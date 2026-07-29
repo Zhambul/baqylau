@@ -6794,6 +6794,21 @@ so is never retractable. That is the deliberate trade — losing the alert would
 be far worse than losing the retraction, and the `telegram-notify` row's
 `retractable` flag records which kind it was.
 
+That degrade is also the one hermeticity hazard of this feature, and it bit
+(2026-07-29): emptying the credential dir does not stop the suite reaching
+Telegram, it *selects the transport that does*. The user received three real
+alerts — `🔴 proj needs you — fix the flaky test` / `…?s=s7` — for a session
+that never existed: they were `test_notifier_transitions`' fixture `winmap`
+(`sid s7`, `cwd /w/proj`) scanned through an un-stubbed `Notifier`, out the
+legacy `Popen(config.NOTIFY_CMD)` to the developer's real notify skill. Most
+notifier tests stub `_telegram`, but only incidentally — nothing made the
+un-stubbed ones safe. The fix is a second sandbox alongside the credential one:
+`tests/conftest.py` sets `CLAUDE_DASH_NOTIFY_CMD` to the no-op
+`tests/notify_sink.py` at *import* time (`dashboard.config` reads the knob once,
+at its own import), so the degrade path still runs and just can't reach the
+wire — pinned end-to-end by
+`test_the_suite_can_never_spawn_the_real_notify_script` (docs/testing.md).
+
 **Nothing touches the wire on the watcher thread**, in either direction — the
 rule the send already followed and the retraction had to be held to
 (`telegram.delete` is a synchronous HTTPS call with a 10 s timeout; the scan

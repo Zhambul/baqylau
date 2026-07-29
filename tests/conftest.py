@@ -23,6 +23,32 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if REPO not in sys.path:          # make core/, plugins/, frontends/ importable in-process
     sys.path.insert(0, REPO)
 
+# ------------------------------------------------- the off-device alert sink
+
+# The Telegram alert has TWO transports, and sandboxing one of them ARMED the
+# other. `_fresh_audit_conn` points CLAUDE_DASH_TELEGRAM_DIR at an empty dir so
+# the Bot API path stays off — but unconfigured credentials are exactly what
+# makes `channels.send_telegram` DEGRADE to the legacy transport: a detached
+# Popen of `config.NOTIFY_CMD`, which defaults to the developer's real
+# ~/.claude/skills/notify/scripts/notify.py — their actual bot, their actual
+# phone. So `make test` delivered its own fixtures as alerts (observed
+# 2026-07-29: "🔴 proj needs you — fix the flaky test / …/?s=s7", straight out
+# of test_notifier_transitions' winmap, for a session that never existed). Any
+# test that scans a red/green transition through an un-stubbed Notifier sends
+# one, and most notifier tests stub `_telegram` only by accident of what they
+# assert on. Aim the knob at a no-op sink for the WHOLE suite instead, so the
+# code path still runs and just can't reach the wire.
+#
+# Set at conftest IMPORT time, not in a fixture: dashboard.config reads the env
+# var once, at its own import, which happens when the first test module imports
+# dashboard.server — before any fixture runs. `setdefault` so a caller can aim
+# the suite at their own recorder. (test_env strips CLAUDE_* from the SUBPROCESS
+# env, but no subprocess in this suite runs the notifier — it lives only in the
+# dashboard server process, which the tests drive in-process.)
+NOTIFY_SINK = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "notify_sink.py")
+os.environ.setdefault("CLAUDE_DASH_NOTIFY_CMD", NOTIFY_SINK)
+
 # ---------------------------------------------------------------- wait_until
 
 # Slow shared CI runners (macOS especially, under -n auto) blow the local
@@ -103,6 +129,16 @@ def _fresh_audit_conn(tmp_path):
     # test that wants the API path points this at its own stub.
     prev_tg = os.environ.get("CLAUDE_DASH_TELEGRAM_DIR")
     os.environ["CLAUDE_DASH_TELEGRAM_DIR"] = str(tmp_path / "telegram-none")
+    # ...and re-assert the OTHER half of that sandbox on the module attribute:
+    # unconfigured credentials are what send the alert down the legacy
+    # `config.NOTIFY_CMD` script path (see NOTIFY_SINK above). The env var is set
+    # at conftest import, so dashboard.config already read it — this only defends
+    # against a module imported (or a knob written) before that, and costs one
+    # dict lookup on a test that never touches the dashboard.
+    cfgmod = sys.modules.get("dashboard.config")
+    prev_cmd = getattr(cfgmod, "NOTIFY_CMD", None) if cfgmod else None
+    if cfgmod is not None:
+        cfgmod.NOTIFY_CMD = os.environ["CLAUDE_DASH_NOTIFY_CMD"]
     # Relocate the durable global prefs DB (dashboard/prefs.py reads
     # P.DASH_PREFS_DB fresh each call) so NO in-process test touches real
     # ~/.claude — the `dash` server fixture already does this per-test, but the
@@ -149,6 +185,8 @@ def _fresh_audit_conn(tmp_path):
         os.environ.pop("CLAUDE_DASH_TELEGRAM_DIR", None)
     else:
         os.environ["CLAUDE_DASH_TELEGRAM_DIR"] = prev_tg
+    if cfgmod is not None and prev_cmd is not None:
+        cfgmod.NOTIFY_CMD = prev_cmd
 
 
 # ------------------------------------------------------------------ test env

@@ -60,6 +60,29 @@ recorder to assert exact raw frames (`test_l0_frontends_contract.py`,
 attempt miss and every call falls back to the recorder — which is why the
 pre-raw-path tests keep passing unchanged.
 
+**The suite must not be able to notify the developer** (2026-07-29). The
+notification feature has TWO transports, and sandboxing one *armed* the other.
+`_fresh_audit_conn` points `CLAUDE_DASH_TELEGRAM_DIR` at an empty dir so
+`telegram.enabled()` reads false and no test can send — or DELETE — a real Bot
+API message. But unconfigured credentials are exactly what makes
+`channels.send_telegram` degrade to the legacy transport: a detached
+`Popen(config.NOTIFY_CMD)`, defaulting to the developer's real
+`~/.claude/skills/notify/scripts/notify.py`. So `make test` delivered its own
+fixtures to the developer's phone — three alerts for a session that never
+existed (`🔴 proj needs you — fix the flaky test`, `?s=s7`), from
+`test_notifier_transitions`' `winmap`; any test that scans a red/green
+transition through an un-stubbed `Notifier` sent one. `conftest` now aims
+`CLAUDE_DASH_NOTIFY_CMD` at the no-op `tests/notify_sink.py` (set
+`BAQYLAU_NOTIFY_SINK_LOG` to see what the suite *would* have sent). It is set at
+conftest **import** time, not in a fixture: `dashboard/config.py` reads the env
+var once, at its own import, which happens when the first test module imports
+`dashboard.server` — before any fixture body runs. The fixture re-asserts the
+value on the module attribute as a belt-and-braces second line, and
+`test_the_suite_can_never_spawn_the_real_notify_script` pins the guarantee by
+driving a real transition scan and asserting what got spawned. The general rule:
+when a feature has a fallback transport, hermeticity has to name *both* — a
+sandbox that only disables the primary can select the one that reaches further.
+
 **No DB may land in the repo working tree** (2026-07-25). The suite is hermetic
 by construction — every DB path comes from a per-test tmpdir or the fake
 `CLAUDE_MIRROR_TMPDIR` — but a test that hands product code an **unresolved log**

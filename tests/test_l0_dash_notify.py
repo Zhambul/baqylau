@@ -4,6 +4,7 @@
 # shared HTTP/audit helpers live in tests/dashkit.py and the in-process
 # server fixture (`dash`) in tests/conftest.py.
 import json
+import os
 import sys
 import threading
 import urllib.error
@@ -228,6 +229,35 @@ def test_telegram_send_invokes_notify_cmd(monkeypatch, tmp_path):
     assert "proj is done" in msg and "all green" in msg
     # ?s=<sid> query param, NOT a #fragment (Telegram drops the fragment)
     assert "https://dash.example/?s=s9" in msg and "#" not in msg
+
+
+def test_the_suite_can_never_spawn_the_real_notify_script(monkeypatch):
+    """The hermetic hole the suite's own alerts escaped through (2026-07-29).
+
+    Sandboxing the Telegram CREDENTIALS (conftest's CLAUDE_DASH_TELEGRAM_DIR)
+    doesn't stop the suite reaching Telegram — it GUARANTEES it: unconfigured is
+    the state that makes send_telegram degrade to the legacy transport, a Popen
+    of the developer's real ~/.claude/skills/notify/scripts/notify.py. So every
+    un-stubbed transition scan (test_notifier_transitions above is one) put a
+    live notification on the developer's phone, for fixture sessions that never
+    existed. This drives that exact path and pins the two facts that matter: the
+    degrade still HAPPENS (the alert path is being exercised, not disabled), and
+    what it spawns is the tests/ sink."""
+    calls = []
+    monkeypatch.setattr(DS.channels.subprocess, "Popen",
+                        lambda argv, **kw: calls.append(argv))
+    monkeypatch.setattr(DS.notifier, "session_title", lambda p: "fix the flaky test")
+    n = DS.Notifier()
+    n.winmap = {"7": {"sid": "s7", "cwd": "/w/proj",
+                      "transcript_path": "/w/t.jsonl"}}
+    seq = [{"7": "working"}, {"7": "awaiting-command"}]
+    monkeypatch.setattr(DS.API, "tab_states", lambda: seq.pop(0))
+    n.scan()                                   # baseline
+    n.scan()                                   # -> asking: arms AND fires
+    assert calls, "the legacy transport must still be the path under test"
+    cmd = calls[0][1]
+    assert cmd == os.path.join(REPO, "tests", "notify_sink.py")
+    assert "skills/notify" not in cmd
 
 
 def test_notify_mute_endpoint_roundtrip_and_validation(dash):
