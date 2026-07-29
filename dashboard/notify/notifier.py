@@ -95,6 +95,22 @@ def retracts(kind, reason):
                                          and reason in SEEN_REASONS)
 
 
+def alert_delay(kind):
+    """How long an armed alert of this kind waits before it fires. The ONE
+    owner of the per-kind clock (config.NOTIFY_DELAY_S / NOTIFY_SETTLE_S — the
+    reasoning for the split, and the measurement behind the 20 s, are on the
+    knob).
+
+    A `done` alert serves the SETTLE window on top of any global delay, because
+    a green tab has to hold still to have meant anything; an `asking` alert is
+    about a session that is already stuck and fires on the global delay alone.
+    `max`, not a sum: setting a big global delay means "hold all my alerts that
+    long", and it should not silently become that plus the settle."""
+    if kind == "done":
+        return max(config.NOTIFY_DELAY_S, config.NOTIFY_SETTLE_S)
+    return config.NOTIFY_DELAY_S
+
+
 def telegram_reason(pushed, target, targets):
     """WHY Telegram fired at stage 1, for its `telegram-notify` row — so a
     Telegram alert is never an unexplained duplicate, and a Telegram alert you
@@ -494,7 +510,7 @@ class Notifier:
                 # what keeps that promise true.
                 A.state_file("", "", "notify-arm",
                              {"sid": payload.get("sid"), "kind": kind,
-                              "phase": "arm", "delay_s": config.NOTIFY_DELAY_S})
+                              "phase": "arm", "delay_s": alert_delay(kind)})
 
     def _cancel_armed(self, cur, tree):
         """PASS 2 — cancel the arms you reacted to / are already handling, all
@@ -560,7 +576,8 @@ class Notifier:
         for win in list(self.pending):
             entry = self.pending[win]
             escalating = entry.get("notified") is not None
-            due = entry["escalate_at"] if escalating else entry["armed_at"] + config.NOTIFY_DELAY_S
+            due = (entry["escalate_at"] if escalating else
+                   entry["armed_at"] + alert_delay(entry.get("kind")))
             if now < due:
                 continue
             sid = entry.get("sid")

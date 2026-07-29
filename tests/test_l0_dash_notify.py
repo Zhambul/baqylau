@@ -325,6 +325,44 @@ def test_presence_beat_marks_device_and_viewing(dash):
     DS.presence._VIEWING.pop("pv1", None)
 
 
+def test_presence_away_ends_presence_but_keeps_the_routing_pick(dash):
+    """`away: true` is the beat's opposite — the page reporting the INSTANT its
+    presence ended, which a timer can only express by lapsing a TTL later. It
+    must clear the two "right now" facts (device active, session viewing) and
+    NOT the monotonic-max routing pick: where you last were is still true after
+    you look away, and forgetting it would route the next alert to a staler
+    device."""
+    DS.presence._DEVICE_SEEN.pop("devA", None)
+    DS.presence._AWAY.discard("devA")
+    _post(dash + "/api/presence", {"device": "devA", "sid": "av1"})
+    assert DS.presence.device_active() is True and DS.web_viewing("av1") is True
+    seen = DS.device_seen("devA")
+    code, _ = _post(dash + "/api/presence",
+                    {"device": "devA", "sid": "av1", "away": True})
+    assert code == 200
+    assert DS.web_viewing("av1") is False            # no longer watching it
+    assert "devA" in DS.presence._AWAY               # no longer in your hands
+    assert DS.device_seen("devA") == seen            # ...but still the MRU pick
+    _post(dash + "/api/presence", {"device": "devA"})   # a beat undoes it
+    assert "devA" not in DS.presence._AWAY
+    DS.presence._DEVICE_SEEN.pop("devA", None)
+    DS.presence._VIEWING.pop("av1", None)
+
+
+def test_device_active_ignores_a_device_that_went_away(monkeypatch):
+    """The whole point of the away flag: a report of leaving is strictly NEWER
+    information than the beat that preceded it, so it wins even while that beat
+    is still inside VIEW_TTL_S. Honouring the beat instead is what suppressed
+    alerts the page had already refused to toast."""
+    monkeypatch.setattr(DS.presence, "_DEVICE_SEEN", {})
+    monkeypatch.setattr(DS.presence, "_AWAY", set())
+    DS.presence.mark_device("devB")
+    assert DS.presence.device_active() is True       # fresh beat
+    DS.presence.mark_away("devB")
+    assert DS.presence.device_active() is False      # ...and gone at once
+    assert DS.presence.device_seen("devB") != float("-inf")
+
+
 def test_add_push_subscription_stores_device_and_label(monkeypatch, tmp_path):
     """A subscription is stored WITH its device id + label so the notifier can
     route to the most-recently-used device (webpush.send ignores the extras)."""
@@ -650,6 +688,83 @@ def test_post_message_empty_text_is_400(dash, monkeypatch):
     with pytest.raises(urllib.error.HTTPError) as e:
         _post(dash + "/api/session/msg3/message", {"text": "   "})
     assert e.value.code == 400
+
+
+# ----------------------------------------------------- the done settle window
+# docs/dashboard.md, *The settle window*. A green tab has to HOLD STILL before
+# it is worth an off-device alert; a red one does not.
+
+
+def _armed(monkeypatch, tmp_path, kind, settle=20.0):
+    """Arm one alert and hand back (notifier, states, clock, sent). Telegram is
+    the channel (NOTIFY_WEBPUSH off → the no-device fallback), stubbed."""
+    monkeypatch.setattr(P, "DASH_PREFS_DB", str(tmp_path / "prefs.db"))
+    monkeypatch.setattr(DS.config, "NOTIFY_DELAY_S", 0.0)
+    monkeypatch.setattr(DS.config, "NOTIFY_SETTLE_S", settle)
+    monkeypatch.setattr(DS.config, "NOTIFY_TELEGRAM", True)
+    monkeypatch.setattr(DS.config, "NOTIFY_WEBPUSH", False)
+    monkeypatch.setattr(DS.notifier, "session_title", lambda p: "t")
+    clock, sent = [0.0], []
+    monkeypatch.setattr(DS.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(DS.channels, "send_telegram",
+                        lambda entry, reason=None: sent.append(entry))
+    n = DS.Notifier()
+    n.winmap = {"7": {"sid": "s7", "cwd": "/w/p", "transcript_path": "/w/t.jsonl"}}
+    states = {"7": "working"}
+    monkeypatch.setattr(DS.API, "tab_states", lambda: dict(states))
+    n.scan()                                   # baseline
+    states["7"] = ("awaiting-command" if kind == "asking" else "awaiting-response")
+    n.scan()                                   # -> armed
+    return n, states, clock, sent
+
+
+def test_a_done_alert_waits_for_the_green_to_settle(monkeypatch, tmp_path):
+    """A `done` alert serves NOTIFY_SETTLE_S before firing, even at delay 0."""
+    n, states, clock, sent = _armed(monkeypatch, tmp_path, "done")
+    assert sent == []                          # not on the arming tick
+    clock[0] = 19.0
+    n.scan()
+    assert sent == []                          # still settling
+    clock[0] = 21.0
+    n.scan()
+    assert len(sent) == 1                      # green held -> it's real
+
+
+def test_a_green_that_does_not_stick_never_pushes_at_all(monkeypatch, tmp_path):
+    """THE case the settle exists for (docs/dashboard.md *The settle window*).
+    A turn ends, the tab goes green, and ~14 s later the session is busy again —
+    the measured MEDIAN. Before the settle that fired a push and then correctly
+    retracted it, leaving a macOS banner that existed for 14 seconds and was
+    never seen. Now no alert is sent at all: there was nothing to tell."""
+    n, states, clock, sent = _armed(monkeypatch, tmp_path, "done")
+    clock[0] = 14.0
+    states["7"] = "working"                    # the next turn started
+    n.scan()
+    clock[0] = 60.0
+    n.scan()
+    assert sent == [] and n.pending == {} and n.sent == []
+
+
+def test_the_settle_window_does_not_delay_an_asking_alert(monkeypatch, tmp_path):
+    """Red is not green: an `asking` session is BLOCKED and will sit there until
+    you act, so waiting only makes you later. It fires on the global delay
+    alone — which is 0."""
+    n, states, clock, sent = _armed(monkeypatch, tmp_path, "asking")
+    assert len(sent) == 1                      # on the arming tick, no settle
+
+
+def test_alert_delay_is_the_one_owner_of_the_per_kind_clock(monkeypatch):
+    """`max`, not a sum: a big global delay means "hold ALL my alerts that
+    long" and must not silently become that plus the settle."""
+    monkeypatch.setattr(DS.config, "NOTIFY_DELAY_S", 0.0)
+    monkeypatch.setattr(DS.config, "NOTIFY_SETTLE_S", 20.0)
+    assert DS.notifier.alert_delay("done") == 20.0
+    assert DS.notifier.alert_delay("asking") == 0.0
+    monkeypatch.setattr(DS.config, "NOTIFY_DELAY_S", 60.0)
+    assert DS.notifier.alert_delay("done") == 60.0      # not 80
+    assert DS.notifier.alert_delay("asking") == 60.0
+    monkeypatch.setattr(DS.config, "NOTIFY_SETTLE_S", 0.0)
+    assert DS.notifier.alert_delay("done") == 60.0      # settle off = old shape
 
 
 # ----------------------------------------------------- alert retraction

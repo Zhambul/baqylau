@@ -131,6 +131,27 @@ NOTIFY_STATES = {tabs.AWAITING_COMMAND: "asking", tabs.AWAITING_RESPONSE: "done"
 # optional debounce for anyone who wants their alerts to hold fire. A bad /
 # negative value falls back to the default.
 NOTIFY_DELAY_S = EV.env_float("CLAUDE_DASH_NOTIFY_DELAY_S", 0)
+# CLAUDE_DASH_NOTIFY_SETTLE_S → the extra wait a `done` alert serves before it
+# fires, DEFAULT 20. The one place the two kinds need different clocks, because
+# their tab states mean different things: red ASKING is a blocked session that
+# will sit there until you act, so a delay only makes you later; green DONE is
+# the resting state of a finished TURN, which the very next turn leaves.
+#
+# Measured 2026-07-29 over a day of real alerts: of 46 delivered `done` pushes
+# that were later retracted `tab-moved`, the MEDIAN lifetime was 14.3 s — the
+# turn had ended, the push went out the same second, and by the time a macOS
+# banner had settled on screen the session was busy again and the banner was
+# correctly deleted. A notification that exists for 14 s is one you never see,
+# and 30 of those 46 lived under 20 s. So the fix is not to stop retracting (the
+# retraction is right — the alert had genuinely stopped being true) but to stop
+# SENDING an alert about a green that hasn't held still yet.
+#
+# 20 s is the knee of that curve, not a round number: 10 s would have suppressed
+# 8/46, 15 s → 25, 20 s → 30, and past it the curve flattens hard (25 s and 30 s
+# → 31, 60 s → 32). Everything beyond 20 s buys a couple of points for seconds
+# of added latency on the alerts that ARE real. Set 0 for the old fire-instantly
+# behaviour. Bad / negative → the default.
+NOTIFY_SETTLE_S = EV.env_float("CLAUDE_DASH_NOTIFY_SETTLE_S", 20)
 # Master switch: "0" disables arming + sending entirely (the in-page toast is
 # unaffected). Default on.
 NOTIFY_TELEGRAM = (os.environ.get("CLAUDE_DASH_NOTIFY_TELEGRAM") or "1") != "0"

@@ -7,7 +7,7 @@
 from core.noaudit import load_audit
 from dashboard.config import (CLIENTLOG_MAX)
 from dashboard.http.base import valid_sid
-from dashboard.notify.presence import mark_device, mark_viewing
+from dashboard.notify.presence import mark_away, mark_device, mark_viewing
 
 A = load_audit()
 
@@ -205,14 +205,25 @@ class _TelemetryMixin:
         `_VIEWING` deadline that suppresses the alert while you watch that
         session — folding the old per-session viewing beat into this one. Types
         NOTHING and writes NO session state; NOT audited per-beat (ephemeral
-        presence, like the SSE connection). Behind _post_guard; always 200."""
+        presence, like the SSE connection). Behind _post_guard; always 200.
+
+        `away: true` INVERTS the beat: the page lost focus / was hidden and is
+        reporting the instant its presence ENDED, which a timer-driven beat can
+        only express by lapsing a TTL later (`presence.mark_away` — the gap that
+        cost real alerts). Same body, same channel, same silence in the audit:
+        the outcome is visible as the suppress row that no longer happens."""
         body = self._post_guard()
         if body is None:
             return
         dev = body.get("device")
-        if isinstance(dev, str) and dev:
-            mark_device(dev)
         sid = body.get("sid")
-        if isinstance(sid, str) and sid:
+        dev = dev if isinstance(dev, str) and dev else ""
+        sid = sid if isinstance(sid, str) and sid else ""
+        if body.get("away") is True:
+            mark_away(dev, sid)
+            return self._json({"ok": True})
+        if dev:
+            mark_device(dev)
+        if sid:
             mark_viewing(sid)
         return self._json({"ok": True})

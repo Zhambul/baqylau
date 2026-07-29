@@ -591,6 +591,10 @@ def _escalation_notifier(monkeypatch, clock, target="mac"):
                                            "device": target}],
                                  {"target": target, "candidates": []}))
     monkeypatch.setattr(DS.config, "NOTIFY_DELAY_S", 0.0)
+    # these are ROUTING/ESCALATION timing tests on a `done` tab — the settle
+    # window is a separate question, covered in test_l0_dash_notify.py, and
+    # leaving it shipped would just make every case below wait 20 s
+    monkeypatch.setattr(DS.config, "NOTIFY_SETTLE_S", 0.0)
     monkeypatch.setattr(DS.config, "ESCALATE_S", 300.0)
     monkeypatch.setattr(DS.config, "NOTIFY_TELEGRAM", True)
     monkeypatch.setattr(DS.config, "NOTIFY_WEBPUSH", True)
@@ -841,7 +845,13 @@ def test_notify_lifecycle_audit_rows(monkeypatch):
 def _notifier_for_done(monkeypatch, screen, delay=999):
     """A Notifier wired hermetically to one green 'done' tab on window '9': a
     fake ANSI-capable frontend returning `screen["txt"]` and every home-touching
-    dependency stubbed. Returns (n, cur, done, sent, audited)."""
+    dependency stubbed. Returns (n, cur, done, sent, audited).
+
+    `delay` pins BOTH clocks a `done` alert serves (the global delay and the
+    settle window — `notifier.alert_delay` takes the max), so these tests keep
+    reasoning about one number. The settle has its own coverage in
+    test_l0_dash_notify.py; leaving it at its shipped 20 s here would only make
+    every routing/audit test below wait for it."""
     win = "9"
     done = next(s for s, k in DS.config.NOTIFY_STATES.items() if k == "done")
     cur = {"states": {}}
@@ -851,6 +861,7 @@ def _notifier_for_done(monkeypatch, screen, delay=999):
     monkeypatch.setattr(DS.prefs, "notify_muted", lambda sid: False)
     monkeypatch.setattr(DS.config, "NOTIFY_TELEGRAM", True)
     monkeypatch.setattr(DS.config, "NOTIFY_DELAY_S", delay)
+    monkeypatch.setattr(DS.config, "NOTIFY_SETTLE_S", delay)
     audited = []
     monkeypatch.setattr(DS.A, "state_file", lambda *a, **k: audited.append(a))
 
@@ -1058,21 +1069,43 @@ def test_notify_suppressed_when_a_browser_is_in_your_hands(monkeypatch):
                and a[3].get("reason") == "device-active" for a in audited)
 
 
-def test_notify_fires_on_the_transition_tick_by_default(monkeypatch):
-    """The alert is INSTANT: with the shipped default delay (0) it goes out on
-    the same scan that saw the tab turn green — no grace window to sit through.
-    The old 60 s wait guessed at your attention with a clock; presence answers
-    it directly, so the only thing the delay bought was latency."""
+def test_shipped_defaults_fire_asking_at_once_and_settle_done(monkeypatch):
+    """The shipped timing of BOTH kinds, read from the real knobs so a
+    regression fails here rather than in production.
+
+    `asking` is INSTANT (delay 0): it goes out on the same scan that saw the tab
+    turn red, with no grace window to sit through — the old 60 s wait guessed at
+    your attention with a clock, and presence answers that directly. `done` is
+    deliberately NOT instant: it serves NOTIFY_SETTLE_S first, because a green
+    tab that goes busy again seconds later never needed an alert (see
+    test_l0_dash_notify.py, *the done settle window*)."""
+    assert DS.config.NOTIFY_DELAY_S == 0     # the shipped pair this test reads
+    assert DS.config.NOTIFY_SETTLE_S >= 10
+    # captured BEFORE the helper, which pins the settle to its `delay` argument
+    settle = DS.config.NOTIFY_SETTLE_S
+    clock = [0.0]
+    monkeypatch.setattr(DS.time, "monotonic", lambda: clock[0])
     screen = {"txt": _done_screen("\x1b[m❯\xa0")}
-    # NOT delay=0 — read the SHIPPED default, so a regression to a waiting
-    # notifier fails here rather than in production
     n, cur, done, sent, _ = _notifier_for_done(monkeypatch, screen,
                                               delay=DS.config.NOTIFY_DELAY_S)
-    assert DS.config.NOTIFY_DELAY_S == 0
+    monkeypatch.setattr(DS.config, "NOTIFY_SETTLE_S", settle)   # shipped, back
+    asking = next(s for s, k in DS.config.NOTIFY_STATES.items() if k == "asking")
+
     n.scan()                                 # baseline
-    cur["states"] = {"9": done}
-    n.scan()                                 # transition and send, one tick
+    cur["states"] = {"9": asking}
+    n.scan()                                 # red: transition and send, one tick
     assert [e["sid"] for e in sent] == ["sX"]
+
+    sent.clear()
+    cur["states"] = {"9": done}
+    n.scan()                                 # green: armed, NOT sent
+    assert sent == []
+    clock[0] = settle - 1
+    n.scan()
+    assert sent == []                        # still settling
+    clock[0] = settle + 1
+    n.scan()
+    assert [e["sid"] for e in sent] == ["sX"]   # the green held
 
 
 def test_terminal_presence_is_polled_from_the_scans_own_ls(monkeypatch):

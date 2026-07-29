@@ -110,6 +110,12 @@ def web_viewing(sid):
 # as a device that hasn't beaten this run).
 DEVICE_SEEN_CAP = 64
 _DEVICE_SEEN = API.BoundedLRU(DEVICE_SEEN_CAP)   # device_id -> monotonic last-seen
+# The devices that have reported themselves AWAY (`mark_away`) since their last
+# beat — a separate set rather than an eviction from _DEVICE_SEEN precisely
+# because those two answer different questions: "are you here now"
+# (`device_active`) and "where were you last" (`route`). Going away must end the
+# first without touching the second.
+_AWAY = set()
 
 # The reserved device id the TERMINAL is stamped under. A browser's DEVICE_ID is
 # a random base36 string, so a collision needs a client to CLAIM this name —
@@ -119,9 +125,42 @@ TERMINAL = "terminal"
 
 
 def mark_device(device):
-    """Record a presence beat from `device` (a browser's stable id)."""
+    """Record a presence beat from `device` (a browser's stable id). A beat is
+    the opposite of `mark_away`, so it clears the away flag: the page only beats
+    while visible + focused."""
     if device and device != TERMINAL:
         _DEVICE_SEEN[device] = time.monotonic()
+        _AWAY.discard(device)
+
+
+def mark_away(device, sid=None):
+    """The page reports it has STOPPED being present — it lost focus or was
+    hidden. The explicit end of a beat, and the fix for a gap the TTL cannot
+    close on its own.
+
+    A beat says "I was here within the last VIEW_TTL_S", which the alert path
+    reads as "you are here NOW". Those differ by up to the whole TTL, and the
+    page's own gate is INSTANT: it stops toasting the moment `document.hasFocus`
+    goes false. So for the 20 s after you clicked away from the dashboard, the
+    server suppressed the off-device alert ("a focused page already toasted
+    you") while the page refused to toast ("I'm not focused") — measured
+    2026-07-29: 20 of 99 suppressed `done` alerts had a `notify.recv` beacon
+    from that very device reading `shown:false, focus:false`, i.e. they reached
+    the user through NO channel at all. Halving the TTL would only halve the
+    window; only the page knows the instant it ends, so the page now says so.
+
+    Clears the two "right now" facts and DELIBERATELY not the third: `_VIEWING`
+    (you are no longer watching that session) and the device's ACTIVE flag (no
+    longer a browser in your hands), but never `_DEVICE_SEEN`, which is the
+    monotonic-max ROUTING pick — where you last were is still true after you
+    look away, and forgetting it would send the next alert to a staler device."""
+    if device and device != TERMINAL and device in _DEVICE_SEEN:
+        # bounded by construction: only a device already in the (capped) seen
+        # map can be marked away, and an entry the LRU evicted is pruned here
+        _AWAY.add(device)
+        _AWAY.intersection_update(set(_DEVICE_SEEN.keys()))
+    if sid:
+        _VIEWING.pop(sid, None)
 
 
 def mark_terminal():
@@ -143,9 +182,14 @@ def device_active():
     second copy of a notification you just got. The terminal is excluded because
     its analog is NOT symmetric — kitty being frontmost tells you nothing about
     the tab you're not on, so at the terminal only `tab_focused` (this session's
-    tab, in front of you) counts as seeing it."""
+    tab, in front of you) counts as seeing it.
+
+    A device that reported itself AWAY is excluded even while its last beat is
+    still inside the TTL — that report is strictly newer information than the
+    beat, and honouring the beat over it is what silently swallowed alerts
+    through no channel at all (see `mark_away`)."""
     now = time.monotonic()
-    return any(dev != TERMINAL and now - seen <= VIEW_TTL_S
+    return any(dev != TERMINAL and dev not in _AWAY and now - seen <= VIEW_TTL_S
                for dev, seen in list(_DEVICE_SEEN.items()))
 
 

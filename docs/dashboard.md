@@ -6540,11 +6540,12 @@ is what makes a cold start — a freshly restarted server where nothing has beat
 Telegram.
 
 **Are you already there** is `_watching`, and it is what replaced the grace
-window. `CLAUDE_DASH_NOTIFY_DELAY_S` now defaults to **0**: the alert fires on
-the same 1 s tick that saw the tab turn red or green. The old 60 s wait was a
+window. `CLAUDE_DASH_NOTIFY_DELAY_S` now defaults to **0**: an `asking` alert
+fires on the same 1 s tick that saw the tab turn red. The old 60 s wait was a
 clock guessing at your attention, and it paid for itself twice — once in latency
 (an alert about a finished turn arriving a minute late), once in wrongness (you
-had walked away 59 seconds ago; the delay changed only when you found out).
+had walked away 59 seconds ago; the delay changed only when you found out). A
+`done` alert waits out the SETTLE window first — a different question, below.
 Three signals answer the question directly, and their asymmetry is deliberate:
 
 - **the session's kitty tab is frontmost** (`tab_focused`) — per-session,
@@ -6574,6 +6575,70 @@ cancelled outright by any look, because its final message was on screen: "if
 I've SEEN it, don't tell me". A held entry also skips the two screen scrapes
 below (they are redundant while you are demonstrably in front of the session),
 which is what stops an unbounded hold costing an unbounded `get-text` per second.
+
+#### The settle window (a green tab has to hold still)
+
+`CLAUDE_DASH_NOTIFY_SETTLE_S` (default **20 s**) is the wait a `done` alert
+serves on top of the global delay — `notifier.alert_delay(kind)` is the one
+owner of that per-kind clock, and takes the **max** of the two so that setting a
+big global delay means "hold all my alerts that long" rather than silently
+becoming that plus the settle.
+
+It exists because the two tab states mean different things. Red `asking` is a
+**blocked** session: it will sit there until you act, so waiting only makes you
+later. Green `done` is the resting state of a finished **turn**, and the very
+next turn leaves it — which the alert path treated as "this session needs you"
+the instant it appeared.
+
+Measured over a day of real alerts (2026-07-29): of 46 delivered `done` pushes
+later retracted `tab-moved`, the **median lifetime was 14.3 s** — the turn
+ended, the push went out that same second, and by the time a macOS banner had
+settled on screen the session was busy again and the banner was correctly
+deleted. 30 of the 46 lived under 20 s. Every part of that is working as
+designed and the result is useless: a notification that exists for 14 seconds is
+one you never see. The bug was not the retraction (the alert really had stopped
+being true) but **sending an alert about a green that hadn't held still yet.**
+
+20 s is the knee of that curve rather than a round number — a 10 s settle would
+have suppressed 8 of the 46, 15 s → 25, 20 s → 30, and past it it flattens hard
+(25 s and 30 s → 31, 60 s → 32). Everything beyond 20 s buys a couple of points
+for seconds of added latency on the alerts that are real. `=0` restores the old
+fire-instantly behaviour.
+
+The alert is still ARMED on the transition, so everything the arm/cancel
+machinery does still applies during the settle — reacting, looking, composing or
+ending the session all cancel it exactly as before. The settle only moves WHEN a
+surviving arm is allowed to fire.
+
+#### Presence ends when the page says so
+
+A beat means *"I was here within `CLAUDE_DASH_VIEW_TTL_S`"*, but the alert path
+has to read it as *"you are here NOW"*. Those differ by up to a whole TTL, and
+the page's own gates are **instant**: it stops showing the in-page toast the
+moment `document.hasFocus()` goes false. So for the 20 s after you clicked from
+the dashboard into another app, the server suppressed the off-device push
+(*"a focused page already toasted you"*) while the page refused to toast
+(*"I'm not focused"*), and the alert reached you through **no channel at all**.
+
+Measured in the same audit: 20 of 99 suppressed `done` alerts had a
+`notify.recv` beacon from that very device reading `shown:false, focus:false`.
+Halving the TTL would only halve the window — only the page knows the instant
+its presence ends, so the page now reports it. `presenceAway()` posts the same
+`/api/presence` body with `away: true` on `blur` and on `visibilitychange` to
+hidden; a `focus` beat was already wired to re-establish presence at once.
+
+`presence.mark_away` clears the two *right-now* facts and deliberately not the
+third: `_VIEWING` (you are no longer watching that session) and the device's
+entry in `_AWAY` (no longer a browser in your hands) — but **never**
+`_DEVICE_SEEN`, which is the monotonic-max **routing** pick. Where you last were
+is still true after you look away, and forgetting it would send the next alert
+to a staler device. `device_active` excludes an away device even while its last
+beat is still inside the TTL: a report of leaving is strictly newer information
+than the beat before it.
+
+Like the beat, an away carries **no audit row** (it is ephemeral presence, at
+browser-event rates). Its effect is visible as the `notify-suppress` row that no
+longer happens, and as the `notify-route` / `web-push send` rows that now do.
 
 **Escalation.** After a PUSH the entry stays armed with an `escalate_at` =
 `CLAUDE_DASH_ESCALATE_S` (default 300 s / 5 min) in the future; if you still
@@ -6748,7 +6813,9 @@ notifier reads the flag live, so one flip governs all sessions at once.
 **Env knobs** (read once at server start — a restart picks up changes):
 `CLAUDE_DASH_NOTIFY_DELAY_S` (grace seconds before firing, default `0` — the
 alert goes out on the transition tick; raise it for a debounce; bad / negative →
-default), `CLAUDE_DASH_NOTIFY_TELEGRAM` (`0` disables arming +
+default), `CLAUDE_DASH_NOTIFY_SETTLE_S` (the EXTRA wait a `done` alert serves so
+a momentary green never pushes at all, default `20` — *The settle window* above;
+`0` restores fire-instantly), `CLAUDE_DASH_NOTIFY_TELEGRAM` (`0` disables arming +
 sending entirely, the in-page toast is unaffected; default on), and
 `CLAUDE_DASH_NOTIFY_CMD` (the notify script path — `~` expanded, overridable for
 a different transport or the hermetic test's recorder),

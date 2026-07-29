@@ -136,6 +136,23 @@ function presenceBeat() {
     .catch(() => {});                              // presence is best-effort
 }
 
+// ...and the other half: say so the INSTANT presence ends. A beat means "I was
+// here within view_ttl_s", which the alert path has to read as "here now" — but
+// the gates above are instant, so from the moment you click into another app
+// this page stops toasting while the server keeps suppressing the off-device
+// push for up to a full TTL. That window swallowed alerts through no channel at
+// all (docs/dashboard.md *Presence ends when the page says so*). Only the page
+// knows when it ended, so it reports it: blur and hide, best-effort, and a
+// `focus` beat is already wired below to re-establish presence at once.
+function presenceAway() {
+  postJSON("/api/presence", { device: DEVICE_ID, sid: S.cur || "", away: true })
+    .catch(() => {});
+}
+window.addEventListener("blur", presenceAway);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible") presenceAway();
+});
+
 // The cadence is DERIVED from the server's presence TTL (LIMITS.view_ttl_s, the
 // env-overridable CLAUDE_DASH_VIEW_TTL_S) rather than a matching literal: a beat
 // every TTL/2.5 leaves room for one to be lost/late and still not lapse, which
