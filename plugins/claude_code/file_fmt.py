@@ -37,7 +37,7 @@ from core import render as R
 from core import state as S
 from core import streamfmt as SF
 from plugins.claude_code import hookkit as H
-from plugins.claude_code import memory as MEM
+from plugins.claude_code import fileobs as FOBS
 from plugins.claude_code import tools as CT
 
 A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
@@ -270,17 +270,17 @@ def main():
     line = SF.file_line(label, disp, CT.FILE_RGB.get(label, O.SLATE),
                         failed=failed, extent=ext,
                         added=added, removed=removed, rng=rng) + mark
-    # A file op under the memory wiki (~/wiki/01) is a MEMORY op — but ONLY for a
-    # session inside the enabled project (aggregator-adapters; MEM.in_scope over
-    # the payload cwd): a wiki note touched from another project is a plain file
-    # op. When it IS one: append the ❖ MARK to the one-liner (baked in before the
-    # emit); the `memory` kv snapshot itself happens AFTER the emit, so the first
-    # op's own emit has created the state DB the parked-guarded record() needs
-    # (main agent — agent_id was bailed above; the substream records subagent
-    # memory ops into the same kv).
-    is_mem = MEM.is_memory(path) and MEM.in_scope(d.get("cwd") or "")
-    if is_mem:
-        line += "  " + R.DIM + MEM.MARK + R.RST
+    # File-op OBSERVERS (fileobs.OBSERVERS — the memory wiki is the one row):
+    # each match bakes its marker glyph into the one-liner before the emit; the
+    # kv snapshot (record()) happens AFTER the emit, so the first op's own emit
+    # has created the state DB the parked-guarded record() needs (main agent —
+    # agent_id was bailed above; the substream records subagent ops the same way).
+    # The `mem=` op flag stays MEMORY's vocabulary, not the registry's: it is a
+    # one-member web classification hint (core/ops.py), keyed off the row name.
+    obs = FOBS.matches(path, d.get("cwd") or "")
+    is_mem = any(o.key == "memory" for o in obs)
+    for o in obs:
+        line += "  " + R.DIM + o.mark + R.RST
     # Click-to-view: stash the pre-rendered content block under the op's
     # tool_use_id, wrap the WHOLE one-liner in the claude-copy:///…/view
     # hyperlink (a `line` op paints verbatim, so the producer bakes the link;
@@ -294,10 +294,10 @@ def main():
         line, vid = stash_view(LOG, gid, tool, label, name, path, ti, tr, line)
     viewed = vid is not None
     O.emit(LOG, O.line(line, view=vid, mem=is_mem))
-    # Now that the emit has ensured the state DB exists, snapshot the touched note
-    # into the `memory` kv (mem_note = the audit fragment, None when not a memory
-    # op / the DB is somehow still parked).
-    mem_note = MEM.record(LOG, path, label, agent=None) if is_mem else None
+    # Now that the emit has ensured the state DB exists, each matched observer
+    # snapshots the touched file into its kv (notes = the audit fragments, empty
+    # when nothing recorded / the DB is somehow still parked).
+    notes = [n for n in (o.record(LOG, path, label, agent=None) for o in obs) if n]
     # Feed the session scoreboard (best-effort): the touched path (files counts
     # UNIQUE files — see bump()) plus the mutation's +/- line counts, keyed by the
     # raw tool name (Read/Edit/Write/MultiEdit/NotebookEdit) for the tools breakdown.
@@ -309,7 +309,8 @@ def main():
                  + (" FAILED" if failed else
                     ("" if tool == "Read" else f" +{added} -{removed}"))
                  + (" +view" if viewed else "")
-                 + (f" +{mem_note}" if mem_note else (" +mem" if is_mem else "")))
+                 + ("".join(f" +{n}" for n in notes) if notes
+                    else (" +mem" if is_mem else "")))
 
 
 def entry():

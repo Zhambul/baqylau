@@ -21,7 +21,7 @@ from core import render as R
 from core import state as S
 from core import streamfmt as SF
 from plugins.claude_code import accounting as ACC
-from plugins.claude_code import memory as MEM
+from plugins.claude_code import fileobs as FOBS
 from plugins.claude_code import tools as CT
 from plugins.claude_code import transcript as TR
 
@@ -287,16 +287,18 @@ class Renderer:
                             added=added, removed=removed, rng=rng)
         if failed:
             line += "  " + R.DIM + "✗" + RST
-        # A subagent memory-wiki op (~/wiki/01), and ONLY when this session is in
-        # the enabled project (MEM.in_scope over the tailer's cwd = the session
-        # dir): mark it ❖ (baked into the line before the emit below); the
-        # `memory` kv snapshot happens AFTER the emit, into the SAME per-session kv
-        # the main agent writes (self.agent names the subagent — e.g. the
-        # note-writer). The mirror block stays main-agent-only; this op only
-        # surfaces in the agent's drill-down, but the Memory tab is team-wide.
-        is_mem = MEM.is_memory(path) and MEM.in_scope()
-        if is_mem:
-            line += "  " + R.DIM + MEM.MARK + RST
+        # A subagent's file op runs the same OBSERVER registry as the main
+        # agent's (fileobs.OBSERVERS — memory the one row; the match's cwd
+        # default is this tailer's cwd = the session dir): each match bakes its
+        # marker into the line before the emit; the kv snapshot happens AFTER
+        # the emit, into the SAME per-session kv the main agent writes
+        # (self.agent names the subagent — e.g. the note-writer). The mirror
+        # block stays main-agent-only; this op only surfaces in the agent's
+        # drill-down, but the Memory tab is team-wide.
+        obs = FOBS.matches(path)
+        is_mem = any(o.key == "memory" for o in obs)
+        for o in obs:
+            line += "  " + R.DIM + o.mark + RST
         # …the model/effort + ctx chips ride as the op's own `tags` field, not
         # baked into the line (core/ops.py: the terminal composes them at paint
         # time, the web's agent scope drops them — see the `who` beside them).
@@ -317,8 +319,8 @@ class Renderer:
                 who="substream render", extra={"agent": self.agent})
         O.emit(self.log, O.gut(line, self.rgb, view=vid, mem=is_mem,
                                who=self.label, tags=tags))
-        if is_mem:
-            MEM.record(self.log, path, label, agent=self.agent)
+        for o in obs:
+            o.record(self.log, path, label, agent=self.agent)
         # Feed the session scoreboard so its files/+/- chips (and the tools breakdown)
         # reflect TEAM-WIDE file activity, not just the main session's own file ops
         # (claude-file-fmt.py skips agent_id calls — the substream owns their rendering,
