@@ -107,6 +107,7 @@ backed by grep-style regression tests that will fail the build):
 | `/tmp/claude-mirror-<key>.log` path format, `ROOT`, `BIN` | `core/paths.py` |
 | Semantic colours `SLATE/ORANGE/RED/…`, `fmt_dur`, `kfmt`, `fmt_usd`, `split_tokens()`, `token_parts()` | `core/ops.py` |
 | Tab states + `COLORS` hex table + tab-DB schema | `core/tabs.py` (read cross-module via `state.tab_state`) |
+| The tab PAINT engine — dedup against the persisted row + persist-only-on-`rc==0` + the `tab_transitions` audit on every applied/skipped/failed path | `core/tabpaint.paint(fe, win, state, reason, sid=, dispatch=)` — frontend-INJECTED; a producer plugin owns only the DECISION (its `{event → (state, reason)}`) and the WINDOW resolver, and gets this for free (`plugins/claude_code/tabstatus.py` is the reference producer; a second copy would drift and lose the `rc==0` rule) |
 | Slot claim-token format (both directions: `_token`/`_untoken`) | `core/slots.py` |
 | Stream-block shapes: `cap`, `chip`, `gutter`, `tok_rollup`, `file_line` | `core/streamfmt.py` |
 | File-op display name (bare basename / `✎` scratchpad icon / dim out-of-project dir), incl. the scratchpad path pattern | `core/streamfmt.file_display` |

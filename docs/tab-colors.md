@@ -172,6 +172,19 @@ locks live in its `watchers` table. Window-keyed state can't live in the
 per-session state DB (a window outlives any one session), and /tmp keeps the old
 self-clearing-on-reboot lifecycle.
 
+**Where this lives.** The DECISION half — mapping Claude Code's hook payloads and
+streamer callbacks onto a `(state, reason)` (the `DISPATCHES` table, the `d_*`
+handlers, the recovery watchers) plus resolving the window — is Claude-specific and
+stays in `plugins/claude_code/tabstatus.py`. The PAINT half above — the dedup, the
+`set_tab_color`/`clear_tab_color` call, the persist-only-on-`rc==0` rule, and the
+`tab_transitions` audit on every applied/skipped/failed path — is tool-AGNOSTIC and
+lives in `core/tabpaint.py` (`paint(fe, win, state, reason, sid=, dispatch=)`,
+frontend-INJECTED like `core/hostpane.py`). A SECOND tab producer (standalone codex,
+a future hookless polled producer) contributes just its own decision table + window
+resolver and reuses the engine — it is NOT reimplemented, because a second copy
+would drift and lose the `rc==0` rule this whole section documents (see
+docs/styleguide.md, the single-owner table).
+
 ### Recovering from a cancelled turn (`interrupt-watch`)
 
 Claude Code fires **no hook at all** when a turn is cancelled/interrupted — no

@@ -68,9 +68,10 @@ from core import paths as P  # noqa: E402  (the one owner of the mirror-log path
 from core import spawn as SP  # noqa: E402  (the ONE audited detached-spawn owner)
 from core import state as St  # noqa: E402  (pid_alive only — DB reads stay mode=ro via sq())
 from plugins.claude_code import hookkit as HK  # noqa: E402  (the injected-payload accessor)
+from core import tabpaint  # noqa: E402  (the tool-agnostic tab PAINT engine — core/tabpaint.py)
 from core.tabs import (  # noqa: E402  (the core tab vocabulary + tab DB — see core/tabs.py)
     IDLE, THINKING, WORKING, EXECUTING, AWAITING_BG, AWAITING_COMMAND,
-    AWAITING_RESPONSE, COLORS, sq, tab_get, tab_set, tab_clear,
+    AWAITING_RESPONSE, sq, tab_get,
     watcher_pid, watcher_set, watcher_del)
 
 # resolve=True: a daemon-origin session's hook processes carry a SCRUBBED env
@@ -947,14 +948,19 @@ def resolve(state, args=()):
 
 
 # --- painting -----------------------------------------------------------------
-# The paint itself goes through the Frontend (frontends/kitty.py today): active
-# bg/fg + inactive (dimmed) bg for THIS window's tab — the inactive background
-# is a darkened variant of the same hue so the focused tab still stands out
-# (otherwise only the bold font-style tells them apart). See
-# frontends.kitty.set_tab_color for the audit-the-real-rc rationale.
-
-# COLORS (state -> active_bg/active_fg/inactive_bg hex) is imported from
-# core/tabs.py — the paint contract shared by every frontend.
+# The PAINT ENGINE — the dedup against the persisted tab row, the frontend
+# set_tab_color/clear_tab_color call, the persist-only-when-rc==0 rule, and the
+# tab_transitions audit row on every applied/skipped/failed path — is tool-
+# AGNOSTIC and lives in core/tabpaint.py, so a second producer (standalone codex,
+# a future hookless polled producer) reuses it instead of reimplementing the
+# rc==0 rule. THIS module is the Claude-Code producer: it resolves the dispatch
+# (resolve()/DISPATCHES/the d_* handlers) and the window (_ensure_win), then hands
+# the resolved (state, reason) to the engine.
+#
+# The frontend paints active bg/fg + inactive (dimmed) bg for THIS window's tab —
+# the inactive background is a darkened variant of the same hue so the focused tab
+# still stands out; see frontends.kitty.set_tab_color for the audit-the-real-rc
+# rationale, and core/tabs.COLORS (state -> hex) for the paint contract.
 
 
 def main(state, args=()):
@@ -963,63 +969,16 @@ def main(state, args=()):
     `args` is the dispatch's extra argv words — the log key, the transcript
     path, the recheck kind. They are parsed ONCE at the entry (entry() from
     sys.argv, dispatch() from its caller) and handed down, so no handler reads
-    argv and every one of them is callable from a test with a plain tuple."""
+    argv and every one of them is callable from a test with a plain tuple.
+
+    The Claude-specific work is resolve() + _ensure_win(); the tool-agnostic
+    dedup/persist/audit paint is core/tabpaint.paint(), handed our resolved
+    window + audit identity (AUDIT_SID/DISPATCH)."""
     _ensure_win(args)                        # daemon-origin env has no KITTY_WINDOW_ID
     state, reason = resolve(state, args)
     if state is None:
         return
-
-    # Must be inside a controllable terminal (kitty: window id + remote-control
-    # socket), else no-op silently. (Audited so the audit trail shows hooks
-    # fired even where the tab can't be set.)
-    if not _win() or not _fe().available():
-        audit_tx("", state, 0, "skipped: not inside kitty / no remote-control socket")
-        return
-
-    # Skip the work entirely when the tab is ALREADY showing this state.
-    # Tool-heavy turns fire many hooks that all resolve to the same colour (a run
-    # of Read/Edit/MCP calls all become WORKING), and re-applying an identical
-    # colour is a wasted `kitten @` socket round-trip. The persisted state row
-    # (written at the end of every applied change) is our record of what's
-    # currently shown: if it matches, there's nothing to do — bail before locating
-    # the kitten binary or touching the socket. (clear/reset deletes the row, so
-    # an empty prev_state means "already cleared".)
-    prev_state = tab_get(_win())
-    if state in ("clear", "reset", ""):
-        if not prev_state:
-            return
-    elif state == prev_state:
-        audit_tx(prev_state, state, 0, "skipped: colour already shown")
-        return
-
-    if not _fe().usable():
-        return
-
-    if state in COLORS:
-        rc = _fe().set_tab_color(_win(), *COLORS[state])
-    elif state in ("clear", "reset", ""):
-        rc = _fe().clear_tab_color(_win())
-    else:
-        return
-
-    # Persist the resolved state (tab DB row) so bg-recheck / bg-watch can tell
-    # whether a finishing background job should flip the stale bg-running blue back
-    # to green — but ONLY when the paint actually landed (rc == 0). Persisting a
-    # failed paint made the DB claim a colour the tab never showed, and the
-    # "colour already shown" dedup above then suppressed every retry of that same
-    # state: one transient socket error stranded the old colour until a DIFFERENT
-    # state came along. Leaving the row unchanged keeps the next same-state event
-    # eligible to retry the paint.
-    if rc == 0:
-        audit_tx(prev_state, state, 1, reason)
-        if state in COLORS:
-            tab_set(_win(), state)
-        else:
-            tab_clear(_win())
-    else:
-        audit_tx(prev_state, state, 0,
-                 (f"{reason} — " if reason else "")
-                 + f"kitten @ failed rc={rc} — state row unchanged")
+    tabpaint.paint(_fe(), _win(), state, reason, sid=AUDIT_SID, dispatch=DISPATCH)
 
 
 def dispatch(state, payload, args=()):

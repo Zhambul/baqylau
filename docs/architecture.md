@@ -112,15 +112,25 @@ runs. `auditcli` imports `audit` through the public `A.connect()`, never the
 reverse), `ops.py` (paint ops, `emit`, the scoreboard
 counters/parts, the semantic colour table — the tool-agnostic half of the old
 `claude_ops.py`), `hostpane.py` (the tool-AGNOSTIC host mirror lifecycle —
-open/close the mirror pane + scoreboard bar, create/restore/park the state DB;
-shared by BOTH hosts, Claude Code's `split.py` and standalone codex's
-`session.py`. Frontend-INJECTED: core imports no frontend, so every terminal-
-touching function takes the caller's `fe` as its first arg), `copy.py` (the ⧉
+open/close the mirror pane + scoreboard bar, create/restore/park the state DB,
+and `host_end(fe, sid, log, reason, win=)` — the ONE session-END owner both hosts
+route through: session-end audit → close panes → park the state DB → optionally
+clear the tab, in Claude Code's historical SessionEnd order; shared by BOTH hosts,
+Claude Code's `split.py` and standalone codex's `session.py`. Frontend-INJECTED:
+core imports no frontend, so every terminal-touching function takes the caller's
+`fe` as its first arg), `copy.py` (the ⧉
 copy-link handler behind the `claude-copy.py` entry — reads a block's
 group-tagged ops read-only and pipes command/output text to the clipboard; see
 [click-to-view.md](click-to-view.md)), `tabs.py`
 (the tab-state vocabulary: state constants, the `COLORS` hex table every
 frontend paints from, and the global window-keyed tab DB + watcher pid locks),
+`tabpaint.py` (the tool-AGNOSTIC tab PAINT engine — `paint(fe, win, state,
+reason, …)`: the dedup against the persisted tab row, the frontend
+`set_tab_color`/`clear_tab_color` call, the persist-only-on-`rc==0` rule, and the
+`tab_transitions` audit on every path; frontend-INJECTED like `hostpane.py`, so a
+tab producer contributes only its `{event → (state, reason)}` decision + a window
+resolver and reuses the engine — `plugins/claude_code/tabstatus.py` is the
+reference producer, standalone codex the second),
 and `sessionapi.py` (the READ-SIDE session-data API — the one door for
 consumers: presentation-channel delegations to `core.state` (the mirror/
 scorebar's whole diet — same function objects, zero behavior change) plus a

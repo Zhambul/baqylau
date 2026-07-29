@@ -487,32 +487,26 @@ def cmd_open():                              # SessionStart (payload on stdin)
 
 def cmd_close():                             # SessionEnd (payload on stdin)
     payload, sid = sid_from_stdin()
-    # Stamp the session's end in the audit DB (also prunes sessions > 30 days old).
-    try:
-        A.session_end(payload)
-    except Exception:
-        pass
-    if sid:
-        close_mirror(sid)
-    audit_pane(sid, "close", 1, "session end")
     log = log_for(sid)
-    # Park (don't delete) the per-session state DB (core.state: the ops table —
-    # the mirror's entire visible history — plus scoreboard counters, message
-    # tracker, agent records, hand-offs) as *.keep: --resume/--continue keeps the
-    # session_id, so the next SessionStart moves it back and the mirror replays
-    # the session (scoreboard included). Renaming makes the DB PATH vanish, which
-    # is the exit signal the codex watcher and the scoreboard bar poll for —
-    # leaving it in place would leak them. Only the anonymous cwd-slug fallback
-    # (no sid) is deleted outright, and parked sessions older than 7 days are
-    # pruned on every close ("log" itself is a pre-migration leftover: removed).
+    # Session teardown — stamp the end in the audit DB, close the mirror +
+    # scoreboard panes, the `close` pane_events row, and PARK (don't delete) the
+    # per-session state DB (core.state: the ops table — the mirror's entire visible
+    # history — plus scoreboard counters, message tracker, agent records,
+    # hand-offs) as the durable resume history: --resume/--continue keeps the
+    # session_id, so the next SessionStart moves it back and the mirror replays the
+    # session. Renaming makes the DB PATH vanish, which is the exit signal the
+    # codex watcher and the scoreboard bar poll for. All of this is tool-agnostic
+    # host lifecycle, owned by core.hostpane.host_end (shared with the standalone
+    # codex host, which used to park + close but wrote no session-close row).
+    #
+    # No `win`: Claude Code's tab is cleared by the earlier `_tab("clear")`
+    # dispatch step (dispatch.py), which PAINTS the theme default; a second
+    # paint-less DB delete here would diverge from the tab on a failed clear paint
+    # (see host_end). Only the anonymous cwd-slug fallback (no sid) is deleted
+    # outright by park_db, and parked sessions older than 7 days are pruned below.
+    HP.host_end(_fe(), sid, log, reason=payload.get("reason") or "")
     if not log:
         return
-    action = HP.park_db(sid, log)            # move->durable park (resume) or delete
-    if action == "keep-history":
-        audit_state(log, P.parked_db(log), "keep-history", "parked for resume")
-    elif action != "discard":                # park-failed (kept live) — the live
-        audit_state(log, P.parked_db(log), action,  # DB persists, pollers stay up
-                    "park FAILED — live DB kept, pollers keep running")
     for f in (log, log + ".keep"):           # legacy JSONL log, if any
         try:
             os.remove(f)

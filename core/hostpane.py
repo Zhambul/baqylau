@@ -28,6 +28,7 @@ from core.noaudit import load_audit
 A = load_audit()   # audit trail (real module, or an inert stub if it can't import)
 from core import paths as P
 from core import state as S
+from core import tabs as T   # tab_clear (host_end's optional tab-clear — see below)
 
 # kitty bias is approximate ("you cannot use this method to create windows of
 # fixed sizes"), so after launching the bar we iterate relative resizes until it
@@ -130,6 +131,59 @@ def close_mirror(fe, sid):
     """The bar rides along with the mirror."""
     fe.close_pane(var=("claude_scorebar", sid))
     fe.close_pane(var=("claude_mirror", sid))
+
+
+# --- lifecycle end: the ONE owner of a host session's teardown ---------------
+
+def host_end(fe, sid, log, reason="", *, win=""):
+    """Tear a host session DOWN: stamp its end in the audit DB, close the mirror +
+    scoreboard panes, park the state DB, and (optionally) clear its tab. The ONE
+    owner both hosts route their session-end through — Claude Code's SessionEnd
+    (plugins/claude_code/split.py `cmd_close`) and standalone codex's pid-death
+    teardown (plugins/codex/watch.py `teardown`), which used to park + close panes
+    but wrote no session-close row and cleared no tab (a real gap this closes).
+
+    FRONTEND-INJECTED like the rest of this module: the caller passes `fe`.
+
+    ORDER is claude_code's historical SessionEnd order — session_end audit → close
+    panes → the `close` pane_events row → park_db (+ its keep/failed audit) — kept
+    byte-identical so routing Claude Code's cmd_close through here changes nothing
+    the audit trail can see. The four steps touch four independent resources (the
+    audit DB, the kitty panes, the state-DB file, the tab DB), so the order is a
+    row-sequence choice, not a data dependency.
+
+    `win` — the tab's kitty window id — is OPTIONAL and clears the tab (its DB row)
+    only when given. Claude Code passes NONE: its SessionEnd already runs a
+    `_tab("clear")` dispatch step BEFORE this (dispatch.py `_ROUTES["SessionEnd"]`)
+    that PAINTS the tab back to the theme default and deletes the row via the paint
+    engine's rc==0 persist — so a second, paint-less delete here would at best be a
+    no-op and at worst diverge from the kitty tab when that clear paint failed
+    (rc!=0 leaves the row, and this delete would erase it while the tab still shows
+    the old colour). Standalone codex has NO such dispatch step, so it passes its
+    win and this fills the gap. (Clearing the tab COLOUR too would need a frontend
+    paint; codex's teardown owns that call — this only drops the DB row.)"""
+    try:
+        A.session_end({"session_id": sid}, reason)
+    except Exception:
+        pass
+    if sid:
+        close_mirror(fe, sid)
+    try:
+        A.pane(sid, "close", 1, "session end")
+    except Exception:
+        pass
+    if log:
+        action = park_db(sid, log)           # move->durable park (resume) or delete
+        try:
+            if action == "keep-history":
+                A.state_file(log, P.parked_db(log), "keep-history", "parked for resume")
+            elif action != "discard":        # park-failed (kept live) — the live
+                A.state_file(log, P.parked_db(log), action,  # DB persists, pollers
+                             "park FAILED — live DB kept, pollers keep running")
+        except Exception:
+            pass
+    if win:
+        T.tab_clear(win)
 
 
 def _anchored_tab_windows(fe, anchor):
