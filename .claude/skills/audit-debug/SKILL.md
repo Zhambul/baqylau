@@ -246,6 +246,35 @@ New always-audited swallow sites (previously silent — their absence used to ma
   the next full read. Check `web-client` rows for a `boot`/`sse.open` after the
   discard before suspecting the server.
 
+- **A session shows NO messages on the web AT ALL — its own first prompt
+  included — and its ⧗ queued chips never drain** *(a take-back flag that ate
+  the tree, reported 2026-07-30 on session `7cb52905`, fixed same day in
+  `3c93a8c`)*. In `default` view mode this reads as "only the summary line",
+  which sends triage at the view-mode collapse; it is NOT that (the collapse
+  never folds prompts, and `verbose` shows the same nothing). It is ONE flag:
+  the take-back stash (`takeback` kv — the uuid a web interrupt stashed when
+  the terminal handed a prompt back, see the shape above) is an ADVISORY
+  suspect, and `_dead_uuids` expands every dead uuid over the whole tree — so a
+  suspect wrongly held dead prunes the entire conversation descending from it.
+  The rescue ("a suspect is dead only while NOTHING descends from it") read the
+  PARSED-record view of the tree while the expansion walks RAW lines; the
+  suspect's only child was an `attachment` record, which `parse_line` drops, so
+  the rescue never saw it and the expansion followed it into everything below
+  (130 of 184 records). Two tells, in order: the session was INTERRUPTED from
+  the web near its start (a `web-interrupt` row with `phase: "restore"`,
+  `restored: true` — its `uid` is the suspect), and the kv is non-empty
+  (`sqlite3 <state.db> "SELECT val FROM kv WHERE key='takeback'"`). CONFIRM by
+  differencing the stash out — this is the one query that names it:
+  `T.conversation(path, 0, T.taken_back(sid))` vs `T.conversation(path, 0)`
+  (records 0 vs 15 in the reported case). No audit row says any of this: the
+  prune is read-side, so the stash + the interrupt row are the whole trail.
+  On a current build a suspect is rescued off the same raw-line child map the
+  expansion uses, so a recurrence means those two tree views diverged again.
+  NB the STUCK CHIPS are downstream of this, not a second bug — `composer_queue`
+  drops a chip whose text matches a DELIVERED prompt, and with the conversation
+  pruned to nothing there are no delivered prompts to match (`_delivered_prompts`
+  returns []); they drain by themselves once the conversation is whole.
+
 - **"I stopped it and my message vanished" / "the web composer stayed empty
   after a stop"**: stopping a turn EARLY makes Claude Code discard the prompt
   and hand it back to the terminal's input box — a take-back, not a bug, and
@@ -2401,8 +2430,18 @@ New always-audited swallow sites (previously silent — their absence used to ma
   used the same rule). On a current build both are self-healing; a recurrence
   means the shared match regressed (grep test
   `test_app_js_drains_through_the_shared_prompt_match`) or the message genuinely
-  never reached the TUI (no matching `UserPromptSubmit` at all — the user Esc'd
-  it out of the queue; the chip's ✕ hides it, the web can't unqueue).
+  never reached the TUI (the user Esc'd it out of the queue; the chip's ✕ hides
+  it, the web can't unqueue). **(3) Is there anything to match AGAINST?** The
+  match runs over the DELIVERED prompts, so a conversation pruned to nothing
+  pins every chip with no defect of its own — see the take-back shape above
+  (`_delivered_prompts` returning [] on a session that plainly has prompts is
+  the tell). NB the ground truth for "was it delivered" is the TRANSCRIPT, not
+  the hooks: a message queued MID-TURN is delivered into the RUNNING turn as a
+  `queue-operation` `remove` + a `queued_command` `attachment` record, and fires
+  NO `UserPromptSubmit` at all (measured on `7cb52905`, v2.1.220 — the enqueue
+  is its own `queue-operation` `enqueue` record). So grep the jsonl for
+  `queue-operation`/`queued_command` before concluding a queued message was
+  lost; absence of a `UserPromptSubmit` proves nothing about it.
 - **"the ctx bar animated forever" / "the ctx bar never animated" / "the ctx
   number was wrong right after a compaction"** — three different failures with
   one evidence trail, the `compacting` `state_files` rows plus the `PreCompact`/
