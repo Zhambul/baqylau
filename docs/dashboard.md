@@ -3977,6 +3977,14 @@ rendering the column anyway rather than by measuring:
   reserves the badge's slot (`.uauth.ghost`, `visibility: hidden`). The name
   column likewise sizes to the widest name on the strip (`--aname-w`, floor
   `ANAME_MIN_CH`).
+- **A model-scoped window has NO reset column at all** (`hasReset(k)` — only
+  `five_hour`/`seven_day` carry one). "7d fable" resets on the same weekly
+  clock as the `seven_day` bar directly above it, so its own `resets in …` was
+  a duplicate of the line above — and on a model the account hasn't touched
+  there is no reset epoch to show anyway (`effective_usage` drops a rolled-over
+  one), so the reserved 17ch read blank. This does NOT break the stack: the
+  column is dropped for the same KEY on every row, which is the invariant —
+  same columns at the same widths, not "every bar has every part".
 
 Identical row widths also mean the rows FOLD at the same point, so the
 alignment survives the narrow-screen wrap `.acct` exists for.

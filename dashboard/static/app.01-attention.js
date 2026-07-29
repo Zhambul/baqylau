@@ -332,7 +332,15 @@ function acctPill(a, cols, anyOut) {
     if (!a.logged_out) pill.append(el("span", "adim", "no usage yet"));
     return pill;
   }
-  const bar = (label, pct, resetKey) => {
+  // A model-scoped weekly window ("7d fable") resets on the SAME clock as the
+  // account-wide `seven_day` bar right above it, so its own "resets in …" was
+  // pure duplication — and a model the account hasn't touched has no reset to
+  // show at all (effective_usage drops a rolled-over one), so the column read
+  // blank exactly where the duplicate would have been. Drop the reset column
+  // for those windows entirely: it is dropped for the SAME key on every row,
+  // so the stack still aligns (docs/dashboard.md *Row alignment*).
+  const hasReset = (k) => k === "five_hour" || k === "seven_day";
+  const bar = (label, pct, resetKey, showReset) => {
     const has = typeof pct === "number";       // false → this account has no
     const seg = el("span", "ubar" + (!has ? " ghost"    // snapshot for the window
       : pct >= 90 ? " hot" : pct >= 70 ? " warn" : ""));
@@ -346,22 +354,24 @@ function acctPill(a, cols, anyOut) {
     // (effective_usage DROPS it once the window has rolled over — an idle
     // account's 5h reads 0% with no reset). Absent, the bar would be 17ch
     // narrower than the other account's and everything after it would slide.
-    const reset = has && u && u[resetKey];
-    const box = el("span", "ureset");
-    if (reset) {
-      // dim "resets in" prefix, keep the duration (4h 12m) at full weight
-      const txt = resetAgo(reset);          // "in 4h 12m" | "in <1m" | "now"
-      const hasIn = txt.startsWith("in ");
-      box.append(el("span", "rlbl", hasIn ? "resets in " : "resets "));
-      box.append(el("span", "rval", hasIn ? txt.slice(3) : txt));
+    if (showReset) {
+      const reset = has && u && u[resetKey];
+      const box = el("span", "ureset");
+      if (reset) {
+        // dim "resets in" prefix, keep the duration (4h 12m) at full weight
+        const txt = resetAgo(reset);        // "in 4h 12m" | "in <1m" | "now"
+        const hasIn = txt.startsWith("in ");
+        box.append(el("span", "rlbl", hasIn ? "resets in " : "resets "));
+        box.append(el("span", "rval", hasIn ? txt.slice(3) : txt));
+      }
+      seg.append(box);
     }
-    seg.append(box);
     return seg;
   };
   // one bar per column — the 5h/7d pair plus any model-scoped window the CLI
   // reports (e.g. "7d fable"), in the served order (renderAccounts' union)
   cols.forEach(k => pill.append(bar(windowLabel(k), u ? u[k] : undefined,
-                                    k + "_reset")));
+                                    k + "_reset", hasReset(k))));
   // The account is BLOCKED right now (a session on it died on error=
   // rate_limit — the `limit-hit` stamp, served only while still active):
   // say so outright; the frozen usage bar alone reads ~95% at exactly the

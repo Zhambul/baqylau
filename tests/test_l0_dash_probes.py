@@ -656,9 +656,13 @@ def test_accounts_strip_rows_stack_column_for_column():
         # ghost-blind and value-blind by construction — a placeholder is the
         # same box with the ink turned down)
         assert rows[0] == rows[1], (name, rows)
-        # and every window carries its reset cell, present or empty
+        # every ACCOUNT-WIDE window carries its reset cell, present or empty;
+        # a model-scoped one ("7d fable") carries NONE — its reset duplicates
+        # the 7d bar above it, and it is dropped for the same key on every row,
+        # so the stack still aligns (docs/dashboard.md *Row alignment*)
         for bar in [c for c in rows[0] if c["kind"] == "ubar"]:
-            assert bar["cells"] == ["ulabel", "utrack", "upct", "ureset"], \
+            tail = ["ureset"] if bar["label"] in ("5h", "7d") else []
+            assert bar["cells"] == ["ulabel", "utrack", "upct"] + tail, \
                 (name, bar)
 
     # the placeholders are where the missing data is, and NOT anywhere else
