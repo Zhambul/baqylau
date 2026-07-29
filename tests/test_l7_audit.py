@@ -138,6 +138,14 @@ BUG_SHAPES = [
         ("INSERT INTO state_files(ts,session_id,path,action,content,script,pid)"
          " VALUES(1,?,'/x.log','bump-otel','{\"deltas\":{\"cost\":0.1}}',NULL,1)",
          (SID,))]),
+    ("codex web interrupt not confirmed", [
+        # A codex web-interrupt whose single Esc landed (ok:true) but whose
+        # turn_aborted record never appeared inside the bounded wait
+        # (verified:false) — the codex-only interrupt-not-confirmed signature.
+        ("INSERT INTO state_files(ts,session_id,path,action,content,script,pid)"
+         " VALUES(1,?,'/x.log','web-interrupt','{\"win\":\"9\",\"ok\":true,"
+         "\"host\":\"codex\",\"status\":\"indeterminate\",\"verified\":false,"
+         "\"steered\":false}',NULL,1)", (SID,))]),
 ]
 
 

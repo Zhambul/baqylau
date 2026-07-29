@@ -148,6 +148,14 @@ class _DialogMixin:
             A.state_file(log, sdb, "web-answer",
                          {"win": "", "ok": False, "chat": chat})
             return self._json({"error": "session has no live window"}, 409)
+        # NON-claude host (codex) answers its OWN request_user_input dialog through
+        # its HostControl.ask gesture (codex's dialog geometry differs — Claude's
+        # askdialog.region() returns "" on it). None for a claude_code / unprovable
+        # session, so the byte-identical inline askdialog path below runs unchanged.
+        host = self._gesture_host(sid)
+        if host is not None:
+            return self._host_answer(host, sid, questions, answers or [], chat,
+                                     log, sdb, fe, win, pending)
         try:
             askdialog.drive(fe, win, questions, answers or [], chat=chat)
         except askdialog.AskError as e:
@@ -183,6 +191,32 @@ class _DialogMixin:
                         {"sid": sid, "win": win})
             resp["message_sent"] = sent
         return self._json(resp)
+
+    def _host_answer(self, host, sid, questions, answers, chat, log, sdb, fe,
+                     win, pending):
+        """Answer a NON-claude host's dialog (codex request_user_input) through
+        its HostControl.ask gesture, which navigates codex's OWN dialog geometry
+        (plugins/codex/dialog.py). `chat` (Claude's 'Chat about this' decline) has
+        no codex analog, so it is ignored — codex answers by option selection /
+        notes. The gesture catches its own driver errors, A.errors an INDETERMINATE
+        degrade with the dialog left open, and hands back {status, ok, step?}; this
+        writes the canonical `web-answer` row (host/status/cid alongside) and the
+        reply. No heal_stash: codex's pending is derived read-side from the rollout,
+        not a kv to self-heal (the next payload re-reads the tail)."""
+        ctx = {"sid": sid, "log": log, "sdb": sdb, "chat": chat,
+               "questions": questions,
+               "tool_use_id": pending.get("tool_use_id") or ""}
+        res = host.ask(fe, win, answers, ctx)
+        ok = bool(res.get("ok"))
+        A.state_file(log, sdb, "web-answer",
+                     {"win": win, "ok": ok, "chat": chat, "host": host.name,
+                      "tool_use_id": pending.get("tool_use_id") or "",
+                      "status": res.get("status"), "cid": res.get("cid"),
+                      "step": res.get("step")})
+        if not ok:
+            return self._json({"error": res.get("detail") or "answer failed",
+                               "step": res.get("step") or "drive"}, 409)
+        return self._json({"ok": True, "chat": chat})
 
     def _plan_guard(self, sid):
         """The shared head of the two plan endpoints: guard the POST, match

@@ -228,6 +228,13 @@ class _TypingMixin:
                           "ok": False, "tab": tab})
             return self._json({"error": "a dialog is open — answer it first"},
                               409)
+        # NON-claude host (codex) drives the command through its own gesture. The
+        # caps guard above already 409'd model/effort (codex leaves them inert), so
+        # only `compact` reaches here for codex; a claude_code / unprovable session
+        # returns None and the byte-identical inline path below runs unchanged.
+        host = self._gesture_host(sid)
+        if host is not None and cmd == "compact":
+            return self._host_compact(host, sid, log, sdb, fe, win, tab)
         # the ONE slash-command channel: a bracketed paste (mode-proof — a raw
         # typed command is vim KEYSTROKES in a NORMAL-mode box) + the clipboard
         # -image guard that a paste requires (launch.type_command)
@@ -260,6 +267,23 @@ class _TypingMixin:
                          {"win": win, "cmd": cmd,
                           "confirm": res["confirm"]})
         return self._json(res)
+
+    def _host_compact(self, host, sid, log, sdb, fe, win, tab):
+        """Route /compact through a NON-claude host's gesture (codex pastes its
+        own `/compact`). Writes the canonical `web-command` row (host/status/cid
+        alongside cmd) and shapes the reply like the inline path — no confirm menu
+        (that is a Claude prompt-cache prompt), and `queued` when mid-turn."""
+        res = host.compact(fe, win, {"sid": sid, "log": log, "sdb": sdb})
+        ok = bool(res.get("ok"))
+        A.state_file(log, sdb, "web-command",
+                     {"win": win, "cmd": "compact", "arg": "", "ok": ok,
+                      "tab": tab, "host": host.name, "status": res.get("status"),
+                      "cid": res.get("cid")})
+        if not ok:
+            A.error(log, "dashboard command (%s compact send failed)" % host.name,
+                    {"sid": sid, "win": win})
+            return self._json({"error": "send failed"}, 502)
+        return self._json({"ok": True, "queued": tab in QUEUE_TABS, "tab": tab})
 
     def post_stop(self, sid):
         """Close a session's kitty tab (Frontend.close_tab — main window +

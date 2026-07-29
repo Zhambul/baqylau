@@ -80,14 +80,21 @@ def test_codex_owns_real_rollouts_only(tmp_path):
     assert RO.owns("") is False
 
 
-def test_codex_host_caps_all_false_in_p3(tmp_path):
-    """codex is a launchable HOST but drives no gesture yet (P5) — every cap
-    reads False, so the dashboard greys its control buttons."""
+def test_codex_host_caps_reflect_wired_gestures(tmp_path):
+    """codex is a launchable HOST that drives its SUPPORTED gestures (P5):
+    interrupt/compact/rename/ask read True (the dashboard un-greys those buttons),
+    while the gestures codex cannot drive — rewind/plan/migrate/model/effort — stay
+    inert and read False (greyed). `send` is not a gesture (never caps-gated). The
+    caps are DERIVED from which methods CodexHost overrides, not an authored dict
+    (plugins.host), so this pins the derivation end-to-end."""
     import plugins
     h = plugins.host_named("codex")
     assert h is not None and h.name == "codex" and h.launchable is True
     assert h.label == "Codex"
-    assert set(h.caps().values()) == {False}
+    assert h.caps() == {"interrupt": True, "send": False, "rename": True,
+                        "rewind": False, "migrate": False, "compact": True,
+                        "model": False, "effort": False, "ask": True,
+                        "plan": False}
     assert h.resume_words("sid7") == ["resume", "sid7"]
     p = _full_rollout(tmp_path)
     assert plugins.host_of(p).name == "codex"
@@ -172,6 +179,173 @@ def test_codex_pending_dialog_reads_open_ask(tmp_path, monkeypatch):
     p2 = _rollout(tmp_path, recs2)
     monkeypatch.setattr(API, "session_row", lambda sid: {"transcript_path": p2})
     assert plugins.pending_dialog("sid1") is None
+
+
+# ------------------------------------------------------ P5 control GESTURES
+
+def _ask_recs():
+    return [_resp("function_call", name="request_user_input", call_id="call_9",
+                  arguments=json.dumps({"questions": [
+                      {"id": "q1", "header": "pick", "question": "which?",
+                       "options": [{"label": "a", "description": ""},
+                                   {"label": "b", "description": ""}]}]}))]
+
+
+class _KeyFE:
+    """A minimal Frontend for the codex gestures: records send_key/paste_text and,
+    on an Escape, appends whatever rollout lines `on_esc` yields (simulating codex
+    writing its `turn_aborted` record after the press)."""
+
+    def __init__(self, rollout=None, on_esc=None):
+        self.rollout, self.on_esc = rollout, on_esc
+        self.keys, self.pastes = [], []
+
+    def send_key(self, win, *keys):
+        self.keys.append(keys)
+        if keys and keys[0] == "escape" and self.rollout and self.on_esc:
+            with open(self.rollout, "a", encoding="utf-8") as fh:
+                for rec in self.on_esc():
+                    fh.write(json.dumps(rec) + "\n")
+        return True
+
+    def paste_text(self, win, text):
+        self.pastes.append(text)
+        return True
+
+
+def test_codex_interrupt_verifies_turn_aborted(tmp_path):
+    from plugins.codex import hostctl
+    p = _rollout(tmp_path, [{"type": "session_meta", "payload": {"cwd": "/w"}}])
+    fe = _KeyFE(rollout=p, on_esc=lambda: [_ev("turn_aborted")])
+    res = hostctl.CodexHost().interrupt(fe, "42", {"rollout": p})
+    assert res["status"] == "acknowledged"
+    assert res["ok"] and res["verified"] and not res["steered"]
+    assert res["tries"] == 1 and ("escape",) in fe.keys
+
+
+def test_codex_interrupt_reports_steer(tmp_path):
+    """A queued message delivered right after the abort (task_started + prompt) is
+    a STEER — reported so the ⧗ chip drains via conversation reconciliation."""
+    from plugins.codex import hostctl
+    p = _rollout(tmp_path, [{"type": "session_meta", "payload": {"cwd": "/w"}}])
+    fe = _KeyFE(rollout=p, on_esc=lambda: [_ev("turn_aborted"),
+                                           _ev("task_started"),
+                                           _ev("user_message", message="go on")])
+    res = hostctl.CodexHost().interrupt(fe, "42", {"rollout": p})
+    assert res["status"] == "acknowledged" and res["verified"] and res["steered"]
+
+
+def test_codex_interrupt_indeterminate_without_record(tmp_path, monkeypatch):
+    """Esc landed but no turn_aborted appeared → INDETERMINATE (audited)."""
+    from plugins.codex import hostctl
+    monkeypatch.setattr(hostctl, "INTERRUPT_VERIFY_S", 0.05)
+    monkeypatch.setattr(hostctl, "INTERRUPT_POLL_S", 0.01)
+    monkeypatch.setattr(hostctl, "INTERRUPT_TRIES", 1)
+    p = _rollout(tmp_path, [{"type": "session_meta", "payload": {"cwd": "/w"}}])
+    fe = _KeyFE(rollout=p, on_esc=lambda: [])   # nothing written
+    res = hostctl.CodexHost().interrupt(fe, "42", {"rollout": p})
+    assert res["status"] == "indeterminate" and res["ok"] and not res["verified"]
+
+
+def test_codex_compact_and_rename_paste(tmp_path):
+    from plugins.codex import hostctl
+    h = hostctl.CodexHost()
+    fe = _KeyFE()
+    assert h.compact(fe, "42", {})["status"] == "acknowledged"
+    assert fe.pastes == ["/compact"]
+    r = h.rename("sid1", "new name", {"fe": fe, "win": "42"})
+    assert r["status"] == "acknowledged" and r["ok"]
+    assert fe.pastes[-1] == "/rename new name"
+    # no window → REJECTED (the caller falls back to the parked rename path)
+    assert h.rename("sid1", "x", {})["status"] == "rejected"
+
+
+class _DialogFE:
+    """A stateful fake codex question dialog: a `›` cursor over two options that
+    DOWN/UP move and ENTER submits (closing the dialog)."""
+
+    def __init__(self):
+        self.cursor, self.closed, self.keys = 1, False, []
+
+    def get_text(self, win, extent="screen", ansi=False):
+        if self.closed:
+            return "codex done\n❯ \n[gpt-5.1-codex] │ ready\n"
+        lines = ["Question 1/1 (1 unanswered)"]
+        for i, label in enumerate(("Apple", "Banana"), 1):
+            mark = "› " if i == self.cursor else "  "
+            lines.append("%s%d. %s   a short description" % (mark, i, label))
+        lines.append("tab to add notes | enter to submit answer | esc to interrupt")
+        return "\n".join(lines)
+
+    def send_key(self, win, *keys):
+        self.keys.append(keys)
+        k = keys[0] if keys else ""
+        if k == "down":
+            self.cursor = min(self.cursor + 1, 2)
+        elif k == "up":
+            self.cursor = max(self.cursor - 1, 1)
+        elif k == "enter":
+            self.closed = True
+        return True
+
+
+def test_codex_dialog_driver_selects_and_submits():
+    from plugins.codex import dialog
+    fe = _DialogFE()
+    qs = [{"id": "q1", "header": "pick", "question": "which?",
+           "options": [{"label": "Apple"}, {"label": "Banana"}]}]
+    res = dialog.drive(fe, "42", qs, [{"selected": ["Banana"], "other": ""}],
+                       sleep=lambda s: None)
+    assert res == {"submitted": True}
+    assert fe.cursor == 2 and fe.closed   # cursored onto Banana, then Enter
+
+
+def test_codex_dialog_driver_bails_open_with_no_dialog():
+    from plugins.codex import dialog
+
+    class Blank:
+        def get_text(self, win, extent="screen", ansi=False):
+            return "just a shell prompt\n❯ \n"
+        def send_key(self, win, *keys):
+            return True
+
+    try:
+        dialog.drive(Blank(), "42", [{"options": []}], [{"selected": []}],
+                     sleep=lambda s: None)
+        raise AssertionError("expected CodexAskError")
+    except dialog.CodexAskError as e:
+        assert e.step == "open"
+
+
+def test_codex_host_ask_gesture_wraps_the_driver():
+    from plugins.codex import hostctl
+    fe = _DialogFE()
+    qs = [{"id": "q1", "header": "pick",
+           "options": [{"label": "Apple"}, {"label": "Banana"}]}]
+    res = hostctl.CodexHost().ask(fe, "42", [{"selected": ["Apple"], "other": ""}],
+                                  {"questions": qs})
+    assert res["status"] == "acknowledged" and res["ok"]
+    assert fe.closed
+
+
+def test_ask_pending_surfaces_codex_dialog(tmp_path, monkeypatch):
+    """The dashboard's ask source is host-aware: a codex session with an open
+    request_user_input surfaces through plugins.pending_dialog into the SAME
+    ask_pending the card + post_answer read (no claude ask-pending kv)."""
+    import plugins
+    from core import sessionapi as API
+    from dashboard.read import session as rsession
+    p = _rollout(tmp_path, _ask_recs())
+    monkeypatch.setattr(API, "session_row", lambda sid: {"transcript_path": p})
+    monkeypatch.setattr(rsession, "session_kv", lambda sid, key, sdb=None: None)
+    got = rsession.ask_pending("sid1")
+    assert got and got["kind"] == "ask" and got["tool_use_id"] == "call_9"
+    # a CLAUDE session (empty/unknown path → DEFAULT_HOST) never reads the rollout
+    monkeypatch.setattr(API, "session_row", lambda sid: {"transcript_path": ""})
+    called = {"n": 0}
+    monkeypatch.setattr(plugins, "pending_dialog",
+                        lambda sid: called.__setitem__("n", called["n"] + 1))
+    assert rsession.ask_pending("sid1") is None and called["n"] == 0
 
 
 # ------------------------------------------------------------------ title

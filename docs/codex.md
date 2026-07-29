@@ -292,14 +292,12 @@ which audits a degrade.
   `--continue`; verified against codex-cli 0.144.1). The command WORD `plugins.
   launch_argv` fixes is just `codex` (the base `HostControl.launch_cmd` default
   over `name` — codex has no account switcher, unlike claude_code, whose
-  `launch_cmd` resolves the `c1`/`c2` alias). It still drives NO control GESTURE
-  (interrupt/rename/…), so its derived caps read all-**False** and the dashboard
-  GREYS every control button for a live codex session — the honest state until the
-  codex app-server transport is wired (interrupt via `turn/interrupt`, rename via
-  `thread/name/set`, ask via the `request_user_input` reply). Leaving a gesture
-  inert is not a stub gap: a False cap is the correct answer while the transport
-  is unwired. Launch/resume are lifecycle plumbing, NOT gesture-gated, so they
-  work now.
+  `launch_cmd` resolves the `c1`/`c2` alias). It drives its SUPPORTED control
+  GESTURES (P5, *Codex control gestures* below) — interrupt/compact/rename/ask —
+  so those caps read **True** and the dashboard un-greys their buttons; the ones
+  it cannot drive (rewind/plan/migrate/model/effort) stay inert and read **False**
+  (greyed). Launch/resume are lifecycle plumbing, NOT gesture-gated, so they work
+  regardless.
 - **Claude screen-scrapers are host-gated OFF codex.** Once codex writes
   `awaiting-response`/`awaiting-command` tab rows (its tab producer, above), three
   Claude-GEOMETRY screen scrapes would start firing on codex panes and return
@@ -350,6 +348,70 @@ which audits a degrade.
   (`A.error`), never raises.
 - **effort** — `model_reasoning_effort` from `~/.codex/config.toml`, behind
   `plugins.effort_default` (codex has no per-project/account effort config).
+
+### Codex control gestures (the P5 write plane)
+
+codex drives the control buttons it CAN — `interrupt`, `compact`, `rename`, and
+`ask` — through its `HostControl` (`plugins/codex/hostctl.CodexHost`). Overriding
+each gesture is what flips its DERIVED cap **True** (plugins.host), so the
+dashboard un-greys those buttons and `_caps_guard` lets them through; the ones
+codex cannot drive stay inert and read **False**: no `rewind` (codex has no
+checkpoint menu), no `plan` (no plan-approval tool), no `migrate` (no account
+switcher), no `model` (codex's `/model` is an INTERACTIVE picker, not a `/model
+<arg>` we can drive blind — deferred), no `effort` (a launch-time `-c
+model_reasoning_effort` only, no live `/effort`). `send` is a generic paste, not a
+gesture, so it is never caps-gated.
+
+The dashboard's control handlers ROUTE to the gesture when the session's owner
+isn't claude_code (`_gesture_host(sid)` — `plugins.owns_by` → the host object, or
+`None` for a claude/unprovable session): a codex session takes the gesture path,
+a Claude session keeps its exact inline body (byte-identical — the branch is one
+`if host is not None:` that is `False` for it). The gesture bodies use ONLY the
+frontend (`fe.paste_text`/`send_key`/`get_text`) + codex's own `rollout.parse`,
+never dashboard code — so the whole gesture, screen driver included, sits behind
+`HostControl` and a future codex **app-server transport** (turn/interrupt,
+thread/name/set, the request_user_input reply) replaces the screen-drive without
+touching the dashboard.
+
+- **`interrupt`** — a **SINGLE Escape** (codex's composer is NOT modal like
+  Claude's vim, so no double-Esc), VERIFIED by the `turn_aborted` RECORD appearing
+  in the rollout: codex fires **no Stop hook**, no take-back to the input box, and
+  gets **no escape-recheck** (all Claude-only). The gesture reads the rollout size
+  before the press, then polls (bounded, one retry — a single synthesized Esc is
+  only ~2/3 reliable per kitty window) for a `turn_aborted` record matched through
+  `rollout.parse` (never a raw byte scan). A QUEUED message delivered right after
+  the abort (`task_started` + `prompt`) is a **STEER** — reported `steered=True`,
+  the ⧗ chip draining via the normal conversation reconciliation, NOT a plain
+  stop. Result `{status, ok, verified, steered, tries}`: **acknowledged** when the
+  record was seen, **indeterminate** (audited `codex interrupt (no turn_aborted)`,
+  the *codex web interrupt not confirmed* anomaly) when the Esc landed but nothing
+  appeared, **rejected** when nothing could be pressed. The `web-interrupt` row
+  carries `host:codex` + `verified` + `steered`.
+- **`compact`** — paste codex's own `/compact` (fires Pre/PostCompact); no
+  Claude switch-confirm menu, no clipboard-image guard (codex doesn't auto-attach
+  a clipboard image on paste).
+- **`rename`** — a LIVE `/rename <name>` paste (the title lands in
+  `~/.codex/state_<N>.sqlite threads.title`); the PARKED path stays P3's
+  `title.set_session_title`. Works live AND parked, both gated by
+  `plugins.renameable`.
+- **`ask`** — drive codex's own `request_user_input` dialog. Its geometry differs
+  from Claude's (a `Question N/M` header, numbered options with a `›` cursor, an
+  `enter to submit answer` footer), so Claude's `askdialog.region()` returns "" on
+  it — codex needs its OWN driver, **`plugins/codex/dialog.py`** (the single-owner
+  codex dialog driver, sibling of `dashboard/askdialog.py` but in the PLUGIN
+  because the gesture drives it and a plugin can't import the dashboard). It walks
+  the `›` cursor with DOWN/UP onto the chosen option and presses ENTER per
+  question, screen-verified each step; a step that never verifies degrades to
+  **indeterminate** with the dialog LEFT OPEN (never Escape-closed — codex's Esc
+  ABORTS the turn). The web question card renders codex's `pending_dialog` through
+  the SAME `data["ask"]` a Claude ask uses (`read/session.ask_pending` is
+  host-aware: a codex session with no hook-stashed `ask-pending` kv derives its
+  open request_user_input from the rollout tail via `plugins.pending_dialog`), and
+  the same card JS (`{header, question, options[{label, description}]}`) renders
+  it. `request_user_input` is plan-mode-only and model-nondeterministic (the model
+  sometimes answers in prose instead of raising the tool), so the card appears
+  rarely — that is expected, not a gap. Codex's "chat about this" / free-text notes
+  are best-effort (no codex analog to Claude's decline).
 
 ### Launching & resuming codex from the web
 

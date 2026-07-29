@@ -966,8 +966,14 @@ def test_hosts_and_host_of(tmp_path):
     assert plugins.host_of("") is None
     assert plugins.host_named("nope") is None
     assert plugins.host_caps("claude_code")["interrupt"] is True
-    # codex drives no gesture yet (P5): every cap False
-    assert plugins.host_caps("codex") == {g: False for g in GESTURES}
+    # codex drives its SUPPORTED gestures (P5): interrupt/compact/rename/ask True,
+    # the rest inert (no rewind/plan/migrate, an interactive /model picker, no live
+    # /effort) — derived from the overridden methods, not an authored dict.
+    assert plugins.host_caps("codex") == {
+        "interrupt": True, "send": False, "rename": True, "rewind": False,
+        "migrate": False, "compact": True, "model": False, "effort": False,
+        "ask": True, "plan": False}
+    assert set(plugins.host_caps("codex")) == set(GESTURES)
     assert plugins.host_caps("nope") == {}
 
 

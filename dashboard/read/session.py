@@ -372,7 +372,31 @@ def _dialog_pending(sid, key):
 
 
 def ask_pending(sid):
-    return _dialog_pending(sid, "ask-pending")
+    """The session's OPEN modal-ask stash, HOST-AWARE — the ONE ask source the
+    payload's data["ask"], post_message's modal send-block, and the ask-card
+    endpoints (_ask_stash) all read. A claude_code session's ask lives in the
+    hook-stashed `ask-pending` kv (ask_fmt.py); a codex session has NO such hook,
+    so its OPEN request_user_input is derived READ-side from the rollout tail
+    (plugins.pending_dialog → plugins/codex/read.pending_dialog), the same
+    {tool_use_id, questions} shape the card renders and post_answer matches. None
+    when neither has one.
+
+    HOST-GATED so a CLAUDE session pays nothing new (session_caps → DEFAULT_HOST →
+    return the kv result at once): the pending_dialog fan-out reads a 256KB rollout
+    tail, which must not fire on every SSE tick for a Claude session. An
+    unprovable/empty path stays the claude default, so a daemon-origin Claude
+    session is unaffected."""
+    claude = _dialog_pending(sid, "ask-pending")
+    if claude is not None:
+        return claude
+    host, _ = session_caps((API.session_row(sid) or {}).get("transcript_path") or "")
+    if host == DEFAULT_HOST:
+        return None
+    try:
+        pend = plugins.pending_dialog(sid)
+    except Exception:
+        return None
+    return pend if isinstance(pend, dict) else None
 
 
 def ask_wire(sid, ask):

@@ -284,6 +284,33 @@ class _Base(BaseHTTPRequestHandler):
                     "cap": key}, 409)
         return True
 
+    def _gesture_host(self, sid):
+        """The session's owning HostControl for control-gesture ROUTING, or None
+        to take the byte-identical claude_code inline path. This is the P5 seam
+        the control handlers branch on: a session PROVABLY owned by a NON-default
+        host (a codex rollout) gets the host object, so the handler dispatches its
+        gesture through host.<gesture> (interrupt/compact/rename/ask); a
+        claude_code session — and EVERY unprovable/empty transcript path
+        (owns_by → None) — returns None so the handler's existing inline body runs
+        UNCHANGED. That None is what keeps a Claude session byte-identical: the
+        branch is one `if host is not None:` that is False for it.
+
+        Degrades to None (the claude path) on any resolution error, exactly as
+        _caps_guard degrades OPEN — a read hiccup must never divert a real Claude
+        session off its own control plane. The caps guard (called first by every
+        gesture handler) already 409'd a gesture this host can't drive, so this
+        only ever hands back a host for a gesture the caps say it CAN."""
+        try:
+            import plugins
+            from dashboard.read import session as rsession
+            tpath = (API.session_row(sid) or {}).get("transcript_path") or ""
+            owner = plugins.owns_by(tpath) if tpath else None
+            if not owner or owner == rsession.DEFAULT_HOST:
+                return None
+            return plugins.host_named(owner)
+        except Exception:
+            return None
+
     # the SPA parts (app.NN-name.js, split from the former monolithic app.js) are
     # admitted by SHAPE, not a per-file whitelist entry — still no user-path
     # resolution (a strict basename pattern), just no dict bloat for the 13 parts.

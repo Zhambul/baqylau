@@ -426,6 +426,13 @@ class _SessionMixin:
                           "reason": "dialog open"})
             return self._json({"error": "a dialog is open — answer it first"},
                               409)
+        # NON-claude host (codex) pastes its OWN `/rename <name>` through its
+        # gesture (fe/win ride in ctx — the gesture is sid-keyed). None for a
+        # claude_code / unprovable session, so the byte-identical inline path
+        # below runs unchanged.
+        host = self._gesture_host(sid)
+        if host is not None:
+            return self._host_rename_live(host, sid, name, log, sdb, fe, win, tab)
         ok, clip = launch.type_command(fe, win, "/rename " + name)
         queued = tab in QUEUE_TABS
         A.state_file(log, sdb, "web-rename",
@@ -433,6 +440,26 @@ class _SessionMixin:
                       "channel": "tui", "queued": queued, "clip": clip})
         if not ok:
             A.error(log, "dashboard rename (send failed)",
+                    {"sid": sid, "win": win})
+            return self._json({"error": "send failed"}, 502)
+        return self._json({"ok": True, "title": name, "channel": "tui",
+                           "queued": queued})
+
+    def _host_rename_live(self, host, sid, name, log, sdb, fe, win, tab):
+        """The LIVE rename for a NON-claude host (codex): route through its
+        HostControl.rename gesture, which pastes the host's own `/rename <name>`.
+        Same `web-rename channel:tui` row + reply shape as the inline claude path
+        (plus host/status/cid); `queued` when mid-turn."""
+        res = host.rename(sid, name, {"sid": sid, "log": log, "sdb": sdb,
+                                      "tab": tab, "fe": fe, "win": win})
+        ok = bool(res.get("ok"))
+        queued = tab in QUEUE_TABS
+        A.state_file(log, sdb, "web-rename",
+                     {"win": win, "chars": len(name), "ok": ok, "tab": tab,
+                      "channel": "tui", "queued": queued, "host": host.name,
+                      "status": res.get("status"), "cid": res.get("cid")})
+        if not ok:
+            A.error(log, "dashboard rename (%s send failed)" % host.name,
                     {"sid": sid, "win": win})
             return self._json({"error": "send failed"}, 502)
         return self._json({"ok": True, "title": name, "channel": "tui",

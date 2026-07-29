@@ -246,6 +246,20 @@ ANOMALY_SECTIONS = [
      "SELECT ts, content FROM state_files WHERE session_id=? "
      "AND action='web-interrupt' AND json_valid(content) "
      "AND json_extract(content, '$.stopped')=0", 1),
+    # The CODEX twin of the claude "web interrupt never landed": codex fires no
+    # Stop hook, so a single Esc (its composer is not modal) is VERIFIED by the
+    # rollout's `turn_aborted` record (plugins/codex/hostctl.interrupt). A
+    # host=codex web-interrupt with verified:false is the Esc landing with NO
+    # turn_aborted seen inside the bounded wait — the gesture also A.error'd
+    # "codex interrupt (no turn_aborted)", so this and the errors table agree
+    # (the row that says which session, the error the traceback). A STEER (a
+    # queued message delivered as a new turn) is NOT a failure — it reads
+    # verified:true, steered:true (docs/codex.md *Codex control gestures*).
+    ("codex web interrupt not confirmed (web-interrupt host=codex, verified:false)",
+     "SELECT ts, content FROM state_files WHERE session_id=? "
+     "AND action='web-interrupt' AND json_valid(content) "
+     "AND json_extract(content, '$.host')='codex' "
+     "AND json_extract(content, '$.verified')=0", 1),
     # "I stopped the turn and my QUEUED message vanished." Claude Code hands the
     # turn to a queued prompt the instant the Esc lands, so the screen keeps
     # animating; a screen-only verdict reads that as "still live" and presses

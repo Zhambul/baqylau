@@ -144,6 +144,14 @@ class _InterruptMixin:
         row, log, sdb, fe, win, tab = resolved
         if self._dialog_open_guard(tab, log, sdb, win, action):
             return
+        # NON-claude host (a codex session) drives its OWN interrupt gesture — a
+        # single Esc verified by the rollout's turn_aborted record, no take-back /
+        # escape-recheck (codex fires no Stop). None for a claude_code / unprovable
+        # session, so the byte-identical inline path below runs unchanged.
+        host = self._gesture_host(sid)
+        if host is not None:
+            return self._host_interrupt(host, sid, verb, action, row, log, sdb,
+                                        fe, win, tab)
         tpath, tsize = self._press_baseline(row)   # BEFORE the key lands
         # ROBUST verified interrupt (docs/dashboard.md *Interrupt*). A single
         # synthesized Escape does NOT reliably stop a busy turn here: kitty
@@ -226,6 +234,39 @@ class _InterruptMixin:
         return self._json({"ok": True, "tab": tab, "queued": bool(drained),
                            "restored": self._restored_input(fe, win, sid, log,
                                                             sdb, action)})
+
+    def _host_interrupt(self, host, sid, verb, action, row, log, sdb, fe, win,
+                        tab):
+        """Route the interrupt through a NON-claude host's HostControl gesture
+        (codex today). The gesture does the whole stop — a single Esc verified by
+        the rollout's `turn_aborted` record, reporting `steered` when a queued
+        message was delivered as a new turn — and its own probe/degrade audit; this
+        writes the canonical `web-interrupt` row (the same vocabulary claude's
+        path uses, plus host/status/cid/verified/steered) and shapes the reply.
+
+        `queued` mirrors the claude contract: a steered abort re-pointed the
+        session at the queued message, so the composer stays in queue mode. There
+        is no `restored` — codex does not hand the prompt back to the input box."""
+        ctx = {"sid": sid, "log": log, "sdb": sdb, "tab": tab,
+               "rollout": row.get("transcript_path") or ""}
+        res = host.interrupt(fe, win, ctx)
+        ok = bool(res.get("ok"))
+        A.state_file(log, sdb, action,
+                     {"win": win, "ok": ok, "tab": tab, "host": host.name,
+                      "status": res.get("status"), "cid": res.get("cid"),
+                      "verified": res.get("verified"),
+                      "steered": res.get("steered"), "tries": res.get("tries")})
+        if not ok:
+            A.error(log, "dashboard %s (%s send failed)" % (verb, host.name),
+                    {"sid": sid, "win": win})
+            return self._json({"error": "send failed"}, 502)
+        # The Esc landed; the gesture already A.error'd an unverified abort (the
+        # codex-interrupt anomaly). A single codex Esc is harmless on an idle box,
+        # so report success with a `verified` flag rather than a false 502.
+        return self._json({"ok": True, "tab": tab,
+                           "queued": bool(res.get("steered")),
+                           "verified": bool(res.get("verified")),
+                           "restored": ""})
 
     def _restored_input(self, fe, win, sid, log, sdb, action):
         """The message Claude Code HANDED BACK to its input box by the Escape

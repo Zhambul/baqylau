@@ -7,18 +7,45 @@
 # Named `hostctl`, not `host`, for the same reason claude_code's is: the `host`
 # PROVIDER function in plugins/codex/__init__.py would shadow a `host` submodule.
 #
-# codex overrides NO control GESTURE, so its derived caps read all-False and the
-# dashboard GREYS every control button for a LIVE codex session (interrupt/rename/
-# compact/ask/…): correct until P5 wires codex's app-server-backed gestures
-# (interrupt via `turn/interrupt`, rename via `thread/name/set`, ask via the
-# request_user_input reply, …). But `launchable=True`, `resume_words` AND
-# `launch_words`/`launch_cmd` are LAUNCH/lifecycle plumbing, NOT capability-gated,
-# so they are live: P6 wired the web new-session picker + a `codex resume`
-# relaunch to compose through them (a codex session launches and resumes from the
-# dashboard now, even though no live gesture is driveable yet). Leaving the
-# gestures inert is deliberate, not a stub gap: a False cap is the honest answer
-# while the app-server transport is unwired (docs/codex.md).
-from plugins.host import HostControl
+# P5 wires the codex-SUPPORTED control GESTURES over the SCREEN (the app-server
+# transport is not up yet, but a whole-gesture method is exactly the seam that
+# transport later replaces WITHOUT touching the dashboard): `interrupt` (a single
+# Escape — codex's composer is NOT modal like Claude's vim, so no double-Esc —
+# verified by the `turn_aborted` RECORD landing in the rollout, since codex fires
+# NO Stop hook), `compact` (`/compact`), `rename` (a LIVE `/rename <name>` paste),
+# and `ask` (drive codex's own `request_user_input` dialog — plugins/codex/
+# dialog.py). Overriding these is what flips their DERIVED caps True so the
+# dashboard un-greys the buttons; the ones left inert (rewind/plan/migrate/model/
+# effort) read False and stay greyed, the HONEST answer — codex has no rewind, no
+# plan-approval tool, no migrate, an interactive `/model` PICKER (not a `/model
+# <arg>` we can drive blind), and no live `/effort` (effort is a launch-time `-c`
+# only). `send` is a generic paste, not a gesture (post_message is never
+# caps-gated), so it needs no override. Launch/resume plumbing (below) was live
+# since P6 and is NOT gesture-gated.
+#
+# The gesture bodies use ONLY the frontend (`fe`) + this plugin's own rollout
+# parse — never dashboard code (the layering rule forbids a plugin importing the
+# dashboard). That is WHY the codex screen driver lives at plugins/codex/dialog.py
+# rather than beside dashboard/askdialog.py: the whole gesture, screen driver
+# included, sits behind HostControl so the dashboard only ever calls
+# host.<gesture> (docs/codex.md *Codex control gestures*).
+import os
+import time
+
+from core.noaudit import load_audit
+from plugins.host import ACK, INDETERMINATE, REJECTED, HostControl
+
+A = load_audit()
+
+# interrupt verification (interrupt): a single synthesized Escape via kitty's
+# send-key is only ~2/3 reliable per window, so a blind press can miss — a
+# bounded wait for the `turn_aborted` record, then one retry press (the task's
+# "bounded wait + one retry"). Well under a second per attempt: codex writes
+# turn_aborted ~36ms after the Esc lands (measured), so a short poll suffices;
+# two attempts ≈ 1.6s worst case, all on total silence.
+INTERRUPT_TRIES = 2
+INTERRUPT_VERIFY_S = 0.8      # per-attempt wait for turn_aborted to appear
+INTERRUPT_POLL_S = 0.1        # rollout re-read beat inside that wait
 
 
 class CodexHost(HostControl):
@@ -26,8 +53,148 @@ class CodexHost(HostControl):
     label = "Codex"
     launchable = True
 
-    # No gesture overrides in P3 (caps all False — see the module header). P5 adds
-    # them over the codex app-server transport.
+    # --- CONTROL gestures (the codex-supported subset; the rest stay inert) ---
+
+    def interrupt(self, fe, win, ctx):
+        """Stop the current codex turn: a SINGLE Escape (codex's composer is not
+        modal — no Claude-vim double-Esc), VERIFIED by the `turn_aborted` record
+        appearing in the rollout (codex fires NO Stop hook, no take-back to the
+        input box, no escape-recheck — the record is the only signal). A running
+        command may outlive the abort (cooperative). A QUEUED message is delivered
+        as a NEW turn (STEER): the queued prompt's own records land right after
+        the abort, so this reports `steered=True` and the ⧗ chip drains via the
+        normal conversation reconciliation — NOT treated as a plain stop.
+
+        `ctx['rollout']` is the session's rollout path (the verify source). Result
+        {status, cid, ok, verified, steered, tries}: ACK when turn_aborted was
+        observed, INDETERMINATE when the Esc landed but no record appeared (audited
+        — the codex-interrupt anomaly signature), REJECTED when nothing could be
+        pressed."""
+        rp = ctx.get("rollout") or ""
+        r = self._ack()          # borrow its cid; the status is corrected below
+        try:
+            pos = os.path.getsize(rp) if rp else -1
+        except OSError:
+            pos = -1
+        ok = verified = steered = False
+        tries = 0
+        for _ in range(INTERRUPT_TRIES):
+            tries += 1
+            ok = bool(fe.send_key(win, "escape")) or ok
+            if not ok:
+                break
+            verified, steered = self._verify_abort(rp, pos)
+            if verified:
+                break
+        if ok and not verified:
+            A.error(ctx.get("log") or "", "codex interrupt (no turn_aborted)",
+                    {"sid": ctx.get("sid"), "win": str(win), "tries": tries})
+        r["status"] = ACK if verified else (INDETERMINATE if ok else REJECTED)
+        r["ok"], r["verified"] = ok, verified
+        r["steered"], r["tries"] = steered, tries
+        return r
+
+    def _verify_abort(self, rp, pos, sleep=time.sleep):
+        """Poll the rollout from byte `pos` for a `turn_aborted` RECORD (matched
+        through rollout.parse, never a raw byte scan — the invariant), up to
+        INTERRUPT_VERIFY_S. Returns (verified, steered): `steered` is True when a
+        NEW turn (`task_started`/`prompt`) starts right after the abort — codex's
+        queue+Esc, where the delivered message owns the tab. (False, False) when
+        no record appears / the rollout is unreadable / `pos` is unknown."""
+        from plugins.codex import rollout
+        if pos < 0:
+            return False, False
+        deadline = time.monotonic() + INTERRUPT_VERIFY_S
+        while time.monotonic() < deadline:
+            sleep(INTERRUPT_POLL_S)
+            try:
+                size = os.path.getsize(rp)
+            except OSError:
+                return False, False
+            if size <= pos:
+                continue
+            try:
+                with open(rp, "rb") as f:
+                    f.seek(pos)
+                    chunk = f.read(size - pos)
+            except OSError:
+                continue
+            lines = chunk.split(b"\n")
+            abort_idx = -1
+            for idx, ln in enumerate(lines[:-1]):    # only COMPLETE lines decidable
+                rec = _rec(rollout, ln)
+                if rec and rec.get("kind") == "turn_aborted":
+                    abort_idx = idx
+                    break
+            if abort_idx < 0:
+                continue
+            steered = False
+            for ln in lines[abort_idx + 1:]:
+                rec = _rec(rollout, ln)
+                if rec and rec.get("kind") in ("task_started", "prompt"):
+                    steered = True
+                    break
+            return True, steered
+        return False, False
+
+    def compact(self, fe, win, ctx):
+        """Compact the codex conversation — paste `/compact` (codex's own
+        summarise command; fires Pre/PostCompact). An atomic bracketed paste +
+        Enter through the frontend (fe.paste_text), the mode-proof channel the
+        quick commands use; no clipboard-image guard (codex's TUI does not
+        auto-attach a clipboard image on paste, unlike Claude Code). Result
+        {status, cid, ok}."""
+        return self._paste(fe, win, "/compact", ctx, "compact")
+
+    def rename(self, sid, name, ctx):
+        """Rename a LIVE codex session — paste codex's own `/rename <name>` (the
+        title lands in ~/.codex/state_<N>.sqlite threads.title; the PARKED path is
+        title.set_session_title, wired in P3). fe/win ride in `ctx` because the
+        gesture signature is sid-keyed (a parked session has no window). Result
+        {status, cid, ok}; REJECTED with no window (the caller then takes the
+        parked path)."""
+        fe, win = ctx.get("fe"), ctx.get("win")
+        if not (fe and win):
+            return self._rejected()
+        return self._paste(fe, win, "/rename " + name, ctx, "rename", sid=sid)
+
+    def ask(self, fe, win, answers, ctx):
+        """Answer codex's OPEN request_user_input dialog (plan-mode-only,
+        model-nondeterministic) by driving its ON-SCREEN dialog — the codex twin
+        of Claude's askdialog, keyed on codex's OWN geometry (`Question N/M`,
+        numbered options with a `›` cursor, the `enter to submit answer` footer;
+        Claude's askdialog.region() returns "" on a codex screen). DOWN walks the
+        cursor onto the chosen option, ENTER submits each question in order.
+        `answers` aligns with ctx['questions'] ([{selected:[label], other:text}]).
+
+        Best-effort: a step that never verifies degrades to INDETERMINATE (audited,
+        dialog LEFT OPEN for a retry — never Escape-closed, since codex's Esc
+        aborts the turn). Result {status, cid, ok, step?, detail?}."""
+        from plugins.codex import dialog
+        r = self._ack()
+        r["ok"] = True
+        try:
+            dialog.drive(fe, win, ctx.get("questions") or [], answers or [])
+        except dialog.CodexAskError as e:
+            A.error(ctx.get("log") or "", "codex answer (%s)" % e.step,
+                    {"sid": ctx.get("sid"), "win": str(win), "detail": str(e)})
+            return {"status": INDETERMINATE, "cid": r["cid"], "ok": False,
+                    "step": e.step, "detail": str(e)}
+        return r
+
+    def _paste(self, fe, win, text, ctx, verb, sid=""):
+        """Shared body of compact/rename: an atomic bracketed paste (+ Enter) of a
+        slash command into the codex window, audited on failure. ACK/ok on
+        success, REJECTED/ok=False on a paste the terminal refused."""
+        ok = bool(fe.paste_text(win, text))
+        r = self._ack() if ok else self._rejected()
+        r["ok"] = ok
+        if not ok:
+            A.error(ctx.get("log") or "", "codex %s (send failed)" % verb,
+                    {"sid": sid or ctx.get("sid"), "win": str(win)})
+        return r
+
+    # --- launch / lifecycle plumbing (NOT capability-gated) -------------------
 
     def resume_words(self, sid):
         """`codex resume <sid>` — codex's own conversation-resume argv (a codex
@@ -56,6 +223,15 @@ class CodexHost(HostControl):
                 + (["-m", model] if model else [])
                 + (["-c", "model_reasoning_effort=" + effort] if effort else [])
                 + ([prompt] if prompt.strip() else []))
+
+
+def _rec(rollout, ln):
+    """rollout.parse_line over one raw bytes line, guarded — the one decoder the
+    interrupt verify shares (a torn/undecodable line is simply not a record)."""
+    try:
+        return rollout.parse_line(ln.decode("utf-8", "replace"))
+    except Exception:
+        return None
 
 
 _HOST = None

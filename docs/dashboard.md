@@ -749,6 +749,41 @@ within one turn (*Web rename*).
 The dashboard stays a consumer of
 session data; it is now also a driver of the terminal.
 
+**Not every session's tool drives every gesture.** A session's OWNING host
+(claude_code, or codex) declares which control gestures it can drive
+(`plugins.host` — the caps DERIVE from which gestures its `HostControl`
+overrides, never an authored table), and the dashboard both GREYS the
+buttons it can't (`capOk` client-side) and 409s them server-side
+(`_caps_guard`). For a claude_code session every cap is True, so the guard
+never fires and the handlers run their EXISTING inline bodies BYTE-IDENTICAL.
+A **codex** session drives the subset it supports —
+`interrupt`/`compact`/`rename`/`ask` — and the handlers ROUTE those through
+its `HostControl` gesture instead: each control POST resolves
+`_gesture_host(sid)` (`plugins.owns_by` → the host object, or None for a
+claude/unprovable session) and, when it is non-None, dispatches
+`host.<gesture>(...)` rather than the claude inline path. The gestures drive
+the terminal through the SAME injected `Frontend` (`paste_text`/`send_key`/
+`get_text`) plus codex's own rollout parse — no dashboard code — so a future
+codex app-server transport swaps in behind `HostControl` without touching
+the dashboard. Codex's greyed gestures (rewind/plan/migrate/model/effort)
+stay off: no checkpoint menu, no plan-approval tool, no account switcher, an
+interactive `/model` picker rather than `/model <arg>`, and no live
+`/effort` (docs/codex.md *Codex control gestures*). The codex specifics:
+
+- **interrupt** — a SINGLE Escape (codex's composer is not modal like
+  Claude's vim), VERIFIED by the rollout's `turn_aborted` record (codex
+  fires no Stop hook, so there is no take-back and no escape-recheck). A
+  queued message delivered right after the abort is a STEER (a new turn owns
+  the tab), reported so the ⧗ chip drains via conversation reconciliation
+  rather than reading as a plain stop; an Esc that lands with no
+  turn_aborted seen is audited (the *codex web interrupt not confirmed*
+  anomaly).
+- **compact** — paste codex's own `/compact` (no Claude switch-confirm
+  menu, no clipboard-image guard).
+- **rename** — a LIVE `/rename <name>` paste (parked stays the transcript/
+  index write, *Web rename*).
+- **ask** — the *Codex question card* (*Web ask* above).
+
 **The threat: drive-by RCE via the browser.** These endpoints type into a
 terminal, so an unprotected one is remote code execution triggered by any web
 page you happen to have open. A malicious page cannot reach a routable
@@ -3537,6 +3572,45 @@ the click). Every attempt is a `web-answer` state_files row
 (`{win, ok, chat, tool_use_id}` (+`step` on a bail)), failures also an
 `A.error`. The card clears optimistically on 200 and authoritatively via
 the SSE `ask` event when the stash drops.
+
+### Codex question card (the same card, a codex dialog)
+
+A **codex** session's `request_user_input` (codex's plan-mode question
+tool — Claude's AskUserQuestion in codex spelling) renders through the
+SAME ask card and the SAME `POST /answer` endpoint. Two host-aware seams
+make that work without a second card:
+
+- **Read side.** codex has no hook to stash an `ask-pending` kv, so
+  `read/session.ask_pending(sid)` is HOST-AWARE: a claude session reads
+  the kv as before; a codex session (`session_caps` → not the default
+  host) derives its OPEN question from the rollout tail via
+  `plugins.pending_dialog` (`plugins/codex/read.pending_dialog` — the
+  newest `request_user_input` with no following `function_call_output`
+  for its call id), as the same `{tool_use_id, questions}` shape the card
+  renders. It is host-gated so a claude session pays nothing (no 256KB
+  rollout tail read on every SSE tick). `data["ask"]`, the composer's
+  modal send-block, and the answer endpoint's stash match all go through
+  this one source.
+- **Write side.** codex's dialog has a DIFFERENT anatomy — a `Question
+  N/M` header, numbered options with a `›` cursor, an `enter to submit
+  answer` footer — so Claude's `askdialog.region()` returns "" on it and
+  cannot drive it. `post_answer` routes a codex session through its
+  `HostControl.ask` gesture (`_host_answer` — the same host branch the
+  other control handlers use, `_gesture_host(sid)`), which drives
+  **`plugins/codex/dialog.py`**: walk the `›` cursor onto the chosen
+  option, ENTER to submit each question in order, screen-verified. It
+  lives in the PLUGIN (not beside `askdialog.py`) because the GESTURE owns
+  it — a future codex app-server transport would answer via the
+  request_user_input reply and touch no dashboard code. A step that never
+  verifies leaves the dialog OPEN (codex's Esc ABORTS the turn, never
+  declines) and degrades to `indeterminate`, audited; the `web-answer` row
+  carries `host: codex`.
+
+`request_user_input` is plan-mode-only and model-nondeterministic (the
+model sometimes answers in prose rather than raising the tool), so the
+codex card appears rarely — that is expected, not a gap. codex's free-text
+"notes" / "chat about this" are best-effort (no codex analog to Claude's
+decline).
 
 ## Web plan mode (`POST /api/session/<sid>/plan-decision`) — ExitPlanMode from the browser
 
