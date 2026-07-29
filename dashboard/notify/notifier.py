@@ -56,15 +56,43 @@ SILENT_REASONS = frozenset(("tab-moved", "session-ended", "composing"))
 # than the cancel set on purpose. A pending alert is cancelled by anything that
 # means "you don't need to be told" — including a mere glance (tab-focused /
 # web-viewing). A delivered alert may only be retracted by something that means
-# "what you were told is no longer true". Glancing at a red tab and walking away
-# is the counter-example that decides it: treating a look as a resolution would
-# delete your only reminder while the tab is still sitting there asking. The
-# screen-scraped signals (dialog-activity / terminal-input) are excluded for a
-# duller reason — they cost a `kitten @ get-text` per record per tick, and a
-# delivered alert is tracked for hours, not for the 60 s grace window; answering
-# at the terminal moves the tab off red seconds later anyway, so `tab-moved`
-# catches it for free.
+# "what you were told is no longer true". Glancing at a red ASKING tab and
+# walking away is the counter-example that decides it: treating a look as a
+# resolution would delete your only reminder while the tab is still sitting
+# there asking. The screen-scraped signals (dialog-activity / terminal-input)
+# are excluded for a duller reason — they cost a `kitten @ get-text` per record
+# per tick, and a delivered alert is tracked for hours, not for the 60 s grace
+# window; answering at the terminal moves the tab off red seconds later anyway,
+# so `tab-moved` catches it for free.
 RETRACT_REASONS = frozenset(("tab-moved", "session-ended", "composing"))
+# SEEN: the per-session looks that retract a delivered `done` alert and NOTHING
+# else. This is the one place the two kinds genuinely differ, so it is a table
+# of its own rather than a branch buried in the retract pass.
+#
+# WHY only `done`. The cancel side already treats a look at a green tab as full
+# resolution — "if I've SEEN the final message, don't tell me" — because a done
+# tab's final message IS on screen the moment it goes green, so looking at it is
+# reading it. The same look at a RED tab means only that you saw the question;
+# seeing a question is not answering it, which is why an `asking` arm is HELD by
+# a look rather than dropped. Retraction inherited the strict rule for both, so
+# "I saw it" resolved a `done` alert one second before delivery and not one
+# second after: open the session from the push and the banner/message you were
+# answering just sat there. That asymmetry was the bug, not the rule.
+#
+# WHY not `device-active`. It is the one MACHINE-WIDE signal in `_watching` — a
+# browser in your hands SOMEWHERE, naming no session. It earns its place on the
+# cancel side because a focused page toasts every session, so the alert would be
+# a second copy of something you just saw. Nothing like that is true of a
+# delivered push: honouring it here would let one awake iPad silently delete the
+# banners of every session you never looked at.
+SEEN_REASONS = frozenset(("tab-focused", "web-viewing"))
+
+
+def retracts(kind, reason):
+    """Does `reason` take back an ALREADY DELIVERED alert of this kind? The one
+    owner of the question the two tables above answer between them."""
+    return reason in RETRACT_REASONS or (kind == "done"
+                                         and reason in SEEN_REASONS)
 
 
 def telegram_reason(pushed, target, targets):
@@ -103,12 +131,14 @@ class Notifier:
     5-minute Telegram escalation waits through.
 
     And it RETRACTS: a sent alert moves to `self.sent` with the handle its
-    channel returned, and once the session stops needing you (RETRACT_REASONS)
-    the Telegram message is deleted and a resolve push closes the on-device
-    banner. Retraction is best-effort and IN-MEMORY: a dashboard restart forgets
-    the handles, so an alert delivered before it stays in the chat — the same
-    bargain `pending` already makes, and the reason the page's own foreground
-    sweep exists as a second line of defence."""
+    channel returned, and once the session stops needing you (`retracts` — the
+    tab moved, the session ended, you're composing a reply, or, for a `done`
+    alert, you simply LOOKED at it) the Telegram message is deleted and a
+    resolve push closes the on-device banner. Retraction is best-effort and
+    IN-MEMORY: a dashboard restart forgets the handles, so an alert delivered
+    before it stays in the chat — the same bargain `pending` already makes, and
+    the reason the page's own foreground sweep exists as a second line of
+    defence."""
 
     def __init__(self, broker=None):
         # The bus this watcher publishes on. NOTIFIER takes the process-wide
@@ -226,15 +256,17 @@ class Notifier:
         `device-active`) or None; best-effort — a terminal read miss / no
         channel degrades to None.
 
-        Called from two places with different meanings (see scan): for a `done`
-        arm it runs EVERY scan while armed, so a single glance any time before
-        the send ('I saw the final message') cancels the alert even after you
-        move on; for an `asking` arm it runs only at SEND time ('are you looking
-        RIGHT NOW'), because a glance that didn't ANSWER still needs the ping.
-        With the delay at 0 those two collapse into the same instant for the
-        FIRST send — the distinction still earns its keep across the escalation
-        window, where a glance cancels a `done` nudge and does not cancel an
-        unanswered `asking` one.
+        Called from three places with different meanings (see scan): for a
+        `done` arm it runs EVERY scan while armed, so a single glance any time
+        before the send ('I saw the final message') cancels the alert even after
+        you move on; for an `asking` arm it runs only at SEND time ('are you
+        looking RIGHT NOW'), because a glance that didn't ANSWER still needs the
+        ping. With the delay at 0 those two collapse into the same instant for
+        the FIRST send — the distinction still earns its keep across the
+        escalation window, where a glance cancels a `done` nudge and does not
+        cancel an unanswered `asking` one. And it runs on the RETRACTION pass,
+        where the same reading carries past delivery: a look takes back a
+        delivered `done` alert (SEEN_REASONS) and never an `asking` one.
         `tree` is a pre-fetched `ls()` shared across a scan's entries so the tab
         check costs one `kitten @ ls` per scan, not one per armed session."""
         try:
@@ -261,7 +293,9 @@ class Notifier:
         `screen=False` skips the two scraped signals (each a `kitten @ get-text`
         subprocess). The retraction pass runs with it off — it tracks entries for
         hours, where the cancel pass only ever tracks them across the 60 s grace
-        window."""
+        window. It does NOT skip `_watching`: that one reads the shared `ls` and
+        two in-memory presence maps, so it costs a delivered `done` record
+        nothing, and it is the signal that takes such a record back."""
         win, sid = entry.get("win"), entry.get("sid")
         if cur.get(win) != entry["state"]:
             # answered -> busy, or the win vanished (tab gone). `ended` below is
@@ -274,9 +308,9 @@ class Notifier:
             #                               the deep link would open a dead one
         if presence.composing(sid):
             return "composing"            # unsent web draft = "I'm on it"
-        if not screen:
-            return None
         if entry.get("kind") == "asking":
+            if not screen:
+                return None
             # You answering AT THE TERMINAL — typing a free-text answer or
             # toggling a selection — moves neither the tab off red nor the
             # transcript (the dialog is still open, unsubmitted), so nothing
@@ -295,13 +329,15 @@ class Notifier:
             # submit. Its trace is REAL (non-faint) content in the input box (a
             # settled tab pre-fills only a FAINT ghost suggestion, which
             # `suggestion.typed` ignores).
-            if self._input_typed(win):
+            if screen and self._input_typed(win):
                 return "terminal-input"
             # "If I've SEEN the final message, no notification." A done tab's
             # final message is on screen the moment it goes green, so ANY glance
-            # during the grace means you saw it — checked every scan, so a
-            # glance that has since ended still counts. Weakest signal in the
-            # table, and the reason RETRACT_REASONS excludes it.
+            # means you saw it — checked every scan, so a glance that has since
+            # ended still counts. Runs on the RETRACTION pass too (`screen`
+            # gates the scrapes above, not this): a look resolves a delivered
+            # `done` alert exactly as it cancels a pending one — see
+            # SEEN_REASONS for why that reading is the green tab's alone.
             return self._watching(win, sid, tree)
         return None
 
@@ -385,7 +421,9 @@ class Notifier:
              before the next one.
         `tree` (one `kitten @ ls`) is resolved once between 1 and 2 and shared by
         the later passes' tab-focus checks — else it costs one subprocess per
-        armed session per second."""
+        tracked session per second. Fetched for a non-empty `sent` as well as a
+        non-empty `pending`: pass 4 asks the same tab-focus question of a
+        delivered `done` alert."""
         cur = API.tab_states()
         prev, self.prev = self.prev, cur
         if prev is None:
@@ -399,16 +437,17 @@ class Notifier:
         self._arm_transitions(cur, prev, now)
         # one ls per scan, shared by every armed entry's tab-focus check (both
         # the done 'seen it' branch and the asking send-time check) — avoids a
-        # kitten @ ls per armed session per second. Best-effort.
+        # kitten @ ls per tracked session per second. Best-effort.
         try:
-            tree = self.fe.ls() if (self.fe and self.pending) else None
+            tracked = self.pending or self.sent   # sent: pass 4 looks too
+            tree = self.fe.ls() if (self.fe and tracked) else None
         except Exception:
             tree = None
         if tree is not None:
             self._poll_terminal(tree)      # free: this tick already paid for ls
         self._cancel_armed(cur, tree)
         self._fire_due(now, tree)
-        self._retract_resolved(cur, now)
+        self._retract_resolved(cur, now, tree)
 
     def _arm_transitions(self, cur, prev, now):
         """PASS 1 — the tab diff. For every window that just ENTERED an
@@ -602,16 +641,18 @@ class Notifier:
                       "reason": reason, "outcome": "expired", "ok": False,
                       "age_s": round(time.monotonic() - rec.get("sent_at", 0), 1)})
 
-    def _retract_resolved(self, cur, now):
+    def _retract_resolved(self, cur, now, tree):
         """PASS 4 — take back the delivered alerts whose premise is gone
-        (docs/dashboard.md, *Alert retraction*). Only RETRACT_REASONS count:
-        the narrower question, not the "you don't need to be told" one pass 2
-        asks — see the table at the top of this module.
+        (docs/dashboard.md, *Alert retraction*). `retracts` decides which
+        answers count: RETRACT_REASONS for either kind, plus — for a `done`
+        alert only — a per-session LOOK, which on a green tab is reading the
+        final message. See the tables at the top of this module.
 
         Runs with `screen=False`: no `kitten @ get-text` per record per tick,
-        because these are tracked for hours. A channel that answers PENDING —
-        the send thread hasn't got its message id home yet, or the delete is
-        still in flight — is simply asked again next tick.
+        because these are tracked for hours. `tree` is the tick's one shared
+        `kitten @ ls`, which is what keeps the look check free. A channel that
+        answers PENDING — the send thread hasn't got its message id home yet, or
+        the delete is still in flight — is simply asked again next tick.
 
         The TTL is checked on EVERY path, settled or not. It would read more
         naturally as the else-branch of "did it resolve", but then a record that
@@ -620,9 +661,9 @@ class Notifier:
         Telegram's own 48 h delete window is the ceiling config.RETRACT_S sits
         under."""
         for rec in list(self.sent):
-            reason = self._reaction(rec, cur, None, screen=False)
+            reason = self._reaction(rec, cur, tree, screen=False)
             outcome = None
-            if reason in RETRACT_REASONS:
+            if reason and retracts(rec.get("kind"), reason):
                 outcome = channels.retract(rec["handle"], reason,
                                            self._needs_you_count())
                 if outcome == channels.PENDING:

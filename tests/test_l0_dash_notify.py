@@ -729,14 +729,14 @@ def test_retract_on_session_end_and_on_composing(monkeypatch, tmp_path,
     assert got == [reason] and n.sent == []
 
 
-def test_a_glance_never_retracts_a_delivered_alert(monkeypatch, tmp_path):
+def test_a_glance_never_retracts_a_delivered_asking_alert(monkeypatch, tmp_path):
     """THE design rule (notifier.RETRACT_REASONS). Looking at a session cancels
-    an alert not yet sent — "you don't need to be told". It must NOT delete one
-    already delivered: glance at a red tab, walk away, and the deletion would
+    an alert not yet sent — "you don't need to be told". It must NOT delete a
+    delivered ASKING one: glance at a red tab, walk away, and the deletion would
     have destroyed your only reminder while the tab is still sitting there
-    asking. So a watching signal leaves the delivered alert alone."""
-    h = {"ch": "telegram", "sid": "s7", "kind": "done"}
-    n, states, clock = _armed_and_sent(monkeypatch, tmp_path, kind="done",
+    asking. Seeing a question is not answering it."""
+    h = {"ch": "telegram", "sid": "s7", "kind": "asking"}
+    n, states, clock = _armed_and_sent(monkeypatch, tmp_path, kind="asking",
                                        handle=h)
     assert len(n.sent) == 1
     calls = []
@@ -745,7 +745,7 @@ def test_a_glance_never_retracts_a_delivered_alert(monkeypatch, tmp_path):
     # you are looking right at it — both channels of _watching, plus the two
     # screen-scraped "I'm on it" signals, all say so
     monkeypatch.setattr(n, "_watching", lambda win, sid, tree=None: "tab-focused")
-    monkeypatch.setattr(n, "_input_typed", lambda win: "a half-typed reply")
+    monkeypatch.setattr(n, "_dialog_region", lambda win: "moved on")
     clock[0] = 50.0
     n.scan()
     assert calls == [] and len(n.sent) == 1       # still out there, still tracked
@@ -753,6 +753,67 @@ def test_a_glance_never_retracts_a_delivered_alert(monkeypatch, tmp_path):
     states["7"] = "working"
     n.scan()
     assert len(calls) == 1 and n.sent == []
+
+
+@pytest.mark.parametrize("look", ["tab-focused", "web-viewing"])
+def test_a_look_retracts_a_delivered_done_alert(monkeypatch, tmp_path, look):
+    """The other half of that rule (notifier.SEEN_REASONS). A green `done` tab
+    shows its final message the moment it goes green, so LOOKING at it is
+    reading it — which is already why a look cancels a pending `done` alert. It
+    must carry past delivery too: opening the session from the push is exactly
+    the case where the banner has stopped being true."""
+    h = {"ch": "telegram", "sid": "s7", "kind": "done"}
+    n, states, clock = _armed_and_sent(monkeypatch, tmp_path, kind="done",
+                                       handle=h)
+    assert len(n.sent) == 1
+    calls = []
+    monkeypatch.setattr(DS.channels, "retract",
+                        lambda handle, reason, badge=0:
+                        (calls.append((handle, reason)), DS.channels.OK)[1])
+    audited = []
+    monkeypatch.setattr(DS.A, "state_file", lambda *a, **k: audited.append(a))
+    monkeypatch.setattr(n, "_watching", lambda win, sid, tree=None: look)
+    clock[0] = 50.0
+    n.scan()                                   # the tab never moved off green
+    assert states["7"] == "awaiting-response"
+    assert calls == [(h, look)] and n.sent == []
+    rows = [a[3] for a in audited if a[2] == "notify-retract"]
+    assert len(rows) == 1 and rows[0]["reason"] == look
+    assert rows[0]["kind"] == "done" and rows[0]["ok"] is True
+
+
+def test_device_active_alone_never_retracts_anything(monkeypatch, tmp_path):
+    """`device-active` is the one MACHINE-WIDE signal in `_watching` — a browser
+    in your hands somewhere, naming no session. It cancels a pending alert (a
+    focused page toasts every session) but must never retract a delivered one,
+    or one awake iPad quietly deletes the banners of every session you never
+    looked at."""
+    h = {"ch": "telegram", "sid": "s7", "kind": "done"}
+    n, states, clock = _armed_and_sent(monkeypatch, tmp_path, kind="done",
+                                       handle=h)
+    calls = []
+    monkeypatch.setattr(DS.channels, "retract",
+                        lambda *a, **k: (calls.append(a), DS.channels.OK)[1])
+    monkeypatch.setattr(n, "_watching",
+                        lambda win, sid, tree=None: "device-active")
+    clock[0] = 50.0
+    n.scan()
+    assert calls == [] and len(n.sent) == 1
+
+
+def test_retracts_is_the_one_owner_of_the_per_kind_rule():
+    """The tables read as a unit: every RETRACT reason takes back either kind, a
+    per-session look takes back only `done`, and the machine-wide / screen-
+    scraped signals take back neither."""
+    for reason in DS.notifier.RETRACT_REASONS:
+        assert DS.notifier.retracts("asking", reason)
+        assert DS.notifier.retracts("done", reason)
+    for look in DS.notifier.SEEN_REASONS:
+        assert DS.notifier.retracts("done", look)
+        assert not DS.notifier.retracts("asking", look)
+    for other in ("device-active", "dialog-activity", "terminal-input", None):
+        assert not DS.notifier.retracts("done", other)
+        assert not DS.notifier.retracts("asking", other)
 
 
 def test_retract_retries_while_the_send_is_still_in_flight(monkeypatch, tmp_path):

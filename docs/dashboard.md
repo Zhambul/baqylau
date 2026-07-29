@@ -6864,22 +6864,56 @@ bug this design exists to avoid.** Both are answered by one predicate
 two declared tables decide who acts on each name:
 
 - `SILENT_REASONS` — which cancels owe no `notify-suppress` row (unchanged).
-- `RETRACT_REASONS` — which reasons also retract an alert **already
-  delivered**: `tab-moved`, `session-ended`, `composing`.
+- `RETRACT_REASONS` — which reasons retract an alert **already delivered**, of
+  either kind: `tab-moved`, `session-ended`, `composing`.
+- `SEEN_REASONS` — the per-session LOOKS (`tab-focused` / `web-viewing`) that
+  retract a delivered **`done`** alert and nothing else.
+
+`Notifier.retracts(kind, reason)` is the one owner of that per-kind rule.
 
 Cancelling a PENDING alert is the broad question, *"do you still need to be
-told?"*, and a mere glance answers it (`tab-focused` / `web-viewing` — you saw
-the final message, so don't ping). Retracting a DELIVERED one is the narrow
-question, *"is what you were told still true?"*, and a glance must NOT answer
-it: look at a red asking-tab on your phone, get distracted, walk away — the tab
-is still red, nothing has been answered, and deleting the alert there would
-destroy your only reminder. So glances are deliberately excluded. The two
-screen-scraped signals (`dialog-activity` / `terminal-input`) are excluded for a
-duller reason: pass 4 runs with `screen=False` because a delivered alert is
-tracked for HOURS, and a `kitten @ get-text` per record per second is a
-subprocess bill the 60 s cancel window never had to pay. Answering at the
-terminal moves the tab off red within seconds anyway, so `tab-moved` catches it
-for free.
+told?"*, and a mere glance answers it. Retracting a DELIVERED one is the narrow
+question, *"is what you were told still true?"* — and the answer **differs by
+kind**, because a look at a red tab and a look at a green one are not the same
+act:
+
+- **`asking` (red).** A glance must NOT retract. Look at a red tab on your
+  phone, get distracted, walk away — the tab is still red, nothing has been
+  answered, and deleting the alert there destroys your only reminder. This is
+  the counter-example the whole split exists for, and it is unchanged. (It is
+  the same reading that makes a look HOLD an `asking` arm rather than cancel it:
+  seeing a question is not answering it.)
+- **`done` (green).** A look DOES retract. A done tab's final message is on
+  screen the moment it goes green, so looking at the session is reading it —
+  which is exactly why the cancel side already drops a seen `done` arm outright
+  (*"if I've SEEN the final message, don't tell me"*).
+
+That second bullet was a real bug until 2026-07-29, and the shape of it is worth
+keeping: "I saw it" resolved a `done` alert one second *before* delivery and not
+one second *after*. Both halves individually defensible, together incoherent —
+you tap the push, the dashboard opens on a finished session, and the banner you
+just acted on sits there because the tab never left green (it can't: green IS
+the resting state of a finished turn, and merely reading the answer moves
+nothing). Reported as *"why is the last notification not deleted, even though I
+have entered that session"*, and the audit showed the machinery working
+perfectly — two clean `tab-moved` retractions minutes earlier in the same
+session.
+
+**`device-active` stays excluded from both.** It is the one machine-wide signal
+in `_watching` — a browser in your hands *somewhere*, naming no session. It
+earns its cancel because a focused page toasts every session, so the alert would
+duplicate something you just saw; nothing like that is true of a banner already
+on your lock screen. Honouring it here would let one forgotten awake iPad delete
+the alerts of every session you never looked at.
+
+The two screen-scraped signals (`dialog-activity` / `terminal-input`) are
+excluded for a duller reason: pass 4 runs with `screen=False` because a
+delivered alert is tracked for HOURS, and a `kitten @ get-text` per record per
+second is a subprocess bill the 60 s cancel window never had to pay. Answering
+at the terminal moves the tab off red within seconds anyway, so `tab-moved`
+catches it for free. The look check is NOT in that bill: `tab_focused` reads the
+tick's one shared `kitten @ ls` (now fetched for a non-empty `sent`, not just a
+non-empty `pending`) and `web_viewing` is an in-memory presence map.
 
 **Where it lives.** Retraction is why `dashboard/notify/channels.py` exists.
 Before it, a send was a leaf call and the watcher could own both the WHEN and
@@ -6967,7 +7001,8 @@ worth being able to find later.
 **Audit.** One action, `notify-retract`, with a single writer (the notifier —
 `channels.retract` deliberately does not file it, so the lifecycle has one row
 shape, and the expiries never reach a channel at all). Fields: `sid`, `kind`,
-`channel`, `reason` (the RETRACT_REASONS name, or `ttl`/`capped` for an
+`channel`, `reason` (the name `retracts` accepted — a RETRACT_REASONS one, or a
+SEEN_REASONS look on a `done` alert; or `ttl`/`capped` for an
 expiry), `outcome` (`ok` · `gone` — already out of the chat, which is the same
 thing · `failed` · `expired`), `ok`, `age_s`. The channels still audit their own
 WIRE detail, which the notifier could not describe: the resolve push's
