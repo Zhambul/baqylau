@@ -2167,6 +2167,17 @@ in the transcript"*).
    transcript can't be: if the turn really ran, its records name that prompt as
    their parent and the bubble stays. Which is why the flag can be a cheap kv
    hint rather than a decision.
+
+   **"Descends from it" means anything in the FILE**, read off the same raw tree
+   the prune's expansion walks — not off the records that parse into
+   conversation. The two used to be different sets, and a flagged prompt whose
+   only child was an `attachment` (a `nested_memory` injection, a directory
+   listing — `parse_line` yields nothing for one, so the caller's parsed view of
+   the tree had never heard of it) was judged childless and pruned, while the
+   expansion followed that very attachment down into everything parented to it.
+   Reported 2026-07-30 as a session showing **no messages at all**, its own first
+   prompt included: one advisory flag pruned 130 of 184 records. One tree, one
+   answer — `_dead_uuids` now builds it once and reads both halves off it.
 3. **That the TUI's box is still holding it.** The take-back leaves the message
    in the `❯` box, so the NEXT send must REPLACE it rather than paste after it
    (`clear_draft`). The page remembered that in a per-view variable

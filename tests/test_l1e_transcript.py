@@ -364,6 +364,32 @@ def test_a_flagged_prompt_with_children_is_kept(tmp_path):
         == [("prompt", "not really taken back"), ("message", "it ran")]
 
 
+def test_a_flagged_prompt_whose_child_is_unparsable_is_kept(tmp_path):
+    # …and "anything descending from it" means anything IN THE FILE, not just
+    # what parses into a conversation record. Claude Code hangs an `attachment`
+    # record off a prompt (a directory listing, a nested memory file); parse_line
+    # yields nothing for one, and the rest of the turn parents to IT. Reading the
+    # rescue off the parsed subset alone therefore called the prompt childless,
+    # while the expansion walked the raw tree straight through that attachment
+    # and pruned the whole session — a real session (2026-07-30) showed NO
+    # messages at all in the dashboard, its own first prompt included.
+    p = tmp_path / "tb3.jsonl"
+    p.write_text("".join(_l(o) + "\n" for o in [
+        {"type": "user", "uuid": "u1", "parentUuid": None,
+         "message": {"content": "the flagged one"},
+         "timestamp": "2026-07-30T00:00:01.000Z"},
+        {"type": "attachment", "uuid": "x1", "parentUuid": "u1",
+         "attachment": {"type": "nested_memory"},
+         "timestamp": "2026-07-30T00:00:02.000Z"},
+        {"type": "assistant", "uuid": "a1", "parentUuid": "x1",
+         "message": {"content": [{"type": "text", "text": "it ran"}]},
+         "timestamp": "2026-07-30T00:00:03.000Z"},
+    ]), encoding="utf-8")
+    recs, _ = TR.conversation(str(p), 0, suspects=("u1",))
+    assert [(r["kind"], r["text"]) for r in recs] \
+        == [("prompt", "the flagged one"), ("message", "it ran")]
+
+
 def test_conversation_drops_a_rewound_away_turn(tmp_path):
     # A rewind supersedes the restored-to prompt the same way — but that one
     # HAS descendants (its whole turn ran), so the prune must walk the tree,

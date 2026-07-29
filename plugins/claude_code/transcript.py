@@ -904,7 +904,7 @@ def _prompt_bearing(rec):
     return False
 
 
-def _dead_uuids(prompts, lines, suspects=(), parented=()):
+def _dead_uuids(prompts, lines, suspects=()):
     """The uuids of DISCARDED records — a branch Claude Code abandoned but the
     transcript still holds, since nothing is ever REWRITTEN there: a cancelled
     or rewound-away turn is dropped only by RE-PARENTING, so the discarded
@@ -932,8 +932,18 @@ def _dead_uuids(prompts, lines, suspects=(), parented=()):
     on disk from a live one (the "it came back on reload" report, 2026-07-25).
     A suspect counts as dead only while NOTHING descends from it, which makes
     the flag self-correcting: if the turn actually ran, its records name that
-    prompt as their parent and it stays. `parented` is the set of parentUuids
-    seen in this window — the observer can be wrong, the transcript can't."""
+    prompt as their parent and it stays — the observer can be wrong, the
+    transcript can't.
+
+    That rescue is read off the SAME tree the expansion below walks, i.e. every
+    line in the window, not the subset that parses into conversation records.
+    The two disagreed (reported 2026-07-30 as a session showing NO messages at
+    all, its own first prompt included): the suspect prompt's only child was an
+    `attachment` record — parse_line yields nothing for one, so the caller's
+    parsed-record view of the tree had never heard of it, while the expansion
+    below reads raw lines and so followed that very record down into the whole
+    rest of the conversation. 130 of 184 records were pruned by one advisory
+    flag. One tree, one answer."""
     by_parent = {}
     for uid, par in prompts:
         if uid:
@@ -942,14 +952,16 @@ def _dead_uuids(prompts, lines, suspects=(), parented=()):
     for sibs in by_parent.values():
         if len(sibs) > 1:
             dead.update(sibs[:-1])            # the LAST fork is the live one
-    dead.update(u for u in suspects if u and u not in parented)
-    if not dead:
+    if not dead and not suspects:
         return dead
     kids = {}
     for s in lines:
         _ts, uid, par = _line_meta(s)
         if uid:
             kids.setdefault(par, []).append(uid)
+    dead.update(u for u in suspects if u and u not in kids)
+    if not dead:
+        return dead
     stack = list(dead)
     while stack:                              # everything below a dead prompt
         for uid in kids.get(stack.pop(), ()):
@@ -1225,8 +1237,7 @@ def conversation(path, pos=0, suspects=(), sends=False):
         ts, uid, par = _line_meta(s)
         parsed.append((rec, ts, uid, par))
     dead = _dead_uuids([(u, p) for r, _t, u, p in parsed if _prompt_bearing(r)],
-                       lines, suspects,
-                       {p for _r, _t, _u, p in parsed if p})
+                       lines, suspects)
     cx = _Conv(sends)
     for rec, ts, uid, par in parsed:
         if uid in dead:
