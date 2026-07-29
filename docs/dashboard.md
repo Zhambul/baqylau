@@ -477,7 +477,7 @@ reflow for free and keeps the no-build rule.
 | `/events/session/<sid>?after=N&mpos=M[&agent=<aid>]` | per-session SSE (`agent` scopes the MIRROR channel only — *Agent scope*): `ops`/`msgs`/`stats`/`agents`/`costs`/`ctx`/`compacting`/`git`/`title`/`running`/`fgrun`/`tab`/`prompts`/`errors`/`monitors`/`jobs`/`memory`/`ask`/`ask-draft`/`plan`/`tasks`/`composer-draft`/`composer-queue`, each on change; a fresh connection's first `ops` event is the merged backlog, tail-limited, carrying `oldest` (see below). Every field other than `ops` is a row of the stream's CHANNEL TABLE (`_SLOW_CHANS`/`_FAST_CHANS`, see *The stream's pushed fields are a channel table*), and the four tab-badge counts (`errors`/`monitors`/`jobs`/`memory`) keep their own table inside it — `_BADGE_COUNTS`, a cheap count wired to a `{"count": n}` event of the same name, its values `(sid, cwd)` callables so the count resolves at call time (a patched `sessionapi` moves the pushed number) and so `memory` can route through its scope-gating owner instead of a second reading of the rule; adding a badge is a table row |
 | `GET /api/session/<sid>/monitors[?agent=<aid>]` | the Monitor tool runs (command/description/lifetime + events, merging transcript + audit streams state) for the monitors tab (*Monitors tab*) — the LEAD's own by default, one agent's with `?agent=` (*Agent scope*) |
 | `GET /api/session/<sid>/jobs[?agent=<aid>]` | the background Bash jobs (command + lifecycle state, merging audit streams + ops + the launch hook) for the jobs tab (*Jobs tab*) — the LEAD's own by default, one agent's with `?agent=` (*Agent scope*); output via the `/copy/<group>/out` endpoint |
-| `GET /api/session/<sid>/memory` | the memory-wiki notes the session touched (`{path, name, verb, agent, count, ts}`, from the `memory` kv) for the memory tab (*Memory tab*) |
+| `GET /api/session/<sid>/memory` | the memory-wiki notes the session touched, BOTH ways: `memory` (the flat newest-touch-first list — `{path, name, verb, agent, count, ts}` from the `memory` kv, the tab badge's authority) and `tree` (the same records grouped into the vault's own folder tree — `{name, path, dirs, notes, count, writes}`, `read/mirror.memory_tree` — which is what the tab renders) (*Memory tab*) |
 | `GET /api/session/<sid>/note?path=<abs>` / `?stem=<stem>` | one memory-wiki note rendered for the viewer (`{name, frontmatter, html, backlinks, missing}`); path-traversal-guarded to `~/wiki/01` (*Memory tab*) |
 
 SSE is plain polling server-side (`TICK_S` per session, `GLOBAL_TICK_S`
@@ -5329,7 +5329,7 @@ above whatever the open tab renders.
 goes through the single `resetBody()`, which re-lays the scope crumb; every
 painter that replaces the body wholesale calls it. It was appended once by
 `renderSessionChrome` instead, and each of those painters — a monitor/job
-drill-down, the memory grid, an open note — wiped it and put back only its own
+drill-down, the memory tree, an open note — wiped it and put back only its own
 crumb, so opening one of an agent's background jobs left you inside that agent
 with nothing on screen saying so and no way up but the browser's Back. Pinned by
 `test_agent_scope_survives_what_the_page_repaints`, which also holds the count of
@@ -5401,9 +5401,11 @@ twice — fourteen near-identical function pairs 200 lines apart, `sortedMonitor
 and `sortedJobs` byte-identical apart from a parameter name — and the
 `SECONDARY_POLL_MS` constant had already been unified with a comment noting the
 rest had not. Memory is a member for its fetch and badge only: it repaints
-through its own `paintMemory` (a note grid OR an open note viewer) and has no
+through its own `paintMemory` (the folder TREE or an open note viewer) and has no
 per-item drill-down, which its `repaint` hook and missing `detail`/`grid` fields
-are what say. Executed, not grepped, by `tests/jsdom/sections.js`
+are what say — plus a `stash` hook, the one thing the shared fetch does for it
+beyond the list: the `tree` served alongside `memory` is what that repaint draws.
+Executed, not grepped, by `tests/jsdom/sections.js`
 (docs/testing.md). (No dedicated per-event SSE increment — a monitor's live
 events already stream into the *mirror* tab as ops; the monitors tab is the
 state-and-history view.)
@@ -5531,11 +5533,52 @@ rides a cheap `memory` SSE — one row of the badge table below, and the ONE pla
 the project-scope gate is applied (`read/session.memory_count`, shared with the
 overview payload: off-scope both report 0, since off-scope there is no tab to
 badge. The stream used to push the real count there — benign on screen, but a
-per-tick kv read for nobody and two readings of one rule). The list renders one card
-per note: a verb chip (read=blue · update=gold · write=green, the `FILE_RGB`
-semantics) + the note name + the subagent name (if any) + a `×N` repeat count.
+per-tick kv read for nobody and two readings of one rule).
 
-**Note viewer + link following.** Clicking a card opens the note via `GET
+**The tab renders the VAULT'S OWN FOLDER TREE**, not the flat list. A list of note
+names in touch order answers "what did we touch" but not the question you actually
+have — *did we work on platform notes, or on providers (and WHICH providers), or on
+tooling, or on slack?* — and the vault's structure already encodes exactly that
+(`providers/<p>/concepts/…`, `platform/concepts/…`, `slack/channels/<c>/threads/…`).
+So the same records are grouped by their path: folder rows (a `▾` twisty + the path
++ that subtree's rollup `N ✎M`) with the note rows under them, indented by depth,
+under one `N notes · ✎M written` summary. A note row keeps everything the old card
+carried — the verb chip (read=blue · update=gold · write=green, the `FILE_RGB`
+semantics), the subagent name (if any), the `×N` repeat count — and opens the same
+viewer. `✎M` counts the notes we CHANGED (Write = created, Update = revised); a Read
+is recall, not work on the note.
+
+The tree is **built server-side** (`read/mirror.memory_tree`, served as `tree`
+beside `memory` on the same endpoint — the flat list stays the badge's authority):
+the browser only renders it, the same split as the stats page. `memory.rel()` is the
+one place the root prefix is stripped (root() owns the root, so the split off it
+belongs there too).
+
+**Two compression rules, one idea: a folder that is not a FORK in the road doesn't
+earn a row.** The vault is five levels deep but mostly LINEAR, and a literal tree
+spends four rows of indent on `slack › channels › vegas-adapters › threads` to show
+one note. So (a) a **chain** — a folder with no notes of its own and exactly one
+sub-folder — collapses into one row carrying the joined path (`platform/concepts`,
+`slack/channels/vegas-adapters/threads`); and (b) a **lone leaf sub-folder** under a
+row that DOES have notes of its own (so the chain rule can't apply — `providers/egt`
+is `egt.md` *plus* a `concepts/`) folds into that row's note LABELS as a path prefix
+(`concepts/wildcard-acl.md`). A folder with SIBLINGS always keeps its row, however
+few notes hang off it: `providers` holding egt + hacksaw + quadcode is the whole
+point. The ROOT is never compressed — folding it would leave the scope rows with no
+header at all, and a vault-root note (`index.md`) hangs on the root itself.
+
+Child order is frozen server-side — **folders before notes, each alphabetical**, and
+deliberately NOT by recency or count: the tab reloads on every `memory` SSE tick, and
+a row that jumps while you are reading it is worse than a stale one. For the same
+reason a **collapse is remembered** per session (`ses.memShut`, keyed by the folder's
+vault-relative path) across those repaints — a fold that sprang back open each time
+the session touched a note would be worse than no fold at all. The rows are one FLAT
+list indented by inline padding rather than nested containers: a collapse is a
+repaint, and nesting would only buy an animation there isn't one of. The render path
+is executed by `tests/jsdom/memtree.js` (indent, twisty↔subtree agreement, the
+collapse surviving a repaint) — before the tree it had no executing test at all.
+
+**Note viewer + link following.** Clicking a note row opens the note via `GET
 /api/session/<sid>/note?path=<abs>` (a followed link uses `?stem=<stem>`). The
 server resolves the stem through `memory.resolve()` (a TTL-cached vault index of
 `{stem: path}`, Obsidian bare-name resolution), reads it path-traversal-guarded to
@@ -5553,8 +5596,8 @@ and back out. A **Backlinks** section lists the notes whose text links to this o
 anchor gets a DIRECT `onclick` (not a container-level delegated listener): the
 anchors have no `href`, and mobile Safari won't dispatch a bubbled click from a tap
 on such an element to an ancestor listener — a delegated handler silently did
-nothing on the phone while the desktop worked (the grid cards use a direct onclick
-for the same reason).
+nothing on the phone while the desktop worked (the tree's own rows use a direct
+onclick for the same reason).
 
 ## Stream item kinds
 

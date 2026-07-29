@@ -485,6 +485,63 @@ def test_secondary_tab_sections_are_one_engine(tmp_path):
     assert d["badges"]["memory"] == {"count": "1", "meta": 1, "painted": None}
 
 
+def test_memory_tab_renders_the_vault_tree(tmp_path):
+    """The memory tab's TREE, EXECUTED rather than grepped: tests/jsdom/
+    memtree.js drives the real renderMemoryTree/memDir/memNote/toggleMemDir
+    over the shared DOM shim against a server-shaped tree
+    (dashboard/read/mirror.memory_tree, docs/dashboard.md *Memory tab*).
+
+    The rows' whole job is STRUCTURE, and none of it is greppable: the indent
+    IS the hierarchy (the rows are one flat list, not nested containers), the
+    twisty must agree with what is on screen, and the collapse must survive the
+    repaint the `memory` SSE fires on every touched note — a fold that springs
+    back open under your hand each time the session writes a note is worse than
+    no fold at all. Skipped without `node` (docs/testing.md)."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("no node on PATH")
+    r = subprocess.run(
+        [node, os.path.join(REPO, "tests", "jsdom", "memtree.js"),
+         os.path.join(REPO, "dashboard", "static", "app.11-chrome.js")],
+        capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    d = json.loads(r.stdout)
+
+    # the summary counts the whole vault-touched set, writes called out
+    assert d["open"][0] == {"cls": "memsum", "pad": "", "text": "6 notes✎ 3 written"}
+    # folders before notes, the indent stepping with depth, the rollup on every
+    # folder row — and a top-level scope row marked as one (`top`)
+    assert [(x["cls"], x["pad"], x["text"]) for x in d["open"][1:]] == [
+        ("memdir top", "6px", "▾platform/concepts2✎1"),
+        ("memnote", "22px", "updatearchitecture.md×2"),
+        ("memnote", "22px", "readnetworking.md"),
+        ("memdir top", "6px", "▾providers3✎2"),
+        ("memdir", "22px", "▾egt2✎2"),
+        ("memnote", "38px", "writeconcepts/acl.md⇢ note-writer"),
+        ("memnote", "38px", "updateegt.md"),
+        ("memdir", "22px", "▾hacksaw1"),
+        ("memnote", "38px", "readhacksaw.md×3"),
+        ("memnote", "6px", "readindex.md"),
+    ]
+    # collapsing drops the SUBTREE (rows, not just the notes) and flips the
+    # twisty, while the row keeps saying how much is folded away under it
+    assert [x["text"] for x in d["collapsed"]] == [
+        "6 notes✎ 3 written", "▾platform/concepts2✎1",
+        "updatearchitecture.md×2", "readnetworking.md",
+        "▸providers3✎2", "readindex.md"]
+    assert d["shut"] == ["providers"]
+    assert d["afterRepaint"] == d["collapsed"]     # the SSE repaint must not unfold it
+    assert d["reopened"] == d["open"]              # …and re-expanding is exactly the first paint
+    # a note row opens THAT note, on a fresh breadcrumb trail
+    assert d["opened"] == [{"path": "/w/platform/concepts/architecture.md",
+                            "reset": True}]
+    # nothing touched — and an old server that served no tree at all — say so
+    # rather than painting an empty panel
+    for case in ("empty", "noTree"):
+        assert [x["cls"] for x in d[case]] == ["empty"], case
+        assert d[case][0]["text"] == "no memory notes touched in this session", case
+
+
 def test_header_action_bar_gates_every_button(tmp_path):
     """The header action bar's reachability matrix, EXECUTED:
     tests/jsdom/headeract.js mounts the real bar (app.11-chrome.js, with the

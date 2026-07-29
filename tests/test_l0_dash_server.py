@@ -1243,6 +1243,34 @@ def test_badge_counts_are_a_table_with_one_scope_owner(monkeypatch, tmp_path):
     assert rsession.badge_count(table["errors"], "s1", off) == 3
 
 
+def test_memory_endpoint_serves_the_flat_list_and_the_vault_tree(dash, tmp_path,
+                                                                monkeypatch):
+    """`/api/session/<sid>/memory` serves the touched notes BOTH ways: the flat
+    newest-touch-first list (the tab badge's authority — its LENGTH is what the
+    page counts) and the same records grouped into the vault's own folder tree,
+    which is what the tab renders (docs/dashboard.md *Memory tab*)."""
+    vault = tmp_path / "wiki" / "01"
+    vault.mkdir(parents=True)
+    monkeypatch.setenv("BAQYLAU_MEMORY_ROOT", str(vault))
+    A.session_start({"session_id": "mem1", "cwd": "/w", "transcript_path": ""})
+    log = P.mirror_log("mem1")
+    S.kv_set(log, "boot", 1)
+    from plugins.claude_code import memory as MEM
+    MEM.record(log, str(vault / "providers" / "egt" / "egt.md"), "Write")
+    MEM.record(log, str(vault / "providers" / "egt" / "concepts" / "acl.md"), "Read")
+    MEM.record(log, str(vault / "tooling" / "concepts" / "esql.md"), "Update")
+
+    d = _get_json(dash + "/api/session/mem1/memory")
+    assert len(d["memory"]) == 3                   # the flat list still rides along
+    tree = d["tree"]
+    assert (tree["count"], tree["writes"]) == (3, 2)
+    assert [x["name"] for x in tree["dirs"]] == ["providers/egt", "tooling/concepts"]
+    egt = tree["dirs"][0]
+    # egt's lone `concepts/` folds into the note label, its folder note beside it
+    assert [n["label"] for n in egt["notes"]] == ["concepts/acl.md", "egt.md"]
+    assert egt["dirs"] == [] and (egt["count"], egt["writes"]) == (2, 1)
+
+
 def test_badges_that_have_an_agent_dimension_follow_the_scope(monkeypatch):
     """Monitors and jobs are ONE AGENT's work and re-point with the view; errors
     (a script's) and memory (the team's) are session-wide, which is what the tab

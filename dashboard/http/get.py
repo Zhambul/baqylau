@@ -16,9 +16,9 @@ from dashboard.config import RESUMABLE_MAX
 from dashboard.notify import presence
 from dashboard.read.lists import (accounts_payload, resumable_payload, sessions_payload,
                                   stats_payload, wire_row)
-from dashboard.read.mirror import (history, merged_backlog, note_payload,
-                                   ops_payload, view_payload, HISTORY_BLOCKS,
-                                   TAIL_BLOCKS)
+from dashboard.read.mirror import (history, memory_tree, merged_backlog,
+                                   note_payload, ops_payload, view_payload,
+                                   HISTORY_BLOCKS, TAIL_BLOCKS)
 from dashboard.read.session import (jobs_payload, monitors_payload,
                                     session_payload)
 from dashboard.http.base import _qint, _qstr, valid_sid
@@ -287,7 +287,11 @@ class _GetMixin:
         return self._json({"jobs": jobs_payload(sid, _qstr(url, "agent"))})
 
     def get_memory(self, sid, url):
-        return self._json({"memory": API.memory(sid)})
+        """The memory-wiki notes this session touched, BOTH ways: the flat
+        newest-touch-first list (the tab badge's authority) and the same records
+        grouped into the vault's folder tree, which is what the tab renders."""
+        mem = API.memory(sid)
+        return self._json({"memory": mem, "tree": memory_tree(mem)})
 
     def get_note(self, sid, url):
         return self._json(note_payload(_qstr(url, "path"), _qstr(url, "stem")))

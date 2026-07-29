@@ -92,7 +92,7 @@ function freshSes() {
     tab: null, body: new El("div"),
     monitors: null, monitorFocus: null, monPoll: null,
     jobs: null, jobFocus: null, jobPoll: null,
-    memory: null, noteTrail: null, memGrid: null,
+    memory: null, memTree: null, memShut: null, noteTrail: null, memWrap: null,
     monitorsGrid: null, jobsGrid: null,
     // the REAL setTabBadge runs (the source's own declaration shadows any
     // stub), so give it the meta map and the three tab anchors it patches

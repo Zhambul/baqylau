@@ -37,7 +37,8 @@ function showSession(sid, tab, agent) {
               timer: null, poll: null, blocks: new Map(), moreEl: null,
               monitors: null, monitorFocus: null, monPoll: null,
               jobs: null, jobFocus: null, jobPoll: null,
-              memory: null, noteTrail: null, noteFocus: null,
+              memory: null, memTree: null, memShut: new Set(),
+              noteTrail: null, noteFocus: null,
               loadingOlder: false, queue: [], pending: [],
               askPend: null, planPend: null,   // in-flight optimistic ask/plan decisions
               // the view mode + its derived state: `view` is seeded from the

@@ -865,7 +865,11 @@ const SECTIONS = {
   memory: {
     api: "memory", list: "memory", tabEl: "memTab", countField: "memory_count",
     label: "memory",
-    // the grid repaints only when it is the thing on screen — an open note
+    // the flat list stays the badge's authority; the FOLDER TREE beside it in
+    // the same payload is what the tab renders (server-computed — the vault's
+    // own structure, docs/dashboard.md *Memory tab*)
+    stash: (ses, d) => { ses.memTree = d.tree || null; },
+    // the tree repaints only when it is the thing on screen — an open note
     // viewer stays put while the list refreshes underneath it
     repaint: () => { if (!noteOpen()) paintMemory(); },
   },
@@ -915,6 +919,7 @@ function loadSection(kind) {
     .then(d => {
       if (S.cur !== sid || !S.ses) return;
       S.ses[sec.list] = d[sec.api] || [];
+      if (sec.stash) sec.stash(S.ses, d);
       setSectionCount(kind, S.ses[sec.list].length);
       if (sec.repaint) { sec.repaint(); return; }
       if (S.ses[sec.focus]) repaintSectionDetail(kind);
@@ -1138,40 +1143,101 @@ function jobCard(j) {
 
 /* ---------- memory tab (the memory-wiki notes a session touched) ---------- */
 
-/* Paint the memory tab body: the note grid, or the note viewer when a note
+/* Paint the memory tab body: the note tree, or the note viewer when a note
    (or a followed [[wikilink]]) is open. */
 function paintMemory() {
   const ses = S.ses;
   if (!ses || !ses.body || ses.tab !== "memory") return;
   resetBody();
   if (ses.noteTrail && ses.noteTrail.length) { renderNoteView(); return; }
-  const wrap = el("div", "sgrid memgrid");
-  ses.memGrid = wrap;
+  const wrap = el("div", "memtree");
+  ses.memWrap = wrap;
   ses.body.append(wrap);
-  renderMemoryGrid();
+  renderMemoryTree();
 }
 
-function renderMemoryGrid() {
+/* The touched notes in the VAULT's own folder structure (server-built —
+   read/mirror.memory_tree), so the tab answers "did we work on platform, or on
+   providers (and which), or on tooling" at a glance instead of listing note
+   names in touch order. Folders are open by default and collapse on click. */
+function renderMemoryTree() {
   const ses = S.ses;
-  if (!ses || !ses.memGrid) return;
-  ses.memGrid.textContent = "";
-  const mem = ses.memory || [];
-  if (!mem.length) {
-    ses.memGrid.append(el("div", "empty", "no memory notes touched in this session"));
+  if (!ses || !ses.memWrap) return;
+  ses.memWrap.textContent = "";
+  const root = ses.memTree;
+  if (!root || !root.count) {
+    ses.memWrap.append(el("div", "empty", "no memory notes touched in this session"));
     return;
   }
-  for (const m of mem) ses.memGrid.append(memCard(m));
+  ses.memWrap.append(memSummary(root));
+  memChildren(ses.memWrap, root, 0);
 }
 
-function memCard(m) {
-  const card = el("div", "memcard");
-  const verb = (m.verb || "Read").toLowerCase();
-  card.append(el("span", "vchip v-" + verb, verb));
-  card.append(el("span", "memname", m.name || "?"));
-  if (m.agent) card.append(el("span", "memagent", "⇢ " + m.agent));
-  if (m.count > 1) card.append(el("span", "memcount", "×" + m.count));
-  card.onclick = () => openNoteRef({ path: m.path }, true);
-  return card;
+/* A node's rows: its sub-folders first, then the notes filed on it directly —
+   the order the server froze (folders before notes, each alphabetical). */
+function memChildren(host, node, depth) {
+  for (const d of node.dirs || []) memDir(host, d, depth);
+  for (const n of node.notes || []) host.append(memNote(n, depth));
+}
+
+function memSummary(root) {
+  const sum = el("div", "memsum");
+  sum.append(el("span", "n", root.count + (root.count === 1 ? " note" : " notes")));
+  if (root.writes)
+    sum.append(el("span", "w", "✎ " + root.writes + " written"));
+  return sum;
+}
+
+/* One folder row + (unless collapsed) everything under it. The rows are a FLAT
+   list indented by depth rather than nested containers — a collapse is a
+   repaint, and nesting only buys an animation we don't have. */
+function memDir(host, node, depth) {
+  const open = !memShut().has(node.path);
+  const row = el("div", "memdir" + (depth ? "" : " top"));
+  row.style.paddingLeft = memPad(depth);
+  row.append(el("span", "mtw", open ? "▾" : "▸"));
+  row.append(el("span", "mdname", node.name));
+  const meta = el("span", "mdmeta");
+  meta.append(el("span", "mdcount", String(node.count)));
+  if (node.writes) meta.append(el("span", "mdwrites", "✎" + node.writes));
+  row.append(meta);
+  row.title = (open ? "collapse " : "expand ") + node.path;
+  row.onclick = () => toggleMemDir(node.path);
+  host.append(row);
+  if (open) memChildren(host, node, depth + 1);
+}
+
+/* One note row — the same chips the flat cards carried (verb colour, the
+   subagent that touched it, a ×N repeat count), under its folder. */
+function memNote(n, depth) {
+  const row = el("div", "memnote");
+  row.style.paddingLeft = memPad(depth);
+  const verb = (n.verb || "Read").toLowerCase();
+  row.append(el("span", "vchip v-" + verb, verb));
+  row.append(el("span", "memname", n.label || n.name || "?"));
+  if (n.agent) row.append(el("span", "memagent", "⇢ " + n.agent));
+  if (n.count > 1) row.append(el("span", "memcount", "×" + n.count));
+  row.onclick = () => openNoteRef({ path: n.path }, true);
+  return row;
+}
+
+function memPad(depth) { return (6 + depth * 16) + "px"; }
+
+/* Which folders are collapsed, by vault-relative path. Per session and kept
+   across repaints: the tab reloads on every `memory` SSE tick, and a fold that
+   sprang back open under your hand each time a note was touched would be worse
+   than no fold at all. */
+function memShut() {
+  const ses = S.ses;
+  if (!ses.memShut) ses.memShut = new Set();
+  return ses.memShut;
+}
+
+function toggleMemDir(path) {
+  const shut = memShut();
+  if (shut.has(path)) shut.delete(path);
+  else shut.add(path);
+  renderMemoryTree();
 }
 
 /* Open a note by absolute path (a grid row) or bare stem (a followed

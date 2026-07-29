@@ -2115,26 +2115,43 @@ html { touch-action: manipulation; }
   :root { --gx: 12px; }
 }
 
-/* ---------- memory tab (memory-wiki notes) ---------- */
-/* note cards: a verb chip (read=blue · update=gold · write=green, matching
-   plugins/claude_code/tools.py FILE_RGB) + the note name + who touched it */
-.memgrid { grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr)); }
-.memcard { display: flex; align-items: center; gap: 8px; padding: 10px 12px;
-  background: var(--panel); box-shadow: var(--card); border-radius: var(--r);
+/* ---------- memory tab (memory-wiki notes, as the vault's folder tree) ---------- */
+/* one panel of indented rows: folder rows (a twisty + the joined path + the
+   subtree's rollup) and note rows (a verb chip — read=blue · update=gold ·
+   write=green, matching plugins/claude_code/tools.py FILE_RGB — + the name) */
+.memtree { background: var(--panel); box-shadow: var(--card); border-radius: var(--r);
+  margin-top: 10px; padding: 6px 0; overflow: hidden; }
+.memtree .empty { padding: 14px 16px; }
+.memsum { display: flex; gap: 10px; align-items: baseline; padding: 4px 14px 8px;
+  margin-bottom: 4px; border-bottom: 1px solid var(--hair); font-size: 11px;
+  text-transform: uppercase; letter-spacing: .1em; }
+.memsum .n { color: var(--dim); }
+.memsum .w { color: var(--green); }
+.memdir { display: flex; align-items: center; gap: 7px; padding: 5px 14px 5px 6px;
+  cursor: pointer; user-select: none; }
+.memdir:hover { background: var(--panel2); }
+.memdir .mtw { color: var(--dim2); font-size: 10px; width: 9px; flex: none; }
+.memdir .mdname { color: var(--text-soft); font-family: var(--mono); font-size: 12px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; }
+.memdir.top .mdname { color: var(--text); font-weight: 600; }
+.memdir .mdmeta { display: flex; gap: 8px; flex: none; font-size: 11px; }
+.memdir .mdcount { color: var(--dim); }
+.memdir .mdwrites { color: var(--green); }
+.memnote { display: flex; align-items: center; gap: 8px; padding: 4px 14px 4px 6px;
   cursor: pointer; }
-.memcard:hover { box-shadow: var(--card-hover); background: var(--panel2); }
-.memcard .vchip { font-size: 10px; text-transform: uppercase; letter-spacing: .08em;
-  padding: 2px 7px; border-radius: 999px; font-weight: 600; flex: none; }
+.memnote:hover { background: var(--panel2); }
+.memnote .vchip { font-size: 9px; text-transform: uppercase; letter-spacing: .08em;
+  padding: 1px 6px; border-radius: 999px; font-weight: 600; flex: none; }
 .vchip.v-read { color: var(--blue);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--blue) 40%, transparent); }
 .vchip.v-update { color: var(--gold);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--gold) 40%, transparent); }
 .vchip.v-write { color: var(--green);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--green) 40%, transparent); }
-.memcard .memname { color: var(--text); font-size: 13px; overflow: hidden;
+.memnote .memname { color: var(--text); font-size: 13px; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; }
-.memcard .memagent { color: var(--dim); font-size: 11px; flex: none; }
-.memcard .memcount { color: var(--dim2); font-size: 11px; flex: none; }
+.memnote .memagent { color: var(--dim); font-size: 11px; flex: none; }
+.memnote .memcount { color: var(--dim2); font-size: 11px; flex: none; }
 
 /* the note viewer */
 .note { background: var(--panel); box-shadow: var(--card); border-radius: var(--r);

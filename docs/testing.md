@@ -203,6 +203,19 @@ MEASURES the widest `resetAgo()` string over every duration up to 8 days, so
 the fixed reset column in `style.css` is pinned to a measurement rather than to
 someone's guess at which form is longest (it was wrong: hours beat days).
 
+And a seventh: `tests/jsdom/memtree.js` renders the MEMORY TAB's folder tree out
+of `app.11-chrome.js` against a server-shaped tree, behind
+`test_memory_tab_renders_the_vault_tree`. Its subject is STRUCTURE, and none of
+it is greppable: the rows are one FLAT list whose indent IS the hierarchy, the
+twisty has to agree with what is on screen, and the collapse has to survive the
+repaint the `memory` SSE fires on every touched note (a fold that springs back
+open under your hand is worse than no fold). The render path had no executing
+test at all while it was a flat card list — the harness came with the tree that
+made it load-bearing. Note that the source declares its own `openNoteRef`, and a
+top-level `function` DOES become a property of the `vm` global — so the click
+recorder has to be re-pointed AFTER the source is evaluated, or the real one runs
+and the click goes unobserved.
+
 The DOM shim these harnesses share lives in
 `tests/jsdom/domshim.js` (`El` + `domGlobals()`): a copy per harness would be
 exactly the duplication these harnesses were written to catch. Note that a

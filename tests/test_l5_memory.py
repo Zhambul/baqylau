@@ -14,6 +14,7 @@ import payloads as P
 from conftest import wait_until
 from core import state as ST
 from dashboard import notehtml as NH
+from dashboard.read import mirror as RM
 from plugins.claude_code import memory as MEM
 from plugins.claude_code import substream_render as SR
 
@@ -44,6 +45,18 @@ def test_in_scope_gates_to_the_project(tmp_path, monkeypatch):
     assert not MEM.in_scope(str(tmp_path / "elsewhere"))
     # a sibling sharing the prefix string must NOT count
     assert not MEM.in_scope(str(tmp_path / "code" / "01" / "aggregator-adapters-x"))
+
+
+def test_rel_is_vault_relative_and_refuses_the_outside(tmp_path, monkeypatch):
+    vault = tmp_path / "wiki" / "01"
+    vault.mkdir(parents=True)
+    monkeypatch.setenv("BAQYLAU_MEMORY_ROOT", str(vault))
+    assert MEM.rel(str(vault / "providers" / "egt" / "egt.md")) == "providers/egt/egt.md"
+    assert MEM.rel(str(vault / "index.md")) == "index.md"
+    # not a note under the root → "" (the tree files it by basename instead)
+    assert MEM.rel(str(tmp_path / "elsewhere" / "n.md")) == ""
+    assert MEM.rel(str(vault)) == ""
+    assert MEM.rel("") == ""
 
 
 # ------------------------------------------------------------------ record
@@ -123,6 +136,149 @@ def test_read_note_parses_frontmatter_and_guards_traversal(tmp_path, monkeypatch
     # a path OUTSIDE the root is refused (path-traversal guard)
     assert MEM.read_note("/etc/passwd") == (None, None)
     assert MEM.read_note(str(tmp_path / "outside.md")) == (None, None)
+
+
+# ------------------------------------------------------------- memory_tree
+
+def _touch(vault, rel, verb="Read", **extra):
+    """One `memory` kv record for a note at `rel` under `vault`."""
+    rec = {"path": str(vault / rel), "name": os.path.basename(rel),
+           "verb": verb, "agent": None, "count": 1, "ts": 1.0}
+    rec.update(extra)
+    return rec
+
+
+def _dirnames(node):
+    return [d["name"] for d in node["dirs"]]
+
+
+def _labels(node):
+    return [n["label"] for n in node["notes"]]
+
+
+def _find(node, name):
+    return next(d for d in node["dirs"] if d["name"] == name)
+
+
+def _vault(tmp_path, monkeypatch):
+    vault = tmp_path / "wiki" / "01"
+    vault.mkdir(parents=True)
+    monkeypatch.setenv("BAQYLAU_MEMORY_ROOT", str(vault))
+    return vault
+
+
+def test_memory_tree_keeps_sibling_folders_as_their_own_rows(tmp_path, monkeypatch):
+    """The question the tab exists to answer is "did we work on platform, or on
+    providers — and WHICH providers", so a folder with siblings always keeps its
+    row, however few notes hang off it."""
+    vault = _vault(tmp_path, monkeypatch)
+    tree = RM.memory_tree([
+        _touch(vault, "providers/egt/egt.md", "Write"),
+        _touch(vault, "providers/hacksaw/hacksaw.md"),
+        _touch(vault, "providers/quadcode/quadcode.md", "Update"),
+        _touch(vault, "tooling/tooling.md"),
+    ])
+    assert _dirnames(tree) == ["providers", "tooling"]      # alphabetical, folders first
+    prov = _find(tree, "providers")
+    assert _dirnames(prov) == ["egt", "hacksaw", "quadcode"]
+    assert _labels(_find(prov, "hacksaw")) == ["hacksaw.md"]
+
+
+def test_memory_tree_compresses_a_linear_chain_into_one_row(tmp_path, monkeypatch):
+    """A folder that is not a FORK earns no row of its own: `platform` holding
+    only `concepts` is one `platform/concepts` row, and the five-level slack
+    path collapses to one instead of spending four indents on one note."""
+    vault = _vault(tmp_path, monkeypatch)
+    tree = RM.memory_tree([
+        _touch(vault, "platform/concepts/architecture.md", "Update"),
+        _touch(vault, "platform/concepts/networking.md"),
+        _touch(vault, "slack/channels/vegas-adapters/threads/egt-acl.md"),
+    ])
+    assert _dirnames(tree) == ["platform/concepts",
+                               "slack/channels/vegas-adapters/threads"]
+    plat = _find(tree, "platform/concepts")
+    assert plat["path"] == "platform/concepts"              # the collapse key is the DEEPEST dir
+    assert _labels(plat) == ["architecture.md", "networking.md"]
+    assert _labels(_find(tree, "slack/channels/vegas-adapters/threads")) == ["egt-acl.md"]
+
+
+def test_memory_tree_folds_a_lone_leaf_folder_into_note_labels(tmp_path, monkeypatch):
+    """`providers/egt` has notes of its OWN (the folder note) plus a lone
+    `concepts/`, so the chain rule can't apply — the leaf folds into the note
+    LABELS instead, which is the same "no row for a non-fork" rule paid in a
+    path prefix."""
+    vault = _vault(tmp_path, monkeypatch)
+    tree = RM.memory_tree([
+        _touch(vault, "providers/egt/egt.md", "Update"),
+        _touch(vault, "providers/egt/concepts/wildcard-acl.md", "Write"),
+        _touch(vault, "providers/hacksaw/hacksaw.md"),
+    ])
+    egt = _find(_find(tree, "providers"), "egt")
+    assert _dirnames(egt) == []
+    assert _labels(egt) == ["concepts/wildcard-acl.md", "egt.md"]
+    # a leaf folder with a SIBLING folder still keeps its row (a real fork)
+    tree = RM.memory_tree([
+        _touch(vault, "providers/egt/egt.md"),
+        _touch(vault, "providers/egt/concepts/a.md"),
+        _touch(vault, "providers/egt/threads/b.md"),
+    ])
+    egt = _find(tree, "providers/egt")
+    assert _dirnames(egt) == ["concepts", "threads"] and _labels(egt) == ["egt.md"]
+
+
+def test_memory_tree_root_is_never_compressed(tmp_path, monkeypatch):
+    """Folding the root would leave the scope rows with no header at all — and a
+    vault-root note (index.md) hangs on the root itself."""
+    vault = _vault(tmp_path, monkeypatch)
+    tree = RM.memory_tree([_touch(vault, "platform/concepts/architecture.md")])
+    assert tree["name"] == "" and _dirnames(tree) == ["platform/concepts"]
+    tree = RM.memory_tree([
+        _touch(vault, "index.md"),
+        _touch(vault, "platform/concepts/architecture.md"),
+    ])
+    assert _labels(tree) == ["index.md"] and _dirnames(tree) == ["platform/concepts"]
+
+
+def test_memory_tree_rolls_up_counts_and_writes(tmp_path, monkeypatch):
+    """Every row carries its SUBTREE's totals, so a collapsed folder still says
+    how much is under it. `writes` counts the notes we CHANGED — Write (created)
+    and Update (revised) alike; a Read is recall, not work on the note."""
+    vault = _vault(tmp_path, monkeypatch)
+    tree = RM.memory_tree([
+        _touch(vault, "providers/egt/egt.md", "Write"),
+        _touch(vault, "providers/egt/concepts/a.md", "Update"),
+        _touch(vault, "providers/hacksaw/hacksaw.md", "Read", count=3),
+        _touch(vault, "index.md"),
+    ])
+    assert (tree["count"], tree["writes"]) == (4, 2)
+    prov = _find(tree, "providers")
+    assert (prov["count"], prov["writes"]) == (3, 2)
+    assert (_find(prov, "egt")["count"], _find(prov, "egt")["writes"]) == (2, 2)
+    assert (_find(prov, "hacksaw")["count"], _find(prov, "hacksaw")["writes"]) == (1, 0)
+
+
+def test_memory_tree_keeps_the_record_fields_the_rows_render(tmp_path, monkeypatch):
+    vault = _vault(tmp_path, monkeypatch)
+    tree = RM.memory_tree([
+        _touch(vault, "tooling/concepts/esql.md", "Write", agent="note-writer", count=2)])
+    note = _find(tree, "tooling/concepts")["notes"][0]
+    assert note["verb"] == "Write" and note["agent"] == "note-writer"
+    assert note["count"] == 2 and note["label"] == "esql.md"
+    assert note["path"] == str(vault / "tooling" / "concepts" / "esql.md")
+
+
+def test_memory_tree_tolerates_junk_records(tmp_path, monkeypatch):
+    """The kv is durable across park, so it can hold a row written under an
+    older root. It keeps its basename at the top level rather than vanishing."""
+    vault = _vault(tmp_path, monkeypatch)
+    tree = RM.memory_tree([
+        {"path": "/somewhere/else/stray.md", "name": "stray.md", "verb": "Read"},
+        "not-a-dict", None,
+        _touch(vault, "platform/concepts/a.md"),
+    ])
+    assert _labels(tree) == ["stray.md"] and tree["count"] == 2
+    assert RM.memory_tree([])["count"] == 0
+    assert RM.memory_tree(None)["dirs"] == []
 
 
 # --------------------------------------------------------------- notehtml

@@ -71,6 +71,17 @@ def is_memory(path):
     return os.path.abspath(path).startswith(root() + os.sep)
 
 
+def rel(path):
+    """`path` as a VAULT-RELATIVE, '/'-joined path ("providers/egt/egt.md"), or
+    "" when it is not a note under the root. The ONE place the root prefix is
+    stripped: root() owns the root, so the split off it belongs here too. The
+    dashboard's Memory tab groups a session's touched notes by the vault's own
+    folder structure with it (dashboard/read/mirror.memory_tree)."""
+    if not is_memory(path):
+        return ""
+    return os.path.relpath(os.path.abspath(path), root()).replace(os.sep, "/")
+
+
 def project():
     """The project the memory feature is enabled for (aggregator-adapters),
     absolute. BAQYLAU_MEMORY_PROJECT overrides it (test seam only)."""
