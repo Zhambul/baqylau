@@ -225,6 +225,12 @@ function curModelFamily() {
 // record), so the row doubles as a live model indicator. A just-switched
 // model shows as pendingModel until the probe's family confirms it (the
 // ctx model stays stale until the next assistant turn).
+// A `model_refusal_fallback` (meta/SSE `fallback` — a safeguard refusal
+// rerouted the session to a fallback model, no hook fires) appends a ⚠ whose
+// own native title carries Claude Code's full notice; the server serves the
+// record only while the ctx model still IS the fallback model, so a /model
+// switch (away or back) retires the icon on the next probe. A pendingModel
+// (just-clicked switch) hides it optimistically for the same reason.
 function setModelBtn(btn) {
   const ses = S.ses;
   const cx = (ses && (ses.ctx || (ses.meta && ses.meta.ctx))) || null;
@@ -234,6 +240,15 @@ function setModelBtn(btn) {
     else { btn.textContent = "✦ " + ses.pendingModel + " ▾"; return; }
   }
   btn.textContent = "✦ " + (m || "model") + " ▾";
+  const fb = ses && ses.meta && ses.meta.fallback;
+  if (fb) {
+    const w = el("span", "fbwarn", "⚠");
+    w.title = "fell back " + (shortModel(fb.from) || fb.from) + " → "
+      + (shortModel(fb.to) || fb.to)
+      + (fb.category ? " (" + fb.category + ")" : "")
+      + (fb.reason ? "\n\n" + fb.reason : "");
+    btn.append(w);
+  }
 }
 
 // The effort button's label carries the SAVED effort level (meta/SSE

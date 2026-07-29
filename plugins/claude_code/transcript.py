@@ -797,6 +797,47 @@ def goal_probe(path):
     return None
 
 
+def fallback_scan(path, pos=0):
+    """The LAST `model_refusal_fallback` system record at or after byte `pos`,
+    as ({from, to, category, reason, ts} | None, new_pos) — the ✦ model
+    button's ⚠ (docs/dashboard.md *Model fallback warning*). Claude Code
+    writes this record ONCE when a safeguard refusal reroutes the session to a
+    fallback model (originalModel → fallbackModel, e.g. Fable 5 → Opus 4.8)
+    and NO hook fires for it — so, like context_probe/goal_probe, this is
+    read-side. UNLIKE those, it is not a tail probe: the record is written at
+    the moment of the fallback and never re-stamped, so by the time anyone
+    looks it can sit MBs behind any bounded tail window (measured: line 232 of
+    a 460-line session whose later records carry multi-KB subagent prompts).
+    Hence a FORWARD scan from a caller-kept byte checkpoint (`pos`, advanced
+    to the returned new_pos — dashboard/read/meta.session_fallback owns the
+    memo): the first call reads the whole file once, every later one only what
+    grew.
+
+    Matched as a RECORD (type:"system" + subtype), never as raw bytes alone —
+    the byte hit is only a prefilter, so a transcript QUOTING the marker (a
+    Read of this file, a grep in a tool_result) cannot fake one (the same
+    invariant as _boundary_meta). `reason` is Claude Code's own notice text
+    (`content`), which the web shows verbatim on hover."""
+    lines, new_pos = _complete_lines(path, pos)
+    fb = None
+    for ln in lines:
+        if '"model_refusal_fallback"' not in ln:
+            continue
+        try:
+            o = json.loads(ln)
+        except Exception:
+            continue
+        if not isinstance(o, dict) or o.get("type") != "system" \
+                or o.get("subtype") != "model_refusal_fallback":
+            continue
+        fb = {"from": o.get("originalModel") or "",
+              "to": o.get("fallbackModel") or "",
+              "category": o.get("apiRefusalCategory") or "",
+              "reason": o.get("content") or "",
+              "ts": _iso_epoch(o.get("timestamp"))}
+    return fb, new_pos
+
+
 def _complete_lines(path, pos):
     """Complete lines from byte `pos`: ([line, …], new_pos). A trailing
     partial line is NOT consumed (new_pos stops before it), so a json parse

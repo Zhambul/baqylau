@@ -320,6 +320,15 @@ function connectSession(sid) {
     if (S.ses.meta) S.ses.meta.goal = d.goal || null;
     renderGoal();
   });
+  // the ✦ model button's ⚠ — a safeguard refusal rerouted the session to a
+  // fallback model; the server stops serving it once the ctx model moves off
+  // the fallback, and the same repaint clears the icon
+  es.addEventListener("fallback", (e) => {
+    const d = JSON.parse(e.data);
+    if (!S.ses || !S.ses.meta) return;
+    S.ses.meta.fallback = d.fallback || null;
+    if (S.ses.modelBtn) setModelBtn(S.ses.modelBtn);
+  });
   // how many prompts you have typed — the ⊜ compact gate's input (Claude Code
   // refuses to compact a conversation that has barely started). Re-runs the
   // quick-command gates so the button un-greys on the message that crosses the

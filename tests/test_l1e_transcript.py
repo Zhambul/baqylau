@@ -1206,3 +1206,69 @@ def test_queue_drained_reads_the_queue_records_not_the_prose(tmp_path):
     assert TR.queue_drained(str(p3), 0) == ""
     assert TR.queue_drained("", 0) == ""
     assert TR.queue_drained(str(p2), 10_000) == ""
+
+
+# ---------------------------------------------------------------- fallback_scan
+
+def _fb_rec(frm="claude-fable-5", to="claude-opus-4-8", cat="cyber",
+            content="Fable 5's safeguards flagged this message. "
+                    "Switched to Opus 4.8."):
+    # The `model_refusal_fallback` system record Claude Code writes when a
+    # safeguard refusal reroutes the session (measured 2.1.220, 2026-07-29).
+    return {"type": "system", "subtype": "model_refusal_fallback",
+            "content": content, "level": "warning", "trigger": "refusal",
+            "direction": "retry", "originalModel": frm, "fallbackModel": to,
+            "apiRefusalCategory": cat,
+            "timestamp": "2026-07-29T15:48:18.689Z"}
+
+
+def test_fallback_scan_missing_file(tmp_path):
+    assert TR.fallback_scan(str(tmp_path / "missing.jsonl")) == (None, 0)
+
+
+def test_fallback_scan_finds_the_record(tmp_path):
+    p = tmp_path / "t.jsonl"
+    p.write_text(_l({"type": "user", "message": {"content": "hi"}}) + "\n"
+                 + _l(_fb_rec()) + "\n", encoding="utf-8")
+    fb, pos = TR.fallback_scan(str(p))
+    assert fb["from"] == "claude-fable-5"
+    assert fb["to"] == "claude-opus-4-8"
+    assert fb["category"] == "cyber"
+    assert "safeguards" in fb["reason"]
+    assert fb["ts"]
+    assert pos == os.path.getsize(p)
+
+
+def test_fallback_scan_quoting_the_marker_is_not_a_record(tmp_path):
+    # a transcript QUOTES its own vocabulary constantly (a grep hit inside a
+    # tool_result, a Read of the file documenting it) — the byte hit is only a
+    # prefilter; the record match is type:"system" + subtype
+    p = tmp_path / "t.jsonl"
+    p.write_text(_l({"type": "user", "message": {
+        "content": 'saw "model_refusal_fallback" in the transcript'}}) + "\n",
+        encoding="utf-8")
+    assert TR.fallback_scan(str(p))[0] is None
+
+
+def test_fallback_scan_incremental_from_checkpoint(tmp_path):
+    p = tmp_path / "t.jsonl"
+    p.write_text(_l(_fb_rec()) + "\n", encoding="utf-8")
+    fb, pos = TR.fallback_scan(str(p))
+    assert fb["to"] == "claude-opus-4-8"
+    # nothing grew: no record after the checkpoint, the position holds
+    assert TR.fallback_scan(str(p), pos) == (None, pos)
+    # growth past the checkpoint: only the new bytes are read, last record wins
+    with open(p, "a", encoding="utf-8") as fh:
+        fh.write(_l(_fb_rec(frm="claude-opus-4-8", to="claude-sonnet-5"))
+                 + "\n")
+    fb2, pos2 = TR.fallback_scan(str(p), pos)
+    assert fb2["to"] == "claude-sonnet-5"
+    assert pos2 > pos
+
+
+def test_fallback_scan_torn_tail_line_not_consumed(tmp_path):
+    # the read-exactly discipline: a record still being written (no newline)
+    # is neither parsed nor consumed, so the next scan re-reads it whole
+    p = tmp_path / "t.jsonl"
+    p.write_text(_l(_fb_rec())[:40], encoding="utf-8")
+    assert TR.fallback_scan(str(p)) == (None, 0)

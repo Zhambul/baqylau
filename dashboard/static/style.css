@@ -390,6 +390,9 @@ body.in-session.fs-on #fsbtn { display: revert; }
 .qcwrap { position: relative; display: inline-flex; }
 .qcwrap .qcmenu { top: calc(100% + 4px); left: 0; right: auto;
                   min-width: 140px; }
+/* the ✦ model button's ⚠ — the session runs a REFUSAL-FALLBACK model
+   (model_refusal_fallback); its own native title carries the full notice */
+.fbwarn { color: var(--amber); margin-left: 4px; cursor: help; }
 .shead .proj { color: var(--text); font-weight: 650; font-size: 15px; }
 /* the inline rename input the ✎ button swaps into the title span */
 .shead .proj input.renamein {

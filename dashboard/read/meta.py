@@ -251,6 +251,44 @@ def session_goal(tpath):
     return size_cached(_GOAL, tpath, lambda: plugins.goal(tpath))
 
 
+_FALLBACK = API.BoundedLRU(MEMO_CAP)   # transcript_path -> (scanned_pos, last
+#                   fallback record | None). NOT a (path, size) memo like
+#                   _CTX/_GOAL: the record is written ONCE mid-file and never
+#                   re-stamped, so a bounded tail probe misses it once the
+#                   session grows past it — the value here is a byte CHECKPOINT
+#                   for transcript.fallback_scan's forward scan, and each poll
+#                   reads only the bytes the last one didn't (a getsize when
+#                   nothing grew; the whole file exactly once per server life).
+
+
+def session_fallback(tpath):
+    """The session's model-refusal fallback ({from, to, category, reason, ts})
+    — Claude Code's `model_refusal_fallback` system record, written when a
+    safeguard refusal reroutes the session to another model (no hook fires) —
+    shown ONLY while the session still RUNS the fallback model: the ctx
+    probe's current model must equal `to`, so a later /model switch (either
+    away or back to the original) retires the warning by itself. Backs the ⚠
+    on the ✦ model button (docs/dashboard.md *Model fallback warning*). None
+    otherwise; read-side, adds no audit rows (same as ctx/goal)."""
+    if not tpath:
+        return None
+    try:
+        size = os.path.getsize(tpath)
+    except OSError:
+        return None
+    pos, fb = _FALLBACK.get(tpath) or (0, None)
+    if size < pos:      # rewritten/truncated — no longer append-only: rescan
+        pos, fb = 0, None
+    if size > pos:
+        got, pos = plugins.model_fallback(tpath, pos)
+        fb = got or fb
+        _FALLBACK[tpath] = (pos, fb)
+    if not fb:
+        return None
+    cx = session_ctx(tpath, main=True)
+    return fb if cx and cx.get("model") == fb.get("to") else None
+
+
 _PROMPTS = API.BoundedLRU(MEMO_CAP)   # transcript_path -> (size, count): the
 #                   same (path, size) key as _CTX/_GOAL — the number of prompts
 #                   you typed can only change when the file grows.

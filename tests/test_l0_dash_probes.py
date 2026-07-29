@@ -812,3 +812,34 @@ def test_reset_column_fits_the_widest_reset_text(dash):
     m = re.search(r"\.ubar \.ureset \{ min-width: (\d+)ch", css)
     assert m, "the fixed reset column"
     assert int(m.group(1)) >= widest["n"], (m.group(1), widest)
+
+
+def test_session_fallback_gates_on_the_current_model(tmp_path, monkeypatch):
+    """session_fallback serves the transcript's model_refusal_fallback record
+    ONLY while the ctx probe says the session still RUNS the fallback model —
+    a /model switch (away or back to the original) retires the ⚠, and an
+    unknown ctx fails OFF. The memo keeps the record either way (the gate is
+    per-call), and the second read is a getsize, not a rescan."""
+    from dashboard.read import meta as RM
+    p = tmp_path / "s.jsonl"
+    p.write_text(json.dumps(
+        {"type": "system", "subtype": "model_refusal_fallback",
+         "content": "safeguards flagged this message",
+         "originalModel": "claude-fable-5",
+         "fallbackModel": "claude-opus-4-8", "apiRefusalCategory": "cyber",
+         "timestamp": "2026-07-29T15:48:18.689Z"}) + "\n", encoding="utf-8")
+    # still ON the fallback model → served
+    monkeypatch.setattr(RM, "session_ctx",
+                        lambda tp, main=False: {"model": "claude-opus-4-8"})
+    fb = RM.session_fallback(str(p))
+    assert fb and fb["to"] == "claude-opus-4-8" and fb["category"] == "cyber"
+    # /model'd away → retired (record kept in the memo, gate hides it)
+    monkeypatch.setattr(RM, "session_ctx",
+                        lambda tp, main=False: {"model": "claude-fable-5"})
+    assert RM.session_fallback(str(p)) is None
+    # ctx unknown → fail OFF (never a phantom warning)
+    monkeypatch.setattr(RM, "session_ctx", lambda tp, main=False: None)
+    assert RM.session_fallback(str(p)) is None
+    # no transcript at all → None
+    assert RM.session_fallback("") is None
+    assert RM.session_fallback(str(tmp_path / "missing.jsonl")) is None

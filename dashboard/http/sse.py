@@ -21,7 +21,8 @@ from dashboard.control import launch
 from dashboard.notify.broker import BROKER
 from dashboard.read.lists import (accounts_key, accounts_payload,
                                   sessions_payload, row_key, wire_row)
-from dashboard.read.meta import (cmd_names, git_info, session_ctx, session_goal,
+from dashboard.read.meta import (cmd_names, git_info, session_ctx,
+                                 session_fallback, session_goal,
                                  session_prompts, session_title, session_slug)
 from dashboard.read.mirror import (agent_scope, merged_backlog, merge_live,
                                    TAIL_BLOCKS)
@@ -133,6 +134,12 @@ _SLOW_CHANS = (
     # the pinned goal card — the active `/goal` scanned from the transcript
     # tail (read-side, no hook fires). Slow, for the same reason as tasks
     _Chan("goal", "goal", lambda c: session_goal(c.tpath), "goal"),
+    # the ✦ model button's ⚠ — a safeguard refusal rerouted the session to a
+    # fallback model (model_refusal_fallback, read-side scan, no hook fires;
+    # retired by the ctx model moving off the fallback). Slow: it changes at
+    # most a handful of times per session, and nobody is blocked on it
+    _Chan("fallback", "fallback", lambda c: session_fallback(c.tpath),
+          "fallback"),
     # the ⊜ compact button's gate — how many prompts you have typed. It only
     # matters at the very start of a session (below the floor Claude Code
     # refuses to compact at), and the cached probe is a getsize once the

@@ -64,6 +64,7 @@ PROVIDERS = {
     "effort_default": 2,     # (cwd, slug)          — the resolved effort level
     "context": 1,            # (transcript_path)    — ctx saturation
     "goal": 1,               # (transcript_path)    — the active /goal
+    "model_fallback": 2,     # (transcript_path, pos) — the refusal-fallback scan
     "prompts": 1,            # (transcript_path)    — human prompts, capped
     "conversation": 3,       # (sid, pos, agent_id) — ONE identity's records
     "ask_preamble": 2,       # (sid, tool_use_id)   — the ask card's preamble
@@ -366,6 +367,19 @@ def goal(transcript_path):
     same exception contract as census()/activity(): the callers are read-side
     dashboards, not hooks."""
     return _first("goal", transcript_path)
+
+
+def model_fallback(transcript_path, pos=0):
+    """Model-refusal-fallback fan-out (path-keyed like context/goal): the
+    first plugin that speaks the file scans it FORWARD from byte `pos` and
+    returns (last `model_refusal_fallback` record | None, new_pos) — a
+    safeguard refusal rerouted the session to a fallback model (docs/
+    dashboard.md *Model fallback warning*). (None, pos) when no plugin does
+    (a codex rollout has no provider). The caller keeps the position
+    checkpoint (dashboard/read/meta.session_fallback) — the record is written
+    once mid-file, so a bounded tail probe would miss it. Read-side like
+    context()/goal(): no hook fires for the fallback."""
+    return _first("model_fallback", transcript_path, pos, default=(None, pos))
 
 
 def prompts(transcript_path):

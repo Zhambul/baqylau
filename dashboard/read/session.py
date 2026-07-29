@@ -14,8 +14,8 @@ from core import tabs
 from dashboard import config, ext, opshtml, prefs, suggestion
 from dashboard.control import launch
 from dashboard.read.meta import (canon_cwd, cmd_names, git_info, session_ctx,
-                                 session_goal, session_kv, session_prompts,
-                                 session_title, session_slug)
+                                 session_fallback, session_goal, session_kv,
+                                 session_prompts, session_title, session_slug)
 from plugins.claude_code import accounting as ACC
 from plugins.claude_code import model as M
 
@@ -289,6 +289,12 @@ def session_payload(sid, agent=""):
     # still shows its final/achieved goal — read-side, no hook (docs/dashboard.md
     # *Web goal*)
     data["goal"] = session_goal(data.get("transcript_path") or "")
+    # the ✦ model button's ⚠ — a safeguard refusal rerouted the session to a
+    # fallback model; served only while the ctx model still IS that fallback
+    # model, so a /model switch retires it (docs/dashboard.md *Model fallback
+    # warning*). Not live-gated for the same reason as goal: the record lives
+    # in the transcript, and a parked session's header should still say it
+    data["fallback"] = session_fallback(data.get("transcript_path") or "")
     # how many prompts YOU typed (capped; None = nothing to conclude) — the ⊜
     # compact button's gate, since Claude Code refuses /compact on a
     # conversation that has barely started (docs/dashboard.md *Header action

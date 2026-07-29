@@ -101,6 +101,15 @@ def prompts(transcript_path):
     return transcript.prompt_count(transcript_path)
 
 
+def model_fallback(transcript_path, pos=0):
+    """The model-refusal-fallback provider (plugins.model_fallback fan-out) —
+    the LAST `model_refusal_fallback` system record at or after byte `pos` of
+    a Claude transcript, as ({from, to, category, reason, ts} | None,
+    new_pos). See transcript.fallback_scan."""
+    from plugins.claude_code import transcript
+    return transcript.fallback_scan(transcript_path, pos)
+
+
 def conversation(sid, pos=0, agent_id=""):
     """The conversation provider (plugins.conversation fan-out) for the
     dashboard's merged mirror stream — ONE identity's records: the session's own

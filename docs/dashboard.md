@@ -3653,6 +3653,73 @@ goal that goes many turns without a re-stamp could scroll out and the card
 would blank (the goal is still active in the TUI; only the mirror loses
 sight of it).
 
+## Model fallback warning (the ⚠ on the ✦ model button)
+
+When one of Fable 5's safeguards refuses a message, Claude Code does not
+fail the turn — it **reroutes the session to a fallback model** (measured
+2.1.220, 2026-07-29: Fable 5 → Opus 4.8 on an `apiRefusalCategory:
+"cyber"` flag while testing a forced permission-dialog escalation) and
+keeps going there. The only trace is a one-time
+`{"type":"system","subtype":"model_refusal_fallback"}` transcript record
+carrying `originalModel`/`fallbackModel`/`apiRefusalCategory` and Claude
+Code's own notice text (`content` — "Fable 5's safeguards flagged this
+message. … Switched to Opus 4.8."). The TUI shows that notice once and
+scrolls on; the model picker then reads Opus with nothing saying *why* —
+which is exactly the question a user asks days later ("I started this as
+Fable, why is it Opus?").
+
+The dashboard answers it in place: the session header's **✦ model button
+grows an amber ⚠** (`.fbwarn`, appended by `setModelBtn`) whose **native
+`title` carries the whole story on hover** — `fell back fable-5 →
+opus-4.8 (cyber)` plus the verbatim notice text. No card, no toast: the
+user already consented to the fallback when it happened (or Claude Code
+did for them); this is a standing *label* on the model indicator, not an
+alert.
+
+**Detection — read-side, no hook, and a FORWARD scan (not a tail
+probe).** No hook fires for the fallback (like `/goal`), so it is a
+transcript derivation. But unlike `goal_status` — which the checker
+re-stamps every turn, keeping it inside the bounded tail window — the
+fallback record is written **once, at the moment of the fallback, and
+never again**: by the time anyone looks it can sit MBs behind any tail
+window (in the motivating session: line 232 of a 460-line transcript
+whose later lines carry multi-KB subagent prompts). So
+`transcript.fallback_scan(path, pos)` scans **forward from a byte
+checkpoint**: last-record-wins over the complete lines after `pos`,
+returning `(record|None, new_pos)`. The record is matched as a RECORD
+(`type:"system"` + subtype; the byte hit is only a prefilter), never as
+raw bytes — the same anti-quoting invariant as `_boundary_meta` and
+interrupt-watch, since a transcript that greps for or documents the
+marker would otherwise fake one. `dashboard/read/meta.session_fallback`
+owns the checkpoint memo (`_FALLBACK`, path → `(scanned_pos, record)` —
+deliberately NOT a `(path, size)` memo: the value of the checkpoint is
+that each poll reads only the bytes the last one didn't, a getsize when
+nothing grew, the whole file exactly once per server life; a shrunken
+file resets the checkpoint, since append-only no longer holds). It
+surfaces through the `plugins.model_fallback()` fan-out (path-keyed
+sibling of `context`/`goal`; a codex rollout has no provider and yields
+`(None, pos)`).
+
+**The warning retires itself: it is gated on the CURRENT model.**
+`session_fallback` serves the record only while the ctx probe's `model`
+(`session_ctx`) still **equals `fallbackModel`** — the moment a `/model`
+switch moves the session anywhere else (away, or back to the original),
+the next assistant turn's ctx probe retires the ⚠ with no writes and no
+expiry clock. An unknown ctx fails OFF (never a phantom warning — the
+same fail-off rule as the compaction animation). The gate lives
+server-side so the payload and SSE agree and the client stays dumb; the
+staleness window (ctx learns a switch on the next assistant turn) is the
+same one the model button's label already has, and `pendingModel` (a
+just-clicked web switch) hides the icon optimistically in the same way it
+swaps the label.
+
+`session_payload` carries it as `data["fallback"]` next to `goal` (not
+live-gated, same reason: a parked session's header should still say its
+model was a fallback), and the per-session SSE diff-emits a `fallback`
+event on the slow cadence. **No audit rows** — a pure read-side
+derivation, identical in kind to ctx/goal/stats: the source of truth is
+the transcript, whose path the audit `sessions` row already records.
+
 ## Web dictation (mic → Deepgram → the textarea, live)
 
 A mic button on the **composer** and on the **new-session form's first-prompt
