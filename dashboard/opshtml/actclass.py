@@ -383,7 +383,7 @@ def as_lead(op):
             # lead's is a bare `line`. In scope the bar says nothing (one agent),
             # and the difference costs more than it looks — a gut op names no
             # ACTIVITY CLASS, so an agent's reads and edits were invisible to the
-            # kind filter and to every view-mode summary. `line` carries the same
+            # item kind and to every view-mode summary. `line` carries the same
             # click-to-view and memory tags, so the conversion is total.
             return O.line(lean, view=out.get("v"), mem=bool(out.get("mem")))
         if lean == s and out.get("outer") is None:

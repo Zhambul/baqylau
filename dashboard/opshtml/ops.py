@@ -302,7 +302,7 @@ def op_items(ops, key="", ids=None, carry=None, scope=None):
     when the op names no kind — a body op inherits its block's, and a GROUP-LESS
     body op inherits the row it follows, which is the only block it has), `bad`
     (1 when the op reports a failed outcome) and, for a mutation one-liner, its
-    `add`/`rem` line counts. The page reads them for the kind filter and the view
+    `add`/`rem` line counts. The page reads them for the item kind and the view
     modes; it never re-derives them from the HTML it was handed. That inheritance
     is why the CALLERS batch consecutive ops into one call (read/mirror.py) — a
     per-op call has no row in front of it to inherit from.

@@ -981,7 +981,7 @@ def test_a_skill_is_one_note_line_shown_in_default_and_counted_in_focus(dash):
     It needs no new page machinery — it is a NOTE block like an agent's or a message's
     (the producer stamps the wording), which is what makes it one quiet line in default
     with its args behind the click. The only page-side facts are its act's three table
-    rows: which filter chip it files under, which summary fragment counts it, and that
+    rows: which item kind it files under, which summary fragment counts it, and that
     FOCUS folds it while DEFAULT does not."""
     from dashboard.opshtml import actclass as AC
     from core import slots
@@ -1431,8 +1431,8 @@ def test_a_bodiless_launch_note_is_dropped_from_history():
 
 
 def test_hiding_a_row_beats_its_own_layout_rule(dash):
-    """The bug three JS fixes chased and none could reach: `.vhide`/`.fhide` are
-    ONE-CLASS selectors, and so is every stream row's own rule — some of which set
+    """The bug three JS fixes chased and none could reach: `.vhide` is a
+    ONE-CLASS selector, and so is every stream row's own rule — some of which set
     `display` (`.ol` is `display: flex`). Equal specificity means the CASCADE
     decided it by source order, and `.ol` is declared BELOW the hide classes, so a
     loose chip row was never hidden however correctly the page marked it: a
@@ -1447,9 +1447,8 @@ def test_hiding_a_row_beats_its_own_layout_rule(dash):
     assert code == 200
     rules = re.findall(r"\n(\.[^\n{]+?)\s*\{([^}]*)\}", css)
 
-    hides = [(sel, body) for sel, body in rules
-             if sel.strip() in (".fhide", ".vhide")]
-    assert len(hides) == 2, "both hide axes must be declared"
+    hides = [(sel, body) for sel, body in rules if sel.strip() == ".vhide"]
+    assert len(hides) == 1, "the hide axis must be declared"
     for sel, body in hides:
         assert "display: none !important" in body, \
             "%s must outrank any row's own display" % sel
@@ -1745,8 +1744,8 @@ def test_a_click_to_view_panel_is_hidden_with_the_row_it_belongs_to(dash):
     child that is not an item. `toggleView` inserts the served HTML as a plain sibling
     (`insertAdjacentHTML("afterend")`) with no `data-kind`, and `streamItems()` — the
     door every pass goes through — filters on exactly that. So no pass knows the panel
-    exists: not the view mode, not the kind filter (same hole), not the run rail, not
-    the visible count. Nothing was hiding it because nothing could see it.
+    exists: not the view mode, not the run rail, not the visible count. Nothing was
+    hiding it because nothing could see it.
 
     The fix is a cascade rule rather than a fourth pass taught about a second kind of
     child, which is sound because the panel's tie to its host is DOM ADJACENCY and that
@@ -1756,11 +1755,10 @@ def test_a_click_to_view_panel_is_hidden_with_the_row_it_belongs_to(dash):
     code, css = _get(dash + "/static/style.css")
     assert code == 200
     rules = _css_rules(css)
-    # whatever hides the host hides the panel — BOTH axes, since the filter had the
-    # same hole, and `!important` because `.vhide`/`.fhide` are themselves important
+    # whatever hides the host hides the panel, and `!important` because `.vhide` is
+    # itself important
     hide = rules[".vhide + .view-block"]
     assert "display: none !important" in hide
-    assert ".fhide + .view-block" in css
     # …and inside an expanded run it joins the group, or the rail breaks around it
     assert "var(--runrail)" in rules[".vrun + .view-block"]
     # hidden, NOT removed: switching back must bring your expansion with it

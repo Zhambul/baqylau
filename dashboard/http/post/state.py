@@ -263,7 +263,7 @@ class _StateMixin:
         return self._json({"ok": True, "hidden": hidden})
 
     def post_view_mode(self, sid):
-        """Set the session mirror's VIEW MODE — the filter bar's
+        """Set the session mirror's VIEW MODE — the view bar's
         verbose/default/focus control (docs/dashboard.md *View modes*). Body:
         `mode` (one of prefs.VIEW_MODES). Writes the durable global prefs store
         (dashboard/prefs.py), NOT any session/terminal state and emphatically NOT

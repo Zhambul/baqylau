@@ -404,7 +404,7 @@ function chromeTabs(ses, meta, tab) {
 }
 
 /* The open tab's body. The mirror tab is the composite one (cards → composer →
-   filter bar → the stream/rail split); the rest are a grid or a renderer plus
+   view bar → the stream/rail split); the rest are a grid or a renderer plus
    the fetch that fills it. */
 function chromeBody(ses, tab, body) {
   if (tab === "mirror") {
@@ -412,7 +412,7 @@ function chromeBody(ses, tab, body) {
     // list, its pending dialogs, its input box. In agent scope they would all
     // be lies about what you're looking at (worst of all the composer, which
     // types to the lead, not the agent you drilled into), so the scoped mirror
-    // is the stream and its filter bar alone.
+    // is the stream and its view bar alone.
     if (!ses.agent) {
       body.append(buildGoalCard());         // the active /goal, pinned at the very top
       body.append(buildTasksCard());        // the session's task list, pinned first
@@ -428,7 +428,7 @@ function chromeBody(ses, tab, body) {
       // what triggers Safari's page auto-zoom — see style.css touch section).
       if (!ses.composer.disabled && !IS_IPAD) ses.composer.focus();
     }
-    body.append(buildFilterBar());
+    body.append(buildViewBar());
     const split = el("div", "split");
     // the transcript column: queued messages pinned ABOVE the newest-first
     // stream (so incoming activity never buries them) until they're delivered
@@ -442,7 +442,7 @@ function chromeBody(ses, tab, body) {
     body.append(split);
     updateAgents();
     updateMoreBtn();                      // the load-older affordance at the bottom
-    applyFilter();                        // re-filter items already in the stream
+    updateShownCount();                   // count items already in the stream
   } else if (tab === "agents") {
     const wrap = el("div", "sgrid");
     ses.agentsGrid = wrap;

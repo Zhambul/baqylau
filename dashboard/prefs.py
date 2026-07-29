@@ -311,7 +311,7 @@ def set_notify_muted(sid, muted):
     return mutate_map(NOTIFY_MUTE_KEY, _apply)
 
 
-# --- the mirror's VIEW MODE, per session (the filter bar's 3-way control) --------
+# --- the mirror's VIEW MODE, per session (the view bar's 3-way control) ----------
 # Which of Claude Code's three transcript densities the session's web mirror is
 # rendered at (docs/dashboard.md, *View modes*), stored under one kv key as a
 # {session_id: mode} map.

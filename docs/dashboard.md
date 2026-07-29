@@ -334,11 +334,11 @@ Why surface just those two: a subagent reads on the dashboard as "here's what I 
 what it gave back," without the wall of intermediate work the terminal pane
 shows inline. A surfaced prompt/result chip opens with the agent's label (not a
 `▶▷◉■` command glyph), so the client's heuristic classifier files it under the
-`agents` filter, same as before. Why filter at render, not at write: the
+`agents` kind, same as before. Why filter at render, not at write: the
 terminal mirror must keep painting everything (same ops table, two presenters),
 and the stamp doubles as provenance in the audit's op rows. Pre-stamp history
 (parked DBs) has no `src` and renders as before — the client's heuristic
-`agents` filter chip still covers those.
+`agents` classification still covers those.
 
 **Security — the `neutralize()` analog.** Op text is raw command output
 (attacker-adjacent bytes; the `@kitty-cmd` replay incident is the terminal
@@ -4994,8 +4994,9 @@ clicking fetches `/history` and appends the page via `appendOlder()` — the
 mirror image of the live `appendItems()` top-prepend. `appendOlder` inserts at
 the bottom; blocks born in a history page start FOLDED and are NOT tracked in
 the live `S.ses.blocks` map (they are history, not the live tail); a straddling group already in the live map has its older ops folded
-into that card's body at the end (older ops trail — acceptable). Filters apply to
-lazily loaded items (`appendOlder` runs the shared `applyFilterTo`). The button
+into that card's body at the end (older ops trail — acceptable). The view mode
+applies to lazily loaded items (`appendOlder` ends in the shared
+`applyViewMode`/`updateShownCount` pass). The button
 hides once `/history` reports `oldest == 0`.
 
 **A page is laid out REVERSED — the whole feed is one descending sequence.** The
@@ -5516,8 +5517,8 @@ scope.
 **Mirror side.** When `file_fmt.py` (main agent) or `substream_render.py` (a
 subagent) renders a file op under the root, it appends ❖ (`memory.MARK`) to the
 one-liner and tags the op `mem` (`ops.line`/`ops.gut`), which `opshtml` surfaces as
-`data-mem` so the page sorts it into its own **`memory`** stream-kind filter
-(*Stream kind filters* below), distinct from generic `files`.
+`data-mem` so the page sorts it into its own **`memory`** stream-item kind
+(*Stream item kinds* below), distinct from generic `files`.
 
 **Tab data path.** Both producers also `memory.record()` the touched note into a
 per-session **`memory` kv** (state DB, survives park) — `{files: [{path, name,
@@ -5555,45 +5556,44 @@ on such an element to an ancestor listener — a delegated handler silently did
 nothing on the phone while the desktop worked (the grid cards use a direct onclick
 for the same reason).
 
-## Stream kind filters
+## Stream item kinds
 
-The session view's mirror tab carries a filter bar directly above the stream:
-toggle chips (`all · commands · files · memory · agents · messages`) and an `N of M
-shown` count. Clicking a chip narrows the stream to one kind. Filtering never
-removes DOM (SSE keeps appending); non-matching items get a `.fhide`
-(`display:none`) class, applied in `appendItems` to newly arrived items too via
-the shared `matchesFilter()` — so a live filter holds as the stream grows.
-Filter state lives on `S.ses.filter` (`{kind}`) and is cleared when switching
-sessions (a fresh `S.ses`).
+The session view's mirror tab carries a **view bar** directly above the stream
+(`buildViewBar`, `.fbar`): the 3-way view-mode segment (*View modes* below) on the
+left and an `N of M shown` count on the right (`updateShownCount`, over the items
+the view mode left visible).
 
-**There is deliberately no free-text search box.** The bar once carried a
-debounced substring input (over each item's `textContent`, folded bodies
-included) with a clear button; it was removed 2026-07-21 as unused — the kind
-chips are the whole filter surface now, and the `data-kind` machinery below is
-what they act on.
+**There is deliberately no kind-filter chip row, and no search box.** The bar
+once carried both: a debounced free-text substring input (over each item's
+`textContent`, folded bodies included), removed 2026-07-21 as unused, and a row of
+toggle chips (`all · commands · files · memory · agents · messages`) narrowing the
+stream to one kind, removed 2026-07-29 on request ("I don't need these filters
+anymore"). The view modes are the density control that actually gets reached for,
+and a single hiding axis is one fewer thing to explain when a block is missing —
+the two-axis machinery (`.fhide` beside `.vhide`, `S.ses.filter`, `matchesFilter`,
+`applyFilterTo`, `FILTER_KINDS`) is gone with the chips.
 
-Each top-level stream child is stamped with a `data-kind`
-(`commands`/`files`/`agents`/`messages`) ONCE at creation (`stampItem`)
-rather than re-sniffed per filter pass — selector stability beats matching the
-exact chip text, which drifts. The kind now comes from the SERVED activity class
-(`act`, *View modes* below — `ACT_KIND` maps it), which replaced the page's own
-`CMD_GLYPH = /^\s*[▶▷◉■]/` regex over the rendered chip text: same answer, but
-the glyph table has one owner and it is server-side. A block still upgrades to
-`agents` on an outer-gutter `.og` wrapper (a subagent's nested job), and the
-upgrade stays monotonic. Ungrouped items classify by item type: `msg` items are
-`messages`, memory-wiki file ops (they carry `data-mem` — the ❖ marker, checked
-first) are `memory`, other file-op one-liners (they carry a `data-v` click-to-view
-id) are `files`, the rest `commands`. On a CURRENT session the `agents` chip mostly
-matches nothing: agent/codex stream ops are producer-source-stamped and never
-reach the page (the main-agent-only rule, *The web presenter* above). The chip
-survives deliberately for pre-stamp history — parked DBs written before the
-stamp existed still carry agent blocks, and since the activity class is derived
-from the op rather than stamped into it, those classify exactly like live ones.
+**`data-kind` survives the chips**, because three other things read it. Each
+top-level stream child is stamped with one
+(`commands`/`files`/`memory`/`agents`/`messages`) ONCE at creation (`stampItem`)
+rather than re-sniffed per pass — selector stability beats matching the exact chip
+text, which drifts. Its presence is what `streamItems()` uses as the "this is a
+top-level ITEM" test (a click-to-view panel has none — *A CLICK-TO-VIEW PANEL is a
+SATELLITE* below), `memory` routes a wiki file op to the memory summary fragments
+(`viewCounter`), and the memory tab's badge machinery reads the same word. The kind
+comes from the SERVED activity class (`act`, *View modes* below — `ACT_KIND` maps
+it), which replaced the page's own `CMD_GLYPH = /^\s*[▶▷◉■]/` regex over the
+rendered chip text: same answer, but the glyph table has one owner and it is
+server-side. A block still upgrades to `agents` on an outer-gutter `.og` wrapper (a
+subagent's nested job), and the upgrade stays monotonic. Ungrouped items classify
+by item type: `msg` items are `messages`, memory-wiki file ops (they carry
+`data-mem` — the ❖ marker, checked first) are `memory`, other file-op one-liners
+(they carry a `data-v` click-to-view id) are `files`, the rest `commands`.
 
 ## View modes (verbose · default · focus)
 
-Claude Code's own transcript densities, over the web mirror. The filter bar
-carries a 3-way segmented control left of the kind chips (`.vmodes`).
+Claude Code's own transcript densities, over the web mirror. The view bar
+carries a 3-way segmented control (`.vmodes`) left of the `N of M shown` count.
 
 **The choice lives on the SERVER, per session** — `POST
 /api/session/<sid>/viewmode` writes the `view-mode` map in `dashboard/prefs.py`
@@ -5661,7 +5661,7 @@ no formatter, so a `/logs` or a model-invoked skill left no trace in the mirror.
 The row needs no new page machinery — it is a NOTE block like an agent's or a message's,
 because the producer stamps the wording (`plugins/claude_code/skill_fmt.py`, on
 PostToolUse *and* PostToolUseFailure per the invariant). Its three page-side facts are
-its act's table rows: the `commands` filter chip, the `used N skills` fragment, and the
+its act's table rows: the `commands` item kind, the `used N skills` fragment, and the
 fold above. Its terminal chip is `✦ skill · <name>` in the semantic table's own
 `VIOLET` — a glyph no other producer writes, which is what lets the classifier read the
 class back off it (`actclass.ACT_SKILL`) without a colour tie-break; the colour gate is
@@ -5826,10 +5826,10 @@ had misdiagnosed. It is deleted rather than left empty (a grep test asserts
 which is not conversation at all and is keyed on `data-injected`, never on an act.
 
 **Hiding must outrank layout (`display: none !important`).** The class was right
-and the row still showed: `.vhide`/`.fhide` are ONE-CLASS selectors and so is every
+and the row still showed: `.vhide` is a ONE-CLASS selector and so is every
 stream row's own rule — and some of those set `display` (`.ol`, a loose chip row, is
 `display: flex`). Equal specificity means the CASCADE fell to source order, and
-`.ol` is declared below the hide classes, so a loose chip row was **never hidden**
+`.ol` is declared below the hide class, so a loose chip row was **never hidden**
 however correctly the page marked it: a subagent launch header
 (`▶︎ explore2 · Symbol reference sweep`) and a `●` mail row sat in focus mode
 wearing `.vhide`, while `.blk` cards — which set no `display` of their own —
@@ -5864,15 +5864,15 @@ replay never clicked.
 the served HTML as a plain sibling of the row it was opened from
 (`insertAdjacentHTML("afterend")`), and that panel carries no `data-kind` — which is
 exactly what `streamItems()` filters on. So the panel is invisible to *every* pass: the
-view mode, the kind filter, the run rail and the visible count all walk right past it.
+view mode, the run rail and the visible count all walk right past it.
 Expanding an Update's diff in default and switching to focus therefore folded the ROW
 into the summary and left the DIFF standing — an orphan panel belonging to nothing
 (*"this update does not disappear, it still stays expanded, and it kinda messes with the
-whole view"*), and the kind filter had the identical hole.
+whole view"*).
 
 The tie is made in the CASCADE rather than by teaching a fourth pass about a second kind
-of child: `.vhide + .view-block, .fhide + .view-block { display: none !important }` —
-whatever hides the host hides the panel, on both axes — plus `.vrun + .view-block` so an
+of child: `.vhide + .view-block { display: none !important }` — whatever hides the host
+hides the panel — plus `.vrun + .view-block` so an
 open panel inside an expanded run carries the rail instead of breaking it. Hidden, not
 removed: switch back and your expansion is still there. This is sound because the
 panel's tie to its host is DOM ADJACENCY and that is an INVARIANT, not luck — every
@@ -6356,9 +6356,9 @@ Mechanics worth knowing:
   Switching INTO verbose fills nothing — it hides nothing, so the window is
   already as full as the loaded data allows (`test_switching_into_a_collapsing_
   mode_fills_the_window` pins both halves).
-- The two axes are independent classes: `.fhide` is the kind filter's, `.vhide`
-  the view mode's. One shared class would let either pass un-hide the other's
-  items.
+- Hiding is ONE axis now, `.vhide` (the view mode's). It was two — the kind
+  filter's `.fhide` beside it, deliberately separate classes so neither pass could
+  un-hide the other's items — until the chips were removed (*Stream item kinds*).
 
 Known gap: a STANDALONE codex host session's blocks classify as `agent` (there
 codex IS the main agent, and its chips carry no main-session glyph), so its

@@ -531,27 +531,15 @@ body.in-session.fs-on #fsbtn { display: revert; }
 /* the rail's own narrow restyle lives NEXT TO its base rule below — a media
    block placed before an equal-specificity base rule loses the cascade */
 
-/* ---- stream filter bar -------------------------------------------------- */
+/* ---- stream view bar ---------------------------------------------------- */
 .fbar {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   box-shadow: var(--card); border-radius: var(--r);
   background: var(--panel); padding: 8px 12px; margin-bottom: 10px;
 }
-.fchips { display: inline-flex; gap: 2px; flex: none; }
-.fchip {
-  background: transparent; color: var(--dim); border: none; cursor: pointer;
-  padding: 5px 11px; border-radius: var(--r);
-  font: 500 11.5px/1 var(--sans);
-}
-.fchip:hover { color: var(--text); }
-.fchip.on {
-  color: var(--text); background: var(--panel2);
-  box-shadow: inset 0 0 0 1px var(--hair);
-}
 .fcount { color: var(--dim2); font: 11px/1 var(--mono); flex: none; margin-left: auto; }
 /* the view-mode control (verbose · default · focus) — a segmented switch, so the
-   three read as ONE choice, unlike the kind chips beside it (independent
-   toggles). docs/dashboard.md *View modes* */
+   three read as ONE choice. docs/dashboard.md *View modes* */
 .vmodes {
   display: inline-flex; flex: none; border-radius: var(--r);
   box-shadow: inset 0 0 0 1px var(--hair); overflow: hidden;
@@ -1271,12 +1259,9 @@ body.modal-open { overflow: hidden; }
    would both work TODAY and silently break on the next row kind that sets
    display; `!important` is the only form that says "no layout rule outranks
    this". Asserted by test_hiding_a_row_beats_its_own_layout_rule. */
-/* hidden by the kind filter; never removed (SSE keeps appending) */
-.fhide { display: none !important; }
 /* hidden by the VIEW MODE (collapsed into a `.vsum` run summary, or — in focus
-   mode — an injected prompt / the team plumbing). A separate class from `.fhide`
-   because the two axes are independent: sharing one would let either pass un-hide
-   the other's items. */
+   mode — an injected prompt / the team plumbing); never removed (SSE keeps
+   appending, and switching modes back must bring it straight there). */
 .vhide { display: none !important; }
 /* focus mode's MID-TURN prose: kept, but pushed into the background so the eye
    lands on your prompt and the reply the turn ends on. Greyed rather than hidden
@@ -1599,21 +1584,20 @@ body.modal-open { overflow: hidden; }
 /* A CLICK-TO-VIEW panel (a Read's content, an Update's diff — `toggleView`) is the
    one top-level stream child that is NOT an item: it carries no `data-kind`, so
    `streamItems()` skips it and NO pass knows it exists — not the view mode, not the
-   kind filter, not the run rail, not the visible count. It is a SATELLITE of the row
-   it was opened from, and the only thing tying it to that row is DOM adjacency
+   run rail, not the visible count. It is a SATELLITE of the row it was opened
+   from, and the only thing tying it to that row is DOM adjacency
    (`insertAdjacentHTML("afterend")`).
    So the tie is made visual here, in the cascade, rather than by teaching every pass
    about a second kind of child: whatever hides the host hides the panel. Without it,
    expanding an Update's diff in default and switching to focus hid the ROW and left
    the DIFF standing — an orphan panel belonging to nothing ("this update does not
-   disappear, it still stays expanded, and it kinda messes with the whole view"), and
-   the kind filter had the same hole. Hidden, not removed: switch back and your
-   expansion is still there.
+   disappear, it still stays expanded, and it kinda messes with the whole view").
+   Hidden, not removed: switch back and your expansion is still there.
    The adjacency this leans on is an invariant, not luck — every other writer to the
    stream inserts at the TOP (`appendItems`), at the BOTTOM (`appendOlder`) or
    immediately BEFORE a span's first item (the `.vsum` summaries), so nothing can land
    between a host and its panel. `toggleView`'s own close depends on the same fact. */
-.vhide + .view-block, .fhide + .view-block { display: none !important; }
+.vhide + .view-block { display: none !important; }
 /* …and inside an expanded run it joins the group, or the rail breaks around it */
 .vrun + .view-block {
   margin-left: 0; border-left: 2px solid var(--runrail); border-radius: 0;
@@ -2106,7 +2090,7 @@ html { touch-action: manipulation; }
   }
   /* tap targets toward the 44px HIG guideline (a modest 36–40px keeps the
      information density; padding grows the hit area, not the type) */
-  .ghost, .fchip, .vmode, .xclose, .sstop, .sresume, .nsbtn, .dirnew, .dirhide,
+  .ghost, .vmode, .xclose, .sstop, .sresume, .nsbtn, .dirnew, .dirhide,
   .askchat, .planopt, .loadmore, .rwmenu .rwopt, .csend, .micbtn, .cattach,
   .chint {
     min-height: 36px;

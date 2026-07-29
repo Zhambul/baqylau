@@ -48,7 +48,7 @@ const sandbox = {
   // consulted is asserted from Python (it must call agentStatus, not re-read
   // end_reason itself).
   agentStatus: a => ["", (a && a.st) || ""],
-  renderAttention: () => {}, applyFilter: () => {},
+  renderAttention: () => {},
   S: null, __tab: "", __loadOlder: 0, __posted: 0,
   // /history stub for the load-older loop. __pages records the block counts asked
   // for. Two content shapes, because they exercise opposite ends of the loop:

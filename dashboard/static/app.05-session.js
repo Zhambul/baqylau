@@ -40,7 +40,6 @@ function showSession(sid, tab, agent) {
               memory: null, noteTrail: null, noteFocus: null,
               loadingOlder: false, queue: [], pending: [],
               askPend: null, planPend: null,   // in-flight optimistic ask/plan decisions
-              filter: { kind: "all" },            // cleared per session (new S.ses)
               // the view mode + its derived state: `view` is seeded from the
               // session's durable pref when meta lands, and until then from the
               // same default the server would serve — so the first paint doesn't
@@ -102,7 +101,7 @@ function loadSessionData(sid) {
         S.ses.compacting = d.compacting || null;
         S.ses.running = d.running || {};
         // the durable per-session view mode (dashboard/prefs.py) — seeded before
-        // the chrome is built, so the filter bar renders with the right segment
+        // the chrome is built, so the view bar renders with the right segment
         // lit and the backlog collapses on first paint rather than flashing
         // verbose first
         if (VIEW_MODES.includes(d.view_mode)) S.ses.view = d.view_mode;
@@ -580,7 +579,6 @@ function appendItems(items) {
     }
     fillBlock(b, it);
     refineBlockKind(b, it);
-    applyFilterTo(b.root);
   }
   drainQueue(items);
   drainPending(items);
@@ -596,7 +594,7 @@ function appendItems(items) {
   }
   tintAgentNotes();              // the notes' dots follow their agents' outcomes
   applyViewMode();               // re-cut the collapsed runs over the final DOM
-  updateFilterCount();
+  updateShownCount();
 }
 
 // The lazy-backlog downward path (item 3): a chunk of OLDER items (server order
@@ -633,7 +631,6 @@ function appendOlder(items) {
     if (live) {
       fillBlock(live, it);
       refineBlockKind(live, it);
-      applyFilterTo(live.root);
       continue;
     }
     let b = local.get(it.g);
@@ -647,14 +644,13 @@ function appendOlder(items) {
     }
     fillBlock(b, it);
     refineBlockKind(b, it);
-    applyFilterTo(b.root);
   }
   for (let i = tops.length - 1; i >= 0; i--) frag.append(tops[i]);
   if (S.ses.moreEl) st.insertBefore(frag, S.ses.moreEl);
   else st.append(frag);
   tintAgentNotes();              // history's notes carry their outcome too
   applyViewMode();
-  updateFilterCount();
+  updateShownCount();
 }
 
 // Render a self-contained mirror snapshot into an ARBITRARY container (the
@@ -794,16 +790,16 @@ function loadOlder(want) {
   });
 }
 
-/* ---------- stream search + kind filters ---------- */
-// Every top-level stream child carries a data-kind (commands · files · agents ·
-// messages) so the filter bar can hide non-matching items via a CSS class
-// (never removing them — SSE keeps appending, and folded bodies stay
-// textContent-searchable). data-kind is stamped once at creation (`stampItem`),
-// never re-derived per filter pass, and it is derived from the SERVED activity
-// class rather than from the rendered chip text — the sniffing this file used to
-// do now has one owner, server-side (dashboard/opshtml/actclass.py).
+/* ---------- stream item kinds ---------- */
+// Every top-level stream child carries a data-kind (commands · files · memory ·
+// agents · messages). It no longer drives a filter chip row (that control is
+// gone), but it stays load-bearing: `streamItems()` uses its presence as the
+// "this is a top-level item" test, the memory tab and the run summaries route on
+// `memory`, and it is stamped once at creation (`stampItem`) from the SERVED
+// activity class rather than from the rendered chip text — the sniffing this
+// file used to do has one owner, server-side (dashboard/opshtml/actclass.py).
 
-// Which filter kind each served ACTIVITY CLASS belongs to. The `act` stamp
+// Which kind each served ACTIVITY CLASS belongs to. The `act` stamp
 // (dashboard/opshtml/actclass.py — one owner, server-side) replaced the glyph
 // regex the page used to run over the block-opening chip text: same answer, but
 // classified where the structured op is, not re-sniffed out of rendered HTML.
@@ -812,7 +808,7 @@ const ACT_KIND = {
   agent: "agents", team: "agents", read: "files", edit: "files", write: "files",
   msg: "messages",
   // a SKILL is work the session did, not a file or an agent — it files under the
-  // commands chip, the kind filter's catch-all for "the session doing something"
+  // commands kind, the catch-all for "the session doing something"
   skill: "commands",
   // …and so does any OTHER tool call (ToolSearch, WebFetch, Grep — an agent's
   // `· <name>` block): same reasoning, the session doing something.
@@ -849,7 +845,7 @@ function ungroupedKind(it, elem) {
 }
 
 // Stamp one freshly-created top-level stream child with everything the view-mode
-// pass reads off the DOM: its filter kind, its served activity class + failure
+// pass reads off the DOM: its item kind, its served activity class + failure
 // flag, the conversation kind (focus mode narrows on it), a monotonic key that
 // names the item for as long as it lives, and its arrival time (the fallback
 // anchor for the live elapsed on a run with no running command in it).
@@ -873,7 +869,6 @@ function stampItem(elem, it) {
   //             blocking Stop hook), so the reply above it was a final answer
   elem.dataset.vk = String(++S.ses.viewSeq);
   elem.dataset.vt = String(Date.now() / 1000);
-  applyFilterTo(elem);
 }
 
 // An agent note's DOT carries the OUTCOME, exactly like a collapsed run's `.vdot`:
@@ -907,39 +902,21 @@ function streamItems() {
   return [...S.ses.stream.children].filter(el => el.dataset && el.dataset.kind);
 }
 
-function matchesFilter(elem) {
-  const f = (S.ses && S.ses.filter) || { kind: "all" };
-  if (f.kind !== "all" && elem.dataset.kind !== f.kind) return false;
-  return true;
-}
-
-// Hidden by EITHER control: `.fhide` is the kind filter's, `.vhide` the view
-// mode's. Deliberately two classes over two independent axes — one shared class
-// would make whichever pass ran last un-hide the other's items.
+// Hidden by the ONE remaining axis: `.vhide` is the view mode's. (There used to
+// be a second — a kind-filter chip row, `.fhide` — dropped as unused: the view
+// modes are the density control people actually reach for, and `data-kind`
+// survives it because the memory routing and the run summaries read it.)
 function itemHidden(elem) {
-  return elem.classList.contains("fhide") || elem.classList.contains("vhide");
+  return elem.classList.contains("vhide");
 }
 
-function applyFilterTo(elem) {
-  if (!elem || !elem.dataset || !elem.dataset.kind) return;
-  elem.classList.toggle("fhide", !matchesFilter(elem));
-}
-
-function applyFilter() {
-  if (!S.ses) return;
-  for (const elem of streamItems()) applyFilterTo(elem);
-  updateFilterCount();
-}
-
-function updateFilterCount() {
+function updateShownCount() {
   const ses = S.ses;
   if (!ses || !ses.countEl || !ses.countEl.isConnected) return;
   const items = streamItems();
   const shown = items.filter(elem => !itemHidden(elem)).length;
   ses.countEl.textContent = shown + " of " + items.length + " shown";
 }
-
-const FILTER_KINDS = ["all", "commands", "files", "memory", "agents", "messages"];
 
 /* ---------- view modes: verbose · default · focus ---------- */
 // Claude Code's three transcript densities, over the web mirror (docs/
@@ -1196,7 +1173,7 @@ function applyViewMode() {
       if (old.classList.contains("vsum")) old.remove();
     clearViewMarks(items);
     ses.viewSig = "verbose";
-    updateFilterCount();
+    updateShownCount();
     return;
   }
 
@@ -1367,7 +1344,7 @@ function applyViewMode() {
     if (p.running && !ses.viewTimer)
       ses.viewTimer = setInterval(tickRunTimers, FG_TICK_MS);
   }
-  updateFilterCount();
+  updateShownCount();
   viewAutoFill();
 }
 
@@ -1399,13 +1376,15 @@ function setViewMode(mode) {
            { mode }, { audit: "viewmode" });
 }
 
-function buildFilterBar() {
+// The stream's control row: the view-mode segment on the left, the visible-item
+// count on the right. It used to carry a second control — a kind-filter chip row
+// (all · commands · files · memory · agents · messages) — removed on request; the
+// view modes are the density cut that gets used, and two axes over one stream
+// only ever had to explain which one had hidden a block.
+function buildViewBar() {
   const ses = S.ses;
-  const f = ses.filter;
   const bar = el("div", "fbar");
 
-  // the view-mode control, left of the kind chips: both act on this stream, and
-  // this one is the coarser cut, so it reads first
   const modes = el("div", "vmodes");
   const mbtns = new Map();
   ses.modeBtns = mbtns;              // the `view-mode` SSE repaints these
@@ -1419,23 +1398,9 @@ function buildFilterBar() {
     modes.append(c);
   }
 
-  const chipwrap = el("div", "fchips");
-  const chips = new Map();
-  for (const key of FILTER_KINDS) {
-    const c = el("button", "fchip" + (f.kind === key ? " on" : ""), key);
-    c.onclick = () => {
-      f.kind = key;
-      chips.forEach((cc, k) => cc.classList.toggle("on", k === key));
-      applyFilter();
-    };
-    chips.set(key, c);
-    chipwrap.append(c);
-  }
-
   const count = el("span", "fcount");
   ses.countEl = count;
-  bar.append(modes, chipwrap, count);
-  ses.filterBar = bar;
+  bar.append(modes, count);
   return bar;
 }
 
