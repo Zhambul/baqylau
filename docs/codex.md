@@ -61,13 +61,20 @@ its own mirror when run standalone (wiring in [wiring.md](wiring.md)).
     `function_call_output`'s "Exit code / Process exited with code" head lines).
     **Parse/paint split**: rollout-record parsing lives in
     `plugins/codex/rollout.py` — the ONE owner of the rollout record shapes
-    (the `turn_context`/`event_msg`/`response_item` grammar, exec-arguments
-    decode, patch line counts, exit extraction, and `usage_split`, the one
+    (the `turn_context`/`event_msg`/`response_item`/top-level grammar,
+    exec-arguments decode, patch line counts, exit extraction, the
+    synthetic-message vocabulary, and `usage_split`, the one
     `total_token_usage` → fresh/out/cached mapping) — mirroring
-    `plugins/claude_code/transcript.py`. ONE presenter consumes its typed
-    records: the stream's `Renderer.feed_rollout` (the mirror's capped,
+    `plugins/claude_code/transcript.py`. Presenters consume its typed
+    records — there may be MORE THAN ONE, and the grep contract
+    (`test_renderer_consumes_the_parser`) pins only that no presenter
+    re-walks the raw grammar, not that a single one exists. Today:
+    the stream's `Renderer.feed_rollout` (the mirror's capped,
     styled paint — byte-identical to the pre-split renderer, pinned by the
-    e2e codex suite). There was a second — `rollout.timeline()`, the uncapped
+    e2e codex suite); a dashboard `conversation` provider is the second.
+    `feed_rollout` dispatches on a `kind` TABLE and silently ignores every
+    kind it has no handler for, so a record added for another presenter never
+    changes the mirror. There was a third — `rollout.timeline()`, the uncapped
     drill-down read model behind a codex `plugins.activity()` provider — and it
     is gone with that whole read model: a codex run's web view is now the mirror
     it already paints, scoped (docs/dashboard.md *Agent scope*), resolved from
@@ -80,6 +87,83 @@ its own mirror when run standalone (wiring in [wiring.md](wiring.md)).
     rollout answers the main-thread `activity(sid)` (uuid == sid). The
     companion `[ts]`-log parse stays in `stream.py` — a pre-digested display
     stream, not a record grammar worth a second module.
+  - **Two registers — deliberately not unified.** A codex rollout says most
+    things TWICE: once as an `event_msg` (codex's own digested UI stream) and
+    once as a `response_item` (the model-API record the conversation is
+    rebuilt from on resume). The MIRROR paints the event_msg register
+    (`prompt` / `message` / `reasoning`); a CONVERSATION presenter reads the
+    response_item register (`chat` / `think`), which is the complete,
+    in-order, resume-restored one and the ONLY source of a **post-abort or
+    queued prompt** (codex writes it as a `response_item/message` and no
+    `user_message` event ever fires). Giving the second register its OWN
+    record kinds is what keeps the mirror from painting every message and
+    every think twice — a shared `message`/`reasoning` kind would have, since
+    `feed_rollout`'s table already handles those.
+    A `chat` record carries `role` (assistant/user/developer) and a
+    `synthetic` flag: codex re-injects its own context blocks *as user
+    messages* every turn, so a presenter must drop them from the bubbles.
+    The marker list is the module constant `rollout.SYNTHETIC_PREFIXES`
+    (`<turn_aborted>`, `<environment_context>`, `<permissions instructions>`,
+    `<skills_instructions>`, `<plugins_instructions>`,
+    `<collaboration_mode>`, `<model_switch>`, `<app-context>`,
+    `Approved command prefix saved:`, `# AGENTS.md instructions`) with
+    `is_synthetic()` its one reader — a presenter must not re-encode it.
+  - **The rest of the response_item grammar** (parsed for the same
+    conversation presenter; none of it reaches the mirror):
+    - **`custom_tool_call` / `custom_tool_call_output`** — codex ≥ 0.13x moved
+      `apply_patch` off `function_call` onto its own custom tool. Both
+      spellings parse to a LIGHTWEIGHT `patch_call` marker (the raw
+      `*** Begin Patch` text + `call_id`) and a `patch_result`
+      (`ok`/`exit`/`output`, paired by `call_id`; the output is either an
+      `Exit code: N` string or a `Success…` one, and either a plain string or
+      a list of `{type,text}` parts). **The double-count question:**
+      `patch_apply_end` stays the AUTHORITATIVE file-op record — it alone has
+      resolved ABSOLUTE paths and per-file diffs — so the call records
+      deliberately produce **no file rows and no scoreboard bumps**; they say
+      only "a patch call started / it succeeded or failed". Rendering the
+      repo-relative patch text as a second set of file ops is exactly the
+      duplication the original "apply_patch response_item is ignored" rule
+      forbade; the marker exists so a conversation view can show the tool
+      call in order without re-deriving what the event already resolved.
+    - **`function_call` beyond `exec_command`** — `shell` is the pre-0.1x
+      spelling of the same `{command:[…]}` shape and yields the same `exec`
+      record; `write_stdin` (the backgrounded-exec continuation poll) yields
+      a light `stdin` record so its `function_call_output` is not orphaned (a
+      presenter pairs the two by `call_id`); `request_user_input` — codex's
+      EXPERIMENTAL question tool, plan-mode-only in practice, whose schema is
+      Claude's AskUserQuestion in codex spelling — yields an `ask` record
+      (`questions[{id, header, question, options[{label, description}]}]`)
+      for a later question card. An unlisted name is `None`.
+  - **Top-level records.** `type:"compacted"` (NOT the `event_msg`
+    `context_compacted` notice the mirror paints as ⟳) is the compaction
+    BOUNDARY itself → `compact_boundary` with `message` (usually `""`: the
+    summary is encrypted), `window_id`/`previous_window_id`, and `replaced`,
+    the LENGTH of `replacement_history` — the rewritten history itself is
+    deliberately not carried into a record shape. `type:"world_state"` (a
+    large periodic snapshot of open files / shell sessions / todos) is
+    EXPLICITLY ignored rather than left to fall through, so the next reader
+    of the table knows it was considered. Both spellings are handled: the
+    fields sit under `payload` in the enveloped form and at the top level in
+    the older bare-item one.
+  - **Version fragility is the design constraint.** The grammar drifted
+    across codex 0.95 → 0.144 in the local corpus (bare items → enveloped;
+    `shell` → `exec_command`; `apply_patch` as a `function_call` then a
+    `custom_tool_call`; `session_id` added; credits reshaped; the turn's
+    `reasoning_effort` moved from a bare top-level `effort` under
+    `collaboration_mode.settings`, and **both** are read). So an unknown
+    `type`/`payload.type` and a missing field must always degrade to `None`,
+    never to an exception — pinned by
+    `test_unknown_shapes_never_raise`.
+  - **Timestamps.** `task_started`/`task_complete` frequently carry NO
+    `started_at`/`completed_at`; the ENVELOPE's `timestamp` is then the only
+    clock, so both records carry it as a separate `ts` field. It is never
+    folded into `at` — `at` is the numeric field the mirror footer subtracts
+    for a duration, the envelope's is an ISO string.
+  - **`token_count` keeps three things**, not one: the cumulative
+    `total_token_usage` (the footer rollup), plus `last_token_usage` and
+    `model_context_window`. The cumulative total NEVER resets across a
+    compaction, so it is useless for saturation — a ctx bar needs the last
+    turn's `total_tokens` over the window.
     The ROLLOUT side additionally renders, from codex's own event stream
     (shapes verified against real `~/.codex/sessions` rollouts, 2026-07):
     - **file ops** from `patch_apply_end` — the authoritative record (resolved
@@ -87,10 +171,11 @@ its own mirror when run standalone (wiring in [wiring.md](wiring.md)).
       `Update(name) +a -r` / `Write(name) +n` / `Delete(name)` line per changed
       file in the Claude file-op look, each fed to the scoreboard exactly like
       a subagent's file ops (unique-path `files` set, ± line sums, Edit/Write
-      tool tallies). The `apply_patch` response_item is deliberately IGNORED —
-      it only carries repo-relative patch text, and rendering both would
-      duplicate. A `success:false` patch paints a red `■ patch failed` and
-      bumps nothing.
+      tool tallies). The `apply_patch` call itself is deliberately NOT a file
+      op — it only carries repo-relative patch text, and counting both would
+      duplicate; it parses to the lightweight `patch_call`/`patch_result`
+      marker pair the mirror never paints (*Two registers* above). A
+      `success:false` patch paints a red `■ patch failed` and bumps nothing.
     - **token accounting** from `token_count` — codex reports a CUMULATIVE
       `total_token_usage` snapshot (input incl. cached / cached / output), so
       the stream keeps only the last one and folds it into the scoreboard ONCE
