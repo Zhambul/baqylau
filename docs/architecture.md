@@ -154,7 +154,9 @@ fan-out — see [dashboard.md](dashboard.md)), `account.py` (the
 subscription-account vocabulary: the switcher's env contract + `accounts.tsv`
 registry, behind `plugins.accounts`/`account_alias`), `statusline.py` (the
 status-line shim's capture half — stashes per-session 5h/7d usage + account
-from the status-line stdin, behind `bin/claude-statusline.py`), the seven hook-handler bodies (`cmd_pre`, `cmd_fmt`,
+from the status-line stdin, behind `bin/claude-statusline.py`), `host.py` (the
+`plugins.host.HostControl` adapter — Claude Code drives every control gesture,
+so its derived caps read all-True; behind the `host` provider), the seven hook-handler bodies (`cmd_pre`, `cmd_fmt`,
 `file_fmt`, `subagent_fmt`, `monitor_fmt`, `task_fmt`, `stop_fmt`), the
 single per-event **`dispatch.py`** (behind the `claude-hook.py` entry — reads
 the payload once and fans out in-process to the tab dispatch, the right
@@ -210,7 +212,7 @@ asked once per session per poll. `plugins.owns_by(path)`
 names the owning tool for the one CONTROL-plane caller that needs it: the
 dashboard refuses to relaunch `claude --resume <sid>` for a session claude_code
 does not own (docs/dashboard.md *Resume & send*).
-**The provider surface is DECLARED.** `plugins.PROVIDERS` lists the twenty-two
+**The provider surface is DECLARED.** `plugins.PROVIDERS` lists the twenty-three
 optional functions a plugin may expose and the arity each fan-out calls it with,
 and every lookup goes through `plugins.provider(plugin, name)` rather than a
 bare `getattr`. This is what `frontends/` has had all along in
@@ -225,8 +227,33 @@ directions: every name a fan-out reaches for is declared (parsed out of the
 fan-outs themselves, so a new one can't skip the table), every declared row is
 actually called by one, every row is implemented by at least one plugin, and
 every implementation accepts the arity its fan-out passes. A plugin still
-implements only what it has something to say about — claude_code 21 of 22, codex
+implements only what it has something to say about — claude_code 22 of 23, codex
 1, otel 1.
+
+**The HOST-tool CONTROL interface.** Reads have `PROVIDERS`; writes have
+`plugins/host.py`. A host tool's CONTROL plane — the whole gestures the
+dashboard drives (interrupt, send, rename, rewind, migrate, compact, model,
+effort, ask, plan) — lives behind ONE class, `plugins.host.HostControl`, the
+write-side twin of the `Frontend` base: one class, inert defaults, a contract
+test. The gestures are WHOLE gestures, not keystroke atoms, so a future
+app-server-backed host (codex's app server, an SDK transport) implements them
+without pretending to press keys. The load-bearing rule is that a host's
+CAPABILITIES are DERIVED from which gestures its subclass OVERRODE
+(`caps()` compares each `GESTURES` method against `HostControl`'s own) — never
+an authored `{name: bool}` a new gesture can silently drift out of sync with.
+A plugin exposes its adapter through the `host` provider, and the registry root
+resolves it: `plugins.hosts()` enumerates the launchable tools for the future
+new-session picker, `plugins.host_named(name)` / `host_of(path)` / `host_for(sid)`
+hand back the adapter, and `plugins.host_caps(name)` its derived caps. The
+dashboard serves those caps per session (`read/session.session_caps`) and GATES
+every control button on them, client-side (`capOk` greys it) and server-side
+(`http/base._caps_guard` 409s it) — so a session owned by a tool that leaves a
+gesture inert degrades cleanly (the button greys, the POST refuses) rather than
+firing a command the tool ignores. claude_code drives every gesture, so its caps
+are all-True and the gate is a no-op for a Claude session (byte-identical). In
+P1a the gestures are DECLARED and gated but the dashboard's POST handlers keep
+their existing bodies; a later phase routes both claude_code and codex through
+the gestures themselves.
 
 **Adding support for another agent tool** = a new `plugins/<tool>/` directory
 implementing whichever hooks it needs (`on_session_start` for a secondary
@@ -234,7 +261,12 @@ source; its own entry scripts + hook wiring for a hook-driven host — Claude
 Code and now codex are both hosts, both driving the shared `core/hostpane.py`
 lifecycle) + one line in `all_plugins()` — core and the frontends don't change.
 A provider it wants that no fan-out has yet is a `PROVIDERS` row plus the
-fan-out; a provider it simply doesn't implement stays absent, as before.
+fan-out; a provider it simply doesn't implement stays absent, as before. To be
+a controllable HOST in the dashboard it also ships a `host` provider returning a
+`plugins.host.HostControl` subclass, overriding exactly the gestures it can
+drive — the caps it does NOT declare grey the corresponding dashboard buttons
+automatically, which is what makes adding copilot/opencode a new package rather
+than an edit to the control plane.
 
 `frontends/` is the terminal layer. `frontends/base.py` defines the
 `Frontend` interface, organised into role slices with each slice's consumers

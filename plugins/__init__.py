@@ -27,7 +27,7 @@ def all_plugins():
 # --- the PROVIDER surface ------------------------------------------------------
 # The optional functions a plugin may expose, and the arity each fan-out calls
 # it with. A plugin implements as many as it has something to say about
-# (claude_code 21 of 22, codex 1, otel 1) and the fan-outs below skip the rest —
+# (claude_code 22 of 23, codex 1, otel 1) and the fan-outs below skip the rest —
 # which is the whole point of an optional surface, and also its hazard: a
 # provider whose name is misspelled, or whose signature drifts from its
 # fan-out's call, is not an error anywhere. It is simply never found, and the
@@ -51,6 +51,8 @@ PROVIDERS = {
     "monitors": 1,           # (sid)                — the monitors read model
     "owns": 1,               # (path)               — is this file ours to read?
     #                          The gate on every PATH-KEYED row below (see _owns)
+    "host": 0,               # ()                   — the HostControl adapter
+    #                          (hosts/host_named/host_of — the control interface)
     "session_title": 1,      # (transcript_path)    — the display title
     "title_and_rename": 1,   # (transcript_path)    — title + the tail rename
     "renameable": 1,         # (transcript_path)    — can it be /rename'd?
@@ -172,6 +174,69 @@ def owns_by(path):
         if fn is not None and fn(path):
             return p.__name__.rsplit(".", 1)[-1]
     return None
+
+
+def hosts():
+    """The registered HOST tools, for the future new-session tool picker:
+    [{name, label, launchable}, …], host first. A plugin is a HOST iff it
+    provides `host` (a plugins.host.HostControl adapter); claude_code is the
+    only one today, codex's arrives with its own `owns` in a later phase. Same
+    read-side exception contract as accounts()."""
+    out = []
+    for p in all_plugins():
+        fn = provider(p, "host")
+        if fn is None:
+            continue
+        h = fn()
+        if h is None:
+            continue
+        out.append({"name": h.name, "label": h.label,
+                    "launchable": bool(h.launchable)})
+    return out
+
+
+def host_named(name):
+    """The HostControl object of the plugin whose short name is `name`, or None
+    (an unknown tool, or a plugin that isn't a host). The one door that turns a
+    tool NAME — what owns_by returns — into its control adapter."""
+    if not name:
+        return None
+    for p in all_plugins():
+        if p.__name__.rsplit(".", 1)[-1] != name:
+            continue
+        fn = provider(p, "host")
+        return fn() if fn is not None else None
+    return None
+
+
+def host_of(path):
+    """The HostControl that OWNS `path` (via owns_by), or None when no plugin
+    claims it — an empty/unknown path, or a codex rollout today (codex declares
+    no `owns` yet, so "unclaimed" is the honest answer, exactly as for owns_by).
+    The CONTROL-plane twin of owns_by: owns_by names the owner, this hands back
+    the object that can drive it."""
+    return host_named(owns_by(path))
+
+
+def host_caps(name):
+    """The DERIVED capability map {gesture: bool} of the plugin host named
+    `name`, or {} when it has none (an unknown tool). The registry-root door
+    the dashboard reads instead of touching plugins.host directly — so the
+    layering rule (dashboard → registry root, never plugins.<tool>) holds and a
+    missing host degrades to every cap absent (the client greys, the guard
+    409s)."""
+    from plugins.host import caps_of
+    return caps_of(host_named(name))
+
+
+def host_for(sid):
+    """The HostControl for a session id — resolves its transcript path through
+    the read-side session API first, then host_of. None when the sid is unknown
+    or its owner declares no host. Lazy import of core.sessionapi (a read-side
+    dependency, not a hook path)."""
+    from core import sessionapi as API
+    tpath = (API.session_row(sid) or {}).get("transcript_path") or ""
+    return host_of(tpath)
 
 
 def _concat_unique(method, key, *args):

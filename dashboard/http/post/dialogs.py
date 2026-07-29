@@ -124,6 +124,10 @@ class _DialogMixin:
         body = self._post_guard()
         if body is None:
             return
+        # refuse when the owning host can't answer a dialog (no-op for
+        # claude_code — its `ask` cap is True; byte-identical)
+        if self._caps_guard(sid, "ask", "web-answer"):
+            return
         chat = bool(body.get("chat"))
         answers = body.get("answers")
         log, sdb = self._audit_target(sid)[1:]
@@ -187,6 +191,10 @@ class _DialogMixin:
         none = (None,) * 6
         body = self._post_guard()
         if body is None:
+            return none
+        # refuse when the owning host can't decide a plan dialog — covers both
+        # plan endpoints through their shared head (no-op for claude_code)
+        if self._caps_guard(sid, "plan", "web-plan"):
             return none
         log, sdb = self._audit_target(sid)[1:]
         pending = plan_pending(sid)

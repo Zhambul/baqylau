@@ -109,6 +109,27 @@ these files (*Web extensions*). The GET signatures are uniform so the dispatch s
 most fixed handlers ignore `url`, and passing it always is cheaper than a
 per-endpoint argument decision.
 
+**Capability gating (multi-tool control plane).** A control-plane POST that
+drives a session gesture first asks whether the session's OWNING HOST can do it.
+Each session payload carries `data["host"]` and `data["caps"]` — the owning
+host's short name and its DERIVED capability map
+(`read/session.session_caps` → `plugins.host_caps`, over the
+`plugins.host.HostControl` a plugin exposes through its `host` provider; caps are
+DERIVED from which gestures the host overrode, never authored). The handlers call
+`self._caps_guard(sid, key, action)` at the top (interrupt → `interrupt`,
+rewind/rewind-to → `rewind`, migrate → `migrate`, the quick commands →
+`compact`/`model`/`effort`, answer → `ask`, plan → `plan`; `message`/`stop` are
+NOT gated); when the cap is absent it 409s `{"error", "cap"}` and writes the
+handler's own `web-*` `ok:False` state_files row. The client greys the same
+buttons through `capOk(meta, key)` (the `CAP_OFF` reason) in `app.11-chrome.js`.
+claude_code drives every gesture, so its caps are all-True and the gate is a
+NO-OP for a Claude session — and an EMPTY/unknown transcript_path (a daemon
+scrubbed-env session, or a row written before the .jsonl exists) defaults to the
+Claude host with full caps rather than failing closed. The gate bites only a
+session owned by a tool that leaves a gesture inert (a not-yet-wired codex, a
+future copilot/opencode) — which is what makes adding a tool a new plugin
+package rather than an edit to every handler.
+
 **The POST tables hold the handler FUNCTIONS, not method-name strings.** That is
 what let the control plane split: a table that can only name methods of `self`
 forces every handler into one class, and the POST plane had grown to 45 methods

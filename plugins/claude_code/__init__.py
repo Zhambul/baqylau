@@ -50,6 +50,17 @@ def owns(path):
     return transcript.owns(path)
 
 
+def host():
+    """The HOST-control provider (plugins.host_named / hosts / host_of) — Claude
+    Code's plugins.host.HostControl adapter, which drives every gesture (so its
+    derived caps read all-True and the dashboard's _caps_guard never fires for a
+    Claude session). Imports `hostctl` (NOT `host` — this provider FUNCTION
+    shadows a `host` submodule for `from plugins.claude_code import host`). See
+    plugins/claude_code/hostctl.py."""
+    from plugins.claude_code import hostctl
+    return hostctl.get()
+
+
 def session_title(transcript_path):
     """The session-title provider (plugins.session_title fan-out) — the head
     summary record / first real prompt of a Claude transcript. See

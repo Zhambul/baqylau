@@ -1562,3 +1562,49 @@ def test_menu_open_survives_the_chord_label_formats():
     # the confirm menu is NOT the first menu, whatever the footer says
     assert not RW.menu_open("\n  Rewind\n\n  Confirm you want to restore to"
                             " the point\n  enter to continue")
+
+
+# ---------------------------------------------------------------- caps gating
+
+def test_session_payload_serves_full_caps_for_a_claude_session(dash):
+    """The multi-tool control gate (P1a): a Claude session (here an EMPTY
+    transcript_path — a daemon scrubbed-env session that must NOT fail closed)
+    is served host="claude_code" + every capability True, so the client greys
+    nothing and the guard fires nowhere (byte-identical control plane)."""
+    from plugins.host import GESTURES
+
+    A.session_start({"session_id": "cap-c", "cwd": "/w", "transcript_path": ""})
+    data = _get_json(dash + "/api/session/cap-c")
+    assert data["host"] == "claude_code"
+    assert data["caps"] == {g: True for g in GESTURES}
+
+
+def test_caps_guard_409s_a_gesture_a_non_claude_host_cant_do(dash, monkeypatch):
+    """A session owned by another tool whose host leaves a gesture inert is
+    degraded cleanly: the payload advertises host="" + all-False caps, and the
+    gated POST 409s with the cap named plus an ok:False `web-*` audit row — the
+    copilot/opencode path proven with a fake owner before either tool exists."""
+    import plugins
+    from plugins.host import GESTURES
+
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setenv("KITTY_WINDOW_ID", "88")
+    A.session_start({"session_id": "cap-x", "cwd": "/w",
+                     "transcript_path": "/w/other.rollout",
+                     "kitty_window_id": "88"})
+    # resolve the transcript to a NON-claude host with every gesture inert
+    monkeypatch.setattr(plugins, "owns_by",
+                        lambda p: "faketool" if p else None)
+    monkeypatch.setattr(plugins, "host_caps",
+                        lambda name: {g: False for g in GESTURES})
+
+    data = _get_json(dash + "/api/session/cap-x")
+    assert data["host"] == "" and data["caps"] == {g: False for g in GESTURES}
+
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/cap-x/interrupt", {})
+    assert e.value.code == 409
+    assert json.loads(e.value.read())["cap"] == "interrupt"
+    row = _last_state_file("cap-x", "web-interrupt")
+    assert row and row["ok"] is False and row["cap"] == "interrupt"

@@ -199,6 +199,40 @@ def badge_count(badge, sid, cwd, agent=""):
     return badge.count(sid, cwd, agent if badge.scoped else "")
 
 
+# The DEFAULT host every session behaves as when its owner can't be proven —
+# Claude Code, the only host the dashboard was ever built for. See session_caps.
+DEFAULT_HOST = "claude_code"
+
+
+def session_caps(tpath):
+    """(host_name, caps) for a session's transcript path — the owning host's
+    short name and its DERIVED capability map (plugins.host_caps). The one owner
+    of the "which tool controls this session, and what can it do" rule that the
+    session payload serves and http/base._caps_guard enforces.
+
+    The load-bearing edge case is an EMPTY / unknown transcript_path. That is a
+    LEGITIMATE Claude session, not a broken one: a daemon-origin SessionStart
+    arrives with a scrubbed env (CLAUDE.md), and an audit row can be written
+    before the .jsonl exists — so it must NOT fail closed and disable its whole
+    control plane. Unprovable therefore means "behave EXACTLY as today": the
+    default host (claude_code), every cap True.
+
+      · unowned / empty / unknown path -> (claude_code, full caps)  [as today]
+      · owned by claude_code           -> (claude_code, full caps)
+      · owned by ANOTHER tool          -> ("", that host's DERIVED caps)
+
+    The last branch is what makes adding copilot/opencode safe: a host that
+    leaves a gesture inert reads that cap False, the client greys the button and
+    the guard 409s it — no codex-shaped special-casing. host="" says the control
+    plane can't attribute the session to a driveable host (today only a stub /
+    a future codex rollout reaches it; codex declares no `owns` yet, so a real
+    rollout still lands in the unprovable default above, which is handled)."""
+    owner = plugins.owns_by(tpath) if tpath else None
+    if owner is None or owner == DEFAULT_HOST:
+        return DEFAULT_HOST, plugins.host_caps(DEFAULT_HOST)
+    return "", plugins.host_caps(owner)
+
+
 def session_payload(sid, agent=""):
     """One session's overview — session() plus the secondary tabs' badge counts
     (BADGES; the full rows stay behind /errors, /monitors, /jobs, /memory) and
@@ -230,6 +264,11 @@ def session_payload(sid, agent=""):
     for b in BADGES:
         data[b.field] = badge_count(b, sid, data.get("cwd") or "", agent)
     data["title"] = session_title(data.get("transcript_path") or "")
+    # the owning host + its DERIVED capability map (session_caps): the client
+    # greys every unsupported button and the server's _caps_guard 409s it. For a
+    # Claude session (or an unprovable empty path) every cap is True, so nothing
+    # changes — the map only bites a session owned by another tool.
+    data["host"], data["caps"] = session_caps(data.get("transcript_path") or "")
     # Whether the session's transcript .jsonl is GONE (known path, absent on
     # disk) — the composer's resume-&-send door is dead for it (`claude
     # --resume` finds no conversation, the launched tab exits at once). An

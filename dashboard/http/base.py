@@ -247,6 +247,43 @@ class _Base(BaseHTTPRequestHandler):
                           **{k: repr(v) for k, v in detail.items()}))
         return self._json({"error": message}, code)
 
+    def _caps_guard(self, sid, key, action):
+        """Refuse a control gesture the session's OWNING HOST does not support —
+        the server-side twin of the client's greyed button. Resolve the row's
+        transcript path → its host's DERIVED caps (read.session.session_caps →
+        plugins.host_caps); when `key` is absent, 409 `{"error":…, "cap":key}`
+        AND write the handler's OWN `web-*` failure state_files row (ok:False +
+        cap + host), matching the audit discipline of every reject site here.
+        Returns True when it HANDLED the request (already responded — the caller
+        `return`s at once), False to proceed.
+
+        claude_code drives every gesture, so for a Claude session — and for an
+        unprovable empty transcript_path, which session_caps defaults to the
+        Claude host — every cap is True and this NEVER fires: byte-identical to
+        the pre-P1a control plane. It bites only a session OWNED by another tool
+        whose host leaves that gesture inert (a not-yet-wired codex, a future
+        copilot/opencode), which is the whole point of the abstraction.
+
+        Degrades OPEN on a caps-resolution failure: a read error must never
+        disable a real Claude session's control plane, so it audits and returns
+        False (proceed) rather than a spurious 409."""
+        row, log, sdb = self._audit_target(sid)
+        try:
+            from dashboard.read import session as rsession
+            host, caps = rsession.session_caps(row.get("transcript_path") or "")
+        except Exception:
+            A.error(log, "dashboard caps (%s)" % action,
+                    {"sid": sid, "cap": key})
+            return False
+        if caps.get(key):
+            return False
+        A.state_file(log, sdb, action,
+                     {"ok": False, "cap": key, "host": host,
+                      "why": "unsupported by this session's tool"})
+        self._json({"error": "not supported by this session's tool",
+                    "cap": key}, 409)
+        return True
+
     # the SPA parts (app.NN-name.js, split from the former monolithic app.js) are
     # admitted by SHAPE, not a per-file whitelist entry — still no user-path
     # resolution (a strict basename pattern), just no dict bloat for the 13 parts.

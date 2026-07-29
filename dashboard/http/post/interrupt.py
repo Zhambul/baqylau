@@ -130,6 +130,10 @@ class _InterruptMixin:
         body = self._post_guard()
         if body is None:
             return
+        # refuse when the owning host can't interrupt (no-op for claude_code —
+        # its `interrupt` cap is True, so this never fires; byte-identical)
+        if self._caps_guard(sid, "interrupt", action):
+            return
         # AUTHORITATIVE window (see _resolve_live_window): the pane tagged
         # claude_session=<sid>, NOT the audit row's stale start-time id (an
         # Escape into a reused id would interrupt an unrelated session — a fresh

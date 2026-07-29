@@ -264,6 +264,10 @@ class _SessionMixin:
         body = self._post_guard()
         if body is None:
             return
+        # refuse when the owning host can't migrate (no-op for claude_code —
+        # its `migrate` cap is True; byte-identical)
+        if self._caps_guard(sid, "migrate", "web-migrate"):
+            return
         row, log, sdb = self._audit_target(sid)
         # The unknown-sid 404 deliberately runs BEFORE anything else (the
         # migrator can't tell "parked" from "never existed"), and files its row

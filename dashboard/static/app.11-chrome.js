@@ -143,6 +143,20 @@ function gate(btn, ok, why) {
   btn.title = ok ? (btn.dataset.tip || "") : why;
 }
 
+// Why a button is out because this session's TOOL can't do it (a codex /
+// copilot / opencode host that leaves the gesture inert — meta.caps[key] false).
+// The server's _caps_guard 409s the same gesture; this just says so up front.
+const CAP_OFF = "not supported by this session's tool";
+
+// Does the owning host support gesture `key`? meta.caps is the DERIVED
+// capability map the payload carries (read.session.session_caps). Absent (an
+// older payload / mid-load) is NOT a denial — degrade open, exactly as the
+// server does; a Claude session has every cap True, so this never restricts it.
+function capOk(meta, key) {
+  const caps = meta && meta.caps;
+  return !caps || !!caps[key];
+}
+
 // Claude Code refuses `/compact` until a conversation has something to
 // summarize ("Not enough messages to compact"), so ⊜ compact greys out below
 // this many of YOUR prompts (meta.prompts, capped server-side; None/absent =
@@ -167,8 +181,9 @@ function chromeActions(ses, meta) {
   // transcript; a live kitty tab also retitles in place — docs/dashboard.md
   // "Web rename")
   const ren = el("button", "sstop actses", "✎ rename");
-  ren.title = "rename this session (resume picker + tab)";
+  ren.dataset.tip = "rename this session (resume picker + tab)";
   ren.onclick = () => startRenameHeader();
+  gate(ren, capOk(meta, "rename"), CAP_OFF);   // a tool that can't rename greys it
   act.append(ren);
   // migrate: hand this session to the other subscription account — the same
   // detached migrator as the automatic rate-limit path (docs/relimit.md
@@ -176,8 +191,9 @@ function chromeActions(ses, meta) {
   // other alias); parked → it just relaunches there. Immediate, no confirm
   // (like ■ stop), and like rename it works live AND parked.
   const mig = el("button", "sstop actses", "⇆ migrate");
-  mig.title = "migrate this session to another account";
+  mig.dataset.tip = "migrate this session to another account";
   mig.onclick = () => lockDuring(mig, migrateSession);
+  gate(mig, capOk(meta, "migrate"), CAP_OFF);   // the server 409s it too
   act.append(mig);
   // ◉ alerts / ○ muted: opt this session in/out of the DEFERRED Telegram
   // alert (docs/dashboard.md *Telegram alerts*) — the off-device notification
@@ -236,12 +252,15 @@ function chromeActions(ses, meta) {
   // session — rewindSession bails on a busy or red tab with a toast, and the
   // button now says so before the click rather than after it.
   ses.stopMode = (t) => {
-    gate(stop, windowed && BUSY_TABS.includes(t),
-         !windowed ? NO_WINDOW
+    const iCap = capOk(meta, "interrupt"), rCap = capOk(meta, "rewind");
+    gate(stop, iCap && windowed && BUSY_TABS.includes(t),
+         !iCap ? CAP_OFF
+           : !windowed ? NO_WINDOW
            : t === "awaiting-command" ? "a question is waiting — answer it in the card"
            : "nothing is running to stop");
-    gate(rew, windowed && !BUSY_TABS.includes(t) && t !== "awaiting-command",
-         !windowed ? NO_WINDOW
+    gate(rew, rCap && windowed && !BUSY_TABS.includes(t) && t !== "awaiting-command",
+         !rCap ? CAP_OFF
+           : !windowed ? NO_WINDOW
            : t === "awaiting-command" ? "a question is waiting — answer it first"
            : "a turn is running — stop it first, then rewind");
   };
@@ -333,14 +352,19 @@ function chromeQuickCmds(ses, meta) {
   // command the TUI will bounce (`prompts`, patched live by its SSE event).
   ses.quickMode = (t) => {
     const dialog = t === "awaiting-command";
-    const ok = windowed && !dialog;
-    const why = !windowed ? NO_WINDOW
-                          : "a question is waiting — answer it in the card";
-    for (const b of [mdl, eff]) gate(b, ok, why);
+    const base = windowed && !dialog;
+    const baseWhy = !windowed ? NO_WINDOW
+                              : "a question is waiting — answer it in the card";
+    // each command has its own host capability (a tool may compact but not
+    // switch model, say); a false cap greys that one button with CAP_OFF
+    gate(mdl, capOk(meta, "model") && base, !capOk(meta, "model") ? CAP_OFF : baseWhy);
+    gate(eff, capOk(meta, "effort") && base, !capOk(meta, "effort") ? CAP_OFF : baseWhy);
+    const cCap = capOk(meta, "compact");
     const n = (ses.meta && ses.meta.prompts);
     const thin = typeof n === "number" && n < COMPACT_MIN_PROMPTS;
-    gate(cpt, ok && !thin,
-         !ok ? why : "not enough conversation to compact yet");
+    gate(cpt, cCap && base && !thin,
+         !cCap ? CAP_OFF : !base ? baseWhy
+               : "not enough conversation to compact yet");
   };
   ses.quickMode(liveTab());
   return act2;

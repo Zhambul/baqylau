@@ -28,6 +28,11 @@ DRAFT_CLEAR_LINES_MAX = 50         # ceiling on the per-line kill loop below —
 #                                    a corrupt/huge stash must not turn into an
 #                                    unbounded keystroke storm at the terminal.
 
+# The quick-command → host CAPABILITY key each command is gated on
+# (_caps_guard). The argless auto-rename is deliberately absent: rename works
+# through the transcript on a parked session, and this phase does not gate it.
+CAP_BY_CMD = {"compact": "compact", "model": "model", "effort": "effort"}
+
 
 class _TypingMixin:
     """The handlers that reach a live TUI with text or a tab close.
@@ -202,6 +207,11 @@ class _TypingMixin:
         else:
             return self._reject_input("web-command", "bad cmd", "unknown command",
                                 {"sid": sid, "cmd": cmd, "arg": arg})
+        # refuse when the owning host can't run this command (no-op for
+        # claude_code — compact/model/effort caps are all True; byte-identical)
+        cap = CAP_BY_CMD.get(cmd)
+        if cap and self._caps_guard(sid, cap, "web-command"):
+            return
         # AUTHORITATIVE window (see _resolve_live_window): the live
         # claude_session=<sid> pane tag, same as post_message (a reused stale id
         # would type into an unrelated tab). 503/409 each a `web-command`
@@ -312,6 +322,9 @@ class _TypingMixin:
         body = self._post_guard()
         if body is None:
             return
+        # refuse when the owning host can't rewind (no-op for claude_code)
+        if self._caps_guard(sid, "rewind", "web-rewind"):
+            return
         resolved = self._resolve_live_window(sid, "web-rewind", verb="rewind")
         if resolved is None:
             return
@@ -357,6 +370,9 @@ class _TypingMixin:
         the failing step), failures also an A.error."""
         body = self._post_guard()
         if body is None:
+            return
+        # refuse when the owning host can't rewind (no-op for claude_code)
+        if self._caps_guard(sid, "rewind", "web-rewind-to"):
             return
         text = body.get("text")
         mode = body.get("mode") or "conversation"

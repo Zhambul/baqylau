@@ -876,6 +876,169 @@ def test_a_plugin_without_owns_is_asked_exactly_as_before(tmp_path, monkeypatch)
         "without an `owns` the host is asked again — the pre-gate behaviour"
 
 
+# --- the HOST control surface (plugins.host) --------------------------------------
+# frontends/ has a declared Frontend base + a contract test; PROVIDERS has the
+# same for the READ fan-outs. The HOST control interface (plugins.host.HostControl)
+# is the WRITE-side equivalent — one class, inert defaults, and caps DERIVED from
+# which gestures a subclass overrode (never an authored {name: bool}). These pin
+# that derivation in both directions, exactly as the two PROVIDERS tests above do.
+
+def test_host_caps_derive_from_declared_gestures_both_directions():
+    """Every declared GESTURE is a method on HostControl, and caps() reports
+    exactly the declared gestures — no cap without a method, no method without a
+    cap. The inert base overrides nothing, so every cap is False (the derivation,
+    not a hand-written table)."""
+    from plugins.host import GESTURES, HostControl
+    for g in GESTURES:
+        assert callable(getattr(HostControl, g, None)), "gesture %r missing" % g
+    base_caps = HostControl().caps()
+    assert set(base_caps) == set(GESTURES)
+    assert base_caps == {g: False for g in GESTURES}
+
+
+def test_host_caps_are_derived_not_authored():
+    """A subclass's caps follow WHICH gestures it overrode — the one-source-of-
+    truth rule. Overriding one flips exactly that bit; overriding none stays
+    all-False even though it IS a subclass (identity of the function object is
+    what caps() reads, so a shared/looped method would wrongly read False)."""
+    from plugins.host import GESTURES, HostControl
+
+    class OneGesture(HostControl):
+        def interrupt(self, fe, win, ctx):
+            return self._ack()
+
+    caps = OneGesture().caps()
+    assert caps["interrupt"] is True
+    assert all(v is False for k, v in caps.items() if k != "interrupt")
+
+    class Empty(HostControl):
+        pass
+
+    assert Empty().caps() == {g: False for g in GESTURES}
+
+
+def test_claude_code_host_drives_every_gesture():
+    """The host tool's caps read all-True — which is what keeps the dashboard's
+    _caps_guard a no-op for a Claude session (byte-identical control plane)."""
+    import plugins
+    from plugins.host import GESTURES
+
+    h = plugins.host_named("claude_code")
+    assert h is not None and h.name == "claude_code" and h.launchable is True
+    assert h.label
+    assert h.caps() == {g: True for g in GESTURES}
+
+
+def test_hosts_and_host_of(tmp_path):
+    """hosts() enumerates the launchable tools for the new-session picker;
+    host_of resolves a path to its owning host via owns_by (None for a rollout —
+    codex declares no `owns` yet — and for an empty/unknown path)."""
+    import plugins
+
+    hs = {h["name"]: h for h in plugins.hosts()}
+    assert "claude_code" in hs
+    assert hs["claude_code"]["launchable"] is True and hs["claude_code"]["label"]
+
+    tpath, rollout = _claude_transcript(tmp_path), _codex_rollout(tmp_path)
+    assert plugins.host_of(tpath).name == "claude_code"
+    assert plugins.host_of(rollout) is None
+    assert plugins.host_of("") is None
+    assert plugins.host_named("nope") is None
+    assert plugins.host_caps("claude_code")["interrupt"] is True
+    assert plugins.host_caps("nope") == {}
+
+
+def test_a_third_tool_degrades_cleanly_not_codex_shaped(tmp_path, monkeypatch):
+    """The abstraction isn't codex-shaped: a FAKE host that owns a path but
+    leaves every gesture inert reads all-caps-False, and session_caps hands the
+    dashboard host="" + that restricted map — so the client greys every button
+    and _caps_guard 409s it. This is the copilot/opencode path proven before
+    either exists."""
+    import plugins
+    from dashboard.read import session as rsession
+    from plugins.host import GESTURES, HostControl
+
+    class FakeHost(HostControl):
+        name = "faketool"
+        label = "Fake Tool"
+
+    monkeypatch.setattr(plugins, "owns_by", lambda p: "faketool" if p else None)
+    monkeypatch.setattr(plugins, "host_caps",
+                        lambda name: FakeHost().caps() if name == "faketool" else {})
+    host, caps = rsession.session_caps("/some/rollout.jsonl")
+    assert host == ""
+    assert caps == {g: False for g in GESTURES}   # every gesture unsupported
+
+
+def test_session_caps_defaults_open_for_an_empty_path():
+    """The load-bearing edge case: an EMPTY transcript_path (a daemon-origin
+    scrubbed-env session, or a row written before the .jsonl exists) is a
+    legitimate Claude session and must NOT fail closed — session_caps defaults
+    it to the Claude host with FULL caps, so its control plane stays live."""
+    from dashboard.read import session as rsession
+    from plugins.host import GESTURES
+
+    host, caps = rsession.session_caps("")
+    assert host == "claude_code"
+    assert caps == {g: True for g in GESTURES}
+
+
+def test_session_caps_full_for_an_owned_claude_transcript(tmp_path):
+    """A path claude_code genuinely owns resolves to the Claude host + full
+    caps (the no-regression half — session_caps changes nothing for a real
+    Claude session)."""
+    from dashboard.read import session as rsession
+    from plugins.host import GESTURES
+
+    host, caps = rsession.session_caps(_claude_transcript(tmp_path))
+    assert host == "claude_code"
+    assert caps == {g: True for g in GESTURES}
+
+
+def test_caps_guard_passes_full_caps_and_409s_a_missing_cap(monkeypatch):
+    """http/base._caps_guard: proceed (False, no response, no row) when the
+    owning host HAS the cap — the claude_code no-op that keeps the control plane
+    byte-identical — and 409 + a `web-*` ok:False row when it does NOT. Driven
+    against a minimal fake handler so it needs no HTTP socket."""
+    import plugins
+    from dashboard.http import base
+    from plugins.host import GESTURES
+
+    rows = []
+    monkeypatch.setattr(base.A, "state_file",
+                        lambda log, path, action, content: rows.append((action, content)))
+
+    class Fake:
+        _caps_guard = base._Base._caps_guard
+
+        def __init__(self):
+            self.responses = []
+
+        @staticmethod
+        def _audit_target(sid):
+            return {"transcript_path": "/x.jsonl"}, "log-key", "/tmp/x.state.db"
+
+        def _json(self, obj, code=200):
+            self.responses.append((code, obj))
+
+    f = Fake()
+    # a claude_code-owned session has every cap True -> the guard is a no-op
+    monkeypatch.setattr(plugins, "owns_by", lambda p: "claude_code")
+    assert f._caps_guard("sid", "interrupt", "web-interrupt") is False
+    assert f.responses == [] and rows == []
+
+    # a session owned by a tool whose host leaves interrupt inert -> 409 + row
+    monkeypatch.setattr(plugins, "owns_by", lambda p: "faketool")
+    monkeypatch.setattr(plugins, "host_caps",
+                        lambda name: {g: False for g in GESTURES})
+    assert f._caps_guard("sid", "interrupt", "web-interrupt") is True
+    assert f.responses[-1][0] == 409
+    assert f.responses[-1][1]["cap"] == "interrupt"
+    action, content = rows[-1]
+    assert action == "web-interrupt"
+    assert content["ok"] is False and content["cap"] == "interrupt"
+
+
 # --- the dashboard -> plugin BOUNDARY ---------------------------------------------
 # `plugins.PROVIDERS` says WHAT a plugin may be asked; this says WHO may ask it
 # directly. frontends/ has had both halves for a long time (the `Frontend` base
