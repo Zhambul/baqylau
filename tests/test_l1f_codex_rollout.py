@@ -16,6 +16,7 @@ if REPO not in sys.path:
     sys.path.insert(0, REPO)
 
 from plugins.codex import rollout as RO
+from plugins.codex import stream as ST
 
 
 def _ev(typ, **kw):
@@ -337,3 +338,34 @@ def test_renderer_consumes_the_parser():
                     'get("arguments")', 'get("changes")',
                     'get("total_token_usage")'):
         assert literal not in src, "rollout grammar re-encoded in stream.py: " + literal
+
+
+# ---------------------------------------------------- the parser↔renderer drift contract
+# rollout.KINDS is the ONE owner of the codex rollout kind vocabulary
+# (docs/codex.md *Kind drift contract*). Every kind it lists must be DECIDED by
+# the mirror renderer — either painted (stream.Renderer._RO) or explicitly
+# ignored (stream.IGNORE_KINDS) — and nothing may claim a kind the parser never
+# emits. This is the SAFETY NET the parser-deepening drift needed: a new/renamed
+# parser kind, or a stale/typo'd handler, fails one of the three checks below.
+
+def test_every_kind_is_decided_render_or_ignore():
+    """No parser kind may sit undecided: each rollout.KINDS member is either a
+    _RO handler key or an IGNORE_KINDS member (the drift the split reopened —
+    the parser grew kinds the renderer silently dropped)."""
+    decided = set(ST.Renderer._RO) | set(ST.IGNORE_KINDS)
+    undecided = RO.KINDS - decided
+    assert not undecided, "codex kinds neither rendered nor ignored: " + repr(sorted(undecided))
+
+
+def test_no_handler_points_at_a_phantom_kind():
+    """No _RO key or IGNORE_KINDS member may name a kind the parser never emits
+    (a rename/typo that would leave a dead handler)."""
+    decided = set(ST.Renderer._RO) | set(ST.IGNORE_KINDS)
+    stale = decided - RO.KINDS
+    assert not stale, "handlers point at kinds not in rollout.KINDS: " + repr(sorted(stale))
+
+
+def test_render_and_ignore_are_disjoint():
+    """A kind is painted OR ignored, never both."""
+    both = set(ST.Renderer._RO) & set(ST.IGNORE_KINDS)
+    assert not both, "codex kinds both rendered and ignored: " + repr(sorted(both))

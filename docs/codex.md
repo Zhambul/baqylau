@@ -87,6 +87,27 @@ its own mirror when run standalone (wiring in [wiring.md](wiring.md)).
     rollout answers the main-thread `activity(sid)` (uuid == sid). The
     companion `[ts]`-log parse stays in `stream.py` — a pre-digested display
     stream, not a record grammar worth a second module.
+  - **Kind drift contract.** `parse`/`parse_line` grew across versions and
+    kinds got ADDED faster than the mirror renderer learned to paint them, so
+    codex content silently vanished — `feed_rollout` drops any `kind` absent
+    from `_RO` by design. The safety net is a single-owner set + a
+    both-directions test: **`rollout.KINDS`** is the ONE owner of the complete
+    kind vocabulary `parse` can return (hand-maintained — a handler's kind is
+    not its registry key, e.g. `user_message` → `prompt`, `patch_apply_end` →
+    `patch` — so it can't be derived off the `_EVENT`/`_RESP`/`_CALL`/`_TOP`
+    tables), and **`stream.IGNORE_KINDS`** enumerates the kinds the mirror
+    deliberately does NOT paint (the `chat`/`think` conversation register, the
+    `patch_call`/`patch_result` patch-lifecycle detail already covered by
+    `patch`, the `compact_boundary` covered by the event_msg `compact`, the
+    `stdin` backgrounded-exec poll, the `ask` question card, and the `bad`
+    malformed line), each with an inline reason. `tests/test_l1f_codex_rollout.py`
+    pins that EVERY `KINDS` member is either a `Renderer._RO` key or an
+    `IGNORE_KINDS` member (nothing undecided), that no handler names a kind the
+    parser never emits (no stale/typo'd key), and that the two sets are
+    disjoint — so a new or renamed parser kind fails the suite until someone
+    decides render-vs-ignore. `IGNORE_KINDS` is documentation + the contract's
+    ignore-side only; `feed_rollout` never consults it (adding a kind there
+    changes no paint behaviour).
   - **Two registers — deliberately not unified.** A codex rollout says most
     things TWICE: once as an `event_msg` (codex's own digested UI stream) and
     once as a `response_item` (the model-API record the conversation is

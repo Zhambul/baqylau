@@ -424,6 +424,26 @@ def _stamp(rec, o):
     return rec
 
 
+# The COMPLETE set of record kinds parse()/parse_line() can return — the ONE
+# owner of the codex rollout KIND vocabulary (docs/styleguide.md single-owner
+# table; docs/codex.md *Kind drift contract*). Hand-maintained rather than
+# derived: the kind a handler returns is NOT its registry key
+# (_ev_user_message → "prompt", _ev_patch_apply_end → "patch",
+# _ev_context_compacted → "compact"), so it can't be read off the
+# _EVENT/_RESP/_CALL/_TOP tables. But a new or renamed kind can never drift past
+# a renderer SILENTLY: tests/test_l1f_codex_rollout.py pins every kind here to
+# be EITHER rendered (stream.Renderer._RO) OR explicitly ignored
+# (stream.IGNORE_KINDS), and every rendered/ignored kind to be a real member
+# here — so adding a parser kind fails the suite until someone decides
+# render-vs-ignore. `bad` is parse_line's non-JSON record.
+KINDS = frozenset({
+    "turn_context", "usage", "patch", "compact", "task_started",
+    "task_complete", "turn_aborted", "prompt", "reasoning", "message",
+    "search", "exec", "exec_result", "stdin", "chat", "think", "patch_call",
+    "patch_result", "ask", "compact_boundary", "bad",
+})
+
+
 def parse(o):
     """One decoded rollout object -> a typed record (module header) or None."""
     t = o.get("type")

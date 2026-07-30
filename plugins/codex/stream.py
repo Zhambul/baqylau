@@ -162,6 +162,25 @@ def dim_gut(text, g=None):
     return SF.dim_gut(text, SLOT_RGB, g=g)
 
 
+# Rollout kinds the mirror renderer deliberately does NOT paint (yet). Every
+# rollout.KINDS member is EITHER handled by Renderer._RO below OR listed here —
+# the both-directions drift contract in tests/test_l1f_codex_rollout.py fails
+# until a new/renamed parser kind is decided one way or the other
+# (docs/codex.md *Kind drift contract*). This set is documentation + the
+# contract's ignore-side; feed_rollout does not consult it (it already ignores
+# any kind absent from _RO), so listing a kind here changes no paint behaviour.
+IGNORE_KINDS = frozenset({
+    "chat",              # prose register — rendered via plugins.conversation() bubbles (P3), not ops
+    "think",             # prose register — rendered via plugins.conversation() bubbles (P3), not ops
+    "stdin",             # backgrounded-exec continuation — rich rendering pending (P2)
+    "patch_call",        # patch lifecycle detail — patch (patch_apply_end) already renders the file lines (P2/P5)
+    "patch_result",      # patch lifecycle detail — patch (patch_apply_end) already renders the file lines (P2/P5)
+    "compact_boundary",  # top-level compaction boundary — the event_msg `compact` already paints ⟳
+    "ask",               # request_user_input dialog — surfaced via the web question card, not the mirror
+    "bad",               # malformed/undecodable line — counted in the malformed audit, never painted
+})
+
+
 class Renderer:
     """Per-run mutable render state for BOTH sources (companion + rollout) —
     was ~10 module globals mutated via `global` in render_record/feed_rollout;
