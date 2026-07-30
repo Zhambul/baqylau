@@ -617,6 +617,21 @@ right treatment for a SIDECAR codex run inside a Claude session — a foldable
 sub-run, like a subagent (`ran N codex runs`). It is the WRONG treatment for a
 STANDALONE codex session, where the codex activity IS the session — see below.
 
+### Only a codex IN A KITTY WINDOW gets a mirror (the ChatGPT-app skip)
+
+`plugins/codex/session.py` stands up a mirror + scoreboard + `sessions` row only
+when the codex is running in a REAL kitty window — resolved BEFORE `A.session_start`
+as its `KITTY_WINDOW_ID` env (a codex tab always carries it; codex is not
+daemon-spawned) OR a prior `claude_session=<sid>` tag (a resume into an existing
+tab). A codex started OUTSIDE kitty has NEITHER and the handler SKIPS the whole
+lifecycle (audited `no kitty window (headless / ChatGPT app) — skip`). This is the
+codex twin of Claude's daemon-origin skip (CLAUDE.md): the **ChatGPT desktop app
+runs the codex CLI**, which shares `~/.codex/hooks.json`, so our SessionStart fires
+for it too — and without the guard it wrote a `sessions` row and painted a mirror
+into whatever kitty tab happened to be focused (a phantom dashboard card for a
+session that isn't in the terminal at all). The old "anchorless standalone start
+is still the user's own tab" fallback was removed — it predated the app case.
+
 ### Standalone mirror parity (a codex session reads like a Claude session)
 
 A standalone codex session's dashboard view must look like a Claude session's:

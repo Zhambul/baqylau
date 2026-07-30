@@ -144,6 +144,23 @@ def main():
                      decision="nested-skip (host mirror %s present)" % host)
         return
 
+    # This codex must be running in a REAL kitty window to get a mirror: its
+    # KITTY_WINDOW_ID env (a codex tab always carries it) or a prior
+    # claude_session=<sid> tag (a resume into an existing tab). A codex launched
+    # OUTSIDE kitty has NEITHER — the ChatGPT DESKTOP app runs the codex CLI, which
+    # shares ~/.codex/hooks.json, so this SessionStart fires for it too — and it
+    # must NOT get a mirror/scoreboard/sessions row (a phantom dashboard card
+    # painted into whatever tab was focused). This is the codex twin of Claude's
+    # daemon-origin skip (CLAUDE.md: pane ops anchor to a window, or SKIP the whole
+    # lifecycle when none exists). Resolved BEFORE A.session_start so no dashboard
+    # presence is created for a headless/app session.
+    win = fe.current_window()                 # KITTY_WINDOW_ID (codex is not daemon-spawned)
+    anchor = win or fe.window_for_session(sid)
+    if not anchor:
+        A.hook_event(payload, handler="codex-session",
+                     decision="no kitty window (headless / ChatGPT app) — skip")
+        return
+
     log = P.mirror_log(sid)
     try:
         A.session_start(payload)
@@ -156,13 +173,8 @@ def main():
         pass
     HP.ensure_db(log)
 
-    win = fe.current_window()                 # tag the codex pane for keybindings
-    if win:
+    if win:                                   # tag the codex pane for keybindings
         fe.set_user_vars(win, {"claude_session": sid})
-    # Anchor pane ops to the codex pane (env, else a prior tag); "" keeps the
-    # old focused-tab fallback — codex has no daemon-origin SessionStart, so an
-    # anchorless standalone start is still the user's own tab.
-    anchor = win or fe.window_for_session(sid)
     HP.close_stale_mirrors(fe, sid, anchor)   # a prior-sid pane (resume/clear)
     b = bias()
     HP.open_mirror(fe, BIN, sid, log, b, anchor=anchor)
@@ -172,9 +184,9 @@ def main():
     # events (pretool/stop/…) as a cheap sqlite lookup — instead of re-running the
     # nested-vs-standalone tab_host_sid subprocess on every event. A NESTED codex
     # never reaches here (the host guard above returned), so no row is written for
-    # it and the dispatcher's nested gate bails. (KITTY_WINDOW_ID rides the codex
-    # SessionStart env — codex is not daemon-spawned like Claude's agents view —
-    # so `anchor` is normally the real tab window; "" degrades to no tab paint.)
+    # it and the dispatcher's nested gate bails. (`anchor` is a real window here —
+    # the no-window case skipped the whole lifecycle above, so this never records
+    # an empty tab.)
     try:
         T.codex_host_mark(sid, str(anchor or ""))
     except Exception:

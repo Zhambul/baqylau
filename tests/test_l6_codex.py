@@ -482,6 +482,26 @@ def test_standalone_session_handler_nested_skips(run_hook, test_env, session,
                for d in oracle.decisions(test_env, s.sid, handler="codex-session"))
 
 
+def test_standalone_session_handler_skips_without_a_kitty_window(
+        run_hook, test_env, session, fake_kitten, reaper):
+    """A codex started OUTSIDE kitty — the ChatGPT DESKTOP app runs the codex CLI,
+    which shares ~/.codex/hooks.json, so this SessionStart fires for it — has no
+    KITTY_WINDOW_ID and no claude_session-tagged window. It must NOT open a mirror
+    or write a sessions row (the reported phantom dashboard card), the codex twin
+    of Claude's daemon-origin skip."""
+    s = session.make()
+    env = dict(test_env)
+    env.pop("KITTY_WINDOW_ID", None)               # not in a kitty tab (the app)
+    run_hook("claude-codex-session.py", P.session_start(s), env=env)
+    assert not os.path.exists(s.state_db), \
+        "headless/app codex must not stand up a state DB (no dashboard card)"
+    assert not any("claude-mirror.py" in " ".join(map(str, a))
+                   for a in fake_kitten.calls("launch")), \
+        "headless/app codex must open no mirror"
+    assert any("no kitty window" in d
+               for d in oracle.decisions(test_env, s.sid, handler="codex-session"))
+
+
 # ---- audit coverage of the codex degrade paths -------------------------------
 
 def test_rollout_malformed_lines_audited_once_with_count(test_env, codex):
