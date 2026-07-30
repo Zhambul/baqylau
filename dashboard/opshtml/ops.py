@@ -289,7 +289,7 @@ def in_scope(op, scope=None):
     return src in scope
 
 
-def op_items(ops, key="", ids=None, carry=None, scope=None, codex_lead=False):
+def op_items(ops, key="", ids=None, carry=None, scope=None, host_lead=False):
     """A batch of ops -> [{g, t, html}, …] for the SESSION STREAM: the app
     folds same-`g` items into one collapsible block (the label ops become the
     block's summary chips), so a finished command reads as one line instead
@@ -409,7 +409,7 @@ def op_items(ops, key="", ids=None, carry=None, scope=None, codex_lead=False):
                 continue
             if g and g in cs.get("drop", ()):
                 continue                # this block's body, following its header
-        elif codex_lead and actclass.is_codex(op):
+        elif host_lead and actclass.is_codex(op):
             # STANDALONE codex HOST, session view: its own (unstamped) codex ops
             # ARE the session's activity, not a foldable sub-run. DROP the prose
             # ops (⇢/✎/⋯/⇠ header + body by group) — plugins.conversation

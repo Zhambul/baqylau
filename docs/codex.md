@@ -79,8 +79,8 @@ its own mirror when run standalone (wiring in [wiring.md](wiring.md)).
     is gone with that whole read model: a codex run's web view is now the mirror
     it already paints, scoped (docs/dashboard.md *Agent scope*), resolved from
     the audit `streams` keystone (`kind='codex'`, `src_path` = the rollout) via
-    `sessionapi.codex_runs()`;
-    the run's identity in the `agents()` list is `sessionapi.codex_aid()` —
+    `plugins.runs()` (plugins/codex/nested.py);
+    the run's identity in the `agents()` list is `paths.codex_aid()` —
     the src basename, extension stripped — since a codex run carries no hook
     `agent_id`. Companion `.log` runs are listed but have no drill-down
     (their activity log is not a rollout); a standalone codex session's own
@@ -245,7 +245,7 @@ its own mirror when run standalone (wiring in [wiring.md](wiring.md)).
     (`spawn(subagent=True)` → `$CLAUDE_OPS_SRC = codex:<nickname>`, NOT the
     standalone main-agent flag). Everything downstream is the existing subagent
     machinery: the stamped ops drop from the main-agent-only web mirror,
-    `sessionapi.codex_runs` mints the clickable agent card (its transcript ≠ the
+    `plugins.runs()` (plugins/codex/nested.py) mints the clickable agent card (its transcript ≠ the
     session's own, so the self-run empty-scope drop keeps it), and
     `read/mirror.agent_scope` matches `codex:<nickname>` to show the run's full
     activity + re-bubbled conversation — visually a Claude subagent, no
@@ -381,7 +381,7 @@ which audits a degrade.
   - `conversation(sid, pos, agent_id)` — maps the RESPONSE_ITEM register onto the
     dashboard's conversation records: a non-synthetic `chat` → a `prompt` (user)
     or `message` (assistant) bubble, a `think` → a `message` bubble. Resolves a
-    SIDECAR run by `agent_id` (`sessionapi.codex_runs`) and the STANDALONE host's
+    SIDECAR run by `agent_id` (`plugins/codex/nested.session_runs`) and the STANDALONE host's
     own thread otherwise. This is the core of sidecar → subagent parity below.
 - **Titles (`plugins/codex/title.py`, the single-owner naming source).** codex
   keeps the session name in its per-machine sqlite index
@@ -674,7 +674,7 @@ codex runs". Two bugs made it show nothing:
 
 2. **The prose folded into "ran N codex runs".** The prose OPS (⇢/✎/⋯/⇠) still
    wore the codex palette → `ACT_CODEX` → folded. `op_items(codex_lead=True)` —
-   set by `mirror.is_codex_lead(sid, agent)` for a codex-owned session's own view
+   set by `mirror.host_lead(sid, agent)` for a codex-owned session's own view
    (not an agent scope) — DROPS a standalone codex session's prose ops
    (`actclass.codex_prose`) AND its codex CHROME (the `codex ▶ <label>` banner +
    the `⚙ model` tag, `actclass.codex_chrome`), exactly as agent scope drops an
@@ -1008,7 +1008,7 @@ up off the run's row — a mismatch there silently yielded an EMPTY scoped mirro
 Now `watch.spawn` stamps `<register>:<codex_aid(srcfile)>`, so the op stamp EQUALS
 the agent id and `agent_scope` is one tool-agnostic rule
 (`{sub:,team:,codex:}+<aid>`), no lookup. `paths.codex_aid` is the single owner of
-that id (the producer stamps off it; `sessionapi.codex_aid` delegates to it).
+that id (both the producer and plugins/codex/nested.py stamp off it).
 
 The PREFIX carries the second fact: a SIDECAR stamps `codex:<aid>`, a native
 SUBAGENT stamps `sub:<aid>` — the very prefix a Claude child uses. That is what
@@ -1021,7 +1021,7 @@ something else.
 
 Re-pointing the stamp was safe because nothing keys on `codex:` to FIND a run:
 `agent_scope` already resolved all three prefixes for one id (so scoping keeps
-working for NEW and PARKED ops alike), and `sessionapi.codex_runs` reads the audit
+working for NEW and PARKED ops alike), and `plugins.runs()` reads the audit
 `streams` rows rather than the op stamp — so a native subagent still lists as a
 clickable card, it simply classifies and folds as the agent it is. Parked
 `codex:`-stamped subagent ops from before the refactor still resolve, still
@@ -1032,9 +1032,9 @@ classify `ACT_CODEX`, and still render through the legacy sniffers; their raw-JS
 
 A codex running on its OWN writes its session transcript AS a rollout (uuid ==
 sid), and the standalone watcher streams that very rollout under the audit
-`streams` kind `codex` — so it used to appear in `sessionapi.codex_runs()` as a
+`streams` kind `codex` — so it used to appear in `plugins.runs()` (plugins/codex/nested.py) as a
 clickable "agent". But it is the SESSION itself, and a standalone run's ops are
 UNSTAMPED (codex is the main agent), so clicking it scoped to `{codex:<label>}`
-matched no op and yielded an EMPTY mirror. `codex_runs()` now drops the run whose
+matched no op and yielded an EMPTY mirror. `session_runs()` now drops the run whose
 rollout IS the session's own `transcript_path`, so only genuine SIDECAR runs
 (inside a Claude host, a different transcript) list as agents.

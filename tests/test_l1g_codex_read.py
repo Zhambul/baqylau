@@ -130,7 +130,7 @@ def test_codex_prompts_counts_non_synthetic_user_turns(tmp_path):
 
 def test_codex_conversation_standalone(tmp_path, monkeypatch):
     # A STANDALONE codex session's OWN conversation, from its rollout. Its prose
-    # OPS are dropped from the session view (op_items codex_lead) and RE-BUBBLED
+    # OPS are dropped from the session view (op_items host_lead) and RE-BUBBLED
     # from here instead — so a codex session reads as ordinary conversation, not
     # "ran N codex runs" (docs/codex.md *Standalone mirror parity*).
     from core import sessionapi as API
@@ -201,10 +201,10 @@ def test_codex_conversation_drops_system_scaffolding_keeps_input_output(tmp_path
 
 def test_codex_conversation_sidecar_by_agent_id(tmp_path, monkeypatch):
     import plugins
-    from core import sessionapi as API
+    from plugins.codex import nested as CR
     p = _full_rollout(tmp_path)
     aid = "rollout-2026-07-29T10-00-00-%s" % _UUID
-    monkeypatch.setattr(API, "codex_runs",
+    monkeypatch.setattr(CR, "session_runs",
                         lambda sid: [{"agent_id": aid, "transcript": p, "kind": "codex"}])
     # claude_code declines a codex agent_id (no such Claude transcript), so the
     # fan-out reaches codex — the SIDECAR → subagent-parity path
@@ -896,12 +896,12 @@ def test_codex_prose_drops_in_scope_via_the_bubbled_flag():
     assert opshtml.op_items([msg], "k", scope=None) == []
 
 
-def test_op_items_codex_lead_drops_prose_and_chrome_keeps_activity():
-    """A STANDALONE codex session's SESSION view (codex_lead=True): op_items
+def test_op_items_host_lead_drops_prose_and_chrome_keeps_activity():
+    """A STANDALONE codex session's SESSION view (host_lead=True): op_items
     drops the PROSE ops (⇢/✎ header + body, re-bubbled via conversation) and the
     codex CHROME (the `codex ▶ <label>` banner + `⚙ model` tag) — so the view is
     bubbles + real activity + footer, never "ran N codex runs". Command / file /
-    footer ops STAY. Without codex_lead nothing is dropped (a sidecar or
+    footer ops STAY. Without host_lead nothing is dropped (a sidecar or
     non-codex host)."""
     import re
     from core import ops as O, render as R, slots as SL
@@ -918,12 +918,12 @@ def test_op_items_codex_lead_drops_prose_and_chrome_keeps_activity():
         O.code("ls -la", g="b3"),
         O.label("■ codex cli ended · 1.0s", rgb),                      # footer — DROPPED
     ]
-    items = opshtml.op_items(ops, "k", codex_lead=True)
+    items = opshtml.op_items(ops, "k", host_lead=True)
     txt = " ".join(re.sub("<[^>]+>", "", it.get("html", "") or "") for it in items)
     assert "prompt" not in txt and "message" not in txt          # prose headers gone
     assert "hi there" not in txt and "hello" not in txt          # prose bodies gone
     assert "codex ▶" not in txt and "⚙" not in txt               # chrome gone
     assert "ls -la" in txt                                        # command kept
     assert "ended" not in txt                                     # footer chrome gone too
-    # a non-codex-host view (codex_lead False) keeps everything
-    assert len(opshtml.op_items(ops, "k", codex_lead=False)) > len(items)
+    # a non-codex-host view (host_lead False) keeps everything
+    assert len(opshtml.op_items(ops, "k", host_lead=False)) > len(items)

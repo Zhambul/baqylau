@@ -66,6 +66,23 @@ def host():
     return hostctl.get()
 
 
+def runs(sid):
+    """The NESTED-RUN provider (plugins.runs fan-out) — this session's codex
+    runs as agent rows (kind 'codex'), which core.sessionapi.agents() splices in
+    beside the Claude subagents/teammates. Includes the standalone host's OWN-run
+    drop: its rollout IS the session, and listing it would mint a card whose
+    scope matches no op. See nested.session_runs (the old core-side
+    `sessionapi.codex_runs`, moved to the plugin that owns every fact in it)."""
+    from plugins.codex import nested
+    return nested.session_runs(sid)
+
+
+# NB codex exposes no `nested_owners` provider: that fan-out reads a host's
+# LAUNCH-HOOK payloads for background jobs and monitors, and codex writes no such
+# rows — it has no bg-job or monitor concept at all (docs/codex.md). The declared
+# zero is the honest answer; an empty implementation would only hide it.
+
+
 def context(transcript_path, main=False):
     """The context-saturation provider (plugins.context fan-out) — a codex
     rollout's last-turn total over its context window, as {used, window, pct,

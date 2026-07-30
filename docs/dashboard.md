@@ -125,10 +125,26 @@ buttons through `capOk(meta, key)` (the `CAP_OFF` reason) in `app.11-chrome.js`.
 claude_code drives every gesture, so its caps are all-True and the gate is a
 NO-OP for a Claude session — and an EMPTY/unknown transcript_path (a daemon
 scrubbed-env session, or a row written before the .jsonl exists) defaults to the
-Claude host with full caps rather than failing closed. The gate bites only a
+DEFAULT host with full caps rather than failing closed. The gate bites only a
 session owned by a tool that leaves a gesture inert (a not-yet-wired codex, a
 future copilot/opencode) — which is what makes adding a tool a new plugin
 package rather than an edit to every handler.
+
+**The `host` field names the real owner.** `data["host"]` used to blank to `""`
+for any NON-default owner — a sentinel meaning "attributed to some other tool",
+which is the one thing a field called `host` cannot say. It now carries the
+owner's own short name (`"codex"`), the same word `plugins.owns_by` returns and
+`plugins.host_caps` was already keyed by; only an unprovable/empty path falls
+back, and it falls back to `plugins.default_host()` — the registry's ONE owner of
+that name, which replaced four independent spellings of the literal
+(`read/session.DEFAULT_HOST`, `read/lists`'s inline default,
+`http/post/session.DEFAULT_TOOL`, and the registry's own `slash_commands`
+fallback; the notifier's screen-scrape gate was a fifth). The dashboard tier now
+names no host anywhere in that path. This is a WIRE change with no client half:
+the SPA reads `caps` for what is reachable and `host_label` for display, and
+reads `host` nowhere (verified) — P5 is where the client starts using it. The
+`_caps_guard`'s `web-*` refusal rows now record the real host too, which is
+strictly better evidence than `""`.
 
 **Tool picker (multi-tool launch).** The new-session form's *tool* row picks the
 HOST a FRESH launch runs — Claude Code or Codex — from `GET /api/hosts`
@@ -5781,6 +5797,26 @@ as the AGENT it is while `codex:` keeps meaning a sidecar run; keyed off the
 palette instead, a codex child folded into "ran 1 codex run" whatever it did.
 `as_lead`'s recolour gate reads the same order.
 
+That register→act map is DERIVED, not authored: `core/agentblocks.REGISTERS` is
+the one table (`src` prefix · act token · whether `as_lead` recolours), and
+`read/mirror.agent_scope`'s prefix set, `actclass._SRC_ACT`, `as_lead`'s
+recolour prefixes and `_is_team` all read it. They were four independent
+spellings of one closed list, and the failure mode of missing one when a host is
+added is SILENT: an unrecognised `src` prefix matches no op, so that agent's
+mirror renders BLANK.
+
+**A standalone host's own prose.** A host whose LEAD runs through the same
+child-agent presenter its sidecars do (codex: one streamer, standalone or nested)
+paints its own turns as `⇢/✎/⋯/⇠` prose blocks — and the web ALSO re-bubbles them
+from `plugins.conversation`. The session view must drop one of the two, or every
+message appears twice AND folds into "ran N codex runs". Which hosts need the
+drop is a TRAIT the host declares (`HostControl.lead_prose`, base False), read
+through `read/mirror.host_lead(sid, agent)` and threaded into `op_items` as
+`host_lead=`. It was `is_codex_lead`, body `plugins.owns_by(transcript) ==
+"codex"`, and the parameter was `codex_lead=` through seven call sites — a
+literal host name deciding how a whole session renders, whose wrong answer raises
+nothing. An agent scope is always False there: a sidecar run IS a sub-run.
+
 **What re-scopes, and what deliberately doesn't.** The **mirror**, **monitors**
 and **jobs** follow the agent — *including their tab BADGES*, which is the same
 split declared once in the read model's `BADGES` table (`scoped`) and reached
@@ -8315,7 +8351,7 @@ grew.
 A session's codex runs ride the same agents list and the same scope, with no
 dashboard-side special-casing: `sessionapi.agents()` merges the audit
 `streams` rows of `kind='codex'` in the same row shape (kind `codex`, `desc`
-= the run label, `agent_id` = `sessionapi.codex_aid()` — synthesized from the
+= the run label, `agent_id` = `paths.codex_aid()` — synthesized from the
 stream's src_path basename, since codex tailers record no hook agent_id), and
 its scoped mirror is the ops that run already painted. The stamp EQUALS that
 agent id (`<register>:<codex_aid>`), so no resolution step is needed at all —

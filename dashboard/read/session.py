@@ -16,8 +16,6 @@ from dashboard.control import launch
 from dashboard.read.meta import (canon_cwd, cmd_names, git_info, session_ctx,
                                  session_fallback, session_goal, session_kv,
                                  session_prompts, session_title, session_slug)
-from plugins.claude_code import accounting as ACC
-from plugins.claude_code import model as M
 
 
 def visible_agents(agents):
@@ -36,8 +34,12 @@ def visible_agents(agents):
 def agents_ctx(agents):
     """Stamp each agent row with its own transcript's context saturation
     (session_ctx over the streams-keystone src_path — an agent transcript is
-    its sidechain turns, so main=False). Rows whose file yields nothing (husk
-    rows, codex rollouts — no codex context provider yet) stay unstamped."""
+    its sidechain turns, so main=False). Rows whose file yields nothing stay
+    unstamped: a husk row with no transcript, and a codex COMPANION-JOB run,
+    whose `transcript` is a .log activity file no rollout parser claims. A codex
+    ROLLOUT is stamped — codex has provided `context()` since it became a host
+    (this docstring claimed "no codex context provider yet" long after there
+    was one)."""
     for a in agents:
         ctx = session_ctx(a.get("transcript") or "")
         if ctx:
@@ -45,23 +47,44 @@ def agents_ctx(agents):
     return agents
 
 
+def row_host(tpath):
+    """The HostControl that OWNS an agent row's file, falling back to the
+    DEFAULT host for a row whose transcript is empty or unclaimed (a husk row, a
+    companion-job .log no parser speaks). The one place the read model turns a
+    PATH into a host's vocabulary — never a model-id grammar, which is what
+    reading another tool's ids through Claude's spelling amounted to."""
+    return (plugins.host_of(tpath or "")
+            or plugins.host_named(plugins.default_host()))
+
+
 def agents_model_effort(agents, effort):
     """Stamp each agent row with the short model id + effort level it runs — the
     web card's echo of the terminal mirror's `opus-4.8·high` op tag
     (substream.op_tag). The model rides FREE on the ctx probe agents_ctx already
-    stamped (ctx["model"] is the raw id of the agent's last assistant turn, from
-    transcript.context_probe), so no extra file read; effort mirrors the
-    substream's `EFFORT_CFG or model_default_effort()` — the session's saved
-    effort, else the running model's default (a frontmatter/env per-agent effort
-    override, the substream's higher-precedence source, isn't readable here and
-    is the one divergence). Rows with no ctx (husks, not-yet-started agents) stay
+    stamped (ctx["model"] is the raw id of the agent's last assistant turn), so
+    no extra file read.
+
+    BOTH words are the OWNING HOST's (row_host → HostControl.model_short /
+    model_default_effort): the display spelling of a model id and the level a
+    model defaults to are per-tool facts, and applying Claude's to every row is
+    how a codex agent card wore a mangled id and an inherited `high`.
+
+    Effort precedence, most specific first: the row's OWN ctx effort (a codex
+    rollout records it per turn — the only true per-agent source anywhere in this
+    payload), else the session's effort, else the running model's default. That
+    mirrors the substream's `EFFORT_CFG or model_default_effort()` with the
+    rollout fact added on top; a frontmatter/env per-agent override (the
+    substream's highest-precedence source) still isn't readable here and stays
+    the one divergence. Rows with no ctx (husks, not-yet-started agents) stay
     unstamped, exactly as their ctx bar does."""
     for a in agents:
-        raw = (a.get("ctx") or {}).get("model") or ""
+        ctx = a.get("ctx") or {}
+        raw = ctx.get("model") or ""
         if not raw:
             continue
-        a["model"] = M.short_model(raw)
-        eff = effort or M.model_default_effort(raw)
+        h = row_host(a.get("transcript") or "")
+        a["model"] = h.model_short(raw)
+        eff = ctx.get("effort") or effort or h.model_default_effort(raw)
         if eff:
             a["effort"] = eff
     return agents
@@ -70,22 +93,16 @@ def agents_model_effort(agents, effort):
 def agent_usage(sid, agent):
     """ONE agent's {model, usage, cost} for the agent-scope scoreboard, or None
     when no plugin has a transcript for it (a codex run declines — it prices its
-    own tokens at its footer). `cost` is approximate USD for that token rollup,
-    priced from the run's last model via the shared accountant, and is omitted
-    for an unknown/empty model — the client just drops the ≈cost chip.
+    own tokens at its footer).
 
-    This transcript pricing is the ONLY per-agent cost figure available: OTEL
+    A thin pass-through now: `cost` is folded in by the PROVIDER, because the
+    plugin that folded the transcript is the one that knows its own price list.
+    Pricing here meant every host's tokens went through Anthropic's table.
+
+    That transcript pricing is the ONLY per-agent cost figure available: OTEL
     `costs()` is aggregate by query_source (main/subagent/auxiliary) and can
     never be attributed to a single agent_id."""
-    tl = plugins.agent_usage(sid, agent)
-    if not tl:
-        return None
-    u = tl.get("usage") or {}
-    if u:
-        tl["cost"] = ACC.cost_usd(tl.get("model"), u.get("in", 0), u.get("out", 0),
-                                  u.get("cache", 0), u.get("create", 0),
-                                  u.get("create_1h", 0))
-    return tl
+    return plugins.agent_usage(sid, agent) or None
 
 
 def ext_scope(scope, cwd):
@@ -199,11 +216,6 @@ def badge_count(badge, sid, cwd, agent=""):
     return badge.count(sid, cwd, agent if badge.scoped else "")
 
 
-# The DEFAULT host every session behaves as when its owner can't be proven —
-# Claude Code, the only host the dashboard was ever built for. See session_caps.
-DEFAULT_HOST = "claude_code"
-
-
 def session_caps(tpath):
     """(host_name, caps) for a session's transcript path — the owning host's
     short name and its DERIVED capability map (plugins.host_caps). The one owner
@@ -215,22 +227,28 @@ def session_caps(tpath):
     arrives with a scrubbed env (CLAUDE.md), and an audit row can be written
     before the .jsonl exists — so it must NOT fail closed and disable its whole
     control plane. Unprovable therefore means "behave EXACTLY as today": the
-    default host (claude_code), every cap True.
+    DEFAULT host (plugins.default_host — the dashboard names no tool itself),
+    every cap True.
 
-      · unowned / empty / unknown path -> (claude_code, full caps)  [as today]
-      · owned by claude_code           -> (claude_code, full caps)
-      · owned by ANOTHER tool          -> ("", that host's DERIVED caps)
+      · unowned / empty / unknown path -> (default host, full caps)  [as today]
+      · owned by the default host      -> (default host, full caps)
+      · owned by ANOTHER tool          -> (that tool, its DERIVED caps)
 
     The last branch is what makes adding copilot/opencode safe: a host that
     leaves a gesture inert reads that cap False, the client greys the button and
-    the guard 409s it — no codex-shaped special-casing. host="" says "attributed
-    to a NON-default host": a codex rollout (codex owns its rollouts) lands here
-    with codex's DERIVED caps, as does any future copilot/opencode stub; the
-    session payload still names the real owner for display via host_label()."""
+    the guard 409s it — no codex-shaped special-casing.
+
+    `host` used to blank to "" for a non-default owner ("attributed to a NON-
+    default host"), which meant the payload's one host field could not NAME the
+    host — a sentinel that existed only because nothing read it. It now carries
+    the REAL owner ("codex"), the same word owns_by returns and host_caps was
+    already keyed by; the client reads `caps` for what is reachable and
+    host_label() for display, and neither changed (docs/dashboard.md *The `host`
+    field*)."""
     owner = plugins.owns_by(tpath) if tpath else None
-    if owner is None or owner == DEFAULT_HOST:
-        return DEFAULT_HOST, plugins.host_caps(DEFAULT_HOST)
-    return "", plugins.host_caps(owner)
+    if owner is None:
+        owner = plugins.default_host()
+    return owner, plugins.host_caps(owner)
 
 
 def host_label(tpath):
@@ -242,7 +260,7 @@ def host_label(tpath):
     default host's label (the same "behave as today" rule), and an owner with no
     host object degrades to a neutral word rather than a wrong tool name."""
     owner = plugins.owns_by(tpath) if tpath else None
-    h = plugins.host_named(owner or DEFAULT_HOST)
+    h = plugins.host_named(owner or plugins.default_host())
     return getattr(h, "label", "") or "the agent"
 
 
@@ -290,7 +308,7 @@ def session_payload(sid, agent=""):
     # client's own default list" (claude_code's are hardcoded; codex supplies
     # its own, since its models/levels differ). The client's quick-command menus
     # read these so a codex session's picker offers codex models, not Claude's.
-    _h = plugins.host_named(plugins.owns_by(tpath) or DEFAULT_HOST)
+    _h = plugins.host_named(plugins.owns_by(tpath) or plugins.default_host())
     data["model_choices"] = list(_h.model_choices()) if _h else []
     data["effort_choices"] = list(_h.effort_choices()) if _h else []
     # Whether the session's transcript .jsonl is GONE (known path, absent on
@@ -317,7 +335,7 @@ def session_payload(sid, agent=""):
     # last applied value, resolved for the session's ACCOUNT (its statusline-
     # stashed slug picks the config dir — accounts each carry their own
     # settings.json).
-    if (plugins.owns_by(_tp) or DEFAULT_HOST) != DEFAULT_HOST:
+    if (plugins.owns_by(_tp) or plugins.default_host()) != plugins.default_host():
         # a NON-default host (codex): its effort is a rollout fact — the ctx
         # probe's turn_context effort, else the path-keyed `effort` read (which
         # needs no usage record). NEVER effort_default: that is Claude's cwd-keyed
@@ -412,11 +430,11 @@ def _host_dialog(sid):
     """A NON-default host's OPEN modal via the pending_dialog fan-out ({kind:
     "ask"|"plan", …}) or None — the ONE door ask_pending and plan_pending share
     so the (256KB rollout tail) read fires at most once and stays host-gated: a
-    CLAUDE session (session_caps → DEFAULT_HOST) never touches it, so a
-    daemon-origin Claude session pays nothing new. Defensive: any read error →
-    None (a modal that won't read must never block the payload)."""
+    session owned by the DEFAULT host stashes its dialogs from a hook and never
+    touches it, so a daemon-origin Claude session pays nothing new. Defensive:
+    any read error → None (a modal that won't read must never block the payload)."""
     host, _ = session_caps((API.session_row(sid) or {}).get("transcript_path") or "")
-    if host == DEFAULT_HOST:
+    if host == plugins.default_host():
         return None
     try:
         pend = plugins.pending_dialog(sid)
@@ -435,10 +453,10 @@ def ask_pending(sid):
     {tool_use_id, questions} shape the card renders and post_answer matches. None
     when neither has one.
 
-    HOST-GATED so a CLAUDE session pays nothing new (session_caps → DEFAULT_HOST →
-    return the kv result at once): the pending_dialog fan-out reads a 256KB rollout
-    tail, which must not fire on every SSE tick for a Claude session. An
-    unprovable/empty path stays the claude default, so a daemon-origin Claude
+    HOST-GATED so a CLAUDE session pays nothing new (session_caps → the DEFAULT
+    host → return the kv result at once): the pending_dialog fan-out reads a 256KB
+    rollout tail, which must not fire on every SSE tick for a Claude session. An
+    unprovable/empty path stays the default host, so a daemon-origin Claude
     session is unaffected."""
     claude = _dialog_pending(sid, "ask-pending")
     if claude is not None:
@@ -550,13 +568,13 @@ def input_box(sid):
     resolves the authoritative live window (the memoized claude_session=<sid>
     map, never a reused start-time id) and probes it ONCE for both.
 
-    HOST-GATED: only a claude_code host has this faint-SGR ghost-suggestion
+    HOST-GATED: only the DEFAULT host has this faint-SGR ghost-suggestion
     geometry — a codex host's screen returns garbage through the Claude scrape
     (verified), so a session owned by another tool gets NO probe. session_caps
-    keeps the DEFAULT_HOST for an unprovable/empty path, so a legitimate
+    keeps the default host for an unprovable/empty path, so a legitimate
     daemon-origin Claude session (scrubbed env, no transcript yet) is unaffected."""
     host, _ = session_caps((API.session_row(sid) or {}).get("transcript_path") or "")
-    if host != DEFAULT_HOST:
+    if host != plugins.default_host():
         return None, None
     fe = launch.frontend()
     if fe is None:

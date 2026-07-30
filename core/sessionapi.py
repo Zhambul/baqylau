@@ -58,10 +58,18 @@ tab_state = S.tab_state
 tab_states = S.tab_states
 
 
-def _rows(db, sql, params=()):
+def db_rows(db, sql, params=()):
     """Full-row read-only query; [] when the DB file is missing/unreadable.
     Fresh conn per call — these are one-shot CLI/dashboard queries, not tick
-    pollers (the styleguide's cached-ro-conn rule does not apply)."""
+    pollers (the styleguide's cached-ro-conn rule does not apply).
+
+    PUBLIC (it was `_rows`) because it now crosses a package boundary: the
+    HOST-SHAPED audit queries this module used to embed live plugin-side now
+    (plugins/claude_code/nested.py), and a provider needs the same mode=ro /
+    missing-file-is-normal runner rather than a second copy of it. Named
+    `db_rows` and not `rows` on purpose — `rows` is the commonest local variable
+    in this file, and a module-level function by that name would be shadowed
+    inside half its own callers."""
     if not db or not os.path.isfile(db):
         return []
     try:
@@ -92,11 +100,11 @@ def _sessions_has_start_cwd(db):
     module can't ALTER — so for the brief window right after an upgrade the
     column may still be absent. Probe once and cache the True result (a column
     never disappears once added), so the sessions list degrades to the old
-    group-by-live-cwd for that window instead of a _rows() error blanking it."""
+    group-by-live-cwd for that window instead of a db_rows() error blanking it."""
     global _HAS_START_CWD
     if not _HAS_START_CWD:
         _HAS_START_CWD = any(r[1] == "start_cwd"
-                             for r in _rows(db, "PRAGMA table_info(sessions)"))
+                             for r in db_rows(db, "PRAGMA table_info(sessions)"))
     return _HAS_START_CWD
 
 
@@ -108,7 +116,7 @@ def sid_chain(sid):
     leaves a state_files row (session_id = the NEW sid, action='adopt',
     content JSON carrying {"from": <old sid>}). [sid] when the audit is
     unavailable or the sid never forked."""
-    rows = _rows(audit_db(),
+    rows = db_rows(audit_db(),
                  "SELECT session_id, content FROM state_files WHERE action='adopt'")
     fwd, back = {}, {}
     for new_sid, content in rows:
@@ -131,8 +139,10 @@ def sid_chain(sid):
     return chain
 
 
-def _in_clause(n):
+def in_clause(n):
     # "?,?,?" — placeholder list only, values are always bound (styleguide).
+    # Public alongside db_rows() and for the same reason: a plugin composing a
+    # chain-aware audit query needs the placeholder rule, not a copy of it.
     return ",".join("?" * n)
 
 
@@ -142,14 +152,14 @@ def _stream_count(sid, kind):
     is bound (styleguide), so `kind='bg'` becomes an equivalent `kind=?`."""
     chain = sid_chain(sid)
     q = ("SELECT COUNT(DISTINCT task_id) FROM streams WHERE kind=?"
-         " AND session_id IN (%s)" % _in_clause(len(chain)))
-    rows = _rows(audit_db(), q, (kind,) + tuple(chain))
+         " AND session_id IN (%s)" % in_clause(len(chain)))
+    rows = db_rows(audit_db(), q, (kind,) + tuple(chain))
     return int(rows[0][0]) if rows else 0
 
 
-def _streams_by(sid, kinds, cols, key, fold):
+def streams_by(sid, kinds, cols, key, fold):
     """The shared chain→in-clause→select→merge skeleton over the audit `streams`
-    keystone, behind agents()/codex_runs()/monitor_streams()/jobs():
+    keystone, behind agents()/monitor_streams()/jobs() and the `runs` providers:
     `SELECT <cols> FROM streams WHERE kind IN (<kinds>) AND session_id IN
     (<chain>) ORDER BY started_at`, then merge the rows into a dict.
 
@@ -159,13 +169,18 @@ def _streams_by(sid, kinds, cols, key, fold):
     the setdefault keeps the FIRST start while later assignments carry the
     NEWEST end/status (the merge semantics each reader relies on). Returns the
     merged dict `out`; readers do their own final shaping (sort / join). Kinds
-    are bound (styleguide): `kind='codex'` becomes an equivalent `kind IN (?)`."""
+    are bound (styleguide): one kind becomes an equivalent `kind IN (?)`.
+
+    PUBLIC (it was `_streams_by`): a plugin that OWNS a stream kind builds its
+    own rows from this same walk (plugins/codex/nested.py behind plugins.runs),
+    which is the half of the old core-side `codex_runs` that was never
+    tool-specific."""
     chain = sid_chain(sid)
     q = ("SELECT %s FROM streams WHERE kind IN (%s) AND session_id IN (%s)"
          " ORDER BY started_at"
-         % (cols, _in_clause(len(kinds)), _in_clause(len(chain))))
+         % (cols, in_clause(len(kinds)), in_clause(len(chain))))
     out = {}
-    for row in _rows(audit_db(), q, tuple(kinds) + tuple(chain)):
+    for row in db_rows(audit_db(), q, tuple(kinds) + tuple(chain)):
         k = key(row)
         if not k:
             continue
@@ -187,7 +202,7 @@ def sessions(limit=25):
     # A controlled 2-value column choice, never user input: fall back to `cwd`
     # (the pre-migration behaviour) when start_cwd isn't in the table yet.
     scwd_col = "start_cwd" if _sessions_has_start_cwd(db) else "cwd"
-    for sid, cwd, tpath, mlog, st, en, er, win, scwd in _rows(
+    for sid, cwd, tpath, mlog, st, en, er, win, scwd in db_rows(
             db,
             "SELECT session_id, cwd, transcript_path, mirror_log, started_at,"
             " ended_at, end_reason, kitty_window_id, " + scwd_col + " FROM sessions"
@@ -546,7 +561,7 @@ def session_row(sid):
     for the first sid that has one), as a dict; None when absent."""
     db = audit_db()
     for s in reversed(sid_chain(sid)):
-        rows = _rows(db,
+        rows = db_rows(db,
                      "SELECT session_id, cwd, transcript_path, mirror_log,"
                      " started_at, ended_at, end_reason, kitty_window_id"
                      " FROM sessions WHERE session_id=?", (s,))
@@ -577,8 +592,9 @@ def state_db_for(sid):
 # --- the read model -----------------------------------------------------------------
 
 def agents(sid):
-    """All subagents/teammates of a session, chain-aware, plus its codex runs
-    (codex_runs() below — same row shape, kind 'codex'). The audit `streams`
+    """All subagents/teammates of a session, chain-aware, plus every plugin's
+    own nested RUNS (plugins.runs — same row shape; codex answers with kind
+    'codex'). The audit `streams`
     rows are the keystone (src_path IS the transcript, end_reason IS the final
     status — 'stop-sentinel', 'stoppedByUser (manual cancel)',
     'parent-task-resolved (rejected)', …; an ended_at of None on the newest row
@@ -594,7 +610,7 @@ def agents(sid):
         rec["tools"] = lines
         if src:
             rec["transcript"] = src
-    out = _streams_by(sid, ("subagent", "teammate"),
+    out = streams_by(sid, ("subagent", "teammate"),
                       "agent_id, kind, src_path, started_at, ended_at,"
                       " end_reason, lines_emitted",
                       lambda r: r[0], fold)
@@ -607,54 +623,17 @@ def agents(sid):
             rec["desc"] = arec.get("desc") or ""
             rec["done"] = bool(arec.get("done"))
             rec["slot"] = arec.get("slot")
-    for rec in codex_runs(sid):
-        out[rec["agent_id"]] = rec   # synthesized ids — can't collide with hook agent_ids
-    return sorted(out.values(), key=lambda r: r.get("started_at") or 0)
-
-
-def codex_aid(src_path):
-    """The synthesized agent identity of a codex run — its stream src_path
-    basename, extension stripped ('rollout-<ts>-<uuid>' / a companion job id).
-    Delegates to the ONE owner core.paths.codex_aid (styleguide table); the
-    producer stamps `codex:<aid>` off the same primitive so the op stamp equals
-    this id (read/mirror.agent_scope matches it with no per-tool lookup)."""
-    return P.codex_aid(src_path)
-
-
-def codex_runs(sid):
-    """The session's codex runs, chain-aware, from the audit streams keystone
-    (kind='codex' — written by the codex tailer's stream_lifecycle) in the
-    agents() row shape: agent_id is codex_aid(src_path), desc is the run
-    label (the streams task_id: 'cli', 'Review', …), transcript is the run's
-    SOURCE file — a native rollout .jsonl (parseable by the codex activity
-    provider) or a companion job .log (activity log only; no drill-down).
-    A restarted run (several stream rows, one src) merges like a restarted
-    teammate: first start, newest end/status."""
-    def fold(out, aid, row):
-        src, task, st, en, er, lines = row
-        rec = out.setdefault(aid, {"agent_id": aid, "kind": "codex",
-                                   "transcript": src or "", "started_at": st,
-                                   "desc": task or ""})
-        rec["ended_at"], rec["end_reason"] = en, er or ""
-        rec["tools"] = lines
-    out = _streams_by(sid, ("codex",),
-                      "src_path, task_id, started_at, ended_at, end_reason,"
-                      " lines_emitted",
-                      lambda r: codex_aid(r[0]), fold)
-    # Drop the STANDALONE host's OWN run. A codex running on its own writes its
-    # session transcript AS a rollout (uuid == sid), and the standalone watcher
-    # streams that very rollout under kind='codex' — so it lands here as a "run".
-    # But it is the SESSION itself, not a nested sidecar: a standalone run's ops
-    # are UNSTAMPED (codex is the main agent there), so listing it as an agent
-    # mints a clickable card whose scope — {codex:<label>} — matches no op, and
-    # clicking it yields an EMPTY mirror (the self-run empty-scope bug,
-    # docs/codex.md). Its rollout IS the session's own transcript, which is the
-    # tell. A SIDECAR codex run (inside a Claude host) has a different transcript
-    # from the Claude session and is kept.
-    own = (session_row(sid) or {}).get("transcript_path") or ""
-    if own:
-        out = {aid: r for aid, r in out.items()
-               if (r.get("transcript") or "") != own}
+    # …plus every plugin's own NESTED RUNS (plugins.runs — codex's sidecar/native
+    # rollouts today). Synthesized ids can't collide with hook agent_ids. The
+    # `codex_runs`/`codex_aid` pair that used to live HERE — a function named
+    # after one tool, in the tool-agnostic core, reading a stream kind only that
+    # plugin writes and applying a drop rule only its standalone mode triggers —
+    # moved to plugins/codex/nested.py behind this fan-out; core keeps the SPLICE.
+    # Lazily imported (a read-side dependency, and plugins reaches back into this
+    # module — the same lazy shape plugins.host_for uses in the other direction).
+    import plugins
+    for rec in plugins.runs(sid):
+        out[rec["agent_id"]] = rec
     return sorted(out.values(), key=lambda r: r.get("started_at") or 0)
 
 
@@ -685,30 +664,22 @@ def nested_owners(sid):
         command; a subagent's MONITOR is absent from the main transcript
         entirely, so plugins.monitors had no command for it either.
 
-    Both are recoverable from `hook_events`, whose PostToolUse payload carries
-    agent_id, the task id, the tool_use_id and the command TOGETHER. Extraction
-    runs in SQLite (json_extract) rather than Python so a busy session's large
-    payloads are never pulled across — only the six small columns."""
+    Both are recoverable from the audit `hook_events` rows a host's launch hook
+    wrote — but the QUERY that recovers them is that host's vocabulary end to
+    end (the hook name, the tool names, the JSON paths into its payload shape),
+    so it lives with the host: `plugins.nested_owners(sid)`, implemented by
+    plugins/claude_code/nested.py. A host that writes no such rows (codex)
+    declines the fan-out instead of being answered `{}` by another tool's SQL.
+
+    What core keeps is the MEMO and the composition — every reader below goes
+    through this one door, at one query per OWNERS_TTL_S per session, unchanged.
+    Lazy import for the same reason agents() has one."""
     now = time.time()
     hit = _OWNERS.get(sid)
     if hit and hit[0] > now:
         return hit[1]
-    chain = sid_chain(sid)
-    q = ("SELECT agent_id,"
-         " json_extract(payload,'$.tool_response.backgroundTaskId'),"
-         " json_extract(payload,'$.tool_response.taskId'),"
-         " json_extract(payload,'$.tool_use_id'),"
-         " json_extract(payload,'$.tool_input.command'),"
-         " json_extract(payload,'$.tool_input.description')"
-         " FROM hook_events WHERE hook='PostToolUse' AND tool_name IN ('Bash','Monitor')"
-         " AND session_id IN (%s) ORDER BY id" % _in_clause(len(chain)))
-    out = {}
-    for aid, btid, mtid, tuid, cmd, desc in _rows(audit_db(), q, tuple(chain)):
-        task = btid or mtid
-        if not task:
-            continue                      # a plain foreground call — no nested stream
-        out[task] = {"agent_id": aid or "", "tool_use_id": tuid or "",
-                     "command": cmd or "", "description": desc or ""}
+    import plugins
+    out = plugins.nested_owners(sid)
     _OWNERS[sid] = (now + OWNERS_TTL_S, out)
     return out
 
@@ -737,7 +708,7 @@ def _nested_count(sid, kind, agent):
     on the pure-SQL _stream_count."""
     def fold(out, task, row):
         out[task] = row[1] or ""         # newest row wins, as everywhere else
-    rows = _streams_by(sid, (kind,), "task_id, agent_id", lambda r: r[0], fold)
+    rows = streams_by(sid, (kind,), "task_id, agent_id", lambda r: r[0], fold)
     owners = nested_owners(sid) if rows else {}
     return sum(1 for task, aid in rows.items()
                if _agent_match(_owner_of(task, aid, owners), agent))
@@ -763,7 +734,7 @@ def monitor_streams(sid):
         rec["ended_at"], rec["end_reason"] = en, er or ""
         rec["lines"], rec["pid"] = lines, pid
         rec["live"] = en is None
-    out = _streams_by(sid, ("monitor",),
+    out = streams_by(sid, ("monitor",),
                       "task_id, agent_id, pid, started_at, ended_at,"
                       " end_reason, lines_emitted",
                       lambda r: r[0], fold)
@@ -816,7 +787,7 @@ def jobs(sid, agent=None):
         rec["ended_at"], rec["end_reason"] = en, er or ""
         rec["lines"], rec["pid"] = lines, pid
         rec["live"] = en is None
-    out = _streams_by(sid, ("bg",),
+    out = streams_by(sid, ("bg",),
                       "task_id, agent_id, pid, started_at, ended_at, end_reason,"
                       " lines_emitted",
                       lambda r: r[0], fold)
@@ -922,8 +893,8 @@ def agent_transcript(sid, agent_id):
     chain = sid_chain(sid)
     q = ("SELECT src_path FROM streams WHERE agent_id=? AND session_id IN (%s)"
          " AND kind IN (%s) ORDER BY started_at DESC LIMIT 1"
-         % (_in_clause(len(chain)), _in_clause(len(TRANSCRIPT_KINDS))))
-    rows = _rows(audit_db(), q, (agent_id, *chain, *TRANSCRIPT_KINDS))
+         % (in_clause(len(chain)), in_clause(len(TRANSCRIPT_KINDS))))
+    rows = db_rows(audit_db(), q, (agent_id, *chain, *TRANSCRIPT_KINDS))
     return (rows[0][0] or "") if rows else ""
 
 
@@ -934,15 +905,15 @@ def costs(sid):
     "cost": {query_source: usd}, "total_usd": x}."""
     chain = sid_chain(sid)
     db = audit_db()
-    ins = _in_clause(len(chain))
+    ins = in_clause(len(chain))
     tokens = {}
-    for qs, typ, n in _rows(
+    for qs, typ, n in db_rows(
             db, "SELECT query_source, type, SUM(value) FROM otel"
                 " WHERE session_id IN (%s) AND metric='token'"
                 " GROUP BY query_source, type" % ins, tuple(chain)):
         tokens.setdefault(qs or "?", {})[typ or "?"] = n or 0
     cost = {}
-    for qs, usd in _rows(
+    for qs, usd in db_rows(
             db, "SELECT query_source, SUM(value) FROM otel"
                 " WHERE session_id IN (%s) AND metric='cost'"
                 " GROUP BY query_source" % ins, tuple(chain)):
@@ -1004,10 +975,10 @@ def errors(sid):
     the same evidence errors-CLI/errwatch surface, as dicts."""
     chain = sid_chain(sid)
     q = ("SELECT id, ts, script, func, traceback, context FROM errors"
-         " WHERE session_id IN (%s) ORDER BY id" % _in_clause(len(chain)))
+         " WHERE session_id IN (%s) ORDER BY id" % in_clause(len(chain)))
     return [{"id": i, "ts": ts, "script": sc, "func": fn,
              "traceback": tb, "context": ctx}
-            for i, ts, sc, fn, tb, ctx in _rows(audit_db(), q, tuple(chain))]
+            for i, ts, sc, fn, tb, ctx in db_rows(audit_db(), q, tuple(chain))]
 
 
 def error_count(sid):
@@ -1018,8 +989,8 @@ def error_count(sid):
     — the badge is the web sibling of that chip but tracks this session)."""
     chain = sid_chain(sid)
     q = ("SELECT COUNT(*) FROM errors WHERE session_id IN (%s)"
-         % _in_clause(len(chain)))
-    rows = _rows(audit_db(), q, tuple(chain))
+         % in_clause(len(chain)))
+    rows = db_rows(audit_db(), q, tuple(chain))
     return int(rows[0][0]) if rows else 0
 
 
@@ -1098,27 +1069,27 @@ def activity_stats(heatmap_days=371):
     # one query each instead of one per session (the otel table is indexed on
     # (session_id, ts), so these are cheap).
     tok, cost = {}, {}
-    for sid, n in _rows(db, "SELECT session_id, SUM(value) FROM otel"
+    for sid, n in db_rows(db, "SELECT session_id, SUM(value) FROM otel"
                             " WHERE metric='token' GROUP BY session_id"):
         tok[sid] = n or 0
-    for sid, usd in _rows(db, "SELECT session_id, SUM(value) FROM otel"
+    for sid, usd in db_rows(db, "SELECT session_id, SUM(value) FROM otel"
                               " WHERE metric='cost' GROUP BY session_id"):
         cost[sid] = usd or 0.0
     err = {}
-    for sid, n in _rows(db, "SELECT session_id, COUNT(*) FROM errors"
+    for sid, n in db_rows(db, "SELECT session_id, COUNT(*) FROM errors"
                             " GROUP BY session_id"):
         err[sid] = n or 0
     rows = [{"sid": sid, "start_cwd": sc or "", "started_at": st, "ended_at": en,
              "tokens": tok.get(sid, 0), "cost": cost.get(sid, 0.0),
              "errors": err.get(sid, 0)}
-            for sid, sc, st, en in _rows(
+            for sid, sc, st, en in db_rows(
                 db, "SELECT session_id, " + scwd + ", started_at, ended_at"
                     " FROM sessions ORDER BY started_at DESC")]
     cut = now - heatmap_days * 86400
-    daily = [[d, c] for d, c in _rows(
+    daily = [[d, c] for d, c in db_rows(
         db, "SELECT date(started_at,'unixepoch','localtime') d, COUNT(*)"
             " FROM sessions WHERE started_at >= ? GROUP BY d ORDER BY d", (cut,))]
-    punch = [[int(dow), int(hr), c] for dow, hr, c in _rows(
+    punch = [[int(dow), int(hr), c] for dow, hr, c in db_rows(
         db, "SELECT strftime('%w', started_at, 'unixepoch', 'localtime') dow,"
             " strftime('%H', started_at, 'unixepoch', 'localtime') hr, COUNT(*)"
             " FROM sessions WHERE started_at IS NOT NULL GROUP BY dow, hr")]

@@ -23,11 +23,47 @@ def census(log):
 
 def agent_usage(sid, agent_id):
     """The per-agent usage provider (plugins.agent_usage fan-out) — one
-    subagent/teammate's token rollup + model, folded from its transcript, which
-    is what the web's agent scoreboard prices its Σ and ≈cost from. See
-    transcript.session_agent_usage."""
-    from plugins.claude_code import transcript
-    return transcript.session_agent_usage(sid, agent_id)
+    subagent/teammate's {model, usage, cost}, folded from its transcript, which
+    is what the web's agent scoreboard shows as its Σ and ≈cost. See
+    transcript.session_agent_usage.
+
+    The PRICE is folded in HERE, not by the caller. The dashboard used to hand
+    whatever any plugin returned to Anthropic's PRICES table (accounting.cost_usd
+    — a direct plugins.claude_code reach from the read model), so a future host
+    that answered this fan-out would have had its tokens priced in Claude's
+    currency without a word of code saying so. The plugin that folded the
+    transcript is the one that knows its own price list; `cost` is omitted for an
+    unknown/empty model and the client simply drops the ≈cost chip."""
+    from plugins.claude_code import accounting, transcript
+    tl = transcript.session_agent_usage(sid, agent_id)
+    if not tl:
+        return tl
+    u = tl.get("usage") or {}
+    if u:
+        tl["cost"] = accounting.cost_usd(
+            tl.get("model"), u.get("in", 0), u.get("out", 0), u.get("cache", 0),
+            u.get("create", 0), u.get("create_1h", 0))
+    return tl
+
+
+def nested_owners(sid):
+    """The nested-job OWNERSHIP provider (plugins.nested_owners fan-out) — who
+    launched each of a session's background jobs and monitors, and the command
+    behind it, recovered from Claude Code's own PostToolUse hook payloads. The
+    Claude-shaped audit SQL that used to sit in core/sessionapi.py. See
+    nested.nested_owners.
+
+    NB codex exposes no twin: its dispatch writes none of these hook_events rows
+    and it has no bg-job/monitor concept at all, so declining is the honest
+    answer rather than an empty implementation."""
+    from plugins.claude_code import nested
+    return nested.nested_owners(sid)
+
+
+# NB claude_code exposes no `runs` provider. That fan-out is for a host's own
+# NESTED runs; a Claude subagent/teammate is not one — it is already an audit
+# `streams` row of kind subagent/teammate that sessionapi.agents() reads
+# first-hand, and answering here would list every agent twice.
 
 
 def monitors(sid):

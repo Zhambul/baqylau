@@ -175,9 +175,10 @@ def resumable_payload(cwd, limit, q=""):
             # the new-session form's tool (a codex rollout resumes with `codex
             # resume`, a claude transcript with `claude --resume`). The launch is
             # OWNER-routed server-side regardless (post_new_session), so this is a
-            # UI convenience, not the source of truth. Defaults to the claude_code
-            # host when unclaimed (owns_by is None for a file no plugin speaks).
-            "tool": plugins.owns_by(tpath) or "claude_code",
+            # UI convenience, not the source of truth. Defaults to the registry's
+            # DEFAULT host when unclaimed (owns_by is None for a file no plugin
+            # speaks) — plugins.default_host is the ONE owner of that name.
+            "tool": plugins.owns_by(tpath) or plugins.default_host(),
             "account": {"slug": slug,
                         "label": labels.get(slug) or (slug or "default")},
         })

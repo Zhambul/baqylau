@@ -208,7 +208,7 @@ def test_op_items_drops_chrome_in_every_view():
     assert "codex ▶" not in _texts(sc) and "gpt-5.6-luna" not in _texts(sc)
     assert "echo" in _texts(sc)
     # 3. the STANDALONE codex LEAD view
-    cl = opshtml.op_items(list(chrome), "k", codex_lead=True)
+    cl = opshtml.op_items(list(chrome), "k", host_lead=True)
     assert "codex ▶" not in _texts(cl) and "gpt-5.6-luna" not in _texts(cl)
     assert "echo" in _texts(cl)
 

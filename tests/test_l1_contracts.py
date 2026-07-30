@@ -1047,9 +1047,10 @@ def test_hosts_and_host_of(tmp_path):
 def test_a_third_tool_degrades_cleanly_not_codex_shaped(tmp_path, monkeypatch):
     """The abstraction isn't codex-shaped: a FAKE host that owns a path but
     leaves every gesture inert reads all-caps-False, and session_caps hands the
-    dashboard host="" + that restricted map — so the client greys every button
-    and _caps_guard 409s it. This is the copilot/opencode path proven before
-    either exists."""
+    dashboard that host's REAL NAME + the restricted map — so the client greys
+    every button and _caps_guard 409s it. This is the copilot/opencode path
+    proven before either exists. (`host` used to blank to "" for a non-default
+    owner; P1 serves the owner's own name — see session_caps.)"""
     import plugins
     from dashboard.read import session as rsession
     from plugins.host import GESTURES, HostControl
@@ -1062,7 +1063,7 @@ def test_a_third_tool_degrades_cleanly_not_codex_shaped(tmp_path, monkeypatch):
     monkeypatch.setattr(plugins, "host_caps",
                         lambda name: FakeHost().caps() if name == "faketool" else {})
     host, caps = rsession.session_caps("/some/rollout.jsonl")
-    assert host == ""
+    assert host == "faketool"                     # the REAL owner, not a sentinel
     assert caps == {g: False for g in GESTURES}   # every gesture unsupported
 
 
@@ -1180,8 +1181,13 @@ DASHBOARD_PLUGIN_REACHES = {
     # (docs/styleguide.md *Layering*); the generic read model no longer touches
     # it (read/session applies every extension's gate through ext.badge_rows).
     "dashboard/ext/memory/read.py": {"plugins.claude_code.memory"},
-    "dashboard/read/session.py": {"plugins.claude_code.model",
-                                  "plugins.claude_code.accounting"},
+    # (P1) dashboard/read/session.py is GONE from this list. It reached
+    # `plugins.claude_code.model` (short_model / model_default_effort, applied to
+    # every host's model ids) and `plugins.claude_code.accounting` (cost_usd,
+    # applied to whatever any plugin's agent_usage returned) — both now answered
+    # by the OWNING host: HostControl.model_short/model_default_effort resolved
+    # through plugins.host_of on the row's own transcript, and `cost` folded into
+    # the agent_usage provider's return.
     # The take-back stash's writer half — the styleguide's own row says "the
     # dashboard's post_interrupt supplies the observation" while transcript.py
     # owns both halves of the stash.

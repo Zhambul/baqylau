@@ -198,14 +198,15 @@ class Notifier:
                 m[win] = row
             sid = row.get("sid")
             if sid and sid not in hosts:
-                # The screen-scrape gate: only a claude_code host has the
+                # The screen-scrape gate: only the DEFAULT host has the
                 # AskUserQuestion dialog / faint-SGR input geometry the two
-                # scrapes below read. An unprovable/empty path stays claude
+                # scrapes below read. An unprovable/empty path stays the default
                 # (owns_by None) — the safe direction (scraping still degrades
                 # to None on a real miss); a proven codex rollout reads False.
+                # plugins.default_host is the ONE owner of that name.
                 owner = plugins.owns_by(row.get("transcript_path") or "") \
                     if row.get("transcript_path") else None
-                hosts[sid] = owner in (None, "claude_code")
+                hosts[sid] = owner in (None, plugins.default_host())
         self.winmap = m
         self._claude_host = hosts
         # the frontend used to read a red tab's dialog region (below). Resolved

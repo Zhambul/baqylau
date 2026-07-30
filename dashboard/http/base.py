@@ -286,14 +286,15 @@ class _Base(BaseHTTPRequestHandler):
 
     def _gesture_host(self, sid):
         """The session's owning HostControl for control-gesture ROUTING, or None
-        to take the byte-identical claude_code inline path. This is the P5 seam
+        to take the byte-identical DEFAULT-host inline path. This is the P5 seam
         the control handlers branch on: a session PROVABLY owned by a NON-default
         host (a codex rollout) gets the host object, so the handler dispatches its
-        gesture through host.<gesture> (interrupt/compact/rename/ask); a
-        claude_code session — and EVERY unprovable/empty transcript path
-        (owns_by → None) — returns None so the handler's existing inline body runs
-        UNCHANGED. That None is what keeps a Claude session byte-identical: the
-        branch is one `if host is not None:` that is False for it.
+        gesture through host.<gesture> (interrupt/compact/rename/ask); a session
+        owned by the default host (plugins.default_host) — and EVERY
+        unprovable/empty transcript path (owns_by → None) — returns None so the
+        handler's existing inline body runs UNCHANGED. That None is what keeps a
+        Claude session byte-identical: the branch is one `if host is not None:`
+        that is False for it.
 
         Degrades to None (the claude path) on any resolution error, exactly as
         _caps_guard degrades OPEN — a read hiccup must never divert a real Claude
@@ -302,10 +303,9 @@ class _Base(BaseHTTPRequestHandler):
         only ever hands back a host for a gesture the caps say it CAN."""
         try:
             import plugins
-            from dashboard.read import session as rsession
             tpath = (API.session_row(sid) or {}).get("transcript_path") or ""
             owner = plugins.owns_by(tpath) if tpath else None
-            if not owner or owner == rsession.DEFAULT_HOST:
+            if not owner or owner == plugins.default_host():
                 return None
             return plugins.host_named(owner)
         except Exception:

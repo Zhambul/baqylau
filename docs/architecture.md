@@ -92,7 +92,14 @@ group from the caller and text already capped (the CAP_* tables stay per-host)
 — so a host adapter keeps its own machinery (tee hand-offs, pend ledgers,
 scoreboard bumps, click-to-view stashes) wrapped around these calls; its three
 REGISTERS (`REG_AGENT`/`REG_TEAM`/`REG_CODEX`) select only which word the web
-calls the child),
+calls the child. It is ALSO the one owner of the register TABLE the read side
+keys on — `REGISTERS`, mapping each register to its `src` stamp prefix, its web
+activity-class token, and whether `as_lead` recolours its headers — read through
+`src_prefixes()`/`src_acts()`/`src_stamp()`/`lead_src_prefixes()` by
+`read/mirror.agent_scope` and `opshtml/actclass`, which each used to spell the
+same closed list out; a fourth host adds a row instead of an edit in three
+packages, and the failure mode of missing one is silent (an unmatched prefix
+renders that agent's mirror BLANK)),
 `render.py` (the ANSI rendering PRIMITIVES — was `claude_render.py`: width
 math, palette/`pick`, strip/wrap/gutters, the security-critical `neutralize()`,
 inline markdown; keeps thin `format_code`/`render` delegating aliases),
@@ -231,8 +238,27 @@ asked once per session per poll. `plugins.owns_by(path)`
 names the owning tool for the one CONTROL-plane caller that needs it: the
 dashboard refuses to relaunch `claude --resume <sid>` for a session claude_code
 does not own (docs/dashboard.md *Resume & send*).
-**The provider surface is DECLARED.** `plugins.PROVIDERS` lists the twenty-six
-optional functions a plugin may expose and the arity each fan-out calls it with,
+**The registry also OWNS the default host's name.** `plugins.default_host()` is
+the one answer to "which tool does a session behave as when its owner can't be
+proven, and which does a launch that names none pick" — derived from the registry
+(`all_plugins()` is host-first; the first LAUNCHABLE `host` adapter is the
+default), not authored. It replaced four independent spellings of the literal in
+the dashboard tier plus a fifth in its notifier; `tests/test_l1i_host_contract.py`
+greps that tier for host-name literals against a shrinking allowlist so they
+cannot come back.
+
+**Core's read model reaches the registry, in two places.** `sessionapi.agents()`
+splices `plugins.runs(sid)` (a host's own NESTED runs — codex answers with its
+sidecar rollouts, claude_code declines because a subagent is already a `streams`
+row) and `sessionapi.nested_owners()` memoizes `plugins.nested_owners(sid)` (who
+launched a background job or monitor, recovered from a HOST's launch-hook payload
+shapes — claude_code answers, codex declines). Both were host-shaped code INSIDE
+core: a `codex_runs()` named after one tool, and Claude Code's PostToolUse JSON
+paths embedded in core SQL. The imports are lazy, and this is the ONE core module
+allowed to call the registry root (docs/styleguide.md *Layering*).
+
+**The provider surface is DECLARED.** `plugins.PROVIDERS` lists the optional
+functions a plugin may expose and the arity each fan-out calls it with,
 and every lookup goes through `plugins.provider(plugin, name)` rather than a
 bare `getattr`. This is what `frontends/` has had all along in
 `frontends/base.Frontend` plus its contract test, and plugins are the same
@@ -246,8 +272,11 @@ directions: every name a fan-out reaches for is declared (parsed out of the
 fan-outs themselves, so a new one can't skip the table), every declared row is
 actually called by one, every row is implemented by at least one plugin, and
 every implementation accepts the arity its fan-out passes. A plugin still
-implements only what it has something to say about — claude_code 23 of 26, codex
-12 of 26, otel 1 of 26.
+implements only what it has something to say about — and WHICH plugin answers
+which name is declared too, in `tests/test_l1i_host_contract.py`'s coverage
+MATRIX: one cell per (provider, host), each either implemented or DECLINED with
+the plugin's own written reason. A running count in prose used to stand in for
+that and was already stale.
 
 **The HOST-tool CONTROL interface.** Reads have `PROVIDERS`; writes have
 `plugins/host.py`. A host tool's CONTROL plane — the whole gestures the

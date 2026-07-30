@@ -43,6 +43,65 @@ REG_AGENT = "agent"
 REG_TEAM = "team"
 REG_CODEX = "codex"
 
+# …and the three facts each register carries on the READ side, in ONE table.
+#
+# A child's ops are stamped with a producer SOURCE (`core/ops.py` `src`) shaped
+# `<prefix>:<agent id>`, and two independent consumers key off that prefix: the
+# scope filter that decides WHOSE mirror an op belongs to
+# (dashboard/read/mirror.agent_scope) and the web presenter's activity CLASS
+# (dashboard/opshtml/actclass._SRC_ACT). Both used to spell the prefix set out
+# themselves — three closed lists of the same vocabulary, in three packages, so
+# a fourth host meant editing all three and a missed one degrades SILENTLY (a
+# blank agent mirror, or every block folding into "ran N agents"). One table,
+# three readers; a new host adds a row.
+#
+# Per row:
+#   src   the `src` stamp prefix its producer writes (NB the AGENT register's is
+#         `sub:`, not `agent:` — the stamp is older than this module and parked
+#         ops carry it, so the table records the fact rather than renaming it)
+#   act   the activity-class token the web presenter classifies its blocks as
+#         (the vocabulary is dashboard/opshtml/actclass.ACTS; the strings are
+#         here so the presenter derives its table instead of re-spelling it)
+#   lead  whether `actclass.as_lead` normalises this register's block headers
+#         into the LEAD's semantic colour under agent scope. True for the two
+#         CHILD-AGENT registers; False for codex, which is DELIBERATE and
+#         behaviour-preserving: a codex block wears its own stream palette and
+#         matches neither arm of as_lead's recolour test today. Encoded as a
+#         FIELD rather than left as a literal at the use site precisely because
+#         it is an asymmetry — this way the next host has to answer the question
+#         instead of inheriting whichever list it was accidentally left out of.
+REGISTERS = {
+    REG_AGENT: {"src": "sub",   "act": "agent", "lead": True},
+    REG_TEAM:  {"src": "team",  "act": "team",  "lead": True},
+    REG_CODEX: {"src": "codex", "act": "codex", "lead": False},
+}
+
+
+def src_prefixes():
+    """Every register's `src` stamp prefix, in table order ("sub", "team",
+    "codex") — the set an agent-scope filter builds `<prefix>:<aid>` from."""
+    return tuple(r["src"] for r in REGISTERS.values())
+
+
+def src_acts():
+    """{src prefix: activity-class token} — the presenter's register→act map."""
+    return {r["src"]: r["act"] for r in REGISTERS.values()}
+
+
+def src_stamp(register):
+    """The `<prefix>:` a `register`'s producer stamps its ops with — the form a
+    consumer tests with str.startswith (`src_stamp(REG_TEAM)` == "team:"). The
+    colon is part of it: a bare prefix would also match a longer register name."""
+    return REGISTERS[register]["src"] + ":"
+
+
+def lead_src_prefixes():
+    """The `<prefix>:` stamps whose blocks `as_lead` recolours into the lead's
+    vocabulary — ("sub:", "team:") today. Colon included: the one consumer tests
+    it with str.startswith, and a bare "sub" would also match a "subsomething:"
+    stamp a future register might use."""
+    return tuple(r["src"] + ":" for r in REGISTERS.values() if r["lead"])
+
 # The block-opening glyphs + kind words this presenter paints, beyond the four
 # MARK_* pairs core/streamfmt already owns (prompt/result/message/mail — those
 # are read BACK by the web presenter, which is why they live there). These are

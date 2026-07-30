@@ -26,8 +26,8 @@ def all_plugins():
 
 # --- the PROVIDER surface ------------------------------------------------------
 # The optional functions a plugin may expose, and the arity each fan-out calls
-# it with. A plugin implements as many as it has something to say about
-# (claude_code 23 of 26, codex 12 of 26, otel 1 of 26) and the fan-outs below skip the rest —
+# it with. A plugin implements as many as it has something to say about, and the
+# fan-outs below skip the rest —
 # which is the whole point of an optional surface, and also its hazard: a
 # provider whose name is misspelled, or whose signature drifts from its
 # fan-out's call, is not an error anywhere. It is simply never found, and the
@@ -41,6 +41,12 @@ def all_plugins():
 # had a `Frontend` base class and a contract test — plugins are the same problem
 # and had neither.
 #
+# WHICH plugin answers which name is the second half, and it is declared too:
+# `tests/test_l1i_host_contract.py`'s coverage MATRIX pins implemented-vs-
+# DECLINED per (provider, host), so a decline is a written-down decision with a
+# reason rather than an absence nobody notices. A running count in this comment
+# used to serve that purpose and was already stale.
+#
 # `min_args` is the smallest number of positional arguments a fan-out ever
 # passes; a provider may accept more only with defaults (context() takes an
 # optional `main=`).
@@ -48,6 +54,10 @@ PROVIDERS = {
     "on_session_start": 3,   # (log, cwd, sid)      — attach watchers at SessionStart
     "census": 1,             # (log)                — the scoreboard ✉ row
     "agent_usage": 2,        # (sid, agent_id)      — one agent's token rollup
+    "runs": 1,               # (sid)                — this host's NESTED runs,
+    #                          spliced into sessionapi.agents()
+    "nested_owners": 1,      # (sid)                — who launched each bg job /
+    #                          monitor, from this host's launch-hook payloads
     "monitors": 1,           # (sid)                — the monitors read model
     "owns": 1,               # (path)               — is this file ours to read?
     #                          The gate on every PATH-KEYED row below (see _owns)
@@ -179,6 +189,31 @@ def owns_by(path):
     return None
 
 
+def default_host():
+    """The DEFAULT host's short name — the tool a session BEHAVES AS when its
+    owner cannot be proven, and the tool a launch that names none picks.
+
+    THE one owner of that name. It used to be spelled independently in four
+    places (dashboard/read/session.DEFAULT_HOST, read/lists's inline literal,
+    http/post/session.DEFAULT_TOOL, and slash_commands' own default below), which
+    is three chances for a rename to half-land — and the dashboard tier is not
+    supposed to know a host's name at all (docs/styleguide.md *Layering*).
+
+    Derived from the registry rather than authored twice: all_plugins() is
+    HOST-FIRST by contract (its docstring), so the first plugin that provides a
+    LAUNCHABLE `host` adapter IS the default. The literal below is the last-resort
+    answer for a registry with no host at all — a state no build ships, kept only
+    so a caller never gets "" for a name it will compare against."""
+    for p in all_plugins():
+        fn = provider(p, "host")
+        if fn is None:
+            continue
+        h = fn()
+        if h is not None and h.launchable and h.name:
+            return h.name
+    return "claude_code"
+
+
 def hosts():
     """The registered HOST tools, for the future new-session tool picker:
     [{name, label, launchable}, …], host first. A plugin is a HOST iff it
@@ -301,14 +336,60 @@ def census(log):
 
 def agent_usage(sid, agent_id):
     """Per-agent usage fan-out (docs/dashboard.md *Agent scope*): the first
-    plugin that recognizes (sid, agent_id) returns that agent's token rollup +
-    model as {"model", "usage"}; None when no plugin does. claude_code folds the
-    agent's transcript (transcript.agent_usage); codex deliberately declines —
-    a run's tokens are folded from its rollout and priced at its footer, so
-    there is nothing for the web to re-price. Exceptions propagate, same
-    contract as census(): the caller is the read-side dashboard, not a hook, and
-    swallowing here would hide which provider broke."""
+    plugin that recognizes (sid, agent_id) returns that agent's token rollup as
+    {"model", "usage", "cost"}; None when no plugin does. claude_code folds the
+    agent's transcript (transcript.agent_usage) AND prices it with its own table;
+    codex deliberately declines — a run's tokens are folded from its rollout and
+    priced at its footer, so there is nothing for the web to re-price.
+
+    `cost` is part of the PROVIDER's contract (approximate USD, omitted for an
+    unknown model) rather than something the caller adds: the dashboard used to
+    price whatever came back with Anthropic's table, which is only correct while
+    exactly one plugin answers. Exceptions propagate, same contract as census():
+    the caller is the read-side dashboard, not a hook, and swallowing here would
+    hide which provider broke."""
     return _first("agent_usage", sid, agent_id)
+
+
+def runs(sid):
+    """NESTED-RUN fan-out: every plugin's own child RUNS of a session, in the
+    core.sessionapi.agents() row shape ({agent_id, kind, transcript, started_at,
+    desc, ended_at, end_reason, tools}), concatenated across plugins with the
+    first agent_id winning. [] when no plugin has any.
+
+    codex answers with its sidecar/native rollout runs (plugins/codex/nested.py —
+    kind 'codex', minus the standalone host's OWN run, which IS the session);
+    claude_code declines, because a Claude subagent is not a "run": it is
+    already an audit `streams` row of kind subagent/teammate that agents() reads
+    first-hand.
+
+    This exists so that `agents()` — in tool-agnostic core — can splice a host's
+    nested children WITHOUT naming one: it used to call a `codex_runs()` defined
+    in core, which knew codex's stream kind, its id derivation and its
+    self-run drop rule. Same rows, same order, one fan-out."""
+    return _concat_unique("runs", lambda r: r.get("agent_id"), sid)
+
+
+def nested_owners(sid):
+    """NESTED-JOB OWNERSHIP fan-out: `{task_id: {"agent_id", "tool_use_id",
+    "command", "description"}}` — who launched each of a session's background
+    jobs and monitors, and with what command — from the first plugin that
+    recognizes the sid; {} when none does.
+
+    The audit `streams.agent_id` stamp is the authoritative source; this is the
+    HISTORY fallback (rows written before the stamp) and the only source of the
+    launching COMMAND for a nested stream (core.sessionapi.nested_owners
+    documents both). Recovering it means reading a HOST's launch-hook payloads —
+    its hook name, its tool names, its JSON paths — which is why the query lives
+    in the plugin (plugins/claude_code/nested.py) and not in core, where it was
+    the deepest tool-specific leak in a module that calls itself tool-agnostic.
+    codex writes none of those rows and declines.
+
+    First-plugin-wins is right here rather than a merge: a session belongs to
+    exactly ONE host, so a second answer would be about someone else's session.
+    core memoizes the result (OWNERS_TTL_S); this fan-out is called once per
+    session per window."""
+    return _first("nested_owners", sid, default={})
 
 
 def monitors(sid):
@@ -467,12 +548,12 @@ def slash_commands(cwd, host=None):
     concatenated: a session belongs to exactly ONE host, so it is offered that
     host's vocabulary (a codex session shows /plan, /approvals, …; a Claude one
     its own /goal, /rewind, …). `host` is the OWNING tool's short name (from
-    owns_by); None defaults to the DEFAULT host (claude_code) — the new-session
-    form has no session to own it yet and launches Claude today. An unknown
-    host, or one with no slash_commands provider, yields [] (an empty menu is
-    the honest answer for a tool with no vocabulary — never another tool's).
+    owns_by); None defaults to default_host() — the new-session form has no
+    session to own it yet and launches the default tool. An unknown host, or one
+    with no slash_commands provider, yields [] (an empty menu is the honest
+    answer for a tool with no vocabulary — never another tool's).
     Same read-side exception contract as census()/activity()."""
-    fn = _named("slash_commands", host or "claude_code")
+    fn = _named("slash_commands", host or default_host())
     return list(fn(cwd) or []) if fn is not None else []
 
 
@@ -515,7 +596,9 @@ def context(transcript_path, main=False):
     dashboard's rows already hold each transcript path): the first plugin that
     recognizes the file returns {"used", "window", "pct", "model"} for its
     most recent turn — how full the context window is; None when no plugin
-    does (a fresh transcript, a codex rollout — no codex provider yet).
+    does (a fresh transcript, or a file no parser claims). BOTH hosts provide
+    it — codex's answer additionally carries `effort`, its per-turn rollout
+    reasoning level, which no Claude transcript has.
     main=True marks a HOST session's main transcript (the claude_code provider
     skips sidechain records there). Same exception contract as
     census()/activity(): the callers are read-side dashboards, not hooks.
@@ -543,8 +626,17 @@ def model_fallback(transcript_path, pos=0):
     (a codex rollout has no provider). The caller keeps the position
     checkpoint (dashboard/read/meta.session_fallback) — the record is written
     once mid-file, so a bounded tail probe would miss it. Read-side like
-    context()/goal(): no hook fires for the fallback."""
-    return _first("model_fallback", transcript_path, pos, default=(None, pos))
+    context()/goal(): no hook fires for the fallback.
+
+    OWNERSHIP-GATED (_first_path), like every other path-keyed row here — it was
+    the one that said "path-keyed like context/goal" and then called `_first`, so
+    a plugin was asked about files it does not own. Concretely: claude_code's
+    FORWARD scanner read every codex rollout end to end on the `fallback` SSE
+    channel, and a rollout that ever quoted the matched token would have been
+    reported as a Claude refusal-fallback — the exact fail-open class the gate
+    exists to prevent (see _first_path's 429KB-rollout measurement)."""
+    return _first_path("model_fallback", transcript_path, pos,
+                       default=(None, pos))
 
 
 def prompts(transcript_path):

@@ -8,6 +8,7 @@
 import bisect
 
 import plugins
+from core import agentblocks as AB
 from core import paths as P
 from core import sessionapi as API
 from core import state as ST
@@ -108,7 +109,7 @@ def conv_items(recs, cmds=()):
     return out
 
 
-def merge_live(ops, recs, key="", cmds=(), scope=None, codex_lead=False):
+def merge_live(ops, recs, key="", cmds=(), scope=None, host_lead=False):
     """A LIVE SSE delta of new ops + new conversation recs -> ONE oldest->newest
     item list, interleaved by ts — the increment-side twin of _merge_order's
     placement rule. Without it the SSE loop emits ops and msgs as two separate
@@ -136,7 +137,7 @@ def merge_live(ops, recs, key="", cmds=(), scope=None, codex_lead=False):
     def flush():
         if run:
             items.extend(opshtml.op_items(run, key, scope=scope,
-                                          codex_lead=codex_lead))
+                                          host_lead=host_lead))
             run.clear()
 
     while i < len(ops) and j < len(recs):
@@ -304,6 +305,13 @@ def agent_scope(sid, agent):
     re-pointing a native subagent's PREFIX to `sub:` needed no change here, for
     new ops or for parked ones; the non-matching prefixes are inert.
 
+    The prefix SET is DERIVED, not spelled here: core/agentblocks.REGISTERS is
+    the one owner of the register vocabulary (`src_prefixes()`), and the web
+    presenter's register→act map comes from the same table. This used to be a
+    literal `{"sub:"…, "team:"…, "codex:"…}` — a third independent copy of one
+    closed list, whose failure mode when a host is missed is silent: an
+    unrecognised prefix matches no op and that agent's mirror renders BLANK.
+
     Prose-drop is no longer signalled here (the retired `codexprose:` marker): an
     agent's re-bubbled prose ops carry the producer-set `bubbled` flag (core/ops.py),
     which opshtml.op_items drops directly — one signal across tools, decided where
@@ -317,24 +325,32 @@ def agent_scope(sid, agent):
     an agent's name to render its stream."""
     if not agent:
         return None
-    return {"sub:" + agent, "team:" + agent, "codex:" + agent}
+    return {p + ":" + agent for p in AB.src_prefixes()}
 
 
-def is_codex_lead(sid, agent):
-    """True for a STANDALONE codex host's own SESSION view (no agent scope): the
-    session's transcript is a codex rollout, so its codex ops ARE the session's
-    activity, not a foldable sub-run. op_items then drops their PROSE ops (⇢/✎/
-    ⋯/⇠) — plugins.conversation re-bubbles that prose exactly as the lead's is,
-    so a codex session's messages read as ordinary conversation bubbles instead
-    of folding into 'ran N codex runs'. False for an agent scope (a sidecar codex
-    run IS a sub-run) or a non-codex host."""
+def host_lead(sid, agent):
+    """True for a SELF-STREAMING host's own SESSION view (no agent scope): the
+    session's own ops ARE its activity, not a foldable sub-run, and they carry
+    the same prose plugins.conversation re-bubbles. op_items then drops their
+    PROSE ops (⇢/✎/⋯/⇠) so the messages read as ordinary conversation bubbles
+    instead of folding into 'ran N codex runs'. False for an agent scope (a
+    sidecar run IS a sub-run) or a host that doesn't stream its own lead.
+
+    The question is answered by the owning host's `lead_prose` TRAIT
+    (plugins.host_of → HostControl), not by comparing its name to "codex". It
+    was `host_lead`, body `owns_by(transcript_path) == "codex"` — a literal
+    host name in the read model, threaded as `host_lead=` through seven call
+    sites. Renaming that plugin, or adding a second self-streaming host, would
+    have broken it with no error: the mirror would just double every message or
+    fold a whole session into one summary line."""
     if agent:
         return False
     row = API.session_row(sid) or {}
-    return plugins.owns_by(row.get("transcript_path") or "") == "codex"
+    host = plugins.host_of(row.get("transcript_path") or "")
+    return bool(getattr(host, "lead_prose", False))
 
 
-def _render_window(entries, start, key, cmds=(), scope=None, codex_lead=False):
+def _render_window(entries, start, key, cmds=(), scope=None, host_lead=False):
     """Render entries[start:] to stream items ({g, t, html}); op entries through
     op_items, msg entries through conv_items. Only the windowed slice is
     rendered — the whole point of the block cut.
@@ -355,7 +371,7 @@ def _render_window(entries, start, key, cmds=(), scope=None, codex_lead=False):
             # record between them flushes the run) — where it would otherwise read as
             # a message of its own
             out.extend(opshtml.op_items(pend, key, pids, carry, scope,
-                                        codex_lead=codex_lead))
+                                        host_lead=host_lead))
             pend.clear()
             pids.clear()
 
@@ -389,7 +405,7 @@ def merged_backlog(sid, key, blocks=TAIL_BLOCKS, agent=None):
     oldest = entries[start][0] if start > 0 else 0
     return last, mpos, oldest, _render_window(entries, start, key,
                                               session_cmds(sid), scope,
-                                              is_codex_lead(sid, agent))
+                                              host_lead(sid, agent))
 
 
 def history(sid, key, before, blocks, agent=None):
@@ -413,7 +429,7 @@ def history(sid, key, before, blocks, agent=None):
     start = _snap(universe, _cut_blocks(universe, blocks, scope))
     oldest = universe[start][0] if start > 0 else 0
     return oldest, _render_window(universe, start, key, session_cmds(sid), scope,
-                                  is_codex_lead(sid, agent))
+                                  host_lead(sid, agent))
 
 
 def ops_payload(sid, after, agent=None):
@@ -428,7 +444,7 @@ def ops_payload(sid, after, agent=None):
     row = API.session_row(sid)
     key = P.sid_from_log(row["log"]) if row else sid
     return last, opshtml.op_items(ops, key, scope=agent_scope(sid, agent),
-                                  codex_lead=is_codex_lead(sid, agent))
+                                  host_lead=host_lead(sid, agent))
 
 
 def view_payload(sid, gid):

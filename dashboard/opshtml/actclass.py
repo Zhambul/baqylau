@@ -35,6 +35,7 @@
 # is an agent. No palette entry collides with a semantic colour (core/slots.py).
 import re
 
+from core import agentblocks as AB
 from core import errwatch as EW
 from core import ops as O
 from core import render as R
@@ -147,7 +148,18 @@ _WARN_GLYPH = EW.GLYPH
 # The producer-source REGISTER -> the agent class it names (core/ops.py owns the
 # `src` vocabulary; this is its one reader on the classify path). A prefix absent
 # here — or an op with no stamp — falls through to the palette test in _classify.
-_SRC_ACT = {"codex": ACT_CODEX, "team": ACT_TEAM, "sub": ACT_AGENT}
+#
+# DERIVED from the one core-owned register table (core/agentblocks.REGISTERS),
+# not authored: the same closed vocabulary is read by read/mirror.agent_scope's
+# prefix set, and three independent spellings of it meant a fourth host had to
+# edit three packages with no failure if it edited two. The tokens it yields ARE
+# the ACT_* constants above (pinned by tests/test_l1i_host_contract.py, which
+# also proves this map is imported rather than re-spelled).
+_SRC_ACT = AB.src_acts()
+
+# …and the `<prefix>:` stamps whose block headers as_lead normalises into the
+# LEAD's own vocabulary — the same table's `lead` field. See as_lead.
+_LEAD_SRC = AB.lead_src_prefixes()
 
 
 def _is_team(op):
@@ -155,8 +167,12 @@ def _is_team(op):
     already says so in the `src` stamp it wears for the web mirror's main-agent-only
     drop (`team:<id>` vs `sub:<id>` — core/ops.py owns that vocabulary), so nothing
     here parses a name or a colour. An op with no stamp at all (pre-`src` history, or
-    the main session's own launch header) is not claimed as a teammate."""
-    return str(op.get("src") or "").startswith("team:")
+    the main session's own launch header) is not claimed as a teammate.
+
+    The stamp comes from the register table (agentblocks.src_stamp), like every
+    other prefix in this module — this was a FOURTH independent spelling of it,
+    found by the contract test that pins the derivation."""
+    return str(op.get("src") or "").startswith(AB.src_stamp(AB.REG_TEAM))
 
 
 def _plain(op):
@@ -419,7 +435,7 @@ def is_codex(op):
 def codex_prose(op):
     """True for a codex PROSE block header (⇢ prompt / ✎ message / ⋯ reasoning /
     ⇠ result) — the codex twin of prose_block. A STANDALONE codex session's view
-    DROPS these (op_items `codex_lead`) because plugins.conversation re-bubbles
+    DROPS these (op_items `host_lead`) because plugins.conversation re-bubbles
     the same prose, exactly as agent scope drops an agent's prose ops; keeping
     them both doubles the conversation AND folds it into 'ran N codex runs'."""
     try:
@@ -435,7 +451,7 @@ def codex_chrome(op):
     """A codex-only SCAFFOLDING line a STANDALONE session doesn't need — the
     `⚙ <model> · <effort>` turn-context tag, the `codex ▶ <label>` run banner,
     AND the `■ codex <label> ended · …` run FOOTER. All dropped in op_items
-    `codex_lead` (alongside codex_prose) so a standalone codex session's view is
+    `host_lead` (alongside codex_prose) so a standalone codex session's view is
     UNIFORM with Claude's — bubbles + real activity, no per-run banners/footers
     ('I told you no codex specific ui'). The model + token totals still show in
     the scoreboard; the footer's token rollup is redundant with it. A Claude
@@ -527,8 +543,13 @@ def as_lead(op):
     # agent palettes as the fallback for ops written before the stamp — the same
     # order _classify reads them in, so a block cannot be recoloured as an agent's
     # and then classified as something else.
+    # WHICH registers recolour is the core table's `lead` field
+    # (agentblocks.lead_src_prefixes() → ("sub:", "team:")), not a literal tuple:
+    # codex is deliberately absent, and an asymmetry that lives as an omission
+    # from an inline list is one nobody can see. Behaviour is unchanged — a codex
+    # SIDECAR block wears its own stream palette and matches neither arm.
     recolour = (c in _AGENT_RGB
-                or str(out.get("src") or "").startswith(("sub:", "team:"))) \
+                or str(out.get("src") or "").startswith(_LEAD_SRC)) \
         and stripped[:1] in (_GLYPH_BASH, _GLYPH_BG, _GLYPH_MONITOR, _GLYPH_WS,
                              _GLYPH_FINISH, _GLYPH_TOOL)
     if stripped == text and not recolour and out.get("outer") is None:

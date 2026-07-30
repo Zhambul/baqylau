@@ -29,7 +29,7 @@ Two kinds of surface in one module:
   Functions: `sessions()`, `session(sid)`, `session_row(sid)`,
   `state_db_for(sid)`, `session_db(row)`, `agents(sid)`,
   `agent_transcript(sid, agent_id)`,
-  `codex_runs(sid)` / `codex_aid(src_path)`, `costs(sid)`, `errors(sid)`,
+  `costs(sid)`, `errors(sid)`,
   `sid_chain(sid)`, `running(sid)` / `fg_running(sid)`.
 
   `agent_transcript(sid, agent_id)` is filtered to `TRANSCRIPT_KINDS`
@@ -137,9 +137,9 @@ owner of the rollout record shapes; `stream.py`'s `Renderer.feed_rollout` paints
 its typed records byte-identically to the pre-split renderer, pinned by the e2e
 codex suite). There is still no durable sid→rollout index, and none is needed:
 recovery goes through the audit `streams` rows (`kind='codex'`, `src_path` =
-the rollout), read via `sessionapi.codex_runs()`. Because codex tailers
+the rollout), read via the `plugins.runs(sid)` fan-out (plugins/codex/nested.py). Because codex tailers
 record no hook `agent_id`, the read model synthesizes one —
-`sessionapi.codex_aid()`, the `src_path` basename with the extension
+`paths.codex_aid()`, the `src_path` basename with the extension
 stripped — and `agents()` lists codex runs in the same row shape
 (kind `codex`, `desc` = the run label), so the codex provider resolves the
 id straight back to its rollout. A companion job's `.log` run is listed but
@@ -147,7 +147,7 @@ declines drill-down (its activity log is not a rollout); a STANDALONE codex
 session's own rollout answers `activity(sid)` with no agent_id — the
 rollout filename uuid IS the sid.
 
-`codex_runs()` DROPS a standalone host's OWN run from the agent list, precisely
+`session_runs()` DROPS a standalone host's OWN run from the agent list, precisely
 because the rollout uuid is the sid: that run's rollout equals the session's own
 `transcript_path`, and its ops are UNSTAMPED (codex is the main agent there, so
 there is no `codex:<label>` src on them). Listed as a scoped agent, clicking it

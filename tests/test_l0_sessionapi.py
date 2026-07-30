@@ -199,7 +199,11 @@ def test_agent_transcript_ignores_the_agents_own_jobs(monkeypatch, tmp_path):
 def test_agents_includes_codex_runs(monkeypatch, tmp_path):
     """kind='codex' streams rows ride the agents list in the SAME row shape
     (additive read model): agent_id is the synthesized codex_aid (codex
-    tailers record no hook agent_id), desc is the run label (task_id)."""
+    tailers record no hook agent_id), desc is the run label (task_id).
+
+    Spliced through the generic `plugins.runs(sid)` fan-out now — core names no
+    host — so this doubles as the proof that the fan-out is WIRED, not just
+    declared."""
     monkeypatch.setattr(P, "PREFIX", str(tmp_path) + "/claude-mirror-")
     monkeypatch.setattr(P, "HISTORY_DIR", str(tmp_path / "park"))
     log = P.mirror_log("cx-sess")
@@ -213,7 +217,7 @@ def test_agents_includes_codex_runs(monkeypatch, tmp_path):
     assert a["kind"] == "codex" and a["desc"] == "cli"
     assert a["transcript"] == src
     assert a["end_reason"] == "task-complete" and a["tools"] == 7
-    assert API.codex_aid(src) == a["agent_id"]
+    assert P.codex_aid(src) == a["agent_id"]       # the ONE owner of that id
     # a src-less codex row can't be named — never listed
     A.stream_start(log, "codex", task_id="ghost", src_path="")
     assert len(API.agents("cx-sess")) == 1

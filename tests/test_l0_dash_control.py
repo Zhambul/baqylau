@@ -1668,9 +1668,11 @@ def test_session_payload_serves_full_caps_for_a_claude_session(dash):
 
 def test_caps_guard_409s_a_gesture_a_non_claude_host_cant_do(dash, monkeypatch):
     """A session owned by another tool whose host leaves a gesture inert is
-    degraded cleanly: the payload advertises host="" + all-False caps, and the
-    gated POST 409s with the cap named plus an ok:False `web-*` audit row — the
-    copilot/opencode path proven with a fake owner before either tool exists."""
+    degraded cleanly: the payload advertises that tool's OWN NAME + all-False
+    caps, and the gated POST 409s with the cap named plus an ok:False `web-*`
+    audit row — the copilot/opencode path proven with a fake owner before either
+    tool exists. (P1: `host` carries the real owner where it used to blank to
+    "" — the JS reads `caps`, never `host`.)"""
     import plugins
     from plugins.host import GESTURES
 
@@ -1687,7 +1689,8 @@ def test_caps_guard_409s_a_gesture_a_non_claude_host_cant_do(dash, monkeypatch):
                         lambda name: {g: False for g in GESTURES})
 
     data = _get_json(dash + "/api/session/cap-x")
-    assert data["host"] == "" and data["caps"] == {g: False for g in GESTURES}
+    assert data["host"] == "faketool"
+    assert data["caps"] == {g: False for g in GESTURES}
 
     with pytest.raises(urllib.error.HTTPError) as e:
         _post(dash + "/api/session/cap-x/interrupt", {})

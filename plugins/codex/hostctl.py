@@ -55,6 +55,14 @@ class CodexHost(HostControl):
     label = "Codex"
     launchable = True
 
+    # A STANDALONE codex session's own ops ARE its stream: the same tailer runs
+    # whether codex is the session or a sidecar inside a Claude one, so the lead's
+    # turns are painted as ⇢/✎/⋯/⇠ prose blocks AND re-bubbled by
+    # plugins.conversation. The web session view drops the ops half. See
+    # HostControl.lead_prose — this is the trait that replaced the read model's
+    # `owns_by(transcript) == "codex"` string compare.
+    lead_prose = True
+
     # --- CONTROL gestures (the codex-supported subset; the rest stay inert) ---
 
     def interrupt(self, fe, win, ctx):
@@ -278,6 +286,16 @@ class CodexHost(HostControl):
         `xhigh` → the picker's 'Extra high', etc.)."""
         from plugins.codex import modeldialog as MD
         return list(MD.EFFORT_CHOICES)
+
+    # model_short: NOT overridden — codex's ids (`gpt-5.4-codex`) ARE their own
+    # display spelling, and the base identity is exactly right. It matters that
+    # this is now a DECISION rather than an accident: the read model used to run
+    # every host's ids through Claude's `short_model` grammar, which splits on
+    # `-` and keeps ≤2-digit version parts, so a codex agent card showed a
+    # truncated id. model_default_effort is likewise inert on purpose — codex's
+    # effort is a per-turn ROLLOUT fact (turn_context, surfaced on ctx["effort"]),
+    # not a property of the model, so a default table would be a second, wronger
+    # answer than the one the rollout already gives.
 
     def resume_words(self, sid):
         """`codex resume <sid>` — codex's own conversation-resume argv (a codex

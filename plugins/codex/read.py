@@ -180,13 +180,14 @@ def prompts(path, cap=PROMPT_CAP):
 
 def _rollout_for(sid, agent_id):
     """The rollout path for one identity, or "": a SIDECAR/subagent codex run
-    (agent_id names it — resolved off sessionapi.codex_runs, whose transcript IS
-    the run's rollout), or the STANDALONE host's own session rollout (agent_id
-    empty — session_row's transcript_path, gated by owns). Lazy import of
-    sessionapi (a read-side dependency, not a hook path)."""
+    (agent_id names it — resolved off this plugin's own nested.session_runs, whose
+    transcript IS the run's rollout), or the STANDALONE host's own session
+    rollout (agent_id empty — session_row's transcript_path, gated by owns).
+    Lazy import of sessionapi (a read-side dependency, not a hook path)."""
     from core import sessionapi as API
+    from plugins.codex import nested
     if agent_id:
-        for rec in API.codex_runs(sid):
+        for rec in nested.session_runs(sid):
             if rec.get("agent_id") == agent_id:
                 path = rec.get("transcript") or ""
                 return path if RO.owns(path) and os.path.isfile(path) else ""

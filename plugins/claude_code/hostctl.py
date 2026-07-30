@@ -65,6 +65,23 @@ class ClaudeCodeHost(HostControl):
     def plan(self, fe, win, decision, ctx):
         return self._deferred("plan")
 
+    def model_short(self, model_id):
+        """Claude's display spelling of a model id ("claude-opus-4-8" →
+        "opus-4.8") — model.short_model, the owner. Overridden here so the read
+        model can ask the OWNING host instead of importing this plugin: the same
+        grammar was being applied to every host's ids, so a codex agent card's
+        model went through Claude's `claude-`-stripping version parser."""
+        from plugins.claude_code import model
+        return model.short_model(model_id)
+
+    def model_default_effort(self, model_id):
+        """Claude's model→default-effort table (model.model_default_effort, the
+        owner): opus-4-7 → xhigh, the adaptive-reasoning families → high, else
+        "". The twin of model_short, and the other half of the read model's old
+        `plugins.claude_code.model` reach."""
+        from plugins.claude_code import model
+        return model.model_default_effort(model_id)
+
     def resume_words(self, sid):
         """`claude --resume <sid>` — the argv the dashboard's resume-&-send and
         the relimit migrator already compose (plugins.owns_by names claude_code

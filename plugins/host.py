@@ -22,11 +22,16 @@
 # pretending to synthesize key events — the whole reason the interface is
 # gestures and not a second Frontend. Each returns a small result dict
 # {"status": <acknowledged|rejected|indeterminate>, "cid": <correlation id>} so
-# an audit row can be tied to the gesture that produced it. In THIS phase
-# (P1a) the gestures are DECLARED and claude_code overrides them so its caps
-# read all-True, but the dashboard's POST handlers are NOT yet routed through
-# them (they keep their existing bodies, byte-identical) — only `caps` gating is
-# wired. P5 routes codex (and re-routes claude_code) through the gestures.
+# an audit row can be tied to the gesture that produced it.
+#
+# ROUTING, as of today: codex's POST handlers DO dispatch through these methods
+# (the seven gestures CodexHost overrides), and claude_code's do not — its
+# gesture bodies are declared so its caps read all-True, while the dashboard's
+# handlers keep their own inline bodies and `_gesture_host` returns None for the
+# DEFAULT host precisely so those run byte-identically. Moving them behind
+# ClaudeCodeHost is the next phase's work. (This header used to say the gestures
+# were "NOT yet routed" for anyone, which stopped being true when codex's
+# interrupt/compact/rename/ask/plan/model/effort were wired.)
 import itertools
 
 # The CAPABILITY surface: each name is BOTH the cap key the dashboard gates a
@@ -72,6 +77,21 @@ class HostControl:
     name = ""             # the plugin's short name (matches plugins.owns_by)
     label = ""            # a human label for the new-session picker
     launchable = False    # can the dashboard launch a fresh session of this tool
+
+    # Does this host's OWN session stream carry its prose TWICE — once as paint
+    # ops and again as plugins.conversation records? A host whose lead runs
+    # through the same child-agent presenter its sidecars do (codex: standalone
+    # or nested, one streamer) paints ⇢/✎/⋯/⇠ prose blocks for its own turns, and
+    # the web ALSO re-bubbles them as conversation. The session view must drop one
+    # of the two, or the messages appear twice AND fold into "ran N codex runs"
+    # (the "all I see is Ran 4 codex runs" bug). A host whose lead is rendered by
+    # its hook formatters (claude_code) emits no such ops and needs no drop.
+    #
+    # A TRAIT, not a host NAME: the read model asked `owns_by(tpath) == "codex"`,
+    # so renaming that plugin — or adding a second self-streaming host — would
+    # have broken it silently, in the direction that BLANKS a mirror. Read via
+    # read/mirror.host_lead (docs/dashboard.md *A standalone host's own prose*).
+    lead_prose = False
 
     # --- capability derivation ------------------------------------------------
     def caps(self):
@@ -157,6 +177,31 @@ class HostControl:
         """The reasoning-effort tokens this host's ✧ menu offers — [] means the
         client default. The effort twin of model_choices."""
         return []
+
+    # --- model VOCABULARY (a host reading its own model ids) ------------------
+    # Not gestures either: these turn a raw model id into the words this host
+    # uses for it. They live on HostControl rather than behind a model-id-keyed
+    # registry fan-out because a model id carries no reliable ownership claim —
+    # answering "whose id is `gpt-5.4-codex`?" by grammar is the sniffing this
+    # whole refactor deletes. The CALLER always knows the owning host already: it
+    # holds the file the id came out of (an agent row's transcript), so it
+    # resolves plugins.host_of(path) and asks THAT host. Base returns the honest
+    # pass-through/empty, so an unclaimed file degrades to the raw id and no
+    # effort rather than another tool's vocabulary.
+    def model_short(self, model_id):
+        """`model_id` in this host's own DISPLAY spelling (Claude Code:
+        "claude-opus-4-8" → "opus-4.8"). The base is the identity — a host whose
+        ids are already display-ready (codex's `gpt-5.4-codex`) needs no
+        override, and passing an id through unchanged is always safe where
+        mangling it through a foreign grammar is not."""
+        return model_id or ""
+
+    def model_default_effort(self, model_id):
+        """The reasoning-effort level `model_id` runs at when the session names
+        none — this host's own model→default table ("" when the model has no
+        adaptive reasoning, or the host has no such notion). Read only as the
+        LAST fallback, after the session's own effort."""
+        return ""
 
     def resume_words(self, sid):
         """The argv words that RESUME session `sid` for this tool (claude:

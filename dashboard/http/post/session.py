@@ -20,16 +20,15 @@ from dashboard.control.launch import launch_argv
 
 A = load_audit()
 
-DEFAULT_TOOL = "claude_code"  # the host a new-session launch uses when the body
-#                               names none — the historical claude_code default,
-#                               and the owner assumed for a resume whose transcript
-#                               has no audit row (left to the CLI, unprovable). A
-#                               FRESH launch's `tool` picks the host directly; a
-#                               RESUME resolves the OWNING host (plugins.owns_by)
-#                               so a parked codex session comes back with
-#                               `codex resume <sid>` and a claude one stays
-#                               `claude --resume <sid>` — the per-tool launch
-#                               provider that used to be a flat refusal.
+# The host a new-session launch uses when the body names none, and the owner
+# assumed for a resume whose transcript has no audit row (left to the CLI,
+# unprovable), is `plugins.default_host()` — the registry's ONE owner of that
+# name, read at the two call sites below rather than re-spelled here (this module
+# held the third of four independent copies of the literal). A FRESH launch's
+# `tool` picks the host directly; a RESUME resolves the OWNING host
+# (plugins.owns_by) so a parked codex session comes back with `codex resume
+# <sid>` and a claude one stays `claude --resume <sid>` — the per-tool launch
+# provider that used to be a flat refusal.
 
 
 class _Steps:
@@ -105,13 +104,13 @@ class _SessionMixin:
             return self._reject_input("web-launch", "resume+continue",
                                 "resume and continue are exclusive",
                                 {"resume": resume})
-        # tool: which HOST to launch (the new-session form's tool picker —
-        # claude_code / codex). Validated against the LAUNCHABLE hosts registry
-        # (plugins.hosts), so an unknown/non-launchable tool 400s rather than
-        # composing an argv for a host that isn't there. A resume overrides this
-        # with the owning host below; a fresh launch uses it directly.
+        # tool: which HOST to launch (the new-session form's tool picker).
+        # Validated against the LAUNCHABLE hosts registry (plugins.hosts), so an
+        # unknown/non-launchable tool 400s rather than composing an argv for a
+        # host that isn't there. A resume overrides this with the owning host
+        # below; a fresh launch uses it directly.
         tool = body.get("tool")
-        tool = tool if isinstance(tool, str) and tool else DEFAULT_TOOL
+        tool = tool if isinstance(tool, str) and tool else plugins.default_host()
         launchable = {h["name"] for h in plugins.hosts() if h.get("launchable")}
         if tool not in launchable:
             return self._reject_input("web-launch", "bad tool", "unknown tool",
@@ -143,7 +142,8 @@ class _SessionMixin:
         r_tpath, host_name = "", tool
         if resume:
             r_tpath = (API.session_row(resume) or {}).get("transcript_path") or ""
-            host_name = (plugins.owns_by(r_tpath) or "") if r_tpath else DEFAULT_TOOL
+            host_name = ((plugins.owns_by(r_tpath) or "") if r_tpath
+                         else plugins.default_host())
         # A resume target whose KNOWN transcript is GONE can't be resumed at all,
         # by any host: `claude --resume` / `codex resume` both open a tab that dies
         # at once (observed live, 2026-07-21). This check precedes the owner guard
