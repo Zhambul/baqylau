@@ -482,7 +482,12 @@ touching the dashboard.
   are set through ONE interactive 3-step `/model` picker, driven by
   **`plugins/codex/modeldialog.py`** (Step 1 `Select Model` → `All models`; Step 2
   the model list; Step 3 `Select Reasoning Level` — the same `›`-cursor / `enter to
-  confirm` geometry as the plan picker). The ✦ **model** button changes the model
+  confirm` geometry as the plan picker). Step 3 is model-dependent: some models
+  (gpt-5.6-sol) list all six levels directly, others (gpt-5.6-terra) collapse
+  **Max/Ultra** behind a `More reasoning…` row that opens an `Advanced Reasoning`
+  sub-step — the driver (`_pick_level`) picks a level directly when present, else
+  opens that sub-step and picks there (a reported effort→max failure: it only
+  looked for a direct `Max` row). The ✦ **model** button changes the model
   and PRESERVES the current reasoning level (the ✦/✧ axes are independent, so a
   switch must not silently reset effort — the gesture reads the current effort from
   the rollout, `read.codex_effort`, and re-selects it at Step 3, falling back to

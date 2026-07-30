@@ -29,6 +29,8 @@ FOOT = "to confirm"
 STEP1 = "Select Model"
 STEP2 = "Select Model and Effort"
 STEP3 = "Select Reasoning Level"
+ADVANCED = "Advanced Reasoning"      # the sub-step Max/Ultra live under
+MORE = "more reasoning"              # the step-3 row that opens ADVANCED
 ALL_MODELS = "all models"            # the step-1 row that opens the full list
 CURRENT = "(current)"                # the step-2 marker on the active model
 
@@ -77,6 +79,15 @@ def _await(fe, win, needle, sleep):
     return screen
 
 
+def _goto(fe, win, num, sleep):
+    """Move the `›` cursor onto row `num`, mapping dialog._cursor_to's error into
+    a CodexModelError so the gesture's one except clause owns it."""
+    try:
+        _cursor_to(fe, win, num, sleep)
+    except Exception as e:                   # dialog._cursor_to's CodexAskError
+        raise CodexModelError("cursor", str(e)) from e
+
+
 def _pick(fe, win, header, want, sleep):
     """On the picker step whose header contains `header`, move the `›` cursor to
     the row whose normalized label EQUALS `want` (or, when `want` is "", accept
@@ -90,10 +101,40 @@ def _pick(fe, win, header, want, sleep):
                     if _norm(r["label"]) == w or w in r["label"].lower()), None)
         if row is None:
             raise CodexModelError("row", "no %r under %r" % (want, header))
-        try:
-            _cursor_to(fe, win, row["num"], sleep)
-        except Exception as e:               # dialog._cursor_to's CodexAskError
-            raise CodexModelError("cursor", str(e)) from e
+        _goto(fe, win, row["num"], sleep)
+    fe.send_key(win, "enter")
+
+
+def _pick_level(fe, win, want, sleep):
+    """Step 3 (Select Reasoning Level), with the Max/Ultra INDIRECTION some models
+    use: gpt-5.6-terra lists Low/Medium/High/Extra high + a `More reasoning…` row
+    that opens an `Advanced Reasoning` sub-step holding Max/Ultra, while others
+    (gpt-5.6-sol) list all six directly. `want` is the on-screen level LABEL
+    (an EFFORT_LABEL value) or "" to accept the pre-selected default."""
+    _await(fe, win, STEP3, sleep)
+    if not want:
+        fe.send_key(win, "enter")            # accept the model's default level
+        return
+    w = want.lower()
+    screen = fe.get_text(win) or ""
+    row = next((r for r in rows(screen) if _norm(r["label"]) == w), None)
+    if row is not None:                      # listed directly on this model
+        _goto(fe, win, row["num"], sleep)
+        fe.send_key(win, "enter")
+        return
+    # not listed — open 'More reasoning…' and pick it in the Advanced sub-step
+    more = next((r for r in rows(screen) if MORE in r["label"].lower()), None)
+    if more is None:
+        raise CodexModelError("row", "no %r (nor a More-reasoning row) under %r"
+                              % (want, STEP3))
+    _goto(fe, win, more["num"], sleep)
+    fe.send_key(win, "enter")
+    _await(fe, win, ADVANCED, sleep)
+    screen = fe.get_text(win) or ""
+    row = next((r for r in rows(screen) if _norm(r["label"]) == w), None)
+    if row is None:
+        raise CodexModelError("row", "no %r under %r" % (want, ADVANCED))
+    _goto(fe, win, row["num"], sleep)
     fe.send_key(win, "enter")
 
 
@@ -110,9 +151,10 @@ def set_model_effort(fe, win, model="", effort="", sleep=time.sleep):
     # Step 2 — the model: the chosen one (✦), else keep the current (✧).
     _pick(fe, win, STEP2, model or CURRENT, sleep)
     # Step 3 — the reasoning level: the chosen one (✧), else the model's default
-    # (✦ accepts the pre-selected row with a bare Enter).
+    # (✦ accepts the pre-selected row with a bare Enter). Handles the Max/Ultra
+    # `More reasoning…` sub-step some models collapse them into.
     want = EFFORT_LABEL.get(effort, "") if effort else ""
-    _pick(fe, win, STEP3, want, sleep)
+    _pick_level(fe, win, want, sleep)
     _, gone = _poll(fe, win, lambda s: FOOT not in (s or ""), STEP_TIMEOUT_S,
                     sleep)
     if not gone:

@@ -549,6 +549,63 @@ def test_codex_slash_commands_are_codex_vocabulary(monkeypatch, tmp_path):
     assert names == sorted(names)
 
 
+class _LevelPickerFE:
+    """A reactive /model picker whose Step 3 COLLAPSES Max/Ultra behind a
+    `More reasoning…` row (gpt-5.6-terra's shape), opening an `Advanced Reasoning`
+    sub-step — the geometry the reported effort→max failure hit. Starts already
+    on Step 3 (the test drives only _pick_level). `chosen` records the final pick."""
+
+    def __init__(self):
+        self.view, self.cursor, self.chosen = "level", 1, None
+
+    _LEVEL = ("Low", "Medium (default)", "High", "Extra high", "More reasoning…")
+    _ADV = ("Max", "Ultra")
+
+    def _rows(self):
+        return self._LEVEL if self.view == "level" else self._ADV
+
+    def get_text(self, win, extent="screen", ansi=False):
+        if ansi or self.view == "done":
+            return "codex\n❯ \n[gpt-5.6-terra] │ ready\n"
+        head = "Select Reasoning Level for gpt-5.6-terra" \
+            if self.view == "level" else "Advanced Reasoning"
+        lines = ["  " + head]
+        for i, label in enumerate(self._rows(), 1):
+            lines.append(("› " if i == self.cursor else "  ")
+                         + "%d. %s   desc" % (i, label))
+        lines.append("  Press enter to confirm or esc to go back")
+        return "\n".join(lines)
+
+    def send_key(self, win, *keys):
+        k = keys[0] if keys else ""
+        if k == "down":
+            self.cursor = min(self.cursor + 1, len(self._rows()))
+        elif k == "up":
+            self.cursor = max(self.cursor - 1, 1)
+        elif k == "enter":
+            label = self._rows()[self.cursor - 1]
+            if self.view == "level" and label.startswith("More reasoning"):
+                self.view, self.cursor = "advanced", 1     # open the sub-step
+            else:
+                self.chosen, self.view = label, "done"
+        return True
+
+
+def test_modeldialog_reaches_max_behind_more_reasoning():
+    """effort→Max/Ultra on a model that collapses them behind `More reasoning…`
+    opens the Advanced Reasoning sub-step and picks there — the reported
+    'no Max under Select Reasoning Level' failure. A directly-listed level is
+    unaffected."""
+    from plugins.codex import modeldialog as MD
+    fe = _LevelPickerFE()
+    MD._pick_level(fe, "9", "Max", sleep=lambda s: None)
+    assert fe.chosen == "Max"
+    # a directly-listed level needs no sub-step
+    fe2 = _LevelPickerFE()
+    MD._pick_level(fe2, "9", "High", sleep=lambda s: None)
+    assert fe2.chosen == "High"
+
+
 def test_codex_effort_provider_reads_the_last_turn_context(tmp_path):
     """plugins.effort (path-keyed, ownership-gated) returns a codex rollout's
     last turn_context level even with NO usage record (unlike context()), so the
