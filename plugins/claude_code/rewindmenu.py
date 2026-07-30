@@ -1,4 +1,5 @@
-# dashboard/rewindmenu.py — drive Claude Code's OWN rewind menu from the web.
+# plugins/claude_code/rewindmenu.py — drive Claude Code's OWN rewind menu from
+# the web.
 #
 # The dashboard's full rewind support (docs/dashboard.md, *Web rewind*)
 # deliberately REUSES Claude Code's interactive checkpoint menu instead of
@@ -32,7 +33,7 @@ import re
 import time
 
 from core import screendrive
-from dashboard.control import launch
+from plugins.claude_code import tui
 
 # One entry per selectable restore option: the requested `mode` (the POST
 # body's vocabulary) → the menu label it must match. Labels are matched
@@ -199,8 +200,8 @@ def drive(fe, win, target, mode, ups=0, sleep=time.sleep):
     # a bracketed paste, never raw keystrokes: with editorMode vim the box is
     # MODAL and the Escapes that preceded this (an interrupt, a bail) leave it
     # in NORMAL mode, where "/rewind" is vim COMMANDS — the menu never opens and
-    # the tail lands in the conversation (launch.type_command has the measurement)
-    ok, _clip = launch.type_command(fe, win, "/rewind")
+    # the tail lands in the conversation (tui.type_command has the measurement)
+    ok, _clip = tui.type_command(fe, win, "/rewind")
     if not ok:
         raise MenuError("send", "/rewind not delivered")
     screen, ok = screendrive.poll_until(fe, win, menu_open, OPEN_TIMEOUT_S, sleep)

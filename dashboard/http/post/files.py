@@ -116,15 +116,23 @@ class _FilesMixin:
                 out.append(rp)
         return out
 
-    def _with_attachments(self, text, paths):
-        """Prepend `@path` mention tokens (one per attachment) to the message
-        text — the TUI-native way to attach a file, delivered verbatim over the
-        existing paste_text / launch-argv transport. Paths first, then a newline,
-        then the typed text (mirrors the TUI's paste-then-type order). No text is
-        fine: the mentions alone are a valid message."""
+    def _with_attachments(self, text, paths, host=None):
+        """Prepend one MENTION token per attachment to the message text — the
+        TUI-native way to attach a file, delivered verbatim over the existing
+        paste_text / launch-argv transport. Paths first, then a newline, then the
+        typed text (mirrors the TUI's paste-then-type order). No text is fine:
+        the mentions alone are a valid message.
+
+        The mention GRAMMAR is the receiving host's (`HostControl.mention` —
+        claude_code's `@path`, which its TUI resolves and attaches). A host with
+        no such grammar returns "" and gets the BARE PATH: it is still a file the
+        model can open, where another tool's sigil would arrive as literal text
+        and mean nothing (the codex leak in the P2 bug list, item 5). `host=None`
+        keeps the historical `@path` for a caller that hasn't resolved one."""
         if not paths:
             return text
-        mentions = " ".join("@" + p for p in paths)
+        mentions = " ".join((host.mention(p) if host is not None else "@" + p)
+                            or p for p in paths)
         return mentions + ("\n" + text if text else "")
 
     def post_clipboard_files(self):

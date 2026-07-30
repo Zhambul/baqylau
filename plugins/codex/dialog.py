@@ -1,6 +1,6 @@
 # plugins/codex/dialog.py — drive codex's request_user_input dialog from the web.
 #
-# The codex twin of dashboard/askdialog.py, and the same philosophy: the dialog
+# The codex twin of plugins/claude_code/askdialog.py, and the same philosophy: the dialog
 # exists only as live TUI pixels (the pending questions are known from the
 # rollout — plugins/codex/read.pending_dialog — but there is no API to answer
 # them), so the one way to submit an answer is the dialog itself, every step
@@ -9,10 +9,12 @@
 # cursor, an `enter to submit answer` footer), so Claude's region() returns "" on
 # a codex screen and its key model does not apply.
 #
-# It lives in the PLUGIN, not beside askdialog in dashboard/, because codex's
-# `ask` HostControl gesture (plugins/codex/hostctl.py) drives it and the layering
-# rule forbids a plugin importing the dashboard — so the whole gesture, screen
-# driver included, sits behind HostControl and the dashboard only calls host.ask.
+# It lives in the PLUGIN because codex's `ask` HostControl gesture
+# (plugins/codex/hostctl.py) drives it and the layering rule forbids a plugin
+# importing the dashboard — so the whole gesture, screen driver included, sits
+# behind HostControl and the dashboard only calls host.ask. Claude Code's
+# drivers followed the same argument into ITS plugin in P2; the shared
+# skeleton they used to reach in dashboard/ moved down to core/screendrive.py.
 #
 # request_user_input is PLAN-MODE-ONLY and model-nondeterministic (the model
 # sometimes answers in prose instead of raising the tool), so this is reached

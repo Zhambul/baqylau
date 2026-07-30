@@ -21,16 +21,20 @@
 # left inert (rewind/migrate/model/effort) read False and stay greyed, the HONEST
 # answer — codex has no rewind, no migrate, an interactive `/model` PICKER (not a
 # `/model <arg>` we can drive blind), and no live `/effort` (effort is a launch-
-# time `-c` only). `send` is a generic paste, not a gesture (post_message is never
-# caps-gated), so it needs no override. Launch/resume plumbing (below) was live
-# since P6 and is NOT gesture-gated.
+# time `-c` only). `send` IS overridden (P2) even though nothing gates it: the
+# composer is always reachable, but the delivery is host-routed now, and without
+# a body the inert base would answer `unsupported` and 409 every codex message.
+# Launch/resume plumbing (below) was live since P6 and is NOT gesture-gated.
 #
 # The gesture bodies use ONLY the frontend (`fe`) + this plugin's own rollout
 # parse — never dashboard code (the layering rule forbids a plugin importing the
 # dashboard). That is WHY the codex screen driver lives at plugins/codex/dialog.py
-# rather than beside dashboard/askdialog.py: the whole gesture, screen driver
-# included, sits behind HostControl so the dashboard only ever calls
-# host.<gesture> (docs/codex.md *Codex control gestures*).
+# — the whole gesture, screen driver included, sits behind HostControl so the
+# dashboard only ever calls host.<gesture> (docs/codex.md *Codex control
+# gestures*). As of P2 Claude Code's drivers live in ITS plugin for the same
+# reason, and each gesture also writes its OWN `web-*` audit row (the handler's
+# `_host_*` shims that used to write them are gone, along with the last inline
+# Claude body they were the counterpart of) — same kinds, same fields.
 import os
 import time
 
@@ -81,6 +85,8 @@ class CodexHost(HostControl):
         — the codex-interrupt anomaly signature), REJECTED when nothing could be
         pressed."""
         rp = ctx.get("rollout") or ""
+        log, sdb = ctx.get("log") or "", ctx.get("sdb") or ""
+        verb = ctx.get("verb") or "interrupt"
         r = self._ack()          # borrow its cid; the status is corrected below
         try:
             pos = os.path.getsize(rp) if rp else -1
@@ -97,11 +103,19 @@ class CodexHost(HostControl):
             if verified:
                 break
         if ok and not verified:
-            A.error(ctx.get("log") or "", "codex interrupt (no turn_aborted)",
+            A.error(log, "codex interrupt (no turn_aborted)",
                     {"sid": ctx.get("sid"), "win": str(win), "tries": tries})
         r["status"] = ACK if verified else (INDETERMINATE if ok else REJECTED)
         r["ok"], r["verified"] = ok, verified
         r["steered"], r["tries"] = steered, tries
+        r["queued"], r["restored"] = steered, ""
+        A.state_file(log, sdb, ctx.get("action") or "web-interrupt",
+                     {"win": win, "ok": ok, "tab": ctx.get("tab") or "",
+                      "host": self.name, "status": r["status"], "cid": r["cid"],
+                      "verified": verified, "steered": steered, "tries": tries})
+        if not ok:
+            A.error(log, "dashboard %s (%s send failed)" % (verb, self.name),
+                    {"sid": ctx.get("sid"), "win": win})
         return r
 
     def _verify_abort(self, rp, pos, sleep=time.sleep):
@@ -147,14 +161,55 @@ class CodexHost(HostControl):
             return True, steered
         return False, False
 
+    def send(self, fe, win, text, ctx):
+        """Deliver a composer message into the codex window: a PLAIN bracketed
+        paste (+ the Enter kitten_send_text rides outside it), and nothing else.
+
+        Everything Claude Code's send does around the paste is deliberately
+        ABSENT here, and each absence is a declaration rather than an oversight:
+        no clipboard-image wipe (`paste_grabs_clipboard_image` is False — codex's
+        TUI does not auto-attach the board, so the ~150ms osascript round-trip
+        bought nothing and ran on every message), no Ctrl+U/Ctrl+K line kill
+        (`clear_input` is inert — codex's composer is not the same input model
+        and blind line-kill keystrokes into it are a guess), and no `tui-draft`
+        stash to consume (nothing in this plugin ever puts text in that box).
+        `send` is not caps-gated — the composer is always reachable — so this
+        override exists to make that reachability HONEST: without a body the
+        inert base would answer `unsupported` and 409 every codex message.
+
+        Writes the canonical `web-send` row (the same fields the Claude host
+        writes, so one query reads both hosts' sends) plus host/status/cid."""
+        log, sdb = ctx.get("log") or "", ctx.get("sdb") or ""
+        ok = bool(fe.paste_text(win, text))
+        r = self._ack() if ok else self._rejected()
+        r["ok"] = ok
+        A.state_file(log, sdb, ctx.get("action") or "web-send",
+                     {"win": win, "chars": len(text), "ok": ok,
+                      "tab": ctx.get("tab") or "",
+                      "clear_draft": bool(ctx.get("clear_draft")),
+                      "tui_draft": False, "draft_lines": 0,
+                      "attachments": int(ctx.get("attachments") or 0),
+                      "clip": False, "live": ctx.get("live"),
+                      "queued": bool(ctx.get("queued")),
+                      "host": self.name, "status": r.get("status"),
+                      "cid": r.get("cid")})
+        if not ok:
+            A.error(log, "dashboard message (%s send failed)" % self.name,
+                    {"sid": ctx.get("sid"), "win": win})
+        return r
+
     def compact(self, fe, win, ctx):
         """Compact the codex conversation — paste `/compact` (codex's own
         summarise command; fires Pre/PostCompact). An atomic bracketed paste +
         Enter through the frontend (fe.paste_text), the mode-proof channel the
         quick commands use; no clipboard-image guard (codex's TUI does not
-        auto-attach a clipboard image on paste, unlike Claude Code). Result
-        {status, cid, ok}."""
-        return self._paste(fe, win, "/compact", ctx, "compact")
+        auto-attach a clipboard image on paste — `paste_grabs_clipboard_image`
+        stays False, unlike Claude Code). Writes the canonical `web-command` row
+        (host/status/cid alongside cmd); no confirm menu (that is a Claude
+        prompt-cache prompt). Result {status, cid, ok}."""
+        r = self._paste(fe, win, "/compact", ctx, "compact")
+        self._cmd_row(ctx, r, win, "compact", "")
+        return r
 
     def rename(self, sid, name, ctx):
         """Rename a LIVE codex session — paste codex's own `/rename <name>` (the
@@ -166,7 +221,17 @@ class CodexHost(HostControl):
         fe, win = ctx.get("fe"), ctx.get("win")
         if not (fe and win):
             return self._rejected()
-        return self._paste(fe, win, "/rename " + name, ctx, "rename", sid=sid)
+        r = self._paste(fe, win, "/rename " + name, ctx, "rename", sid=sid)
+        log, sdb = ctx.get("log") or "", ctx.get("sdb") or ""
+        A.state_file(log, sdb, ctx.get("action") or "web-rename",
+                     {"win": win, "chars": len(name), "ok": bool(r.get("ok")),
+                      "tab": ctx.get("tab") or "", "channel": "tui",
+                      "queued": bool(ctx.get("queueing")), "host": self.name,
+                      "status": r.get("status"), "cid": r.get("cid")})
+        if not r.get("ok"):
+            A.error(log, "dashboard rename (%s send failed)" % self.name,
+                    {"sid": sid, "win": win})
+        return r
 
     def ask(self, fe, win, answers, ctx):
         """Answer codex's OPEN request_user_input dialog (plan-mode-only,
@@ -181,15 +246,22 @@ class CodexHost(HostControl):
         dialog LEFT OPEN for a retry — never Escape-closed, since codex's Esc
         aborts the turn). Result {status, cid, ok, step?, detail?}."""
         from plugins.codex import dialog
+        log, sdb = ctx.get("log") or "", ctx.get("sdb") or ""
         r = self._ack()
         r["ok"] = True
         try:
             dialog.drive(fe, win, ctx.get("questions") or [], answers or [])
         except dialog.CodexAskError as e:
-            A.error(ctx.get("log") or "", "codex answer (%s)" % e.step,
+            A.error(log, "codex answer (%s)" % e.step,
                     {"sid": ctx.get("sid"), "win": str(win), "detail": str(e)})
-            return {"status": INDETERMINATE, "cid": r["cid"], "ok": False,
-                    "step": e.step, "detail": str(e)}
+            r = {"status": INDETERMINATE, "cid": r["cid"], "ok": False,
+                 "step": e.step, "detail": str(e)}
+        A.state_file(log, sdb, ctx.get("action") or "web-answer",
+                     {"win": win, "ok": bool(r.get("ok")),
+                      "chat": bool(ctx.get("chat")), "host": self.name,
+                      "tool_use_id": ctx.get("tool_use_id") or "",
+                      "status": r.get("status"), "cid": r.get("cid"),
+                      "step": r.get("step")})
         return r
 
     def plan(self, fe, win, decision, ctx):
@@ -207,9 +279,12 @@ class CodexHost(HostControl):
         closed, since codex's Esc steps BACK a level). Result {status, cid, ok,
         step?, detail?}."""
         from plugins.codex import plandialog as PD
+        log, sdb = ctx.get("log") or "", ctx.get("sdb") or ""
         r = self._ack()
         r["ok"] = True
         decision = decision or {}
+        kind = "dismiss" if decision.get("dismiss") else "decide"
+        r["kind"] = kind
         try:
             if decision.get("dismiss"):
                 PD.dismiss(fe, win)
@@ -217,10 +292,26 @@ class CodexHost(HostControl):
                 PD.decide(fe, win, decision.get("digit"),
                           decision.get("label") or "")
         except PD.CodexPlanError as e:
-            A.error(ctx.get("log") or "", "codex plan (%s)" % e.step,
+            A.error(log, "codex plan (%s)" % e.step,
                     {"sid": ctx.get("sid"), "win": str(win), "detail": str(e)})
-            return {"status": INDETERMINATE, "cid": r["cid"], "ok": False,
-                    "step": e.step, "detail": str(e)}
+            r = {"status": INDETERMINATE, "cid": r["cid"], "ok": False,
+                 "kind": kind, "step": e.step, "detail": str(e)}
+        A.state_file(log, sdb, ctx.get("action") or "web-plan",
+                     {"win": win, "ok": bool(r.get("ok")), "kind": kind,
+                      "host": self.name, "status": r.get("status"),
+                      "label": decision.get("label") or "",
+                      "plan_id": ctx.get("tool_use_id") or ""})
+        return r
+
+    def plan_options(self, fe, win, ctx):
+        """codex's plan-decision options come from the PENDING read model, not
+        the screen: the picker is pure TUI with STATIC rows (unlike Claude's
+        dialog, whose labels vary with the session's permission mode), so the
+        rollout tail already knows them and no key or capture is needed. Rides
+        the `plan` cap."""
+        r = self._ack()
+        r["ok"] = True
+        r["options"] = list(ctx.get("options") or [])
         return r
 
     def model(self, fe, win, arg, ctx):
@@ -247,8 +338,11 @@ class CodexHost(HostControl):
 
     def _drive_model(self, fe, win, ctx, verb, model="", effort=""):
         """Shared body of model/effort: drive the /model picker (which sets both
-        axes at once), audited on failure. INDETERMINATE with the picker LEFT as-
-        is on any unverified step (codex's Esc steps BACK, so never blind-Esc)."""
+        axes at once), audited on failure, and write the canonical `web-command`
+        row. INDETERMINATE with the picker LEFT as-is on any unverified step
+        (codex's Esc steps BACK, so never blind-Esc). A picker that can't be
+        driven mid-turn is unlikely (codex refuses `/model` while a turn runs),
+        so this is never `queued` — a failure is the caller's 502."""
         from plugins.codex import modeldialog as MD
         r = self._ack()
         r["ok"] = True
@@ -257,9 +351,30 @@ class CodexHost(HostControl):
         except MD.CodexModelError as e:
             A.error(ctx.get("log") or "", "codex %s (%s)" % (verb, e.step),
                     {"sid": ctx.get("sid"), "win": str(win), "detail": str(e)})
-            return {"status": INDETERMINATE, "cid": r["cid"], "ok": False,
-                    "step": e.step, "detail": str(e)}
+            r = {"status": INDETERMINATE, "cid": r["cid"], "ok": False,
+                 "step": e.step, "detail": str(e)}
+        self._cmd_row(ctx, r, win, verb, model or effort)
         return r
+
+    def _cmd_row(self, ctx, r, win, cmd, arg):
+        """The `web-command` state_files row every quick command writes — the
+        same vocabulary the Claude host's own commands use, plus host/status/cid
+        (and `step` when a picker step is what failed). Failures also A.error."""
+        log, sdb = ctx.get("log") or "", ctx.get("sdb") or ""
+        ok = bool(r.get("ok"))
+        row = {"win": win, "cmd": cmd, "arg": arg or "", "ok": ok,
+               "tab": ctx.get("tab") or "", "host": self.name,
+               "status": r.get("status"), "cid": r.get("cid")}
+        if cmd != "compact":
+            row["step"] = r.get("step") or ""
+        A.state_file(log, sdb, ctx.get("action") or "web-command", row)
+        if not ok:
+            phrase = ("dashboard command (%s compact send failed)" % self.name
+                      if cmd == "compact" else
+                      "dashboard command (%s %s: %s)"
+                      % (self.name, cmd, r.get("step") or "failed"))
+            A.error(log, phrase, {"sid": ctx.get("sid"), "win": win,
+                                  "detail": r.get("detail") or ""})
 
     def _paste(self, fe, win, text, ctx, verb, sid=""):
         """Shared body of compact/rename: an atomic bracketed paste (+ Enter) of a
@@ -272,6 +387,47 @@ class CodexHost(HostControl):
             A.error(ctx.get("log") or "", "codex %s (send failed)" % verb,
                     {"sid": sid or ctx.get("sid"), "win": str(win)})
         return r
+
+    # --- per-host VOCABULARY --------------------------------------------------
+
+    def plan_decisions(self):
+        """codex's picker accepts a numbered row or Escape — and NOTHING else.
+        There is no free-text 'tell me what to change' row (that is Claude's
+        ExitPlanMode dialog), so `feedback` is refused with a 409 naming this
+        vocabulary rather than silently dropped: the text the user typed has
+        nowhere to go, and pretending otherwise loses it."""
+        return ("decide", "dismiss")
+
+    # ask_declines: NOT overridden — codex's request_user_input dialog has no
+    # decline row at all (its Esc ABORTS the turn, the opposite of declining), so
+    # the base's empty vocabulary is the honest answer and a `chat` flag aimed at
+    # it now 409s instead of being ignored.
+    #
+    # mention / clear_input / turn_live / rewind_modes: likewise inert. codex has
+    # no `@path` mention grammar (the caller delivers bare paths), no verified
+    # line-kill repertoire for its composer (see title_key's neighbour note
+    # below), no rewind, and its turn liveness has a BETTER source than a screen
+    # delta — the rollout's own records, which the interrupt already reads
+    # (turn_aborted). Wiring turn_live to a rollout probe is future work; None
+    # means "trust the tab", which is what codex did before.
+
+    def title_key(self, tpath):
+        """The durable rename-override key for a codex ROLLOUT — its filename
+        stem (`rollout-<ts>-<uuid>`). Same shape as Claude's transcript stem and
+        a different namespace by construction (the uuid), so the two hosts'
+        overrides cannot collide in the one prefs map."""
+        import os
+        base = os.path.basename(tpath or "")
+        return base[:-len(".jsonl")] if base.endswith(".jsonl") else ""
+
+    def lifecycle_end(self, sid, log, reason):
+        """Nothing to do: a web-closed codex tab kills the codex process, and
+        this plugin's own watcher notices its host pid is gone and runs
+        core.hostpane.host_end (pane close + state-DB park + tab clear) on its
+        own — the same teardown a terminal-side exit takes. Overridden only to
+        record that the question was asked and answered NO, since codex is
+        precisely the host with no SessionEnd hook to point at."""
+        return None
 
     # --- launch / lifecycle plumbing (NOT capability-gated) -------------------
 

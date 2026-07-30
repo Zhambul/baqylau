@@ -285,31 +285,62 @@ class _Base(BaseHTTPRequestHandler):
         return True
 
     def _gesture_host(self, sid):
-        """The session's owning HostControl for control-gesture ROUTING, or None
-        to take the byte-identical DEFAULT-host inline path. This is the P5 seam
-        the control handlers branch on: a session PROVABLY owned by a NON-default
-        host (a codex rollout) gets the host object, so the handler dispatches its
-        gesture through host.<gesture> (interrupt/compact/rename/ask); a session
-        owned by the default host (plugins.default_host) — and EVERY
-        unprovable/empty transcript path (owns_by → None) — returns None so the
-        handler's existing inline body runs UNCHANGED. That None is what keeps a
-        Claude session byte-identical: the branch is one `if host is not None:`
-        that is False for it.
+        """The session's owning HostControl — the ONE door every control gesture
+        goes through. Not a branch any more: a session PROVABLY owned by a host
+        gets that host, and an unprovable/empty transcript path (owns_by → None)
+        gets the DEFAULT host, which is exactly what "behaves as" meant when the
+        handlers still had inline bodies for it. The P2 move deleted those
+        bodies (they live in plugins/<tool>/hostctl.py now), so there is nothing
+        left to fall back TO and no `if host is not None:` anywhere.
 
-        Degrades to None (the claude path) on any resolution error, exactly as
-        _caps_guard degrades OPEN — a read hiccup must never divert a real Claude
-        session off its own control plane. The caps guard (called first by every
-        gesture handler) already 409'd a gesture this host can't drive, so this
-        only ever hands back a host for a gesture the caps say it CAN."""
+        Degrades to the default host on any resolution error, exactly as
+        _caps_guard degrades OPEN — a read hiccup must never divert a real
+        Claude session off its own control plane. Only if even THAT can't be
+        resolved (a registry with no host at all — a state no build ships) does
+        it return an inert HostControl, whose gestures all answer `unsupported`:
+        a 409 naming the capability, audited, rather than a 500.
+
+        The caps guard (called first by every gesture handler) has already 409'd
+        a gesture this host can't drive, so this normally hands back a host for a
+        gesture the caps say it CAN — the exceptions are the two cap SHARERS
+        (autoname rides `rename`, rewind_to rides `rewind`), where a host may
+        implement one and not the other and the `unsupported` result is the 409."""
+        import plugins
         try:
-            import plugins
             tpath = (API.session_row(sid) or {}).get("transcript_path") or ""
             owner = plugins.owns_by(tpath) if tpath else None
-            if not owner or owner == plugins.default_host():
-                return None
-            return plugins.host_named(owner)
+            host = plugins.host_named(owner) if owner else None
+            if host is not None:
+                return host
         except Exception:
-            return None
+            pass
+        try:
+            return (plugins.host_named(plugins.default_host())
+                    or plugins.inert_host())
+        except Exception:
+            return plugins.inert_host()
+
+    def _gesture_declined(self, res, sid, action, cap, *, extra=None):
+        """Answer a gesture the owning host DECLARED it cannot drive (its inert
+        base body returned `unsupported`) — the same 409 + `web-*` reject row
+        `_caps_guard` writes, for the cases the cap map cannot express: a cap
+        SHARER the host didn't implement (autoname under `rename`, rewind_to
+        under `rewind`). Returns True when it handled the request.
+
+        Deliberately NOT collapsed into "any rejected result": a host that TRIED
+        and failed returns `_rejected()` WITHOUT that key, and that is a 502 —
+        "your tool can't do this" and "it didn't work" are different answers and
+        the client shows them differently."""
+        if not (res or {}).get("unsupported"):
+            return False
+        row, log, sdb = self._audit_target(sid)
+        A.state_file(log, sdb, action,
+                     dict({"ok": False, "cap": cap,
+                           "why": "unsupported by this session's tool"},
+                          **(extra or {})))
+        self._json({"error": "not supported by this session's tool",
+                    "cap": cap}, 409)
+        return True
 
     # the SPA parts (app.NN-name.js, split from the former monolithic app.js) are
     # admitted by SHAPE, not a per-file whitelist entry — still no user-path

@@ -1035,9 +1035,12 @@ def test_hosts_and_host_of(tmp_path):
     # codex drives its SUPPORTED gestures: interrupt/compact/rename/ask/plan and
     # model/effort True (model/effort via codex's INTERACTIVE /model picker), the
     # rest inert (no rewind/migrate) — derived from the overridden methods, not an
-    # authored dict.
+    # authored dict. `send` reads True since P2: it is not caps-GATED (the
+    # composer is always reachable), but it is now a real gesture with a real
+    # body, and the derivation would be lying if a host with a send body read
+    # False.
     assert plugins.host_caps("codex") == {
-        "interrupt": True, "send": False, "rename": True, "rewind": False,
+        "interrupt": True, "send": True, "rename": True, "rewind": False,
         "migrate": False, "compact": True, "model": True, "effort": True,
         "ask": True, "plan": True}
     assert set(plugins.host_caps("codex")) == set(GESTURES)
@@ -1188,10 +1191,11 @@ DASHBOARD_PLUGIN_REACHES = {
     # by the OWNING host: HostControl.model_short/model_default_effort resolved
     # through plugins.host_of on the row's own transcript, and `cost` folded into
     # the agent_usage provider's return.
-    # The take-back stash's writer half — the styleguide's own row says "the
-    # dashboard's post_interrupt supplies the observation" while transcript.py
-    # owns both halves of the stash.
-    "dashboard/http/post/interrupt.py": {"plugins.claude_code.transcript"},
+    # (P2) dashboard/http/post/interrupt.py is GONE from this list. It reached
+    # `plugins.claude_code.transcript` for the queue-drain check and the
+    # take-back flag — both inside the interrupt BODY, which moved into
+    # ClaudeCodeHost.interrupt with the rest of the gesture. The endpoint now
+    # calls host.interrupt(...) and knows neither.
 }
 
 

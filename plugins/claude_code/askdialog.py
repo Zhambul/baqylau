@@ -1,5 +1,5 @@
-# dashboard/askdialog.py — drive Claude Code's AskUserQuestion dialog from the
-# web (docs/dashboard.md, *Web ask*). Sibling of rewindmenu.py and the same
+# plugins/claude_code/askdialog.py — drive Claude Code's AskUserQuestion dialog
+# from the web (docs/dashboard.md, *Web ask*). Sibling of rewindmenu.py and the same
 # philosophy: the dialog exists only as live TUI pixels (the pending questions
 # are known from the PreToolUse stash — plugins/claude_code/ask_fmt.py — but
 # there is no API to answer them), so the one way to submit an answer is the

@@ -1,4 +1,4 @@
-# dashboard/plandialog.py — drive Claude Code's ExitPlanMode plan-approval
+# plugins/claude_code/plandialog.py — drive Claude Code's ExitPlanMode plan-approval
 # dialog from the web (docs/dashboard.md, *Web plan mode*). Third sibling of
 # rewindmenu.py / askdialog.py: the pending plan is known from the PreToolUse
 # stash (plugins/claude_code/ask_fmt.py, kv `plan-pending`), but the dialog's

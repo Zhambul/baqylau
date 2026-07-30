@@ -1,4 +1,4 @@
-# dashboard/confirmdialog.py — auto-answer the switch-confirm menu that
+# plugins/claude_code/confirmdialog.py — auto-answer the switch-confirm menu that
 # /model and /effort can open (docs/dashboard.md, *Web quick commands*).
 # Sibling of rewindmenu.py/askdialog.py in philosophy — every key press is
 # preceded by READING THE SCREEN back — but deliberately not unified with

@@ -1,13 +1,14 @@
-# dashboard/http/post/dialogs.py — answering the TUI's own MODAL dialogs from
-# the web: AskUserQuestion (the ask card) and ExitPlanMode (the plan card). Both
-# match a pending kv stash before a single key is pressed, then drive the real
-# on-screen dialog through dashboard/askdialog.py / plandialog.py.
-from functools import partial
-
+# dashboard/http/post/dialogs.py — answering the host's own MODAL dialogs from
+# the web: the question dialog (the ask card) and the plan dialog (the plan
+# card). Both match a pending stash before a single key is pressed, then hand
+# the decision to the session's OWNING HOST, whose gesture drives the real
+# on-screen dialog (plugins/claude_code/askdialog.py + plandialog.py for Claude
+# Code; plugins/codex/dialog.py + plandialog.py for codex) and writes the
+# `web-answer`/`web-plan` row. The DECLINE vocabulary is the host's too: an
+# unknown word is a 409 naming what that host accepts, never a flag dropped on
+# the floor.
 from core import state as ST
 from core.noaudit import load_audit
-from dashboard import (askdialog, plandialog)
-from core.screendrive import clip_screen
 from dashboard.control import launch
 from dashboard.read.mirror import (drop_stash, heal_stash)
 from dashboard.read.session import (ask_pending, plan_pending)
@@ -107,12 +108,14 @@ class _DialogMixin:
         with screen-verified key events (dashboard/askdialog.drive).
 
         Body: `tool_use_id` — must match the `ask-pending` stash (a stale
-        card is refused before any key is pressed); either `chat: true` (the
-        dialog's own "Chat about this" — declines + invites discussion; the
-        page then focuses its composer) or `answers` — a list aligned with
-        the stash's questions: {"selected": [labels…], "other": "text"} per
-        question (multiSelect may combine both; single-select uses one or
-        the other).
+        card is refused before any key is pressed); either `chat: true` (a
+        DECLINE — Claude Code's own "Chat about this" row, which declines +
+        invites discussion, the page then focusing its composer; 409 for a host
+        whose `ask_declines()` has no such word, since a decline that cannot be
+        delivered must not be silently answered instead) or `answers` — a list
+        aligned with the stash's questions: {"selected": [labels…], "other":
+        "text"} per question (multiSelect may combine both; single-select uses
+        one or the other).
 
         409 on a missing/expired stash, a stash/window mismatch, or any
         dialog step that didn't verify (AskError — the dialog is left OPEN,
@@ -133,6 +136,16 @@ class _DialogMixin:
         chat = bool(body.get("chat"))
         answers = body.get("answers")
         log, sdb = self._audit_target(sid)[1:]
+        host = self._gesture_host(sid)
+        # the DECLINE vocabulary is the host's own (Claude Code: "chat"). A word
+        # this host has no row for is refused, naming what it does accept — the
+        # codex branch used to drop the flag and ANSWER the question instead.
+        if chat and "chat" not in host.ask_declines():
+            return self._reject_input(
+                "web-answer", "decline unsupported",
+                "this session's tool has no decline for a question "
+                "(accepts: %s)" % _vocab(host.ask_declines()),
+                {"chat": True}, code=409, sid=sid)
         # the stash match + the answer-count 400 must BOTH fire before the
         # terminal checks below — no key may be pressed for a stale card
         pending, questions = self._ask_stash(sid, body, "web-answer",
@@ -150,30 +163,27 @@ class _DialogMixin:
             A.state_file(log, sdb, "web-answer",
                          {"win": "", "ok": False, "chat": chat})
             return self._json({"error": "session has no live window"}, 409)
-        # NON-claude host (codex) answers its OWN request_user_input dialog through
-        # its HostControl.ask gesture (codex's dialog geometry differs — Claude's
-        # askdialog.region() returns "" on it). None for a claude_code / unprovable
-        # session, so the byte-identical inline askdialog path below runs unchanged.
-        host = self._gesture_host(sid)
-        if host is not None:
-            return self._host_answer(host, sid, questions, answers or [], chat,
-                                     log, sdb, fe, win, pending)
-        try:
-            askdialog.drive(fe, win, questions, answers or [], chat=chat)
-        except askdialog.AskError as e:
-            ctx = {"sid": sid, "win": win, "chat": chat, "detail": str(e)}
-            if e.screen is not None:      # the pixels the failing step saw
-                ctx["screen"] = clip_screen(e.screen)
-            A.error(log, "dashboard answer (%s)" % e.step, ctx)
-            A.state_file(log, sdb, "web-answer",
-                         {"win": win, "ok": False, "chat": chat,
-                          "step": e.step,
-                          "tool_use_id": pending.get("tool_use_id") or ""})
-            heal_stash(sid, log, sdb, "ask-pending", e.step)
-            return self._json({"error": str(e), "step": e.step}, 409)
-        A.state_file(log, sdb, "web-answer",
-                     {"win": win, "ok": True, "chat": chat,
-                      "tool_use_id": pending.get("tool_use_id") or ""})
+        # The dialog itself is the host's: each drives its OWN geometry
+        # (Claude Code's ☐/☒ chip bar + numbered rows; codex's `Question N/M` +
+        # `›` cursor — Claude's region() returns "" on a codex screen), leaves an
+        # unverified dialog OPEN rather than Escape-closing it, and writes the
+        # `web-answer` row.
+        tid = pending.get("tool_use_id") or ""
+        res = host.ask(fe, win, answers or [], {
+            "sid": sid, "log": log, "sdb": sdb, "action": "web-answer",
+            "verb": "answer", "chat": chat, "questions": questions,
+            "tool_use_id": tid})
+        if self._gesture_declined(res, sid, "web-answer", "ask",
+                                  extra={"win": win, "chat": chat}):
+            return
+        if not res.get("ok"):
+            # a kv the driver PROVED stale self-heals (the dialog resolved in
+            # the terminal); a host whose pending is derived read-side from its
+            # own transcript has no kv to heal and says so with no `step` of
+            # that kind — heal_stash is a no-op for a step it doesn't know.
+            heal_stash(sid, log, sdb, "ask-pending", res.get("step") or "")
+            return self._json({"error": res.get("detail") or "answer failed",
+                               "step": res.get("step") or "drive"}, 409)
         # "Chat about this" DECLINES the questions, and a decline fires no hook —
         # the plan card's bug in the other dialog (see post_plan_decision), and
         # sharper here, because this path's whole purpose is to hand you the
@@ -198,42 +208,10 @@ class _DialogMixin:
         msg = body.get("message")
         resp = {"ok": True, "chat": chat}
         if chat and isinstance(msg, str) and msg.strip():
-            clip = launch.clear_clipboard_image()      # clipboard-image guard, as post_message
-            sent = bool(fe.paste_text(win, msg))
-            A.state_file(log, sdb, "web-send",
-                         {"win": win, "chars": len(msg), "ok": sent,
-                          "via": "ask-chat", "clip": clip})
-            if not sent:
-                A.error(log, "dashboard answer-chat message (send failed)",
-                        {"sid": sid, "win": win})
-            resp["message_sent"] = sent
+            out = host.deliver(fe, win, msg, {
+                "sid": sid, "log": log, "sdb": sdb, "via": "ask-chat"})
+            resp["message_sent"] = bool(out.get("ok"))
         return self._json(resp)
-
-    def _host_answer(self, host, sid, questions, answers, chat, log, sdb, fe,
-                     win, pending):
-        """Answer a NON-claude host's dialog (codex request_user_input) through
-        its HostControl.ask gesture, which navigates codex's OWN dialog geometry
-        (plugins/codex/dialog.py). `chat` (Claude's 'Chat about this' decline) has
-        no codex analog, so it is ignored — codex answers by option selection /
-        notes. The gesture catches its own driver errors, A.errors an INDETERMINATE
-        degrade with the dialog left open, and hands back {status, ok, step?}; this
-        writes the canonical `web-answer` row (host/status/cid alongside) and the
-        reply. No heal_stash: codex's pending is derived read-side from the rollout,
-        not a kv to self-heal (the next payload re-reads the tail)."""
-        ctx = {"sid": sid, "log": log, "sdb": sdb, "chat": chat,
-               "questions": questions,
-               "tool_use_id": pending.get("tool_use_id") or ""}
-        res = host.ask(fe, win, answers, ctx)
-        ok = bool(res.get("ok"))
-        A.state_file(log, sdb, "web-answer",
-                     {"win": win, "ok": ok, "chat": chat, "host": host.name,
-                      "tool_use_id": pending.get("tool_use_id") or "",
-                      "status": res.get("status"), "cid": res.get("cid"),
-                      "step": res.get("step")})
-        if not ok:
-            return self._json({"error": res.get("detail") or "answer failed",
-                               "step": res.get("step") or "drive"}, 409)
-        return self._json({"ok": True, "chat": chat})
 
     def _plan_guard(self, sid):
         """The shared head of the two plan endpoints: guard the POST, match
@@ -281,29 +259,31 @@ class _DialogMixin:
         body, pending, fe, win, log, sdb = self._plan_guard(sid)
         if body is None:
             return
-        # a NON-claude host (codex) carries its decision options in the pending
-        # read model (they're static — the picker is pure TUI, not a permission-
-        # varying dialog), so no screen read is needed. None for claude_code, so
-        # the byte-identical plandialog.options path below runs unchanged.
-        if self._gesture_host(sid) is not None:
-            return self._json({"ok": True, "options": pending.get("options") or []})
-        try:
-            opts = plandialog.options(fe, win)
-        except plandialog.PlanError as e:
-            heal_stash(sid, log, sdb, "plan-pending", e.step)
-            return self._json({"error": str(e), "step": e.step}, 409)
-        return self._json({"ok": True, "options": opts})
+        # WHERE the options come from is the host's call: Claude Code reads them
+        # off the live screen (its labels vary with the session's permission
+        # mode), codex hands back the static rows its pending already carries.
+        res = self._gesture_host(sid).plan_options(fe, win, {
+            "sid": sid, "log": log, "sdb": sdb,
+            "options": pending.get("options") or []})
+        if self._gesture_declined(res, sid, "web-plan", "plan"):
+            return
+        if not res.get("ok"):
+            heal_stash(sid, log, sdb, "plan-pending", res.get("step") or "")
+            return self._json({"error": res.get("detail") or "no options",
+                               "step": res.get("step") or ""}, 409)
+        return self._json({"ok": True, "options": res.get("options") or []})
 
     def post_plan_decision(self, sid):
         """Decide the OPEN plan dialog from the web (docs/dashboard.md, *Web
         plan mode*): drives the TUI's own dialog via dashboard/plandialog.
 
-        Body (one of, after `tool_use_id` matching the `plan-pending` stash):
-        `digit` + `label` — press that decision row, verified against the
-        live screen (label drift = 409, nothing pressed); `feedback` — the
-        "Tell Claude what to change" row: focus, type, Enter (rejects with
-        feedback; newlines collapse — single-line editor); `dismiss: true` —
-        Escape, the TUI's own reject-and-keep-planning.
+        Body (one of the owning host's `plan_decisions()`, after `tool_use_id`
+        matching the `plan-pending` stash): `digit` + `label` — press that
+        decision row, verified against the live screen (label drift = 409,
+        nothing pressed); `feedback` — the free-text "tell it what to change"
+        row (Claude Code only; a host without one 409s naming its vocabulary
+        rather than swallowing the text); `dismiss: true` — Escape, the TUI's
+        own reject-and-keep-planning.
 
         409 on stash mismatch or any unverified step (PlanError — the dialog
         is left OPEN: an Escape bail would REJECT a plan the user may still
@@ -316,45 +296,43 @@ class _DialogMixin:
         body, pending, fe, win, log, sdb = self._plan_guard(sid)
         if body is None:
             return
-        # a NON-claude host (codex) decides its OWN plan picker through its
-        # HostControl.plan gesture (codex's picker geometry differs — Claude's
-        # plandialog keys on ExitPlanMode's dialog). None for claude_code / an
-        # unprovable path, so the byte-identical inline path below runs unchanged.
         host = self._gesture_host(sid)
-        if host is not None:
-            return self._host_plan(host, sid, body, pending, log, sdb, fe, win)
-        tid = pending.get("tool_use_id") or ""
-        # one driver call per body shape, bound to a zero-arg callable so the
-        # single try/except below owns the PlanError handling for all three
+        vocab = host.plan_decisions()
+        tid = pending.get("tool_use_id") or pending.get("plan_id") or ""
+        # the body's SHAPE names the decision; the host's vocabulary says
+        # whether it has such a row. An unknown shape is the old 400 ("no
+        # action"); a KNOWN shape this host doesn't offer is a 409 naming the
+        # ones it does — codex's picker has no free-text row, and swallowing the
+        # feedback would lose what the user typed.
         if body.get("dismiss"):
-            kind, run = "dismiss", partial(plandialog.dismiss, fe, win)
+            kind, decision = "dismiss", {"dismiss": True}
         elif isinstance(body.get("feedback"), str) \
                 and body["feedback"].strip():
-            kind = "feedback"
-            run = partial(plandialog.feedback, fe, win, body["feedback"])
+            kind, decision = "feedback", {"feedback": body["feedback"]}
         elif body.get("digit") and isinstance(body.get("label"), str):
             kind = "decide"
-            run = partial(plandialog.decide, fe, win, str(body["digit"]),
-                          body["label"])
+            decision = {"digit": str(body["digit"]), "label": body["label"]}
         else:
             return self._reject_input(
-                "web-plan", "no action",
-                "need digit+label, feedback, or dismiss",
+                "web-plan", "no action", "need " + _vocab_help(vocab),
                 {"keys": sorted(body)}, log=log, path=sdb)
-        try:
-            run()
-        except plandialog.PlanError as e:
-            A.error(log, "dashboard plan (%s)" % e.step,
-                    {"sid": sid, "win": win, "kind": kind,
-                     "detail": str(e)})
-            A.state_file(log, sdb, "web-plan",
-                         {"win": win, "ok": False, "kind": kind,
-                          "step": e.step, "tool_use_id": tid})
-            heal_stash(sid, log, sdb, "plan-pending", e.step)
-            return self._json({"error": str(e), "step": e.step}, 409)
-        A.state_file(log, sdb, "web-plan",
-                     {"win": win, "ok": True, "kind": kind,
-                      "label": body.get("label") or "", "tool_use_id": tid})
+        if kind not in vocab:
+            return self._reject_input(
+                "web-plan", "%s unsupported" % kind,
+                "this session's tool has no %s for a plan (needs %s)"
+                % (kind, _vocab_help(vocab)),
+                {"kind": kind}, code=409, log=log, path=sdb)
+        res = host.plan(fe, win, decision, {
+            "sid": sid, "log": log, "sdb": sdb, "action": "web-plan",
+            "verb": "plan", "tool_use_id": tid})
+        if self._gesture_declined(res, sid, "web-plan", "plan",
+                                  extra={"win": win, "kind": kind}):
+            return
+        if not res.get("ok"):
+            heal_stash(sid, log, sdb, "plan-pending", res.get("step") or "")
+            return self._json({"error": res.get("detail")
+                               or "plan decision failed",
+                               "step": res.get("step") or ""}, 409)
         # A DECLINE has no closing hook and sends no message, so NOTHING else
         # drops the stash until the next turn boundary — which after a decline is
         # however long the model's continuation runs, or NEVER if you interrupt
@@ -374,34 +352,26 @@ class _DialogMixin:
             drop_stash(sid, log, sdb, "plan-pending", "web decline (%s)" % kind)
         return self._json({"ok": True, "kind": kind})
 
-    def _host_plan(self, host, sid, body, pending, log, sdb, fe, win):
-        """Decide a NON-claude host's plan picker (codex) through HostControl.plan.
-        Body shapes: {dismiss:true} → keep planning; {digit, label} → approve
-        that decision row. codex's picker has NO free-text 'feedback' row (the
-        card hides that box off-Claude), so only those two arrive. The gesture
-        catches its own driver errors, returns {status, ok, step?}, and this
-        writes the canonical `web-plan` state_files row (host/status/plan_id
-        alongside) + the reply. No heal_stash: codex's pending is derived
-        read-side from the rollout, not a kv to self-heal (the next payload
-        re-reads the tail)."""
-        pid = pending.get("plan_id") or pending.get("tool_use_id") or ""
-        if body.get("dismiss"):
-            kind, decision = "dismiss", {"dismiss": True}
-        elif isinstance(body.get("label"), str) and body["label"].strip():
-            kind = "decide"
-            decision = {"digit": body.get("digit"), "label": body["label"]}
-        else:
-            return self._reject_input(
-                "web-plan", "no action", "need digit+label or dismiss",
-                {"keys": sorted(body)}, log=log, path=sdb)
-        res = host.plan(fe, win, decision, {"sid": sid, "log": log, "sdb": sdb})
-        ok = bool(res.get("ok"))
-        A.state_file(log, sdb, "web-plan",
-                     {"win": win, "ok": ok, "kind": kind, "host": host.name,
-                      "status": res.get("status"),
-                      "label": body.get("label") or "", "plan_id": pid})
-        if not ok:
-            return self._json({"error": res.get("detail")
-                               or "plan decision failed",
-                               "step": res.get("step") or ""}, 409)
-        return self._json({"ok": True, "kind": kind})
+
+_DECISION_WORDS = {"decide": "digit+label", "feedback": "feedback",
+                   "dismiss": "dismiss"}
+
+
+def _vocab(words):
+    """A host's vocabulary as prose for an error message — "none" for a host
+    that has no word at all, which is the whole point of naming it."""
+    return ", ".join(words) if words else "none"
+
+
+def _vocab_help(words):
+    """The "need …" half of a plan-decision 400/409, built from the host's OWN
+    `plan_decisions()` in its declared order — so the message names what THIS
+    tool accepts instead of a fixed list that is right for one of them."""
+    parts = [_DECISION_WORDS.get(w, w) for w in words]
+    if not parts:
+        return "a decision this tool supports"
+    if len(parts) == 1:
+        return parts[0]
+    if len(parts) == 2:
+        return "%s or %s" % (parts[0], parts[1])
+    return "%s, or %s" % (", ".join(parts[:-1]), parts[-1])

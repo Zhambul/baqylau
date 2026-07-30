@@ -47,12 +47,16 @@ def session_kv(sid, key, sdb=None):
 
 
 def _rename_override(tpath):
-    """The durable web-rename override for a transcript (prefs `renamed-title`,
-    keyed by the .jsonl stem), or '' when absent / not a session transcript."""
-    base = os.path.basename(tpath or "")
-    if not base.endswith(".jsonl"):
-        return ""
-    return prefs.renamed_title(base[:-len(".jsonl")])
+    """The durable web-rename override for a transcript (prefs `renamed-title`),
+    or '' when absent / not one of the owning host's transcripts.
+
+    The KEY comes from that host (`HostControl.title_key`) — the same derivation
+    the parked rename's WRITE uses, so the two halves cannot drift and neither
+    tier spells one host's filename convention. A host that declares no key has
+    no override, which reads the same as "never renamed"."""
+    host = plugins.host_of(tpath or "")
+    key = host.title_key(tpath) if host is not None else ""
+    return prefs.renamed_title(key) if key else ""
 
 
 def session_title(tpath):

@@ -256,6 +256,17 @@ def host_of(path):
     return host_named(owns_by(path))
 
 
+def inert_host():
+    """The interface's OWN inert host — a HostControl whose every gesture answers
+    `unsupported`. The registry-root door for the one caller that needs a host
+    object when the registry could not name one (the dashboard's `_gesture_host`
+    last-resort, so a handler that has already audited its intent gets an audited
+    409 rather than an AttributeError 500). Not a registered plugin and never a
+    default: it is the honest "no host at all"."""
+    from plugins.host import HostControl
+    return HostControl()
+
+
 def host_caps(name):
     """The DERIVED capability map {gesture: bool} of the plugin host named
     `name`, or {} when it has none (an unknown tool). The registry-root door

@@ -999,7 +999,7 @@ def test_a_look_HOLDS_an_asking_alert_instead_of_killing_it(monkeypatch):
     n._telegram = lambda entry, reason=None: sent.append(reason)
     monkeypatch.setattr(n, "_watching", lambda w, s, tree=None: here["v"])
     scrapes = []
-    monkeypatch.setattr(n, "_dialog_region", lambda w: scrapes.append(w))
+    monkeypatch.setattr(n, "_dialog_region", lambda s, w: scrapes.append(w))
     n.scan()                                  # baseline
     cur["states"] = {win: asking}
     n.scan()                                  # you're on it → held, not sent
@@ -1032,8 +1032,8 @@ def test_a_hold_that_ended_restores_the_terminal_scrapes(monkeypatch):
     here = {"v": "tab-focused"}
     monkeypatch.setattr(n, "_watching", lambda w, s, tree=None: here["v"])
     scrapes = []
-    monkeypatch.setattr(n, "_dialog_region", lambda w: scrapes.append(w))
-    monkeypatch.setattr(n, "_input_typed", lambda w: scrapes.append(w))
+    monkeypatch.setattr(n, "_dialog_region", lambda s, w: scrapes.append(w))
+    monkeypatch.setattr(n, "_input_typed", lambda s, w: scrapes.append(w))
     states = {"7": "working"}
     monkeypatch.setattr(DS.API, "tab_states", lambda: dict(states))
     n.scan()                                  # baseline

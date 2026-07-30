@@ -11,7 +11,7 @@ import time
 import plugins
 from core import sessionapi as API
 from core import tabs
-from dashboard import config, ext, opshtml, prefs, suggestion
+from dashboard import config, ext, opshtml, prefs
 from dashboard.control import launch
 from dashboard.read.meta import (canon_cwd, cmd_names, git_info, session_ctx,
                                  session_fallback, session_goal, session_kv,
@@ -557,6 +557,15 @@ def composer_draft(sid):
 SUGGEST_TABS = (tabs.AWAITING_RESPONSE, tabs.IDLE)
 
 
+def _owning_host(tpath):
+    """The HostControl that owns `tpath`, or the DEFAULT host when nothing does
+    — the read-side twin of the control plane's `_gesture_host`, and the same
+    fail-open rule: an unprovable path BEHAVES AS the default host, which is
+    what keeps a daemon-origin Claude session (no transcript yet) working."""
+    return (plugins.host_of(tpath)
+            or plugins.host_named(plugins.default_host()))
+
+
 def input_box(sid):
     """A LIVE session's input box, read straight off the TUI screen (no hook
     fires for either half): (ghost, typed) — the faint pre-filled 'suggested
@@ -568,21 +577,24 @@ def input_box(sid):
     resolves the authoritative live window (the memoized claude_session=<sid>
     map, never a reused start-time id) and probes it ONCE for both.
 
-    HOST-GATED: only the DEFAULT host has this faint-SGR ghost-suggestion
-    geometry — a codex host's screen returns garbage through the Claude scrape
-    (verified), so a session owned by another tool gets NO probe. session_caps
-    keeps the default host for an unprovable/empty path, so a legitimate
-    daemon-origin Claude session (scrubbed env, no transcript yet) is unaffected."""
-    host, _ = session_caps((API.session_row(sid) or {}).get("transcript_path") or "")
-    if host != plugins.default_host():
-        return None, None
+    HOST-OWNED: the faint-SGR ghost-suggestion geometry belongs to ONE TUI —
+    a codex host's screen returns garbage through the Claude scrape (verified) —
+    so the probe is the owning host's own `input_box`, whose inert base returns
+    (None, None). That is the whole gate: a tool that cannot be read this way
+    declines by not implementing it, instead of this tier comparing host names.
+    An unprovable/empty path resolves to the default host, so a legitimate
+    daemon-origin Claude session (scrubbed env, no transcript yet) is
+    unaffected."""
+    host = _owning_host((API.session_row(sid) or {}).get("transcript_path") or "")
+    if not host.implements("input_box"):
+        return None, None      # …and pay for NO frontend/window resolution
     fe = launch.frontend()
     if fe is None:
         return None, None
     win = (launch.live_windows() or {}).get(sid)
     if not win:
         return None, None
-    return suggestion.probe_box(fe, win, sid)
+    return host.input_box(fe, win, {"sid": sid})
 
 
 def _delivered_prompts(sid):

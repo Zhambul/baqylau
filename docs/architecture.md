@@ -298,10 +298,45 @@ every control button on them, client-side (`capOk` greys it) and server-side
 (`http/base._caps_guard` 409s it) — so a session owned by a tool that leaves a
 gesture inert degrades cleanly (the button greys, the POST refuses) rather than
 firing a command the tool ignores. claude_code drives every gesture, so its caps
-are all-True and the gate is a no-op for a Claude session (byte-identical). In
-P1a the gestures are DECLARED and gated but the dashboard's POST handlers keep
-their existing bodies; a later phase routes both claude_code and codex through
-the gestures themselves.
+are all-True and the gate is a no-op for a Claude session.
+
+**Every host's POST handler dispatches through those gestures** (as of P2). A
+control handler is guards + `host.<gesture>(...)` + the HTTP mapping; there is no
+inline body for any host left in the dashboard tier. Three things came with that:
+
+- Four **cap SHARERS** — real gestures that ride another's cap because a cap must
+  map to exactly one method or the derivation stops being the truth: `autoname`
+  (under `rename`), `rewind_to` (under `rewind`), `plan_options` (under `plan`),
+  `deliver` (under `ask`). A host may implement one half and not the other, and
+  the inert base's `unsupported` RESULT is what turns that into a 409 naming the
+  capability — distinct from a `_rejected()` result, which means "tried and
+  failed" and is a 502.
+- Per-host **request VOCABULARIES** the dashboard validates against instead of
+  spelling: `ask_declines()` / `plan_decisions()` / `rewind_modes()` /
+  `mention(path)` / `title_key(tpath)` / `paste_grabs_clipboard_image` /
+  `clear_input` / `turn_live` — plus the read-only screen probes `input_box` /
+  `ask_region` / `typed_input`, whose inert defaults are what make "no probe for
+  a tool we cannot read" the default rather than a host-name check in the read
+  model.
+- Each host's **screen drivers moved into its own package** (see below), which is
+  what made the routing possible at all.
+
+**A host's SCREEN DRIVERS live in its plugin.** `plugins/<tool>/` holds
+everything that KNOWS one agent tool — including the code that drives its TUI.
+Claude Code's five drivers (`askdialog.py`, `plandialog.py`, `rewindmenu.py`,
+`confirmdialog.py`, `suggestion.py`) sit in `plugins/claude_code/` beside the
+codex drivers that already worked this way (`plugins/codex/dialog.py` &
+siblings), because the dashboard reaches a host ONLY through `HostControl`: the
+whole gesture, screen driver included, sits behind `host.<gesture>` so the
+consumer tier never imports a driver. Two pieces they share are tool-agnostic and
+live in `core/`: `core/screendrive.py` (the screen re-read poll loop +
+`StepError`, frontend-INJECTED like `core/hostpane.py` and `core/tabpaint.py`)
+and `core/clipimg.py` (the macOS clipboard IMAGE probe/wipe — the MECHANISM is
+OS-level, the POLICY is the host's `paste_grabs_clipboard_image` declaration).
+The dependency rule is what forced both moves and is enforced BOTH ways: no
+plugin module may import `dashboard/` (`tests/test_l1i_host_contract.py` walks
+every plugin's imports), and the dashboard may reach into `plugins/<tool>/` only
+through the declared `DASHBOARD_PLUGIN_REACHES` list.
 
 **Adding support for another agent tool** = a new `plugins/<tool>/` directory
 implementing whichever hooks it needs (`on_session_start` for a secondary

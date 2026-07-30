@@ -1,0 +1,72 @@
+# plugins/claude_code/tui.py — how text reaches Claude Code's `❯` input box.
+#
+# The ONE delivery channel every gesture that puts a `/…` SLASH COMMAND in front
+# of Claude Code goes through (the compact / model / effort quick commands, a
+# live `/rename <name>`, the argless auto-rename, `/rewind` — including the one
+# rewindmenu.drive types itself). It lives with the host that owns the box: it
+# encodes two facts about Claude Code's TUI and nothing else's, and a plugin may
+# not import the dashboard, where it used to sit (dashboard/control/launch.
+# type_command, moved here byte-identically when the gestures did).
+import time
+
+from core import clipimg
+
+# after the line-kill that clears whatever the box held, settle before pasting —
+# a paste into a just-cleared input drops leading bytes (measured; the mangle).
+CLEAR_GAP_S = 0.15
+CLEAR_LINES_MAX = 50    # ceiling on the per-line kill loop: a corrupt/huge
+#                         stash must not become an unbounded keystroke storm.
+
+
+def type_command(fe, win, text):
+    """Put a SLASH COMMAND into a session's input box and submit it. Returns
+    (ok, cleared_clipboard_image).
+
+    THE one way to do that — raw keystrokes are NOT SAFE in that box. With
+    `editorMode: vim` the input is MODAL, and anything that pressed Escape first
+    (the interrupt presses up to `INTERRUPT_TRIES`) leaves it in NORMAL mode,
+    where the characters are vim COMMANDS rather than text: `/` opens reverse
+    history search, and Claude Code's own hint spells out the workaround —
+    *"press Esc then i then / to open the command menu instead"*. Measured
+    2026-07-25: a web rewind ~14s after a web interrupt typed `/rewind` into a
+    NORMAL-mode box, the checkpoint menu never opened, and the tail of the
+    keystrokes was submitted into the conversation as the message `nd` (the
+    first `web-rewind-to` `step: "open"` failure in the audit; the identical `nd`
+    artifact recorded earlier in the Esc-gesture comment was blamed on a racing
+    Escape, which now looks like the wrong diagnosis).
+
+    A BRACKETED PASTE is mode-proof — Claude Code takes it as content, never as
+    keystrokes — and it is already how the quick commands (`/compact`,
+    `/model`, `/effort`) reach the TUI, which is why those kept working where
+    the typed `/rewind` did not. The Enter rides outside the paste
+    (kitten_send_text), so it still submits.
+
+    The clipboard-image guard comes with it: a bracketed paste makes Claude Code
+    attach whatever IMAGE is on the board (docs/dashboard.md *Clipboard-image
+    guard*), so no caller may paste without it — folding the two together here is
+    the point of the single owner. THIS host declares
+    `paste_grabs_clipboard_image`; a host that doesn't pays no osascript."""
+    clip = clipimg.clear_image()
+    return bool(fe.paste_text(win, text)), clip
+
+
+def clear_input(fe, win, prev_text="", sleep=time.sleep):
+    """Kill whatever is in the input box, so the paste that follows REPLACES it
+    instead of gluing onto it. Returns the number of lines killed.
+
+    Ctrl+U (to line start) + Ctrl+K (to line end) clear ONE line, and the text
+    the web left there can be MULTI-LINE (session 8b9f870b, 2026-07-29: a 3-line
+    take-back came back, only its last line died, and the resend glued onto the
+    two survivors) — so `prev_text` (the stash, when we have it) drives the loop:
+    one kill per newline, with a backspace between kills consuming the newline to
+    hop up a line. The cursor sits on the LAST line after a restore. With no
+    stash the historical single-line kill stands, and the cursor position within
+    a line never mattered."""
+    lines = prev_text.count("\n") + 1 if prev_text else 1
+    for i in range(min(lines, CLEAR_LINES_MAX)):
+        if i:
+            fe.send_key(win, "backspace")
+        fe.send_key(win, "ctrl+u")
+        fe.send_key(win, "ctrl+k")
+    sleep(CLEAR_GAP_S)
+    return lines

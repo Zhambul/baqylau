@@ -85,15 +85,18 @@ def test_codex_host_caps_reflect_wired_gestures(tmp_path):
     interrupt/compact/rename/ask read True (the dashboard un-greys those buttons),
     plus `plan` (plan-mode DECISION picker) and `model`/`effort` (the interactive
     /model picker — plugins/codex/modeldialog.py), while the gestures codex cannot
-    drive — rewind/migrate — stay inert and read False (greyed). `send` is not a
-    gesture (never caps-gated). The caps are DERIVED from which methods CodexHost
+    drive — rewind/migrate — stay inert and read False (greyed). `send` reads True
+    too, and is the one cap nothing GATES: the composer is always reachable, but
+    P2 made the delivery itself host-routed (a plain bracketed paste here, with no
+    clipboard-image wipe and no line-kill), so the host has a real body and the
+    derivation reports it. The caps are DERIVED from which methods CodexHost
     overrides, not an authored dict (plugins.host), so this pins the derivation
     end-to-end."""
     import plugins
     h = plugins.host_named("codex")
     assert h is not None and h.name == "codex" and h.launchable is True
     assert h.label == "Codex"
-    assert h.caps() == {"interrupt": True, "send": False, "rename": True,
+    assert h.caps() == {"interrupt": True, "send": True, "rename": True,
                         "rewind": False, "migrate": False, "compact": True,
                         "model": True, "effort": True, "ask": True,
                         "plan": True}

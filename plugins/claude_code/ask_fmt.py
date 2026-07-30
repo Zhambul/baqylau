@@ -12,7 +12,7 @@
 # stashes the pending dialog in the state DB kv (`ask-pending`: questions +
 # tool_use_id; `plan-pending`: plan markdown + planFilePath + tool_use_id),
 # the session SSE surfaces it to the page, and the /answer / /plan-decision
-# endpoints drive the real dialog (dashboard/askdialog.py, plandialog.py)
+# endpoints drive the real dialog (plugins/claude_code/askdialog.py, plandialog.py)
 # with the stash as their map.
 #
 # Clearing has NO closing hook in the decline paths (measured 2026-07-18):

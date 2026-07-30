@@ -15,7 +15,7 @@
 // TUI's one-keystroke feel), and "chat about this" (the dialog's own
 // decline-and-discuss).
 // Answers POST /answer, where the server drives the REAL dialog with
-// screen-verified key events (dashboard/askdialog.py). The card clears via
+// screen-verified key events (plugins/claude_code/askdialog.py). The card clears via
 // the SSE `ask` event when the answer's PostToolUse drops the stash.
 
 function buildAskCard() {
@@ -351,7 +351,7 @@ function submitAsk(ask, answers, chat) {
 // their labels vary with the session's permission mode), a feedback box
 // mirrors the dialog's "Tell Claude what to change" row, and "keep planning"
 // is the dialog's own Esc. Decisions POST /plan-decision, where the server
-// drives the real dialog screen-verified (dashboard/plandialog.py).
+// drives the real dialog screen-verified (plugins/claude_code/plandialog.py).
 
 function buildPlanCard() {
   const wrap = el("div", "planwrap");

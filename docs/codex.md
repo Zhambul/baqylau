@@ -351,16 +351,19 @@ which audits a degrade.
   it cannot drive (rewind/plan/migrate/model/effort) stay inert and read **False**
   (greyed). Launch/resume are lifecycle plumbing, NOT gesture-gated, so they work
   regardless.
-- **Claude screen-scrapers are host-gated OFF codex.** Once codex writes
+- **The Claude screen-scrapes are the HOST's, so codex simply has none.** Once codex writes
   `awaiting-response`/`awaiting-command` tab rows (its tab producer, above), three
   Claude-GEOMETRY screen scrapes would start firing on codex panes and return
   garbage: the ghost-suggestion probe (`dashboard/read/session.input_box`) and the
   notifier's dialog-region + terminal-input reads
-  (`dashboard/notify/notifier._dialog_region` / `_input_typed`). Each is now gated
-  on the session's HOST being `claude_code` (via `owns_by`/`session_caps`; an
-  unprovable/empty path stays the claude default, so a daemon-origin Claude session
-  is unaffected) — a codex host gets NO ghost-suggestion probe and NO
-  askdialog/suggestion notifier probe. The host-agnostic alert signals
+  (`dashboard/notify/notifier._dialog_region` / `_input_typed`). Each is now a
+  METHOD ON THE OWNING HOST (`input_box` / `ask_region` / `typed_input`, P2) whose
+  inert base returns nothing, so codex declines them by not implementing them —
+  no name check anywhere, and a new host is silent by default rather than
+  scraped through Claude's geometry. (An unprovable/empty path still resolves to
+  the default host, so a daemon-origin Claude session is unaffected; the read
+  model also skips resolving a frontend at all when the host declares no
+  `input_box`, via `HostControl.implements`.) The host-agnostic alert signals
   (tab-moved / focus / composing) still resolve a codex alert, so **cross-session
   toast/Telegram/Web-Push notifications fire for a codex tab going red/green with
   no notifier change beyond this gating** — the codex `sessions` row carries the
@@ -446,13 +449,15 @@ codex cannot drive stay inert and read **False**: no `rewind` (codex has no
 checkpoint menu), no `migrate` (no account switcher), no `model` (codex's `/model`
 is an INTERACTIVE picker, not a `/model <arg>` we can drive blind — deferred), no
 `effort` (a launch-time `-c model_reasoning_effort` only, no live `/effort`).
-`send` is a generic paste, not a gesture, so it is never caps-gated.
+`send` IS overridden (P2) even though nothing gates it — see below.
 
-The dashboard's control handlers ROUTE to the gesture when the session's owner
-isn't claude_code (`_gesture_host(sid)` — `plugins.owns_by` → the host object, or
-`None` for a claude/unprovable session): a codex session takes the gesture path,
-a Claude session keeps its exact inline body (byte-identical — the branch is one
-`if host is not None:` that is `False` for it). The gesture bodies use ONLY the
+The dashboard's control handlers route EVERY session through its owning host
+(`_gesture_host(sid)` — `plugins.owns_by` → the host object, the DEFAULT host for
+an unprovable path). Until P2 that was a branch with an inline Claude body on the
+other side; those bodies now live in `plugins/claude_code/hostctl.py` with the
+five Claude screen drivers, so codex and Claude Code reach their TUIs through the
+same seam and each gesture writes its OWN `web-*` audit row. The gesture bodies
+use ONLY the
 frontend (`fe.paste_text`/`send_key`/`get_text`) + codex's own `rollout.parse`,
 never dashboard code — so the whole gesture, screen driver included, sits behind
 `HostControl` and a future codex **app-server transport** (turn/interrupt,
@@ -473,6 +478,21 @@ touching the dashboard.
   the *codex web interrupt not confirmed* anomaly) when the Esc landed but nothing
   appeared, **rejected** when nothing could be pressed. The `web-interrupt` row
   carries `host:codex` + `verified` + `steered`.
+- **`send`** (P2) — a PLAIN bracketed paste, and deliberately nothing else. It
+  is not caps-gated (the composer is always reachable), but it is a real gesture
+  now, and the override exists so that reachability is honest: without a body the
+  inert base would answer `unsupported` and 409 every codex message. Each thing
+  Claude Code's send does AROUND the paste is a declared absence here — no
+  clipboard-image wipe (`paste_grabs_clipboard_image` is **False**; codex's TUI
+  does not auto-attach the board, so that ~150 ms osascript round-trip ran on
+  every message for nothing), no Ctrl+U/Ctrl+K line kill (`clear_input` stays
+  inert — codex's composer is a different input model and blind line-kill
+  keystrokes into it are a guess), no `tui-draft` stash to consume, and no
+  screen-delta `turn_live` probe (its liveness has a better source in the rollout;
+  the inert `None` means "trust the tab", which is what codex did before).
+  Attachments arrive as BARE PATHS: `mention(path)` is `""` for codex, because
+  `@path` is Claude Code's TUI grammar and a foreign sigil would land as literal
+  text.
 - **`compact`** — paste codex's own `/compact` (fires Pre/PostCompact); no
   Claude switch-confirm menu, no clipboard-image guard (codex doesn't auto-attach
   a clipboard image on paste).
@@ -484,7 +504,7 @@ touching the dashboard.
   from Claude's (a `Question N/M` header, numbered options with a `›` cursor, an
   `enter to submit answer` footer), so Claude's `askdialog.region()` returns "" on
   it — codex needs its OWN driver, **`plugins/codex/dialog.py`** (the single-owner
-  codex dialog driver, sibling of `dashboard/askdialog.py` but in the PLUGIN
+  codex dialog driver, sibling of `plugins/claude_code/askdialog.py` but in the PLUGIN
   because the gesture drives it and a plugin can't import the dashboard). It walks
   the `›` cursor with DOWN/UP onto the chosen option and presses ENTER per
   question, screen-verified each step; a step that never verifies degrades to
@@ -513,7 +533,7 @@ touching the dashboard.
   the rollout, `read.codex_effort`, and re-selects it at Step 3, falling back to
   the new model's default only when the effort can't be read); the ✧ **effort**
   button KEEPS the current model (its `(current)` row) and changes only the level. `dashboard/http/post/typing.post_command` routes both through
-  `_host_model` → `HostControl.model`/`effort` (no `/model <arg>` paste, no Claude
+  `HostControl.model`/`effort` (no `/model <arg>` paste, no Claude
   confirm menu — the gesture screen-verifies its own steps), and the arg is
   validated by the LIVE picker (label-matched, `Extra high` for the `xhigh` token),
   not Claude's `MODEL_ARG_OK`/`EFFORTS`. The ✦/✧ MENUS offer codex's own
@@ -524,6 +544,24 @@ touching the dashboard.
   lists `gpt-5.6-sol/terra/luna/…` and `low…ultra`, no codex-specific menu code.
   Verified live: a switch to `gpt-5.6-terra` (accepting its default `medium`) and
   an effort change to `xhigh` keeping the model.
+
+**What codex REFUSES, and how** (P2). Three answers the dashboard used to give
+wrongly for codex are now the host's own declarations, each surfacing as a 409
+that names the vocabulary instead of a foreign command or a silent drop:
+
+| request | codex's answer | what it used to do |
+|---|---|---|
+| `POST /command {"cmd":"rename"}` (the ✦ auto-rename) | **409 `cap:"rename"`** — codex's `/rename` takes a NAME; `autoname` is a cap SHARER it declines | bracket-pasted Claude Code's argless `/rename` into codex's composer, plus a clipboard wipe it never needed |
+| `POST /answer {"chat":true}` | **409** — `ask_declines()` is `()`; codex's dialog has no decline row (its Esc ABORTS the turn) | the flag was silently dropped and the question got ANSWERED instead of dodged |
+| `POST /plan-decision {"feedback":…}` | **409** naming `digit+label or dismiss` — `plan_decisions()` is `("decide","dismiss")`, its picker has no free-text row | a generic 400 "no action", and the text the user typed vanished |
+
+`rewind_modes()` is likewise `()` (codex has no checkpoint menu) and
+`title_key(tpath)` is its rollout's `.jsonl` stem, so a PARKED codex rename gets
+the same durable prefs override a Claude one does, under a key its own host
+derived. `lifecycle_end` is a documented no-op: a web-closed codex tab kills the
+codex process and this plugin's watcher notices its host pid is gone and runs
+`core.hostpane.host_end` on its own — the same teardown a terminal-side exit
+takes.
 
 ### Launching & resuming codex from the web
 
@@ -612,7 +650,7 @@ TUI, re-verified live at decide time), so no screen read is needed to render;
 `keep planning` maps to the `No, stay in Plan mode` row (an explicit choice, not
 an Esc — codex's Esc only steps BACK). codex's picker has no free-text
 "what to change" row, so the card hides the feedback box off-Claude. A decision
-POSTs `/plan-decision`, routed through `HostControl.plan` (`_host_plan`, keyed on
+POSTs `/plan-decision`, routed through `HostControl.plan` (keyed on
 `plan_id` not `tool_use_id`) → `plugins/codex/plandialog.py`, which navigates the
 `›` cursor to the label-matched row (label-keyed, so codex reordering can't press
 the wrong one) and ENTERs, screen-verified.

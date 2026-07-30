@@ -121,7 +121,7 @@ _OSC_RE = r"\x1b\][^\x1b\x07]*(?:\x07|\x1b\\)"         # OSC (BEL/ST)
 _C1_RE = r"\x1b[@-Z\\-_]"                              # other 2-char C1
 
 # PUBLIC (no underscore): the compiled escape scanner is part of this module's
-# vocabulary, not an internal. dashboard/suggestion.py walks a raw ANSI capture
+# vocabulary, not an internal. plugins/claude_code/suggestion.py walks a raw ANSI capture
 # with it, and a name marked private that another PACKAGE imports tells the next
 # reader the opposite of the truth (styleguide, *Public surface*).
 ANSI_RE = re.compile(_CSI_RE + "|" + _OSC_RE + "|" + _C1_RE)

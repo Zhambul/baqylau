@@ -284,7 +284,7 @@ function setEffortBtn(btn) {
 // its bubble — a ↶ button each .msg.prompt carries (hover-revealed; pick mode
 // reveals them all). The chosen mode POSTs /rewind-to, where the server
 // drives Claude Code's own rewind menu in the session's window with screen-
-// verified key events (dashboard/rewindmenu.py) — nothing to do in kitty.
+// verified key events (plugins/claude_code/rewindmenu.py) — nothing to do in kitty.
 
 // Picking mode: the idle meaning of ↶ rewind / double-Esc. Reveals every
 // bubble's ↶ and waits for a click; Esc or a second toggle leaves.

@@ -317,6 +317,237 @@ def test_the_register_prefixes_are_not_re_spelled_in_their_readers():
                           "from core/agentblocks.REGISTERS" % (rel, hits))
 
 
+# ------------------------------------------------------ 4. the gesture surface
+
+# The three FAMILIES of HostControl method, and what each means:
+#
+#   GESTURES (plugins.host.GESTURES) — a cap each, DERIVED from the override.
+#   SIBLINGS — real gestures that share another gesture's cap (a cap must map to
+#     exactly one method or the derivation stops being the source of truth), so
+#     the caller gates them on that cap and the gesture's own `unsupported`
+#     result is what turns "this host has the cap but not this half" into a 409.
+#   VOCABULARY — not gestures at all: the WORDS, grammars and screen READS a host
+#     declares so the control plane can refuse an unknown one by name instead of
+#     typing a foreign command into its TUI.
+SIBLINGS = {"rewind_to": "rewind", "autoname": "rename",
+            "plan_options": "plan", "deliver": "ask"}
+
+VOCABULARY = ("mention", "clear_input", "turn_live", "ask_declines",
+              "plan_decisions", "rewind_modes", "title_key",
+              "input_box", "ask_region", "typed_input", "lifecycle_end")
+
+# {method: {host: IMPL | DECLINED}} — the gesture-side twin of COVERAGE. A
+# DECLINE here is a DECISION with a written reason in the host's own module (see
+# the "NOT overridden" notes in plugins/codex/hostctl.py), and the table is what
+# makes it visible: without it, "codex has no `send` body" and "somebody forgot
+# to write one" look identical from the outside, and the difference is exactly
+# what the 409-vs-502 split turns on.
+HOST_SURFACE = {
+    # the ten capability gestures
+    "interrupt": {"claude_code": IMPL,     "codex": IMPL},
+    "send":      {"claude_code": IMPL,     "codex": IMPL},
+    "rename":    {"claude_code": IMPL,     "codex": IMPL},
+    "rewind":    {"claude_code": IMPL,     "codex": DECLINED},
+    "migrate":   {"claude_code": IMPL,     "codex": DECLINED},
+    "compact":   {"claude_code": IMPL,     "codex": IMPL},
+    "model":     {"claude_code": IMPL,     "codex": IMPL},
+    "effort":    {"claude_code": IMPL,     "codex": IMPL},
+    "ask":       {"claude_code": IMPL,     "codex": IMPL},
+    "plan":      {"claude_code": IMPL,     "codex": IMPL},
+    # the cap SHARERS
+    "rewind_to":    {"claude_code": IMPL, "codex": DECLINED},
+    "autoname":     {"claude_code": IMPL, "codex": DECLINED},
+    "plan_options": {"claude_code": IMPL, "codex": IMPL},
+    "deliver":      {"claude_code": IMPL, "codex": DECLINED},
+    # the vocabulary / screen reads
+    "mention":        {"claude_code": IMPL, "codex": DECLINED},
+    "clear_input":    {"claude_code": IMPL, "codex": DECLINED},
+    "turn_live":      {"claude_code": IMPL, "codex": DECLINED},
+    "ask_declines":   {"claude_code": IMPL, "codex": DECLINED},
+    "plan_decisions": {"claude_code": IMPL, "codex": IMPL},
+    "rewind_modes":   {"claude_code": IMPL, "codex": DECLINED},
+    "title_key":      {"claude_code": IMPL, "codex": IMPL},
+    "input_box":      {"claude_code": IMPL, "codex": DECLINED},
+    "ask_region":     {"claude_code": IMPL, "codex": DECLINED},
+    "typed_input":    {"claude_code": IMPL, "codex": DECLINED},
+    "lifecycle_end":  {"claude_code": IMPL, "codex": IMPL},
+}
+
+
+def _host_objs():
+    import plugins
+    return {h["name"]: plugins.host_named(h["name"]) for h in plugins.hosts()}
+
+
+def test_the_gesture_surface_table_matches_reality():
+    """HOST_SURFACE says which host overrides which method; reality must agree.
+
+    Both directions, like COVERAGE. A cell that says IMPL where the override is
+    gone means a button that silently answers `unsupported`; one that says
+    DECLINED where a body appeared means a gesture nobody argued for — and for
+    the SIBLINGS in particular the difference is a 409 the client renders as
+    "your tool can't do that"."""
+    from plugins.host import HostControl
+
+    wrong = []
+    for name, row in sorted(HOST_SURFACE.items()):
+        assert hasattr(HostControl, name), (
+            "HOST_SURFACE names %r, which is not on HostControl" % name)
+        for host_name, host in sorted(_host_objs().items()):
+            want = row.get(host_name)
+            assert want is not None, (
+                "HOST_SURFACE[%r] has no cell for host %r" % (name, host_name))
+            got = (IMPL if getattr(type(host), name)
+                   is not getattr(HostControl, name) else DECLINED)
+            if got != want:
+                wrong.append("%s / %s: table says %s, reality is %s"
+                             % (name, host_name, want, got))
+    assert not wrong, ("host-gesture surface table is out of date:\n"
+                       + "\n".join(wrong))
+
+
+def test_the_gesture_surface_table_covers_every_declared_method():
+    """Every GESTURE and every declared sibling/vocabulary hook has a row, and no
+    row names something that isn't one. A method absent from the table is a
+    surface nobody has said, per host, whether it is answered."""
+    from plugins import host as H
+
+    declared = set(H.GESTURES) | set(SIBLINGS) | set(VOCABULARY)
+    assert set(HOST_SURFACE) == declared, (
+        "HOST_SURFACE and the declared surface disagree: missing %s, extra %s"
+        % (sorted(declared - set(HOST_SURFACE)),
+           sorted(set(HOST_SURFACE) - declared)))
+
+
+def test_caps_are_derived_from_the_gestures_alone():
+    """A cap exists for exactly one gesture, and the siblings do NOT get one:
+    `caps` is what the client greys buttons on and what `_caps_guard` reads, so a
+    second method under one cap would make the two disagree about which body
+    answers. The sibling's own `unsupported` result is the finer-grained refusal."""
+    import plugins
+    from plugins import host as H
+
+    for name, host in sorted(_host_objs().items()):
+        assert set(host.caps()) == set(H.GESTURES), name
+    assert not (set(SIBLINGS) & set(H.GESTURES))
+    # …and every sibling names a REAL cap to ride
+    assert set(SIBLINGS.values()) <= set(H.GESTURES)
+    # the derivation itself: caps == the overrides, for every registered host
+    for name, host in sorted(_host_objs().items()):
+        for g in H.GESTURES:
+            assert host.caps()[g] is (HOST_SURFACE[g][name] == IMPL), (name, g)
+    assert plugins.host_caps("nope") == {}
+
+
+def test_an_unimplemented_gesture_says_unsupported_not_failed():
+    """The inert base's result carries `unsupported`, and a host's own FAILURE
+    result does not. That one key is how a caller answers 409 ("your tool does
+    not do this", naming the capability) where it would otherwise answer 502
+    ("it tried and it broke") — the two used to be indistinguishable, which is
+    how a renameable-but-uncapped host surfaced its refusal as a malfunction."""
+    from plugins.host import REJECTED, HostControl
+
+    base = HostControl()
+    calls = {
+        "interrupt": lambda: base.interrupt(None, "", {}),
+        "send": lambda: base.send(None, "", "hi", {}),
+        "rename": lambda: base.rename("s", "n", {}),
+        "rewind": lambda: base.rewind(None, "", {}),
+        "migrate": lambda: base.migrate("s", {}),
+        "compact": lambda: base.compact(None, "", {}),
+        "model": lambda: base.model(None, "", "m", {}),
+        "effort": lambda: base.effort(None, "", "high", {}),
+        "ask": lambda: base.ask(None, "", [], {}),
+        "plan": lambda: base.plan(None, "", {}, {}),
+        "rewind_to": lambda: base.rewind_to(None, "", "t", "both", {}),
+        "autoname": lambda: base.autoname(None, "", {}),
+        "plan_options": lambda: base.plan_options(None, "", {}),
+        "deliver": lambda: base.deliver(None, "", "hi", {}),
+    }
+    for g, call in sorted(calls.items()):
+        res = call()
+        assert res["status"] == REJECTED and res["unsupported"] == g, g
+    assert "unsupported" not in HostControl._rejected()
+    # …and the inert VOCABULARY is empty rather than another host's words
+    assert base.mention("/p") == "" and base.title_key("/x.jsonl") == ""
+    assert base.ask_declines() == () and base.plan_decisions() == ()
+    assert base.rewind_modes() == () and base.turn_live(None, "") is None
+    assert base.input_box(None, "") == (None, None)
+    assert base.paste_grabs_clipboard_image is False
+
+
+def test_every_hosts_vocabulary_is_a_closed_word_list():
+    """The decline/decision vocabularies are TUPLES of words the handler
+    validates a request against — not booleans, and not free text. A host that
+    accepts nothing says so with an empty one (which is what produces the 409
+    naming "none"), and every word a host DOES name must be one the plan handler
+    knows how to build a body for."""
+    known = {"decide", "feedback", "dismiss"}
+    for name, host in sorted(_host_objs().items()):
+        assert isinstance(host.ask_declines(), tuple), name
+        assert isinstance(host.plan_decisions(), tuple), name
+        assert isinstance(host.rewind_modes(), tuple), name
+        assert set(host.plan_decisions()) <= known, name
+    hosts = _host_objs()
+    # today's per-host truth, pinned so a change is deliberate
+    assert hosts["claude_code"].ask_declines() == ("chat",)
+    assert hosts["codex"].ask_declines() == ()
+    assert hosts["claude_code"].plan_decisions() == ("decide", "feedback",
+                                                     "dismiss")
+    assert hosts["codex"].plan_decisions() == ("decide", "dismiss")
+
+
+def test_rewind_modes_comes_from_the_menu_table_not_a_second_list():
+    """`rewind_modes()` IS rewindmenu.MODE_LABELS' key set — one owner. That
+    table maps each mode to the label matched on the real menu, so a second list
+    would be a set of modes with no menu row behind them."""
+    import plugins
+    from plugins.claude_code import rewindmenu
+
+    host = plugins.host_named(plugins.default_host())
+    assert host.rewind_modes() == tuple(rewindmenu.MODE_LABELS)
+    assert plugins.host_named("codex").rewind_modes() == ()
+
+
+def test_the_claude_screen_drivers_live_in_the_plugin():
+    """The five Claude Code SCREEN DRIVERS are the plugin's, not the
+    dashboard's — the symmetry plugins/codex/hostctl.py declares for its own
+    (docs/architecture.md). Only the tool-agnostic skeleton is shared, and it
+    sits in CORE because a plugin may not import the dashboard."""
+    for mod in ("askdialog", "plandialog", "rewindmenu", "confirmdialog",
+                "suggestion"):
+        assert os.path.isfile(os.path.join(REPO, "plugins/claude_code",
+                                           mod + ".py")), mod
+        assert not os.path.isfile(os.path.join(REPO, "dashboard",
+                                               mod + ".py")), mod
+    assert os.path.isfile(os.path.join(REPO, "core/screendrive.py"))
+
+
+def test_no_plugin_imports_the_dashboard():
+    """The dependency rule, in the direction the driver move could have broken:
+    plugins import core + frontends, never the consumer tier above them."""
+    bad = []
+    for dirpath, dirnames, filenames in os.walk(os.path.join(REPO, "plugins")):
+        dirnames[:] = [d for d in dirnames if d != "__pycache__"]
+        for fn in sorted(filenames):
+            if not fn.endswith(".py"):
+                continue
+            path = os.path.join(dirpath, fn)
+            with open(path, encoding="utf-8") as fh:
+                tree = ast.parse(fh.read(), filename=path)
+            for n in ast.walk(tree):
+                mod = ((n.module or "") if isinstance(n, ast.ImportFrom)
+                       else "")
+                names = ([a.name for a in n.names]
+                         if isinstance(n, ast.Import) else [])
+                if (mod == "dashboard" or mod.startswith("dashboard.")
+                        or any(a == "dashboard" or a.startswith("dashboard.")
+                               for a in names)):
+                    bad.append("%s:%d" % (os.path.relpath(path, REPO),
+                                          n.lineno))
+    assert bad == [], "plugin module(s) importing the dashboard: %s" % bad
+
+
 # --------------------------------------------------- the lead_prose host trait
 
 def test_lead_prose_is_a_trait_not_a_host_name():

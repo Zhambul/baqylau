@@ -124,12 +124,28 @@ def test_codex_host_registry_roundtrip(tmp_path, monkeypatch):
 # --- the Claude screen-scraper host-gates --------------------------------------
 
 def test_notifier_screen_scrapable_gate():
+    # The gate is no longer a per-sid BOOLEAN the notifier computes from a host
+    # NAME: each probe is asked of the session's OWNING host, and a host with no
+    # such screen geometry answers None by not implementing it (P2). What the
+    # notifier keeps is the ROUTING — which host to ask, defaulting to the
+    # default host for a sid it hasn't seen yet (the safe direction).
+    import plugins
     from dashboard.notify.notifier import Notifier
+
     n = Notifier()
-    assert n._screen_scrapable("unseen") is True   # default allow (safe direction)
-    n._claude_host = {"codexsid": False, "claudesid": True}
-    assert n._screen_scrapable("codexsid") is False   # codex -> no scrape
-    assert n._screen_scrapable("claudesid") is True
+    claude = plugins.host_named(plugins.default_host())
+    codex = plugins.host_named("codex")
+    assert n._host_for("unseen") is claude          # default (safe direction)
+    n._hosts = {"codexsid": codex, "claudesid": claude}
+    assert n._host_for("codexsid") is codex
+    assert n._host_for("claudesid") is claude
+    # …and the two probes DECLINE for codex without touching the screen
+    class _Boom:
+        def get_text(self, *a, **k):
+            raise AssertionError("a codex host must never be screen-scraped")
+    n.fe = _Boom()
+    assert n._dialog_region("codexsid", "7") is None
+    assert n._input_typed("codexsid", "7") is None
 
 
 def test_input_box_skips_a_codex_host(monkeypatch):

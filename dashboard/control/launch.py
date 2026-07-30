@@ -251,6 +251,42 @@ def set_tui_draft(sid, text):
         return False
 
 
+class WebBox:
+    """What the WEB left in one session's input box — the `tui-draft` kv plus
+    the "we just pasted" stamp — as a small object a HOST GESTURE is handed
+    through its ctx.
+
+    INJECTED, exactly as `fe` is, and for the same reason: the stash is the
+    DASHBOARD's memory of its own pastes (its terminal-draft sync writes it too,
+    and `post_message` reads it to decide `clear_draft`), while only the host
+    knows WHEN the box changed under it — an interrupt's take-back and a rewind's
+    restore are both moments only the gesture can see. A plugin may not import
+    this module, and forking the kv into a second owner is exactly the drift the
+    single-owner table bans, so the owner stays here and the gesture gets this
+    view of it.
+
+    Deliberately tiny and stateless (it re-reads on every access): a gesture
+    holds one for the length of one request."""
+
+    def __init__(self, sid):
+        self.sid = sid
+
+    @property
+    def draft(self):
+        """The text we know is in the box (see tui_draft)."""
+        return tui_draft(self.sid)
+
+    def set_draft(self, text):
+        """Record (or, with "", forget) the text we left there; returns the
+        write's result so the gesture can audit a failure."""
+        return set_tui_draft(self.sid, text)
+
+    def note_send(self):
+        """Stamp that we are about to paste, so the draft sync ignores the box
+        for SEND_QUIET_S (see note_send)."""
+        note_send(self.sid)
+
+
 TERMINAL_ORIGIN = "terminal"     # composer-draft `origin` for a synced box
 SEND_QUIET_S = 4.0               # after OUR paste, ignore the box for this long
 _LAST_SEND = {}                  # sid -> monotonic stamp of the last web send
@@ -338,38 +374,6 @@ def sync_terminal_draft(sid, seen, last, stored):
     A.state_file(sid, sdb, "composer-draft",
                  {"action": "terminal", "chars": len(seen)})
     return seen
-
-
-def type_command(fe, win, text):
-    """Put a SLASH COMMAND into a session's input box and submit it. Returns
-    (ok, cleared_clipboard_image).
-
-    THE one way to do that — every site that puts a `/…` command in front of
-    Claude Code goes through here, because raw keystrokes are NOT SAFE in that
-    box. With `editorMode: vim` the input is MODAL, and anything that pressed
-    Escape first (the interrupt presses up to `INTERRUPT_TRIES`) leaves it in
-    NORMAL mode, where the characters are vim COMMANDS rather than text: `/`
-    opens reverse history search, and Claude Code's own hint spells out the
-    workaround — *"press Esc then i then / to open the command menu instead"*.
-    Measured 2026-07-25: a web rewind ~14s after a web interrupt typed
-    `/rewind` into a NORMAL-mode box, the checkpoint menu never opened, and the
-    tail of the keystrokes was submitted into the conversation as the message
-    `nd` (the first `web-rewind-to` `step: "open"` failure in the audit; the
-    identical `nd` artifact recorded earlier in the Esc-gesture comment was
-    blamed on a racing Escape, which now looks like the wrong diagnosis).
-
-    A BRACKETED PASTE is mode-proof — Claude Code takes it as content, never as
-    keystrokes — and it is already how `post_command`'s quick commands
-    (`/compact`, `/model`, `/effort`) reach the TUI, which is why those kept
-    working where the typed `/rewind` did not. The Enter rides outside the
-    paste (kitten_send_text), so it still submits.
-
-    The clipboard-image guard comes with it: a bracketed paste makes Claude
-    Code attach whatever IMAGE is on the board (docs/dashboard.md
-    *Clipboard-image guard*), so no caller may paste without it — folding the
-    two together here is the point of the single owner."""
-    clip = clear_clipboard_image()
-    return bool(fe.paste_text(win, text)), clip
 
 
 def steal_watch(before, terminal_app):

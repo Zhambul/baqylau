@@ -22,7 +22,11 @@ import core.audit as A
 from core import paths as P
 from core import state as S
 from dashboard import server as DS
-from dashboard import suggestion as SUG
+from plugins.claude_code import askdialog as ASKD
+from plugins.claude_code import plandialog as PLD
+from plugins.claude_code import rewindmenu as RWM
+from plugins.claude_code import suggestion as SUG
+from plugins.claude_code import tui as CTUI
 
 
 
@@ -431,8 +435,8 @@ class _MenuFE(_FakeFE):
 
 def _rewind_env(monkeypatch, sid, win, fe):
     _inject_fe(monkeypatch, fe)
-    monkeypatch.setattr(DS.rewindmenu, "POLL_S", 0.01)
-    monkeypatch.setattr(DS.rewindmenu, "KEY_GAP_S", 0)
+    monkeypatch.setattr(RWM, "POLL_S", 0.01)
+    monkeypatch.setattr(RWM, "KEY_GAP_S", 0)
     monkeypatch.setenv("KITTY_WINDOW_ID", win)
     A.session_start({"session_id": sid, "cwd": "/w", "transcript_path": ""})
 
@@ -597,7 +601,7 @@ _CONFIRM_SCREEN = """\
 
 
 def test_rewindmenu_parsers_pin_the_real_screens():
-    RM = DS.rewindmenu
+    RM = RWM
     assert RM.menu_open(_MENU_SCREEN)
     assert not RM.confirm_open(_MENU_SCREEN)
     # the column-0 scrollback prompt echo is NOT the cursor; the indented
@@ -624,7 +628,7 @@ def test_rewindmenu_parsers_pin_the_real_screens():
 
 
 def test_rewindmenu_entry_match_is_truncation_aware():
-    RM = DS.rewindmenu
+    RM = RWM
     long = ("This is a deliberately very long first line meant to overflow "
             "the rewind menu entry width and show me how truncation is "
             "rendered at the edge of the pane, if at all, in the checkpoint "
@@ -819,12 +823,12 @@ class _AskFE(_FakeFE):
 
 def _ask_env(monkeypatch, sid, win, fe, questions, tid="toolu_a1"):
     _inject_fe(monkeypatch, fe)
-    monkeypatch.setattr(DS.askdialog, "POLL_S", 0.01)
-    monkeypatch.setattr(DS.askdialog, "KEY_GAP_S", 0)
+    monkeypatch.setattr(ASKD, "POLL_S", 0.01)
+    monkeypatch.setattr(ASKD, "KEY_GAP_S", 0)
     # the open-check polls up to STEP_TIMEOUT_S now (like every other step) —
     # keep the dialog-dismissed "open" bail from burning the full budget
-    monkeypatch.setattr(DS.askdialog, "STEP_TIMEOUT_S", 0.1)
-    monkeypatch.setattr(DS.askdialog, "SUBMIT_TIMEOUT_S", 0.1)
+    monkeypatch.setattr(ASKD, "STEP_TIMEOUT_S", 0.1)
+    monkeypatch.setattr(ASKD, "SUBMIT_TIMEOUT_S", 0.1)
     monkeypatch.setenv("KITTY_WINDOW_ID", win)
     A.session_start({"session_id": sid, "cwd": "/w", "transcript_path": ""})
     S.kv_set(DS.P.mirror_log(sid), "ask-pending",
@@ -1126,7 +1130,7 @@ Enter to select · ↑/↓ to navigate · n to add notes · Tab to switch questi
 
 
 def test_askdialog_parsers_pin_the_real_screens():
-    AD = DS.askdialog
+    AD = ASKD
     assert AD.dialog_open(_ASK_MULTI_SCREEN)
     assert not AD.review_open(_ASK_MULTI_SCREEN)
     rs = AD.rows(_ASK_MULTI_SCREEN)
@@ -1176,7 +1180,7 @@ def test_askdialog_typed_answer_fails_fast_without_type_row():
     ('other') answer is undeliverable — the driver must fail FAST with step
     "type" instead of walking the cursor forever ("cursor never reached Type
     row", 2026-07-19). The web card routes typed answers via chat instead."""
-    AD = DS.askdialog
+    AD = ASKD
     fe = _FakeFE()
     fe.screens = [_ASK_PREVIEW_SCREEN]
     # 2 options → the (absent) Type row would be digit 3
@@ -1195,7 +1199,7 @@ def test_cursor_to_reaches_chat_in_two_cursor_preview_layout():
     ("cursor never reached Chat row"); checking EVERY cursored row fixes it
     without breaking option targeting (the down-from-top walk stops at the clean
     single-❯ option before descending into the two-❯ state)."""
-    AD = DS.askdialog
+    AD = ASKD
 
     class _PreviewNavFE:
         # rows: options 1..3 then an unnumbered "Chat about this"; idx 3 = Chat.
@@ -1296,7 +1300,7 @@ _PLAN_PEND = {"tool_use_id": "toolu_p1", "plan": "# Plan\n1. do the thing",
 
 def _plan_env(monkeypatch, sid, win, fe):
     _inject_fe(monkeypatch, fe)
-    monkeypatch.setattr(DS.plandialog, "POLL_S", 0.01)
+    monkeypatch.setattr(PLD, "POLL_S", 0.01)
     monkeypatch.setenv("KITTY_WINDOW_ID", win)
     A.session_start({"session_id": sid, "cwd": "/w", "transcript_path": ""})
     S.kv_set(DS.P.mirror_log(sid), "plan-pending", dict(_PLAN_PEND))
@@ -1444,7 +1448,7 @@ _PLAN_SCREEN = """\
 
 
 def test_plandialog_parsers_pin_the_real_screen():
-    PD = DS.plandialog
+    PD = PLD
     assert PD.dialog_open(_PLAN_SCREEN)
     rs = PD.rows(_PLAN_SCREEN)
     # the plan's own numbered STEPS are above the proceed anchor — they must
@@ -1465,7 +1469,7 @@ def test_post_message_clear_draft_kills_then_pastes(dash, monkeypatch):
     # (paste_text) — a raw send here drops leading bytes (the measured mangle)
     fe = _FakeFE()
     _inject_fe(monkeypatch, fe)
-    monkeypatch.setattr(DS.post_typing, "DRAFT_CLEAR_GAP_S", 0)
+    monkeypatch.setattr(CTUI, "CLEAR_GAP_S", 0)
     monkeypatch.setenv("KITTY_WINDOW_ID", "71")
     A.session_start({"session_id": "cd1", "cwd": "/w", "transcript_path": ""})
     code, body = _post(dash + "/api/session/cd1/message",
@@ -1490,7 +1494,7 @@ def test_post_message_clear_draft_kills_every_line_of_a_multiline_draft(
     # backspace between kills consuming the newline to hop up a line.
     fe = _FakeFE()
     _inject_fe(monkeypatch, fe)
-    monkeypatch.setattr(DS.post_typing, "DRAFT_CLEAR_GAP_S", 0)
+    monkeypatch.setattr(CTUI, "CLEAR_GAP_S", 0)
     monkeypatch.setenv("KITTY_WINDOW_ID", "72")
     A.session_start({"session_id": "cd2", "cwd": "/w", "transcript_path": ""})
     S.kv_set(P.mirror_log("cd2"), "seed", 1)   # the stash never creates the DB

@@ -22,6 +22,11 @@ from core import ops as O
 from core import paths as P
 from core import state as S
 from dashboard import server as DS
+from plugins.claude_code import askdialog as ASKD
+from plugins.claude_code import confirmdialog as CFD
+from plugins.claude_code import hostctl as CH
+from plugins.claude_code import rewindmenu as RWM
+from plugins.claude_code import tui as CTUI
 
 
 # ------------------------------------------------------------------ opshtml
@@ -454,7 +459,7 @@ def test_post_command_sends_slash_text(dash, monkeypatch):
     # key pressed
     fe = _FakeFE()
     _inject_fe(monkeypatch, fe)
-    monkeypatch.setattr(DS.confirmdialog, "OPEN_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(CFD, "OPEN_TIMEOUT_S", 0.05)
     monkeypatch.setenv("KITTY_WINDOW_ID", "61")
     A.session_start({"session_id": "qc1", "cwd": "/w", "transcript_path": ""})
     code, body = _post(dash + "/api/session/qc1/command", {"cmd": "compact"})
@@ -513,7 +518,7 @@ def test_post_command_stuck_confirm_menu_reports_failed(dash, monkeypatch):
     fe = _FakeFE()
     fe.screens = [_SWITCH_CONFIRM_SCREEN]       # sticks forever
     _inject_fe(monkeypatch, fe)
-    monkeypatch.setattr(DS.confirmdialog, "STEP_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(CFD, "STEP_TIMEOUT_S", 0.05)
     monkeypatch.setenv("KITTY_WINDOW_ID", "66")
     A.session_start({"session_id": "qc6", "cwd": "/w", "transcript_path": ""})
     code, body = _post(dash + "/api/session/qc6/command",
@@ -560,7 +565,7 @@ def test_confirm_find_menu_shape_not_prose():
     # detection is by SHAPE: a ❯-cursored numbered list with Yes+No labels.
     # The bare composer prompt and scrollback prose that happens to enumerate
     # Yes/No must NOT match (a false press would type a digit into the chat)
-    from dashboard import confirmdialog as cd
+    cd = CFD
     assert cd.find_menu(_SWITCH_CONFIRM_SCREEN) == "1"
     assert cd.find_menu("") is None
     assert cd.find_menu("some output\n❯ \n") is None          # bare prompt
@@ -573,7 +578,7 @@ def test_ask_current_question_longest_match():
     # substring of question j's, a FIRST-match scan returns i while j is on
     # screen and drive()'s wait for j never resolves. The most specific
     # (longest) matching question is the one displayed.
-    from dashboard import askdialog as ad
+    ad = ASKD
     qs = [{"question": "Pick a color"}, {"question": "Pick a color scheme"}]
     # ☐ anchors the region; "Enter to select" is the pane footer
     showing_j = "☐ chips\nPick a color scheme\n1. dark\nEnter to select"
@@ -589,7 +594,7 @@ def test_ask_dialog_open_when_chip_bar_scrolled_off():
     # ☐/☒ chip bar scrolls off the top while the footer survives — get_text
     # returns only the visible screen. A chip-bar-only anchor returned "" and
     # false-bailed step:open on a genuinely-open dialog (session 819627e5).
-    from dashboard import askdialog as ad
+    ad = ASKD
     # exactly what the errors-row `screen` capture showed: options + footer,
     # no ☐/☒ anywhere.
     off_screen = ("     approval.\n  3. Just diagnose\n  4. Type something.\n"
@@ -1256,6 +1261,137 @@ def test_post_new_session_codex_resume_is_owner_routed(dash, monkeypatch, tmp_pa
     assert (_last_state_file("", "web-launch") or {}).get("tool") == "codex"
 
 
+# --- P2: every gesture is the owning HOST's, and a host it can't drive 409s ----
+#
+# The sessions below are GENUINE codex rollouts (rollout-*.jsonl under a
+# `sessions/` tree), so the dash server's OWN plugins.owns_by resolves them to
+# codex — a test-process monkeypatch cannot reach it.
+
+def _codex_session(tmp_path, sid, win=None):
+    """A codex-OWNED session row (its transcript is a real rollout layout), so
+    the server routes its gestures to CodexHost."""
+    d = tmp_path / "sessions" / "2026" / "07" / "31"
+    d.mkdir(parents=True, exist_ok=True)
+    tpath = d / ("rollout-%s.jsonl" % sid)
+    tpath.write_text("{}\n")
+    A.session_start({"session_id": sid, "cwd": str(tmp_path),
+                     "transcript_path": str(tpath)})
+    return str(tpath)
+
+
+def test_autoname_on_a_host_without_one_is_409_not_a_foreign_command(
+        dash, monkeypatch, tmp_path):
+    """`{"cmd": "rename"}` is the ✦ AUTO-rename — bare `/rename`, "generate the
+    title yourself". codex has no such command (its `/rename` takes a name), and
+    the endpoint used to have neither a cap row nor a host branch for it, so
+    Claude Code's argless `/rename` was bracket-pasted into a codex composer (the
+    P2 bug list, item 3).
+
+    Now `rename` is in CAP_BY_CMD (codex CAN rename, so the cap passes) and the
+    refusal comes one level down, from the `autoname` gesture codex declines —
+    which is the point of a cap SHARER: "can rename" and "can invent a name" are
+    different answers, and only the host knows the second one."""
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setenv("KITTY_WINDOW_ID", "77")
+    _codex_session(tmp_path, "cdxauto")
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/cdxauto/command", {"cmd": "rename"})
+    assert e.value.code == 409
+    assert json.loads(e.value.read())["cap"] == "rename"
+    assert fe.pasted == [] and fe.sent == []      # nothing typed at the terminal
+    row = _last_state_file("cdxauto", "web-command")
+    assert row["ok"] is False and row["cap"] == "rename"
+
+
+def test_codex_send_pastes_without_the_claude_paste_machinery(
+        dash, monkeypatch, tmp_path):
+    """A codex composer send is the HOST's `send` gesture: a plain bracketed
+    paste. No clipboard-image wipe (codex's TUI does not auto-attach the board —
+    `paste_grabs_clipboard_image` is False, and the osascript round-trip ran on
+    every message for nothing), and no Ctrl+U/Ctrl+K line kill even when the body
+    asks for one (codex's composer is a different input model; `clear_input` is
+    inert rather than guessed). The row records both as the honest zero."""
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setenv("KITTY_WINDOW_ID", "78")
+    _codex_session(tmp_path, "cdxsend")
+    wiped = []
+    monkeypatch.setattr(CH.clipimg, "clear_image",
+                        lambda: wiped.append(1) or True)
+    code, body = _post(dash + "/api/session/cdxsend/message",
+                       {"text": "hello codex", "clear_draft": True})
+    assert code == 200 and json.loads(body)["ok"] is True
+    assert fe.pasted == [("78", "hello codex")]
+    assert wiped == []                            # NO clipboard round-trip
+    assert fe.keyed == []                         # NO line-kill keystrokes
+    row = _last_state_file("cdxsend", "web-send")
+    assert row["host"] == "codex" and row["clip"] is False
+    assert row["draft_lines"] == 0 and row["chars"] == len("hello codex")
+
+
+def test_a_claude_send_still_wipes_the_clipboard_and_kills_the_draft(
+        dash, monkeypatch):
+    """The same endpoint against the DEFAULT host keeps every step of the Claude
+    delivery — the guard, the per-line kill, the bracketed paste, the row's own
+    fields. The gesture moved; the behaviour did not."""
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setenv("KITTY_WINDOW_ID", "79")
+    A.session_start({"session_id": "clsend", "cwd": "/w", "transcript_path": ""})
+    wiped = []
+    monkeypatch.setattr(CH.clipimg, "clear_image",
+                        lambda: wiped.append(1) or True)
+    monkeypatch.setattr(CTUI, "CLEAR_GAP_S", 0)
+    code, _ = _post(dash + "/api/session/clsend/message",
+                    {"text": "hello claude", "clear_draft": True})
+    assert code == 200
+    assert wiped == [1]
+    assert fe.keyed == [("79", ("ctrl+u",)), ("79", ("ctrl+k",))]
+    assert fe.pasted == [("79", "hello claude")]
+    row = _last_state_file("clsend", "web-send")
+    assert row["clip"] is True and row["draft_lines"] == 1
+    assert "host" not in row                     # the default host's own row
+
+
+def test_an_attachment_rides_the_hosts_own_mention_grammar(tmp_path):
+    """`@path` is Claude Code's TUI mention, not a universal one. The composer
+    asks the OWNING host for it, and a host with no mention grammar gets the BARE
+    PATH — a file the model can still open, where a foreign sigil would arrive as
+    literal text (the P2 bug list, item 5)."""
+    import plugins
+    from dashboard.http.post.files import _FilesMixin
+
+    claude = plugins.host_named(plugins.default_host())
+    codex = plugins.host_named("codex")
+    with_att = _FilesMixin._with_attachments
+    assert with_att(None, "hi", ["/u/a.png"], claude) == "@/u/a.png\nhi"
+    assert with_att(None, "hi", ["/u/a.png"], codex) == "/u/a.png\nhi"
+    assert with_att(None, "", ["/u/a.png", "/u/b.png"], codex) \
+        == "/u/a.png /u/b.png"
+    assert with_att(None, "hi", [], codex) == "hi"
+
+
+def test_a_plan_decision_names_the_hosts_own_vocabulary(dash, monkeypatch,
+                                                        tmp_path):
+    """The plan card's `feedback` box is Claude Code's "Tell Claude what to
+    change" row. codex's picker has no such row, so the request is refused with a
+    409 that NAMES what codex does accept — where the old codex branch answered a
+    generic 400 "no action" and the typed feedback simply vanished."""
+    import plugins
+    codex = plugins.host_named("codex")
+    claude = plugins.host_named(plugins.default_host())
+    assert claude.plan_decisions() == ("decide", "feedback", "dismiss")
+    assert codex.plan_decisions() == ("decide", "dismiss")
+    # the message the handler builds from each vocabulary (its one owner)
+    from dashboard.http.post.dialogs import _vocab, _vocab_help
+    assert _vocab_help(claude.plan_decisions()) \
+        == "digit+label, feedback, or dismiss"
+    assert _vocab_help(codex.plan_decisions()) == "digit+label or dismiss"
+    assert _vocab(claude.ask_declines()) == "chat"
+    assert _vocab(codex.ask_declines()) == "none"
+
+
 def test_post_new_session_bad_tool_is_400(dash, monkeypatch, tmp_path):
     """An unknown/non-launchable tool is a clean 400 (validated against the
     launchable hosts registry), never an argv composed for a host that isn't
@@ -1489,7 +1625,7 @@ def test_post_interrupt_verifies_and_re_presses(dash, monkeypatch):
     #             pre        i1a          i1b(changed)   i2a       i2b(same)
     fe.screens = ["✻ Alpha…", "✻ Alpha…", "✻ Bravo…", "❯ idle", "❯ idle"]
     _inject_fe(monkeypatch, fe)
-    monkeypatch.setattr(DS.post_interrupt, "INTERRUPT_RETRY_S", 0)
+    monkeypatch.setattr(CH, "INTERRUPT_RETRY_S", 0)
     monkeypatch.setenv("KITTY_WINDOW_ID", "78")
     A.session_start({"session_id": "intrv", "cwd": "/w", "transcript_path": ""})
     monkeypatch.setattr(DS.API, "tab_states", lambda: {"78": "thinking"})
@@ -1527,7 +1663,7 @@ def test_post_interrupt_stops_pressing_when_the_queue_is_delivered(dash,
     fe = _DeliverFE()
     fe.screens = ["✻ Alpha…", "✻ Bravo…", "✻ Delta…", "✻ Echo…", "✻ Golf…"]
     _inject_fe(monkeypatch, fe)
-    monkeypatch.setattr(DS.post_interrupt, "INTERRUPT_RETRY_S", 0)
+    monkeypatch.setattr(CH, "INTERRUPT_RETRY_S", 0)
     spawned = []
     monkeypatch.setattr(DS.SP, "spawn_detached",
                         lambda path, argv, log, env=None, purpose="", **kw:
@@ -1555,7 +1691,7 @@ def test_post_interrupt_not_confirmed_is_502_no_recheck(dash, monkeypatch):
     fe = _FakeFE()
     fe.screens = ["scr%d" % i for i in range(9)]   # every capture distinct = live
     _inject_fe(monkeypatch, fe)
-    monkeypatch.setattr(DS.post_interrupt, "INTERRUPT_RETRY_S", 0)
+    monkeypatch.setattr(CH, "INTERRUPT_RETRY_S", 0)
     spawned = []
     monkeypatch.setattr(DS.SP, "spawn_detached",
                         lambda path, argv, log, env=None, purpose="", **kw:
@@ -1568,7 +1704,7 @@ def test_post_interrupt_not_confirmed_is_502_no_recheck(dash, monkeypatch):
     assert e.value.code == 502
     assert spawned == []                          # no masking escape-recheck
     row = _last_state_file("intrn", "web-interrupt")
-    assert row["stopped"] is False and row["attempts"] == DS.post_interrupt.INTERRUPT_TRIES + 1
+    assert row["stopped"] is False and row["attempts"] == CH.INTERRUPT_TRIES + 1
 
 
 def test_post_rewind_idle_types_the_command(dash, monkeypatch):
@@ -1637,7 +1773,7 @@ def test_menu_open_survives_the_chord_label_formats():
     Matching the whole phrase in one of them is what broke every web rewind on
     v2.1.220 with `step: "open"` while the menu was open on screen
     (2026-07-25) — only the action half is the product's own literal."""
-    from dashboard import rewindmenu as RW
+    RW = RWM
 
     def screen(foot):
         return "\n".join(["", "  Rewind", "", "  ❯ a prompt", "", "  " + foot])

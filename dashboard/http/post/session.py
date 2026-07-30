@@ -8,7 +8,6 @@ import time
 import plugins
 from core import paths as P
 from core import sessionapi as API
-from core import spawn as SP
 from core import tabs
 from core.noaudit import load_audit
 from dashboard import (prefs)
@@ -130,7 +129,6 @@ class _SessionMixin:
         # send" path, which both route through here). With no typed prompt, the
         # mentions alone are a valid initial prompt.
         attachments = self._attachment_paths(body)
-        prompt = self._with_attachments(prompt, attachments)
         # Resolve the launching HOST, then compose its argv through the one
         # HostControl seam (launch_words + launch_cmd) both hosts share. A FRESH
         # launch uses the picked `tool`; a RESUME uses the host that OWNS the
@@ -170,6 +168,12 @@ class _SessionMixin:
                 {"error": ("resume not yet supported for this session's tool"
                            if resume else "unknown tool"),
                  "sid": resume or "", "tool": host_name}, 409)
+        # attachments ride the launch prompt as leading mentions, same as the
+        # live composer (covers the new-session form AND the parked "resume &
+        # send" path, which both route through here) — in the LAUNCHING host's
+        # own grammar, resolved just above. With no typed prompt, the mentions
+        # alone are a valid initial prompt.
+        prompt = self._with_attachments(prompt, attachments, host)
         # A resume's model/effort ride ONLY when the picked tool matches the owner
         # — a codex resume must never receive a claude `--model` (nor a claude
         # resume a codex `-c`); a mismatch keeps the session's own (the common
@@ -236,12 +240,16 @@ class _SessionMixin:
         term = fe.app_id()
         before = launch.front_app() if term else ""
         step.mark("front")
-        # a launch carrying a first prompt makes Claude Code's TUI read the
-        # clipboard at startup and attach any image to that auto-submitted
+        # a launch carrying a first prompt makes a clipboard-grabbing TUI read
+        # the board at startup and attach any image to that auto-submitted
         # message (docs/dashboard.md *Clipboard-image guard*) — empty an image
         # clipboard first so the startup grab finds nothing. Only when there's a
-        # prompt (a bare launch auto-submits nothing, so nothing to attach to).
-        clip = launch.clear_clipboard_image() if prompt.strip() else False
+        # prompt (a bare launch auto-submits nothing, so nothing to attach to),
+        # and only for a host that DECLARES the grab: the osascript round-trip is
+        # ~150ms and codex's TUI does no such thing.
+        clip = (launch.clear_clipboard_image()
+                if prompt.strip() and host.paste_grabs_clipboard_image
+                else False)
         step.mark("clip")
         # launch_tab: the new window's id on success when the terminal reports
         # one (kitty prints it), bare True when it doesn't, falsy on failure.
@@ -313,37 +321,19 @@ class _SessionMixin:
             A.state_file(log, sdb, "web-migrate",
                          {"ok": False, "reason": "no terminal"})
             return self._json({"error": "no terminal available"}, 503)
-        cur = (API.kv_at(sdb, "account") or {}).get("slug") or ""
-        # The model the session is running (off its transcript) feeds the
-        # downgrade ladder (docs/relimit.md *Model-downgrade ladder*): a manual
-        # ⇆ now downgrades too when no account has the current model free.
-        cur_model = (plugins.context(row.get("transcript_path") or "")
-                     or {}).get("model") or ""
-        # Capture the picker's FULL reasoning (per-account rung/eff5h/limit-hit/
-        # reject) so a manual-migrate REFUSAL is reconstructible from the DB —
-        # the same subtle gap the automatic path closed with `relimit-pick`
-        # (docs/relimit.md *Audit trail*); a bare "no target" is undebuggable.
-        pick = {}
-        target = plugins.migration_target(cur, cur_model, manual=True,
-                                          explain=pick)
+        # the account vocabulary, the downgrade ladder and the migrator argv are
+        # all the owning host's (plugins/claude_code — accounts are a claude_code
+        # concept end to end); this endpoint owns the unknown-sid 404, the
+        # no-terminal 503 and the mapping of its verdict.
+        res = self._gesture_host(sid).migrate(sid, {
+            "sid": sid, "log": log, "sdb": sdb, "row": row,
+            "action": "web-migrate", "verb": "migrate"})
+        if self._gesture_declined(res, sid, "web-migrate", "migrate"):
+            return
+        target = res.get("target")
         if target is None:
-            A.state_file(log, sdb, "web-migrate",
-                         {"ok": False, "reason": "no target", "from": cur,
-                          "pick": pick})
             return self._json({"error": "no other account available"}, 409)
-        # target["model"] is the downgrade rung (or "" for a same-model migrate);
-        # pick_target already resolved same-vs-downgrade, so forward it verbatim.
-        proc = SP.spawn_detached(
-            os.path.join(P.BIN, "claude-relimit.py"),
-            [log, sid, target["slug"], target["alias"],
-             row.get("cwd") or "", "manual", target["model"]],
-            log, purpose="relimit:%s (web)" % target["slug"])
-        ok = proc is not None
-        A.state_file(log, sdb, "web-migrate",
-                     {"ok": ok, "from": cur, "to": target["slug"],
-                      "model": target["model"], "eff": target["eff"],
-                      "cwd": row.get("cwd") or "", "pick": pick})
-        if not ok:                       # spawn failure already audited by SP
+        if not res.get("ok"):            # spawn failure already audited by SP
             return self._json({"error": "migrator spawn failed"}, 502)
         return self._json({"ok": True, "to": target["slug"]})
 
@@ -385,11 +375,20 @@ class _SessionMixin:
                          {"win": "", "chars": len(name), "ok": False,
                           "reason": "no transcript"})
             return self._json({"error": "no transcript"}, 409)
+        # TWO different questions, both asked before the live/parked branch.
+        # (1) CAN this session's host rename at all (the cap the client greys the
+        # ✎ button on)? Without this a host with `renameable` True and the
+        # `rename` cap False fell through to the base gesture and surfaced as a
+        # 502 "send failed" — a capability answered as a malfunction (the P2 bug
+        # list, item 4).
+        if self._caps_guard(sid, "rename", "web-rename"):
+            return
+        # (2) Does a plugin OWN the file well enough to write into it? That is
+        # the PARKED half's gate — the transcript append and the durable
+        # override — and it is a different fact from the cap: a host may drive a
+        # live `/rename` and own no record format at all. Its window carries the
+        # same claude_session tag either way, so this too comes first.
         if not plugins.renameable(tpath):
-            # no plugin owns the file (a codex standalone host's rollout): it
-            # must receive neither a Claude `agent-name` record NOR a typed
-            # `/rename` — and its window carries the same claude_session tag,
-            # so this gate has to come BEFORE the live/parked branch
             A.state_file(log, sdb, "web-rename",
                          {"win": "", "chars": len(name), "ok": False,
                           "reason": "unsupported"})
@@ -402,12 +401,12 @@ class _SessionMixin:
         return self._rename_parked(sid, name, log, sdb, tpath)
 
     def _rename_live(self, sid, name, log, sdb, fe, win, tab):
-        """The LIVE half of post_rename: Claude Code's own `/rename <name>`,
-        pasted through the one slash-command channel (launch.type_command —
-        mode-proof against `editorMode: vim`, clipboard-image guarded). Claude
-        Code then updates its in-memory title, writes the `agent-name` record
-        itself and re-emits the OSC the kitty tab follows, so all four readers
-        agree from ONE write.
+        """The LIVE half of post_rename: the host's own `/rename <name>`, pasted
+        through its one slash-command channel (mode-proof against `editorMode:
+        vim`, clipboard-image guarded where the host declares it). Claude Code
+        then updates its in-memory title, writes the `agent-name` record itself
+        and re-emits the OSC the kitty tab follows, so all four readers agree
+        from ONE write.
 
         Mid-turn it lands in the TUI's message queue and applies at the turn
         boundary (`queued`, exactly like the ✦ auto button and the other quick
@@ -426,41 +425,15 @@ class _SessionMixin:
                           "reason": "dialog open"})
             return self._json({"error": "a dialog is open — answer it first"},
                               409)
-        # NON-claude host (codex) pastes its OWN `/rename <name>` through its
-        # gesture (fe/win ride in ctx — the gesture is sid-keyed). None for a
-        # claude_code / unprovable session, so the byte-identical inline path
-        # below runs unchanged.
-        host = self._gesture_host(sid)
-        if host is not None:
-            return self._host_rename_live(host, sid, name, log, sdb, fe, win, tab)
-        ok, clip = launch.type_command(fe, win, "/rename " + name)
         queued = tab in QUEUE_TABS
-        A.state_file(log, sdb, "web-rename",
-                     {"win": win, "chars": len(name), "ok": ok, "tab": tab,
-                      "channel": "tui", "queued": queued, "clip": clip})
-        if not ok:
-            A.error(log, "dashboard rename (send failed)",
-                    {"sid": sid, "win": win})
-            return self._json({"error": "send failed"}, 502)
-        return self._json({"ok": True, "title": name, "channel": "tui",
-                           "queued": queued})
-
-    def _host_rename_live(self, host, sid, name, log, sdb, fe, win, tab):
-        """The LIVE rename for a NON-claude host (codex): route through its
-        HostControl.rename gesture, which pastes the host's own `/rename <name>`.
-        Same `web-rename channel:tui` row + reply shape as the inline claude path
-        (plus host/status/cid); `queued` when mid-turn."""
-        res = host.rename(sid, name, {"sid": sid, "log": log, "sdb": sdb,
-                                      "tab": tab, "fe": fe, "win": win})
-        ok = bool(res.get("ok"))
-        queued = tab in QUEUE_TABS
-        A.state_file(log, sdb, "web-rename",
-                     {"win": win, "chars": len(name), "ok": ok, "tab": tab,
-                      "channel": "tui", "queued": queued, "host": host.name,
-                      "status": res.get("status"), "cid": res.get("cid")})
-        if not ok:
-            A.error(log, "dashboard rename (%s send failed)" % host.name,
-                    {"sid": sid, "win": win})
+        res = self._gesture_host(sid).rename(sid, name, {
+            "sid": sid, "log": log, "sdb": sdb, "tab": tab, "fe": fe,
+            "win": win, "action": "web-rename", "verb": "rename",
+            "queueing": queued})
+        if self._gesture_declined(res, sid, "web-rename", "rename",
+                                  extra={"win": win, "chars": len(name)}):
+            return
+        if not res.get("ok"):
             return self._json({"error": "send failed"}, 502)
         return self._json({"ok": True, "title": name, "channel": "tui",
                            "queued": queued})
@@ -487,8 +460,14 @@ class _SessionMixin:
                          {"win": "", "chars": len(name), "ok": False,
                           "channel": "transcript"})
             return self._json({"error": "append failed"}, 502)
-        stem = os.path.basename(tpath)
-        stem = stem[:-len(".jsonl")] if stem.endswith(".jsonl") else stem
+        # the override's KEY is the owning host's own filename convention
+        # (HostControl.title_key), the same derivation read/meta applies on the
+        # way back out — the `.jsonl` stem used to be spelled here, in a tier
+        # that is not supposed to know one host's transcript naming from
+        # another's. A host that declares none falls back to the basename, which
+        # is what the old code did for a non-`.jsonl` path anyway.
+        stem = (self._gesture_host(sid).title_key(tpath)
+                or os.path.basename(tpath))
         stored = prefs.set_renamed_title(stem, name)
         override_ok = isinstance(stored, dict) and stored.get(stem) == name
         A.state_file(log, sdb, "web-rename",

@@ -32,7 +32,7 @@ import time
 import plugins
 from core import sessionapi as API
 from core.noaudit import load_audit
-from dashboard import askdialog, config, prefs, suggestion
+from dashboard import config, prefs
 from dashboard.config import (GLOBAL_TICK_S, NOTIFY_STATES,
                               SESSIONS_LIMIT, SLOW_EVERY)
 from dashboard.control import launch
@@ -174,7 +174,7 @@ class Notifier:
         self.sent = []                 # [dict(payload, sent_at, handle)]
         self.fe = None                 # cached Frontend for the dialog-region
         #                                read (refreshed on the slow cadence)
-        self._claude_host = {}         # sid -> is the session a claude_code host?
+        self._hosts = {}               # sid -> its owning HostControl
         #                                (the screen-scrape gate; refreshed with winmap)
 
     # The bus surface, kept as delegations: a Notifier IS a publisher to its
@@ -198,63 +198,62 @@ class Notifier:
                 m[win] = row
             sid = row.get("sid")
             if sid and sid not in hosts:
-                # The screen-scrape gate: only the DEFAULT host has the
-                # AskUserQuestion dialog / faint-SGR input geometry the two
-                # scrapes below read. An unprovable/empty path stays the default
-                # (owns_by None) — the safe direction (scraping still degrades
-                # to None on a real miss); a proven codex rollout reads False.
-                # plugins.default_host is the ONE owner of that name.
-                owner = plugins.owns_by(row.get("transcript_path") or "") \
-                    if row.get("transcript_path") else None
-                hosts[sid] = owner in (None, plugins.default_host())
+                # The screen-scrape ROUTE: the dialog-region and input-box
+                # geometry the two probes below read belong to ONE TUI, so each
+                # is asked of the session's OWNING host and a host that has no
+                # such geometry answers None by not implementing it. An
+                # unprovable/empty path resolves to the default host — the safe
+                # direction (the scrape still degrades to None on a real miss).
+                hosts[sid] = (plugins.host_of(row.get("transcript_path") or "")
+                              or plugins.host_named(plugins.default_host()))
         self.winmap = m
-        self._claude_host = hosts
+        self._hosts = hosts
         # the frontend used to read a red tab's dialog region (below). Resolved
         # here, not per-scan: a hunt for kitty's socket is a subprocess, and a
         # missing terminal control channel degrades cleanly to None → no
         # dialog-activity signal, alerts fire as before.
         self.fe = launch.frontend()
 
-    def _screen_scrapable(self, sid):
-        """Whether the two Claude-geometry screen scrapes below (_dialog_region /
-        _input_typed) apply to this session's host. Only a claude_code host has
-        the AskUserQuestion dialog + faint-SGR input box they read; a codex host's
-        screen returns garbage (verified), so those scrapes must be skipped for it
-        — the tab-move / focus / composing signals still resolve a codex alert.
-        Defaults True for an unknown sid (a session that appeared a beat after the
-        last winmap refresh — the safe direction, and the scrape itself degrades
-        to None on a real miss)."""
-        return self._claude_host.get(sid, True)
+    def _host_for(self, sid):
+        """The session's owning HostControl for the two screen probes below —
+        the DEFAULT host for an unknown sid (a session that appeared a beat after
+        the last winmap refresh: the safe direction, and the probe itself
+        degrades to None on a real miss)."""
+        h = self._hosts.get(sid)
+        if h is None:
+            h = plugins.host_named(plugins.default_host())
+        return h
 
-    def _dialog_region(self, win):
-        """The AskUserQuestion dialog pane's text on window `win`, or None when
-        there's no terminal channel / read miss. `askdialog.region` isolates the
-        dialog (from its header-chip bar down), so a live-ticking status line
-        below it doesn't register as change — and it's "" for a non-ask red tab
-        (a permission / plan prompt has no ☐/☒ chip), so those keep the plain
-        grace-window behaviour."""
+    def _dialog_region(self, sid, win):
+        """The open question-dialog pane's text on window `win`, or None when
+        there's no terminal channel / read miss / a host with no such geometry.
+        The host's `ask_region` isolates the dialog (for Claude Code, from its
+        header-chip bar down), so a live-ticking status line below it doesn't
+        register as change — and it's "" for a non-ask red tab (a permission /
+        plan prompt has no chip bar), so those keep the plain grace-window
+        behaviour."""
         fe = self.fe
         if not (fe and win):
             return None
         try:
-            return askdialog.region(fe.get_text(win) or "")
+            return self._host_for(sid).ask_region(fe, win)
         except Exception:
             return None
 
-    def _input_typed(self, win):
+    def _input_typed(self, sid, win):
         """The REAL (non-faint) text the user has typed into the terminal input
         box on window `win`, or None. The 'done'-arm analog of _dialog_region:
         a green tab you're replying to AT THE TERMINAL leaves no other trace
         (typing into the `❯` box moves neither the tab off green nor the
         transcript until you submit), so this is what tells 'still composing in
         the kitty tab' from 'walked away'. None on no terminal channel / read
-        miss / empty-or-ghost box → those keep the plain grace-window behaviour.
-        Needs the ANSI capture (faint-SGR detection), unlike _dialog_region."""
+        miss / empty-or-ghost box / a host with no such geometry → those keep the
+        plain grace-window behaviour."""
         fe = self.fe
         if not (fe and win):
             return None
         try:
-            return suggestion.typed(fe.get_text(win, ansi=True) or "")
+            return self._host_for(sid).typed_input(fe, win)
         except Exception:
             return None
 
@@ -354,16 +353,15 @@ class Notifier:
         if entry.get("kind") == "asking":
             if not screen:
                 return None
-            if not self._screen_scrapable(sid):
-                return None                      # codex host — no dialog scrape
             # You answering AT THE TERMINAL — typing a free-text answer or
             # toggling a selection — moves neither the tab off red nor the
             # transcript (the dialog is still open, unsubmitted), so nothing
             # above fires. Its ONLY trace is the dialog region changing.
             # Baseline it on first sighting (the untouched dialog), then report
             # the moment it differs: you're on it, don't nag.
-            reg = self._dialog_region(win)
-            if reg:                          # "" = no ask dialog / read miss
+            reg = self._dialog_region(sid, win)
+            if reg:                          # "" = no dialog / read miss / a
+                #                              host with no such geometry
                 if entry.get("ask_region") is None:
                     entry["ask_region"] = reg
                 elif reg != entry["ask_region"]:
@@ -373,8 +371,9 @@ class Notifier:
             # typing into the `❯` box — likewise shows up nowhere until you
             # submit. Its trace is REAL (non-faint) content in the input box (a
             # settled tab pre-fills only a FAINT ghost suggestion, which
-            # `suggestion.typed` ignores).
-            if screen and self._screen_scrapable(sid) and self._input_typed(win):
+            # the host's typed_input ignores). A host with no such geometry
+            # answers None and the alert keeps the plain behaviour.
+            if screen and self._input_typed(sid, win):
                 return "terminal-input"
             # "If I've SEEN the final message, no notification." A done tab's
             # final message is on screen the moment it goes green, so ANY glance

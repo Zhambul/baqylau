@@ -1,37 +1,34 @@
 # dashboard/http/post/typing.py — the control-plane POSTs that TYPE INTO a
 # session's kitty window: message, quick command, stop (close the tab), and the
 # two rewind gestures. Every one of them resolves the AUTHORITATIVE live window
-# first (_resolve_live_window) and audits its own `web-*` state_files row.
-import time
-
+# first (_resolve_live_window), then hands the gesture to the session's OWNING
+# HOST (_gesture_host → plugins/<tool>/hostctl.py), which drives the terminal and
+# writes the `web-*` state_files row. What stays here is the guarding: input
+# validation, the caps gate, the live window, the tab-state refusals, and the
+# HTTP mapping of the gesture's result.
+import plugins
 from core import sessionapi as API
 from core import tabs
 from core.noaudit import load_audit
-from dashboard import (confirmdialog, rewindmenu)
 from dashboard.config import (BUSY_TABS,
                               EFFORTS,
                               QUEUE_TABS,
                               MODEL_ARG_OK)
 from dashboard.control import launch
 from dashboard.read.session import (ask_pending, plan_pending)
-from core.screendrive import clip_screen
 
 A = load_audit()
 
-DRAFT_CLEAR_GAP_S = 0.15           # settle between killing the restored draft
-#                                    (ctrl+u/k) and the bracketed paste of the
-#                                    edited resend (post_message clear_draft).
-#                                    Read only here, so it lives with its reader
-#                                    rather than in the shared knob registry —
-#                                    see the note in http/post/interrupt.py.
-DRAFT_CLEAR_LINES_MAX = 50         # ceiling on the per-line kill loop below —
-#                                    a corrupt/huge stash must not turn into an
-#                                    unbounded keystroke storm at the terminal.
-
 # The quick-command → host CAPABILITY key each command is gated on
-# (_caps_guard). The argless auto-rename is deliberately absent: rename works
-# through the transcript on a parked session, and this phase does not gate it.
-CAP_BY_CMD = {"compact": "compact", "model": "model", "effort": "effort"}
+# (_caps_guard). `rename` is the argless AUTO-rename (the ✦ button), and it
+# rides the `rename` cap rather than one of its own — being told a name and
+# inventing one are the same capability from the button's point of view. It used
+# to be absent, which is how Claude Code's argless `/rename` got pasted into a
+# codex composer that has no such command (the P2 bug list, item 3); the host's
+# `autoname` gesture is the other half of that fix, since a host may implement
+# `rename` and not `autoname` (codex does) and only the gesture can say so.
+CAP_BY_CMD = {"compact": "compact", "model": "model", "effort": "effort",
+              "rename": "rename"}
 
 
 class _TypingMixin:
@@ -49,15 +46,16 @@ class _TypingMixin:
         when no terminal resolves; else Frontend.send_text. Every attempt is a
         `web-send` state_files row, failures also an A.error.
 
+        The DELIVERY itself is the owning host's `send` gesture (the paste, the
+        input clear, the clipboard-image guard, the draft-stash consume — all
+        host-specific, all in plugins/<tool>/hostctl.py). This handler owns the
+        guards around it: the text/attachment validation, the modal refusal, the
+        live window, and the `queued` promise.
+
         `clear_draft` (bool): the TUI input already holds text the web put
         there — an interrupt that took the last message back, or a rewind that
-        restored one — so the send first kills that draft (Ctrl+U to start +
-        Ctrl+K to end per line, a backspace between lines — the stash's line
-        count drives the loop, so a multi-line take-back dies whole; the
-        cursor position within a line doesn't matter) and then delivers
-        the text as a BRACKETED PASTE (paste_text): a raw send into the
-        just-cleared input drops leading bytes (measured — the mangle), an
-        atomic paste doesn't. This is what lets you edit AND resend from the
+        restored one — so the send first kills that draft and then delivers the
+        text as a bracketed paste. This is what lets you edit AND resend from the
         web without touching the kitty tab (docs/dashboard.md).
 
         The SERVER decides it (`launch.tui_draft`), OR-ed with the body flag.
@@ -80,7 +78,10 @@ class _TypingMixin:
         if not text.strip() and not attachments:
             return self._reject_input("web-send", "empty text", "empty text",
                                       {"chars": len(text)}, sid=sid)
-        text = self._with_attachments(text, attachments)
+        # the owning host supplies the MENTION grammar the attachments ride in
+        # (claude_code's `@path`; a host with none gets the bare paths)
+        host = self._gesture_host(sid)
+        text = self._with_attachments(text, attachments, host)
         # the box holds text WE left there (take-back / rewind restore) — the
         # server's own record, so a reload or another device can't lose it
         pending_draft = launch.tui_draft(sid)
@@ -120,55 +121,20 @@ class _TypingMixin:
         # `tab: thinking` send). So VERIFY the turn is really live first. The
         # probe must run BEFORE the paste: our own paste changes the screen and
         # would itself read as motion.
-        live = self._turn_live(fe, win) if tab in QUEUE_TABS else None
+        live = host.turn_live(fe, win, {"sid": sid}) if tab in QUEUE_TABS \
+            else None
         queued = tab in QUEUE_TABS and live is not False
-        draft_lines = 0
-        if clear_draft:
-            # kill the restored draft, settle, then paste. Ctrl+U/Ctrl+K clear
-            # ONE line, and a take-back can hold a MULTI-LINE draft (session
-            # 8b9f870b, 2026-07-29: a 3-line message came back, only its last
-            # line died, and the resend glued onto the two survivors) — the
-            # stash knows the exact text, so kill one line per newline, a
-            # backspace between kills consuming the newline to hop up a line.
-            # The cursor sits on the LAST line after a restore; a body-flag-only
-            # clear (no stash) keeps the historical single-line kill.
-            draft_lines = pending_draft.count("\n") + 1 if pending_draft else 1
-            for i in range(min(draft_lines, DRAFT_CLEAR_LINES_MAX)):
-                if i:
-                    fe.send_key(win, "backspace")
-                fe.send_key(win, "ctrl+u")
-                fe.send_key(win, "ctrl+k")
-            time.sleep(DRAFT_CLEAR_GAP_S)
-        # ALWAYS a bracketed paste, not a raw send: a raw send is delivered as
-        # fast individual keystrokes and the TUI drops some depending on its
-        # input state (reported live: "test" arrived as "t"; measured 8/8
-        # clean for a bracketed paste, flaky for raw). The trailing CR is a
-        # separate keystroke OUTSIDE the paste, so it still submits — and a
-        # multi-line composer message pastes atomically instead of its internal
-        # newlines submitting it early.
-        # empty an IMAGE clipboard first — a bracketed paste makes Claude Code
-        # attach whatever image is on the board (docs/dashboard.md *Clipboard-
-        # image guard*); no-op on a text clipboard / off macOS.
-        clip = launch.clear_clipboard_image()
-        launch.note_send(sid)      # our paste is about to sit in the box for a
-        #                            beat — the draft sync must not read it back
-        ok = bool(fe.paste_text(win, text))
-        A.state_file(log, sdb, "web-send",
-                     {"win": win, "chars": len(text), "ok": ok, "tab": tab,
-                      "clear_draft": clear_draft, "tui_draft": bool(pending_draft),
-                      "draft_lines": draft_lines,
-                      "attachments": len(attachments),
-                      "clip": clip, "live": live, "queued": queued})
-        if not ok:
-            A.error(log, "dashboard message (send failed)",
-                    {"sid": sid, "win": win})
+        res = host.send(fe, win, text, {
+            "sid": sid, "log": log, "sdb": sdb, "tab": tab,
+            "action": "web-send", "verb": "message",
+            "clear_draft": clear_draft, "prev_text": pending_draft,
+            "box": launch.WebBox(sid), "live": live, "queued": queued,
+            "attachments": len(attachments)})
+        if self._gesture_declined(res, sid, "web-send", "send",
+                                  extra={"win": win, "chars": len(text)}):
+            return
+        if not res.get("ok"):
             return self._json({"error": "send failed"}, 502)
-        if pending_draft and not launch.set_tui_draft(sid, ""):
-            # a stale flag only costs an extra Ctrl+U/K on an empty line, but
-            # it means the STASH is broken — the same write path the take-back
-            # depends on, so surface it
-            A.error(log, "dashboard message (tui-draft clear)",
-                    {"sid": sid, "win": win})
         return self._json({"ok": True, "queued": queued, "tab": tab})
 
     def post_command(self, sid):
@@ -177,16 +143,14 @@ class _TypingMixin:
         `/compact`, `{"cmd": "model", "arg": <alias|id>}` → `/model <arg>`,
         `{"cmd": "effort", "arg": <level>}` → `/effort <arg>` (both may open
         the TUI's switch-confirm menu, auto-answered Yes below — the reply's
-        `confirm` field), `{"cmd": "rename"}` → `/rename` (argless — bare
-        `/rename` makes Claude Code GENERATE the title itself, the web
-        auto-rename; a NAMED rename never comes through here, post_rename's
-        transcript append works parked too). A FIXED
-        vocabulary, 400 on anything else — the arg is validated
-        (MODEL_ARG_OK / EFFORTS) precisely because it is typed into a
-        terminal, and compact/rename take no arg (the closed vocabulary IS
-        the point; free-form text is the composer's job). Delivery matches
-        post_message (bracketed paste + CR via the live claude_session
-        window), so mid-turn the command lands in the TUI's message queue and
+        `confirm` field), `{"cmd": "rename"}` → the host's AUTONAME (bare
+        `/rename` makes Claude Code GENERATE the title itself; a NAMED rename
+        never comes through here, post_rename's transcript append works parked
+        too). A FIXED vocabulary, 400 on anything else — the arg is validated
+        (MODEL_ARG_OK / EFFORTS) precisely because it is typed into a terminal,
+        and compact/rename take no arg (the closed vocabulary IS the point;
+        free-form text is the composer's job). Delivery is the host's own
+        gesture, so mid-turn the command lands in the TUI's message queue and
         runs at the turn boundary (`queued` in the reply) — but a RED tab
         (awaiting-command: a modal dialog is up) is a 409: pasted text would
         land IN the dialog, its digits deciding it. Every attempt is a
@@ -195,21 +159,24 @@ class _TypingMixin:
         if body is None:
             return
         cmd, arg = body.get("cmd"), body.get("arg")
-        # a NON-claude host (codex) drives model/effort through its OWN gesture
+        # A NON-default host (codex) drives model/effort through its OWN gesture
         # (an interactive /model picker, not a `/model <arg>` paste), so its arg
         # is validated by the live picker, not Claude's MODEL_ARG_OK/EFFORTS.
         host = self._gesture_host(sid)
+        # STRICT for the default host (and for an unnamed/inert one — a registry
+        # that could not resolve a host must not thereby relax an allowlist that
+        # guards text typed into a terminal); a proven non-default host validates
+        # its own arg against its live picker.
+        default = host.name in ("", plugins.default_host())
         argful = isinstance(arg, str) and bool(arg)
-        if cmd == "compact" and not arg:
-            text = "/compact"
-        elif cmd == "rename" and not arg:
-            text = "/rename"
-        elif cmd == "model" and argful and (host is not None
+        if cmd in ("compact", "rename") and not arg:
+            pass
+        elif cmd == "model" and argful and (not default
                                             or MODEL_ARG_OK.match(arg)):
-            text = "/model " + arg
-        elif cmd == "effort" and ((host is not None and argful)
+            pass
+        elif cmd == "effort" and ((not default and argful)
                                   or arg in EFFORTS):
-            text = "/effort " + arg
+            pass
         else:
             return self._reject_input("web-command", "bad cmd", "unknown command",
                                 {"sid": sid, "cmd": cmd, "arg": arg})
@@ -234,91 +201,38 @@ class _TypingMixin:
                           "ok": False, "tab": tab})
             return self._json({"error": "a dialog is open — answer it first"},
                               409)
-        # NON-claude host (codex) drives the command through its own gesture:
-        # `compact` pastes codex's /compact, `model`/`effort` drive codex's
-        # interactive /model picker (there is no /model <arg> or /effort to
-        # paste). A claude_code / unprovable session returns None (host resolved
-        # once, above) and the byte-identical inline paste path below runs
-        # unchanged.
-        if host is not None:
-            if cmd == "compact":
-                return self._host_compact(host, sid, log, sdb, fe, win, tab)
-            if cmd in ("model", "effort"):
-                return self._host_model(host, sid, cmd, arg, log, sdb, fe, win,
-                                        tab)
-        # the ONE slash-command channel: a bracketed paste (mode-proof — a raw
-        # typed command is vim KEYSTROKES in a NORMAL-mode box) + the clipboard
-        # -image guard that a paste requires (launch.type_command)
-        ok, clip = launch.type_command(fe, win, text)
-        A.state_file(log, sdb, "web-command",
-                     {"win": win, "cmd": cmd, "arg": arg or "", "ok": ok,
-                      "tab": tab, "clip": clip})
-        if not ok:
-            A.error(log, "dashboard command (send failed)",
-                    {"sid": sid, "win": win, "cmd": cmd})
-            return self._json({"error": "send failed"}, 502)
-        res = {"ok": True, "queued": tab in QUEUE_TABS, "tab": tab}
-        if cmd in ("model", "effort") and tab not in QUEUE_TABS:
-            # newer TUI builds interpose a Yes/No switch-confirm menu (the
-            # prompt-cache warning) instead of applying outright — unanswered
-            # it makes the click look dead, so press its own Yes (the button
-            # IS the consent), screen-verified: dashboard/confirmdialog.py.
-            # Mid-turn (queued) the command only runs at the turn boundary,
-            # so there is no menu to wait for here — an unanswered late menu
-            # surfaces as the red-tab notification.
-            try:
-                c = confirmdialog.confirm(fe, win)
-                res["confirm"] = "confirmed" if c["dialog"] else "none"
-            except Exception as e:      # ConfirmError or a frontend hiccup —
-                # the menu (if any) is left open for the terminal user
-                A.error(log, "dashboard command (confirm failed)",
-                        {"sid": sid, "win": win, "cmd": cmd, "err": str(e)})
-                res["confirm"] = "failed"
-            A.state_file(log, sdb, "web-command-confirm",
-                         {"win": win, "cmd": cmd,
-                          "confirm": res["confirm"]})
-        return self._json(res)
-
-    def _host_compact(self, host, sid, log, sdb, fe, win, tab):
-        """Route /compact through a NON-claude host's gesture (codex pastes its
-        own `/compact`). Writes the canonical `web-command` row (host/status/cid
-        alongside cmd) and shapes the reply like the inline path — no confirm menu
-        (that is a Claude prompt-cache prompt), and `queued` when mid-turn."""
-        res = host.compact(fe, win, {"sid": sid, "log": log, "sdb": sdb})
-        ok = bool(res.get("ok"))
-        A.state_file(log, sdb, "web-command",
-                     {"win": win, "cmd": "compact", "arg": "", "ok": ok,
-                      "tab": tab, "host": host.name, "status": res.get("status"),
-                      "cid": res.get("cid")})
-        if not ok:
-            A.error(log, "dashboard command (%s compact send failed)" % host.name,
-                    {"sid": sid, "win": win})
-            return self._json({"error": "send failed"}, 502)
-        return self._json({"ok": True, "queued": tab in QUEUE_TABS, "tab": tab})
-
-    def _host_model(self, host, sid, cmd, arg, log, sdb, fe, win, tab):
-        """Route /model or /effort through a NON-claude host's gesture (codex
-        drives its INTERACTIVE 3-step picker, which sets model + reasoning level
-        together). No confirm menu (that is Claude's prompt-cache prompt — the
-        gesture screen-verifies its own steps). Writes the canonical `web-command`
-        row (host/status/cid) and shapes the reply like the inline path. A picker
-        that can't be driven mid-turn is unlikely (codex refuses `/model` while a
-        turn runs), so this is not queued — a failure is a 502."""
-        ctx = {"sid": sid, "log": log, "sdb": sdb}
-        res = host.model(fe, win, arg, ctx) if cmd == "model" \
-            else host.effort(fe, win, arg, ctx)
-        ok = bool(res.get("ok"))
-        A.state_file(log, sdb, "web-command",
-                     {"win": win, "cmd": cmd, "arg": arg or "", "ok": ok,
-                      "tab": tab, "host": host.name, "status": res.get("status"),
-                      "cid": res.get("cid"), "step": res.get("step") or ""})
-        if not ok:
-            A.error(log, "dashboard command (%s %s: %s)"
-                    % (host.name, cmd, res.get("step") or "failed"),
-                    {"sid": sid, "win": win, "detail": res.get("detail") or ""})
-            return self._json({"error": res.get("detail") or "switch failed",
-                               "step": res.get("step") or ""}, 502)
-        return self._json({"ok": True, "queued": False, "tab": tab})
+        # Every command is the owning host's own gesture: `compact` its
+        # summarise command, `model`/`effort` a `/model <arg>` paste + the
+        # switch-confirm auto-Yes for Claude Code and an interactive 3-step
+        # picker for codex, `rename` the argless AUTO-name. The handler no longer
+        # knows any of those spellings — including whether the host HAS the
+        # gesture: `autoname` is the one CAP SHARER here (it rides `rename`), so
+        # a host with a `/rename <name>` but no argless form declines and that
+        # decline is the 409.
+        ctx = {"sid": sid, "log": log, "sdb": sdb, "tab": tab,
+               "action": "web-command", "verb": "command",
+               "queueing": tab in QUEUE_TABS}
+        if cmd == "compact":
+            res = host.compact(fe, win, ctx)
+        elif cmd == "rename":
+            res = host.autoname(fe, win, ctx)
+        elif cmd == "model":
+            res = host.model(fe, win, arg, ctx)
+        else:
+            res = host.effort(fe, win, arg, ctx)
+        if self._gesture_declined(res, sid, "web-command",
+                                  CAP_BY_CMD.get(cmd) or cmd,
+                                  extra={"win": win, "cmd": cmd,
+                                         "arg": arg or ""}):
+            return
+        if not res.get("ok"):
+            return self._json({"error": res.get("detail") or "send failed",
+                               "step": res.get("step") or ""},
+                              502)
+        out = {"ok": True, "queued": tab in QUEUE_TABS, "tab": tab}
+        if res.get("confirm"):
+            out["confirm"] = res["confirm"]
+        return self._json(out)
 
     def post_stop(self, sid):
         """Close a session's kitty tab (Frontend.close_tab — main window +
@@ -357,6 +271,13 @@ class _TypingMixin:
         A.state_file(log, sdb, "web-stop", {"win": win, "phase": "attempt"})
         ok = bool(fe.close_tab(win))
         A.state_file(log, sdb, "web-stop", {"win": win, "phase": "done", "ok": ok})
+        # the one lifecycle event no host's OWN hooks describe: "the web closed
+        # your tab". Both hosts answer "nothing to do" (Claude Code fires
+        # SessionEnd, codex's watcher notices its host pid is gone — each routes
+        # into hostpane.host_end by itself), and each says so by overriding it;
+        # the call is here so a host that DOES need to park something has the
+        # seam, and so the declaration is not dead code.
+        self._gesture_host(sid).lifecycle_end(sid, log, "web-stop")
         if not ok:
             A.error(log, "dashboard stop (close failed)",
                     {"sid": sid, "win": win})
@@ -364,10 +285,11 @@ class _TypingMixin:
         return self._json({"ok": True})
 
     def post_rewind(self, sid):
-        """Open Claude Code's rewind/checkpoint menu by TYPING `/rewind`
-        (documented identical to the idle double-Esc; synthesized double-press
-        key events opened the menu only ~2/3 at the best gap while the typed
-        command opened it every time). No Escape pressed ⇒ no recheck.
+        """Open the session's rewind/checkpoint menu (the host's `rewind`
+        gesture — for Claude Code a typed `/rewind`, documented identical to the
+        idle double-Esc; synthesized double-press key events opened the menu only
+        ~2/3 at the best gap while the typed command opened it every time). No
+        Escape pressed ⇒ no recheck.
 
         409 on a BUSY tab. This endpoint used to FORK there — a mid-turn
         double-Esc meant "cancel the turn and restore the message", the ⊘
@@ -396,12 +318,10 @@ class _TypingMixin:
                           "refused": "busy"})
             return self._json({"error": "session is busy — stop the turn first",
                                "tab": tab}, 409)
-        ok, clip = launch.type_command(fe, win, "/rewind")
-        A.state_file(log, sdb, "web-rewind",
-                     {"win": win, "ok": ok, "tab": tab, "clip": clip})
-        if not ok:
-            A.error(log, "dashboard rewind (send failed)",
-                    {"sid": sid, "win": win})
+        res = self._gesture_host(sid).rewind(fe, win, {
+            "sid": sid, "log": log, "sdb": sdb, "tab": tab,
+            "action": "web-rewind", "verb": "rewind"})
+        if not res.get("ok"):
             return self._json({"error": "send failed"}, 502)
         return self._json({"ok": True, "tab": tab})
 
@@ -409,12 +329,14 @@ class _TypingMixin:
         """FULL web rewind — restore the session to the checkpoint of a
         SPECIFIC prompt without touching the kitty tab (docs/dashboard.md,
         *Web rewind*): drives Claude Code's own rewind menu in the session's
-        window via dashboard/rewindmenu.drive (typed `/rewind`, screen-
-        verified navigation, digit resolved from the parsed option labels).
+        window via the host's `rewind_to` gesture (for Claude Code: a typed
+        `/rewind`, screen-verified navigation, and a digit resolved from the
+        parsed option labels — plugins/claude_code/rewindmenu.py).
 
         Body: `text` — the target prompt's full text (menu entries are its
-        first line, truncation-aware); `mode` — "conversation" | "both" |
-        "code" (rewindmenu.MODE_LABELS); `ups` — the target's `up`-press
+        first line, truncation-aware); `mode` — one of the owning host's
+        `rewind_modes()` ("conversation" | "both" | "code" for Claude Code);
+        `ups` — the target's `up`-press
         distance from the menu's "(current)" cursor start (newer prompts
         + 1), a jump hint the text-verify scan corrects.
 
@@ -435,10 +357,13 @@ class _TypingMixin:
             return
         text = body.get("text")
         mode = body.get("mode") or "conversation"
+        host = self._gesture_host(sid)
         if not isinstance(text, str) or not text.strip():
             return self._reject_input("web-rewind-to", "empty text", "empty text",
                                       {"type": type(text).__name__}, sid=sid)
-        if mode not in rewindmenu.MODE_LABELS:
+        # the restore modes are the owning host's own vocabulary (its rewind
+        # menu's rows), not a table here
+        if mode not in host.rewind_modes():
             return self._reject_input("web-rewind-to", "bad mode", "bad mode",
                                       {"mode": mode}, sid=sid)
         try:
@@ -459,37 +384,19 @@ class _TypingMixin:
             return self._json(
                 {"error": "session is busy — stop or cancel it first",
                  "tab": tab}, 409)
-        try:
-            res = rewindmenu.drive(fe, win, text, mode, ups=ups)
-        except rewindmenu.MenuError as e:
-            # the screen the failing step gave up on, clipped — without it a
-            # `step: "open"` row cannot tell "the menu never opened" from "our
-            # marker stopped matching a menu that did" (the 2026-07-25 drift).
-            # It rides ONLY the errors row (context is untruncated there): put
-            # in the state_files row too, it blew A.state_file's 2000-byte cap
-            # and the truncated JSON crashed every json_extract anomaly query
-            # over state_files.content (2026-07-29, session 69caa362).
-            seen = clip_screen(e.screen) if e.screen else ""
-            A.error(log, "dashboard rewind-to (%s)" % e.step,
-                    {"sid": sid, "win": win, "mode": mode, "detail": str(e),
-                     "screen": seen})
-            A.state_file(log, sdb, "web-rewind-to",
-                         {"win": win, "ok": False, "tab": tab, "mode": mode,
-                          "ups": ups, "step": e.step})
-            return self._json({"error": str(e), "step": e.step}, 409)
-        A.state_file(log, sdb, "web-rewind-to",
-                     {"win": win, "ok": True, "tab": tab, "mode": mode,
-                      "ups": ups, "steps": res["steps"],
-                      "digit": res["digit"], "degraded": res["degraded"]})
-        restored = text if mode in ("conversation", "both") else ""
-        if restored and not launch.set_tui_draft(sid, restored):
-            # Claude Code puts the rewound-to prompt back in the input box, so
-            # the next send must REPLACE it (launch.tui_draft — the same
-            # server-owned flag the interrupt's take-back sets)
-            A.error(log, "dashboard rewind-to (tui-draft stash)",
-                    {"sid": sid, "win": win})
-        return self._json({"ok": True, "mode": mode, "restored": restored,
-                           "degraded": res["degraded"]})
+        res = host.rewind_to(fe, win, text, mode, {
+            "sid": sid, "log": log, "sdb": sdb, "tab": tab, "ups": ups,
+            "action": "web-rewind-to", "verb": "rewind-to",
+            "box": launch.WebBox(sid)})
+        if self._gesture_declined(res, sid, "web-rewind-to", "rewind",
+                                  extra={"win": win, "mode": mode}):
+            return
+        if not res.get("ok"):
+            return self._json({"error": res.get("detail") or "rewind failed",
+                               "step": res.get("step") or ""}, 409)
+        return self._json({"ok": True, "mode": mode,
+                           "restored": res.get("restored") or "",
+                           "degraded": res.get("degraded")})
 
     def _resolve_live_window(self, sid, action, *, verb, extra=None):
         """The shared head of the control-plane POST handlers that TYPE INTO a

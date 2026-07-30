@@ -21,7 +21,7 @@ if REPO not in sys.path:
     sys.path.insert(0, REPO)
 
 from dashboard import server as DS
-from dashboard import suggestion as SUG
+from plugins.claude_code import suggestion as SUG
 
 
 # ------------------------------------------------------------------ opshtml

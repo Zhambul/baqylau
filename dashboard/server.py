@@ -59,8 +59,13 @@ from core import paths as P  # noqa: F401  -- DS.P
 from core import sessionapi as API  # noqa: F401  -- DS.API
 from core import spawn as SP  # noqa: F401  -- DS.SP
 from core.noaudit import load_audit
-from dashboard import askdialog, confirmdialog, plandialog, prefs, \
-    rewindmenu, telegram, webpush  # noqa: F401  -- DS.<dialog>/prefs/transport test handles
+from dashboard import prefs, telegram, webpush  # noqa: F401  -- DS.prefs/transport test handles
+# The five Claude SCREEN DRIVERS (askdialog / plandialog / rewindmenu /
+# confirmdialog / suggestion) are NOT re-exported here any more: they moved into
+# plugins/claude_code/ with the gestures that drive them (P2), and this facade
+# is the DASHBOARD's surface. A test that drives one reaches its owner directly
+# (`from plugins.claude_code import askdialog`), which is also where its knobs
+# now live.
 
 A = load_audit()   # always-on audit trail (CLAUDE_AUDIT=0 disables); inert stub if it can't import
 

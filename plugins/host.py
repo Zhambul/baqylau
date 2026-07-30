@@ -24,14 +24,19 @@
 # {"status": <acknowledged|rejected|indeterminate>, "cid": <correlation id>} so
 # an audit row can be tied to the gesture that produced it.
 #
-# ROUTING, as of today: codex's POST handlers DO dispatch through these methods
-# (the seven gestures CodexHost overrides), and claude_code's do not — its
-# gesture bodies are declared so its caps read all-True, while the dashboard's
-# handlers keep their own inline bodies and `_gesture_host` returns None for the
-# DEFAULT host precisely so those run byte-identically. Moving them behind
-# ClaudeCodeHost is the next phase's work. (This header used to say the gestures
-# were "NOT yet routed" for anyone, which stopped being true when codex's
-# interrupt/compact/rename/ask/plan/model/effort were wired.)
+# ROUTING, as of P2: EVERY host's POST handler dispatches through these methods.
+# `_gesture_host(sid)` hands back a HostControl for every session (the DEFAULT
+# host included — there is no inline fallback left), and the Claude bodies that
+# used to sit in dashboard/http/post/*.py now live in
+# plugins/claude_code/hostctl.py together with the five screen drivers they
+# drive. A handler is guards + `host.<gesture>(…)` + the HTTP mapping.
+#
+# What a gesture OWNS, therefore: the terminal driving, its own `web-*`
+# state_files rows and `A.error` diagnostics (row ORDER inside a gesture is
+# load-bearing), and the host-specific decisions inside it. What the CALLER
+# still owns: authentication, the caps guard, resolving the live window, tab-
+# state refusals, the read model, and every HTTP status. `ctx` is the bag those
+# two halves meet in (below).
 import itertools
 
 # The CAPABILITY surface: each name is BOTH the cap key the dashboard gates a
@@ -94,6 +99,17 @@ class HostControl:
     lead_prose = False
 
     # --- capability derivation ------------------------------------------------
+    def implements(self, name):
+        """Did THIS subclass replace HostControl's inert `name`? The same
+        derivation caps() applies to the GESTURES, exposed for the surface that
+        has no cap: a caller about to PAY for something before asking (the ghost
+        -suggestion probe resolves a frontend and a `kitten @ ls` window map
+        first) can skip the whole errand for a host whose answer is the inert
+        default. Never a host-name check — that is the thing this refactor
+        deletes."""
+        return (getattr(type(self), name, None)
+                is not getattr(HostControl, name, None))
+
     def caps(self):
         """This host's capability map: {gesture: bool} over GESTURES, each bit
         DERIVED from whether this subclass replaced HostControl's inert default.
@@ -107,14 +123,45 @@ class HostControl:
 
     # --- CONTROL gestures (whole gestures, not keystrokes) --------------------
     # `fe`/`win` are the frontend + its window id when the gesture drives a
-    # terminal (an app-server host ignores them); `ctx` is an opaque per-request
-    # bag (sid/log/sdb/tab) the caller threads through for audit. Each returns a
-    # result dict via _rejected() in the base — a subclass returns ACK/
-    # INDETERMINATE. None of these are CALLED by the dashboard in P1a; their
-    # existence (as overrides) is what flips a subclass's caps True.
+    # terminal (an app-server host ignores them); `ctx` is the per-request bag
+    # the caller threads through. Its COMMON keys are:
+    #
+    #   sid / log / sdb  — the session and its audit targets (every gesture
+    #                      writes its own `web-*` state_files row through them)
+    #   action           — the KIND of that row ("web-send", "web-interrupt", …),
+    #                      so the gesture's row and the caller's refusal rows
+    #                      share one vocabulary
+    #   verb             — the word an `A.error` phrase uses ("interrupt")
+    #   tab              — the window's tab state at gesture time
+    #   queueing         — bool: is this tab one where typed text lands in the
+    #                      host's own message QUEUE rather than starting a turn
+    #                      (the caller's policy table, not the host's)
+    #   row              — the audit `sessions` row (transcript_path/cwd)
+    #   box              — the WEB's input-box stash: `.draft` (text we left in
+    #                      the box), `.set_draft(text) -> bool`, `.note_send()`.
+    #                      INJECTED like `fe`, for the same reason: the stash is
+    #                      the DASHBOARD's memory of its own pastes (its terminal
+    #                      draft sync writes it too) while only the host knows
+    #                      WHEN the box changed under it.
+    #
+    # Per-gesture keys are named in each method's docstring. Each returns a
+    # result dict: {"status", "cid", "ok": bool} plus whatever the caller needs
+    # to shape its reply. The INERT base returns `_unsupported(<gesture>)` — a
+    # REJECTED result carrying the gesture name, which is how a caller tells "this
+    # host does not do that" (409, naming the capability) from "it tried and
+    # failed" (502): a plain `_rejected()` means the latter, and hosts use it for
+    # real failures.
     @staticmethod
     def _rejected():
         return {"status": REJECTED, "cid": ""}
+
+    @staticmethod
+    def _unsupported(gesture):
+        """The inert default's result: this host does not implement `gesture`.
+        Distinct from _rejected() (which a host returns when it TRIED and could
+        not) — the `unsupported` key is what lets a caller answer 409 with the
+        capability rather than 502 with a failure."""
+        return {"status": REJECTED, "cid": "", "unsupported": gesture}
 
     @staticmethod
     def _ack():
@@ -122,44 +169,171 @@ class HostControl:
 
     def interrupt(self, fe, win, ctx):
         """Stop the current turn in place (the session stays up)."""
-        return self._rejected()
+        return self._unsupported("interrupt")
 
     def send(self, fe, win, text, ctx):
-        """Deliver `text` into the session as a user message."""
-        return self._rejected()
+        """Deliver `text` into the session as a user message. NOT caps-gated (the
+        composer is always reachable), but the BODY is host-routed: the mention
+        grammar, the input clear, whether a paste grabs the clipboard image and
+        how a turn's liveness is probed all differ per host."""
+        return self._unsupported("send")
 
     def rename(self, sid, name, ctx):
         """Rename the session to `name` (through whatever channel owns the
-        name — sid-keyed, since a parked session has no window)."""
-        return self._rejected()
+        name — sid-keyed, since a parked session has no window; `fe`/`win` ride
+        in ctx for the LIVE half)."""
+        return self._unsupported("rename")
 
     def rewind(self, fe, win, ctx):
-        """Open / drive the checkpoint-rewind menu."""
-        return self._rejected()
+        """Open the checkpoint-rewind menu (for the TERMINAL user to drive)."""
+        return self._unsupported("rewind")
 
     def migrate(self, sid, ctx):
         """Hand the session to another subscription account."""
-        return self._rejected()
+        return self._unsupported("migrate")
 
     def compact(self, fe, win, ctx):
         """Compact (summarise) the conversation."""
-        return self._rejected()
+        return self._unsupported("compact")
 
     def model(self, fe, win, arg, ctx):
         """Switch the session's model to `arg`."""
-        return self._rejected()
+        return self._unsupported("model")
 
     def effort(self, fe, win, arg, ctx):
         """Switch the session's reasoning effort to `arg`."""
-        return self._rejected()
+        return self._unsupported("effort")
 
     def ask(self, fe, win, answer, ctx):
-        """Answer the session's open AskUserQuestion dialog."""
-        return self._rejected()
+        """Answer the session's open question dialog."""
+        return self._unsupported("ask")
 
     def plan(self, fe, win, decision, ctx):
-        """Decide the session's open ExitPlanMode dialog."""
-        return self._rejected()
+        """Decide the session's open plan dialog — `decision` is one of the shapes
+        plan_decisions() names."""
+        return self._unsupported("plan")
+
+    # --- gesture SIBLINGS that share another gesture's cap --------------------
+    # Not in GESTURES (a cap must map to exactly one method, or the derivation
+    # stops being the source of truth), but real gestures with real bodies. Each
+    # names the cap it rides so the caller gates it on the same bit.
+
+    def rewind_to(self, fe, win, target, mode, ctx):
+        """Restore the session to the checkpoint of a SPECIFIC prompt — the
+        web's own end-to-end rewind, where `rewind` merely opens the menu. Rides
+        the `rewind` cap. `target` is the prompt's full text, `mode` one of
+        rewind_modes(), `ctx['ups']` a jump hint the driver's verify corrects."""
+        return self._unsupported("rewind_to")
+
+    def autoname(self, fe, win, ctx):
+        """Let the host NAME THE SESSION ITSELF (no name supplied) — the ✦ auto
+        button. Rides the `rename` cap: being told a name and inventing one are
+        the same capability from the button's point of view, and a host may
+        implement one without the other (which is exactly what the 409 says)."""
+        return self._unsupported("autoname")
+
+    def plan_options(self, fe, win, ctx):
+        """The decision options the host's OPEN plan dialog offers, as
+        {ok, options: [{digit, label}, …]}. Rides the `plan` cap. A separate
+        method because a host may have to READ THEM OFF THE SCREEN (Claude Code's
+        labels vary with the session's permission mode) where another simply
+        knows them."""
+        return self._unsupported("plan_options")
+
+    def deliver(self, fe, win, text, ctx):
+        """Put `text` into the session as a message with NO draft/liveness
+        machinery — the follow-up a dialog decline hands over. Rides the `ask`
+        cap (its one caller is the ask card's typed-answer route)."""
+        return self._unsupported("deliver")
+
+    # --- per-host VOCABULARY the control plane validates against --------------
+    # Not gestures (no caps): these are the WORDS and grammars a host accepts, so
+    # the dashboard can refuse an unknown one with a 409 that NAMES the host's
+    # own vocabulary instead of typing a foreign command into its TUI.
+
+    # Does a bracketed paste into this host's TUI grab whatever IMAGE the
+    # clipboard holds? Claude Code's does (there is no opt-out, so its gestures
+    # empty an image clipboard first); codex's does not, and must not pay the
+    # osascript round-trip. A DECLARATION, so the guard is applied by the host
+    # that needs it rather than to everyone (docs/dashboard.md *Clipboard-image
+    # guard*).
+    paste_grabs_clipboard_image = False
+
+    def mention(self, path):
+        """How this host's input names an ATTACHED FILE inline (Claude Code:
+        `@path`, which its TUI resolves and attaches). "" means the host has no
+        mention grammar — the caller then delivers the bare PATH, which is
+        strictly better than typing another tool's sigil as literal text."""
+        return ""
+
+    def clear_input(self, fe, win, prev_text=""):
+        """Kill whatever is in the input box so a paste REPLACES rather than
+        appends; returns the number of lines killed. The key repertoire is the
+        host's (Claude Code: Ctrl+U/Ctrl+K per line with a backspace between).
+        The inert default does nothing and says so: a host whose input model is
+        unknown must not be sent line-kill keystrokes on spec."""
+        return 0
+
+    def turn_live(self, fe, win, ctx=None):
+        """Is a turn ACTUALLY running? True / False / None (can't tell). The
+        caller uses it to decide whether a message will QUEUE — a promise the tab
+        colour alone cannot make (a turn cancelled at the terminal can leave the
+        colour frozen). None is the honest default: the caller then trusts the
+        tab, exactly as it did before any host had a probe."""
+        return None
+
+    def ask_declines(self):
+        """The words that DECLINE this host's question dialog rather than
+        answering it (Claude Code: "chat", its 'Chat about this' row). ()
+        means the host has no decline — the caller 409s naming the vocabulary
+        instead of silently dropping the flag and answering the question."""
+        return ()
+
+    def plan_decisions(self):
+        """The decision shapes this host's plan dialog accepts, in the order a
+        "need one of …" message should name them: "decide" (a numbered row),
+        "feedback" (free text), "dismiss" (keep planning). () for a host with no
+        plan dialog."""
+        return ()
+
+    def rewind_modes(self):
+        """The restore modes this host's rewind offers (Claude Code:
+        both/conversation/code). () when it cannot rewind."""
+        return ()
+
+    def title_key(self, tpath):
+        """The durable rename-override key for one of this host's transcripts
+        (its filename STEM), or "" when the path isn't one / the host has no such
+        key. Both sides of the override — the parked rename's write and the read
+        model's lookup — derive it here, so the filename convention stays the
+        OWNING host's fact."""
+        return ""
+
+    # --- screen READS the web MIRRORS (no keys pressed) -----------------------
+    # Read-only probes of a live window. They are host methods, not providers,
+    # because they need the frontend and are pure TUI geometry; the inert
+    # defaults are what make "no probe for a host we can't read" the default
+    # rather than a host-name check in the read model.
+
+    def input_box(self, fe, win, ctx=None):
+        """(ghost, typed) — the host's own pre-filled SUGGESTION in its input
+        box and the REAL text the user has typed there. (None, None) when the
+        host has no such geometry, which is also "we could not read it": both
+        mean no news, and the callers already treat it that way."""
+        return None, None
+
+    def ask_region(self, fe, win):
+        """The open question dialog's REGION text, isolated from the rest of the
+        screen so a ticking status line isn't mistaken for activity — the
+        notifier diffs it to tell "you are answering at the terminal" from "the
+        question is unread". "" = no such dialog on screen; None = no reading."""
+        return None
+
+    def typed_input(self, fe, win):
+        """The REAL (non-ghost) text in the input box — the 'still composing at
+        the terminal' signal on a settled tab. None when unreadable / no such
+        geometry."""
+        return None
 
     # --- launch / lifecycle plumbing (NOT capability-gated) -------------------
     # These aren't user buttons the dashboard greys — they are the argv/lifecycle
@@ -224,8 +398,17 @@ class HostControl:
         return self.name
 
     def lifecycle_end(self, sid, log, reason):
-        """Best-effort teardown when a session ends (park/close bookkeeping).
-        The inert default does nothing."""
+        """Best-effort teardown after the WEB closed a session's tab (the ■ stop
+        button), called by post_stop once the close returns.
+
+        For both hosts today this is genuinely a no-op and BOTH say so by
+        overriding it: Claude Code fires SessionEnd on exit and codex's watcher
+        notices its host pid is gone, and each routes into core.hostpane.host_end
+        on its own — the tab close is the whole gesture. It stays declared (and
+        called) because "the web closed your tab" is the one lifecycle event no
+        hook of the host's own describes, so a future host that needs to park
+        something has a place to do it; the inert default is the honest answer
+        for a host that hasn't thought about it."""
         return None
 
 

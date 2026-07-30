@@ -22,6 +22,7 @@ import core.audit as A
 from core import paths as P
 from dashboard import opshtml
 from dashboard import server as DS
+from plugins.claude_code import hostctl as CH
 
 
 # ------------------------------------------------------------------ opshtml
@@ -403,8 +404,8 @@ def test_clear_clipboard_image_only_when_image(monkeypatch):
         r = type("R", (), {})()
         r.stdout = fake_run.info if argv[2:3] == ["clipboard info"] else ""
         return r
-    monkeypatch.setattr(DS.launch.sys, "platform", "darwin")
-    monkeypatch.setattr(DS.launch.subprocess, "run", fake_run)
+    monkeypatch.setattr(DS.launch.clipimg.sys, "platform", "darwin")
+    monkeypatch.setattr(DS.launch.clipimg.subprocess, "run", fake_run)
     # an image on the clipboard → detected and cleared
     fake_run.info = "«class PNGf», 70, «class utf8», 3"
     calls.clear()
@@ -416,7 +417,7 @@ def test_clear_clipboard_image_only_when_image(monkeypatch):
     assert DS.clear_clipboard_image() is False
     assert not any("set the clipboard" in " ".join(c) for c in calls)
     # off macOS → never even probes
-    monkeypatch.setattr(DS.launch.sys, "platform", "linux")
+    monkeypatch.setattr(DS.launch.clipimg.sys, "platform", "linux")
     calls.clear()
     assert DS.clear_clipboard_image() is False and calls == []
 
@@ -429,7 +430,9 @@ def test_post_message_runs_clipboard_guard(dash, monkeypatch):
     monkeypatch.setenv("KITTY_WINDOW_ID", "42")
     A.session_start({"session_id": "msgclip", "cwd": "/w", "transcript_path": ""})
     calls = []
-    monkeypatch.setattr(DS.launch, "clear_clipboard_image",
+    # the guard now runs INSIDE the host's send gesture (a host that declares
+    # `paste_grabs_clipboard_image`), over the one core owner of the mechanism
+    monkeypatch.setattr(CH.clipimg, "clear_image",
                         lambda: calls.append(1) or True)
     code, _ = _post(dash + "/api/session/msgclip/message", {"text": "hi"})
     assert code == 200
@@ -474,7 +477,7 @@ def test_post_message_queued_is_verified_against_a_live_screen(dash, monkeypatch
     True. Both land in the web-send audit row (`live`/`queued`)."""
     fe = _FakeFE()
     _inject_fe(monkeypatch, fe)
-    monkeypatch.setattr(DS.post_interrupt, "QUEUE_VERIFY_GAP_S", 0.0)
+    monkeypatch.setattr(CH, "QUEUE_VERIFY_GAP_S", 0.0)
     monkeypatch.setenv("KITTY_WINDOW_ID", "88")
     A.session_start({"session_id": "msgv", "cwd": "/w", "transcript_path": ""})
     monkeypatch.setattr(DS.API, "tab_states", lambda: {"88": "thinking"})

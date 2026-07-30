@@ -1,4 +1,5 @@
-# dashboard/suggestion.py — read Claude Code's greyish "suggested answer" ghost
+# plugins/claude_code/suggestion.py — read Claude Code's greyish "suggested
+# answer" ghost
 # text out of a live session's input box (docs/dashboard.md, *Web ghost
 # suggestion*). Sibling of askdialog.py/plandialog.py and the same philosophy:
 # the suggestion exists ONLY as live TUI pixels — Claude Code fires no hook for

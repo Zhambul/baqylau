@@ -1,6 +1,6 @@
 # plugins/codex/plandialog.py — drive codex's plan-mode DECISION picker.
 #
-# The codex analog of dashboard/plandialog.py, and the sibling of
+# The codex analog of plugins/claude_code/plandialog.py, and the sibling of
 # plugins/codex/dialog.py (the request_user_input driver). After codex presents
 # a plan in Plan mode it shows a numbered decision picker on screen — the same
 # `N. label  description` / `›` cursor geometry the /model picker uses (so this
@@ -16,7 +16,7 @@
 # There is NO plan record for the decision itself (it is pure TUI, no rollout
 # row until decided), so — like the ask driver — the ONLY way to answer from the
 # web is to drive the picker, every step screen-verified. It lives in the PLUGIN
-# (not beside dashboard/plandialog.py) because codex's `plan` HostControl gesture
+# (not beside plugins/claude_code/plandialog.py) because codex's `plan` HostControl gesture
 # drives it and the layering rule forbids a plugin importing the dashboard: the
 # whole gesture, driver included, sits behind HostControl and the dashboard only
 # calls host.plan (docs/codex.md *Plan mode*).

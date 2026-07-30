@@ -614,15 +614,15 @@ reflow for free and keeps the no-build rule.
 | `POST /api/dirs/hide` | **control plane:** `{"cwd"}` (the group key `group_dir\|\|cwd`) → stamp `time.time()` into the hidden-dirs prefs and return `{ok, hidden}` (the full map); the group vanishes until a session started after now shows up in it (*Hidden directories* below); 400 non-string key; **409 when the directory has an active (live) session** |
 | `/api/notify-config` | `{enabled}` — the GLOBAL alerts master switch (`prefs.notify_enabled()`, default ON); the list page's `#notifytoggle` seeds its ◉/○ label from this on load (*Global alerts toggle* below) |
 | `POST /api/notify` | **control plane** (a FIXED route, distinct from `/api/session/<sid>/notify`): `{"enabled": bool}` → write the durable global `notify-enabled` pref, audit a `notify-global` `state_files` row, and push a `notify-config` SSE event so every other open page repaints; the ONE master switch over all toasts/OS notifs + Telegram/web-push, overriding per-session mutes when OFF (*Global alerts toggle* below); 400 non-bool |
-| `POST /api/session/<sid>/message` | **control plane:** `{"text", "attachments"?, "clear_draft"?}` → type it (+ Enter) into the session's kitty window (`Frontend.paste_text`); `attachments` are `@`-mention paths prepended to the text (*Web attachments* below); replies `{ok, queued, tab}` — `queued: true` when the send landed mid-turn in Claude Code's own message queue (a `QUEUE_TABS` tab colour VERIFIED against a live screen, `_turn_live` — a terminal-side cancel freezes the colour mid-turn); 409 headless, 400 empty, 503 no terminal |
-| `POST /api/session/<sid>/command` | **control plane:** `{"cmd", "arg"?}` → the scoreboard's quick-command row (*Web quick commands* below): a FIXED vocabulary of the TUI's own slash commands — `compact` (argless), `model` (arg: `MODEL_ARG_OK`), `effort` (arg: `EFFORTS`), `rename` (argless — bare `/rename`, Claude Code generates the title itself; the ✦ auto button inside the inline-rename input, *Web rename* below) — pasted like a composer send; model/effort auto-answer the TUI's switch-confirm menu (`dashboard/confirmdialog.py`, non-queued only); replies `{ok, queued, tab, confirm?}`; 400 off-vocabulary, 409 headless or a dialog open (red tab), 503 no terminal |
+| `POST /api/session/<sid>/message` | **control plane:** `{"text", "attachments"?, "clear_draft"?}` → type it (+ Enter) into the session's kitty window (`Frontend.paste_text`); `attachments` are prepended as the owning host's own MENTION tokens — `@path` for Claude Code, the bare path for a host with no mention grammar (*Web attachments* below); the delivery is that host's `send` gesture (its clear/paste/clipboard rules, *Every gesture is the owning HOST's* below); replies `{ok, queued, tab}` — `queued: true` when the send landed mid-turn in Claude Code's own message queue (a `QUEUE_TABS` tab colour VERIFIED against a live screen, `_turn_live` — a terminal-side cancel freezes the colour mid-turn); 409 headless, 400 empty, 503 no terminal |
+| `POST /api/session/<sid>/command` | **control plane:** `{"cmd", "arg"?}` → the scoreboard's quick-command row (*Web quick commands* below): a FIXED vocabulary of the TUI's own slash commands — `compact` (argless), `model` (arg: `MODEL_ARG_OK`), `effort` (arg: `EFFORTS`), `rename` (argless — the host's AUTONAME: bare `/rename`, Claude Code generates the title itself; the ✦ auto button inside the inline-rename input, *Web rename* below; **409 `cap: "rename"` for a host with no argless form — codex's `/rename` takes a name**) — delivered by the owning host's gesture; model/effort auto-answer the TUI's switch-confirm menu (`plugins/claude_code/confirmdialog.py`, non-queued only); replies `{ok, queued, tab, confirm?}`; 400 off-vocabulary, 409 headless or a dialog open (red tab), 503 no terminal |
 | `POST /api/session/<sid>/stop` | **control plane:** close the session's kitty tab (`Frontend.close_tab` — a graceful stop: Claude Code exits on the HUP and SessionEnd runs the normal lifecycle); 409 headless, 503 no terminal |
 | `POST /api/upload` | **control plane:** `{"sid"?, "name", "mime", "data"(base64)}` → stage the bytes under `paths.UPLOADS_DIR/<sid\|staging>/` and return `{path(abs), name, mime, is_image}`; the composer injects `path` as an `@`-mention (*Web attachments* below). JSON+base64 (no multipart), cap raised to `UPLOAD_MAX`; 400 bad base64, 413 oversize |
 | `POST /api/clipboard/files` | **local-machine read** (no terminal write, nothing staged): `{"names": [basename, …], "sid"?}` → `{paths: [abs, …]}`, the FULL paths of those files on the host's pasteboard (`dashboard/clipboard.py`). The one way a pasted file becomes a usable path instead of an upload — the browser only ever sees a basename (*Web attachments* → *Pasting a copied FILE*). Returns paths ONLY when the basenames match exactly (`clipboard.match` — a remote device's clipboard is not the host's); a miss is a 200 with `[]`, audited either way as a `web-clipboard` row; 400 missing/non-string `names` |
 | `POST /api/clientlog` | **frontend audit** (audit-only, no terminal write): `{"client", "device", "conn"{online,view,es,conn}, "events":[{t,sid,ev,…}]}` → one `web-client` `state_files` row per event, scoped to each event's own `sid` (*Frontend audit (clientlog)* below); every row carries this browser's `device` id (device-attributable — the frontend side of notification *Device routing*); the browser reporting the transport + connection + JS-error timeline the server can't see; ≤`CLIENTLOG_MAX` events, scalars only; 400 non-list events |
 | `POST /api/presence` | **device presence** (no terminal write, no per-beat audit): `{"device", "sid"?}` → stamp `_DEVICE_SEEN[device]` (so the on-device push routes to the most-recently-used device — *Web push* → *Device routing*) and, when `sid` present, refresh the `_VIEWING` deadline (the "you're watching this session" suppress). Sent on a heartbeat DERIVED from the served `view_ttl_s` (TTL/2.5, *Served limits* above) while the page is visible+focused, from ANY view; the client's single presence beat, superseding the old per-session `viewing` beat (that endpoint still exists) |
 | `POST /api/sessions/new` | **control plane:** `{"cwd", "account"?, "resume"?, "continue"?, "model"?, "effort"?, "prompt"?, "attachments"?}` → launch `<account-alias> [--resume sid \| --continue] [--model m] [--effort e] [prompt]` in a new tab at `cwd` (`Frontend.launch_tab`); `account` is a switcher slug → its vetted alias command word (default `claude`); responds `{ok, win}` — `win` the new tab's window id when the terminal reported one (the page's exact jump-match key, "" otherwise) — and starts the `launch_wake` SSE hurry-up watch; 400 bad cwd/model/effort/resume/account, 503 no terminal |
-| `POST /api/session/<sid>/rename` | **control plane:** `{"name"}` → rename a session through the channel that owns its name (*Web rename* below): LIVE, paste Claude Code's own `/rename <name>` into its window; PARKED, append the `agent-name` naming record ourselves (`plugins.set_session_title`, docs/session-naming-findings.md) + the durable prefs override; replies `{ok, title, channel: tui\|transcript, queued?}`; 400 empty name, 409 no transcript / unsupported (a codex rollout) / a dialog is open, 502 send or append failed |
+| `POST /api/session/<sid>/rename` | **control plane:** `{"name"}` → rename a session through the channel that owns its name (*Web rename* below): LIVE, paste Claude Code's own `/rename <name>` into its window; PARKED, append the `agent-name` naming record ourselves (`plugins.set_session_title`, docs/session-naming-findings.md) + the durable prefs override; replies `{ok, title, channel: tui\|transcript, queued?}`; 400 empty name, 409 no transcript / **the owning host has no `rename` cap** (`_caps_guard` — this used to fall through to the inert gesture and surface as a 502) / unsupported by `plugins.renameable` (the PARKED-write ownership gate, a different question from the cap) / a dialog is open, 502 send or append failed |
 | `POST /api/session/<sid>/…` | **control plane**, each with its own section below: `interrupt` (Esc in the session's window), `rewind` (open the checkpoint menu; idle only), `rewind-to` (*Web rewind* — the full checkpoint restore), `answer` (*Web ask* — AskUserQuestion; a `chat`+`message` body routes a typed preview-question answer through "chat about this" then delivers the text) + `ask-draft` (persist the unsubmitted ask selections, no terminal write), `composer-draft` + `composer-queue` (persist the unsent message / pending ⧗ chips, no terminal write — *Web composer draft* / *Web composer queue*), `hint-audit` (audit-only beacon for the optimistic composer bubble's lifecycle — a `web-hint` state_files row, no terminal write, no session state — *Optimistic composer bubble*), `plan-options` + `plan-decision` (*Web plan mode* — ExitPlanMode), `notify` (`{"muted"}` → opt this session in/out of the deferred Telegram alert, a prefs write, no terminal — *Telegram alerts* below), `viewmode` (`{"mode": verbose|default|focus}` → this session's mirror DENSITY, a prefs write, no terminal and emphatically not Claude Code's own `viewMode` setting — *View modes* above; 400 outside the vocabulary), `tasks-hide` (`{"hidden": bool}` → dismiss/restore the pinned tasks CARD, a prefs write, no terminal and no task touched — *Web tasks* below; 400 non-bool, **409 unless every task is completed**), `viewing` (a presence heartbeat sent only while the page is visible+focused+on this session — refreshes the in-memory `_VIEWING` deadline so the deferred alert suppresses while you're watching; empty body, no terminal write, no session state, no per-beat audit — *Telegram alerts* below) |
 | `/events` | global SSE: a `hello` (the server's `BOOT_ID` — the EventSource auto-reconnects across a server restart, and a changed boot id tells an OPEN page its loaded JS may be stale; the client toasts "dashboard updated — refresh", click to reload. Twice a redeploy shipped under an open page and its old handlers running against the new server read as a product bug), then a full `sessions` snapshot on connect + on membership/order change, `sessions-delta` `{rows}` for content-only changes (paused-blind per-row diff, wire-stripped rows — *The list renders once, then patches* below), an `accounts` event (the full `/api/accounts` payload) whenever the accounts strip's data changes (sched_score-blind diff — same section) + `notify` toasts |
 | `/events/session/<sid>?after=N&mpos=M[&agent=<aid>]` | per-session SSE (`agent` scopes the MIRROR channel only — *Agent scope*): `ops`/`msgs`/`stats`/`agents`/`costs`/`ctx`/`compacting`/`git`/`title`/`running`/`fgrun`/`tab`/`prompts`/`errors`/`monitors`/`jobs`/`memory`/`ask`/`ask-draft`/`plan`/`tasks`/`composer-draft`/`composer-queue`, each on change; a fresh connection's first `ops` event is the merged backlog, tail-limited, carrying `oldest` (see below). Every field other than `ops` is a row of the stream's CHANNEL TABLE (`_SLOW_CHANS`/`_FAST_CHANS`, see *The stream's pushed fields are a channel table*), and the four tab-badge counts (`errors`/`monitors`/`jobs`/`memory`) keep their own table inside it — `_BADGE_COUNTS`, a cheap count wired to a `{"count": n}` event of the same name, its values `(sid, cwd)` callables so the count resolves at call time (a patched `sessionapi` moves the pushed number) and so `memory` can route through its scope-gating owner instead of a second reading of the rule; adding a badge is a table row |
@@ -1106,7 +1106,78 @@ sometimes", and screenshots (the dominant attach-by-paste case) carry no file
 path anyway, so they already upload. One rule, plus drag-drop as the explicit
 attach gesture.
 
-**Slash commands are PASTED, never typed** (`launch.type_command`, 2026-07-25).
+### Every gesture is the owning HOST's
+
+The control-plane POSTs do not know how to drive a session. They know how to
+GUARD one: authenticate the request, validate the body, refuse a gesture the
+session's tool cannot do (`_caps_guard`), resolve the AUTHORITATIVE live window,
+refuse a red tab or a busy one — and then hand the whole gesture to the
+session's owning host:
+
+```
+_gesture_host(sid)  ->  plugins.owns_by(transcript) -> plugins.host_named(...)
+                        (the DEFAULT host for an unprovable path)
+      |
+      +-- host.interrupt / send / rename / autoname / rewind / rewind_to
+          / migrate / compact / model / effort / ask / plan / deliver
+```
+
+There is no `if host is not None:` anywhere any more. Until P2 that branch was
+the seam: a *provably* non-default host (a codex rollout) went through
+`HostControl`, and everything else fell through to an inline body written for
+Claude Code. Those inline bodies are gone — they live in
+`plugins/claude_code/hostctl.py` now, together with the five SCREEN DRIVERS they
+drive (`askdialog` / `plandialog` / `rewindmenu` / `confirmdialog` /
+`suggestion`, which moved out of `dashboard/` into that package; only the
+tool-agnostic skeleton stayed shared, and it moved DOWN to `core/screendrive.py`
+because a plugin may not import the dashboard). `dashboard/clipboard.py`'s
+sibling mechanism went the same way: `core/clipimg.py` owns the macOS
+clipboard-image probe/wipe, and the POLICY of whether a paste needs it is a host
+DECLARATION (`paste_grabs_clipboard_image` — true for Claude Code, false for
+codex, which paid a ~150 ms osascript round-trip on every message for nothing).
+
+**A gesture owns its `web-*` audit rows.** That is a deliberate split from the
+"the handler audits everything" discipline the guards keep: the row ORDER inside
+a gesture is load-bearing (an interrupt writes its main row and THEN its `phase:
+restore` row; it must NOT spawn the escape-recheck for a turn that never
+stopped), and only the body knows those orderings. The handler still writes every
+REFUSAL it makes itself — the caps 409, the no-window 409, the dialog/busy 409 —
+under the same `web-*` kind, so one query still reads a gesture and its
+rejections together.
+
+**Two kinds of "no".** `_caps_guard` answers the coarse one from the DERIVED caps
+map (the same bits the client greys its buttons on). The fine one comes from the
+gesture itself: the inert base returns an `unsupported` result, and
+`_gesture_declined` turns that into the identical 409 + reject row. It exists for
+the CAP SHARERS — one cap, two methods — where the caps map cannot express the
+difference:
+
+| sharer | rides the cap | why a host may have one and not the other |
+|---|---|---|
+| `autoname` | `rename` | codex's `/rename` takes a NAME; there is no "invent one" form. Claude Code's argless `/rename` used to be pasted into it (nothing gated `{"cmd":"rename"}` at all) |
+| `rewind_to` | `rewind` | opening a checkpoint menu and driving it to a chosen prompt are different amounts of screen contract |
+| `plan_options` | `plan` | Claude Code READS its options off the screen (they vary with the permission mode); codex's are static in its pending record |
+| `deliver` | `ask` | the follow-up message an ask DECLINE hands over — only reachable where the host has a decline at all |
+
+**Per-host VOCABULARIES, refused by name.** Three request words used to be
+Claude-Code-only facts that other hosts either ignored or mis-answered. Each is
+now a list the owning host declares, and a word outside it is a 409 that NAMES
+what that host accepts:
+
+| vocabulary | claude_code | codex | what a bad word used to do |
+|---|---|---|---|
+| `ask_declines()` | `("chat",)` — the dialog's "Chat about this" row | `()` — its Esc ABORTS the turn, so there is no decline | silently dropped, and the question got ANSWERED instead of dodged |
+| `plan_decisions()` | `("decide", "feedback", "dismiss")` | `("decide", "dismiss")` — its picker has no free-text row | a generic 400 "no action", and the typed feedback vanished |
+| `rewind_modes()` | the keys of `rewindmenu.MODE_LABELS` | `()` | a dashboard-side table of modes with no menu row behind them |
+
+The mention grammar joins them: `HostControl.mention(path)` is `@path` for Claude
+Code (its TUI resolves and attaches the file) and `""` for a host with no such
+grammar, which then receives the BARE PATH — still a file the model can open,
+where a foreign sigil arrives as literal text. And `title_key(tpath)` is the
+durable rename override's key, derived by the host that owns the transcript
+naming convention rather than by a `.jsonl` literal in this tier.
+
+**Slash commands are PASTED, never typed** (`tui.type_command`, 2026-07-25).
 Raw keystrokes are not safe in Claude Code's input box: with **`editorMode: vim`**
 it is MODAL, and anything that pressed Escape first — the interrupt presses up to
 `INTERRUPT_TRIES` — leaves it in **NORMAL** mode, where the characters are vim
@@ -1125,7 +1196,7 @@ it without any race, and that older diagnosis now looks wrong.
 A **bracketed paste** is mode-proof — Claude Code takes it as content, never as
 keystrokes — and it was already how the quick commands (`/compact`, `/model`,
 `/effort`) reached the TUI, which is exactly why *those* kept working where the
-typed `/rewind` did not. So `launch.type_command` is the ONE slash-command
+typed `/rewind` did not. So `tui.type_command` is the ONE slash-command
 channel (`post_rewind`, `post_command`, `rewindmenu.drive`), and it folds in the
 clipboard-image guard below, which every paste requires. The Enter rides outside
 the paste, so it still submits. A grep-test pins it: nothing may reach the TUI as
@@ -1717,7 +1788,7 @@ until a ghost is live) that inserts the suggestion on tap.
 **Why screen-scrape.** The suggestion is pure TUI state — Claude Code fires
 **no hook** for its own input-box suggestion, and it never touches the
 transcript (it isn't sent yet). So the only source is the live screen. The
-probe (`dashboard/suggestion.py`, sibling of `askdialog.py`/`plandialog.py`)
+probe (`plugins/claude_code/suggestion.py`, sibling of `askdialog.py`/`plandialog.py`)
 captures the viewport WITH ANSI (`fe.get_text(win, ansi=True)` — a new `ansi`
 flag on the frontend `get_text`, `--ansi` / the raw-socket `ansi` payload
 field) and reads the input box, which sits between the two grey divider rules
@@ -1941,7 +2012,7 @@ of the TUI's OWN slash commands into the session's window — `/compact`,
 philosophy as the "/" menu: the web never re-implements compaction or model
 switching, it only presses the button.
 
-**The switch-confirm menu (`dashboard/confirmdialog.py`).** v2.1.214 applied
+**The switch-confirm menu (`plugins/claude_code/confirmdialog.py`).** v2.1.214 applied
 `/model`/`/effort` with an argument outright; newer builds (observed live
 2026-07-18) interpose a numbered are-you-sure menu when the switch would
 invalidate the conversation's prompt cache — "Change effort level? … ❯ 1.
@@ -2520,7 +2591,7 @@ the document-level interrupt gesture).
 Claude Code owns its own name and a parked one has nobody to ask:
 
 - **LIVE → Claude Code's own `/rename <name>`**, pasted into the session's
-  window through the one slash-command channel (`launch.type_command` —
+  window through the one slash-command channel (`tui.type_command` —
   bracketed paste, mode-proof against `editorMode: vim`, clipboard-image
   guarded). Claude Code updates its in-memory session title, writes the
   `agent-name` record itself, and re-emits the OSC title the kitty tab
@@ -2663,7 +2734,7 @@ place; verified live 2026-07-18). File snapshots do live on disk
 (`~/.claude/file-history/<sid>/<hash>@vN`, mapped by the transcript's
 `file-history-snapshot`/`-delta` records keyed to prompt uuids), so CODE
 could be restored externally — but conversation could not, and a partial
-reimplementation would drift. So `dashboard/rewindmenu.py` drives Claude
+reimplementation would drift. So `plugins/claude_code/rewindmenu.py` drives Claude
 Code's own menu in the session's window, with every step verified by
 reading the screen back (`Frontend.get_text`), never pressing blind:
 
@@ -3410,7 +3481,7 @@ on the SAME boundary as `ask-pending` (its PostToolUse, or the turn
 boundary), so it never outlives its question. Best-effort throughout: a
 failed save retries on the next edit and the local card keeps its state.
 
-**Answering** drives the TUI's own dialog — `dashboard/askdialog.py`,
+**Answering** drives the TUI's own dialog — `plugins/claude_code/askdialog.py`,
 the rewindmenu philosophy (screen-verified key events, never a blind
 press) but deliberately NOT unified with it: different anatomy, and
 OPPOSITE bail semantics — rewindmenu bails by pressing Escape, while
@@ -3630,7 +3701,7 @@ make that work without a second card:
   N/M` header, numbered options with a `›` cursor, an `enter to submit
   answer` footer — so Claude's `askdialog.region()` returns "" on it and
   cannot drive it. `post_answer` routes a codex session through its
-  `HostControl.ask` gesture (`_host_answer` — the same host branch the
+  `HostControl.ask` gesture (the same host routing
   other control handlers use, `_gesture_host(sid)`), which drives
   **`plugins/codex/dialog.py`**: walk the `›` cursor onto the chosen
   option, ENTER to submit each question in order, screen-verified. It
@@ -3670,14 +3741,14 @@ versa); the turn boundaries drop both. Snapshot carries `plan`, the
 session SSE emits a `plan` event on change.
 
 **The decision buttons come from the live screen** — `POST
-/plan-options` (`dashboard/plandialog.options`, read-only, no key
+/plan-options` (`plugins/claude_code/plandialog.options`, read-only, no key
 pressed): the labels VARY with the session's permission mode ("Yes, and
 bypass permissions" in a bypass session vs "Yes, and auto-accept edits"
 elsewhere — measured), and they exist nowhere but the dialog pixels, so
 hardcoding them would drift. The card fetches once per render; a parse
 failure degrades to the feedback box + "decide in the terminal".
 
-**Deciding** (`POST /plan-decision`, `dashboard/plandialog.py` — third
+**Deciding** (`POST /plan-decision`, `plugins/claude_code/plandialog.py` — third
 sibling of rewindmenu/askdialog, same screen-verified philosophy):
 
 - `digit` + `label` — press that decision row, after verifying the
