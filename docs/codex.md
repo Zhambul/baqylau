@@ -783,7 +783,24 @@ A codex run launched INSIDE a Claude session must read like a subagent in agent
 scope: its intermediate messages/reasoning/commands all visible. The same is now
 true of a codex subagent spawned by a STANDALONE codex host (cli 0.146+, its own
 child rollout — see *Per-subagent codex streams* above for the discovery, which
-streams it stamped `codex:<nickname>` through exactly this machinery). Three parts:
+streams it stamped `codex:<nickname>` through exactly this machinery). Four parts:
+0. **The replayed-parent PREFIX is trimmed.** A subagent rollout OPENS with a
+   burst replaying the PARENT thread's history as of the fork — two `session_meta`
+   records (the child's `thread_source=="subagent"`, then the parent's), the
+   parent's replayed turn(s), then the child's own work. Left in, that prefix
+   DOUBLES the parent's prose + exec into the subagent's scoped mirror AND bubbles
+   (the bug: clicking a subagent looked identical to the lead). `rollout.py` owns
+   the boundary: the parent's replayed `task_started` carries a `started_at` from
+   BEFORE the fork, while the child's OWN bootstrap `task_started` carries
+   `started_at >= the fork` (`subagent_fork_epoch` = the child `session_meta`'s
+   timestamp). Everything after that bootstrap task_started is the child's turn.
+   TWO callers share the predicate `is_child_bootstrap`, applied in the shape their
+   context needs (a deliberately-different pair): the live op stream GATES
+   per-record (`stream.py` `Renderer.feed_rollout`, race-safe — each record
+   self-decides as it arrives, so a burst still being written can't mis-cut); the
+   web `conversation` seeks a byte OFFSET (`subagent_body_offset`, a random-access
+   read of a complete file). Both fail OPEN (show everything) when the boundary
+   can't be found, never an empty scope.
 1. **Grammar** — the rollout `chat`/`think`/exec/patch records already parse.
 2. **`conversation()`** — the run's PROSE becomes bubbles from its rollout,
    exactly as a Claude subagent's does.

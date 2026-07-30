@@ -329,6 +329,80 @@ def test_request_user_input_question_schema():
                          arguments="{broken")) is None
 
 
+# ------------------------------------------------- subagent rollout prefix boundary
+
+def _write_subagent_rollout(tmp_path, fork_iso="2026-07-30T12:19:59.556Z",
+                            fork_epoch=1785413999):
+    """A minimal subagent rollout: child session_meta (thread_source=subagent) +
+    parent session_meta, the parent's REPLAYED turn (task_started started_at BEFORE
+    the fork, a parent prompt + message), then the child's OWN bootstrap
+    task_started (started_at == the fork) and its work."""
+    p = tmp_path / "rollout-2026-07-30T12-19-59-child.jsonl"
+    recs = [
+        {"type": "session_meta", "timestamp": fork_iso,
+         "payload": {"thread_source": "subagent", "timestamp": fork_iso,
+                     "parent_thread_id": "PARENT", "agent_nickname": "Pauli",
+                     "source": {"subagent": {"thread_spawn": {
+                         "parent_thread_id": "PARENT"}}}}},
+        {"type": "session_meta", "timestamp": fork_iso,
+         "payload": {"thread_source": "user", "originator": "codex-tui"}},
+        # --- parent's replayed turn (started BEFORE the fork) ---
+        {"type": "event_msg", "timestamp": fork_iso,
+         "payload": {"type": "task_started", "started_at": fork_epoch - 15}},
+        {"type": "event_msg", "timestamp": fork_iso,
+         "payload": {"type": "user_message", "message": "run a subagent for weather"}},
+        {"type": "event_msg", "timestamp": fork_iso,
+         "payload": {"type": "agent_message", "message": "I'll delegate that."}},
+        # --- child's OWN bootstrap task_started (started_at == the fork) ---
+        {"type": "event_msg", "timestamp": fork_iso,
+         "payload": {"type": "task_started", "started_at": fork_epoch}},
+        # --- the child's own work ---
+        {"type": "event_msg", "timestamp": "2026-07-30T12:20:11.379Z",
+         "payload": {"type": "agent_message", "message": "Checking Bali forecast."}},
+    ]
+    p.write_text("".join(json.dumps(r) + "\n" for r in recs), encoding="utf-8")
+    return str(p)
+
+
+def test_subagent_fork_epoch_only_for_a_subagent_rollout(tmp_path):
+    sub = _write_subagent_rollout(tmp_path)
+    assert RO.subagent_fork_epoch(sub) == 1785413999
+    # a normal rollout (no thread_source==subagent) has no fork epoch
+    normal = tmp_path / "rollout-normal.jsonl"
+    normal.write_text(json.dumps({"type": "session_meta", "payload": {
+        "cwd": "/w", "originator": "codex-tui"}}) + "\n", encoding="utf-8")
+    assert RO.subagent_fork_epoch(str(normal)) is None
+
+
+def test_subagent_body_offset_skips_the_replayed_parent_prefix(tmp_path):
+    """The byte offset lands past the child's bootstrap task_started, so a reader
+    starting there sees only the child's OWN turn — never the parent's replayed
+    prompt/message."""
+    sub = _write_subagent_rollout(tmp_path)
+    off = RO.subagent_body_offset(sub)
+    assert off > 0
+    tail = open(sub, "rb").read()[off:].decode()
+    assert "Checking Bali forecast." in tail            # child's own work kept
+    assert "run a subagent for weather" not in tail      # parent prompt dropped
+    assert "I'll delegate that." not in tail             # parent message dropped
+    # a normal rollout is never trimmed (fail-open)
+    normal = tmp_path / "rollout-normal.jsonl"
+    normal.write_text(json.dumps({"type": "session_meta", "payload": {
+        "cwd": "/w"}}) + "\n" + json.dumps(_ev("user_message", message="hi")) + "\n",
+        encoding="utf-8")
+    assert RO.subagent_body_offset(str(normal)) == 0
+
+
+def test_is_child_bootstrap_needs_the_fork_epoch():
+    parent = RO.parse(_ev("task_started", started_at=1785413984))
+    child = RO.parse(_ev("task_started", started_at=1785413999))
+    assert not RO.is_child_bootstrap(parent, 1785413999)
+    assert RO.is_child_bootstrap(child, 1785413999)
+    assert not RO.is_child_bootstrap(child, None)       # not a subagent rollout
+    assert not RO.is_child_bootstrap(RO.parse(_ev("user_message", message="x")),
+                                     1785413999)
+
+
 # --------------------------------------------------------------- top-level records
 
 def test_top_level_compacted_boundary():

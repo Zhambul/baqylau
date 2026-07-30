@@ -222,6 +222,13 @@ def conversation(sid, pos=0, agent_id=""):
     path = _rollout_for(sid, agent_id)
     if not path:
         return None
+    # A SUBAGENT rollout opens with the parent thread's REPLAYED history; skip it
+    # so the subagent's bubbles are its OWN turns only (docs/codex.md *Sidecar →
+    # subagent parity*) — the same boundary the op stream gates on, applied here as
+    # a byte offset (this is a random-access read of a complete file). No-op (0)
+    # for the standalone own-run (agent_id empty) and a non-subagent sidecar.
+    if agent_id and pos == 0:
+        pos = RO.subagent_body_offset(path)
     lines, new_pos = _complete_lines(path, pos)
     out = []
     # codex writes each turn in BOTH registers — the event_msg one (user_message

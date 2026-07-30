@@ -67,6 +67,7 @@
 import json
 import os
 import re
+from datetime import datetime
 
 # The exec output's exit-status head line ("Exit code: 2" / "Process exited
 # with code 2") — scanned only in the head window: the status line leads the
@@ -564,3 +565,71 @@ def parse_line(s):
     except Exception:
         return {"kind": "bad", "raw": s}
     return parse(o)
+
+
+# --- subagent rollout: skip the replayed-parent PREFIX ---------------------------
+# A codex SUBAGENT run (cli 0.146+, `collaboration.spawn_agent`) writes its OWN
+# rollout that OPENS with a burst replaying the PARENT thread's history as of the
+# fork — two `session_meta` records (the child's `thread_source=="subagent"`, then
+# the parent's), the parent's replayed turn(s), then the child's own work. Left
+# in, that prefix DOUBLES the parent's prose/exec into the subagent's scoped
+# mirror + bubbles (docs/codex.md *Sidecar → subagent parity*). The reliable
+# boundary (verified on cli 0.146): a parent's replayed `task_started` carries a
+# `started_at` from BEFORE the fork, while the CHILD's OWN bootstrap `task_started`
+# carries `started_at >= the fork` (the child `session_meta`'s own timestamp).
+# Everything after that bootstrap task_started is the child's turn. Two callers
+# apply it in the shape their context needs (they share this predicate): the
+# stream tails LIVE so it GATES per-record (race-safe — `feed_rollout`); the web
+# `conversation` reads a COMPLETE file so it seeks a byte OFFSET.
+
+def subagent_fork_epoch(path):
+    """int(the child `session_meta` timestamp) for a SUBAGENT rollout, else None
+    (a normal rollout / unreadable head). A subagent rollout's first session_meta
+    has `thread_source == "subagent"` (or a `source.subagent.thread_spawn`)."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            o = json.loads(fh.readline())
+        if o.get("type") != "session_meta":
+            return None
+        p = o.get("payload") or {}
+        spawn = (((p.get("source") or {}).get("subagent") or {})
+                 .get("thread_spawn") or {})
+        if p.get("thread_source") != "subagent" and not spawn:
+            return None
+        ts = p.get("timestamp") or o.get("timestamp") or ""
+        return int(datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp())
+    except Exception:
+        return None
+
+
+def is_child_bootstrap(rec, fork_epoch):
+    """True for the child's OWN bootstrap `task_started` (`at >= fork_epoch`) —
+    the last record of the replayed-parent prefix. `fork_epoch` None => never."""
+    return (fork_epoch is not None and bool(rec)
+            and rec.get("kind") == "task_started"
+            and (rec.get("at") or 0) >= fork_epoch)
+
+
+def subagent_body_offset(path):
+    """Byte offset of the first CHILD-OWN record in a subagent rollout — just past
+    the child's bootstrap task_started, skipping the replayed-parent prefix. 0 for
+    a normal rollout OR when the boundary isn't found (fail-open: show everything,
+    never an empty scope). For a random-access reader (the web conversation); the
+    live stream uses is_child_bootstrap as a forward gate instead."""
+    fork_epoch = subagent_fork_epoch(path)
+    if fork_epoch is None:
+        return 0
+    try:
+        off = 0
+        with open(path, "rb") as fh:
+            for raw in fh:
+                off += len(raw)
+                try:
+                    rec = parse(json.loads(raw.decode("utf-8", "replace")))
+                except Exception:
+                    continue
+                if is_child_bootstrap(rec, fork_epoch):
+                    return off          # the child's turns begin on the NEXT line
+    except Exception:
+        pass
+    return 0

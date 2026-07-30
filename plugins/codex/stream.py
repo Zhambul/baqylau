@@ -229,6 +229,13 @@ class Renderer:
         # over these — instead of once at a footer that would never come; live,
         # like the OTLP receiver feeds a Claude session.
         self.f_fresh = self.f_out = self.f_cache = 0
+        # SUBAGENT rollout only: the fork epoch (RO.subagent_fork_epoch, set by
+        # main()) and a forward gate. A subagent rollout OPENS with a burst
+        # replaying the PARENT thread; those records are DROPPED until the child's
+        # own bootstrap task_started passes (docs/codex.md *Sidecar → subagent
+        # parity*). None fork_epoch => not a subagent => open from the first record.
+        self.fork_epoch = None
+        self.sub_open = True
 
     def _emit_exit_chip(self, code):
         # The red failed-exit chip, shared by both sources (companion
@@ -480,6 +487,14 @@ class Renderer:
            "exec_result": _ro_exec_result}
 
     def feed_rollout(self, rec):
+        if not self.sub_open:
+            # still in a subagent rollout's replayed-parent PREFIX — drop every
+            # record until the child's own bootstrap task_started passes (that
+            # task_started is turn chrome, dropped too; the child's turns start on
+            # the NEXT record). Race-safe: each record self-decides as it arrives.
+            if RO.is_child_bootstrap(rec, self.fork_epoch):
+                self.sub_open = True
+            return
         h = self._RO.get(rec["kind"])
         if h:
             h(self, rec)
@@ -519,6 +534,12 @@ def main(run):
 
     tail = T.FileTailer(LOGFILE)
     rd = Renderer()          # this run's mutable render state (both sources)
+    # A SUBAGENT rollout replays the parent thread's history first; gate it out so
+    # the subagent's stream is its OWN turns only (docs/codex.md *Sidecar → subagent
+    # parity*). Non-subagent rollout / companion .log => fork_epoch None => no gate.
+    if ROLLOUT:
+        rd.fork_epoch = RO.subagent_fork_epoch(LOGFILE)
+        rd.sub_open = rd.fork_epoch is None
 
     def pump():
         # Loops while a capped read (core/tail.py PUMP_MAX_B) left a backlog —

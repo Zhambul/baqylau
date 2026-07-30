@@ -473,6 +473,47 @@ def test_standalone_watcher_streams_a_subagent_stamped(test_env, codex, reaper):
     host.terminate()
 
 
+def test_standalone_subagent_stream_drops_the_replayed_parent_prefix(test_env, codex, reaper):
+    """A codex subagent rollout OPENS by replaying the PARENT thread's history;
+    the stream must paint only the child's OWN turns (docs/codex.md *Sidecar →
+    subagent parity*). Regression: the whole parent prefix leaked into the
+    subagent's scoped mirror, so clicking it looked identical to the lead. The
+    boundary is the child's bootstrap task_started (started_at == the fork); the
+    parent's replayed task_started is earlier."""
+    import calendar
+    host = subprocess.Popen(["sleep", "60"])
+    reaper.append(host)
+    codex.start_watcher(host_pid=host.pid)
+    fork_iso = "2026-07-30T12:19:59.556Z"
+    fork_epoch = calendar.timegm((2026, 7, 30, 12, 19, 59, 0, 0, 0))
+    codex.add_rollout(
+        originator="codex-tui",
+        meta={"thread_source": "subagent", "timestamp": fork_iso,
+              "parent_thread_id": codex.s.sid, "agent_nickname": "Pauli",
+              "source": {"subagent": {"thread_spawn": {
+                  "parent_thread_id": codex.s.sid}}}},
+        events=[
+            # the injected PARENT snapshot: its own session_meta + a replayed turn
+            {"type": "session_meta", "payload": {"thread_source": "user"}},
+            {"type": "event_msg", "payload": {
+                "type": "task_started", "started_at": fork_epoch - 15}},
+            {"type": "response_item", "payload": {
+                "type": "custom_tool_call", "name": "exec", "call_id": "p1",
+                "input": 'await tools.exec_command({cmd:"echo PARENTWORK"});'}},
+            # the CHILD's own bootstrap task_started (started_at == the fork) + work
+            {"type": "event_msg", "payload": {
+                "type": "task_started", "started_at": fork_epoch}},
+            {"type": "response_item", "payload": {
+                "type": "custom_tool_call", "name": "exec", "call_id": "c1",
+                "input": 'await tools.exec_command({cmd:"echo CHILDWORK"});'}},
+        ])
+    wait_until(lambda: "echo CHILDWORK" in codex.s.ops_text(),
+               desc="the subagent's OWN exec streamed")
+    assert "echo PARENTWORK" not in codex.s.ops_text(), \
+        "the replayed parent prefix leaked into the subagent's stream"
+    host.terminate()
+
+
 def test_standalone_teardown_parks_db_on_host_exit(test_env, codex, reaper):
     """Codex fires no SessionEnd hook, so the standalone watcher owns teardown:
     when the codex host pid dies (here: killed), it parks the state DB (-> durable
