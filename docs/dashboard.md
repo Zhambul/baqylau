@@ -6836,10 +6836,11 @@ undivided output and there is nothing to split it into rows on
 rows therefore said `Read 1 file` for a command that read two — the same under-report
 the one-liner itself used to make by naming only the first file. So the row carries
 `data-nf`, how many files it actually read, and the summary adds THAT instead of 1.
-It is served per item like the diffstat beside it (`actclass.readmore`, parsed off the
-`+N more` the one-liner already paints — `core/streamfmt.MORE_FILES` owns the wording,
-so the terminal's text and the web's count can't disagree). A row without `data-nf`
-weighs 1, so nothing else changes.
+It is served per item like the diffstat beside it (`actclass.nfiles`), off the op's
+own `nf` field rather than parsed out of the painted text — the line LISTS up to five
+files and counts the remainder, so the total is not a fragment of it
+([mirror-pane.md](mirror-pane.md)). A row without `data-nf` weighs 1, so nothing else
+changes.
 
 ### Team mail: the message comes from the SEND, the poller only reports on it
 

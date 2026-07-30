@@ -220,8 +220,8 @@ def dim_gut(text, rgb, g=None, bubbled=False):
 
 
 def file_line(verb, name, rgb, failed=False, extent="", added=0, removed=0,
-              rng="", more=0):
-    """The file-op one-liner text: `verb(name)[  extent][  +A -R][  range][  +N more]`.
+              rng=""):
+    """The file-op one-liner text: `verb(name…)[  extent][  +A -R][  range][  +N]`.
 
     The shared shape three producers paint — the main session's file formatter
     (plugins/claude_code/file_fmt.py), the subagent substream renderer
@@ -236,16 +236,26 @@ def file_line(verb, name, rgb, failed=False, extent="", added=0, removed=0,
     mark, and click-to-view hyperlink — those differ per caller and are
     appended/wrapped around this text.
 
-    `more` is the count of ADDITIONAL files this one line stands for, beyond the one
-    it names — a BASH read of several files at once (`cat app.py utils.py`), where
-    the mirror has one block because the command produced one undivided output
-    (plugins/claude_code/cmd_fmt._render_read). It lives here, with the rest of the
-    shape, because the WEB reads it back off this text to weight its collapsed-run
-    summary ("Read 2 files", not "Read 1 file" — dashboard/opshtml/actclass.readmore),
-    exactly as it recovers `+A -R` for the edit summary. One encoding of the fact,
-    one owner; a field beside it would be a second."""
+    `name` is one display name, or a SEQUENCE of them for a one-liner standing for
+    SEVERAL files — a Bash read of `cat a.py b.py …`, which is one block because the
+    command produced one undivided output (plugins/claude_code/cmd_fmt._render_read).
+    Up to FILE_LIST_MAX are listed inside the parens and the rest counted as a dim
+    trailing `+N`: naming just the first and counting the others (`+7 more`) told you
+    almost nothing about what the command read, and listing all of them without bound
+    would let one line swallow the pane. Joined with FILE_SEP — a COMMA, not a space,
+    because a display name may itself contain one (`✎ scratch.md`, a dim dir prefix).
+
+    The `+N` is presentation only: the web's collapsed summary weights the row from
+    the op's own `nf` FIELD (core/ops.line), not from this text. It once parsed the
+    text — fine while the fragment WAS the whole count, wrong once the line lists
+    some and counts the rest, since the total would then have to be recovered by
+    re-parsing the name list."""
     col = R.fg(*O.RED) if failed else R.fg(*rgb)
-    line = col + verb + R.DIM + "(" + R.COL["def"] + name + R.DIM + ")" + R.RST
+    names = [name] if isinstance(name, str) else list(name)
+    shown = names[:FILE_LIST_MAX]
+    line = (col + verb + R.DIM + "(" + R.COL["def"]
+            + (R.DIM + FILE_SEP + R.COL["def"]).join(shown)
+            + R.DIM + ")" + R.RST)
     if failed:
         return line
     if extent:
@@ -259,15 +269,21 @@ def file_line(verb, name, rgb, failed=False, extent="", added=0, removed=0,
         line += "  " + " ".join(parts)
     if rng:
         line += "  " + R.DIM + rng + R.RST
-    if more > 0:
-        line += "  " + R.DIM + MORE_FILES % more + R.RST
+    if len(names) > len(shown):
+        line += "  " + R.DIM + MORE_COUNT % (len(names) - len(shown)) + R.RST
     return line
 
 
-# The "…and N more files" fragment file_line appends, and the ONE place its wording
-# lives: the terminal paints it and dashboard/opshtml/actclass.readmore parses it
-# back to weight the web's collapsed summary. Changing the words here changes both.
-MORE_FILES = "+%d more"
+# How many files a one-liner LISTS before it starts counting them, the separator
+# between them, and the fragment for the remainder. 5 rather than 1: `Read(a.py)  +7
+# more` named one file out of eight and left the reader to click to find out what the
+# command actually read, while the point of the collapsed line is to say that at a
+# glance. Bounded all the same — an unbounded list lets one command's line swallow a
+# narrow pane. The separator is a COMMA because a display name may contain a space
+# (file_display's `✎ name` and its dim dir prefix).
+FILE_LIST_MAX = 5
+FILE_SEP = ", "
+MORE_COUNT = "+%d"
 
 SCRATCH_ICON = "✎"
 # The per-session scratchpad agent tools offer for temp files

@@ -17,6 +17,7 @@ import pytest
 import oracle
 import payloads as P
 from conftest import wait_until
+from core import render as R
 
 TAB = "claude-tab-status.py"
 
@@ -342,8 +343,9 @@ def test_f2md_slice_renders_as_read(run_hook, test_env, session):
 def test_f2multi_a_multi_file_read_is_one_block_naming_every_file(
         run_hook, test_env, session):
     """END TO END through the real hooks: `cat a.py b.py` collapses to ONE Read
-    one-liner that names the first file with a dim `+1 more`, expands under a header
-    naming BOTH, and feeds BOTH paths to the scoreboard's file set.
+    one-liner that LISTS both files, expands under a header naming both, feeds both
+    paths to the scoreboard's file set, and carries the total on the op's `nf` field
+    (the web's summary weight).
 
     It reported only a.py before — the line, the stash header and the file count all
     said one file for a command that read two. It stays ONE block because the command
@@ -359,8 +361,9 @@ def test_f2multi_a_multi_file_read_is_one_block_naming_every_file(
              P.post_bash(s, cmd, tid="toolu_multi",
                          stdout="import os\n\n\ndef b():\n    pass\n"))
     lop = next(op for op in s.ops() if op["t"] == "line" and "Read" in op["s"])
-    assert "a.py" in lop["s"] and "+1 more" in lop["s"], "first file + the count"
-    assert "b.py" not in lop["s"], "the line names one file; the header names both"
+    assert "a.py" in lop["s"] and "b.py" in lop["s"], "the line LISTS both files"
+    assert "+" not in R.strip_ansi(lop["s"]), "nothing left over to count"
+    assert lop.get("nf") == 2, "the summary weight rides the op"
     stash = json.loads(s.query_state("SELECT val FROM kv WHERE key=?",
                                      ("view:toolu_multi",))[0][0])
     head = next(o for o in stash if o["t"] == "label")
@@ -369,6 +372,34 @@ def test_f2multi_a_multi_file_read_is_one_block_naming_every_file(
     assert sorted(r[0] for r in s.query_state("SELECT path FROM files")) == \
         ["lib/a.py", "lib/b.py"]
     assert any("Read(a.py b.py)" in d for d in oracle.decisions(test_env, s.sid))
+    oracle.assert_clean(test_env, s.sid)
+
+
+def test_f2multi_past_the_list_cap_the_rest_are_counted(
+        run_hook, test_env, session):
+    """Past streamfmt.FILE_LIST_MAX the line lists that many and counts the rest as a
+    dim `+N` — bounded, or one command's line swallows a narrow pane — while the
+    op's `nf` still carries the TOTAL (which is why the web's weight cannot be
+    recovered from the `+N` text: the text is `5 listed + 3`, not `8`)."""
+    s = session.make()
+    files = ["lib/f%d.py" % i for i in range(1, 9)]
+    cmd = "cat " + " ".join(files)
+    run_hook("claude-cmd-fmt.py",
+             P.post_bash(s, cmd, tid="toolu_many", stdout="import os\n"))
+    lop = next(op for op in s.ops() if op["t"] == "line" and "Read" in op["s"])
+    plain = R.strip_ansi(lop["s"])
+    from core import streamfmt as SFM
+    for i in range(1, SFM.FILE_LIST_MAX + 1):
+        assert "f%d.py" % i in plain, plain
+    assert "f%d.py" % (SFM.FILE_LIST_MAX + 1) not in plain, "the rest are counted"
+    assert (SFM.MORE_COUNT % (len(files) - SFM.FILE_LIST_MAX)) in plain, plain
+    assert lop.get("nf") == len(files), "the TOTAL, not the remainder"
+    # …and the expansion's header still names every one of them
+    stash = json.loads(s.query_state("SELECT val FROM kv WHERE key=?",
+                                     ("view:toolu_many",))[0][0])
+    head = next(o for o in stash if o["t"] == "label")
+    for f in files:
+        assert os.path.basename(f) in head["s"], f
     oracle.assert_clean(test_env, s.sid)
 
 

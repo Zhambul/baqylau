@@ -168,6 +168,35 @@ def test_file_line_single_sided_counts():
     assert got == _head(RED, "Delete", "d.py") + "  " + RED + "-7" + R.RST
 
 
+def test_file_line_lists_several_files_and_counts_the_rest():
+    """A one-liner standing for SEVERAL files (a Bash read of `cat a.py b.py …`)
+    LISTS them inside the parens and counts whatever is past FILE_LIST_MAX.
+
+    Naming only the first and counting the others (`Read(a.py)  +7 more`) said almost
+    nothing about what the command read, while saying it at a glance is the whole
+    point of the collapsed line; an UNBOUNDED list would let one line swallow a
+    narrow pane. The separator is a COMMA because a display name may contain a space
+    (file_display's `✎ name`, its dim dir prefix)."""
+    two = SF.file_line("Read", ["a.py", "b.py"], O.BLUE)
+    assert two == (BLUE + "Read" + R.DIM + "(" + DEF + "a.py"
+                   + R.DIM + SF.FILE_SEP + DEF + "b.py" + R.DIM + ")" + R.RST)
+    # a one-element sequence is exactly the plain single-name form
+    assert SF.file_line("Read", ["a.py"], O.BLUE) == \
+        SF.file_line("Read", "a.py", O.BLUE)
+    # exactly at the cap: everything listed, nothing counted
+    at_cap = ["f%d.py" % i for i in range(SF.FILE_LIST_MAX)]
+    assert R.strip_ansi(SF.file_line("Read", at_cap, O.BLUE)) == \
+        "Read(%s)" % SF.FILE_SEP.join(at_cap)
+    # past it: the cap's worth listed, the remainder as a dim trailing count
+    over = at_cap + ["x.py", "y.py", "z.py"]
+    plain = R.strip_ansi(SF.file_line("Read", over, O.BLUE))
+    assert plain == "Read(%s)  %s" % (SF.FILE_SEP.join(at_cap), SF.MORE_COUNT % 3)
+    assert "x.py" not in plain
+    # the count sits AFTER the other suffixes, like every trailing chip
+    with_ext = R.strip_ansi(SF.file_line("Read", over, O.BLUE, extent="1-40/900"))
+    assert with_ext.endswith("1-40/900  " + SF.MORE_COUNT % 3)
+
+
 def test_file_line_failed_is_red_head_only():
     # A failed op: red verb(name), and every suffix suppressed even if passed —
     # the counts would claim lines never written. The ✗ mark stays caller-side.

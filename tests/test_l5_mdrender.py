@@ -496,6 +496,11 @@ def test_read_command_names_every_file_of_a_multi_file_read():
     assert files == ("a.py", "b.js") and reader == "cat"
     # a repeated file is named once
     assert read_command("cat a.py b.py a.py")[1] == ("a.py", "b.py")
+    # …and there is no cap on the LIST read_command returns — the cap is a
+    # PRESENTATION rule (streamfmt.FILE_LIST_MAX), applied when the line is painted,
+    # so the scoreboard and the expansion's header still get every file
+    many = ["f%d.py" % i for i in range(1, 9)]
+    assert read_command("cat " + " ".join(many))[1] == tuple(many)
     # the collapse DECISION is untouched: a command whose LAST statement is not a
     # read still streams, or `ls`'s real output would hide behind a Read one-liner
     assert read_command("cat foo.py; ls") == (None, (), None)

@@ -180,32 +180,23 @@ def _failed(op, text):
             and tuple(op.get("c") or ()) == tuple(O.ORANGE))
 
 
-# The `+N more` fragment a multi-file Bash read carries, derived from its owner's
-# format (core/streamfmt.MORE_FILES) rather than spelled again — a literal here would
-# drift from the text the producer actually paints. Built by splitting the format on
-# its one placeholder and escaping the literal halves: re.escape does NOT escape `%`
-# (3.7+), so escaping the whole format and substituting `\%d` silently matched
-# nothing and every multi-file read weighed 1.
-_MORE_HEAD, _MORE_TAIL = SF.MORE_FILES.split("%d")
-_MORE_RE = re.compile(re.escape(_MORE_HEAD) + r"(\d+)" + re.escape(_MORE_TAIL))
+def nfiles(op):
+    """How many files a read one-liner stands for — 1 for an ordinary one, N for a
+    Bash read of several at once (`cat app.py utils.py`, one block because the
+    command produced one undivided output).
 
-
-def readmore(op):
-    """How many EXTRA files a read one-liner stands for (0 for an ordinary one) —
-    the `+N more` a Bash read of several files at once carries (`cat app.py
-    utils.py`, one block because the command produced one undivided output).
-
-    The web's collapsed summary must WEIGHT that row: one item that read two files
-    is "Read 2 files", and counting rows said "Read 1 file" — the same
-    under-report the one-liner itself used to make by naming only the first file.
-    Read off the op's text for the same reason diffstat is: the terminal has to
-    paint it anyway, so the text is the one encoding of the fact and a parallel op
-    field would be a second."""
+    The web's collapsed summary must WEIGHT that row: an item that read two files is
+    "Read 2 files", where counting rows said "Read 1 file" — the same under-report
+    the one-liner itself used to make by naming only the first file. Straight off the
+    op's `nf` field (core/ops.line), NOT parsed out of the painted text: the text
+    lists some names and counts the remainder, so the total is not a fragment of it.
+    (An earlier cut did parse the text, which was defensible while the fragment was
+    the whole count — the `diffstat` rule below — and stopped being so the moment the
+    line started listing files.)"""
     try:
-        m = _MORE_RE.search(_plain(op))
-        return int(m.group(1)) if m else 0
-    except Exception:
-        return 0
+        return max(1, int(op.get("nf") or 1))
+    except (TypeError, ValueError):
+        return 1
 
 
 def diffstat(op):

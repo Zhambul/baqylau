@@ -232,7 +232,7 @@ def gut(s, c, outer=None, g=None, bg=None, lex=None, num=None, view=None,
     return o
 
 
-def line(s, view=None, mem=False):
+def line(s, view=None, mem=False, nfiles=0):
     # view: a click-to-view group id (the file op's tool_use_id). The renderer
     # paints the kv-stashed block `view:<id>` INLINE under this line while the
     # id is in the session's `view-open` kv set (toggled by claude-copy.py on a
@@ -241,11 +241,20 @@ def line(s, view=None, mem=False):
     # a web-only classification hint the dashboard uses to sort it into its own
     # `memory` filter kind; the terminal renderer ignores it (the ❖ MARK is
     # already baked into `s`).
+    # nfiles: how many files this ONE one-liner stands for — a Bash read of several
+    # at once (`cat a.py b.py`), which is one block because the command produced one
+    # undivided output. A FIELD rather than something read back off `s`: the text
+    # lists some names and counts the remainder (core/streamfmt.file_line), so the
+    # total isn't in it. The web weights its collapsed-run summary with this ("Read 2
+    # files", not "Read 1 file"); the terminal ignores it, the names are already
+    # painted. Omitted for the ordinary single-file case.
     o = {"t": "line", "s": s}
     if view:
         o["v"] = str(view)
     if mem:
         o["mem"] = 1
+    if nfiles and int(nfiles) > 1:
+        o["nf"] = int(nfiles)
     return o
 
 

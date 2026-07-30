@@ -520,11 +520,11 @@ def op_items(ops, key="", ids=None, carry=None, scope=None, codex_lead=False):
                 it["rem"] = rem
         if act == actclass.ACT_READ:
             # How many files this ONE row read (a multi-file Bash read is one block —
-            # actclass.readmore), so the collapsed summary can say "Read 2 files"
+            # actclass.nfiles), so the collapsed summary can say "Read 2 files"
             # instead of counting the row once.
-            more = actclass.readmore(op)
-            if more:
-                it["nf"] = more + 1
+            nf = actclass.nfiles(op)
+            if nf > 1:
+                it["nf"] = nf
         elif not act and not it["g"] and t in _BODY_OPS and prev_act:
             # A GROUP-LESS body op inherits the class of the row it follows.
             # "A body op inherits its block's class" is the classifier's rule, but

@@ -277,14 +277,27 @@ one-liner named only the first — the mirror said one file, the scoreboard coun
 one, and `cat a.py b.js` highlighted b.js as PYTHON (the first file's lexer). Now
 every matched file is collected — every argument of a whole reader, and across
 statements too (`sed -n 1,20p a.md; sed -n 1,20p b.md`) — and the block names all of
-them: the line shows the first plus a dim `+N more` (`streamfmt.file_line`'s `more`,
-the ONE owner of that fragment), the expansion's header lists them, each path feeds
-the scoreboard's unique-file set, and the web's collapsed summary weights the row so
-it reads *"Read 2 files"* rather than counting one (`actclass.readmore` parses the
-`+N more` back off the text, exactly as `diffstat` recovers `+A -R`; a parallel op
-field would be a second encoding of one fact). Where the files' lexers DISAGREE the
-detection value goes `None` and the body renders unhighlighted, rather than painting
-b.js as python.
+them: the line LISTS them — `Read(a.py, b.py, c.py)` — the expansion's header names
+every one, each path feeds the scoreboard's unique-file set, and the web's collapsed
+summary weights the row so it reads *"Read 2 files"* rather than counting one. Where
+the files' lexers DISAGREE the detection value goes `None` and the body renders
+unhighlighted, rather than painting b.js as python.
+
+**The list is capped, and the cap is presentation.** `streamfmt.file_line` names up
+to `FILE_LIST_MAX` (5) files and counts the remainder as a dim trailing `+N`. The
+first cut named ONE and counted the rest (`Read(a.py)  +7 more`) — rejected on sight:
+it said almost nothing about what the command read, while saying exactly that at a
+glance is the whole point of a collapsed line. An UNBOUNDED list is the other failure
+— one command's line swallowing a narrow pane — so 5, then a count. `read_command`
+itself returns every file with no cap; the scoreboard and the expansion header use
+the full list. The separator is a COMMA, not a space, because a display name may
+contain one (`file_display`'s `✎ name` and its dim dir prefix).
+
+The web's summary weight rides the op's own **`nf` field** (`core/ops.line`), not the
+painted text. It was briefly parsed off the text — defensible while the fragment WAS
+the whole count (the rule `diffstat` follows for `+A -R`) and wrong the moment the
+line began listing some files and counting others, since the total would then have to
+be recovered by re-parsing the name list.
 
 *The collapse DECISION is deliberately unchanged* — still the last statement alone
 (`_effective`) — so exactly the same commands collapse as before; only the file LIST

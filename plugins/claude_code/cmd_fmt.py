@@ -369,20 +369,25 @@ def _render_read(d, cmd, output, spec, files, reader):
     command, not a native Read — while the noise (the streamed file dump) collapses
     behind the click, ⧉cmd/⧉out copiable.
 
-    SEVERAL files (`cat app.py utils.py`, `sed a.md; sed b.md`) stay ONE block, and
-    the line names the first with a dim `+N more`. One block because there is one
-    output: which bytes came from which file is not recoverable (docs/mirror-pane.md
-    — the rejected splitting designs are recorded there), so N lines would each have
-    to claim the whole blob. But every file is NAMED — in the `+N more`, in the
-    expansion's header, and in the scoreboard's file count — which is what was
-    actually lost before: `cat app.py utils.py` reported only app.py."""
+    SEVERAL files (`cat app.py utils.py`, `sed a.md; sed b.md`) stay ONE block, whose
+    line LISTS them (up to streamfmt.FILE_LIST_MAX, then a dim `+N`). One block
+    because there is one output: which bytes came from which file is not recoverable
+    (docs/mirror-pane.md — the rejected splitting designs are recorded there), so N
+    lines would each have to claim the whole blob. But every file is accounted for —
+    listed on the line, all of them in the expansion's header, all of them in the
+    scoreboard's file set, and the total on the op's `nf` field so the web's
+    collapsed summary says "Read 2 files". What was actually lost before: `cat
+    app.py utils.py` reported only app.py."""
     path = files[0]
-    disp, loc = SF.file_display(path, d.get("cwd"))
+    _disp, loc = SF.file_display(path, d.get("cwd"))
     names = [os.path.basename(f.rstrip("/")) or f for f in files]
-    # `more` rides the shared builder (streamfmt.file_line owns the whole one-liner
-    # shape, `+N more` included) so the web can read the count back off the text and
-    # weight its summary — see the reader tag below, which stays this caller's own.
-    line = SF.file_line("Read", disp, O.BLUE, more=len(files) - 1)
+    # The whole LIST goes to the shared builder, which owns the one-liner shape —
+    # how many names it lists, the separator, and the `+N` for the remainder
+    # (streamfmt.FILE_LIST_MAX). Each name is location-aware exactly as a single
+    # file op's is (file_display: bare basename under the session cwd, ✎ for a
+    # scratchpad, a dim abbreviated dir for anything else).
+    disps = [SF.file_display(f, d.get("cwd"))[0] for f in files]
+    line = SF.file_line("Read", disps, O.BLUE)
     if reader:
         line += "  " + R.DIM + reader + R.RST
     # OBSERVER command plane (fileobs — memory the one row): this one-liner IS the
@@ -395,7 +400,7 @@ def _render_read(d, cmd, output, spec, files, reader):
     vid = None
     if gid:
         line, vid = _stash_read_view(LOG, gid, names, cmd, output, spec, line)
-    O.emit(LOG, O.line(line, view=vid, mem=bool(obs)))
+    O.emit(LOG, O.line(line, view=vid, mem=bool(obs), nfiles=len(files)))
     # It is still a Bash command — count it as one (not a file read), matching how
     # the normal foreground path bumps. The OTLP receiver owns token/cost. Each file
     # IS fed to the scoreboard's UNIQUE-path `files` set though: the command read
