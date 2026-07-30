@@ -1540,13 +1540,19 @@ function buildViewBar() {
 // its own oninput (autoGrow) and calls sm.key(e) FIRST in onkeydown — a true
 // return means the menu consumed the key.
 
-// `sid` (optional) host-SCOPES the menu: the server resolves the session's
-// owning tool and returns ITS vocabulary (a codex session gets /plan etc., not
-// Claude's). The new-session form passes none (no session yet → default host).
-function cmdsFor(cwd, cache, key, sid) {
+// The menu is host-SCOPED, by whichever of the two handles the caller has:
+// `sid` (the composer) — the server resolves that session's OWNING tool and
+// returns ITS vocabulary (a codex session gets /plan etc., not Claude's) — or
+// `tool` (the new-session form, which has no session yet, only a picker), so
+// the menu follows the host you are ABOUT to launch. Passing neither means the
+// default host, which is what the form used to do unconditionally: it offered
+// Claude Code's commands for a codex launch. `key` must vary with whichever one
+// is passed, since the cache is per-menu.
+function cmdsFor(cwd, cache, key, sid, tool) {
   if (!cache[key])
     cache[key] = fetch("/api/commands?cwd=" + encodeURIComponent(cwd || "")
-                       + (sid ? "&sid=" + encodeURIComponent(sid) : ""))
+                       + (sid ? "&sid=" + encodeURIComponent(sid) : "")
+                       + (tool ? "&tool=" + encodeURIComponent(tool) : ""))
       .then(r => r.ok ? r.json() : [])
       .catch(() => []);
   return cache[key];

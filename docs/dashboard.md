@@ -147,14 +147,47 @@ reads `host` nowhere (verified) — P5 is where the client starts using it. The
 strictly better evidence than `""`.
 
 **Tool picker (multi-tool launch).** The new-session form's *tool* row picks the
-HOST a FRESH launch runs — Claude Code or Codex — from `GET /api/hosts`
-(`plugins.hosts` → `[{name, label, launchable}]`, cached in `S.hosts`); the row
-HIDES when only one host is launchable, so a single-tool machine sees the form
-exactly as before. The picked tool follows through the form: the model/effort
-option sets swap (Codex offers its `gpt-*-codex` models — an empty *codex
-default* leaves `-m` off — and low/medium/high reasoning-effort, versus Claude's
-fable/opus/… and low…max), and the ACCOUNT picker HIDES for Codex (no
-subscription switcher). The last-used tool persists in the durable new-session
+HOST a FRESH launch runs, from `GET /api/hosts` (`plugins.hosts`, cached in
+`S.hosts` and primed at boot in `app.13-init.js`); the row HIDES when only one
+host is launchable, so a single-tool machine sees the form exactly as before.
+
+That endpoint serves each host's WHOLE new-session vocabulary, and since P5 the
+page holds none of its own:
+
+| field | what it decides | where it comes from |
+|---|---|---|
+| `name` / `label` / `launchable` | the picker's rows | `HostControl.name/label/launchable` |
+| `default` | which row is preselected, and what an unnamed launch means | `plugins.default_host()` |
+| `model_choices` / `effort_choices` | the two option menus | `HostControl.model_choices/effort_choices` |
+| `model_default` / `effort_default` | their first-ever selections | `HostControl.model_default/effort_default` |
+| `model_match` | how a menu row matches a RUNNING model id (`family`/`exact`) | `HostControl.model_match` |
+| `accounts` | whether the ACCOUNT row is offered at all | DERIVED: does the plugin provide the `accounts` registry |
+| `attach` | whether the host has an inline file-mention grammar | `HostControl.mention` |
+| `rewind_modes` | the ↶ menu's rows, `[{mode, label}]` | `rewind_modes` + `rewind_mode_label` |
+| `quick_commands` | which of ⊜/✦/✧/✦auto exist, and each one's REFUSAL FLOOR | DERIVED from the overrides + `command_floor` |
+
+The same table (minus the picker fields) rides the SESSION payload for that
+session's own owner — one builder, `plugins.host_vocabulary`, so the per-tool
+answer and the per-session answer cannot disagree about a host.
+
+What this replaced was four host-NAME-keyed tables in
+`app.09-newsession.js` (`TOOL_MODELS` / `TOOL_EFFORTS` / `TOOL_MODEL_DEF` /
+`TOOL_EFFORT_DEF`) read through `toolOpts = (tbl, t) => tbl[t] ||
+tbl.claude_code`, plus `=== "codex"` deciding the account row. Both existing
+hosts behave exactly as before — the values were MOVED, not changed — but a
+THIRD host used to be handed Claude Code's four models, Claude's five effort
+levels and `fable`/`high`, silently, and launched with them. The rule now is
+the host's own list or an EMPTY menu (the launch then omits the flag and the
+tool's own config decides), and `hostRow()` returns null until `/api/hosts`
+lands rather than fabricating a default row. Pinned by
+`tests/jsdom/newsession.js`, which drives the real form over a fake `/api/hosts`
+carrying both real hosts and an unknown third one.
+
+The picked tool follows through the whole form: both option menus, the ACCOUNT
+row's visibility, the first-prompt placeholder's name for the host, and the "/"
+completion menu — which now passes `tool=` to `/api/commands`, so a Codex launch
+is offered Codex's commands instead of the default host's (it passed neither a
+sid nor a tool before). The last-used tool persists in the durable new-session
 prefs (`{cwd, model, effort, tool}`, *New-session prefs*). The launch POST carries
 `tool`; `post_new_session` validates it against the launchable-hosts registry
 (unknown → 400) and composes the argv through that host's HostControl seam —
@@ -2083,14 +2116,38 @@ styling: `closeRewindMenu()` keeps selecting `.rwmenu:not(.qcmenu)` because
 the rewind feed-delegation handler runs on every document click and its
 click-away branch once removed the quick-command menu in the same click
 that opened it (the pickers looked dead) — any future menu sharing that
-class needs the same exclusion. The model button's label
-shows the session's CURRENT model (`✦ opus-4.8 ▾`) from the ctx probe's
-`model` field, refreshed by the same `ctx` SSE event that drives the ctx bar
-(`shortModel` in app.js is the display twin of `model.short_model` — the
-Python side is the authority). Both labels stay CURRENT: an applied web
-switch updates them optimistically (`applyQuickSwitch` — for model a
-`pendingModel` override that holds until the ctx probe's family confirms it
-on the next assistant turn; the probe's model is stale until then). The
+class needs the same exclusion.
+
+**Whose words are in the menus (P5).** Both lists, both labels and the
+"which row is current" rule are the OWNING HOST's, served on the session
+payload (`meta.model_choices` / `effort_choices` / `model_match`, from
+`plugins.host_vocabulary`); `hostChoices(kind)` maps the served list to rows
+and a host that declares none gets an EMPTY menu rather than the default
+host's (the `MODEL_CHOICES`/`EFFORT_CHOICES` fallback pair that used to sit
+in `app.10-control.js` is deleted).
+
+The model button's label shows the session's CURRENT model (`✦ opus-4.8 ▾`)
+from the ctx probe — now its `model_short` field, the owning host's own
+display spelling of the raw id (`HostControl.model_short`, stamped by
+`read/meta.session_ctx`), refreshed by the same `ctx` SSE event that drives
+the ctx bar. `shortModel` in the page is a bare pass-through today: it used
+to branch TWO hosts' id grammars inline (strip `claude-` and join numeric
+version parts, but return a `gpt-`-prefixed id untouched, because that same
+parse turns `gpt-5.6-terra` into a useless `gpt`), which is a model-id sniff
+for a fact the file's owner simply knows.
+
+WHICH MENU ROW a running model sits under follows the host's declared
+`model_match` (`modelKey`): `family` reduces `opus-4.8` to the `opus` row
+(Claude Code's menu is family aliases), `exact` keeps the whole id (codex's
+rows ARE ids). This is a DECLARATION because the old sniff
+(`sm.startsWith("gpt-") ? sm : sm.split("-")[0]`) mis-fires even for the two
+hosts it knew: a session on `gpt-5.4-codex` — not a menu row at all — would
+be filed under the `gpt-5.4` row by a family compare, and `exact` correctly
+marks nothing. Both labels stay CURRENT: an applied web switch updates them
+optimistically (`applyQuickSwitch` — for model a `pendingModel` override that
+holds until the probe confirms it BY THAT SAME RULE, since Claude's `opus`
+row never equals the running `opus-4.8`; the probe's model is stale until the
+next assistant turn). The
 effort label (`✧ high ▾`) shows the SAVED effort level — session meta
 `effort` + the SSE `effort` event, backed by the
 `plugins.effort_default(cwd, slug)` fan-out over
@@ -5355,7 +5412,17 @@ condition, with the working tooltip (`data-tip`) restored the moment it applies.
 | ✕ close | live window | nothing to close once it's parked |
 | ⊜ compact | live window, no dialog waiting, **and** enough conversation | see below |
 | ✦ model ▾ · ✧ effort ▾ | live window, no dialog waiting | pasted text would land IN an open dialog (the server 409s too) |
-| ↻ resume | parked, with a cwd | the one button that is genuinely absent otherwise: it is the parked counterpart of the live set, not a greyed version of anything |
+| ↻ resume | parked (greyed without a cwd) | the parked counterpart of the live set — the one button BUILT conditionally, since a live session has nothing to resume; its other refusal (no directory recorded, so there is nowhere to launch) greys like everything else |
+
+Every row above ALSO carries its host capability (`capOk(meta, …)` over the
+derived caps map) and, for the quick commands, whether the owning host OFFERS
+that command at all (`cmdOffered` over the served `quick_commands`) — a tool
+that renames but cannot name a session ITSELF greys ✦ auto with "not supported
+by this session's tool" instead of firing a POST the server 409s. The two ways
+into rewind that BYPASS the ↶ button — the Esc gesture and a prompt bubble's own
+↶ — check the same cap now (`rewindPickMode`/`openRewindMenu`), and the ↶ menu's
+rows are the host's own `rewind_modes` with the host's own words for them, where
+the page used to spell Claude Code's three.
 
 Both tab-dependent gates re-derive from the tab on every SSE `tab` event
 (`ses.stopMode`, `ses.quickMode`) — never blindly re-enabled. `rewindSession` /
@@ -5387,10 +5454,20 @@ Three things about that count are deliberate:
   real number. The count exists solely to ARGUE FOR disabling a button, so an
   unknown must never disable one.
 
-The floor itself (`COMPACT_MIN_PROMPTS = 2`) is the lowest one that catches the
-reported case — you sent a single message and compact bounced. Claude Code's
-exact rule is its own and unpublished, so past that floor the TUI stays the
-authority: this is a courtesy gate, not a reimplementation of its check.
+The floor itself is 2 — the lowest one that catches the reported case (you sent
+a single message and compact bounced). Claude Code's exact rule is its own and
+unpublished, so past that floor the TUI stays the authority: this is a courtesy
+gate, not a reimplementation of its check.
+
+**The floor is the HOST's, not the page's** (P5). It was a client constant
+(`COMPACT_MIN_PROMPTS = 2`) applied to every session regardless of tool, next to
+an inline `prompts < 1` doing the same job for ✦ auto. Both are now declared by
+the owning host — `HostControl.command_floor(cmd)`, served per command on the
+payload's `quick_commands` (`[{cmd, min_prompts}]`) — so a host that refuses
+neither offers both buttons at one prompt, and a host that offers a command at
+all is the one that says so. The client rule mirrors `capOk`'s: an ABSENT
+`quick_commands` (older payload, mid-load) gates nothing, while a PRESENT one
+that omits a command means that host does not have it.
 
 ## The session chrome, in named phases
 

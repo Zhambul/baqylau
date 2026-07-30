@@ -162,13 +162,35 @@ function capOk(meta, key) {
   return !caps || !!caps[key];
 }
 
-// Claude Code refuses `/compact` until a conversation has something to
-// summarize ("Not enough messages to compact"), so ⊜ compact greys out below
-// this many of YOUR prompts (meta.prompts, capped server-side; None/absent =
-// nothing to conclude → no gate). Deliberately the lowest floor that catches
-// the reported case — you sent one message and compact bounced: past it the TUI
-// stays the authority, since its exact rule is its own and unpublished.
-const COMPACT_MIN_PROMPTS = 2;
+// The QUICK-COMMAND vocabulary of the session's owning host: meta.quick_commands
+// is [{cmd, min_prompts}] — which of the closed set (compact/model/effort/the
+// argless rename) this host actually implements, each with the REFUSAL FLOOR it
+// measured. Both facts used to be client constants that spelled Claude Code's
+// answer and applied it to every host: a `COMPACT_MIN_PROMPTS = 2` and an inline
+// `prompts < 1` for ✦ auto.
+//
+// Absent (an older payload, mid-load) is NOT a denial — degrade open, exactly as
+// capOk does. Present-but-missing-the-row IS one: the host declared its
+// vocabulary and this command is not in it (codex has no argless rename).
+function cmdOffered(meta, cmd) {
+  const list = meta && meta.quick_commands;
+  return !Array.isArray(list) || list.some(c => c && c.cmd === cmd);
+}
+
+// How many of YOUR prompts (meta.prompts, capped server-side) this host needs
+// before it will accept `cmd`. 0 when it declares no floor — and an UNKNOWN
+// prompt count never greys anything: the gate only ever argues for disabling, so
+// it must not act on a number it doesn't have.
+function cmdFloor(meta, cmd) {
+  const list = (meta && meta.quick_commands) || [];
+  const row = Array.isArray(list) ? list.find(c => c && c.cmd === cmd) : null;
+  return (row && row.min_prompts) || 0;
+}
+
+function tooThin(meta, cmd) {
+  const n = meta && meta.prompts;
+  return typeof n === "number" && n < cmdFloor(meta, cmd);
+}
 
 // Why every terminal-typing action is out for a parked session: it has no
 // window to type into (the server rejects them too — this just says so first).
@@ -301,12 +323,22 @@ function chromeActions(ses, meta) {
       });
   });
   act.append(cls);
-  // resume (parked, with a cwd): reopen the new-session form preset to
-  // `claude --resume <this sid>` in this session's directory
-  if (!meta.live && meta.cwd) {
+  // resume: reopen the new-session form preset to this conversation, in this
+  // session's directory (the OWNING host's own resume argv, composed server-side
+  // — `--resume` or `resume`). The parked-only counterpart of ✕ close, so the
+  // two swap: a LIVE session has nothing to resume, and it is the one button the
+  // bar still builds conditionally rather than greying.
+  //
+  // It does grey for the other refusal, though — a parked session with no cwd
+  // (an old row whose directory was never recorded) has nowhere to launch, and
+  // the form would open on an empty folder field. That used to be half of the
+  // same `if`, i.e. a button that silently wasn't there.
+  if (!meta.live) {
     const res = el("button", "sresume actses", "↻ resume");
-    res.title = "start a new tab resuming this conversation";
+    res.dataset.tip = "start a new tab resuming this conversation";
     res.onclick = () => openNewSession(meta.cwd, S.cur);
+    gate(res, !!meta.cwd,
+         "no directory recorded for this session — nowhere to resume it");
     act.append(res);
   }
   return act;
@@ -351,10 +383,11 @@ function chromeQuickCmds(ses, meta) {
   // server 409s too; disabling just says so up front). Live via the same
   // SSE tab event as stopMode.
   //
-  // ⊜ compact carries one gate of its own: Claude Code refuses to compact a
-  // conversation that has barely started, so a session with fewer than
-  // COMPACT_MIN_PROMPTS of your prompts greys it out instead of typing a
-  // command the TUI will bounce (`prompts`, patched live by its SSE event).
+  // ⊜ compact carries one gate of its own: a host that refuses to compact a
+  // conversation that has barely started declares the floor (quick_commands'
+  // `min_prompts` — Claude Code's 2), and a session under it greys the button
+  // instead of typing a command the TUI will bounce (`prompts`, patched live by
+  // its SSE event).
   ses.quickMode = (t) => {
     const dialog = t === "awaiting-command";
     const base = windowed && !dialog;
@@ -364,9 +397,8 @@ function chromeQuickCmds(ses, meta) {
     // switch model, say); a false cap greys that one button with CAP_OFF
     gate(mdl, capOk(meta, "model") && base, !capOk(meta, "model") ? CAP_OFF : baseWhy);
     gate(eff, capOk(meta, "effort") && base, !capOk(meta, "effort") ? CAP_OFF : baseWhy);
-    const cCap = capOk(meta, "compact");
-    const n = (ses.meta && ses.meta.prompts);
-    const thin = typeof n === "number" && n < COMPACT_MIN_PROMPTS;
+    const cCap = capOk(meta, "compact") && cmdOffered(meta, "compact");
+    const thin = tooThin(ses.meta, "compact");
     gate(cpt, cCap && base && !thin,
          !cCap ? CAP_OFF : !base ? baseWhy
                : "not enough conversation to compact yet");

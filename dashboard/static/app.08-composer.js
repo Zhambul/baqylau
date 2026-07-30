@@ -853,7 +853,13 @@ function buildComposer() {
   const ta = el("textarea", "cinput");
   ta.rows = 1;
   ta.spellcheck = false;
-  const canSend = !!(meta.live && meta.kitty_window_id);
+  // `send` is a capability like every other gesture (plugins.host.GESTURES) —
+  // the composer is the ONE control that never consulted it, on the theory that
+  // every host takes a message. A host whose `send` is inert has no way to
+  // receive one, so the box is dead rather than a POST the server 409s; for both
+  // hosts today the cap is True, so this changes nothing yet. capOk degrades
+  // OPEN (an older payload / mid-load is not a denial), same as the header bar.
+  const canSend = !!(meta.live && meta.kitty_window_id && capOk(meta, "send"));
   // RESUME MODE (docs/dashboard.md *Resume & send*): a parked session's
   // composer stays fully usable — typing, "/" menu, dictation — and the one
   // send button (relabeled "resume & send") is the single door from parked
@@ -877,6 +883,7 @@ function buildComposer() {
                  : "message this parked session — sending resumes it  "
                    + "(Enter to resume & send)")
       : gone ? "this session's transcript is gone — it can't be resumed"
+      : !capOk(meta, "send") ? "this session's tool can't be messaged from here"
       : (meta.live ? "no terminal window — can't message a headless session"
                    : "session is not live");
   // remember the composer's OWN placeholder — a live ghost suggestion borrows

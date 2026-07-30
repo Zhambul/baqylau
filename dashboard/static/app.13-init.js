@@ -86,6 +86,14 @@ fetch("/api/ns-prefs").then(r => r.json())
 // this cache synchronously)
 fetch("/api/ns-draft").then(r => r.json())
   .then(m => { if (m && typeof m === "object") S.nsDrafts = m; }).catch(() => {});
+// …and the HOST vocabulary (/api/hosts): the new-session form's tool picker,
+// both option menus, their defaults and the account row are ALL built from it,
+// so priming it here means the first form open is fully populated on the frame
+// it appears. The form refetches if this hasn't landed, and until it does it
+// shows an EMPTY picker rather than a fabricated default host — a launch that
+// names no tool is routed to the server's own default anyway.
+fetch("/api/hosts").then(r => r.json())
+  .then(l => { if (Array.isArray(l)) S.hosts = l; }).catch(() => {});
 // seed the hidden-directory set before the first list paint (the SSE snapshot
 // carries the session rows, not this pref) — a failed fetch just leaves nothing
 // hidden, never a broken list

@@ -3,6 +3,14 @@
 // cohesive files (classic scripts share one global scope; load order is set in
 // index.html). See app.13-init.js for the boot/init sequence.
 
+// What to call a host we have no label for — before /api/hosts lands, or for a
+// row that carries none. The same neutral word the session view falls back to
+// (meta.host_label || "the agent"), deliberately not a guess at which tool it
+// is: the form's own default used to be "Claude" and the pending card's "the
+// session". Declared here, at the top, because the pending view's module-level
+// state reads it (a `const` further down would be in its temporal dead zone).
+const NO_HOST_LABEL = "the agent";
+
 function armJump(cwd, resumeSid, o) {
   o = o || {};
   S.jumpDone = null;               // a new launch supersedes a stale forward
@@ -92,7 +100,7 @@ function jumpFail() {
 const PEND_HINT_MS = 8000;             // "still waiting…" past this — claude
 //                                        boot measured ~2s, so 8s is abnormal
 const PEND_TICK_MS = 500;              // ticker cadence (hint + timeout watch)
-let pendToolLabel = "the session";     // the launched tool's label, retained by
+let pendToolLabel = NO_HOST_LABEL;     // the launched tool's label, retained by
 //                    showPending so showPendingFail can name it (S.jump is null
 //                    by the time jumpFail mounts the failure card)
 
@@ -113,7 +121,7 @@ function showPending() {
     .forEach(t => chips.append(el("span", "pendchip", t)));
   if (chips.childNodes.length) card.append(chips);
   if (show.prompt) card.append(el("div", "pendprompt", show.prompt));
-  const tl = show.toolLabel || "the session";
+  const tl = show.toolLabel || NO_HOST_LABEL;
   pendToolLabel = tl;              // retained for showPendingFail (S.jump is cleared)
   const hint = el("div", "pendhint",
                   tl + " is booting in a new terminal tab — usually a couple of seconds");
@@ -310,12 +318,11 @@ const nsRemember = (p) => {
 // form's textarea (null while closed): the close flush's handle on the text,
 // since closeNewSession tears the DOM down.
 let nsPromptBox = null;
-// the launched tool's display label ("Codex" / "Claude"), kept current by
-// syncTool so the prompt placeholder names the picked host instead of always
-// "Claude"; syncTool runs on the initial fill (before nsPromptBox exists) and on
-// every tool switch, so nsPrompt reads this for its FIRST paint and syncTool
-// repaints the live box thereafter.
-let nsToolLabel = "Claude";
+// the launched tool's display label, kept current by syncTool so the prompt
+// placeholder names the PICKED host; syncTool runs on the initial fill (before
+// nsPromptBox exists) and on every tool switch, so nsPrompt reads this for its
+// FIRST paint and syncTool repaints the live box thereafter.
+let nsToolLabel = NO_HOST_LABEL;
 let nsDraftDir = "";
 let nsDraftTimer = 0;
 // The form's notion of "the same folder" — and, since the server stores the key
@@ -559,7 +566,9 @@ function resumePicker() {
       row.dataset.sid = r.sid;
       row.append(el("div", "nsrestitle", r.title || shortSid(r.sid)));
       const meta = el("div", "nsresmeta");
-      const fam = shortModel(r.model);
+      // the row's model in its OWN host's display spelling (served as
+      // `model_short`), not this page's idea of how to shorten an id
+      const fam = shortModel(r.model_short);
       if (fam) meta.append(el("span", "nsreschip", fam));
       if (r.effort) meta.append(el("span", "nsreschip", r.effort));
       if (r.account && r.account.label)
@@ -798,31 +807,35 @@ function nsConversation(F) {
   Object.assign(F, { picker, resumeRow, freshRow, fresh, syncFresh });
 }
 
-// The model/effort options + first-ever defaults per HOST. codex differs from
-// claude: its models are the gpt-*-codex family (a "" = "codex default" leaves
-// the -m flag off so codex's own config picks), and its effort is the reasoning
-// level that rides `-c model_reasoning_effort` (codex's own enum is
-// low/medium/high/xhigh/max/ultra, verified against the codex binary). Every
-// option is an EXPLICIT value — no "default" pseudo-option (matching Claude's
-// dropdowns) so you always know what you launched. The server validates what is
-// sent (MODEL_OK / EFFORTS). codex's `gpt-5-codex`/`gpt-5.1-codex` are dropped:
-// they 400 on a ChatGPT account ("model not supported"), reproduced live.
-const TOOL_MODELS = {
-  claude_code: [["fable", "fable"], ["opus", "opus"],
-                ["sonnet", "sonnet"], ["haiku", "haiku"]],
-  codex: [["gpt-5.6-sol", "gpt-5.6-sol"], ["gpt-5.6-terra", "gpt-5.6-terra"],
-          ["gpt-5.6-luna", "gpt-5.6-luna"], ["gpt-5.5", "gpt-5.5"],
-          ["gpt-5.4", "gpt-5.4"], ["gpt-5.4-mini", "gpt-5.4-mini"]],
+/* The HOST vocabulary the form is built out of — /api/hosts (cached as S.hosts,
+   primed at boot), one row per registered tool:
+
+     {name, label, launchable, default, model_choices, effort_choices,
+      model_default, effort_default, model_match, accounts, attach,
+      rewind_modes, quick_commands}
+
+   All of it is DERIVED server-side from that tool's HostControl + its plugin's
+   providers (plugins.hosts). What stood here instead was four host-NAME-keyed
+   tables — TOOL_MODELS / TOOL_EFFORTS / TOOL_MODEL_DEF / TOOL_EFFORT_DEF — read
+   through `toolOpts = (tbl, t) => tbl[t] || tbl.claude_code`, so a host this
+   page had never heard of was silently offered CLAUDE's models, Claude's effort
+   levels and Claude's defaults, and launched with them. The rule now is the
+   host's OWN list or an empty menu: an empty picker is honest, and the launch
+   then omits the flag and lets the tool's own config decide.
+
+   hostRow returns null until /api/hosts lands (never a fabricated default row —
+   that is the same lie in one entry), and every reader treats null as "no
+   vocabulary yet". */
+const hostList = () => (Array.isArray(S.hosts) ? S.hosts : []);
+const hostRow = (t) => hostList().find(h => h && h.name === t) || null;
+// one host's ✦/✧ options as dropdown() pairs — [] for a host that declares none
+const hostOpts = (t, kind) => {
+  const list = (hostRow(t) || {})[kind + "_choices"];
+  return Array.isArray(list) ? list.map(v => [v, v]) : [];
 };
-const TOOL_EFFORTS = {
-  claude_code: [["low", "low"], ["medium", "medium"], ["high", "high"],
-                ["xhigh", "xhigh"], ["max", "max"]],
-  codex: [["low", "low"], ["medium", "medium"], ["high", "high"],
-          ["xhigh", "xhigh"], ["max", "max"], ["ultra", "ultra"]],
-};
-const TOOL_MODEL_DEF = { claude_code: "fable", codex: "gpt-5.6-sol" };
-const TOOL_EFFORT_DEF = { claude_code: "high", codex: "low" };
-const toolOpts = (tbl, t) => tbl[t] || tbl.claude_code;
+// the tool a launch that names none picks: the registry's own DEFAULT host (the
+// `default` flag), so this page never spells a host name to mean "the usual one"
+const defaultHost = () => (hostList().find(h => h && h.default) || {}).name || "";
 
 function nsPickers(F) {
   const { last, dir, picker, fresh, syncFresh, presetTool } = F;
@@ -839,18 +852,17 @@ function nsPickers(F) {
     return [row, sel];
   };
 
-  // TOOL — which HOST to launch (claude_code / codex). Everything below FOLLOWS
-  // the tool: the model/effort option sets (TOOL_MODELS/TOOL_EFFORTS) and whether
-  // an account is picked at all (codex has no subscription switcher). Populated
-  // from /api/hosts (cached S.hosts); the row HIDES when only one host is
-  // launchable — a single-tool machine sees the form exactly as before.
+  // TOOL — which HOST to launch. Everything below FOLLOWS the tool: its own
+  // model/effort options and defaults, whether an account is picked at all (a
+  // host with no subscription switcher declares `accounts: false`), the prompt
+  // placeholder's name for it, and the "/" menu's vocabulary. Populated from
+  // /api/hosts (cached S.hosts); the row HIDES when only one host is launchable
+  // — a single-tool machine sees the form exactly as before.
   // docs/dashboard.md *Tool picker*.
   const [toolRow, tool] = pick("tool", []);
   toolRow.classList.add("nstoolrow");
   toolRow.style.display = "none";
   let toolPicked = false;
-  const hostList = () => (Array.isArray(S.hosts) && S.hosts.length) ? S.hosts
-    : [{ name: "claude_code", label: "Claude Code", launchable: true }];
 
   const [modelRow, model] = pick("model", []);   // filled per-tool by syncTool()
   const [effortRow, effort] = pick("effort", []);
@@ -885,12 +897,15 @@ function nsPickers(F) {
   acct.onpick = () => { acctPicked = true; };
   const limitBlocks = (a) =>
     a.limit_hit && (!a.limit_hit.model || a.limit_hit.model === model.value);
-  // an account is picked only when there IS a switcher AND the tool uses one
-  // (codex has none) — the row's visibility and the autoAcct short-circuit both
-  // read this.
-  const acctVisible = () => acctList.length && tool.value !== "codex";
+  // an account is picked only when there IS a switcher AND the picked tool USES
+  // one — the served `accounts` flag, which is true for a plugin that provides
+  // the account registry those rows come from and false for one that has no
+  // switcher at all (codex). A host-name compare here was the last thing that
+  // decided a whole form row by spelling a tool.
+  const toolAccounts = () => !!(hostRow(tool.value) || {}).accounts;
+  const acctVisible = () => acctList.length && toolAccounts();
   const autoAcct = () => {
-    if (acctPicked || !acctList.length || tool.value === "codex") return;
+    if (acctPicked || !acctList.length || !toolAccounts()) return;
     // never auto-select a logged-out account (its login is revoked — a launch
     // there dies on auth); fall back to the full list only if ALL are logged out
     const live = acctList.filter(a => !a.logged_out);
@@ -937,19 +952,21 @@ function nsPickers(F) {
   // reselects the remembered value if the new options still offer it, else the
   // tool's first-ever default.
   const syncTool = () => {
-    const t = tool.value || "claude_code";
-    model.fill(toolOpts(TOOL_MODELS, t));
+    const t = tool.value;
+    const h = hostRow(t);
+    model.fill(hostOpts(t, "model"));
     if (!modelPicked)
-      model.value = model.has(last.model) ? last.model : (TOOL_MODEL_DEF[t] || "");
-    effort.fill(toolOpts(TOOL_EFFORTS, t));
+      model.value = model.has(last.model) ? last.model
+                                          : ((h && h.model_default) || "");
+    effort.fill(hostOpts(t, "effort"));
     if (!effortPicked)
-      effort.value = effort.has(last.effort) ? last.effort : (TOOL_EFFORT_DEF[t] || "");
+      effort.value = effort.has(last.effort) ? last.effort
+                                             : ((h && h.effort_default) || "");
     acctRow.style.display = acctVisible() ? "" : "none";
     // name the picked host in the prompt placeholder (repaint the live box if
-    // it is already open; nsPrompt reads nsToolLabel for its first paint)
-    nsToolLabel = (Array.isArray(S.hosts)
-                   && (S.hosts.find(h => h.name === t) || {}).label)
-                  || (t === "codex" ? "Codex" : "Claude");
+    // it is already open; nsPrompt reads nsToolLabel for its first paint). The
+    // server's label or the neutral word — never a guess at which tool it is.
+    nsToolLabel = (h && h.label) || NO_HOST_LABEL;
     if (nsPromptBox) nsPromptBox.placeholder = nsPromptPlaceholder();
     autoAcct();
   };
@@ -957,10 +974,11 @@ function nsPickers(F) {
   const fillTools = (list) => {
     const launchable = (list || []).filter(h => h && h.launchable);
     tool.fill(launchable.map(h => [h.name, h.label || h.name]));
-    const want = presetTool || last.tool || "claude_code";
+    const want = presetTool || last.tool || defaultHost();
     if (tool.has(want)) tool.value = want;
-    // one host → the picker is noise; hide the row (the launch still sends
-    // tool=claude_code, the server default).
+    // one host → the picker is noise; hide the row (the launch then sends that
+    // one host's name, or none at all before /api/hosts lands — the server
+    // routes an unnamed launch to its own default host either way).
     toolRow.style.display = launchable.length > 1 ? "" : "none";
     syncTool();
   };
@@ -987,7 +1005,14 @@ function nsPickers(F) {
       tool.value = r.tool;
       syncTool();
     }
-    const fam = (shortModel(r.model) || "").split("-")[0];
+    // the row's model, reduced to a MENU ROW by the owning host's own match rule
+    // (modelKey over its `model_match`) — the row carries the server's display
+    // spelling of the id (`model_short`) and its tool, so this asks the right
+    // host. It used to take the leading word of every id, which is Claude's
+    // family shape: a codex row's `gpt-5.6-sol` became "gpt" and matched nothing,
+    // so resuming a codex session never pre-selected the model it was on.
+    const fam = modelKey(shortModel(r.model_short),
+                         (hostRow(tool.value) || {}).model_match);
     if (!modelPicked && fam && model.has(fam)) model.value = fam;
     if (!effortPicked && r.effort && effort.has(r.effort)) effort.value = r.effort;
     autoAcct();
@@ -1017,7 +1042,7 @@ function nsPromptPlaceholder() {
 }
 
 function nsPrompt(F) {
-  const { dir } = F;
+  const { dir, tool } = F;
 
   const promptRow = el("label", "nsfield");
   promptRow.append(el("span", "nslabel", "first prompt (optional)"));
@@ -1041,11 +1066,19 @@ function nsPrompt(F) {
   const promptBox = el("div", "nsdictrow");
   promptBox.append(prompt, nsAttach, pdic.btn);
   promptRow.append(nsTray.strip, promptBox);
-  // "/" completion here too — cwd-keyed to whatever directory is currently
-  // typed (cached per dir, so flipping between dirs doesn't refetch)
+  // "/" completion here too — keyed to the directory currently typed AND the
+  // TOOL currently picked (cached per pair, so flipping either doesn't refetch):
+  // the menu is the vocabulary of the host this launch will START, where it used
+  // to be whichever host the server defaults to (a codex launch was offered
+  // /goal and /rewind). No tool yet — the window before /api/hosts lands — still
+  // means the default host, and the picked one supersedes it at once.
   const cmdCache = {};
   const spm = slashMenu(prompt, promptRow,
-    () => { const c = dir.value.trim(); return cmdsFor(c, cmdCache, c); },
+    () => {
+      const c = dir.value.trim();
+      const t = (tool && tool.value) || "";
+      return cmdsFor(c, cmdCache, c + " " + t, "", t);
+    },
     { enterSends: !IS_IPAD });
   // composer UX: grow with the message, Enter launches, Shift+Enter newline
   // (on an iPad Enter is a newline and only the launch button launches).
@@ -1125,14 +1158,18 @@ function nsActions(F) {
     if (nsTray.pending())
       return toast("ask", "attachment still uploading", "one moment…");
     submit.disabled = true;
-    const codex = tool.value === "codex";
-    const body = { cwd, tool: tool.value || "claude_code" };
+    const host = hostRow(tool.value);
+    const acctful = !!(host && host.accounts);
+    // an EMPTY tool is a real state (the form opened before /api/hosts landed):
+    // the server routes an unnamed launch to its own default host, which is
+    // strictly better than this page naming one it hasn't been told about
+    const body = { cwd, tool: tool.value || "" };
     const atts = nsTray.paths();
     if (atts.length) body.attachments = atts;
     if (resumeSel) body.resume = resumeSel;
-    // codex has no subscription switcher — never send an account for it (the
-    // server would resolve an alias the codex host then ignores)
-    if (acct.value && !codex) body.account = acct.value;
+    // a host with no subscription switcher (`accounts: false`) never carries an
+    // account — the server would resolve an alias that host then ignores
+    if (acct.value && acctful) body.account = acct.value;
     if (model.value) body.model = model.value;
     if (effort.value) body.effort = effort.value;
     if (prompt.value.trim()) body.prompt = prompt.value.trim();
@@ -1156,12 +1193,11 @@ function nsActions(F) {
     // heuristic) and arrives below, and the failure path rolls the form back.
     // Arming before the POST also takes the known/live baseline from before the
     // launch, which is what checkJump wants.
-    const toolLbl = (Array.isArray(S.hosts)
-                     && (S.hosts.find(h => h.name === body.tool) || {}).label)
-                    || (codex ? "Codex" : "Claude");
+    const toolLbl = (host && host.label) || NO_HOST_LABEL;
     const show = { mode: body.resume ? "resume" : "new",
                    model: model.value, effort: effort.value, toolLabel: toolLbl,
-                   account: codex ? "" : acct.value, prompt: body.prompt || "" };
+                   account: acctful ? acct.value : "",
+                   prompt: body.prompt || "" };
     armJump(cwd, body.resume, { show, pend: true });
     const mine = S.jump;               // this launch's watch — a later one wins
     closeNewSession();

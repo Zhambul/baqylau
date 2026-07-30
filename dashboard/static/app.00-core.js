@@ -67,6 +67,12 @@ const S = {
   nsPrefs: {},           // the new-session form's last-used {cwd, model, effort}
                          // — the backend prefs cache (GET/POST /api/ns-prefs;
                          // fetched at boot), so nsLast() reads it synchronously
+  hosts: null,           // the HOST vocabulary (GET /api/hosts, fetched at
+                         // boot): one row per registered tool with its menus,
+                         // defaults, match rule and account/attach flags — the
+                         // new-session form is built entirely out of it, and
+                         // null means "not yet known", never "assume Claude"
+                         // (docs/dashboard.md, *Tool picker*)
   nsDrafts: {},          // its UNSENT first prompts, {cwd: {text, seq}} — one
                          // per directory (GET/POST /api/ns-draft), cached the
                          // same way so openNewSession and a directory switch
@@ -429,27 +435,22 @@ function agentQ(sep) {
 }
 
 function shortSid(sid) { return (sid || "").length > 20 ? sid.slice(0, 8) + "…" + sid.slice(-4) : sid; }
-// "claude-opus-4-8" → "opus-4.8" — display twin of model.short_model (the
-// Python side is the authority; this only styles the model button's label):
-// drop "claude-", join short numeric version parts with ".", skip 8-digit
-// date suffixes, drop "[1m]".
-function shortModel(m) {
-  let s = String(m || "").toLowerCase().replace("[1m]", "").trim();
-  if (!s) return "";
-  // codex models (gpt-5.6-terra, gpt-5.5, gpt-5.4-mini) are already short, and
-  // their TRAILING variant (terra/sol/luna/mini) is the discriminator — Claude's
-  // family-shortening below keeps only bare-integer version parts, so it drops
-  // the dotted version AND the variant, leaving a useless "gpt". Keep the id.
-  if (s.startsWith("gpt-") || s.startsWith("gpt5")) return s;
-  if (s.startsWith("claude-")) s = s.slice(7);
-  const parts = s.split("-");
-  const ver = [];
-  for (const p of parts.slice(1)) {
-    if (/^\d{1,2}$/.test(p)) ver.push(p);
-    else break;
-  }
-  return parts[0] + (ver.length ? "-" + ver.join(".") : "");
-}
+// A model id in its host's DISPLAY spelling — now a pass-through, because the
+// SERVER does the shortening: every payload that carries a model id carries the
+// owning host's own spelling of it beside it (`model_short` on ctx and the
+// resume rows, `from_short`/`to_short` on the fallback record; an agent row's
+// `model` is already short), resolved through HostControl.model_short by the
+// host that owns the file the id came out of.
+//
+// What was here was the grammar of TWO hosts, branched inline: strip "claude-",
+// join short numeric version parts with ".", skip 8-digit date suffixes, drop
+// "[1m]" — but return a `gpt-`/`gpt5` id untouched, because that same parse
+// turns "gpt-5.6-terra" into a useless "gpt". A model id carries no reliable
+// ownership claim, so the third host's ids would have been read through
+// whichever branch their spelling happened to fall in. The function survives as
+// the one place the page COERCES a served display string (null/number → ""), so
+// call sites keep reading the same.
+function shortModel(m) { return String(m || "").trim(); }
 function copySid(sid) {
   // navigator.clipboard is undefined in a NON-secure context (a plain-http
   // remote tunnel); calling .writeText on it throws synchronously. 127.0.0.1 is

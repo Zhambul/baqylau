@@ -144,23 +144,17 @@ function prefillComposer(restored) {
    reply), and a red asking-you tab disables the row — pasted text would land
    in the open dialog (the server 409s as the backstop). */
 
-// The picker choices. Model aliases match the new-session form's list (the
-// CLI resolves them); effort matches the server's EFFORTS levels.
-const MODEL_CHOICES = [["fable", "fable"], ["opus", "opus"],
-                       ["sonnet", "sonnet"], ["haiku", "haiku"]];
-const EFFORT_CHOICES = [["low", "low"], ["medium", "medium"],
-                        ["high", "high"], ["xhigh", "xhigh"], ["max", "max"]];
-
 // The ✦/✧ menu choices for the CURRENT session — the OWNING host's own list
-// (meta.model_choices / effort_choices, a flat list the server derives from the
-// host) when it has one, else the Claude defaults above. So a codex session's
-// pickers offer codex models/levels, not Claude's, without a codex-specific menu.
+// (meta.model_choices / effort_choices, the flat lists the server derives from
+// that host's HostControl). So a codex session's pickers offer codex
+// models/levels without a codex-specific menu here — and a host that declares
+// none gets an EMPTY menu rather than Claude Code's, which is what the
+// hardcoded fallback pair that used to sit here would have handed it.
 function hostChoices(kind) {
   const meta = S.ses && S.ses.meta;
   const list = meta && Array.isArray(meta[kind + "_choices"])
     ? meta[kind + "_choices"] : null;
-  if (list && list.length) return list.map(v => [v, v]);
-  return kind === "model" ? MODEL_CHOICES : EFFORT_CHOICES;
+  return list ? list.map(v => [v, v]) : [];
 }
 
 function closeQuickMenu() {
@@ -215,7 +209,11 @@ function applyQuickSwitch(cmd, arg) {
   const ses = S.ses;
   if (!ses) return;
   if (cmd === "model") {
-    ses.pendingModel = arg.replace("[1m]", "");
+    // `arg` is a MENU ROW — a word out of the host's own model_choices — so it
+    // is already in the vocabulary modelKey() compares against (the "[1m]" strip
+    // that used to be here normalised a Claude id, and the server's model_short
+    // owns that now).
+    ses.pendingModel = arg;
     if (ses.modelBtn) setModelBtn(ses.modelBtn);
   } else if (cmd === "effort") {
     if (ses.meta) ses.meta.effort = arg;
@@ -223,16 +221,31 @@ function applyQuickSwitch(cmd, arg) {
   }
 }
 
-// The session's current model FAMILY (a MODEL_CHOICES value) when the ctx
-// probe knows it — shortModel's leading word ("opus-4.8" → "opus").
+// Which MENU ROW a running model id sits under, per the owning host's declared
+// match rule (meta.model_match — HostControl.model_match):
+//   "family" — the rows are family words (claude_code: `opus`), so the row is
+//              the id's leading word ("opus-4.8" → "opus");
+//   "exact"  — the rows ARE full ids (codex: `gpt-5.6-terra`), so the id is the
+//              row, and a model the menu doesn't offer matches NOTHING.
+// The page used to decide this by sniffing the id itself
+// (`sm.startsWith("gpt-") ? sm : sm.split("-")[0]`), which reads a third host's
+// ids through whichever host's grammar their spelling resembles — and even for
+// codex mis-fires: a session on `gpt-5.4-codex` (not a menu row) would have been
+// shown as `gpt-5.4` under a family compare. Unknown/absent rule = "exact", the
+// answer that never claims a row the host did not name.
+function modelKey(short, match) {
+  const s = short || "";
+  return match === "family" ? s.split("-")[0] : s;
+}
+
+// The menu row the session is CURRENTLY on — the server's display spelling of
+// the ctx probe's model (ctx.model_short), reduced to a row by the host's rule.
 function curModelFamily() {
   const ses = S.ses;
   if (ses && ses.pendingModel) return ses.pendingModel;
   const cx = (ses && (ses.ctx || (ses.meta && ses.meta.ctx))) || null;
-  const sm = shortModel(cx && cx.model) || "";
-  // codex's menu rows are FULL ids (gpt-5.6-terra) so the current row matches on
-  // the whole id; Claude's menu is by FAMILY (opus/sonnet), the leading word.
-  return sm.startsWith("gpt-") ? sm : sm.split("-")[0];
+  const meta = (ses && ses.meta) || {};
+  return modelKey(shortModel(cx && cx.model_short), meta.model_match);
 }
 
 // The model button's label carries the session's CURRENT model when the ctx
@@ -249,12 +262,14 @@ function curModelFamily() {
 function setModelBtn(btn) {
   const ses = S.ses;
   const cx = (ses && (ses.ctx || (ses.meta && ses.meta.ctx))) || null;
-  const m = shortModel(cx && cx.model);
+  const meta = (ses && ses.meta) || {};
+  const m = shortModel(cx && cx.model_short);
   if (ses && ses.pendingModel) {
-    // clear the optimistic label once the probe confirms it — Claude confirms by
-    // FAMILY (m's leading word), codex by the FULL id (its pendingModel is the
-    // whole `gpt-5.6-terra`, so a family compare would never clear it)
-    if (m === ses.pendingModel || (m || "").split("-")[0] === ses.pendingModel)
+    // clear the optimistic label once the probe confirms it — the host's own
+    // match rule decides what "confirms" means (Claude Code by FAMILY, since its
+    // menu row `opus` never equals the running `opus-4.8`; codex by the full id)
+    if (m === ses.pendingModel
+        || modelKey(m, meta.model_match) === ses.pendingModel)
       ses.pendingModel = null;
     else { btn.textContent = "✦ " + ses.pendingModel + " ▾"; return; }
   }
@@ -262,8 +277,9 @@ function setModelBtn(btn) {
   const fb = ses && ses.meta && ses.meta.fallback;
   if (fb) {
     const w = el("span", "fbwarn", "⚠");
-    w.title = "fell back " + (shortModel(fb.from) || fb.from) + " → "
-      + (shortModel(fb.to) || fb.to)
+    // both ids in the OWNING host's spelling, served beside the raw ones
+    w.title = "fell back " + (fb.from_short || fb.from) + " → "
+      + (fb.to_short || fb.to)
       + (fb.category ? " (" + fb.category + ")" : "")
       + (fb.reason ? "\n\n" + fb.reason : "");
     btn.append(w);
@@ -291,6 +307,10 @@ function setEffortBtn(btn) {
 function rewindPickMode(on) {
   const ses = S.ses;
   if (!ses || !ses.stream) return;
+  // the ↶ header button is cap-gated; so are the two ways INTO pick mode that
+  // bypass it (the Esc gesture, a bubble's own ↶) — a host with no rewind must
+  // not be able to open a menu whose every row the server 409s
+  if (!capOk(ses.meta, "rewind")) return;
   const want = on === undefined ? !ses.stream.classList.contains("rwpick") : !!on;
   ses.stream.classList.toggle("rwpick", want);
   if (want)
@@ -312,20 +332,24 @@ function closeRewindMenu() {
   document.querySelectorAll(".rwmenu:not(.qcmenu)").forEach(m => m.remove());
 }
 
-// The per-message mode menu — Claude Code's own confirm options, minus the
-// summarize pair (a web summarize would need the composer anyway). The
-// labels match rewindmenu.MODE_LABELS server-side.
-const RW_MODES = [
-  ["both", "restore code and conversation"],
-  ["conversation", "restore conversation"],
-  ["code", "restore code"],
-];
+// The per-message mode menu — the OWNING host's own restore modes and the words
+// for them (meta.rewind_modes: [{mode, label}], HostControl.rewind_modes +
+// rewind_mode_label, whose single owner is the table the on-screen menu is
+// matched against). Claude Code's three, minus the summarize pair (a web
+// summarize would need the composer anyway), used to be spelled here.
+function rwModes() {
+  const list = S.ses && S.ses.meta && S.ses.meta.rewind_modes;
+  return Array.isArray(list) ? list.map(r => [r.mode, r.label || r.mode]) : [];
+}
 
 function openRewindMenu(bubble) {
   closeRewindMenu();
+  // same cap gate as the header button and pick mode: no rewind, no menu (and
+  // with no modes served there would be nothing in it but "never mind")
+  if (!capOk(S.ses && S.ses.meta, "rewind")) return;
   const menu = el("div", "rwmenu");
   menu.append(el("div", "rwhead", "rewind to before this message?"));
-  for (const [mode, label] of RW_MODES) {
+  for (const [mode, label] of rwModes()) {
     const b = el("button", "rwopt", label);
     b.onclick = (e) => { e.stopPropagation(); doRewindTo(bubble, mode, menu); };
     menu.append(b);
@@ -549,20 +573,25 @@ function startRenameHeader() {
     else if (e.key === "Escape") cancel();
   };
   inp.onblur = () => cancel();          // a stray click = cancel, same as Esc
-  // ✦ auto — bare /rename, a terminal-typing action: greyed with the reason
-  // when there is no window to type into (parked/headless), a modal dialog
-  // is up (the same conditions the header's quick commands gate on), or the
-  // conversation is EMPTY — bare /rename bounces with "Could not generate a
-  // name: no conversation context yet" (v2.1.220), the ⊜ compact bounce
-  // class; like that gate, an UNKNOWN count never greys.
+  // ✦ auto — the argless rename, a terminal-typing action on the quick-command
+  // channel, so it carries that channel's gates: the owning host must OFFER it
+  // (`rename` in meta.quick_commands — codex renames but cannot name a session
+  // itself, and its `autoname` gesture 409s) and hold the `rename` cap, there
+  // must be a window to type into (parked/headless), no modal dialog may be up,
+  // and the conversation must clear the host's own floor for the command — bare
+  // `/rename` bounces with "Could not generate a name: no conversation context
+  // yet" on an empty one, the ⊜ compact bounce class. Like that gate, an UNKNOWN
+  // prompt count never greys.
   const auto = el("button", "sstop renameauto", "✦ auto");
   const hostLbl = (ses.meta && ses.meta.host_label) || "the agent";
   auto.dataset.tip = "let " + hostLbl + " name this session (/rename)";
   const meta = ses.meta || {};
   const windowed = !!(meta.live && meta.kitty_window_id);
-  const empty = typeof meta.prompts === "number" && meta.prompts < 1;
-  gate(auto, windowed && !empty && liveTab() !== "awaiting-command",
-       !windowed ? NO_WINDOW
+  const cap = capOk(meta, "rename") && cmdOffered(meta, "rename");
+  const empty = tooThin(meta, "rename");
+  gate(auto, cap && windowed && !empty && liveTab() !== "awaiting-command",
+       !cap ? CAP_OFF
+         : !windowed ? NO_WINDOW
          : empty ? "nothing to name yet — the conversation is empty"
                  : "a question is waiting — answer it in the card");
   // preventDefault keeps the click from stealing the input's focus first —

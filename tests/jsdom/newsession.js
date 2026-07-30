@@ -16,7 +16,17 @@
 // into; and the launch, which reads from five earlier phases). Anything a phase
 // forgot to publish throws here.
 //
-// Usage: node tests/jsdom/newsession.js dashboard/static/app.09-newsession.js
+// It is ALSO the pin on where the form's vocabulary comes from: every model,
+// effort level, default and account-row decision is read out of the fake
+// /api/hosts payload below, so a THIRD host gets its own menus (or empty ones)
+// instead of the default host's — the failure the deleted host-name-keyed
+// tables made structural.
+//
+// Usage: node tests/jsdom/newsession.js dashboard/static/app.10-control.js \
+//                                       dashboard/static/app.09-newsession.js
+// (app.10 rides along for `modelKey`, the host-declared model-match rule the
+// resume prefill applies — the same "load the REAL neighbour" discipline
+// headeract.js uses for BUSY_TABS/liveTab.)
 // SKIPPED when `node` is absent — it is never a build requirement
 // (docs/testing.md).
 "use strict";
@@ -26,6 +36,8 @@ const vm = require("vm");
 const { El, domGlobals } = require("./domshim");
 
 const posted = [];
+const cmdAsks = [];          // every "/" menu vocabulary request the box made
+let slashSrc = null;         // the first-prompt box's own "/" source callback
 const modal = new El("div");
 
 /* The app globals app.09 calls that live in OTHER parts (each shimmed to the
@@ -44,13 +56,42 @@ const sandbox = {
   navigator: { userAgent: "node", onLine: true },
   ...domGlobals(),
   // -- page state + helpers from the other parts --
-  // two LAUNCHABLE hosts so the tool picker is visible AND offers codex (a
-  // single-host machine hides the row); the form's /api/hosts fetch never
-  // settles (fetch stub), so this cache IS what the picker builds from.
-  S: { sessions: [], accts: null, nsPrefs: {}, nsDrafts: {}, cur: null,
+  // THE /api/hosts PAYLOAD, as the server serves it (plugins.hosts): every
+  // menu, default, flag and match rule the form is built from now comes from
+  // here, and the form holds no per-host table of its own. The form's own
+  // /api/hosts fetch never settles (fetch stub), so this cache IS the
+  // vocabulary — which is the point: swap a row and the form changes.
+  //
+  // Three LAUNCHABLE hosts: the two real ones (verbatim values, so this doubles
+  // as the "nothing moved for either" pin) plus an UNKNOWN third, whose whole
+  // vocabulary is its own — different models, different levels, its own
+  // defaults, no account switcher. The old form would have handed it Claude
+  // Code's four models, Claude's five levels and `fable`/`high`
+  // (`toolOpts = (tbl, t) => tbl[t] || tbl.claude_code`).
+  // one SWITCHABLE account row, so "is the account picker offered" is decided
+  // by the picked host's `accounts` flag rather than by there being no accounts
+  S: { sessions: [], nsPrefs: {}, nsDrafts: {}, cur: null,
+       accts: [{ slug: "c1", label: "one", switchable: true, usage: {} }],
        ses: null, jump: null, pendingUI: false,
-       hosts: [{ name: "claude_code", label: "Claude Code", launchable: true },
-               { name: "codex", label: "Codex", launchable: true }] },
+       hosts: [
+         { name: "claude_code", label: "Claude Code", launchable: true,
+           default: true, accounts: true, attach: true, model_match: "family",
+           model_choices: ["fable", "opus", "sonnet", "haiku"],
+           effort_choices: ["low", "medium", "high", "xhigh", "max"],
+           model_default: "fable", effort_default: "high" },
+         { name: "codex", label: "Codex", launchable: true,
+           default: false, accounts: false, attach: false,
+           model_match: "exact",
+           model_choices: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.5"],
+           effort_choices: ["low", "medium", "high", "xhigh", "max", "ultra"],
+           model_default: "gpt-5.6-sol", effort_default: "low" },
+         { name: "opencode", label: "OpenCode", launchable: true,
+           default: false, accounts: false, attach: false,
+           model_match: "exact",
+           model_choices: ["oc-large", "oc-small"],
+           effort_choices: [], model_default: "oc-small",
+           effort_default: "" },
+       ] },
   IS_IPAD: false,
   $modal: modal,
   $newbtn: new El("button"), $statsbtn: new El("button"),
@@ -73,12 +114,29 @@ const sandbox = {
   autoGrow: () => {}, dictation: () => ({ btn: new El("button"), stop() {} }),
   attachTray: () => ({ strip: new El("div"), pending: () => false, paths: () => [] }),
   wireAttach: () => new El("button"),
-  slashMenu: () => ({ key: () => false }),
-  cmdsFor: () => [], groupKey: (r) => r.cwd || "",
-  shortModel: (m) => m, kfmt: (n) => String(n), usd: (c) => String(c),
+  // keep the box's own vocabulary CALLBACK so the harness can ask what the "/"
+  // menu would fetch at any moment (the real slashMenu calls it on "/")
+  slashMenu: (box, host, src) => { slashSrc = src; return { key: () => false }; },
+  // the "/" menu's fetch, recorded: the new-session box must ask for the
+  // vocabulary of the TOOL the picker is on (bug 13 — it used to pass neither a
+  // sid nor a tool, so the server answered with the default host's commands)
+  cmdsFor: (cwd, cache, key, sid, tool) => {
+    cmdAsks.push({ cwd, key, sid: sid || "", tool: tool || "" });
+    return [];
+  },
+  groupKey: (r) => r.cwd || "",
+  // app.00-core's shortModel is a PASS-THROUGH now (the server serves each id
+  // in its owning host's spelling), so the stub is the real function
+  shortModel: (m) => String(m || "").trim(),
+  kfmt: (n) => String(n), usd: (c) => String(c),
   ago: () => "", dur: () => "", proj: () => "", shortSid: (s) => s,
   armConfirm: () => {}, lastActive: () => 0,
   acctPill: () => new El("span"), limitPct: () => 0,
+  // the usage-strip vocabulary fillAccts words its option rows with (server
+  // -supplied everywhere real) — stubbed to nothing: what this harness asks of
+  // the account row is WHETHER it shows, which is the host's `accounts` flag
+  usageWindows: () => [], windowLabel: (k) => k, limitLabel: () => "",
+  schedScore: () => 0,
 };
 sandbox.window = sandbox;
 sandbox.globalThis = sandbox;
@@ -88,8 +146,8 @@ sandbox.document.addEventListener = () => {};
 sandbox.document.documentElement = new El("html");
 
 vm.createContext(sandbox);
-const src = fs.readFileSync(process.argv[2], "utf8");
-vm.runInContext(src, sandbox, { filename: "app.09-newsession.js" });
+for (const src of process.argv.slice(2))
+  vm.runInContext(fs.readFileSync(src, "utf8"), sandbox, { filename: src });
 
 const out = { ok: true, errors: [] };
 function step(name, fn) {
@@ -143,8 +201,62 @@ step("tool", () => {
   out.prompt_placeholder = pbox ? pbox.placeholder : "";
 });
 
+/* The two option pickers, read off the DOM: which rows the menu offers and
+   which one is selected. dropdown() paints its rows on the first open and
+   leaves them in the (hidden) menu, so one click is enough. */
+function fieldByLabel(name) {
+  return modal.querySelectorAll(".nsfield").find(
+    (f) => ((f.querySelectorAll(".nslabel")[0] || {}).textContent === name));
+}
+function pickerState(name) {
+  const f = fieldByLabel(name);
+  if (!f) throw new Error("no " + name + " field");
+  const btn = f.querySelectorAll(".nsdropbtn")[0];
+  if (btn && btn.onclick) btn.onclick();          // open → paint the rows
+  const opts = f.querySelectorAll(".nsdropitem").map((i) => i.textContent);
+  if (btn && btn.onclick) btn.onclick();          // …and close again
+  return { opts, cur: (f.querySelectorAll(".nsdroplab")[0] || {}).textContent };
+}
+function pickTool(label) {
+  const toolRow = modal.querySelectorAll(".nstoolrow")[0];
+  const btn = toolRow.querySelectorAll(".nsdropbtn")[0];
+  btn.onclick();
+  const row = toolRow.querySelectorAll(".nsdropitem")
+                     .find((i) => i.textContent === label);
+  if (!row) throw new Error("no " + label + " option");
+  row.onclick({ preventDefault() {} });
+}
+function toolShape() {
+  const acct = fieldByLabel("account");
+  // …and what the "/" menu would ask the server for RIGHT NOW: slashMenu's
+  // source callback is the box's own, so calling it is exactly what typing "/"
+  // does (bug 13 — it used to name neither a sid nor a tool, so the server
+  // answered every new-session menu with the DEFAULT host's commands).
+  cmdAsks.length = 0;
+  if (slashSrc) slashSrc();
+  return { model: pickerState("model"), effort: pickerState("effort"),
+           account_row: !!acct && acct.style.display !== "none",
+           placeholder: (modal.querySelectorAll(".nsprompt")[0] || {}).placeholder,
+           slash: cmdAsks[0] || null };
+}
+
+// 3b. every menu the form shows is THAT host's own: codex is on screen from the
+//     step above, then the UNKNOWN third host (its own models, NO effort levels
+//     at all, no account row), then back to the default. The old tables would
+//     have answered all three with Claude Code's.
+step("vocabulary", () => {
+  out.codex = toolShape();
+  pickTool("OpenCode");
+  out.third = toolShape();
+  pickTool("Claude Code");
+  out.claude = toolShape();
+  pickTool("Codex");        // …and back, so the launch below is codex's (the
+  //                           tool switch must also be REPEATABLE: each pick
+  //                           re-fills both menus from that host's own lists)
+});
+
 // 4. the launch: nsActions' go(), which reads dir/fresh/picker/prompt/pdic/
-//    nsTray/acct/model/effort/tool — six earlier phases at once (now codex).
+//    nsTray/acct/model/effort/tool — six earlier phases at once.
 step("launch", () => {
   const btns = modal.querySelectorAll(".nsbtn");
   const submit = btns.find((b) => b._cls().includes("primary"));

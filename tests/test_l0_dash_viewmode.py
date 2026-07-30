@@ -667,9 +667,16 @@ def test_header_action_bar_gates_every_button(tmp_path):
     # it closes the tab, it doesn't type)
     assert off("asking") == {"■ stop", "↶ rewind", "⊜ compact",
                              "✦ model ▾", "✧ effort ▾"}
-    # one prompt in — Claude Code refuses to compact a conversation this short
+    # one prompt in — the owning host declares a compact floor of 2 (Claude Code
+    # refuses to compact a conversation this short), served on the payload as
+    # quick_commands[compact].min_prompts. It used to be a client constant
+    # applied to every host.
     assert off("fresh") == {"■ stop", "⊜ compact"}
     assert "not enough conversation" in d["fresh"]["⊜ compact"]["title"]
+    # …and a host that declares NO floor keeps ⊜ compact at the same one prompt,
+    # while ↶ rewind greys on its (false) cap. The same bar, two vocabularies.
+    assert off("other") == {"■ stop", "↶ rewind", "⇆ migrate"}
+    assert "not supported" in d["other"]["↶ rewind"]["title"]
     # …but an UNKNOWN count never greys it: the gate only ever argues for
     # disabling, so it must not act on a number it doesn't have
     assert off("unknown") == {"■ stop"}
@@ -680,6 +687,11 @@ def test_header_action_bar_gates_every_button(tmp_path):
                              "✦ model ▾", "✧ effort ▾"}
     assert "parked" in d["parked"]["✕ close"]["title"]
     assert d["parked"]["↻ resume"]["disabled"] is False
+    # …and a parked row with no directory recorded GREYS ↻ resume with the
+    # reason rather than not building it — the bar's own "greyed, never gone"
+    # rule, which this one button used to be the standing exception to
+    assert d["nodir"]["↻ resume"]["disabled"] is True
+    assert "nowhere to resume" in d["nodir"]["↻ resume"]["title"]
     # the ✦ auto button inside the inline-rename input (bare /rename — Claude
     # names the session): same terminal-typing gate as the quick commands —
     # clickable live, greyed with the reason on a red tab or a parked session
@@ -688,10 +700,32 @@ def test_header_action_bar_gates_every_button(tmp_path):
     assert "/rename" in ar["idle"]["title"]      # enabled = the working tooltip
     assert ar["asking"]["disabled"] and "question" in ar["asking"]["title"]
     assert ar["parked"]["disabled"] and "parked" in ar["parked"]["title"]
-    # an empty conversation: bare /rename bounces ("no conversation context
-    # yet"), so the button says so — but an unknown count never greys
+    # an empty conversation: the argless rename bounces ("no conversation
+    # context yet") below the host's own floor of 1, so the button says so — but
+    # an unknown count never greys
     assert ar["empty"]["disabled"] and "empty" in ar["empty"]["title"]
     assert ar["unknown"]["disabled"] is False
+    # a host that renames but cannot NAME ITSELF offers no `rename` quick
+    # command, and the button greys as unsupported instead of firing the 409 its
+    # inert `autoname` gesture would answer with (the P2 bug list, item 3 —
+    # Claude Code's argless /rename used to be pasted into a codex composer)
+    assert ar["other"]["disabled"] and "not supported" in ar["other"]["title"]
+    # WHICH ROW the ✦ menu marks, per the owning host's declared match rule
+    m = d["model"]
+    assert m["claude"]["label"] == "✦ opus-4.8 ▾"     # the served spelling
+    assert m["claude"]["cur"] == "opus"               # …under its family row
+    assert m["other"]["label"] == "✦ gpt-5.6-terra ▾"
+    assert m["other"]["cur"] == "gpt-5.6-terra"       # exact: the whole id
+    # a model that host's menu does not offer matches no row at all — where a
+    # family compare would have filed gpt-5.4-codex under the gpt-5.4 row
+    assert m["unlisted"]["cur"] == "gpt-5.4-codex"
+    # an optimistic switch clears once the probe confirms it BY THAT RULE
+    # (`opus` vs a running `opus-4.8` — an equality compare never would), and
+    # holds while it hasn't
+    assert m["pending_confirmed"]["pending"] == ""
+    assert m["pending_confirmed"]["label"] == "✦ opus-4.8 ▾"
+    assert m["pending_waiting"]["pending"] == "sonnet"
+    assert m["pending_waiting"]["label"] == "✦ sonnet ▾"
     # leaving the session hands the corner back to the list's own buttons
     assert d["cleared"] == {"n": 0, "hidden": True}
 
@@ -2113,6 +2147,7 @@ def test_new_session_form_phases_hand_off_everything(tmp_path):
         pytest.skip("no node on PATH")
     r = subprocess.run(
         [node, os.path.join(REPO, "tests", "jsdom", "newsession.js"),
+         os.path.join(REPO, "dashboard", "static", "app.10-control.js"),
          os.path.join(REPO, "dashboard", "static", "app.09-newsession.js")],
         capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stderr
@@ -2142,6 +2177,39 @@ def test_new_session_form_phases_hand_off_everything(tmp_path):
     assert d["launch_model"] == "gpt-5.6-sol", d
     assert d["launch_effort"] == "low", d
     assert d["launch_account"] == "", d
+    # WHOSE VOCABULARY: every menu, default and row of the form is the PICKED
+    # host's, read out of the /api/hosts payload the harness stands in for —
+    # there is no host-name-keyed table left in the page. Both real hosts first,
+    # unchanged from when those tables held them:
+    assert d["claude"]["model"]["opts"] == ["fable", "opus", "sonnet", "haiku"]
+    assert d["claude"]["effort"]["opts"] == ["low", "medium", "high", "xhigh",
+                                             "max"]
+    assert d["claude"]["model"]["cur"] == "fable"
+    assert d["claude"]["effort"]["cur"] == "high"
+    assert d["claude"]["account_row"] is True      # it has a switcher
+    assert d["codex"]["model"]["opts"][0] == "gpt-5.6-sol"
+    assert d["codex"]["effort"]["opts"][-1] == "ultra"   # codex's own extra level
+    assert d["codex"]["model"]["cur"] == "gpt-5.6-sol"
+    assert d["codex"]["effort"]["cur"] == "low"
+    assert d["codex"]["account_row"] is False      # …and codex has none
+    # …then the host this page has never heard of. It gets ITS OWN two models,
+    # an EMPTY effort menu (it declares no levels) and its own default — where
+    # `toolOpts(tbl, t) || tbl.claude_code` would have handed it Claude Code's
+    # four models, Claude's five levels and `fable`/`high`. This is the whole
+    # point of the phase: a third host plugs in with no page change.
+    assert d["third"]["model"]["opts"] == ["oc-large", "oc-small"]
+    assert d["third"]["effort"]["opts"] == []
+    assert d["third"]["model"]["cur"] == "oc-small"
+    assert d["third"]["effort"]["cur"] == ""
+    assert d["third"]["account_row"] is False
+    assert "OpenCode" in d["third"]["placeholder"]
+    # the "/" menu follows the PICKED tool (bug 13): the box asks for that
+    # host's vocabulary, where it used to pass neither sid nor tool and get the
+    # default host's commands for every launch.
+    for who, tool in (("claude", "claude_code"), ("codex", "codex"),
+                      ("third", "opencode")):
+        assert d[who]["slash"]["tool"] == tool, (who, d[who]["slash"])
+        assert d[who]["slash"]["sid"] == ""          # no session to own it yet
     # The waiting room is OPTIMISTIC: by the time the request is in flight the
     # jump watch is armed and the page is already at #/launching. Gating that on
     # the response (where it first shipped) put the whole POST — measured p50
