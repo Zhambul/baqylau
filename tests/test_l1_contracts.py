@@ -493,10 +493,43 @@ def test_task_fmt_resolves_drifted_task_dir(run_hook, test_env, session, seed):
         json.dump(dict(_TASK, subject="Drifted", status="completed"), f)
     run_hook("claude-task-fmt.py", P.post_task_update(s, "1", "completed"))
     assert _tasks_kv(s)["tasks"][0]["status"] == "completed"
-    # a task landing back in the SID dir out-ranks the stale pin
+    # a FRESH task landing back in the SID dir out-ranks the pin — and un-pins
     _seed_task_dir(test_env, s, [dict(_TASK, id="2", subject="Fresh list")])
     run_hook("claude-task-fmt.py", P.task_created(s, "2", "Fresh list"))
     assert [t["subject"] for t in _tasks_kv(s)["tasks"]] == ["Fresh list"]
+    assert any(a == "tasks-dir" and '"unpin"' in c
+               for _p, a, c in oracle.state_files(test_env, s.sid))
+    assert not oracle.errors(test_env, s.sid)
+
+
+def test_task_fmt_id_only_flip_follows_the_freshest_dir(run_hook, test_env,
+                                                        session, seed):
+    """A TaskUpdate status flip probes by taskId ALONE (tool_input carries no
+    subject), and tiny integer ids exist in EVERY list — so a stale sid dir
+    that still holds <id>.json 'matches' just as well as the live drifted dir.
+    Candidate ORDER cannot break that tie (the 6e58ae19 re-regression: the
+    dead sid dir kept winning and re-stashing the dead list); the FRESHEST
+    matched record must win, because the hook fires as the direct consequence
+    of a write moments ago."""
+    import os
+    import time as _t
+    s = session.make()
+    seed.py("from core import state as ST; ST.kv_set(%r, 'seeded', 1)" % s.log)
+    # the sid dir holds a STALE 1.json (the dead pre-resume list)…
+    sid_dir = _seed_task_dir(test_env, s, [_TASK])
+    old = _t.time() - 3600
+    os.utime(os.path.join(sid_dir, "1.json"), (old, old))
+    # …while the drifted dir holds a FRESH 1.json (the live list)
+    drift = os.path.join(test_env["CLAUDE_CONFIG_DIR"], "tasks",
+                         "session-feedf00d")
+    os.makedirs(drift, exist_ok=True)
+    with open(os.path.join(drift, "1.json"), "w", encoding="utf-8") as f:
+        json.dump(dict(_TASK, subject="New life", status="in_progress"), f)
+    run_hook("claude-task-fmt.py", P.post_task_update(s, "1", "in_progress"))
+    got = _tasks_kv(s)
+    assert [t["subject"] for t in got["tasks"]] == ["New life"]
+    assert any(a == "tasks-dir" and '"pin"' in c
+               for _p, a, c in oracle.state_files(test_env, s.sid))
     assert not oracle.errors(test_env, s.sid)
 
 

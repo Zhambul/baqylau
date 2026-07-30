@@ -3911,13 +3911,25 @@ measured session): the dashboard card shows a frozen stale list while
 the TUI works a new one it never shows. So `task_fmt.resolve_dir` finds
 the dir that actually holds **the event's own task** (each event names
 one — `task_id`/`task_subject`, or `tool_input.taskId`/`.subject` on
-the tool events): the sid dir wins when it matches, else the previously
-pinned drift dir, else a newest-mtime scan of the sibling `session-*`
-dirs (bounded, `SCAN_MAX`); a scan hit is pinned in the `tasks-dir` kv
-(audited as a `tasks-dir` `{"action":"pin"}` state_files row) so the
-probe-carrying-but-unmatchable and future reads stay on the resolved
-dir. A matching sid dir always out-ranks a stale pin, so a genuinely
-fresh list keyed by the sid self-corrects with no un-pin gesture.
+the tool events) — and of the dirs holding it, **the one holding the
+FRESHEST copy wins** (`_match_mtime`). Recency, not candidate order,
+is the disambiguator, because the first cut ("sid dir wins when it
+matches") regressed the same day it shipped: a `TaskUpdate` status
+flip probes by `taskId` ALONE, and tiny integer ids exist in every
+list, so the dead sid dir (whose `1.json`–`9.json` all still existed)
+"matched" every id-only probe and kept re-stashing the dead list —
+interleaved with the correctly-resolved TaskCreated/TaskCompleted
+snapshots, whichever ran last owned the kv. The hook fires as the
+direct consequence of a write moments ago, so the true dir holds a
+copy younger than `RECENT_S` (30s) while the stale dir's is hours old.
+Candidates: the sid dir + the pinned drift dir, widened to a
+newest-mtime scan of the sibling `session-*` dirs (bounded,
+`SCAN_MAX`) when neither holds a RECENT copy. A scan hit is pinned in
+the `tasks-dir` kv (audited as a `tasks-dir` `{"action":"pin"}`
+state_files row) so probe-less reads stay on the resolved dir; a
+FRESH win by the sid dir un-pins (`{"action":"unpin"}`) — the
+freshness gate matters, because a merely-stale default match (the
+scan found nothing fresher) must not drop a good pin.
 
 `session_payload` carries the list as `data["tasks"]` (and the
 dismissal as `data["tasks_hidden"]`) — deliberately **NOT live-gated**

@@ -32,14 +32,19 @@
 # subagent, no prompt_id) and writes THERE, so the sid-keyed snapshot froze on
 # the pre-resume list (the dashboard card showed a dead 9-task list while the
 # TUI worked a new one). So the dir is RESOLVED, not assumed: each task event
-# names a task (task_id/subject), and the dir that actually holds THAT task is
-# the one Claude Code is writing — sid dir first, else a bounded newest-mtime
-# scan of the sibling session-* dirs; a scan hit is PINNED in the `tasks-dir`
-# kv (audited) so the snapshots that carry no probe (a bare status flip) stay
-# on the resolved dir. A matching sid dir always wins over a stale pin, so a
-# genuinely fresh session self-corrects without an un-pin gesture.
+# names a task (task_id/subject), and of the dirs holding that task the one
+# holding the FRESHEST copy is the one Claude Code just wrote — RECENCY, not
+# candidate order, because a TaskUpdate probes by id ALONE and tiny integer
+# ids exist in every list, so the dead sid dir "matched" and kept winning on
+# order (the same session's second regression, 21:50 same day). Candidates:
+# the sid dir + the pinned drift dir, widened to a bounded newest-mtime scan
+# of the sibling session-* dirs when neither holds a RECENT (RECENT_S) copy;
+# a scan hit is PINNED in the `tasks-dir` kv (audited) so the snapshots that
+# carry no probe stay on the resolved dir, and a FRESH win by the sid dir
+# un-pins, so a list genuinely re-keyed to the sid self-corrects too.
 import json
 import os
+import time
 
 from core import ops as O
 from core import state as ST
@@ -62,6 +67,7 @@ GLYPHS     = (GLYPH_NEW, GLYPH_DONE)
 KEY = "tasks"          # the state-DB kv stash the dashboard's tasks card reads
 PIN_KEY = "tasks-dir"  # kv: the drift-resolved task dir (see the header note)
 SCAN_MAX = 40          # newest sibling session-* dirs probed on a drift scan
+RECENT_S = 30          # a matched record younger than this is "the write this hook is about"
 
 
 def tasks_dir(sid):
@@ -84,64 +90,92 @@ def _probe(d):
     return str(d.get("task_id") or ""), d.get("task_subject") or ""
 
 
-def _dir_matches(path, tid, subj):
-    """Does this task dir hold the probed task? An id probe demands
-    <tid>.json (subject agreeing when both are known); a subject-only probe
-    (TaskCreate's Post — no id yet) matches any record with that subject."""
+def _match_mtime(path, tid, subj):
+    """The mtime of the record matching the probe in this dir, None = no
+    match. The mtime IS the disambiguator: task ids are tiny integers present
+    in EVERY list (a stale sid dir matches an id-only TaskUpdate probe just as
+    well as the live drifted dir — the 6e58ae19 re-regression), but the hook
+    fires as the direct consequence of a write moments ago, so the dir Claude
+    Code really wrote holds a FRESH copy of the event's task."""
     try:
         if tid:
-            with open(os.path.join(path, tid + ".json"), encoding="utf-8") as f:
+            p = os.path.join(path, tid + ".json")
+            with open(p, encoding="utf-8") as f:
                 rec = json.load(f)
-            return not subj or (rec.get("subject") or "") == subj
+            if subj and (rec.get("subject") or "") != subj:
+                return None
+            return os.stat(p).st_mtime
         if subj:
+            best = None
             for name in os.listdir(path):
                 if not name.endswith(".json"):
                     continue
-                with open(os.path.join(path, name), encoding="utf-8") as f:
+                p = os.path.join(path, name)
+                with open(p, encoding="utf-8") as f:
                     if (json.load(f).get("subject") or "") == subj:
-                        return True
+                        mt = os.stat(p).st_mtime
+                        best = mt if best is None or mt > best else best
+            return best
     except (OSError, ValueError):
-        return False
-    return False
+        return None
+    return None
 
 
 def resolve_dir(d, sid, LOG):
-    """The task dir Claude Code is actually writing for this session: the
-    sid-keyed default when it holds the event's task, else the pinned
-    drift dir, else a newest-mtime scan of the sibling session-* dirs —
-    a scan hit is pinned (kv + audit) for the probe-less snapshots."""
+    """The task dir Claude Code is actually writing for this session: of the
+    dirs holding the event's task, the one holding the FRESHEST copy — sid
+    dir and pinned drift dir first, widened to a newest-mtime scan of the
+    sibling session-* dirs when neither holds a RECENT copy. A scan hit is
+    pinned (kv + audit) for the probe-less snapshots; a fresh win by the sid
+    dir un-pins, so a genuinely re-keyed list self-corrects both ways."""
     default = tasks_dir(sid)
     pin = ST.kv_get(LOG, PIN_KEY) or {}
     pinned = pin.get("dir") or ""
     tid, subj = _probe(d)
     if not tid and not subj:                  # no probe — trust what we have
         return pinned if pinned and os.path.isdir(pinned) else default
-    if _dir_matches(default, tid, subj):      # sid dir wins over a stale pin
-        return default
-    if pinned and _dir_matches(pinned, tid, subj):
-        return pinned
-    root = os.path.dirname(default)
-    cands = []
-    try:
-        for e in os.scandir(root):
-            try:
-                if e.name.startswith("session-") and e.is_dir():
-                    cands.append((e.stat().st_mtime, e.path))
-            except OSError:
+    best, best_mt = None, -1.0
+    for cand in (default, pinned) if pinned and pinned != default else (default,):
+        mt = _match_mtime(cand, tid, subj)
+        if mt is not None and mt > best_mt:
+            best, best_mt = cand, mt
+    if best is None or time.time() - best_mt > RECENT_S:
+        # neither dir holds a FRESH copy of the event's task — the write
+        # likely landed under a drifted key; hunt the sibling dirs for one
+        root = os.path.dirname(default)
+        dirs = []
+        try:
+            for e in os.scandir(root):
+                try:
+                    if e.name.startswith("session-") and e.is_dir():
+                        dirs.append((e.stat().st_mtime, e.path))
+                except OSError:
+                    continue
+        except OSError:
+            dirs = []
+        dirs.sort(reverse=True)
+        for _mt, path in dirs[:SCAN_MAX]:
+            if path in (default, pinned):
                 continue
-    except OSError:
-        cands = []
-    cands.sort(reverse=True)
-    for _mt, path in cands[:SCAN_MAX]:
-        if path in (default, pinned):
-            continue
-        if _dir_matches(path, tid, subj):
-            ST.kv_set(LOG, PIN_KEY, {"dir": path})
-            A.state_file(LOG, ST.db_path(LOG), PIN_KEY,
-                         {"action": "pin", "dir": path, "sid_dir": default,
-                          "task_id": tid, "subject": subj[:80]})
-            return path
-    return pinned if pinned and os.path.isdir(pinned) else default
+            mt = _match_mtime(path, tid, subj)
+            if mt is not None and mt > best_mt:
+                best, best_mt = path, mt
+    if best is None:
+        return pinned if pinned and os.path.isdir(pinned) else default
+    fresh = time.time() - best_mt <= RECENT_S
+    if best not in (default, pinned):
+        ST.kv_set(LOG, PIN_KEY, {"dir": best})
+        A.state_file(LOG, ST.db_path(LOG), PIN_KEY,
+                     {"action": "pin", "dir": best, "sid_dir": default,
+                      "task_id": tid, "subject": subj[:80]})
+    elif best == default and pinned and fresh:
+        # the sid dir just took a real write — the drift is over; a stale
+        # default match must NOT un-pin (the scan may simply have found
+        # nothing fresher), hence the freshness gate
+        ST.kv_del(LOG, PIN_KEY)
+        A.state_file(LOG, ST.db_path(LOG), PIN_KEY,
+                     {"action": "unpin", "dir": pinned, "sid_dir": default})
+    return best
 
 
 def read_tasks(d, sid, LOG):
