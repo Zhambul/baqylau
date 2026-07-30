@@ -428,12 +428,14 @@ def test_standalone_watcher_ignores_foreign_rollouts(test_env, codex, reaper):
 def test_standalone_watcher_streams_a_subagent_stamped(test_env, codex, reaper):
     """A codex SUBAGENT (collaboration.spawn_agent, cli 0.146+) writes its OWN
     rollout whose session_meta.parent_thread_id links back to the standalone
-    session. It must read like a Claude subagent: the standalone watcher discovers
-    it via that parent link and streams it STAMPED (`codex:<nickname>`) so the
-    main-agent mirror drops its ops while its agent-scope view shows them. A child
-    rollout whose parent is a DIFFERENT session is never adopted. Regression: the
-    standalone scan matched only uuid == SID, so a subagent's whole run was
-    invisible in the dashboard (docs/codex.md *Sidecar → subagent parity*)."""
+    session. It IS a child agent, so it is streamed in the SUBAGENT register: its
+    ops are stamped `sub:<aid>` — the very prefix a Claude subagent uses, which is
+    what makes the same scope/classify/fold machinery cover it — and painted in
+    the SUB palette rather than the codex one. `codex:` now means exactly "a
+    sidecar codex run inside a Claude host". A child rollout whose parent is a
+    DIFFERENT session is never adopted. Regression: the standalone scan matched
+    only uuid == SID, so a subagent's whole run was invisible in the dashboard
+    (docs/codex.md *Sidecar → subagent parity*)."""
     host = subprocess.Popen(["sleep", "60"])
     reaper.append(host)
     codex.start_watcher(host_pid=host.pid)
@@ -465,18 +467,26 @@ def test_standalone_watcher_streams_a_subagent_stamped(test_env, codex, reaper):
                desc="the codex subagent run streamed")
     assert "echo FOREIGN" not in codex.s.ops_text(), \
         "a subagent of another session leaked into this session's mirror"
-    # the main run's ops are UNSTAMPED; the subagent's carry `codex:<aid>` — the
+    # the main run's ops are UNSTAMPED; the subagent's carry `sub:<aid>` — the
     # run's synthesized AGENT ID (paths.codex_aid = the rollout basename), the
     # same id agent_scope matches, so the web mirror drops them into that scope
     from core import paths as _P
+    from core import slots as _SL
     aid = _P.codex_aid(sub_path)
     ops = codex.s.ops()
     main = [op for op in ops if "echo MAIN" in str(op)]
     sub = [op for op in ops if "echo SUBWORK" in str(op)]
     assert main and all(not op.get("src") for op in main), \
         "the standalone main run's ops must stay unstamped"
-    assert sub and all(op.get("src") == "codex:" + aid for op in sub), \
-        "the subagent run's ops must be stamped codex:<aid>"
+    assert sub and all(op.get("src") == "sub:" + aid for op in sub), \
+        "the subagent run's ops must be stamped sub:<aid> (a CHILD AGENT)"
+    # …and its block wears a SUBAGENT-palette colour, not the codex one: every
+    # palette-gated stage downstream (the prose drop, the as_lead recolour) keys
+    # on that family, so a codex child covered by it needs no special-casing
+    sub_rgb = {tuple(op["c"]) for op in codex.s.ops()
+               if op.get("src") == "sub:" + aid and op.get("c")}
+    assert sub_rgb and sub_rgb <= {tuple(c) for c in _SL.SUB_PALETTE}, \
+        "a codex subagent must wear the SUB palette, not the codex one"
     host.terminate()
 
 
@@ -522,10 +532,11 @@ def test_standalone_subagent_stream_drops_the_replayed_parent_prefix(test_env, c
 
 
 def test_standalone_subagent_prompt_web_surfaces_and_tool_renders(test_env, codex, reaper):
-    """B1+B2: a codex subagent's ⇢ prompt web-surfaces (so the LEAD shows a foldable
-    card, note `Codex "…" ran`), and a NON-exec_command tool (`tools.web__run`)
-    renders as activity (it used to parse to nothing). docs/codex.md *Sidecar →
-    subagent parity*."""
+    """A codex subagent's LAUNCH CARD web-surfaces in the LEAD's mirror — the same
+    `⇢ prompt` card, note and brief-behind-the-click a Claude subagent gets
+    (`Agent "<nickname>" launched`, NOT a codex-specific wording) — and a NON-shell
+    tool (`tools.web__run`) renders as the quiet `· <name>` block instead of a
+    `▶ cmd` of raw JavaScript. docs/codex.md *Sidecar → subagent parity*."""
     import calendar
     host = subprocess.Popen(["sleep", "60"])
     reaper.append(host)
@@ -539,23 +550,42 @@ def test_standalone_subagent_prompt_web_surfaces_and_tool_renders(test_env, code
               "source": {"subagent": {"thread_spawn": {
                   "parent_thread_id": codex.s.sid}}}},
         events=[
+            # the replayed-parent PREFIX: the last human turn in it is the only
+            # plaintext statement of the child's task, and so is its brief
+            {"type": "response_item", "payload": {
+                "type": "message", "role": "user",
+                "content": [{"type": "input_text",
+                             "text": "look up the weather in Bali"}]}},
+            # …the child's own bootstrap, where the launch card is emitted…
             {"type": "event_msg", "payload": {
                 "type": "task_started", "started_at": fork_epoch}},
-            {"type": "event_msg", "payload": {
-                "type": "user_message", "message": "look up the weather"}},
+            # …and its own work
             {"type": "response_item", "payload": {
                 "type": "custom_tool_call", "name": "exec", "call_id": "w1",
                 "input": 'const r = await tools.web__run({q:"weather Bali"}); text(r)'}},
         ])
-    # the tool call renders (B2 — was invisible before the tools.<fn> decode)
+    # the tool call renders as a `·` block (it used to be laundered into `▶ cmd`
+    # with the raw JS as the command)
     wait_until(lambda: "web__run" in codex.s.ops_text(),
                desc="the subagent's tools.web__run rendered as activity")
-    # the ⇢ prompt op is web-stamped (B1) so it surfaces in the LEAD, with the note
+    tool = [op for op in codex.s.ops()
+            if op.get("t") == "label" and "web__run" in (op.get("s") or "")]
+    assert tool and tool[0]["s"].startswith("· "), \
+        "a non-shell tool call must paint the quiet `· <name>` block"
+    assert "▶ cmd" not in codex.s.ops_text(), \
+        "a tool call must not render as a command block of raw JavaScript"
+    # the ⇢ prompt op is the LAUNCH CARD: web-stamped so it surfaces in the LEAD,
+    # worded in the same register a Claude subagent's is, and holding the brief
+    wait_until(lambda: any(op.get("note") for op in codex.s.ops()),
+               desc="the subagent's launch card")
     pj = [op for op in codex.s.ops()
           if op.get("t") == "label" and "prompt" in (op.get("s") or "")]
     assert pj and pj[0].get("web") == 1, "the codex ⇢ prompt must be web-surfaced"
-    assert pj[0].get("note") == 'Codex "Pauli" ran', \
-        "the lead card note must read Codex \"<label>\" ran"
+    assert pj[0].get("note") == 'Agent "Pauli" launched', \
+        "a codex CHILD's card must be worded as an Agent, not as a codex run"
+    assert pj[0].get("who") == "Pauli", "the card must carry the child's name"
+    assert "look up the weather in Bali" in codex.s.ops_text(), \
+        "the brief must be behind the launch card's click"
     host.terminate()
 
 

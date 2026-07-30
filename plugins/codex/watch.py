@@ -39,7 +39,7 @@
 import glob, hashlib, json, os, re, subprocess, sys, tempfile, time
 from datetime import datetime, timedelta
 
-from core.slots import CODEX_PALETTE
+from core.slots import CODEX_PALETTE, SUB_PALETTE
 from core import paths as P
 from core import env as EV
 from core import locks as LK
@@ -285,12 +285,23 @@ def rollout_subagent(path):
 
 
 _n = 0
+# A SUBAGENT's colour comes from the SUBAGENT palette, round-robin on its OWN
+# counter: a codex subagent IS a child agent, so it wears the same family a
+# Claude subagent does and the two read alike in a shared pane (and every
+# palette-gated stage downstream — actclass's prose/recolour gates — covers it
+# with no codex special-casing). Its own counter so a session's codex sidecars
+# and its subagents don't advance each other's hue.
+_sub_n = 0
 
 
 def spawn(srcfile, jsonfile, label, subagent=False):
-    global _n
-    rgb = ",".join(str(x) for x in CODEX_PALETTE[_n % len(CODEX_PALETTE)])
-    _n += 1
+    global _n, _sub_n
+    if subagent:
+        rgb = ",".join(str(x) for x in SUB_PALETTE[_sub_n % len(SUB_PALETTE)])
+        _sub_n += 1
+    else:
+        rgb = ",".join(str(x) for x in CODEX_PALETTE[_n % len(CODEX_PALETTE)])
+        _n += 1
     # The detach mechanics + spawn/error audit live in core.spawn (the one
     # owner); audit_argv drops the rgb/jsonfile noise the spawns row never
     # recorded here. WHO the run is decides the register:
@@ -299,19 +310,30 @@ def spawn(srcfile, jsonfile, label, subagent=False):
     #     command colours + block shape (uniform, no codex palette — docs/codex.md
     #     *Standalone command parity*). The CLAUDE_CODEX_STANDALONE flag rides the
     #     env so the stream paints the main-agent register.
-    #   * Everything else — a SECONDARY-source run inside a Claude host, OR a codex
-    #     SUBAGENT spawned by a standalone host (`subagent=True`) — gets the
-    #     producer-source stamp ($CLAUDE_OPS_SRC -> core.ops stamps every op). It is
-    #     NOT the host session's main agent, so the web dashboard's main-agent-only
-    #     mirror drops its ops and its agent-scope view shows them — the codex twin
-    #     of a Claude subagent (docs/codex.md *Sidecar → subagent parity*). The stamp
-    #     is `codex:<codex_aid>` — the run's synthesized AGENT ID (paths.codex_aid,
+    #   * A codex SUBAGENT (`subagent=True`) is a CHILD AGENT, so it is stamped
+    #     `sub:<codex_aid>` — the very prefix a Claude subagent uses. The prefix is
+    #     the REGISTER: `codex:` now means exactly "a sidecar codex run inside a
+    #     Claude host" (the thing the web counts as `ran N codex runs`), while a
+    #     native subagent classifies, scopes and folds as an AGENT with no
+    #     per-tool special-casing. Safe to re-point because nothing keys on the
+    #     `codex:` prefix to FIND a run: read/mirror.agent_scope accepts all three
+    #     prefixes for one id, and sessionapi.codex_runs reads the audit `streams`
+    #     rows, not the op stamp.
+    #   * A SECONDARY-source run inside a Claude host keeps `codex:<codex_aid>`.
+    #     Either way the stamp is the run's synthesized AGENT ID (paths.codex_aid,
     #     the same id sessionapi.codex_runs mints the card with), NOT the display
     #     `label`: making the stamp EQUAL the agent id is what lets
-    #     read/mirror.agent_scope match it directly, no per-tool label lookup (the
-    #     unification — a Claude subagent stamps `sub:<aid>` the same way).
+    #     read/mirror.agent_scope match it directly, no per-tool label lookup.
+    #     Both are NOT the host session's main agent, so the web dashboard's
+    #     main-agent-only mirror drops their ops and the agent-scope view shows them.
     env = dict(os.environ)
-    if STANDALONE and not subagent:
+    if subagent:
+        # …and the stream paints the SUBAGENT register off this flag (an explicit
+        # env flag, like the STANDALONE precedent — the rollout itself cannot say
+        # which of the two roles this watcher spawned it for).
+        env["CLAUDE_CODEX_SUBAGENT"] = "1"
+        env["CLAUDE_OPS_SRC"] = "sub:" + P.codex_aid(srcfile)
+    elif STANDALONE:
         env["CLAUDE_CODEX_STANDALONE"] = "1"
     else:
         env["CLAUDE_OPS_SRC"] = "codex:" + P.codex_aid(srcfile)

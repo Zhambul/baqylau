@@ -156,6 +156,17 @@ class AgentStream:
                            bubbled=True),
                 self._gut(brief, g=g, web=True, bubbled=True)]
 
+    def prompt(self, text, g, ctx=""):
+        """`⇢ prompt` again, MID-RUN — a follow-up task handed to a child that is
+        already running (codex's `followup_task`; a Claude subagent gets exactly
+        one brief and never reaches this).
+
+        Deliberately NOT `web` and carrying no note: the lead's mirror shows a
+        child's two ENDPOINTS, and a follow-up is neither — it would read as a
+        second launch of the same agent. `bubbled` like every other prose block."""
+        return [self._chip(*SF.MARK_PROMPT, ctx, g=g, lk=O.COPY_ALL, bubbled=True),
+                self._gut(text, g=g, bubbled=True)]
+
     def result(self, text, g, ctx=""):
         """`⇠ result` — what the child returned. The other `web`-stamped block,
         and the only one whose note carries a duration (the run is over, so

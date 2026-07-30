@@ -42,9 +42,10 @@ A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
 
 RST, FAIL = R.RST, R.fg(*O.RED)
 
-# The `pending_exec` entry KIND for a non-shell tool call's open block (an exec's
-# entry carries no kind — it is the historical shape).
-_PEND_TOOL = "tool"
+# The `pending_exec` entry KINDS for an open block awaiting its result: a
+# non-shell tool call, and a SUBAGENT's shell command (a STANDALONE exec's entry
+# carries no kind — it is the historical shape, closed by _exec_close).
+_PEND_TOOL, _PEND_CMD = "tool", "cmd"
 
 # --- run identity (argv contract) ---------------------------------------------------
 # All of this used to be parsed at module top level — importing the module read
@@ -57,23 +58,43 @@ LOGFILE  = ""
 JSONF    = "-"
 LABEL    = "task"
 ROLLOUT  = False                          # LOGFILE ends .jsonl; else companion .log
-STANDALONE = False                        # a codex host on its OWN (no Claude host)
+
+# The three REGISTERS a codex run is painted in — WHO the run is to the session,
+# which is the only thing the paint forks on:
+#   STANDALONE — a codex host on its OWN. It IS the session's main agent, so it
+#       paints like one: no run banner, no ⚙ line, no prose (that comes back as
+#       conversation bubbles), commands in Claude's own semantic colours + block
+#       shape, file ops as bare `line`s (docs/codex.md *Standalone command parity*).
+#   SIDECAR — a run inside a Claude host. Its own bracketed sub-stream in the codex
+#       palette, banner and footer included; the historical shape.
+#   SUBAGENT — a codex-native child agent of a standalone host. It is a CHILD, so
+#       it paints as one: core/agentblocks builds every block, it wears the SUB
+#       palette its watcher assigned, and its launch/result cards, notes and stamps
+#       are the same ones a Claude subagent's substream writes.
+# Selected by the watcher through the env (an explicit flag each — the rollout
+# cannot say which role its watcher spawned it for).
+REG_STANDALONE, REG_SIDECAR, REG_SUBAGENT = "standalone", "sidecar", "subagent"
+REGISTER = REG_SIDECAR
 
 
 def _init(argv):
     """Bind this run's identity from the shim's argv:
       claude-codex-stream.py MIRROR_LOG "r,g,b" SRCFILE JSONFILE LABEL
-    plus $CLAUDE_CODEX_STANDALONE (set by the watcher for a standalone host — the
-    run then paints its commands in Claude's own semantic colours, not the codex
-    palette; docs/codex.md *Standalone command parity*)."""
-    global LOG, SLOT_RGB, LOGFILE, JSONF, LABEL, ROLLOUT, STANDALONE
+    plus the REGISTER, from $CLAUDE_CODEX_STANDALONE / $CLAUDE_CODEX_SUBAGENT (set
+    by plugins/codex/watch.spawn — see the REG_* block above)."""
+    global LOG, SLOT_RGB, LOGFILE, JSONF, LABEL, ROLLOUT, REGISTER
     LOG      = argv[1] if len(argv) > 1 else ""
     SLOT_RGB = tuple(int(x) for x in argv[2].split(",")) if len(argv) > 2 else (0, 200, 150)
     LOGFILE  = argv[3] if len(argv) > 3 else ""
     JSONF    = argv[4] if len(argv) > 4 else "-"
     LABEL    = argv[5] if len(argv) > 5 else "task"
     ROLLOUT  = LOGFILE.endswith(".jsonl")
-    STANDALONE = os.environ.get("CLAUDE_CODEX_STANDALONE") == "1"
+    if os.environ.get("CLAUDE_CODEX_SUBAGENT") == "1":
+        REGISTER = REG_SUBAGENT
+    elif os.environ.get("CLAUDE_CODEX_STANDALONE") == "1":
+        REGISTER = REG_STANDALONE
+    else:
+        REGISTER = REG_SIDECAR
 
 
 def _iso_ts(s):
@@ -139,7 +160,7 @@ FILE_VERB = {"add": ("Write", O.GREEN, "Write"),
              "move": ("Update", O.YELLOW, "Edit")}
 
 
-def render_patch(rec):
+def render_patch(rec, blocks=None):
     """A parsed rollout `patch` record (plugins/codex/rollout.py — built from
     patch_apply_end, the authoritative file-op record for a codex run: it
     carries the RESOLVED absolute paths + per-file diffs; the apply_patch
@@ -158,15 +179,26 @@ def render_patch(rec):
         # The one-liner shape is the shared core builder (streamfmt.file_line —
         # the same anatomy the claude_code file formatters paint); a codex patch
         # has no extent/range/failure variants, just the ± counts.
-        line = SF.file_line(verb, name, rgb, added=f["added"], removed=f["removed"])
-        # A STANDALONE run is the session's main agent, so its file op is the
-        # LEAD's shape: a bare `line`, exactly what claude_code's file_fmt emits.
-        # That is not cosmetic — a `gut` op names no ACTIVITY CLASS, so a
-        # standalone run's reads and edits were invisible to the web's item kind
-        # and to every view-mode summary (the same fix agent scope makes for a
-        # subagent's file ops, dashboard/opshtml/actclass.as_lead). A SIDECAR run
-        # keeps the guttered shape: it is a sub-stream hanging off its own bar.
-        O.emit(LOG, O.line(line) if STANDALONE else O.gut(line, SLOT_RGB))
+        # A SUBAGENT's file op is built by the shared child-agent presenter, so it
+        # carries the same `who` + model/ctx tags a Claude subagent's Read/Update
+        # line does (`blocks` is passed only in that register) — and that builder
+        # owns the text too, so only the other registers shape it here.
+        if blocks is not None:
+            O.emit(LOG, *blocks.file_line(verb, name, rgb, added=f["added"],
+                                          removed=f["removed"]))
+        else:
+            # A STANDALONE run is the session's main agent, so its file op is the
+            # LEAD's shape: a bare `line`, exactly what claude_code's file_fmt
+            # emits. That is not cosmetic — a `gut` op names no ACTIVITY CLASS, so
+            # a standalone run's reads and edits were invisible to the web's item
+            # kind and to every view-mode summary (the same fix agent scope makes
+            # for a subagent's file ops, dashboard/opshtml/actclass.as_lead). A
+            # SIDECAR run keeps the guttered shape: a sub-stream hanging off its
+            # own bar.
+            line = SF.file_line(verb, name, rgb, added=f["added"],
+                                removed=f["removed"])
+            O.emit(LOG, O.line(line) if REGISTER == REG_STANDALONE
+                   else O.gut(line, SLOT_RGB))
         O.bump(LOG, tool=tool, file=f["path"], added=f["added"], removed=f["removed"])
 
 # A companion job-log line is prefixed with an ISO timestamp; the tail is the event
@@ -200,8 +232,10 @@ def _tool_rgb():
     reads as ordinary main-session activity downstream (the quiet ⏺ register, the
     `tool` activity class) — the same rule its exec blocks follow (docs/codex.md
     *Standalone command parity*). A SIDECAR run keeps the codex palette: there the
-    run is a sub-stream among the host's own work and the colour is what says so."""
-    return SF.CMD_OK if STANDALONE else SLOT_RGB
+    run is a sub-stream among the host's own work and the colour is what says so.
+    (A SUBAGENT's tool block is built by core/agentblocks in its own SUB-palette
+    colour and never asks this.)"""
+    return SF.CMD_OK if REGISTER == REG_STANDALONE else SLOT_RGB
 
 
 # Rollout kinds the mirror renderer deliberately does NOT paint (yet). Every
@@ -224,6 +258,15 @@ IGNORE_KINDS = frozenset({
 })
 
 
+# The record kinds whose paint OPENS a new block, and which therefore commit a
+# SUBAGENT's buffered message first (see Renderer.flush_msg). Deliberately not
+# "every kind": a `usage`/`turn_context`/`task_started` record paints nothing, and
+# flushing on one would turn the run's FINAL message — its ⇠ result card — into an
+# ordinary ✎ message, since a token_count always trails the last message.
+_FLUSH_BEFORE = frozenset({"exec", "tool", "patch", "search", "prompt",
+                           "compact", "reasoning"})
+
+
 class Renderer:
     """Per-run mutable render state for BOTH sources (companion + rollout) —
     was ~10 module globals mutated via `global` in render_record/feed_rollout;
@@ -231,6 +274,21 @@ class Renderer:
     state-holding class the lifecycle instantiates per run)."""
 
     def __init__(self):
+        # SUBAGENT register only: the shared CHILD-AGENT presenter (core/
+        # agentblocks.py) — the same builders (and the same stamp policy) the
+        # Claude substream paints its agent with, bound to THIS run's identity.
+        # `tags` is the model·effort chip turn_context keeps current, so it rides
+        # every block header instead of the sidecar's separate ⚙ line; `agent_dur`
+        # times the run from its bootstrap task_started for the finish note.
+        self.blocks = AB.AgentStream(label=LABEL, rgb=SLOT_RGB,
+                                     register=AB.REG_AGENT,
+                                     tags=lambda: self.ro_tag,
+                                     agent_dur=self._agent_dur)
+        # …and its buffered assistant message: the LAST message a child sends
+        # before it completes is its RESULT (the ⇠ card), so a message is held
+        # until either the next block paints (making it an intermediate ✎ message)
+        # or the task completes. Exactly the substream's flush_msg discipline.
+        self.pending_msg = None
         self.last_msg = ""    # last assistant-message body, to de-dup a repeated "Final output"
         # companion: the `[ts]` block currently being accumulated (a head only
         # renders when the NEXT timestamped line flushes it)
@@ -267,6 +325,39 @@ class Renderer:
         # parity*). None fork_epoch => not a subagent => open from the first record.
         self.fork_epoch = None
         self.sub_open = True
+
+    # --- SUBAGENT register: the child-agent lifecycle ---------------------------
+
+    def _agent_dur(self):
+        """How long this child has been running, for the finish note — from its
+        BOOTSTRAP task_started (`ro_started`, stamped at the gate flip below,
+        because the bootstrap record itself is dropped as turn chrome) to its
+        completion, or to now while it still runs. "" when the start is unknown,
+        and the note then simply carries no duration."""
+        if not self.ro_started:
+            return ""
+        end = self.ro_completed or time.time()
+        return O.fmt_dur(max(0.0, end - self.ro_started))
+
+    def _emit_launch(self, rec):
+        """The child's LAUNCH CARD, emitted once, at the moment its own turns
+        begin (the bootstrap-gate flip). The brief behind the click comes from the
+        replayed-parent prefix this gate is dropping — the only plaintext
+        statement of the task there is (plugins/codex/rollout.subagent_brief)."""
+        self.ro_started = self.ro_started or rec.get("at")
+        brief = cap(RO.subagent_brief(LOGFILE), CAP_PROMPT)
+        if not brief:
+            return          # a card with nothing behind it is not a card
+        O.emit(LOG, *self.blocks.launch(brief, O.new_group(LOG)))
+
+    def flush_msg(self, is_result=False):
+        """Commit the buffered assistant message — as the ⇠ RESULT card when the
+        run is completing, else as an intermediate ✎ message."""
+        if self.pending_msg is None:
+            return
+        text, self.pending_msg = self.pending_msg, None
+        build = self.blocks.result if is_result else self.blocks.message
+        O.emit(LOG, *build(text, O.new_group(LOG)))
 
     def _emit_exit_chip(self, code):
         # The red failed-exit chip, shared by both sources (companion
@@ -363,7 +454,10 @@ class Renderer:
         tag = model + (" · " + eff if eff else "")
         if model and tag != self.ro_tag:
             self.ro_model, self.ro_tag = model, tag
-            if not STANDALONE:
+            # A SUBAGENT shows the same fact the way a Claude subagent does — as
+            # the model/effort TAG on every block header (the AgentStream reads
+            # `ro_tag` above) — so it paints no line of its own here either.
+            if REGISTER == REG_SIDECAR:
                 # chrome=1: the line is this run's own frame (core/ops.py's
                 # `chrome`) — the terminal paints it, every web view drops it,
                 # where the model belongs on the run's card instead. Structural
@@ -396,7 +490,7 @@ class Renderer:
         # Cumulative usage snapshot. The SIDECAR folds it ONCE at the footer (the
         # totals are cumulative, so summing per-record would double-count).
         self.ro_usage = rec["usage"]
-        if STANDALONE:
+        if REGISTER == REG_STANDALONE:
             # A standalone stream has no per-turn footer, so fold the DELTA over
             # what's already folded — the cumulative total keeps rising across
             # turns, and only the increment is new spend.
@@ -408,11 +502,16 @@ class Renderer:
                 self.f_fresh, self.f_out, self.f_cache = fresh, tout, tcache
 
     def _ro_patch(self, rec):
-        render_patch(rec)
+        render_patch(rec, self.blocks if REGISTER == REG_SUBAGENT else None)
 
     def _ro_compact(self, rec):
         # Same ⟳ treatment the substream gives a compact_boundary, so a
-        # gap in a codex run's history reads the same way.
+        # gap in a codex run's history reads the same way — literally the same
+        # builder in the SUBAGENT register (codex's record names no token
+        # figures, so the line is the bare mark).
+        if REGISTER == REG_SUBAGENT:
+            O.emit(LOG, *self.blocks.compact())
+            return
         O.emit(LOG, O.gut(R.fg(*O.YELLOW) + "⟳ compacted" + RST, SLOT_RGB))
 
     def _ro_task_started(self, rec):
@@ -424,6 +523,11 @@ class Renderer:
         self.ro_active = False
         self.ro_completed = rec["at"] or self.ro_completed
         self.ro_done_wall = time.time()
+        # …and the message the child was holding is its RESULT: the ⇠ card, whose
+        # note carries the duration this record just closed (set above, so
+        # _agent_dur reports the real task time and not "still running").
+        if REGISTER == REG_SUBAGENT:
+            self.flush_msg(is_result=True)
 
     def _ro_turn_aborted(self, rec):
         self.ro_active, self.ro_aborted, self.ro_done_wall = False, True, time.time()
@@ -444,7 +548,14 @@ class Renderer:
     # for a sidecar (each returns early when STANDALONE); a companion .log run never
     # reaches these (render_record paints it, no rollout to re-bubble → no bubbled).
     def _ro_prompt(self, rec):
-        if STANDALONE:
+        if REGISTER == REG_STANDALONE:
+            return
+        if REGISTER == REG_SUBAGENT:
+            # A child's LAUNCH card is emitted at the bootstrap gate (_emit_launch)
+            # from the brief; a prompt reaching it mid-run is a FOLLOW-UP task
+            # (codex's `followup_task`), which is prose, not a second launch.
+            O.emit(LOG, *self.blocks.prompt(cap(rec["text"], CAP_PROMPT),
+                                            O.new_group(LOG)))
             return
         # web=True + a `Codex "<label>" ran` note: the ⇢ prompt is the codex run's
         # LAUNCH card in the LEAD mirror (in_scope keeps a web-stamped op there),
@@ -458,7 +569,11 @@ class Renderer:
                gutter(cap(rec["text"], CAP_PROMPT), g=g, bubbled=True, web=True))
 
     def _ro_reasoning(self, rec):
-        if STANDALONE:
+        if REGISTER == REG_STANDALONE:
+            return
+        if REGISTER == REG_SUBAGENT:
+            O.emit(LOG, *self.blocks.reasoning(cap(rec["text"], CAP_THINK),
+                                               O.new_group(LOG)))
             return
         g = O.new_group(LOG)
         O.emit(LOG, chip("⋯", "reasoning", g=g, lk=O.COPY_ALL, bubbled=True),
@@ -466,7 +581,15 @@ class Renderer:
 
     def _ro_message(self, rec):
         self.last_msg = rec["text"]
-        if STANDALONE:
+        if REGISTER == REG_STANDALONE:
+            return
+        if REGISTER == REG_SUBAGENT:
+            # BUFFERED, not painted: which card this message becomes is only known
+            # once something follows it (see flush_msg). UNCAPPED, like the
+            # substream's — a child's message and its result are what the stream
+            # exists to deliver.
+            self.flush_msg()                  # commit the previous one
+            self.pending_msg = rec["text"]
             return
         g = O.new_group(LOG)
         O.emit(LOG, chip("✎", "message", g=g, lk=O.COPY_ALL, bubbled=True),
@@ -484,6 +607,15 @@ class Renderer:
         if rec["query"] and rec["query"] == self.ro_last_search:
             return
         self.ro_last_search = rec["query"]
+        if REGISTER == REG_SUBAGENT:
+            # A child's search is one of its TOOL CALLS — painted as the shared
+            # `· <name>` block with the query behind the click, exactly as a
+            # Claude agent's WebSearch is (substream `_use_other`). The ⌕ glyph is
+            # codex's own vocabulary and has no counterpart there.
+            O.emit(LOG, *self.blocks.tool_open("search",
+                                               cap(rec["query"], CAP_HEAD),
+                                               O.new_group(LOG)))
+            return
         g = O.new_group(LOG)
         O.emit(LOG, chip("⌕", "search", g=g, lk=O.COPY_ALL),
                gutter(cap(rec["query"], CAP_HEAD), g=g))
@@ -505,14 +637,21 @@ class Renderer:
         `▶ cmd` block of raw JavaScript, which is how a subagent's entire real
         work came to read as gibberish."""
         g = O.new_group(LOG)
-        col = _tool_rgb()
+        args = cap(rec["args"], CAP_TOOL)
         name = rec["name"] or "tool"
+        if REGISTER == REG_SUBAGENT:
+            # …and in the SUBAGENT register it is literally the block a Claude
+            # agent's generic tool call gets — same builder, same stamps.
+            O.emit(LOG, *self.blocks.tool_open(name, args, g))
+            self.pending_exec[rec["call_id"]] = {"kind": _PEND_TOOL, "gid": g}
+            return
+        col = _tool_rgb()
         # STANDALONE: a bare label in the semantic colour (the lead's own shape —
         # no `who`, no palette). SIDECAR: the run's identity chip, as its other
         # blocks wear.
         head = (O.label(AB.TOOL_GLYPH + " " + name, col, g=g, lk=O.COPY_ALL)
-                if STANDALONE else chip(AB.TOOL_GLYPH, name, g=g, lk=O.COPY_ALL))
-        args = cap(rec["args"], CAP_TOOL)
+                if REGISTER == REG_STANDALONE
+                else chip(AB.TOOL_GLYPH, name, g=g, lk=O.COPY_ALL))
         O.emit(LOG, head, *([SF.gutter(args, col, g=g)] if args else []))
         self.pending_exec[rec["call_id"]] = {"kind": _PEND_TOOL, "gid": g}
 
@@ -521,12 +660,18 @@ class Renderer:
         A non-zero exit adds the shared red failure mark (core/agentblocks.
         fail_text) under it — the same words a Claude agent's failed tool result
         wears, so the two read alike."""
-        col = _tool_rgb()
         out = (rec["output"] or "").rstrip("\n")
+        failed = bool(rec["exit"]) and rec["exit"] != "0"
+        if REGISTER == REG_SUBAGENT:
+            O.emit(LOG, *self.blocks.tool_close(pend["gid"],
+                                                cap(out, CAP_OUTPUT),
+                                                failed=failed))
+            return
+        col = _tool_rgb()
         body = R.emphasize(R.unescape(cap(out, CAP_OUTPUT))) if out.strip() \
             else SF.no_output_body()
         ops = [O.gut(body, col, g=pend["gid"])]
-        if rec["exit"] and rec["exit"] != "0":
+        if failed:
             ops.append(O.gut(FAIL + AB.fail_text(rec["exit"]) + RST, col,
                              g=pend["gid"]))
         O.emit(LOG, *ops)
@@ -540,7 +685,18 @@ class Renderer:
         if pend and pend.get("kind") == _PEND_TOOL:
             self._tool_close(rec, self.pending_exec.pop(rec["call_id"]))
             return
-        if STANDALONE:
+        if pend and pend.get("kind") == _PEND_CMD:
+            # a SUBAGENT's command block: body + outcome, the shared builder's
+            # (an exit code names itself in the failure mark — the one thing a
+            # codex result carries that a Claude tool_result does not)
+            self.pending_exec.pop(rec["call_id"], None)
+            out = (rec["output"] or "").rstrip("\n")
+            failed = bool(rec["exit"]) and rec["exit"] != "0"
+            O.emit(LOG, *self.blocks.cmd_close(
+                pend["gid"], cap(out, CAP_OUTPUT), failed=failed,
+                exit_code=rec["exit"] if failed else None))
+            return
+        if REGISTER == REG_STANDALONE:
             self._exec_close(rec)
             return
         # In-a-Claude-session (not yet folded into the subagent abstraction —
@@ -550,7 +706,18 @@ class Renderer:
             self._emit_exit_chip(rec["exit"])
 
     def _ro_exec(self, rec):
-        if STANDALONE:
+        if REGISTER == REG_SUBAGENT:
+            # A child's shell command is the shared `▶ foreground` block, opened
+            # now and closed by its result — a Claude subagent's plain fg command
+            # exactly. Deliberately NO per-command elapsed chip: the standalone
+            # register times its blocks because it is a main agent's mirror, and a
+            # child's stream matches the Claude child instead (parity over a
+            # codex-only nicety).
+            g = O.new_group(LOG)
+            self.pending_exec[rec["call_id"]] = {"kind": _PEND_CMD, "gid": g}
+            O.emit(LOG, *self.blocks.cmd_open(rec["cmd"], g))
+            return
+        if REGISTER == REG_STANDALONE:
             # A standalone codex host IS the main agent, so its command is painted
             # EXACTLY as Claude's foreground block — the shared core/streamfmt
             # opener, in the semantic command colours (no codex palette), opened NOW
@@ -605,7 +772,13 @@ class Renderer:
             # the NEXT record). Race-safe: each record self-decides as it arrives.
             if RO.is_child_bootstrap(rec, self.fork_epoch):
                 self.sub_open = True
+                if REGISTER == REG_SUBAGENT:
+                    self._emit_launch(rec)     # the ⇢ card, once, right here
             return
+        if REGISTER == REG_SUBAGENT and rec["kind"] in _FLUSH_BEFORE:
+            # a block is about to paint, so the held message is an INTERMEDIATE
+            # one (see flush_msg) — commit it before the block lands under it
+            self.flush_msg()
         h = self._RO.get(rec["kind"])
         if h:
             h(self, rec)
@@ -648,7 +821,10 @@ def main(run):
     # scaffolding around this run's stream — see core/ops.py's `chrome` and the
     # ⚙ line above. The bracketing rules carry no flag because they need none:
     # op_items drops every rule/blank before it looks at anything else.
-    if not STANDALONE:
+    # Only a SIDECAR paints it: a STANDALONE run is the session itself, and a
+    # SUBAGENT opens on its LAUNCH CARD instead — the same way a Claude subagent's
+    # stream does, where the host's own header is the (chrome) launch line.
+    if REGISTER == REG_SIDECAR:
         O.emit(LOG, O.rule(), O.label("codex ▶ " + LABEL, SLOT_RGB, chrome=True),
                O.rule())
 
@@ -719,15 +895,17 @@ def main(run):
             # (the parked DB above) stops it. Ending on task-complete froze the
             # mirror after the first idle gap — later turns went unstreamed
             # (docs/codex.md *Standalone streams the whole session*). The
-            # per-task grace + footer are for a SIDECAR run (a discrete task).
-            if (not STANDALONE and rd.ro_done_wall and not rd.ro_active
+            # per-task grace + footer are for a discrete TASK — a SIDECAR run and
+            # a SUBAGENT alike (a child agent ends when its task completes, and
+            # its footer is what says so).
+            if (REGISTER != REG_STANDALONE and rd.ro_done_wall and not rd.ro_active
                     and (time.time() - rd.ro_done_wall) >= GRACE):
                 pump(); end("task-complete"); break
         elif read_status() in ("completed", "failed", "cancelled"):
             time.sleep(0.2); pump(); pump()  # drain the tail
             end("sidecar-status: " + read_status())
             break
-        if not STANDALONE and time.time() - start > T.BACKSTOP_S:  # stuck-run backstop
+        if REGISTER != REG_STANDALONE and time.time() - start > T.BACKSTOP_S:
             end("backstop-timeout")
             break
         time.sleep(T.POLL_S)
@@ -735,8 +913,8 @@ def main(run):
     if not ROLLOUT and rd.cur_head is not None:
         rd.render_record(rd.cur_head, rd.cur_body)
 
-    # Only a SIDECAR run reaches here — a standalone run returns at the parked
-    # exit above (no per-task footer, tokens folded incrementally).
+    # Only a SIDECAR or SUBAGENT run reaches here — a standalone run returns at
+    # the parked exit above (no per-task footer, tokens folded incrementally).
     if ROLLOUT:
         state = "failed" if rd.ro_aborted else "ended"
         sec = (rd.ro_completed - rd.ro_started) if (rd.ro_started and rd.ro_completed) \
@@ -745,7 +923,11 @@ def main(run):
         state = "failed" if read_status() == "failed" else "ended"
         sec = max(0.0, time.time() - start)
     dur = O.fmt_dur(sec)
-    foot = f"■ codex {LABEL} {state} · {dur}"
+    # A SUBAGENT that ended without a task_complete (aborted, backstopped) still
+    # owes its held message — as the RESULT, since nothing more is coming.
+    if REGISTER == REG_SUBAGENT:
+        rd.flush_msg(is_result=True)
+    foot = ""
     if ROLLOUT and isinstance(rd.ro_usage, dict):
         # Cumulative rollup from the run's last token_count: fresh billed
         # input (input minus cached) / generated output / cache-hit share —
@@ -763,7 +945,16 @@ def main(run):
         if usd:
             foot += " · ≈ " + O.fmt_usd(usd)
         rd._fold_bump(fresh, tout, tcache)
-    O.emit(LOG, O.rule(), O.label(foot, SLOT_RGB, chrome=True), O.rule())
+    if REGISTER == REG_SUBAGENT:
+        # A CHILD's footer is the child-agent one — `■ <label> ended · <dur>` +
+        # this run's rollup tail, the same line a Claude subagent closes on. NOT
+        # chrome: it is the agent's own last line, not the host's frame around it.
+        O.emit(LOG, *rd.blocks.footer(state, dur, foot))
+    else:
+        O.emit(LOG, O.rule(),
+               O.label(f"■ codex {LABEL} {state} · {dur}" + foot, SLOT_RGB,
+                       chrome=True),
+               O.rule())
 
 
 def entry():

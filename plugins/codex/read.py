@@ -227,7 +227,18 @@ def conversation(sid, pos=0, agent_id=""):
     # subagent parity*) — the same boundary the op stream gates on, applied here as
     # a byte offset (this is a random-access read of a complete file). No-op (0)
     # for the standalone own-run (agent_id empty) and a non-subagent sidecar.
+    brief = ""
     if agent_id and pos == 0:
+        # …and the BRIEF that prefix holds is exactly what must survive it: the
+        # task this child was spawned with (rollout.subagent_brief — the child's
+        # own NEW_TASK payload is encrypted, so the prefix's last human turn is
+        # the only plaintext statement of it). Read BEFORE the seek, prepended as
+        # the first bubble, so an agent scope opens on its brief the way a Claude
+        # agent's does. It cannot double with the launch CARD the op stream
+        # paints: that card is `bubbled`, which is precisely the producer saying
+        # "this content is also a conversation record — drop the op wherever the
+        # conversation renders" (core/ops.py), and agent scope does.
+        brief = RO.subagent_brief(path)
         pos = RO.subagent_body_offset(path)
     lines, new_pos = _complete_lines(path, pos)
     out = []
@@ -254,6 +265,12 @@ def conversation(sid, pos=0, agent_id=""):
         if kind == "message":
             rec["who"] = "codex"
         out.append(rec)
+
+    if brief:
+        # stamped with the FORK moment (the child session_meta's own timestamp,
+        # which subagent_fork_epoch already owns), so the merge places the brief
+        # before every turn the child then took
+        _add("prompt", brief, RO.subagent_fork_epoch(path))
 
     for s in lines:
         s = s.strip()
