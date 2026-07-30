@@ -25,6 +25,39 @@
 # day that plugin is renamed or a second self-streaming host appears — which is
 # exactly the class of bug P1 removed (read/mirror.is_codex_lead, four spellings
 # of the default-host name).
+#
+# P7 — THE FINAL RATCHET AUDIT. Every row below was re-tested for shrinkage at
+# the end of the host-abstraction work, and the ones that remain are at their
+# floor. What that means per row, so a future reader does not re-derive it:
+#
+#   LITERAL_ALLOW (2 files, 3 literals)
+#     ext/memory: `PRODUCER` is one of the extension descriptor's REQUIRED
+#       constants (pinned by test_l1_contracts' conformance check beside NAME /
+#       LABEL / TAB_AFTER / BADGE_SCOPED) — documentation that is never
+#       imported. Removing it means deleting a contract field, not a coupling.
+#     opshtml/actclass: the two parked-history sniffs. FROZEN by construction —
+#       they match ops written BEFORE the `chrome` flag existed (25 sessions in
+#       the parked corpus) and no restart can re-stamp a parked op. A live run
+#       stamps the flag, so a new host neither needs nor may add a third.
+#   JS_LITERAL_ALLOW (3 files, 4 rows) — all VOCABULARY, none a host branch:
+#     the slot-KIND ribbon (core/slots.py's five kinds), the ACT token, and two
+#     protocol constants named after the product (the X-Claude-Dash header, the
+#     push tag pinned to notify/channels.push_tag). Each row says which.
+#   DASHBOARD_PLUGIN_REACHES (test_l1_contracts.py, 4 rows) — also re-tested:
+#     opshtml/tools.py cannot shrink without INVERTING the layering (a
+#       `plugins.tool_html` fan-out would have the plugin emit the page's own
+#       HTML/CSS classes and need `ansi_html`, which lives in the dashboard a
+#       plugin may not import);
+#     opshtml/ops.py keeps its `strip_reminders` reach on the argument P6 wrote
+#       out in full at the call site (no PATH at op-render time to key a
+#       path-fan-out with, and the alternative is a second regex);
+#     opshtml/actclass.py's two glyph reaches are producer vocabulary read back
+#       off a painted op, inside a per-op loop;
+#     ext/memory/read.py is an extension reaching its OWN plugin, the sanctioned
+#       shape.
+#   The ratchet's remaining TEETH are the both-directions checks: a row that
+#   outlives its code fails, and the JS rows carry EXACT counts so the list
+#   cannot be widened by writing another literal in a file already on it.
 import ast
 import os
 import re
@@ -187,13 +220,23 @@ JS_LITERAL_ALLOW = {
                        "named after the product, matched by http/base.py"),
     },
     # The presenter's ACTIVITY-CLASS vocabulary (view-mode folds, fragments,
-    # counters, subjects) — `codex` here is the act token opshtml/actclass.py
-    # emits, the page's own word for "a codex run happened", exactly as
-    # ACT_CODEX is on the Python side. P6 owns this layer (producer-stamped
-    # `act`), and moving it now would split one change across two phases.
+    # counters, subjects) — `codex` here is the ACT TOKEN, whose vocabulary
+    # core/ops.py owns (ACT_CODEX) and every producer stamps. The page needs a
+    # phrase and a kind PER TOKEN, and one of the fourteen tokens happens to be
+    # spelled like a host.
+    #
+    # P7 re-verified this row and it is at its floor. The only way to remove it
+    # is to rename the token itself, which P6 considered and rejected: the token
+    # rides the wire in each item's `act` field (renaming it changes rendered
+    # output, which the corpus gate forbids) and it exists precisely so the
+    # default summary can say "ran N codex runs" instead of folding a codex run
+    # into "ran N agents" — the user-visible distinction the act field was added
+    # for. A fourth host adds a token here the same way, and that is the
+    # designed cost of a client-side phrase table.
     "app.05-session.js": {
-        "codex": (5, "P6: the act/view-mode vocabulary token (the ACT_CODEX "
-                     "twin), not a host branch"),
+        "codex": (5, "the act/view-mode vocabulary token (the ACT_CODEX twin) "
+                     "— core owns the token, the page owns the phrase; not a "
+                     "host branch"),
     },
     # The Web Push notification TAG, which must agree byte for byte with
     # notify/channels.push_tag — a retraction deletes the banner by tag, so the
