@@ -483,9 +483,11 @@ touching the dashboard.
   **`plugins/codex/modeldialog.py`** (Step 1 `Select Model` → `All models`; Step 2
   the model list; Step 3 `Select Reasoning Level` — the same `›`-cursor / `enter to
   confirm` geometry as the plan picker). The ✦ **model** button changes the model
-  and accepts that model's DEFAULT level (codex's own behaviour on a model switch);
-  the ✧ **effort** button KEEPS the current model (its `(current)` row) and changes
-  only the level. `dashboard/http/post/typing.post_command` routes both through
+  and PRESERVES the current reasoning level (the ✦/✧ axes are independent, so a
+  switch must not silently reset effort — the gesture reads the current effort from
+  the rollout, `read.codex_effort`, and re-selects it at Step 3, falling back to
+  the new model's default only when the effort can't be read); the ✧ **effort**
+  button KEEPS the current model (its `(current)` row) and changes only the level. `dashboard/http/post/typing.post_command` routes both through
   `_host_model` → `HostControl.model`/`effort` (no `/model <arg>` paste, no Claude
   confirm menu — the gesture screen-verifies its own steps), and the arg is
   validated by the LIVE picker (label-matched, `Extra high` for the `xhigh` token),

@@ -113,6 +113,26 @@ def context(path, main=False):
             "effort": effort}
 
 
+def codex_effort(path):
+    """The LAST `turn_context`'s reasoning-effort token (low/medium/high/xhigh/
+    max/ultra), or "" — the newest wins (a mid-session switch is reflected).
+    Distinct from context(), which needs a `token_count` to report saturation and
+    returns None on a fresh run: the ✦ model gesture needs the effort ALONE, to
+    PRESERVE it across a model switch, even before the first usage record."""
+    lines = TL.tail_lines(path, CTX_TAIL_B)
+    if lines is None:
+        return ""
+    for raw in reversed(lines):
+        if b'"turn_context"' in raw:
+            try:
+                rec = RO.parse(json.loads(raw))
+            except Exception:
+                rec = None
+            if rec and rec["kind"] == "turn_context":
+                return rec.get("effort") or ""
+    return ""
+
+
 def prompts(path, cap=PROMPT_CAP):
     """How many NON-synthetic user turns a codex rollout holds, capped at `cap`;
     None when it has nothing to say. The codex twin of transcript.prompt_count and

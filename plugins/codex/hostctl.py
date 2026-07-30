@@ -218,11 +218,17 @@ class CodexHost(HostControl):
     def model(self, fe, win, arg, ctx):
         """Switch the codex model via its INTERACTIVE /model picker (codex has no
         `/model <arg>` — plugins/codex/modeldialog.py). `arg` is a codex model id
-        (modeldialog.MODEL_CHOICES); the picker changes the model and accepts that
-        model's DEFAULT reasoning level (codex's own behaviour on a model switch).
-        Overriding this flips the `model` cap True. Result {status, cid, ok,
+        (modeldialog.MODEL_CHOICES). PRESERVES the current reasoning level: the
+        picker's step 3 would otherwise default to the NEW model's level (so a
+        low→switch→medium surprise, since the dashboard's ✦/✧ are independent
+        axes), so the gesture reads the current effort from the rollout and
+        re-selects it. Falls back to the picker default when the effort can't be
+        read. Overriding this flips the `model` cap True. Result {status, cid, ok,
         step?}."""
-        return self._drive_model(fe, win, ctx, "model", model=arg)
+        from plugins.codex import read as RD
+        path = RD._rollout_for(ctx.get("sid") or "", "")
+        eff = RD.codex_effort(path) if path else ""
+        return self._drive_model(fe, win, ctx, "model", model=arg, effort=eff)
 
     def effort(self, fe, win, arg, ctx):
         """Switch the reasoning level via the /model picker, KEEPING the current

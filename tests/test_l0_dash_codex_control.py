@@ -113,20 +113,42 @@ class _CxModelFE(_FakeFE):
         return True
 
 
-def test_codex_model_routes_through_the_picker(dash, tmp_path, monkeypatch):
+def test_codex_model_preserves_current_effort(dash, tmp_path, monkeypatch):
+    """A model switch PRESERVES the current reasoning level (the ✦/✧ axes are
+    independent) — the gesture reads the current effort (here `low`) from the
+    rollout and re-selects it at step 3, instead of accepting the new model's
+    default. The reported bug: low → switch model → medium."""
     monkeypatch.setenv("KITTY_WINDOW_ID", "71")
-    _seed(tmp_path, "cx2")
+    _seed(tmp_path, "cx2", [
+        {"type": "session_meta", "payload": {"cwd": str(tmp_path)}},
+        {"type": "turn_context",
+         "payload": {"model": "gpt-5.6-sol", "effort": "low"}}])
     fe = _CxModelFE()
     _inject_fe(monkeypatch, fe)
     code, body = _post(dash + "/api/session/cx2/command",
                        {"cmd": "model", "arg": "gpt-5.6-terra"})
     assert code == 200 and json.loads(body)["ok"]
-    # step1 → 'All models', step2 → the chosen model, step3 → accept the default
+    # step1 → 'All models', step2 → the chosen model, step3 → the CURRENT level
     assert fe.pasted == [("71", "/model")]
     assert [p[1] for p in fe.picks] == ["All models (current)", "gpt-5.6-terra",
-                                        "Medium (default)"]
+                                        "Low"]
     row = _last_state_file("cx2", "web-command")
     assert row["host"] == "codex" and row["cmd"] == "model" and row["ok"]
+
+
+def test_codex_model_accepts_default_when_effort_unknown(dash, tmp_path,
+                                                         monkeypatch):
+    """No readable current effort (a fresh rollout) → the model switch accepts
+    the new model's default level (the safe fallback, never a wrong one)."""
+    monkeypatch.setenv("KITTY_WINDOW_ID", "73")
+    _seed(tmp_path, "cx2c")           # session_meta only: no turn_context effort
+    fe = _CxModelFE()
+    _inject_fe(monkeypatch, fe)
+    code, body = _post(dash + "/api/session/cx2c/command",
+                       {"cmd": "model", "arg": "gpt-5.6-terra"})
+    assert code == 200 and json.loads(body)["ok"]
+    assert [p[1] for p in fe.picks] == ["All models (current)", "gpt-5.6-terra",
+                                        "Medium (default)"]
 
 
 def test_codex_effort_keeps_current_model(dash, tmp_path, monkeypatch):

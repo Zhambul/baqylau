@@ -33,9 +33,15 @@ ALL_MODELS = "all models"            # the step-1 row that opens the full list
 CURRENT = "(current)"                # the step-2 marker on the active model
 
 # the ✧ effort tokens the dashboard sends → the on-screen reasoning-level LABEL
-# (matched EXACTLY, not as a substring, so 'high' can't hit 'Extra high').
+# (matched EXACTLY, not as a substring, so 'high' can't hit 'Extra high'). Also
+# the map the ✦ model gesture runs the CURRENT effort (from read.context) through
+# to PRESERVE it across a model switch, so a few spelling aliases for the higher
+# levels are included defensively (the config token codex records for them is
+# less certain than low/medium/high) — an unmapped token falls back to the
+# picker default, never a wrong level.
 EFFORT_LABEL = {"low": "Low", "medium": "Medium", "high": "High",
-                "xhigh": "Extra high", "max": "Max", "ultra": "Ultra"}
+                "xhigh": "Extra high", "extra_high": "Extra high",
+                "extra-high": "Extra high", "max": "Max", "ultra": "Ultra"}
 # the codex models the ✦ menu offers (label == the picker row + the -m arg).
 MODEL_CHOICES = ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
                  "gpt-5.5", "gpt-5.4", "gpt-5.4-mini")
