@@ -49,14 +49,13 @@
 #   {"kind": "task_complete", "at": …, "ts": …} | {"kind": "turn_aborted"}
 #   {"kind": "prompt" | "reasoning" | "message", "text": str}   (never empty)
 #   {"kind": "search", "query": str}
-#   {"kind": "exec", "cmd": str, "call_id": str}
-#   {"kind": "exec_result", "exit": str|None, "output": str, "call_id": str}
+#   {"kind": "exec", "cmd": str, "call_id": str, "ts": str|None}
+#   {"kind": "exec_result", "exit": str|None, "output": str,
+#    "call_id": str, "ts": str|None}
 #   {"kind": "stdin", "text": str, "call_id": str}      backgrounded-exec poll
 #   {"kind": "chat", "role": str, "text": str, "synthetic": bool}
 #   {"kind": "think", "text": str}                      (never empty)
 #   {"kind": "patch_call", "patch": str, "call_id": str}
-#   {"kind": "patch_result", "ok": bool|None, "exit": str|None,
-#    "output": str, "call_id": str}
 #   {"kind": "ask", "call_id": str, "questions": [{"id", "header", "question",
 #                                  "options": [{"label", "description"}]}]}
 #   {"kind": "compact_boundary", "message": str, "replaced": int,
@@ -75,8 +74,45 @@ import re
 EXIT_RE = re.compile(r"(?:^|\n)(?:Exit code|Process exited with code)[: ]+(\d+)")
 EXIT_SCAN_B = 300
 
-# A custom_tool_call_output with no exit code says "Success" instead.
-OK_WORD = "Success"
+# codex has TWO exec channels across versions (docs/codex.md, the
+# custom_tool_call exec channel), both funnelled to the same
+# `exec`/`exec_result` records:
+#   - OLDER: a `function_call` named exec_command/shell, arguments a JSON
+#     `{cmd:[…]}`; its `function_call_output` is a plain string.
+#   - 0.14x+: a `custom_tool_call` named "exec" whose `input` is a JS snippet
+#     `tools.exec_command({cmd:"ls",…})`, and a `custom_tool_call_output` whose
+#     `output` is a list of parts led by a "Script completed…\nOutput:\n"
+#     preamble. This is what a real `run ls` produced (verified 0.144.1) — the
+#     reason a codex command showed NO block before: the parser knew only the
+#     function_call channel.
+# The command is pulled from the JS with a targeted match (never by executing
+# it): a list joins on spaces, a string is taken verbatim.
+_JS_CMD = re.compile(r"""cmd\s*:\s*(\[[^\]]*\]|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')""")
+# The custom-exec output preamble ends in this marker; the block body wants only
+# what follows it (the exit is still read from the whole head window).
+_OUTPUT_MARK = "Output:\n"
+
+
+def _exec_cmd_from_js(js):
+    """The command out of a `custom_tool_call` name=exec JS `input`, or ''."""
+    m = _JS_CMD.search(js or "")
+    if not m:
+        return ""
+    raw = m.group(1)
+    try:
+        v = json.loads(raw)                 # "ls" or ["bash","-lc","…"] (double-quoted)
+    except Exception:
+        raw = raw.strip()                   # single-quoted / unquoted — light cleanup
+        return raw[1:-1] if raw[:1] in "\"'" else raw
+    return " ".join(str(x) for x in v) if isinstance(v, list) else str(v)
+
+
+def _exec_output_body(txt):
+    """A custom-exec output stripped of codex's `…Output:\\n` status preamble, so
+    the block body is the command's real output (uniform with a Claude command);
+    the whole text is still what the exit is scanned from."""
+    i = txt.find(_OUTPUT_MARK)
+    return txt[i + len(_OUTPUT_MARK):].lstrip("\n") if i >= 0 else txt
 
 # The canonical codex ROLLOUT path layout (docs/codex.md): a `rollout-*.jsonl`
 # file under a `.../sessions/YYYY/MM/DD/` tree (`~/.codex/sessions/…` in
@@ -299,29 +335,39 @@ def _rsp_reasoning(p):
 
 
 def _rsp_custom_tool_call(p):
-    # codex ≥ 0.13x moved apply_patch off function_call onto its own custom
-    # tool. A lightweight "the patch call started" marker only: the resolved
-    # file ops come from patch_apply_end (see _ev_patch_apply_end) — counting
-    # both would double every edit.
-    if p.get("name") != "apply_patch":
-        return None
-    inp = p.get("input")
-    return {"kind": "patch_call",
-            "patch": inp if isinstance(inp, str) else _content_text(inp),
-            "call_id": p.get("call_id") or ""}
+    # codex ≥ 0.13x runs BOTH apply_patch and exec through custom tools:
+    #   name="exec"       -> an exec record (cmd out of the JS input) — the
+    #                        0.14x+ command channel (see _JS_CMD above).
+    #   name="apply_patch"-> a lightweight "patch call started" marker; the
+    #                        resolved file ops come from patch_apply_end
+    #                        (_ev_patch_apply_end), counting both would double.
+    # Any other custom tool degrades to None (forward-compatible).
+    name = p.get("name")
+    if name == "exec":
+        cmd = _exec_cmd_from_js(p.get("input") or "")
+        return {"kind": "exec", "cmd": cmd,
+                "call_id": p.get("call_id") or ""} if cmd else None
+    if name == "apply_patch":
+        inp = p.get("input")
+        return {"kind": "patch_call",
+                "patch": inp if isinstance(inp, str) else _content_text(inp),
+                "call_id": p.get("call_id") or ""}
+    return None
 
 
 def _rsp_custom_tool_call_output(p):
-    # The output carries no tool name — apply_patch is codex's only custom
-    # tool today, so a presenter pairs this to its `patch_call` by call_id.
+    # The output carries no tool name, so this is the exec/patch OUTPUT for
+    # whatever `custom_tool_call` opened this call_id — an `exec_result` in both
+    # cases, paired by call_id in the renderer: an exec's closes its command
+    # block, an apply_patch's is an orphan (its file ops come from
+    # patch_apply_end) that shows only a FAILED exit, never a stray block. Same
+    # record shape the function_call_output (older channel) yields, so one
+    # renderer path handles both.
     out = p.get("output")
     txt = out if isinstance(out, str) else _content_text(out)
     m = EXIT_RE.search(txt[:EXIT_SCAN_B])
-    code = m.group(1) if m else None
-    ok = (code == "0") if code is not None else \
-        (True if OK_WORD in txt[:EXIT_SCAN_B] else None)
-    return {"kind": "patch_result", "ok": ok, "exit": code, "output": txt,
-            "call_id": p.get("call_id") or ""}
+    return {"kind": "exec_result", "exit": m.group(1) if m else None,
+            "output": _exec_output_body(txt), "call_id": p.get("call_id") or ""}
 
 
 def _call_exec(p, args):
@@ -443,7 +489,7 @@ KINDS = frozenset({
     "turn_context", "usage", "patch", "compact", "task_started",
     "task_complete", "turn_aborted", "prompt", "reasoning", "message",
     "search", "exec", "exec_result", "stdin", "chat", "think", "patch_call",
-    "patch_result", "ask", "compact_boundary", "bad",
+    "ask", "compact_boundary", "bad",
 })
 
 

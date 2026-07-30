@@ -97,7 +97,7 @@ its own mirror when run standalone (wiring in [wiring.md](wiring.md)).
     `patch` — so it can't be derived off the `_EVENT`/`_RESP`/`_CALL`/`_TOP`
     tables), and **`stream.IGNORE_KINDS`** enumerates the kinds the mirror
     deliberately does NOT paint (the `chat`/`think` conversation register, the
-    `patch_call`/`patch_result` patch-lifecycle detail already covered by
+    `patch_call` patch-lifecycle marker already covered by
     `patch`, the `compact_boundary` covered by the event_msg `compact`, the
     `stdin` backgrounded-exec poll, the `ask` question card, and the `bad`
     malformed line), each with an inline reason. `tests/test_l1f_codex_rollout.py`
@@ -131,13 +131,25 @@ its own mirror when run standalone (wiring in [wiring.md](wiring.md)).
     `is_synthetic()` its one reader — a presenter must not re-encode it.
   - **The rest of the response_item grammar** (parsed for the same
     conversation presenter; none of it reaches the mirror):
-    - **`custom_tool_call` / `custom_tool_call_output`** — codex ≥ 0.13x moved
-      `apply_patch` off `function_call` onto its own custom tool. Both
-      spellings parse to a LIGHTWEIGHT `patch_call` marker (the raw
-      `*** Begin Patch` text + `call_id`) and a `patch_result`
-      (`ok`/`exit`/`output`, paired by `call_id`; the output is either an
-      `Exit code: N` string or a `Success…` one, and either a plain string or
-      a list of `{type,text}` parts). **The double-count question:**
+    - **`custom_tool_call` / `custom_tool_call_output`** — codex ≥ 0.13x runs
+      BOTH `apply_patch` AND `exec` through custom tools (the `custom_tool_call`
+      `name` disambiguates), and the OUTPUT record carries no name at all:
+      - `name:"exec"` — the 0.14x+ command channel (what a real `run ls` uses,
+        verified 0.144.1): the command lives in a JS `input`
+        (`tools.exec_command({cmd:"ls",…})`), pulled out with `_JS_CMD` into an
+        `exec` record — the reason a codex command showed NO block before was
+        that the parser knew only the older `function_call`/`exec_command`
+        channel.
+      - `name:"apply_patch"` — a LIGHTWEIGHT `patch_call` marker (the raw
+        `*** Begin Patch` text + `call_id`); the file ops come from
+        `patch_apply_end`, so counting the call too would duplicate.
+      - `custom_tool_call_output` (nameless) parses to an **`exec_result`**
+        (`exit`/`output`, paired by `call_id`; codex's `…Output:\n` status
+        preamble stripped, the list-of-parts form joined). The renderer pairs
+        it by `call_id`: an exec's closes its command block, an apply_patch's is
+        an orphan surfaced only on a FAILED exit (its file ops already came from
+        `patch_apply_end`), so one `exec_result` shape serves both with no
+        double-render and no `patch_result` kind. **The double-count question:**
       `patch_apply_end` stays the AUTHORITATIVE file-op record — it alone has
       resolved ABSOLUTE paths and per-file diffs — so the call records
       deliberately produce **no file rows and no scoreboard bumps**; they say
@@ -194,8 +206,8 @@ its own mirror when run standalone (wiring in [wiring.md](wiring.md)).
       a subagent's file ops (unique-path `files` set, ± line sums, Edit/Write
       tool tallies). The `apply_patch` call itself is deliberately NOT a file
       op — it only carries repo-relative patch text, and counting both would
-      duplicate; it parses to the lightweight `patch_call`/`patch_result`
-      marker pair the mirror never paints (*Two registers* above). A
+      duplicate; it parses to the lightweight `patch_call`
+      marker the mirror never paints (*Two registers* above). A
       `success:false` patch paints a red `■ patch failed` and bumps nothing.
     - **token accounting** from `token_count` — codex reports a CUMULATIVE
       `total_token_usage` snapshot (input incl. cached / cached / output), so
@@ -545,6 +557,19 @@ SAME components so a future change lands in one place:
   stamps the ENVELOPE `ts` on the `exec`/`exec_result` pair (the same `ts` the
   task-lifecycle records already carry); the block subtracts exec.ts →
   exec_result.ts for the elapsed, `?` when the clock is missing.
+- **Both exec channels feed it.** The command must first PARSE to an `exec`
+  record. codex ≥ 0.14x runs `exec` as a `custom_tool_call` (a JS
+  `tools.exec_command({cmd:…})` snippet), not the older `function_call`
+  `exec_command` — the parser now recognises BOTH (the custom_tool_call exec
+  channel, above); the
+  first live standalone session showed NO command block at all because the
+  custom-tool channel was unparsed, so the block gets no data no matter how it is
+  painted.
+- **The codex run FOOTER is dropped too.** `actclass.codex_chrome` now also drops
+  the `■ codex <label> ended · …` footer in a standalone view (`op_items`
+  `codex_lead`), alongside the banner + `⚙` tag — a Claude session has no
+  per-session footer, and its token rollup is redundant with the scoreboard, so
+  it was exactly the codex-specific chrome to remove ("no codex specific ui").
 - **Gated on STANDALONE.** The watcher passes `CLAUDE_CODEX_STANDALONE=1` in the
   stream's env for a standalone host (where codex IS the main agent). A codex run
   INSIDE a Claude session is being folded into the SUBAGENT abstraction — no

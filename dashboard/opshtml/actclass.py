@@ -395,21 +395,25 @@ def codex_prose(op):
 
 def codex_chrome(op):
     """A codex-only SCAFFOLDING line a STANDALONE session doesn't need — the
-    `⚙ <model> · <effort>` turn-context tag and the `codex ▶ <label>` run banner.
-    Dropped in op_items `codex_lead` (alongside codex_prose) so a standalone
-    codex session's view is UNIFORM with Claude's — bubbles + real activity +
-    footer, no sub-run banners folding into 'ran N codex runs'. The model still
-    shows in the scoreboard; the `■ codex … ended` footer (a ■ line, not chrome)
-    stays."""
+    `⚙ <model> · <effort>` turn-context tag, the `codex ▶ <label>` run banner,
+    AND the `■ codex <label> ended · …` run FOOTER. All dropped in op_items
+    `codex_lead` (alongside codex_prose) so a standalone codex session's view is
+    UNIFORM with Claude's — bubbles + real activity, no per-run banners/footers
+    ('I told you no codex specific ui'). The model + token totals still show in
+    the scoreboard; the footer's token rollup is redundant with it. A Claude
+    session has no such per-session footer, so keeping codex's is exactly the
+    codex-specific chrome to remove."""
     try:
         if op.get("t") not in ("label", "gut") or not is_codex(op):
             return False
         # RAW text, NOT lead_head: lead_head strips the leading token as an
         # agent `who` name ("codex ▶ cli" -> "▶ cli", "⚙ model" -> "· …"), which
-        # is exactly the prefix this predicate keys on. A command opens with ▶,
-        # so "codex " can only be the run banner (no collision).
+        # is exactly the prefix this predicate keys on. A real command opens
+        # "▶ foreground" in a SEMANTIC colour (not is_codex), so "codex " / the
+        # "■ codex " footer can only be the run banner/footer (no collision).
         text = _plain(op).lstrip()
-        return text[:1] == "⚙" or text.startswith("codex ")
+        return (text[:1] == "⚙" or text.startswith("codex ")
+                or text.startswith("■ codex "))
     except Exception:
         return False
 

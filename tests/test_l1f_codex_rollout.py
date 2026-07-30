@@ -248,20 +248,39 @@ def test_custom_tool_call_apply_patch_is_a_lightweight_marker():
     assert RO.parse(_rsp("custom_tool_call", name="mystery", input="x")) is None
 
 
-def test_custom_tool_call_output_success_and_exit_forms():
-    ok = RO.parse(_rsp("custom_tool_call_output", call_id="p1",
-                       output="Success. Updated the following files:\nM a.py"))
-    assert ok["kind"] == "patch_result" and ok["ok"] is True
-    assert ok["exit"] is None and ok["call_id"] == "p1"
+def test_custom_tool_call_exec_is_the_0_14x_command_channel():
+    """0.14x+ runs a shell command through a `custom_tool_call` named "exec"
+    whose input is a JS `tools.exec_command({cmd:…})` snippet — the channel a real
+    `run ls` used (verified 0.144.1), and the reason a codex command showed no
+    block before. The command is pulled out of the JS; a list joins on spaces."""
+    js = ('const r = await tools.exec_command({cmd:"ls","workdir":"/w",'
+          '"yield_time_ms":10000}); text(r.output);\n')
+    assert RO.parse(_rsp("custom_tool_call", name="exec", call_id="c9",
+                         input=js)) == {"kind": "exec", "cmd": "ls",
+                                        "call_id": "c9", "ts": None}
+    jl = 'await tools.exec_command({cmd:["bash","-lc","echo hi"]});'
+    assert RO.parse(_rsp("custom_tool_call", name="exec", input=jl)) == {
+        "kind": "exec", "cmd": "bash -lc echo hi", "call_id": "", "ts": None}
+    # unparseable cmd -> no record (a broken block is worse than none)
+    assert RO.parse(_rsp("custom_tool_call", name="exec", input="noop();")) is None
+
+
+def test_custom_tool_call_output_is_an_exec_result():
+    """A custom_tool_call_output carries no tool name, so it is the exec/patch
+    OUTPUT for whatever opened its call_id — an exec_result either way (an
+    apply_patch's is an orphan the renderer surfaces only on failure). codex's
+    `…Output:\\n` status preamble is stripped so the body is the real output; the
+    exit is still read from the whole head."""
+    out = [{"type": "input_text", "text": "Script completed\nWall time 0.3 "
+            "seconds\nOutput:\n"}, {"type": "input_text", "text": "01cloud\n1x2\n"}]
+    rec = RO.parse(_rsp("custom_tool_call_output", call_id="c9", output=out))
+    assert rec == {"kind": "exec_result", "exit": None, "output": "01cloud\n1x2",
+                   "call_id": "c9", "ts": None}
     bad = RO.parse(_rsp("custom_tool_call_output",
-                        output="Exit code: 1\npatch does not apply"))
-    assert bad["ok"] is False and bad["exit"] == "1"
-    # the list-of-parts output form normalises to text
-    lst = RO.parse(_rsp("custom_tool_call_output", output=[
-        {"type": "input_text", "text": "Success"}]))
-    assert lst["ok"] is True and lst["output"] == "Success"
-    # neither marker: undecided, never a guess
-    assert RO.parse(_rsp("custom_tool_call_output", output="hm"))["ok"] is None
+                        output="Exit code: 1\nOutput:\npatch does not apply"))
+    assert bad["exit"] == "1" and bad["output"] == "patch does not apply"
+    # no preamble marker: the whole text is the body
+    assert RO.parse(_rsp("custom_tool_call_output", output="hm"))["output"] == "hm"
 
 
 def test_shell_and_write_stdin_function_calls():

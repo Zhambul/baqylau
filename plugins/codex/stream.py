@@ -192,7 +192,6 @@ IGNORE_KINDS = frozenset({
     "think",             # prose register — rendered via plugins.conversation() bubbles (P3), not ops
     "stdin",             # backgrounded-exec continuation — rich rendering pending (P2)
     "patch_call",        # patch lifecycle detail — patch (patch_apply_end) already renders the file lines (P2/P5)
-    "patch_result",      # patch lifecycle detail — patch (patch_apply_end) already renders the file lines (P2/P5)
     "compact_boundary",  # top-level compaction boundary — the event_msg `compact` already paints ⟳
     "ask",               # request_user_input dialog — surfaced via the web question card, not the mirror
     "bad",               # malformed/undecodable line — counted in the malformed audit, never painted

@@ -302,12 +302,16 @@ def test_standalone_exec_renders_as_a_claude_command_block(test_env, codex, reap
     host = subprocess.Popen(["sleep", "60"])
     reaper.append(host)
     codex.start_watcher(host_pid=host.pid)
+    # the 0.14x+ channel a real `run ls` uses: a custom_tool_call named "exec"
+    # whose input is a JS tools.exec_command snippet, + a list-of-parts output
     codex.add_rollout(originator="codex-tui", u=codex.s.sid, events=[
         {"type": "response_item", "payload": {
-            "type": "function_call", "name": "exec_command", "call_id": "c1",
-            "arguments": json.dumps({"cmd": ["echo", "hi"]})}},
+            "type": "custom_tool_call", "name": "exec", "call_id": "c1",
+            "input": 'await tools.exec_command({cmd:"echo hi","workdir":"/w"});'}},
         {"type": "response_item", "payload": {
-            "type": "function_call_output", "call_id": "c1", "output": "hi\n"}},
+            "type": "custom_tool_call_output", "call_id": "c1", "output": [
+                {"type": "input_text", "text": "Script completed\nOutput:\n"},
+                {"type": "input_text", "text": "hi\n"}]}},
     ])
     wait_until(lambda: all(s in codex.s.ops_text()
                            for s in ("▶ foreground", "echo hi", "hi", "■ finished")),

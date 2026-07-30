@@ -553,7 +553,7 @@ def test_op_items_codex_lead_drops_prose_and_chrome_keeps_activity():
         O.gut("hello", rgb, g="b2"),                                   # prose body
         dict(O.label("▶ cmd", rgb, g="b3"), who="codex"),              # command — KEPT
         O.code("ls -la", g="b3"),
-        O.label("■ codex cli ended · 1.0s", rgb),                      # footer — KEPT
+        O.label("■ codex cli ended · 1.0s", rgb),                      # footer — DROPPED
     ]
     items = opshtml.op_items(ops, "k", codex_lead=True)
     txt = " ".join(re.sub("<[^>]+>", "", it.get("html", "") or "") for it in items)
@@ -561,6 +561,6 @@ def test_op_items_codex_lead_drops_prose_and_chrome_keeps_activity():
     assert "hi there" not in txt and "hello" not in txt          # prose bodies gone
     assert "codex ▶" not in txt and "⚙" not in txt               # chrome gone
     assert "ls -la" in txt                                        # command kept
-    assert "ended" in txt                                         # footer kept
+    assert "ended" not in txt                                     # footer chrome gone too
     # a non-codex-host view (codex_lead False) keeps everything
     assert len(opshtml.op_items(ops, "k", codex_lead=False)) > len(items)
