@@ -92,6 +92,9 @@ function jumpFail() {
 const PEND_HINT_MS = 8000;             // "still waiting…" past this — claude
 //                                        boot measured ~2s, so 8s is abnormal
 const PEND_TICK_MS = 500;              // ticker cadence (hint + timeout watch)
+let pendToolLabel = "the session";     // the launched tool's label, retained by
+//                    showPending so showPendingFail can name it (S.jump is null
+//                    by the time jumpFail mounts the failure card)
 
 function showPending() {
   leaveSession();
@@ -110,8 +113,10 @@ function showPending() {
     .forEach(t => chips.append(el("span", "pendchip", t)));
   if (chips.childNodes.length) card.append(chips);
   if (show.prompt) card.append(el("div", "pendprompt", show.prompt));
+  const tl = show.toolLabel || "the session";
+  pendToolLabel = tl;              // retained for showPendingFail (S.jump is cleared)
   const hint = el("div", "pendhint",
-                  "claude is booting in a new terminal tab — usually a couple of seconds");
+                  tl + " is booting in a new terminal tab — usually a couple of seconds");
   card.append(hint);
   $view.append(card);
   // the ticker only escalates the hint and fires the timeout during total
@@ -136,7 +141,7 @@ function showPendingFail() {
   const card = el("div", "pendcard fail");
   card.append(el("div", "pendtitle", "✗ the session never appeared"));
   card.append(el("div", "pendhint",
-                 "claude may have failed to start — check the terminal tab"));
+                 pendToolLabel + " may have failed to start — check the terminal tab"));
   const back = el("button", "nsbtn", "back to sessions");
   back.onclick = () => { location.hash = "#/"; };
   card.append(back);
@@ -305,6 +310,12 @@ const nsRemember = (p) => {
 // form's textarea (null while closed): the close flush's handle on the text,
 // since closeNewSession tears the DOM down.
 let nsPromptBox = null;
+// the launched tool's display label ("Codex" / "Claude"), kept current by
+// syncTool so the prompt placeholder names the picked host instead of always
+// "Claude"; syncTool runs on the initial fill (before nsPromptBox exists) and on
+// every tool switch, so nsPrompt reads this for its FIRST paint and syncTool
+// repaints the live box thereafter.
+let nsToolLabel = "Claude";
 let nsDraftDir = "";
 let nsDraftTimer = 0;
 // The form's notion of "the same folder" — and, since the server stores the key
@@ -923,6 +934,12 @@ function nsPickers(F) {
     if (!effortPicked)
       effort.value = effort.has(last.effort) ? last.effort : (TOOL_EFFORT_DEF[t] || "");
     acctRow.style.display = acctVisible() ? "" : "none";
+    // name the picked host in the prompt placeholder (repaint the live box if
+    // it is already open; nsPrompt reads nsToolLabel for its first paint)
+    nsToolLabel = (Array.isArray(S.hosts)
+                   && (S.hosts.find(h => h.name === t) || {}).label)
+                  || (t === "codex" ? "Codex" : "Claude");
+    if (nsPromptBox) nsPromptBox.placeholder = nsPromptPlaceholder();
     autoAcct();
   };
   tool.onpick = () => { toolPicked = true; syncTool(); };
@@ -979,6 +996,15 @@ function nsLayout(F) {
   Object.assign(F, { split, split2 });
 }
 
+// The first-prompt placeholder, naming the picked host (nsToolLabel) rather than
+// always "Claude"; the terminal form adds the launch/newline hint the iPad form
+// drops. Shared by nsPrompt's first paint and syncTool's live repaint.
+function nsPromptPlaceholder() {
+  return IS_IPAD
+    ? "what should " + nsToolLabel + " start on?"
+    : "what should " + nsToolLabel + " start on?  (Enter to launch · Shift+Enter for newline)";
+}
+
 function nsPrompt(F) {
   const { dir } = F;
 
@@ -987,9 +1013,7 @@ function nsPrompt(F) {
   const prompt = el("textarea", "nsinput nsprompt");
   prompt.rows = 3;
   prompt.spellcheck = false;
-  prompt.placeholder = IS_IPAD
-    ? "what should Claude start on?"
-    : "what should Claude start on?  (Enter to launch · Shift+Enter for newline)";
+  prompt.placeholder = nsPromptPlaceholder();
   // restore THIS DIRECTORY's unsent draft (an accidental close, a reload,
   // another device): synchronous from the cache, then reconciled below with a
   // fresh GET. The box belongs to the directory the form opened on until the
@@ -1121,8 +1145,11 @@ function nsActions(F) {
     // heuristic) and arrives below, and the failure path rolls the form back.
     // Arming before the POST also takes the known/live baseline from before the
     // launch, which is what checkJump wants.
+    const toolLbl = (Array.isArray(S.hosts)
+                     && (S.hosts.find(h => h.name === body.tool) || {}).label)
+                    || (codex ? "Codex" : "Claude");
     const show = { mode: body.resume ? "resume" : "new",
-                   model: model.value, effort: effort.value,
+                   model: model.value, effort: effort.value, toolLabel: toolLbl,
                    account: codex ? "" : acct.value, prompt: body.prompt || "" };
     armJump(cwd, body.resume, { show, pend: true });
     const mine = S.jump;               // this launch's watch — a later one wins

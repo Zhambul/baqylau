@@ -56,7 +56,7 @@ def alert_text(entry):
     proj = entry.get("project") or entry.get("sid") or "session"
     head = ("🔴 %s needs you" if asking else "🟢 %s is done") % proj
     detail = entry.get("title") or (
-        "Claude is asking a question" if asking else "finished — your turn")
+        "a question is waiting" if asking else "finished — your turn")
     url = "%s/?s=%s" % (config.NOTIFY_URL_BASE, quote(entry.get("sid") or ""))
     return head, detail, url
 

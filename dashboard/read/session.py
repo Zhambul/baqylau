@@ -223,14 +223,27 @@ def session_caps(tpath):
 
     The last branch is what makes adding copilot/opencode safe: a host that
     leaves a gesture inert reads that cap False, the client greys the button and
-    the guard 409s it — no codex-shaped special-casing. host="" says the control
-    plane can't attribute the session to a driveable host (today only a stub /
-    a future codex rollout reaches it; codex declares no `owns` yet, so a real
-    rollout still lands in the unprovable default above, which is handled)."""
+    the guard 409s it — no codex-shaped special-casing. host="" says "attributed
+    to a NON-default host": a codex rollout (codex owns its rollouts) lands here
+    with codex's DERIVED caps, as does any future copilot/opencode stub; the
+    session payload still names the real owner for display via host_label()."""
     owner = plugins.owns_by(tpath) if tpath else None
     if owner is None or owner == DEFAULT_HOST:
         return DEFAULT_HOST, plugins.host_caps(DEFAULT_HOST)
     return "", plugins.host_caps(owner)
+
+
+def host_label(tpath):
+    """The OWNING host's DISPLAY label ("Codex" / "Claude Code") for user-facing
+    copy — the client shows it wherever it used to hardcode "Claude" (the ask
+    card title, the rename/send tips). Distinct from session_caps's host NAME,
+    which blanks to "" for a non-default tool to keep its attribution semantics;
+    the label wants the real owner regardless. Unprovable/empty path → the
+    default host's label (the same "behave as today" rule), and an owner with no
+    host object degrades to a neutral word rather than a wrong tool name."""
+    owner = plugins.owns_by(tpath) if tpath else None
+    h = plugins.host_named(owner or DEFAULT_HOST)
+    return getattr(h, "label", "") or "the agent"
 
 
 def session_payload(sid, agent=""):
@@ -268,7 +281,11 @@ def session_payload(sid, agent=""):
     # greys every unsupported button and the server's _caps_guard 409s it. For a
     # Claude session (or an unprovable empty path) every cap is True, so nothing
     # changes — the map only bites a session owned by another tool.
-    data["host"], data["caps"] = session_caps(data.get("transcript_path") or "")
+    tpath = data.get("transcript_path") or ""
+    data["host"], data["caps"] = session_caps(tpath)
+    # host DISPLAY label ("Codex" / "Claude Code") for the client's user-facing
+    # copy — every string that used to hardcode "Claude" reads meta.host_label.
+    data["host_label"] = host_label(tpath)
     # Whether the session's transcript .jsonl is GONE (known path, absent on
     # disk) — the composer's resume-&-send door is dead for it (`claude
     # --resume` finds no conversation, the launched tab exits at once). An

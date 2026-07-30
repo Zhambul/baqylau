@@ -70,7 +70,8 @@ function renderAsk() {
   const card = el("div", "askcard");
   const head = el("div", "askhead");
   head.append(el("span", "asktitle",
-                 "claude is asking" + (qs.length > 1 ? " — " + qs.length + " questions" : "")));
+                 ((ses.meta && ses.meta.host_label) || "the agent") + " is asking"
+                 + (qs.length > 1 ? " — " + qs.length + " questions" : "")));
   const chatB = el("button", "askchat", "chat about this");
   chatB.title = "dismiss the questions and discuss in the chat instead";
   chatB.onclick = () => submitAsk(ask, null, true);

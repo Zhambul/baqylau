@@ -137,6 +137,10 @@ step("tool", () => {
   if (!codex) throw new Error("no codex option");
   codex.onclick({ preventDefault() {} });   // pick codex → tool.onpick → syncTool
   out.tool_after = lab ? lab.textContent : "";
+  // syncTool repaints the first-prompt placeholder to name the picked host — it
+  // must say "Codex", never the hardcoded "Claude" (the de-Claude fix)
+  const pbox = modal.querySelectorAll(".nsprompt")[0];
+  out.prompt_placeholder = pbox ? pbox.placeholder : "";
 });
 
 // 4. the launch: nsActions' go(), which reads dir/fresh/picker/prompt/pdic/

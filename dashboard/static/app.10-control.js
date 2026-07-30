@@ -512,8 +512,9 @@ function startRenameHeader() {
         if (ses.meta) ses.meta.title = d.title || name;
         restore(d.title || name);
         toast("done", "renamed",
-              d.channel === "tui" ? "sent to Claude Code"
-                                  : "picker (applies on resume)");
+              d.channel === "tui"
+                ? "sent to " + ((ses.meta && ses.meta.host_label) || "the agent")
+                : "picker (applies on resume)");
       })
       .catch((e) => {
         restore(old);
@@ -536,7 +537,8 @@ function startRenameHeader() {
   // name: no conversation context yet" (v2.1.220), the ⊜ compact bounce
   // class; like that gate, an UNKNOWN count never greys.
   const auto = el("button", "sstop renameauto", "✦ auto");
-  auto.dataset.tip = "let Claude name this session (/rename)";
+  const hostLbl = (ses.meta && ses.meta.host_label) || "the agent";
+  auto.dataset.tip = "let " + hostLbl + " name this session (/rename)";
   const meta = ses.meta || {};
   const windowed = !!(meta.live && meta.kitty_window_id);
   const empty = typeof meta.prompts === "number" && meta.prompts < 1;
@@ -554,8 +556,8 @@ function startRenameHeader() {
     postJSON("/api/session/" + encodeURIComponent(S.cur) + "/command",
              { cmd: "rename" }, { audit: "command", auditData: { cmd: "rename" } })
       .then((r) => toast("done", "/rename",
-                         r.queued ? "queued — Claude names it when the turn ends"
-                                  : "sent — Claude is picking a name"))
+                         r.queued ? "queued — " + hostLbl + " names it when the turn ends"
+                                  : "sent — " + hostLbl + " is picking a name"))
       .catch((e) => toast("ask", "auto-rename failed", (e && e.error) || ""));
   };
   span.replaceChildren(inp, auto);

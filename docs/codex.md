@@ -451,6 +451,34 @@ N agents". `ACT_CODEX` has a matching `VIEW_FRAGMENTS` row (`ran N codex runs`)
 and folds in default + focus, so default NAMES the codex run and verbose unfolds
 it (the page's `act`↔fragment table is grep-pinned in both directions).
 
+### Host-labeled UI copy (no hardcoded "Claude")
+
+The dashboard was built for one host, so a pile of user-facing strings hardcoded
+"Claude" — the ask-card title ("claude is asking"), the auto-rename tips, the
+rename-sent toast, and the new-session pending/fail/placeholder copy. On a codex
+session those read WRONG (a codex question titled "claude is asking"), and the
+launch-failure card blamed "claude" even when the tab running is codex.
+
+The fix routes every one of those through the OWNING host's label:
+- **`read.session.host_label(tpath)`** — the display label ("Codex" /
+  "Claude Code") of the host that `owns_by` claims, defaulting to the default
+  host for an unprovable/empty path (the same "behave as today" rule
+  `session_caps` uses). The session payload carries it as **`meta.host_label`**;
+  the client reads it for the ask card + rename/send tips. Distinct from
+  `session_caps`'s host NAME, which stays "" for a non-default tool (its
+  attribution semantics) — the label wants the real owner regardless.
+- **New-session copy** rides the PICKED tool's label (the form knows it before
+  any session exists): `syncTool` repaints the first-prompt placeholder
+  (`nsPromptPlaceholder`), and the launch stashes `show.toolLabel` for the
+  pending "&lt;tool&gt; is booting" / "&lt;tool&gt; may have failed to start" cards.
+- **Notification fallbacks** (the `alert_text` detail line, the SSE toast) have
+  no host in the `entry`, and the title is only a FALLBACK for a missing session
+  title, so they go host-NEUTRAL ("a question is waiting") rather than plumb the
+  host through the notify path — correct for every tool.
+
+The jsdom `newsession` verdict asserts the placeholder says "Codex" (never
+"Claude") after the tool switch.
+
 ### Sidecar → subagent parity
 
 A codex run launched INSIDE a Claude session must read like a subagent in agent

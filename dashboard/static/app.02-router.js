@@ -96,7 +96,7 @@ function connectGlobal() {
     if (!shown) return;
     const asking = d.kind === "asking";
     const t1 = (d.project || d.sid) + (asking ? " needs you" : " is done");
-    const t2 = d.title || (asking ? "Claude is asking a question" : "finished — your turn");
+    const t2 = d.title || (asking ? "a question is waiting" : "finished — your turn");
     toast(asking ? "ask" : "done", t1, t2, () => { location.hash = "#/s/" + d.sid; });
   });
   es.addEventListener("notify-config", (e) => {

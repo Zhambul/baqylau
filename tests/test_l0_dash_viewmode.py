@@ -2048,6 +2048,10 @@ def test_new_session_form_phases_hand_off_everything(tmp_path):
     assert d["tool_visible"] is True, d
     assert d["tool_default"] == "Claude Code", d
     assert d["tool_after"] == "Codex", d
+    # syncTool repaints the first-prompt placeholder to NAME the picked host — it
+    # must say "Codex", never the old hardcoded "Claude" (the de-Claude fix).
+    assert "Codex" in d["prompt_placeholder"], d
+    assert "Claude" not in d["prompt_placeholder"], d
     # …and the launch reached the endpoint with the directory the form opened on,
     # carrying the chosen tool (codex) and — codex has no switcher — no account
     assert d["posted"] == ["/api/sessions/new"], d

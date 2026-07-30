@@ -161,9 +161,9 @@ def _first_path(method, path, *args, **kwargs):
 
 
 def owns_by(path):
-    """WHICH tool owns `path` — the plugin's short name ("claude_code"), or
-    None when no plugin claims it (a codex rollout today: codex declares no
-    `owns` yet, and "unclaimed" is the honest answer, not a wrong one).
+    """WHICH tool owns `path` — the plugin's short name ("claude_code" for a
+    Claude transcript, "codex" for a codex rollout), or None when no plugin
+    claims it (an unclaimed file — the honest answer, not a wrong one).
 
     The read fan-outs never need this — they route through _first_path, which
     asks the question per plugin — but a CONTROL-plane caller does: the
