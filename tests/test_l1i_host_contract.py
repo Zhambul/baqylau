@@ -567,24 +567,15 @@ def test_the_register_prefixes_are_not_re_spelled_in_their_readers():
 
 # ------------------------------------------------------ 4. the gesture surface
 
-# The three FAMILIES of HostControl method, and what each means:
+# The FAMILIES of HostControl method are declared by the PRODUCT
+# (plugins/host.py: GESTURES / SIBLINGS / VOCABULARY / PLUMBING, plus the
+# INFRASTRUCTURE that is the interface's own machinery). They used to be tuples
+# in THIS file, which made the coverage check below a tautology for 17 of its 28
+# rows: the "declared surface" it compared HOST_SURFACE against was a list the
+# test itself owned, so a new HostControl method — overridden by a host, live in
+# production — landed with no failure at all. Demonstrated, then fixed by moving
+# the tables to the class they describe and asserting the partition is TOTAL.
 #
-#   GESTURES (plugins.host.GESTURES) — a cap each, DERIVED from the override.
-#   SIBLINGS — real gestures that share another gesture's cap (a cap must map to
-#     exactly one method or the derivation stops being the source of truth), so
-#     the caller gates them on that cap and the gesture's own `unsupported`
-#     result is what turns "this host has the cap but not this half" into a 409.
-#   VOCABULARY — not gestures at all: the WORDS, grammars and screen READS a host
-#     declares so the control plane can refuse an unknown one by name instead of
-#     typing a foreign command into its TUI.
-SIBLINGS = {"rewind_to": "rewind", "autoname": "rename",
-            "plan_options": "plan", "deliver": "ask"}
-
-VOCABULARY = ("mention", "clear_input", "turn_live", "ask_declines",
-              "plan_decisions", "rewind_modes", "rewind_mode_label",
-              "command_floor", "title_key",
-              "input_box", "ask_region", "typed_input", "lifecycle_end")
-
 # {method: {host: IMPL | DECLINED}} — the gesture-side twin of COVERAGE. A
 # DECLINE here is a DECISION with a written reason in the host's own module (see
 # the "NOT overridden" notes in plugins/codex/hostctl.py), and the table is what
@@ -618,10 +609,28 @@ HOST_SURFACE = {
     "rewind_mode_label": {"claude_code": IMPL, "codex": DECLINED},
     "command_floor":  {"claude_code": IMPL, "codex": DECLINED},
     "title_key":      {"claude_code": IMPL, "codex": IMPL},
+    # the ONE row where claude_code is the decline: a title-freshness stamp is
+    # only needed by a host that keeps the name OUTSIDE the transcript, and
+    # Claude Code writes it in (docs/codex.md *A rename the read model can SEE*)
+    "title_sig":      {"claude_code": DECLINED, "codex": IMPL},
     "input_box":      {"claude_code": IMPL, "codex": DECLINED},
     "ask_region":     {"claude_code": IMPL, "codex": DECLINED},
     "typed_input":    {"claude_code": IMPL, "codex": DECLINED},
     "lifecycle_end":  {"claude_code": IMPL, "codex": IMPL},
+    # the LAUNCH/model plumbing (plugins.host.PLUMBING) — no caps, but the same
+    # both-directions pin: these compose a launch and spell a model id, and an
+    # override that appears or disappears here changes what the new-session form
+    # offers. They were outside the table entirely until P7's audit.
+    "model_choices":  {"claude_code": IMPL, "codex": IMPL},
+    "effort_choices": {"claude_code": IMPL, "codex": IMPL},
+    "model_default":  {"claude_code": IMPL, "codex": IMPL},
+    "effort_default": {"claude_code": IMPL, "codex": IMPL},
+    "model_short":    {"claude_code": IMPL, "codex": DECLINED},
+    "model_default_effort": {"claude_code": IMPL, "codex": DECLINED},
+    "launch_words":   {"claude_code": IMPL, "codex": IMPL},
+    # codex's launch command word IS its host name, which is the base's own
+    # answer — a DECLINE that is the right one, not a gap
+    "launch_cmd":     {"claude_code": IMPL, "codex": DECLINED},
 }
 
 
@@ -657,13 +666,59 @@ def test_the_gesture_surface_table_matches_reality():
                        + "\n".join(wrong))
 
 
-def test_the_gesture_surface_table_covers_every_declared_method():
-    """Every GESTURE and every declared sibling/vocabulary hook has a row, and no
-    row names something that isn't one. A method absent from the table is a
-    surface nobody has said, per host, whether it is answered."""
+def _public_methods():
+    """Every PUBLIC callable on HostControl — the class's real surface, read off
+    the class rather than off any list describing it."""
+    from plugins.host import HostControl
+    return {n for n in dir(HostControl)
+            if not n.startswith("_") and callable(getattr(HostControl, n))}
+
+
+def test_the_declared_families_partition_the_whole_class():
+    """THE anti-tautology check: the product's four families plus its
+    infrastructure account for EVERY public callable on HostControl, and name
+    nothing that isn't one.
+
+    Without this, "the declared surface" was whatever the tables listed, so a
+    new method — overridden by a host and live in production — was covered by
+    definition and pinned by nothing. Adding one now fails here until it is
+    filed under a family, which is the moment to decide what KIND of surface it
+    is: a capability gesture, a cap sharer, a vocabulary declaration, or launch
+    plumbing."""
     from plugins import host as H
 
-    declared = set(H.GESTURES) | set(SIBLINGS) | set(VOCABULARY)
+    families = {"GESTURES": set(H.GESTURES), "SIBLINGS": set(H.SIBLINGS),
+                "VOCABULARY": set(H.VOCABULARY), "PLUMBING": set(H.PLUMBING),
+                "INFRASTRUCTURE": set(H.INFRASTRUCTURE)}
+    filed = set()
+    for name, fam in sorted(families.items()):
+        dupe = sorted(fam & filed)
+        assert not dupe, "%s re-files %s (a method has exactly one family)" % (
+            name, dupe)
+        filed |= fam
+    have = _public_methods()
+    assert not (filed - have), (
+        "the declared families name method(s) HostControl does not have: %s"
+        % sorted(filed - have))
+    assert not (have - filed), (
+        "HostControl method(s) in no declared family — file each under "
+        "GESTURES / SIBLINGS / VOCABULARY / PLUMBING in plugins/host.py (or "
+        "INFRASTRUCTURE if it is the interface's own machinery): %s"
+        % sorted(have - filed))
+
+
+def test_the_gesture_surface_table_covers_every_declared_method():
+    """Every method a host can implement has a per-host row, and no row names
+    something that isn't one. A method absent from the table is a surface
+    nobody has said, per host, whether it is answered.
+
+    Together with the partition above this is no longer circular: the families
+    come from the product, the partition proves they cover the class, and this
+    proves the table covers the families."""
+    from plugins import host as H
+
+    declared = (set(H.GESTURES) | set(H.SIBLINGS) | set(H.VOCABULARY)
+                | set(H.PLUMBING))
     assert set(HOST_SURFACE) == declared, (
         "HOST_SURFACE and the declared surface disagree: missing %s, extra %s"
         % (sorted(declared - set(HOST_SURFACE)),
@@ -680,9 +735,9 @@ def test_caps_are_derived_from_the_gestures_alone():
 
     for name, host in sorted(_host_objs().items()):
         assert set(host.caps()) == set(H.GESTURES), name
-    assert not (set(SIBLINGS) & set(H.GESTURES))
+    assert not (set(H.SIBLINGS) & set(H.GESTURES))
     # …and every sibling names a REAL cap to ride
-    assert set(SIBLINGS.values()) <= set(H.GESTURES)
+    assert set(H.SIBLINGS.values()) <= set(H.GESTURES)
     # the derivation itself: caps == the overrides, for every registered host
     for name, host in sorted(_host_objs().items()):
         for g in H.GESTURES:
@@ -821,7 +876,7 @@ def test_every_host_serves_its_whole_new_session_vocabulary(tmp_path, monkeypatc
     for cmd, (method, cap) in H.QUICK_COMMANDS.items():
         assert hasattr(H.HostControl, method), cmd
         assert cap in H.GESTURES, cmd
-        assert method in set(H.GESTURES) | set(SIBLINGS), cmd
+        assert method in set(H.GESTURES) | set(H.SIBLINGS), cmd
     assert T.CAP_BY_CMD == plugins.quick_command_caps()
     assert T.CAP_BY_CMD == {"compact": "compact", "model": "model",
                             "effort": "effort", "rename": "rename"}

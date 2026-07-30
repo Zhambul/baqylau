@@ -1,8 +1,8 @@
 # plugins/codex/hostctl.py — codex's HostControl adapter.
 #
 # codex as a first-class HOST tool (plugins.host.HostControl) — what
-# plugins.host_of / host_for(sid) / host_caps("codex") hand back for a codex
-# session, and what the dashboard reads to know which control buttons to offer.
+# plugins.host_of(path) / host_caps("codex") hand back for a codex session, and
+# what the dashboard reads to know which control buttons to offer.
 #
 # Named `hostctl`, not `host`, for the same reason claude_code's is: the `host`
 # PROVIDER function in plugins/codex/__init__.py would shadow a `host` submodule.
@@ -514,12 +514,6 @@ class CodexHost(HostControl):
     # effort is a per-turn ROLLOUT fact (turn_context, surfaced on ctx["effort"]),
     # not a property of the model, so a default table would be a second, wronger
     # answer than the one the rollout already gives.
-
-    def resume_words(self, sid):
-        """`codex resume <sid>` — codex's own conversation-resume argv (a codex
-        session id IS its rollout uuid). The new-session/resume-&-send path
-        composes a relaunch from this; [] when there is no sid."""
-        return ["resume", sid] if sid else []
 
     def launch_words(self, opts):
         """The `codex` "$@" tail for a web new-session launch (verified against

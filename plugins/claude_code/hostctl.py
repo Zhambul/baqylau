@@ -1012,12 +1012,6 @@ class ClaudeCodeHost(HostControl):
         from plugins.claude_code import model
         return model.model_default_effort(model_id)
 
-    def resume_words(self, sid):
-        """`claude --resume <sid>` — the argv the dashboard's resume-&-send and
-        the relimit migrator already compose (plugins.owns_by names claude_code
-        as the ONE tool that can pick a conversation up this way)."""
-        return ["--resume", sid] if sid else []
-
     def launch_words(self, opts):
         """The `claude` "$@" tail for a web new-session launch: `--resume`/
         `--continue` and `--model`/`--effort` riding as positional words ahead of

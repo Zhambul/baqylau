@@ -336,8 +336,11 @@ A plugin exposes its adapter through the `host` provider, and the registry root
 resolves it: `plugins.hosts()` enumerates the tools AND each one's whole
 new-session vocabulary (the picker, both option menus, their defaults, the
 account/mention flags, the rewind modes and the quick commands — see below),
-`plugins.host_named(name)` / `host_of(path)` / `host_for(sid)`
-hand back the adapter, and `plugins.host_caps(name)` its derived caps. The
+`plugins.host_named(name)` / `host_of(path)` hand back the adapter, and
+`plugins.host_caps(name)` its derived caps. (There is deliberately no
+`host_for(sid)`: every caller arrives with the transcript already resolved, and
+the one that starts from a bare sid — the notifier's screen probes — wants a
+DIFFERENT fallback, the default host rather than none.) The
 dashboard serves those caps per session (`read/session.session_caps`) and GATES
 every control button on them, client-side (`capOk` greys it) and server-side
 (`http/base._caps_guard` 409s it) — so a session owned by a tool that leaves a
@@ -432,7 +435,7 @@ itself against a live screen.
 | what | read-side FACTS | control-plane GESTURES |
 | shape | optional module-level functions | methods on one class |
 | declared in | `plugins.PROVIDERS` (name → arity) | `plugins.host.GESTURES` (the capability gestures) + `QUICK_COMMANDS`; the cap-SHARER and VOCABULARY halves of the surface are declared in the contract test, which pins them against the class |
-| reached by | `plugins.<name>(…)` fan-outs | `plugins.host_named/host_of/host_for` → `host.<gesture>(…)` |
+| reached by | `plugins.<name>(…)` fan-outs | `plugins.host_named/host_of` → `host.<gesture>(…)` |
 | a host opts in by | defining the function | OVERRIDING the method |
 | not implementing means | the fan-out asks the next plugin | the inert base answers `unsupported` → a 409 naming the cap |
 | capabilities | n/a | DERIVED from which methods were overridden (`caps()`), never authored |

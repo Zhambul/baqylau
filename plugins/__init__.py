@@ -380,14 +380,15 @@ def host_caps(name):
     return caps_of(host_named(name))
 
 
-def host_for(sid):
-    """The HostControl for a session id — resolves its transcript path through
-    the read-side session API first, then host_of. None when the sid is unknown
-    or its owner declares no host. Lazy import of core.sessionapi (a read-side
-    dependency, not a hook path)."""
-    from core import sessionapi as API
-    tpath = (API.session_row(sid) or {}).get("transcript_path") or ""
-    return host_of(tpath)
+# (No `host_for(sid)`. It resolved a sid to its HostControl through the audit
+# row's transcript path, and nothing ever called it. The dashboard's own
+# sid→host lookups arrive with the transcript ALREADY in hand (host_of), and
+# the one place that starts from a bare sid — the notifier's screen probes —
+# resolves out of its window map with a DEFAULT-host fallback, which is a
+# different answer on purpose: an unknown sid there is a session that appeared
+# a beat after the last refresh, not a session with no host. Two resolutions
+# with two fallbacks is exactly the drift a registry root exists to prevent, so
+# the unused one goes rather than the used one being bent to fit it.)
 
 
 def _concat_unique(method, key, *args):

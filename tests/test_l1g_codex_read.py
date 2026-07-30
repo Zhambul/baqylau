@@ -105,7 +105,8 @@ def test_codex_host_caps_reflect_wired_gestures(tmp_path):
                         "plan": True}
     assert list(h.model_choices())[0] == "gpt-5.6-sol"
     assert "xhigh" in h.effort_choices()
-    assert h.resume_words("sid7") == ["resume", "sid7"]
+    # …and the resume argv is composed by launch_words, the ONE seam for it
+    assert h.launch_words({"resume": "sid7"}) == ["resume", "sid7"]
     p = _full_rollout(tmp_path)
     assert plugins.host_of(p).name == "codex"
     assert "codex" in {x["name"] for x in plugins.hosts()}

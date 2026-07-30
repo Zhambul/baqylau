@@ -338,7 +338,7 @@ which audits a degrade.
   vice-versa, and what makes `plugins.owns_by(rollout)` name `codex` (so
   `session_caps` attributes the session to the codex host).
 - **The codex HostControl (`plugins/codex/hostctl.CodexHost`).** `name="codex"`,
-  `launchable=True`, `resume_words → ["resume", sid]`, and `launch_words(opts)` —
+  `launchable=True`, and `launch_words(opts)` —
   the codex argv the web new-session launch composes: `resume <sid>` (+`-C`/`-m`/
   `-c model_reasoning_effort=`/prompt) or a fresh `-C <cwd> -m <model>
   -c model_reasoning_effort=<eff> "<prompt>"` (codex has NO `--effort` flag and NO

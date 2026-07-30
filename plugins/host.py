@@ -82,6 +82,43 @@ QUICK_COMMANDS = {
     "rename": ("autoname", "rename"),
 }
 
+# The rest of the surface, declared HERE beside GESTURES rather than in the
+# contract test — because a table the test owns can only ever agree with itself.
+# It did: adding a HostControl method AND overriding it in a host landed with no
+# failure at all, since the "declared surface" the coverage check compared
+# against was the test file's own two tuples. Now the product declares its
+# families and the test asserts the partition is TOTAL over the class's public
+# callables, so a new method fails until it is filed under one of them.
+#
+#   SIBLINGS   — real gestures that share another gesture's cap (a cap must map
+#                to exactly one method or the derivation stops being the source
+#                of truth), so the caller gates them on that cap and the
+#                gesture's own `unsupported` result is what turns "this host has
+#                the cap but not this half" into a 409.
+SIBLINGS = {"rewind_to": "rewind", "autoname": "rename",
+            "plan_options": "plan", "deliver": "ask"}
+
+#   VOCABULARY — not gestures at all: the WORDS, grammars and screen READS a
+#                host declares so the control plane can refuse an unknown one by
+#                name instead of typing a foreign command into its TUI.
+VOCABULARY = ("mention", "clear_input", "turn_live", "ask_declines",
+              "plan_decisions", "rewind_modes", "rewind_mode_label",
+              "command_floor", "title_key", "title_sig",
+              "input_box", "ask_region", "typed_input", "lifecycle_end")
+
+#   PLUMBING   — the launch/lifecycle and model-vocabulary reads. Not user
+#                buttons (nothing greys on them) and not a refusal vocabulary
+#                either: they are how the control plane COMPOSES a launch and
+#                spells a model id in the host's own words.
+PLUMBING = ("model_choices", "effort_choices", "model_default",
+            "effort_default", "model_short", "model_default_effort",
+            "launch_words", "launch_cmd")
+
+#   INFRASTRUCTURE — the capability DERIVATION itself, which is the interface's
+#                own machinery rather than anything a host implements. The only
+#                public callables that are in no family.
+INFRASTRUCTURE = ("implements", "caps")
+
 _CID = itertools.count(1)
 
 
@@ -458,10 +495,13 @@ class HostControl:
         LAST fallback, after the session's own effort."""
         return ""
 
-    def resume_words(self, sid):
-        """The argv words that RESUME session `sid` for this tool (claude:
-        ['--resume', sid]); [] when the tool can't resume."""
-        return []
+    # (No `resume_words`. It declared "the argv words that RESUME session
+    # <sid>", three hosts implemented it, and NOTHING ever called it: the one
+    # place a resume argv is composed is `launch_words`, whose `opts["resume"]`
+    # emits the flag inline — which is also where a host that spells resumption
+    # differently would say so. A second seam for the same word could only
+    # disagree with the first, and a declared method with no caller reads as a
+    # contract the code honours.)
 
     def launch_words(self, opts):
         """The argv words that LAUNCH a fresh session with `opts`

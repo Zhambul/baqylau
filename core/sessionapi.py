@@ -390,7 +390,7 @@ def agents(sid):
     # plugin writes and applying a drop rule only its standalone mode triggers —
     # moved to plugins/codex/nested.py behind this fan-out; core keeps the SPLICE.
     # Lazily imported (a read-side dependency, and plugins reaches back into this
-    # module — the same lazy shape plugins.host_for uses in the other direction).
+    # module — import-time purity forbids the work either way).
     import plugins
     for rec in plugins.runs(sid):
         out[rec["agent_id"]] = rec
