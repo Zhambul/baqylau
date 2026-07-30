@@ -229,7 +229,10 @@ function curModelFamily() {
   const ses = S.ses;
   if (ses && ses.pendingModel) return ses.pendingModel;
   const cx = (ses && (ses.ctx || (ses.meta && ses.meta.ctx))) || null;
-  return (shortModel(cx && cx.model) || "").split("-")[0];
+  const sm = shortModel(cx && cx.model) || "";
+  // codex's menu rows are FULL ids (gpt-5.6-terra) so the current row matches on
+  // the whole id; Claude's menu is by FAMILY (opus/sonnet), the leading word.
+  return sm.startsWith("gpt-") ? sm : sm.split("-")[0];
 }
 
 // The model button's label carries the session's CURRENT model when the ctx
@@ -248,7 +251,11 @@ function setModelBtn(btn) {
   const cx = (ses && (ses.ctx || (ses.meta && ses.meta.ctx))) || null;
   const m = shortModel(cx && cx.model);
   if (ses && ses.pendingModel) {
-    if ((m || "").split("-")[0] === ses.pendingModel) ses.pendingModel = null;
+    // clear the optimistic label once the probe confirms it — Claude confirms by
+    // FAMILY (m's leading word), codex by the FULL id (its pendingModel is the
+    // whole `gpt-5.6-terra`, so a family compare would never clear it)
+    if (m === ses.pendingModel || (m || "").split("-")[0] === ses.pendingModel)
+      ses.pendingModel = null;
     else { btn.textContent = "✦ " + ses.pendingModel + " ▾"; return; }
   }
   btn.textContent = "✦ " + (m || "model") + " ▾";

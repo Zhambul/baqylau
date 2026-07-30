@@ -66,6 +66,7 @@ PROVIDERS = {
     "slash_commands": 1,     # (cwd)                — the "/" menu's vocabulary
     "config_dirs": 1,        # (cwd)                — the .claude/ ancestor walk
     "effort_default": 2,     # (cwd, slug)          — the resolved effort level
+    "effort": 1,             # (transcript_path)    — the session's current effort
     "context": 1,            # (transcript_path)    — ctx saturation
     "goal": 1,               # (transcript_path)    — the active /goal
     "model_fallback": 2,     # (transcript_path, pos) — the refusal-fallback scan
@@ -496,6 +497,17 @@ def effort_default(cwd, slug=""):
     saved value IS the last applied one. Same exception contract as
     census()/activity(): the caller is the read-side dashboard, not a hook."""
     return _first("effort_default", cwd, slug, default="", truthy=True)
+
+
+def effort(transcript_path):
+    """The session's CURRENT reasoning-effort token from its transcript, or "" —
+    PATH-keyed and ownership-gated (unlike the cwd-keyed effort_default), so a
+    NON-default host's real level comes from its own rollout, never Claude's
+    cwd-keyed default (which leaked `high` onto a `low` codex run). codex reads
+    its last turn_context (read.codex_effort — no usage record needed); Claude
+    provides none here (its effort is a settings fact, so it keeps using
+    effort_default). Same read-side exception contract as context()."""
+    return _first_path("effort", transcript_path, default="", truthy=True)
 
 
 def context(transcript_path, main=False):

@@ -437,6 +437,11 @@ function shortSid(sid) { return (sid || "").length > 20 ? sid.slice(0, 8) + "…
 function shortModel(m) {
   let s = String(m || "").toLowerCase().replace("[1m]", "").trim();
   if (!s) return "";
+  // codex models (gpt-5.6-terra, gpt-5.5, gpt-5.4-mini) are already short, and
+  // their TRAILING variant (terra/sol/luna/mini) is the discriminator — Claude's
+  // family-shortening below keeps only bare-integer version parts, so it drops
+  // the dotted version AND the variant, leaving a useless "gpt". Keep the id.
+  if (s.startsWith("gpt-") || s.startsWith("gpt5")) return s;
   if (s.startsWith("claude-")) s = s.slice(7);
   const parts = s.split("-");
   const ver = [];

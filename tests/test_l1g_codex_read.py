@@ -549,6 +549,25 @@ def test_codex_slash_commands_are_codex_vocabulary(monkeypatch, tmp_path):
     assert names == sorted(names)
 
 
+def test_codex_effort_provider_reads_the_last_turn_context(tmp_path):
+    """plugins.effort (path-keyed, ownership-gated) returns a codex rollout's
+    last turn_context level even with NO usage record (unlike context()), so the
+    ✧ button never falls back to Claude's cwd-keyed effort_default (the reported
+    `high` on a `low` codex run). A Claude/unknown path → '' (no codex provider)."""
+    import plugins
+    p = _rollout(tmp_path, [
+        {"type": "session_meta", "payload": {"cwd": "/w"}},
+        {"type": "turn_context", "payload": {"model": "gpt-5.6-sol",
+                                             "effort": "low"}}])
+    assert plugins.effort(p) == "low"
+    # context() alone is None here (no token_count), proving effort is a
+    # separate, usage-independent read
+    from plugins.codex import read as RD
+    assert RD.context(p) is None and RD.codex_effort(p) == "low"
+    # a non-codex path is not claimed → ''
+    assert plugins.effort(str(tmp_path / "nope.jsonl")) == ""
+
+
 def test_slash_commands_fan_out_is_host_scoped():
     """plugins.slash_commands routes to exactly the OWNING host, not a concat: a
     codex session gets codex's list, a Claude one gets Claude's, an unknown host

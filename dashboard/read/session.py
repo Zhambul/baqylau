@@ -317,8 +317,16 @@ def session_payload(sid, agent=""):
     # last applied value, resolved for the session's ACCOUNT (its statusline-
     # stashed slug picks the config dir — accounts each carry their own
     # settings.json).
-    data["effort"] = (data.get("ctx") or {}).get("effort") \
-        or plugins.effort_default(data.get("cwd") or "", session_slug(sid))
+    if (plugins.owns_by(_tp) or DEFAULT_HOST) != DEFAULT_HOST:
+        # a NON-default host (codex): its effort is a rollout fact — the ctx
+        # probe's turn_context effort, else the path-keyed `effort` read (which
+        # needs no usage record). NEVER effort_default: that is Claude's cwd-keyed
+        # default and leaked `high` onto a `low` codex run.
+        data["effort"] = (data.get("ctx") or {}).get("effort") \
+            or plugins.effort(_tp)
+    else:
+        data["effort"] = (data.get("ctx") or {}).get("effort") \
+            or plugins.effort_default(data.get("cwd") or "", session_slug(sid))
     # the agent cards' per-agent model·effort — reuses the ctx just stamped, so
     # the session effort resolved above is its inherit-default
     agents_model_effort(data["agents"], data["effort"])

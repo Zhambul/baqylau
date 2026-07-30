@@ -143,6 +143,16 @@ def slash_commands(cwd):
     return commands.slash_commands(cwd)
 
 
+def effort(transcript_path):
+    """The current-effort provider (plugins.effort fan-out) — a codex rollout's
+    LAST turn_context reasoning level (low/medium/high/…), or "". The dashboard's
+    ✧ button reads this so a codex session shows its REAL level, never Claude's
+    cwd-keyed effort_default (which leaked e.g. `high` onto a `low` run). Works
+    without a usage record, unlike context(). See read.codex_effort."""
+    from plugins.codex import read
+    return read.codex_effort(transcript_path)
+
+
 def pending_dialog(sid):
     """The pending-dialog provider (plugins.pending_dialog fan-out) — a codex
     run's OPEN request_user_input question for the web ask card (P5 drives it),
