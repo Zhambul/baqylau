@@ -411,11 +411,14 @@ _RESP = {"web_search_call": _rsp_web_search_call,
 _TOP = {"turn_context": _turn_context, "compacted": _top_compacted,
         "world_state": _top_world_state}
 
-# The two lifecycle records whose own timestamp field is absent in many codex
-# versions — the ENVELOPE's `timestamp` is then the only clock. It rides as a
-# separate `ts` (never folded into `at`): `at` is the numeric field the mirror
-# subtracts for a duration, and the envelope's is an ISO string.
-_ENVELOPE_TS = ("task_started", "task_complete")
+# Record kinds that carry the ENVELOPE's `timestamp` as a separate `ts` string.
+# Two families: the task lifecycle records whose OWN timestamp field is absent in
+# many codex versions (task_started/task_complete), and the exec pair — a codex
+# exec record carries no duration of its own, so the standalone command block
+# times itself from the exec's `ts` to its exec_result's `ts` (the elapsed on
+# `■ finished · Ns`, plugins/codex/stream.py). `ts` is always the ISO envelope
+# string, never folded into the numeric `at` a task duration subtracts.
+_ENVELOPE_TS = ("task_started", "task_complete", "exec", "exec_result")
 
 
 def _stamp(rec, o):
@@ -453,7 +456,9 @@ def parse(o):
         return _stamp(h(p), o) if h else None
     if t == "response_item":
         h = _RESP.get(p.get("type"))
-        return h(p) if h else None
+        # response_item too: exec / exec_result carry the envelope timestamp so a
+        # standalone exec block can time itself (_stamp is a no-op for the rest).
+        return _stamp(h(p), o) if h else None
     h = _TOP.get(t)
     # A top-level record's fields sit under `payload` in the enveloped
     # spelling and at the top level in the older bare-item one — hand the

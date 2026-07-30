@@ -127,6 +127,15 @@ def test_lifecycle_surfaces_the_envelope_timestamp():
     o2 = _ev("task_started")
     o2["timestamp"] = "2026-07-29T09:59:00.000Z"
     assert RO.parse(o2)["ts"] == "2026-07-29T09:59:00.000Z"
+    # the exec pair is stamped too (a codex exec carries no duration of its own —
+    # the standalone command block times exec.ts -> exec_result.ts)
+    oe = _rsp("function_call", name="exec_command",
+              arguments=json.dumps({"cmd": ["true"]}))
+    oe["timestamp"] = "2026-07-29T09:59:01.000Z"
+    assert RO.parse(oe)["ts"] == "2026-07-29T09:59:01.000Z"
+    orr = _rsp("function_call_output", output="ok")
+    orr["timestamp"] = "2026-07-29T09:59:03.500Z"
+    assert RO.parse(orr)["ts"] == "2026-07-29T09:59:03.500Z"
     # a non-lifecycle record is not stamped
     assert "ts" not in RO.parse(_ev("agent_message", message="hi"))
 
@@ -141,11 +150,13 @@ def test_web_search_query():
 def test_exec_command_args_decode_and_list_join():
     rec = RO.parse(_rsp("function_call", name="exec_command", call_id="c1",
                         arguments=json.dumps({"cmd": ["pytest", "-q"]})))
-    assert rec == {"kind": "exec", "cmd": "pytest -q", "call_id": "c1"}
+    # the exec pair carries the envelope `ts` (None here — no timestamp set) so a
+    # standalone command block can time itself; see the timestamp test below
+    assert rec == {"kind": "exec", "cmd": "pytest -q", "call_id": "c1", "ts": None}
     # string form + the alternate "command" key
     rec2 = RO.parse(_rsp("function_call", name="exec_command",
                          arguments=json.dumps({"command": "ls"})))
-    assert rec2 == {"kind": "exec", "cmd": "ls", "call_id": ""}
+    assert rec2 == {"kind": "exec", "cmd": "ls", "call_id": "", "ts": None}
     # a non-exec function call and an empty cmd are not records
     assert RO.parse(_rsp("function_call", name="other_tool",
                          arguments="{}")) is None
@@ -158,7 +169,7 @@ def test_exec_output_exit_extraction_both_head_forms():
                         output="Process exited with code 2\nOutput:\nboom"))
     assert rec == {"kind": "exec_result", "exit": "2",
                    "output": "Process exited with code 2\nOutput:\nboom",
-                   "call_id": "c1"}
+                   "call_id": "c1", "ts": None}
     assert RO.parse(_rsp("function_call_output",
                          output="Exit code: 0\nok"))["exit"] == "0"
     assert RO.parse(_rsp("function_call_output", output="plain"))["exit"] is None
@@ -257,7 +268,7 @@ def test_shell_and_write_stdin_function_calls():
     # `shell` is the pre-0.1x spelling of exec_command — same exec record
     rec = RO.parse(_rsp("function_call", name="shell", call_id="s1",
                         arguments=json.dumps({"command": ["ls", "-l"]})))
-    assert rec == {"kind": "exec", "cmd": "ls -l", "call_id": "s1"}
+    assert rec == {"kind": "exec", "cmd": "ls -l", "call_id": "s1", "ts": None}
     # write_stdin is the backgrounded-exec poll: a light record so its
     # function_call_output is not orphaned (paired by call_id)
     rec2 = RO.parse(_rsp("function_call", name="write_stdin", call_id="s2",

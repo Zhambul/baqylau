@@ -27,6 +27,7 @@
 # A codex run is attributed to the SESSION / cwd, not the launching agent_id, so it
 # reads as its own top-level stream (rule-bracketed) in the codex palette.
 import json, os, re, sys, time
+from datetime import datetime
 
 from core import env as EV
 from core import ops as O
@@ -51,18 +52,35 @@ LOGFILE  = ""
 JSONF    = "-"
 LABEL    = "task"
 ROLLOUT  = False                          # LOGFILE ends .jsonl; else companion .log
+STANDALONE = False                        # a codex host on its OWN (no Claude host)
 
 
 def _init(argv):
     """Bind this run's identity from the shim's argv:
-      claude-codex-stream.py MIRROR_LOG "r,g,b" SRCFILE JSONFILE LABEL"""
-    global LOG, SLOT_RGB, LOGFILE, JSONF, LABEL, ROLLOUT
+      claude-codex-stream.py MIRROR_LOG "r,g,b" SRCFILE JSONFILE LABEL
+    plus $CLAUDE_CODEX_STANDALONE (set by the watcher for a standalone host — the
+    run then paints its commands in Claude's own semantic colours, not the codex
+    palette; docs/codex.md *Standalone command parity*)."""
+    global LOG, SLOT_RGB, LOGFILE, JSONF, LABEL, ROLLOUT, STANDALONE
     LOG      = argv[1] if len(argv) > 1 else ""
     SLOT_RGB = tuple(int(x) for x in argv[2].split(",")) if len(argv) > 2 else (0, 200, 150)
     LOGFILE  = argv[3] if len(argv) > 3 else ""
     JSONF    = argv[4] if len(argv) > 4 else "-"
     LABEL    = argv[5] if len(argv) > 5 else "task"
     ROLLOUT  = LOGFILE.endswith(".jsonl")
+    STANDALONE = os.environ.get("CLAUDE_CODEX_STANDALONE") == "1"
+
+
+def _iso_ts(s):
+    """An ISO-8601 rollout envelope timestamp -> epoch seconds, or None. Tolerant
+    of the trailing `Z` codex writes; any unparseable value is None so a missing
+    clock degrades to an unknown duration rather than raising."""
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(str(s).replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return None
 
 # Line caps per excerpt kind (how many lines of each block the mirror shows before
 # "… (+N lines)"). These deliberately DIVERGE from plugins/claude_code/
@@ -200,6 +218,10 @@ class Renderer:
         self.ro_tag = ""      # "model · effort" chip last shown (re-shown on change)
         self.ro_usage = None  # CUMULATIVE total_token_usage from the last token_count
         self.ro_malformed = 0  # complete-but-unparseable rollout lines this run
+        # STANDALONE only: an exec command's open block, keyed by call_id, awaiting
+        # its exec_result to append the output + finish chip (the Claude live-block
+        # split — header out now, outcome later).
+        self.pending_exec = {}
 
     def _emit_exit_chip(self, code):
         # The red failed-exit chip, shared by both sources (companion
@@ -343,15 +365,54 @@ class Renderer:
                gutter(cap(rec["query"], CAP_HEAD), g=g))
 
     def _ro_exec_result(self, rec):
-        # The exec output record: surface a FAILED exit prominently (the
-        # companion path already does this from its "Command failed" lines).
+        if STANDALONE:
+            self._exec_close(rec)
+            return
+        # In-a-Claude-session (not yet folded into the subagent abstraction —
+        # docs/codex.md): surface only a FAILED exit prominently, as the companion
+        # path does from its "Command failed" lines.
         if rec["exit"] and rec["exit"] != "0":
             self._emit_exit_chip(rec["exit"])
 
     def _ro_exec(self, rec):
+        if STANDALONE:
+            # A standalone codex host IS the main agent, so its command is painted
+            # EXACTLY as Claude's foreground block — the shared core/streamfmt
+            # opener, in the semantic command colours (no codex palette), opened NOW
+            # so a long-running command shows the instant it starts. _exec_close
+            # appends the output + the shared finish chip when the result lands.
+            # Because the block wears a semantic colour, the web classifier reads it
+            # as ordinary command activity (ACT_BASH) rather than folding it into
+            # "ran N codex runs" (dashboard/opshtml/actclass.py).
+            gid = O.new_group(LOG)
+            self.pending_exec[rec["call_id"]] = {
+                "cmd": rec["cmd"], "ts": rec.get("ts"), "gid": gid}
+            O.emit(LOG, *SF.command_open(rec["cmd"], gid))
+            return
         g = O.new_group(LOG)
         O.emit(LOG, chip("▶", "cmd", g=g, lk=[["cmd", "⧉cmd"]]),
                O.code(rec["cmd"], g=g))
+
+    def _exec_close(self, rec):
+        """STANDALONE: close the foreground command block _ro_exec opened, matched
+        to its exec by call_id — the output behind the outcome-coloured gutter + the
+        shared finish chip. An ORPHAN result (a backgrounded write_stdin poll's
+        output, whose call_id is the stdin call's, not the exec's) has no open block
+        to close, so — as in the sidecar path — only its failed exit is surfaced."""
+        pend = self.pending_exec.pop(rec["call_id"], None)
+        failed = bool(rec["exit"]) and rec["exit"] != "0"
+        if not pend:
+            if failed:
+                self._emit_exit_chip(rec["exit"])
+            return
+        out = (rec["output"] or "").rstrip("\n")
+        body = R.emphasize(R.unescape(cap(out, CAP_OUTPUT))) if out.strip() \
+            else SF.no_output_body()
+        a, b = _iso_ts(pend.get("ts")), _iso_ts(rec.get("ts"))
+        dur = O.fmt_dur(b - a) if (a is not None and b is not None and b >= a) else "?"
+        chip_txt, col = SF.finish_chip(dur, failed=failed,
+                                       exit_code=rec["exit"] if failed else None)
+        O.emit(LOG, *SF.command_close(body, chip_txt, col, pend["gid"]))
 
     _RO = {"turn_context": _ro_turn_context, "usage": _ro_usage,
            "patch": _ro_patch, "compact": _ro_compact,

@@ -518,10 +518,42 @@ codex runs". Two bugs made it show nothing:
    scaffolding a standalone session doesn't need (the model shows in the
    scoreboard). Command / file / footer ops STAY.
 
-What's left for full uniformity (a follow-up): a standalone codex session's
-command/file ops still wear the codex palette, so until they are rendered in the
-lead's semantic colours + block shape (the shared `core/streamfmt` command
-block), a command-heavy session still folds its commands as `ACT_CODEX`.
+### Standalone command parity (a codex command reads like a Claude command)
+
+The prose fix above still left a standalone codex session's COMMANDS wearing the
+codex palette, so a command-heavy session folded them into "ran N codex runs" and
+the block itself was a bare one-line chip (no output, no exit, no elapsed) — the
+"foreground command is not showing up in the same style" report. The fix paints a
+standalone codex exec **exactly as Claude's own foreground block**, reusing the
+SAME components so a future change lands in one place:
+
+- **The block shape is shared.** `core/streamfmt` grew `command_open` /
+  `command_close` / `command_block` + `finish_chip` + `no_output_body` + the
+  semantic colour names `CMD_OK`/`CMD_BG`/`CMD_FAIL` — extracted from
+  `cmd_fmt._render_finished`, which now paints through them (byte-identical; the
+  L2 command goldens are the pin). `plugins/codex/stream.py` paints through the
+  same builders, so Claude's Bash block and codex's exec block are one anatomy.
+- **Semantic colours, not the codex palette.** The header is `▶ foreground` in
+  slate, the outcome (slate ok / red failed / orange interrupted) rides the
+  gutter + `■ finished · Ns` chip — the Claude LIVE-block split, opened the
+  instant the `exec` record lands (so a long-running command shows at once) and
+  closed when its `exec_result` (matched by `call_id`) appends the output + chip.
+  Because the block wears a SEMANTIC colour, `actclass` reads it as `ACT_BASH`
+  (ordinary command activity) — no fold, no web special-casing, the renderer
+  auto-paints the ⧉cmd/⧉out links onto the g-tagged header.
+- **It times itself.** A codex exec carries no duration, so `rollout.parse` now
+  stamps the ENVELOPE `ts` on the `exec`/`exec_result` pair (the same `ts` the
+  task-lifecycle records already carry); the block subtracts exec.ts →
+  exec_result.ts for the elapsed, `?` when the clock is missing.
+- **Gated on STANDALONE.** The watcher passes `CLAUDE_CODEX_STANDALONE=1` in the
+  stream's env for a standalone host (where codex IS the main agent). A codex run
+  INSIDE a Claude session is being folded into the SUBAGENT abstraction — no
+  codex-specific UI, it renders like any subagent (*Sidecar → subagent parity*
+  below); until that lands it keeps the per-run palette chip. An ORPHAN
+  `exec_result` (a backgrounded `write_stdin` poll's output, whose `call_id` is
+  the stdin call's) has no open block, so — as before — only its failed exit is
+  surfaced; richer backgrounded-exec rendering (the `stdin` kind) stays a
+  follow-up.
 
 ### Host-labeled UI copy (no hardcoded "Claude")
 

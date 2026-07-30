@@ -280,6 +280,72 @@ def file_display(path, cwd=None):
     return R.DIM + d + "/" + R.RST + R.COL["def"] + name, "out"
 
 
+# The main session's FOREGROUND-command colours — the semantic table imported
+# from core.ops, named here so the two command-block painters share one source:
+# plugins/claude_code/cmd_fmt.py (Claude's own Bash blocks) and
+# plugins/codex/stream.py (a standalone codex run's exec blocks, docs/codex.md
+# *Standalone command parity*). Slate = a clean finish, orange = interrupted / a
+# slot-less background header, red = a failure. A codex command painted in these
+# reads IDENTICALLY to Claude's — same colour, same glyph, same shape — so every
+# downstream stage (the web activity classifier, the quiet-note register, the
+# view-mode fold) treats it as main-session command activity with no codex
+# special-casing (dashboard/opshtml/actclass.py keys on exactly this table).
+CMD_OK, CMD_BG, CMD_FAIL = O.SLATE, O.ORANGE, O.RED
+
+
+def finish_chip(dur, failed=False, interrupted=False, exit_code=None):
+    """The block-CLOSING chip's (text, colour) for a finished command — the shared
+    shape cmd_fmt._render_finished and the codex stream both paint: `■ finished ·
+    3.2s` (slate), `■ failed (exit N) · …` (red), `■ interrupted · …` (orange).
+    `dur` is the caller's already-formatted duration string ('?' when unknown)."""
+    if not failed:
+        return "■ finished · " + dur, CMD_OK
+    if interrupted:
+        return "■ interrupted · " + dur, CMD_BG
+    if exit_code is not None:
+        return f"■ failed (exit {exit_code}) · {dur}", CMD_FAIL
+    return "■ failed · " + dur, CMD_FAIL
+
+
+def no_output_body():
+    """The dim `(no output)` gutter body a command block shows when its command
+    printed nothing — shared so an empty codex exec reads like an empty Bash run."""
+    return R.DIM + "(no output)" + R.RST
+
+
+def command_open(cmd, gid, col=None, head="▶ foreground"):
+    """The OPENING ops of a foreground command block — a blank + rule, the coloured
+    header, the command as a `code` op, and a rule. The renderer auto-paints the
+    ⧉cmd/⧉out copy links onto the g-tagged header (bin/claude-mirror.py), so no
+    `lk` is passed; the header colour is always CMD_OK (slate) — the OUTCOME colour
+    rides the gutter + closing chip, exactly as the live Claude path paints it
+    (plugins/claude_code/cmd_pre.py). Emitted the instant the command starts so a
+    long-running / backgrounded one shows immediately; command_close appends its
+    body + closer when the result lands."""
+    return [O.blank(), O.rule(), O.label(head, col or CMD_OK, g=gid),
+            O.code(cmd, g=gid), O.rule()]
+
+
+def command_close(body, chip_txt, col, gid):
+    """The CLOSING ops of a foreground command block — the output behind the
+    outcome-coloured gutter, a rule, the closing chip, a rule. `body` is the
+    already-shaped gut text (emphasised/neutralised, or no_output_body())."""
+    return [O.gut(body, col, g=gid), O.rule(), O.label(chip_txt, col, g=gid),
+            O.rule()]
+
+
+def command_block(cmd, body, chip_txt, col, gid, head="▶ foreground"):
+    """A COMPLETE foreground command block (open + close) as one op list — the
+    shared anatomy cmd_fmt paints when it renders the whole block AT ONCE (no live
+    tailer owns it, so there is no start/finish split): the header, command,
+    output and chip are all painted in `col`, the block's single outcome colour.
+    (The live path splits this — cmd_pre opens the block slate, the finish chip
+    lands the outcome colour later — which is what command_open/command_close are
+    for; codex's rollout is tailed the same split way.)"""
+    return command_open(cmd, gid, col=col, head=head) + \
+        command_close(body, chip_txt, col, gid)
+
+
 def tok_rollup(fresh, out, cached, reads=None):
     """The ended-footer token fragment: ' · Xk in · Yk out[ · cache Z%]'.
 

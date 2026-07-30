@@ -261,6 +261,16 @@ def spawn(srcfile, jsonfile, label):
     if not STANDALONE:
         env = dict(os.environ)
         env["CLAUDE_OPS_SRC"] = "codex:" + label
+    else:
+        # A STANDALONE codex host IS the session's main agent, so its exec blocks
+        # are painted in Claude's own semantic command colours + block shape
+        # (uniform, no codex palette — docs/codex.md *Standalone command parity*).
+        # The flag rides the env so the stream paints the main-agent register. The
+        # in-a-Claude-session case is being folded into the SUBAGENT abstraction
+        # (no codex-specific UI — docs/codex.md *Sidecar → subagent parity*); until
+        # that lands it keeps the per-run palette chip.
+        env = dict(os.environ)
+        env["CLAUDE_CODEX_STANDALONE"] = "1"
     spawn_detached(STREAM, [LOG, rgb, srcfile, jsonfile, label], LOG, env=env,
                    purpose=f"stream:codex {label}", audit_argv=[srcfile, label])
 

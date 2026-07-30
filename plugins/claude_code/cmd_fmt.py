@@ -27,9 +27,10 @@ A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
 
 LOG = ""   # set in main() from the payload's session_id (per-session log)
 
-LBL_FG   = O.SLATE    # foreground OK (neutral, distinct from the vivid palettes)
+# The finished-command chip colours now live in core/streamfmt (CMD_OK/BG/FAIL —
+# shared with the codex exec block, docs/codex.md); the one still named locally is
+# the slot-less background HEADER hue (not a finish outcome).
 LBL_BG   = O.ORANGE   # background header chip / foreground "interrupted"
-LBL_FAIL = O.RED      # a failed tool (PostToolUseFailure)
 
 
 def _combined_output(tr):
@@ -208,20 +209,17 @@ def _render_finished(d, tr, cmd, live, done):
         code = m.group(1) if m else None
         if m:
             body = body[m.end():]
-        if interrupted:
-            chip_txt, col = "■ interrupted · " + dur, LBL_BG
-        elif code is not None:
-            chip_txt, col = f"■ failed (exit {code}) · {dur}", LBL_FAIL
-        else:
-            chip_txt, col = "■ failed · " + dur, LBL_FAIL
     else:
         body = _combined_output(tr)
-        chip_txt, col = "■ finished · " + dur, LBL_FG
-
-    # One colour for the whole block — header, gutter, and finish chip all use it
-    # (slate ok / red failed / orange interrupted), so the finish line matches the
+        code = None
+    # The block-closing chip + its colour — the shared shape (core/streamfmt) a
+    # codex exec block paints identically: slate ok / red failed / orange
+    # interrupted. One colour for the whole block, so the finish line matches the
     # gutter and you can tell which stream finished.
-    gut_body = R.emphasize(R.unescape(body)) if body else R.DIM + "(no output)" + R.RST
+    chip_txt, col = SF.finish_chip(dur, failed=failed, interrupted=interrupted,
+                                   exit_code=code)
+
+    gut_body = R.emphasize(R.unescape(body)) if body else SF.no_output_body()
 
     # claude-cmd-pre.py (PreToolUse) may already have rendered the header and be
     # tailing this command's output live (see its module docstring; `live` was read
@@ -240,9 +238,7 @@ def _render_finished(d, tr, cmd, live, done):
 
     if not live:
         gid = d.get("tool_use_id") or None      # ⧉ copy links: this block's group
-        O.emit(LOG, O.blank(), O.rule(), O.label("▶ foreground", col, g=gid),
-               O.code(cmd, g=gid), O.rule(), O.gut(gut_body, col, g=gid), O.rule(),
-               O.label(chip_txt, col, g=gid), O.rule())
+        O.emit(LOG, *SF.command_block(cmd, gut_body, chip_txt, col, gid))
     A.hook_event(d, decision=("handed off to fg tailer: " if live else "rendered: ")
                  + chip_txt)
 

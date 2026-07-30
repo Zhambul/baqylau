@@ -289,6 +289,43 @@ def test_standalone_watcher_streams_own_tui_rollout(test_env, codex, reaper):
     host.terminate()
 
 
+def test_standalone_exec_renders_as_a_claude_command_block(test_env, codex, reaper):
+    """A standalone codex host IS the session's main agent, so its exec command is
+    painted EXACTLY as Claude's own foreground block — a `▶ foreground` header, the
+    command, the output gutter, and a `■ finished · Ns` chip, all in the SEMANTIC
+    command colours (core/ops.SLATE), never the codex palette. Painting a semantic
+    colour is the one bit the web activity classifier keys on to render it as
+    ordinary command activity instead of folding it into 'ran N codex runs'
+    (docs/codex.md *Standalone command parity*)."""
+    from core import ops as O
+    from core.slots import CODEX_PALETTE
+    host = subprocess.Popen(["sleep", "60"])
+    reaper.append(host)
+    codex.start_watcher(host_pid=host.pid)
+    codex.add_rollout(originator="codex-tui", u=codex.s.sid, events=[
+        {"type": "response_item", "payload": {
+            "type": "function_call", "name": "exec_command", "call_id": "c1",
+            "arguments": json.dumps({"cmd": ["echo", "hi"]})}},
+        {"type": "response_item", "payload": {
+            "type": "function_call_output", "call_id": "c1", "output": "hi\n"}},
+    ])
+    wait_until(lambda: all(s in codex.s.ops_text()
+                           for s in ("▶ foreground", "echo hi", "hi", "■ finished")),
+               desc="standalone exec renders as a Claude foreground block")
+    palette = {tuple(c) for c in CODEX_PALETTE}
+    hdr = [op for op in codex.s.ops()
+           if op.get("t") == "label" and "▶ foreground" in (op.get("s") or "")]
+    assert hdr and tuple(hdr[0].get("c") or ()) == tuple(O.SLATE), \
+        "the command header must wear the semantic slate, not the codex palette"
+    # and NOTHING in the block wears a codex-palette colour
+    block = [op for op in codex.s.ops()
+             if any(w in (op.get("s") or "")
+                    for w in ("▶ foreground", "echo hi", "■ finished"))]
+    assert block and all(tuple(op.get("c") or ()) not in palette for op in block), \
+        "a codex-palette colour leaked onto the standalone command block"
+    host.terminate()
+
+
 def test_standalone_watcher_ignores_foreign_rollouts(test_env, codex, reaper):
     """Standalone pins to its OWN session id: a different codex run in the same
     repo (a stray rollout with another uuid) is NOT adopted — each standalone tab
