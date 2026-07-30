@@ -94,7 +94,8 @@ def skill_note(name, failed=False):
     return note + " failed" if failed else note
 
 
-def chip(who, glyph, kind, rgb, tags=(), g=None, lk=None, web=False, note=None):
+def chip(who, glyph, kind, rgb, tags=(), g=None, lk=None, web=False, note=None,
+         mem=False):
     """The block-header label op: `<glyph> <kind>` in the stream's colour, with
     `who` (the agent's name) and `tags` (its model/effort + ctx chips) carried as
     the op's OWN fields rather than concatenated into the text (core/ops.py — the
@@ -103,9 +104,11 @@ def chip(who, glyph, kind, rgb, tags=(), g=None, lk=None, web=False, note=None):
     (core/copy.py), passed straight through to O.label. web=True keeps this
     stamped op in the web dashboard's main mirror (a subagent prompt/result
     header — see core/ops.py's "web" field), and `note` is that surface's own
-    wording for it (the quiet one-liner)."""
+    wording for it (the quiet one-liner). `mem` marks the block as a memory-wiki
+    touch (see O.label) — an agent's vault read/search, the same flag the lead's
+    command header carries."""
     return O.label(f"{glyph} {kind}", rgb, g=g, lk=lk, web=web, note=note,
-                   who=who, tags=tags)
+                   who=who, tags=tags, mem=mem)
 
 
 def compose(op, s=None):
@@ -313,7 +316,7 @@ def no_output_body():
     return R.DIM + "(no output)" + R.RST
 
 
-def command_open(cmd, gid, col=None, head="▶ foreground"):
+def command_open(cmd, gid, col=None, head="▶ foreground", mem=False):
     """The OPENING ops of a foreground command block — a blank + rule, the coloured
     header, the command as a `code` op, and a rule. The renderer auto-paints the
     ⧉cmd/⧉out copy links onto the g-tagged header (bin/claude-mirror.py), so no
@@ -321,8 +324,12 @@ def command_open(cmd, gid, col=None, head="▶ foreground"):
     rides the gutter + closing chip, exactly as the live Claude path paints it
     (plugins/claude_code/cmd_pre.py). Emitted the instant the command starts so a
     long-running / backgrounded one shows immediately; command_close appends its
-    body + closer when the result lands."""
-    return [O.blank(), O.rule(), O.label(head, col or CMD_OK, g=gid),
+    body + closer when the result lands.
+
+    `mem` rides the header op (core/ops.label) — a command that read or searched
+    the memory wiki, which is a property of the BLOCK rather than of any line in
+    it; the ❖ marker itself goes in `head`, which the caller builds."""
+    return [O.blank(), O.rule(), O.label(head, col or CMD_OK, g=gid, mem=mem),
             O.code(cmd, g=gid), O.rule()]
 
 
@@ -334,7 +341,7 @@ def command_close(body, chip_txt, col, gid):
             O.rule()]
 
 
-def command_block(cmd, body, chip_txt, col, gid, head="▶ foreground"):
+def command_block(cmd, body, chip_txt, col, gid, head="▶ foreground", mem=False):
     """A COMPLETE foreground command block (open + close) as one op list — the
     shared anatomy cmd_fmt paints when it renders the whole block AT ONCE (no live
     tailer owns it, so there is no start/finish split): the header, command,
@@ -342,7 +349,7 @@ def command_block(cmd, body, chip_txt, col, gid, head="▶ foreground"):
     (The live path splits this — cmd_pre opens the block slate, the finish chip
     lands the outcome colour later — which is what command_open/command_close are
     for; codex's rollout is tailed the same split way.)"""
-    return command_open(cmd, gid, col=col, head=head) + \
+    return command_open(cmd, gid, col=col, head=head, mem=mem) + \
         command_close(body, chip_txt, col, gid)
 
 

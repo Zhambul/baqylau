@@ -23,11 +23,11 @@ def scope(cwd):
 
 
 def badge(sid, agent):
-    """The Memory tab badge's number — distinct wiki notes touched, team-wide
-    (`agent` unused: BADGE_SCOPED=False, the tab is session-wide). The
-    framework applies the off-scope -> 0 gate (read/session.badge_count's scope
-    weave), so both its readers — the overview payload and the SSE badge
-    channel — cannot disagree about it."""
+    """The Memory tab badge's number — distinct wiki notes touched plus vault
+    searches run, team-wide (`agent` unused: BADGE_SCOPED=False, the tab is
+    session-wide). The framework applies the off-scope -> 0 gate
+    (read/session.badge_count's scope weave), so both its readers — the overview
+    payload and the SSE badge channel — cannot disagree about it."""
     return API.memory_count(sid)
 
 
@@ -156,11 +156,42 @@ def note_payload(path, stem):
 # --- the tab's GET routes (ext.session_gets — same wire as before the move) ---
 
 def get_memory(sid, url):
-    """The memory-wiki notes this session touched, BOTH ways: the flat
-    newest-touch-first list (the tab badge's authority) and the same records
-    grouped into the vault's folder tree, which is what the tab renders."""
+    """Everything the Memory tab shows: the notes this session touched — BOTH the
+    flat newest-touch-first list and the same records grouped into the vault's
+    folder tree, which is what the tab renders — plus the vault SEARCHES it ran
+    (the expandable query/results cards above the tree, docs/dashboard.md *Memory
+    searches*). Notes and searches are independent halves of one kv: a search
+    names notes it never opened, and a note is often read with no search behind
+    it, so neither is derivable from the other."""
     mem = API.memory(sid)
-    return {"memory": mem, "tree": memory_tree(mem)}
+    return {"memory": mem, "tree": memory_tree(mem),
+            "searches": search_cards(API.memory_searches(sid))}
+
+
+def search_cards(searches):
+    """The search records as the tab's cards: each hit gains `viewable` — whether
+    the note behind it still exists and can be opened in the note viewer — so the
+    client renders a plain row rather than a dead link for a hit whose note was
+    since renamed or deleted (qmd's index outlives the file). Everything else is
+    passed through as recorded; the SERVER decides linkability because it is the
+    side that knows the filesystem."""
+    out = []
+    for s in searches or []:
+        if not isinstance(s, dict):
+            continue
+        card = dict(s)
+        hits = []
+        for h in s.get("hits") or []:
+            if not isinstance(h, dict):
+                continue
+            hit = dict(h)
+            path = hit.get("path") or ""
+            hit["viewable"] = bool(path) and MEM.is_memory(path) \
+                and os.path.isfile(path)
+            hits.append(hit)
+        card["hits"] = hits
+        out.append(card)
+    return out
 
 
 def get_note(sid, url):

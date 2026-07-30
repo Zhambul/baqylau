@@ -379,10 +379,11 @@ def test_act_vocabulary_matches_the_page_phrase_table(dash):
             assert act in ACTS, "%s folds unknown act %r" % (mode, act)
             assert aliases.get(act, act) in fragments, \
                 "%s folds %r with no summary fragment" % (mode, act)
-    # the fragment keys are acts too (plus the two memory flavours, which are a
-    # file op's act + the ❖ memory tag, not acts of their own)
+    # the fragment keys are acts too (plus the three memory flavours, which are a
+    # file-or-bash op's act + the ❖ memory tag, not acts of their own — a `bash`
+    # act is a memory op whenever the command read or searched the vault)
     for key in fragments:
-        assert key in ACTS or key in ("mem-read", "mem-write"), key
+        assert key in ACTS or key in ("mem-read", "mem-write", "mem-search"), key
 
     # No act is ever dropped from the COUNTERS by a mode: whatever a mode collapses,
     # its summary still accounts for. Focus hid the team plumbing outright for a
@@ -524,17 +525,21 @@ def test_a_fake_extension_gets_the_whole_registration_contract(tmp_path):
 
 
 def test_memory_tab_renders_the_vault_tree(tmp_path):
-    """The memory tab's TREE, EXECUTED rather than grepped: tests/jsdom/
-    memtree.js drives the real renderMemoryTree/memDir/memNote/toggleMemDir
-    over the shared DOM shim against a server-shaped tree
-    (dashboard/read/mirror.memory_tree, docs/dashboard.md *Memory tab*).
+    """The memory tab's two renderers, EXECUTED rather than grepped: tests/jsdom/
+    memtree.js drives the real renderMemoryTree/memDir/memNote/toggleMemDir and
+    renderMemorySearches/memSearchCard/toggleMemSearch over the shared DOM shim
+    against server-shaped payloads (dashboard/read/mirror.memory_tree +
+    ext/memory/read.search_cards, docs/dashboard.md *Memory tab* / *Memory
+    searches*).
 
     The rows' whole job is STRUCTURE, and none of it is greppable: the indent
     IS the hierarchy (the rows are one flat list, not nested containers), the
     twisty must agree with what is on screen, and the collapse must survive the
     repaint the `memory` SSE fires on every touched note — a fold that springs
     back open under your hand each time the session writes a note is worse than
-    no fold at all. Skipped without `node` (docs/testing.md)."""
+    no fold at all. The search cards have the same shape of contract, plus one
+    of their own: a hit whose note no longer exists must render as a ROW, not as
+    a link that goes nowhere. Skipped without `node` (docs/testing.md)."""
     node = shutil.which("node")
     if not node:
         pytest.skip("no node on PATH")
@@ -579,6 +584,45 @@ def test_memory_tab_renders_the_vault_tree(tmp_path):
     for case in ("empty", "noTree"):
         assert [x["cls"] for x in d[case]] == ["empty"], case
         assert d[case][0]["text"] == "no memory notes touched in this session", case
+
+    # ---- the SEARCH cards (docs/dashboard.md *Memory searches*) --------------
+    # A search opens no note, so the tree above can never show it — these cards
+    # are its only surface, and each property below is one that a grep can't see.
+    assert d["searchHead"] == "2 searches"
+    # COLLAPSED by default: five multi-line passages per answer would bury the
+    # tree. The head is the useful index — kind, the question, and what came back
+    assert [c["cls"] for c in d["searchCollapsed"]] == ["memsearch", "memsearch"]
+    assert all(c["body"] is None for c in d["searchCollapsed"])
+    assert d["searchCollapsed"][0]["head"] == \
+        "▸qmd queryhow does rscheck answer getstatus2 hits"
+    assert d["searchCollapsed"][1]["head"] == \
+        "▸qmd searchmanifest started healthcheck⇢ note-writer×2"
+    # opening one shows the ANSWER: what the query was expanded to, then the
+    # ranked hits with score · note · line · title · vault path · passage
+    body = d["searchOpen"][0]["body"]
+    assert d["searchOpen"][0]["cls"] == "memsearch open"
+    assert [x["cls"] for x in body] == ["msexp", "mshit live", "mshit"]
+    assert body[0]["text"] == \
+        "expanded tolex: how rscheck returnsvec: getstatus in rscheck"
+    assert body[1]["text"] == ("86%rscheck-healthcheck:13"
+                               "rscheck — what answers /getstatus:81"
+                               "platform/concepts/rscheck-healthcheck.md"
+                               "Documented in the internal docs repo.")
+    assert d["searchOpen"][1]["body"] is None      # only the one opened
+    assert d["searchAfterRepaint"] == d["searchOpen"]   # the SSE must not snap it shut
+    # a hit whose note still exists opens it; one whose note is GONE (qmd's index
+    # outlives the file) keeps its row but gets no handler — a row, not a dead link
+    assert d["hitClasses"] == ["mshit live", "mshit"]
+    assert d["hitOpened"] == [{"path": "/w/a.md", "reset": True}]
+    assert d["deadHitHasHandler"] is False
+    # a search whose answer wasn't captured (truncated output / a multi-search
+    # command) still shows its QUESTION, and says the answer is missing
+    assert d["searchNoHits"] == [{"cls": "empty",
+                                  "text": "no results captured for this search"}]
+    assert d["noSearches"] == 0                    # no header over nothing
+    # …and with searches present the empty TREE must not read as "no memory" over
+    # a tab that visibly has memory in it
+    assert d["treeEmptyWithSearches"] == "no notes opened — only searched"
 
 
 def test_header_action_bar_gates_every_button(tmp_path):

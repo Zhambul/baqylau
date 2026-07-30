@@ -851,29 +851,52 @@ def job_count(sid, agent=""):
     return _nested_count(sid, "bg", agent)
 
 
-def memory(sid):
-    """The memory-wiki notes a session touched — the `memory` kv the file
-    formatter / substream stash on every op under ~/wiki/01 (plugins.claude_code
-    .memory.record), which survives park. A list of {path, name, verb, agent,
-    count, ts} (verb ∈ Read/Update/Write, agent None = main), newest-touch first;
-    [] when the session touched no memory. Team-wide (main agent AND subagents,
-    unlike the main-agent-only mirror). Read-only (kv_at, live-or-parked path)."""
+def _memory_list(sid, key):
+    """One list of the `memory` kv, newest-first — the shared body of memory() and
+    memory_searches() (the kv holds both halves under one key, so reading it twice
+    would be two loads of the same json for one payload)."""
     sdb = state_db_for(sid)
     if not sdb:
         return []
     stash = kv_at(sdb, "memory")
-    files = stash.get("files") if isinstance(stash, dict) else None
-    if not isinstance(files, list):
+    rows = stash.get(key) if isinstance(stash, dict) else None
+    if not isinstance(rows, list):
         return []
-    return sorted((f for f in files if isinstance(f, dict)),
-                  key=lambda f: f.get("ts") or 0, reverse=True)
+    return sorted((r for r in rows if isinstance(r, dict)),
+                  key=lambda r: r.get("ts") or 0, reverse=True)
+
+
+def memory(sid):
+    """The memory-wiki notes a session touched — the `memory` kv's `files` list,
+    stashed on every op under ~/wiki/01 by the file formatters (a Read/Write/Edit
+    tool call) and by the Bash formatters (a `cat`/`find -exec cat`/`qmd get` of a
+    note — plugins.claude_code.memory.record via memcmd), and surviving park. A
+    list of {path, name, verb, agent, count, ts} (verb ∈ Read/Update/Write, agent
+    None = main), newest-touch first; [] when the session touched no memory.
+    Team-wide (main agent AND subagents, unlike the main-agent-only mirror).
+    Read-only (kv_at, live-or-parked path)."""
+    return _memory_list(sid, "files")
+
+
+def memory_searches(sid):
+    """The vault SEARCHES a session ran — the `memory` kv's `searches` list
+    (plugins.claude_code.memory.record_search, fed by memcmd's qmd parsing), newest
+    first. A list of {kind, sub, query, cmd, expanded, hits, agent, count, ts},
+    where `hits` are the parsed result rows ({path, rel, name, line, title, score,
+    snippet}) — the Memory tab's search cards. The OTHER half of recall: a `qmd
+    query` opens no note, so memory() above can't see it, yet it is exactly the
+    moment the session asked memory a question."""
+    return _memory_list(sid, "searches")
 
 
 def memory_count(sid):
-    """The distinct memory-note COUNT for a session — the cheap twin of memory()
-    for the Memory tab's badge (the kv is small, so this just len()s it, but the
-    separate entry keeps the per-tick SSE symmetric with jobs/errors)."""
-    return len(memory(sid))
+    """The Memory tab's badge number — notes touched PLUS searches run. Both, and
+    not just the notes, because a session that only SEARCHED the vault (a very
+    ordinary shape: ask qmd, read the ranked passages, act) would otherwise wear a
+    0 badge over a tab with content in it. The cheap twin of memory() +
+    memory_searches() (the kv is small, so this just len()s them; the separate
+    entry keeps the per-tick SSE symmetric with jobs/errors)."""
+    return len(memory(sid)) + len(memory_searches(sid))
 
 
 # The stream KINDS whose `src_path` is an agent's TRANSCRIPT. Every other kind

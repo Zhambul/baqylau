@@ -117,12 +117,17 @@ def _wrap_outer(body, outer):
 
 
 def _v_attrs(op):
-    """The ` data-v`/` data-mem` attribute string a click-to-view op carries —
-    shared by the `gut` and `line` branches (html-escaped, data-mem only when
-    the op is memory-tagged)."""
+    """The ` data-v`/` data-mem` attribute string an op carries — shared by the
+    `gut`, `line` and `label` branches (html-escaped). `data-mem` carries the
+    memory FLAVOUR the producer stamped ("1" a note read, "search" a vault
+    search — core/ops.label), not a bare presence flag: the page words the two
+    differently, and the block-kind test only asks whether the attribute is
+    there."""
     v = op.get("v")
     vattr = " data-v=\"%s\"" % html.escape(str(v), quote=True) if v else ""
-    vattr += " data-mem=\"1\"" if op.get("mem") else ""
+    mem = op.get("mem")
+    if mem:
+        vattr += " data-mem=\"%s\"" % html.escape(str(mem), quote=True)
     return vattr
 
 
@@ -158,14 +163,14 @@ def op_html(op, key=""):
         cq = actclass.cmd_note(op)
         if cq is not None:
             body, links = _cq_pieces(op, key, cq[0], cq[1])
-            return _wrap_outer("<div class=\"ol\">%s%s</div>" % (body, links),
-                               op.get("outer"))
+            return _wrap_outer("<div class=\"ol\"%s>%s%s</div>"
+                               % (_v_attrs(op), body, links), op.get("outer"))
         chip = ("<span class=\"chip\" style=\"background:%s\">%s</span>"
                 % (_rgb(op.get("c")), ansi_html(op.get("s", ""))))
         g = op.get("g")
         if g and key:
             chip += _copy_links(key, g, op.get("lk"))
-        body = "<div class=\"ol\">%s</div>" % chip
+        body = "<div class=\"ol\"%s>%s</div>" % (_v_attrs(op), chip)
         return _wrap_outer(body, op.get("outer"))
     if t == "code":
         return _code_block(op.get("s", ""), op.get("ind", "  "))

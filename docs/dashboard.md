@@ -6088,14 +6088,16 @@ subagent) renders a file op under the root, it appends ❖ (`memory.MARK`) to th
 one-liner and tags the op `mem` (`ops.line`/`ops.gut`), which `opshtml` surfaces as
 `data-mem` so the page sorts it into its own **`memory`** stream-item kind
 (*Stream item kinds* below), distinct from generic `files`. Both formatters
-reach memory through the file-op OBSERVER table (`plugins/claude_code/
-fileobs.py` — the extension's producer registration, memory its one row), not
-by hard-coding the feature; the `mem=` flag stays memory's own vocabulary,
-keyed off the row name.
+reach memory through the OBSERVER table (`plugins/claude_code/fileobs.py` — the
+extension's producer registration, memory its one row), not by hard-coding the
+feature; the `mem=` flag stays memory's own vocabulary, keyed off the row name.
+A **shell command** that reads or searches the vault is marked the same way, on
+the block's HEADER rather than a one-liner — see *Memory: the Bash plane* below.
 
-**Tab data path.** Both producers also `memory.record()` the touched note into a
+**Tab data path.** Every producer also `memory.record()`s the touched note into a
 per-session **`memory` kv** (state DB, survives park) — `{files: [{path, name,
-verb, agent, count, ts}]}` keyed by path, verb ESCALATED by rank (Write > Update >
+verb, agent, count, ts}], searches: [...]}`; `files` is keyed by path, verb
+ESCALATED by rank (Write > Update >
 Read) on a repeat touch, stamping the escalating op's agent (None = main). Unlike
 the main-agent-only *mirror*, this is **team-wide**: a subagent (e.g. a note-writer)
 records under `self.agent`, so the tab shows who touched each note. The read model
@@ -6170,6 +6172,155 @@ on such an element to an ancestor listener — a delegated handler silently did
 nothing on the phone while the desktop worked (the tree's own rows use a direct
 onclick for the same reason).
 
+## Memory: the Bash plane
+
+**A memory op does not have to be a tool call, and most are not.** The feature
+shipped wired only to Claude Code's Read/Write/Edit TOOLS, and that turned out to
+be the smaller half of real recall. Measured on one in-scope session (`d8dc5a67`,
+2026-07-30): **ten wiki notes read, two vault searches run, and not one record in
+the kv** — the Memory tab was empty for a session whose whole job was reading
+memory. Every touch had been a shell command:
+
+```
+grep -ril "6988\|health.?check" ~/wiki/01/ --include=*.md | head -30
+cd ~/wiki/01 && cat platform/concepts/observability.md 2>/dev/null | head -60
+cd ~/wiki/01 && cat platform/concepts/rscheck-healthcheck.md platform/… ×3
+cd ~/wiki/01 && find . -name "cloud-manifest-port-started-state.md" -exec cat {} \;
+cd ~/wiki/01 && grep -ril "started:" . | head -20; echo …; qmd search "manifest started healthcheck"
+```
+
+`plugins/claude_code/memcmd.py` is the answer: the memory feature's **command
+plane**, and the single owner of "which vault notes does this shell command read,
+and what did qmd answer". It registers through the SAME `fileobs.py` row as the
+file plane (`cmd_match`/`cmd_record` beside `match`/`record`), so the feature is
+one registration with two planes, and both apply the same `in_scope()` project
+gate — the feature can't be half-on for a session.
+
+**Why not reuse `tools.read_command`.** That function answers a deliberately
+narrower question — *should the mirror COLLAPSE this command into a `Read`
+one-liner* — which means one file, from the LAST statement, from an allowlisted
+reader, no plumbing. Every command above fails it for a reason that is correct
+there and wrong here: three files at once (it picks one, to choose one lexer); the
+read sits in a non-final statement; `find` is not a reader; the path is relative
+under a `cd` it doesn't follow. So the read-plane verdict is not reusable, and this
+plane walks EVERY statement and EVERY token asking only one thing: **is this token a
+real file under the vault.** The proof is the FILESYSTEM (`is_memory` + `isfile`),
+not a grammar — which is also what stops it false-positiving on flags and patterns.
+
+What it takes:
+
+- **Per-statement cwd.** `tools.statement_cwds(cmd, cwd, tilde=True)` pairs each
+  statement with the directory it runs in. Two things had to change for this:
+  `parse_redirect` only ever needed the LAST statement's cwd, and `_follow_cd`
+  REFUSED a `cd ~/x` as dynamic. The refusal is right for a redirect (a
+  wrong-but-existing target replays a whole file into the mirror as command
+  output) and wrong here (a wrong path just fails `isfile` and records nothing) —
+  and `cd ~/wiki/01 && …` is how every real vault read is spelled, so refusing it
+  would refuse the feature. Hence the `tilde` flag: ONE implementation, one
+  declared difference, named at its owner. `~user` stays dynamic.
+- **Every statement, every token, all files.** `cat a.md b.md c.md` records three
+  notes; a read in a non-final statement is not lost.
+- **A bare basename** (`find . -name "x.md" -exec cat {} \;` names the note without
+  its path) resolves through the vault's own name index — but ONLY when the
+  statement runs inside the vault, so a repo's `README.md` can't be answered with a
+  same-named note.
+- **A reader must be present** somewhere in the statement (`cat`/`head`/`sed`/`grep`/
+  `bat`/`glow`/… — checked across the whole token list, since the reader is
+  routinely not the first word: `find … -exec cat`, `xargs cat`, `| head`). Naming
+  a note is not reading it: `ls`/`rm`/`git add` record nothing. The set is
+  deliberately WIDER than `tools._WHOLE_READERS` — those exclude `bat`/`glow`
+  because the mirror can't re-render their styled output, but a note read through
+  `glow` is just as much a recall.
+- **`qmd get`/`multi-get`** are note reads too, resolved against the COLLECTION root
+  (with the `qmd://…` URL and `:from:count` window forms), which is not the shell's
+  cwd — hence their own resolver.
+
+**Deliberately out of scope: writes.** A Bash write into the vault (`cat >
+note.md <<EOF`, `>>`, `tee`, `mv`) is not recorded; the plane is reads and searches
+only. A token scan cannot tell a read from a write without a second grammar, and
+notes are in practice written with the Write/Edit tools, which the file plane
+already covers.
+
+**The `resolve()` index had to get cheaper.** `memory.resolve()` used to be one
+scan that also OPENED AND READ every note to build the backlink map — fine for a
+long-lived dashboard, ruinous on the hook path, where a short-lived process would
+have read the whole vault to resolve one `find -name` basename and then exited
+before the cache paid off. It is now two indexes with two costs: `_scan_names`
+(a directory walk, opens nothing) behind `resolve()`, `_scan_links` behind
+`backlinks()`.
+
+**A side fix.** `_match_reader` matched `--include=*.md` as a markdown file, so
+`grep -ril pat ~/wiki/01/ --include=*.md` painted in the mirror as
+`Read(--include=*.md)` — a one-liner naming a file that does not exist, hiding a
+recursive search behind a read. A token starting with `-` is now never the file, in
+every render kind.
+
+## Memory searches (the qmd cards)
+
+A **search is the other half of recall, and it opens no note** — so however the
+note tree is built, a `qmd query "how does rscheck answer getstatus"` can never
+appear in it, yet it is exactly the moment the session asked memory a question. The
+tab therefore carries a second surface above the tree: one **expandable card per
+search**, newest first.
+
+**What is kept is the question AND the answer.** `memcmd.qmd_hits()` parses qmd's
+stdout at PostToolUse — which is the only place it exists, since a search writes no
+file — into the ranked result blocks:
+
+```
+qmd://wiki01/platform/concepts/rscheck-healthcheck.md:13 #000b85
+Title: rscheck — what actually answers `/getstatus:81` on a cloud service
+Score:  86%
+
+@@ -12,4 @@ (11 before, 54 after)
+<the matched passage>
+```
+
+giving `{path, rel, name, line, title, score, snippet}` per hit, plus — for a `qmd
+query`, which expands before searching — the **`lex:`/`vec:`/`hyde:` lines the LLM
+rewrote the question into**, which is what the search actually asked as opposed to
+what was typed. `memory.record_search()` files it under the kv's `searches` list,
+keyed `(kind, sub, query)`: a rerun bumps `count` and REPLACES the hits (the
+freshest answer is the one that mattered), so a retried query doesn't fill the tab
+with near-duplicates. Bounded by `SEARCH_MAX`/`HITS_MAX`/`SNIPPET_CAP` — the kv is
+read whole on every tab poll, so it cannot grow with the session; past the cap the
+OLDEST search drops.
+
+**The parser is tolerant on purpose.** `| head -40` is the idiomatic way to run
+these, so the last block routinely arrives half-written — it is kept with whatever
+fields made it. A hit whose note has since been renamed or deleted keeps its row
+(qmd's index outlives the file, and the ANSWER is still what the session was told);
+the server stamps `viewable` so the client renders it un-clickable rather than as a
+dead link.
+
+**Hits are not filed as note reads.** A search names notes it never opened, and
+recording them in `files` would fill the tree with notes nobody read. They live in
+the card, each clickable straight into the note viewer.
+
+**One search per command gets its answer.** qmd's output carries no marker saying
+which of two concatenated searches a result block belongs to, so when a command
+runs more than one, both queries are recorded WITHOUT hits rather than one being
+given the other's answer. Same for a BACKGROUND command: its bytes go to the
+tailer, never to the hook. The question is always the record.
+
+**Card UI.** Collapsed by default — a search's answer is five multi-line passages,
+and three open at once bury the note tree that is the tab's other half; the query
+line alone is the useful index. Expanded state is remembered per session across
+repaints, for the same reason the tree's folds are (the tab reloads on every
+`memory` SSE tick). The **badge counts notes PLUS searches** (`sessionapi.
+memory_count`), because a session that only searched — a very ordinary shape: ask
+qmd, read the passages, act — would otherwise wear a `0` over a tab with content in
+it; the client's own count agrees via the section descriptor's `count` hook.
+
+**On the mirror**, a vault-touching command carries ❖ on its block HEADER (not a
+one-liner — a command's memory-ness is a property of the whole block: the notes are
+named in the command, and the body ops belong to a tailer that knows nothing about
+the wiki), emitted by `cmd_pre.py`, which owns the header op. The header's `mem`
+value is the **flavour** — `1` a note read, `"search"` a vault search — which the
+page words differently in a collapsed run's summary: *recalled 3 memories* vs
+*queried 2 memories* (`VIEW_FRAGMENTS`' `mem-read`/`mem-search`). A command that
+does both counts as a read: opening the note is the stronger act.
+
 ## Stream item kinds
 
 The session view's mirror tab carries a **view bar** directly above the stream
@@ -6200,8 +6351,9 @@ it), which replaced the page's own `CMD_GLYPH = /^\s*[▶▷◉■]/` regex over
 rendered chip text: same answer, but the glyph table has one owner and it is
 server-side. A block still upgrades to `agents` on an outer-gutter `.og` wrapper (a
 subagent's nested job), and the upgrade stays monotonic. Ungrouped items classify
-by item type: `msg` items are `messages`, memory-wiki file ops (they carry
-`data-mem` — the ❖ marker, checked first) are `memory`, other file-op one-liners
+by item type: `msg` items are `messages`, memory-wiki ops (they carry
+`data-mem` — the ❖ marker, checked first; a file op carries it on its one-liner, a
+vault-touching COMMAND on its block header) are `memory`, other file-op one-liners
 (they carry a `data-v` click-to-view id) are `files`, the rest `commands`.
 
 ## View modes (verbose · default · focus)

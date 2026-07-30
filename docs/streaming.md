@@ -208,6 +208,23 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
   eats the first newline, which used to weld the `}` onto the last line — a
   syntax error for a command that ran fine unwrapped), or the command's own
   redirect target if it already has one — emits the `▶ foreground` header
+  <br><br>
+  **The rewrite is what every LATER consumer sees.** `updatedInput` replaces the
+  command, so from that point on the `tool_input.command` in the `PostToolUse`
+  payload — and in the audit's stored payload — is the WRAPPED text, not what the
+  model asked for. Any Post-side reader of the command string has to undo that
+  first, which is why the wrapper is a **pair with one owner**: `tools.tee_wrap`
+  builds it, `tools.unwrap_tee` reverses it (exactly — a command that merely starts
+  with `{` is returned untouched, so it can be applied blind). The cost of not
+  knowing this is silent and total: the memory feature's Bash plane
+  ([dashboard.md](dashboard.md) *Memory: the Bash plane*) parses that command to
+  find which wiki notes a session read, and `{ cd ~/wiki/01 && cat …` tokenises
+  with `{` as the first word — which makes the static `cd` tracking refuse the
+  statement and every relative path under it unresolvable. Replayed against a real
+  session it found **2 of 10 reads and 0 of 2 searches**, and the two survivors
+  were only the commands `cmd_pre` had declined to rewrite. Nothing errored.
+  <br><br>
+  Continuing: it
   immediately, claims an `fg.<n>` slot (so the tab tracker sees it — [tab-colors.md](tab-colors.md)), and
   spawns `claude-stream.py fg` to tail `$F` the same way a background job is
   tailed. `claude-cmd-fmt.py`'s `PostToolUse` handler is the only place the real

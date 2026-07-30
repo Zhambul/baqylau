@@ -135,7 +135,8 @@ class Renderer:
 
     # --- small line/block builders ------------------------------------------
 
-    def chip(self, glyph, kind, ctx="", g=None, lk=None, web=False, note=None):
+    def chip(self, glyph, kind, ctx="", g=None, lk=None, web=False, note=None,
+             mem=False):
         # ctx (e.g. "ctx 42% · 84k/200k") rides in the chip header for the first op of a
         # turn, rather than on its own gutter line below it. g ties a block's header + its
         # code/gut body ops into one ⧉ copy group — a tool_use_id for commands, else a
@@ -144,7 +145,8 @@ class Renderer:
         # blocks (core/copy.py), just double-guttered here. Shape shared with the codex
         # stream via core/streamfmt.py; the model tag + ctx ride as trailing tags.
         return SF.chip(self.label, glyph, kind, self.rgb,
-                       tags=(self._op_tag(), ctx), g=g, lk=lk, web=web, note=note)
+                       tags=(self._op_tag(), ctx), g=g, lk=lk, web=web, note=note,
+                       mem=mem)
 
     def gutter(self, text, g=None, web=False):
         return SF.gutter(text, self.rgb, g=g, web=web)
@@ -341,11 +343,25 @@ class Renderer:
 
     def _use_bash(self, name, inp, tid, ctx):
         cmd = inp.get("command", "")
+        # An agent's shell command runs the same OBSERVER command plane as the
+        # lead's (fileobs.cmd_matches — memory the one row; the cwd default is this
+        # tailer's cwd = the session dir, as for its file ops). The marker + `mem`
+        # flag ride the block HEADER here, because a command's memory-ness is a
+        # property of the whole block; the kv snapshot happens at the RESULT, which
+        # is where this transcript reveals the output a search's answer lives in.
+        obs = FOBS.cmd_matches(cmd)
+        kind = "".join("  " + R.DIM + o.mark + RST for o in obs)
+        mem = FOBS.cmd_mem_flag(cmd, None, obs)
         if inp.get("run_in_background"):
-            O.emit(self.log, self.chip("▷", "background", ctx, g=tid), O.code(cmd, g=tid))
+            O.emit(self.log, self.chip("▷", "background" + kind, ctx, g=tid, mem=mem),
+                   O.code(cmd, g=tid))
+            # A backgrounded command's output never reaches this transcript, so its
+            # record is taken NOW, without one (same trade as the lead's bg path).
+            self._observe(cmd, "")
             self.pend[tid] = ("bg", cmd)
         else:
-            O.emit(self.log, self.chip("▶", "foreground", ctx, g=tid), O.code(cmd, g=tid))
+            O.emit(self.log, self.chip("▶", "foreground" + kind, ctx, g=tid, mem=mem),
+                   O.code(cmd, g=tid))
             rec = self._take_subfg(tid) if (self.sub_fg and tid) else None
             if rec and self._spawn_fg_tailer(tid, rec, cmd):
                 # A live fg tailer now owns this command's OUTPUT + finish chip; we
@@ -354,6 +370,14 @@ class Renderer:
                 self.pend[tid] = ("fg-live", cmd)
             else:
                 self.pend[tid] = ("fg", cmd)
+
+    def _observe(self, cmd, output):
+        """Run the OBSERVER command plane's RECORD half for one of this agent's Bash
+        calls, attributed to it (`agent=self.agent` — the Memory tab is team-wide,
+        unlike the mirror block). The lead's twin is cmd_fmt._observe; both run after
+        the block's emit, and the record functions are parked-guarded."""
+        for o in FOBS.cmd_matches(cmd):
+            o.cmd_record(self.log, cmd, None, output, self.agent)
 
     def _use_file(self, name, inp, tid, ctx):
         # Defer to the result: absolute line info — a Read's EXTENT
@@ -461,12 +485,13 @@ class Renderer:
         # feed the team-wide command tally, exactly as the plain fg path does below.
         rec = self.fg_live.pop(tid, None)
         err = bool(b.get("is_error"))
+        body = result_text(b.get("content")).rstrip("\n")
         if rec:
-            body = result_text(b.get("content")).rstrip("\n")
             fb = R.emphasize(R.unescape(cap(body, CAP_BODY))) if body else R.DIM + "(no output)" + RST
             if S.hand_put(self.log, "done:" + rec["done"], {"failed": err, "fallback_body": fb}):
                 A.state_file(self.log, "state:done:" + rec["done"], "write", {"failed": err})
         O.bump(self.log, tool="Bash", commands=1, **({"failed": 1} if err else {}))
+        self._observe(cmd, body)             # the memory kv record (see _use_bash)
 
     def _res_job(self, kind, cmd, b, tur, tid):
         txt = result_text(b.get("content"))
@@ -509,6 +534,7 @@ class Renderer:
             # render_file). Count every foreground Bash call + its failure, exactly as
             # _render_finished does for the lead.
             O.bump(self.log, tool="Bash", commands=1, **({"failed": 1} if err else {}))
+            self._observe(cmd, body)         # the memory kv record (see _use_bash)
 
     # pend kind -> result handler; anything else (fg / other) is a body render.
     # `monitor` is SILENT on both halves — monitor_fmt.py owns an agent's monitor

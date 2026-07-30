@@ -20,6 +20,7 @@ from core import render as R
 from core import slots as claude_slots
 from core import state as S
 from core import streamfmt as SF
+from plugins.claude_code import fileobs as FOBS
 from plugins.claude_code import hookkit as H
 from plugins.claude_code import tools as CT
 
@@ -40,6 +41,29 @@ def _combined_output(tr):
     out = tr.get("stdout", "") if isinstance(tr, dict) else str(tr)
     err = tr.get("stderr", "") if isinstance(tr, dict) else ""
     return (out + (("\n" + err) if err else "")).rstrip("\n")
+
+
+def _observe(d, cmd, output, obs=None):
+    """Run the OBSERVER command plane over a finished Bash command and return its
+    audit-decision fragments (fileobs.cmd_matches — the memory wiki is the one row;
+    docs/dashboard.md *Memory searches*). PostToolUse is where this belongs because
+    the OUTPUT is half the record: a `qmd query` reads no file, and its answer —
+    the ranked notes it came back with — exists nowhere but here. The mirror-side
+    marker is cmd_pre's half (it owns the header op).
+
+    `obs` is passed by a caller that already matched (it needed the marks); the
+    default matches here. Runs after the block's own emit, like the file plane —
+    the record functions are parked-guarded and never create the state DB."""
+    obs = FOBS.cmd_matches(cmd, d.get("cwd")) if obs is None else obs
+    frags = []
+    for o in obs:
+        frags += list(o.cmd_record(LOG, cmd, d.get("cwd"), output, None) or ())
+    return frags
+
+
+def _obs_note(frags):
+    """Observer fragments as an audit-decision suffix ('' when nothing recorded)."""
+    return "".join(" +" + f for f in frags)
 
 
 def _spawn_stream(kind, taskid, slot, src=None, skip_existing=False, group=None,
@@ -152,8 +176,18 @@ def _render_background(d, cmd, taskid, converted, done):
         O.emit(LOG, O.label("▷ backgrounded (ctrl+b) — continuing below", LBL_BG,
                             g=taskid))
     else:
-        O.emit(LOG, O.blank(), O.rule(), O.label("▷ background", head_rgb, g=taskid),
+        # OBSERVER command plane, same as the foreground paths — but with NO output:
+        # a background command's bytes go to the tailer, not to this hook, so a
+        # backgrounded `qmd query` records its QUESTION with no hits (the notes it
+        # reads are named in the command and are recorded normally). Deliberately
+        # not chased into the tailer: a bg vault search is a shape nobody runs.
+        obs = FOBS.cmd_matches(cmd, d.get("cwd"))
+        head = "▷ background" + "".join("  " + R.DIM + o.mark + R.RST for o in obs)
+        O.emit(LOG, O.blank(), O.rule(),
+               O.label(head, head_rgb, g=taskid,
+                       mem=FOBS.cmd_mem_flag(cmd, d.get("cwd"), obs)),
                O.code(cmd, g=taskid), O.rule())
+        _observe(d, cmd, "", obs)
 
     O.bump(LOG, tool="Bash", commands=1)     # count it; the streamer owns its finish
     if taskid:
@@ -236,11 +270,19 @@ def _render_finished(d, tr, cmd, live, done):
             A.error(LOG, "write done handoff", {"done": done})
             live = None    # couldn't hand off -> fall through to the normal render below
 
+    # OBSERVER command plane (fileobs — the memory wiki is the one row). On the LIVE
+    # path cmd_pre already marked the header and this call only adds the kv record;
+    # when we render the whole block here (cmd_pre skipped it, or the command failed)
+    # this is also where the ❖ marker and the header's `mem` flag come from.
+    obs = FOBS.cmd_matches(cmd, d.get("cwd"))
     if not live:
         gid = d.get("tool_use_id") or None      # ⧉ copy links: this block's group
-        O.emit(LOG, *SF.command_block(cmd, gut_body, chip_txt, col, gid))
+        head = "▶ foreground" + "".join("  " + R.DIM + o.mark + R.RST for o in obs)
+        O.emit(LOG, *SF.command_block(cmd, gut_body, chip_txt, col, gid, head=head,
+                                      mem=FOBS.cmd_mem_flag(cmd, d.get("cwd"), obs)))
+    frags = _observe(d, cmd, body, obs)
     A.hook_event(d, decision=("handed off to fg tailer: " if live else "rendered: ")
-                 + chip_txt)
+                 + chip_txt + _obs_note(frags))
 
     # Update the session scoreboard. claude-scorebar.py (its own small window under
     # the mirror) refreshes off this sidecar bump — nothing is emitted into the log.
@@ -325,18 +367,25 @@ def _render_read(d, cmd, output, spec, path, reader):
     line = SF.file_line("Read", disp, O.BLUE)
     if reader:
         line += "  " + R.DIM + reader + R.RST
+    # OBSERVER command plane (fileobs — memory the one row): this one-liner IS the
+    # whole block, so its marker rides the line like a file op's, and the `mem` flag
+    # goes on the `line` op rather than a header (there is none).
+    obs = FOBS.cmd_matches(cmd, d.get("cwd"))
+    for o in obs:
+        line += "  " + R.DIM + o.mark + R.RST
     gid = d.get("tool_use_id") or None
     vid = None
     if gid:
         line, vid = _stash_read_view(LOG, gid, name, cmd, output, spec, line)
-    O.emit(LOG, O.line(line, view=vid))
+    O.emit(LOG, O.line(line, view=vid, mem=bool(obs)))
     # It is still a Bash command — count it as one (not a file read), matching how
     # the normal foreground path bumps. The OTLP receiver owns token/cost.
     O.bump(LOG, tool="Bash", commands=1)
+    frags = _observe(d, cmd, output, obs)
     A.hook_event(d, decision="rendered as Read (%s): Read(%s) via %s"
                  % (spec.kind, name, reader or "<stdin>")
                  + (f" [{loc}]" if loc else "")
-                 + (" +view" if vid else ""))
+                 + (" +view" if vid else "") + _obs_note(frags))
 
 
 def entry():

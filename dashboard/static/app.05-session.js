@@ -1035,6 +1035,11 @@ const VIEW_FRAGMENTS = [
   ["mail", "passing", "passed", "message", "messages"],
   ["mem-read", "recalling", "recalled", "memory", "memories"],
   ["mem-write", "writing", "wrote", "memory", "memories"],
+  // a vault SEARCH — the qmd queries the session asked memory (docs/dashboard.md
+  // *Memory searches*). Its own fragment because it is not a read: no note was
+  // opened, a question was answered, and "recalled 2 memories" for two searches
+  // that opened nothing would overstate what happened.
+  ["mem-search", "querying", "queried", "memory", "memories"],
 ];
 
 // Claude Code counts a Write as an edit (one `editFileCount` over its whole
@@ -1071,15 +1076,32 @@ const VIEW_ELAPSED_MIN_S = 2;
 const VIEW_FILL_TRIES = 3;
 const VIEW_FILL_MIN = 15;
 
-// Which counter one item feeds: its activity class, with memory-wiki file ops
-// (the ❖ ops, `data-mem`) routed to the memory fragments — Claude Code words
-// those as "recalled"/"wrote memories" rather than file reads and edits.
+// Which counter one item feeds: its activity class, with memory-wiki ops (the ❖
+// ops, `data-mem`) routed to the memory fragments — Claude Code words those as
+// "recalled"/"wrote memories" rather than file reads and edits.
+//
+// A `bash` act can be a memory op too (most vault recall is a shell command —
+// `cat`, `find -exec cat`, `qmd`), and it counts as a RECALL rather than as a
+// shell command: what the reader wants to know is that the session consulted
+// memory, not that it ran a process. The two flavours come from the served
+// `data-mem` VALUE (core/ops.label) — "search" asked a question, "1" opened a
+// note — because after collapsing there is nothing else left to tell them apart.
 function viewCounter(elem) {
   const act = elem.dataset.act || "";
   const mem = elem.dataset.kind === "memory";
-  if (mem && act === "read") return "mem-read";
+  if (mem && memFlavour(elem) === "search") return "mem-search";
+  if (mem && (act === "read" || act === "bash")) return "mem-read";
   if (mem && (act === "edit" || act === "write")) return "mem-write";
   return VIEW_COUNTER[act] || act;
+}
+
+// The memory flavour an item's ops carry ("1" | "search" | ""), from whichever op
+// stamped it (the item is the block; the flag rides its header or its one-liner).
+function memFlavour(elem) {
+  const own = elem.dataset.mem;
+  if (own) return own;
+  const node = elem.querySelector("[data-mem]");
+  return node ? (node.dataset.mem || "") : "";
 }
 
 // Whether a reply reads as a BOOKKEEPING REPORT rather than an answer: it

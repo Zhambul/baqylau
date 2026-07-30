@@ -18,17 +18,128 @@ function noteOpen() {
 
 /* ---------- memory tab (the memory-wiki notes a session touched) ---------- */
 
-/* Paint the memory tab body: the note tree, or the note viewer when a note
-   (or a followed [[wikilink]]) is open. */
+/* Paint the memory tab body: the search cards + the note tree, or the note viewer
+   when a note (or a followed [[wikilink]]) is open. */
 function paintMemory() {
   const ses = S.ses;
   if (!ses || !ses.body || ses.tab !== "memory") return;
   resetBody();
   if (ses.noteTrail && ses.noteTrail.length) { renderNoteView(); return; }
+  const searches = el("div", "memsearches");
+  ses.memSearchWrap = searches;
+  ses.body.append(searches);
+  renderMemorySearches();
   const wrap = el("div", "memtree");
   ses.memWrap = wrap;
   ses.body.append(wrap);
   renderMemoryTree();
+}
+
+/* ---------- the search cards (docs/dashboard.md *Memory searches*) ----------
+   A vault SEARCH is the other half of recall, and it opens no note — so it can't
+   appear in the tree below however the tree is built. Each card is one question
+   the session asked memory (`qmd query|search|vsearch`), collapsed to its query
+   line, expanding to the answer it got back: the ranked note hits with their
+   titles, scores and matched passages, plus (for a `query`) the lex/vec/hyde
+   lines the LLM expanded it into. Newest first, like the mirror's own feed.
+
+   Collapsed BY DEFAULT, deliberately: a search's answer is five multi-line
+   passages, and three of those open at once bury the note tree that is the tab's
+   other half. The query alone is the useful index — you open the one you want. */
+function renderMemorySearches() {
+  const ses = S.ses;
+  if (!ses || !ses.memSearchWrap) return;
+  const host = ses.memSearchWrap;
+  host.textContent = "";
+  const rows = ses.memSearch || [];
+  if (!rows.length) return;                 // no header over nothing
+  const head = el("div", "memsechead");
+  head.append(el("span", "n", rows.length + (rows.length === 1 ? " search" : " searches")));
+  host.append(head);
+  rows.forEach((s, i) => host.append(memSearchCard(s, i)));
+}
+
+function memSearchCard(s, idx) {
+  const open = memSearchOpen().has(searchKey(s, idx));
+  const card = el("div", "memsearch" + (open ? " open" : ""));
+  const head = el("div", "mshead");
+  head.append(el("span", "mstw", open ? "▾" : "▸"));
+  head.append(el("span", "mskind", (s.kind || "qmd") + " " + (s.sub || "query")));
+  head.append(el("span", "msq", s.query || ""));
+  const meta = el("span", "msmeta");
+  const hits = (s.hits || []).length;
+  if (hits) meta.append(el("span", "mshits", hits + " hits"));
+  if (s.agent) meta.append(el("span", "memagent", "⇢ " + s.agent));
+  if (s.count > 1) meta.append(el("span", "memcount", "×" + s.count));
+  head.append(meta);
+  head.title = (open ? "collapse" : "expand") + " — " + (s.query || "");
+  head.onclick = () => toggleMemSearch(searchKey(s, idx));
+  card.append(head);
+  if (open) card.append(memSearchBody(s));
+  return card;
+}
+
+function memSearchBody(s) {
+  const body = el("div", "msbody");
+  if (s.expanded && s.expanded.length) {
+    const exp = el("div", "msexp");
+    exp.append(el("div", "lbl", "expanded to"));
+    for (const line of s.expanded) exp.append(el("div", "msexpl", line));
+    body.append(exp);
+  }
+  const hits = s.hits || [];
+  if (!hits.length) {
+    // A search whose answer we don't have: qmd's output was truncated past its
+    // results, or the command ran several searches at once (memcmd.record won't
+    // file one query's results under another). The question is still the record.
+    body.append(el("div", "empty", "no results captured for this search"));
+    return body;
+  }
+  for (const h of hits) body.append(memSearchHit(h));
+  return body;
+}
+
+function memSearchHit(h) {
+  const row = el("div", "mshit" + (h.viewable ? " live" : ""));
+  const top = el("div", "mshtop");
+  if (h.score) top.append(el("span", "msscore", h.score));
+  top.append(el("span", "mshname", h.name || h.rel || "?"));
+  if (h.line) top.append(el("span", "mshline", ":" + h.line));
+  row.append(top);
+  if (h.title) row.append(el("div", "mshtitle", h.title));
+  if (h.rel) row.append(el("div", "mshrel", h.rel));
+  if (h.snippet) row.append(el("pre", "mshsnip", h.snippet));
+  if (h.viewable) {
+    // Same gesture as a tree row: the hit opens the note in the viewer, which is
+    // the whole point of showing which notes answered — the passage is a taste.
+    top.title = "open " + (h.rel || h.name);
+    row.onclick = () => openNoteRef({ path: h.path }, true);
+  }
+  return row;
+}
+
+/* A stable identity for the open/closed set: the query itself (what the card IS),
+   with the index as the tiebreak for the pathological same-query-twice case the
+   kv's own (kind, sub, query) dedup should already have folded. */
+function searchKey(s, idx) {
+  return (s.kind || "") + "|" + (s.sub || "") + "|" + (s.query || "") + "|" + idx;
+}
+
+/* Which cards are expanded. Per session and kept across repaints, for exactly the
+   reason the folder folds are (memShut): the tab reloads on every `memory` SSE
+   tick, and a card that snapped shut under your hand each time the session
+   touched a note would be worse than one that never opened. */
+function memSearchOpen() {
+  const ses = S.ses;
+  if (!ses.memSearchShown) ses.memSearchShown = new Set();
+  return ses.memSearchShown;
+}
+
+function toggleMemSearch(key) {
+  const open = memSearchOpen();
+  if (open.has(key)) open.delete(key);
+  else open.add(key);
+  renderMemorySearches();
 }
 
 /* The touched notes in the VAULT's own folder structure (server-built —
@@ -41,7 +152,12 @@ function renderMemoryTree() {
   ses.memWrap.textContent = "";
   const root = ses.memTree;
   if (!root || !root.count) {
-    ses.memWrap.append(el("div", "empty", "no memory notes touched in this session"));
+    // Say "notes" specifically: with search cards above, a bare "no memory" over a
+    // tab that visibly HAS memory in it would read as a bug.
+    if (!(ses.memSearch || []).length)
+      ses.memWrap.append(el("div", "empty", "no memory notes touched in this session"));
+    else
+      ses.memWrap.append(el("div", "empty", "no notes opened — only searched"));
     return;
   }
   ses.memWrap.append(memSummary(root));
@@ -218,7 +334,8 @@ extRegister({
   scoped: false,                // session-wide: a note is the TEAM's (no agent dimension)
   // the extension's per-session state slots (showSession stamps them via init)
   init: (ses) => Object.assign(ses, { memory: null, memTree: null,
-                                      memShut: new Set(),
+                                      memSearch: null, memShut: new Set(),
+                                      memSearchShown: new Set(),
                                       noteTrail: null, noteFocus: null }),
   body: (ses, body) => {
     if (!ses.memory) body.append(el("div", "empty", "loading memory…"));
@@ -226,10 +343,16 @@ extRegister({
     loadSection("memory");
   },
   section: {
-    // the flat list stays the badge's authority; the FOLDER TREE beside it in
-    // the same payload is what the tab renders (server-computed — the vault's
-    // own structure, docs/dashboard.md *Memory tab*)
-    stash: (ses, d) => { ses.memTree = d.tree || null; },
+    // the FOLDER TREE and the SEARCH cards, both server-computed, beside the flat
+    // note list in the same payload (docs/dashboard.md *Memory tab* / *Memory
+    // searches*)
+    stash: (ses, d) => {
+      ses.memTree = d.tree || null;
+      ses.memSearch = d.searches || [];
+    },
+    // the badge counts notes AND searches — the same sum the server's
+    // memory_count serves, so the eager number and the fetched one agree
+    count: (ses) => (ses.memory || []).length + (ses.memSearch || []).length,
     // the tree repaints only when it is the thing on screen — an open note
     // viewer stays put while the list refreshes underneath it
     repaint: () => { if (!noteOpen()) paintMemory(); },

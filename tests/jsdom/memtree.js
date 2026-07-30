@@ -1,6 +1,7 @@
-// tests/jsdom/memtree.js — drives the REAL memory-tab TREE renderer
-// (renderMemoryTree/memDir/memNote/toggleMemDir in dashboard/static/
-// app.11-chrome.js) over the shared DOM shim, and prints one JSON verdict
+// tests/jsdom/memtree.js — drives the REAL memory-tab renderers (the TREE:
+// renderMemoryTree/memDir/memNote/toggleMemDir; and the SEARCH CARDS:
+// renderMemorySearches/memSearchCard/toggleMemSearch — dashboard/static/
+// app.11-ext-memory.js) over the shared DOM shim, and prints one JSON verdict
 // object that test_l0_dash_viewmode.py asserts on.
 //
 // Why this exists: the memory tab used to be a flat card list, and its render
@@ -146,5 +147,88 @@ out.empty = rows(bare);
 const none = freshSes(null);
 sandbox.renderMemoryTree();
 out.noTree = rows(none);
+
+
+/* ---------- the SEARCH cards (docs/dashboard.md *Memory searches*) ----------
+   A search opens no note, so it can never appear in the tree above — the cards
+   are the only surface it has. What is not greppable: a card starts COLLAPSED
+   (three open answers bury the tree), the expanded set survives the repaint the
+   `memory` SSE fires on every touched note, and a hit whose note is gone must
+   render as a row rather than a dead link. */
+const SEARCHES = [
+  { kind: "qmd", sub: "query", query: "how does rscheck answer getstatus",
+    count: 1, agent: null,
+    expanded: ["lex: how rscheck returns", "vec: getstatus in rscheck"],
+    hits: [
+      { rel: "platform/concepts/rscheck-healthcheck.md", name: "rscheck-healthcheck",
+        line: 13, score: "86%", title: "rscheck — what answers /getstatus:81",
+        snippet: "Documented in the internal docs repo.", path: "/w/a.md",
+        viewable: true },
+      { rel: "platform/concepts/gone.md", name: "gone", line: null, score: "41%",
+        title: "", snippet: "", path: "", viewable: false },
+    ] },
+  { kind: "qmd", sub: "search", query: "manifest started healthcheck",
+    count: 2, agent: "note-writer", expanded: [], hits: [] },
+];
+
+function freshSearchSes(searches) {
+  const wrap = new El("div", "memsearches");
+  const ses = { tab: "memory", body: new El("div"),
+                memWrap: new El("div", "memtree"), memTree: null,
+                memSearchWrap: wrap, memSearch: searches,
+                memSearchShown: new Set(), memShut: new Set(),
+                memory: [], noteTrail: null };
+  sandbox.S.ses = ses;
+  return ses;
+}
+
+/* Each card as (class, its head line, the body lines under it) — a collapsed
+   card has no body at all, which is the thing being asserted. */
+function cards(ses) {
+  return ses.memSearchWrap.children.slice(1).map(c => ({
+    cls: c.className,
+    head: c.children[0].textContent,
+    body: c.children.length > 1
+      ? c.children[1].children.map(x => ({ cls: x.className, text: x.textContent }))
+      : null,
+  }));
+}
+
+const sses = freshSearchSes(SEARCHES);
+sandbox.renderMemorySearches();
+out.searchHead = sses.memSearchWrap.children[0].textContent;
+out.searchCollapsed = cards(sses);
+
+// open the first card — the question's ANSWER appears under it
+sandbox.toggleMemSearch(sandbox.searchKey(SEARCHES[0], 0));
+out.searchOpen = cards(sses);
+
+// …and the `memory` SSE repaint must not snap it shut
+sandbox.renderMemorySearches();
+out.searchAfterRepaint = cards(sses);
+
+// a hit whose note still exists opens it; the vanished one has no handler
+const card = sses.memSearchWrap.children[1];
+const hits = card.children[1].children.filter(x => x.className.startsWith("mshit"));
+out.hitClasses = hits.map(h => h.className);
+opened.length = 0;
+hits[0].onclick();
+out.hitOpened = opened.slice();
+out.deadHitHasHandler = !!hits[1].onclick;
+
+// a search with no captured answer says so rather than showing an empty card
+sandbox.toggleMemSearch(sandbox.searchKey(SEARCHES[1], 1));
+out.searchNoHits = cards(sses)[1].body;
+
+// no searches at all → no header over nothing
+const nosearch = freshSearchSes([]);
+sandbox.renderMemorySearches();
+out.noSearches = nosearch.memSearchWrap.children.length;
+
+// the tree's empty line changes wording when there ARE searches — a bare "no
+// memory" over a tab that visibly has memory in it reads as a bug
+const onlySearched = freshSearchSes(SEARCHES);
+sandbox.renderMemoryTree();
+out.treeEmptyWithSearches = rows(onlySearched)[0].text;
 
 process.stdout.write(JSON.stringify(out, null, 1));

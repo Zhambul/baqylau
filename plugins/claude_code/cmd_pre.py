@@ -20,11 +20,13 @@
 # the main loop, which always awaits one Bash call's Pre->exec->Post cycle before
 # starting the next, but not for concurrent subagents — those keep the old bundled
 # rendering (already excluded below via the agent_id check, same as claude-cmd-fmt.py).
-import json, os, shlex, time
+import json, os, time
 
 from core import ops as O
+from core import render as R
 from core import slots as claude_slots
 from core import state as S
+from plugins.claude_code import fileobs as FOBS
 from plugins.claude_code import hookkit as H
 from plugins.claude_code import tools as CT
 
@@ -37,13 +39,13 @@ HAND_RETRY_S = 0.1   # pause before the one fg-live hand_put retry (a transient
 
 
 def _tee_wrap(cmd, src):
-    # Wrap `cmd` so its stdout/stderr ALSO tee into `src` (the live-tail file).
-    # The blank line before "}" is load-bearing: a command ENDING in a
-    # line-continuation backslash consumes the first newline, which used to
-    # weld the closing "}" onto the last line — a syntax error for a command
-    # that ran fine unwrapped. The extra newline gives it one to eat.
-    q = shlex.quote(src)
-    return "{ " + cmd + "\n\n} > >(tee -a " + q + ") 2> >(tee -a " + q + " >&2)"
+    # The tee wrapper's SHAPE lives in tools.py, with its inverse beside it: the
+    # rewrite goes out through `updatedInput`, so PostToolUse hands the WRAPPED
+    # command back to every consumer, and anything reading that command has to be
+    # able to get the user's own text out again (tools.unwrap_tee). Two sites
+    # spelling the same braces is exactly the drift the styleguide's single-owner
+    # rule is about — this shim keeps the historical local name.
+    return CT.tee_wrap(cmd, src)
 
 
 def _prepare_tee(cmd, stem, cwd):
@@ -236,13 +238,24 @@ def main():
             return                             # tailer will notice via its own backstop eventually
     A.state_file(log, "state:fg-live", "write", rec)
 
-    O.emit(log, O.blank(), O.rule(), O.label("▶ foreground", LBL_FG, g=gid),
+    # OBSERVER markers on the header (fileobs.cmd_matches — the memory wiki is the
+    # one row): the block's ❖ has to ride the HEADER because a command's memory-ness
+    # is a fact about the whole block — the notes it reads are named in the command,
+    # and the body ops belong to a tailer that knows nothing about the wiki. The
+    # kv snapshot is claude-cmd-fmt.py's half: it needs the command's OUTPUT (a
+    # search's answer exists nowhere else) and the state DB to already exist.
+    obs = FOBS.cmd_matches(cmd, d.get("cwd"))
+    head = "▶ foreground" + "".join("  " + R.DIM + o.mark + R.RST for o in obs)
+    O.emit(log, O.blank(), O.rule(),
+           O.label(head, LBL_FG, g=gid,
+                   mem=FOBS.cmd_mem_flag(cmd, d.get("cwd"), obs)),
            O.code(cmd, g=gid), O.rule())
     # (Any content-render mode the tailer picks is audited by the tailer itself —
     # the state_files "render:<taskid> start" row.)
     A.hook_event(d, decision="live fg stream: slot=%s tailer=%s %s"
                  % (slot, proc.pid, "rewrote command (tee)" if wrapped_cmd
-                    else "tailing command's own redirect"))
+                    else "tailing command's own redirect")
+                 + ("".join(" +" + o.key for o in obs) if obs else ""))
 
     if wrapped_cmd:
         _emit_updated_input(ti, wrapped_cmd)   # "allow" is deliberate — see the helper

@@ -49,7 +49,7 @@ def _effective(cmd):
     return stmt.strip()
 
 
-def _follow_cd(stmts, cwd):
+def _follow_cd(stmts, cwd, tilde=False):
     """Statically track the working directory across a command's LEADING
     statements, so a relative redirect target in the final statement resolves
     against the directory the command actually writes in (`cd build && make >
@@ -57,12 +57,26 @@ def _follow_cd(stmts, cwd):
     that never existed, and the mirror painted "output not found").
 
     Returns (cwd, known). known=False = some `cd` couldn't be resolved
-    statically — dynamic target (`cd "$DIR"`, `cd -`, `~`), subshell-scoped or
-    backgrounded (`(cd x)`, `cd x & …`), flags, or a quote-mangled statement
-    split — and the caller must then REFUSE a relative target (tee fallback)
-    rather than guess: tailing a wrong-but-existing file replays its whole
-    contents into the mirror as command output. A later ABSOLUTE `cd` restores
-    certainty; a relative `cd` on an unknown base stays unknown."""
+    statically — dynamic target (`cd "$DIR"`, `cd -`, `~` unless `tilde`),
+    subshell-scoped or backgrounded (`(cd x)`, `cd x & …`), flags, or a
+    quote-mangled statement split — and the caller must then REFUSE a relative
+    target (tee fallback) rather than guess: tailing a wrong-but-existing file
+    replays its whole contents into the mirror as command output. A later
+    ABSOLUTE `cd` restores certainty; a relative `cd` on an unknown base stays
+    unknown.
+
+    `tilde` is the ONE declared difference between this function's two callers,
+    and it exists because their COST of being wrong differs. `cd ~/x` is
+    perfectly deterministic (unlike `cd "$DIR"`) — but parse_redirect refuses it
+    (tilde=False, pinned by test_parse_redirect_untrackable_cd_bails_to_tee)
+    because a wrong-but-existing redirect target replays a whole file into the
+    mirror as command output, so there the conservative bail is worth losing a
+    resolvable form. The memory plane (memcmd.statement_cwds) passes tilde=True:
+    a wrong path there merely fails its own isfile() check and records nothing,
+    and EVERY vault read in the wild is spelled `cd ~/wiki/01 && …`, so refusing
+    the form would refuse the feature. Only `~` / `~/…` expand; `~user` stays
+    dynamic (expanduser leaves an unknown user untouched, which would then be
+    read as a relative path)."""
     known = True
     for st in stmts:
         try:
@@ -86,6 +100,8 @@ def _follow_cd(stmts, cwd):
         t = toks[1]
         if len(t) >= 2 and t[0] in ("'", '"') and t[-1] == t[0]:
             t = t[1:-1]                 # quotes are shell syntax, not the name
+        if tilde and (t == "~" or t.startswith("~/")):
+            t = os.path.expanduser(t)   # deterministic — see the `tilde` note above
         if not t or t.startswith("-") or t.startswith("~") \
                 or any(c in t for c in "$`*?["):
             known = False               # flags / `cd -` / expansion: dynamic
@@ -94,6 +110,71 @@ def _follow_cd(stmts, cwd):
         elif known:
             cwd = os.path.normpath(os.path.join(cwd, t))
     return cwd, known
+
+
+"""The LIVE-FG TEE WRAPPER, and its inverse.
+
+claude-cmd-pre.py rewrites a foreground command (via `updatedInput`) so its
+output ALSO tees into a side file the tailer follows — docs/streaming.md. The
+consequence is easy to forget and expensive to rediscover: from that moment on
+the command string EVERY later consumer sees is the WRAPPED one. PostToolUse's
+payload carries it, so a Post-side reader that wants to know what the command
+DID must undo the wrapper first.
+
+That cost real capture. The memory Bash plane (memcmd.py) analysed the payload
+command directly and found 2 of 10 vault reads on a replay of the session it was
+written for: `{ cd ~/wiki/01 && cat …` tokenises with `{` as the first word, so
+the static cd tracking below refuses the statement and every relative path under
+it goes unresolved. The two that DID record were the commands cmd_pre had
+declined to rewrite.
+
+Hence a PAIR, here, with one owner: tee_wrap builds it, unwrap_tee reverses it.
+unwrap_tee is exact rather than heuristic — it matches this wrapper and nothing
+else (a command that merely happens to start with `{` is returned untouched), so
+it can be applied unconditionally by any reader."""
+
+_TEE_TAIL = re.compile(
+    r"\n\n\} > >\(tee -a (?P<q>\S+)\) 2> >\(tee -a (?P=q) >&2\)\s*\Z")
+
+
+def tee_wrap(cmd, src):
+    """Wrap `cmd` so its stdout/stderr ALSO tee into `src` (the live-tail file).
+    The blank line before "}" is load-bearing: a command ENDING in a
+    line-continuation backslash consumes the first newline, which used to weld the
+    closing "}" onto the last line — a syntax error for a command that ran fine
+    unwrapped. The extra newline gives it one to eat."""
+    q = shlex.quote(src)
+    return "{ " + cmd + "\n\n} > >(tee -a " + q + ") 2> >(tee -a " + q + " >&2)"
+
+
+def unwrap_tee(cmd):
+    """`cmd` with the live-fg tee wrapper removed — the command the model actually
+    asked for. Returns `cmd` unchanged when it isn't wrapped (which includes every
+    PreToolUse payload, so a caller may apply it blind)."""
+    if not (cmd or "").startswith("{ "):
+        return cmd
+    m = _TEE_TAIL.search(cmd)
+    return cmd[2:m.start()] if m else cmd
+
+
+def statement_cwds(cmd, cwd, tilde=False):
+    """`cmd`'s statements paired with the directory each RUNS in:
+    [(statement, cwd_or_None), …] in order, None where a `cd` along the way could
+    not be tracked statically (see _follow_cd — the caller must then refuse to
+    resolve that statement's relative paths).
+
+    parse_redirect only ever needed the LAST statement's cwd; a consumer that
+    asks "which files does this command touch" needs every statement's, because
+    a read can sit anywhere in the chain (`cd ~/wiki/01 && cat a.md && cat b.md`
+    — keying off the last statement lost a.md, and off the hook cwd lost both).
+    Shell-shape knowledge, so it lives here with _statements/_follow_cd rather
+    than being re-derived by each consumer."""
+    stmts = _statements(cmd)
+    out = []
+    for i, st in enumerate(stmts):
+        base, known = _follow_cd(stmts[:i], cwd, tilde=tilde)
+        out.append((st, base if known else None))
+    return out
 
 
 def parse_redirect(cmd, cwd):
@@ -358,7 +439,16 @@ def _match_reader(cmd, match, readers, tailarg_readers):
     if "$(" in cmd:
         return None, None, None
     def _match(word):
-        return match(word.strip("'\"").lower())
+        w = word.strip("'\"")
+        # A FLAG is never the file, however it ends. `grep -ril pat ~/wiki/01/
+        # --include=*.md` matched `--include=*.md` as a markdown file and the
+        # mirror painted the whole recursive search as `Read(--include=*.md)` —
+        # a one-liner naming a file that does not exist, hiding a search behind
+        # a read. Checked here (not per-kind) because it is true of every kind's
+        # matcher: an argument starting with `-` is option syntax.
+        if w.startswith("-"):
+            return None
+        return match(w.lower())
     # `< file.ext` (with or without a leading command)
     if "<" in toks:
         i = toks.index("<")

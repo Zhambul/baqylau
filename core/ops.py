@@ -117,7 +117,7 @@ def rule():
 
 
 def label(s, c, outer=None, g=None, lk=None, web=False, note=None, mid=None,
-          who=None, tags=()):
+          who=None, tags=(), mem=False):
     o = {"t": "label", "s": s, "c": _rgb(c)}
     if who:
         o["who"] = str(who)
@@ -126,6 +126,15 @@ def label(s, c, outer=None, g=None, lk=None, web=False, note=None, mid=None,
         o["tags"] = tags
     if web:
         o["web"] = 1
+    if mem:
+        # This block touched memory (see line()'s `mem`) — carried by the HEADER
+        # here because a Bash block's memory-ness is a fact about the whole block:
+        # the notes are named in the command, not in any one-liner of their own,
+        # and the body ops are the command's raw output (a tailer's, which knows
+        # nothing about the wiki). The value is the memory FLAVOUR — "1" for a
+        # note read, "search" for a vault search — which is what lets the web
+        # word them differently ("recalled 3 memories" vs "queried 2 memories").
+        o["mem"] = 1 if mem is True else str(mem)
     if note:
         o["note"] = str(note)      # the web mirror's wording for this header
     if mid:

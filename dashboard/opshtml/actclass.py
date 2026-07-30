@@ -100,6 +100,21 @@ _STREAM_RGB = frozenset(tuple(c) for c in (SL.BG_PALETTE + SL.MON_PALETTE))
 # left that distinguishes a job you didn't wait for from one you did.
 _CMD_KIND_MUTE = "foreground"
 
+
+def _mute_kind(rest):
+    """A command header's text minus the muted kind word — but keeping anything the
+    producer appended AFTER it. What gets appended is an observer MARK (❖, a
+    memory-wiki read or search — plugins/claude_code/fileobs.py), and the quiet line
+    should keep saying that: it is the one thing about the block the command text
+    itself doesn't state. Matched as a PREFIX rather than by equality for exactly
+    that reason — the equality test alone put the word `foreground` back on screen
+    the moment a marker was added beside it."""
+    if rest == _CMD_KIND_MUTE:
+        return ""
+    if rest.startswith(_CMD_KIND_MUTE):
+        return rest[len(_CMD_KIND_MUTE):].strip()
+    return rest
+
 # Team mail + task rows: the glyphs are their PRODUCERS' vocabulary, imported
 # rather than spelled again (msgs.event_ops paints the mail chips, task_fmt the
 # task line). `◉` is shared with a monitor block's chip and is disambiguated by
@@ -541,7 +556,7 @@ def cmd_note(op):
             # view an agent's tool block is producer-source-stamped and dropped,
             # and pre-`src` history keeps its chip (nothing there says WHOSE call
             # it was except the colour).
-            return ("" if rest == _CMD_KIND_MUTE else rest), CQ_OPEN
+            return _mute_kind(rest), CQ_OPEN
         return None
     except Exception:
         return None                     # unreadable: keep the chip

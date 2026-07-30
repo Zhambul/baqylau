@@ -46,6 +46,7 @@
   --orange: #d19a66;
   --blue: #61afef;
   --amber: #d6995c;
+  --violet: #c678dd;              /* == core/ops.py VIOLET */
 
   /* the "/command" tint — ONE hue for both places a picked command is shown:
      the input-box overlay (.cmhlt) and the transcript prompt bubble (.cmdtok) */
@@ -2185,6 +2186,55 @@ html { touch-action: manipulation; }
   text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; }
 .memnote .memagent { color: var(--dim); font-size: 11px; flex: none; }
 .memnote .memcount { color: var(--dim2); font-size: 11px; flex: none; }
+
+/* ---------- memory SEARCH cards (the qmd queries a session ran) ----------
+   Above the tree, because a search is what came FIRST: you ask memory a
+   question, then open what it hands back. Each card is one collapsed query line
+   expanding to its ranked hits — same panel/hairline vocabulary as the tree, one
+   visible difference: the query line is the only row in the tab set in the UI
+   font at full weight, because it is a QUESTION SOMEONE ASKED and everything
+   else here is machinery. */
+.memsearches { display: flex; flex-direction: column; gap: 6px; }
+.memsechead { padding: 10px 2px 2px; font-size: 11px; color: var(--dim);
+  text-transform: uppercase; letter-spacing: .1em; }
+.memsearch { background: var(--panel); box-shadow: var(--card);
+  border-radius: var(--r); overflow: hidden; }
+.memsearch .mshead { display: flex; align-items: center; gap: 8px;
+  padding: 8px 14px 8px 8px; cursor: pointer; user-select: none; }
+.memsearch .mshead:hover { background: var(--panel2); }
+.memsearch .mstw { color: var(--dim2); font-size: 10px; width: 9px; flex: none; }
+.memsearch .mskind { color: var(--violet); font-family: var(--mono); font-size: 10px;
+  text-transform: uppercase; letter-spacing: .06em; flex: none;
+  padding: 1px 6px; border-radius: 999px;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--violet) 40%, transparent); }
+.memsearch .msq { color: var(--text); font-size: 13px; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; }
+.memsearch .msmeta { display: flex; gap: 8px; flex: none; font-size: 11px; }
+.memsearch .mshits { color: var(--dim); }
+.memsearch .msbody { border-top: 1px solid var(--hair); padding: 4px 0 6px; }
+.memsearch .msbody .empty { padding: 10px 16px; }
+.memsearch .msexp { padding: 8px 16px; border-bottom: 1px solid var(--hair); }
+.memsearch .msexp .lbl { font-size: 10px; color: var(--dim2);
+  text-transform: uppercase; letter-spacing: .1em; margin-bottom: 4px; }
+.memsearch .msexpl { color: var(--dim); font-family: var(--mono); font-size: 11px;
+  line-height: 1.5; }
+/* one hit: score + note name, its title, its vault path, its matched passage */
+.memsearch .mshit { padding: 8px 16px; border-bottom: 1px solid var(--hair); }
+.memsearch .mshit:last-child { border-bottom: 0; }
+.memsearch .mshit.live { cursor: pointer; }
+.memsearch .mshit.live:hover { background: var(--panel2); }
+.memsearch .mshtop { display: flex; align-items: baseline; gap: 8px; }
+.memsearch .msscore { color: var(--green); font-family: var(--mono); font-size: 11px;
+  flex: none; min-width: 30px; }
+.memsearch .mshname { color: var(--blue); font-size: 12px; font-family: var(--mono);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.memsearch .mshline { color: var(--dim2); font-size: 11px; flex: none; }
+.memsearch .mshtitle { color: var(--text-soft); font-size: 12px; margin-top: 2px; }
+.memsearch .mshrel { color: var(--dim2); font-family: var(--mono); font-size: 10px;
+  margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.memsearch .mshsnip { color: var(--dim); font-family: var(--mono); font-size: 11px;
+  line-height: 1.5; margin: 5px 0 0; padding: 6px 8px; background: var(--panel2);
+  border-radius: 4px; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 /* the note viewer */
 .note { background: var(--panel); box-shadow: var(--card); border-radius: var(--r);

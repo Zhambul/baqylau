@@ -902,6 +902,17 @@ function extRegister(d) {
 
 function extList() { return Object.values(EXT); }
 
+/* A section tab's badge from the FETCHED payload — the list's length, unless the
+   section declares its own `count` (memory does: its badge is notes PLUS vault
+   searches, two independent lists in one payload, and the SERVER's own
+   memory_count says the same). The two callers below — the poll's
+   setSectionCount and extTabs' initial build — must ask the same question, or a
+   tab's number changes the moment its first fetch lands. */
+function sectionCount(sec, ses) {
+  if (sec.count) return sec.count(ses);
+  return (ses[sec.list] || []).length;
+}
+
 function extPage(route) {
   return extList().find(x => x.page && x.page.route === route) || null;
 }
@@ -925,7 +936,7 @@ function extTabs(ses, meta, mk, anchor) {
     if (x.scopeField && !meta[x.scopeField]) continue;
     const sec = SECTIONS[x.name];
     ses[sec.tabEl] = mk(x.name, x.label || x.name,
-                        ses[sec.list] ? ses[sec.list].length
+                        ses[sec.list] ? sectionCount(sec, ses)
                                       : (meta[sec.countField] || 0));
   }
 }
@@ -1008,7 +1019,7 @@ function loadSection(kind) {
       S.ses.secRaw[kind] = raw;
       S.ses[sec.list] = d[sec.api] || [];
       if (sec.stash) sec.stash(S.ses, d);
-      setSectionCount(kind, S.ses[sec.list].length);
+      setSectionCount(kind, sectionCount(sec, S.ses));
       if (same) {
         // the list is what it was — leave the DOM alone; a job's OUTPUT can
         // still be growing (it lives in the ops, not this payload), so the

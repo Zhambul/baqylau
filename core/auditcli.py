@@ -699,6 +699,29 @@ ANOMALY_SECTIONS = [
      "AND (COALESCE(s.end_reason,'') != 'launched' "
      "OR NOT EXISTS (SELECT 1 FROM hook_events h WHERE h.session_id=s.session_id "
      "AND h.hook='SessionStart' AND h.ts > s.ended_at))", 1),
+    # The memory-wiki BASH plane's regression shape (docs/dashboard.md *Memory
+    # searches*). Most vault recall is a shell command, not a Read tool call —
+    # `cd ~/wiki/01 && cat platform/…md`, `find -name x.md -exec cat`, `qmd
+    # query "…"` — and for a year none of it reached the `memory` kv at all
+    # (session d8dc5a67: ten notes, two searches, zero records). The capture is
+    # memcmd.plan via the fileobs command plane, and every successful record
+    # writes a state_files row with action='memory'. So: Bash commands whose text
+    # names the vault, and NOT ONE memory row for the whole session.
+    #
+    # Matched on the LITERAL 'wiki/01' rather than on memory.root(): the payload
+    # holds whatever the model typed (`~/wiki/01/…`, the absolute path, or a
+    # relative path under a `cd`), and this query only has to be a good enough
+    # SMOKE ALARM to say "look at the Bash plane". Two benign firings: a session
+    # OUTSIDE aggregator-adapters (the feature is project-scoped, so no record is
+    # correct — check the sessions row's cwd first), and a command that merely
+    # MENTIONS the vault without reading a note (`ls ~/wiki/01`, a grep for
+    # filenames). Read it as a pointer, not a verdict.
+    ("Bash commands naming the memory wiki but NO memory records (Bash plane regressed)",
+     "SELECT MIN(h.ts), COUNT(*) FROM hook_events h WHERE h.session_id=? "
+     "AND h.handler='claude-cmd-fmt.py' "
+     "AND json_extract(h.payload,'$.tool_input.command') LIKE '%wiki/01%' "
+     "AND NOT EXISTS (SELECT 1 FROM state_files f WHERE f.session_id=h.session_id "
+     "  AND f.action='memory') HAVING COUNT(*) > 0", 1),
     lambda conn, section, sid: _section_otel_stranded(conn, section, sid),
 ]
 
