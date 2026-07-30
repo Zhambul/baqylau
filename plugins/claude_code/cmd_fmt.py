@@ -174,7 +174,7 @@ def _render_background(d, cmd, taskid, converted, done):
         else:
             A.error(LOG, "write converted handoff", {"done": done})
         O.emit(LOG, O.label("▷ backgrounded (ctrl+b) — continuing below", LBL_BG,
-                            g=taskid))
+                            g=taskid, act=O.ACT_BG))
     else:
         # OBSERVER command plane, same as the foreground paths — but with NO output:
         # a background command's bytes go to the tailer, not to this hook, so a
@@ -184,7 +184,7 @@ def _render_background(d, cmd, taskid, converted, done):
         obs = FOBS.cmd_matches(cmd, d.get("cwd"))
         head = "▷ background" + "".join("  " + R.DIM + o.mark + R.RST for o in obs)
         O.emit(LOG, O.blank(), O.rule(),
-               O.label(head, head_rgb, g=taskid,
+               O.label(head, head_rgb, g=taskid, act=O.ACT_BG,
                        mem=FOBS.cmd_mem_flag(cmd, d.get("cwd"), obs)),
                O.code(cmd, g=taskid), O.rule())
         _observe(d, cmd, "", obs)
@@ -400,7 +400,8 @@ def _render_read(d, cmd, output, spec, files, reader):
     vid = None
     if gid:
         line, vid = _stash_read_view(LOG, gid, names, cmd, output, spec, line)
-    O.emit(LOG, O.line(line, view=vid, mem=bool(obs), nfiles=len(files)))
+    O.emit(LOG, O.line(line, view=vid, mem=bool(obs), nfiles=len(files),
+                       act=O.ACT_READ))
     # It is still a Bash command — count it as one (not a file read), matching how
     # the normal foreground path bumps. The OTLP receiver owns token/cost. Each file
     # IS fed to the scoreboard's UNIQUE-path `files` set though: the command read

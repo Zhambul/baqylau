@@ -184,7 +184,7 @@ def sent_ops(frm, to, summ, text, mid, log=None):
     g = O.new_group(log) if (log and body) else None
     ops = [O.label("%s %s → %s" % (GLYPH_SENT, frm, to), MSG_NEW_RGB,
                    g=g, mid=mid, lk=O.COPY_ALL if g else None,
-                   note=note_message(frm, to, summ))]
+                   act=O.ACT_MAIL, note=note_message(frm, to, summ))]
     if body:
         ops.append(O.gut(body, MSG_NEW_RGB, g=g, mid=mid))
     return ops
@@ -217,11 +217,11 @@ def event_ops(events, log=None):
             fr = frame(text)
             state = frame_words(fr)[0] if fr else "delivered"
             ops.append(O.label("%s %s · %s" % (GLYPH_NEW, pair, state),
-                               MSG_NEW_RGB, mid=mid,
+                               MSG_NEW_RGB, mid=mid, act=O.ACT_MAIL,
                                note=note_mail(frm, to, state)))
         else:                                        # read
-            ops.append(O.label(READ_PREFIX + pair, MSG_READ_RGB,
-                               mid=mid, note=note_mail(frm, to, "read")))
+            ops.append(O.label(READ_PREFIX + pair, MSG_READ_RGB, mid=mid,
+                               act=O.ACT_MAIL, note=note_mail(frm, to, "read")))
     return ops
 
 

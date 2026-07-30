@@ -71,7 +71,7 @@ def main():
     rgb = FAIL_RGB if failed else SKILL_RGB
     g = O.new_group(LOG) if args else None
     ops = [O.label("%s skill · %s" % (SF.SKILL_MARK, name), rgb, g=g,
-                   note=SF.skill_note(name, failed))]
+                   act=O.ACT_SKILL, note=SF.skill_note(name, failed))]
     if args:
         ops.append(O.gut(args, rgb, g=g))
     O.emit(LOG, *ops)

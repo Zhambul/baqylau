@@ -170,8 +170,9 @@ def warn_note(text):
 
 
 def _warn(text):
-    """One AMBER ⚠ label, web-worded."""
-    return O.label(text, O.AMBER, note=warn_note(text))
+    """One AMBER ⚠ label, web-worded and classed `warn` (core/ops.py's `act`) —
+    its own activity class so a collapse can never swallow it."""
+    return O.label(text, O.AMBER, act=O.ACT_WARN, note=warn_note(text))
 
 
 def err_ops(rows, sid, who=""):

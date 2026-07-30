@@ -58,7 +58,7 @@ def _emit_header_block(log, text, rgb, ti, grp, trailer, opsrc):
     header colour (`rgb`, also the subject-line tint) and the trailer (a failed
     call closes inline with an error chip + rule; a live one just opens a rule)."""
     cmd_op = _cmd_op(ti, rgb, grp)
-    ops = [O.blank(), O.rule(), O.label(text, rgb, g=grp)]
+    ops = [O.blank(), O.rule(), O.label(text, rgb, g=grp, act=O.ACT_MONITOR)]
     if cmd_op is not None:
         ops.append(cmd_op)
     ops += trailer

@@ -1020,9 +1020,17 @@ def test_the_agent_class_is_decided_by_the_src_register_first():
 
 def test_as_lead_recolours_a_child_block_by_register_or_palette():
     """…and the scope normalisation follows the same order: a command-family
-    header of a `sub:`/`team:`-stamped child is recoloured to the lead's SLATE (so
-    cmd_note/classify, both colour-gated, recognise it), with the agent palettes as
-    the parked-history fallback."""
+    header of a STAMPED child is recoloured to the lead's SLATE (so cmd_note and
+    classify, both colour-gated, recognise it), with every register's palette as
+    the parked-history fallback.
+
+    Both arms are host-BLIND. They were narrower — the two Claude palettes, and a
+    `lead` field in the register table naming which registers may recolour — so
+    the recolour was an enumeration of known hosts, and a register outside it
+    kept the terminal's coloured pill in its own scope while its `gut` file ops
+    never became `line` ops (invisible to every view-mode summary). A codex
+    SIDECAR was the register left out, and it is included now: in ITS OWN scope
+    its blocks read exactly as a Claude child's do."""
     from core import ops as O
     from core import slots as SL
     from dashboard.opshtml import actclass as AC
@@ -1031,10 +1039,19 @@ def test_as_lead_recolours_a_child_block_by_register_or_palette():
     assert tuple(AC.as_lead(stamped)["c"]) == tuple(O.SLATE)
     parked = O.label("▶ foreground", SL.SUB_PALETTE[0], g="b1")   # no stamp
     assert tuple(AC.as_lead(parked)["c"]) == tuple(O.SLATE)
-    # a codex SIDECAR is not a child agent — its block keeps the codex palette
+    # a codex SIDECAR's command header, in its own scope, now too
     side = O.label("▶ cmd", SL.CODEX_PALETTE[0], g="b1")
     side["src"] = "codex:cli"
-    assert tuple(AC.as_lead(side)["c"]) == tuple(SL.CODEX_PALETTE[0])
+    assert tuple(AC.as_lead(side)["c"]) == tuple(O.SLATE)
+    # …and so does a host with a register this build has never heard of, off the
+    # stamp alone — the third-host arm, with no palette of ours at all
+    gem = O.label("▶ foreground", (7, 7, 7), g="b1")
+    gem["src"] = "gem:g1"
+    assert tuple(AC.as_lead(gem)["c"]) == tuple(O.SLATE)
+    # PROSE headers are still never recoloured — only the command family is
+    prose = O.label("✎ message", SL.SUB_PALETTE[0], g="b1")
+    prose["src"] = "sub:a1"
+    assert tuple(AC.as_lead(prose)["c"]) == tuple(SL.SUB_PALETTE[0])
 
 
 def test_codex_prose_drops_in_scope_via_the_bubbled_flag():
@@ -1054,7 +1071,7 @@ def test_codex_prose_drops_in_scope_via_the_bubbled_flag():
     # a companion .log run: prose has NO bubbled; a command is never bubbled
     comp = O.label("✎ message", rgb, g="c4"); comp["src"] = "codex:cli"
     cmd = O.label("▶ cmd", rgb, g="c3"); cmd["src"] = "codex:cli"
-    scope = {"codex:cli"}                            # agent_scope for aid 'cli'
+    scope = "cli"                                    # agent_scope for aid 'cli'
     def kinds(items):
         return "".join(it.get("html", "") for it in items)
     assert "message" not in kinds(opshtml.op_items([msg], "k", scope=scope))
@@ -1066,13 +1083,24 @@ def test_codex_prose_drops_in_scope_via_the_bubbled_flag():
     assert opshtml.op_items([msg], "k", scope=None) == []
 
 
-def test_op_items_host_lead_drops_prose_and_chrome_keeps_activity():
-    """A STANDALONE codex session's SESSION view (host_lead=True): op_items
-    drops the PROSE ops (⇢/✎ header + body, re-bubbled via conversation) and the
-    codex CHROME (the `codex ▶ <label>` banner + `⚙ model` tag) — so the view is
-    bubbles + real activity + footer, never "ran N codex runs". Command / file /
-    footer ops STAY. Without host_lead nothing is dropped (a sidecar or
-    non-codex host)."""
+def test_a_standalone_hosts_own_prose_and_chrome_drop_with_no_host_flag():
+    """A STANDALONE codex session's SESSION view: op_items drops the PROSE ops
+    (⇢/✎ header + body, re-bubbled via conversation) and the codex CHROME (the
+    `codex ▶ <label>` banner, the `⚙ model` tag, the run footer) — so the view is
+    bubbles + real activity, never "ran N codex runs". Command / file ops STAY.
+
+    With NO per-host flag: this used to need `host_lead=True`, resolved from the
+    owning host's `lead_prose` trait and threaded through seven call sites, and
+    the whole point of the parameter was that a Claude session must not have
+    these ops dropped. It doesn't — the sniffers are PALETTE-gated, so they match
+    only codex's own unstamped ops, and a session that never hosted a codex run
+    has none. Measured over the 187-session parked corpus: the session view is
+    byte-identical for every one of them, the 25 standalone codex sessions
+    included.
+
+    The ops here are all PARKED-shaped (no `bubbled`/`chrome` flags) because that
+    is the only era these sniffers exist for: a live standalone run paints no
+    prose at all, and stamps `chrome` on its frame."""
     import re
     from core import ops as O, render as R, slots as SL
     from dashboard import opshtml
@@ -1088,12 +1116,16 @@ def test_op_items_host_lead_drops_prose_and_chrome_keeps_activity():
         O.code("ls -la", g="b3"),
         O.label("■ codex cli ended · 1.0s", rgb),                      # footer — DROPPED
     ]
-    items = opshtml.op_items(ops, "k", host_lead=True)
+    items = opshtml.op_items(ops, "k")
     txt = " ".join(re.sub("<[^>]+>", "", it.get("html", "") or "") for it in items)
     assert "prompt" not in txt and "message" not in txt          # prose headers gone
     assert "hi there" not in txt and "hello" not in txt          # prose bodies gone
     assert "codex ▶" not in txt and "⚙" not in txt               # chrome gone
     assert "ls -la" in txt                                        # command kept
     assert "ended" not in txt                                     # footer chrome gone too
-    # a non-codex-host view (host_lead False) keeps everything
-    assert len(opshtml.op_items(ops, "k", host_lead=False)) > len(items)
+    # …and a CLAUDE session's ops are untouched by either sniffer: same shapes,
+    # an agent palette instead of codex's
+    sub = SL.SUB_PALETTE[0]
+    claude = [dict(O.label("⇢ prompt", sub, g="b1"), who="Explore"),
+              O.gut("the brief", sub, g="b1")]
+    assert len(opshtml.op_items(claude, "k")) == 2

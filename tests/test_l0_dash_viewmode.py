@@ -1509,16 +1509,29 @@ def test_a_teammate_is_not_worded_or_counted_as_a_subagent():
         op["src"] = src
         return op
 
-    # the PRODUCER's own wording, one builder for both registers
-    assert SF.agent_note("Explore", "launched") == 'Agent "Explore" launched'
-    assert SF.agent_note("fix-smoke-dedup", "finished", team=True, dur="21m 31s") \
+    # the PRODUCER's own wording, ONE builder for every register — which word it
+    # gets is the register table's `word` row (core/agentblocks.REGISTERS), data
+    # rather than a per-register branch
+    from core import agentblocks as AB
+    assert SF.register_note(AB.register_word(AB.REG_AGENT), "Explore",
+                            "launched") == 'Agent "Explore" launched'
+    assert SF.register_note(AB.register_word(AB.REG_TEAM), "fix-smoke-dedup",
+                            "finished", dur="21m 31s") \
         == "Teammate @fix-smoke-dedup finished · 21m 31s"
+    assert SF.register_note(AB.register_word(AB.REG_CODEX), "Dewey", "ran") \
+        == 'Codex "Dewey" ran'
 
-    # …recovered the same way for pre-`note` ops, off `src` (which is OLDER than `note`)
+    # …recovered the same way for pre-`note` ops, off `src` (which is OLDER than
+    # `note`) resolved through the SAME table, so history and today cannot word
+    # one register differently
     assert AC.legacy_agent_note(chip("rev-ui-util", "team:a1", "team")) \
         == "Teammate @rev-ui-util finished"
     assert AC.legacy_agent_note(chip("Explore", "sub:a2", "sub")) \
         == 'Agent "Explore" finished'
+    # …including the third register, which the old two-constant pick had no
+    # answer for and quietly named an Agent
+    assert AC.legacy_agent_note(chip("Dewey", "codex:c1", "codex")) \
+        == 'Codex "Dewey" finished'
     # an op older than the src stamp has nothing to go on and stays an Agent
     assert AC.legacy_agent_note(chip("Explore", "", "sub")) == 'Agent "Explore" finished'
 

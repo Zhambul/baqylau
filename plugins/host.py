@@ -101,20 +101,14 @@ class HostControl:
     label = ""            # a human label for the new-session picker
     launchable = False    # can the dashboard launch a fresh session of this tool
 
-    # Does this host's OWN session stream carry its prose TWICE — once as paint
-    # ops and again as plugins.conversation records? A host whose lead runs
-    # through the same child-agent presenter its sidecars do (codex: standalone
-    # or nested, one streamer) paints ⇢/✎/⋯/⇠ prose blocks for its own turns, and
-    # the web ALSO re-bubbles them as conversation. The session view must drop one
-    # of the two, or the messages appear twice AND fold into "ran N codex runs"
-    # (the "all I see is Ran 4 codex runs" bug). A host whose lead is rendered by
-    # its hook formatters (claude_code) emits no such ops and needs no drop.
-    #
-    # A TRAIT, not a host NAME: the read model asked `owns_by(tpath) == "codex"`,
-    # so renaming that plugin — or adding a second self-streaming host — would
-    # have broken it silently, in the direction that BLANKS a mirror. Read via
-    # read/mirror.host_lead (docs/dashboard.md *A standalone host's own prose*).
-    lead_prose = False
+    # (P6 deleted `lead_prose`. It declared that a host's own session stream
+    # carries its prose TWICE — as paint ops and again as plugins.conversation
+    # records — so the session view could drop one. It was already a trait rather
+    # than a host name, but a DECLARATION is still the wrong tier for it: the
+    # producer stamps `bubbled` on the very ops it double-emits (core/ops.py),
+    # which is per-OP and cannot be out of date, where a per-HOST flag says
+    # nothing about which of that host's ops are affected. opshtml.rebubbled now
+    # honours the flag in every view and no host declares anything.)
 
     # --- capability derivation ------------------------------------------------
     def implements(self, name):

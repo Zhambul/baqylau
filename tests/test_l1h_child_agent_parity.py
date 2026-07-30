@@ -243,7 +243,7 @@ def test_both_adapters_keep_and_drop_the_same_in_both_views(tmp_path, monkeypatc
         aid = "a-" + name
         stamped = [dict(op, src="sub:" + aid) for op in ops]
         lead = OH.op_items(stamped, "sid")
-        scoped = OH.op_items(stamped, "sid", scope={"sub:" + aid})
+        scoped = OH.op_items(stamped, "sid", scope=aid)
         got.append((name, [it.get("act") for it in lead],
                     [it.get("act") for it in scoped],
                     [bool(it.get("note")) for it in lead]))

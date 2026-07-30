@@ -54,7 +54,16 @@ _PEND_TOOL, _PEND_CMD = "tool", "cmd"
 # (tests, tooling) reads no argv — only running it does. The placeholders below
 # just name the module globals every function reads at call time.
 LOG      = ""
-SLOT_RGB = (0, 200, 150)
+# The stream colour, normally assigned round-robin by the watcher and handed in
+# on argv. The DEFAULT is the codex register's FIRST palette entry (core/slots.py
+# via the register table), not a colour of its own: an invented (0,200,150) was
+# in no palette, so a run reaching this module without an explicit rgb — a manual
+# invocation, a test — painted blocks that failed every palette test the web
+# classifies a run by, and the whole run folded into "ran N agents". A default
+# that is a real palette member cannot do that. (The classification itself no
+# longer rides on the colour — producers stamp `act` — but a stream still owes
+# the terminal a colour from the table its neighbours are drawn from.)
+SLOT_RGB = tuple(AB.REGISTERS[AB.REG_CODEX]["palette"][0])
 LOGFILE  = ""
 JSONF    = "-"
 LABEL    = "task"
@@ -85,7 +94,8 @@ def _init(argv):
     by plugins/codex/watch.spawn — see the REG_* block above)."""
     global LOG, SLOT_RGB, LOGFILE, JSONF, LABEL, ROLLOUT, REGISTER
     LOG      = argv[1] if len(argv) > 1 else ""
-    SLOT_RGB = tuple(int(x) for x in argv[2].split(",")) if len(argv) > 2 else (0, 200, 150)
+    SLOT_RGB = tuple(int(x) for x in argv[2].split(",")) if len(argv) > 2 \
+        else tuple(AB.REGISTERS[AB.REG_CODEX]["palette"][0])
     LOGFILE  = argv[3] if len(argv) > 3 else ""
     JSONF    = argv[4] if len(argv) > 4 else "-"
     LABEL    = argv[5] if len(argv) > 5 else "task"
@@ -198,8 +208,10 @@ def render_patch(rec, blocks=None):
             # own bar.
             line = SF.file_line(verb, name, rgb, added=f["added"],
                                 removed=f["removed"])
-            O.emit(LOG, O.line(line) if REGISTER == REG_STANDALONE
-                   else O.gut(line, SLOT_RGB))
+            act, a, r = SF.file_act(verb), f["added"], f["removed"]
+            O.emit(LOG, O.line(line, act=act, add=a, rem=r)
+                   if REGISTER == REG_STANDALONE
+                   else O.gut(line, SLOT_RGB, act=act, add=a, rem=r))
         O.bump(LOG, tool=tool, file=f["path"], added=f["added"], removed=f["removed"])
 
 # A companion job-log line is prefixed with an ISO timestamp; the tail is the event
@@ -214,9 +226,15 @@ TS = re.compile(r"^\[\d{4}-\d\d-\d\dT[\d:.]+Z\]\s?(.*)$")
 cap = SF.cap
 
 
-def chip(glyph, kind, g=None, lk=None, bubbled=False, web=False, note=None):
+def chip(glyph, kind, g=None, lk=None, bubbled=False, web=False, note=None,
+         act=None):
+    # `act` defaults to this REGISTER's own class (core/agentblocks.REGISTERS —
+    # `codex`, so the lead's summary names the run rather than folding it into
+    # "ran N agents"); a block that is a KIND OF WORK rather than the run itself
+    # passes its own, exactly as the child-agent presenter does.
     return SF.chip("codex", glyph, kind, SLOT_RGB, g=g, lk=lk, bubbled=bubbled,
-                   web=web, note=note)
+                   web=web, note=note,
+                   act=AB.REGISTERS[AB.REG_CODEX]["act"] if act is None else act)
 
 
 def gutter(text, g=None, bubbled=False, web=False):
@@ -566,7 +584,8 @@ class Renderer:
         # it in the run's OWN scope (its conversation re-bubbles the prompt there).
         g = O.new_group(LOG)
         O.emit(LOG, chip("⇢", "prompt", g=g, lk=O.COPY_ALL, bubbled=True, web=True,
-                         note=SF.codex_note(LABEL, "ran")),
+                         note=SF.register_note(
+                             AB.register_word(AB.REG_CODEX), LABEL, "ran")),
                gutter(cap(rec["text"], CAP_PROMPT), g=g, bubbled=True, web=True))
 
     def _ro_reasoning(self, rec):
@@ -618,7 +637,7 @@ class Renderer:
                                                O.new_group(LOG)))
             return
         g = O.new_group(LOG)
-        O.emit(LOG, chip("⌕", "search", g=g, lk=O.COPY_ALL),
+        O.emit(LOG, chip("⌕", "search", g=g, lk=O.COPY_ALL, act=O.ACT_TOOL),
                gutter(cap(rec["query"], CAP_HEAD), g=g))
 
     def _ro_tool(self, rec):
@@ -650,9 +669,11 @@ class Renderer:
         # STANDALONE: a bare label in the semantic colour (the lead's own shape —
         # no `who`, no palette). SIDECAR: the run's identity chip, as its other
         # blocks wear.
-        head = (O.label(AB.TOOL_GLYPH + " " + name, col, g=g, lk=O.COPY_ALL)
+        head = (O.label(AB.TOOL_GLYPH + " " + name, col, g=g, lk=O.COPY_ALL,
+                        act=O.ACT_TOOL)
                 if REGISTER == REG_STANDALONE
-                else chip(AB.TOOL_GLYPH, name, g=g, lk=O.COPY_ALL))
+                else chip(AB.TOOL_GLYPH, name, g=g, lk=O.COPY_ALL,
+                          act=O.ACT_TOOL))
         O.emit(LOG, head, *([SF.gutter(args, col, g=g)] if args else []))
         self.pending_exec[rec["call_id"]] = {"kind": _PEND_TOOL, "gid": g}
 
@@ -741,7 +762,8 @@ class Renderer:
             FX.fg_open(LOG, gid, _iso_ts(rec.get("ts")))
             return
         g = O.new_group(LOG)
-        O.emit(LOG, chip("▶", "cmd", g=g, lk=[["cmd", "⧉cmd"]]),
+        O.emit(LOG, chip("▶", "cmd", g=g, lk=[["cmd", "⧉cmd"]],
+                         act=O.ACT_BASH),
                O.code(rec["cmd"], g=g))
 
     def _exec_close(self, rec):

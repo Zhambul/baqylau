@@ -292,7 +292,9 @@ class Renderer:
                 self.log, tid, name_tool, label, name, path, inp,
                 result if isinstance(result, dict) else {}, line,
                 who="substream render", extra={"agent": self.agent})
-        O.emit(self.log, *self.blocks.file_row(line, view=vid, mem=is_mem, ctx=ctx))
+        O.emit(self.log, *self.blocks.file_row(line, view=vid, mem=is_mem,
+                                               ctx=ctx, verb=label,
+                                               added=added, removed=removed))
         for o in obs:
             o.record(self.log, path, label, agent=self.agent)
         # Feed the session scoreboard so its files/+/- chips (and the tools breakdown)

@@ -24,8 +24,8 @@ from dashboard.read.lists import (accounts_key, accounts_payload,
 from dashboard.read.meta import (cmd_names, git_info, session_ctx,
                                  session_effort, session_fallback, session_goal,
                                  session_prompts, session_title, session_slug)
-from dashboard.read.mirror import (agent_scope, host_lead, merged_backlog,
-                                   merge_live, TAIL_BLOCKS)
+from dashboard.read.mirror import (agent_scope, merged_backlog, merge_live,
+                                   TAIL_BLOCKS)
 from dashboard.read.session import (BADGES, badge_count, agents_ctx,
                                     agents_model_effort,
                                     visible_agents, ask_draft,
@@ -405,7 +405,6 @@ class _SseMixin:
         # binds it (see the _SLOW_CHANS header).
         key = P.sid_from_log(row.get("log") or P.mirror_log(sid))
         scope = agent_scope(sid, agent)
-        lead = host_lead(sid, agent)
         if not after and not mpos:
             last, mpos, oldest, items = merged_backlog(sid, key, TAIL_BLOCKS, agent)
             if items and not self._sse("ops", {"last": last, "mpos": mpos,
@@ -436,8 +435,7 @@ class _SseMixin:
                 # resolve the owner) tinted codex's `/plan`. Same tick, same
                 # session, two vocabularies.
                 items = merge_live(ops, recs, key,
-                                   cmd_names(ctx.cwd, ctx.host), scope,
-                                   host_lead=lead)
+                                   cmd_names(ctx.cwd, ctx.host), scope)
                 if items and not self._sse("ops", {"last": last2, "mpos": mpos,
                                                    "items": items}):
                     return

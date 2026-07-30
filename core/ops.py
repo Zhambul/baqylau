@@ -100,6 +100,24 @@
 # the agent counter draws by `src` ("running 77 agents" for a session with 21).
 # Ignored by the terminal renderer, like "note" and "web".
 #
+# A label/line/gut op may carry "act": the PRODUCER's activity-class hint — what
+# KIND of activity this block is (a shell command, a file read, a child agent's
+# card, a task row …), from the closed ACTS vocabulary below. The web dashboard's
+# view modes collapse runs of adjacent items by it ("Read 3 files, ran 2 shell
+# commands"), and the presenter used to recover it ENTIRELY by sniffing the paint
+# text — the block-opening glyph plus the chip's colour (dashboard/opshtml/
+# actclass.py). That sniff is a second spelling of the producer's own vocabulary:
+# it works for the two hosts whose glyphs it enumerates and silently answers
+# "some agent" for a third, which is the "ran N agents" fold a whole host
+# disappears into. So the producer says it, exactly as it says "web"/"note"/
+# "bubbled"/"chrome"/"nf" — and the presenter keeps its glyph tables as the
+# PARKED-HISTORY fallback, since ops already on disk carry no hint and no restart
+# can re-stamp them. Inert for the terminal renderer, like the other web fields.
+#
+# The FIELD is core's and so is its vocabulary (a producer may not import the
+# dashboard); the presenter derives its own ACT_* table from this one rather than
+# re-spelling it, and the page's phrase table is keyed by the same strings.
+#
 # Any label/code/gut op may additionally carry "g": a COPY-GROUP id tying the ops of
 # one activity block together (the Bash tool_use_id, the backgroundTaskId for a
 # background job, or any synthesised per-block id). A g-tagged label is painted with
@@ -120,6 +138,50 @@ from core import state as S             # per-session runtime state (SQLite, /tm
 
 def _rgb(c):
     return [int(c[0]), int(c[1]), int(c[2])]
+
+
+# --- the ACTIVITY-CLASS vocabulary (the op "act" field, see the header) ---------
+# One closed set, owned here because BOTH sides need it: every producer stamps
+# from it (core/agentblocks, the claude_code formatters, core/errwatch, the codex
+# stream) and the web presenter classifies into it (dashboard/opshtml/actclass.py
+# derives its ACT_* table from these, and the page's ACT_PHRASE is keyed by the
+# same strings — a token with no phrase is uncounted, which is grep-tested).
+ACT_BASH    = "bash"      # a foreground shell command block
+ACT_BG      = "bg"        # a background job block (long-lived, own stream)
+ACT_MONITOR = "monitor"   # a monitor block (long-lived, own stream)
+ACT_READ    = "read"      # a Read one-liner (native, or a collapsed code-read command)
+ACT_EDIT    = "edit"      # an Update one-liner (Edit/MultiEdit/NotebookEdit)
+ACT_WRITE   = "write"     # a Write one-liner
+ACT_AGENT   = "agent"     # a SUBAGENT launch, prompt or result (a one-shot delegate)
+ACT_TEAM    = "team"      # …the same, for an agent-TEAM member (a named, mailable peer)
+ACT_TASK    = "task"      # a task-list row (✚ created / ✓ completed)
+ACT_MAIL    = "mail"      # agent-team mail surfaced in the mirror (● / ◉ read)
+ACT_SKILL   = "skill"     # a Skill invocation (✦ / `Skill(<name>)`)
+ACT_TOOL    = "tool"      # any OTHER tool call (· ToolSearch / WebFetch / Grep …)
+ACT_CODEX   = "codex"     # a codex run's block (standalone host OR sidecar) — its
+#                           OWN class, so a summary names the run rather than
+#                           folding it into "ran N agents" (docs/codex.md)
+ACT_WARN    = "warn"      # the audit warning light's ⚠ one-liner
+ACT_MSG     = "msg"       # conversation text — the ONE token no paint op wears
+#                           (the web stamps it on a bubble; it is in the set
+#                           because the vocabulary is closed and the view modes
+#                           count bubbles alongside blocks)
+
+ACTS = (ACT_BASH, ACT_BG, ACT_MONITOR, ACT_READ, ACT_EDIT, ACT_WRITE,
+        ACT_AGENT, ACT_TEAM, ACT_TASK, ACT_MAIL, ACT_SKILL, ACT_TOOL,
+        ACT_CODEX, ACT_WARN, ACT_MSG)
+
+_ACTS = frozenset(ACTS)
+
+
+def _act(o, act):
+    """Stamp a validated `act` on op `o` (see the header). An unknown token is
+    DROPPED rather than written: the consumer falls back to its own derivation,
+    which is a worse answer than the hint but never a wrong vocabulary the page
+    has no phrase for. Returns the op, so builders can tail-call it."""
+    if act and act in _ACTS:
+        o["act"] = act
+    return o
 
 
 def blank():
@@ -147,8 +209,8 @@ def rule():
 
 
 def label(s, c, outer=None, g=None, lk=None, web=False, note=None, mid=None,
-          who=None, tags=(), mem=False, bubbled=False, chrome=False):
-    o = {"t": "label", "s": s, "c": _rgb(c)}
+          who=None, tags=(), mem=False, bubbled=False, chrome=False, act=None):
+    o = _act({"t": "label", "s": s, "c": _rgb(c)}, act)
     if who:
         o["who"] = str(who)
     tags = [str(t) for t in (tags or ()) if t]
@@ -208,8 +270,14 @@ def code(s, ind="  ", g=None):
 
 def gut(s, c, outer=None, g=None, bg=None, lex=None, num=None, view=None,
         web=False, mem=False, mid=None, who=None, tags=(), bubbled=False,
-        chrome=False):
-    o = {"t": "gut", "s": s, "c": _rgb(c)}
+        chrome=False, act=None, add=0, rem=0):
+    # `act` on a BODY op is only meaningful for the one gut that is a whole block
+    # by itself — a child agent's file-op one-liner, which agent scope converts
+    # into the `line` op the lead paints (actclass.as_lead) and which carries the
+    # hint across that conversion. Ordinary body ops take their class from the
+    # header above them and pass nothing. `add`/`rem` ride the same op and for
+    # the same reason (see line()).
+    o = _diff(_act({"t": "gut", "s": s, "c": _rgb(c)}, act), add, rem)
     if who:
         o["who"] = str(who)            # see label()'s `who`
     tags = [str(t) for t in (tags or ()) if t]
@@ -253,7 +321,7 @@ def gut(s, c, outer=None, g=None, bg=None, lex=None, num=None, view=None,
     return o
 
 
-def line(s, view=None, mem=False, nfiles=0):
+def line(s, view=None, mem=False, nfiles=0, act=None, add=0, rem=0):
     # view: a click-to-view group id (the file op's tool_use_id). The renderer
     # paints the kv-stashed block `view:<id>` INLINE under this line while the
     # id is in the session's `view-open` kv set (toggled by claude-copy.py on a
@@ -269,13 +337,33 @@ def line(s, view=None, mem=False, nfiles=0):
     # total isn't in it. The web weights its collapsed-run summary with this ("Read 2
     # files", not "Read 1 file"); the terminal ignores it, the names are already
     # painted. Omitted for the ordinary single-file case.
-    o = {"t": "line", "s": s}
+    # add/rem: the ± LINE COUNTS a mutation one-liner carries. Fields for the same
+    # reason, and they retire the LAST text-parse of painted output: the web's
+    # collapsed edit fragment sums them over a run ("edited 3 files +12 -4"), and
+    # it used to recover them with a regex over the rendered line
+    # (`actclass._DIFF_RE`) — a presenter re-deriving, from ANSI, two integers the
+    # producer had in hand. That regex is now the parked-history fallback.
+    # act: the producer's activity-class hint (see the header) — a file-op
+    # one-liner is a whole block in one op, so it names its own kind.
+    o = _act({"t": "line", "s": s}, act)
     if view:
         o["v"] = str(view)
     if mem:
         o["mem"] = 1
     if nfiles and int(nfiles) > 1:
         o["nf"] = int(nfiles)
+    _diff(o, add, rem)
+    return o
+
+
+def _diff(o, add, rem):
+    """Stamp a file one-liner's ± line counts (see line()'s `add`/`rem`), each
+    omitted when zero — a Read carries neither, and an absent field and a 0 mean
+    the same thing to every reader."""
+    if add:
+        o["add"] = int(add)
+    if rem:
+        o["rem"] = int(rem)
     return o
 
 

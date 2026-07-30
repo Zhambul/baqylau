@@ -31,14 +31,20 @@
 # of it.
 from core import ops as O
 from core import render as R
+from core import slots as SL
 from core import streamfmt as SF
 
 # The three REGISTERS a child is named in on the web — the one thing about a
 # child that is not the same for every host. They select the WORDING of the
-# `note` (core/streamfmt owns the words themselves: `Agent "<type>"` for a
-# Task-spawned subagent, `Teammate @<name>` for an agent-team member, `Codex
+# `note` (core/streamfmt owns the format strings themselves: `Agent "<type>"` for
+# a Task-spawned subagent, `Teammate @<name>` for an agent-team member, `Codex
 # "<label>"` for a codex run), and nothing else: the block shapes, the stamps
 # and the colours are register-independent by design.
+#
+# A register NAME is an internal key and nothing branches on one outside the
+# table below — REG_CODEX in particular is not a host check: it names the
+# register a codex SIDECAR run is painted in, and a codex-NATIVE subagent uses
+# REG_AGENT because it is a child agent.
 REG_AGENT = "agent"
 REG_TEAM = "team"
 REG_CODEX = "codex"
@@ -59,21 +65,28 @@ REG_CODEX = "codex"
 #   src   the `src` stamp prefix its producer writes (NB the AGENT register's is
 #         `sub:`, not `agent:` — the stamp is older than this module and parked
 #         ops carry it, so the table records the fact rather than renaming it)
-#   act   the activity-class token the web presenter classifies its blocks as
-#         (the vocabulary is dashboard/opshtml/actclass.ACTS; the strings are
-#         here so the presenter derives its table instead of re-spelling it)
-#   lead  whether `actclass.as_lead` normalises this register's block headers
-#         into the LEAD's semantic colour under agent scope. True for the two
-#         CHILD-AGENT registers; False for codex, which is DELIBERATE and
-#         behaviour-preserving: a codex block wears its own stream palette and
-#         matches neither arm of as_lead's recolour test today. Encoded as a
-#         FIELD rather than left as a literal at the use site precisely because
-#         it is an asymmetry — this way the next host has to answer the question
-#         instead of inheriting whichever list it was accidentally left out of.
+#   act   the activity-class token its blocks are STAMPED with (core/ops.py's
+#         `act` field owns the vocabulary; the row picks this register's member,
+#         and the web presenter derives its register→act fallback map from here
+#         instead of re-spelling it)
+#   word  the format string the web NAMES this register's child with, `%s` the
+#         child's own label (`Agent "Explore"`, `Teammate @fix-smoke`, `Codex
+#         "Dewey"`). DATA in the table rather than a per-register branch in
+#         note() below: the wording was the ONE thing a register selected, and
+#         it selected it with `if self.register == REG_CODEX` over a core
+#         constant literally named CODEX — a host's NAME baked into the
+#         tool-agnostic tier, in the module whose own header forbids exactly
+#         that. As a row, a fourth host adds a word instead of a branch.
+#   palette  the slot palette its stream colours come from (core/slots.py owns
+#         the tables — the row REFERENCES one, so a new host adds a row here and
+#         a palette there rather than a constant in each reader).
 REGISTERS = {
-    REG_AGENT: {"src": "sub",   "act": "agent", "lead": True},
-    REG_TEAM:  {"src": "team",  "act": "team",  "lead": True},
-    REG_CODEX: {"src": "codex", "act": "codex", "lead": False},
+    REG_AGENT: {"src": "sub",   "act": O.ACT_AGENT,
+                "word": SF.AGENT_WORD,           "palette": SL.SUB_PALETTE},
+    REG_TEAM:  {"src": "team",  "act": O.ACT_TEAM,
+                "word": SF.TEAM_WORD,            "palette": SL.TEAM_PALETTE},
+    REG_CODEX: {"src": "codex", "act": O.ACT_CODEX,
+                "word": SF.host_word("Codex"),   "palette": SL.CODEX_PALETTE},
 }
 
 
@@ -95,20 +108,40 @@ def src_stamp(register):
     return REGISTERS[register]["src"] + ":"
 
 
-def lead_src_prefixes():
-    """The `<prefix>:` stamps whose blocks `as_lead` recolours into the lead's
-    vocabulary — ("sub:", "team:") today. Colon included: the one consumer tests
-    it with str.startswith, and a bare "sub" would also match a "subsomething:"
-    stamp a future register might use."""
-    return tuple(r["src"] + ":" for r in REGISTERS.values() if r["lead"])
+def register_of_src(src):
+    """Which REGISTER produced an op stamped `src` ("team:a1b2" -> REG_TEAM), or
+    None for an unstamped / unknown one. The read-side inverse of src_stamp, for
+    the one consumer that has an op and wants the register's DATA (the web
+    presenter's wording fallback for a chip written before producers carried a
+    note)."""
+    pre = str(src or "").split(":", 1)[0]
+    for name, row in REGISTERS.items():
+        if row["src"] == pre:
+            return name
+    return None
+
+
+def register_word(register):
+    """The naming template a register's child is worded with (`Agent "%s"`), for
+    a caller holding the register rather than an AgentStream."""
+    return REGISTERS[register]["word"]
+
+
+def stream_palettes():
+    """Every register's slot palette, flattened — the colours a CHILD's block can
+    wear. Its one consumer is the web presenter's `as_lead`, which recognises a
+    child's header by colour for ops written before the `src` stamp existed; a
+    per-register list there would miss whichever host was added last."""
+    return tuple(tuple(c) for r in REGISTERS.values() for c in r["palette"])
 
 # The block-opening glyphs + kind words this presenter paints, beyond the four
 # MARK_* pairs core/streamfmt already owns (prompt/result/message/mail — those
 # are read BACK by the web presenter, which is why they live there). These are
 # producer vocabulary: a generic tool call's quiet `·`, and a shell command's
-# `▶ foreground` / `▷ background` header. dashboard/opshtml/actclass.py is their
-# one READER and keeps its own table by design (it must also classify ops
-# written before this module existed, which no restart can re-stamp).
+# `▶ foreground` / `▷ background` header — and dashboard/opshtml/actclass.py
+# IMPORTS them from here rather than keeping a second table: the parked-history
+# ops it must also classify carry these very bytes (`▶ foreground` predates this
+# module unchanged), so one spelling covers history and today alike.
 TOOL_GLYPH = "·"
 CMD_GLYPH, CMD_KIND = "▶", "foreground"
 BG_GLYPH, BG_KIND = "▷", "background"
@@ -155,6 +188,15 @@ class AgentStream:
         self.register = register
         self._tags = tags
         self._agent_dur = agent_dur
+        # This child's ACTIVITY CLASS (core/ops.py's `act`), from the register
+        # table — every block this stream paints that is the CHILD ITSELF (its
+        # launch card, its prose, its result) carries it, so the web classifies
+        # the child by what its producer said rather than by matching a glyph
+        # against two hosts' vocabulary. Blocks that are a KIND OF WORK rather
+        # than the child (a command, a file op, a tool call) carry that work's
+        # class instead — a subagent's `▶ make test` is a shell command in
+        # anybody's summary.
+        self.act = REGISTERS[register]["act"]
 
     # --- identity -----------------------------------------------------------
 
@@ -172,24 +214,30 @@ class AgentStream:
         `Codex "Dewey" ran` (core/ops.py's "note"). ONE builder so the launch and
         finish blocks cannot drift, and the WORDING belongs to core/streamfmt,
         which the web presenter reads too. `dur` appends how long the child has
-        run, when the caller injected a way to know."""
+        run, when the caller injected a way to know.
+
+        WHICH word is the register table's `word` row — data, not a branch: this
+        was `if self.register == REG_CODEX` picking a second builder, which is a
+        host name deciding a sentence inside the tool-agnostic tier."""
         d = ""
         if dur and self._agent_dur:
             try:
                 d = self._agent_dur()
             except Exception:
                 d = ""              # a note without a duration beats no note
-        if self.register == REG_CODEX:
-            return SF.codex_note(self.label, verb, dur=d)
-        return SF.agent_note(self.label, verb, team=(self.register == REG_TEAM),
-                             dur=d)
+        return SF.register_note(register_word(self.register), self.label, verb,
+                                dur=d)
 
     # --- the shared op shapes, bound to this stream -------------------------
 
     def _chip(self, glyph, kind, ctx="", g=None, lk=None, web=False, note=None,
-              mem=False, bubbled=False):
+              mem=False, bubbled=False, act=None):
+        # `act` defaults to the child's own class (self.act): most of these
+        # blocks ARE the child speaking, and the ones that are a kind of WORK
+        # pass their own.
         return SF.chip(self.label, glyph, kind, self.rgb, tags=self._tagset(ctx),
-                       g=g, lk=lk, web=web, note=note, mem=mem, bubbled=bubbled)
+                       g=g, lk=lk, web=web, note=note, mem=mem, bubbled=bubbled,
+                       act=self.act if act is None else act)
 
     def _gut(self, text, g=None, web=False, bubbled=False):
         return SF.gutter(text, self.rgb, g=g, web=web, bubbled=bubbled)
@@ -211,7 +259,8 @@ class AgentStream:
         is the launch, with the brief itself behind the click. `bubbled` because
         agent scope re-bubbles the same brief from the child's own transcript."""
         return [self._chip(*SF.MARK_PROMPT, g=g, lk=O.COPY_ALL, web=True,
-                           note=self.note("resumed" if resumed else "launched"),
+                           note=self.note(SF.VERB_RESUMED if resumed
+                                          else SF.VERB_LAUNCHED),
                            bubbled=True),
                 self._gut(brief, g=g, web=True, bubbled=True)]
 
@@ -231,7 +280,8 @@ class AgentStream:
         and the only one whose note carries a duration (the run is over, so
         there is one to report)."""
         return [self._chip(*SF.MARK_RESULT, ctx, g=g, lk=O.COPY_ALL, web=True,
-                           note=self.note("finished", dur=True), bubbled=True),
+                           note=self.note(SF.VERB_FINISHED, dur=True),
+                           bubbled=True),
                 self._md(text, g=g, web=True, bubbled=True)]
 
     def message(self, text, g, ctx=""):
@@ -267,7 +317,8 @@ class AgentStream:
         is just the header; the group is minted by the caller either way,
         because the block's other half is its RESULT and that op has no group of
         its own to fall back on."""
-        ops = [self._chip(TOOL_GLYPH, name or "tool", ctx, g=g, lk=O.COPY_ALL)]
+        ops = [self._chip(TOOL_GLYPH, name or "tool", ctx, g=g, lk=O.COPY_ALL,
+                          act=O.ACT_TOOL)]
         if request:
             ops.append(self._gut(request, g=g))
         return ops
@@ -285,7 +336,8 @@ class AgentStream:
         of the output. No `lk` — a command block wears the renderer's default
         ⧉cmd/⧉out pair."""
         glyph, kind = (BG_GLYPH, BG_KIND) if background else (CMD_GLYPH, CMD_KIND)
-        return [self._chip(glyph, kind + marks, ctx, g=g, mem=mem),
+        act = O.ACT_BG if background else O.ACT_BASH
+        return [self._chip(glyph, kind + marks, ctx, g=g, mem=mem, act=act),
                 O.code(cmd, g=g)]
 
     def cmd_close(self, g, body, failed=False, exit_code=None):
@@ -318,12 +370,23 @@ class AgentStream:
         return SF.file_line(verb, disp, verb_rgb, failed=failed, extent=extent,
                             added=added, removed=removed, rng=rng) + marks
 
-    def file_row(self, text, view=None, mem=False, ctx=""):
+    def file_row(self, text, view=None, mem=False, ctx="", verb="", added=0,
+                 removed=0):
         """…and that text as this child's op: a `gut` (so it hangs off the
         stream's gutter bar in the shared terminal pane) carrying `who` + tags,
-        the click-to-view id and the memory flag."""
+        the click-to-view id and the memory flag.
+
+        `verb` is the display verb the text opens with, and names the op's
+        ACTIVITY CLASS through its one owner (streamfmt.file_act). The class
+        matters even though a `gut` is a body op: agent scope turns this exact op
+        into the bare `line` the lead paints (actclass.as_lead), and it is the
+        one body op that IS a whole block — so it must arrive with its own class
+        rather than inheriting the block above it. `added`/`removed` ride it for
+        the same reason: the web's collapsed edit fragment SUMS them, and the
+        producer is holding the numbers the presenter used to re-parse."""
         return [O.gut(text, self.rgb, view=view, mem=mem, who=self.label,
-                      tags=self._tagset(ctx))]
+                      tags=self._tagset(ctx), act=SF.file_act(verb),
+                      add=added, rem=removed)]
 
     def file_line(self, verb, disp, verb_rgb, failed=False, extent="", added=0,
                   removed=0, rng="", marks="", view=None, mem=False, ctx=""):
@@ -331,7 +394,8 @@ class AgentStream:
         return self.file_row(
             self.file_text(verb, disp, verb_rgb, failed=failed, extent=extent,
                            added=added, removed=removed, rng=rng, marks=marks),
-            view=view, mem=mem, ctx=ctx)
+            view=view, mem=mem, ctx=ctx, verb=verb,
+            added=0 if failed else added, removed=0 if failed else removed)
 
     def compact(self, pre=None, post=None, trigger=None):
         """`⟳ compacted · 120k → 30k (auto)` — the child's conversation was

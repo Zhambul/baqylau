@@ -8,7 +8,6 @@
 import bisect
 
 import plugins
-from core import agentblocks as AB
 from core import paths as P
 from core import sessionapi as API
 from core import state as ST
@@ -109,7 +108,7 @@ def conv_items(recs, cmds=()):
     return out
 
 
-def merge_live(ops, recs, key="", cmds=(), scope=None, host_lead=False):
+def merge_live(ops, recs, key="", cmds=(), scope=None):
     """A LIVE SSE delta of new ops + new conversation recs -> ONE oldest->newest
     item list, interleaved by ts — the increment-side twin of _merge_order's
     placement rule. Without it the SSE loop emits ops and msgs as two separate
@@ -136,8 +135,7 @@ def merge_live(ops, recs, key="", cmds=(), scope=None, host_lead=False):
 
     def flush():
         if run:
-            items.extend(opshtml.op_items(run, key, scope=scope,
-                                          host_lead=host_lead))
+            items.extend(opshtml.op_items(run, key, scope=scope))
             run.clear()
 
     while i < len(ops) and j < len(recs):
@@ -289,33 +287,29 @@ def _snap(entries, start):
 
 
 def agent_scope(sid, agent):
-    """WHOSE stream to render: the set of producer-source (`src`) stamps that
-    belong to one agent of a session, or None for the ordinary main-agent-only
-    session view (a falsy `agent`). It is what the ops are filtered on
-    (opshtml.in_scope).
+    """WHOSE stream to render: the AGENT ID whose ops belong in this mirror, or
+    None for the ordinary main-agent-only session view (a falsy `agent`). It is
+    what the ops are filtered on (opshtml.in_scope).
 
-    A subagent, a teammate AND a codex run are all named by the SAME id now: the
-    producer stamps every op with the id that IS the scope key — `sub:<aid>` /
-    `team:<aid>` for a Claude agent, `codex:<aid>` for a codex SIDECAR and
-    `sub:<aid>` for a codex-NATIVE subagent (the run's synthesized agent id,
-    paths.codex_aid — plugins/codex/watch.spawn), so no per-tool label lookup is
-    needed (the unification: a codex run used to be stamped `codex:<label>` and
-    matched by a lookup off its card, which an id mismatch could turn into an
-    empty mirror). All three spellings are accepted — which is also why
-    re-pointing a native subagent's PREFIX to `sub:` needed no change here, for
-    new ops or for parked ones; the non-matching prefixes are inert.
+    The ID ALONE, because the id IS the unified scope key: the producer stamps
+    every op `<register>:<agent id>` and a subagent, a teammate and a codex run
+    are all named by the same id — `sub:<aid>` / `team:<aid>` for a Claude agent,
+    `codex:<aid>` for a codex SIDECAR, `sub:<aid>` for a codex-NATIVE subagent
+    (the run's synthesized id, paths.codex_aid — plugins/codex/watch.spawn). The
+    PREFIX says which register produced the op, which is a fact about the
+    producer and never about which mirror the op belongs in.
 
-    The prefix SET is DERIVED, not spelled here: core/agentblocks.REGISTERS is
-    the one owner of the register vocabulary (`src_prefixes()`), and the web
-    presenter's register→act map comes from the same table. This used to be a
-    literal `{"sub:"…, "team:"…, "codex:"…}` — a third independent copy of one
-    closed list, whose failure mode when a host is missed is silent: an
-    unrecognised prefix matches no op and that agent's mirror renders BLANK.
+    It used to resolve the id into the SET of prefixed stamps it could wear,
+    built from core/agentblocks.REGISTERS. That was right for the registers in
+    the table and silently wrong for anything else: a host stamping a prefix the
+    table doesn't list matched NO op, and its agent's mirror rendered BLANK — a
+    failure with no error, in the one direction a reader cannot detect. Matching
+    the id needs no table, so there is nothing left to keep in step.
 
-    Prose-drop is no longer signalled here (the retired `codexprose:` marker): an
-    agent's re-bubbled prose ops carry the producer-set `bubbled` flag (core/ops.py),
-    which opshtml.op_items drops directly — one signal across tools, decided where
-    the producer knows both halves.
+    Prose-drop is not signalled here either (the retired `codexprose:` marker):
+    an agent's re-bubbled prose ops carry the producer-set `bubbled` flag
+    (core/ops.py), which opshtml.op_items drops in every view — one signal across
+    tools, decided where the producer knows both halves.
 
     The agent's NAME is deliberately not part of this. It used to be, to strip
     the name the substream baked into every block it painted; producers carry it
@@ -323,34 +317,10 @@ def agent_scope(sid, agent):
     undone structurally, off the block marker and the stream colour
     (actclass.lead_head / streamfmt.strip_who) — so no consumer needs to be told
     an agent's name to render its stream."""
-    if not agent:
-        return None
-    return {p + ":" + agent for p in AB.src_prefixes()}
+    return agent or None
 
 
-def host_lead(sid, agent):
-    """True for a SELF-STREAMING host's own SESSION view (no agent scope): the
-    session's own ops ARE its activity, not a foldable sub-run, and they carry
-    the same prose plugins.conversation re-bubbles. op_items then drops their
-    PROSE ops (⇢/✎/⋯/⇠) so the messages read as ordinary conversation bubbles
-    instead of folding into 'ran N codex runs'. False for an agent scope (a
-    sidecar run IS a sub-run) or a host that doesn't stream its own lead.
-
-    The question is answered by the owning host's `lead_prose` TRAIT
-    (plugins.host_of → HostControl), not by comparing its name to "codex". It
-    was `host_lead`, body `owns_by(transcript_path) == "codex"` — a literal
-    host name in the read model, threaded as `host_lead=` through seven call
-    sites. Renaming that plugin, or adding a second self-streaming host, would
-    have broken it with no error: the mirror would just double every message or
-    fold a whole session into one summary line."""
-    if agent:
-        return False
-    row = API.session_row(sid) or {}
-    host = plugins.host_of(row.get("transcript_path") or "")
-    return bool(getattr(host, "lead_prose", False))
-
-
-def _render_window(entries, start, key, cmds=(), scope=None, host_lead=False):
+def _render_window(entries, start, key, cmds=(), scope=None):
     """Render entries[start:] to stream items ({g, t, html}); op entries through
     op_items, msg entries through conv_items. Only the windowed slice is
     rendered — the whole point of the block cut.
@@ -370,8 +340,7 @@ def _render_window(entries, start, key, cmds=(), scope=None, host_lead=False):
             # and its read notice may well land in the NEXT batch (a conversation
             # record between them flushes the run) — where it would otherwise read as
             # a message of its own
-            out.extend(opshtml.op_items(pend, key, pids, carry, scope,
-                                        host_lead=host_lead))
+            out.extend(opshtml.op_items(pend, key, pids, carry, scope))
             pend.clear()
             pids.clear()
 
@@ -404,8 +373,7 @@ def merged_backlog(sid, key, blocks=TAIL_BLOCKS, agent=None):
     start = _snap(entries, _cut_blocks(entries, blocks, scope))
     oldest = entries[start][0] if start > 0 else 0
     return last, mpos, oldest, _render_window(entries, start, key,
-                                              session_cmds(sid), scope,
-                                              host_lead(sid, agent))
+                                              session_cmds(sid), scope)
 
 
 def history(sid, key, before, blocks, agent=None):
@@ -428,8 +396,7 @@ def history(sid, key, before, blocks, agent=None):
     universe = entries[:bound]
     start = _snap(universe, _cut_blocks(universe, blocks, scope))
     oldest = universe[start][0] if start > 0 else 0
-    return oldest, _render_window(universe, start, key, session_cmds(sid), scope,
-                                  host_lead(sid, agent))
+    return oldest, _render_window(universe, start, key, session_cmds(sid), scope)
 
 
 def ops_payload(sid, after, agent=None):
@@ -443,8 +410,7 @@ def ops_payload(sid, after, agent=None):
     last, ops = API.ops_at(sdb, after)
     row = API.session_row(sid)
     key = P.sid_from_log(row["log"]) if row else sid
-    return last, opshtml.op_items(ops, key, scope=agent_scope(sid, agent),
-                                  host_lead=host_lead(sid, agent))
+    return last, opshtml.op_items(ops, key, scope=agent_scope(sid, agent))
 
 
 def view_payload(sid, gid):

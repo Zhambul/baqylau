@@ -8,25 +8,35 @@
 # page only reads it (it used to sniff the chip glyph itself — `CMD_GLYPH` in
 # app.05-session.js — which is why the classification now has ONE home).
 #
-# Why classify at RENDER time instead of stamping `act` in the producers (the
-# route `src`/`web` took): unlike a producer's identity, the activity class is
-# fully recoverable from the op the producer already wrote. Stamping would put
-# the same knowledge in eight formatters AND still need this fallback for every
-# PARKED session (a dashboard is mostly read over history, which can't be
-# re-stamped) — two implementations that drift. One reader it is.
-#
 # What it keys on, in order of preference:
+#   0. The PRODUCER's OWN ANSWER — the op's `act` field (core/ops.py), validated
+#      against the vocabulary below. Everything under it is the fallback.
 #   1. STRUCTURE — the op's `t`, and the semantic colours imported from core.ops.
 #      Nothing here re-encodes an RGB literal: a chip painted in the shared
 #      `ops.RED` IS a failure, and a chip painted in a SLOT PALETTE colour
 #      rather than a semantic one is a per-stream block, not a main-session one.
-#   2. The FILE-OP VERB, taken from its owner `tools.FILE_LABEL` (Read/Update/
-#      Write) rather than spelled again here.
+#   2. The FILE-OP VERB, taken from its owner `streamfmt.FILE_ACTS` (Read/
+#      Update/Write) rather than spelled again here.
 #   3. The block-opening GLYPH (`▶ ▷ ◉ ↻ ■`). These are producer vocabulary
 #      (cmd_fmt / monitor_fmt / subagent_fmt bake them into their chip text) and
 #      this table is their ONE reader — deliberately the glyph and not the WORD
 #      beside it ("foreground"/"background"/"monitor"), because the glyph is the
 #      stable part: the words have been reworded, the glyphs never have.
+#
+# Steps 1-3 USED to be the whole story, and the header here argued for it: the
+# class is recoverable from the op the producer already wrote, stamping it would
+# put the same knowledge in eight formatters, and the fallback would be needed
+# for parked history anyway — two implementations that drift. Three things
+# happened to that argument. The drift it feared arrived from the OTHER
+# direction: the glyph tables are a closed enumeration of TWO hosts' vocabulary,
+# so a third host's blocks fall through to "some agent" and a whole session folds
+# into "ran N agents" (docs/dashboard.md *View modes*) — the sniff is not
+# host-agnostic, it is host-blind. The "eight formatters" became ONE for every
+# child agent (core/agentblocks.AgentStream). And `bubbled`, `chrome` and `nf`
+# each made the same move already, keeping the sniffer as a parked-history
+# fallback, and none of them drifted — because for a LIVE op the fallback is
+# dead code, and for a PARKED one it is the only code. So: the producer says
+# what it painted, and the tables below classify what is already on disk.
 #
 # The glyph is ambiguous on its own and the colour disambiguates it: a subagent
 # LAUNCH header is also `▶ <agent type> · <desc>` (subagent_fmt), so `▶` means a
@@ -43,48 +53,60 @@ from core import slots as SL
 from core import streamfmt as SF
 from plugins.claude_code import msgs as MSGS
 from plugins.claude_code import task_fmt as TASKS
-from plugins.claude_code.tools import FILE_LABEL
 
-# The `act` vocabulary — the closed set every stream item is classified into.
-# The page's phrase table (app.05-session.js `ACT_PHRASE`) is keyed by exactly
-# these tokens, so adding one here without a phrase there leaves it uncounted
-# (grep-tested: test_act_vocabulary_matches_the_page_phrase_table).
-ACT_BASH    = "bash"      # a foreground shell command block
-ACT_BG      = "bg"        # a background job block (long-lived, own stream)
-ACT_MONITOR = "monitor"   # a monitor block (long-lived, own stream)
-ACT_READ    = "read"      # a Read one-liner (native, or a collapsed code-read command)
-ACT_EDIT    = "edit"      # an Update one-liner (Edit/MultiEdit/NotebookEdit)
-ACT_WRITE   = "write"     # a Write one-liner
-ACT_AGENT   = "agent"     # a SUBAGENT launch, prompt or result (a one-shot delegate)
-ACT_TEAM    = "team"      # …the same, for an agent-TEAM member (a named, mailable peer)
-ACT_TASK    = "task"      # a task-list row (✚ created / ✓ completed)
-ACT_MAIL    = "mail"      # agent-team mail surfaced in the mirror (● / ◉ read)
-ACT_SKILL   = "skill"     # a Skill invocation (✦ / `Skill(<name>)`)
-ACT_TOOL    = "tool"      # any OTHER tool call (· ToolSearch / WebFetch / Grep …)
-ACT_CODEX   = "codex"     # a codex run's block (standalone host OR sidecar) — its
-#                           OWN act, so default names the codex run rather than
-#                           folding it into "ran N agents" (docs/codex.md)
-ACT_WARN    = "warn"      # the audit warning light's ⚠ one-liner
-ACT_MSG     = "msg"       # conversation text (stamped by read.mirror, not here)
+# The `act` vocabulary — the closed set every stream item is classified into,
+# IMPORTED from its owner (core/ops.py, the `act` op field): the producers stamp
+# from that table and this module answers in it, so the two cannot disagree about
+# a token. Re-exported under the presenter's own names because this is where the
+# page's contract lives: app.05-session.js `ACT_PHRASE` is keyed by exactly these
+# strings, so adding one without a phrase there leaves it uncounted (grep-tested:
+# test_act_vocabulary_matches_the_page_phrase_table).
+ACT_BASH    = O.ACT_BASH      # a foreground shell command block
+ACT_BG      = O.ACT_BG        # a background job block (long-lived, own stream)
+ACT_MONITOR = O.ACT_MONITOR   # a monitor block (long-lived, own stream)
+ACT_READ    = O.ACT_READ      # a Read one-liner (native, or a collapsed code-read command)
+ACT_EDIT    = O.ACT_EDIT      # an Update one-liner (Edit/MultiEdit/NotebookEdit)
+ACT_WRITE   = O.ACT_WRITE     # a Write one-liner
+ACT_AGENT   = O.ACT_AGENT     # a SUBAGENT launch, prompt or result (a one-shot delegate)
+ACT_TEAM    = O.ACT_TEAM      # …the same, for an agent-TEAM member (a named, mailable peer)
+ACT_TASK    = O.ACT_TASK      # a task-list row (✚ created / ✓ completed)
+ACT_MAIL    = O.ACT_MAIL      # agent-team mail surfaced in the mirror (● / ◉ read)
+ACT_SKILL   = O.ACT_SKILL     # a Skill invocation (✦ / `Skill(<name>)`)
+ACT_TOOL    = O.ACT_TOOL      # any OTHER tool call (· ToolSearch / WebFetch / Grep …)
+ACT_CODEX   = O.ACT_CODEX     # a codex run's block (standalone host OR sidecar) — its
+#                               OWN act, so default names the codex run rather than
+#                               folding it into "ran N agents" (docs/codex.md)
+ACT_WARN    = O.ACT_WARN      # the audit warning light's ⚠ one-liner
+ACT_MSG     = O.ACT_MSG       # conversation text (stamped by read.mirror, not here)
 
-ACTS = (ACT_BASH, ACT_BG, ACT_MONITOR, ACT_READ, ACT_EDIT, ACT_WRITE,
-        ACT_AGENT, ACT_TEAM, ACT_TASK, ACT_MAIL, ACT_SKILL, ACT_TOOL,
-        ACT_CODEX, ACT_WARN, ACT_MSG)
+ACTS = O.ACTS
+_ACTS = frozenset(ACTS)
 
 # The main session's own command colours — the semantic table, imported. A chip
 # in any of these is main-session command activity; anything else is a palette
 # colour, i.e. a per-stream (agent/job/monitor) block.
 _CMD_RGB = (tuple(O.SLATE), tuple(O.ORANGE), tuple(O.RED))
 
-# Block-opening glyphs. `■` opens nothing — it CLOSES a block ("■ finished ·
-# 3.2s"), so it names no class and contributes only the outcome.
-_GLYPH_BASH = "▶"          # a foreground command … or a subagent launch (see above)
-_GLYPH_BG = "▷"
+# Block-opening glyphs — the CLASSIFY-path fallback for ops written before the
+# producer stamped `act` (a parked session cannot be re-stamped). Live ops answer
+# from the field and never reach the glyph ladder in _classify; the glyphs stay
+# load-bearing for everything ELSE this module reads a header for (lead_head's
+# marker set, cmd_note's quiet register, as_lead's recolour test), which is about
+# a block's SHAPE rather than its class.
+#
+# Four of them have an owner in core and are imported from it (agentblocks paints
+# them, this module reads them back); three — ◉ ⇄ ↻ — are still spelled here
+# because nothing in core paints them: they are plugins/claude_code vocabulary
+# (monitor_fmt, subagent_fmt) that no other host shares, and a dashboard module
+# may not reach into a plugin for a string. `■` opens nothing — it CLOSES a block
+# ("■ finished · 3.2s"), so it names no class and contributes only the outcome.
+_GLYPH_BASH = AB.CMD_GLYPH      # a foreground command … or a subagent launch (see above)
+_GLYPH_BG = AB.BG_GLYPH
 _GLYPH_MONITOR = "◉"
 _GLYPH_WS = "⇄"            # a WebSocket monitor's SUBJECT line (monitor_fmt._cmd_op)
 _GLYPH_RESUMED = "↻"       # a RESUMED subagent's launch header
-_GLYPH_FINISH = "■"
-_GLYPH_TOOL = "·"          # an agent's GENERIC tool block (substream_render.render_tool)
+_GLYPH_FINISH = AB.FOOT_MARK
+_GLYPH_TOOL = AB.TOOL_GLYPH     # an agent's GENERIC tool block (agentblocks.tool_open)
 
 # The stream palettes a bg job's / monitor's chips wear (core/slots.py owns the
 # tables — imported, never re-spelled). Together with the semantic command
@@ -95,12 +117,14 @@ _GLYPH_TOOL = "·"          # an agent's GENERIC tool block (substream_render.re
 # `■ <type> ended` footer wears SUB_PALETTE and is therefore NOT command family.
 _STREAM_RGB = frozenset(tuple(c) for c in (SL.BG_PALETTE + SL.MON_PALETTE))
 
-# The kind word a quiet command line DROPS. A foreground command is the default
-# kind and its line already shows the command itself, so `▶ foreground` would say
-# nothing the dot and the command don't ("⏺ make test · 0.6s"); `background` and
-# `monitor` are kept, because with the chip colour gone the word is the only thing
-# left that distinguishes a job you didn't wait for from one you did.
-_CMD_KIND_MUTE = "foreground"
+# The kind word a quiet command line DROPS — core/agentblocks' own (the word a
+# child's `▶` header is opened with), imported rather than re-spelled. A
+# foreground command is the default kind and its line already shows the command
+# itself, so `▶ foreground` would say nothing the dot and the command don't
+# ("⏺ make test · 0.6s"); `background` and `monitor` are kept, because with the
+# chip colour gone the word is the only thing left that distinguishes a job you
+# didn't wait for from one you did.
+_CMD_KIND_MUTE = AB.CMD_KIND
 
 
 def _mute_kind(rest):
@@ -129,11 +153,14 @@ _MAIL_RGB = (tuple(MSGS.MSG_NEW_RGB), tuple(MSGS.MSG_READ_RGB))
 # …and a SKILL row's two: its own semantic hue, and RED when the call failed.
 _SKILL_RGB = (tuple(O.VIOLET), tuple(O.RED))
 
-# The file-op one-liner's shape, `verb(name)` — built FROM its owner's verb set
-# so the three verbs live in exactly one place (core/streamfmt.file_line paints
-# the shape, plugins/claude_code/tools.FILE_LABEL names the verbs).
-_VERB_ACT = {"Read": ACT_READ, "Update": ACT_EDIT, "Write": ACT_WRITE}
-_FILE_RE = re.compile(r"^(%s)\(" % "|".join(sorted(set(FILE_LABEL.values()))))
+# The file-op one-liner's shape, `verb(name)` — built FROM its owner's table so
+# the three verbs and the class each names live in exactly one place
+# (core/streamfmt owns file_line's shape AND its FILE_ACTS map; the hosts map
+# their own tool names onto those verbs). This was a local dict plus a regex over
+# plugins.claude_code.tools.FILE_LABEL — the presenter re-deciding, for Claude's
+# tool names only, a question the shape's owner can answer for every host.
+_VERB_ACT = SF.FILE_ACTS
+_FILE_RE = re.compile(r"^(%s)\(" % "|".join(sorted(_VERB_ACT)))
 # The `+A -R` line counts a mutation one-liner carries, in the same shape
 # file_line paints them (after the closing paren, so a filename containing a
 # digit-plus can't be read as a count).
@@ -145,34 +172,17 @@ _DIFF_RE = re.compile(r"\)\s+\+(\d+)(?:\s+-(\d+))?|\)\s+-(\d+)")
 _WARN_GLYPH = EW.GLYPH
 
 
-# The producer-source REGISTER -> the agent class it names (core/ops.py owns the
+# The producer-source REGISTER -> the agent class it names — the FALLBACK for an
+# op with no `act` stamp, which since P6 means a PARKED one (core/ops.py owns the
 # `src` vocabulary; this is its one reader on the classify path). A prefix absent
 # here — or an op with no stamp — falls through to the palette test in _classify.
 #
 # DERIVED from the one core-owned register table (core/agentblocks.REGISTERS),
-# not authored: the same closed vocabulary is read by read/mirror.agent_scope's
-# prefix set, and three independent spellings of it meant a fourth host had to
-# edit three packages with no failure if it edited two. The tokens it yields ARE
-# the ACT_* constants above (pinned by tests/test_l1i_host_contract.py, which
-# also proves this map is imported rather than re-spelled).
+# not authored: two independent spellings of one closed vocabulary meant a third
+# host had to edit two packages with no failure if it edited one. The tokens it
+# yields ARE the ACT_* constants above (pinned by tests/test_l1i_host_contract.py,
+# which also proves this map is imported rather than re-spelled).
 _SRC_ACT = AB.src_acts()
-
-# …and the `<prefix>:` stamps whose block headers as_lead normalises into the
-# LEAD's own vocabulary — the same table's `lead` field. See as_lead.
-_LEAD_SRC = AB.lead_src_prefixes()
-
-
-def _is_team(op):
-    """Is this op an agent-TEAM member's, rather than a subagent's? The producer
-    already says so in the `src` stamp it wears for the web mirror's main-agent-only
-    drop (`team:<id>` vs `sub:<id>` — core/ops.py owns that vocabulary), so nothing
-    here parses a name or a colour. An op with no stamp at all (pre-`src` history, or
-    the main session's own launch header) is not claimed as a teammate.
-
-    The stamp comes from the register table (agentblocks.src_stamp), like every
-    other prefix in this module — this was a FOURTH independent spelling of it,
-    found by the contract test that pins the derivation."""
-    return str(op.get("src") or "").startswith(AB.src_stamp(AB.REG_TEAM))
 
 
 def _plain(op):
@@ -226,9 +236,18 @@ def diffstat(op):
     it carries none. The collapsed edit fragment sums these over its run
     ("edited 3 files +12 -4"), which is the whole of focus mode's edit summary —
     so the numbers are read here, off the op, rather than scraped back out of
-    rendered HTML by the page. Same single owner as the verb: the shape is
-    core/streamfmt.file_line's."""
+    rendered HTML by the page.
+
+    Straight off the producer's `add`/`rem` FIELDS (core/ops.line/gut), with the
+    regex over the painted text as the parked-history fallback. Those two
+    integers were the LAST fact this module recovered by parsing rendered output:
+    the producer computed them, painted them, and the presenter read them back
+    out of the ANSI — where a change to how file_line spaces its counts would
+    have silently zeroed every edit summary. Same move `nf` made."""
     try:
+        add, rem = op.get("add"), op.get("rem")
+        if add is not None or rem is not None:
+            return int(add or 0), int(rem or 0)
         m = _DIFF_RE.search(_plain(op))
         if not m:
             return 0, 0
@@ -245,8 +264,11 @@ def diffstat(op):
 # No leading space: `who` is a FIELD now (core/ops.py) so a live chip's text
 # OPENS with the marker; pre-field history still has the name before it, and
 # `find` locating it at 0 vs >0 is exactly what tells the two eras apart.
-_LEGACY_NOTE = (("%s %s" % SF.MARK_PROMPT, "launched"),
-                ("%s %s" % SF.MARK_RESULT, "finished"))
+# The VERBS are core/streamfmt's too (SF.VERB_*, the words the producer's own
+# note ends on) — spelling them again here is how history came to read
+# differently from today for no reason a reader could see.
+_LEGACY_NOTE = (("%s %s" % SF.MARK_PROMPT, SF.VERB_LAUNCHED),
+                ("%s %s" % SF.MARK_RESULT, SF.VERB_FINISHED))
 
 
 def legacy_agent_note(op):
@@ -254,20 +276,29 @@ def legacy_agent_note(op):
     pre-`note` subagent chip, or None. Reads the marker, not the whole chip: `<who>` is
     simply the text before it, and the model/ctx tags after it are dropped (they belong
     on the agent's card). No duration — the chip never carried one; a live op's own note
-    does. Which of the two registers it gets comes from the op's `src` stamp, which is
-    OLDER than `note`, so history is worded right too; an op older than both reads as an
-    Agent (the neutral one, and the only guess available)."""
+    does.
+
+    WHICH REGISTER's word it gets comes from the op's `src` stamp, which is OLDER
+    than `note`, so history is worded right too — through the register table
+    (agentblocks.register_of_src → its `word`), the same data the PRODUCER words
+    a live note with, so the two eras cannot say it differently. An op older than
+    the stamp as well reads as an Agent: the neutral register, and the only guess
+    available. (This used to ask a boolean `_is_team` and pick between two
+    constants — which had no answer at all for a third register, and quietly
+    named a codex sidecar's chip an Agent.)"""
     try:
         if op.get("t") != "label" or op.get("note"):
             return None
         text = _plain(op)
+        reg = AB.register_of_src(op.get("src")) or AB.REG_AGENT
         for mark, verb in _LEGACY_NOTE:
             at = text.find(mark)
             if at >= 0:
                 # `<who>` is a FIELD now (core/ops.py), so a live chip opens AT
                 # the marker and only pre-field history has text before it
-                return SF.agent_note((text[:at].strip() or op.get("who") or ""),
-                                     verb, team=_is_team(op))
+                return SF.register_note(
+                    AB.register_word(reg),
+                    (text[:at].strip() or op.get("who") or ""), verb)
         return None
     except Exception:
         return None                     # unreadable: keep the chip
@@ -348,6 +379,14 @@ def lead_head(text):
 # reads as command family.
 _AGENT_RGB = frozenset(tuple(c) for c in (SL.SUB_PALETTE + SL.TEAM_PALETTE))
 
+# …and EVERY register's palette, from the one table that lists them
+# (agentblocks.stream_palettes → core/slots). as_lead's colour test uses this
+# wider set: it asks "is this a CHILD's block header", and a child of a host this
+# module has never heard of wears its own register's palette. The narrower
+# _AGENT_RGB above stays where the question really is "a CLAUDE agent's" —
+# prose_block, whose parked-codex hole is documented as accepted.
+_CHILD_RGB = frozenset(AB.stream_palettes())
+
 # The codex palette a codex run's chips wear (core/slots.CODEX_PALETTE) — disjoint
 # from every other palette and from the semantic colours, so a chip in it is a
 # codex block whoever the host is. It is the FALLBACK for deciding that, behind
@@ -356,11 +395,12 @@ _AGENT_RGB = frozenset(tuple(c) for c in (SL.SUB_PALETTE + SL.TEAM_PALETTE))
 # this covers. A codex-NATIVE subagent wears the SUB palette and stamps `sub:`,
 # because it is a child agent — it is not this.
 _CODEX_RGB = frozenset(tuple(c) for c in SL.CODEX_PALETTE)
-# codex's reasoning chip glyph (plugins/codex/stream.py `⋯ reasoning`) — its
-# prompt/message/result glyphs already coincide with the substream's _PROSE_MARKS
-# (⇢/✎/⇠); only reasoning is codex-only, and its `think` bubbles come from
-# plugins.conversation in scope, so it drops with the rest.
-_CODEX_REASONING = "⋯"
+# the REASONING chip's glyph (`⋯ reasoning`), from its owner core/streamfmt — the
+# fourth prose marker, emitted only by a host whose stream carries a thinking
+# summary (codex's rollout does, a Claude subagent's transcript does not). Its
+# three siblings are imported two lines below; this one was spelled here, which
+# is exactly the drift the styleguide's single-owner row names.
+_REASONING_MARK = SF.MARK_REASONING[0]
 
 # The markers on an agent's own PROSE blocks — the brief it was handed, its
 # assistant text, its final result. core/streamfmt owns all three.
@@ -423,9 +463,20 @@ def prose_block(op, scope=None):
         return False                    # unreadable: keep it (fail toward showing)
 
 
+# ---------------------------------------------------------------------------
+# PARKED-HISTORY ONLY, all three below. A live codex run stamps `bubbled` on its
+# prose and `chrome` on its frame (plugins/codex/stream.py), and those flags are
+# what op_items reads; these recover the same two facts from ops ALREADY ON DISK,
+# which no restart can re-stamp. They are palette-gated, so they can only ever
+# match codex's OWN ops — a session that never hosted a codex run has none — and
+# they are FROZEN: a new host must never grow a fourth one. It has no history to
+# recover, because it is stamping the flags from its first op.
+# ---------------------------------------------------------------------------
+
 def is_codex(op):
     """True when `op` wears the codex palette — a codex run's block, standalone
-    host or sidecar (the one signal that says 'this op is codex's')."""
+    host or sidecar (the one signal that says 'this op is codex's'). Survives as
+    the two predicates below need it; nothing on the LIVE path asks."""
     try:
         return tuple(op.get("c") or ()) in _CODEX_RGB
     except Exception:
@@ -434,29 +485,34 @@ def is_codex(op):
 
 def codex_prose(op):
     """True for a codex PROSE block header (⇢ prompt / ✎ message / ⋯ reasoning /
-    ⇠ result) — the codex twin of prose_block. A STANDALONE codex session's view
-    DROPS these (op_items `host_lead`) because plugins.conversation re-bubbles
-    the same prose, exactly as agent scope drops an agent's prose ops; keeping
-    them both doubles the conversation AND folds it into 'ran N codex runs'."""
+    ⇠ result) — the codex twin of prose_block, and like it a PARKED-only
+    fallback (opshtml.ops.rebubbled). The session view drops these because
+    plugins.conversation re-bubbles the same prose, exactly as agent scope drops
+    an agent's; keeping both doubles the conversation AND folds it into 'ran N
+    codex runs'. A LIVE standalone run paints no prose into the mirror at all,
+    so every op this matches is history (25 parked sessions in the measured
+    corpus, 17 of them holding such ops)."""
     try:
         if op.get("t") != "label" or not is_codex(op):
             return False
         h = lead_head(_plain(op))[:1]
-        return h in _PROSE_MARKS or h == _CODEX_REASONING
+        return h in _PROSE_MARKS or h == _REASONING_MARK
     except Exception:
         return False
 
 
 def codex_chrome(op):
-    """A codex-only SCAFFOLDING line a STANDALONE session doesn't need — the
-    `⚙ <model> · <effort>` turn-context tag, the `codex ▶ <label>` run banner,
-    AND the `■ codex <label> ended · …` run FOOTER. All dropped in op_items
-    `host_lead` (alongside codex_prose) so a standalone codex session's view is
-    UNIFORM with Claude's — bubbles + real activity, no per-run banners/footers
-    ('I told you no codex specific ui'). The model + token totals still show in
-    the scoreboard; the footer's token rollup is redundant with it. A Claude
-    session has no such per-session footer, so keeping codex's is exactly the
-    codex-specific chrome to remove."""
+    """A codex-only SCAFFOLDING line — the `⚙ <model> · <effort>` turn-context
+    tag, the `codex ▶ <label>` run banner, AND the `■ codex <label> ended · …`
+    run FOOTER. Dropped by every web view so a codex session reads UNIFORMLY
+    with Claude's — bubbles + real activity, no per-run banners/footers ('I told
+    you no codex specific ui'). The model + token totals still show in the
+    scoreboard; the footer's token rollup is redundant with it.
+
+    The PARKED-history twin of the producer-set `chrome` flag, which a live run
+    stamps on all three (plugins/codex/stream.py). Frozen at those three shapes:
+    a new host declares `chrome` and needs no sniffer, which is why this one
+    keeps a host's NAME in a string compare and no successor may."""
     try:
         if op.get("t") not in ("label", "gut") or not is_codex(op):
             return False
@@ -470,6 +526,20 @@ def codex_chrome(op):
                 or text.startswith("■ codex "))
     except Exception:
         return False
+
+
+# The three classes a FILE one-liner can carry — what as_lead recognises a
+# child's file `gut` by when it converts it into the lead's bare `line`.
+_FILE_ACTS = frozenset(SF.FILE_ACTS.values())
+
+
+def _file_row(op, text):
+    """Is this body op a file one-liner (and therefore a whole block)? The
+    producer's `act` first, its painted VERB as the parked-history fallback —
+    the same order everything else here reads the two in."""
+    if op.get("act") in _FILE_ACTS:
+        return True
+    return bool(_FILE_RE.match(R.strip_ansi(text).strip()))
 
 
 def as_lead(op):
@@ -513,15 +583,19 @@ def as_lead(op):
         # shape that carries it (a file-op one-liner), undone by its owner
         s = out.get("s") or ""
         lean = s if out.get("who") else SF.strip_who(s, out.get("c") or ())
-        if not out.get("g") and _FILE_RE.match(R.strip_ansi(lean).strip()):
+        if not out.get("g") and _file_row(out, lean):
             # …and THAT one-liner is the lead's own file op, painted for a shared
             # pane: a `gut` so it hangs off this stream's gutter bar, where the
             # lead's is a bare `line`. In scope the bar says nothing (one agent),
             # and the difference costs more than it looks — a gut op names no
             # ACTIVITY CLASS, so an agent's reads and edits were invisible to the
             # item kind and to every view-mode summary. `line` carries the same
-            # click-to-view and memory tags, so the conversion is total.
-            return O.line(lean, view=out.get("v"), mem=bool(out.get("mem")))
+            # click-to-view and memory tags — and the producer's own `act`, which
+            # is the whole reason this conversion can stop depending on the three
+            # display verbs being spelled the way this module expects.
+            return O.line(lean, view=out.get("v"), mem=bool(out.get("mem")),
+                          nfiles=out.get("nf") or 0, act=out.get("act"),
+                          add=out.get("add") or 0, rem=out.get("rem") or 0)
         if lean == s and out.get("outer") is None:
             return out
         out = dict(out)
@@ -539,17 +613,18 @@ def as_lead(op):
     # hooks paint no tool but Bash/files/monitors/skills/mail): it is the same
     # thing, one call the agent made, and without the recolour it was the last
     # block in scope still wearing the terminal's coloured pill.
-    # Whose block it is comes from the producer's `src` REGISTER first, with the
-    # agent palettes as the fallback for ops written before the stamp — the same
-    # order _classify reads them in, so a block cannot be recoloured as an agent's
-    # and then classified as something else.
-    # WHICH registers recolour is the core table's `lead` field
-    # (agentblocks.lead_src_prefixes() → ("sub:", "team:")), not a literal tuple:
-    # codex is deliberately absent, and an asymmetry that lives as an omission
-    # from an inline list is one nobody can see. Behaviour is unchanged — a codex
-    # SIDECAR block wears its own stream palette and matches neither arm.
-    recolour = (c in _AGENT_RGB
-                or str(out.get("src") or "").startswith(_LEAD_SRC)) \
+    # Whose block it is: ANY producer stamp says a child painted it (in this view
+    # every op is that agent's, by construction — in_scope let it through), with
+    # any register's PALETTE as the fallback for ops written before the stamp.
+    # Both arms are deliberately host-BLIND. They were narrower — the two Claude
+    # palettes, and a `lead` field in the register table listing which registers
+    # may recolour — which made the recolour an enumeration of known hosts: a
+    # register outside it kept the terminal's coloured pill (cmd_note is
+    # colour-gated) and, worse, its `gut` file ops never became `line` ops, so
+    # its reads and edits were invisible to every view-mode summary. There is
+    # nothing host-specific about "this is a child's command header, paint it
+    # like the lead's" — which is the whole job of this function.
+    recolour = (c in _CHILD_RGB or bool(out.get("src"))) \
         and stripped[:1] in (_GLYPH_BASH, _GLYPH_BG, _GLYPH_MONITOR, _GLYPH_WS,
                              _GLYPH_FINISH, _GLYPH_TOOL)
     if stripped == text and not recolour and out.get("outer") is None:
@@ -787,6 +862,15 @@ def _classify(op):
         return None, False             # body ops inherit their block's class
     text = _plain(op)
     bad = _failed(op, text)
+    # THE PRODUCER'S OWN ANSWER, first (core/ops.py's `act`). Validated against
+    # the vocabulary, and fail-OPEN: an op stamped with a token this build does
+    # not know falls through to the derivation below rather than being handed to
+    # a page that has no phrase for it. `bad` is deliberately NOT the producer's
+    # to state — an outcome is structural (the shared semantic RED, the ORANGE
+    # interrupt), the same read for a stamped op and a parked one.
+    hint = op.get("act")
+    if hint in _ACTS:
+        return hint, bad
     if t == "line":
         if text.startswith(_WARN_GLYPH):
             return ACT_WARN, bad

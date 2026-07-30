@@ -292,7 +292,7 @@ def main():
     obs = FOBS.cmd_matches(cmd, d.get("cwd"))
     head = "▶ foreground" + "".join("  " + R.DIM + o.mark + R.RST for o in obs)
     O.emit(log, O.blank(), O.rule(),
-           O.label(head, LBL_FG, g=gid,
+           O.label(head, LBL_FG, g=gid, act=O.ACT_BASH,
                    mem=FOBS.cmd_mem_flag(cmd, d.get("cwd"), obs)),
            O.code(cmd, g=gid), O.rule())
     # (Any content-render mode the tailer picks is audited by the tailer itself —

@@ -6041,21 +6041,28 @@ the session's own; what changes is a `?agent=<id>` on every read.
 
 **The unified agent-scope render (one code path for every tool).** A Claude
 subagent, a teammate AND a codex run all go through the SAME scope pipeline, keyed
-the SAME way. `agent_scope(sid, aid)` is one tool-agnostic rule —
-`{sub:<aid>, team:<aid>, codex:<aid>}` — because every producer stamps its ops
-with the id that IS the scope key (a codex run's `codex:<aid>` is
-`paths.codex_aid`, no longer a `codex:<label>` matched by a per-tool lookup off
-the run's card, which an id mismatch could turn into an empty mirror). And an
-agent's PROSE (its ⇢ prompt / ✎ message / ⇠ result / ⋯ reasoning) is dropped in
-scope — so its conversation, re-bubbled from its transcript via
+the SAME way. `agent_scope(sid, aid)` is the AGENT ID itself and `opshtml.in_scope`
+matches an op's `src` on the id ALONE (`src.split(":", 1)[-1] == scope`), because
+the id IS the scope key and the prefix in front of it is the PRODUCER's register:
+a codex sidecar stamps `codex:<aid>`, a codex-native subagent `sub:<aid>`, and
+both are that agent's ops. (The id itself is `paths.codex_aid` for a codex run —
+no longer a `codex:<label>` matched by a per-tool lookup off the run's card,
+which an id mismatch could turn into an empty mirror.)
+
+It used to RESOLVE the id into the set of prefixed stamps it could wear, built
+from the register table. Correct for the registers in the table, and silently
+wrong for anything else: an unlisted prefix matched no op, so that agent's mirror
+rendered BLANK — a failure with no error, in the one direction a reader cannot
+detect. Matching the id needs no table, so there is nothing left to keep in step.
+
+And an agent's PROSE (its ⇢ prompt / ✎ message / ⇠ result / ⋯ reasoning) is
+dropped — so its conversation, re-bubbled from its transcript via
 `plugins.conversation`, isn't shown twice — by ONE signal: the producer-set
 `bubbled` op field (`core/ops.py`), set by whichever stream emits both the op and
-the conversation record. `opshtml.op_items` drops a `bubbled` op directly;
-`actclass.prose_block` survives only as the legacy fallback for parked pre-flag
-ops. This retired the codex-only fork (`agent_scope`'s codex branch, the
-`codexprose:<label>` marker, palette-sniffing) — a change to how an agent's
-stream renders now lands in one place for every tool (docs/codex.md *Sidecar →
-subagent parity*, *The unified scope key*).
+the conversation record. This retired the codex-only fork (`agent_scope`'s codex
+branch, the `codexprose:<label>` marker, palette-sniffing) — a change to how an
+agent's stream renders now lands in one place for every tool (docs/codex.md
+*Sidecar → subagent parity*, *The unified scope key*).
 
 **The HOST's scaffolding is dropped the same way — the `chrome` flag.** A run
 banner, a `⚙ model · effort` line, a run footer, the lead's own
@@ -7681,11 +7688,24 @@ Mechanics worth knowing:
   filter's `.fhide` beside it, deliberately separate classes so neither pass could
   un-hide the other's items — until the chips were removed (*Stream item kinds*).
 
-Known gap: a STANDALONE codex host session's blocks classify as `agent` (there
-codex IS the main agent, and its chips carry no main-session glyph), so its
-default-mode summary reads "ran N agents" instead of naming the codex run. It
-needs a codex-specific act to fix properly; until then `verbose` shows such a
-session unfolded.
+**Where the class comes from.** The PRODUCER says it: every op carries an `act`
+field (core/ops.py, the vocabulary in the same module), stamped by the formatter
+that painted it — a shell block `bash`, a file one-liner the class its display
+verb names, a child agent's own cards its REGISTER's class, a `⚠` line `warn`.
+`actclass._classify` reads that field first and validates it against the
+vocabulary; everything below it — the block-opening glyph, the chip's colour, the
+`src` register, the file verb — is the PARKED-HISTORY fallback for ops already on
+disk, which no restart can re-stamp.
+
+That order is the fix for what used to be logged here as a "known gap": a
+standalone codex host's blocks classified as `agent` (there codex IS the main
+agent, and its chips carry no main-session glyph), so a whole session's default
+summary read "ran N agents". The glyph/colour tables are a closed enumeration of
+the hosts whose vocabulary was written into them, so the failure was structural,
+not a missing case — the next host would have reproduced it exactly. A stamp
+cannot: a producer always knows what it painted. Codex's own runs get
+`ACT_CODEX`, so they fold as `ran N codex runs` under their own class, and its
+shell/file/tool blocks carry the same classes Claude's do.
 
 ## Notifications (the toaster)
 

@@ -67,28 +67,49 @@ MAIL_TO = "to %s"
 # sides need it: the producer stamps the note (agentblocks.AgentStream.note) and the web
 # presenter recovers it for pre-`note` ops (opshtml/actclass.legacy_agent_note), and a
 # dashboard module may not reach into a plugin for a string.
-AGENT_WORD = 'Agent "%s"'
+#
+# The quoted shape is GENERIC — `<Name> "<label>"` — because a host that streams
+# its own runs as children is named the same way (`Codex "Dewey"`, and whatever
+# the next one calls itself). host_word() binds the first half so the result is
+# still a one-`%s` template the note builder fills with the child's label;
+# core/agentblocks.REGISTERS holds the bound words as DATA, one per register, so
+# a new host adds a row rather than a core constant carrying its name.
+HOST_WORD = '%s "%s"'
+
+
+def host_word(host):
+    """`Agent "%s"` / `Codex "%s"` — HOST_WORD with the naming half bound."""
+    return HOST_WORD.replace("%s", host, 1)
+
+
+AGENT_WORD = host_word("Agent")
 TEAM_WORD = "Teammate @%s"
 
+# …and the three VERBS those notes end on — a child's whole lifecycle as far as
+# the web is concerned: it `launched` (or `resumed`, a Claude subagent picked
+# back up) and it `finished`. One owner because two surfaces write them: the
+# producer, through agent_note/codex_note below (core/agentblocks.AgentStream
+# passes the verb), and the web presenter, which recovers the SAME sentence for
+# a chip written before producers carried a `note` at all
+# (dashboard/opshtml/actclass._LEGACY_NOTE) — two spellings of `finished` is a
+# history that reads differently from today for no reason anyone could see.
+VERB_LAUNCHED = "launched"
+VERB_RESUMED = "resumed"
+VERB_FINISHED = "finished"
 
-CODEX_WORD = 'Codex "%s"'
 
+def register_note(word, label, verb, dur=""):
+    """`Agent "Explore" launched` / `Teammate @fix-smoke-dedup finished · 21m 31s`
+    / `Codex "Dewey" ran` — the web mirror's one-liner for a child's
+    launch/finish, in whichever REGISTER's `word` the caller hands it
+    (core/agentblocks.REGISTERS holds them). `dur` is appended when the caller
+    has one (a launch has nothing to report yet).
 
-def agent_note(label, verb, team=False, dur=""):
-    """`Agent "Explore" launched` / `Teammate @fix-smoke-dedup finished · 21m 31s` —
-    the web mirror's one-liner for an agent's launch/finish. `dur` is appended when
-    the caller has one (a launch has nothing to report yet)."""
-    note = ((TEAM_WORD if team else AGENT_WORD) % label) + " " + verb
-    return note + " · " + dur if dur else note
-
-
-def codex_note(label, verb, dur=""):
-    """`Codex "Dewey" ran` — the web mirror's one-liner for a codex SIDECAR run's
-    launch card, the codex twin of agent_note (so a codex run surfaces in the lead
-    the same way a Claude subagent does, docs/codex.md *Sidecar → subagent
-    parity*). Its own word (`Codex`) rather than `Agent`, since a codex run is a
-    third kind the summary counts as `ran N codex runs`."""
-    note = (CODEX_WORD % label) + " " + verb
+    ONE builder for every register, and the register's word arrives as an
+    argument: the per-host twin this replaced (`codex_note`, over a core constant
+    named CODEX_WORD) said the same sentence a second time so that one word in it
+    could differ."""
+    note = (word % label) + " " + verb
     return note + " · " + dur if dur else note
 
 
@@ -113,7 +134,7 @@ def skill_note(name, failed=False):
 
 
 def chip(who, glyph, kind, rgb, tags=(), g=None, lk=None, web=False, note=None,
-         mem=False, bubbled=False):
+         mem=False, bubbled=False, act=None):
     """The block-header label op: `<glyph> <kind>` in the stream's colour, with
     `who` (the agent's name) and `tags` (its model/effort + ctx chips) carried as
     the op's OWN fields rather than concatenated into the text (core/ops.py — the
@@ -126,9 +147,11 @@ def chip(who, glyph, kind, rgb, tags=(), g=None, lk=None, web=False, note=None,
     touch (see O.label) — an agent's vault read/search, the same flag the lead's
     command header carries. `bubbled` marks a PROSE block re-bubbled via
     plugins.conversation (see O.label) — the one unified agent-scope prose-drop
-    signal across Claude subagents and codex sidecars."""
+    signal across Claude subagents and codex sidecars. `act` is the block's
+    ACTIVITY CLASS (see O.label): what the web folds a run of these into, said by
+    the producer instead of recovered from `glyph` + `rgb`."""
     return O.label(f"{glyph} {kind}", rgb, g=g, lk=lk, web=web, note=note,
-                   who=who, tags=tags, mem=mem, bubbled=bubbled)
+                   who=who, tags=tags, mem=mem, bubbled=bubbled, act=act)
 
 
 def compose(op, s=None):
@@ -282,6 +305,23 @@ def file_line(verb, name, rgb, failed=False, extent="", added=0, removed=0,
     return line
 
 
+# The three DISPLAY VERBS a file one-liner opens with, and the activity class
+# each names (core/ops.py's `act`). The verbs are file_line's own vocabulary —
+# every host paints the same three so an edit reads the same whoever made it
+# (plugins/claude_code/tools.FILE_LABEL maps Claude's tool names onto them,
+# plugins/codex/stream.FILE_VERB maps codex's patch kinds) — so the mapping onto
+# an act belongs here, beside the shape, and both the producer (which stamps it)
+# and the web presenter (whose parked-history fallback matches these verbs in the
+# painted text) read this one table. A verb absent from it, like codex's
+# `Delete`, names no class: the row still renders, it just doesn't fold.
+FILE_ACTS = {"Read": O.ACT_READ, "Update": O.ACT_EDIT, "Write": O.ACT_WRITE}
+
+
+def file_act(verb):
+    """The activity class a file one-liner's display `verb` names, or None."""
+    return FILE_ACTS.get(verb)
+
+
 # How many files a one-liner LISTS before it starts counting them, the separator
 # between them, and the fragment for the remainder. 5 rather than 1: `Read(a.py)  +7
 # more` named one file out of eight and left the reader to click to find out what the
@@ -386,8 +426,13 @@ def command_open(cmd, gid, col=None, head="▶ foreground", mem=False):
 
     `mem` rides the header op (core/ops.label) — a command that read or searched
     the memory wiki, which is a property of the BLOCK rather than of any line in
-    it; the ❖ marker itself goes in `head`, which the caller builds."""
-    return [O.blank(), O.rule(), O.label(head, col or CMD_OK, g=gid, mem=mem),
+    it; the ❖ marker itself goes in `head`, which the caller builds.
+
+    The header carries `act=bash` (core/ops.py): whoever opened the block, a
+    foreground shell command is one in every summary — which is the whole point
+    of a standalone codex run painting through this builder."""
+    return [O.blank(), O.rule(),
+            O.label(head, col or CMD_OK, g=gid, mem=mem, act=O.ACT_BASH),
             O.code(cmd, g=gid), O.rule()]
 
 

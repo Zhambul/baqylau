@@ -288,7 +288,8 @@ def main():
     done = ev == "TaskCompleted"
     glyph, rgb = (GLYPH_DONE, DONE_RGB) if done else (GLYPH_NEW, CREATED_RGB)
     text = f"{glyph} task #{tid} · {subj}" if subj else f"{glyph} task #{tid}"
-    O.emit(LOG, O.blank(), O.label(text, rgb, note=task_note(tid, subj, done)))
+    O.emit(LOG, O.blank(), O.label(text, rgb, act=O.ACT_TASK,
+                                   note=task_note(tid, subj, done)))
     A.hook_event(d, decision=f"rendered: {text}; {snapshot(d, LOG)}")
 
 

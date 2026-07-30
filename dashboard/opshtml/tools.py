@@ -86,7 +86,13 @@ def _tint_lead(body, tok):
 # verdict lives in the LABEL rather than the body because two of its three
 # outcomes HAVE no body — an approval and a bare rejection say nothing beyond
 # themselves (docs/dashboard.md, *Web plan mode*).
-PLAN_WHO = "claude ▸ proposes a plan"
+# `%s` is the ASSISTANT's own name (`self_label`, below) — the same thread the
+# `message` and `question` bubbles are already labelled through. It was the
+# literal "claude", so a codex session's plan bubble said another tool had
+# proposed it (bug 14): every OTHER bubble in that same conversation was named
+# correctly, which made the one wrong label read as a mix-up rather than a
+# default.
+PLAN_WHO = "%s ▸ proposes a plan"
 PLAN_DECIDED = {"approved": "you ▸ approved the plan",
                 "changes": "you ▸ asked for changes",
                 "rejected": "you ▸ rejected the plan"}
@@ -145,7 +151,7 @@ def msg_html(kind, text, sender="", qa=None, par="", cmds=(), meta=False,
     # one defaults to "claude" (every existing Claude call).
     who = {"prompt": "you", "message": self_label,
            "question": self_label + " ▸ asks you", "answer": "you ▸ answered",
-           "plan": PLAN_WHO,
+           "plan": PLAN_WHO % self_label,
            "plandecision": PLAN_DECIDED.get(decision) or "you ▸ decided",
            "recap": "↩ recap",
            "sendmsg": SF.MARK_MAIL + " " + SF.MAIL_TO % (sender or "team")} \
@@ -211,7 +217,16 @@ def msg_html(kind, text, sender="", qa=None, par="", cmds=(), meta=False,
 # Escape discipline is unchanged — every leaf rides ansi_html / html.escape.
 WRITE_CAP = 200                    # Write content lines shown before an elision
 _DEFLIST_TOOLS = ("Grep", "Glob", "WebFetch", "WebSearch", "Task", "SendMessage")
-_EDIT_TOOLS = ("Edit", "MultiEdit", "NotebookEdit")
+
+
+def _edit_tools():
+    """Claude Code's MUTATING file tools — the tool names whose one-liner verb is
+    `Update`, DERIVED from the verb table that decides that (FILE_LABEL, the
+    single owner) instead of listed again here. The list was `("Edit",
+    "MultiEdit", "NotebookEdit")`: correct, and a second spelling of three of
+    that table's five keys, so a sixth tool would have had to be added twice."""
+    from plugins.claude_code import tools as T
+    return tuple(k for k, v in T.FILE_LABEL.items() if v == "Update")
 
 
 def _first_line(s, n=200):
@@ -340,7 +355,7 @@ def tool_html(tool_name, inp):
     try:
         if tool_name == "Bash":
             return _bash_html(inp)
-        if tool_name in _EDIT_TOOLS:
+        if tool_name in _edit_tools():
             return _edit_html(tool_name, inp)
         if tool_name == "Write":
             return _write_html(inp)

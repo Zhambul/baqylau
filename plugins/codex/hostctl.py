@@ -59,13 +59,11 @@ class CodexHost(HostControl):
     label = "Codex"
     launchable = True
 
-    # A STANDALONE codex session's own ops ARE its stream: the same tailer runs
-    # whether codex is the session or a sidecar inside a Claude one, so the lead's
-    # turns are painted as ⇢/✎/⋯/⇠ prose blocks AND re-bubbled by
-    # plugins.conversation. The web session view drops the ops half. See
-    # HostControl.lead_prose — this is the trait that replaced the read model's
-    # `owns_by(transcript) == "codex"` string compare.
-    lead_prose = True
+    # (No `lead_prose` declaration since P6: a standalone codex run's prose is
+    # not painted into the mirror at all — plugins/codex/stream.py returns early
+    # in that register — and where a run DOES paint prose it stamps the op
+    # `bubbled`, which every web view honours. The host had nothing left to
+    # declare; see HostControl's note.)
 
     # --- CONTROL gestures (the codex-supported subset; the rest stay inert) ---
 

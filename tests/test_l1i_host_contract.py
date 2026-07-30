@@ -52,17 +52,20 @@ LITERAL_ALLOW = {
     # (P3 deleted this file's two rows: the host-NAMED /api/codex-usage endpoint
     # and its get_codex_usage handler are gone, folded into the one host-keyed
     # usage strip that /api/accounts now serves over plugins.usage_strip.)
-    # The presenter's parked-history sniffers. ACT_CODEX is the dashboard's own
-    # activity-class token (the page's ACT_PHRASE table is keyed by it) and only
-    # COINCIDES with the register name — check 3 below pins that coincidence
-    # rather than leaving it to luck. The two banner/footer string compares are
-    # text sniffs over ops written before the `chrome` flag existed; P6 demotes
-    # them to explicitly-parked-only.
+    # The presenter's two remaining parked-history sniffs: `codex_chrome` matches
+    # the run banner / footer of ops written BEFORE the `chrome` flag existed
+    # (25 such sessions in the parked corpus), and no restart can re-stamp them.
+    # FROZEN at these two literals — a live run stamps the flag, so a new host
+    # neither needs nor may add a third.
+    #
+    # (P6 deleted this file's `codex` row: the ACT_CODEX token is no longer
+    # spelled here at all. The act vocabulary moved to its owner core/ops.py —
+    # the producers stamp from it — and actclass imports the tokens, so the
+    # coincidence between the register name and the act token is now a
+    # derivation rather than a matching pair of strings.)
     "dashboard/opshtml/actclass.py": {
-        "codex": "ACT_CODEX, the presenter's own act token (pinned to the "
-                 "register table by test_register_table_is_the_single_source)",
-        "codex ": "P6: parked-history sniff for the pre-`chrome` run banner",
-        "■ codex ": "P6: parked-history sniff for the pre-`chrome` run footer",
+        "codex ": "parked-history sniff for the pre-`chrome` run banner (frozen)",
+        "■ codex ": "parked-history sniff for the pre-`chrome` run footer (frozen)",
     },
 }
 
@@ -407,38 +410,58 @@ def test_every_host_declares_a_default_and_the_registry_owns_its_name():
 # --------------------------------------------------- 3. one register table
 
 def test_register_table_is_the_single_source():
-    """`read/mirror.agent_scope`'s prefixes and `opshtml/actclass`'s register→act
-    map are DERIVED from core/agentblocks.REGISTERS, not re-spelled beside it.
+    """`opshtml/actclass`'s register→act map and its wording fallback are DERIVED
+    from core/agentblocks.REGISTERS, not re-spelled beside it.
 
-    Three independent copies of one closed vocabulary is what this replaced, and
-    the failure mode of missing one when a host is added is SILENT: an
-    unrecognised `src` prefix matches no op, so that agent's mirror renders
-    blank, and an unrecognised register falls through to the palette test and
-    folds every block into "ran N agents"."""
+    Independent copies of one closed vocabulary is what this replaced, and the
+    failure mode of missing one when a host is added is SILENT: an unrecognised
+    register falls through to the palette test and folds every block into "ran N
+    agents", and its child gets named in the wrong register's word.
+
+    The scope filter is no longer one of the readers at all: `agent_scope` is the
+    bare AGENT ID and `in_scope` matches the id, so the prefix vocabulary cannot
+    be missed there because it is not consulted."""
     from core import agentblocks as AB
+    from core import ops as O
     from dashboard.opshtml import actclass
     from dashboard.read import mirror
 
-    # the scope filter's prefix set IS the table's, applied to one id
-    assert mirror.agent_scope("s", "aid42") == {p + ":aid42"
-                                               for p in AB.src_prefixes()}
+    # the scope is the id itself — no table, nothing to keep in step
+    assert mirror.agent_scope("s", "aid42") == "aid42"
     assert mirror.agent_scope("s", "") is None          # the session view
 
     # the presenter's register->act map IS the table's
     assert actclass._SRC_ACT == AB.src_acts()
-    # …and the tokens it yields are the presenter's OWN act vocabulary — the
-    # coincidence the actclass literal allowlist row leans on, pinned here
+    # …and the tokens it yields are the ACT vocabulary — which core owns, so the
+    # producer stamping `act` and the presenter classifying into it cannot
+    # disagree about a token
+    assert actclass.ACTS is O.ACTS
     assert set(actclass._SRC_ACT.values()) <= set(actclass.ACTS)
     assert actclass._SRC_ACT[AB.REGISTERS[AB.REG_AGENT]["src"]] == actclass.ACT_AGENT
     assert actclass._SRC_ACT[AB.REGISTERS[AB.REG_TEAM]["src"]] == actclass.ACT_TEAM
     assert actclass._SRC_ACT[AB.REGISTERS[AB.REG_CODEX]["src"]] == actclass.ACT_CODEX
 
-    # …and as_lead's recolour prefixes are the table's `lead` field, colon
-    # included. The codex register is deliberately absent — an ASYMMETRY that is
-    # now a field rather than an omission from an inline tuple.
-    assert actclass._LEAD_SRC == AB.lead_src_prefixes()
-    assert actclass._LEAD_SRC == ("sub:", "team:")
-    assert AB.REGISTERS[AB.REG_CODEX]["lead"] is False
+    # every row carries the WHOLE per-register vocabulary — a new host adds a
+    # row, and this is the list of what a row has to answer
+    for name, row in AB.REGISTERS.items():
+        assert set(row) == {"src", "act", "word", "palette"}, name
+        assert row["act"] in O.ACTS and row["word"].count("%s") == 1
+        assert row["palette"] and all(len(c) == 3 for c in row["palette"])
+    # the display WORD is data, not a branch: the codex register's is the generic
+    # host shape with its own name bound (there is no CODEX_WORD constant left)
+    from core import streamfmt as SF
+    assert AB.register_word(AB.REG_CODEX) == SF.host_word("Codex")
+    assert AB.register_word(AB.REG_AGENT) == 'Agent "%s"'
+    assert not hasattr(SF, "CODEX_WORD") and not hasattr(SF, "codex_note")
+    # …and the read side resolves a `src` stamp back to its register
+    assert AB.register_of_src("team:a1") == AB.REG_TEAM
+    assert AB.register_of_src("codex:x") == AB.REG_CODEX
+    assert AB.register_of_src("gem:x") is None and AB.register_of_src("") is None
+    # as_lead's colour fallback is EVERY register's palette, from the same table
+    # (it used to be the two Claude ones plus a `lead` flag naming which
+    # registers may recolour — an enumeration of known hosts)
+    assert actclass._CHILD_RGB == frozenset(AB.stream_palettes())
+    assert not hasattr(AB, "lead_src_prefixes")
 
 
 def test_the_register_prefixes_are_not_re_spelled_in_their_readers():
@@ -781,35 +804,40 @@ def test_no_plugin_imports_the_dashboard():
     assert bad == [], "plugin module(s) importing the dashboard: %s" % bad
 
 
-# --------------------------------------------------- the lead_prose host trait
+# ------------------------------- no host declares how its own prose is dropped
 
-def test_lead_prose_is_a_trait_not_a_host_name():
-    """A host whose OWN session stream carries its prose twice declares it
-    (`HostControl.lead_prose`); read/mirror.host_lead reads the trait off the
-    owning host instead of comparing its name to "codex".
+def test_the_prose_drop_asks_the_op_not_the_host():
+    """A host's own re-bubbled prose is dropped by the PRODUCER-set `bubbled`
+    flag in every view — no per-host declaration, and nothing left in the read
+    model to resolve one.
 
-    The old `owns_by(tpath) == "codex"` broke silently in the worst direction:
-    the wrong answer either DOUBLES every message in the mirror or folds a whole
-    session into one summary line, and nothing raises."""
+    The predecessors, in order: `is_codex_lead` (body `owns_by(tpath) ==
+    "codex"`), then `HostControl.lead_prose` read through `mirror.host_lead` and
+    threaded as `host_lead=` through seven call sites. The trait was already a
+    fact rather than a name — but it is per-HOST, and the question is per-OP:
+    only some of a host's ops are re-bubbled, and the producer of each one knows
+    which. A flag on the op cannot be out of date about itself.
+
+    Both wrong answers are silent, which is why this is pinned: the mirror either
+    doubles every message or folds a whole session into one summary line."""
     import plugins
+    from dashboard import opshtml
+    from dashboard.read import mirror
     from plugins.host import HostControl
 
-    assert HostControl.lead_prose is False              # the honest default
-    assert plugins.host_named("codex").lead_prose is True
-    assert plugins.host_named(plugins.default_host()).lead_prose is False
+    assert not hasattr(mirror, "host_lead")
+    assert not hasattr(HostControl, "lead_prose")
+    assert not hasattr(plugins.host_named("codex"), "lead_prose")
+    # …and no caller can pass one: the parameter is gone from the presenter
+    import inspect
+    assert "host_lead" not in inspect.signature(opshtml.op_items).parameters
+    for fn in (mirror.merge_live, mirror._render_window):
+        assert "host_lead" not in inspect.signature(fn).parameters
 
-
-def test_host_lead_is_false_in_agent_scope_and_for_the_default_host(monkeypatch):
-    """host_lead is a SESSION-view question: a sidecar run IS a sub-run, so any
-    agent scope answers False regardless of host."""
-    import plugins
-    from dashboard.read import mirror
-
-    monkeypatch.setattr(mirror.API, "session_row",
-                        lambda sid: {"transcript_path": "/x/rollout.jsonl"})
-    monkeypatch.setattr(plugins, "host_of",
-                        lambda p: plugins.host_named("codex"))
-    assert mirror.host_lead("s", None) is True
-    assert mirror.host_lead("s", "some-agent") is False   # agent scope: never
-    monkeypatch.setattr(plugins, "host_of", lambda p: None)
-    assert mirror.host_lead("s", None) is False           # unclaimed path
+    # the flag itself, in BOTH views — with the one structural exemption
+    op = {"t": "label", "s": "✎ message", "c": [1, 2, 3], "bubbled": 1}
+    assert opshtml.op_items([dict(op)], "k") == []              # session view
+    assert opshtml.op_items([dict(op, src="sub:a1")], "k", scope="a1") == []
+    web = dict(op, src="sub:a1", web=1)                # a child's endpoint card
+    assert opshtml.op_items([web], "k")                # …kept in the LEAD's view
+    assert opshtml.op_items([web], "k", scope="a1") == []   # …dropped in its own

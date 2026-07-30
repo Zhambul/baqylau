@@ -193,6 +193,18 @@ def op_html(op, key=""):
             # which no restart can re-stamp. An empty result drops the op entirely —
             # a TEAMMATE's spawn record is nothing BUT reminders (its real
             # instructions arrive as mail), and an empty panel is worse than none.
+            #
+            # PARKED-ONLY, and it KEEPS the direct plugin reach rather than moving
+            # behind a `plugins.clean_brief(path, text)` fan-out (the shape the
+            # other read facts use). Two reasons, in order: a path-keyed fan-out
+            # needs a PATH to pick the owning host with, and this function has
+            # none — op_html renders an op, not a session, and threading a
+            # transcript path through every call site to reach a fallback would
+            # be more coupling than the reach it removes. And the alternative to
+            # calling the marker's OWNER is a second regex here, which is the
+            # drift this file spent P6 removing. A host whose briefs need no
+            # stripping is unaffected: the call is a no-op on text without the
+            # marker.
             s = TR.strip_reminders(s)
             if not s.strip():
                 return ""
@@ -276,20 +288,64 @@ def in_scope(op, scope=None):
     `scope` None is the SESSION view: keep the main agent's own (unstamped) ops
     and drop every `src`-stamped one — agent and secondary-codex detail belongs
     to that agent, not the lead's stream — except the two `web`-stamped
-    endpoints described in op_items. A scope — the SET of `src` strings that
-    belong to one agent, e.g. {"sub:a1b2", "team:a1b2"} (read/mirror.agent_scope)
-    — inverts it: keep only those, which is how the same pipeline renders ONE
-    agent's mirror. A resolved set rather than a bare id because the PREFIX is
-    not uniform: one agent id can be stamped `sub:`, `team:` or `codex:`
-    depending on which register produced it (a codex sidecar is `codex:<aid>`, a
-    codex-native subagent `sub:<aid>`)."""
+    endpoints described in op_items. A scope is one AGENT ID and inverts it:
+    keep the ops stamped with that id, whatever REGISTER prefix the producer
+    wrote in front of it, which is how the same pipeline renders ONE agent's
+    mirror.
+
+    The id ALONE is the key (`read/mirror.agent_scope`), because the prefix is
+    the producer's register and the id is the agent: one agent id may arrive as
+    `sub:`, `team:` or `codex:` (a codex sidecar is `codex:<aid>`, a codex-native
+    subagent `sub:<aid>`) and every one of them is that agent's op. This used to
+    be a resolved SET of `<prefix>:<id>` strings built from the register table —
+    correct for the three registers in it, and silently empty for a fourth: an
+    unrecognised prefix matched nothing, so that agent's mirror rendered BLANK
+    rather than wrong. Matching the id needs no table at all."""
     src = op.get("src") or ""
     if scope is None:
         return not src or bool(op.get("web"))
-    return src in scope
+    return bool(src) and src.split(":", 1)[-1] == scope
 
 
-def op_items(ops, key="", ids=None, carry=None, scope=None, host_lead=False):
+def rebubbled(op, scope=None):
+    """THE prose-drop rule, the twin of `in_scope` above: does the view already
+    render this op's content as a CONVERSATION BUBBLE, so painting the op too
+    would show it twice?
+
+    `bubbled` is the producer's own answer (core/ops.py) and it is honoured in
+    BOTH views, because it means exactly what it says — "this block is also a
+    plugins.conversation record". The one exemption is structural rather than
+    per-host: in the SESSION view a `web`-stamped op is a CHILD's endpoint
+    surfaced in the LEAD's mirror (a subagent's ⇢ launch card, a codex run's),
+    and the conversation rendered there is the lead's own, which does not contain
+    the child's brief. Its bubble lives in that child's scope, where this rule
+    drops the op exactly as it should.
+
+    Honouring the flag unconditionally is what replaced a HOST-NAMED parameter
+    (`host_lead`, fed by an owning-host trait): a host that streams its own lead
+    — a standalone codex session, and every self-streaming host after it — has
+    unstamped prose ops that plugins.conversation re-bubbles, and without this
+    every message rendered TWICE and the whole session folded into one summary
+    line. The flag already knew; only the caller had to be told, per host.
+
+    The two SNIFFERS below are the PARKED-HISTORY fallback for ops written before
+    the flag existed, which no restart can re-stamp — the same role prose_block
+    plays for `bubbled` and codex_chrome for `chrome`:
+      · in AGENT SCOPE, `prose_block` (agent-palette prose headers);
+      · in the SESSION view, `codex_prose` — a standalone codex host's own
+        pre-flag ⇢/✎/⋯/⇠ ops (25 parked sessions in the measured corpus, 17 of
+        them holding such ops). Palette-gated, so it can only ever match codex's
+        own unstamped ops; a session that never hosted codex has none, and a
+        LIVE standalone codex run emits no prose at all (plugins/codex/stream.py
+        returns early in that register), so this is history and nothing else."""
+    if op.get("bubbled"):
+        return not (scope is None and op.get("web"))
+    if scope is not None:
+        return actclass.prose_block(op, scope)
+    return actclass.codex_prose(op)
+
+
+def op_items(ops, key="", ids=None, carry=None, scope=None):
     """A batch of ops -> [{g, t, html}, …] for the SESSION STREAM: the app
     folds same-`g` items into one collapsible block (the label ops become the
     block's summary chips), so a finished command reads as one line instead
@@ -356,74 +412,49 @@ def op_items(ops, key="", ids=None, carry=None, scope=None, host_lead=False):
         # one stream starts and another ends. Here the child has a CARD instead,
         # which already states its model, its duration and its launch.
         #
-        # Its body ops go with it through the same copy-group drop set the scope
-        # drops use, so a banner's rules and a footer's tail cannot outlive their
-        # header. The per-view SNIFFERS below (codex_chrome, agent_header) are now
-        # the LEGACY FALLBACK for ops ALREADY ON DISK, which carry no flag and
-        # which no restart can re-stamp — exactly the role prose_block plays
-        # beside `bubbled`.
+        # Its body ops go with it through the same copy-group drop set the prose
+        # drop uses, so a banner's rules and a footer's tail cannot outlive their
+        # header. The SNIFFERS beside the flag (codex_chrome here, prose_block /
+        # codex_prose in `rebubbled`, agent_header below) are the LEGACY FALLBACK
+        # for ops ALREADY ON DISK, which carry no flag and which no restart can
+        # re-stamp.
+        #
+        # Then the PROSE drop, also in every view (`rebubbled`) — the two
+        # questions a web view asks of an op before it renders anything: is this
+        # the host's frame, and is this already a bubble.
         g = op.get("g") or None
-        if op.get("chrome"):
+        if op.get("chrome") or actclass.codex_chrome(op):
+            # …the `chrome` FLAG, and behind it the parked-history sniffer for a
+            # codex run's pre-flag banner / `⚙` line / footer (palette-gated, so
+            # it matches only codex's own unstamped ops — see `rebubbled`). One
+            # test in EVERY view: the drop has the same answer in all of them.
             if g:
                 cs.setdefault("drop", set()).add(g)
             continue
         if g and g in cs.get("drop", ()):
             continue                    # this block's body, following its header
+        if rebubbled(op, scope):
+            # a block whose conversation this view already renders (see rebubbled)
+            if g:
+                cs.setdefault("drop", set()).add(g)
+            continue
         if scope is not None:
-            # AGENT SCOPE, and the ONLY place it differs from the session view.
-            # Two steps, both about making an agent's ops the same SHAPE the
-            # lead's are, so that everything below here is identity-agnostic by
-            # construction — no second rendering path, nothing downstream that
-            # has to know a scope exists:
-            #   1. normalise the op into the lead's vocabulary — the model/ctx
-            #      tags, the agent palette, the outer gutter and (for ops written
-            #      before `who` was a field) the name baked into the text all say
-            #      "which agent", which the scope says once (actclass.as_lead);
-            #   2. drop the agent's PROSE blocks (header + body, by copy group) —
-            #      its conversation now comes from its own transcript through the
-            #      same merge the lead's does (actclass.prose_block).
-            # In that order: the drop recognises a block by what it OPENS with,
-            # which is exactly what step 1 restores for history.
-            #   0. FIRST drop a codex run's terminal-only CHROME — the `codex ▶`
-            #      banner, the `⚙ model · effort` line, the `■ codex … ended` footer
-            #      (actclass.codex_chrome). Its model + duration belong on the
-            #      agent's card, not as inline ops (a Claude subagent scope has no
-            #      such lines). BEFORE as_lead, which recolours the codex palette
-            #      to the lead's SLATE and would defeat codex_chrome's palette gate.
-            if actclass.codex_chrome(op):
-                g = op.get("g") or None
-                if g:
-                    cs.setdefault("drop", set()).add(g)
-                continue
+            # AGENT SCOPE, and the ONLY place left where it differs from the
+            # session view: normalise the op into the LEAD's vocabulary — the
+            # model/ctx tags, the agent palette, the outer gutter and (for ops
+            # written before `who` was a field) the name baked into the text all
+            # say "which agent", which the scope says once (actclass.as_lead).
+            # Everything below here is then identity-agnostic by construction —
+            # no second rendering path, nothing downstream that has to know a
+            # scope exists.
+            #
+            # AFTER both drops above, deliberately: they recognise a block by its
+            # colour and by what it OPENS with, and as_lead rewrites both.
             op = actclass.as_lead(op)
             t = op.get("t")             # as_lead may re-shape the op (gut -> line)
             g = op.get("g") or None
-            # Drop a re-bubbled PROSE block: the producer-set `bubbled` flag is the
-            # ONE unified signal (a Claude subagent's ⇢/✎/⇠/✉ and a codex sidecar's
-            # ⇢/✎/⋯ alike — core/ops.py), so its conversation twin (plugins.
-            # conversation) isn't doubled. `prose_block` stays as the LEGACY fallback
-            # for parked pre-flag ops (no `bubbled` on disk).
-            if op.get("bubbled") or actclass.prose_block(op, scope):
-                if g:
-                    cs.setdefault("drop", set()).add(g)
-                continue
             if g and g in cs.get("drop", ()):
                 continue                # this block's body, following its header
-        elif host_lead and actclass.is_codex(op):
-            # STANDALONE codex HOST, session view: its own (unstamped) codex ops
-            # ARE the session's activity, not a foldable sub-run. DROP the prose
-            # ops (⇢/✎/⋯/⇠ header + body by group) — plugins.conversation
-            # re-bubbles that prose exactly as the lead's is bubbled, so keeping
-            # them here would DOUBLE the conversation AND fold it into "ran N
-            # codex runs" (the "all I see is Ran 4 codex runs" bug). Command /
-            # file / lifecycle ops stay (P2 renders commands inline).
-            g = op.get("g") or None
-            if actclass.codex_prose(op) or actclass.codex_chrome(op):
-                if g:
-                    cs.setdefault("drop", set()).add(g)
-                continue
-            if g and g in cs.get("drop", ()):
-                continue
         if actclass.agent_header(op):
             # the main session's own `▶ <type> · <desc>` launch/resume header —
             # dropped here because the substream's ⇢ prompt block says the same

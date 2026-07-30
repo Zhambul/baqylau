@@ -154,18 +154,43 @@ def test_op_items_scope_drops_a_bubbled_block_across_tools():
     # is re-bubbled via plugins.conversation) is dropped with its whole copy group,
     # while the agent's non-bubbled activity (a command) stays — one signal for a
     # Claude subagent AND a codex sidecar, no per-tool sniffing.
-    scope = {"sub:a1", "team:a1", "codex:a1"}
-    items = opshtml.op_items(
-        [{"t": "label", "s": "⇢ prompt", "c": [1, 2, 3], "g": "p1",
-          "src": "sub:a1", "bubbled": 1, "web": 1},
-         {"t": "gut", "s": "the brief", "c": [1, 2, 3], "g": "p1",
-          "src": "sub:a1", "bubbled": 1, "web": 1},
-         {"t": "label", "s": "▶ foreground", "c": [1, 2, 3], "g": "b1",
-          "src": "sub:a1"},
-         {"t": "gut", "s": "cmd output", "c": [1, 2, 3], "g": "b1",
-          "src": "sub:a1"}], "k", scope=scope)
+    ops = [{"t": "label", "s": "⇢ prompt", "c": [1, 2, 3], "g": "p1",
+            "src": "sub:a1", "bubbled": 1, "web": 1},
+           {"t": "gut", "s": "the brief", "c": [1, 2, 3], "g": "p1",
+            "src": "sub:a1", "bubbled": 1, "web": 1},
+           {"t": "label", "s": "▶ foreground", "c": [1, 2, 3], "g": "b1",
+            "src": "sub:a1"},
+           {"t": "gut", "s": "cmd output", "c": [1, 2, 3], "g": "b1",
+            "src": "sub:a1"}]
+    items = opshtml.op_items(ops, "k", scope="a1")
     # the bubbled prompt block (header + body, same group) is gone; the command stays
     assert [(it["g"], it["t"]) for it in items] == [("b1", "label"), ("b1", "gut")]
+    # …and the scope is the AGENT ID alone: the same ops under any REGISTER's
+    # prefix belong to the same agent, including one this build never heard of
+    for pre in ("sub", "team", "codex", "gem"):
+        got = opshtml.op_items([dict(o, src=pre + ":a1") for o in ops], "k",
+                               scope="a1")
+        assert [(it["g"], it["t"]) for it in got] == [("b1", "label"),
+                                                      ("b1", "gut")], pre
+
+
+def test_op_items_keeps_a_web_stamped_bubbled_card_in_the_session_view():
+    """`bubbled` is honoured in BOTH views — with ONE structural exemption: a
+    `web`-stamped op in the SESSION view is a CHILD's endpoint surfaced in the
+    LEAD's mirror, and the conversation rendered there is the lead's own, which
+    does not hold the child's brief. Its bubble lives in the child's scope, where
+    the rule above drops the op.
+
+    Without the exemption, honouring the flag unconditionally would delete every
+    subagent launch/result card from the lead's stream — the two blocks the `web`
+    stamp exists to surface."""
+    card = [{"t": "label", "s": "⇢ prompt", "c": [1, 2, 3], "g": "p1",
+             "src": "sub:a1", "bubbled": 1, "web": 1, "note": 'Agent "x" launched'},
+            {"t": "gut", "s": "the brief", "c": [1, 2, 3], "g": "p1",
+             "src": "sub:a1", "bubbled": 1, "web": 1}]
+    lead = opshtml.op_items(list(card), "k")
+    assert [it["t"] for it in lead] == ["label", "gut"]
+    assert opshtml.op_items(list(card), "k", scope="a1") == []   # …and gone in scope
 
 
 def test_ops_label_gut_chrome_field():
@@ -204,13 +229,13 @@ def test_op_items_drops_chrome_in_every_view():
     assert "echo" in _texts(lead)                     # activity kept
     # 2. AGENT SCOPE
     scoped = [dict(op, src="codex:cli") for op in chrome]
-    sc = opshtml.op_items(scoped, "k", scope={"codex:cli"})
+    sc = opshtml.op_items(scoped, "k", scope="cli")
     assert "codex ▶" not in _texts(sc) and "gpt-5.6-luna" not in _texts(sc)
     assert "echo" in _texts(sc)
-    # 3. the STANDALONE codex LEAD view
-    cl = opshtml.op_items(list(chrome), "k", host_lead=True)
-    assert "codex ▶" not in _texts(cl) and "gpt-5.6-luna" not in _texts(cl)
-    assert "echo" in _texts(cl)
+    # (there is no third arm any more: the STANDALONE host's lead view IS the
+    # session view above. It used to be a separate `host_lead=` branch, fed by a
+    # per-host trait; the drop is the same question with the same answer, so it
+    # is asked once — the `chrome` flag, in every view.)
 
 
 def test_op_items_scope_drops_codex_terminal_chrome():
@@ -221,7 +246,7 @@ def test_op_items_scope_drops_codex_terminal_chrome():
     # palette. The run's real activity (a command) stays.
     from core import slots as SL
     rgb = list(SL.CODEX_PALETTE[0])
-    scope = {"codex:cli"}
+    scope = "cli"
     ops = [
         {"t": "label", "s": "codex ▶ cli", "c": rgb, "src": "codex:cli"},
         {"t": "gut", "s": "⚙ gpt-5.6-luna · low", "c": rgb, "src": "codex:cli"},
@@ -238,7 +263,7 @@ def test_op_items_scope_drops_codex_terminal_chrome():
     assert "ended" not in html                     # footer dropped
     # Claude ops (no codex palette) are untouched by the chrome drop
     claude = [{"t": "label", "s": "⚙ not codex", "c": [1, 2, 3], "src": "sub:a1"}]
-    assert opshtml.op_items(claude, "k", scope={"sub:a1"})
+    assert opshtml.op_items(claude, "k", scope="a1")
 
 
 _HAVE_PYGMENTS = importlib.util.find_spec("pygments") is not None
@@ -402,8 +427,14 @@ def test_msg_html_plan_pair_labels_carry_the_verdict():
     the verdict rides the LABEL (+ a class per outcome, for the hue)."""
     from dashboard.opshtml import tools as T
     plan = opshtml.msg_html("plan", "# Step one")
-    assert 'class="msg plan"' in plan and T.PLAN_WHO in plan
+    assert 'class="msg plan"' in plan and T.PLAN_WHO % "claude" in plan
     assert "<h1>Step one</h1>" in plan          # the ordinary markdown bubble
+    # …and the proposer is the ASSISTANT's own name, threaded exactly as the
+    # `message`/`question` bubbles already are: a codex session's plan bubble
+    # must not say another tool proposed it (the label was the literal "claude"
+    # while every other bubble in the same conversation was named correctly).
+    cx = opshtml.msg_html("plan", "# Step one", self_label="codex")
+    assert T.PLAN_WHO % "codex" in cx and "claude" not in cx
     for dec, label in T.PLAN_DECIDED.items():
         h = opshtml.msg_html("plandecision", "", "", None, "", (), False, dec)
         assert 'class="msg plandecision %s"' % dec in h and label in h

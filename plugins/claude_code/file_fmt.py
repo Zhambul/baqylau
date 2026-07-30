@@ -298,7 +298,12 @@ def main():
     if not failed and gid:
         line, vid = stash_view(LOG, gid, tool, label, name, path, ti, tr, line)
     viewed = vid is not None
-    O.emit(LOG, O.line(line, view=vid, mem=is_mem))
+    # `act` is the display VERB's class, through the one owner of that mapping
+    # (streamfmt.file_act — the same table the web's parked-history fallback
+    # matches these verbs with).
+    O.emit(LOG, O.line(line, view=vid, mem=is_mem, act=SF.file_act(label),
+                       add=0 if failed else added,
+                       rem=0 if failed else removed))
     # Now that the emit has ensured the state DB exists, each matched observer
     # snapshots the touched file into its kv (notes = the audit fragments, empty
     # when nothing recorded / the DB is somehow still parked).
