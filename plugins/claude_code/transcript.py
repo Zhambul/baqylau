@@ -1687,6 +1687,14 @@ def conversation_for(sid, pos=0, agent_id=""):
     path = agent_path(sid, agent_id)
     if not path:
         return None
+    if not owns(path):
+        # A transcript this plugin does NOT own (a codex rollout resolved for a
+        # standalone codex session). Return None so the fan-out asks its real
+        # host: `conversation` is a first-non-None-wins `_first`, and parsing a
+        # codex rollout as a Claude transcript returns [] — a non-None answer
+        # that SHADOWS codex, leaving a codex session with no conversation
+        # bubbles at all. owns() is the same gate the path-keyed fan-outs apply.
+        return None
     return conversation(path, pos, taken_back(sid) if not agent_id else (),
                         sends=bool(agent_id))
 

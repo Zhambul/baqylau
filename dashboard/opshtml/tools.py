@@ -94,7 +94,7 @@ PLAN_EDITED = "edited before approval"
 
 
 def msg_html(kind, text, sender="", qa=None, par="", cmds=(), meta=False,
-             decision="", edited=False):
+             decision="", edited=False, self_label="claude"):
     """A main-thread CONVERSATION block for the merged web stream — not an op
     (the terminal mirror deliberately omits main-agent messages: the main
     pane already shows them; the web has no main pane, so the dashboard
@@ -138,8 +138,13 @@ def msg_html(kind, text, sender="", qa=None, par="", cmds=(), meta=False,
     # who sending to whom"). Both directions read the SAME `sender` slot — the PEER,
     # whoever they are — and the words are core/streamfmt's (MAIL_FROM/MAIL_TO), the
     # same pair the producer words its chip with, so the two surfaces cannot drift.
-    who = {"prompt": "you", "message": "claude",
-           "question": "claude ▸ asks you", "answer": "you ▸ answered",
+    # `self_label` is the ASSISTANT's name — "claude" for a Claude session, the
+    # owning host for another tool (a codex session's reply bubble must not read
+    # "claude"). It rides the conversation RECORD (codex read.conversation stamps
+    # `who`), so no host has to be threaded through the merge; a record without
+    # one defaults to "claude" (every existing Claude call).
+    who = {"prompt": "you", "message": self_label,
+           "question": self_label + " ▸ asks you", "answer": "you ▸ answered",
            "plan": PLAN_WHO,
            "plandecision": PLAN_DECIDED.get(decision) or "you ▸ decided",
            "recap": "↩ recap",

@@ -369,6 +369,51 @@ def prose_block(op, scope=None):
         return False                    # unreadable: keep it (fail toward showing)
 
 
+def is_codex(op):
+    """True when `op` wears the codex palette — a codex run's block, standalone
+    host or sidecar (the one signal that says 'this op is codex's')."""
+    try:
+        return tuple(op.get("c") or ()) in _CODEX_RGB
+    except Exception:
+        return False
+
+
+def codex_prose(op):
+    """True for a codex PROSE block header (⇢ prompt / ✎ message / ⋯ reasoning /
+    ⇠ result) — the codex twin of prose_block. A STANDALONE codex session's view
+    DROPS these (op_items `codex_lead`) because plugins.conversation re-bubbles
+    the same prose, exactly as agent scope drops an agent's prose ops; keeping
+    them both doubles the conversation AND folds it into 'ran N codex runs'."""
+    try:
+        if op.get("t") != "label" or not is_codex(op):
+            return False
+        h = lead_head(_plain(op))[:1]
+        return h in _PROSE_MARKS or h == _CODEX_REASONING
+    except Exception:
+        return False
+
+
+def codex_chrome(op):
+    """A codex-only SCAFFOLDING line a STANDALONE session doesn't need — the
+    `⚙ <model> · <effort>` turn-context tag and the `codex ▶ <label>` run banner.
+    Dropped in op_items `codex_lead` (alongside codex_prose) so a standalone
+    codex session's view is UNIFORM with Claude's — bubbles + real activity +
+    footer, no sub-run banners folding into 'ran N codex runs'. The model still
+    shows in the scoreboard; the `■ codex … ended` footer (a ■ line, not chrome)
+    stays."""
+    try:
+        if op.get("t") not in ("label", "gut") or not is_codex(op):
+            return False
+        # RAW text, NOT lead_head: lead_head strips the leading token as an
+        # agent `who` name ("codex ▶ cli" -> "▶ cli", "⚙ model" -> "· …"), which
+        # is exactly the prefix this predicate keys on. A command opens with ▶,
+        # so "codex " can only be the run banner (no collision).
+        text = _plain(op).lstrip()
+        return text[:1] == "⚙" or text.startswith("codex ")
+    except Exception:
+        return False
+
+
 def as_lead(op):
     """One AGENT-produced op rewritten in the LEAD's own vocabulary — THE single
     place agent scope differs from the session view (docs/dashboard.md *Agent

@@ -277,7 +277,7 @@ def in_scope(op, scope=None):
     return src in scope
 
 
-def op_items(ops, key="", ids=None, carry=None, scope=None):
+def op_items(ops, key="", ids=None, carry=None, scope=None, codex_lead=False):
     """A batch of ops -> [{g, t, html}, …] for the SESSION STREAM: the app
     folds same-`g` items into one collapsible block (the label ops become the
     block's summary chips), so a finished command reads as one line instead
@@ -359,6 +359,21 @@ def op_items(ops, key="", ids=None, carry=None, scope=None):
                 continue
             if g and g in cs.get("drop", ()):
                 continue                # this block's body, following its header
+        elif codex_lead and actclass.is_codex(op):
+            # STANDALONE codex HOST, session view: its own (unstamped) codex ops
+            # ARE the session's activity, not a foldable sub-run. DROP the prose
+            # ops (⇢/✎/⋯/⇠ header + body by group) — plugins.conversation
+            # re-bubbles that prose exactly as the lead's is bubbled, so keeping
+            # them here would DOUBLE the conversation AND fold it into "ran N
+            # codex runs" (the "all I see is Ran 4 codex runs" bug). Command /
+            # file / lifecycle ops stay (P2 renders commands inline).
+            g = op.get("g") or None
+            if actclass.codex_prose(op) or actclass.codex_chrome(op):
+                if g:
+                    cs.setdefault("drop", set()).add(g)
+                continue
+            if g and g in cs.get("drop", ()):
+                continue
         if actclass.agent_header(op):
             # the main session's own `▶ <type> · <desc>` launch/resume header —
             # dropped here because the substream's ⇢ prompt block says the same

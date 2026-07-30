@@ -124,12 +124,10 @@ def test_codex_prompts_counts_non_synthetic_user_turns(tmp_path):
 # ------------------------------------------------------------------ conversation
 
 def test_codex_conversation_standalone(tmp_path, monkeypatch):
-    # The STANDALONE branch resolves the session's own rollout — tested on the
-    # codex read module DIRECTLY, because through plugins.conversation() the
-    # fan-out asks claude_code FIRST and its rollout parse returns an empty [] (a
-    # non-None answer) that SHADOWS this branch on purpose: a standalone codex run
-    # already paints its prose into its (unstamped) ops, so bubbles here would
-    # DOUBLE it (docs/codex.md).
+    # A STANDALONE codex session's OWN conversation, from its rollout. Its prose
+    # OPS are dropped from the session view (op_items codex_lead) and RE-BUBBLED
+    # from here instead — so a codex session reads as ordinary conversation, not
+    # "ran N codex runs" (docs/codex.md *Standalone mirror parity*).
     from core import sessionapi as API
     from plugins.codex import read
     p = _full_rollout(tmp_path)
@@ -140,6 +138,33 @@ def test_codex_conversation_standalone(tmp_path, monkeypatch):
     assert kinds == [("prompt", "fix the parser"),
                      ("message", "let me look"),
                      ("message", "done, fixed it")]
+    # the assistant bubbles are authored "codex" (the reply must NOT read
+    # "claude" — msg_html's default); the user prompt has no author override
+    who = {(r["kind"], r["text"]): r.get("who") for r in recs}
+    assert who[("message", "done, fixed it")] == "codex"
+    assert who[("prompt", "fix the parser")] is None
+
+
+def test_codex_conversation_reads_event_msg_register_deduped(tmp_path, monkeypatch):
+    # Codex writes a turn in BOTH registers — event_msg (user_message /
+    # agent_message) AND response_item (message). An interactive `codex` often
+    # writes ONLY the event_msg one, so reading just response_item (the old code)
+    # returned NOTHING and the web showed no messages. Read both, de-doubled by
+    # text so a turn present in both bubbles ONCE.
+    from core import sessionapi as API
+    from plugins.codex import read
+    p = _rollout(tmp_path, [
+        _ev("user_message", message="hi there"),
+        _resp("message", role="user",
+              content=[{"type": "input_text", "text": "hi there"}]),   # same turn, other register
+        _ev("agent_message", message="hello back"),
+        _resp("message", role="assistant",
+              content=[{"type": "output_text", "text": "hello back"}]),  # dup
+    ])
+    monkeypatch.setattr(API, "session_row", lambda sid: {"transcript_path": p})
+    recs, _pos = read.conversation("sid1", 0, "")
+    assert [(r["kind"], r["text"]) for r in recs] == [
+        ("prompt", "hi there"), ("message", "hello back")]   # each once, not twice
 
 
 def test_codex_conversation_sidecar_by_agent_id(tmp_path, monkeypatch):
@@ -506,3 +531,36 @@ def test_codex_prose_drops_in_scope_only_for_rollout_backed_runs():
     assert AC.prose_block(think, companion_scope) is False
     # no scope (session view) never drops a codex prose op
     assert AC.prose_block(msg, None) is False
+
+
+def test_op_items_codex_lead_drops_prose_and_chrome_keeps_activity():
+    """A STANDALONE codex session's SESSION view (codex_lead=True): op_items
+    drops the PROSE ops (⇢/✎ header + body, re-bubbled via conversation) and the
+    codex CHROME (the `codex ▶ <label>` banner + `⚙ model` tag) — so the view is
+    bubbles + real activity + footer, never "ran N codex runs". Command / file /
+    footer ops STAY. Without codex_lead nothing is dropped (a sidecar or
+    non-codex host)."""
+    import re
+    from core import ops as O, render as R, slots as SL
+    from dashboard import opshtml
+    rgb = SL.CODEX_PALETTE[0]
+    ops = [
+        O.label("codex ▶ cli", rgb),                                   # chrome
+        O.gut(R.fg(*O.SLATE) + "⚙ gpt-5-codex · low" + R.RST, rgb),    # chrome
+        dict(O.label("⇢ prompt", rgb, g="b1"), who="codex"),           # prose hdr
+        O.gut("hi there", rgb, g="b1"),                                # prose body
+        dict(O.label("✎ message", rgb, g="b2"), who="codex"),          # prose hdr
+        O.gut("hello", rgb, g="b2"),                                   # prose body
+        dict(O.label("▶ cmd", rgb, g="b3"), who="codex"),              # command — KEPT
+        O.code("ls -la", g="b3"),
+        O.label("■ codex cli ended · 1.0s", rgb),                      # footer — KEPT
+    ]
+    items = opshtml.op_items(ops, "k", codex_lead=True)
+    txt = " ".join(re.sub("<[^>]+>", "", it.get("html", "") or "") for it in items)
+    assert "prompt" not in txt and "message" not in txt          # prose headers gone
+    assert "hi there" not in txt and "hello" not in txt          # prose bodies gone
+    assert "codex ▶" not in txt and "⚙" not in txt               # chrome gone
+    assert "ls -la" in txt                                        # command kept
+    assert "ended" in txt                                         # footer kept
+    # a non-codex-host view (codex_lead False) keeps everything
+    assert len(opshtml.op_items(ops, "k", codex_lead=False)) > len(items)

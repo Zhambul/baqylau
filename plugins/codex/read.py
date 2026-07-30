@@ -189,6 +189,30 @@ def conversation(sid, pos=0, agent_id=""):
         return None
     lines, new_pos = _complete_lines(path, pos)
     out = []
+    # codex writes each turn in BOTH registers — the event_msg one (user_message
+    # →`prompt`, agent_message→`message`, agent_reasoning→`reasoning`) AND the
+    # response_item one (`chat` role user/assistant, `think`). Which register a
+    # turn lands in is MODE-DEPENDENT: an interactive `codex` (what you launch
+    # directly) often writes prose ONLY as event_msg, while `codex exec` writes
+    # both — so reading just `chat`/`think` (the old code) returned NOTHING for an
+    # interactive session and the web showed no messages. Read BOTH and de-double
+    # by text: the same turn in both registers must bubble ONCE (first wins).
+    seen = set()
+
+    def _add(kind, text, ts):
+        body = (text or "").strip()
+        key = " ".join(body.split())
+        if not body or key in seen:
+            return
+        seen.add(key)
+        rec = {"kind": kind, "text": body, "anchor": None, "ts": ts}
+        # the assistant bubble's author — "codex", so the web reply bubble reads
+        # "codex" instead of the msg_html default "claude" (a codex session must
+        # not attribute its reply to Claude). The `prompt` bubble stays "you".
+        if kind == "message":
+            rec["who"] = "codex"
+        out.append(rec)
+
     for s in lines:
         s = s.strip()
         if not s:
@@ -201,18 +225,21 @@ def conversation(sid, pos=0, agent_id=""):
             continue
         k = rec["kind"]
         ts = _line_ts(s)
-        if k == "chat" and not rec.get("synthetic"):
+        # event_msg register (a turn's only source in interactive mode)
+        if k == "prompt":
+            _add("prompt", rec.get("text"), ts)
+        elif k in ("message", "reasoning"):
+            _add("message", rec.get("text"), ts)
+        # response_item register (exec mode + some interactive turns)
+        elif k == "chat" and not rec.get("synthetic"):
             role = rec.get("role") or ""
             if role == "user":
-                out.append({"kind": "prompt", "text": rec["text"],
-                            "anchor": None, "ts": ts})
+                _add("prompt", rec.get("text"), ts)
             elif role == "assistant":
-                out.append({"kind": "message", "text": rec["text"],
-                            "anchor": None, "ts": ts})
+                _add("message", rec.get("text"), ts)
             # developer/system non-synthetic turns are codex machinery — skip
-        elif k == "think" and rec.get("text"):
-            out.append({"kind": "message", "text": rec["text"],
-                        "anchor": None, "ts": ts})
+        elif k == "think":
+            _add("message", rec.get("text"), ts)
     return out, new_pos
 
 

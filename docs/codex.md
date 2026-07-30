@@ -483,11 +483,45 @@ unconfigured/unreachable (empty payload). Labelled `Codex · <planType>`.
 ### View modes — a codex run is its own act
 
 A codex block wears the **codex palette** (`core/slots.CODEX_PALETTE`, disjoint
-from every other), so `opshtml.actclass` classifies it `ACT_CODEX` — a standalone
-codex host's blocks used to fall through to the generic `agent` act and read "ran
-N agents". `ACT_CODEX` has a matching `VIEW_FRAGMENTS` row (`ran N codex runs`)
-and folds in default + focus, so default NAMES the codex run and verbose unfolds
-it (the page's `act`↔fragment table is grep-pinned in both directions).
+from every other), so `opshtml.actclass` classifies it `ACT_CODEX`. This is the
+right treatment for a SIDECAR codex run inside a Claude session — a foldable
+sub-run, like a subagent (`ran N codex runs`). It is the WRONG treatment for a
+STANDALONE codex session, where the codex activity IS the session — see below.
+
+### Standalone mirror parity (a codex session reads like a Claude session)
+
+A standalone codex session's dashboard view must look like a Claude session's:
+your message + codex's reply as conversation BUBBLES, real activity (commands,
+file ops) inline — never a session that shows only `■ codex cli ended` + "ran N
+codex runs". Two bugs made it show nothing:
+
+1. **The conversation was empty.** `plugins.conversation` is a first-non-None
+   `_first`, and `claude_code` is asked FIRST — it resolved the session's codex
+   rollout, parsed it as a Claude transcript, and returned `[]` (a non-None
+   answer) that SHADOWED codex. Fixed by an OWNS GATE in
+   `transcript.conversation_for`: it returns None for a transcript it doesn't own
+   (the same `owns()` predicate the path-keyed fan-outs use), so the fan-out
+   reaches codex. AND codex's `read.conversation` was reading only the
+   response_item register (`chat`/`think`) — but an interactive `codex` writes a
+   turn's prose ONLY in the event_msg register (`prompt`/`message`/`reasoning`),
+   so it returned nothing. It now reads BOTH registers, de-doubled by text (codex
+   writes each turn in both), and stamps the assistant bubble `who="codex"` so
+   the reply reads "codex", not msg_html's default "claude".
+
+2. **The prose folded into "ran N codex runs".** The prose OPS (⇢/✎/⋯/⇠) still
+   wore the codex palette → `ACT_CODEX` → folded. `op_items(codex_lead=True)` —
+   set by `mirror.is_codex_lead(sid, agent)` for a codex-owned session's own view
+   (not an agent scope) — DROPS a standalone codex session's prose ops
+   (`actclass.codex_prose`) AND its codex CHROME (the `codex ▶ <label>` banner +
+   the `⚙ model` tag, `actclass.codex_chrome`), exactly as agent scope drops an
+   agent's prose. The prose comes back as bubbles (1); the banners are sub-run
+   scaffolding a standalone session doesn't need (the model shows in the
+   scoreboard). Command / file / footer ops STAY.
+
+What's left for full uniformity (a follow-up): a standalone codex session's
+command/file ops still wear the codex palette, so until they are rendered in the
+lead's semantic colours + block shape (the shared `core/streamfmt` command
+block), a command-heavy session still folds its commands as `ACT_CODEX`.
 
 ### Host-labeled UI copy (no hardcoded "Claude")
 

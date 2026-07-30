@@ -71,7 +71,11 @@ def conv_items(recs, cmds=()):
                                        # since two of the three outcomes have no
                                        # body of their own (opshtml.msg_html)
                                        r.get("decision") or "",
-                                       bool(r.get("edited")))}
+                                       bool(r.get("edited")),
+                                       # the assistant's name — "claude" unless
+                                       # the record names its host (a codex reply
+                                       # bubble reads "codex", not "claude")
+                                       r.get("who") or "claude")}
         if r["kind"] == "prompt":
             it["text"] = r.get("text", "")
             it["par"] = r.get("par") or ""
@@ -94,7 +98,7 @@ def conv_items(recs, cmds=()):
     return out
 
 
-def merge_live(ops, recs, key="", cmds=(), scope=None):
+def merge_live(ops, recs, key="", cmds=(), scope=None, codex_lead=False):
     """A LIVE SSE delta of new ops + new conversation recs -> ONE oldest->newest
     item list, interleaved by ts — the increment-side twin of _merge_order's
     placement rule. Without it the SSE loop emits ops and msgs as two separate
@@ -121,7 +125,8 @@ def merge_live(ops, recs, key="", cmds=(), scope=None):
 
     def flush():
         if run:
-            items.extend(opshtml.op_items(run, key, scope=scope))
+            items.extend(opshtml.op_items(run, key, scope=scope,
+                                          codex_lead=codex_lead))
             run.clear()
 
     while i < len(ops) and j < len(recs):
@@ -310,7 +315,21 @@ def agent_scope(sid, agent):
     return srcs
 
 
-def _render_window(entries, start, key, cmds=(), scope=None):
+def is_codex_lead(sid, agent):
+    """True for a STANDALONE codex host's own SESSION view (no agent scope): the
+    session's transcript is a codex rollout, so its codex ops ARE the session's
+    activity, not a foldable sub-run. op_items then drops their PROSE ops (⇢/✎/
+    ⋯/⇠) — plugins.conversation re-bubbles that prose exactly as the lead's is,
+    so a codex session's messages read as ordinary conversation bubbles instead
+    of folding into 'ran N codex runs'. False for an agent scope (a sidecar codex
+    run IS a sub-run) or a non-codex host."""
+    if agent:
+        return False
+    row = API.session_row(sid) or {}
+    return plugins.owns_by(row.get("transcript_path") or "") == "codex"
+
+
+def _render_window(entries, start, key, cmds=(), scope=None, codex_lead=False):
     """Render entries[start:] to stream items ({g, t, html}); op entries through
     op_items, msg entries through conv_items. Only the windowed slice is
     rendered — the whole point of the block cut.
@@ -330,7 +349,8 @@ def _render_window(entries, start, key, cmds=(), scope=None):
             # and its read notice may well land in the NEXT batch (a conversation
             # record between them flushes the run) — where it would otherwise read as
             # a message of its own
-            out.extend(opshtml.op_items(pend, key, pids, carry, scope))
+            out.extend(opshtml.op_items(pend, key, pids, carry, scope,
+                                        codex_lead=codex_lead))
             pend.clear()
             pids.clear()
 
@@ -363,7 +383,8 @@ def merged_backlog(sid, key, blocks=TAIL_BLOCKS, agent=None):
     start = _snap(entries, _cut_blocks(entries, blocks, scope))
     oldest = entries[start][0] if start > 0 else 0
     return last, mpos, oldest, _render_window(entries, start, key,
-                                              session_cmds(sid), scope)
+                                              session_cmds(sid), scope,
+                                              is_codex_lead(sid, agent))
 
 
 def history(sid, key, before, blocks, agent=None):
@@ -386,7 +407,8 @@ def history(sid, key, before, blocks, agent=None):
     universe = entries[:bound]
     start = _snap(universe, _cut_blocks(universe, blocks, scope))
     oldest = universe[start][0] if start > 0 else 0
-    return oldest, _render_window(universe, start, key, session_cmds(sid), scope)
+    return oldest, _render_window(universe, start, key, session_cmds(sid), scope,
+                                  is_codex_lead(sid, agent))
 
 
 def ops_payload(sid, after, agent=None):
@@ -400,7 +422,8 @@ def ops_payload(sid, after, agent=None):
     last, ops = API.ops_at(sdb, after)
     row = API.session_row(sid)
     key = P.sid_from_log(row["log"]) if row else sid
-    return last, opshtml.op_items(ops, key, scope=agent_scope(sid, agent))
+    return last, opshtml.op_items(ops, key, scope=agent_scope(sid, agent),
+                                  codex_lead=is_codex_lead(sid, agent))
 
 
 def view_payload(sid, gid):
