@@ -154,9 +154,13 @@ def usage_windows():
 # --- the shared usage-window vocabulary (plugins.usage_strip) -----------------
 # codex names a window by its DURATION, because that is all it reports: there is
 # no key like Claude's `five_hour`, just `primary`/`secondary` and a length in
-# minutes. The label vocabulary is codex's own and deliberately NOT shared with
-# claude_code's — the SAME 10080-minute window is "1w" here and "7d" there, and
-# each host says it the way its own UI does.
+# minutes. The label is NOT codex's own: the shared duration table
+# (`plugins.window_label`) spells 300 → "5h" and 10080 → "7d" for every host,
+# because the strip lays its columns out BY DURATION and this row's weekly bar
+# sits directly under Claude's. It used to read "1w" here and "7d" there, each
+# "the way its own UI does" — which is one column with two names, not two
+# vocabularies. The duration ladder below survives only as the FALLBACK for a
+# duration that table does not name.
 
 HOST = "codex"              # this plugin's name, stamped on its strip row so
 #                             ONE painter can group the strip by host
@@ -165,20 +169,32 @@ MINS_WEEK = 60 * 24 * 7
 MINS_DAY = 60 * 24
 
 
+def _derived_label(mins):
+    """codex's OWN duration ladder — 20160 → "2w", 1440 → "1d", 90 → "90m". Only
+    reachable for a duration the shared table does not name (it names 300 and
+    10080), which is why 10080 can no longer come out of here as "1w"."""
+    if mins % MINS_WEEK == 0:
+        return "%dw" % (mins // MINS_WEEK)
+    if mins % MINS_DAY == 0:
+        return "%dd" % (mins // MINS_DAY)
+    if mins % 60 == 0:
+        return "%dh" % (mins // 60)
+    return "%dm" % mins
+
+
 def window_label(mins, i=0):
-    """A codex window's short label from its duration: 300 → "5h", 10080 → "1w",
-    1440 → "1d". Falls back to primary/secondary by position when the duration is
-    missing — the same rule the browser used to apply client-side, moved here so
-    the server owns every string the strip shows (docs/styleguide.md)."""
+    """A codex window's short label from its duration: 300 → "5h", 10080 → "7d"
+    (the SHARED table, `plugins.window_label` — the strip's columns are keyed by
+    duration and this row stacks under Claude's), 1440 → "1d" (codex's own
+    ladder, for a duration that table does not name). Falls back to
+    primary/secondary by position when the duration is missing — the same rule
+    the browser used to apply client-side, moved here so the server owns every
+    string the strip shows (docs/styleguide.md)."""
+    import plugins as P
+
     if isinstance(mins, (int, float)) and mins > 0:
         mins = int(mins)
-        if mins % MINS_WEEK == 0:
-            return "%dw" % (mins // MINS_WEEK)
-        if mins % MINS_DAY == 0:
-            return "%dd" % (mins // MINS_DAY)
-        if mins % 60 == 0:
-            return "%dh" % (mins // 60)
-        return "%dm" % mins
+        return P.window_label(mins, fallback=_derived_label(mins))
     return "primary" if i == 0 else "secondary"
 
 

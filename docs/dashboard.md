@@ -4552,9 +4552,18 @@ with an account switcher and one without:
   Claude's `7d` and codex's `1w`. Unioning across hosts would ghost a window onto
   a host that simply does not have one, which reads as a missing reading rather
   than a different vocabulary.
-- **`label`** is per host, and so is each window's **`label`** — the server owns
-  every string the strip shows (the browser used to derive both, in two different
-  client-side functions, one per host).
+- **`label`** (the ROW's name) is per host. Each WINDOW's **`label`** is not: it
+  comes from one shared table keyed by DURATION —
+  `plugins.window_label(mins, fallback=)` / `WINDOW_LABELS`, `300 → "5h"`,
+  `10080 → "7d"` — beside the vocabulary docstring, because it is part of the
+  vocabulary. A host may name only a duration the table does not know (codex's
+  own ladder, `1440 → "1d"`) or build a SUFFIX onto the shared word (Claude's
+  per-model `"7d fable"`); it may not re-spell the duration. codex used to call
+  10080 minutes `"1w"` while Claude called it `"7d"`, each "the way its own UI
+  does" — but the two rows share a COLUMN (*Row alignment*), and one column with
+  two names is not two vocabularies. The server still owns every string the
+  strip shows (the browser used to derive them, in two different client-side
+  functions, one per host).
 - **`scope`** (`account` | `model`) is what tells the painter whether a window
   owns a reset column. A per-model weekly cap resets on the same clock as the
   account-wide `seven_day` bar above it, so repeating it was pure duplication —

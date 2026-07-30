@@ -642,11 +642,10 @@ def test_accounts_strip_rows_stack_column_for_column():
     All three now render the column anyway (a ghost bar / an empty reset cell /
     a `visibility: hidden` badge), which is what these signatures pin.
 
-    The stack is per HOST GROUP, not per strip: window sets belong to a host
-    (the same 10080-minute window is Claude's "7d" and codex's "1w"), so rows of
-    different hosts deliberately do NOT share columns — unioning across them
-    would ghost a window onto a host that simply does not have it, which reads
-    as a missing reading rather than a different vocabulary.
+    The stack is per HOST GROUP, not per strip: a window a host does not report
+    is not a missing reading on its row, so rows of different hosts do not share
+    a GHOST. (Their columns are still anchored to the same durations — the label
+    for one duration is now one shared word, plugins.window_label.)
     Skipped without `node` (docs/testing.md)."""
     node = shutil.which("node")
     if not node:
@@ -702,13 +701,14 @@ def test_accounts_strip_rows_stack_column_for_column():
         "the account picker must drop non-switchable usage-strip rows"
 
     # TWO HOSTS, one strip, one painter: each group lays out its OWN windows,
-    # and neither borrows the other's — no ghost "1w" on an account, no ghost
-    # "7d fable" on the codex row. This is what let the second endpoint, DOM
-    # node, poll and painter be deleted.
+    # and neither borrows the other's — no ghost "7d fable" on the codex row.
+    # This is what let the second endpoint, DOM node, poll and painter be
+    # deleted. codex's weekly bar now wears the SHARED "7d" (the duration table,
+    # plugins.window_label) where it used to say "1w".
     two = d["cases"]["two_hosts"]
     labels = [[c["label"] for c in row if c["kind"] == "ubar"]
               for row in two["rows"]]
-    assert labels == [["5h", "7d"], ["1w"]]
+    assert labels == [["5h", "7d"], ["7d"]]
     assert two["ghosts"] == [[False, False, False], [False, False]]
     assert not two["hidden"]
 

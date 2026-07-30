@@ -496,8 +496,12 @@ the difference between a tool with an account switcher and one without:
  windows: [{key, label, used_pct, resets_at, window_mins, scope}, …]}
 ```
 
-`label` is the host's OWN spelling of a window — the same 10080 minutes is "7d"
-to Claude and "1w" to codex, and neither is wrong. A `used_pct` of `None` means
+A window's `label` comes from ONE table keyed by duration
+(`plugins.window_label` / `WINDOW_LABELS`, beside the fan-out's docstring): the
+same 10080 minutes is "7d" on every host's row, because the strip lays its
+columns out by duration and those bars are one column. A host names only a
+duration the table does not know, or suffixes the shared word ("7d fable"). A
+`used_pct` of `None` means
 this row has no reading for a window a SIBLING row has, and the painter ghosts
 the column rather than shifting the stack. This replaced a bespoke host-NAMED
 strip (`/api/codex-usage` → `#codexusage`, its own poll and CSS) with one

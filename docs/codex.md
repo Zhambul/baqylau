@@ -607,10 +607,15 @@ unconfigured/unreachable) means no row at all, rather than an empty pill.
 
 Codex names a window by its DURATION, because that is all it reports — there is
 no key like Claude's `five_hour`, just `primary`/`secondary` and a length in
-minutes. So `usage.window_label` is codex's OWN vocabulary: 300 → `5h`,
-10080 → `1w`, 1440 → `1d`. The same 10080-minute window Claude calls `7d` codex
-calls `1w`, and neither is wrong — which is exactly why the label is a per-host
-FIELD of the served row rather than something the browser derives. Every codex
+minutes. The WORD for that duration is shared, not codex's own:
+`usage.window_label` asks `plugins.window_label(mins)` first — 300 → `5h`,
+10080 → `7d` — and falls through to codex's own ladder (`_derived_label`:
+1440 → `1d`, 20160 → `2w`) only for a duration that table does not name. This
+row used to say `1w` where Claude said `7d` for the very same 10080 minutes, on
+the argument that each host should speak the way its own UI does; the strip
+lays its columns out BY DURATION, so those two bars are ONE column
+(docs/dashboard.md *Row alignment*) and it read as a column that renames itself
+halfway down. Every codex
 window is account-wide (`scope: "account"`), so each keeps its own reset column;
 codex reports no per-model cap. Percentages are rounded server-side (codex
 reports floats, Claude ints — the painter should not have to know which).

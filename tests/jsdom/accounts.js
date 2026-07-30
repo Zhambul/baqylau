@@ -176,11 +176,10 @@ step("one_logged_out", () => render([
 ]));
 
 // (4) TWO HOSTS in one strip — the whole reason the codex-only endpoint, DOM
-// node, poll and painter could go. Window sets are per host, so the column
-// union must be per host too: unioning across them would ghost Claude's "7d
-// fable" onto the codex row and codex's "1w" onto both accounts, which is not
-// a missing reading — it is a window that host does not have. The codex row is
-// a plain row with no slug and no switcher fields.
+// node, poll and painter could go. The codex row is a plain row with no slug
+// and no switcher fields, and its weekly window now carries the SHARED "7d"
+// (plugins.window_label): the same 10080 minutes is one column whoever reported
+// it, so codex's bar has to wear the name Claude's does.
 step("two_hosts", () => render([
   { host: "claude_code", slug: "c1", label: "oboard",
     windows: [H5(60, now + 3600), D7(97, now + 10222)],
@@ -188,7 +187,7 @@ step("two_hosts", () => render([
              seven_day: 97, seven_day_reset: now + 10222, ts: now } },
   { host: "codex", slug: "", label: "Codex · plus", switchable: false,
     plan: "plus", usage: null, limit_hit: null, logged_out: false,
-    windows: [W("w10080", "1w", 4, now + 522456, 10080, "account")] },
+    windows: [W("w10080", "7d", 4, now + 522456, 10080, "account")] },
 ]));
 
 /* ---------- the reset column's width ------------------------------------

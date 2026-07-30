@@ -837,6 +837,42 @@ def pending_dialog(sid):
     return _first_owner("pending_dialog", sid)
 
 
+# THE WINDOW-LABEL TABLE — how long a rate-limit window is, spelled the ONE way
+# the strip shows it, for every host (docs/dashboard.md *One usage-window
+# vocabulary, every host*). It lives beside the vocabulary docstring below
+# because it IS part of that vocabulary.
+#
+# This used to be per HOST: `plugins/claude_code/usage.window_label` said "7d"
+# and `plugins/codex/usage.window_label` said "1w" for the very same 10080
+# minutes, each "the way its own UI does". That reading was wrong for the one
+# surface both feed — the strip is read as a STACK, and its columns are keyed by
+# DURATION so codex's weekly bar sits directly under Claude's (*Row alignment*).
+# Two spellings of one column is not two vocabularies, it is a column that
+# changes its name halfway down. So the DURATION word is shared and a host may
+# only name a duration this table does not know.
+WINDOW_LABELS = {
+    300: "5h",        # 5 hours — Claude's `five_hour`, codex's usual primary
+    10080: "7d",      # 7 days  — Claude's `seven_day`, codex's weekly secondary
+}
+
+
+def window_label(mins, fallback=""):
+    """A rate-limit window's SHORT display label from its LENGTH IN MINUTES —
+    300 → "5h", 10080 → "7d" — the one spelling every host's strip row uses, so
+    the same duration lands in the same column whoever reported it.
+
+    `fallback` is the caller's OWN word, used only for a duration this table
+    does not name (codex's duration-derived ladder — 1440 → "1d"; a window with
+    no readable duration at all). A host that wants to decorate the shared word
+    (Claude's per-model cap, "7d fable") builds on the returned string; it does
+    not re-spell the duration. Pure — no I/O, safe at import."""
+    try:
+        mins = int(mins)
+    except (TypeError, ValueError):
+        return fallback
+    return WINDOW_LABELS.get(mins) or fallback
+
+
 def usage_strip(cache=None, limit=50):
     """THE USAGE-WINDOW VOCABULARY — the one shape every host states its
     rate limits in, and the list page's usage strip, CONCATENATED across hosts
@@ -856,11 +892,14 @@ def usage_strip(cache=None, limit=50):
         "plan":       the subscription plan word, "" when the host has none,
         "ts":         when the reading was taken (epoch), None when unknown,
         "windows":    the limits themselves, in display order:
-            [{"key":        unique WITHIN this host's rows (the union the
-                            painter lays out as columns),
-              "label":      the host's OWN short spelling of the window — the
-                            same 10080 minutes is "7d" to Claude and "1w" to
-                            codex, and neither is wrong,
+            [{"key":        unique WITHIN this host's rows (a row's own handle
+                            on the window; the painter lays its COLUMNS out by
+                            `window_mins`, not by this — see window_label),
+              "label":      the window's short spelling, from the SHARED
+                            duration table (window_label above): the same 10080
+                            minutes is "7d" on every host's row, because it is
+                            the same column. A host names only what that table
+                            does not, and may add its own suffix ("7d fable"),
               "used_pct":   int 0..100, or None when this row has no reading
                             for a window a SIBLING row has (the painter ghosts
                             the column rather than shifting the stack),

@@ -450,6 +450,47 @@ def test_every_host_declares_a_default_and_the_registry_owns_its_name():
     assert rsession.session_caps("")[0] == name
 
 
+# -------------------------------------- 2b. the one usage-window LABEL table
+
+def test_every_hosts_window_label_comes_from_the_one_duration_table():
+    """A rate-limit window's short LABEL is a fact about its DURATION, not about
+    who reported it — `plugins.WINDOW_LABELS` / `plugins.window_label(mins)` is
+    the one owner, and every host's strip builder routes through it.
+
+    This is a real ratchet, not a tautology. The labels used to be per HOST by
+    DESIGN ("each host says it the way its own UI does"): claude_code spelled
+    10080 minutes "7d" and codex spelled the same 10080 "1w". But the two rows
+    share the list strip, whose columns are keyed by duration so that codex's
+    weekly bar sits directly under Claude's (docs/dashboard.md *Row alignment*)
+    — so that was never two vocabularies, it was ONE COLUMN with two names,
+    which is the thing a stack cannot survive. What stays per-host is only what
+    the shared table does not know: a duration it has no word for (codex's own
+    `1d`/`2w` ladder) and a SUFFIX on the shared word (Claude's per-model
+    `7d fable`, a cap no other host reports)."""
+    import plugins
+    from plugins.claude_code import usage as CU
+    from plugins.codex import usage as XU
+
+    # the table itself, and the fallback contract: an unknown duration yields
+    # the CALLER's word, never a fabricated one
+    assert plugins.WINDOW_LABELS == {300: "5h", 10080: "7d"}
+    assert plugins.window_label(1440) == ""
+    assert plugins.window_label(1440, fallback="1d") == "1d"
+    assert plugins.window_label(None, fallback="primary") == "primary"
+
+    # BOTH hosts agree, window for window, on every duration the table names —
+    # asked through each host's OWN public label builder (Claude's is keyed by
+    # its window KEY, codex's by minutes; that difference is the point)
+    for key, mins in (("five_hour", 300), ("seven_day", 10080)):
+        shared = plugins.window_label(mins)
+        assert CU.window_label(key) == shared, key
+        assert XU.window_label(mins) == shared, mins
+
+    # and the per-host remainder is exactly the two sanctioned kinds
+    assert CU.window_label("seven_day_fable") == "7d fable"   # shared + suffix
+    assert XU.window_label(1440) == "1d"                      # unnamed duration
+
+
 # --------------------------------------------------- 3. one register table
 
 def test_register_table_is_the_single_source():

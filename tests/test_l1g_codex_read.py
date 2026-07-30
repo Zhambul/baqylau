@@ -854,23 +854,31 @@ def test_codex_usage_probe_reads_both_windows(tmp_path):
 
 def test_codex_window_rows_speak_the_shared_vocabulary():
     """codex's windows map into the SAME row shape Claude's do — the point of the
-    one vocabulary — but with codex's OWN labels: it names a window by its
-    DURATION (there is no key like `five_hour` in its payload), and the same
-    10080 minutes it calls "1w" Claude calls "7d". Every codex window is
-    account-wide, so each keeps its reset column; percentages are rounded
-    server-side, since only one host reported floats and the painter should not
-    have to know which."""
+    one vocabulary — and now with the same LABELS: it names a window by its
+    DURATION (there is no key like `five_hour` in its payload), and the shared
+    table (`plugins.window_label`) spells that duration for every host, so the
+    10080-minute window reads "7d" here exactly as it does on a Claude row. It
+    used to read "1w"; the strip's columns are keyed by duration, so those two
+    bars are one column and it renamed itself halfway down the stack.
+
+    codex's OWN ladder survives only where the shared table has nothing to say
+    (1440, 90) — that is the whole remaining per-host part of the label. Every
+    codex window is account-wide, so each keeps its reset column; percentages
+    are rounded server-side, since only one host reported floats and the painter
+    should not have to know which."""
     from plugins.codex import usage
     rows = usage.window_rows([
         {"used_pct": 42.4, "window_mins": 300, "resets_at": 111},
         {"used_pct": 7.0, "window_mins": 10080, "resets_at": 222},
         {"used_pct": None, "window_mins": None, "resets_at": None},
     ])
-    assert [r["label"] for r in rows] == ["5h", "1w", "secondary"]
+    assert [r["label"] for r in rows] == ["5h", "7d", "secondary"]
     assert [r["key"] for r in rows] == ["w300", "w10080", "secondary"]
     assert [r["used_pct"] for r in rows] == [42, 7, None]
     assert {r["scope"] for r in rows} == {"account"}
+    # the fallback ladder, reachable only for a duration the table does not name
     assert usage.window_label(1440) == "1d" and usage.window_label(90) == "90m"
+    assert usage.window_label(20160) == "2w"
 
 
 def test_codex_strip_row_is_one_host_wide_reading():
@@ -887,7 +895,7 @@ def test_codex_strip_row_is_one_host_wide_reading():
     assert row["plan"] == "plus"
     assert row["usage"] is None and row["limit_hit"] is None
     assert row["logged_out"] is False
-    assert row["windows"][0]["label"] == "1w"
+    assert row["windows"][0]["label"] == "7d"   # the SHARED duration word
     # no plan word → just the host name; no windows at all → no row (the strip
     # shows nothing rather than an empty pill)
     assert usage.strip_row({"windows": [{"used_pct": 1, "window_mins": 300,
@@ -914,7 +922,7 @@ def test_session_facets_route_to_the_OWNING_host(tmp_path, monkeypatch):
     # PARKED session's limits stood, which the app server can no longer say
     u = plugins.session_usage("cx1")
     assert u["plan"] == "plus"
-    assert [w["label"] for w in u["windows"]] == ["1w"]
+    assert [w["label"] for w in u["windows"]] == ["7d"]
     assert u["windows"][0]["used_pct"] == 4
     # account: the minimal honest shape for a host with no switcher — no slug
     # (nothing to switch to), just the plan, so the header chip still reads

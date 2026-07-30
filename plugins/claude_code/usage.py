@@ -165,11 +165,19 @@ def window_span(key):
 
 def window_label(key):
     """A window key's SHORT display label: five_hour → "5h", seven_day → "7d",
-    seven_day_fable → "7d fable". Claude Code's own vocabulary, and the reason
-    the label is a per-host field of the strip row rather than something derived
-    from the duration: codex calls the same 10080-minute window "1w"."""
-    for prefix, short in (("five_hour", "5h"), ("seven_day", "7d")):
+    seven_day_fable → "7d fable".
+
+    The DURATION word is NOT ours — it comes from the shared table
+    (`plugins.window_label`, keyed by minutes), because the strip's columns are
+    keyed by duration and codex's weekly bar has to sit under this one wearing
+    the same name. What stays Claude's here is the per-model SUFFIX: a
+    `seven_day_<family>` cap is a window only this host reports, so only this
+    host knows to spell it as the shared "7d" plus its family."""
+    import plugins as P
+
+    for prefix in ACCOUNT_WINDOWS:
         if key.startswith(prefix):
+            short = P.window_label(window_span(prefix) // 60, fallback=prefix)
             key = short + key[len(prefix):]
             break
     return key.replace("_", " ").strip()

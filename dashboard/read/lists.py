@@ -240,8 +240,9 @@ def accounts_payload():
     now two fields.
 
     All server-computed (single-owner rule): the page renders the served numbers
-    and labels — including each window's own SHORT LABEL, since the same 10080
-    minutes is "7d" to one host and "1w" to another and only the host knows which.
+    and labels — including each window's SHORT LABEL, which comes from ONE table
+    keyed by DURATION (plugins.window_label), so the same 10080 minutes reads
+    "7d" on every host's row and the painter can lay one column out for it.
     Read-only, adds NO audit rows (a codex app-server degrade is audited once in
     plugins/codex/usage.py, never here)."""
     return plugins.usage_strip(cache=_ACCT, limit=SESSIONS_LIMIT)

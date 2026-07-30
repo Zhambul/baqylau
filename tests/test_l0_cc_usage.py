@@ -173,11 +173,16 @@ def test_account_usage_keeps_freshest_per_slug(monkeypatch, tmp_path):
 def test_window_rows_speak_the_shared_vocabulary():
     """A Claude usage snapshot → the strip vocabulary (plugins.usage_strip owns
     the shape). The account-wide pair first, then model windows; each row
-    carries CLAUDE's own label ("7d" where codex says "1w" for the same 10080
-    minutes — the label is per host, deliberately) and its `scope`, which is
-    what tells the painter whether the window owns a reset column: a per-model
-    weekly cap resets on the same clock as the `seven_day` bar above it, so
-    repeating it was pure duplication."""
+    carries the SHARED duration label (`plugins.window_label` — "7d" here and
+    "7d" on codex's row for the same 10080 minutes, because the strip's columns
+    are keyed by duration and those two bars are one column) and its `scope`,
+    which is what tells the painter whether the window owns a reset column: a
+    per-model weekly cap resets on the same clock as the `seven_day` bar above
+    it, so repeating it was pure duplication.
+
+    What is still CLAUDE's here is the SUFFIX: `seven_day_fable` is a per-model
+    cap no other host reports, so only this host knows to spell it as the shared
+    "7d" plus its family."""
     now = 10_000_000.0
     u = {"five_hour": 60, "five_hour_reset": now + 3600,
          "seven_day": 97, "seven_day_reset": now + 10222,
