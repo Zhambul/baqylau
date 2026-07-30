@@ -121,7 +121,7 @@ def collect(db, gid, what):
     state DB mode=ro — this handler must never create runtime state (see docstring).
 
     FALLBACK to the `view:<gid>` stash when no group-tagged ops exist: a
-    code-reading command rendered as a collapsed Read one-liner
+    file-reading command rendered as a collapsed Read one-liner
     (plugins/claude_code/cmd_fmt._render_read) streams NOTHING to the ops table —
     its command + output live in that stash, whose header carries the ⧉cmd/⧉out
     links that route here. Only fires when the ops scan came up empty, so ordinary

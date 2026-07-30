@@ -740,3 +740,33 @@ def test_code_reader_renders_as_read_with_copiable_stash(session, run_hook,
     assert "sed" in cmd_copy and "Foo.kt" in cmd_copy
     _copy(run_hook, test_env, s.sid, "tu_rd", "out", clip)
     assert "fun main" in open(clip, encoding="utf-8").read()
+
+
+def test_md_reader_stash_is_markdown_rendered_and_copiable(session, run_hook,
+                                                           test_env, tmp_path):
+    """A markdown-reading Bash command (a sed SLICE of a .md) collapses the same
+    way, but its stash body is the markdown AST render (file_fmt.md_ops — the ONE
+    builder a native .md Read expands through), not a lexed gut op. ⧉cmd still
+    copies the exact command; ⧉out copies the RENDERED prose (markdown is styled,
+    not lexed, so the raw bytes aren't in the stash — the same trade a native .md
+    Read's expansion makes)."""
+    s = session.make()
+    run_hook("claude-cmd-fmt.py",
+             P.post_bash(s, "sed -n '1,4p' notes.md", tid="tu_md",
+                         stdout="# Title\n\nA **bold** claim.\n"))
+    lop = next(op for op in s.ops() if op["t"] == "line" and "Read" in op["s"])
+    assert lop.get("v") == "tu_md" and "sed" in lop["s"]
+    assert "claude-copy:///%s/tu_md/view" % s.sid in lop["s"]
+    stash = _kv(s, "view:tu_md")
+    assert stash and {"rule", "label", "code", "gut"} <= {o["t"] for o in stash}
+    guts = [o for o in stash if o["t"] == "gut"]
+    assert not any(o.get("lex") for o in guts), "prose is styled, never lexed"
+    assert all(o.get("g") == "tu_md" for o in guts), "body ops carry the copy group"
+    body = "".join(o["s"] for o in guts)
+    assert "# Title" not in body and "**bold**" not in body, "raw markers survived"
+    clip = str(tmp_path / "clip.txt")
+    _copy(run_hook, test_env, s.sid, "tu_md", "cmd", clip)
+    assert "sed -n '1,4p' notes.md" in open(clip, encoding="utf-8").read()
+    _copy(run_hook, test_env, s.sid, "tu_md", "out", clip)
+    out_copy = open(clip, encoding="utf-8").read()
+    assert "Title" in out_copy and "bold claim" in out_copy

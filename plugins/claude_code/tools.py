@@ -5,6 +5,7 @@
 # structuredPatch hunks) — plugin knowledge, not core. The colour values the
 # FILE_RGB verbs map to come from core.ops' semantic colour table.
 import difflib, os, re, shlex
+from collections import namedtuple
 
 from core.ops import BLUE, GREEN, YELLOW
 
@@ -193,6 +194,15 @@ def parse_redirect(cmd, cwd):
 _MD_EXT = (".md", ".markdown", ".mdown", ".mkd")
 _PLUMBING = ("|", ";", "&&", "||", "&", ">", ">>", "&>")
 
+# The two reader sets the registry rows below are built from. WHOLE readers emit
+# the file verbatim (the file may be ANY argument); FRAGMENT readers emit matching
+# /selected lines and put a SCRIPT/PATTERN argument first, so only their TRAILING
+# argument can be the file. "" is the reader name _match_reader reports for a bare
+# `< file` stdin redirect (no command owns it) — a read-plane set carries it to
+# admit that form.
+_WHOLE_READERS = frozenset({"cat", "head", "tail"})
+_FRAG_READERS = frozenset({"sed", "grep", "egrep", "fgrep"})
+
 
 def _ext_match(exts):
     """word-matcher: True when the (quote-stripped, lowered) word ends in `exts`."""
@@ -213,9 +223,26 @@ def _lexer_match(w):
 class RenderKind:
     """One row of the RENDER_KINDS registry.
 
+    A kind declares TWO planes of readers, because a reader's output decides how
+    the mirror should present it:
+      * the STREAM plane (`readers`/`tailarg_readers`, consulted by `detect` —
+        stream.py's `_detect_render`): the command is teed and its content
+        pretty-rendered LIVE, line by line, as a `▶ foreground` block.
+      * the READ plane (`read_readers`/`read_tailarg_readers`, consulted by
+        `read_match` — `read_command`, which both Bash hooks gate on): the
+        command is NOT streamed at all; it collapses to a click-to-expand Read
+        one-liner whose whole output is rendered ONCE, buffered, in the view
+        stash (docs/click-to-view.md).
+    The planes are per-reader, not per-kind: `cat CLAUDE.md` streams live as a
+    document, while `sed -n 120,400p CLAUDE.md` collapses to `Read(CLAUDE.md)`.
+
     name            render-kind tag ("md"/"json"/"yaml"/"code") — stream.py's
-                    RENDER_KIND (code suffixes its lexer: "code:python").
-    env             the CLAUDE_MIRROR_* gate stream.py checks (default-on).
+                    RENDER_KIND (code suffixes its lexer: "code:python"), and
+                    the read plane's ReadSpec.kind (which body builder renders
+                    the stash — cmd_fmt._READ_BODY).
+    env             the CLAUDE_MIRROR_* gate stream.py checks (default-on). The
+                    read plane honours it too: a kind whose rendering is off
+                    falls back to streaming rather than collapsing.
     readers         commands whose stdout is the file verbatim when the file is
                     ANY argument (cat/head/tail — grep/rg emit fragments, not a
                     document, so they never appear here).
@@ -223,9 +250,17 @@ class RenderKind:
                     SCRIPT/PATTERN arg first) — so `grep 'foo.py' x.txt` can't
                     masquerade as python and a recursive `grep -r pat src/` (dir
                     last, no extension) correctly opts out. Only the code kind
-                    uses this: a sed/grep of a .md/.yml emits fragments too, but
-                    colouring fragments in place is fine, reflowing them as a
-                    document is not.
+                    STREAMS through these: a sed/grep of a .md/.yml emits
+                    fragments too, but colouring fragments in place is fine,
+                    reflowing them as a document is not — which is exactly why
+                    md sends its fragment readers down the READ plane instead
+                    (a buffered slice, rendered whole, like a native Read of a
+                    .md with an offset).
+    read_*_readers  the same two shapes for the READ plane (empty = this kind
+                    never collapses to a Read one-liner). Unlike the stream
+                    plane, the `< file` redirect form is admitted only when ""
+                    is in `read_readers`, so a kind can take `sed x.md` without
+                    also taking `< x.md` (a whole document — it streams).
     match           word -> truthy detection value (True, or the lexer name) —
                     called with each candidate word quote-stripped and lowered.
     streamer        "module:Class" of the core content streamer stream.py
@@ -233,13 +268,30 @@ class RenderKind:
                     whether the detection value (the lexer) is its ctor arg.
     """
     def __init__(self, name, env, readers, match, streamer,
-                 tailarg_readers=(), streamer_takes_value=False):
+                 tailarg_readers=(), streamer_takes_value=False,
+                 read_readers=frozenset(), read_tailarg_readers=frozenset()):
         self.name, self.env, self.match = name, env, match
         self.readers, self.tailarg_readers = readers, tailarg_readers
+        self.read_readers = read_readers
+        self.read_tailarg_readers = read_tailarg_readers
         self.streamer, self.streamer_takes_value = streamer, streamer_takes_value
 
     def detect(self, cmd):
         return _detect_source(cmd, self)
+
+    def read_match(self, cmd):
+        """(detection value, file, reader) when `cmd` is a READ-plane read of
+        this kind's files — else (None, None, None). Same skeleton as `detect`,
+        the read reader sets, plus the reader-admission filter that makes the
+        `< file` form opt-in (see read_readers above)."""
+        admitted = frozenset(self.read_readers) | frozenset(self.read_tailarg_readers)
+        if not admitted:
+            return None, None, None
+        v, path, reader = _match_reader(cmd, self.match, self.read_readers,
+                                       self.read_tailarg_readers)
+        if v is None or (reader or "") not in admitted:
+            return None, None, None
+        return v, path, reader
 
 
 # Priority-ordered: stream.py picks the FIRST gated-on kind that detects. Per-kind
@@ -250,33 +302,49 @@ class RenderKind:
 #   yaml  — coloured in place (not reparsed), so head/tail of a .yml is fine too.
 #   code  — coloured in place like YAML; extension picks the lexer (the detection
 #           value); sed/grep stream a file too, via the trailing-arg rule above.
+# The READ plane (read_* sets) is where a reader collapses to a Read one-liner
+# instead: EVERY code reader (a source file's contents are a file slice however
+# you spell the read), and md's FRAGMENT readers only (a `sed`/`grep` of a .md is
+# a slice — rendered whole in the stash; `cat`/`head`/`tail` of one is a document
+# and keeps streaming live). json/yaml stay stream-only.
 RENDER_KINDS = (
-    RenderKind("md", "CLAUDE_MIRROR_MD", frozenset({"cat", "head", "tail"}),
-               _ext_match(_MD_EXT), "core.mdrender:MarkdownStreamer"),
+    RenderKind("md", "CLAUDE_MIRROR_MD", _WHOLE_READERS,
+               _ext_match(_MD_EXT), "core.mdrender:MarkdownStreamer",
+               read_tailarg_readers=_FRAG_READERS),
     RenderKind("json", "CLAUDE_MIRROR_JSON", frozenset({"cat"}),
                _ext_match((".json", ".jsonl", ".ndjson")),
                "core.jsonrender:JsonStreamer"),
-    RenderKind("yaml", "CLAUDE_MIRROR_YAML", frozenset({"cat", "head", "tail"}),
+    RenderKind("yaml", "CLAUDE_MIRROR_YAML", _WHOLE_READERS,
                _ext_match((".yml", ".yaml")), "core.yamlrender:YamlStreamer"),
-    RenderKind("code", "CLAUDE_MIRROR_CODE", frozenset({"cat", "head", "tail"}),
+    RenderKind("code", "CLAUDE_MIRROR_CODE", _WHOLE_READERS,
                _lexer_match, "core.coderender:CodeStreamer",
-               tailarg_readers=frozenset({"sed", "grep", "egrep", "fgrep"}),
-               streamer_takes_value=True),
+               tailarg_readers=_FRAG_READERS, streamer_takes_value=True,
+               read_readers=_WHOLE_READERS | {""},
+               read_tailarg_readers=_FRAG_READERS),
 )
 
+# What read_command returns as its first element: the winning kind's NAME plus its
+# detection value (the pygments lexer for code, True for md). Compares equal to the
+# plain (kind, value) tuple, so callers/tests may spell it either way.
+ReadSpec = namedtuple("ReadSpec", "kind value")
 
-def _match_reader(cmd, kind):
+
+def _match_reader(cmd, match, readers, tailarg_readers):
     """The one detection skeleton — the token-matching core, additionally naming
     WHICH word matched and the reader command that owns it. If `cmd` is a single
     simple command whose body streams a matching file's raw contents — an
     allowlisted reader with a matching file argument, or a bare `< file.ext` stdin
-    redirect — return (kind.match's truthy value, file_word, reader); else
+    redirect — return (`match`'s truthy value, file_word, reader); else
     (None, None, None). `reader` is the invoking command basename ('' for a bare
     `< file`). Conservative: any pipe, output redirect, chain (; && ||), or command
     substitution disqualifies, because then the streamed bytes are filtered/
     derived, not the document itself. Runs on the command's `_effective` read, so a
     trailing `| head`/`| tail` (truncation) still renders and a multi-statement
-    block keys off its LAST statement's file."""
+    block keys off its LAST statement's file.
+
+    Takes the matcher + reader sets rather than a RenderKind: BOTH of a kind's
+    planes run this same skeleton, each with its own sets (RenderKind.detect /
+    RenderKind.read_match)."""
     cmd = _effective(cmd)
     try:
         toks = shlex.split(cmd, posix=False)
@@ -290,7 +358,7 @@ def _match_reader(cmd, kind):
     if "$(" in cmd:
         return None, None, None
     def _match(word):
-        return kind.match(word.strip("'\"").lower())
+        return match(word.strip("'\"").lower())
     # `< file.ext` (with or without a leading command)
     if "<" in toks:
         i = toks.index("<")
@@ -300,13 +368,13 @@ def _match_reader(cmd, kind):
                 reader = "" if toks[0] == "<" else os.path.basename(toks[0].strip("'\""))
                 return v, toks[i + 1].strip("'\""), reader
     head = os.path.basename(toks[0].strip("'\""))
-    if head in kind.readers:
+    if head in readers:
         for w in toks[1:]:
             v = _match(w)
             if v:
                 return v, w.strip("'\""), head
         return None, None, None
-    if head in kind.tailarg_readers and len(toks) > 1:
+    if head in tailarg_readers and len(toks) > 1:
         w = toks[-1]                        # the FILE is the trailing arg
         v = _match(w)
         if v:
@@ -318,8 +386,8 @@ def _detect_source(cmd, kind):
     """kind.match's truthy value when `cmd` streams a matching file's raw contents,
     else None — the render-kind detector stream.py's _detect_render iterates. Thin
     over _match_reader (which additionally names the matched file + reader; only the
-    Read-one-liner path, code_read_target, needs those)."""
-    return _match_reader(cmd, kind)[0]
+    Read-one-liner plane, RenderKind.read_match, needs those)."""
+    return _match_reader(cmd, kind.match, kind.readers, kind.tailarg_readers)[0]
 
 
 def is_md(path):
@@ -355,28 +423,34 @@ def code_source(cmd):
     return _BY_NAME["code"].detect(cmd)
 
 
-def code_read_target(cmd):
-    """(lexer, file_path, reader) for a command whose stdout is a source file the
-    mirror can syntax-highlight — a sed/grep/cat/head/tail of a .py/.kt/.java/…
-    file (the `code` render kind; see code_source / _match_reader) — else
-    (None, None, None). `reader` is the invoking command basename (the dim tag on
-    the Read one-liner). The seam behind rendering such a command as a collapsed
-    Read op instead of a streamed foreground block."""
-    return _match_reader(cmd, _BY_NAME["code"])
-
-
 def read_command(cmd):
-    """(lexer, file_path, reader) when `cmd` should render as a collapsed Read
-    one-liner instead of a streamed foreground block (a code-reading command —
-    code_read_target), else (None, None, None). Gated by CLAUDE_MIRROR_CMD_READ
-    (default on; '0' falls back to live streaming). The SINGLE owner of the
-    decision both Bash hooks consult — claude-cmd-pre.py skips live streaming and
-    claude-cmd-fmt.py renders the Read one-liner for exactly the same commands, so
-    they can never disagree (a mismatch would strand a streamed header with no
-    body, or double-render)."""
+    """(ReadSpec, file_path, reader) when `cmd` should render as a collapsed Read
+    one-liner instead of a streamed foreground block — a file-READING command: a
+    sed/grep/cat/head/tail (or a bare `< file`) of a source file the mirror can
+    syntax-highlight, or a sed/grep SLICE of a markdown file (the READ plane of
+    RENDER_KINDS, in the registry's priority order) — else (None, None, None).
+    `reader` is the invoking command basename (the dim tag on the Read one-liner);
+    the ReadSpec names WHICH render kind matched and carries its detection value
+    (the lexer, for code), which is what lets the expansion pick a renderer per
+    kind (cmd_fmt._READ_BODY) instead of assuming a lexer.
+
+    Gated by CLAUDE_MIRROR_CMD_READ (default on; '0' falls back to live
+    streaming), and per kind by that kind's own CLAUDE_MIRROR_* gate — with its
+    rendering off there is nothing to collapse INTO, so the command streams.
+
+    The SINGLE owner of the decision both Bash hooks consult — claude-cmd-pre.py
+    skips live streaming and claude-cmd-fmt.py renders the Read one-liner for
+    exactly the same commands, so they can never disagree (a mismatch would strand
+    a streamed header with no body, or double-render)."""
     if os.environ.get("CLAUDE_MIRROR_CMD_READ", "1") == "0":
         return None, None, None
-    return code_read_target(cmd)
+    for kind in RENDER_KINDS:
+        if os.environ.get(kind.env, "1") == "0":
+            continue
+        v, path, reader = kind.read_match(cmd)
+        if v:
+            return ReadSpec(kind.name, v), path, reader
+    return None, None, None
 
 
 def diff_counts(tool_name, inp):

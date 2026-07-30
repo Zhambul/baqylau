@@ -302,6 +302,40 @@ def test_f2code_source_file_renders_as_read(run_hook, test_env, session):
     assert not any(op["t"] == "gut" and "fun main" in op.get("s", "")
                    for op in s.ops()), "output should collapse into the view stash"
     assert not s.live("fg"), "no fg slot claimed for a code reader"
+
+
+def test_f2md_slice_renders_as_read(run_hook, test_env, session):
+    """A main-session `sed -n '1,4p' notes.md` — a markdown SLICE — collapses the
+    same way (the md kind's READ plane): cmd-pre skips live streaming, cmd-fmt
+    emits the Read(name) + `sed` tag one-liner, and the stash body is the markdown
+    AST render (an amber heading banner, no `lex` spec — prose isn't source), not
+    the raw `#` characters. `cat notes.md` still streams live as a document
+    (test_f2md_markdown_file_is_pretty_rendered above) — the planes are per-reader."""
+    s = session.make()
+    run_hook("claude-cmd-pre.py", P.pre_bash(s, "sed -n '1,4p' notes.md"))
+    assert fg_live_record(s) is None, "an md slice must not start live streaming"
+    assert any("ignored: md reader" in d for d in oracle.decisions(test_env, s.sid))
+    run_hook("claude-cmd-fmt.py",
+             P.post_bash(s, "sed -n '1,4p' notes.md", tid="toolu_md",
+                         stdout="# Bold Heading\n\nSome **strong** prose.\n",
+                         duration_ms=90))
+    lop = next(op for op in s.ops() if op["t"] == "line" and "Read" in op["s"])
+    assert "notes.md" in lop["s"] and "sed" in lop["s"], "Read(name) + reader tag"
+    assert lop.get("v") == "toolu_md"
+    stash = json.loads(s.query_state("SELECT val FROM kv WHERE key=?",
+                                     ("view:toolu_md",))[0][0])
+    guts = [o for o in stash if o["t"] == "gut"]
+    assert guts and not any(o.get("lex") for o in guts), "markdown is styled, not lexed"
+    body = "".join(o["s"] for o in guts)
+    assert _BANNER_SGR in body, "heading rendered as a banner (markdown mode active)"
+    assert "# Bold Heading" not in body, "heading shown raw, not rendered"
+    assert "Bold Heading" in body and "**strong**" not in body
+    stashed = [json.loads(c) for (_p, a, c) in oracle.state_files(test_env, s.sid)
+               if a == "view-stash"]
+    assert [row["render"] for row in stashed] == ["md"], "the audit names the kind"
+    assert any("rendered as Read (md)" in d for d in oracle.decisions(test_env, s.sid))
+    assert not s.live("fg"), "no fg slot claimed for an md reader"
+    oracle.assert_clean(test_env, s.sid)
     oracle.assert_clean(test_env, s.sid)
 
 

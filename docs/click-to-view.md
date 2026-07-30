@@ -79,7 +79,8 @@ line-number gutter from its real start line — **except a `.md`/`.markdown`
 file, which is instead pretty-rendered as markdown** (headings→amber banners,
 bold/emphasis, lists, blockquotes, GFM tables, fenced code in its own CODE_BG
 panel) by the same `core/mdrender.py` AST renderer the live streaming path uses
-(`file_fmt._md_ops` → `mdrender.MarkdownStreamer`, gated by `tools.is_md`), with
+(`file_fmt.md_ops` → `mdrender.MarkdownStreamer`, gated by `tools.is_md`; the same
+builder a markdown-reading command's Read one-liner expands through), with
 no line-number gutter (prose isn't source); a **Write** its written body,
 same treatment (markdown when `.md`, else syntax-highlighted code); an
 **Update** (Edit/MultiEdit/NotebookEdit) a delta-style diff
@@ -288,13 +289,16 @@ recorded poisoned history is defused too, with no data scrubbing. Why not the al
   from `strip_ansi` copies.
 
 
-## Code-reading commands render as a Read one-liner
+## File-reading commands render as a Read one-liner
 
-A foreground Bash command whose stdout *is* a source file verbatim — a
+A foreground Bash command whose stdout *is* a file's contents — a
 `sed`/`grep`/`egrep`/`fgrep`/`cat`/`head`/`tail` of a `.py`/`.kt`/`.java`/… file
-(exactly the `code` render kind from [streaming.md](streaming.md); detected by
-`tools.code_read_target`, gated by `CLAUDE_MIRROR_CMD_READ`, default on) — is
-**not streamed as a `▶ foreground` block**. It collapses to a Read one-liner,
+(the `code` render kind from [streaming.md](streaming.md)), or a `sed`/`grep`
+**slice** of a `.md`/`.markdown` one (the `md` kind's *read plane*, below);
+detected by `tools.read_command`, gated by `CLAUDE_MIRROR_CMD_READ` (default on)
+and by each kind's own `CLAUDE_MIRROR_MD`/`_CODE` (with a kind's rendering off
+there is nothing to collapse INTO, so it streams) — is **not streamed as a
+`▶ foreground` block**. It collapses to a Read one-liner,
 because that is what it *is* from the reader's point of view: a slice of a file.
 This was the request "make sed and sed-like reads of code look like Read ops".
 
@@ -311,10 +315,28 @@ This was the request "make sed and sed-like reads of code look like Read ops".
   tool_use_id as `"v"` and the `…/view` hyperlink, exactly like a real Read line.
 - **The stash** (`cmd_fmt._stash_read_view` → `view:<tool_use_id>`) is a
   COMMAND + its OUTPUT, not a file payload: a `rule`, a header `label`, a `code`
-  op (the command, pretty-printed) and a `gut` op carrying the raw output + a
-  paint-time `lex` spec (highlighted in the renderer like any Read body — the
-  same deferral, since the hook python may lack pygments). So a click expands to
-  *both the command and its highlighted output*, in place, collapse on re-click.
+  op (the command, pretty-printed) and the **per-kind body** below. So a click
+  expands to *both the command and its rendered output*, in place, collapse on
+  re-click.
+- **The body picks a renderer per kind** (`cmd_fmt._READ_BODY`, keyed by the
+  `tools.ReadSpec.kind` `read_command` returns — the seam that replaced
+  *assuming a lexer*, since a markdown read has none):
+  - `code` → one `gut` op carrying the **raw** output + a paint-time `lex` spec
+    (highlighted in the renderer like any Read body — the same deferral, since
+    the hook python may lack pygments). Deliberately **no `num`**: a slice's true
+    line numbers aren't recoverable from its output (`sed -n 120,400p` prints
+    none), and numbering from 1 would assert a falsehood.
+  - `md` → the markdown AST render, through the SAME builder a native `.md`
+    Read expands with (`file_fmt.md_ops` → `core/mdrender.py`; public for
+    exactly this second caller), so `sed -n 120,400p CLAUDE.md` and
+    `Read(CLAUDE.md, offset=120)` look identical. Prose is *styled*, not lexed,
+    so these ops carry no `lex`/`num` — and the trade is that `⧉out` copies the
+    RENDERED text rather than the raw bytes, the same trade a native `.md` Read's
+    expansion already makes.
+  - anything else → `_read_body_plain`, the output verbatim. Unreachable today
+    (a contract test pins `_READ_BODY` against the registry's read-eligible
+    kinds) but *never* a stranded block: `cmd_pre` has already skipped streaming
+    on the same verdict, so this side must render something.
 - **Copiable, unlike a native Read.** A real Read's expansion carries no copy
   links (its payload is the content, and you clicked to *see* it). A command
   read's header `label` DOES — `⧉cmd`/`⧉out`, the same specs a `▶ foreground`
@@ -322,8 +344,8 @@ This was the request "make sed and sed-like reads of code look like Read ops".
   clipboard. Since this block streams NOTHING into the `ops` table (the whole
   point is that it collapses), `core.copy.collect` FALLS BACK to the
   `view:<gid>` stash when its ops-table scan for the group comes up empty: `⧉cmd`
-  reads the stash's `code` op, `⧉out` its `gut` op. The fallback fires only on an
-  empty ops-table match, so ordinary command blocks (which tag their ops) are
+  reads the stash's `code` op, `⧉out` its `gut` op(s). The fallback fires only on
+  an empty ops-table match, so ordinary command blocks (which tag their ops) are
   untouched. Both terminal (`claude-copy.py`) and web (`/api/session/…/copy/…`)
   go through the one `collect`, so both surfaces copy identically.
 - **Main session only** (like `file_fmt` vs the substream): a subagent's code
@@ -331,3 +353,34 @@ This was the request "make sed and sed-like reads of code look like Read ops".
   before the gate), and the web mirror is main-agent-only anyway. A **failed** or
   **empty-output** read falls through to the normal foreground block — a real
   error message, or a `(no output)` chip, reads better than an empty Read.
+- **Audited per kind**: the `view-stash` `state_files` row carries
+  `render: code|md` beside its `tool: Bash, kind: read`, and the decision reads
+  `rendered as Read (md): Read(CLAUDE.md) via sed` — so "why did this render that
+  way" is answerable from the DB. `cmd_pre`'s skip names it too
+  (`ignored: md reader (claude-cmd-fmt renders it as Read)`).
+
+### Why only a *slice* of a markdown file collapses
+
+The `md` kind is read-eligible for its **fragment** readers (`sed`/`grep`) and
+NOT for `cat`/`head`/`tail`/`< file`, which keep streaming live as a document
+through `MarkdownStreamer`. The split is the *reader's output*, not the file type
+(`tools.RenderKind`'s two planes — [mirror-pane.md](mirror-pane.md), *One
+registry, two planes*):
+
+- A `cat CLAUDE.md` is a **document**: streaming it renders progressively, which
+  is the whole point of the md render kind.
+- A `sed -n 120,400p CLAUDE.md` is a **slice**, and *streaming* a slice through
+  an AST renderer was already rejected (reflowing fragments mid-document is
+  wrong — that's why the md kind never had streaming `tailarg_readers`). But
+  rendering a slice **buffered, whole, behind a click** is exactly what a native
+  `Read(CLAUDE.md, offset=120, limit=280)` already does. So the fragment readers
+  get the READ plane instead of a streaming one, and the old objection is
+  answered rather than overridden.
+
+*Why not just add `.md` to `coderender.LANGS`?* That was the smaller diff (one
+row, and `read_command` would have matched), but it declares markdown to be
+**source** — a pygments lexer with a line-number gutter — when this repo already
+owns a much better markdown renderer and uses it for every other `.md` body
+(Read/Write expansions, the live stream). It would also have made the two `.md`
+surfaces disagree: a native Read pretty-rendered, a `sed` of the same lines
+lexed.

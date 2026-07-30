@@ -99,8 +99,8 @@ def _code_ops(path, text, start, rgb):
     return [O.gut(text.rstrip("\n"), rgb, lex=_lexer(path), num=start)]
 
 
-def _md_ops(text, rgb):
-    """gut ops for a markdown Read/Write body, pretty-rendered by the SAME
+def md_ops(text, rgb):
+    """gut ops for a markdown body, pretty-rendered by the SAME
     AST renderer the live streaming path uses (core.mdrender.MarkdownStreamer):
     headings→amber banners, bold/emphasis, lists, blockquotes, GFM tables, and
     fenced code blocks in their own CODE_BG panel. Each `(text, bg)` segment
@@ -108,7 +108,12 @@ def _md_ops(text, rgb):
     'lex'/'num', so it paints verbatim (no line-number gutter; prose isn't
     source). mdrender degrades gracefully when wenmode/pygments are absent
     (this hook may run a bare python3), exactly as the streaming path relies on.
-    Falls back to a plain code op if rendering yields nothing."""
+    Falls back to a plain code op if rendering yields nothing.
+
+    PUBLIC because a second caller shares it: the Read one-liner a markdown-
+    READING Bash command collapses to (`sed -n 120,400p CLAUDE.md` —
+    cmd_fmt._read_body_md) expands through this too, so a command's slice of a
+    .md renders exactly like a native Read of the same extent."""
     from core import mdrender as MDR
     stream = MDR.MarkdownStreamer()
     segs = stream.feed(text) + stream.close()
@@ -180,13 +185,13 @@ def view_ops(tool, label, name, path, ti, tr):
         text, start = _read_text(path, ti, tr)
         if text is None or not text.strip():
             return None
-        body = _md_ops(text, rgb) if CT.is_md(path) else _code_ops(path, text, start, rgb)
+        body = md_ops(text, rgb) if CT.is_md(path) else _code_ops(path, text, start, rgb)
         suffix = CT.read_extent(tr.get("file") if isinstance(tr, dict) else None, ti)
     elif tool == "Write":
         text = ti.get("content") or ""
         if not text.strip():
             return None
-        body = _md_ops(text, rgb) if CT.is_md(path) else _code_ops(path, text, 1, rgb)
+        body = md_ops(text, rgb) if CT.is_md(path) else _code_ops(path, text, 1, rgb)
         suffix = "+%d" % len(text.splitlines())
     else:
         rows = CT.diff_rows(tool, ti, tr)

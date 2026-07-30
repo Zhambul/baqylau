@@ -241,7 +241,7 @@ implementation: `tools.RENDER_KINDS` is a priority-ordered table of `RenderKind`
 entries, each declaring its render-kind name, `CLAUDE_MIRROR_*` env gate, reader
 allowlist, trailing-arg readers (code's sed/grep rule), word-matcher (extension
 set, or the LANGS lexer lookup), and the `module:Class` of its core content
-streamer; `tools._detect_source` is the one skeleton (`_effective` → tokenise →
+streamer; `tools._match_reader` is the one skeleton (`_effective` → tokenise →
 plumbing guard → `< file` redirect → reader allowlist) they all run through.
 `md_source`/`json_source`/`yaml_source`/`code_source` survive as thin wrappers.
 `claude-stream.py::_detect_render` iterates the registry and instantiates the
@@ -249,6 +249,28 @@ winning entry's declared streamer — so **adding a render mode is one registry
 entry** (plus its core streamer module), not a fifth copy of the skeleton and a
 lockstep edit to the tailer's mode switch (the pre-registry design drifted
 exactly that way).
+
+**One registry, two planes.** A kind declares reader sets *twice*, because how a
+reader's output should be presented depends on the reader, not just the file:
+
+| plane | fields | consulted by | presentation |
+|---|---|---|---|
+| STREAM | `readers` / `tailarg_readers` | `RenderKind.detect` → `stream.py::_detect_render` | teed and pretty-rendered LIVE as a `▶ foreground` block |
+| READ | `read_readers` / `read_tailarg_readers` | `RenderKind.read_match` → `tools.read_command` | not streamed at all: a click-to-expand **Read one-liner** whose whole output renders once, buffered ([click-to-view.md](click-to-view.md)) |
+
+Today: `code` collapses on EVERY reader it streams (a source file's contents are
+a file slice however you spell the read) plus the bare `< file` form; `md`
+collapses only on its FRAGMENT readers (`sed`/`grep` — a slice), and keeps
+STREAMING its whole-document readers (`cat`/`head`/`tail`, `< x.md`); `json`/`yaml`
+are stream-only. Both planes run the same `_match_reader` skeleton with their own
+sets — which is what keeps "a sed of a .md is a Read" from becoming "a sed of a
+.md streams through the markdown AST renderer", the design [rejected
+earlier](click-to-view.md) (reflowing fragments live is wrong; rendering a
+buffered slice behind a click is what a native `Read` with an `offset` does). The
+read plane additionally *admits* the `< file` form only when `""` (the reader name
+the skeleton reports for a bare redirect) is in `read_readers`, so a kind can take
+`sed x.md` without also taking `< x.md`; the stream plane's redirect branch stays
+reader-agnostic, as it always was.
 
 **Where detection runs: in the tailer, not the launch hook.** All four
 filename-keyed modes (md/JSON/YAML/code) are decided by `claude-stream.py`

@@ -104,19 +104,20 @@ def main():
 
     if bg or converted:
         return _render_background(d, cmd, taskid, converted, done)
-    # A foreground code-reading command (sed/grep/cat of a source file —
-    # CT.read_command) renders as a COLLAPSED Read one-liner, not a streamed
-    # block. claude-cmd-pre.py skipped its live streaming (same gate), so there is
-    # never a live tailer here (`live` is None); a FAILED command falls through to
-    # the normal block so its error is shown, and an EMPTY-output run does too
-    # (nothing to "read" — a normal "(no output)" block reads better than an empty
-    # Read). The command + its syntax-highlighted output expand from a view stash.
+    # A foreground file-reading command (sed/grep/cat of a source file, sed/grep of
+    # a markdown one — CT.read_command) renders as a COLLAPSED Read one-liner, not a
+    # streamed block. claude-cmd-pre.py skipped its live streaming (same gate), so
+    # there is never a live tailer here (`live` is None); a FAILED command falls
+    # through to the normal block so its error is shown, and an EMPTY-output run does
+    # too (nothing to "read" — a normal "(no output)" block reads better than an
+    # empty Read). The command + its output, rendered per kind, expand from a view
+    # stash.
     if not live and not H.is_failure(d):
-        lexer, path, reader = CT.read_command(cmd)
-        if lexer:
+        spec, path, reader = CT.read_command(cmd)
+        if spec:
             output = _combined_output(tr)
             if output.strip():
-                return _render_read(d, cmd, output, lexer, path, reader)
+                return _render_read(d, cmd, output, spec, path, reader)
     _render_finished(d, tr, cmd, live, done)
 
 
@@ -253,38 +254,76 @@ def _render_finished(d, tr, cmd, live, done):
     O.bump(LOG, tool="Bash", commands=1, **({"failed": 1} if failed else {}))
 
 
-def _stash_read_view(log, gid, name, cmd, output, lexer, line):
-    """Stash a code-reading command's block under kv `view:<gid>` and wrap `line`
+def _read_body_code(output, spec, gid):
+    """The `code` kind's stash body: ONE gut op carrying the RAW output plus the
+    paint-time `lex` spec (the lexer detection already picked), syntax-highlighted
+    in the RENDERER like any Read body — the same deferral, since this hook's
+    python may lack pygments. Deliberately NO `num`: a sed/grep slice's true line
+    numbers aren't recoverable from its output (`sed -n 120,400p` prints no
+    numbers), and numbering it from 1 would assert a falsehood."""
+    return [O.gut(output, O.BLUE, lex=spec.value, g=gid)]
+
+
+def _read_body_md(output, _spec, gid):
+    """The `md` kind's stash body: the markdown AST render (file_fmt.md_ops →
+    core.mdrender — headings to amber banners, lists, tables, fenced code), so a
+    `sed -n 120,400p CLAUDE.md` expands EXACTLY like a native Read of that extent
+    — one shared builder, not a second markdown rendering. Prose is styled, not
+    lexed, so these ops carry no `lex`; the trade is that ⧉out copies the RENDERED
+    text rather than the raw bytes (identical to a native .md Read's expansion)."""
+    from plugins.claude_code import file_fmt as FF
+    return [dict(op, g=str(gid)) for op in FF.md_ops(output, O.BLUE)]
+
+
+def _read_body_plain(output, _spec, gid):
+    """Fallback body for a read-eligible kind with no builder of its own: the
+    output verbatim. Never a stranded block — claude-cmd-pre.py already skipped
+    streaming on the same read_command verdict, so this side MUST render
+    something. (_READ_BODY covering every read-eligible kind is contract-tested.)"""
+    return [O.gut(output, O.BLUE, g=gid)]
+
+
+# The "pick a renderer per kind" table behind the Read one-liner's expansion,
+# keyed by CT.ReadSpec.kind — the seam that replaced assuming a pygments lexer
+# (a markdown read has none; it has an AST renderer).
+_READ_BODY = {"code": _read_body_code, "md": _read_body_md}
+
+
+def _stash_read_view(log, gid, name, cmd, output, spec, line):
+    """Stash a file-reading command's block under kv `view:<gid>` and wrap `line`
     in the claude-copy:///…/view hyperlink — the same click-to-view protocol
     file_fmt.stash_view pins for file ops, but the block is a COMMAND (a `code`
-    op, pretty-printed) + its syntax-highlighted OUTPUT (a `gut` op carrying the
-    raw text + a paint-time `lex` spec, highlighted in the renderer like a Read
-    body). The header label carries the group id + ⧉cmd/⧉out link specs so the
-    expansion is copiable: core.copy.collect falls back to this stash (the block
-    streams nothing to the ops table). Returns (hyperlinked line, gid), or
-    (line, None) when the stash write failed (the caller keeps the plain line)."""
+    op, pretty-printed) + its rendered OUTPUT (the per-kind body from _READ_BODY:
+    a lex `gut` op for source, markdown gut ops for a .md). The header label
+    carries the group id + ⧉cmd/⧉out link specs so the expansion is copiable:
+    core.copy.collect falls back to this stash (the block streams nothing to the
+    ops table). Returns (hyperlinked line, gid), or (line, None) when the stash
+    write failed (the caller keeps the plain line)."""
+    body = _READ_BODY.get(spec.kind, _read_body_plain)(output, spec, gid)
     vops = [O.rule(),
             O.label("Read " + name, O.BLUE, g=gid,
                     lk=[["cmd", "⧉cmd"], ["out", "⧉out"]]),
             O.code(cmd, g=gid),
-            O.gut(output, O.BLUE, lex=lexer, g=gid),
+            *body,
             O.blank()]
     if not S.kv_set(log, "view:" + str(gid), vops):
         return line, None
     url = "claude-copy:///%s/%s/view" % (
         quote(PATHS.sid_from_log(log), safe=""), quote(str(gid), safe=""))
     A.state_file(log, S.db_path(log), "view-stash",
-                 {"gid": gid, "tool": "Bash", "kind": "read", "ops": len(vops)})
+                 {"gid": gid, "tool": "Bash", "kind": "read", "ops": len(vops),
+                  "render": spec.kind})
     return R.hyperlink(url, line), gid
 
 
-def _render_read(d, cmd, output, lexer, path, reader):
-    """Render a code-reading foreground command as a collapsed Read one-liner: a
+def _render_read(d, cmd, output, spec, path, reader):
+    """Render a file-reading foreground command as a collapsed Read one-liner: a
     blue Read(name) line (the shared streamfmt.file_line shape, so it reads like a
     real Read) with a dim reader tag (`sed`/`grep`/…), clickable to expand the
-    command + its highlighted output (_stash_read_view). The reader tag keeps it
-    honest — it is a command, not a native Read — while the noise (the streamed
-    file dump) collapses behind the click, ⧉cmd/⧉out copiable."""
+    command + its rendered output (_stash_read_view — highlighted source for the
+    `code` kind, markdown for `md`). The reader tag keeps it honest — it is a
+    command, not a native Read — while the noise (the streamed file dump) collapses
+    behind the click, ⧉cmd/⧉out copiable."""
     disp, loc = SF.file_display(path, d.get("cwd"))
     name = os.path.basename(path.rstrip("/")) or path
     line = SF.file_line("Read", disp, O.BLUE)
@@ -293,13 +332,13 @@ def _render_read(d, cmd, output, lexer, path, reader):
     gid = d.get("tool_use_id") or None
     vid = None
     if gid:
-        line, vid = _stash_read_view(LOG, gid, name, cmd, output, lexer, line)
+        line, vid = _stash_read_view(LOG, gid, name, cmd, output, spec, line)
     O.emit(LOG, O.line(line, view=vid))
     # It is still a Bash command — count it as one (not a file read), matching how
     # the normal foreground path bumps. The OTLP receiver owns token/cost.
     O.bump(LOG, tool="Bash", commands=1)
-    A.hook_event(d, decision="rendered as Read: Read(%s) via %s"
-                 % (name, reader or "<stdin>")
+    A.hook_event(d, decision="rendered as Read (%s): Read(%s) via %s"
+                 % (spec.kind, name, reader or "<stdin>")
                  + (f" [{loc}]" if loc else "")
                  + (" +view" if vid else ""))
 

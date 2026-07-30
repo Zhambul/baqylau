@@ -405,17 +405,71 @@ def test_code_source_detection():
         assert code_source(c) is None, c
 
 
-def test_read_command_names_file_and_reader():
+def test_read_command_names_kind_file_and_reader():
     """The Read-one-liner seam both Bash hooks consult returns the whole triple —
-    (lexer, file, reader tag). A sed of a .js used to fall through to a streamed
-    fg block because the extension had no lexer; the file/reader halves always
-    matched (sed is a tailarg reader), so only the LANGS row was missing."""
+    (ReadSpec(kind, detection value), file, reader tag). A sed of a .js used to
+    fall through to a streamed fg block because the extension had no lexer; the
+    file/reader halves always matched (sed is a tailarg reader), so only the LANGS
+    row was missing. The KIND is what lets the expansion pick a renderer instead
+    of assuming a lexer."""
     from plugins.claude_code.tools import read_command
     assert read_command("sed -n 60,110p tests/jsdom/domshim.js") == (
-        "javascript", "tests/jsdom/domshim.js", "sed")
+        ("code", "javascript"), "tests/jsdom/domshim.js", "sed")
     assert read_command("grep -n color app/theme.scss") == (
-        "scss", "app/theme.scss", "grep")
+        ("code", "scss"), "app/theme.scss", "grep")
     assert read_command("cat notes.txt") == (None, None, None)
+
+
+def test_read_command_takes_a_markdown_slice():
+    """A sed/grep SLICE of a markdown file collapses to a Read one-liner too (the
+    md kind's READ plane) — `sed -n 120,400p CLAUDE.md` was the reported miss: it
+    streamed as a raw fg dump because only the `code` kind was read-eligible and
+    .md has no lexer. Whole-document readers (cat/head/tail, `< x.md`) are NOT
+    read-eligible: they keep streaming live through MarkdownStreamer."""
+    from plugins.claude_code.tools import read_command
+    assert read_command("sed -n 120,400p /p/CLAUDE.md") == (
+        ("md", True), "/p/CLAUDE.md", "sed")
+    assert read_command("grep -n '^## ' docs/dashboard.md") == (
+        ("md", True), "docs/dashboard.md", "grep")
+    assert read_command("sed -n 1,5p notes.markdown")[0] == ("md", True)
+    for whole in ["cat CLAUDE.md", "head -50 CLAUDE.md", "tail -20 x.md",
+                  "< r.md", "cat < r.md"]:
+        assert read_command(whole) == (None, None, None), whole
+    # …and a kind with no read plane at all never collapses (json/yaml stream).
+    for other in ["cat data.json", "sed -n 1p c.yml", "cat notes.txt"]:
+        assert read_command(other) == (None, None, None), other
+
+
+def test_read_command_honours_both_env_gates(monkeypatch):
+    """CLAUDE_MIRROR_CMD_READ=0 turns the whole collapse off (the historical
+    escape hatch), and a kind's OWN CLAUDE_MIRROR_* gate turns off just that
+    kind's — with its rendering off there is nothing to collapse into, so the
+    command streams instead."""
+    from plugins.claude_code.tools import read_command
+    monkeypatch.setenv("CLAUDE_MIRROR_CMD_READ", "0")
+    assert read_command("sed -n 1,5p x.md") == (None, None, None)
+    assert read_command("sed -n 1,5p x.py") == (None, None, None)
+    monkeypatch.delenv("CLAUDE_MIRROR_CMD_READ")
+    monkeypatch.setenv("CLAUDE_MIRROR_MD", "0")
+    assert read_command("sed -n 1,5p x.md") == (None, None, None)
+    assert read_command("sed -n 1,5p x.py")[0] == ("code", "python"), "code unaffected"
+    monkeypatch.setenv("CLAUDE_MIRROR_CODE", "0")
+    assert read_command("sed -n 1,5p x.py") == (None, None, None)
+
+
+def test_read_plane_and_body_builders_agree():
+    """CONTRACT: every read-eligible RENDER_KINDS entry has its own body builder
+    in cmd_fmt._READ_BODY, and vice versa. cmd_pre skips live streaming on
+    read_command's verdict alone, so a kind the renderer can't build a body for
+    would degrade to a verbatim block (_read_body_plain) — correct, but silently
+    worse than the kind's own rendering. Adding a read plane and forgetting the
+    builder is the drift this pins."""
+    from plugins.claude_code import tools as CT
+    from plugins.claude_code import cmd_fmt as CF
+    eligible = {k.name for k in CT.RENDER_KINDS
+                if k.read_readers or k.read_tailarg_readers}
+    assert eligible == {"md", "code"}
+    assert eligible == set(CF._READ_BODY)
 
 
 def test_file_op_lexer_covers_the_web_extensions():
@@ -608,3 +662,41 @@ def test_render_kinds_registry():
             assert got, (kind, cmd)
         else:
             assert got == exp, (kind, cmd)
+
+
+def test_render_kinds_read_plane():
+    """The registry's SECOND plane (read_match — the Read-one-liner path): the same
+    skeleton, per-kind read reader sets. md admits only its FRAGMENT readers (a
+    slice is a Read; a whole document keeps streaming), code admits every reader it
+    streams plus the bare `< file` form, json/yaml none."""
+    from plugins.claude_code import tools as CT
+    by = {k.name: k for k in CT.RENDER_KINDS}
+    for kind, cmd, exp in [
+        # md: fragment readers only
+        ("md", "sed -n 120,400p CLAUDE.md", True),
+        ("md", "grep -n '^## ' docs/x.md", True),
+        ("md", "sed -n 1,5p 'my notes.markdown'", True),
+        ("md", "cat CLAUDE.md", None), ("md", "head -3 x.md", None),
+        ("md", "< r.md", None), ("md", "cat < r.md", None),
+        ("md", "cat x.md | grep foo", None),      # plumbing guard still applies
+        ("md", "grep foo x.md > hits.txt", None),
+        # code: whole + fragment readers, and the redirect forms
+        ("code", "sed -n '80,130p' dispatch.py", "python"),
+        ("code", "cat foo.py", "python"), ("code", "head -50 App.kt", "kotlin"),
+        ("code", "< s.py", "python"), ("code", "cat < s.py", "python"),
+        # a styling reader is not an allowlisted one even via the redirect form
+        ("code", "bat < r.py", None), ("code", "bat r.py", None),
+        # stream-only kinds
+        ("json", "cat data.json", None), ("json", "sed -n 1p x.json", None),
+        ("yaml", "cat c.yml", None), ("yaml", "sed -n 1p c.yml", None),
+    ]:
+        got = by[kind].read_match(cmd)[0]
+        if exp is None:
+            assert not got, (kind, cmd)
+        elif exp is True:
+            assert got, (kind, cmd)
+        else:
+            assert got == exp, (kind, cmd)
+    # the two planes are independent: md STREAMS what it does not collapse
+    assert by["md"].detect("cat CLAUDE.md") and not by["md"].read_match("cat CLAUDE.md")[0]
+    assert by["md"].read_match("sed -n 1p x.md")[0] and not by["md"].detect("sed -n 1p x.md")
