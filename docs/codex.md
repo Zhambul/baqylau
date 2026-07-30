@@ -478,6 +478,25 @@ touching the dashboard.
   sometimes answers in prose instead of raising the tool), so the card appears
   rarely — that is expected, not a gap. Codex's "chat about this" / free-text notes
   are best-effort (no codex analog to Claude's decline).
+- **`model` / `effort`** — codex has NO `/model <arg>` and NO `/effort`: both axes
+  are set through ONE interactive 3-step `/model` picker, driven by
+  **`plugins/codex/modeldialog.py`** (Step 1 `Select Model` → `All models`; Step 2
+  the model list; Step 3 `Select Reasoning Level` — the same `›`-cursor / `enter to
+  confirm` geometry as the plan picker). The ✦ **model** button changes the model
+  and accepts that model's DEFAULT level (codex's own behaviour on a model switch);
+  the ✧ **effort** button KEEPS the current model (its `(current)` row) and changes
+  only the level. `dashboard/http/post/typing.post_command` routes both through
+  `_host_model` → `HostControl.model`/`effort` (no `/model <arg>` paste, no Claude
+  confirm menu — the gesture screen-verifies its own steps), and the arg is
+  validated by the LIVE picker (label-matched, `Extra high` for the `xhigh` token),
+  not Claude's `MODEL_ARG_OK`/`EFFORTS`. The ✦/✧ MENUS offer codex's own
+  vocabulary: `CodexHost.model_choices()`/`effort_choices()` (from
+  `modeldialog.MODEL_CHOICES`/`EFFORT_CHOICES`) ride the session payload
+  (`data["model_choices"]`/`["effort_choices"]`), and the client's `hostChoices()`
+  uses them when present, else its Claude defaults — so a codex session's picker
+  lists `gpt-5.6-sol/terra/luna/…` and `low…ultra`, no codex-specific menu code.
+  Verified live: a switch to `gpt-5.6-terra` (accepting its default `medium`) and
+  an effort change to `xhigh` keeping the model.
 
 ### Launching & resuming codex from the web
 

@@ -195,14 +195,20 @@ class _TypingMixin:
         if body is None:
             return
         cmd, arg = body.get("cmd"), body.get("arg")
+        # a NON-claude host (codex) drives model/effort through its OWN gesture
+        # (an interactive /model picker, not a `/model <arg>` paste), so its arg
+        # is validated by the live picker, not Claude's MODEL_ARG_OK/EFFORTS.
+        host = self._gesture_host(sid)
+        argful = isinstance(arg, str) and bool(arg)
         if cmd == "compact" and not arg:
             text = "/compact"
         elif cmd == "rename" and not arg:
             text = "/rename"
-        elif cmd == "model" and isinstance(arg, str) \
-                and MODEL_ARG_OK.match(arg):
+        elif cmd == "model" and argful and (host is not None
+                                            or MODEL_ARG_OK.match(arg)):
             text = "/model " + arg
-        elif cmd == "effort" and arg in EFFORTS:
+        elif cmd == "effort" and ((host is not None and argful)
+                                  or arg in EFFORTS):
             text = "/effort " + arg
         else:
             return self._reject_input("web-command", "bad cmd", "unknown command",
@@ -228,13 +234,18 @@ class _TypingMixin:
                           "ok": False, "tab": tab})
             return self._json({"error": "a dialog is open — answer it first"},
                               409)
-        # NON-claude host (codex) drives the command through its own gesture. The
-        # caps guard above already 409'd model/effort (codex leaves them inert), so
-        # only `compact` reaches here for codex; a claude_code / unprovable session
-        # returns None and the byte-identical inline path below runs unchanged.
-        host = self._gesture_host(sid)
-        if host is not None and cmd == "compact":
-            return self._host_compact(host, sid, log, sdb, fe, win, tab)
+        # NON-claude host (codex) drives the command through its own gesture:
+        # `compact` pastes codex's /compact, `model`/`effort` drive codex's
+        # interactive /model picker (there is no /model <arg> or /effort to
+        # paste). A claude_code / unprovable session returns None (host resolved
+        # once, above) and the byte-identical inline paste path below runs
+        # unchanged.
+        if host is not None:
+            if cmd == "compact":
+                return self._host_compact(host, sid, log, sdb, fe, win, tab)
+            if cmd in ("model", "effort"):
+                return self._host_model(host, sid, cmd, arg, log, sdb, fe, win,
+                                        tab)
         # the ONE slash-command channel: a bracketed paste (mode-proof — a raw
         # typed command is vim KEYSTROKES in a NORMAL-mode box) + the clipboard
         # -image guard that a paste requires (launch.type_command)
@@ -284,6 +295,30 @@ class _TypingMixin:
                     {"sid": sid, "win": win})
             return self._json({"error": "send failed"}, 502)
         return self._json({"ok": True, "queued": tab in QUEUE_TABS, "tab": tab})
+
+    def _host_model(self, host, sid, cmd, arg, log, sdb, fe, win, tab):
+        """Route /model or /effort through a NON-claude host's gesture (codex
+        drives its INTERACTIVE 3-step picker, which sets model + reasoning level
+        together). No confirm menu (that is Claude's prompt-cache prompt — the
+        gesture screen-verifies its own steps). Writes the canonical `web-command`
+        row (host/status/cid) and shapes the reply like the inline path. A picker
+        that can't be driven mid-turn is unlikely (codex refuses `/model` while a
+        turn runs), so this is not queued — a failure is a 502."""
+        ctx = {"sid": sid, "log": log, "sdb": sdb}
+        res = host.model(fe, win, arg, ctx) if cmd == "model" \
+            else host.effort(fe, win, arg, ctx)
+        ok = bool(res.get("ok"))
+        A.state_file(log, sdb, "web-command",
+                     {"win": win, "cmd": cmd, "arg": arg or "", "ok": ok,
+                      "tab": tab, "host": host.name, "status": res.get("status"),
+                      "cid": res.get("cid"), "step": res.get("step") or ""})
+        if not ok:
+            A.error(log, "dashboard command (%s %s: %s)"
+                    % (host.name, cmd, res.get("step") or "failed"),
+                    {"sid": sid, "win": win, "detail": res.get("detail") or ""})
+            return self._json({"error": res.get("detail") or "switch failed",
+                               "step": res.get("step") or ""}, 502)
+        return self._json({"ok": True, "queued": False, "tab": tab})
 
     def post_stop(self, sid):
         """Close a session's kitty tab (Frontend.close_tab — main window +

@@ -146,6 +146,18 @@ class HostControl:
     # words the control plane composes, so they stay off GESTURES (a host may
     # provide them regardless of which gestures it drives). `launchable` above is
     # what the new-session picker reads; these are the how.
+    def model_choices(self):
+        """The model ids this host's ✦ menu offers — [] means the client uses
+        its own default list (claude_code's are client-hardcoded; codex's differ,
+        so it supplies them here). Not a gesture (no cap): a READ the session
+        payload serves so the menu is the owning host's own vocabulary."""
+        return []
+
+    def effort_choices(self):
+        """The reasoning-effort tokens this host's ✧ menu offers — [] means the
+        client default. The effort twin of model_choices."""
+        return []
+
     def resume_words(self, sid):
         """The argv words that RESUME session `sid` for this tool (claude:
         ['--resume', sid]); [] when the tool can't resume."""

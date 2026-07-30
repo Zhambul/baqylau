@@ -286,6 +286,13 @@ def session_payload(sid, agent=""):
     # host DISPLAY label ("Codex" / "Claude Code") for the client's user-facing
     # copy — every string that used to hardcode "Claude" reads meta.host_label.
     data["host_label"] = host_label(tpath)
+    # the OWNING host's ✦ model / ✧ effort menu vocabulary — [] means "use the
+    # client's own default list" (claude_code's are hardcoded; codex supplies
+    # its own, since its models/levels differ). The client's quick-command menus
+    # read these so a codex session's picker offers codex models, not Claude's.
+    _h = plugins.host_named(plugins.owns_by(tpath) or DEFAULT_HOST)
+    data["model_choices"] = list(_h.model_choices()) if _h else []
+    data["effort_choices"] = list(_h.effort_choices()) if _h else []
     # Whether the session's transcript .jsonl is GONE (known path, absent on
     # disk) — the composer's resume-&-send door is dead for it (`claude
     # --resume` finds no conversation, the launched tab exits at once). An

@@ -328,7 +328,7 @@ function chromeQuickCmds(ses, meta) {
   ses.modelBtn = mdl;
   setModelBtn(mdl);
   mdl.dataset.tip = "switch the model (/model — also saves as your new-session default)";
-  mdl.onclick = () => openQuickMenu(mwrap, "model", MODEL_CHOICES,
+  mdl.onclick = () => openQuickMenu(mwrap, "model", hostChoices("model"),
                                     curModelFamily());
   mwrap.append(mdl);
   // effort: dropdown picker (current effort is config-only — not readable
@@ -338,7 +338,7 @@ function chromeQuickCmds(ses, meta) {
   ses.effortBtn = eff;
   setEffortBtn(eff);
   eff.dataset.tip = "set the reasoning effort (/effort — also saves as your new-session default)";
-  eff.onclick = () => openQuickMenu(ewrap, "effort", EFFORT_CHOICES,
+  eff.onclick = () => openQuickMenu(ewrap, "effort", hostChoices("effort"),
                                     (ses.meta && ses.meta.effort) || "");
   ewrap.append(eff);
   act2.append(mwrap, ewrap, cpt);

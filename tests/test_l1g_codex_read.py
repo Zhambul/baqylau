@@ -83,19 +83,22 @@ def test_codex_owns_real_rollouts_only(tmp_path):
 def test_codex_host_caps_reflect_wired_gestures(tmp_path):
     """codex is a launchable HOST that drives its SUPPORTED gestures (P5):
     interrupt/compact/rename/ask read True (the dashboard un-greys those buttons),
-    plus `plan` (codex's plan-mode DECISION picker — plugins/codex/plandialog.py),
-    while the gestures codex cannot drive — rewind/migrate/model/effort — stay
-    inert and read False (greyed). `send` is not a gesture (never caps-gated). The
-    caps are DERIVED from which methods CodexHost overrides, not an authored dict
-    (plugins.host), so this pins the derivation end-to-end."""
+    plus `plan` (plan-mode DECISION picker) and `model`/`effort` (the interactive
+    /model picker — plugins/codex/modeldialog.py), while the gestures codex cannot
+    drive — rewind/migrate — stay inert and read False (greyed). `send` is not a
+    gesture (never caps-gated). The caps are DERIVED from which methods CodexHost
+    overrides, not an authored dict (plugins.host), so this pins the derivation
+    end-to-end."""
     import plugins
     h = plugins.host_named("codex")
     assert h is not None and h.name == "codex" and h.launchable is True
     assert h.label == "Codex"
     assert h.caps() == {"interrupt": True, "send": False, "rename": True,
                         "rewind": False, "migrate": False, "compact": True,
-                        "model": False, "effort": False, "ask": True,
+                        "model": True, "effort": True, "ask": True,
                         "plan": True}
+    assert list(h.model_choices())[0] == "gpt-5.6-sol"
+    assert "xhigh" in h.effort_choices()
     assert h.resume_words("sid7") == ["resume", "sid7"]
     p = _full_rollout(tmp_path)
     assert plugins.host_of(p).name == "codex"

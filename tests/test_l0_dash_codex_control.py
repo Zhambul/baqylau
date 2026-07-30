@@ -58,19 +58,90 @@ def test_codex_compact_routes_through_the_gesture(dash, tmp_path, monkeypatch):
     assert row["host"] == "codex" and row["cmd"] == "compact" and row["ok"]
 
 
-def test_codex_model_and_effort_are_capped_off(dash, tmp_path, monkeypatch):
-    fe = _FakeFE()
-    _inject_fe(monkeypatch, fe)
+class _CxModelFE(_FakeFE):
+    """A reactive codex /model picker: pasting `/model` opens step 1
+    (Select Model), and ENTER advances through the 3 steps
+    (Select Model → Select Model and Effort → Select Reasoning Level →
+    closed). DOWN/UP walk the `›` cursor within a step."""
+
+    _STEPS = ("Select Model", "Select Model and Effort",
+              "Select Reasoning Level for gpt-5.6-terra")
+    _ROWS = (("codex-auto-review", "All models (current)"),
+             ("gpt-5.6-sol (current)", "gpt-5.6-terra", "gpt-5.6-luna"),
+             ("Low", "Medium (default)", "High", "Extra high", "Max", "Ultra"))
+
+    def __init__(self):
+        super().__init__()
+        self.step, self.cursor, self.picks = -1, 1, []
+
+    def _default_cursor(self, step):
+        """The row the picker pre-selects on entering `step` — its `(current)` /
+        `(default)` row (1-based), else row 1 — so a bare Enter accepts it."""
+        if 0 <= step < len(self._ROWS):
+            for i, label in enumerate(self._ROWS[step], 1):
+                if "(current)" in label or "(default)" in label:
+                    return i
+        return 1
+
+    def paste_text(self, win, text):
+        self.pasted.append((win, text))
+        if text == "/model":
+            self.step, self.cursor = 0, self._default_cursor(0)
+        return True
+
+    def get_text(self, win, extent="screen", ansi=False):
+        if ansi or self.step < 0 or self.step >= len(self._STEPS):
+            return "codex\n❯ \n[gpt-5.6-terra] │ ready\n"
+        lines = ["  " + self._STEPS[self.step]]
+        for i, label in enumerate(self._ROWS[self.step], 1):
+            mark = "› " if i == self.cursor else "  "
+            lines.append("%s%d. %s   desc" % (mark, i, label))
+        lines.append("  Press enter to confirm or esc to go back")
+        return "\n".join(lines)
+
+    def send_key(self, win, *keys):
+        self.keyed.append((win, keys))
+        k = keys[0] if keys else ""
+        if k == "down":
+            self.cursor = min(self.cursor + 1, len(self._ROWS[self.step]))
+        elif k == "up":
+            self.cursor = max(self.cursor - 1, 1)
+        elif k == "enter":
+            self.picks.append((self.step, self._ROWS[self.step][self.cursor - 1]))
+            self.step += 1                              # advance / close
+            self.cursor = self._default_cursor(self.step)
+        return True
+
+
+def test_codex_model_routes_through_the_picker(dash, tmp_path, monkeypatch):
     monkeypatch.setenv("KITTY_WINDOW_ID", "71")
     _seed(tmp_path, "cx2")
-    for cmd, arg in (("model", "sonnet[1m]"), ("effort", "low")):
-        try:
-            _post(dash + "/api/session/cx2/command", {"cmd": cmd, "arg": arg})
-            raise AssertionError("expected 409")
-        except urllib.error.HTTPError as e:
-            assert e.code == 409
-            assert json.loads(e.read())["cap"] == cmd
-    assert fe.pasted == []   # nothing typed for an unsupported gesture
+    fe = _CxModelFE()
+    _inject_fe(monkeypatch, fe)
+    code, body = _post(dash + "/api/session/cx2/command",
+                       {"cmd": "model", "arg": "gpt-5.6-terra"})
+    assert code == 200 and json.loads(body)["ok"]
+    # step1 → 'All models', step2 → the chosen model, step3 → accept the default
+    assert fe.pasted == [("71", "/model")]
+    assert [p[1] for p in fe.picks] == ["All models (current)", "gpt-5.6-terra",
+                                        "Medium (default)"]
+    row = _last_state_file("cx2", "web-command")
+    assert row["host"] == "codex" and row["cmd"] == "model" and row["ok"]
+
+
+def test_codex_effort_keeps_current_model(dash, tmp_path, monkeypatch):
+    monkeypatch.setenv("KITTY_WINDOW_ID", "72")
+    _seed(tmp_path, "cx2b")
+    fe = _CxModelFE()
+    _inject_fe(monkeypatch, fe)
+    code, body = _post(dash + "/api/session/cx2b/command",
+                       {"cmd": "effort", "arg": "xhigh"})
+    assert code == 200 and json.loads(body)["ok"]
+    # effort keeps the CURRENT model (the (current) row) and picks 'Extra high'
+    assert [p[1] for p in fe.picks] == ["All models (current)",
+                                        "gpt-5.6-sol (current)", "Extra high"]
+    row = _last_state_file("cx2b", "web-command")
+    assert row["host"] == "codex" and row["cmd"] == "effort" and row["ok"]
 
 
 def test_codex_rename_live_routes_through_the_gesture(dash, tmp_path, monkeypatch):

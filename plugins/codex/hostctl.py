@@ -215,6 +215,38 @@ class CodexHost(HostControl):
                     "step": e.step, "detail": str(e)}
         return r
 
+    def model(self, fe, win, arg, ctx):
+        """Switch the codex model via its INTERACTIVE /model picker (codex has no
+        `/model <arg>` — plugins/codex/modeldialog.py). `arg` is a codex model id
+        (modeldialog.MODEL_CHOICES); the picker changes the model and accepts that
+        model's DEFAULT reasoning level (codex's own behaviour on a model switch).
+        Overriding this flips the `model` cap True. Result {status, cid, ok,
+        step?}."""
+        return self._drive_model(fe, win, ctx, "model", model=arg)
+
+    def effort(self, fe, win, arg, ctx):
+        """Switch the reasoning level via the /model picker, KEEPING the current
+        model (the picker's `(current)` row) — codex has no live `/effort`. `arg`
+        is a token in modeldialog.EFFORT_CHOICES. Overriding this flips the
+        `effort` cap True. Result {status, cid, ok, step?}."""
+        return self._drive_model(fe, win, ctx, "effort", effort=arg)
+
+    def _drive_model(self, fe, win, ctx, verb, model="", effort=""):
+        """Shared body of model/effort: drive the /model picker (which sets both
+        axes at once), audited on failure. INDETERMINATE with the picker LEFT as-
+        is on any unverified step (codex's Esc steps BACK, so never blind-Esc)."""
+        from plugins.codex import modeldialog as MD
+        r = self._ack()
+        r["ok"] = True
+        try:
+            MD.set_model_effort(fe, win, model=model, effort=effort)
+        except MD.CodexModelError as e:
+            A.error(ctx.get("log") or "", "codex %s (%s)" % (verb, e.step),
+                    {"sid": ctx.get("sid"), "win": str(win), "detail": str(e)})
+            return {"status": INDETERMINATE, "cid": r["cid"], "ok": False,
+                    "step": e.step, "detail": str(e)}
+        return r
+
     def _paste(self, fe, win, text, ctx, verb, sid=""):
         """Shared body of compact/rename: an atomic bracketed paste (+ Enter) of a
         slash command into the codex window, audited on failure. ACK/ok on
@@ -228,6 +260,18 @@ class CodexHost(HostControl):
         return r
 
     # --- launch / lifecycle plumbing (NOT capability-gated) -------------------
+
+    def model_choices(self):
+        """codex's ✦ menu models (modeldialog.MODEL_CHOICES) — the label IS the
+        picker row AND the gesture arg."""
+        from plugins.codex import modeldialog as MD
+        return list(MD.MODEL_CHOICES)
+
+    def effort_choices(self):
+        """codex's ✧ menu reasoning-effort tokens (modeldialog.EFFORT_CHOICES;
+        `xhigh` → the picker's 'Extra high', etc.)."""
+        from plugins.codex import modeldialog as MD
+        return list(MD.EFFORT_CHOICES)
 
     def resume_words(self, sid):
         """`codex resume <sid>` — codex's own conversation-resume argv (a codex

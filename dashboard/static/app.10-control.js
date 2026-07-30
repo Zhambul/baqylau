@@ -151,6 +151,18 @@ const MODEL_CHOICES = [["fable", "fable"], ["opus", "opus"],
 const EFFORT_CHOICES = [["low", "low"], ["medium", "medium"],
                         ["high", "high"], ["xhigh", "xhigh"], ["max", "max"]];
 
+// The ✦/✧ menu choices for the CURRENT session — the OWNING host's own list
+// (meta.model_choices / effort_choices, a flat list the server derives from the
+// host) when it has one, else the Claude defaults above. So a codex session's
+// pickers offer codex models/levels, not Claude's, without a codex-specific menu.
+function hostChoices(kind) {
+  const meta = S.ses && S.ses.meta;
+  const list = meta && Array.isArray(meta[kind + "_choices"])
+    ? meta[kind + "_choices"] : null;
+  if (list && list.length) return list.map(v => [v, v]);
+  return kind === "model" ? MODEL_CHOICES : EFFORT_CHOICES;
+}
+
 function closeQuickMenu() {
   document.querySelectorAll(".qcmenu").forEach(m => m.remove());
 }
