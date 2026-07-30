@@ -250,14 +250,23 @@ def conversation(sid, pos=0, agent_id=""):
 
 
 def pending_dialog(sid):
-    """The codex run's OPEN question, or None — the pending `request_user_input`
-    (rollout `ask` record) with no answer after it, as {"kind": "ask",
-    "tool_use_id", "questions": [...]} for the web question card (P5 drives it;
-    this is the read surface). Derived READ-SIDE from the standalone host's own
-    rollout tail (agent_id-less — a sidecar's questions surface in agent scope
-    later): the newest `ask` record whose call is not yet answered by a following
-    `function_call_output` is open. `tool_use_id` is the ask's call id so the
-    driver can pair the answer. None when no rollout / no open ask."""
+    """The codex run's OPEN modal — whichever of two plan-mode surfaces is open
+    and NEWEST, else None. Both have no hook (codex fires none for them), so both
+    are derived READ-side from the standalone host's own rollout tail (a sidecar's
+    surface in agent scope later):
+
+      · a `request_user_input` question with no answer after it →
+        {"kind": "ask", "tool_use_id", "questions": [...]} (the web question card)
+      · a plan-mode Plan (`item_completed`/`item.type == "Plan"`) not yet decided
+        → {"kind": "plan", "plan": <markdown>, "plan_id"} (the web plan card)
+
+    A Plan is DECIDED — no longer pending — once a NEW turn starts or you reply
+    after it (`task_started` / `user_message` newer than the Plan): clicking
+    "implement" opens a fresh default-mode turn, and typing a follow-up starts a
+    turn of its own. Scanning newest→oldest, the first OPEN modal wins, so an ask
+    raised after a plan (both plan-mode) shadows it, matching the screen. `plan_id`
+    lets the driver pair the decision; `tool_use_id` pairs an ask answer. The card
+    endpoints verify the live screen anyway, so a stale tail can never mis-drive."""
     path = _rollout_for(sid, "")
     if not path:
         return None
@@ -265,6 +274,7 @@ def pending_dialog(sid):
     if lines is None:
         return None
     answered = set()
+    plan_decided = False           # a task_started / user_message newer than a Plan
     for raw in reversed(lines):
         # An answer (function_call_output) for a call id closes that ask; scan
         # newest→oldest and return the first ask still open.
@@ -275,6 +285,23 @@ def pending_dialog(sid):
                 cid = None
             if cid:
                 answered.add(cid)
+            continue
+        # A new turn or your own message (newer than any Plan we'll reach below)
+        # means an earlier plan was decided/superseded — mark it so a Plan record
+        # reached afterwards is not offered.
+        if b'"task_started"' in raw or b'"user_message"' in raw:
+            plan_decided = True
+            continue
+        if b'"item_completed"' in raw:
+            if plan_decided:
+                continue
+            try:
+                rec = RO.parse(json.loads(raw))
+            except Exception:
+                rec = None
+            if rec and rec["kind"] == "plan":
+                return {"kind": "plan", "plan": rec["text"],
+                        "plan_id": rec.get("id") or ""}
             continue
         if b'"request_user_input"' not in raw:
             continue

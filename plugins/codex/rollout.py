@@ -287,6 +287,22 @@ def _ev_task_complete(p):
     return {"kind": "task_complete", "at": p.get("completed_at")}
 
 
+def _ev_item_completed(p):
+    """codex's PLAN-mode plan: an `item_completed` whose `item.type == "Plan"`
+    carries the full plan as markdown (`item.text`) with a stable id. This is
+    the structured plan the dashboard renders as a plan card (docs/codex.md
+    *Plan mode*) — the codex analog of Claude's ExitPlanMode plan text, and the
+    signal the pending-plan read keys on. Every OTHER item_completed kind (codex
+    also completes messages/reasoning as items) is already covered by its own
+    event/response record, so only Plan produces a record here."""
+    item = p.get("item") or {}
+    if item.get("type") != "Plan":
+        return None
+    text = (item.get("text") or "").strip()
+    return {"kind": "plan", "text": text, "id": item.get("id") or ""} if text \
+        else None
+
+
 def _ev_turn_aborted(p):
     return {"kind": "turn_aborted"}
 
@@ -457,6 +473,7 @@ def _top_world_state(p):
 _EVENT = {"token_count": _ev_token_count, "patch_apply_end": _ev_patch_apply_end,
           "context_compacted": _ev_context_compacted,
           "task_started": _ev_task_started, "task_complete": _ev_task_complete,
+          "item_completed": _ev_item_completed,
           "turn_aborted": _ev_turn_aborted, "user_message": _ev_user_message,
           "agent_reasoning": _ev_agent_reasoning,
           "agent_message": _ev_agent_message}
@@ -501,7 +518,7 @@ KINDS = frozenset({
     "turn_context", "usage", "patch", "compact", "task_started",
     "task_complete", "turn_aborted", "prompt", "reasoning", "message",
     "search", "exec", "exec_result", "stdin", "chat", "think", "patch_call",
-    "ask", "compact_boundary", "bad",
+    "ask", "plan", "compact_boundary", "bad",
 })
 
 

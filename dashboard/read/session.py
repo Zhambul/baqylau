@@ -393,6 +393,23 @@ def _dialog_pending(sid, key):
     return pending if isinstance(pending, dict) else None
 
 
+def _host_dialog(sid):
+    """A NON-default host's OPEN modal via the pending_dialog fan-out ({kind:
+    "ask"|"plan", …}) or None — the ONE door ask_pending and plan_pending share
+    so the (256KB rollout tail) read fires at most once and stays host-gated: a
+    CLAUDE session (session_caps → DEFAULT_HOST) never touches it, so a
+    daemon-origin Claude session pays nothing new. Defensive: any read error →
+    None (a modal that won't read must never block the payload)."""
+    host, _ = session_caps((API.session_row(sid) or {}).get("transcript_path") or "")
+    if host == DEFAULT_HOST:
+        return None
+    try:
+        pend = plugins.pending_dialog(sid)
+    except Exception:
+        return None
+    return pend if isinstance(pend, dict) else None
+
+
 def ask_pending(sid):
     """The session's OPEN modal-ask stash, HOST-AWARE — the ONE ask source the
     payload's data["ask"], post_message's modal send-block, and the ask-card
@@ -411,14 +428,11 @@ def ask_pending(sid):
     claude = _dialog_pending(sid, "ask-pending")
     if claude is not None:
         return claude
-    host, _ = session_caps((API.session_row(sid) or {}).get("transcript_path") or "")
-    if host == DEFAULT_HOST:
-        return None
-    try:
-        pend = plugins.pending_dialog(sid)
-    except Exception:
-        return None
-    return pend if isinstance(pend, dict) else None
+    pend = _host_dialog(sid)
+    # the codex pending_dialog fan-out returns whichever modal is open (ask OR
+    # plan) with a `kind`; the ask card takes only the ask (the plan is
+    # plan_pending's, below).
+    return pend if pend and pend.get("kind") == "ask" else None
 
 
 def ask_wire(sid, ask):
@@ -648,8 +662,17 @@ def tasks_card(sid):
 
 def plan_pending(sid):
     """The pending plan, ENRICHED for the page: `plan_html` (the markdown
-    rendered server-side, the msg-bubble md_html — escape-first)."""
+    rendered server-side, the msg-bubble md_html — escape-first). HOST-AWARE
+    like ask_pending: a claude_code session's plan lives in the hook-stashed
+    `plan-pending` kv (ask_fmt.py); a codex session has NO such hook, so its
+    open plan-mode Plan is derived READ-side from the rollout tail
+    (plugins.pending_dialog → {kind:"plan", plan, plan_id}), the same `plan`
+    shape the card renders and post_plan_decision drives. None when neither."""
     pending = _dialog_pending(sid, "plan-pending")
+    if pending is None:
+        pend = _host_dialog(sid)
+        if pend and pend.get("kind") == "plan":
+            pending = pend
     if pending and "plan_html" not in pending:
         pending = dict(pending)
         pending["plan_html"] = opshtml.md_html(pending.get("plan") or "")

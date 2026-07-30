@@ -194,6 +194,7 @@ IGNORE_KINDS = frozenset({
     "patch_call",        # patch lifecycle detail — patch (patch_apply_end) already renders the file lines (P2/P5)
     "compact_boundary",  # top-level compaction boundary — the event_msg `compact` already paints ⟳
     "ask",               # request_user_input dialog — surfaced via the web question card, not the mirror
+    "plan",              # plan-mode Plan item — surfaced via the web plan card + transcript, not the mirror
     "bad",               # malformed/undecodable line — counted in the malformed audit, never painted
 })
 
