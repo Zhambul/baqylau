@@ -87,6 +87,22 @@ function sig(row) {
   });
 }
 
+/* WHICH GRID TRACK each cell was placed in — the structural half of the stack,
+   and the one the box SEQUENCE above cannot state. Two rows can emit the same
+   boxes in the same order and still not line up: they were separate flex lines,
+   so a column existed only for as long as everything in front of it happened to
+   measure the same. The strip is now one grid whose tracks every row subgrids
+   into, and each cell names its track — so "c1's 7d bar and codex's 7d bar are
+   in column 3" is a fact the DOM states, which is what this reports. */
+function place(row) {
+  return row.children.map(c => ({
+    kind: c.className.split(/\s+/)[0],
+    label: c.className.split(/\s+/)[0] === "ubar" && c.children[0]
+      ? c.children[0].textContent : "",
+    col: c.style.gridColumn,
+  }));
+}
+
 function ghosts(row) {
   return row.children.map(c => c._cls().includes("ghost"));
 }
@@ -106,6 +122,12 @@ function render(list) {
   sandbox.renderAccounts(list);
   return {
     rows: $accounts.children.map(sig),
+    places: $accounts.children.map(place),
+    // every row spans the WHOLE track set (it is a subgrid of the strip)
+    rowspan: $accounts.children.map(r => r.style.gridColumn),
+    // the strip's own track list — one entry per column, all measured by the
+    // layout engine across the rows (`max-content`)
+    tracks: $accounts.style.getPropertyValue("--acct-tracks"),
     ghosts: $accounts.children.map(ghosts),
     holes: $accounts.children.map(holes),
     text: $accounts.children.map(r => r.textContent),

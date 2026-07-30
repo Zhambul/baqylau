@@ -685,6 +685,29 @@ def test_accounts_strip_rows_stack_column_for_column():
                 tail = [] if bar["label"].startswith("7d ") else ["ureset"]
                 assert bar["cells"] == ["ulabel", "utrack", "upct"] + tail, \
                     (name, bar)
+        # …and the SAME GRID TRACK, which is the half the box sequence cannot
+        # state. Emitting the same boxes in the same order aligned the rows only
+        # while everything in front of a bar measured the same in each of them —
+        # they were separate flex lines, with the name's `ch` arithmetic, the ⚠
+        # badge and each label's own width three ways for one row to start its
+        # bars a few pixels off its neighbour's. The strip is one grid now, every
+        # row a subgrid of it, and each cell NAMES its column.
+        pl = case["places"]
+        assert all(s == "1 / -1" for s in case["rowspan"]), (name, case["rowspan"])
+        by_label = [{c["label"]: c["col"] for c in row if c["kind"] == "ubar"}
+                    for row in pl]
+        assert by_label[0] == by_label[1], (name, by_label)
+        for row in pl:
+            # the name opens every row, and the cells march across the tracks
+            assert row[0]["kind"] == "aname" and row[0]["col"] == "1", (name, row)
+            cols = [int(c["col"]) for c in row if "/" not in c["col"]]
+            assert cols == sorted(set(cols)), (name, cols)
+        # one track per column: the name, the badge slot when ANY row is logged
+        # out, one per duration column, and the trailing limit-hit cell
+        badge = 1 if any(c["kind"] == "uauth" for c in pl[0]) else 0
+        assert len(case["tracks"].split()) == 1 + badge + len(by_label[0]) + 1, \
+            (name, case["tracks"])
+        assert set(case["tracks"].split()) == {"max-content"}, case["tracks"]
 
     # the placeholders are where the missing data is, and NOT anywhere else
     assert d["cases"]["live_shape"]["ghosts"] == [[False] * 4, [False] * 4]
@@ -755,6 +778,15 @@ def test_accounts_strip_rows_stack_column_for_column():
         css = fh.read()
     assert re.search(r"\.ubar\.hole\s*\{[^}]*visibility:\s*hidden", css), \
         "a hole must reserve the column and paint nothing"
+    # …and the tracks the placements above name have to BE shared tracks: the
+    # strip owns them and each row is a `subgrid` of it. Without that the
+    # grid-column values would place cells in each row's OWN grid, which is the
+    # per-row layout this replaced wearing a grid's clothes.
+    assert re.search(r"\.acct\s*\{[^}]*grid-template-columns:\s*subgrid", css), \
+        "every account row must subgrid the strip's columns"
+    assert re.search(r"#accounts\s*\{[^}]*grid-template-columns:\s*"
+                     r"var\(--acct-tracks", css), \
+        "the strip owns the track list renderAccounts writes"
 
 
 def test_ctx_bar_compaction_and_drain():

@@ -563,25 +563,53 @@ body.in-session.fs-on #fsbtn { display: revert; }
    poll and painter, welded flush under this one so the two would read as a
    single strip; now they are one. */
 body.in-session #accounts { display: none; }
+/* THE STRIP IS ONE GRID and every row is a `subgrid` of it — the tracks
+   (--acct-tracks, one `max-content` per column, written by renderAccounts) are
+   measured across ALL the rows at once, so a duration's bar sits in the same
+   track in each of them no matter how long that row's account name is, whether
+   it wears the ⚠ badge, or how many windows it reports (docs/dashboard.md *Row
+   alignment*). The rows were flex lines before this, each laying out its own
+   sequence of fixed-width parts; that only stacks while every part measures the
+   same in every row, and it kept not doing so. Cells name their track
+   explicitly (`grid-column`, app.01-attention.place), so the alignment does not
+   rest on the source order either.
+   `overflow-x: auto` replaces the rows' old `flex-wrap`: a grid row cannot
+   fold, and the strip must not widen the page on a narrow screen. */
 #accounts {
-  display: flex; flex-direction: column; gap: 12px; align-items: flex-start;
+  display: grid; grid-template-columns: var(--acct-tracks, max-content);
+  justify-content: start; row-gap: 12px; column-gap: 10px; overflow-x: auto;
   padding: 14px max(var(--gx), env(safe-area-inset-right))
            14px max(var(--gx), env(safe-area-inset-left));
   background: var(--panel);
   box-shadow: inset 0 -1px 0 var(--hair);
 }
-/* wrap + max-width: the row (name + two ubars, ~500px) must fold on a narrow
-   screen — #accounts has no internal scroll, an unwrapped row widens the page.
-   each row is its own padded, rounded chip (left edge still on the --gx page
-   gutter; the padding insets the content within the chip) */
-.acct { display: inline-flex; flex-wrap: wrap; align-items: center;
-        gap: 4px 10px; min-width: 0; max-width: 100%;
+/* each row is its own padded, rounded chip (left edge still on the --gx page
+   gutter; the padding insets the content within the chip), spanning every track
+   and re-using them for its own cells. A subgrid's padding is taken off its
+   first/last track rather than shifting the tracks, and every row carries the
+   same padding, so the columns stay put. */
+.acct { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid;
+        align-items: center; min-width: 0;
         padding: 7px 14px; border-radius: var(--r);
         background: color-mix(in srgb, var(--mid) 5%, transparent);
         box-shadow: inset 0 0 0 1px var(--hair); }
-/* the name column is as wide as the widest account name on the strip (--aname-w,
-   set by renderAccounts in `ch` — the font is mono, so it's exact); a fixed
-   width here is the first of the columns that make the rows stack */
+/* A browser without `subgrid` (nothing current — Firefox 71, Safari 16,
+   Chrome 117) would compute an invalid track list and stack every cell in one
+   column, so it falls back to exactly the flex strip this replaced: the
+   grid-column values are inert in a flex container, and the per-part fixed
+   widths below are still there to do the aligning. */
+@supports not (grid-template-columns: subgrid) {
+  #accounts { display: flex; flex-direction: column; align-items: flex-start;
+              gap: 12px; overflow-x: visible; }
+  .acct { display: inline-flex; flex-wrap: wrap; gap: 4px 10px; max-width: 100%; }
+}
+/* the name cell's FLOOR — the widest account name on the strip (--aname-w, set
+   by renderAccounts in `ch`), never under 14ch so a single short name doesn't
+   let the bars jump left. The track above is what actually sizes the column
+   now, which is what makes this floor harmless: it applies equally to every
+   row, and where the `ch` estimate falls short of the painted name the
+   max-content track covers the difference (it used to be the only sizer, and a
+   character COUNT is not a width). */
 .acct .aname { color: var(--text-soft); font: 600 11px/1 var(--mono); flex: none;
   min-width: var(--aname-w, 14ch); }
 .acct .adim { color: var(--dim2); font: 11px/1 var(--mono); }
@@ -613,7 +641,10 @@ body.in-session #accounts { display: none; }
    "resets …" text that follows stays aligned across the c1/c2 account rows */
 .ubar .upct { color: var(--text); font: 650 10px/1 var(--mono);
   min-width: 4ch; text-align: right; flex: none; }
-.ubar .ureset, .acct > .ureset { color: var(--text-soft); font: 11px/1 var(--mono); white-space: nowrap; }
+/* the limit-hit chip + its reset ride ONE trailing cell, so the two are a single
+   grid item in the last track rather than two competing for it */
+.acct .utail { display: inline-flex; align-items: center; gap: 8px; }
+.ubar .ureset, .utail .ureset { color: var(--text-soft); font: 11px/1 var(--mono); white-space: nowrap; }
 /* fixed reset-text column — the last variable-width part of a window, so
    pinning it aligns the dividers. 17ch is the WIDEST resetAgo() output:
    "resets in 23h 59m" (17) beats the days form "resets in 6d 23h" (16), and at

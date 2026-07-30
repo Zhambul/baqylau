@@ -4797,10 +4797,37 @@ single-owner, server-side). The `web-launch` audit row records the chosen
 **Row alignment (the strip is read as a STACK).** The rows are compared
 column-by-column — c1's 5h bar directly above c2's 5h bar, the codex row's
 weekly bar under both `7d`s, the resets in one line — so every row must lay out
-the SAME columns at the SAME widths. Everything is monospace (`--mono`), so the
-columns are fixed in `ch` and are exact; what kept breaking alignment was
-*structure*, four ways, each fixed by rendering the column anyway rather than by
-measuring:
+the SAME columns at the SAME widths.
+
+**The columns are a real GRID, shared by every row.** `#accounts` owns the track
+list (`--acct-tracks`, one `max-content` per column, written by
+`renderAccounts`) and each `.acct` row is a `grid-template-columns: subgrid` of
+it, spanning `1 / -1`; every cell NAMES its track (`stripTracks` →
+`place(node, col)`: 1 = the account name, 2 = the ⚠ badge slot when any row
+carries one, then one per duration column, then a trailing cell for the
+limit-hit chip). This is the SECOND fix at this spot and it subsumes the first.
+The first made every row emit the same boxes in the same ORDER, each part sized
+in `ch`, and each row was still its own flex line — which aligns the strip only
+while everything in FRONT of a bar happens to measure the same in every row.
+Three things could break that independently: the name column's width was a
+character COUNT (`--aname-w = len(name) + "ch"`) standing in for a width, so a
+name whose glyphs the mono font doesn't cover at exactly `1ch` (`c1 · oboard`
+vs `codex · plus` — the middle dot) shifted its own row's bars; the ⚠ badge and
+each column's label were sized by content with nothing comparing them across
+rows; and a row that wrapped, wrapped alone. The strip still looked ragged, and
+the report came back. A grid track is measured across ALL the rows at once and
+the placement is stated rather than implied, so none of those can move a column
+again — and the rows come out the same WIDTH too (they each span every track),
+which the flex version never did. `overflow-x: auto` on the strip replaces the
+rows' `flex-wrap`: a grid row cannot fold, and the strip must not widen the
+page. The `ch` sizes below all survive as the FLOOR inside a cell (and as the
+whole story under `@supports not (grid-template-columns: subgrid)`, which
+restores the flex strip for a browser that predates subgrid — Firefox 71,
+Safari 16, Chrome 117, i.e. none in use).
+
+What each row must nonetheless CONTAIN is unchanged, and it is still structure
+rather than measurement — four ways it broke, each fixed by rendering the column
+anyway:
 
 - **A window with no reset.** `effective_usage` DROPS the reset epoch of a
   rolled-over window (above), so an idle account's 5h reads `0%` with no
@@ -4852,8 +4879,16 @@ measuring:
   column is dropped for the same KEY on every row, which is the invariant —
   same columns at the same widths, not "every bar has every part".
 
-Identical row widths also mean the rows FOLD at the same point, so the
-alignment survives the narrow-screen wrap `.acct` exists for.
+The jsdom harness (`tests/jsdom/accounts.js`) renders the real painter over
+real-shaped payloads and reports each row's cells WITH the track each was placed
+in, which is what `tests/test_l0_dash_probes.py` pins: same boxes in the same
+order AND the same column — `{label: column}` must be identical across the rows
+of every case, so "codex's 7d bar and Claude's 7d bar are both column 3" is a
+fact the DOM states rather than one two independent flex lines happen to agree
+on. The track count is pinned the same way (name + optional badge + one per
+duration + tail), and the CSS pin is that `.acct` really does `subgrid` — a
+`grid-column` value placed in each row's OWN grid would be the per-row layout
+wearing a grid's clothes.
 
 **Per-model usage bars (the OAuth `/usage` fetch).** The `/usage` screen's
 third bar — a **weekly per-MODEL cap** (e.g. "Fable") — is exposed by no

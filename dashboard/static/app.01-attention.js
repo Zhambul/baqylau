@@ -365,17 +365,47 @@ function stripColumns(rows) {
   return cols;
 }
 
-// `cols` is the strip-wide column layout (stripColumns) and `anyOut` whether ANY
-// row on the strip is logged out — both computed once by renderAccounts, so
-// every row lays out the same columns in the same order and the rows STACK
-// (docs/dashboard.md *Row alignment*). A row missing a window still renders it,
-// as a ghost or a hole; a window whose reset was dropped (rolled over) still
-// reserves its reset column; a row that is fine still reserves the ⚠ badge's
-// slot.
-function acctPill(a, cols, anyOut) {
+// WHERE each part of a row sits in the strip-wide GRID — 1-based CSS
+// `grid-column` values, computed once for the whole strip (docs/dashboard.md
+// *Row alignment*):
+//
+//   1                    the account NAME
+//   2                    the ⚠ logged-out badge — only when SOME row carries one
+//   …                    one track per duration column (stripColumns), in order
+//   last                 the trailing limit-hit chip
+//
+// The tracks are the same for every row and each cell NAMES the one it goes in,
+// which is what makes the strip a stack rather than a coincidence: same-duration
+// bars sit in the same track whatever a row's label is, however many windows it
+// reports, and whether or not it wraps a badge in front of them. Placing by
+// ORDER alone (the previous cut) only aligned the rows while every part before a
+// bar happened to be the same WIDTH in each of them — a per-row flex line has no
+// notion of a column, so the strip drifted the moment one row's name, badge or
+// label measured differently from its neighbour's.
+function stripTracks(cols, anyOut) {
+  const bar0 = 2 + (anyOut ? 1 : 0);
+  return { name: 1, badge: anyOut ? 2 : 0, bar0, tail: bar0 + cols.length,
+           n: bar0 + cols.length };
+}
+
+// Put a cell in its track. One helper so no call site spells the property.
+function place(node, col) {
+  node.style.gridColumn = String(col);
+  return node;
+}
+
+// `cols` is the strip-wide column layout (stripColumns), `tr` its track map
+// (stripTracks) and `anyOut` whether ANY row on the strip is logged out — all
+// computed once by renderAccounts, so every row places its cells in the same
+// tracks and the rows STACK (docs/dashboard.md *Row alignment*). A row missing a
+// window still renders it, as a ghost or a hole; a window whose reset was
+// dropped (rolled over) still reserves its reset column; a row that is fine
+// still reserves the ⚠ badge's slot.
+function acctPill(a, cols, anyOut, tr) {
   const slots = rowSlots(a);
   const pill = el("div", "acct");
-  pill.append(el("span", "aname", acctName(a)));
+  pill.style.gridColumn = "1 / -1";        // the row spans every track (subgrid)
+  pill.append(place(el("span", "aname", acctName(a)), tr.name));
   // LOGGED OUT: the account's OAuth login was revoked/expired — a session on it
   // died on error='authentication_failed' (server flag a.logged_out, cleared on
   // the next successful session). Warn outright and up front: the usage bars are
@@ -387,10 +417,16 @@ function acctPill(a, cols, anyOut) {
     if (a.logged_out)
       chip.title = a.logged_out_msg || "run /login — the account's login was revoked";
     else chip.setAttribute("aria-hidden", "true");
-    pill.append(chip);
+    pill.append(place(chip, tr.badge));
   }
   if (!(a.windows || []).length) {
-    if (!a.logged_out) pill.append(el("span", "adim", "no usage yet"));
+    // nothing to lay out in the bar tracks: the notice spans all of them (a
+    // one-track cell would leave the row's chip ending at the first column)
+    if (!a.logged_out) {
+      const dim = el("span", "adim", "no usage yet");
+      dim.style.gridColumn = tr.bar0 + " / -1";
+      pill.append(dim);
+    }
     return pill;
   }
   // A model-scoped weekly window ("7d fable") resets on the SAME clock as the
@@ -444,7 +480,11 @@ function acctPill(a, cols, anyOut) {
   //     is `visibility: hidden`, so the width is right BY CONSTRUCTION rather
   //     than by a second measurement), which is what lets a host with no 5h
   //     window leave that column empty instead of shifting left into it.
-  cols.forEach(c => {
+  //
+  // Each bar NAMES its track (place → grid-column), so the column a duration
+  // owns is the same one in every row by construction rather than by every
+  // preceding cell measuring the same.
+  cols.forEach((c, i) => {
     const w = (slots.get(c.slot) || [])[c.i];
     const seg = bar(c.label, w ? w.used_pct : undefined,
                     w && w.resets_at, c.scope === "account");
@@ -452,21 +492,27 @@ function acctPill(a, cols, anyOut) {
       seg.classList.add("hole");
       seg.setAttribute("aria-hidden", "true");
     }
-    pill.append(seg);
+    pill.append(place(seg, tr.bar0 + i));
   });
   // The account is BLOCKED right now (a session on it died on error=
   // rate_limit — the `limit-hit` stamp, served only while still active):
   // say so outright; the frozen usage bar alone reads ~95% at exactly the
   // moment the account stops working (the status line never reports 100%
   // once requests are rejected — docs/relimit.md).
+  //
+  // It rides ONE trailing cell (`.utail`) in the last track, chip and reset
+  // together: two loose spans would be two cells competing for one column, and
+  // giving each its own track would widen the strip for every other row.
   if (a.limit_hit) {
     // model-scoped stamps ("fable limit hit" — only that model is blocked,
     // relimit.limit_model) name the model; account-wide ones stay bare
+    const tail = place(el("span", "utail"), tr.tail);
     const chip = el("span", "ulimit", limitLabel(a.limit_hit));
     if (a.limit_hit.msg) chip.title = a.limit_hit.msg;
-    pill.append(chip);
+    tail.append(chip);
     if (a.limit_hit.resets_at)
-      pill.append(el("span", "ureset", "resets " + resetAgo(a.limit_hit.resets_at)));
+      tail.append(el("span", "ureset", "resets " + resetAgo(a.limit_hit.resets_at)));
+    pill.append(tail);
   }
   return pill;
 }
@@ -501,6 +547,17 @@ const ANAME_MIN_CH = 14;
 // the logged-out badge is a Claude fact), but the columns span the groups. What
 // per-host grouping still buys is the GHOST-vs-HOLE distinction in acctPill: a
 // missing reading and an absent window are different claims.
+//
+// And the columns are a REAL GRID, not a per-row agreement to emit the same
+// boxes in the same order: `#accounts` owns the tracks and every `.acct` is a
+// `subgrid` of them, each cell naming the track it goes in (stripTracks/place).
+// The ordered-boxes cut before it aligned only while every cell BEFORE a bar
+// measured the same in each row — a flex row knows nothing about its neighbour,
+// so the name column's `ch` arithmetic, the badge's width and each label's own
+// width were three separate ways for one row to start its bars a few pixels off
+// its neighbour's, and the strip still read as ragged (the re-report). A track
+// is measured across ALL rows at once, so none of those can shift a column
+// again, and the rows come out the same WIDTH as a bonus (each spans 1 / -1).
 function renderAccounts(list) {
   if (!$accounts) return;
   // show a row with any usage window OR a logged-out warning (a dead account
@@ -518,9 +575,18 @@ function renderAccounts(list) {
   // anywhere means EVERY row reserves the slot, or the bars of the rows that
   // don't start a badge-width to the left of the ones that do.
   const anyOut = shown.some(a => a.logged_out);
+  const tr = stripTracks(cols, anyOut);
+  // THE tracks, on the container every row subgrids into. All `max-content`:
+  // each track is as wide as the widest cell any row puts in it, measured by
+  // the layout engine over the whole strip — which is the one measurement that
+  // cannot disagree with what is painted (the `ch` arithmetic it replaces was a
+  // character COUNT standing in for a width, and a mono font is only exactly
+  // that wide for the glyphs it actually covers).
+  $accounts.style.setProperty("--acct-tracks",
+                              new Array(tr.n).fill("max-content").join(" "));
   const hosts = [];
   for (const a of shown) if (!hosts.includes(a.host)) hosts.push(a.host);
   for (const h of hosts)
     for (const a of shown)
-      if (a.host === h) $accounts.append(acctPill(a, cols, anyOut));
+      if (a.host === h) $accounts.append(acctPill(a, cols, anyOut, tr));
 }
