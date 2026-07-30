@@ -1152,6 +1152,100 @@ def _format_questions(tool_input):
     return "\n\n".join(blocks)
 
 
+# --- the ExitPlanMode plan, and the DECISION on it ---------------------------
+# Claude Code's plan-approval round trip as measured (2026-07-18 … 2026-07-30,
+# v2.1.214+). The tool_use `input` is {plan, planFilePath}; the tool_result
+# comes back in exactly three shapes:
+#   approved — no is_error; toolUseResult a DICT {plan, isAgent, filePath,
+#              hasTaskTool[, planWasEdited]}, and the content is Claude Code's
+#              "User has approved your plan…" recap with the whole plan
+#              appended again (which the `plan` record already holds, so the
+#              record below keeps only the verdict);
+#   changes  — is_error, content "…To tell you how to proceed, the user said:\n
+#              <feedback>". That feedback is the ONLY record of what the user
+#              asked for — it is NOT also a prompt record — so dropping the
+#              block loses it outright;
+#   rejected — is_error, the bare "…STOP what you are doing and wait for the
+#              user to tell you how to proceed." (Esc, or the web card's ✕).
+# Only the APPROVED shape names itself; both declines are the generic
+# tool-rejection text EVERY other tool shares, which is why a decline is
+# matched by the plan's tool_use ID (_Conv.is_plan) and never by its wording.
+_PLAN_TOOL = "ExitPlanMode"
+_PLAN_OK = "User has approved your plan"
+_PLAN_SAID = "the user said:"
+_PLAN_STOP = "STOP what you are doing"
+
+PLAN_LOOKBEHIND = 1 << 18        # bytes before an incremental read's `pos`
+#                                  scanned for the plan tool_use ids a decision
+#                                  inside that window can refer back to.
+#                                  Generous on purpose but bounded: an
+#                                  ExitPlanMode ENDS its turn, so its result is
+#                                  normally the very next record — the window
+#                                  only has to survive one big plan plus
+#                                  whatever the same poll already consumed.
+
+
+def _plan_ids_before(path, pos):
+    """The ExitPlanMode tool_use ids in the bounded stretch of `path` ending at
+    byte `pos` — the lookbehind _Conv.is_plan seeds from (see it for why an
+    incremental read needs one). Cheap by construction: the substring pre-filter
+    means json.loads runs only for the handful of lines that name the tool at
+    all. Best-effort — an unreadable or torn window just yields fewer ids, and
+    the next FULL read is authoritative either way (the same contract as the
+    anchor and the discard prune)."""
+    ids = set()
+    if pos <= 0:
+        return ids
+    start = max(0, pos - PLAN_LOOKBEHIND)
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(start)
+            data = fh.read(pos - start)
+    except OSError:
+        return ids
+    lines = data.decode("utf-8", "replace").split("\n")
+    if start:
+        del lines[0]                  # a seek into the middle tears line one
+    for s in lines:
+        if _PLAN_TOOL not in s:
+            continue
+        rec = parse_line(s.strip())
+        if rec is None or rec["kind"] != "assistant":
+            continue
+        for bkind, blk in rec["blocks"]:
+            if bkind == "tool" and blk.get("name") == _PLAN_TOOL and blk.get("id"):
+                ids.add(blk["id"])
+    return ids
+
+
+def _plan_decision(blk, tur):
+    """One tool_result -> the plan DECISION record's fields, or None when the
+    result is not a plan verdict at all. SHAPE ONLY: for the two DECLINE shapes
+    the caller must still confirm the block belongs to an ExitPlanMode, because
+    that wording is shared with every other rejected tool (see the table above).
+    Returns {"decision", "text"[, "edited"]} — `text` is the feedback the user
+    typed (the `changes` case), "" for the two outcomes that have no body."""
+    txt = result_text(blk.get("content")).strip()
+    if not blk.get("is_error"):
+        if not (isinstance(tur, dict) and isinstance(tur.get("plan"), str)):
+            return None
+        if not txt.startswith(_PLAN_OK):
+            return None
+        out = {"decision": "approved", "text": ""}
+        if tur.get("planWasEdited"):
+            # the user edited the plan in the dialog before approving, so the
+            # `plan` bubble (built from the tool_use) is the PRE-edit text —
+            # worth saying, since the two disagree
+            out["edited"] = True
+        return out
+    i = txt.find(_PLAN_SAID)
+    if i >= 0:
+        return {"decision": "changes", "text": txt[i + len(_PLAN_SAID):].strip()}
+    if _PLAN_STOP in txt:
+        return {"decision": "rejected", "text": ""}
+    return None
+
+
 class _Conv:
     """The per-record context conversation()'s handlers share: the growing
     output list, the current line's (ts, uid, par), and the running tool_use
@@ -1159,12 +1253,31 @@ class _Conv:
     context object shared by named phases, the same shape the long entry
     main()s use (docs/styleguide.md, *Module shape*)."""
 
-    __slots__ = ("out", "anchor", "ts", "uid", "par", "sends")
+    __slots__ = ("out", "anchor", "ts", "uid", "par", "sends",
+                 "plans", "seed", "_seeded")
 
-    def __init__(self, sends=False):
+    def __init__(self, sends=False, seed=None):
         self.out, self.anchor = [], None
         self.ts = self.uid = self.par = None
         self.sends = sends
+        self.plans = set()        # ExitPlanMode tool_use ids seen in THIS window
+        self.seed, self._seeded = seed, None
+
+    def is_plan(self, tuid):
+        """Is `tuid` an ExitPlanMode's tool_use? Ids seen in this window answer
+        directly; for an INCREMENTAL read (the live SSE tail) the plan's tool_use
+        almost always landed in an EARLIER poll — a plan sits on screen for as
+        long as it takes you to read it — so the miss is the NORMAL case here,
+        not an edge, and `seed` is the bounded backward scan that covers it. Run
+        at most once per call, and only when a decision-SHAPED result actually
+        asks, so an ordinary tick pays nothing for it."""
+        if not tuid:
+            return False
+        if tuid in self.plans:
+            return True
+        if self._seeded is None:
+            self._seeded = self.seed() if self.seed else frozenset()
+        return tuid in self._seeded
 
     def add(self, kind, text, **extra):
         """Append one conversation record. Every record carries `anchor` and
@@ -1222,6 +1335,24 @@ def _conv_results(rec, cx):
             txt = result_text(blk.get("content")).strip()
             if txt:
                 cx.add("answer", txt, qa=qa)
+    else:
+        # …and, for the SAME reason, an ExitPlanMode VERDICT is a tool_result:
+        # the plan card that carried it is ephemeral by construction (its kv
+        # stash clears at the turn boundary, and the card is live-only), so once
+        # you decided, nothing on the page said a plan had ever been proposed
+        # or what you chose — while the transcript held both all along
+        # (docs/dashboard.md, *Web plan mode*).
+        for blk in rec["blocks"]:
+            dec = _plan_decision(blk, tur)
+            if dec is None:
+                continue
+            # an APPROVAL names itself (no other tool's toolUseResult carries a
+            # `plan`); a DECLINE wears the generic tool-rejection text, so it
+            # has to be tied back to the plan's own tool_use id
+            if dec["decision"] != "approved" \
+                    and not cx.is_plan(blk.get("tool_use_id")):
+                continue
+            cx.add("plandecision", dec.pop("text"), **dec)
     for text in rec["texts"]:
         kind, sender, body = classify_user_text(text)
         if kind == "teammsg":
@@ -1244,6 +1375,17 @@ def _conv_assistant(rec, cx):
             q = _format_questions(blk.get("input") or {})
             if q:
                 cx.add("question", q)
+        # …and the ExitPlanMode tool_use IS the plan Claude proposed — the other
+        # half of the exchange _conv_results' `plandecision` closes, and the only
+        # place the plan TEXT survives a decline (an approval's toolUseResult
+        # repeats it; a rejection's says nothing). Its id is remembered because
+        # that is what ties a generically-worded decline back to a plan.
+        elif blk.get("name") == _PLAN_TOOL:
+            if blk.get("id"):
+                cx.plans.add(blk["id"])
+            plan = ((blk.get("input") or {}).get("plan") or "").strip()
+            if plan:
+                cx.add("plan", plan)
         # …and, for a read that asked for them (`sends`), a SendMessage tool_use IS
         # an outgoing message — the other half of a conversation whose INCOMING half
         # already arrives as a `teammsg` record. It is not surfaced by default
@@ -1292,10 +1434,12 @@ def conversation(path, pos=0, suspects=(), sends=False):
     """The MAIN-THREAD conversation for the dashboard's merged mirror stream
     (docs/dashboard.md): every prompt / assistant message / teammate message /
     recap (Claude Code's away-summary) — plus, for AskUserQuestion, the
-    `question` Claude asked and the `answer` the user submitted, and with
-    `sends`, the `sendmsg` outgoing mail this identity sent (_conv_assistant
-    says why that one is asked for rather than always on) — from byte
-    `pos` on, in transcript order, each carrying `ts`
+    `question` Claude asked and the `answer` the user submitted, for
+    ExitPlanMode the `plan` Claude proposed and the `plandecision` you gave it
+    (both dialogs' cards are ephemeral; these records are what remains once one
+    is gone), and with `sends`, the `sendmsg` outgoing mail this identity sent
+    (_conv_assistant says why that one is asked for rather than always on) —
+    from byte `pos` on, in transcript order, each carrying `ts`
     — the line's
     `timestamp` as an epoch float (None when absent) — and `anchor`, the id of
     the last tool_use seen BEFORE it. Ops carry both a wall-clock `_ts` and the
@@ -1333,7 +1477,7 @@ def conversation(path, pos=0, suspects=(), sends=False):
         parsed.append((rec, ts, uid, par))
     dead = _dead_uuids([(u, p) for r, _t, u, p in parsed if _prompt_bearing(r)],
                        lines, suspects)
-    cx = _Conv(sends)
+    cx = _Conv(sends, seed=lambda: _plan_ids_before(path, pos))
     for rec, ts, uid, par in parsed:
         if uid in dead:
             continue

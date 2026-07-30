@@ -81,7 +81,20 @@ def _tint_lead(body, tok):
         body[:i + 1], esc, body[i + 1 + len(esc):])
 
 
-def msg_html(kind, text, sender="", qa=None, par="", cmds=(), meta=False):
+# The plan round trip reads as ONE exchange in two bubbles, exactly like
+# question/answer: the plan Claude PROPOSED, then the verdict you gave it. The
+# verdict lives in the LABEL rather than the body because two of its three
+# outcomes HAVE no body — an approval and a bare rejection say nothing beyond
+# themselves (docs/dashboard.md, *Web plan mode*).
+PLAN_WHO = "claude ▸ proposes a plan"
+PLAN_DECIDED = {"approved": "you ▸ approved the plan",
+                "changes": "you ▸ asked for changes",
+                "rejected": "you ▸ rejected the plan"}
+PLAN_EDITED = "edited before approval"
+
+
+def msg_html(kind, text, sender="", qa=None, par="", cmds=(), meta=False,
+             decision="", edited=False):
     """A main-thread CONVERSATION block for the merged web stream — not an op
     (the terminal mirror deliberately omits main-agent messages: the main
     pane already shows them; the web has no main pane, so the dashboard
@@ -92,7 +105,15 @@ def msg_html(kind, text, sender="", qa=None, par="", cmds=(), meta=False):
     question (the AskUserQuestion Claude asked — its text + offered options) |
     answer (the answer the user submitted — the "my answer didn't appear" fix;
     both are `you`/`claude` bubbles WITHOUT the rewind affordance, since neither
-    is a re-runnable prompt) | recap (Claude Code's away-summary — a
+    is a re-runnable prompt) | plan (the plan an ExitPlanMode proposed) |
+    plandecision (…and what you decided about it — `decision` is
+    approved|changes|rejected and picks the LABEL, `edited` says the plan was
+    changed in the dialog before being approved so the `plan` bubble above is
+    the pre-edit text, and the body is the feedback you typed where there was
+    any; the plan pair is the same shape as the ask pair, and for the same
+    reason: its card is ephemeral, so without these two the transcript held no
+    trace that a plan was ever proposed or what came of it) |
+    recap (Claude Code's away-summary — a
     system-generated bubble, not a re-runnable prompt either). The body rides
     md_html (readable markdown), which is escape-first like everything else
     here — the neutralize() analog. `qa` (answer only) is the structured
@@ -119,6 +140,8 @@ def msg_html(kind, text, sender="", qa=None, par="", cmds=(), meta=False):
     # same pair the producer words its chip with, so the two surfaces cannot drift.
     who = {"prompt": "you", "message": "claude",
            "question": "claude ▸ asks you", "answer": "you ▸ answered",
+           "plan": PLAN_WHO,
+           "plandecision": PLAN_DECIDED.get(decision) or "you ▸ decided",
            "recap": "↩ recap",
            "sendmsg": SF.MARK_MAIL + " " + SF.MAIL_TO % (sender or "team")} \
         .get(kind) or (SF.MARK_MAIL + " " + SF.MAIL_FROM % (sender or "team"))
@@ -153,10 +176,19 @@ def msg_html(kind, text, sender="", qa=None, par="", cmds=(), meta=False):
         tok = _lead_cmd(text or "", cmds)
         if tok:
             body = _tint_lead(body, tok)
+    elif kind == "plandecision" and edited:
+        # the one thing an approval has to say beyond its label: what got
+        # approved is not quite what the `plan` bubble above shows
+        body = "<span class=\"pedit\">%s</span>%s" % (_esc(PLAN_EDITED), body)
     # `sys` rides ALONGSIDE the kind class (still `prompt`): the page's focus
     # logic keys on the kind — an injected turn must not read as a turn boundary —
     # so the flavour is a second class, not a different kind.
     cls = html.escape(kind, quote=True) + (" sys" if system else "")
+    # …and, for a verdict, the OUTCOME as a second class (approve reads green,
+    # changes amber, rejected red) — a flavour of one kind, like `sys` above,
+    # never a kind of its own: the page's focus logic keys on the kind
+    if kind == "plandecision" and decision in PLAN_DECIDED:
+        cls += " " + decision
     return ("<div class=\"msg %s\"%s><span class=\"who\">%s</span>"
             "<div class=\"md\">%s</div></div>"
             % (cls, extra, who, body))

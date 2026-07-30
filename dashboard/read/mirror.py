@@ -38,7 +38,7 @@ def heal_stash(sid, log, sdb, key, step):
 
 def conv_items(recs, cmds=()):
     """Conversation records -> stream items. Additively carry `kind`
-    (prompt|message|teammsg|sendmsg|question|answer|recap) and, for prompts, the raw `text`:
+    (prompt|message|teammsg|sendmsg|question|answer|plan|plandecision|recap) and, for prompts, the raw `text`:
     the page's queued-message chips match a DELIVERED prompt against what they
     sent — the transcript's prompt record is the one true delivery signal (tab
     transitions are useless: green flips busy again the instant a queued
@@ -64,7 +64,14 @@ def conv_items(recs, cmds=()):
                                        r.get("sender") or r.get("to") or "",
                                        r.get("qa"),
                                        r.get("par") or "", cmds,
-                                       r.get("meta"))}
+                                       r.get("meta"),
+                                       # a plan VERDICT's outcome + whether the
+                                       # plan was edited before approval: the
+                                       # label and the class come from these,
+                                       # since two of the three outcomes have no
+                                       # body of their own (opshtml.msg_html)
+                                       r.get("decision") or "",
+                                       bool(r.get("edited")))}
         if r["kind"] == "prompt":
             it["text"] = r.get("text", "")
             it["par"] = r.get("par") or ""

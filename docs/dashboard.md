@@ -3677,6 +3677,69 @@ approve by digit+label → PostToolUse + the plan executed; options parsed
 from the live dialog exactly; stash lifecycle audited write→remove with
 reasons (`answered` / `new prompt` / overwrite-by-revision).
 
+### The plan and the decision STAY in the transcript
+
+The card above is **ephemeral by construction** — its stash clears at the
+turn boundary and it is served live-only — so for a while the plan was a
+*write-only* modal: pixels in the TUI, one transient kv row, one SSE-fed
+DOM node. The moment you approved, the page held **no trace** that a plan
+had ever been proposed or what you decided (reported 2026-07-30), even
+though the transcript held both verbatim. No op covered the gap either:
+ExitPlanMode is routed to `ask_fmt.py` alone, which emits none (it
+imports no `core.ops`), and the main agent's mirror has no generic
+tool renderer — only a SUBAGENT's plan painted, via `substream_render`'s
+`_use_other` fallback.
+
+The fix is on the TRANSCRIPT side, deliberately, not a new op: it also
+covers a plan decided **in the terminal**, which no dashboard-side code
+can observe. Two conversation records, the exact twin of the ask pair
+(`transcript.conversation`, rendered by `opshtml.msg_html`):
+
+- **`plan`** — from the ExitPlanMode `tool_use`, whose `input.plan` is
+  the plan markdown. The only place the plan TEXT survives a decline (an
+  approval's `toolUseResult` repeats it; a rejection's says nothing).
+  `--gold`, the same plan/reasoning accent the live card wears.
+- **`plandecision`** — from the `tool_result`, `decision` one of
+  `approved` (green) / `changes` (amber) / `rejected` (red). The verdict
+  rides the LABEL and a second class, because two of the three outcomes
+  have no body at all. `changes` does: the feedback you typed, which
+  exists NOWHERE else — it is not also a prompt record. An approval over
+  a plan you EDITED in the dialog (`planWasEdited`) additionally carries
+  `edited`, since the `plan` bubble in front of it is then the pre-edit
+  text.
+
+The three result shapes, measured (2026-07-18 … 2026-07-30, v2.1.214+):
+
+| outcome | `is_error` | `toolUseResult` | tool_result content |
+|---|---|---|---|
+| approved | absent | dict `{plan, isAgent, filePath, hasTaskTool[, planWasEdited]}` | `User has approved your plan…` + the plan again |
+| changes | true | `"Error: …the user said:\n<feedback>"` | same, unprefixed |
+| rejected | true | `"User rejected tool use"` | `…STOP what you are doing and wait…` |
+
+Only the APPROVED shape names itself (no other tool's `toolUseResult`
+carries a `plan`). **Both declines wear the generic tool-rejection text
+every other tool shares**, so a decline is matched by the plan's own
+`tool_use` ID — never by its wording, or a rejected `Bash` command would
+render as a rejected plan. That ID is remembered from the `tool_use`
+(`_Conv.plans`), which the full read always has… but the LIVE SSE tail
+does not: a plan sits on screen for as long as it takes you to read it,
+so its `tool_use` is almost always an *earlier poll's* — the miss is the
+NORMAL case here, not an edge. `_Conv.is_plan` therefore seeds from a
+bounded backward scan (`_plan_ids_before`, `PLAN_LOOKBEHIND` = 256 KB
+before the cursor), run at most once per call and only when a
+decision-SHAPED result actually asks, so an ordinary tick pays nothing.
+It is generous but bounded — an ExitPlanMode ENDS its turn, so its result
+is normally the very next record — and it fails QUIET: out of reach means
+no verdict claimed, never a verdict pinned on the wrong tool, and the
+next full read is authoritative (the same contract as the anchor and the
+discard prune).
+
+Both bubbles show in every view mode (like a `question`/`answer`: a
+turn-level fact, not the mid-turn prose focus mode thins out) and neither
+carries the rewind ↶ — neither is a re-runnable prompt. Read-side only:
+no hook, no op, no audit rows (the decision's audit trail is unchanged —
+a web-made decision is still a `web-plan` `state_files` row).
+
 ## Web tasks (the pinned tasks card)
 
 The session's native task list (Claude Code's TaskCreate/TaskUpdate

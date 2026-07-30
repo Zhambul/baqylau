@@ -147,6 +147,108 @@ def test_conversation_surfaces_ask_answer(tmp_path):
     assert ans["text"].startswith("Your questions have been answered")
 
 
+def _plan_rows(tuid, plan, tur, content, is_error=False):
+    """One ExitPlanMode round trip as Claude Code writes it: the tool_use
+    carrying the plan, then the verdict as a tool_result."""
+    blk = {"type": "tool_result", "tool_use_id": tuid, "content": content}
+    if is_error:
+        blk["is_error"] = True
+    return ({"type": "assistant", "message": {"id": "m" + tuid, "content": [
+                {"type": "tool_use", "id": tuid, "name": "ExitPlanMode",
+                 "input": {"plan": plan}}]}},
+            {"type": "user", "toolUseResult": tur,
+             "message": {"content": [blk]}})
+
+
+_REJECT = ("The user doesn't want to proceed with this tool use. The tool use "
+           "was rejected (eg. if it was a file edit, the new_string was NOT "
+           "written to the file). ")
+
+
+def test_conversation_surfaces_plan_and_its_decision(tmp_path):
+    """The plan CARD is ephemeral by construction (its kv stash clears at the
+    turn boundary, the card is live-only), so once a plan was decided the page
+    held no trace that one was ever proposed or what came of it — while the
+    transcript held both all along. Surfaced as the `plan` / `plandecision`
+    pair, the ask pair's twin (docs/dashboard.md, *Web plan mode*)."""
+    from plugins.claude_code import transcript as TR
+    rows = []
+    rows += _plan_rows("p1", "# one step", "Error: " + _REJECT
+                       + "To tell you how to proceed, the user said:\nmake it three",
+                       _REJECT + "To tell you how to proceed, the user said:\n"
+                       "make it three", is_error=True)
+    rows += _plan_rows("p2", "# three steps",
+                       {"plan": "# edited", "isAgent": False,
+                        "filePath": "/y.md", "hasTaskTool": True,
+                        "planWasEdited": True},
+                       "User has approved your plan. You can now start coding.")
+    rows += _plan_rows("p3", "# a third", "User rejected tool use",
+                       _REJECT + "STOP what you are doing and wait for the "
+                       "user to tell you how to proceed.", is_error=True)
+    recs, _ = TR.conversation(_tw(tmp_path, "plan.jsonl", *rows), 0)
+    assert [(r["kind"], r.get("decision", "")) for r in recs] == [
+        ("plan", ""), ("plandecision", "changes"),
+        ("plan", ""), ("plandecision", "approved"),
+        ("plan", ""), ("plandecision", "rejected")]
+    plans = [r["text"] for r in recs if r["kind"] == "plan"]
+    assert plans == ["# one step", "# three steps", "# a third"]
+    dec = [r for r in recs if r["kind"] == "plandecision"]
+    # the typed feedback is the ONLY record of what the user asked for — it is
+    # not also a prompt record, so dropping the block would lose it
+    assert dec[0]["text"] == "make it three"
+    # …and an approval over a plan the user EDITED in the dialog says so: the
+    # `plan` bubble in front of it is the pre-edit text
+    assert dec[1].get("edited") and not dec[2].get("edited")
+    assert dec[1]["text"] == "" and dec[2]["text"] == ""
+
+
+def test_conversation_plan_decline_needs_the_plans_own_tool_use(tmp_path):
+    """Both DECLINE shapes wear the generic tool-rejection text every other tool
+    shares, so a verdict is tied to the plan's own tool_use ID and never to its
+    wording — a rejected Bash command is not a rejected plan."""
+    from plugins.claude_code import transcript as TR
+    p = _tw(tmp_path, "notplan.jsonl",
+            {"type": "assistant", "message": {"id": "m1", "content": [
+                {"type": "tool_use", "id": "b1", "name": "Bash",
+                 "input": {"command": "rm -rf /"}}]}},
+            {"type": "user", "toolUseResult": "User rejected tool use",
+             "message": {"content": [
+                {"type": "tool_result", "tool_use_id": "b1", "is_error": True,
+                 "content": _REJECT + "STOP what you are doing and wait for "
+                 "the user to tell you how to proceed."}]}})
+    recs, _ = TR.conversation(p, 0)
+    assert [r["kind"] for r in recs] == []
+
+
+def test_conversation_plan_decision_survives_an_incremental_read(tmp_path):
+    """A plan sits on screen for as long as it takes to READ it, so on the live
+    SSE tail its tool_use is almost always an EARLIER poll's — the miss is the
+    normal case, not an edge. _Conv.is_plan seeds from a bounded lookbehind; a
+    verdict that lands in its own tick must still be surfaced, or the decision
+    only ever appeared on a page RELOAD."""
+    from plugins.claude_code import transcript as TR
+    use, res = _plan_rows("p1", "# the plan", "User rejected tool use",
+                          _REJECT + "STOP what you are doing and wait for the "
+                          "user to tell you how to proceed.", is_error=True)
+    p = _tw(tmp_path, "inc.jsonl", use)
+    recs, pos = TR.conversation(p, 0)
+    assert [r["kind"] for r in recs] == ["plan"]
+    with open(p, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(res) + "\n")
+    recs2, _ = TR.conversation(p, pos)          # the tool_use is behind `pos`
+    assert [(r["kind"], r["decision"]) for r in recs2] == \
+        [("plandecision", "rejected")]
+    # …and the lookbehind is BOUNDED and fails quiet: out of reach = no verdict
+    # claimed, never a verdict pinned on the wrong tool (the next FULL read is
+    # authoritative, as with the anchor and the discard prune)
+    old = TR.PLAN_LOOKBEHIND
+    try:
+        TR.PLAN_LOOKBEHIND = 1
+        assert TR.conversation(p, pos)[0] == []
+    finally:
+        TR.PLAN_LOOKBEHIND = old
+
+
 def test_http_sessions_carry_titles(dash, tmp_path):
     tp = _tw(tmp_path, "titled.jsonl",
              {"type": "user", "message": {"content": "build the dashboard"}})
@@ -154,6 +256,29 @@ def test_http_sessions_carry_titles(dash, tmp_path):
     rows = _get_json(dash + "/api/sessions")
     row = next(r for r in rows if r["sid"] == "dash5")
     assert row["title"] == "build the dashboard"
+
+
+def test_merged_stream_carries_the_plan_verdict_to_the_page(dash, tmp_path):
+    """The whole point of the pair: after a reload the merged stream still shows
+    the plan AND the decision. Also pins conv_items' hand-off of `decision` /
+    `edited` to msg_html — a positional slot a rename would silently drop."""
+    rows = _plan_rows("p1", "# the plan",
+                      {"plan": "# the plan", "isAgent": False,
+                       "filePath": "/y.md", "hasTaskTool": True},
+                      "User has approved your plan. You can now start coding.")
+    tp = _tw(tmp_path, "planweb.jsonl",
+             {"type": "user", "message": {"content": "plan it"}}, *rows)
+    A.session_start({"session_id": "dashplan", "cwd": "/w",
+                     "transcript_path": tp})
+    _last, _mpos, _oldest, items = DS.merged_backlog("dashplan", "dashplan")
+    kinds = [it.get("kind") for it in items if it["t"] == "msg"]
+    assert kinds == ["prompt", "plan", "plandecision"]
+    dec = next(it for it in items if it.get("kind") == "plandecision")
+    assert 'class="msg plandecision approved"' in dec["html"]
+    assert "you ▸ approved the plan" in dec["html"]
+    assert "# the plan" not in dec["html"]     # the plan bubble holds it, once
+    assert "the plan" in next(it for it in items
+                              if it.get("kind") == "plan")["html"]
 
 
 def test_merged_backlog_interleaves_by_anchor(dash, tmp_path):

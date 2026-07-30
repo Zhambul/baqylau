@@ -1299,7 +1299,10 @@ function applyViewMode() {
         if (!newest) return "hide";
         return (busy && inNewestTurn) ? "dim" : "show";
       }
-      memArmed = false;      // a recap / an ask / mail — another reply, same rule
+      // a recap / an ask / a plan or its verdict / mail — another reply, same
+      // rule. All of them SHOW in every mode: each is a turn-level fact of the
+      // conversation, not the mid-turn prose focus mode thins out.
+      memArmed = false;
       return "show";
     }
     // MAIL PLUMBING — the inbox poller reporting on a message (delivered / read / a

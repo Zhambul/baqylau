@@ -296,6 +296,33 @@ def test_msg_html_mail_is_one_bubble_labelled_by_direction():
     assert "<div class=\"md\">" in out and "my report" in out
 
 
+def test_msg_html_plan_pair_labels_carry_the_verdict():
+    """The plan exchange is two bubbles, the ask pair's twin: the plan Claude
+    proposed and the verdict on it. Two of the three outcomes have no BODY, so
+    the verdict rides the LABEL (+ a class per outcome, for the hue)."""
+    from dashboard.opshtml import tools as T
+    plan = opshtml.msg_html("plan", "# Step one")
+    assert 'class="msg plan"' in plan and T.PLAN_WHO in plan
+    assert "<h1>Step one</h1>" in plan          # the ordinary markdown bubble
+    for dec, label in T.PLAN_DECIDED.items():
+        h = opshtml.msg_html("plandecision", "", "", None, "", (), False, dec)
+        assert 'class="msg plandecision %s"' % dec in h and label in h
+    # `changes` is the one outcome WITH a body — the feedback you typed, which
+    # exists nowhere else in the transcript
+    fb = opshtml.msg_html("plandecision", "make it **three** steps", "", None,
+                          "", (), False, "changes")
+    assert "<strong>three</strong>" in fb
+    # …and an approval whose plan was EDITED in the dialog says so, because the
+    # `plan` bubble above it is then the pre-edit text
+    ed = opshtml.msg_html("plandecision", "", "", None, "", (), False,
+                          "approved", True)
+    assert 'class="pedit"' in ed and T.PLAN_EDITED in ed
+    assert 'class="pedit"' not in opshtml.msg_html(
+        "plandecision", "", "", None, "", (), False, "approved")
+    # neither half is a re-runnable prompt: no rewind ↶, no data-txt
+    assert "data-txt" not in plan and 'class="rw"' not in plan
+
+
 def test_msg_html_prompt_stamps_tree_position():
     # data-par is the prompt's parentUuid — what the page's dropSuperseded
     # matches siblings on to drop a bubble the terminal discarded. Only prompts

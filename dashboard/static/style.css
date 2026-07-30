@@ -1724,6 +1724,29 @@ body.modal-open { overflow: hidden; }
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--done) 45%, transparent);
 }
 .ansv.none { background: transparent; color: var(--dim); box-shadow: none; }
+/* ExitPlanMode in the transcript, the ask pair's twin: the plan Claude proposed
+   (--gold, the same plan/reasoning accent the live plan card wears) and the
+   VERDICT you gave it, hued by outcome — approved green, changes amber, rejected
+   red. Neither carries the rewind ↶; neither is a re-runnable prompt. */
+.msg.plan { border-left-color: var(--gold); }
+.msg.plan .who { color: var(--gold); }
+.msg.plandecision.approved { border-left-color: var(--done); }
+.msg.plandecision.approved .who { color: var(--done); }
+.msg.plandecision.changes { border-left-color: var(--amber); }
+.msg.plandecision.changes .who { color: var(--amber); }
+.msg.plandecision.rejected { border-left-color: var(--ask); }
+.msg.plandecision.rejected .who { color: var(--ask); }
+/* an approval whose plan the user EDITED in the dialog first — the `plan` bubble
+   above it is then the pre-edit text, which the chip is there to say */
+.pedit {
+  display: inline-block; margin-bottom: 4px; padding: 2px 9px; border-radius: 7px;
+  background: color-mix(in srgb, var(--amber) 14%, var(--bg));
+  color: var(--amber); font: 600 11px/1.5 var(--sans);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--amber) 38%, transparent);
+}
+/* approve / bare-reject have no body at all (the verdict is the label), so the
+   empty markdown box must not leave a gap under it */
+.msg.plandecision .md:empty { display: none; }
 /* Claude Code recap (away-summary): a system-generated summary bubble, cyan to
    set it apart from prompts/messages. No rewind ↶ — it isn't a re-runnable prompt. */
 .msg.recap { border-left-color: #56b6c2; }
