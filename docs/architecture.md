@@ -193,8 +193,11 @@ constants; behind the `plugins.usage_strip`/`session_usage`/`session_account`/
 `session_costs` fan-outs, and the numbers the rate-limit migration picker runs
 on), `host.py` (the
 `plugins.host.HostControl` adapter — Claude Code drives every control gesture,
-so its derived caps read all-True; behind the `host` provider), the seven hook-handler bodies (`cmd_pre`, `cmd_fmt`,
-`file_fmt`, `subagent_fmt`, `monitor_fmt`, `task_fmt`, `stop_fmt`), the
+so its derived caps read all-True; behind the `host` provider), the eight hook-handler bodies (`cmd_pre`, `cmd_fmt`,
+`file_fmt`, `subagent_fmt`, `monitor_fmt`, `task_fmt`, `stop_fmt`, and
+`tool_fmt` — the one that runs by DEFAULT, for every tool the others do not
+claim: one quiet `· <name>(<request>)` line with the request + the answer behind
+the click, see [wiring.md](wiring.md) and dashboard.md › *Every other tool*), the
 single per-event **`dispatch.py`** (behind the `claude-hook.py` entry — reads
 the payload once and fans out in-process to the tab dispatch, the right
 formatter, and the audit subscriber; matcher routing lives in its `_plan()` —

@@ -6955,6 +6955,61 @@ the conversation as a user-shaped turn (transcript `isMeta`, the mirror's
 A skill invoked with no args gets a line with nothing behind it, and the note block's
 own empty-body guard makes it unclickable rather than opening an empty panel.
 
+### Every other tool (`· WebFetch(https://…)`)
+
+Everything Claude Code calls that no formatter above owns — **WebFetch,
+WebSearch, ToolSearch, Grep, Glob, EnterWorktree, ScheduleWakeup, an MCP
+server's tools, whatever ships next** — is ONE quiet expandable line in the
+mirror, `plugins/claude_code/tool_fmt.py` (`bin/claude-tool-fmt.py`, on
+PostToolUse *and* PostToolUseFailure per the invariant):
+
+```
+· WebFetch(https://docs.claude.com/en/docs/claude-code/hooks)
+· WebSearch(kitty osc 8 hyperlinks)                     ← click either one and
+· ToolSearch(select:SendMessage,TaskOutput)                the request + the
+· Grep(neutralize\()                            ✗          answer expand in place
+```
+
+Those calls rendered **nothing at all** before it. The dispatcher's PostToolUse
+table had a matcher per formatter and no default, so a tool without one fell
+through in silence (measured: session `5a8123c7`'s `hook_events` carry
+WebSearch/WebFetch rows with no formatter `decision` beside them) — while a
+CHILD agent's identical calls have rendered all along, in this same `·`
+register (`core/agentblocks.AgentStream.tool_open`). The mirror showed a
+subagent's web fetch and not the lead's.
+
+- **The matcher is an EXCLUSION, not an allowlist** (`dispatch._GENERIC_TOOL`, a
+  negative lookahead over `_ROUTED_TOOLS`). The tools WITH a renderer are a
+  closed set the routing table already states; the tools without one are
+  open-ended — Claude Code ships new ones and MCP servers add more — and an
+  allowlist's failure mode is exactly the silence this fixes. So a tool nobody
+  has taught us about renders by default, and teaching us (giving it a matcher)
+  removes it from the generic family by construction. Both directions are
+  ratcheted in `tests/test_l1b_dispatch.py`: a routed tool that is not excluded
+  would render TWICE, and an excluded tool that nothing routes is a stale row.
+- **The shape is a `line` op, not a block** — a file one-liner's anatomy
+  (`Read(x.py)`), not a child agent's header + request + result card. The lead's
+  mirror is a dense stream of its own work; three rows per WebFetch would bury
+  the commands around it. So the request is summarised into the parens (its
+  FIRST field with the key dropped — a WebFetch's url, a search's query, a
+  Grep's pattern; measured, every one of those payloads leads with the field
+  that names the request) and **everything** goes behind the click.
+- **Behind the click: the whole request, then the answer** — the same
+  `view:<tool_use_id>` stash + OSC 8 hyperlink a Read expands with
+  (docs/click-to-view.md), so it works in the terminal AND on the web
+  (`data-v`), live and parked. Both halves are rendered as the compact
+  `key: value` listing `transcript.input_summary` already owns, because every
+  measured `tool_input` AND `tool_response` is a flat dict
+  (`{url, prompt}` → `{bytes, code, codeText, result, durationMs, url}`).
+  A FAILED call stashes too — for a tool the error text IS the content, which is
+  where this parts company with a file op, whose failure has nothing to show.
+- **Deliberately not rendered:** `TaskList`/`TaskGet` (`tool_fmt.SKIP`) — a
+  read-back of the session's own task bookkeeping, which is already a pinned
+  card and a ✚/✓ row. The skip list is argued one entry at a time; the default
+  is to render.
+- `tool` is in `VIEW_FOLD.focus` only, exactly like `skill`: default shows the
+  line (it is the whole point), focus collapses a run into `used 3 tools`.
+
 **A MONITOR folds in default too** (`VIEW_FOLD.default`), asked for in those words:
 *"also monitors should be in the under summary in default mode"*. A monitor is a
 watcher you set up once and then read only if it fires, so its card standing open in

@@ -99,6 +99,28 @@ _ASK = _fmt("claude-ask-fmt.py", "ask_fmt",
             matcher="AskUserQuestion|ExitPlanMode")
 _ASK_TURN = _fmt("claude-ask-fmt.py", "ask_fmt")
 
+# EVERY OTHER TOOL — the generic `· <name>(<request>)` one-liner (tool_fmt.py),
+# matched as the COMPLEMENT of the tools already routed above rather than as a
+# list of names. The tools with a renderer of their own are a closed set this
+# table already states; the tools without one are open-ended (Claude Code ships
+# new ones, and MCP servers add more), and an allowlist's failure mode is
+# SILENCE — which is the bug this fixes: WebFetch/WebSearch/ToolSearch/Grep
+# produced no mirror op at all, while a subagent's have rendered all along.
+# So a tool nobody has taught us about renders by default, and teaching us
+# means giving it a matcher above, which removes it from here by construction.
+#
+# The names, and why each is spoken for: Bash (cmd_fmt), the five file tools
+# (file_fmt), Monitor (monitor_fmt), SendMessage (mail_fmt), Skill (skill_fmt),
+# TaskCreate/TaskUpdate (task_fmt), AskUserQuestion/ExitPlanMode (ask_fmt + the
+# web's own cards), and Task/Agent — whose PostToolUse is the "launched"
+# ack, the block being the subagent's own (subagent_fmt + the substream).
+# tests/test_l1_contracts.py walks this table and fails if a routed tool is
+# missing from the exclusion (and if an excluded one has no route).
+_ROUTED_TOOLS = ("Bash|Read|Edit|Write|MultiEdit|NotebookEdit|Monitor"
+                 "|SendMessage|Skill|TaskCreate|TaskUpdate"
+                 "|AskUserQuestion|ExitPlanMode|Task|Agent")
+_GENERIC_TOOL = r"(?!(?:%s)$).+" % _ROUTED_TOOLS
+
 # The compaction-in-progress latch (the web ctx bar's animation): armed on
 # PreCompact, cleared on PostCompact. ONE step on both events — the handler
 # reads hook_event_name itself, like ask_fmt's stash/clear split.
@@ -135,6 +157,11 @@ _ROUTES = {
         # (pending→in_progress, →completed, →deleted) fires NO dedicated hook —
         # its PostToolUse(+Failure) is the only refresh signal (task_fmt.py)
         _fmt("claude-task-fmt.py", "task_fmt", matcher="TaskCreate|TaskUpdate"),
+        # …and every OTHER tool as one quiet expandable line (tool_fmt.py) — the
+        # complement of every matcher above, see _GENERIC_TOOL. LAST, so a tool
+        # that later earns a renderer of its own is routed to it and drops out
+        # of here by the same edit.
+        _fmt("claude-tool-fmt.py", "tool_fmt", matcher=_GENERIC_TOOL),
     ],
     "Notification": [_tab("notify")],
     "Stop": [_tab("stop"), _STOP_FOLD, _ASK_TURN],

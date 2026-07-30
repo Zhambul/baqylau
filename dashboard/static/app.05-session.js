@@ -996,8 +996,12 @@ const VIEW_DEFAULT = "default";
 const VIEW_FOLD = {
   verbose: [],
   default: ["bash", "read", "monitor", "task", "mail", "codex"],
+  // `tool` folds in FOCUS only, exactly like `skill`: a generic tool call is a
+  // quiet one-liner the lead now emits too (plugins/claude_code/tool_fmt.py),
+  // so default SHOWS it — that line is the whole point — and focus collapses a
+  // run of them into "used 3 tools".
   focus: ["bash", "read", "bg", "monitor", "edit", "write", "agent", "team",
-          "task", "mail", "skill", "codex"],
+          "task", "mail", "skill", "tool", "codex"],
 };
 
 // THE SUMMARY VOCABULARY — Claude Code's own, extracted from the 2.1.220 binary
@@ -1020,9 +1024,11 @@ const VIEW_FRAGMENTS = [
   // a SKILL, in the same shape (Claude Code has no fragment of its own for one): it
   // shows as a line in default and is counted here in focus, `used 2 skills`
   ["skill", "using", "used", "skill", "skills"],
-  // …and every OTHER tool call an agent makes (`· ToolSearch`), which only agent
-  // scope ever shows — `used 3 tools`. Deliberately generic: the block's own line
-  // names WHICH tool, and a per-tool fragment table would have to grow forever.
+  // …and every OTHER tool call — `used 3 tools`. An agent's (`· ToolSearch`,
+  // shown in its own scope) and, since plugins/claude_code/tool_fmt.py, the
+  // LEAD's own (`· WebFetch(https://…)`, one expandable line in the main
+  // mirror). Deliberately generic: the line itself names WHICH tool, and a
+  // per-tool fragment table would have to grow forever.
   ["tool", "using", "used", "tool", "tools"],
   ["bash", "running", "ran", "shell command", "shell commands"],
   ["bg", "running", "ran", "background job", "background jobs"],

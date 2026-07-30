@@ -179,6 +179,33 @@ def post_skill(s, skill="slack", args="read https://slack/archives/p178",
     return d
 
 
+def post_tool(s, tool="WebFetch", ti=None, tr=None, agent_id=None,
+              event="PostToolUse", tid="toolu_wf1"):
+    """PostToolUse(<any tool with no formatter of its own)> — the generic family
+    the exclusion matcher routes to tool_fmt.py.
+
+    Shapes per the live audit (measured 2026-07-31 over 474k hook_events): every
+    one of them carries a FLAT dict on both sides — WebFetch
+    `{url, prompt}` → `{bytes, code, codeText, result, durationMs, url}`,
+    WebSearch `{query}` → `{query, results, durationSeconds, searchCount}`,
+    ToolSearch `{query, max_results}` → `{matches, query,
+    total_deferred_tools}` — and the request's FIRST field is the one that names
+    it, which is what the one-liner shows."""
+    if ti is None:
+        ti = {"url": "https://docs.claude.com/en/docs/claude-code/hooks",
+              "prompt": "find the updatedInput contract"}
+    if tr is None:
+        tr = {"bytes": 807, "code": 200, "codeText": "OK",
+              "result": "The PreToolUse hook may return updatedInput.",
+              "durationMs": 1533,
+              "url": "https://docs.claude.com/en/docs/claude-code/hooks"}
+    d = base(s, event, tool_name=tool, tool_use_id=tid,
+             tool_input=ti, tool_response=tr)
+    if agent_id:
+        d["agent_id"] = agent_id
+    return d
+
+
 def notification(s, message="Claude needs your permission to use Bash"):
     return base(s, "Notification", message=message)
 

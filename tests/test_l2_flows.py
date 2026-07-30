@@ -970,6 +970,73 @@ def test_f8c_skill_invocation_is_one_expandable_note(run_hook, test_env, session
     oracle.assert_clean(test_env, s.sid, allow=("failed tools",))
 
 
+def test_f8d_generic_tool_is_one_expandable_line(run_hook, test_env, session,
+                                                 seed):
+    """The MAIN agent's WebFetch/WebSearch/ToolSearch/… — every tool no other
+    formatter owns — renders as one quiet `· <name>(<request>)` line with the
+    request AND the answer behind the click.
+
+    They rendered NOTHING before: the dispatcher's PostToolUse table matched
+    Bash, the file tools, Monitor, SendMessage, Skill and the task tools, and
+    everything else fell through (session 5a8123c7's hook_events carry
+    WebFetch/WebSearch rows with no formatter decision). A CHILD agent's have
+    rendered all along, in this same `·` register — so the mirror showed a
+    subagent's web fetch and not the lead's."""
+    from core import agentblocks as AB
+    from dashboard import opshtml
+    s = session.make()
+    seed.py("from core import state as ST; ST.kv_set(%r, 'seeded', 1)" % s.log)
+    run_hook("claude-tool-fmt.py", P.post_tool(s))
+    lop = next(op for op in s.ops() if op["t"] == "line")
+    text = R.strip_ansi(lop["s"])
+    # the shared quiet glyph (never a second spelling of it) + the request's
+    # FIRST field, its key dropped: a WebFetch is its url
+    assert text.startswith(AB.TOOL_GLYPH + " WebFetch(")
+    assert "docs.claude.com/en/docs/claude-code/hooks" in text
+    assert "prompt:" not in text, "the one-liner is an excerpt, not the payload"
+    # …clickable, through the same protocol a Read one-liner expands with
+    assert lop.get("v") == "toolu_wf1" and lop.get("act") == "tool"
+    assert "claude-copy:///%s/toolu_wf1/view" % s.sid in lop["s"]
+    stash = json.loads(s.query_state("SELECT val FROM kv WHERE key=?",
+                                     ("view:toolu_wf1",))[0][0])
+    body = "".join(o.get("s", "") for o in stash)
+    assert "prompt: find the updatedInput contract" in body, "the WHOLE request"
+    assert "The PreToolUse hook may return updatedInput." in body, "…and the answer"
+    # the scoreboard's tools breakdown sees it, keyed by the raw tool name
+    assert s.counters().get("tool:WebFetch") == 1
+    # the WEB row: the same one-liner, classified `tool`, expandable
+    items = opshtml.op_items(s.ops(), s.sid)
+    it = next(i for i in items if i.get("act") == "tool")
+    # `data-v` is what makes the row expandable on the page, and the OSC 8 link
+    # became the same `cc` anchor a Read one-liner's does (the parens are their
+    # own dim spans, so the text is not one contiguous "WebFetch(")
+    assert "WebFetch" in it["html"] and 'data-v="toolu_wf1"' in it["html"]
+    assert "toolu_wf1/view" in it["html"] and 'class="opl"' in it["html"]
+    oracle.assert_clean(test_env, s.sid)
+
+    # a SUBAGENT's tool call is not the main session's row (the substream owns
+    # that stream — agentblocks.tool_open paints it there)
+    run_hook("claude-tool-fmt.py",
+             P.post_tool(s, tool="WebSearch", agent_id="asub-1", tid="toolu_ws1",
+                         ti={"query": "kitty osc 8"}, tr={"results": []}))
+    assert "WebSearch" not in s.ops_text()
+    # …and a FAILED call still shows — reddened, with the ✗ mark, and its error
+    # text STILL behind the click (for a tool the failure IS the content, which
+    # is where this parts company with a file op's empty-handed failure)
+    run_hook("claude-tool-fmt.py",
+             P.post_tool(s, tool="WebSearch", tid="toolu_ws2",
+                         event="PostToolUseFailure",
+                         ti={"query": "kitty osc 8"},
+                         tr={"error": "search backend unavailable"}))
+    bad = next(op for op in s.ops()
+               if op["t"] == "line" and "WebSearch" in op["s"])
+    assert "✗" in bad["s"] and bad.get("v") == "toolu_ws2"
+    hit = json.loads(s.query_state("SELECT val FROM kv WHERE key=?",
+                                   ("view:toolu_ws2",))[0][0])
+    assert "search backend unavailable" in "".join(o.get("s", "") for o in hit)
+    oracle.assert_clean(test_env, s.sid, allow=("failed tools",))
+
+
 # --------------------------------------------------------------------- F9
 
 def test_f9a_cancelled_fg_command_self_heals(run_hook, test_env, session):

@@ -184,8 +184,17 @@ def test_plan_sequences_pinned():
         assert _names(ev, "TaskUpdate") == [tab, "claude-task-fmt.py"]
         # team mail's MESSAGE row: the send is the only moment its text exists
         assert _names(ev, "SendMessage") == [tab, "claude-mail-fmt.py"]
-        assert _names(ev, "WebFetch") == [tab]
-        assert _names(ev, "Readx") == [tab]  # fullmatch, not prefix
+        # …and EVERY OTHER tool goes to the generic one-liner — the matcher is
+        # the COMPLEMENT of the ones above, so a tool nobody has taught us about
+        # renders by default (it rendered NOTHING before, which is the bug)
+        for t in ("WebFetch", "WebSearch", "ToolSearch", "Grep", "Glob",
+                  "EnterWorktree", "mcp__thing__do"):
+            assert _names(ev, t) == [tab, "claude-tool-fmt.py"], t
+        # …fullmatch, not prefix: `Readx` is not the file tool `Read`, so it is
+        # a tool of its own and lands in the generic register
+        assert _names(ev, "Readx") == [tab, "claude-tool-fmt.py"]
+        # …and a tool with no name at all reaches no formatter
+        assert _names(ev, "") == [tab]
     assert _names("Notification") == [tab]
     assert _names("Stop") == [tab, "claude-stop-fmt.py", ask]
     # StopFailure = Stop's steps + the rate-limit migration, ordered LAST
@@ -207,6 +216,34 @@ def test_plan_sequences_pinned():
     # Unknown/other events: empty plan (subscriber-only, recorded by route()).
     for ev in ("PermissionRequest", "Setup", ""):
         assert _names(ev) == []
+
+
+def test_generic_tool_matcher_is_the_complement_of_the_routed_ones():
+    """THE RATCHET under the exclusion matcher (_GENERIC_TOOL). It is spelled as
+    a negative lookahead over a list of names, and a list that has to agree with
+    the routing table beside it is a list that will stop agreeing — in the
+    direction that HURTS, too: a tool that gains a renderer of its own but stays
+    out of the exclusion gets rendered TWICE, once by its formatter and once as
+    a generic line.
+
+    So both directions are pinned here: every tool any OTHER PostToolUse matcher
+    claims must be excluded, and the exclusion may not name a tool nothing
+    routes."""
+    from plugins.claude_code import dispatch as D
+    routed = [m for _n, m, _f in D._ROUTES["PostToolUse"]
+              if m and m != D._GENERIC_TOOL]
+    names = {n for m in routed for n in m.split("|")}
+    for n in sorted(names):
+        assert not D._match(n, D._GENERIC_TOOL), \
+            "%s has a formatter of its own AND falls to the generic one" % n
+    # Task/Agent are routed on PreToolUse (their PostToolUse is the "launched
+    # successfully" ack — the block is the subagent's own, painted by
+    # subagent_fmt + the substream), so they are excluded without appearing in
+    # the PostToolUse table.
+    assert set(D._ROUTED_TOOLS.split("|")) == names | {"Task", "Agent"}
+    # …and the generic matcher does admit the family it exists for
+    for n in ("WebFetch", "WebSearch", "ToolSearch", "Grep", "Glob"):
+        assert D._match(n, D._GENERIC_TOOL), n
 
 
 # ---------------------------------------------------- agent_id main-session guard
@@ -233,8 +270,8 @@ sys.argv = ["lazy-import-test"]
 import plugins.claude_code.dispatch as D
 HEAVY = {"plugins.claude_code." + m for m in
          ("cmd_pre", "cmd_fmt", "file_fmt", "monitor_fmt", "stop_fmt",
-          "task_fmt", "mail_fmt", "split", "subagent_fmt", "accounting", "msgs",
-          "tools", "model")}
+          "task_fmt", "mail_fmt", "tool_fmt", "split", "subagent_fmt",
+          "accounting", "msgs", "tools", "model")}
 loaded = HEAVY & set(sys.modules)
 assert not loaded, "at import time: %s" % loaded
 D.adopt.on_event = lambda d: None            # pin the probe to routing only
