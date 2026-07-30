@@ -1373,7 +1373,8 @@ word like "run" appears in dozens of them, and a menu you complete against
 must stay predictable. Capped at `MENU_MAX` rows, as before.
 
 The list is
-`plugins.slash_commands(cwd)` → `plugins/claude_code/slashcmds.py`: a curated
+`plugins.slash_commands(cwd, host)` → the OWNING host's provider (for
+claude_code, `plugins/claude_code/slashcmds.py` — see *Host-scoped* below): a curated
 `BUILTINS` snapshot of the CLI's built-in commands plus the session cwd's
 discovered custom entries — `commands/**/*.md` (subdirectory-namespaced,
 `gh/fix.md` → `/gh:fix`) and `skills/*/SKILL.md` from every ancestor
@@ -1395,9 +1396,12 @@ host)` routes to the single owning plugin (`_named`, the single-plugin twin of
 `host_named`): a codex session gets `plugins/codex/commands.py`'s codex builtins
 (`/plan`, `/approvals`, `/review`, `/undo`, …) plus its `$CODEX_HOME/prompts/*.md`
 user prompts, and NOT Claude's `/goal`/`/rewind`/`/agents`; an unknown host gets
-`[]` (an empty menu, never another tool's). `host=None` defaults to Claude — the
-new-session form has no session to own it and launches Claude today (a tool
-picker would pass the choice, P6). The composer resolves the host from its `sid`
+`[]` (an empty menu, never another tool's). `host=None` defaults to
+`plugins.default_host()` — the fail-OPEN rule, for a caller with nothing to
+resolve an owner from; the new-session form is no longer such a caller, since
+P5's tool picker passes the tool it is about to launch (*Tool picker*), so a
+codex launch is completed against codex's palette from the first keystroke.
+The composer resolves the host from its `sid`
 server-side (`owns_by` over the transcript path), so the JS never learns host
 names. This closed the reported "`/plan` isn't recognized" gap: the old fan-out
 concatenated every plugin, which was only ever right because `claude_code` was
@@ -2795,8 +2799,14 @@ the page: the feed's prompt bubbles ARE the checkpoint list (Claude Code
 checkpoints every user prompt), each carries a hover-revealed **↶** button
 (picking mode — the idle ↶-button/double-Esc meaning — reveals them all
 and makes whole bubbles clickable), and the mode menu on it mirrors Claude
-Code's own confirm options (`RW_MODES` ↔ `rewindmenu.MODE_LABELS`:
-conversation / code + conversation / code).
+Code's own confirm options (conversation / code + conversation / code).
+Those modes AND their words are SERVED, not spelled client-side: the page
+renders whatever `rewind_modes` the owning host declares
+(`HostControl.rewind_modes()`/`rewind_mode_label()`, whose one owner for
+claude_code is `rewindmenu.MODE_LABELS` — the same table the driver matches
+the real menu rows against, so a mode with no menu row behind it cannot
+exist). A host that cannot rewind serves `[]` and the button greys; the
+client table this replaced (`RW_MODES`) offered Claude's three to every host.
 
 **Why drive the TUI menu at all?** A rewind is invisible outside the live
 process: it writes NOTHING to the transcript at restore time — the

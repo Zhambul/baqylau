@@ -409,6 +409,207 @@ drive — the caps it does NOT declare grey the corresponding dashboard buttons
 automatically, which is what makes adding copilot/opencode a new package rather
 than an edit to the control plane.
 
+## Host abstraction
+
+The prose above explains each seam where it lives; this chapter is the same
+material as REFERENCE — the tables a second host is written against, and the
+tests that fail when one of them is not extended. The end state it describes:
+**`dashboard/` (python AND the static page) reaches an agent tool only through
+an abstraction**, and everything that knows one tool lives in that tool's
+`plugins/<tool>/` package.
+
+### The two seams
+
+A host is reached two ways, and the split is deliberate — one class for both
+would blur a pure function over on-disk state with a gesture that may verify
+itself against a live screen.
+
+| | **Registry providers** | **`HostControl`** |
+|---|---|---|
+| what | read-side FACTS | control-plane GESTURES |
+| shape | optional module-level functions | methods on one class |
+| declared in | `plugins.PROVIDERS` (name → arity) | `plugins.host.GESTURES` (the capability gestures) + `QUICK_COMMANDS`; the cap-SHARER and VOCABULARY halves of the surface are declared in the contract test, which pins them against the class |
+| reached by | `plugins.<name>(…)` fan-outs | `plugins.host_named/host_of/host_for` → `host.<gesture>(…)` |
+| a host opts in by | defining the function | OVERRIDING the method |
+| not implementing means | the fan-out asks the next plugin | the inert base answers `unsupported` → a 409 naming the cap |
+| capabilities | n/a | DERIVED from which methods were overridden (`caps()`), never authored |
+
+The load-bearing consequences: a cap maps to exactly ONE method (the four cap
+SHARERS ride another's cap and use their own `unsupported` result for the finer
+refusal), and an `unsupported` result is a 409 ("your tool does not do this")
+where a `_rejected()` is a 502 ("it tried and it broke").
+
+### How a read fact is KEYED (which host gets asked)
+
+The key decides the routing rule, and getting this wrong is the fail-open bug
+class the ownership gates exist for:
+
+| key | rule | why |
+|---|---|---|
+| PATH (`transcript_path`) | `_first_path` — ownership-GATED by the `owns` provider | these parsers are bounded and fail open, so first-plugin-wins is first-PARSER-wins (`plugins.prompts()` once read 8 "human prompts" out of a 429 KB codex rollout it never opened) |
+| SID | `_first_owner` — ownership-ROUTED: resolve the session's path, ask ONLY its owner | a session belongs to exactly one host, so a wrong answer is a claim about someone else's session (`ask_preamble` answers `""` for ANY sid, ending the fan-out before the owner is reached) |
+| AGENT id | first-wins, deliberately | a child need not share its parent's host — a codex run sidecar'd in a Claude session is a codex agent under a claude_code sid — and the agent id is itself the discriminator, since each host recognizes only ids it issued |
+| CWD | first-TRUTHY, and must take the path/slug as extra args | a cwd cannot be owned; a cwd-keyed fan-out once had codex's config answering for a Claude session |
+
+Unclaimed or empty resolves to `plugins.default_host()` — the registry's own
+answer (`all_plugins()` is host-first; the first LAUNCHABLE `host` adapter),
+which is also the fail-OPEN rule `session_caps` applies so a daemon-origin
+session with no transcript keeps working.
+
+### The session facets
+
+The three facets worth naming as a group, because they are what the dashboard
+used to read as raw kv rows BY NAME — and so answered Claude Code's shapes for
+every host, silently `None` for codex:
+
+| facet | answers | claude_code | codex |
+|---|---|---|---|
+| `tasks(sid)` | the pinned task-list card | the `tasks` kv `task_fmt` re-snapshots | DECLINED — no task-list tool in an 80-rollout corpus, so the card stays presence-hidden rather than faked |
+| `compacting(sid)` | the ctx bar's breath, RAW `{ts, trigger}` | the `compacting` latch (`compact_fmt`) | the same latch, armed on codex's own Pre/PostCompact hooks |
+| `fg_running(sid)` | the live ⏱ elapsed chip, `{g, start_ts}` | the take-once `fg-live` hand-off (`cmd_pre`) | the same record, written by the ROLLOUT STREAM |
+
+The TTL that ages an un-cleared compaction latch out belongs to the READER
+(`config.COMPACT_MAX_S`): an interrupted compaction fires no closing hook on
+either host, and an animation must fail OFF.
+
+That last row carries a real asymmetry worth keeping: the compaction latch holds
+only "since when", so a HOOK can arm it — but the fg record names WHICH MIRROR
+BLOCK is running, and the hook cannot know that. Claude Code gets away with a
+hook because its `tool_use_id` IS the copy group its own header ops are stamped
+with; codex's hook payload (`exec-…`), its rollout (`call_…`) and the mirror
+block (an integer copy group) are three disjoint id spaces, so a hook-stamped
+record would name a block that does not exist. The rollout stream is the one
+place holding the group id and the command's start at the same moment, so it
+writes the record — and its own pid is the tailer-liveness backstop, exactly as
+the Claude fg tailer's is.
+
+### The usage-window vocabulary
+
+`plugins.usage_strip()` is the ONE shape every host states rate limits in,
+concatenated across hosts (each answers for itself; `[]` from a host with
+nothing to say). One row per thing with its own limits — per SUBSCRIPTION
+ACCOUNT for claude_code, a single host-wide reading for codex, which is exactly
+the difference between a tool with an account switcher and one without:
+
+```
+{host, label, slug, switchable, plan, ts,
+ windows: [{key, label, used_pct, resets_at, window_mins, scope}, …]}
+```
+
+`label` is the host's OWN spelling of a window — the same 10080 minutes is "7d"
+to Claude and "1w" to codex, and neither is wrong. A `used_pct` of `None` means
+this row has no reading for a window a SIBLING row has, and the painter ghosts
+the column rather than shifting the stack. This replaced a bespoke host-NAMED
+strip (`/api/codex-usage` → `#codexusage`, its own poll and CSS) with one
+painter over one payload. Its per-session twins are `session_usage` /
+`session_account` / `session_costs`.
+
+### The REGISTER table
+
+One core-owned table, `core/agentblocks.REGISTERS`, is the single source for
+everything about a CHILD-agent producer. A fourth register is one row:
+
+| register | `src` stamp | `act` | display word | palette |
+|---|---|---|---|---|
+| `REG_AGENT` | `sub:` | `ACT_AGENT` | `Agent "%s"` | `SUB_PALETTE` |
+| `REG_TEAM` | `team:` | `ACT_TEAM` | `Teammate @%s` | `TEAM_PALETTE` |
+| `REG_CODEX` | `codex:` | `ACT_CODEX` | `host_word("Codex")` | `CODEX_PALETTE` |
+
+The readers DERIVE rather than re-spell: `actclass._SRC_ACT` IS
+`agentblocks.src_acts()`, `as_lead`'s recolour set IS
+`agentblocks.stream_palettes()`, and the display word is DATA (there is no
+`CODEX_WORD` constant left). The PREFIX is the producer's register, which is why
+a codex SIDECAR is `codex:<aid>` while a codex-NATIVE subagent is `sub:<aid>` and
+classifies as the child agent it is. The agent-scope filter is NOT one of the
+readers any more: `agent_scope` is the bare agent id and `in_scope` matches
+`src.split(":", 1)[1]`, so the prefix vocabulary cannot be missed there because
+it is never consulted.
+
+### The producer-stamped `act`
+
+`core/ops.py` owns the activity-class vocabulary (`ACTS`) and `label()`/`line()`/
+`gut()` take an `act=` hint; the PRODUCER stamps what it painted, and
+`actclass._classify` reads that FIRST. The glyph/palette tables remain only as
+the fallback for ops ALREADY ON DISK, which no restart can re-stamp.
+
+Two rules make the field safe: `core/ops.py` REFUSES a token outside `ACTS` (the
+field is dropped, and the reader falls back to its own derivation — a worse
+answer, never a wrong one), and core owns the tokens because a producer may not
+import the dashboard. The failure mode this removed was silent: an unrecognised
+block fell through to a palette test and folded into "ran N agents".
+
+### The contract tests
+
+`tests/test_l1i_host_contract.py` is the ratchet; each check is a DECLARED table
+a change must edit.
+
+| check | what it forces |
+|---|---|
+| `LITERAL_ALLOW` | no host NAME as a string literal in `dashboard/**/*.py` outside an allowlist with a written reason — enforced BOTH ways, so a row that outlives its code fails too |
+| `JS_LITERAL_ALLOW` | the same for `dashboard/static/*.js`, with EXACT per-file counts, and `gpt-`/`claude-` counted too (a model-id grammar names a host as surely as `=== "codex"`) |
+| `COVERAGE` | one cell per (provider, host): implemented, or DECLINED with the plugin's own reason. A provider nobody implements is a feature that degrades to "no plugin answered" |
+| `HOST_SURFACE` | the gesture-side twin — every gesture, cap sharer and vocabulary hook, per host |
+| caps derivation | `caps()` == the overrides, and no sibling gets a cap of its own |
+| register table | `_SRC_ACT`/`_CHILD_RGB` are IMPORTED from `REGISTERS`, and neither reader contains a `<prefix>:` literal |
+| `ACT_PRODUCERS` | every producer still stamps its act (one that stops does not fail — it degrades into the host-blind sniff) |
+| driver location + import direction | the five Claude drivers are in `plugins/claude_code/`, and NO plugin imports `dashboard` |
+| `DASHBOARD_PLUGIN_REACHES` (in `test_l1_contracts.py`) | the other direction: which dashboard modules may import a `plugins/<tool>/` internal |
+
+`tests/test_l1h_child_agent_parity.py` carries the PARITY proof and the
+THIRD-HOST proof. Parity: the Claude and codex child-agent adapters are driven
+through one synthetic sequence and must paint the same block sequence, carry the
+child identity on every header, classify the same, keep/drop the same in both
+views, and reach the quiet register alike — a structural guard, not a textual
+one. The third-host proof (`REG_THIRD = "opencode"`, `_third_host_ops`) is that
+same instruction FOLLOWED as a test: an adapter that is neither claude_code nor
+codex classifies, scopes and collapses correctly with ZERO presenter changes.
+That is the actual "opencode would plug in" evidence, as distinct from an
+argument that it would.
+
+### Recipe: adding `opencode`
+
+Each step names the test that fails until it is done.
+
+1. **One folder.** `plugins/opencode/` + one line in `all_plugins()`. Core and
+   `frontends/` do not change.
+   → `COVERAGE` fails: every provider row now lacks an `opencode` cell.
+2. **Declare the read facts** it can answer — at minimum `owns(path)` (so the
+   path-keyed fan-outs stop guessing at its files) and `session_title`/`context`.
+   Every other provider is an explicit DECLINED cell with a reason in the
+   plugin's own `__init__`.
+   → `COVERAGE` again, now cell by cell.
+3. **One `hostctl.py`** exposing a `HostControl` subclass through the `host`
+   provider, overriding exactly the gestures it can drive. Caps follow
+   automatically; the buttons for gestures it leaves inert grey themselves and
+   their POSTs 409.
+   → `HOST_SURFACE` fails until every gesture/sibling/vocabulary row has an
+   `opencode` cell; `test_caps_are_derived_from_the_gestures_alone` fails if a
+   cap was authored instead of derived.
+4. **Its UI vocabulary** on the same class — `model_choices`/`effort_choices` and
+   their defaults, `model_match`, `rewind_modes` + labels, `command_floor` per
+   quick command. `/api/hosts` and the session payload both serve it from the ONE
+   builder `plugins.host_vocabulary`, so the form and the header bar cannot
+   disagree.
+   → `test_every_host_serves_its_whole_new_session_vocabulary` fails on a missing
+   key; the page needs no edit at all, which is the point.
+5. **A register row** ONLY if it produces child-agent blocks — `src`, `act`,
+   `word`, `palette` in `core/agentblocks.REGISTERS`.
+   → `test_register_table_is_the_single_source` fails if a reader re-spells it.
+6. **Stamp `act`** on every producer that paints a block header or one-liner.
+   → `ACT_PRODUCERS` fails (and, if skipped, nothing else does — it degrades
+   quietly, which is why the table exists).
+7. **Hook wiring + its own entry scripts** if it is a HOST (`bin/claude-*.py`
+   shims, its dispatcher), driving the shared `core/hostpane.py` lifecycle and
+   `core/tabpaint.py`; `on_session_start` alone is enough for a SECONDARY source.
+   → no test forces this one: it is the tool's own integration, and its evidence
+   is the audit trail (`hook_events` decisions, `streams` rows).
+8. **Screen drivers, if any, live in `plugins/opencode/`** — never in
+   `dashboard/`; the agnostic skeleton is `core/screendrive.py`.
+   → `test_no_plugin_imports_the_dashboard` fails if a driver reaches upward.
+
+What is NOT on the list is the point: no dashboard python module, no static JS
+file, and no presenter table is edited in any step.
+
 `frontends/` is the terminal layer. `frontends/base.py` defines the
 `Frontend` interface, organised into role slices with each slice's consumers
 documented inline — presence (`available`/`usable`/`current_window`/
