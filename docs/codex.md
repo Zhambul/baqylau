@@ -430,6 +430,16 @@ account picker HIDES for codex (no subscription switcher). The web-launch audit
 row names the launching `tool`. An owner the dashboard can't launch (an unclaimed
 transcript, a tool with no host) is a 409, never the wrong tool.
 
+codex's model options are the `gpt-5.6-sol`/`terra`/`luna` + `gpt-5.5` + `gpt-5.4`/
+`-mini` family (`gpt-5.6-sol` the default) and its effort is the FULL codex enum
+`low/medium/high/xhigh/max/ultra` (server `EFFORTS`) — every option EXPLICIT, no
+"codex default" pseudo-option (matching Claude's dropdowns, so you always know
+what you launched). The old `gpt-5-codex`/`gpt-5.1-codex` options are GONE: they
+400 on a ChatGPT account ("model not supported when using Codex with a ChatGPT
+account", reproduced live) — a dead turn with no assistant reply, which read on
+the dashboard as an empty session. Both `-m` and `-c model_reasoning_effort=` now
+always ride a fresh codex launch (no reliance on the config default).
+
 ### Codex usage strip
 
 `plugins.usage_windows()` (the app-server rate limits above) renders as its OWN

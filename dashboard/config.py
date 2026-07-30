@@ -265,7 +265,9 @@ BOOT_ID = str(int(time.time() * 1000))
 
 # --- control-plane validation vocabulary (the /command, rename, new-session
 # endpoints) --------------------------------------------------------------------
-EFFORTS = ("low", "medium", "high", "xhigh", "max")   # claude --effort levels
+EFFORTS = ("low", "medium", "high", "xhigh", "max", "ultra")   # claude --effort
+#           levels + codex's `ultra` (gpt-5.6 reasoning tier — the codex enum is
+#           low/medium/high/xhigh/max/ultra, verified against the codex binary)
 MODEL_OK = re.compile(r"^[A-Za-z0-9._-]+$")   # an alias or full model id — one
                                                # clean argv word, nothing else
 # The scoreboard's quick-command row (post_command, docs/dashboard.md *Web

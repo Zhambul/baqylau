@@ -158,6 +158,10 @@ out.launch_cwd = (launch.body && launch.body.cwd) || "";
 // (codex has no switcher) no account rides along
 out.launch_tool = (launch.body && launch.body.tool) || "";
 out.launch_account = (launch.body && launch.body.account) || "";
+// codex's model/effort defaults must be EXPLICIT + supported — never the empty
+// "codex default" pseudo-option, never the ChatGPT-unsupported gpt-5-codex
+out.launch_model = (launch.body && launch.body.model) || "";
+out.launch_effort = (launch.body && launch.body.effort) || "";
 // the optimistic hand-off, as it stood WHILE the launch request was open
 out.launch_armed = !!launch.armed;
 out.launch_hash = launch.hash || "";

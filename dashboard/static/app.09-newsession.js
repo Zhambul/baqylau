@@ -801,23 +801,27 @@ function nsConversation(F) {
 // The model/effort options + first-ever defaults per HOST. codex differs from
 // claude: its models are the gpt-*-codex family (a "" = "codex default" leaves
 // the -m flag off so codex's own config picks), and its effort is the reasoning
-// level that rides `-c model_reasoning_effort` (low/medium/high — codex has no
-// xhigh/max; "" leaves it at the config default). The server validates whatever
-// is sent (MODEL_OK / EFFORTS), and an empty value is simply not sent.
+// level that rides `-c model_reasoning_effort` (codex's own enum is
+// low/medium/high/xhigh/max/ultra, verified against the codex binary). Every
+// option is an EXPLICIT value — no "default" pseudo-option (matching Claude's
+// dropdowns) so you always know what you launched. The server validates what is
+// sent (MODEL_OK / EFFORTS). codex's `gpt-5-codex`/`gpt-5.1-codex` are dropped:
+// they 400 on a ChatGPT account ("model not supported"), reproduced live.
 const TOOL_MODELS = {
   claude_code: [["fable", "fable"], ["opus", "opus"],
                 ["sonnet", "sonnet"], ["haiku", "haiku"]],
-  codex: [["", "codex default"], ["gpt-5.1-codex", "gpt-5.1-codex"],
-          ["gpt-5-codex", "gpt-5-codex"]],
+  codex: [["gpt-5.6-sol", "gpt-5.6-sol"], ["gpt-5.6-terra", "gpt-5.6-terra"],
+          ["gpt-5.6-luna", "gpt-5.6-luna"], ["gpt-5.5", "gpt-5.5"],
+          ["gpt-5.4", "gpt-5.4"], ["gpt-5.4-mini", "gpt-5.4-mini"]],
 };
 const TOOL_EFFORTS = {
   claude_code: [["low", "low"], ["medium", "medium"], ["high", "high"],
                 ["xhigh", "xhigh"], ["max", "max"]],
-  codex: [["", "codex default"], ["low", "low"], ["medium", "medium"],
-          ["high", "high"]],
+  codex: [["low", "low"], ["medium", "medium"], ["high", "high"],
+          ["xhigh", "xhigh"], ["max", "max"], ["ultra", "ultra"]],
 };
-const TOOL_MODEL_DEF = { claude_code: "fable", codex: "" };
-const TOOL_EFFORT_DEF = { claude_code: "high", codex: "" };
+const TOOL_MODEL_DEF = { claude_code: "fable", codex: "gpt-5.6-sol" };
+const TOOL_EFFORT_DEF = { claude_code: "high", codex: "low" };
 const toolOpts = (tbl, t) => tbl[t] || tbl.claude_code;
 
 function nsPickers(F) {

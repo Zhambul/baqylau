@@ -2057,6 +2057,10 @@ def test_new_session_form_phases_hand_off_everything(tmp_path):
     assert d["posted"] == ["/api/sessions/new"], d
     assert d["launch_cwd"] == "/tmp/proj", d
     assert d["launch_tool"] == "codex", d
+    # codex's model/effort defaults are EXPLICIT + ChatGPT-supported — the empty
+    # "codex default" pseudo-option and the 400-ing gpt-5-codex are both gone.
+    assert d["launch_model"] == "gpt-5.6-sol", d
+    assert d["launch_effort"] == "low", d
     assert d["launch_account"] == "", d
     # The waiting room is OPTIMISTIC: by the time the request is in flight the
     # jump watch is armed and the page is already at #/launching. Gating that on
