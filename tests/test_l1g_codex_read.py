@@ -95,6 +95,9 @@ def test_codex_host_caps_reflect_wired_gestures(tmp_path):
     import plugins
     h = plugins.host_named("codex")
     assert h is not None and h.name == "codex" and h.launchable is True
+    # `HostControl.label` names the TOOL in the new-session picker and stays
+    # "Codex" — deliberately NOT the usage strip's lowercase "codex · plus" row
+    # name, which names an ACCOUNT-shaped reading beside Claude's slug rows.
     assert h.label == "Codex"
     assert h.caps() == {"interrupt": True, "send": True, "rename": True,
                         "rewind": False, "migrate": False, "compact": True,
@@ -891,7 +894,7 @@ def test_codex_strip_row_is_one_host_wide_reading():
     row = usage.strip_row({"planType": "plus", "windows": [
         {"used_pct": 4.0, "window_mins": 10080, "resets_at": 1785944457}]})
     assert row["host"] == "codex" and row["switchable"] is False
-    assert row["slug"] == "" and row["label"] == "Codex · plus"
+    assert row["slug"] == "" and row["label"] == "codex · plus"
     assert row["plan"] == "plus"
     assert row["usage"] is None and row["limit_hit"] is None
     assert row["logged_out"] is False
@@ -899,7 +902,7 @@ def test_codex_strip_row_is_one_host_wide_reading():
     # no plan word → just the host name; no windows at all → no row (the strip
     # shows nothing rather than an empty pill)
     assert usage.strip_row({"windows": [{"used_pct": 1, "window_mins": 300,
-                                         "resets_at": 0}]})["label"] == "Codex"
+                                         "resets_at": 0}]})["label"] == "codex"
     assert usage.strip_row({"planType": "plus", "windows": []}) is None
     assert usage.strip_row(None) is None
 
@@ -926,7 +929,7 @@ def test_session_facets_route_to_the_OWNING_host(tmp_path, monkeypatch):
     assert u["windows"][0]["used_pct"] == 4
     # account: the minimal honest shape for a host with no switcher — no slug
     # (nothing to switch to), just the plan, so the header chip still reads
-    assert plugins.session_account("cx1") == {"slug": "", "label": "Codex · plus"}
+    assert plugins.session_account("cx1") == {"slug": "", "label": "codex · plus"}
     # costs: codex's OWN priced scoreboard (CODEX_PRICES folded it as the stream
     # read each turn), reported in the same envelope the OTEL side returns —
     # under one query_source named for the host, since codex has no

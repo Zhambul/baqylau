@@ -228,13 +228,18 @@ def strip_row(windows, ts=None):
     window. ONE row, not one per account: codex has no subscription SWITCHER, so
     its limits are a single host-wide reading — which is why the row carries
     `switchable: False` (the new-session account picker offers only rows that are
-    an account you can launch under) and no slug."""
+    an account you can launch under) and no slug.
+
+    The row's name is LOWERCASE `codex` — the tool's own spelling of itself (its
+    binary, its config dir, this plugin's `HOST`), and the one the strip should
+    use, since a Claude row beside it is named by its account slug rather than
+    by a title-cased product name."""
     rows = window_rows((windows or {}).get("windows"))
     if not rows:
         return None
     plan = ((windows or {}).get("planType") or "").strip()
     return {"host": HOST, "switchable": False, "slug": "", "plan": plan,
-            "label": "Codex · " + plan if plan else "Codex",
+            "label": HOST + " · " + plan if plan else HOST,
             "windows": rows, "ts": ts,
             # the account-switcher fields a Claude row carries. Served as the
             # honest empty so ONE painter can read every row the same way
@@ -284,13 +289,17 @@ def session_account(sid):
     """The per-session account provider (plugins.session_account fan-out) — the
     minimal honest shape for a host with NO account switcher: no slug (there is
     nothing to switch to, and a slug is what the migrate/launch paths key on),
-    just the plan the rollout reported, so the header chip reads "◈ Codex · plus"
+    just the plan the rollout reported, so the header chip reads "◈ codex · plus"
     instead of blanking. {} when the rollout names no plan — the chip is then
-    absent, which is the honest answer rather than a bare "Codex" that claims a
-    subscription reading we do not have."""
+    absent, which is the honest answer rather than a bare "codex" that claims a
+    subscription reading we do not have.
+
+    Lowercase, and the SAME string strip_row builds, for the same reason: it is
+    the tool's own spelling of itself, and the header chip and the strip row name
+    one thing — two spellings of it would read as two facts."""
     got = _rollout_usage(sid)
     plan = ((got or {}).get("planType") or "").strip()
-    return {"slug": "", "label": "Codex · " + plan} if plan else {}
+    return {"slug": "", "label": HOST + " · " + plan} if plan else {}
 
 
 def session_costs(sid):

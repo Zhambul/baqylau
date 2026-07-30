@@ -197,7 +197,7 @@ step("two_hosts", () => render([
     windows: [H5(60, now + 3600), D7(97, now + 10222)],
     usage: { five_hour: 60, five_hour_reset: now + 3600,
              seven_day: 97, seven_day_reset: now + 10222, ts: now } },
-  { host: "codex", slug: "", label: "Codex · plus", switchable: false,
+  { host: "codex", slug: "", label: "codex · plus", switchable: false,
     plan: "plus", usage: null, limit_hit: null, logged_out: false,
     windows: [W("w10080", "7d", 4, now + 522456, 10080, "account")] },
 ]));
@@ -214,7 +214,7 @@ step("both_hosts_have_5h", () => render([
     usage: { five_hour: 60, five_hour_reset: now + 3600,
              seven_day: 97, seven_day_reset: now + 10222, ts: now,
              seven_day_fable: 32, seven_day_fable_reset: now + 10222 } },
-  { host: "codex", slug: "", label: "Codex · plus", switchable: false,
+  { host: "codex", slug: "", label: "codex · plus", switchable: false,
     plan: "plus", usage: null, limit_hit: null, logged_out: false,
     windows: [W("w300", "5h", 41, now + 1800, 300, "account"),
               W("w10080", "7d", 4, now + 522456, 10080, "account")] },
@@ -227,7 +227,7 @@ step("both_hosts_have_5h", () => render([
 // the reported bug: with the columns unioned per host, codex's lone weekly bar
 // started where Claude's 5h bar starts.
 step("codex_first_no_5h", () => render([
-  { host: "codex", slug: "", label: "Codex · plus", switchable: false,
+  { host: "codex", slug: "", label: "codex · plus", switchable: false,
     plan: "plus", usage: null, limit_hit: null, logged_out: false,
     windows: [W("w10080", "7d", 4, now + 522456, 10080, "account")] },
   { host: "claude_code", slug: "c1", label: "oboard",

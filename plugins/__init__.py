@@ -886,7 +886,7 @@ def usage_strip(cache=None, limit=50):
         "host":       the owning plugin's short name — the painter's GROUPING
                       key, so one strip can stack several hosts and each host's
                       columns still line up within its own group,
-        "label":      the row's display name ("claude-01" / "Codex · plus"),
+        "label":      the row's display name ("claude-01" / "codex · plus"),
         "slug":       the switcher account id, "" for a host with no accounts,
         "switchable": may the new-session picker offer this row as an ACCOUNT?
         "plan":       the subscription plan word, "" when the host has none,

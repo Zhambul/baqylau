@@ -602,7 +602,7 @@ What makes it a different KIND of row is two fields: `switchable: False` (codex
 has no account switcher, so it is not something the new-session picker can offer
 you a launch under) and an empty `slug`. The account-switcher fields
 (`usage`/`limit_hit`/`logged_out`) are served as the honest empty so one painter
-reads every row the same way. Labelled `Codex · <planType>`; no windows (codex
+reads every row the same way. Labelled `codex · <planType>`; no windows (codex
 unconfigured/unreachable) means no row at all, rather than an empty pill.
 
 Codex names a window by its DURATION, because that is all it reports — there is
@@ -656,7 +656,7 @@ strip mapper serves both.
 
 `plugins.session_account(sid)` is the minimal honest companion: no slug (there is
 nothing to switch to, and a slug is what the migrate/launch paths key on), just
-`{slug: "", label: "Codex · <plan>"}` so the header chip reads `◈ Codex · plus`.
+`{slug: "", label: "codex · <plan>"}` so the header chip reads `◈ codex · plus`.
 A rollout naming no plan yields `{}` and the chip is absent — better than a bare
 "Codex" claiming a subscription reading nobody has.
 

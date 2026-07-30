@@ -209,7 +209,7 @@ has no account SWITCHER), and they ride the SAME strip as the Claude accounts �
 one payload, one painter. See *Accounts & usage* below; the codex row is
 `plugins/codex/usage.strip_row` over `codex app-server`
 `account/rateLimits/read`, marked `switchable: False` and labelled
-`Codex · <planType>`.
+`codex · <planType>`.
 
 This used to be a strip of its own — `GET /api/codex-usage` →
 `codex_usage_payload` → `renderCodexUsage` → `#codexusage`, with its own CSS and
@@ -4709,7 +4709,7 @@ ACCOUNT-scope windows reach the chip: a per-model weekly cap belongs on the
 strip, not in a one-line header.
 
 A host with no account switcher says what it can rather than blanking: codex
-serves `{slug: "", label: "Codex · plus"}`, so the chip reads `◈ Codex · plus`.
+serves `{slug: "", label: "codex · plus"}`, so the chip reads `◈ codex · plus`.
 An empty `{}` (no plan in the rollout) hides the chip — the honest answer, rather
 than a bare "Codex" claiming a subscription reading nobody has.
 

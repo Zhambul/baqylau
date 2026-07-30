@@ -85,7 +85,7 @@ function chromeIdentity(ses, meta) {
   // which account this chat runs under (◈ c2 · claude-01), and where its rate
   // limits stood when it last reported them (5h 12% · 7d 40%). Both come from
   // the session's OWNING host: a host with no account switcher names itself and
-  // its plan instead of a slug (◈ Codex · plus), and states its windows in the
+  // its plan instead of a slug (◈ codex · plus), and states its windows in the
   // same served vocabulary — so the chip reads the `windows` list rather than
   // Claude's flat five_hour/seven_day keys, which no other host has. Only
   // ACCOUNT-wide windows are shown: a per-model weekly cap belongs on the strip,

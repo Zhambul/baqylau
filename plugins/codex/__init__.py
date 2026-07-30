@@ -229,7 +229,7 @@ def session_usage(sid):
 def session_account(sid):
     """The per-session account provider (plugins.session_account fan-out) — the
     minimal shape for a host with no switcher: no slug, just the rollout's plan
-    ("Codex · plus"), or {} when it names none. See usage.session_account."""
+    ("codex · plus"), or {} when it names none. See usage.session_account."""
     from plugins.codex import usage
     return usage.session_account(sid)
 

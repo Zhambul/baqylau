@@ -1424,7 +1424,7 @@ def test_usage_strip_is_one_payload_over_every_host(dash, monkeypatch):
     from plugins import codex as CX
     monkeypatch.setattr(CX, "usage_strip", lambda cache=None, limit=50: [
         {"host": "codex", "switchable": False, "slug": "", "plan": "pro",
-         "label": "Codex · pro", "ts": None,
+         "label": "codex · pro", "ts": None,
          "usage": None, "limit_hit": None, "logged_out": False,
          "windows": [{"key": "w300", "label": "5h", "used_pct": 42,
                       "resets_at": 0, "window_mins": 300, "scope": "account"}]}])
@@ -1433,7 +1433,7 @@ def test_usage_strip_is_one_payload_over_every_host(dash, monkeypatch):
     for r in rows:
         by_host.setdefault(r["host"], []).append(r)
     cx = by_host["codex"]
-    assert len(cx) == 1 and cx[0]["label"] == "Codex · pro"
+    assert len(cx) == 1 and cx[0]["label"] == "codex · pro"
     assert cx[0]["windows"][0]["used_pct"] == 42
     assert cx[0]["switchable"] is False
     # …and the CLAUDE rows are still there, still switchable, still carrying the
