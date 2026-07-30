@@ -642,10 +642,20 @@ def test_accounts_strip_rows_stack_column_for_column():
     All three now render the column anyway (a ghost bar / an empty reset cell /
     a `visibility: hidden` badge), which is what these signatures pin.
 
-    The stack is per HOST GROUP, not per strip: a window a host does not report
-    is not a missing reading on its row, so rows of different hosts do not share
-    a GHOST. (Their columns are still anchored to the same durations — the label
-    for one duration is now one shared word, plugins.window_label.)
+    The stack spans the WHOLE strip, ACROSS hosts, because the columns are keyed
+    by window DURATION (`winSlot`/`stripColumns`): codex's weekly bar sits in the
+    same column as Claude's 7d, and a host with no 5h window leaves that column
+    EMPTY rather than sliding left into it. The columns used to be unioned per
+    HOST, which are two layouts that only look stacked while both hosts report
+    the same shape — a codex row with only a weekly window started its bar where
+    Claude's 5h bar starts. Hence the unconditional `rows[0] == rows[1]` below:
+    EVERY row of the strip lays out the same boxes now, whoever produced it.
+
+    The per-host distinction that survives is GHOST vs HOLE, and it is a claim
+    about meaning, not width: a ghost ("—") says this account has no reading for
+    a window a SIBLING OF ITS OWN HOST reports; a hole says the column is another
+    host's window entirely, which this host was never going to report. Both
+    reserve the identical box.
     Skipped without `node` (docs/testing.md)."""
     node = shutil.which("node")
     if not node:
@@ -661,11 +671,11 @@ def test_accounts_strip_rows_stack_column_for_column():
     for name, case in d["cases"].items():
         rows = case["rows"]
         assert len(rows) == 2, (name, rows)
-        # rows of ONE host lay out the SAME cells in the SAME order (the
-        # signature is ghost-blind and value-blind by construction — a
-        # placeholder is the same box with the ink turned down)
-        if case["hosts"][0] == case["hosts"][1]:
-            assert rows[0] == rows[1], (name, rows)
+        # EVERY row of the strip lays out the SAME cells in the SAME order —
+        # across hosts, not just within one (the signature is ghost/hole-blind
+        # and value-blind by construction: a placeholder is the same box with
+        # the ink turned down, or off)
+        assert rows[0] == rows[1], (name, rows)
         # every ACCOUNT-WIDE window carries its reset cell, present or empty;
         # a model-scoped one ("7d fable") carries NONE — its reset duplicates
         # the 7d bar above it, and it is dropped for the same key on every row,
@@ -681,6 +691,10 @@ def test_accounts_strip_rows_stack_column_for_column():
     assert d["cases"]["model_window_on_one"]["ghosts"][1][-1] is True
     assert d["cases"]["one_logged_out"]["ghosts"] == \
         [[False, False, False, False], [False, True, False, False]]
+    # ...and a single-host strip has no HOLES at all: a hole is only ever
+    # another host's column, so within one host every placeholder is a ghost
+    for name in ("live_shape", "model_window_on_one", "one_logged_out"):
+        assert not any(any(r) for r in d["cases"][name]["holes"]), name
 
     # the ghosted 5h/7d-fable bar says "—", not a fabricated 0%
     assert "7d fable—" in d["cases"]["model_window_on_one"]["text"][1]
@@ -700,17 +714,47 @@ def test_accounts_strip_rows_stack_column_for_column():
     assert "filter(a => a.switchable)" in ns, \
         "the account picker must drop non-switchable usage-strip rows"
 
-    # TWO HOSTS, one strip, one painter: each group lays out its OWN windows,
-    # and neither borrows the other's — no ghost "7d fable" on the codex row.
-    # This is what let the second endpoint, DOM node, poll and painter be
-    # deleted. codex's weekly bar now wears the SHARED "7d" (the duration table,
-    # plugins.window_label) where it used to say "1w".
+    # TWO HOSTS, one strip, one painter — and now ONE column layout, keyed by
+    # window DURATION. This is what let the second endpoint, DOM node, poll and
+    # painter be deleted; the duration key is what finally made the two rows
+    # actually stack. codex's weekly bar wears the SHARED "7d" (the duration
+    # table, plugins.window_label) where it used to say "1w", because it is
+    # literally the column Claude's 7d bar is in.
+    def ubars(case):
+        return [[c["label"] for c in row if c["kind"] == "ubar"]
+                for row in case["rows"]]
+
     two = d["cases"]["two_hosts"]
-    labels = [[c["label"] for c in row if c["kind"] == "ubar"]
-              for row in two["rows"]]
-    assert labels == [["5h", "7d"], ["7d"]]
-    assert two["ghosts"] == [[False, False, False], [False, False]]
+    # codex reports no 5h window: the column is still THERE, as a hole
+    assert ubars(two) == [["5h", "7d"], ["5h", "7d"]]
+    assert two["holes"] == [[False, False, False], [False, True, False]]
     assert not two["hidden"]
+
+    # BOTH hosts report 5h: the 5h bars and the 7d bars each share one column,
+    # and Claude's per-model "7d fable" is a HOLE on the codex row (a window it
+    # does not have) rather than a ghost (a reading it failed to make)
+    both = d["cases"]["both_hosts_have_5h"]
+    assert ubars(both) == [["5h", "7d", "7d fable"]] * 2
+    assert both["holes"] == [[False] * 4, [False, False, False, True]]
+
+    # THE EMPTY CELL, and the reason the columns are SORTED by duration rather
+    # than taken in first-seen order: codex is served FIRST with only its weekly
+    # window, and its bar must still land in the SECOND column — never sliding
+    # left into the 5h column, which is the reported symptom.
+    first = d["cases"]["codex_first_no_5h"]
+    assert first["hosts"] == ["codex", "claude_code"]
+    assert ubars(first) == [["5h", "7d"], ["5h", "7d"]]
+    assert first["holes"] == [[False, True, False], [False, False, False]]
+
+    # A hole reads EMPTY on screen — the codex row must not claim a 5h reading
+    # it owes. It keeps the ghost's markup (that is how its width comes out
+    # right BY CONSTRUCTION, rather than from a second measurement that could
+    # drift), so what makes it blank is one CSS rule, and the rule is the pin.
+    with open(os.path.join(REPO, "dashboard", "static", "style.css"),
+              encoding="utf-8") as fh:
+        css = fh.read()
+    assert re.search(r"\.ubar\.hole\s*\{[^}]*visibility:\s*hidden", css), \
+        "a hole must reserve the column and paint nothing"
 
 
 def test_ctx_bar_compaction_and_drain():

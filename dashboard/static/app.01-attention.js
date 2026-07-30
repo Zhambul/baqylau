@@ -306,16 +306,74 @@ function acctName(a) {
   return a.slug ? a.slug + " · " + a.label : a.label;
 }
 
-// `cols` is the UNION of window DESCRIPTORS ({key, label, scope}) across every
-// row of one HOST's group and `anyOut` whether ANY of them is logged out — both
-// computed once by renderAccounts, so every row lays out the same columns in the
-// same order and the rows STACK (docs/dashboard.md *Row alignment*). A row
-// missing a window still renders it, as a ghost; a window whose reset was
-// dropped (rolled over) still reserves its reset column; a row that is fine
-// still reserves the ⚠ badge's slot.
+// A window's COLUMN SLOT — its DURATION in minutes, which is what the whole
+// strip is laid out by, so codex's weekly bar lands directly under Claude's
+// (docs/dashboard.md *Row alignment*). It cannot be the `key`: the same 10080
+// minutes is `seven_day` to Claude and `w10080` to codex, and keying on that
+// gave the two hosts two different columns for one duration. A window with no
+// readable duration can share a column with nothing, so it stands on its key.
+function winSlot(w) {
+  return typeof w.window_mins === "number" && w.window_mins > 0
+    ? "m" + w.window_mins : "k" + w.key;
+}
+function slotMins(slot) {
+  return slot[0] === "m" ? parseInt(slot.slice(1), 10) : Number.MAX_SAFE_INTEGER;
+}
+
+// One row's windows bucketed by slot, in SERVED order. A host may report several
+// windows of one duration — Claude's account-wide `seven_day` plus a per-model
+// `seven_day_fable` cap are both 10080 — and they keep the row's own order,
+// taking consecutive columns inside that duration's block. So the shared 7d bars
+// still line up and the per-model extras hang off the end of the same block,
+// which is the "keep today's within-row order, just anchor the shared columns"
+// rule.
+function rowSlots(a) {
+  const m = new Map();
+  for (const w of a.windows || []) {
+    const k = winSlot(w);
+    if (!m.has(k)) m.set(k, []);
+    m.get(k).push(w);
+  }
+  return m;
+}
+
+// THE COLUMN LAYOUT, computed once for the WHOLE strip: one column per
+// (duration, position-within-that-duration), ordered by duration so the strip
+// reads short-window-first whatever order the hosts were served in. Each column
+// remembers `hosts` — which hosts report a window there — because that is what
+// decides how a row with nothing to put in it renders (acctPill).
+function stripColumns(rows) {
+  const order = [], depth = new Map(), meta = new Map();
+  for (const a of rows) {
+    for (const [k, ws] of rowSlots(a)) {
+      if (!depth.has(k)) { order.push(k); depth.set(k, 0); meta.set(k, []); }
+      depth.set(k, Math.max(depth.get(k), ws.length));
+      const at = meta.get(k);
+      ws.forEach((w, i) => {
+        // the first row to claim a position names the column; with the labels
+        // now shared per DURATION (plugins.window_label) the rows agree on it
+        if (!at[i]) at[i] = { label: w.label, scope: w.scope, hosts: new Set() };
+        at[i].hosts.add(a.host);
+      });
+    }
+  }
+  order.sort((x, y) => slotMins(x) - slotMins(y));
+  const cols = [];
+  for (const slot of order)
+    for (let i = 0; i < depth.get(slot); i++)
+      cols.push(Object.assign({ slot, i }, meta.get(slot)[i]));
+  return cols;
+}
+
+// `cols` is the strip-wide column layout (stripColumns) and `anyOut` whether ANY
+// row on the strip is logged out — both computed once by renderAccounts, so
+// every row lays out the same columns in the same order and the rows STACK
+// (docs/dashboard.md *Row alignment*). A row missing a window still renders it,
+// as a ghost or a hole; a window whose reset was dropped (rolled over) still
+// reserves its reset column; a row that is fine still reserves the ⚠ badge's
+// slot.
 function acctPill(a, cols, anyOut) {
-  const byKey = {};
-  for (const w of a.windows || []) byKey[w.key] = w;
+  const slots = rowSlots(a);
   const pill = el("div", "acct");
   pill.append(el("span", "aname", acctName(a)));
   // LOGGED OUT: the account's OAuth login was revoked/expired — a session on it
@@ -372,14 +430,29 @@ function acctPill(a, cols, anyOut) {
     }
     return seg;
   };
-  // one bar per column, in the served order (renderAccounts' per-host union):
-  // Claude's 5h/7d pair plus any model-scoped window the CLI reports ("7d
-  // fable"), codex's own 5h/1w. A column this row has no reading for renders
-  // as a ghost — that is what keeps the stack aligned.
+  // one bar per column of the strip-wide layout (stripColumns): the 5h block,
+  // then the 7d block — Claude's account-wide 7d and codex's weekly bar in the
+  // SAME column, any model-scoped 7d cap right after it.
+  //
+  // A row with nothing to put in a column still renders the box, or the stack
+  // stops aligning — but WHICH nothing depends on whose column it is:
+  //   * a window a SIBLING ROW OF THE SAME HOST reports is a missing READING —
+  //     ghost it (label + empty track + "—"): this account has no snapshot;
+  //   * a column belonging entirely to ANOTHER host is a window this host does
+  //     not HAVE, and "—" would claim a reading it was never going to make. So
+  //     it is a HOLE: the identical box painted with nothing in it (`.ubar.hole`
+  //     is `visibility: hidden`, so the width is right BY CONSTRUCTION rather
+  //     than by a second measurement), which is what lets a host with no 5h
+  //     window leave that column empty instead of shifting left into it.
   cols.forEach(c => {
-    const w = byKey[c.key];
-    pill.append(bar(c.label, w ? w.used_pct : undefined,
-                    w && w.resets_at, c.scope === "account"));
+    const w = (slots.get(c.slot) || [])[c.i];
+    const seg = bar(c.label, w ? w.used_pct : undefined,
+                    w && w.resets_at, c.scope === "account");
+    if (!w && !c.hosts.has(a.host)) {
+      seg.classList.add("hole");
+      seg.setAttribute("aria-hidden", "true");
+    }
+    pill.append(seg);
   });
   // The account is BLOCKED right now (a session on it died on error=
   // rate_limit — the `limit-hit` stamp, served only while still active):
@@ -414,12 +487,20 @@ function resetAgo(epochS) {
 const ANAME_MIN_CH = 14;
 
 // THE ONE usage-strip painter, over every host's rows (GET /api/accounts →
-// plugins.usage_strip). It knows no host by name: rows are GROUPED by their
-// `host` field, and each group decides its own columns, because window sets are
-// per host and unioning them across hosts would ghost Claude's "7d fable" onto
-// a codex row and codex's "1w" onto every account. codex used to have a whole
-// second endpoint, DOM node, poll and painter for exactly this; it is now one
-// group of one row.
+// plugins.usage_strip). It knows no host by name.
+//
+// The whole strip is read as a STACK — c1's 5h bar above c2's above codex's 7d
+// — so the columns are decided ONCE for every row, keyed by window DURATION
+// (stripColumns / winSlot). Duration, not `key`: Claude calls 10080 minutes
+// `seven_day` and codex calls it `w10080`, and while the columns were unioned
+// PER HOST those were two separate layouts that only happened to look stacked
+// when both hosts reported the same shape. A codex account with no 5h window
+// then slid its weekly bar left into Claude's 5h column, which is the report.
+//
+// Rows stay GROUPED by host in render order (a host's rows belong together, and
+// the logged-out badge is a Claude fact), but the columns span the groups. What
+// per-host grouping still buys is the GHOST-vs-HOLE distinction in acctPill: a
+// missing reading and an absent window are different claims.
 function renderAccounts(list) {
   if (!$accounts) return;
   // show a row with any usage window OR a logged-out warning (a dead account
@@ -428,27 +509,18 @@ function renderAccounts(list) {
   $accounts.hidden = !shown.length;
   $accounts.textContent = "";
   // The name column is sized across the WHOLE strip so every host's rows share
-  // one left edge, even though their bar columns differ.
+  // one left edge — as, now, do their bar columns.
   const nameCh = shown.reduce((n, a) => Math.max(n, acctName(a).length),
                               ANAME_MIN_CH);
   $accounts.style.setProperty("--aname-w", nameCh + "ch");
-  const groups = [];
-  for (const a of shown) {
-    let g = groups.find(x => x.host === a.host);
-    if (!g) groups.push(g = { host: a.host, rows: [], cols: [] });
-    g.rows.push(a);
-  }
-  for (const g of groups) {
-    // The rows of one host are read as a STACK — c1's 5h bar directly above
-    // c2's 5h bar — so the column set is decided ONCE per group, not per row:
-    // the union of its windows in served order (an account whose model-window
-    // fetch didn't match has no `seven_day_fable`, and dropping the column from
-    // that row alone would shift nothing on it but everything after it on the
-    // others). docs/dashboard.md *Row alignment*.
-    for (const a of g.rows)
-      for (const w of a.windows || [])
-        if (!g.cols.some(c => c.key === w.key)) g.cols.push(w);
-    const anyOut = g.rows.some(a => a.logged_out);
-    for (const a of g.rows) $accounts.append(acctPill(a, g.cols, anyOut));
-  }
+  const cols = stripColumns(shown);
+  // strip-wide too: the ⚠ badge sits BEFORE the bars, so one logged-out account
+  // anywhere means EVERY row reserves the slot, or the bars of the rows that
+  // don't start a badge-width to the left of the ones that do.
+  const anyOut = shown.some(a => a.logged_out);
+  const hosts = [];
+  for (const a of shown) if (!hosts.includes(a.host)) hosts.push(a.host);
+  for (const h of hosts)
+    for (const a of shown)
+      if (a.host === h) $accounts.append(acctPill(a, cols, anyOut));
 }

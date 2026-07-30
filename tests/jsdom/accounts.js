@@ -91,19 +91,31 @@ function ghosts(row) {
   return row.children.map(c => c._cls().includes("ghost"));
 }
 
+/* A HOLE is the other kind of placeholder, and the two mean different things:
+   a GHOST says "this account has no reading for a window its SIBLING reports",
+   a HOLE says "this column is another host's window entirely". Both reserve the
+   box (that is what keeps the duration columns aligned across hosts); only the
+   ghost claims a missing reading. A hole is a ghost too, in class terms — it is
+   built by the same `bar()` call — so it has to be reported separately or the
+   ghost map would say codex is missing readings it was never going to make. */
+function holes(row) {
+  return row.children.map(c => c._cls().includes("hole"));
+}
+
 function render(list) {
   sandbox.renderAccounts(list);
   return {
     rows: $accounts.children.map(sig),
     ghosts: $accounts.children.map(ghosts),
+    holes: $accounts.children.map(holes),
     text: $accounts.children.map(r => r.textContent),
     aname: $accounts.style.getPropertyValue("--aname-w"),
     hidden: $accounts.hidden === true,
-    // which HOST each rendered row belongs to, in render order — the stacking
-    // rule is per host GROUP (columns are a host's own window set), so the
-    // python assertions need to know where one group ends. Taken from the
-    // fixture, not the DOM: the row carries no host marker on screen, and it
-    // should not — the grouping is layout, not something to label.
+    // which HOST each rendered row belongs to, in render order. Columns now span
+    // the WHOLE strip (keyed by duration), but rows are still GROUPED by host in
+    // render order and the ghost-vs-hole rule is per host, so the python
+    // assertions need to know which row is whose. Taken from the fixture, not
+    // the DOM: the row carries no host marker on screen, and it should not.
     hosts: (list || []).map(a => a.host),
   };
 }
@@ -188,6 +200,40 @@ step("two_hosts", () => render([
   { host: "codex", slug: "", label: "Codex · plus", switchable: false,
     plan: "plus", usage: null, limit_hit: null, logged_out: false,
     windows: [W("w10080", "7d", 4, now + 522456, 10080, "account")] },
+]));
+
+// (5) TWO HOSTS that BOTH report a 5h window, plus a Claude-only per-model cap.
+// The 5h bars and the 7d bars each share ONE column across the hosts (the
+// columns are keyed by DURATION — Claude's key is `seven_day`, codex's `w10080`,
+// and keying on that gave them separate columns). The "7d fable" column is
+// Claude's alone, so the codex row renders a HOLE there, not a ghost: it has no
+// per-model cap and never will, and "—" would claim a reading it owes.
+step("both_hosts_have_5h", () => render([
+  { host: "claude_code", slug: "c1", label: "oboard",
+    windows: [H5(60, now + 3600), D7(97, now + 10222), F7(32, now + 10222)],
+    usage: { five_hour: 60, five_hour_reset: now + 3600,
+             seven_day: 97, seven_day_reset: now + 10222, ts: now,
+             seven_day_fable: 32, seven_day_fable_reset: now + 10222 } },
+  { host: "codex", slug: "", label: "Codex · plus", switchable: false,
+    plan: "plus", usage: null, limit_hit: null, logged_out: false,
+    windows: [W("w300", "5h", 41, now + 1800, 300, "account"),
+              W("w10080", "7d", 4, now + 522456, 10080, "account")] },
+]));
+
+// (6) THE EMPTY CELL, and the reason the columns are SORTED by duration rather
+// than taken in first-seen order: codex is served FIRST and has only the weekly
+// window. Its 7d bar must still sit in the 7d column — the SECOND one — with the
+// 5h column left empty above Claude's, never sliding left into it. That slide is
+// the reported bug: with the columns unioned per host, codex's lone weekly bar
+// started where Claude's 5h bar starts.
+step("codex_first_no_5h", () => render([
+  { host: "codex", slug: "", label: "Codex · plus", switchable: false,
+    plan: "plus", usage: null, limit_hit: null, logged_out: false,
+    windows: [W("w10080", "7d", 4, now + 522456, 10080, "account")] },
+  { host: "claude_code", slug: "c1", label: "oboard",
+    windows: [H5(60, now + 3600), D7(97, now + 10222)],
+    usage: { five_hour: 60, five_hour_reset: now + 3600,
+             seven_day: 97, seven_day_reset: now + 10222, ts: now } },
 ]));
 
 /* ---------- the reset column's width ------------------------------------

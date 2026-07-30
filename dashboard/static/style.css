@@ -628,6 +628,14 @@ body.in-session #accounts { display: none; }
    drop the ink */
 .ubar.ghost .ulabel, .ubar.ghost .upct { color: var(--dim2); }
 .ubar.ghost .utrack { opacity: .45; }
+/* a duration column that belongs to ANOTHER host entirely (the columns span the
+   whole strip now, keyed by duration, so a host with no 5h window still has a 5h
+   column). Not a ghost: a ghost says "no reading", and this host was never going
+   to report one. Hidden rather than sized, so the column width is right by
+   CONSTRUCTION — it is literally the same box (docs/dashboard.md *Row
+   alignment*). `.ubar + .ubar`'s divider rule is a border on the box itself, so
+   it disappears with it and the hole reads as blank, not as an empty cell. */
+.ubar.hole { visibility: hidden; }
 /* the ⚠ badge's reserved slot on an account that is NOT logged out — hidden,
    not absent, so the dead account's bars stay in column with the others */
 .acct .uauth.ghost { visibility: hidden; }

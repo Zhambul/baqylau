@@ -4547,11 +4547,14 @@ with an account switcher and one without:
  windows: [{key, label, used_pct, resets_at, window_mins, scope}]}
 ```
 
-- **`host`** is the painter's GROUPING key. Columns are unioned WITHIN a host,
-  never across: window sets belong to a host, and the same 10080 minutes is
-  Claude's `7d` and codex's `1w`. Unioning across hosts would ghost a window onto
-  a host that simply does not have one, which reads as a missing reading rather
-  than a different vocabulary.
+- **`host`** groups the rows in RENDER order (a host's rows belong together) and
+  decides how an empty cell reads. It no longer decides the COLUMNS: those are
+  strip-wide and keyed by **`window_mins`** (*Row alignment*), so codex's weekly
+  bar lands in the same column as Claude's 7d. What `host` still buys is the
+  GHOST-vs-HOLE distinction — a window a sibling of the SAME host reports is a
+  missing reading (`—`), a column belonging to another host entirely is a window
+  this one does not have, and saying `—` there would claim a reading it was never
+  going to make.
 - **`label`** (the ROW's name) is per host. Each WINDOW's **`label`** is not: it
   comes from one shared table keyed by DURATION —
   `plugins.window_label(mins, fallback=)` / `WINDOW_LABELS`, `300 → "5h"`,
@@ -4774,10 +4777,10 @@ page** (`#accounts`) — `plugins.accounts()` with usage aggregated per slug (th
 freshest snapshot across that account's sessions —
 `core/sessionapi.account_usage`, shared with the rate-limit migration's target
 picker), polled slowly and hidden until some account has usage. The pill
-renders **one bar per window captured anywhere on the strip** (app.js
-`usageWindows`/`windowLabel`, the union in `renderAccounts` — *Row alignment*
-below — `five_hour` → "5h", `seven_day` → "7d", a future `seven_day_fable` →
-"7d fable"), in the served order; the new-session picker's option text joins the
+renders **one bar per column of the strip-wide layout** (`stripColumns` in
+`renderAccounts`, keyed by window DURATION — *Row alignment* below — with the
+labels served: `five_hour` → "5h", `seven_day` → "7d", `seven_day_fable` →
+"7d fable"), in duration order; the new-session picker's option text joins the
 same windows. The served
 `usage` is the **effective** snapshot (`sessionapi.effective_usage`): any
 window — the 5h/7d pair or a model-scoped one (`sessionapi.usage_windows`,
@@ -4791,12 +4794,13 @@ symptom (the client must not fix this itself: the rolled-over arithmetic is
 single-owner, server-side). The `web-launch` audit row records the chosen
 `account`.
 
-**Row alignment (the strip is read as a STACK).** The accounts are compared
-column-by-column — c1's 5h bar directly above c2's 5h bar, the two `7d` resets
-in one line — so every row must lay out the SAME columns at the SAME widths.
-Everything is monospace (`--mono`), so the columns are fixed in `ch` and are
-exact; what kept breaking alignment was *structure*, three ways, each fixed by
-rendering the column anyway rather than by measuring:
+**Row alignment (the strip is read as a STACK).** The rows are compared
+column-by-column — c1's 5h bar directly above c2's 5h bar, the codex row's
+weekly bar under both `7d`s, the resets in one line — so every row must lay out
+the SAME columns at the SAME widths. Everything is monospace (`--mono`), so the
+columns are fixed in `ch` and are exact; what kept breaking alignment was
+*structure*, four ways, each fixed by rendering the column anyway rather than by
+measuring:
 
 - **A window with no reset.** `effective_usage` DROPS the reset epoch of a
   rolled-over window (above), so an idle account's 5h reads `0%` with no
@@ -4812,13 +4816,33 @@ rendering the column anyway rather than by measuring:
 - **A window (or a badge) only one account has.** The per-model window
   (`seven_day_fable`) attaches only where the OAuth fetch matched a slug
   (*Per-model usage bars*), and `⚠ logged out` sits BEFORE the bars. So the
-  column set is decided ONCE for the whole strip in `renderAccounts` — the
-  UNION of every shown account's windows, in served order — and each row
-  renders all of it: a window this account has no snapshot for becomes a
-  `.ubar.ghost` (label + empty track + `—`), and a healthy account still
-  reserves the badge's slot (`.uauth.ghost`, `visibility: hidden`). The name
-  column likewise sizes to the widest name on the strip (`--aname-w`, floor
-  `ANAME_MIN_CH`).
+  column set is decided ONCE for the whole strip in `renderAccounts`
+  (`stripColumns`) and each row renders all of it: a window this account has no
+  snapshot for becomes a `.ubar.ghost` (label + empty track + `—`), and a
+  healthy account still reserves the badge's slot (`.uauth.ghost`,
+  `visibility: hidden`) — strip-wide, since one logged-out account anywhere
+  offsets every row that doesn't reserve it. The name column likewise sizes to
+  the widest name on the strip (`--aname-w`, floor `ANAME_MIN_CH`).
+- **A column that belongs to a DIFFERENT HOST.** The columns used to be unioned
+  per host, on the argument that window sets belong to a host and the same 10080
+  minutes was Claude's `7d` and codex's `1w`. But two per-host layouts are not a
+  stack; they only look like one while both hosts report the same shape. A codex
+  row carrying ONLY a weekly window started its bar exactly where Claude's **5h**
+  bar starts — the reported symptom. So a column is keyed by **duration**
+  (`winSlot` → `window_mins`, never `key`: Claude says `seven_day`, codex says
+  `w10080` for the one window) and the layout spans the strip, ordered by
+  duration; the label for a duration is one shared word (*One usage-window
+  vocabulary, every host*), which is the other half of the same fix — a column
+  may not rename itself halfway down. A host reporting SEVERAL windows of one
+  duration (Claude's account-wide `seven_day` plus a per-model
+  `seven_day_fable`) keeps its own order inside that duration's block, so the
+  shared bars still line up and the per-model extras hang off the end of it.
+  A row with nothing for a column renders the box either way, but not the same
+  way: within a host it is a **ghost** (`—`, "no reading"), across hosts a
+  **hole** (`.ubar.hole`, `visibility: hidden`) — because codex has no per-model
+  cap and never will, and `—` would claim a reading it owes. The hole is the
+  ghost's own markup with the ink off, so its width is right BY CONSTRUCTION
+  rather than by a second measurement free to drift.
 - **A model-scoped window has NO reset column at all** (`hasReset(k)` — only
   `five_hour`/`seven_day` carry one). "7d fable" resets on the same weekly
   clock as the `seven_day` bar directly above it, so its own `resets in …` was
