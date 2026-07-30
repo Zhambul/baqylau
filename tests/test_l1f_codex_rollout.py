@@ -297,21 +297,82 @@ def test_custom_tool_call_exec_is_the_0_14x_command_channel():
     assert RO.parse(_rsp("custom_tool_call", name="exec", input="noop();")) is None
 
 
-def test_custom_tool_call_exec_handles_any_tools_fn_not_just_exec_command():
+def test_a_non_shell_tools_fn_is_a_TOOL_record_not_a_command():
     """codex ≥ 0.146 runs MANY tools through the same `exec` custom tool — a
-    web/MCP lookup is `tools.web__run({…})`, not `tools.exec_command({cmd:…})`. It
-    used to parse to None, so a subagent's real work never rendered (view modes had
-    nothing to fold). Now it surfaces the readable call expression as the command,
-    the wrapper (`const r = await … ; text(r)`) stripped."""
+    web/MCP lookup is `tools.web__run({…})`, not `tools.exec_command({cmd:…})` —
+    and the two are DIFFERENT KINDS of activity, so they get different records: a
+    shell command keeps `exec`, everything else is a structured `tool` (name +
+    arguments).
+
+    It used to be laundered INTO the exec shape, which is how a codex subagent's
+    entire real work came to render as `▶ cmd` blocks of raw JavaScript
+    (measured on the real cli 0.146 child rollout 019fb363-4028…: five such calls,
+    not one shell command among them)."""
     js = ('const r = await tools.web__run({weather:[{location:"Bali",duration:1}],'
-          'response_length:"short"}); text(r)\n')
-    rec = RO.parse(_rsp("custom_tool_call", name="exec", call_id="w1", input=js))
-    assert rec == {"kind": "exec", "call_id": "w1", "ts": None,
-                   "cmd": 'tools.web__run({weather:[{location:"Bali",duration:1}],'
-                          'response_length:"short"})'}
-    # exec_command still wins its own cleaner extraction (not the generic fallback)
+          'response_length:"short"}); text(JSON.stringify(r));')
+    assert RO.parse(_rsp("custom_tool_call", name="exec", call_id="w1",
+                         input=js)) == {
+        "kind": "tool", "name": "web__run", "call_id": "w1",
+        "args": '{weather:[{location:"Bali",duration:1}],response_length:"short"}'}
+    # a SHELL command still parses to exec, by its own cleaner {cmd:…} extraction
     assert RO.parse(_rsp("custom_tool_call", name="exec",
-                         input='await tools.exec_command({cmd:"ls"});'))["cmd"] == "ls"
+                         input='await tools.exec_command({cmd:"ls"});')) == {
+        "kind": "exec", "cmd": "ls", "call_id": "", "ts": None}
+    # neither shape -> no record at all (a broken block is worse than none)
+    assert RO.parse(_rsp("custom_tool_call", name="exec", input="noop();")) is None
+
+
+def test_tool_args_end_at_the_matching_paren_whatever_the_wrapper_tail():
+    """The arguments are cut at the call's MATCHING close paren rather than at a
+    known suffix, because codex's wrapper tail VARIES per call —
+    `text(JSON.stringify(r))`, `text(r.content.map(x=>x.text||"").join("\\n"))`.
+    The old fixed suffix list matched NONE of the five real calls in the measured
+    rollout, so the whole `; text(…)` tail rode along as part of the command."""
+    for tail in ('text(JSON.stringify(r));',
+                 'text(r.content.map(x=>x.text||"").join("\\n"));',
+                 'console.log(r)'):
+        js = 'const r = await tools.web__run({q:"a (b) c"}); ' + tail
+        assert RO.js_tool_call(js) == ("web__run", '{q:"a (b) c"}'), tail
+    # a paren INSIDE a string never closes the call…
+    assert RO.js_tool_call('tools.f({x:")"})') == ("f", '{x:")"}')
+    # …and an unbalanced (truncated) input fails OPEN to the rest of the line
+    assert RO.js_tool_call("tools.f({x:1}") == ("f", "{x:1}")
+    assert RO.js_tool_call("no tools here") == ("", "")
+    assert RO.js_tool_call("") == ("", "")
+
+
+def test_web_search_end_is_a_search_only_when_it_names_a_query():
+    """cli 0.146 writes NO `web_search_call` response_item at all: the measured
+    child rollout carries five `web_search_end` EVENTS and zero of the other, so
+    this event is the only place a codex search appears — without it a web search
+    rendered nothing.
+
+    Four of those five are the web tool's non-search actions (`action.type ==
+    "other"` — opening a result it already found), which carry an empty query and
+    must paint nothing; only the fifth names what was searched."""
+    assert RO.parse(_ev("web_search_end", call_id="e1", query="",
+                        action={"type": "other"}, results=[])) is None
+    assert RO.parse(_ev("web_search_end", call_id="e2",
+                        query="current weather Bali Indonesia",
+                        action={"type": "search",
+                                "query": "current weather Bali Indonesia"})) == {
+        "kind": "search", "query": "current weather Bali Indonesia"}
+    # the query may arrive only under `action`
+    assert RO.parse(_ev("web_search_end",
+                        action={"type": "search", "query": "kubectl logs"})) == {
+        "kind": "search", "query": "kubectl logs"}
+
+
+def test_the_two_agent_plumbing_events_stay_unparsed():
+    """`sub_agent_activity` (a `{kind:"interacted"}` ping about a child thread,
+    which has its own rollout and its own stream) and
+    `inter_agent_communication_metadata` (`{trigger_turn:true}`) are deliberately
+    NOT parsed — both measured in the real child rollout, both pure plumbing.
+    Pinned so a later reader sees the decision rather than a gap."""
+    assert RO.parse(_ev("sub_agent_activity", kind="interacted",
+                        agent_path="/root")) is None
+    assert RO.parse({"type": "inter_agent_communication_metadata",
+                     "payload": {"trigger_turn": True}}) is None
 
 
 def test_custom_tool_call_output_is_an_exec_result():
@@ -369,11 +430,20 @@ def test_request_user_input_question_schema():
 
 def _write_subagent_rollout(tmp_path, fork_iso="2026-07-30T12:19:59.556Z",
                             fork_epoch=1785413999):
-    """A minimal subagent rollout: child session_meta (thread_source=subagent) +
-    parent session_meta, the parent's REPLAYED turn (task_started started_at BEFORE
-    the fork, a parent prompt + message), then the child's OWN bootstrap
-    task_started (started_at == the fork) and its work."""
+    """A minimal subagent rollout in the REAL shape (verified against the cli
+    0.146 child rollout 019fb363-4028…): child session_meta
+    (thread_source=subagent) + parent session_meta, the parent's REPLAYED turn —
+    the developer/system injections, the `<environment_context>` role=user one,
+    the parent's real human prompt, and the 2KB team-scaffolding developer
+    message that follows it — then the child's OWN bootstrap task_started
+    (started_at == the fork) and its work."""
     p = tmp_path / "rollout-2026-07-30T12-19-59-child.jsonl"
+
+    def _msg(role, text):
+        return {"type": "response_item", "timestamp": fork_iso,
+                "payload": {"type": "message", "role": role,
+                            "content": [{"type": "input_text", "text": text}]}}
+
     recs = [
         {"type": "session_meta", "timestamp": fork_iso,
          "payload": {"thread_source": "subagent", "timestamp": fork_iso,
@@ -385,10 +455,18 @@ def _write_subagent_rollout(tmp_path, fork_iso="2026-07-30T12:19:59.556Z",
         # --- parent's replayed turn (started BEFORE the fork) ---
         {"type": "event_msg", "timestamp": fork_iso,
          "payload": {"type": "task_started", "started_at": fork_epoch - 15}},
+        _msg("developer", "<permissions instructions>\nFilesystem sandboxing…"),
+        _msg("user", "<environment_context>\n  <cwd>/w</cwd>\n</environment_context>"),
+        _msg("user", "run a subagent for weather"),
         {"type": "event_msg", "timestamp": fork_iso,
          "payload": {"type": "user_message", "message": "run a subagent for weather"}},
         {"type": "event_msg", "timestamp": fork_iso,
          "payload": {"type": "agent_message", "message": "I'll delegate that."}},
+        # the team-scaffolding brief codex hands every agent — role=developer, and
+        # carrying no task text at all (measured: 2.1KB of spawn_agent/
+        # concurrency-slot instructions)
+        _msg("developer", "You are an agent in a team of agents collaborating to "
+                          "complete a task.\n\nYou can spawn sub-agents…"),
         # --- child's OWN bootstrap task_started (started_at == the fork) ---
         {"type": "event_msg", "timestamp": fork_iso,
          "payload": {"type": "task_started", "started_at": fork_epoch}},
@@ -427,6 +505,53 @@ def test_subagent_body_offset_skips_the_replayed_parent_prefix(tmp_path):
         "cwd": "/w"}}) + "\n" + json.dumps(_ev("user_message", message="hi")) + "\n",
         encoding="utf-8")
     assert RO.subagent_body_offset(str(normal)) == 0
+
+
+def test_subagent_brief_is_the_last_human_turn_before_the_bootstrap(tmp_path):
+    """The brief behind a codex subagent's launch card.
+
+    Measured on the real child rollout: the child's own NEW_TASK record carries
+    the task as an `encrypted_content` part, so it CANNOT be read — the only
+    plaintext statement of why the child exists is the last real human turn of
+    the replayed-parent prefix. Everything else in that prefix is excluded
+    STRUCTURALLY, needing no preamble heuristic: the `<environment_context>`
+    injection by the `<tag>` rule, and the team-scaffolding brief ("You are an
+    agent in a team of agents…") by its role=developer system channel."""
+    sub = _write_subagent_rollout(tmp_path)
+    assert RO.subagent_brief(sub) == "run a subagent for weather"
+    # a NORMAL rollout is not a subagent and has no brief (never the lead's prose)
+    normal = tmp_path / "rollout-normal.jsonl"
+    normal.write_text(json.dumps({"type": "session_meta", "payload": {
+        "cwd": "/w", "originator": "codex-tui"}}) + "\n", encoding="utf-8")
+    assert RO.subagent_brief(str(normal)) == ""
+    # …and so does a missing file (fail-open, never an exception into a tailer)
+    assert RO.subagent_brief(str(tmp_path / "nope.jsonl")) == ""
+
+
+def test_subagent_brief_unwraps_a_task_wrapper(tmp_path):
+    """When codex delivers the task UNencrypted it is a `<task>…</task>` role=user
+    turn — an INPUT wrapper, which is kept (not treated as machinery) and reduced
+    to its inner text by the shared strip_input_wrapper, so the card opens on the
+    task rather than on markup."""
+    fork_iso, fork_epoch = "2026-07-30T12:19:59.556Z", 1785413999
+    p = tmp_path / "rollout-2026-07-30T12-19-59-task.jsonl"
+    recs = [
+        {"type": "session_meta", "timestamp": fork_iso,
+         "payload": {"thread_source": "subagent", "timestamp": fork_iso,
+                     "source": {"subagent": {"thread_spawn": {}}}}},
+        {"type": "response_item", "payload": {
+            "type": "message", "role": "user", "content": [
+                {"type": "input_text",
+                 "text": "<task>\nGet the weather in Bali\n</task>"}]}},
+        {"type": "event_msg", "payload": {"type": "task_started",
+                                          "started_at": fork_epoch}},
+        # the child's own turn — AFTER the bootstrap, so never the brief
+        {"type": "response_item", "payload": {
+            "type": "message", "role": "user",
+            "content": [{"type": "input_text", "text": "a later child turn"}]}},
+    ]
+    p.write_text("".join(json.dumps(r) + "\n" for r in recs), encoding="utf-8")
+    assert RO.subagent_brief(str(p)) == "Get the weather in Bali"
 
 
 def test_is_child_bootstrap_needs_the_fork_epoch():
@@ -500,6 +625,63 @@ def test_renderer_consumes_the_parser():
 # ignored (stream.IGNORE_KINDS) — and nothing may claim a kind the parser never
 # emits. This is the SAFETY NET the parser-deepening drift needed: a new/renamed
 # parser kind, or a stale/typo'd handler, fails one of the three checks below.
+
+def _renderer(tmp_path, name="dedup"):
+    """A stream Renderer bound to a scratch mirror log — the same in-process paint
+    path the tailer drives (`feed_rollout`), for the two RENDERER guards below.
+    They live in this file, beside the drift contract, because each exists to
+    protect a decision made in the PARSER: one kind answered from two registers,
+    and one call_id shared by a request and its answer."""
+    log = str(tmp_path / ("claude-mirror-%s.log" % name))
+    ST._init(["claude-codex-stream.py", log, "1,2,3",
+              str(tmp_path / "r.jsonl"), "-", "run"])
+    return ST.Renderer(), log
+
+
+def _labels(log):
+    from core import render as R
+    from core import state as S
+    _last, ops = S.ops_after(log, 0)
+    return [R.strip_ansi(o.get("s") or "") for o in ops if o.get("t") == "label"]
+
+
+def test_the_renderer_collapses_a_search_that_arrives_from_both_registers(tmp_path):
+    """`search` is the one kind BOTH rollout registers can answer, so a codex
+    build that wrote both would hand the renderer the same search twice. An
+    immediately-repeated query paints once; a genuine repeat LATER (anything else
+    painted in between) still gets its own block — which is why the guard is
+    adjacency and not a seen-set."""
+    rd, log = _renderer(tmp_path)
+    # (the stream's name rides as the op's own `who` field, so the chip TEXT is
+    # just the marker — core/ops.py)
+    rd.feed_rollout({"kind": "search", "query": "weather Bali"})
+    rd.feed_rollout({"kind": "search", "query": "weather Bali"})   # the twin
+    assert [s for s in _labels(log) if "search" in s] == ["⌕ search"]
+    rd.feed_rollout({"kind": "task_started", "at": 1, "ts": None})
+    rd.feed_rollout({"kind": "search", "query": "weather Bali"})
+    assert [s for s in _labels(log) if "search" in s] == ["⌕ search", "⌕ search"]
+
+
+def test_a_tool_calls_answer_lands_behind_its_own_request(tmp_path):
+    """A `tool` record opens a `· <name>` block and its output closes THAT block —
+    paired by call_id, because codex returns every custom-tool output through one
+    output record that carries no tool name. Without the pairing the answer landed
+    as a loose row (or, for an exec-shaped close, under the wrong header)."""
+    rd, log = _renderer(tmp_path, "tool")
+    rd.feed_rollout({"kind": "tool", "name": "web__run",
+                     "args": '{q:"bali"}', "call_id": "c1"})
+    rd.feed_rollout({"kind": "exec_result", "exit": None, "call_id": "c1",
+                     "output": "27°C, scattered clouds", "ts": None})
+    from core import render as R
+    from core import state as S
+    _last, ops = S.ops_after(log, 0)
+    body = [o for o in ops if o.get("t") == "gut"]
+    assert _labels(log) == ["· web__run"]        # `who` is a field, not text
+    assert [o.get("g") for o in body] == [ops[0].get("g")] * 2, \
+        "the request and its answer must share the block's copy group"
+    assert '{q:"bali"}' in R.strip_ansi(body[0]["s"])
+    assert "27°C" in R.strip_ansi(body[1]["s"])
+
 
 def test_every_kind_is_decided_render_or_ignore():
     """No parser kind may sit undecided: each rollout.KINDS member is either a

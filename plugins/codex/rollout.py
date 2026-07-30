@@ -50,6 +50,8 @@
 #   {"kind": "prompt" | "reasoning" | "message", "text": str}   (never empty)
 #   {"kind": "search", "query": str}
 #   {"kind": "exec", "cmd": str, "call_id": str, "ts": str|None}
+#   {"kind": "tool", "name": str, "args": str, "call_id": str}   a NON-shell
+#    tool call through the same `exec` custom tool (`tools.web__run({…})`)
 #   {"kind": "exec_result", "exit": str|None, "output": str,
 #    "call_id": str, "ts": str|None}
 #   {"kind": "stdin", "text": str, "call_id": str}      backgrounded-exec poll
@@ -61,9 +63,13 @@
 #   {"kind": "compact_boundary", "message": str, "replaced": int,
 #    "window_id": …, "previous_window_id": …}
 # parse_line(s) wraps json.loads: {"kind": "bad", "raw": s} for a complete
-# line that isn't JSON. parse_line/parse are pure (no I/O, no state) — with the
-# timeline gone this module does no I/O at all (owns() below is a pure
-# filename/layout test — the codex twin of transcript.owns — so that stays true).
+# line that isn't JSON. parse_line/parse are pure (no I/O, no state), and so is
+# owns() (a filename/layout test — the codex twin of transcript.owns). The ONLY
+# functions here that touch a file are the three SUBAGENT head-readers at the
+# bottom (subagent_fork_epoch / subagent_body_offset / subagent_brief): a
+# subagent rollout's replayed-parent PREFIX is a fact about the file's shape, not
+# about one record, so it cannot be answered from a parsed line — each is bounded
+# and fails open.
 import json
 import os
 import re
@@ -100,38 +106,62 @@ _JS_CMD = re.compile(
 _OUTPUT_MARK = "Output:\n"
 
 
-_JS_TOOL = re.compile(r"tools\.[A-Za-z_][A-Za-z0-9_]*\s*\(")
+_JS_TOOL = re.compile(r"tools\.([A-Za-z_][A-Za-z0-9_]*)\s*\(")
+# The quote characters the argument scan below must not read structure inside.
+_JS_QUOTES = "\"'`"
 
 
-def _tool_call_from_js(js):
-    """A NON-exec_command tool call out of a `custom_tool_call` name=exec JS input,
-    as a readable `tools.<fn>({…})` expression, or "". codex ≥ 0.146 runs many
-    tools through the SAME `exec` custom tool — a shell command is
-    `tools.exec_command({cmd:…})` (handled above), but a web/MCP lookup is
-    `const r = await tools.web__run({…}); text(r)`. Without this those calls parsed
-    to nothing and the subagent's real work never rendered (view modes had nothing
-    to fold). We surface the call expression as the block's command, stripping the
-    `const r = await … ; text(r)` wrapper codex adds."""
+def js_tool_call(js):
+    """(name, args) of the `tools.<fn>(…)` call in a `custom_tool_call` name=exec
+    JS input — ("", "") when there is none.
+
+    codex ≥ 0.146 runs MANY tools through the SAME `exec` custom tool: a shell
+    command is `tools.exec_command({cmd:…})` (handled by _exec_cmd_from_js
+    above), but a web/MCP lookup is
+    `const r = await tools.web__run({…}); text(JSON.stringify(r))`. The NAME is
+    the function (`web__run`) and the ARGS are what it was called with, so a
+    presenter can paint the same quiet `· <name>` block every other tool call in
+    this repo gets, with the arguments behind the click.
+
+    The args end at the call's MATCHING close paren, found by a depth count that
+    skips quoted text. A fixed suffix list ("; text(r)", …) was the previous
+    approach and matched NONE of the five real calls in the measured child
+    rollout — the wrapper's tail varies per call (`text(JSON.stringify(r))`,
+    `text(r.content.map(x=>x.text||"").join("\\n"))`), so the whole `; text(…)`
+    tail was landing in the rendered command. An unbalanced (truncated) input
+    falls open to the rest of the string rather than raising."""
     m = _JS_TOOL.search(js or "")
     if not m:
-        return ""
-    expr = (js[m.start():] or "").strip()
-    for suf in ("; text(r)", ";text(r)", "; console.log(r)"):
-        i = expr.rfind(suf)
-        if i > 0:
-            expr = expr[:i]
-            break
-    return expr.strip().rstrip(";").strip()
+        return "", ""
+    i, depth, quote, esc = m.end(), 1, "", False
+    while i < len(js) and depth:
+        ch = js[i]
+        if esc:
+            esc = False
+        elif quote:
+            if ch == "\\":
+                esc = True
+            elif ch == quote:
+                quote = ""
+        elif ch in _JS_QUOTES:
+            quote = ch
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        i += 1
+    args = js[m.end():i - 1] if not depth else js[m.end():]
+    return m.group(1), args.strip()
 
 
 def _exec_cmd_from_js(js):
-    """The command out of a `custom_tool_call` name=exec JS `input`, or ''. A
-    `tools.exec_command({cmd:…})` shell command yields its cmd; ANY OTHER
-    `tools.<fn>(…)` (web__run, …) yields the readable call expression, so a
-    subagent's tool activity renders (and folds) instead of vanishing."""
+    """The SHELL command out of a `custom_tool_call` name=exec JS `input`, or ''
+    when the call is not a shell one — `tools.exec_command({cmd:…})` yields its
+    cmd, anything else is a different tool and belongs to js_tool_call above (the
+    `tool` record), not to a command block."""
     m = _JS_CMD.search(js or "")
     if not m:
-        return _tool_call_from_js(js)       # a non-exec_command tool (web__run, …)
+        return ""
     raw = m.group(1)
     try:
         v = json.loads(raw)                 # "ls" or ["bash","-lc","…"] (double-quoted)
@@ -409,6 +439,28 @@ def _ev_agent_message(p):
     return {"kind": "message", "text": msg} if msg else None
 
 
+def _ev_web_search_end(p):
+    """codex's web SEARCH in the event_msg register — and on cli 0.146 the ONLY
+    place a search appears at all: the measured child rollout (019fb363-4028…)
+    carries five `web_search_end` events and ZERO `web_search_call`
+    response_items, so without this handler a codex web search rendered nothing.
+
+    Only a search that NAMES a query yields a record. The same event ALSO fires
+    for the web tool's non-search actions (`action.type == "other"` — an
+    open/fetch of a previously-found result), where `query` is "" and there is
+    nothing to show; four of the five measured events are exactly that. Same
+    guard as the response_item twin below, which is why both can return the one
+    `search` kind.
+
+    If some codex build emits BOTH registers for one search, two records would
+    reach the renderer for it; the RENDERER collapses an immediately-repeated
+    query (plugins/codex/stream.py `_ro_search`) rather than the parser dropping
+    one — a parser stays a faithful reader of what the file actually says."""
+    q = ((p.get("query") or "").strip()
+         or ((p.get("action") or {}).get("query") or "").strip())
+    return {"kind": "search", "query": q} if q else None
+
+
 def _rsp_web_search_call(p):
     q = (p.get("action") or {}).get("query") or ""
     return {"kind": "search", "query": q} if q else None
@@ -463,9 +515,19 @@ def _rsp_custom_tool_call(p):
     # Any other custom tool degrades to None (forward-compatible).
     name = p.get("name")
     if name == "exec":
-        cmd = _exec_cmd_from_js(p.get("input") or "")
-        return {"kind": "exec", "cmd": cmd,
-                "call_id": p.get("call_id") or ""} if cmd else None
+        js = p.get("input") or ""
+        cmd = _exec_cmd_from_js(js)
+        if cmd:
+            return {"kind": "exec", "cmd": cmd, "call_id": p.get("call_id") or ""}
+        # …not a shell command: any OTHER `tools.<fn>(…)` through the same exec
+        # tool is a TOOL CALL and gets its own record — structured (name + args)
+        # rather than laundered into the exec/command shape, which painted a
+        # subagent's web lookups as a `▶ cmd` block of raw JS.
+        fn, args = js_tool_call(js)
+        if fn:
+            return {"kind": "tool", "name": fn, "args": args,
+                    "call_id": p.get("call_id") or ""}
+        return None
     if name == "apply_patch":
         inp = p.get("input")
         return {"kind": "patch_call",
@@ -568,7 +630,15 @@ _EVENT = {"token_count": _ev_token_count, "patch_apply_end": _ev_patch_apply_end
           "item_completed": _ev_item_completed,
           "turn_aborted": _ev_turn_aborted, "user_message": _ev_user_message,
           "agent_reasoning": _ev_agent_reasoning,
-          "agent_message": _ev_agent_message}
+          "agent_message": _ev_agent_message,
+          "web_search_end": _ev_web_search_end}
+# Two event_msg types stay DELIBERATELY unparsed (they fall through to None like
+# any unknown type, and so have no KINDS entry): `sub_agent_activity` (a
+# `{kind:"interacted"}` ping about a child thread — the child has its own rollout
+# and its own stream, so this would only duplicate) and
+# `inter_agent_communication_metadata` (`{trigger_turn:true}` — pure plumbing).
+# Both were measured in the real child rollout; noted here so the next reader
+# knows they were considered rather than missed.
 _RESP = {"web_search_call": _rsp_web_search_call,
          "function_call_output": _rsp_function_call_output,
          "function_call": _rsp_function_call,
@@ -610,7 +680,7 @@ KINDS = frozenset({
     "turn_context", "usage", "patch", "compact", "task_started",
     "task_complete", "turn_aborted", "prompt", "reasoning", "message",
     "search", "exec", "exec_result", "stdin", "chat", "think", "patch_call",
-    "ask", "plan", "settings", "compact_boundary", "bad",
+    "ask", "plan", "settings", "compact_boundary", "tool", "bad",
 })
 
 
@@ -685,6 +755,69 @@ def is_child_bootstrap(rec, fork_epoch):
     return (fork_epoch is not None and bool(rec)
             and rec.get("kind") == "task_started"
             and (rec.get("at") or 0) >= fork_epoch)
+
+
+# How far into a subagent rollout's HEAD subagent_brief will read before giving
+# up. The replayed-parent prefix is short (13 records in the measured run), but a
+# fork of a long conversation replays more, and this runs in a tailer's startup
+# path — so both a line and a byte ceiling, generous enough that only a
+# pathological file hits one, and hitting one just means no brief.
+BRIEF_MAX_LINES = 500
+BRIEF_MAX_B = 4 << 20
+
+
+def subagent_brief(path):
+    """The BRIEF a codex subagent was spawned with — the text behind its launch
+    card's click — or "" when the file offers none.
+
+    WHERE THE BRIEF ACTUALLY IS, measured on the real cli 0.146 child rollout
+    (019fb363-4028…): NOT in the child's own NEW_TASK record. codex delivers the
+    task as a `response_item/agent_message` whose plaintext is only the envelope
+    (`Message Type: NEW_TASK / Task name: /root/bali_weather / Sender: /root /
+    Payload:`) — the payload itself is an `encrypted_content` part and cannot be
+    read here at all. What IS in plaintext is the fork PREFIX: a subagent rollout
+    opens by replaying the parent thread, and the last REAL HUMAN turn in that
+    replay is the task the parent was working on when it spawned the child ("run
+    a subagent to get a weather in bali"). That is the closest available
+    statement of why the child exists, so that is what this returns.
+
+    The team-scaffolding message ("You are an agent in a team of agents…", 2.1KB
+    of spawn_agent/concurrency-slot instructions) is deliberately NOT it, and
+    needs no preamble-stripping heuristic to exclude: it is role=developer —
+    codex's SYSTEM channel — and contains no task text whatsoever, so the
+    structural `is_synthetic` rule already drops it, along with
+    `<environment_context>` and every other `<tag>` injection. A `<task>…</task>`
+    INPUT wrapper (how codex delivers an UNencrypted task) is kept and reduced to
+    its inner text by the shared strip_input_wrapper, which `_rsp_message` has
+    already applied to these records.
+
+    Reads the `chat` register (response_item), the complete resume-restored one
+    (module header). Bounded by BRIEF_MAX_LINES/BRIEF_MAX_B and fail-open: "" for
+    a non-subagent rollout, an unreadable file, or a prefix whose bootstrap never
+    arrives. The caller CAPS the text (core/agentblocks takes it capped)."""
+    fork_epoch = subagent_fork_epoch(path)
+    if fork_epoch is None:
+        return ""
+    brief = ""
+    try:
+        read = 0
+        with open(path, encoding="utf-8") as fh:
+            for n, ln in enumerate(fh):
+                read += len(ln)
+                if n >= BRIEF_MAX_LINES or read > BRIEF_MAX_B:
+                    break
+                try:
+                    rec = parse(json.loads(ln))
+                except Exception:
+                    continue                    # a torn/foreign line is not a brief
+                if is_child_bootstrap(rec, fork_epoch):
+                    break                       # the prefix ends here
+                if (rec and rec["kind"] == "chat" and rec["role"] == "user"
+                        and not rec["synthetic"]):
+                    brief = rec["text"]         # the LAST one before the bootstrap
+    except Exception:
+        return ""
+    return (brief or "").strip()
 
 
 def subagent_body_offset(path):

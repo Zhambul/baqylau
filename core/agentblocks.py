@@ -64,10 +64,12 @@ COMPACT_TEXT = "⟳ compacted"
 FOOT_MARK = "■"
 
 
-def _fail_text(exit_code=None):
+def fail_text(exit_code=None):
     """`■ failed`, or `■ failed (exit 3)` when the host's result carries an exit
     status. Claude's subagent transcript carries none (its tool_result says only
-    is_error), so the bare mark is the default and the parenthesis is opt-in."""
+    is_error), so the bare mark is the default and the parenthesis is opt-in.
+    Public because a host that closes a block WITHOUT these builders still owes
+    the same words (plugins/codex/stream.py's tool close)."""
     return FAIL_MARK if exit_code is None else "%s (exit %s)" % (FAIL_MARK, exit_code)
 
 
@@ -228,7 +230,7 @@ class AgentStream:
         ops = [O.gut(R.emphasize(R.unescape(body)), self.rgb, g=g) if body
                else O.gut(SF.no_output_body(), self.rgb, g=g)]
         if failed:
-            ops.append(O.gut(R.fg(*O.RED) + _fail_text(exit_code) + R.RST,
+            ops.append(O.gut(R.fg(*O.RED) + fail_text(exit_code) + R.RST,
                              self.rgb, g=g))
         return ops
 

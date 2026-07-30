@@ -29,6 +29,7 @@
 import json, os, re, sys, time
 from datetime import datetime
 
+from core import agentblocks as AB
 from core import env as EV
 from core import ops as O
 from core import render as R
@@ -40,6 +41,10 @@ from plugins.codex import rollout as RO
 A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
 
 RST, FAIL = R.RST, R.fg(*O.RED)
+
+# The `pending_exec` entry KIND for a non-shell tool call's open block (an exec's
+# entry carries no kind — it is the historical shape).
+_PEND_TOOL = "tool"
 
 # --- run identity (argv contract) ---------------------------------------------------
 # All of this used to be parsed at module top level — importing the module read
@@ -93,6 +98,7 @@ CAP_REASONING = 16  # a companion "Reasoning summary" block
 CAP_THINK     = 12  # a rollout agent_reasoning event
 CAP_PROMPT    = 6   # the user prompt (rollout user_message)
 CAP_HEAD      = 4   # a bare head line (review-started, search query, unknown)
+CAP_TOOL      = 10  # a non-shell tool call's ARGUMENTS (`tools.web__run({…})`)
 
 # Approximate per-MTok (input, output) USD for codex models — the plugin's own
 # price table (core deliberately has none; each tool plugin knows its vendor's
@@ -153,7 +159,14 @@ def render_patch(rec):
         # the same anatomy the claude_code file formatters paint); a codex patch
         # has no extent/range/failure variants, just the ± counts.
         line = SF.file_line(verb, name, rgb, added=f["added"], removed=f["removed"])
-        O.emit(LOG, O.gut(line, SLOT_RGB))
+        # A STANDALONE run is the session's main agent, so its file op is the
+        # LEAD's shape: a bare `line`, exactly what claude_code's file_fmt emits.
+        # That is not cosmetic — a `gut` op names no ACTIVITY CLASS, so a
+        # standalone run's reads and edits were invisible to the web's item kind
+        # and to every view-mode summary (the same fix agent scope makes for a
+        # subagent's file ops, dashboard/opshtml/actclass.as_lead). A SIDECAR run
+        # keeps the guttered shape: it is a sub-stream hanging off its own bar.
+        O.emit(LOG, O.line(line) if STANDALONE else O.gut(line, SLOT_RGB))
         O.bump(LOG, tool=tool, file=f["path"], added=f["added"], removed=f["removed"])
 
 # A companion job-log line is prefixed with an ISO timestamp; the tail is the event
@@ -179,6 +192,16 @@ def gutter(text, g=None, bubbled=False, web=False):
 
 def dim_gut(text, g=None, bubbled=False, chrome=False):
     return SF.dim_gut(text, SLOT_RGB, g=g, bubbled=bubbled, chrome=chrome)
+
+
+def _tool_rgb():
+    """The colour a NON-shell tool block wears. A STANDALONE run is the session's
+    MAIN agent, so its tool call is painted in the SEMANTIC command colour and
+    reads as ordinary main-session activity downstream (the quiet ⏺ register, the
+    `tool` activity class) — the same rule its exec blocks follow (docs/codex.md
+    *Standalone command parity*). A SIDECAR run keeps the codex palette: there the
+    run is a sub-stream among the host's own work and the colour is what says so."""
+    return SF.CMD_OK if STANDALONE else SLOT_RGB
 
 
 # Rollout kinds the mirror renderer deliberately does NOT paint (yet). Every
@@ -220,10 +243,17 @@ class Renderer:
         self.ro_tag = ""      # "model · effort" chip last shown (re-shown on change)
         self.ro_usage = None  # CUMULATIVE total_token_usage from the last token_count
         self.ro_malformed = 0  # complete-but-unparseable rollout lines this run
-        # STANDALONE only: an exec command's open block, keyed by call_id, awaiting
-        # its exec_result to append the output + finish chip (the Claude live-block
-        # split — header out now, outcome later).
+        # An OPEN block awaiting its result, keyed by call_id (codex returns every
+        # custom-tool output through the same `custom_tool_call_output`, which
+        # carries no tool name — the call_id is the only pairing there is). Two
+        # kinds live here: a STANDALONE exec command's block (header out now,
+        # output + finish chip when the result lands — the Claude live-block
+        # split), and — in BOTH registers — a `· <name>` TOOL block, whose answer
+        # must land behind the same ⧉ click as its request.
         self.pending_exec = {}
+        # The query of the search painted last, and only while it is still the
+        # last thing painted — see _ro_search's two-register note.
+        self.ro_last_search = None
         # STANDALONE only: the cumulative token totals already folded into the
         # scoreboard. A standalone stream tails the WHOLE session (never ends on a
         # per-turn grace), so tokens fold INCREMENTALLY — each token_count's DELTA
@@ -443,11 +473,73 @@ class Renderer:
                gutter(cap(rec["text"], CAP_MSG), g=g, bubbled=True))
 
     def _ro_search(self, rec):
+        # ONE search can reach here TWICE: the parser answers `search` from BOTH
+        # of its registers (the event_msg one is all cli 0.146 writes, but the
+        # response_item twin still parses), so a build that emits both would
+        # paint the block twice. An IMMEDIATELY repeated query
+        # is therefore collapsed: `ro_last_search` is cleared by the next record
+        # of any other kind (feed_rollout), so a genuine second search for the
+        # same words later still gets its own block. The de-dup lives here and
+        # not in the parser, which must keep reporting what the file says.
+        if rec["query"] and rec["query"] == self.ro_last_search:
+            return
+        self.ro_last_search = rec["query"]
         g = O.new_group(LOG)
         O.emit(LOG, chip("⌕", "search", g=g, lk=O.COPY_ALL),
                gutter(cap(rec["query"], CAP_HEAD), g=g))
 
+    def _ro_tool(self, rec):
+        """A NON-shell tool call — `tools.web__run({…})` and friends, which codex
+        ≥ 0.146 runs through the very same `exec` custom tool as a shell command
+        (plugins/codex/rollout.js_tool_call). Painted as the QUIET `· <name>`
+        block a generic tool call gets everywhere else in this repo
+        (core/agentblocks.TOOL_GLYPH — the substream paints an agent's ToolSearch
+        exactly so), with the ARGUMENTS behind the click and the answer appended
+        when the result lands.
+
+        This is deliberately MORE than the Claude LEAD shows: Claude's hooks
+        paint no generic tool block at all (only Bash / files / monitors / skills
+        / mail), so a standalone codex host is the first main agent whose web and
+        MCP calls are visible. Hiding them for symmetry's sake would be the same
+        mistake by another route — the previous behaviour laundered these into a
+        `▶ cmd` block of raw JavaScript, which is how a subagent's entire real
+        work came to read as gibberish."""
+        g = O.new_group(LOG)
+        col = _tool_rgb()
+        name = rec["name"] or "tool"
+        # STANDALONE: a bare label in the semantic colour (the lead's own shape —
+        # no `who`, no palette). SIDECAR: the run's identity chip, as its other
+        # blocks wear.
+        head = (O.label(AB.TOOL_GLYPH + " " + name, col, g=g, lk=O.COPY_ALL)
+                if STANDALONE else chip(AB.TOOL_GLYPH, name, g=g, lk=O.COPY_ALL))
+        args = cap(rec["args"], CAP_TOOL)
+        O.emit(LOG, head, *([SF.gutter(args, col, g=g)] if args else []))
+        self.pending_exec[rec["call_id"]] = {"kind": _PEND_TOOL, "gid": g}
+
+    def _tool_close(self, rec, pend):
+        """…and that tool call's ANSWER, behind the same ⧉ group as its request.
+        A non-zero exit adds the shared red failure mark (core/agentblocks.
+        fail_text) under it — the same words a Claude agent's failed tool result
+        wears, so the two read alike."""
+        col = _tool_rgb()
+        out = (rec["output"] or "").rstrip("\n")
+        body = R.emphasize(R.unescape(cap(out, CAP_OUTPUT))) if out.strip() \
+            else SF.no_output_body()
+        ops = [O.gut(body, col, g=pend["gid"])]
+        if rec["exit"] and rec["exit"] != "0":
+            ops.append(O.gut(FAIL + AB.fail_text(rec["exit"]) + RST, col,
+                             g=pend["gid"]))
+        O.emit(LOG, *ops)
+
     def _ro_exec_result(self, rec):
+        # A tool block's output closes that block, in BOTH registers — its
+        # request is already on screen and its answer belongs behind the same
+        # click (checked FIRST: the output record itself says only "some custom
+        # tool with this call_id finished", so the open block is what names it).
+        pend = self.pending_exec.get(rec["call_id"])
+        if pend and pend.get("kind") == _PEND_TOOL:
+            self._tool_close(rec, self.pending_exec.pop(rec["call_id"]))
+            return
         if STANDALONE:
             self._exec_close(rec)
             return
@@ -502,7 +594,7 @@ class Renderer:
            "task_started": _ro_task_started, "task_complete": _ro_task_complete,
            "turn_aborted": _ro_turn_aborted, "prompt": _ro_prompt,
            "reasoning": _ro_reasoning, "message": _ro_message,
-           "search": _ro_search, "exec": _ro_exec,
+           "search": _ro_search, "exec": _ro_exec, "tool": _ro_tool,
            "exec_result": _ro_exec_result}
 
     def feed_rollout(self, rec):
@@ -517,6 +609,10 @@ class Renderer:
         h = self._RO.get(rec["kind"])
         if h:
             h(self, rec)
+        if rec["kind"] != "search":
+            # the two-register search de-dup only spans ADJACENT records
+            # (_ro_search) — anything else in between ends the run
+            self.ro_last_search = None
 
 
 def read_status():
