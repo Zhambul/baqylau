@@ -1169,8 +1169,12 @@ DASHBOARD_PLUGIN_REACHES = {
     # producer. A provider fan-out cannot serve it: this is a comparison inside a
     # per-op loop, and the ONLY alternative is respelling the glyphs here, which
     # is exactly the drift that had `◉ read · …` classified as a MONITOR.
-    "dashboard/opshtml/actclass.py": {"plugins.claude_code.tools",
-                                      "plugins.claude_code.msgs",
+    # (P6 removed this file's `tools` reach: the file-op VERB set and the act
+    # each names come from core/streamfmt.FILE_ACTS now — beside the shape that
+    # paints them, and the same table for every host. The two glyph reaches stay:
+    # mail's ●/◉ and a task row's ✚/✓ are their producers' vocabulary and the
+    # presenter is their one reader.)
+    "dashboard/opshtml/actclass.py": {"plugins.claude_code.msgs",
                                       "plugins.claude_code.task_fmt"},
     "dashboard/opshtml/tools.py": {"plugins.claude_code.tools"},
     # op_html strips Claude Code's injected <system-reminder> blocks out of a

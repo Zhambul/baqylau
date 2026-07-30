@@ -907,11 +907,12 @@ SAME components so a future change lands in one place:
   first live standalone session showed NO command block at all because the
   custom-tool channel was unparsed, so the block gets no data no matter how it is
   painted.
-- **The codex run FOOTER is dropped too.** `actclass.codex_chrome` now also drops
-  the `■ codex <label> ended · …` footer in a standalone view (`op_items`
-  `codex_lead`), alongside the banner + `⚙` tag — a Claude session has no
-  per-session footer, and its token rollup is redundant with the scoreboard, so
-  it was exactly the codex-specific chrome to remove ("no codex specific ui").
+- **The codex run FOOTER is dropped too** — alongside the banner + `⚙` tag. A
+  Claude session has no per-session footer, and its token rollup is redundant
+  with the scoreboard, so it was exactly the codex-specific chrome to remove
+  ("no codex specific ui"). A live run stamps all three `chrome` and every web
+  view drops them; `actclass.codex_chrome` matches the same three shapes for ops
+  written before that flag.
 - **Gated on STANDALONE.** The watcher passes `CLAUDE_CODEX_STANDALONE=1` in the
   stream's env for a standalone host (where codex IS the main agent). A codex run
   INSIDE a Claude session is being folded into the SUBAGENT abstraction — no

@@ -6095,17 +6095,31 @@ spellings of one closed list, and the failure mode of missing one when a host is
 added is SILENT: an unrecognised `src` prefix matches no op, so that agent's
 mirror renders BLANK.
 
-**A standalone host's own prose.** A host whose LEAD runs through the same
-child-agent presenter its sidecars do (codex: one streamer, standalone or nested)
-paints its own turns as `⇢/✎/⋯/⇠` prose blocks — and the web ALSO re-bubbles them
-from `plugins.conversation`. The session view must drop one of the two, or every
-message appears twice AND folds into "ran N codex runs". Which hosts need the
-drop is a TRAIT the host declares (`HostControl.lead_prose`, base False), read
-through `read/mirror.host_lead(sid, agent)` and threaded into `op_items` as
-`host_lead=`. It was `is_codex_lead`, body `plugins.owns_by(transcript) ==
-"codex"`, and the parameter was `codex_lead=` through seven call sites — a
-literal host name deciding how a whole session renders, whose wrong answer raises
-nothing. An agent scope is always False there: a sidecar run IS a sub-run.
+**A standalone host's own prose — and why no host declares anything.** A host
+whose LEAD runs through the same child-agent presenter its sidecars do (codex:
+one streamer, standalone or nested) can paint its own turns as `⇢/✎/⋯/⇠` prose
+blocks — and the web ALSO re-bubbles them from `plugins.conversation`. The
+session view must drop one of the two, or every message appears twice AND folds
+into "ran N codex runs".
+
+The op says which (`opshtml.rebubbled`): `bubbled` is honoured in EVERY view,
+with one structural exemption — a `web`-stamped op in the SESSION view is a
+CHILD's endpoint card, and the conversation rendered there is the LEAD's, which
+does not hold the child's brief. (Its bubble lives in that child's scope, where
+the same rule drops the op. Without the exemption the rule deletes every subagent
+launch/result card from the lead's mirror — the two blocks the `web` stamp exists
+to surface.)
+
+It took a per-host answer to get here: `is_codex_lead` (body
+`plugins.owns_by(transcript) == "codex"`), then `HostControl.lead_prose` read
+through `read/mirror.host_lead()` and threaded as `host_lead=` through seven call
+sites. The trait was already a FACT rather than a name — but it is per-HOST and
+the question is per-OP: only some of a host's ops are re-bubbled, and the
+producer of each one knows which. A flag on the op cannot be out of date about
+itself, and both wrong answers here are silent (double every message, or fold a
+session into one line). All three are gone; `actclass.codex_prose` survives only
+as the parked-history sniffer, palette-gated so it matches nothing but codex's
+own unstamped ops.
 
 **What re-scopes, and what deliberately doesn't.** The **mirror**, **monitors**
 and **jobs** follow the agent — *including their tab BADGES*, which is the same
@@ -8639,7 +8653,9 @@ byte-identical rendered mirror (23 items, zero duplicated prose) in both
 directions, at scope `None` and at agent scope. The survey's worry — that
 ownership-routing `conversation` would double a standalone codex lead's prose,
 since its ops already carry it — does not materialise, because the lead's prose
-ops are already dropped and re-bubbled (`bubbled` / `host_lead`). The survey's
+ops are already dropped and re-bubbled (`bubbled`, plus the parked-history
+sniffer for the ops that predate it; re-measured after P6 removed the per-host
+`host_lead` flag, same 23 items and the same zero). The survey's
 *other* claim, that claude_code's `[]` shadows codex today, is also wrong: it
 returns `None`, so the fan-out already fell through. That was luck, not a
 contract, and the routing makes it one.

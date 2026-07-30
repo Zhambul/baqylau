@@ -155,10 +155,11 @@ _SKILL_RGB = (tuple(O.VIOLET), tuple(O.RED))
 
 # The file-op one-liner's shape, `verb(name)` — built FROM its owner's table so
 # the three verbs and the class each names live in exactly one place
-# (core/streamfmt owns file_line's shape AND its FILE_ACTS map; the hosts map
-# their own tool names onto those verbs). This was a local dict plus a regex over
-# plugins.claude_code.tools.FILE_LABEL — the presenter re-deciding, for Claude's
-# tool names only, a question the shape's owner can answer for every host.
+# (core/streamfmt owns file_line's shape AND its FILE_ACTS map; each host maps
+# its own tool names onto those verbs). This was a local dict plus a regex built
+# from the claude_code plugin's own tool-name table — the presenter re-deciding,
+# for ONE host's tool names, a question the shape's owner answers for every host.
+# That reach is gone from this module with it.
 _VERB_ACT = SF.FILE_ACTS
 _FILE_RE = re.compile(r"^(%s)\(" % "|".join(sorted(_VERB_ACT)))
 # The `+A -R` line counts a mutation one-liner carries, in the same shape
