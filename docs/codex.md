@@ -224,14 +224,27 @@ its own mirror when run standalone (wiring in [wiring.md](wiring.md)).
     - **`⚙ model · effort`** (dim, once per change) from `turn_context`,
       **`⌕ search`** + query from `web_search_call`, and **`⟳ compacted`**
       from `context_compacted` — matching the substream's compact treatment.
-    **Why no per-subagent codex streams** (the roadmap item): a survey of every
-    rollout on the dev machine (33 files, 2026-07-07) found ZERO
-    subagent/collab events in codex's vocabulary — the full event set is
-    task/turn lifecycle, messages, reasoning, exec, apply_patch, web_search,
-    token_count, compaction. The companion log's `Subagent …` head (rendered as
-    one `✎ sub` chip) likewise never occurs in any job log on disk. There is
-    nothing to attach a per-subagent stream to; revisit when codex actually
-    emits per-agent records.
+    **Per-subagent codex streams** (was the roadmap item; landed once codex
+    started emitting per-agent records): the 2026-07-07 survey found ZERO
+    subagent/collab events, but codex-cli 0.146+ now emits them —
+    `collaboration.spawn_agent`/`wait_agent` tool calls, `SubagentStart`/`Stop`
+    hooks carrying an `agent_id`, and a **child rollout** whose first
+    `session_meta` links back via `parent_thread_id` (`thread_source ==
+    "subagent"`, plus a `source.subagent.thread_spawn{agent_nickname, agent_path}`
+    block). A STANDALONE codex host's watcher discovers those children through
+    that parent link (`watch.rollout_subagent`; `standalone_scan` streams every
+    rollout whose parent is our SID, gated on creation time so a resume doesn't
+    replay a prior run's subagents) and streams each **stamped**
+    (`spawn(subagent=True)` → `$CLAUDE_OPS_SRC = codex:<nickname>`, NOT the
+    standalone main-agent flag). Everything downstream is the existing subagent
+    machinery: the stamped ops drop from the main-agent-only web mirror,
+    `sessionapi.codex_runs` mints the clickable agent card (its transcript ≠ the
+    session's own, so the self-run empty-scope drop keeps it), and
+    `read/mirror.agent_scope` matches `codex:<nickname>` to show the run's full
+    activity + re-bubbled conversation — visually a Claude subagent, no
+    codex-specific UI (*Sidecar → subagent parity* below). The companion log's
+    `Subagent …` head (one `✎ sub` chip) still never occurs in any job log on
+    disk.
     It never writes after the state DB is parked: the
     header emit re-checks the DB file right before painting (SessionEnd can park it
     during the tailer's wait-for-source window, and `core.state`'s connect would
@@ -767,7 +780,10 @@ The jsdom `newsession` verdict asserts the placeholder says "Codex" (never
 ### Sidecar → subagent parity
 
 A codex run launched INSIDE a Claude session must read like a subagent in agent
-scope: its intermediate messages/reasoning/commands all visible. Three parts:
+scope: its intermediate messages/reasoning/commands all visible. The same is now
+true of a codex subagent spawned by a STANDALONE codex host (cli 0.146+, its own
+child rollout — see *Per-subagent codex streams* above for the discovery, which
+streams it stamped `codex:<nickname>` through exactly this machinery). Three parts:
 1. **Grammar** — the rollout `chat`/`think`/exec/patch records already parse.
 2. **`conversation()`** — the run's PROSE becomes bubbles from its rollout,
    exactly as a Claude subagent's does.

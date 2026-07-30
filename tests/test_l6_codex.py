@@ -80,7 +80,8 @@ def codex(test_env, session, seed, reaper):
                 for b in body:
                     f.write(b + "\n")
 
-        def add_rollout(self, originator="codex_exec", cwd=None, events=(), u=None):
+        def add_rollout(self, originator="codex_exec", cwd=None, events=(), u=None,
+                        meta=None):
             u = u or str(uuid.uuid4())
             now = datetime.now()
             d = os.path.join(test_env["HOME"], ".codex", "sessions",
@@ -89,9 +90,12 @@ def codex(test_env, session, seed, reaper):
             os.makedirs(d, exist_ok=True)
             path = os.path.join(
                 d, "rollout-%s-%s.jsonl" % (now.strftime("%Y-%m-%dT%H-%M-%S"), u))
+            payload = {"cwd": cwd or self.s.cwd, "originator": originator}
+            if meta:                              # extra session_meta fields (subagent link)
+                payload.update(meta)
             with open(path, "w", encoding="utf-8") as f:
-                f.write(json.dumps({"type": "session_meta", "payload": {
-                    "cwd": cwd or self.s.cwd, "originator": originator}}) + "\n")
+                f.write(json.dumps({"type": "session_meta",
+                                    "payload": payload}) + "\n")
                 for e in events:
                     f.write(json.dumps(e) + "\n")
             return path, u
@@ -414,6 +418,58 @@ def test_standalone_watcher_ignores_foreign_rollouts(test_env, codex, reaper):
     wait_until(lambda: "echo MINE" in codex.s.ops_text(), desc="own rollout streamed")
     assert "echo NOTMINE" not in codex.s.ops_text(), \
         "a foreign codex run leaked into a standalone session's mirror"
+    host.terminate()
+
+
+def test_standalone_watcher_streams_a_subagent_stamped(test_env, codex, reaper):
+    """A codex SUBAGENT (collaboration.spawn_agent, cli 0.146+) writes its OWN
+    rollout whose session_meta.parent_thread_id links back to the standalone
+    session. It must read like a Claude subagent: the standalone watcher discovers
+    it via that parent link and streams it STAMPED (`codex:<nickname>`) so the
+    main-agent mirror drops its ops while its agent-scope view shows them. A child
+    rollout whose parent is a DIFFERENT session is never adopted. Regression: the
+    standalone scan matched only uuid == SID, so a subagent's whole run was
+    invisible in the dashboard (docs/codex.md *Sidecar → subagent parity*)."""
+    host = subprocess.Popen(["sleep", "60"])
+    reaper.append(host)
+    codex.start_watcher(host_pid=host.pid)
+    # our own main run — matched by uuid == SID, unstamped (the main agent)
+    codex.add_rollout(originator="codex-tui", u=codex.s.sid, events=[
+        {"type": "response_item", "payload": {
+            "type": "custom_tool_call", "name": "exec", "call_id": "m1",
+            "input": 'await tools.exec_command({cmd:"echo MAIN"});'}}])
+    # OUR subagent — its own rollout, parent_thread_id == our SID, nickname Pauli
+    codex.add_rollout(originator="codex-tui", events=[
+        {"type": "response_item", "payload": {
+            "type": "custom_tool_call", "name": "exec", "call_id": "s1",
+            "input": 'await tools.exec_command({cmd:"echo SUBWORK"});'}}],
+        meta={"thread_source": "subagent", "agent_nickname": "Pauli",
+              "parent_thread_id": codex.s.sid,
+              "source": {"subagent": {"thread_spawn": {
+                  "parent_thread_id": codex.s.sid, "agent_nickname": "Pauli"}}}})
+    # a subagent of a DIFFERENT session — must NOT be adopted
+    codex.add_rollout(originator="codex-tui", events=[
+        {"type": "response_item", "payload": {
+            "type": "custom_tool_call", "name": "exec", "call_id": "x1",
+            "input": 'await tools.exec_command({cmd:"echo FOREIGN"});'}}],
+        meta={"thread_source": "subagent", "agent_nickname": "Other",
+              "source": {"subagent": {"thread_spawn": {
+                  "parent_thread_id": "some-other-session"}}}})
+    wait_until(lambda: "echo MAIN" in codex.s.ops_text(),
+               desc="standalone main run streamed")
+    wait_until(lambda: "echo SUBWORK" in codex.s.ops_text(),
+               desc="the codex subagent run streamed")
+    assert "echo FOREIGN" not in codex.s.ops_text(), \
+        "a subagent of another session leaked into this session's mirror"
+    # the main run's ops are UNSTAMPED; the subagent's carry the codex:<nickname>
+    # producer stamp so the web mirror drops them into that agent's scope
+    ops = codex.s.ops()
+    main = [op for op in ops if "echo MAIN" in str(op)]
+    sub = [op for op in ops if "echo SUBWORK" in str(op)]
+    assert main and all(not op.get("src") for op in main), \
+        "the standalone main run's ops must stay unstamped"
+    assert sub and all(op.get("src") == "codex:Pauli" for op in sub), \
+        "the subagent run's ops must be stamped codex:Pauli"
     host.terminate()
 
 

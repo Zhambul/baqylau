@@ -243,36 +243,76 @@ def rollout_meta(path):
     return "", ""
 
 
+def rollout_subagent(path):
+    """If this rollout is a codex SUBAGENT run (spawned by `collaboration.spawn_agent`,
+    cli 0.146+), return (parent_thread_id, label); else (None, None). A subagent
+    writes its OWN rollout whose first `session_meta` links back to the spawning
+    session — the tell is `thread_source == "subagent"` (or a
+    `source.subagent.thread_spawn` block), and the parent is that block's
+    `parent_thread_id`. The label is the agent's display nickname, else its
+    `agent_path` basename, else "agent". Returns (None, None) for a plain run AND
+    for a rollout whose `session_meta` isn't written yet, so the caller retries a
+    mid-write file rather than skipping it forever."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for _ in range(5):
+                line = fh.readline()
+                if not line:
+                    break
+                try:
+                    o = json.loads(line)
+                except Exception:
+                    continue
+                if o.get("type") != "session_meta":
+                    continue
+                p = o.get("payload") or {}
+                spawn = (((p.get("source") or {}).get("subagent") or {})
+                         .get("thread_spawn") or {})
+                if p.get("thread_source") != "subagent" and not spawn:
+                    return None, None          # a plain (non-subagent) rollout
+                parent = (spawn.get("parent_thread_id")
+                          or p.get("parent_thread_id") or "").strip()
+                label = (spawn.get("agent_nickname") or p.get("agent_nickname")
+                         or "").strip()
+                if not label:
+                    ap = (spawn.get("agent_path") or p.get("agent_path") or "").strip()
+                    label = os.path.basename(ap.rstrip("/")) if ap else ""
+                return (parent or None), (label or "agent")
+    except Exception:
+        pass
+    return None, None
+
+
 _n = 0
 
 
-def spawn(srcfile, jsonfile, label):
+def spawn(srcfile, jsonfile, label, subagent=False):
     global _n
     rgb = ",".join(str(x) for x in CODEX_PALETTE[_n % len(CODEX_PALETTE)])
     _n += 1
     # The detach mechanics + spawn/error audit live in core.spawn (the one
     # owner); audit_argv drops the rgb/jsonfile noise the spawns row never
-    # recorded here. A SECONDARY-source run gets the producer-source stamp in
-    # its env ($CLAUDE_OPS_SRC -> core.ops stamps every op) — it is not the
-    # host session's main agent, so the web dashboard's main-agent-only mirror
-    # drops its ops. A STANDALONE codex host's own rollout stays unstamped:
-    # there codex IS the main agent and stamping would blank its web mirror.
-    env = None
-    if not STANDALONE:
-        env = dict(os.environ)
-        env["CLAUDE_OPS_SRC"] = "codex:" + label
-    else:
-        # A STANDALONE codex host IS the session's main agent, so its exec blocks
-        # are painted in Claude's own semantic command colours + block shape
-        # (uniform, no codex palette — docs/codex.md *Standalone command parity*).
-        # The flag rides the env so the stream paints the main-agent register. The
-        # in-a-Claude-session case is being folded into the SUBAGENT abstraction
-        # (no codex-specific UI — docs/codex.md *Sidecar → subagent parity*); until
-        # that lands it keeps the per-run palette chip.
-        env = dict(os.environ)
+    # recorded here. WHO the run is decides the register:
+    #   * A STANDALONE codex host's OWN rollout stays unstamped: there codex IS
+    #     the main agent, so its exec blocks are painted in Claude's own semantic
+    #     command colours + block shape (uniform, no codex palette — docs/codex.md
+    #     *Standalone command parity*). The CLAUDE_CODEX_STANDALONE flag rides the
+    #     env so the stream paints the main-agent register.
+    #   * Everything else — a SECONDARY-source run inside a Claude host, OR a codex
+    #     SUBAGENT spawned by a standalone host (`subagent=True`) — gets the
+    #     producer-source stamp ($CLAUDE_OPS_SRC -> core.ops stamps every op). It is
+    #     NOT the host session's main agent, so the web dashboard's main-agent-only
+    #     mirror drops its ops and its agent-scope view (sessionapi.codex_runs mints
+    #     a card; read/mirror.agent_scope matches `codex:<label>`) shows them — the
+    #     codex twin of a Claude subagent (docs/codex.md *Sidecar → subagent parity*).
+    env = dict(os.environ)
+    if STANDALONE and not subagent:
         env["CLAUDE_CODEX_STANDALONE"] = "1"
+    else:
+        env["CLAUDE_OPS_SRC"] = "codex:" + label
+    purpose = ("stream:codex-subagent " if subagent else "stream:codex ") + label
     spawn_detached(STREAM, [LOG, rgb, srcfile, jsonfile, label], LOG, env=env,
-                   purpose=f"stream:codex {label}", audit_argv=[srcfile, label])
+                   purpose=purpose, audit_argv=[srcfile, label])
 
 
 def label_for(data):
@@ -296,24 +336,39 @@ def acquire_lock():
 
 # --- standalone mode: this session's own codex run + its teardown ------------
 
-def standalone_scan(seen):
-    """STANDALONE poll: stream exactly this codex session's own rollout. We know
-    our session_id, and the rollout filename's uuid IS that session_id, so we
-    target `rollout-*-<SID>.jsonl` precisely — no cwd heuristics, no claim races,
-    and (unlike the secondary-source path) we adopt it even though its originator
-    is `codex-tui`, because here that human-driven TUI IS our session."""
-    if SID in seen:
-        return
+def standalone_scan(seen, start):
+    """STANDALONE poll: stream this codex session's own rollout AND every SUBAGENT
+    it spawns. The OWN run is targeted precisely by the rollout filename uuid ==
+    our session_id (no cwd heuristics, no claim races, and — unlike the
+    secondary-source path — adopted even though its originator is `codex-tui`,
+    because here that human-driven TUI IS our session). A SUBAGENT
+    (`collaboration.spawn_agent`, cli 0.146+) writes its OWN rollout whose
+    `session_meta.parent_thread_id` is our SID; it must read like a Claude
+    subagent, so it is streamed STAMPED (`spawn(subagent=True)` -> the ops drop
+    from the main mirror and surface in its agent scope). Subagents are gated on
+    creation time so a RESUME doesn't replay a prior run's subagents; the own run
+    has no such gate (it IS the session)."""
     for rf in rollout_files():
         m = RO_UUID.search(os.path.basename(rf))
-        if not m or m.group(1) != SID:
+        if not m:
             continue
-        cw, _origin = rollout_meta(rf)
-        if not cw:
-            return                    # session_meta not written yet — retry next poll
-        seen.add(SID)
-        spawn(rf, "-", "cli")         # our standalone codex session
-        return
+        u = m.group(1)
+        if u in seen:
+            continue
+        if u == SID:
+            cw, _origin = rollout_meta(rf)
+            if not cw:
+                continue              # session_meta not written yet — retry next poll
+            seen.add(SID)
+            spawn(rf, "-", "cli")     # our standalone codex session (main agent)
+            continue
+        parent, label = rollout_subagent(rf)
+        if parent != SID:
+            continue                  # not our subagent (or session_meta not yet written)
+        if (rollout_created(rf) or 0) < start - SKEW:
+            seen.add(u); continue     # a PRIOR run's subagent (resume) — don't replay
+        seen.add(u)
+        spawn(rf, "-", label, subagent=True)
 
 
 def teardown():
@@ -379,7 +434,7 @@ def main():
                 if not S.pid_alive(HOST_PID):
                     teardown()
                     break             # DB parked -> loop condition now false anyway
-                standalone_scan(seen)
+                standalone_scan(seen, start)
                 time.sleep(POLL)
                 continue
             # --- source A: companion jobs (labelled, Claude-session matched) ---------
