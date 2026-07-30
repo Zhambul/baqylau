@@ -144,6 +144,12 @@ _DIFF_RE = re.compile(r"\)\s+\+(\d+)(?:\s+-(\d+))?|\)\s+-(\d+)")
 _WARN_GLYPH = EW.GLYPH
 
 
+# The producer-source REGISTER -> the agent class it names (core/ops.py owns the
+# `src` vocabulary; this is its one reader on the classify path). A prefix absent
+# here — or an op with no stamp — falls through to the palette test in _classify.
+_SRC_ACT = {"codex": ACT_CODEX, "team": ACT_TEAM, "sub": ACT_AGENT}
+
+
 def _is_team(op):
     """Is this op an agent-TEAM member's, rather than a subagent's? The producer
     already says so in the `src` stamp it wears for the web mirror's main-agent-only
@@ -509,15 +515,20 @@ def as_lead(op):
     text = _plain(out)
     stripped = lead_head(text)
     c = tuple(out.get("c") or ())
-    # a command-family header in an AGENT palette: the lead paints that block in a
+    # a command-family header of a CHILD AGENT: the lead paints that block in a
     # semantic colour, and the colour is what cmd_note/classify gate on. `·` — a
     # GENERIC tool block — is in the set although the lead has no equivalent (its
     # hooks paint no tool but Bash/files/monitors/skills/mail): it is the same
     # thing, one call the agent made, and without the recolour it was the last
     # block in scope still wearing the terminal's coloured pill.
-    recolour = c in _AGENT_RGB and stripped[:1] in (
-        _GLYPH_BASH, _GLYPH_BG, _GLYPH_MONITOR, _GLYPH_WS, _GLYPH_FINISH,
-        _GLYPH_TOOL)
+    # Whose block it is comes from the producer's `src` REGISTER first, with the
+    # agent palettes as the fallback for ops written before the stamp — the same
+    # order _classify reads them in, so a block cannot be recoloured as an agent's
+    # and then classified as something else.
+    recolour = (c in _AGENT_RGB
+                or str(out.get("src") or "").startswith(("sub:", "team:"))) \
+        and stripped[:1] in (_GLYPH_BASH, _GLYPH_BG, _GLYPH_MONITOR, _GLYPH_WS,
+                             _GLYPH_FINISH, _GLYPH_TOOL)
     if stripped == text and not recolour and out.get("outer") is None:
         return out                      # already in the lead's shape
     out = dict(out)
@@ -758,20 +769,27 @@ def _classify(op):
             return ACT_WARN, bad
         m = _FILE_RE.match(text)
         return (_VERB_ACT.get(m.group(1)) if m else None), bad
-    # Which of the two agent classes this op would be, if it turns out to be agent
-    # activity at all: a TEAMMATE's blocks count and collapse as teammates ("ran 2
-    # teammates, ran 4 agents"), because they are a different kind of thing and the
-    # notes now say so. Read off `src`, never the name or the palette.
-    # A CODEX run is a THIRD kind (docs/codex.md): its chips wear the codex palette
-    # (disjoint from every other), so a codex block — a standalone host's own
-    # (unstamped) or a sidecar's (`codex:<label>`) — classifies ACT_CODEX and the
-    # default summary NAMES it ("ran N codex runs") instead of "ran N agents".
-    if tuple(op.get("c") or ()) in _CODEX_RGB:
-        agent_act = ACT_CODEX
-    elif _is_team(op):
-        agent_act = ACT_TEAM
-    else:
-        agent_act = ACT_AGENT
+    # Which of the three agent classes this op would be, if it turns out to be
+    # agent activity at all — they count and collapse separately ("ran 2
+    # teammates, ran 4 agents, ran 1 codex run"), because they are different kinds
+    # of thing and the notes say so.
+    #
+    # The PRODUCER's stamp decides, first: `src` is the register (core/ops.py), and
+    # since a codex-native subagent stamps `sub:` it classifies as the AGENT it is
+    # — while `codex:` means exactly what it now says, a sidecar codex run inside a
+    # Claude host. Keying on the stamp rather than the palette is what let one
+    # child-agent vocabulary cover both tools: the alternative was a palette test
+    # per host, which is how a codex subagent's whole run folded into "ran 1 codex
+    # run" no matter what it did.
+    #
+    # The PALETTE is the fallback, for ops with no stamp at all: a standalone codex
+    # host's own run (unstamped by design — there codex IS the main agent) and
+    # every parked op written before the stamp existed, which no restart can
+    # re-stamp.
+    agent_act = _SRC_ACT.get(str(op.get("src") or "").split(":", 1)[0])
+    if agent_act is None:
+        agent_act = (ACT_CODEX if tuple(op.get("c") or ()) in _CODEX_RGB
+                     else ACT_AGENT)
     if text.startswith(_WARN_GLYPH):
         # the audit warning light's own line, `label` or `line` alike (errwatch
         # emits a label). Before this it fell through to the agent fallback below

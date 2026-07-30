@@ -346,6 +346,28 @@ def op_items(ops, key="", ids=None, carry=None, scope=None, codex_lead=False):
         t = op.get("t")
         if t in ("rule", "blank") or not in_scope(op, scope):
             continue
+        # THE HOST-SCAFFOLDING DROP — first in EVERY view, because it is the one
+        # question that has the same answer in all of them: an op the producer
+        # marked `chrome` is the host's frame around a child's stream (the run
+        # banner, the `⚙ model · effort` line, the run footer, the lead's own
+        # `▶ <type> · <desc>` launch header — core/ops.py), and no web view wants
+        # it. The terminal does: a shared pane needs the brackets that say where
+        # one stream starts and another ends. Here the child has a CARD instead,
+        # which already states its model, its duration and its launch.
+        #
+        # Its body ops go with it through the same copy-group drop set the scope
+        # drops use, so a banner's rules and a footer's tail cannot outlive their
+        # header. The per-view SNIFFERS below (codex_chrome, agent_header) are now
+        # the LEGACY FALLBACK for ops ALREADY ON DISK, which carry no flag and
+        # which no restart can re-stamp — exactly the role prose_block plays
+        # beside `bubbled`.
+        g = op.get("g") or None
+        if op.get("chrome"):
+            if g:
+                cs.setdefault("drop", set()).add(g)
+            continue
+        if g and g in cs.get("drop", ()):
+            continue                    # this block's body, following its header
         if scope is not None:
             # AGENT SCOPE, and the ONLY place it differs from the session view.
             # Two steps, both about making an agent's ops the same SHAPE the

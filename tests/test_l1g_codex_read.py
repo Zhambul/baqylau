@@ -812,6 +812,61 @@ def test_codex_blocks_classify_as_codex_act():
     assert AC.ACT_CODEX in AC.ACTS
 
 
+def test_the_agent_class_is_decided_by_the_src_register_first():
+    """WHICH of the three agent classes a block gets is the PRODUCER's `src`
+    register, with the palette only as the fallback for ops that carry no stamp.
+
+    That order is what makes one child-agent vocabulary cover two tools: a
+    codex-NATIVE subagent stamps `sub:` and classifies as the AGENT it is, while
+    `codex:` keeps meaning what it now says — a sidecar codex run inside a Claude
+    host. Keyed off the palette instead, a codex child folded into 'ran 1 codex
+    run' no matter what it did.
+
+    All six cells pinned: three registers × stamped/unstamped."""
+    from core import ops as O
+    from core import slots as SL
+    from dashboard.opshtml import actclass as AC
+    codex_rgb, sub_rgb = SL.CODEX_PALETTE[0], SL.SUB_PALETTE[0]
+
+    def act(rgb, src=None):
+        op = O.label("⇠ result", rgb)
+        if src:
+            op["src"] = src
+        return AC.classify(op)[0]
+
+    # STAMPED — the register decides, whatever palette the op wears
+    assert act(sub_rgb, "sub:a1") == AC.ACT_AGENT
+    assert act(sub_rgb, "team:a1") == AC.ACT_TEAM
+    assert act(codex_rgb, "codex:cli") == AC.ACT_CODEX
+    # …and a codex-native subagent (SUB palette + `sub:`) is an AGENT, not a codex
+    # run — the whole point of the register
+    assert act(sub_rgb, "sub:rollout-2026-07-30T22-17-34-019fb363") == AC.ACT_AGENT
+    # …while a `codex:`-stamped op stays a codex run even in another palette
+    assert act(sub_rgb, "codex:cli") == AC.ACT_CODEX
+    # UNSTAMPED (parked history, and a standalone host's own ops) — palette decides
+    assert act(codex_rgb) == AC.ACT_CODEX
+    assert act(sub_rgb) == AC.ACT_AGENT
+
+
+def test_as_lead_recolours_a_child_block_by_register_or_palette():
+    """…and the scope normalisation follows the same order: a command-family
+    header of a `sub:`/`team:`-stamped child is recoloured to the lead's SLATE (so
+    cmd_note/classify, both colour-gated, recognise it), with the agent palettes as
+    the parked-history fallback."""
+    from core import ops as O
+    from core import slots as SL
+    from dashboard.opshtml import actclass as AC
+    stamped = O.label("▶ foreground", SL.CODEX_PALETTE[0], g="b1")
+    stamped["src"] = "sub:a1"                       # a child, wrong palette
+    assert tuple(AC.as_lead(stamped)["c"]) == tuple(O.SLATE)
+    parked = O.label("▶ foreground", SL.SUB_PALETTE[0], g="b1")   # no stamp
+    assert tuple(AC.as_lead(parked)["c"]) == tuple(O.SLATE)
+    # a codex SIDECAR is not a child agent — its block keeps the codex palette
+    side = O.label("▶ cmd", SL.CODEX_PALETTE[0], g="b1")
+    side["src"] = "codex:cli"
+    assert tuple(AC.as_lead(side)["c"]) == tuple(SL.CODEX_PALETTE[0])
+
+
 def test_codex_prose_drops_in_scope_via_the_bubbled_flag():
     """Sidecar parity, UNIFIED: a codex sidecar run's prose ops carry the
     producer-set `bubbled` flag (a ROLLOUT-backed run re-bubbles them via

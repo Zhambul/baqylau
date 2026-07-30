@@ -168,6 +168,51 @@ def test_op_items_scope_drops_a_bubbled_block_across_tools():
     assert [(it["g"], it["t"]) for it in items] == [("b1", "label"), ("b1", "gut")]
 
 
+def test_ops_label_gut_chrome_field():
+    # core/ops.py sets the host-scaffolding flag only when asked; default off.
+    assert O.label("h", (1, 2, 3), chrome=True).get("chrome") == 1
+    assert O.gut("b", (1, 2, 3), chrome=True).get("chrome") == 1
+    assert "chrome" not in O.label("h", (1, 2, 3))
+    assert "chrome" not in O.gut("b", (1, 2, 3))
+
+
+def test_op_items_drops_chrome_in_every_view():
+    """THE host-scaffolding drop: an op the PRODUCER marked `chrome` is the host's
+    frame around a child's stream (a run banner, a `⚙ model` line, a run footer,
+    the lead's own subagent launch header), and NO web view shows it — the child
+    has a card that says all of it. Structural, so it holds in all three arms; the
+    text sniffers stay only for ops already on disk (below).
+
+    Its BODY goes with it through the copy group, exactly as the scope drops do."""
+    from core import slots as SL
+    rgb = list(SL.CODEX_PALETTE[0])
+    chrome = [
+        {"t": "label", "s": "codex ▶ cli", "c": rgb, "g": "c0", "chrome": 1},
+        {"t": "gut", "s": "the banner's body", "c": rgb, "g": "c0"},
+        {"t": "gut", "s": "⚙ gpt-5.6-luna · low", "c": rgb, "chrome": 1},
+        {"t": "label", "s": "▶ cmd", "c": rgb, "g": "b1"},   # real activity
+        {"t": "code", "s": "echo hi", "g": "b1"},
+    ]
+
+    def _texts(items):
+        return " ".join(it.get("html", "") for it in items)
+
+    # 1. the SESSION view (unstamped ops — the lead's own launch header lives here)
+    lead = opshtml.op_items(list(chrome), "k")
+    assert "codex ▶" not in _texts(lead) and "the banner's body" not in _texts(lead)
+    assert "gpt-5.6-luna" not in _texts(lead)
+    assert "echo" in _texts(lead)                     # activity kept
+    # 2. AGENT SCOPE
+    scoped = [dict(op, src="codex:cli") for op in chrome]
+    sc = opshtml.op_items(scoped, "k", scope={"codex:cli"})
+    assert "codex ▶" not in _texts(sc) and "gpt-5.6-luna" not in _texts(sc)
+    assert "echo" in _texts(sc)
+    # 3. the STANDALONE codex LEAD view
+    cl = opshtml.op_items(list(chrome), "k", codex_lead=True)
+    assert "codex ▶" not in _texts(cl) and "gpt-5.6-luna" not in _texts(cl)
+    assert "echo" in _texts(cl)
+
+
 def test_op_items_scope_drops_codex_terminal_chrome():
     # A codex run's terminal-only CHROME — the `codex ▶` run banner, the
     # `⚙ model · effort` line, the `■ codex … ended` footer — must NOT show on the
