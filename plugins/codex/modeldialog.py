@@ -105,12 +105,18 @@ def _pick(fe, win, header, want, sleep):
     fe.send_key(win, "enter")
 
 
-def _pick_level(fe, win, want, sleep):
+def _pick_level(fe, win, want, sleep, strict=True):
     """Step 3 (Select Reasoning Level), with the Max/Ultra INDIRECTION some models
     use: gpt-5.6-terra lists Low/Medium/High/Extra high + a `More reasoning…` row
     that opens an `Advanced Reasoning` sub-step holding Max/Ultra, while others
     (gpt-5.6-sol) list all six directly. `want` is the on-screen level LABEL
-    (an EFFORT_LABEL value) or "" to accept the pre-selected default."""
+    (an EFFORT_LABEL value) or "" to accept the pre-selected default.
+
+    `strict` governs a level the CURRENT model does NOT offer (reasoning levels
+    are model-dependent — gpt-5.4 has no Ultra, no `More reasoning…` at all):
+    strict=True (an EXPLICIT ✧ effort) raises; strict=False (a ✦ model switch
+    PRESERVING the old level) accepts the new model's DEFAULT instead — a preserve
+    must never fail the switch just because the target model can't do that level."""
     _await(fe, win, STEP3, sleep)
     if not want:
         fe.send_key(win, "enter")            # accept the model's default level
@@ -125,6 +131,10 @@ def _pick_level(fe, win, want, sleep):
     # not listed — open 'More reasoning…' and pick it in the Advanced sub-step
     more = next((r for r in rows(screen) if MORE in r["label"].lower()), None)
     if more is None:
+        # this model has no such level and no Advanced sub-step
+        if not strict:
+            fe.send_key(win, "enter")        # best-effort preserve → its default
+            return
         raise CodexModelError("row", "no %r (nor a More-reasoning row) under %r"
                               % (want, STEP3))
     _goto(fe, win, more["num"], sleep)
@@ -152,9 +162,12 @@ def set_model_effort(fe, win, model="", effort="", sleep=time.sleep):
     _pick(fe, win, STEP2, model or CURRENT, sleep)
     # Step 3 — the reasoning level: the chosen one (✧), else the model's default
     # (✦ accepts the pre-selected row with a bare Enter). Handles the Max/Ultra
-    # `More reasoning…` sub-step some models collapse them into.
+    # `More reasoning…` sub-step some models collapse them into. When a MODEL is
+    # being set the effort is a PRESERVE (best-effort — strict=False: a target
+    # model that lacks the old level gets its default, never a failed switch);
+    # when only the effort is set it is an EXPLICIT ✧ choice (strict).
     want = EFFORT_LABEL.get(effort, "") if effort else ""
-    _pick_level(fe, win, want, sleep)
+    _pick_level(fe, win, want, sleep, strict=not model)
     _, gone = _poll(fe, win, lambda s: FOOT not in (s or ""), STEP_TIMEOUT_S,
                     sleep)
     if not gone:

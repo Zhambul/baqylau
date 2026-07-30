@@ -591,6 +591,56 @@ class _LevelPickerFE:
         return True
 
 
+class _ShortLevelFE:
+    """A /model picker Step 3 for a model with only Low/Medium/High and NO
+    `More reasoning…` row (gpt-5.4's shape — it has no Ultra). `entered` records
+    each Enter's cursor row so a test can see whether a level or the default was
+    taken."""
+
+    _LEVEL = ("Low", "Medium (default)", "High")
+
+    def __init__(self):
+        self.cursor, self.entered, self.done = 2, [], False   # default row = Medium
+
+    def get_text(self, win, extent="screen", ansi=False):
+        if ansi or self.done:
+            return "codex\n❯ \n[gpt-5.4] │ ready\n"
+        lines = ["  Select Reasoning Level for gpt-5.4"]
+        for i, label in enumerate(self._LEVEL, 1):
+            lines.append(("› " if i == self.cursor else "  ")
+                         + "%d. %s   desc" % (i, label))
+        lines.append("  Press enter to confirm or esc to go back")
+        return "\n".join(lines)
+
+    def send_key(self, win, *keys):
+        k = keys[0] if keys else ""
+        if k == "down":
+            self.cursor = min(self.cursor + 1, len(self._LEVEL))
+        elif k == "up":
+            self.cursor = max(self.cursor - 1, 1)
+        elif k == "enter":
+            self.entered.append(self._LEVEL[self.cursor - 1])
+            self.done = True
+        return True
+
+
+def test_modeldialog_preserve_falls_back_to_default_on_unsupported_level():
+    """PRESERVING a level the target model lacks (Ultra → gpt-5.4, which has no
+    Ultra and no More-reasoning row) must NOT fail the model switch — strict=False
+    accepts the model's DEFAULT. The reported break: model→gpt-5.4 while the
+    session was on ultra."""
+    import pytest
+    from plugins.codex import modeldialog as MD
+    fe = _ShortLevelFE()
+    MD._pick_level(fe, "9", "Ultra", sleep=lambda s: None, strict=False)
+    assert fe.entered == ["Medium (default)"]      # accepted the default, no raise
+    # an EXPLICIT ✧ effort for a level the model lacks is strict → raises
+    fe2 = _ShortLevelFE()
+    with pytest.raises(MD.CodexModelError):
+        MD._pick_level(fe2, "9", "Ultra", sleep=lambda s: None, strict=True)
+    assert fe2.entered == []                        # nothing selected
+
+
 def test_modeldialog_reaches_max_behind_more_reasoning():
     """effort→Max/Ultra on a model that collapses them behind `More reasoning…`
     opens the Advanced Reasoning sub-step and picks there — the reported
