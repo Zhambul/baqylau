@@ -468,6 +468,38 @@ def test_task_fmt_snapshots_tasks_kv(run_hook, test_env, session, seed):
     assert got["tasks"][0]["status"] == "completed"
 
 
+def test_task_fmt_resolves_drifted_task_dir(run_hook, test_env, session, seed):
+    """After a --resume Claude Code keys the on-disk task dir by a FRESH
+    internal id, not the sid (measured 2026-07-30, session 6e58ae19: the
+    resumed process wrote session-275b8fdf while the snapshot kept re-reading
+    the dead sid dir) — the snapshot must follow the dir that holds the
+    event's task, pin it, and let a matching sid dir out-rank a stale pin."""
+    import os
+    s = session.make()
+    seed.py("from core import state as ST; ST.kv_set(%r, 'seeded', 1)" % s.log)
+    # the drifted dir holds the event's task; the sid dir doesn't exist
+    drift = os.path.join(test_env["CLAUDE_CONFIG_DIR"], "tasks",
+                         "session-deadbeef")
+    os.makedirs(drift, exist_ok=True)
+    with open(os.path.join(drift, "1.json"), "w", encoding="utf-8") as f:
+        json.dump(dict(_TASK, subject="Drifted"), f)
+    run_hook("claude-task-fmt.py", P.task_created(s, "1", "Drifted"))
+    assert [t["subject"] for t in _tasks_kv(s)["tasks"]] == ["Drifted"]
+    # the resolution was pinned + audited
+    assert any(a == "tasks-dir" and '"pin"' in c
+               for _p, a, c in oracle.state_files(test_env, s.sid))
+    # a later status flip (id-only probe) stays on the pinned dir
+    with open(os.path.join(drift, "1.json"), "w", encoding="utf-8") as f:
+        json.dump(dict(_TASK, subject="Drifted", status="completed"), f)
+    run_hook("claude-task-fmt.py", P.post_task_update(s, "1", "completed"))
+    assert _tasks_kv(s)["tasks"][0]["status"] == "completed"
+    # a task landing back in the SID dir out-ranks the stale pin
+    _seed_task_dir(test_env, s, [dict(_TASK, id="2", subject="Fresh list")])
+    run_hook("claude-task-fmt.py", P.task_created(s, "2", "Fresh list"))
+    assert [t["subject"] for t in _tasks_kv(s)["tasks"]] == ["Fresh list"]
+    assert not oracle.errors(test_env, s.sid)
+
+
 def test_task_fmt_agent_and_unhosted_guards(run_hook, test_env, session):
     import os
     # a subagent's inner task event never touches the main session's kv …

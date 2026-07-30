@@ -3898,6 +3898,27 @@ nothing — kv_set would CREATE the DB whose existence is the
 session-alive signal (this previously bit: the old task_fmt's
 unconditional `O.emit` created ghost DBs for headless team sessions).
 
+**The dir key DRIFTS on resume (why the dir is resolved, not assumed).**
+The `session-<first uuid segment>` key holds only for the session's
+FIRST process: after a `--resume` (measured 2026-07-30, session
+`6e58ae19`) Claude Code mints a fresh internal list id and writes the
+new list under `tasks/session-275b8fdf` — a segment matching no session
+id, no subagent, no prompt_id, and appearing nowhere in the transcript —
+while every task hook still carries the original sid. The sid-keyed
+snapshot then re-stashes the DEAD pre-resume list on every hook (the
+identical `completed:4 in_progress:1 pending:4` for eleven hours in the
+measured session): the dashboard card shows a frozen stale list while
+the TUI works a new one it never shows. So `task_fmt.resolve_dir` finds
+the dir that actually holds **the event's own task** (each event names
+one — `task_id`/`task_subject`, or `tool_input.taskId`/`.subject` on
+the tool events): the sid dir wins when it matches, else the previously
+pinned drift dir, else a newest-mtime scan of the sibling `session-*`
+dirs (bounded, `SCAN_MAX`); a scan hit is pinned in the `tasks-dir` kv
+(audited as a `tasks-dir` `{"action":"pin"}` state_files row) so the
+probe-carrying-but-unmatchable and future reads stay on the resolved
+dir. A matching sid dir always out-ranks a stale pin, so a genuinely
+fresh list keyed by the sid self-corrects with no un-pin gesture.
+
 `session_payload` carries the list as `data["tasks"]` (and the
 dismissal as `data["tasks_hidden"]`) — deliberately **NOT live-gated**
 (unlike `ask`/`plan`): the kv survives park, so a parked session still
