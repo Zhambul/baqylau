@@ -378,18 +378,33 @@ class Renderer:
     def _ro_turn_aborted(self, rec):
         self.ro_active, self.ro_aborted, self.ro_done_wall = False, True, time.time()
 
+    # The CONVERSATION register (prompt / assistant message / reasoning). A
+    # STANDALONE codex host is the session's MAIN agent, and the terminal mirror
+    # shows a main agent's ACTIVITY only — never its conversation — exactly as a
+    # Claude session's mirror does (the prose lives in the TUI, and on the web it
+    # comes from plugins.conversation as bubbles, NOT from these ops, which
+    # op_items already drops for a codex lead). So a standalone run emits no prose
+    # into the mirror. A SIDECAR run (codex inside a Claude host) still emits it —
+    # there the run reads as its own bracketed sub-stream (pending the subagent
+    # abstraction, docs/codex.md *Sidecar → subagent parity*).
     def _ro_prompt(self, rec):
+        if STANDALONE:
+            return
         g = O.new_group(LOG)
         O.emit(LOG, chip("⇢", "prompt", g=g, lk=O.COPY_ALL),
                gutter(cap(rec["text"], CAP_PROMPT), g=g))
 
     def _ro_reasoning(self, rec):
+        if STANDALONE:
+            return
         g = O.new_group(LOG)
         O.emit(LOG, chip("⋯", "reasoning", g=g, lk=O.COPY_ALL),
                dim_gut(cap(rec["text"], CAP_THINK), g=g))
 
     def _ro_message(self, rec):
         self.last_msg = rec["text"]
+        if STANDALONE:
+            return
         g = O.new_group(LOG)
         O.emit(LOG, chip("✎", "message", g=g, lk=O.COPY_ALL),
                gutter(cap(rec["text"], CAP_MSG), g=g))

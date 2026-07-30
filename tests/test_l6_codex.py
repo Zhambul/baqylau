@@ -273,17 +273,32 @@ def test_standalone_watcher_streams_own_tui_rollout(test_env, codex, reaper):
     """A STANDALONE watcher (host pid passed) streams THIS codex session's own
     rollout — matched by uuid == session id — and adopts it even though the
     originator is codex-tui (the human-driven TUI IS this session), with none of
-    the companion grace the secondary-source path imposes on raw runs."""
+    the companion grace the secondary-source path imposes on raw runs.
+
+    The terminal mirror shows the MAIN agent's ACTIVITY only — never its
+    conversation — exactly like a Claude session (the prose is the web's
+    conversation bubbles, from plugins.conversation): so a standalone run's user
+    prompt / assistant message do NOT appear as ops; a command does."""
     host = subprocess.Popen(["sleep", "60"])
     reaper.append(host)
     codex.start_watcher(host_pid=host.pid)
     codex.add_rollout(originator="codex-tui", u=codex.s.sid, events=[
         {"type": "event_msg", "payload": {"type": "user_message",
-                                          "message": "standalone hello"}}])
-    wait_until(lambda: "standalone hello" in codex.s.ops_text(),
-               desc="standalone codex streams its own codex-tui rollout")
-    # A standalone host's own rollout is the session's MAIN agent: its ops are
-    # NOT src-stamped (stamping would blank the session's web mirror).
+                                          "message": "standalone hello"}},
+        {"type": "response_item", "payload": {
+            "type": "custom_tool_call", "name": "exec", "call_id": "s1",
+            "input": 'await tools.exec_command({cmd:"echo streamed"});'}},
+        {"type": "event_msg", "payload": {"type": "agent_message",
+                                          "message": "a chatty reply"}},
+    ])
+    wait_until(lambda: "echo streamed" in codex.s.ops_text(),
+               desc="standalone codex streams its own codex-tui rollout (activity)")
+    # the MAIN agent's conversation must NOT be in the terminal mirror
+    assert "standalone hello" not in codex.s.ops_text(), \
+        "a standalone codex prompt must not show in the terminal mirror"
+    assert "a chatty reply" not in codex.s.ops_text(), \
+        "a standalone codex message must not show in the terminal mirror"
+    # its ops are NOT src-stamped (stamping would blank the session's web mirror).
     assert not any(op.get("src") for op in codex.s.ops()), \
         "a standalone codex host's own ops must stay unstamped"
     host.terminate()
@@ -384,13 +399,15 @@ def test_standalone_watcher_ignores_foreign_rollouts(test_env, codex, reaper):
     reaper.append(host)
     codex.start_watcher(host_pid=host.pid)
     codex.add_rollout(originator="codex_exec", events=[   # random uuid != our sid
-        {"type": "event_msg", "payload": {"type": "user_message",
-                                          "message": "not mine"}}])
+        {"type": "response_item", "payload": {
+            "type": "custom_tool_call", "name": "exec", "call_id": "f1",
+            "input": 'await tools.exec_command({cmd:"echo NOTMINE"});'}}])
     codex.add_rollout(originator="codex-tui", u=codex.s.sid, events=[
-        {"type": "event_msg", "payload": {"type": "user_message",
-                                          "message": "mine"}}])
-    wait_until(lambda: "mine" in codex.s.ops_text(), desc="own rollout streamed")
-    assert "not mine" not in codex.s.ops_text(), \
+        {"type": "response_item", "payload": {
+            "type": "custom_tool_call", "name": "exec", "call_id": "m1",
+            "input": 'await tools.exec_command({cmd:"echo MINE"});'}}])
+    wait_until(lambda: "echo MINE" in codex.s.ops_text(), desc="own rollout streamed")
+    assert "echo NOTMINE" not in codex.s.ops_text(), \
         "a foreign codex run leaked into a standalone session's mirror"
     host.terminate()
 
