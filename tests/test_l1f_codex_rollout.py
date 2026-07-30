@@ -704,3 +704,45 @@ def test_render_and_ignore_are_disjoint():
     """A kind is painted OR ignored, never both."""
     both = set(ST.Renderer._RO) & set(ST.IGNORE_KINDS)
     assert not both, "codex kinds both rendered and ignored: " + repr(sorted(both))
+
+
+def test_codex_prices_the_menu_models_and_refuses_to_guess():
+    """CODEX_PRICES vs the published rates, and — the load-bearing half — the
+    models it must still REFUSE to price.
+
+    Every model the codex menu offers is now priced, from
+    developers.openai.com/api/docs/pricing (retrieved 2026-07-31, each rate
+    cross-checked on that model's own docs page). One row's arithmetic is
+    spelled out end to end so a table edit that transposes a column fails here
+    rather than in a scoreboard nobody reconciles.
+
+    The refusals are the point of the version-exact prefix rule. There is no
+    family-level `gpt-5.6` rate — sol, terra and luna are three separately
+    priced models (terra and luna are the two that every third-party aggregator
+    gets wrong, luna by 5x) — so an UNKNOWN `gpt-5.6-*` variant must fall through
+    to "no cost shown", not inherit a sibling's rate. A bare `gpt-5.6` row would
+    break exactly that, which is why there isn't one."""
+    # gpt-5.6-terra: $2.00 in / $12.00 out per MTok, cached at 0.1x input.
+    # 1M fresh + 1M cached + 1M out = 2.00 + 0.20 + 12.00
+    assert ST.codex_cost_usd("gpt-5.6-terra", 1_000_000, 1_000_000,
+                             1_000_000) == 14.20
+    # and it scales linearly off that one verified row
+    assert ST.codex_cost_usd("gpt-5.6-terra", 500_000, 0, 0) == 1.00
+
+    # the whole menu is priced (docs/codex.md — the model picker's options)
+    menu = ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+            "gpt-5.5", "gpt-5.4", "gpt-5.4-mini")
+    for m in menu:
+        assert ST.codex_cost_usd(m, 1_000_000, 0, 0) is not None, m
+    # each at its OWN rate — no two of the gpt-5.6 trio share one, and
+    # `gpt-5.4-mini` is not billed as `gpt-5.4` (the row-order hazard)
+    rate = {m: ST.codex_cost_usd(m, 1_000_000, 0, 0) for m in menu}
+    assert rate["gpt-5.6-sol"] == 5.00
+    assert rate["gpt-5.6-terra"] == 2.00
+    assert rate["gpt-5.6-luna"] == 0.20
+    assert rate["gpt-5.4-mini"] == 0.75 and rate["gpt-5.4"] == 2.50
+
+    # an UNVERIFIED variant stays unpriced rather than borrowing a sibling's
+    assert ST.codex_cost_usd("gpt-5.6-nova", 1_000_000, 0, 0) is None
+    assert ST.codex_cost_usd("gpt-5.6", 1_000_000, 0, 0) is None
+    assert ST.codex_cost_usd("", 1, 0, 0) is None

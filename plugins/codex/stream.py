@@ -140,7 +140,35 @@ CAP_TOOL      = 10  # a non-shell tool call's ARGUMENTS (`tools.web__run({…})`
 # shown" rather than being silently priced at an older rate; the bump-agent
 # audit meta still records the token split, so spend is re-derivable once the
 # rate is added here.
+#
+# The models the codex menu offers (docs/codex.md *Launching & resuming codex
+# from the web*) are the first block. Retrieved 2026-07-31 from
+# https://developers.openai.com/api/docs/pricing (where
+# platform.openai.com/docs/pricing now 301s; openai.com/api/pricing 403s to a
+# fetcher), each rate cross-checked against that model's own
+# developers.openai.com/api/docs/models/<id> page. Standard tier, SHORT context.
+#
+# Two things the page settles that a guess would get wrong:
+#   · there is NO family-level `gpt-5.6` rate — sol/terra/luna are three
+#     separately priced models, so each needs its own row and a bare `gpt-5.6`
+#     key would misprice two of them (and silently price an unknown future
+#     variant). Third-party price aggregators AGREE WITH EACH OTHER on
+#     terra 2.50/15 and luna 1.00/6, and both are wrong against OpenAI's own two
+#     surfaces — luna by 5x. Only the vendor pages count here.
+#   · cached input is exactly 0.1x input for every one of the six, which is the
+#     ratio codex_cost_usd already assumes — so the formula is unchanged.
+# LONG-context rates (~2x in / 1.5x out above the threshold) are deliberately NOT
+# modelled: the page states the threshold only for gpt-5.5/gpt-5.4 (272K) and
+# leaves it unstated for the gpt-5.6 family, so a long-context session is priced
+# at the short-context rate — an UNDER-estimate, which is the safe direction and
+# is re-derivable from the audited token split.
 CODEX_PRICES = (
+    ("gpt-5.6-sol",        5.00, 30.0),
+    ("gpt-5.6-terra",      2.00, 12.0),
+    ("gpt-5.6-luna",       0.20, 1.20),
+    ("gpt-5.5",            5.00, 30.0),
+    ("gpt-5.4-mini",       0.75, 4.50),   # before gpt-5.4: the prefix rule below
+    ("gpt-5.4",            2.50, 15.0),   # would otherwise claim `-mini` first
     ("gpt-5.1-codex-mini", 0.25, 2.00),
     ("gpt-5-mini",         0.25, 2.00),
     ("gpt-5-nano",         0.05, 0.40),
