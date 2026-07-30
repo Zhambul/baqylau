@@ -342,6 +342,11 @@ def test_standalone_exec_renders_as_a_claude_command_block(test_env, codex, reap
                     for w in ("▶ foreground", "echo hi", "■ finished"))]
     assert block and all(tuple(op.get("c") or ()) not in palette for op in block), \
         "a codex-palette colour leaked onto the standalone command block"
+    # a standalone (main-agent) mirror carries NO codex chrome — no run banner,
+    # no `⚙ model · effort` line (they live on the web scoreboard/ctx bar instead)
+    txt = codex.s.ops_text()
+    assert "codex ▶" not in txt, "standalone mirror must not show the run banner"
+    assert "⚙" not in txt, "standalone mirror must not show the ⚙ model tag"
     host.terminate()
 
 

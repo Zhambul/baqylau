@@ -313,13 +313,18 @@ class Renderer:
     # old ladder fell through silently).
 
     def _ro_turn_context(self, rec):
-        # Model + effort for this turn — shown once (dim ⚙ line) and re-shown
-        # only when it changes; the bare model id prices the footer rollup.
+        # Model + effort for this turn — tracked always (the bare model id prices
+        # the footer/fold), but the dim `⚙ model · effort` line is codex-specific
+        # chrome a STANDALONE (main-agent) mirror must NOT show — a Claude mirror
+        # has no per-turn model line, and the model/effort live on the web
+        # scoreboard + ctx bar instead. A SIDECAR run still shows it (its own
+        # sub-stream). Same rule as the run banner + the prose register.
         model, eff = rec["model"], rec["effort"]
         tag = model + (" · " + eff if eff else "")
         if model and tag != self.ro_tag:
             self.ro_model, self.ro_tag = model, tag
-            O.emit(LOG, dim_gut("⚙ " + tag))
+            if not STANDALONE:
+                O.emit(LOG, dim_gut("⚙ " + tag))
 
     def _fold_bump(self, fresh, tout, tcache):
         # The attributed codex scoreboard fold — the ONE place the token/cost
@@ -503,7 +508,12 @@ def main(run):
     if S.parked(LOG):
         run.end("state-db-parked (before header)")
         return
-    O.emit(LOG, O.rule(), O.label("codex ▶ " + LABEL, SLOT_RGB), O.rule())
+    # The `codex ▶ <label>` run banner is codex-specific chrome — a STANDALONE
+    # (main-agent) mirror shows none of it, exactly like a Claude session (whose
+    # mirror opens straight into activity). A SIDECAR run keeps the banner: it
+    # brackets that run's own sub-stream among the host's other activity.
+    if not STANDALONE:
+        O.emit(LOG, O.rule(), O.label("codex ▶ " + LABEL, SLOT_RGB), O.rule())
 
     tail = T.FileTailer(LOGFILE)
     rd = Renderer()          # this run's mutable render state (both sources)

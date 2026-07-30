@@ -268,6 +268,12 @@ def test_custom_tool_call_exec_is_the_0_14x_command_channel():
     jl = 'await tools.exec_command({cmd:["bash","-lc","echo hi"]});'
     assert RO.parse(_rsp("custom_tool_call", name="exec", input=jl)) == {
         "kind": "exec", "cmd": "bash -lc echo hi", "call_id": "", "ts": None}
+    # the `cmd` key comes DOUBLE-QUOTED too (valid JSON), model/version dependent —
+    # verified live from a gpt-5.6-terra `pwd` that showed NO block until handled
+    jq = 'const r = await tools.exec_command({"cmd":"pwd","workdir":"/w"});'
+    assert RO.parse(_rsp("custom_tool_call", name="exec", call_id="q1",
+                         input=jq)) == {"kind": "exec", "cmd": "pwd",
+                                        "call_id": "q1", "ts": None}
     # unparseable cmd -> no record (a broken block is worse than none)
     assert RO.parse(_rsp("custom_tool_call", name="exec", input="noop();")) is None
 

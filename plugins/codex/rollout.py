@@ -86,8 +86,14 @@ EXIT_SCAN_B = 300
 #     reason a codex command showed NO block before: the parser knew only the
 #     function_call channel.
 # The command is pulled from the JS with a targeted match (never by executing
-# it): a list joins on spaces, a string is taken verbatim.
-_JS_CMD = re.compile(r"""cmd\s*:\s*(\[[^\]]*\]|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')""")
+# it): a list joins on spaces, a string is taken verbatim. The `cmd` key comes
+# BOTH unquoted (`{cmd:"ls"}` — a JS object literal) AND double-quoted
+# (`{"cmd":"pwd"}` — valid JSON), across codex models/versions, so the optional
+# quotes around the key are load-bearing: without them the quoted form matched
+# nothing and the command silently vanished (verified live — a gpt-5.6-terra run's
+# `pwd` showed no block at all).
+_JS_CMD = re.compile(
+    r"""["']?cmd["']?\s*:\s*(\[[^\]]*\]|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')""")
 # The custom-exec output preamble ends in this marker; the block body wants only
 # what follows it (the exit is still read from the whole head window).
 _OUTPUT_MARK = "Output:\n"
