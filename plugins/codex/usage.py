@@ -14,6 +14,7 @@
 # once (A.error) — the task's "audit a degrade" rule — so a persistently
 # unreachable app server is diagnosable rather than silent.
 import json
+import os
 import subprocess
 import time
 
@@ -27,6 +28,37 @@ USAGE_TTL_S = 120.0           # cache the windows this long (a poller must not
 
 _CACHE = None                 # (expires_at, result-or-None)
 
+# codex is a node script (`#!/usr/bin/env node`), so a STRIPPED env — the
+# launchd dashboard runs with PATH=/usr/bin:/bin:/usr/sbin:/sbin — finds neither
+# `codex` NOR the `node` it shebangs, and the app-server spawn failed silently
+# (the usage strip then hid, "codex missing from the accounts list"). Prepend
+# the common node/codex install dirs to PATH so BOTH resolve — the find_kitten
+# candidate-list idiom (frontends/kitty.py), not a hard single path. Verified:
+# a launch from a shell (login-shell PATH) already worked; only server-side
+# DIRECT spawns like this one were blind. $CODEX_BIN_DIR overrides.
+CODEX_BIN_DIRS = ("~/.hermes/node/bin", "/opt/homebrew/bin",
+                  "/usr/local/bin", "~/.local/bin")
+
+
+def codex_spawn_env():
+    """os.environ with the codex/node bin dirs PREPENDED to PATH — the one owner
+    of "how a server-side codex subprocess finds its binary under a stripped
+    env". Reused by every direct codex spawn (the usage app-server here; the P4
+    error channel next). A dir is added only if it exists, so a machine without
+    one is unaffected; $CODEX_BIN_DIR wins for an unusual install."""
+    env = dict(os.environ)
+    dirs = []
+    override = env.get("CODEX_BIN_DIR")
+    if override and os.path.isdir(override):
+        dirs.append(override)
+    for d in CODEX_BIN_DIRS:
+        p = os.path.expanduser(d)
+        if os.path.isdir(p) and p not in dirs:
+            dirs.append(p)
+    if dirs:
+        env["PATH"] = os.pathsep.join(dirs + [env.get("PATH", "")])
+    return env
+
 
 def _rpc_read_ratelimits():
     """Spawn `codex app-server`, initialize, call account/rateLimits/read, return
@@ -37,7 +69,7 @@ def _rpc_read_ratelimits():
         proc = subprocess.Popen(
             ["codex", "app-server"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL, text=True)
+            stderr=subprocess.DEVNULL, text=True, env=codex_spawn_env())
     except Exception:
         return None
     try:

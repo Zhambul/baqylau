@@ -345,7 +345,14 @@ which audits a degrade.
   needs no live session — the stable source, unlike the nullable per-session
   `token_count.rate_limits`). Normalised to `{planType, windows:[{used_pct,
   window_mins, resets_at}]}`; degrades to None on any failure and audits it once
-  (`A.error`), never raises.
+  (`A.error`), never raises. The spawn goes through **`usage.codex_spawn_env()`**,
+  which PREPENDS the common node/codex install dirs to PATH: codex is a node
+  script (`#!/usr/bin/env node`), and the launchd dashboard runs with a stripped
+  PATH (`/usr/bin:/bin:…`) that finds neither `codex` NOR its `node` — so the
+  spawn failed silently and the usage strip hid ("codex missing from the accounts
+  list"). It's the `find_kitten` candidate-list idiom (existing dirs only,
+  `$CODEX_BIN_DIR` overrides), and the ONE owner of "how a server-side codex
+  subprocess finds its binary" — the P4 error channel reuses it.
 - **effort** — `model_reasoning_effort` from `~/.codex/config.toml`, behind
   `plugins.effort_default` (codex has no per-project/account effort config).
 

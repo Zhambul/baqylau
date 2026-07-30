@@ -437,6 +437,34 @@ def test_codex_usage_windows_degrades_to_none(monkeypatch):
     assert usage.usage_windows() is None       # degrades, never raises
 
 
+def test_codex_spawn_env_prepends_node_bin_dirs(monkeypatch, tmp_path):
+    # The launchd dashboard runs with a STRIPPED PATH (/usr/bin:/bin:…) that can
+    # find neither `codex` nor the `node` it shebangs — the "codex missing from
+    # the accounts list" bug. codex_spawn_env must PREPEND an existing install
+    # dir so the app-server spawn resolves both.
+    from plugins.codex import usage
+    node_bin = tmp_path / "node-bin"
+    node_bin.mkdir()
+    monkeypatch.setattr(usage, "CODEX_BIN_DIRS", (str(node_bin), "/no/such/dir"))
+    monkeypatch.delenv("CODEX_BIN_DIR", raising=False)
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    env = usage.codex_spawn_env()
+    parts = env["PATH"].split(os.pathsep)
+    assert parts[0] == str(node_bin)            # existing dir prepended
+    assert "/no/such/dir" not in parts          # a missing dir is skipped
+    assert parts[-2:] == ["/usr/bin", "/bin"]   # the original PATH is preserved
+
+
+def test_codex_spawn_env_override_wins(monkeypatch, tmp_path):
+    from plugins.codex import usage
+    over = tmp_path / "custom"
+    over.mkdir()
+    monkeypatch.setattr(usage, "CODEX_BIN_DIRS", ())
+    monkeypatch.setenv("CODEX_BIN_DIR", str(over))
+    monkeypatch.setenv("PATH", "/usr/bin")
+    assert usage.codex_spawn_env()["PATH"].split(os.pathsep)[0] == str(over)
+
+
 # ------------------------------------------------------------------ view modes / parity
 
 def test_codex_blocks_classify_as_codex_act():
