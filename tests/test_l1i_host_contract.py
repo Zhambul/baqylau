@@ -27,6 +27,7 @@
 # of the default-host name).
 import ast
 import os
+import re
 
 from conftest import REPO
 
@@ -148,6 +149,133 @@ def test_every_allowlisted_literal_states_a_reason():
            for rel, rows in LITERAL_ALLOW.items()
            for lit, why in rows.items() if not (why or "").strip()]
     assert not bad, "LITERAL_ALLOW rows need a reason:\n" + "\n".join(bad)
+
+
+# ------------------------------------------------- 1b. the same, for the PAGE
+
+# The PYTHON tier's ratchet above has a twin here because the browser is the
+# other place a host gets known by heart — and the leak was bigger there: the
+# new-session form carried four host-NAME-keyed tables (every model and effort
+# level of BOTH tools, their defaults) read through a fallback that handed an
+# unknown host CLAUDE's, and `shortModel` branched two hosts' model-id grammars
+# inline. All of it is served now (`/api/hosts` + the session payload's host
+# vocabulary), so what remains is countable.
+#
+# `gpt-`/`claude-` join the two plugin names because a MODEL-ID grammar is the
+# same bug wearing a different string: `startsWith("gpt-")` names a host as
+# surely as `=== "codex"` does.
+JS_WORDS = ("claude_code", "codex", "gpt-", "claude-")
+
+# {file: {word: (count, why)}} — an EXACT count, both directions: a new
+# occurrence in an already-listed file fails just as a deleted one does, so the
+# ratchet cannot be widened by writing another `=== "codex"` in a file that
+# happens to be on the list. Line numbers are printed on failure.
+JS_LITERAL_ALLOW = {
+    # The `live`-table SLOT KIND vocabulary, not a host branch: `codex` is one
+    # of the five kinds a running-slot row can carry (fg/bg/monitor/sub.pid/
+    # codex — core/slots.py's palettes), and these two tables give each its
+    # ribbon glyph and its place in the order. A row here says "how to draw a
+    # codex RUN", which stays true no matter which tool hosts the session; the
+    # unknown-kind path beside them (app.11-chrome.js) is already generic.
+    "app.00-core.js": {
+        "codex": (2, "the slot-KIND ribbon glyph + order (core/slots.py's "
+                     "kinds), not a host check"),
+        "claude-": (1, "the X-Claude-Dash request header — a protocol constant "
+                       "named after the product, matched by http/base.py"),
+    },
+    # The presenter's ACTIVITY-CLASS vocabulary (view-mode folds, fragments,
+    # counters, subjects) — `codex` here is the act token opshtml/actclass.py
+    # emits, the page's own word for "a codex run happened", exactly as
+    # ACT_CODEX is on the Python side. P6 owns this layer (producer-stamped
+    # `act`), and moving it now would split one change across two phases.
+    "app.05-session.js": {
+        "codex": (5, "P6: the act/view-mode vocabulary token (the ACT_CODEX "
+                     "twin), not a host branch"),
+    },
+    # The Web Push notification TAG, which must agree byte for byte with
+    # notify/channels.push_tag — a retraction deletes the banner by tag, so the
+    # service worker and the server have to spell it the same way. Product name,
+    # not a host lookup.
+    "sw.js": {
+        "claude-": (1, "the push-notification tag prefix, pinned to "
+                       "notify/channels.push_tag"),
+    },
+}
+
+# /* … */ blocks and // line comments are stripped before the scan: PROSE may
+# name a host freely (it is how the design is explained), the same rule the
+# Python scan applies to docstrings. Line comments are cut only where the `//`
+# is not preceded by `:` — enough to keep a `https://…` inside a string from
+# eating the rest of its line. The failure mode of a bad strip is a MISSED
+# literal, never a false one.
+_JS_BLOCK = re.compile(r"/\*.*?\*/", re.S)
+_JS_LINE = re.compile(r"(^|[^:])//.*$")
+
+
+def _js_uncommented(src):
+    """`src` with its comments blanked, LINE NUMBERS preserved."""
+    src = _JS_BLOCK.sub(lambda m: "\n" * m.group(0).count("\n"), src)
+    return [_JS_LINE.sub(r"\1", ln) for ln in src.split("\n")]
+
+
+def _js_host_literals():
+    """{file: {word: [line numbers]}} — every host name / model-id grammar left
+    in the page's CODE."""
+    found = {}
+    root = os.path.join(REPO, "dashboard", "static")
+    for fn in sorted(os.listdir(root)):
+        if not fn.endswith(".js"):
+            continue
+        with open(os.path.join(root, fn), encoding="utf-8") as fh:
+            lines = _js_uncommented(fh.read())
+        for i, ln in enumerate(lines, 1):
+            low = ln.lower()
+            for w in JS_WORDS:
+                if w in low:
+                    found.setdefault(fn, {}).setdefault(w, []).append(i)
+    return found
+
+
+def test_no_host_name_literal_in_the_page_off_the_allowlist():
+    """The static SPA names no host in code outside JS_LITERAL_ALLOW.
+
+    The client half of "the dashboard knows no host". Before P5 the new-session
+    form decided a whole form row, both option menus and their defaults by
+    host NAME — and its fallback (`tbl[t] || tbl.claude_code`) meant a host
+    nobody had written yet would be OFFERED Claude Code's models and launched
+    with Claude Code's defaults, silently."""
+    found = _js_host_literals()
+    offenders = []
+    for fn, words in sorted(found.items()):
+        allowed = JS_LITERAL_ALLOW.get(fn, {})
+        for w, lines in sorted(words.items()):
+            want = (allowed.get(w) or (0, ""))[0]
+            if len(lines) != want:
+                offenders.append("%s: %r ×%d (allowed %d) at line(s) %s"
+                                 % (fn, w, len(lines), want,
+                                    ", ".join(str(n) for n in lines)))
+    assert not offenders, (
+        "host-name / model-grammar literal(s) in the page — read the fact off "
+        "the served host vocabulary (/api/hosts, meta.*), or adjust "
+        "JS_LITERAL_ALLOW with a reason:\n" + "\n".join(offenders))
+
+
+def test_the_page_literal_allowlist_has_no_stale_rows():
+    """Every allowlisted JS row still describes something that is there — the
+    both-directions half, as for the Python list."""
+    found = _js_host_literals()
+    stale = []
+    for fn, rows in sorted(JS_LITERAL_ALLOW.items()):
+        have = found.get(fn, {})
+        for w, (n, why) in sorted(rows.items()):
+            if not (why or "").strip():
+                stale.append("%s: %r has no reason" % (fn, w))
+            if w not in have:
+                stale.append("%s: %r no longer present (allowed %d)"
+                             % (fn, w, n))
+    assert not stale, ("stale JS_LITERAL_ALLOW row(s) — delete them (the "
+                       "ratchet only counts if it tightens):\n"
+                       + "\n".join(stale))
 
 
 # ------------------------------------------------------- 2. provider coverage
@@ -346,7 +474,8 @@ SIBLINGS = {"rewind_to": "rewind", "autoname": "rename",
             "plan_options": "plan", "deliver": "ask"}
 
 VOCABULARY = ("mention", "clear_input", "turn_live", "ask_declines",
-              "plan_decisions", "rewind_modes", "title_key",
+              "plan_decisions", "rewind_modes", "rewind_mode_label",
+              "command_floor", "title_key",
               "input_box", "ask_region", "typed_input", "lifecycle_end")
 
 # {method: {host: IMPL | DECLINED}} — the gesture-side twin of COVERAGE. A
@@ -379,6 +508,8 @@ HOST_SURFACE = {
     "ask_declines":   {"claude_code": IMPL, "codex": DECLINED},
     "plan_decisions": {"claude_code": IMPL, "codex": IMPL},
     "rewind_modes":   {"claude_code": IMPL, "codex": DECLINED},
+    "rewind_mode_label": {"claude_code": IMPL, "codex": DECLINED},
+    "command_floor":  {"claude_code": IMPL, "codex": DECLINED},
     "title_key":      {"claude_code": IMPL, "codex": IMPL},
     "input_box":      {"claude_code": IMPL, "codex": DECLINED},
     "ask_region":     {"claude_code": IMPL, "codex": DECLINED},
@@ -508,6 +639,95 @@ def test_every_hosts_vocabulary_is_a_closed_word_list():
     assert hosts["claude_code"].plan_decisions() == ("decide", "feedback",
                                                      "dismiss")
     assert hosts["codex"].plan_decisions() == ("decide", "dismiss")
+
+
+def test_every_host_serves_its_whole_new_session_vocabulary():
+    """`/api/hosts` carries everything the page needs to BUILD ITS FORM for a
+    host it has never heard of: the picker row, both option menus with their
+    first-ever defaults, how a menu row matches a running model, whether the
+    tool has an account switcher or a file-mention grammar, its rewind modes
+    WITH their words, and its quick commands with their refusal floors.
+
+    The values are pinned because they are a MIGRATION: each one was a literal
+    in dashboard/static/app.09-newsession.js (TOOL_MODELS / TOOL_EFFORTS /
+    TOOL_MODEL_DEF / TOOL_EFFORT_DEF) or app.10-control.js (MODEL_CHOICES /
+    EFFORT_CHOICES / RW_MODES / COMPACT_MIN_PROMPTS), and P5's whole claim is
+    that only their SOURCE moved."""
+    import plugins
+
+    rows = {h["name"]: h for h in plugins.hosts()}
+    keys = {"name", "label", "launchable", "default", "accounts", "attach",
+            "model_choices", "effort_choices", "model_default",
+            "effort_default", "model_match", "rewind_modes", "quick_commands"}
+    for name, row in sorted(rows.items()):
+        assert set(row) == keys, name
+    cc, cx = rows[plugins.default_host()], rows["codex"]
+    # exactly one DEFAULT, and it is the registry's own answer
+    assert [h["name"] for h in plugins.hosts() if h["default"]] == [cc["name"]]
+    # the two menus, verbatim from the client tables they replaced
+    assert cc["model_choices"] == ["fable", "opus", "sonnet", "haiku"]
+    assert cc["effort_choices"] == ["low", "medium", "high", "xhigh", "max"]
+    assert cc["model_default"] == "fable" and cc["effort_default"] == "high"
+    assert cx["model_choices"][0] == "gpt-5.6-sol"
+    assert cx["model_default"] == "gpt-5.6-sol" and cx["effort_default"] == "low"
+    # `ultra` is codex's level and is deliberately NOT in Claude's menu, though
+    # the arg validator's EFFORTS (the UNION over hosts) accepts it
+    assert "ultra" in cx["effort_choices"] and "ultra" not in cc["effort_choices"]
+    from dashboard import config
+    assert set(cc["effort_choices"]) | set(cx["effort_choices"]) \
+        <= set(config.EFFORTS)
+    # the match rule: family rows for the default host, full ids for codex
+    assert cc["model_match"] == "family" and cx["model_match"] == "exact"
+    # the account switcher is DERIVED from the plugin providing that registry
+    assert cc["accounts"] is True and cx["accounts"] is False
+    assert bool(plugins.accounts()) and plugins.host_named("codex").mention("/p") == ""
+    # …and the mention grammar from HostControl.mention
+    assert cc["attach"] is True and cx["attach"] is False
+    # the rewind menu, modes AND the words for them
+    assert cc["rewind_modes"] == [
+        {"mode": "both", "label": "restore code and conversation"},
+        {"mode": "conversation", "label": "restore conversation"},
+        {"mode": "code", "label": "restore code"}]
+    assert cx["rewind_modes"] == []          # codex cannot rewind at all
+    # the quick commands a host OFFERS are derived from its overrides (codex
+    # renames but has no argless autoname, so it has no `rename` row), and each
+    # carries the floor that host measured
+    assert cc["quick_commands"] == [
+        {"cmd": "compact", "min_prompts": 2}, {"cmd": "model", "min_prompts": 0},
+        {"cmd": "effort", "min_prompts": 0}, {"cmd": "rename", "min_prompts": 1}]
+    assert [c["cmd"] for c in cx["quick_commands"]] == ["compact", "model",
+                                                        "effort"]
+    assert all(c["min_prompts"] == 0 for c in cx["quick_commands"])
+    # every wire word names a real method + a real cap, and the /command guard
+    # reads its caps out of that ONE table rather than a second copy
+    from dashboard.http.post import typing as T
+    from plugins import host as H
+    for cmd, (method, cap) in H.QUICK_COMMANDS.items():
+        assert hasattr(H.HostControl, method), cmd
+        assert cap in H.GESTURES, cmd
+        assert method in set(H.GESTURES) | set(SIBLINGS), cmd
+    assert T.CAP_BY_CMD == plugins.quick_command_caps()
+    assert T.CAP_BY_CMD == {"compact": "compact", "model": "model",
+                            "effort": "effort", "rename": "rename"}
+
+
+def test_one_builder_serves_both_wire_surfaces():
+    """The SAME vocabulary rides the session payload as rides /api/hosts — one
+    builder (plugins.host_vocabulary), so the per-tool answer and the
+    per-session answer cannot disagree about a host, and the session payload's
+    keys ARE that builder's (dashboard/read/session.py spreads it)."""
+    import plugins
+
+    vocab = plugins.host_vocabulary(plugins.host_named("codex"))
+    row = next(h for h in plugins.hosts() if h["name"] == "codex")
+    for k, v in vocab.items():
+        assert row[k] == v, k
+    # …and the inert host answers with EMPTY everything rather than the default
+    # host's words (the "no host at all" answer must not be another tool's)
+    inert = plugins.host_vocabulary(plugins.inert_host())
+    assert inert["model_choices"] == [] and inert["effort_choices"] == []
+    assert inert["rewind_modes"] == [] and inert["quick_commands"] == []
+    assert inert["model_default"] == "" and inert["model_match"] == "exact"
 
 
 def test_rewind_modes_comes_from_the_menu_table_not_a_second_list():
