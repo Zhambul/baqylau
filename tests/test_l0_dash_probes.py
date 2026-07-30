@@ -585,11 +585,15 @@ def test_modal_stash_match_has_one_owner_per_dialog():
     dashboard/http/post/dialogs.py; the scan covers the whole package so a
     handler moving out of it can't take a third copy along."""
     src = "\n".join(t for f, t in _dash_py("dashboard/http/post"))
-    # the mismatch test itself: exactly twice, once per guard (they spell it
-    # identically). post_message's `ask_pending(sid) or plan_pending(sid)`
+    # the mismatch test itself: ONCE per guard. `_ask_stash` matches the
+    # `tool_use_id` literally; `_plan_guard` matches an id-agnostic
+    # `body_id != pend_id` (host-aware — claude's tool_use_id OR codex's plan_id),
+    # so the two guards spell it differently but there is still exactly ONE match
+    # owner per dialog. post_message's `ask_pending(sid) or plan_pending(sid)`
     # asks a DIFFERENT question — "is ANY modal up" (a paste would go into the
     # dialog) — and matches no id, so the stash READS are not what's counted.
-    assert src.count('!= (pending.get("tool_use_id")') == 2
+    assert src.count('!= (pending.get("tool_use_id")') == 1   # _ask_stash
+    assert src.count("body_id != pend_id") == 1               # _plan_guard
     for guard in ("_ask_stash", "_plan_guard"):
         assert src.count("def %s(" % guard) == 1
         assert src.count("self.%s(" % guard) == 2, "the two %s callers" % guard
