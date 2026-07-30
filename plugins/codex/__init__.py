@@ -1,12 +1,14 @@
-# plugins/codex/ — the codex adapter (a SECONDARY source).
+# plugins/codex/ — the codex adapter, in BOTH of its roles: a secondary source
+# inside a Claude session AND a standalone HOST of its own (docs/codex.md).
 #
-# Codex has no hook system pointed at us: the plugin discovers every codex run
-# from the two global directories all runs funnel through (companion job
-# sidecars + native rollouts — see watch.py) and streams each into the HOSTING
-# session's mirror. Modules: launch.py (detach-fast launcher), watch.py (the
-# one-per-session discovery watcher), stream.py (one tailer per run — the
-# paint half), rollout.py (rollout-record parsing + the drill-down timeline —
-# the parse half of the split, docs/sessionapi.md).
+# As a SECONDARY source it has no hook system pointed at us: the plugin
+# discovers every codex run from the two global directories all runs funnel
+# through (companion job sidecars + native rollouts — see watch.py) and streams
+# each into the HOSTING session's mirror. As a HOST it runs its own SessionStart
+# (session.py), tab producer, hook dispatch and control gestures. Modules:
+# launch.py (detach-fast launcher), watch.py (the one-per-session discovery
+# watcher / standalone manager), stream.py (one tailer per run — the paint
+# half), rollout.py (rollout-record parsing — the parse half of the split).
 import os
 import subprocess
 import sys
@@ -38,6 +40,7 @@ def on_session_start(log, cwd, sid):
     dead code on that path. Routing session.py through the fan-out instead would
     have spawned the watcher TWICE unless the provider knew the difference; now
     it does."""
+    from core import audit as A
     from core import tabs as T
     launcher = os.path.join(BIN, "claude-codex-launch.py")
     if not os.path.isfile(launcher):
@@ -51,12 +54,24 @@ def on_session_start(log, cwd, sid):
             from plugins.codex import session
             argv.append(str(session.codex_pid()))
     except Exception:
-        pass                       # unresolvable => the secondary role, as before
+        # The ROLE resolution failed, and the degrade is silent BY SHAPE: the
+        # watcher still starts, just in the SECONDARY role — no rollout stream
+        # for this session's own thread and, worse, no teardown owner, since the
+        # standalone manager is the only thing that watches the codex pid. A
+        # session that quietly lost half its watcher looks exactly like one that
+        # never had a standalone role to begin with, so it gets its OWN row
+        # rather than sharing the spawn failure's.
+        A.error(log, "codex watcher role (standalone -> secondary)",
+                {"sid": sid, "cwd": cwd})
     try:
         subprocess.run(argv, stdout=subprocess.DEVNULL,
                        stderr=subprocess.DEVNULL)
     except Exception:
-        pass
+        # …and the launcher itself. session.py audited this before the provider
+        # took the spawn over; losing the row with the move is how a codex
+        # session with NO mirror stream at all became undebuggable.
+        A.error(log, "spawn codex watcher launcher",
+                {"sid": sid, "cwd": cwd, "argv": len(argv)})
 
 
 # NB codex exposes no `agent_usage` provider: a run's tokens are folded from its
