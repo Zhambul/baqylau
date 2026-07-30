@@ -25,7 +25,7 @@
 import re
 import time
 
-from dashboard import screendrive
+from core import screendrive
 
 POLL_S = 0.15
 STEP_TIMEOUT_S = 2.5

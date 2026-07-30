@@ -14,7 +14,7 @@ from dashboard.config import (BUSY_TABS,
                               MODEL_ARG_OK)
 from dashboard.control import launch
 from dashboard.read.session import (ask_pending, plan_pending)
-from dashboard.screendrive import clip_screen
+from core.screendrive import clip_screen
 
 A = load_audit()
 

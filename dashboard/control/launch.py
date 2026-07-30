@@ -14,6 +14,7 @@ import time
 
 import frontends
 import plugins
+from core import clipimg
 from core import sessionapi as API
 from core.noaudit import load_audit
 
@@ -191,45 +192,19 @@ def front_app():
         return ""
 
 
-# macOS clipboard "flavor" codes that mean an IMAGE is on the board. Claude
-# Code's TUI auto-attaches whatever image the clipboard holds to a message on
-# ANY bracketed paste (and on an argv-prompt startup) — proven live: a web send
-# with a screenshot on the clipboard arrived as "text[Image #1]" with the PNG,
-# though baqylau attached nothing. There is no CC opt-out, so before any web
-# send/launch we EMPTY an image clipboard so the grab finds nothing (the user
-# chose auto-clear; a text-only clipboard is left alone). docs/dashboard.md
-# *Clipboard-image guard*.
-_CLIP_IMAGE_FLAVORS = ("PNGf", "TIFF", "8BPS", "jp2", "GIF", "JPEG", "picture")
-
-
-def _clip_has_image():
-    """True when the macOS clipboard currently holds an image flavor. Best-effort
-    (`osascript -e 'clipboard info'`); False off macOS / on any failure / on a
-    text-only clipboard — so we never clear a clipboard that has no image."""
-    if sys.platform != "darwin":
-        return False
-    try:
-        info = subprocess.run(["osascript", "-e", "clipboard info"],
-                              capture_output=True, text=True, timeout=2).stdout or ""
-    except Exception:
-        return False
-    return any(f in info for f in _CLIP_IMAGE_FLAVORS)
-
-
 def clear_clipboard_image():
-    """If the macOS clipboard holds an IMAGE, empty it — so Claude Code can't
-    auto-attach it to a web-delivered message (docs/dashboard.md *Clipboard-image
-    guard*). Returns True iff it cleared. No-op (False) off macOS or on a
-    text-only clipboard, so a plain text clipboard is preserved; best-effort,
-    never raises into the caller."""
-    if not _clip_has_image():
-        return False
-    try:
-        subprocess.run(["osascript", "-e", 'set the clipboard to ""'],
-                       capture_output=True, timeout=2)
-        return True
-    except Exception:
-        return False
+    """The dashboard-side name of core.clipimg.clear_image — if the macOS
+    clipboard holds an IMAGE, empty it, so a host TUI can't auto-attach it to a
+    web-delivered message (docs/dashboard.md *Clipboard-image guard*). Returns
+    True iff it cleared.
+
+    The mechanism moved to core because BOTH tiers need it: a host's own
+    gestures (a plugin may not import the dashboard) and this tier's new-session
+    launch, which fires it only when the launching host DECLARES
+    `paste_grabs_clipboard_image`. This wrapper stays as
+    the dashboard's one door (server.py exports it; the control POSTs and their
+    tests reach it here)."""
+    return clipimg.clear_image()
 
 
 TUI_DRAFT_KEY = "tui-draft"      # state-DB kv: text WE left in the input box

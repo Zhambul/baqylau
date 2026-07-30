@@ -56,7 +56,7 @@
 import re
 import time
 
-from dashboard import screendrive
+from core import screendrive
 
 POLL_S = 0.15          # screen re-read beat while waiting for a dialog state
 STEP_TIMEOUT_S = 2.5   # a key press → its screen effect visible

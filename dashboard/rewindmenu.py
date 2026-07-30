@@ -31,7 +31,7 @@
 import re
 import time
 
-from dashboard import screendrive
+from core import screendrive
 from dashboard.control import launch
 
 # One entry per selectable restore option: the requested `mode` (the POST

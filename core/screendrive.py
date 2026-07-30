@@ -1,8 +1,16 @@
-# dashboard/screendrive.py — the GENERIC plumbing shared by the screen-verified
+# core/screendrive.py — the GENERIC plumbing shared by the screen-verified
 # dialog drivers (askdialog / plandialog / confirmdialog / rewindmenu). Those
 # drivers are deliberately NOT unified — their ANATOMY (keys, region parsing,
 # bail semantics) is per-dialog and must stay separate (docs/dashboard.md). Only
 # the two tool-agnostic mechanical pieces live here:
+#
+# It lives in CORE, not in the dashboard, because its consumers are per-HOST
+# screen drivers inside the plugins tier (Claude Code's ask/plan/confirm/rewind
+# drivers; codex's own predate it and keep their private `_poll`), and the
+# dependency rule forbids a plugin importing the dashboard. Tool-agnostic
+# (it names no dialog) and terminal-agnostic (the caller passes its `fe`) — the
+# same frontend-INJECTED profile as core/hostpane.py and core/tabpaint.py, which
+# is what makes core its home rather than either tier above it.
 #
 #   - poll_until: the screen re-read poll loop every driver used to inline as a
 #     private `_wait`, byte-identical across the three menu drivers (and the

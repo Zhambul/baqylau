@@ -21,7 +21,7 @@
 import re
 import time
 
-from dashboard import screendrive
+from core import screendrive
 
 OPEN_TIMEOUT_S = 4.0   # paste delivered → menu visible (slash-cmd latency);
 #                        no menu inside this window = the switch applied
