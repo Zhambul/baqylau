@@ -349,8 +349,12 @@ which audits a degrade.
 - **Read providers (`plugins/codex/read.py`, over `rollout.parse`).**
   - `context(path)` — the last `token_count`'s **`last_token_usage.total_tokens`**
     over `model_context_window` (the cumulative `total_token_usage` never resets
-    across compaction and must NOT be used), `model` from the last `turn_context`.
-    Feeds the ctx bar on session/agent cards.
+    across compaction and must NOT be used), plus `model` AND `effort` from the
+    last `turn_context` (the reversed tail scan finds the NEWEST, so a mid-session
+    `/model` or effort switch is reflected). Feeds the ctx bar on session/agent
+    cards. `effort` on the ctx is codex's ONLY effort source — the dashboard
+    prefers `ctx.effort` over `effort_default` for a codex session (below), so the
+    ✧ label shows the run's REAL level rather than a stale cwd default.
   - `prompts(path)` — non-synthetic user `chat` turns (capped, fail-open None like
     Claude's), from the RESPONSE_ITEM register so a post-abort/queued prompt still
     counts. Feeds the ⊜ compact gate.
@@ -386,8 +390,31 @@ which audits a degrade.
   list"). It's the `find_kitten` candidate-list idiom (existing dirs only,
   `$CODEX_BIN_DIR` overrides), and the ONE owner of "how a server-side codex
   subprocess finds its binary" — the P4 error channel reuses it.
-- **effort** — `model_reasoning_effort` from `~/.codex/config.toml`, behind
-  `plugins.effort_default` (codex has no per-project/account effort config).
+- **effort** — a codex session's effort is a per-turn ROLLOUT fact, surfaced on
+  `context().effort` (above) from the last `turn_context`; the dashboard's
+  `data["effort"]` prefers it (`data["ctx"].effort or effort_default(...)`).
+  `plugins.effort_default` (`model_reasoning_effort` from `~/.codex/config.toml`)
+  is only the launch-form default — codex has no per-project/account effort config
+  and never persists a `/effort`, so using it for a LIVE session showed a stale or
+  foreign level (e.g. `high` on a `low` run).
+
+### Tab states — wired + the exec colour
+
+The codex TAB PRODUCER (`plugins/codex/tabstatus.py`) maps every codex hook event
+to a colour (`UserPromptSubmit`→thinking · `PreToolUse`→executing/working/asking ·
+`Stop`→green · `PermissionRequest`→red), over the shared `core/tabpaint` engine.
+Two facts make it actually paint:
+- **The events must be WIRED.** `~/.codex/config.toml` needs `[hooks] hooks =
+  true` AND `~/.codex/hooks.json` must route all NINE non-SessionStart events to
+  `claude-codex-hook.py` (docs/wiring.md). With only `SessionStart` wired the tab
+  never changed — the mapping code ran for nobody (zero `tab_transitions` for any
+  codex session, the tell in the audit).
+- **codex sends CLAUDE-COMPATIBLE tool names.** A shell command's `PreToolUse`
+  `tool_name` is `Bash` (not `exec_command`), so `EXEC_TOOLS` includes the
+  claude-compat `Bash`/`Task`/`Agent` (blue executing, mirroring claude) beside
+  the codex-native spellings; `ASK_TOOLS` likewise includes `AskUserQuestion`.
+  Changing `hooks.json` re-triggers codex's "Hooks need review" trust prompt (the
+  hash changed) — expected on the next launch, one-time.
 
 ### Codex control gestures (the P5 write plane)
 

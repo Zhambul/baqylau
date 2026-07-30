@@ -60,17 +60,24 @@ EVENT_LABEL = {
 }
 
 # codex PreToolUse tool_names that run a SHELL/PATCH (tab -> blue "executing",
-# same colour intent as claude's Bash). The exact spellings drift across codex
-# versions (shell -> exec_command; apply_patch on function_call then a custom
-# tool — see rollout.py), so this is a best-effort set: an unlisted tool falls
-# through to WORKING (magenta busy), which is a cosmetic miss (blue vs magenta),
-# never a stuck tab.
+# same colour intent as claude's Bash). codex sends CLAUDE-COMPATIBLE hook
+# payloads, so its shell tool arrives as `Bash` (verified live 0.144.1 — the
+# PreToolUse `tool_name` is "Bash", not "exec_command") and a Task as `Task`/
+# `Agent`; this mirrors claude's own Bash/Task/Agent -> executing mapping. The
+# codex-native spellings are kept too (they drift across versions: shell ->
+# exec_command; apply_patch on function_call then a custom tool — see
+# rollout.py), so a version that sends the raw name still goes blue. An unlisted
+# tool falls through to WORKING (magenta busy) — a cosmetic miss, never a stuck
+# tab.
 EXEC_TOOLS = frozenset({
+    "Bash", "Task", "Agent",                        # claude-compatible names codex emits
     "exec_command", "shell", "local_shell", "unified_exec",
     "apply_patch", "container.exec",
 })
 # codex's question tool (plan-mode in practice) — codex is asking YOU -> red.
-ASK_TOOLS = frozenset({"request_user_input"})
+# `AskUserQuestion` is the claude-compatible name a codex payload may carry for
+# the same intent (mirrors claude's own ask tools).
+ASK_TOOLS = frozenset({"request_user_input", "AskUserQuestion"})
 
 
 def resolve(event, payload):

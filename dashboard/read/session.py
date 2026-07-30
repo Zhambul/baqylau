@@ -301,13 +301,17 @@ def session_payload(sid, agent=""):
     data["cwd"] = canon_cwd(data.get("cwd") or "")   # collapse the /kitty symlink
     data["git"] = git_info(data["cwd"])
     # the effort quick-button's label (docs/dashboard.md, *Web quick
-    # commands*): the SAVED effort level — every /effort persists itself
-    # there, so it is the last applied value; per-session effort is readable
-    # from nowhere else. Resolved for the session's ACCOUNT (its statusline-
+    # commands*). A codex session's effort is a per-turn ROLLOUT fact (its last
+    # turn_context, surfaced on `ctx.effort`) — codex has no cwd-keyed default and
+    # a `/effort` it never persists, so the ctx value is the ONLY true source and
+    # is preferred here (else the cwd default showed a stale/foreign level, e.g.
+    # `high` on a `low` codex run). Claude's `ctx` carries no effort, so it falls
+    # back to the SAVED level — every Claude `/effort` persists itself there, the
+    # last applied value, resolved for the session's ACCOUNT (its statusline-
     # stashed slug picks the config dir — accounts each carry their own
-    # settings.json)
-    data["effort"] = plugins.effort_default(data.get("cwd") or "",
-                                            session_slug(sid))
+    # settings.json).
+    data["effort"] = (data.get("ctx") or {}).get("effort") \
+        or plugins.effort_default(data.get("cwd") or "", session_slug(sid))
     # the agent cards' per-agent model·effort — reuses the ctx just stamped, so
     # the session effort resolved above is its inherit-default
     agents_model_effort(data["agents"], data["effort"])

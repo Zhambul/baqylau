@@ -68,19 +68,23 @@ def _line_ts(s):
 def context(path, main=False):
     """Context saturation for a codex rollout — the LAST `token_count` record's
     `last_token_usage.total_tokens` over `model_context_window`, as {"used",
-    "window", "pct", "model"}; None when the tail holds no usable usage (a fresh
-    run, an unreadable file). The codex twin of transcript.context_probe.
+    "window", "pct", "model", "effort"}; None when the tail holds no usable usage
+    (a fresh run, an unreadable file). The codex twin of transcript.context_probe.
 
     codex's CUMULATIVE `total_token_usage` never resets across a compaction, so
     the ctx bar reads the LAST TURN's total (`last`) — the one figure that
     measures the live occupancy (docs/codex.md *token_count keeps three things*).
-    `model` is the last `turn_context`'s model id; `main` is accepted for the
-    provider arity but ignored — codex has no sidechain records to skip."""
+    `model` + `effort` are the LAST `turn_context`'s — so a mid-session `/model`
+    switch is reflected (the reversed scan finds the newest first). `effort` is
+    codex's ONLY effort source (it has no cwd-keyed default, unlike Claude's
+    persisted `/effort`); the dashboard prefers it over effort_default. `main` is
+    accepted for the provider arity but ignored — codex has no sidechain records
+    to skip."""
     lines = TL.tail_lines(path, CTX_TAIL_B)
     if lines is None:
         return None
     used = window = None
-    model = ""
+    model = effort = ""
     for raw in reversed(lines):
         if used is None and b'"token_count"' in raw:
             try:
@@ -99,12 +103,14 @@ def context(path, main=False):
                 rec = None
             if rec and rec["kind"] == "turn_context":
                 model = rec.get("model") or ""
+                effort = rec.get("effort") or ""
         if used is not None and model:
             break
     if used is None or not window:
         return None
     return {"used": used, "window": window,
-            "pct": min(100, used * 100 // window), "model": model}
+            "pct": min(100, used * 100 // window), "model": model,
+            "effort": effort}
 
 
 def prompts(path, cap=PROMPT_CAP):

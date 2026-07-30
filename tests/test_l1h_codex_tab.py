@@ -19,6 +19,12 @@ def test_resolve_maps_every_codex_event():
     assert TS.resolve("PreToolUse", {"tool_name": "exec_command"})[0] == EXECUTING
     assert TS.resolve("PreToolUse", {"tool_name": "shell"})[0] == EXECUTING
     assert TS.resolve("PreToolUse", {"tool_name": "apply_patch"})[0] == EXECUTING
+    # codex sends CLAUDE-COMPATIBLE tool names — a shell command arrives as `Bash`
+    # (verified live), so it must go blue like claude's own Bash, not magenta
+    assert TS.resolve("PreToolUse", {"tool_name": "Bash"})[0] == EXECUTING
+    assert TS.resolve("PreToolUse", {"tool_name": "Task"})[0] == EXECUTING
+    assert TS.resolve("PreToolUse",
+                      {"tool_name": "AskUserQuestion"})[0] == AWAITING_COMMAND
     assert TS.resolve("PreToolUse", {"tool_name": "web_search"})[0] == WORKING
     assert TS.resolve("PostToolUse", {})[0] == WORKING
     assert TS.resolve("PostToolUseFailure", {})[0] == WORKING

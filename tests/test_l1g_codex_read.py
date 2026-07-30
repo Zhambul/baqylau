@@ -108,7 +108,8 @@ def test_codex_context_reads_last_turn_over_window(tmp_path):
     p = _full_rollout(tmp_path)
     ctx = plugins.context(p)
     assert ctx == {"used": 13600, "window": 272000,
-                   "pct": 13600 * 100 // 272000, "model": "gpt-5.1-codex"}
+                   "pct": 13600 * 100 // 272000, "model": "gpt-5.1-codex",
+                   "effort": "high"}    # effort rides the ctx (the ✧ button's source)
     # a rollout with no token_count yields nothing (fresh run)
     bare = _rollout(tmp_path, [{"type": "session_meta", "payload": {"cwd": "/w"}}])
     assert plugins.context(bare) is None
