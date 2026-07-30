@@ -25,11 +25,64 @@ import glob
 import os
 import re
 import sqlite3
+import time
 
 _CODEX_DIR = os.path.join(os.path.expanduser("~"), ".codex")
 _UUID = re.compile(r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
                    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12})")
 TITLE_HEAD_LINES = 200   # rollout head lines the first-prompt fallback scans
+
+
+_STATE_DB = {}          # _CODEX_DIR -> (deadline, resolved path)
+STATE_DB_TTL_S = 60.0   # how long a resolved index path is trusted (see below)
+
+
+def _state_db_cached():
+    """`_state_db()` behind a small per-directory TTL memo.
+
+    The RESOLUTION is a glob of ~/.codex plus a regex per candidate, and the
+    only thing that can change its answer is codex shipping a HIGHER-numbered
+    index file — which happens on a codex upgrade, not during a page tick. The
+    plain resolver stays the one that knows HOW (and the tests drive it), this
+    is only about how often. It matters because `title_sig` runs on every title
+    lookup — per codex session card, per slow tick — where the un-memoised glob
+    would be the most expensive thing in a path that exists to be cheap.
+
+    Keyed on `_CODEX_DIR` and read at CALL time, never at import: the tests
+    monkeypatch that global, and a key that captured it would serve one test's
+    directory to the next. A NEGATIVE answer is never cached — "there is no
+    index yet" is the one answer that flips on its own (a first codex run, a
+    fixture that writes the file after the first read), and a miss is a glob of
+    a directory we just found nothing in."""
+    hit = _STATE_DB.get(_CODEX_DIR)
+    now = time.time()
+    if hit and hit[0] > now:
+        return hit[1]
+    db = _state_db()
+    if db:
+        _STATE_DB[_CODEX_DIR] = (now + STATE_DB_TTL_S, db)
+    return db
+
+
+def state_sig():
+    """A freshness stamp for the codex state INDEX — "<mtime>:<size>" of the
+    resolved `state_<N>.sqlite`, or "" when there is none.
+
+    This is what makes a codex rename VISIBLE on the web: the name lives in the
+    index's `threads.title`, so renaming leaves the rollout byte-identical and
+    the read model's (path, size) title memo would serve the old name forever
+    (dashboard/read/cache.size_cached's `sig`). A stat is deliberately the whole
+    test — it is coarse (any thread's rename re-computes every codex session's
+    title) and that is the right trade for a memo whose miss costs one small
+    query, where the alternative is a per-uuid read on every tick."""
+    db = _state_db_cached()
+    if not db:
+        return ""
+    try:
+        st = os.stat(db)
+    except OSError:
+        return ""
+    return "%d:%d" % (st.st_mtime_ns, st.st_size)
 
 
 def _state_db():

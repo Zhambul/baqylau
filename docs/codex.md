@@ -499,7 +499,58 @@ touching the dashboard.
 - **`rename`** — a LIVE `/rename <name>` paste (the title lands in
   `~/.codex/state_<N>.sqlite threads.title`); the PARKED path stays P3's
   `title.set_session_title`. Works live AND parked, both gated by
-  `plugins.renameable`.
+  `plugins.renameable`. Two things a codex rename needs that a Claude one does
+  not, both because codex keeps the name OUTSIDE the transcript and tells
+  nobody — see *The tab title is ours to write* and *A rename the read model
+  can SEE* below.
+
+#### The tab title is ours to write
+
+`Frontend.set_tab_title` spent a year with no production caller on purpose:
+Claude Code re-emits the session name as an OSC title at every turn boundary,
+so the kitty tab already follows it, and retitling would make the tab a SECOND
+writer free to disagree with the session's own name (docs/dashboard.md *Web
+rename*).
+
+**That argument inverts for codex.** Its TUI emits no title at all — so a codex
+tab follows nothing, and a codex rename used to leave it showing the old name
+forever while every other surface updated. There is no first writer to conflict
+with, so ours is not a second one: `CodexHost.rename` calls `set_tab_title`
+after its paste and is that capability's ONE sanctioned caller. kitty's
+stickiness, the cost that made this wrong for Claude, costs nothing here —
+being frozen to an explicit title only matters when something else would
+otherwise have moved it.
+
+It is best-effort and strictly AFTER the paste: the paste IS the rename, this
+only makes it visible, so a refused retitle is audited (`codex rename (tab
+retitle failed)`) and reported in the `web-rename` row's `tab_title` field
+without turning a successful rename into a failure.
+
+#### A rename the read model can SEE
+
+The dashboard memoises a session's title on `(transcript path, SIZE)` — sound
+for an append-only transcript, and wrong for codex: the name lives in the state
+index, so renaming leaves the rollout **byte-identical** (a contract test pins
+exactly that: `set_session_title` never grows a rollout). The list page
+therefore served the pre-rename title indefinitely — measured on a real session
+whose `threads.title` said `test` while the page did not.
+
+The memo's freshness key now comes from the OWNING HOST: `HostControl.
+title_sig(tpath)` returns any string that changes when the title might have,
+and `read/cache.size_cached` folds it into the key. Claude Code returns `""` —
+the file really is the whole story — and codex returns `title.state_sig()`, the
+`mtime:size` of the resolved `state_<N>.sqlite`. One stat covers every thread
+(coarse: any rename re-computes every codex session's title, which is the right
+trade against a per-uuid query per tick), and the index PATH is TTL-memoised
+(`STATE_DB_TTL_S`) because only a codex upgrade can change which numbered file
+is newest — a negative result is never cached, since "no index yet" is the one
+answer that flips on its own.
+
+That alone repaints on the next slow tick (the `title` SSE channel re-evaluates
+`session_title` every pass, so no new channel or nudge is needed). For the
+second the user is actually watching, `post_rename` also evicts the row
+outright (`read/meta.evict_title`) on both halves: after our OWN write, a stale
+memo is a bug rather than a cache.
 - **`ask`** — drive codex's own `request_user_input` dialog. Its geometry differs
   from Claude's (a `Question N/M` header, numbered options with a `›` cursor, an
   `enter to submit answer` footer), so Claude's `askdialog.region()` returns "" on

@@ -215,21 +215,48 @@ class CodexHost(HostControl):
         title.set_session_title, wired in P3). fe/win ride in `ctx` because the
         gesture signature is sid-keyed (a parked session has no window). Result
         {status, cid, ok}; REJECTED with no window (the caller then takes the
-        parked path)."""
+        parked path).
+
+        AND it retitles the kitty tab (`Frontend.set_tab_title`) — the one
+        sanctioned caller of that capability. The "no set_tab_title" rule was
+        argued for CLAUDE CODE and it INVERTS here: Claude Code re-emits the
+        session name as an OSC title at every turn boundary, so retitling would
+        make the tab a SECOND writer free to disagree with the session's own.
+        codex's TUI emits NO title at all — there is no first writer, so our
+        gesture is the only one there is, and without this the tab keeps
+        whatever name it had while every other surface shows the new one (the
+        reported bug). Nothing can later disagree with it, because nothing else
+        ever writes it. Best-effort and AFTER the paste: the paste is the
+        rename, this only makes it visible, so a terminal that refuses the
+        retitle must not turn a successful rename into a failure."""
         fe, win = ctx.get("fe"), ctx.get("win")
         if not (fe and win):
             return self._rejected()
         r = self._paste(fe, win, "/rename " + name, ctx, "rename", sid=sid)
         log, sdb = ctx.get("log") or "", ctx.get("sdb") or ""
+        titled = self._retitle(fe, win, name, ctx) if r.get("ok") else None
         A.state_file(log, sdb, ctx.get("action") or "web-rename",
                      {"win": win, "chars": len(name), "ok": bool(r.get("ok")),
                       "tab": ctx.get("tab") or "", "channel": "tui",
                       "queued": bool(ctx.get("queueing")), "host": self.name,
-                      "status": r.get("status"), "cid": r.get("cid")})
+                      "status": r.get("status"), "cid": r.get("cid"),
+                      "tab_title": titled})
         if not r.get("ok"):
             A.error(log, "dashboard rename (%s send failed)" % self.name,
                     {"sid": sid, "win": win})
         return r
+
+    def _retitle(self, fe, win, name, ctx):
+        """Set the kitty tab's title to `name` — see rename(). True/False, and
+        audited on failure; never raises into the gesture."""
+        try:
+            ok = bool(fe.set_tab_title(win, name))
+        except Exception:
+            ok = False
+        if not ok:
+            A.error(ctx.get("log") or "", "codex rename (tab retitle failed)",
+                    {"sid": ctx.get("sid"), "win": str(win)})
+        return ok
 
     def ask(self, fe, win, answers, ctx):
         """Answer codex's OPEN request_user_input dialog (plan-mode-only,
@@ -417,6 +444,19 @@ class CodexHost(HostControl):
         import os
         base = os.path.basename(tpath or "")
         return base[:-len(".jsonl")] if base.endswith(".jsonl") else ""
+
+    def title_sig(self, tpath):
+        """The stat of codex's own state INDEX — the freshness stamp the read
+        model folds into its title memo.
+
+        codex is exactly the host the base's "" default is wrong for: the name
+        lives in `threads.title`, not in the rollout, so a rename leaves the
+        transcript byte-identical and a (path, size) memo serves the old title
+        forever — which is what the list page did (measured: threads.title
+        said `test`, plugins.session_title agreed, the page did not). See
+        title.state_sig for why one stat covers every thread."""
+        from plugins.codex import title
+        return title.state_sig()
 
     def lifecycle_end(self, sid, log, reason):
         """Nothing to do: a web-closed codex tab kills the codex process, and

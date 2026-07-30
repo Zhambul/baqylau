@@ -2702,15 +2702,20 @@ whenever the tail carries an `agent-name` — a rule written when `agent-name`
 could only come from a rename. So the auto name won everywhere except the one
 channel we own outright: the sticky tab title. Hence the split above, and:
 
-- **No `Frontend.set_tab_title` on the live path** (it now has no production
-  caller; `frontends/base.py` says why). Claude Code re-emits the OSC, so the
-  tab follows on its own AND keeps following future titles. Retitling as well
-  would make the tab a SECOND writer of the name, free to disagree with the
-  one the session actually has — a queued rename the user then Escapes out of
-  would leave the tab asserting a name nothing else knows. That divergence IS
-  the shape the bug presented as. (One legacy: a tab made sticky by a
-  PRE-2026-07-29 web rename stays frozen for the rest of that session — kitty
-  stickiness is per tab and permanent.)
+- **No `Frontend.set_tab_title` on CLAUDE CODE's live path** (`frontends/
+  base.py` says why). Claude Code re-emits the OSC, so the tab follows on its
+  own AND keeps following future titles. Retitling as well would make the tab a
+  SECOND writer of the name, free to disagree with the one the session actually
+  has — a queued rename the user then Escapes out of would leave the tab
+  asserting a name nothing else knows. That divergence IS the shape the bug
+  presented as. (One legacy: a tab made sticky by a PRE-2026-07-29 web rename
+  stays frozen for the rest of that session — kitty stickiness is per tab and
+  permanent.) **The argument is about a host that PUBLISHES its title, and it
+  inverts for one that doesn't:** codex's TUI emits no OSC title, so a codex
+  tab never followed anything and a codex rename left it stale forever. There
+  our retitle is the FIRST writer, not a second — `CodexHost.rename` calls
+  `set_tab_title` after its paste, the capability's one sanctioned caller
+  (docs/codex.md *The tab title is ours to write*).
 - **Mid-turn a live rename QUEUES** (`queued: true`, the reply's field) — it
   lands in the TUI's message queue and applies at the turn boundary, exactly
   like ✦ auto and the other quick commands. The page deliberately does NOT

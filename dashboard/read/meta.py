@@ -15,10 +15,11 @@ from core import sessionapi as API
 from dashboard import prefs
 from dashboard.read.cache import MEMO_CAP, size_cached, ttl_cached
 
-_TITLES = API.BoundedLRU(MEMO_CAP)   # transcript_path -> (size, title): a title
-#                   only changes when the file grows, so (path, size) is the
-#                   natural cache key — the list poll must not re-scan 50
-#                   transcript heads per tick
+_TITLES = API.BoundedLRU(MEMO_CAP)   # transcript_path -> (size, sig, title): the
+#                   list poll must not re-scan 50 transcript heads per tick. The
+#                   file's size is most of the key; `sig` is the OWNING HOST's
+#                   stamp for a name it keeps somewhere ELSE (codex's state
+#                   index), which a growing-file key cannot see move
 
 
 def session_kv(sid, key, sdb=None):
@@ -44,6 +45,34 @@ def session_kv(sid, key, sdb=None):
     if sdb is None:
         sdb = API.state_db_for(sid)
     return API.kv_at(sdb, key) if sdb else None
+
+
+def _title_sig(tpath):
+    """The owning host's title-freshness stamp for `tpath` (HostControl.
+    title_sig), or "" — the sibling of `_rename_override`'s `title_key` lookup,
+    resolved through the same `plugins.host_of`. "" for an unowned path, which
+    reads as "the file is the whole story" and is what every host but codex
+    answers anyway."""
+    try:
+        host = plugins.host_of(tpath or "")
+        return host.title_sig(tpath) if host is not None else ""
+    except Exception:
+        return ""                       # a stamp we can't read is no stamp
+
+
+def evict_title(tpath):
+    """Forget `tpath`'s memoised title — the INSTANT-echo half of a rename.
+
+    The `sig` key already makes a codex rename visible on the next tick, but a
+    rename is a gesture the user is watching: the write and the read happen in
+    the same second, and codex's index has a coarse mtime. Dropping the row
+    costs one small re-read and removes the whole question. Called by the one
+    writer (post_rename) — a stale memo after OUR OWN write is the failure this
+    exists to make impossible, not an optimisation."""
+    try:
+        _TITLES.pop(tpath, None)
+    except Exception:
+        pass                            # a memo we can't evict re-reads by sig
 
 
 def _rename_override(tpath):
@@ -74,7 +103,10 @@ def session_title(tpath):
             if override:
                 title = override
         return title
-    return size_cached(_TITLES, tpath, compute, empty="")
+    # `sig`: a title is NOT always a fact about the transcript file (see
+    # _title_sig / cache.size_cached). For Claude Code it is "" and this is the
+    # (path, size) memo it always was.
+    return size_cached(_TITLES, tpath, compute, empty="", sig=_title_sig(tpath))
 
 
 _GIT = API.BoundedLRU(MEMO_CAP)   # cwd -> the _git_resolve result (None = not a

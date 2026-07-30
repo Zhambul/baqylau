@@ -17,7 +17,9 @@
 #                                 needed it too); aliased below.
 #   size_cached (path, size)    — a transcript, which only changes by GROWING, so
 #                                 os.path.getsize is a complete fingerprint and a
-#                                 miss costs one stat.
+#                                 miss costs one stat. Its optional `sig` covers
+#                                 the one value that is NOT wholly the file's: a
+#                                 session title a host keeps somewhere else.
 #   ttl_cached  (key, wall TTL) — an input with NO cheap fingerprint: a directory
 #                                 WALK, a `git status` subprocess, a whole-corpus
 #                                 aggregate. Bounded staleness is the only rule
@@ -42,14 +44,24 @@ _db_sig = API.db_sig
 _db_cached = API.db_cached
 
 
-def size_cached(cache, path, compute, empty=None):
-    """Read-through a (path, size) memo: `empty` for a falsy path or an
+def size_cached(cache, path, compute, empty=None, sig=""):
+    """Read-through a (path, size[, sig]) memo: `empty` for a falsy path or an
     unstatable file, the cached value while the file's size is unchanged, else
     `compute()` (a zero-arg callable) stored under the new size.
 
     Valid only for an APPEND-ONLY file — a transcript. A file that can be
     rewritten in place keeps its size and would serve a stale value forever;
-    that is what db_cached's stat-plus-WAL fingerprint is for."""
+    that is what db_cached's stat-plus-WAL fingerprint is for.
+
+    `sig` is an OUT-OF-BAND freshness stamp folded into the key, for a value
+    derived from the file PLUS something else that can move on its own. The one
+    caller is the session TITLE: a codex session's name lives in codex's state
+    index, not in its rollout, so a rename left the transcript byte-identical
+    and the (path, size) key served the old title forever (the confirmed bug —
+    the list page never updated). The stamp is the OWNING HOST's answer
+    (`HostControl.title_sig`), so the tier that caches a host's fact does not
+    have to know what makes that fact stale. "" is the honest default: the file
+    is the whole story, which is exactly true for an append-only transcript."""
     if not path:
         return empty
     try:
@@ -57,10 +69,10 @@ def size_cached(cache, path, compute, empty=None):
     except OSError:
         return empty
     hit = cache.get(path)
-    if hit and hit[0] == size:
-        return hit[1]
+    if hit and hit[0] == size and hit[1] == sig:
+        return hit[2]
     v = compute()
-    cache[path] = (size, v)
+    cache[path] = (size, sig, v)
     return v
 
 

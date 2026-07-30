@@ -530,6 +530,73 @@ def test_codex_title_falls_back_to_first_prompt(tmp_path, monkeypatch):
     assert plugins.session_title(p) == "fix the parser"
 
 
+def test_a_codex_rename_moves_the_title_memo_key(tmp_path, monkeypatch):
+    """THE codex-rename staleness bug: the name lives in codex's state index,
+    so a rename leaves the ROLLOUT byte-identical — and the read model's title
+    memo is keyed on (path, SIZE). The list page served the pre-rename title
+    forever (measured: threads.title said `test`, the page did not).
+
+    The fix is that the memo's freshness key comes from the OWNING HOST. This
+    is the fixture the bug needs: an index that CHANGES while the transcript
+    does not."""
+    import plugins
+    from dashboard.read import meta
+    from plugins.codex import title
+    p = _full_rollout(tmp_path)
+    d = _fake_state_index(tmp_path, _UUID, "before")
+    monkeypatch.setattr(title, "_CODEX_DIR", d)
+    title._STATE_DB.clear()             # the resolved-path memo is per-dir
+    size = os.path.getsize(p)
+    assert meta.session_title(p) == "before"
+
+    # rename THROUGH the index, exactly as the parked write does
+    sig = title.state_sig()
+    assert plugins.set_session_title(p, "after") is True
+    assert os.path.getsize(p) == size   # the rollout never moved — the bug
+    assert title.state_sig() != sig     # …but the host's stamp did
+    assert meta.session_title(p) == "after"
+
+
+def test_the_title_memo_is_unchanged_for_a_host_with_no_stamp(tmp_path):
+    """…and the base "" stamp keeps the (path, size) memo exactly as it was:
+    one compute per size, no re-read per call. Claude Code answers "" because
+    for it the transcript really is the whole story."""
+    from dashboard.read import cache
+    from core import sessionapi as API
+    memo = API.BoundedLRU(8)
+    f = tmp_path / "t.jsonl"
+    f.write_text("a\n")
+    n = {"calls": 0}
+
+    def compute():
+        n["calls"] += 1
+        return "T%d" % n["calls"]
+
+    assert cache.size_cached(memo, str(f), compute, empty="") == "T1"
+    assert cache.size_cached(memo, str(f), compute, empty="") == "T1"
+    assert n["calls"] == 1                       # memoised on size alone
+    assert cache.size_cached(memo, str(f), compute, empty="", sig="s1") == "T2"
+    assert cache.size_cached(memo, str(f), compute, empty="", sig="s1") == "T2"
+    assert cache.size_cached(memo, str(f), compute, empty="", sig="s2") == "T3"
+    assert n["calls"] == 3                       # a moved stamp re-computes
+
+
+def test_the_state_index_path_memo_never_caches_a_negative(tmp_path,
+                                                            monkeypatch):
+    """The resolved index PATH is TTL-memoised (only a codex upgrade changes
+    which numbered file is newest), but "there is no index yet" must NOT be —
+    a first codex run, or any fixture that writes the file after the first
+    read, would otherwise be invisible for a whole TTL."""
+    from plugins.codex import title
+    d = tmp_path / ".codex"
+    d.mkdir()
+    monkeypatch.setattr(title, "_CODEX_DIR", str(d))
+    title._STATE_DB.clear()
+    assert title.state_sig() == ""               # nothing there yet
+    _fake_state_index(tmp_path, _UUID, "x")      # …and now there is
+    assert title.state_sig() != ""
+
+
 def test_codex_set_session_title_writes_the_index(tmp_path, monkeypatch):
     import plugins
     from plugins.codex import title

@@ -237,13 +237,20 @@ class Frontend:
         the session (docs/session-naming-findings.md §4). True when the
         terminal accepted the call, else False.
 
-        DELIBERATELY unused by the web rename since 2026-07-29, and don't put
-        it back: a live rename goes through Claude Code's own `/rename`, which
-        re-emits that OSC, so the tab follows on its own. Calling this too
-        would make the tab a SECOND writer of the name — free to disagree with
-        the one the session actually has, which is precisely the split the
-        rename bug presented as (a tab asserting the manual name while every
-        other reader had the auto one)."""
+        DELIBERATELY unused by CLAUDE CODE's rename since 2026-07-29, and don't
+        put it back there: a live rename goes through Claude Code's own
+        `/rename`, which re-emits that OSC, so the tab follows on its own.
+        Calling this too would make the tab a SECOND writer of the name — free
+        to disagree with the one the session actually has, which is precisely
+        the split the rename bug presented as (a tab asserting the manual name
+        while every other reader had the auto one).
+
+        That argument is about a host that PUBLISHES its title, and it inverts
+        for one that does not. codex's TUI emits no OSC title at all, so its tab
+        never followed anything and a codex rename left the tab stale forever;
+        there `CodexHost.rename` is the FIRST writer, not a second one, and it
+        is this capability's one sanctioned caller (docs/codex.md *The tab title
+        is ours to write*)."""
         return False
 
     # --- viewport scroll / read ---------------------------------------------

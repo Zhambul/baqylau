@@ -342,6 +342,25 @@ class HostControl:
         OWNING host's fact."""
         return ""
 
+    def title_sig(self, tpath):
+        """A cheap FRESHNESS STAMP for this transcript's session title — any
+        string that CHANGES when the title could have changed. "" (the default)
+        means "the transcript file is the whole story", which is exactly true
+        for a host that writes the name into the transcript itself.
+
+        It exists because that is NOT true of every host: codex keeps the name
+        in its own state index (`threads.title`), so a codex rename leaves the
+        rollout byte-identical — and the read model's title memo is keyed on
+        (path, SIZE). The list page therefore served the pre-rename title
+        forever, which is the bug this closes. Asking the owning host is the
+        only way the caching tier can know; sniffing what makes one host's
+        title stale is the thing this interface deletes.
+
+        Cheap is part of the contract: it is read on every title lookup (a slow
+        SSE tick, per session card), where the memo it guards exists precisely
+        so the expensive read is not. A stat is the right order of magnitude."""
+        return ""
+
     # --- screen READS the web MIRRORS (no keys pressed) -----------------------
     # Read-only probes of a live window. They are host methods, not providers,
     # because they need the frontend and are pure TUI geometry; the inert

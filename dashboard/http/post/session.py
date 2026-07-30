@@ -16,6 +16,7 @@ from dashboard.config import (EFFORTS,
                               MODEL_OK, NAME_CTRL, QUEUE_TABS, SID_OK)
 from dashboard.control import launch
 from dashboard.control.launch import launch_argv
+from dashboard.read import meta
 
 A = load_audit()
 
@@ -435,8 +436,26 @@ class _SessionMixin:
             return
         if not res.get("ok"):
             return self._json({"error": "send failed"}, 502)
+        self._forget_title(sid)
         return self._json({"ok": True, "title": name, "channel": "tui",
                            "queued": queued})
+
+    def _forget_title(self, sid):
+        """Drop this session's memoised title after OUR OWN rename, so the next
+        read re-derives it instead of serving the name we just replaced.
+
+        The memo's freshness key already covers the general case (the file's
+        size, plus the owning host's `title_sig` for a name kept outside it —
+        codex's state index). This is about the SECOND the user is watching:
+        the write and the read happen in the same tick, and a host's index has
+        a coarse mtime. One small re-read, and the class of bug where the page
+        still shows the old name after a successful rename cannot happen at
+        all."""
+        try:
+            row = API.session_row(sid) or {}
+            meta.evict_title(row.get("transcript_path") or "")
+        except Exception:
+            pass                        # the sig key still refreshes it
 
     def _rename_parked(self, sid, name, log, sdb, tpath):
         """The PARKED half of post_rename: append the `agent-name` naming
@@ -473,5 +492,6 @@ class _SessionMixin:
         A.state_file(log, sdb, "web-rename",
                      {"win": "", "chars": len(name), "ok": bool(appended),
                       "channel": "transcript", "override": override_ok})
+        meta.evict_title(tpath)         # see _forget_title
         return self._json({"ok": True, "title": name,
                            "channel": "transcript"})
