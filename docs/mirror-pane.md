@@ -272,6 +272,43 @@ the skeleton reports for a bare redirect) is in `read_readers`, so a kind can ta
 `sed x.md` without also taking `< x.md`; the stream plane's redirect branch stays
 reader-agnostic, as it always was.
 
+**SEVERAL files, ONE block.** `cat app.py utils.py` reads two files and the
+one-liner named only the first — the mirror said one file, the scoreboard counted
+one, and `cat a.py b.js` highlighted b.js as PYTHON (the first file's lexer). Now
+every matched file is collected — every argument of a whole reader, and across
+statements too (`sed -n 1,20p a.md; sed -n 1,20p b.md`) — and the block names all of
+them: the line shows the first plus a dim `+N more` (`streamfmt.file_line`'s `more`,
+the ONE owner of that fragment), the expansion's header lists them, each path feeds
+the scoreboard's unique-file set, and the web's collapsed summary weights the row so
+it reads *"Read 2 files"* rather than counting one (`actclass.readmore` parses the
+`+N more` back off the text, exactly as `diffstat` recovers `+A -R`; a parallel op
+field would be a second encoding of one fact). Where the files' lexers DISAGREE the
+detection value goes `None` and the body renders unhighlighted, rather than painting
+b.js as python.
+
+*The collapse DECISION is deliberately unchanged* — still the last statement alone
+(`_effective`) — so exactly the same commands collapse as before; only the file LIST
+widened. Broadening the decision to "any statement is a read" would start collapsing
+`cat foo.py; ls`, hiding ls's real output behind a `Read(foo.py)` line.
+
+**What can never be recovered is which OUTPUT belongs to which file.** `cat a.py
+b.py` emits one undelimited stream; so does `sed a; echo ---; sed b`. There is no
+marker to split on, which is why this is one block naming both rather than two rows
+each claiming the same bytes. Three rejected designs, all of which fake that
+attribution:
+
+- **Rewrite the command to interleave delimiters** (`for f in …; do echo "\x1f$f";
+  cat "$f"; done`). The tee wrapper is *additive*; this changes the command's
+  semantics — exit codes, quoting, stderr ordering.
+- **Re-read each file from disk** and render per-file blocks. There is precedent
+  (`file_fmt.view_ops` falls back to a disk re-read), but here it lies exactly when
+  it matters: `head -20` and `sed -n 1,80p` truncate, and the file may have changed
+  since. Disk content presented as "what the command printed" is wrong in the common
+  case.
+- **N one-liners sharing one stash.** Mechanically broken: `view-open` is a SET of
+  ids, so one click would expand the block under all N lines. It would need N
+  stashes each holding a copy of the same output.
+
 **A trailing stderr redirect is not the trailing argument.** The tailarg rule
 (`sed`/`grep` put a script/pattern first, so only the LAST token can be the file)
 exists to stop `grep 'foo.py' x.txt` masquerading as python — but it took the last

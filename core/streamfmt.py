@@ -220,8 +220,8 @@ def dim_gut(text, rgb, g=None, bubbled=False):
 
 
 def file_line(verb, name, rgb, failed=False, extent="", added=0, removed=0,
-              rng=""):
-    """The file-op one-liner text: `verb(name)[  extent][  +A -R][  range]`.
+              rng="", more=0):
+    """The file-op one-liner text: `verb(name)[  extent][  +A -R][  range][  +N more]`.
 
     The shared shape three producers paint — the main session's file formatter
     (plugins/claude_code/file_fmt.py), the subagent substream renderer
@@ -234,7 +234,16 @@ def file_line(verb, name, rgb, failed=False, extent="", added=0, removed=0,
     verb(name) head: no extent/counts/range (counts would claim lines never
     written). Deliberately NOT shared: the who-prefix, model/ctx tags, failure
     mark, and click-to-view hyperlink — those differ per caller and are
-    appended/wrapped around this text."""
+    appended/wrapped around this text.
+
+    `more` is the count of ADDITIONAL files this one line stands for, beyond the one
+    it names — a BASH read of several files at once (`cat app.py utils.py`), where
+    the mirror has one block because the command produced one undivided output
+    (plugins/claude_code/cmd_fmt._render_read). It lives here, with the rest of the
+    shape, because the WEB reads it back off this text to weight its collapsed-run
+    summary ("Read 2 files", not "Read 1 file" — dashboard/opshtml/actclass.readmore),
+    exactly as it recovers `+A -R` for the edit summary. One encoding of the fact,
+    one owner; a field beside it would be a second."""
     col = R.fg(*O.RED) if failed else R.fg(*rgb)
     line = col + verb + R.DIM + "(" + R.COL["def"] + name + R.DIM + ")" + R.RST
     if failed:
@@ -250,8 +259,15 @@ def file_line(verb, name, rgb, failed=False, extent="", added=0, removed=0,
         line += "  " + " ".join(parts)
     if rng:
         line += "  " + R.DIM + rng + R.RST
+    if more > 0:
+        line += "  " + R.DIM + MORE_FILES % more + R.RST
     return line
 
+
+# The "…and N more files" fragment file_line appends, and the ONE place its wording
+# lives: the terminal paints it and dashboard/opshtml/actclass.readmore parses it
+# back to weight the web's collapsed summary. Changing the words here changes both.
+MORE_FILES = "+%d more"
 
 SCRATCH_ICON = "✎"
 # The per-session scratchpad agent tools offer for temp files

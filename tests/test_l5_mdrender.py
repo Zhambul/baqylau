@@ -414,10 +414,10 @@ def test_read_command_names_kind_file_and_reader():
     of assuming a lexer."""
     from plugins.claude_code.tools import read_command
     assert read_command("sed -n 60,110p tests/jsdom/domshim.js") == (
-        ("code", "javascript"), "tests/jsdom/domshim.js", "sed")
+        ("code", "javascript"), ("tests/jsdom/domshim.js",), "sed")
     assert read_command("grep -n color app/theme.scss") == (
-        ("code", "scss"), "app/theme.scss", "grep")
-    assert read_command("cat notes.txt") == (None, None, None)
+        ("code", "scss"), ("app/theme.scss",), "grep")
+    assert read_command("cat notes.txt") == (None, (), None)
 
 
 def test_read_command_takes_a_markdown_slice():
@@ -428,16 +428,16 @@ def test_read_command_takes_a_markdown_slice():
     read-eligible: they keep streaming live through MarkdownStreamer."""
     from plugins.claude_code.tools import read_command
     assert read_command("sed -n 120,400p /p/CLAUDE.md") == (
-        ("md", True), "/p/CLAUDE.md", "sed")
+        ("md", True), ("/p/CLAUDE.md",), "sed")
     assert read_command("grep -n '^## ' docs/dashboard.md") == (
-        ("md", True), "docs/dashboard.md", "grep")
+        ("md", True), ("docs/dashboard.md",), "grep")
     assert read_command("sed -n 1,5p notes.markdown")[0] == ("md", True)
     for whole in ["cat CLAUDE.md", "head -50 CLAUDE.md", "tail -20 x.md",
                   "< r.md", "cat < r.md"]:
-        assert read_command(whole) == (None, None, None), whole
+        assert read_command(whole) == (None, (), None), whole
     # …and a kind with no read plane at all never collapses (json/yaml stream).
     for other in ["cat data.json", "sed -n 1p c.yml", "cat notes.txt"]:
-        assert read_command(other) == (None, None, None), other
+        assert read_command(other) == (None, (), None), other
 
 
 def test_read_command_ignores_a_trailing_stderr_redirect():
@@ -451,26 +451,58 @@ def test_read_command_ignores_a_trailing_stderr_redirect():
     `cat` never had the bug — a WHOLE reader takes the file anywhere."""
     from plugins.claude_code.tools import read_command
     assert read_command("sed -n 1,80p /w/note.md 2>/dev/null") == (
-        ("md", True), "/w/note.md", "sed")
+        ("md", True), ("/w/note.md",), "sed")
     assert read_command("sed -n 1,120p /d/availability.md 2>&1") == (
-        ("md", True), "/d/availability.md", "sed")
+        ("md", True), ("/d/availability.md",), "sed")
     assert read_command("grep -n foo app.py 2>/dev/null") == (
-        ("code", "python"), "app.py", "grep")
+        ("code", "python"), ("app.py",), "grep")
     assert read_command("grep -n foo app.py 2>>errors.log") == (
-        ("code", "python"), "app.py", "grep")
+        ("code", "python"), ("app.py",), "grep")
     # the anti-masquerade guard the tailarg rule exists for still holds — the
     # PATTERN is never taken as the file, and a recursive grep still opts out
-    assert read_command("grep 'foo.py' x.txt 2>/dev/null") == (None, None, None)
-    assert read_command("grep -r pat src/ 2>/dev/null") == (None, None, None)
+    assert read_command("grep 'foo.py' x.txt 2>/dev/null") == (None, (), None)
+    assert read_command("grep -r pat src/ 2>/dev/null") == (None, (), None)
     assert read_command("grep -ril p ~/w/ --include=*.md 2>/dev/null") == \
-        (None, None, None)
+        (None, (), None)
     # a STDOUT redirect still disqualifies outright (the output never reaches the
     # pane, so there is nothing to collapse), with or without a stderr one
-    assert read_command("sed -n 1,80p note.md > out.txt") == (None, None, None)
+    assert read_command("sed -n 1,80p note.md > out.txt") == (None, (), None)
     assert read_command("sed -n 1,80p note.md 2>/dev/null > out.txt") == \
-        (None, None, None)
+        (None, (), None)
     # …and a redirect must not be read as the file when there is no other arg
-    assert read_command("sed -n 1,80p 2>/dev/null") == (None, None, None)
+    assert read_command("sed -n 1,80p 2>/dev/null") == (None, (), None)
+
+
+def test_read_command_names_every_file_of_a_multi_file_read():
+    """A read of SEVERAL files at once is one block that names them all.
+
+    `cat app.py utils.py` reported only app.py — the mirror said one file, the
+    scoreboard counted one, and `cat a.py b.js` highlighted b.js as PYTHON (the
+    first file's lexer). The decision statement is unchanged (see _effective), so
+    which commands collapse is exactly what it was; only the file LIST widened.
+    What can never be recovered is which OUTPUT belongs to which file — one
+    undelimited stream — so it stays one block, honestly naming both."""
+    from plugins.claude_code.tools import read_command
+    # a whole reader takes every matching argument
+    assert read_command("cat app.py utils.py") == (
+        ("code", "python"), ("app.py", "utils.py"), "cat")
+    # …across STATEMENTS too: the decision keys off the last one, the list doesn't
+    assert read_command("sed -n 1,20p a.md; sed -n 1,20p b.md") == (
+        ("md", True), ("a.md", "b.md"), "sed")
+    # mixed languages: one block carries one lexer, so rather than paint b.js as
+    # python the VALUE goes None and the body falls back to unhighlighted
+    spec, files, reader = read_command("cat a.py b.js")
+    assert (spec.kind, spec.value) == ("code", None)
+    assert files == ("a.py", "b.js") and reader == "cat"
+    # a repeated file is named once
+    assert read_command("cat a.py b.py a.py")[1] == ("a.py", "b.py")
+    # the collapse DECISION is untouched: a command whose LAST statement is not a
+    # read still streams, or `ls`'s real output would hide behind a Read one-liner
+    assert read_command("cat foo.py; ls") == (None, (), None)
+    assert read_command("ls; cat foo.py") == (
+        ("code", "python"), ("foo.py",), "cat")
+    # a non-matching argument beside a matching one is not a file
+    assert read_command("cat -n app.py")[1] == ("app.py",)
 
 
 def test_read_command_honours_both_env_gates(monkeypatch):
@@ -480,14 +512,14 @@ def test_read_command_honours_both_env_gates(monkeypatch):
     command streams instead."""
     from plugins.claude_code.tools import read_command
     monkeypatch.setenv("CLAUDE_MIRROR_CMD_READ", "0")
-    assert read_command("sed -n 1,5p x.md") == (None, None, None)
-    assert read_command("sed -n 1,5p x.py") == (None, None, None)
+    assert read_command("sed -n 1,5p x.md") == (None, (), None)
+    assert read_command("sed -n 1,5p x.py") == (None, (), None)
     monkeypatch.delenv("CLAUDE_MIRROR_CMD_READ")
     monkeypatch.setenv("CLAUDE_MIRROR_MD", "0")
-    assert read_command("sed -n 1,5p x.md") == (None, None, None)
+    assert read_command("sed -n 1,5p x.md") == (None, (), None)
     assert read_command("sed -n 1,5p x.py")[0] == ("code", "python"), "code unaffected"
     monkeypatch.setenv("CLAUDE_MIRROR_CODE", "0")
-    assert read_command("sed -n 1,5p x.py") == (None, None, None)
+    assert read_command("sed -n 1,5p x.py") == (None, (), None)
 
 
 def test_read_plane_and_body_builders_agree():

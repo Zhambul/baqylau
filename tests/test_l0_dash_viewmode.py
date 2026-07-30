@@ -752,6 +752,15 @@ def test_view_mode_engine_collapses_runs_and_words_them(dash):
     # "passed 4 messages" appeared for two that had been sent.
     assert d["mailCount"] == "Passed 1 message"        # 1 message, 2 rows
     assert d["mailCountNoId"] == "Passed 2 messages"   # 2 rows, no ids
+    # …and the INVERSE weighting: one ROW that stands for several files. A Bash read
+    # of several files at once (`cat app.py utils.py`) is one block, because the
+    # command produced one undivided output and there is nothing to split it on — so
+    # the row carries `data-nf` (served per item, actclass.readmore off the `+N more`
+    # the one-liner paints) and the summary adds THAT instead of 1. Counting rows
+    # said "Read 1 file" for a command that read three, the same under-report the
+    # one-liner itself used to make by naming only the first file.
+    assert d["multiReadCount"] == "Read 3 files"       # 1 row, nf=3
+    assert d["multiReadMixed"] == "Read 4 files"       # 1+2+1 — a bare row weighs 1
 
     # EXPANDING that summary reveals every member it counted, agents and mail
     # included, under one rail

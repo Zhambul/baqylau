@@ -880,6 +880,9 @@ function stampItem(elem, it) {
   if (it.bad) elem.dataset.bad = "1";
   if (it.add) elem.dataset.add = String(it.add);   // a mutation's line counts, for
   if (it.rem) elem.dataset.rem = String(it.rem);   //   focus mode's edit summary
+  if (it.nf) elem.dataset.nf = String(it.nf);      // how many files ONE read row read
+  //                                                 (a multi-file Bash read is one
+  //                                                 block) — the summary's weight
   if (it.kind) elem.dataset.msg = it.kind;
   if (it.agent) elem.dataset.agent = it.agent;   // the run summary counts agents,
   //                                                not agent-ish rows
@@ -1162,7 +1165,13 @@ function buildRunSummary(key, members, running, anchor, bad, open) {
       // counts once (and can never merge with another one)
       (seen[c] || (seen[c] = new Set())).add(m.dataset[idk] || ("vk" + m.dataset.vk));
     } else if (c) {
-      counts[c] = (counts[c] | 0) + 1;
+      // WEIGHT the row: one item usually stands for one thing, but a Bash read of
+      // several files at once is ONE block (the command produced one undivided
+      // output, so it can't be split into rows) — `data-nf` says how many files it
+      // actually read (served per item, actclass.readmore). Counting rows made a
+      // `cat app.py utils.py` read "Read 1 file", the same under-report the
+      // one-liner itself used to make by naming only the first file.
+      counts[c] = (counts[c] | 0) + (+(m.dataset.nf || 1) || 1);
     }
     counts.add += +(m.dataset.add || 0);       // served per item (actclass.diffstat)
     counts.rem += +(m.dataset.rem || 0);

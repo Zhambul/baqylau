@@ -339,6 +339,39 @@ def test_f2md_slice_renders_as_read(run_hook, test_env, session):
     oracle.assert_clean(test_env, s.sid)
 
 
+def test_f2multi_a_multi_file_read_is_one_block_naming_every_file(
+        run_hook, test_env, session):
+    """END TO END through the real hooks: `cat a.py b.py` collapses to ONE Read
+    one-liner that names the first file with a dim `+1 more`, expands under a header
+    naming BOTH, and feeds BOTH paths to the scoreboard's file set.
+
+    It reported only a.py before — the line, the stash header and the file count all
+    said one file for a command that read two. It stays ONE block because the command
+    produced ONE undivided output: `cat` writes no delimiter between the files, so
+    there is nothing to split on and a second row could only re-claim the same bytes
+    (docs/mirror-pane.md records the rejected splitting designs)."""
+    s = session.make()
+    cmd = "cat lib/a.py lib/b.py"
+    run_hook("claude-cmd-pre.py", P.pre_bash(s, cmd))
+    assert fg_live_record(s) is None, "a code read must not start live streaming"
+    assert any("reader of 2 file(s)" in d for d in oracle.decisions(test_env, s.sid))
+    run_hook("claude-cmd-fmt.py",
+             P.post_bash(s, cmd, tid="toolu_multi",
+                         stdout="import os\n\n\ndef b():\n    pass\n"))
+    lop = next(op for op in s.ops() if op["t"] == "line" and "Read" in op["s"])
+    assert "a.py" in lop["s"] and "+1 more" in lop["s"], "first file + the count"
+    assert "b.py" not in lop["s"], "the line names one file; the header names both"
+    stash = json.loads(s.query_state("SELECT val FROM kv WHERE key=?",
+                                     ("view:toolu_multi",))[0][0])
+    head = next(o for o in stash if o["t"] == "label")
+    assert "a.py" in head["s"] and "b.py" in head["s"], "the expansion names BOTH"
+    # both paths reach the scoreboard's UNIQUE-file set (it counted one before)
+    assert sorted(r[0] for r in s.query_state("SELECT path FROM files")) == \
+        ["lib/a.py", "lib/b.py"]
+    assert any("Read(a.py b.py)" in d for d in oracle.decisions(test_env, s.sid))
+    oracle.assert_clean(test_env, s.sid)
+
+
 def test_f2code_subagent_fg_is_syntax_highlighted(run_hook, test_env, session):
     """A SUBAGENT's `cat Foo.kt` colours too: the substream's fg tailer gets the
     same content-render detection as the main session, because every launch site

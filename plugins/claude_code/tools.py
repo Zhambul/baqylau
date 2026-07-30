@@ -30,6 +30,17 @@ def _statements(cmd):
     return [p for p in _STMT_SEP.split(cmd) if p.strip()]
 
 
+def _clean_stmt(stmt):
+    """One statement with its trailing TRUNCATION pipes peeled (`… | head -40`,
+    `| tail`) — they only shorten the output, so the base read still renders. A
+    NON-truncation pipe (`| awk`, `| grep`) is deliberately LEFT so the per-detector
+    `|` guard rejects it: that output is transformed, not the file."""
+    prev = None
+    while prev != stmt:                             # peel nested `| head | tail`
+        prev, stmt = stmt, _TRUNC_PIPE.sub("", stmt)
+    return stmt.strip()
+
+
 def _effective(cmd):
     """Reduce a command to the single read that determines the mirror's rendering.
 
@@ -40,13 +51,15 @@ def _effective(cmd):
     (`… | head -40`, `| tail`) only shortens that output, so it's stripped and the
     base read still colours. A NON-truncation pipe (`| awk`, `| grep`) is left in
     place so the per-detector `|` guard rejects it — that output is transformed,
-    not the file. Returns the cleaned statement."""
+    not the file. Returns the cleaned statement.
+
+    This is the DECISION statement: whether a command collapses to a Read one-liner
+    at all is judged here and nowhere else. The FILE LIST is gathered more widely
+    (_match_all below) — a distinction that matters, because broadening the decision
+    to "any statement is a read" would start collapsing `cat foo.py; ls`, hiding
+    ls's real output behind a `Read(foo.py)` line."""
     parts = _statements(cmd)
-    stmt = parts[-1] if parts else cmd
-    prev = None
-    while prev != stmt:                             # peel nested `| head | tail`
-        prev, stmt = stmt, _TRUNC_PIPE.sub("", stmt)
-    return stmt.strip()
+    return _clean_stmt(parts[-1] if parts else cmd)
 
 
 def _follow_cd(stmts, cwd, tilde=False):
@@ -367,18 +380,32 @@ class RenderKind:
         return _detect_source(cmd, self)
 
     def read_match(self, cmd):
-        """(detection value, file, reader) when `cmd` is a READ-plane read of
-        this kind's files — else (None, None, None). Same skeleton as `detect`,
-        the read reader sets, plus the reader-admission filter that makes the
-        `< file` form opt-in (see read_readers above)."""
+        """(detection value, files, reader) when `cmd` is a READ-plane read of this
+        kind's files — else (None, (), None). Same skeleton as `detect`, the read
+        reader sets, plus the reader-admission filter that makes the `< file` form
+        opt-in (see read_readers above).
+
+        `files` is a TUPLE — every file the command reads, across all its statements
+        (_match_all), with the DECISION still made by the last statement alone
+        (_match_reader). The one-liner names files[0] and counts the rest.
+
+        The detection VALUE is the files' CONSENSUS, or None when they disagree:
+        `cat a.py b.js` reads two languages and one block can carry one lexer, so
+        rather than highlight b.js as python the body falls back to unhighlighted
+        (cmd_fmt._read_body_code paints raw for a None lexer). md's value is always
+        True, so it can never disagree with itself."""
         admitted = frozenset(self.read_readers) | frozenset(self.read_tailarg_readers)
         if not admitted:
-            return None, None, None
-        v, path, reader = _match_reader(cmd, self.match, self.read_readers,
+            return None, (), None
+        matches, reader = _match_reader(cmd, self.match, self.read_readers,
                                        self.read_tailarg_readers)
-        if v is None or (reader or "") not in admitted:
-            return None, None, None
-        return v, path, reader
+        if not matches or (reader or "") not in admitted:
+            return None, (), None
+        every = _match_all(cmd, self.match, self.read_readers,
+                           self.read_tailarg_readers) or matches
+        values = {v for v, _w in every}
+        return (values.pop() if len(values) == 1 else None,
+                tuple(w for _v, w in every), reader)
 
 
 # Priority-ordered: stream.py picks the FIRST gated-on kind that detects. Per-kind
@@ -416,34 +443,37 @@ RENDER_KINDS = (
 ReadSpec = namedtuple("ReadSpec", "kind value")
 
 
-def _match_reader(cmd, match, readers, tailarg_readers):
-    """The one detection skeleton — the token-matching core, additionally naming
-    WHICH word matched and the reader command that owns it. If `cmd` is a single
-    simple command whose body streams a matching file's raw contents — an
-    allowlisted reader with a matching file argument, or a bare `< file.ext` stdin
-    redirect — return (`match`'s truthy value, file_word, reader); else
-    (None, None, None). `reader` is the invoking command basename ('' for a bare
-    `< file`). Conservative: any pipe, output redirect, chain (; && ||), or command
-    substitution disqualifies, because then the streamed bytes are filtered/
-    derived, not the document itself. Runs on the command's `_effective` read, so a
-    trailing `| head`/`| tail` (truncation) still renders and a multi-statement
-    block keys off its LAST statement's file.
+def _match_stmt(stmt, match, readers, tailarg_readers):
+    """The one detection skeleton — the token-matching core, over ONE already-cleaned
+    statement. Returns (matches, reader): `matches` is a tuple of (detection value,
+    file_word) pairs IN COMMAND ORDER, empty when this statement is not such a read;
+    `reader` is the invoking command basename ('' for a bare `< file`, None when
+    nothing matched).
+
+    A read is an allowlisted reader with a matching file argument, or a bare
+    `< file.ext` stdin redirect. Conservative: any pipe, output redirect, chain
+    (; && ||), or command substitution disqualifies, because then the streamed bytes
+    are filtered/derived, not the document itself.
+
+    SEVERAL files is the normal case for a WHOLE reader — `cat app.py utils.py` reads
+    two, and returning only the first silently lost the rest (the mirror named
+    app.py, and `cat a.py b.js` highlighted b.js as python). A tailarg reader names
+    exactly one by definition. Callers that need a single answer take matches[0].
 
     Takes the matcher + reader sets rather than a RenderKind: BOTH of a kind's
     planes run this same skeleton, each with its own sets (RenderKind.detect /
     RenderKind.read_match)."""
-    cmd = _effective(cmd)
     try:
-        toks = shlex.split(cmd, posix=False)
+        toks = shlex.split(stmt, posix=False)
     except ValueError:
-        return None, None, None
+        return (), None
     if not toks:
-        return None, None, None
+        return (), None
     # Any shell plumbing means the output is no longer the file verbatim.
     if any(t in _PLUMBING for t in toks):
-        return None, None, None
-    if "$(" in cmd:
-        return None, None, None
+        return (), None
+    if "$(" in stmt:
+        return (), None
     def _match(word):
         w = word.strip("'\"")
         # A FLAG is never the file, however it ends. `grep -ril pat ~/wiki/01/
@@ -462,14 +492,14 @@ def _match_reader(cmd, match, readers, tailarg_readers):
             v = _match(toks[i + 1])
             if v:
                 reader = "" if toks[0] == "<" else os.path.basename(toks[0].strip("'\""))
-                return v, toks[i + 1].strip("'\""), reader
+                return ((v, toks[i + 1].strip("'\"")),), reader
     head = os.path.basename(toks[0].strip("'\""))
     if head in readers:
-        for w in toks[1:]:
-            v = _match(w)
-            if v:
-                return v, w.strip("'\""), head
-        return None, None, None
+        # EVERY matching argument: a whole reader emits each file's contents in
+        # turn, so each one was genuinely read.
+        found = tuple((v, w.strip("'\"")) for v, w in
+                      ((_match(w), w) for w in toks[1:]) if v)
+        return (found, head) if found else ((), None)
     if head in tailarg_readers and len(toks) > 1:
         # The FILE is the trailing ARGUMENT — and a redirect is not an argument,
         # it is shell syntax, so it cannot be allowed to occupy that slot.
@@ -488,16 +518,46 @@ def _match_reader(cmd, match, readers, tailarg_readers):
             w = args[-1]
             v = _match(w)
             if v:
-                return v, w.strip("'\""), head
-    return None, None, None
+                return ((v, w.strip("'\"")),), head
+    return (), None
+
+
+def _match_reader(cmd, match, readers, tailarg_readers):
+    """_match_stmt over the command's DECISION statement (`_effective`) — a trailing
+    `| head`/`| tail` still renders, and a multi-statement block keys off its LAST
+    statement. Returns _match_stmt's (matches, reader)."""
+    return _match_stmt(_effective(cmd), match, readers, tailarg_readers)
+
+
+def _match_all(cmd, match, readers, tailarg_readers):
+    """Every file `cmd` reads with these reader sets, across ALL its statements —
+    deduped, in command order. `sed -n 1,20p a.md; sed -n 1,20p b.md` reads two
+    notes and the decision statement names only b.md.
+
+    Deliberately does NOT widen the collapse DECISION (see _effective): this is
+    called only after the decision statement has already matched, purely to complete
+    the file list. So `cat foo.py; ls` still streams (its last statement is not a
+    read) — collapsing it would hide ls's output behind a `Read(foo.py)` line."""
+    out = []
+    for stmt in _statements(cmd):
+        matches, _reader = _match_stmt(_clean_stmt(stmt), match, readers,
+                                       tailarg_readers)
+        for v, w in matches:
+            if not any(w == prev for _pv, prev in out):
+                out.append((v, w))
+    return tuple(out)
 
 
 def _detect_source(cmd, kind):
     """kind.match's truthy value when `cmd` streams a matching file's raw contents,
     else None — the render-kind detector stream.py's _detect_render iterates. Thin
-    over _match_reader (which additionally names the matched file + reader; only the
-    Read-one-liner plane, RenderKind.read_match, needs those)."""
-    return _match_reader(cmd, kind.match, kind.readers, kind.tailarg_readers)[0]
+    over _match_reader (which additionally names the matched files + reader; only
+    the Read-one-liner plane, RenderKind.read_match, needs those). The FIRST match's
+    value: a live content stream renders one way for the whole command, and its
+    first file is what picked that way before several could be named."""
+    matches, _reader = _match_reader(cmd, kind.match, kind.readers,
+                                     kind.tailarg_readers)
+    return matches[0][0] if matches else None
 
 
 def is_md(path):
@@ -534,15 +594,25 @@ def code_source(cmd):
 
 
 def read_command(cmd):
-    """(ReadSpec, file_path, reader) when `cmd` should render as a collapsed Read
+    """(ReadSpec, files, reader) when `cmd` should render as a collapsed Read
     one-liner instead of a streamed foreground block — a file-READING command: a
     sed/grep/cat/head/tail (or a bare `< file`) of a source file the mirror can
     syntax-highlight, or a sed/grep SLICE of a markdown file (the READ plane of
-    RENDER_KINDS, in the registry's priority order) — else (None, None, None).
+    RENDER_KINDS, in the registry's priority order) — else (None, (), None).
     `reader` is the invoking command basename (the dim tag on the Read one-liner);
     the ReadSpec names WHICH render kind matched and carries its detection value
     (the lexer, for code), which is what lets the expansion pick a renderer per
     kind (cmd_fmt._READ_BODY) instead of assuming a lexer.
+
+    `files` is EVERY file the command reads, in command order — one block, but it
+    names all of them (RenderKind.read_match). What can never be recovered is which
+    part of the OUTPUT belongs to which file: `cat a.py b.py` emits one undelimited
+    stream, so the expansion shows the whole thing under a header naming both. The
+    rejected alternatives were rewriting the command to interleave delimiters (the
+    tee wrapper is ADDITIVE; that would change the command's semantics — exit codes,
+    quoting, stderr ordering) and re-reading each file from disk (it lies exactly
+    when it matters: `head -20` and `sed -n 1,80p` truncate, and the file may have
+    changed since). docs/mirror-pane.md.
 
     Gated by CLAUDE_MIRROR_CMD_READ (default on; '0' falls back to live
     streaming), and per kind by that kind's own CLAUDE_MIRROR_* gate — with its
@@ -553,14 +623,16 @@ def read_command(cmd):
     exactly the same commands, so they can never disagree (a mismatch would strand
     a streamed header with no body, or double-render)."""
     if os.environ.get("CLAUDE_MIRROR_CMD_READ", "1") == "0":
-        return None, None, None
+        return None, (), None
     for kind in RENDER_KINDS:
         if os.environ.get(kind.env, "1") == "0":
             continue
-        v, path, reader = kind.read_match(cmd)
-        if v:
-            return ReadSpec(kind.name, v), path, reader
-    return None, None, None
+        v, files, reader = kind.read_match(cmd)
+        if files:
+            # `v` may be None (the files' lexers disagree) — `files` is the match,
+            # not the value, so the truth test is on the files.
+            return ReadSpec(kind.name, v), files, reader
+    return None, (), None
 
 
 def diff_counts(tool_name, inp):

@@ -143,9 +143,11 @@ def main():
     # PostToolUse emit the Read(name) line + view stash from tool_response. Both
     # hooks gate on the same CT.read_command so they agree (a mismatch would strand
     # a header here with no body). The command runs unrewritten — no updatedInput.
-    spec = CT.read_command(cmd)[0]
-    if spec:
-        return H.ignore(d, "%s reader (claude-cmd-fmt renders it as Read)" % spec.kind)
+    spec, read_files = CT.read_command(cmd)[:2]
+    if read_files:
+        return H.ignore(d, "%s reader of %d file(s) "
+                        "(claude-cmd-fmt renders it as Read)"
+                        % (spec.kind, len(read_files)))
 
     held = S.hand_peek(log, "fg-live")
     if held:

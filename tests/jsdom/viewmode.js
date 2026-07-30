@@ -100,6 +100,7 @@ function item(spec) {
   if (spec.bad) e.dataset.bad = "1";
   if (spec.add) e.dataset.add = String(spec.add);
   if (spec.rem) e.dataset.rem = String(spec.rem);
+  if (spec.nf) e.dataset.nf = String(spec.nf);   // files ONE read row stands for
   if (spec.g) e.dataset.g = spec.g;
   if (spec.agent) e.dataset.agent = spec.agent;
   if (spec.mid) e.dataset.mid = spec.mid;
@@ -228,6 +229,16 @@ out.mailCount = sums(scene("focus",
   [F.prompt, F.mailIn, F.mailRead, F.reply]))[0].text;
 out.mailCountNoId = sums(scene("focus",
   [F.prompt, F.mail, F.mail, F.reply]))[0].text;
+// A multi-file BASH read is ONE block (the command produced one undivided output,
+// so it cannot be split into rows) but stands for N files — `data-nf`, served per
+// item (actclass.readmore off the `+N more` the one-liner paints). Counting rows
+// said "Read 1 file" for `cat app.py utils.py`, the same under-report the one-liner
+// itself used to make by naming only the first file.
+out.multiReadCount = sums(scene("focus",
+  [F.prompt, { act: "read", kind: "files", nf: 3 }, F.reply]))[0].text;
+// …mixed with ordinary single-file reads, and a row with no nf still counts 1
+out.multiReadMixed = sums(scene("focus",
+  [F.prompt, F.read, { act: "read", kind: "files", nf: 2 }, F.read, F.reply]))[0].text;
 
 // EXPANDING a run reveals what its summary COUNTED — never what the mode hid.
 // The hidden items sit inside the run's span, and revealing the span wholesale

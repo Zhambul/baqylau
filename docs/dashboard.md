@@ -6798,6 +6798,18 @@ producer stamps it on all three ops; the terminal ignores it) and stamped onto t
 as `data-mid`. `VIEW_SUBJECT` is the table of counters that count subjects rather than
 rows — `{agent: data-agent, mail: data-mid}` — so the two cases are one code path.
 
+**…and the INVERSE: one row that stands for SEVERAL files.** A Bash read of several
+files at once (`cat app.py utils.py`) is ONE block, because the command produced one
+undivided output and there is nothing to split it into rows on
+([mirror-pane.md](mirror-pane.md) records the rejected splitting designs). Counting
+rows therefore said `Read 1 file` for a command that read two — the same under-report
+the one-liner itself used to make by naming only the first file. So the row carries
+`data-nf`, how many files it actually read, and the summary adds THAT instead of 1.
+It is served per item like the diffstat beside it (`actclass.readmore`, parsed off the
+`+N more` the one-liner already paints — `core/streamfmt.MORE_FILES` owns the wording,
+so the terminal's text and the web's count can't disagree). A row without `data-nf`
+weighs 1, so nothing else changes.
+
 ### Team mail: the message comes from the SEND, the poller only reports on it
 
 Mail on the web is TWO kinds of row, and confusing them is what made this feature take

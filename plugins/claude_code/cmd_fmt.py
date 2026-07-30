@@ -138,11 +138,11 @@ def main():
     # empty Read). The command + its output, rendered per kind, expand from a view
     # stash.
     if not live and not H.is_failure(d):
-        spec, path, reader = CT.read_command(cmd)
-        if spec:
+        spec, files, reader = CT.read_command(cmd)
+        if files:
             output = _combined_output(tr)
             if output.strip():
-                return _render_read(d, cmd, output, spec, path, reader)
+                return _render_read(d, cmd, output, spec, files, reader)
     _render_finished(d, tr, cmd, live, done)
 
 
@@ -327,7 +327,7 @@ def _read_body_plain(output, _spec, gid):
 _READ_BODY = {"code": _read_body_code, "md": _read_body_md}
 
 
-def _stash_read_view(log, gid, name, cmd, output, spec, line):
+def _stash_read_view(log, gid, names, cmd, output, spec, line):
     """Stash a file-reading command's block under kv `view:<gid>` and wrap `line`
     in the claude-copy:///…/view hyperlink — the same click-to-view protocol
     file_fmt.stash_view pins for file ops, but the block is a COMMAND (a `code`
@@ -336,10 +336,16 @@ def _stash_read_view(log, gid, name, cmd, output, spec, line):
     carries the group id + ⧉cmd/⧉out link specs so the expansion is copiable:
     core.copy.collect falls back to this stash (the block streams nothing to the
     ops table). Returns (hyperlinked line, gid), or (line, None) when the stash
-    write failed (the caller keeps the plain line)."""
+    write failed (the caller keeps the plain line).
+
+    `names` is EVERY file the command read, and the header names them ALL — which is
+    the honest shape for a multi-file read, because the body below is ONE undivided
+    output stream (`cat a.py b.py` emits no delimiter between them). Naming both
+    over one blob says "these two files, this output"; naming one would claim the
+    blob was that file's."""
     body = _READ_BODY.get(spec.kind, _read_body_plain)(output, spec, gid)
     vops = [O.rule(),
-            O.label("Read " + name, O.BLUE, g=gid,
+            O.label("Read " + " ".join(names), O.BLUE, g=gid,
                     lk=[["cmd", "⧉cmd"], ["out", "⧉out"]]),
             O.code(cmd, g=gid),
             *body,
@@ -354,17 +360,29 @@ def _stash_read_view(log, gid, name, cmd, output, spec, line):
     return R.hyperlink(url, line), gid
 
 
-def _render_read(d, cmd, output, spec, path, reader):
+def _render_read(d, cmd, output, spec, files, reader):
     """Render a file-reading foreground command as a collapsed Read one-liner: a
     blue Read(name) line (the shared streamfmt.file_line shape, so it reads like a
     real Read) with a dim reader tag (`sed`/`grep`/…), clickable to expand the
     command + its rendered output (_stash_read_view — highlighted source for the
     `code` kind, markdown for `md`). The reader tag keeps it honest — it is a
     command, not a native Read — while the noise (the streamed file dump) collapses
-    behind the click, ⧉cmd/⧉out copiable."""
+    behind the click, ⧉cmd/⧉out copiable.
+
+    SEVERAL files (`cat app.py utils.py`, `sed a.md; sed b.md`) stay ONE block, and
+    the line names the first with a dim `+N more`. One block because there is one
+    output: which bytes came from which file is not recoverable (docs/mirror-pane.md
+    — the rejected splitting designs are recorded there), so N lines would each have
+    to claim the whole blob. But every file is NAMED — in the `+N more`, in the
+    expansion's header, and in the scoreboard's file count — which is what was
+    actually lost before: `cat app.py utils.py` reported only app.py."""
+    path = files[0]
     disp, loc = SF.file_display(path, d.get("cwd"))
-    name = os.path.basename(path.rstrip("/")) or path
-    line = SF.file_line("Read", disp, O.BLUE)
+    names = [os.path.basename(f.rstrip("/")) or f for f in files]
+    # `more` rides the shared builder (streamfmt.file_line owns the whole one-liner
+    # shape, `+N more` included) so the web can read the count back off the text and
+    # weight its summary — see the reader tag below, which stays this caller's own.
+    line = SF.file_line("Read", disp, O.BLUE, more=len(files) - 1)
     if reader:
         line += "  " + R.DIM + reader + R.RST
     # OBSERVER command plane (fileobs — memory the one row): this one-liner IS the
@@ -376,15 +394,21 @@ def _render_read(d, cmd, output, spec, path, reader):
     gid = d.get("tool_use_id") or None
     vid = None
     if gid:
-        line, vid = _stash_read_view(LOG, gid, name, cmd, output, spec, line)
+        line, vid = _stash_read_view(LOG, gid, names, cmd, output, spec, line)
     O.emit(LOG, O.line(line, view=vid, mem=bool(obs)))
     # It is still a Bash command — count it as one (not a file read), matching how
-    # the normal foreground path bumps. The OTLP receiver owns token/cost.
+    # the normal foreground path bumps. The OTLP receiver owns token/cost. Each file
+    # IS fed to the scoreboard's UNIQUE-path `files` set though: the command read
+    # them, and that counter is about which files a session touched.
     O.bump(LOG, tool="Bash", commands=1)
+    for f in files:
+        O.bump(LOG, file=f)
     frags = _observe(d, cmd, output, obs)
     A.hook_event(d, decision="rendered as Read (%s): Read(%s) via %s"
-                 % (spec.kind, name, reader or "<stdin>")
+                 % (spec.kind, " ".join(names), reader or "<stdin>")
                  + (f" [{loc}]" if loc else "")
+                 + ("" if spec.value or spec.kind != "code"
+                    else " [mixed lexers — plain body]")
                  + (" +view" if vid else "") + _obs_note(frags))
 
 
