@@ -380,6 +380,17 @@ ANOMALY_SECTIONS = [
      "AND NOT EXISTS (SELECT 1 FROM hook_events h WHERE h.session_id=t.session_id "
      "  AND h.handler='codex-session' "
      "  AND h.decision LIKE 'standalone-open%')", 1),
+    # A codex SUBAGENT event repainting the MAIN tab — the stuck-magenta
+    # regression (docs/tab-colors.md *Main session only*, Bug B). A codex
+    # SubagentStart/SubagentStop carries the child's agent_id, so it must be
+    # ignored by the shared core/tabpaint.agent_inner_event gate and write NO tab
+    # transition; a `dispatch='codex-subagent'` tab_transitions row means the gate
+    # leaked and a subagent's (often LATE) SubagentStop repainted `working` over
+    # the lead's resting state. The fix writes only a hook_event decision
+    # (`codex: agent_id inner call — main tab untouched`), never a transition.
+    ("codex subagent event repainted the main tab (stuck-magenta regression)",
+     "SELECT ts, dispatch, prev_state, new_state, reason FROM tab_transitions "
+     "WHERE session_id=? AND dispatch='codex-subagent'", 1),
     # A nested bg/monitor tailer whose OWNER can be resolved from neither
     # source: not from its own streams row (hookkit.stream_env's
     # CLAUDE_STREAM_AGENT, stamped by the three nested launch sites) and not
