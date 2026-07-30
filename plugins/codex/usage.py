@@ -109,7 +109,21 @@ def _rpc_read_ratelimits():
 def _normalize(res):
     """codex's {rateLimits:{planType, primary{usedPercent,windowDurationMins,
     resetsAt}, secondary{…}}} -> {planType, windows:[{used_pct, window_mins,
-    resets_at}, …]}. None when the shape is unusable."""
+    resets_at}, …]}. None when the shape is unusable.
+
+    `primary`/`secondary` are SLOTS, not durations — do not read `primary` as
+    "the 5h one". On the current plus plan codex sends ONE window: `secondary` is
+    literal JSON null and `primary` IS the weekly (10080m) one, which is why the
+    strip shows a single codex bar and no 5h bar. That is codex's shape, not a
+    dropped window — verified against both raw sources (this reply and the
+    rollouts' token_count.rate_limits) and against 75 rollouts of history, in
+    which codex changed the shape four times, including a real two-window plus
+    period (2026-06-26 → 07-07, primary 300m + secondary 10080m) that this same
+    code parsed into two windows. docs/codex.md *One window, not two*.
+
+    Skipping a null slot is therefore correct: a null is not a window. A window
+    with `usedPercent` 0 or null, or a null duration, is KEPT (window_rows
+    carries it as a ghost) — only BOTH slots being non-dicts yields None."""
     rl = (res or {}).get("rateLimits") if isinstance(res, dict) else None
     if not isinstance(rl, dict):
         return None

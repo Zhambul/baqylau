@@ -768,6 +768,45 @@ def test_codex_usage_windows_normalizes(monkeypatch):
     assert out["windows"][0]["window_mins"] == 300
 
 
+def test_codex_usage_windows_keeps_one_window_when_secondary_is_null():
+    """A NULL `secondary` yields ONE window, and it is whatever `primary` holds.
+
+    This is the current plus-plan shape, captured verbatim from a live
+    `account/rateLimits/read`: `secondary` is literal JSON null and `primary` is
+    the WEEKLY window. So the strip's single codex bar is correct — the reading
+    that looked like "the 5h window went missing" (docs/codex.md *One window, not
+    two*). The trap this pins is the NAME: `primary`/`secondary` are slots, not
+    durations, and codex really did ship a plus period (2026-06-26 → 07-07) where
+    primary was the 5h one — which the case below still covers, unchanged.
+
+    Skipping a null slot is right (a null is not a window); DROPPING a window
+    that is merely at 0%, or unreadable, would not be — so those are pinned here
+    too, since a falsy-check regression is exactly what this bug report would
+    have looked like if it were real."""
+    from plugins.codex import usage
+    rl = {"planType": "plus", "limitId": "codex", "individualLimit": None,
+          "primary": {"usedPercent": 4, "windowDurationMins": 10080,
+                      "resetsAt": 1785944457},
+          "secondary": None}
+    got = usage._normalize({"rateLimits": rl})
+    assert got == {"planType": "plus", "windows": [
+        {"used_pct": 4, "window_mins": 10080, "resets_at": 1785944457}]}
+    assert usage.window_rows(got["windows"])[0]["label"] == "7d"
+
+    # 0% is a READING, not an absence — it must survive as 0, never be dropped
+    zero = dict(rl, primary=dict(rl["primary"], usedPercent=0))
+    assert usage._normalize({"rateLimits": zero})["windows"][0]["used_pct"] == 0
+    # an unreadable percentage / duration is kept too — the painter ghosts it
+    blank = dict(rl, primary={"usedPercent": None, "windowDurationMins": None,
+                              "resetsAt": None})
+    rows = usage.window_rows(usage._normalize({"rateLimits": blank})["windows"])
+    assert rows[0]["used_pct"] is None and rows[0]["label"] == "primary"
+    # only BOTH slots being non-dicts is "nothing to say" (a real historical
+    # shape: the June limit_id="premium" readings carried two nulls)
+    assert usage._normalize({"rateLimits": {"planType": "", "primary": None,
+                                            "secondary": None}}) is None
+
+
 def test_codex_usage_windows_degrades_to_none(monkeypatch):
     from plugins.codex import usage
     usage._CACHE = None

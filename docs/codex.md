@@ -617,7 +617,34 @@ lays its columns out BY DURATION, so those two bars are ONE column
 (docs/dashboard.md *Row alignment*) and it read as a column that renames itself
 halfway down. Every codex
 window is account-wide (`scope: "account"`), so each keeps its own reset column;
-codex reports no per-model cap. Percentages are rounded server-side (codex
+codex reports no per-model cap.
+
+**One window, not two — and `primary` is not "the 5h one".** The codex row today
+shows a single weekly bar and no 5h bar beside Claude's, which looks like a
+dropped window. It is not: the app server's reply carries
+`"secondary": null` (literal JSON null, not an absent key) and its `primary` IS
+the weekly window — `{resetsAt, usedPercent, windowDurationMins: 10080}`. The
+normalizer is correct, verified against both raw sources: the live
+`account/rateLimits/read` reply and the `token_count.rate_limits` records of the
+recent rollouts, which agree exactly. `primary`/`secondary` are SLOTS, not
+durations, and reading `primary` as "the short window" is the trap here.
+
+The two-window shape is real history, which is why it looks like a regression. A
+sweep of 75 rollouts (2025-11 → 2026-07, 502 non-null readings) shows codex
+changing this shape upstream four times: a 30-day `primary` on the free plan;
+both slots `null` under `limit_id: "premium"`; then **2026-06-26 → 07-07** on
+plus, `primary` 300m + `secondary` 10080m — the two-window shape, which this same
+code parsed into two windows at the time; then from **2026-07-29** the current
+one-window plus shape. So there is nothing to restore and nothing to fix; if
+codex re-adds a second window, `_normalize` will pick it up unchanged.
+
+The one latent seam, deliberately left: `window_rows` derives its positional
+`primary`/`secondary` fallback from `enumerate()`, but `_normalize` has already
+COLLAPSED the two slots into a dense list — so a future `primary: null` with a
+non-null `secondary` would label that secondary "primary". Harmless while every
+real window carries a duration (which wins over the fallback) and unobserved in
+all 502 readings; the fix, if it ever matters, is to carry the slot name out of
+`_normalize` rather than re-derive it from position. Percentages are rounded server-side (codex
 reports floats, Claude ints — the painter should not have to know which).
 
 This used to be a whole parallel surface: `/api/codex-usage`,
