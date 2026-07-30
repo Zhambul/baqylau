@@ -34,6 +34,13 @@ the bug **from evidence, not guesswork**.
 
 New always-audited swallow sites (previously silent — their absence used to make these symptoms triage-blind): `errors` rows for `release`/`release_id`/`pid_del` (failed slot release = stuck blue), `spawn <script> (script missing)` + `notify_tab <dispatch>` from hookkit (block never streams / dropped tab dispatch), `update_messages` from the scorebar (frozen ✉ row), `format_code` from core/ops (commands paint verbatim), and `lsof failed/missing` from claude-stream (see the stream-ended-too-early shape).
 
+**The HOST + CAP fields on every `web-*` row** (since the host abstraction, P2/P5). Every control gesture now belongs to the session's OWNING host, and the two refusal shapes are distinguishable in the DB — which matters because they mean opposite things to the user:
+
+- **A CAP refusal** (`http/base._caps_guard`, before any handler body runs) writes the handler's own `web-*` row with **`ok: False` + `cap: <gesture>` + `host: <owning plugin>`** and answers **409** `{"error":…, "cap":…}`. This is "your tool does not do this" — the server-side twin of the greyed button, and it is the EXPECTED row for e.g. a ↶ rewind or ⇆ migrate on a codex session. It NEVER fires for a Claude session (claude_code drives every gesture, so its derived caps are all-True), nor for an unprovable empty `transcript_path`, which defaults to the Claude host — so a `cap` row on a Claude sid is itself the anomaly.
+- **A cap-SHARER refusal** (`_unsupported_guard`, after the gesture ran and returned the inert base's result) writes `ok: False` + `cap` + **`why: "unsupported by this session's tool"`**, also 409. The sharers are `autoname` (under `rename`), `rewind_to` (under `rewind`), `plan_options` (under `plan`), `deliver` (under `ask`) — a host may implement one half and not the other, which no cap map can express.
+- **A 502 is a different animal**: the host TRIED and failed (`_rejected()` with no `unsupported` key). "Can't" vs "broke" are deliberately not collapsed, and the client renders them differently.
+- Caps resolution DEGRADES OPEN: a read failure audits (`errors` func `dashboard caps (<action>)`) and PROCEEDS, so a hiccup can never disable a real session's control plane. A gesture that silently did nothing with NO `web-*` row at all is therefore not a cap refusal — look at the frontend `web-client` `<gesture>.begin`/`.ok`/`.fail` trail instead.
+
 ## Triage order
 
 0. **If the scorebar shows an amber `⚠ N` chip** (or the mirror shows `⚠ audit:` lines) — the session ITSELF is telling you it has N swallowed exceptions: go straight to `python3 bin/claude-audit.py errors <sid>`. The chip/lines are `core/errwatch.py` reading the same `errors` table these steps query.
@@ -142,6 +149,67 @@ New always-audited swallow sites (previously silent — their absence used to ma
   NOT a bug: codex has no task-list tool, so `plugins.tasks` is a declared
   DECLINE (`tests/test_l1i_host_contract.py` COVERAGE) and the card is hidden
   by design.
+
+### A codex session shows no limit bars, or its cost reads $0
+
+Three separate facets sit behind that one impression, and they fail
+independently — establish WHICH before digging:
+
+- **The limits/usage bars** come from `plugins.session_usage(sid)` (per session,
+  from the rollout's last `token_count` `rate_limits`) and the list strip from
+  `plugins.usage_strip()` (account-level, via `codex app-server`
+  `account/rateLimits/read`). Both are READ-SIDE probes that add NO audit rows —
+  so there is nothing to query, and the check is a direct read:
+  `python3 -c "import plugins; print(plugins.session_usage('<sid>'))"`. An empty
+  `windows` list means the rollout tail carried no `rate_limits` yet (a very
+  young session) or the app-server call failed; a `plan` with no windows is the
+  honest partial answer, not a crash. Verify the routing first — these are
+  ownership-ROUTED, so a codex session whose `sessions.transcript_path` is not a
+  `.codex/sessions/…/rollout-*.jsonl` gets ASKED OF CLAUDE and answers empty.
+- **A window that a sibling row has and this one doesn't** renders as a ghosted
+  column, deliberately (`used_pct: None`) — the painter refuses to shift the
+  stack. Not a bug.
+- **The cost** is the one with a real, currently-live gap. codex never reaches
+  the `otel` table (that receiver is Claude Code's); it prices its own turns in
+  the state-DB scoreboard from `plugins/codex/stream.py CODEX_PRICES`, and
+  `plugins.session_costs(sid)` reports what is BANKED there. The evidence is the
+  `bump-agent` `state_files` rows (`meta.kind = "codex"`), which carry the token
+  split and the model. **If those rows show tokens but the payload's `cost` is
+  `{}` and `total_usd` is 0.0, the model has no row in `CODEX_PRICES`.** That is
+  a DELIBERATE fall-through — matching is version-exact prefix (`key == model` or
+  `model.startswith(key + "-")`), so an unverified new version reads as "no cost
+  shown" rather than being silently priced at an older rate. **Measured
+  2026-07-31: the table's newest entry is `gpt-5.1`, while codex's whole current
+  menu (`gpt-5.6-sol`/`-terra`/`-luna`, `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`)
+  matches nothing — so EVERY codex session today reports $0.** The tokens are not
+  lost: they are in the counters and in the `bump-agent` meta, and spend is
+  re-derivable the moment a rate is added. Treat a $0 codex session as this
+  known gap unless the token counters are ALSO zero, which is a different bug.
+
+### A control button is greyed out, or a control POST 409s naming a capability
+
+This is usually the abstraction working, not failing — but the DB says which:
+
+- **409 with a `cap` field** → read the paired `web-*` row's `cap` + `host`
+  (schema note above). `host: "codex"` + `cap: "rewind"`/`"migrate"` is the
+  DECLARED decline: codex has no checkpoint menu and no account switcher, pinned
+  in `HOST_SURFACE`. Nothing to fix.
+- **409 on a Claude session** is always wrong — claude_code overrides every
+  gesture, so its caps are all-True and `_caps_guard` cannot fire. Check whether
+  `sessions.transcript_path` actually resolves to a Claude `projects/`
+  transcript; a session whose path is missing or owned by another plugin is
+  being asked of the wrong host.
+- **The BUTTON greyed with no POST at all** is the client half, and it reads the
+  SAME served facts: `caps` (per gesture) and `quick_commands` (per command,
+  with its `min_prompts` refusal floor) off the session payload. A ⊜ compact
+  greyed on a long conversation means `plugins.prompts` returned under the
+  floor — that probe is bounded and FAILS OPEN (an oversized transcript returns
+  its cap), so a greyed button there means it returned a real, small number.
+- **A gesture whose menu is EMPTY** (no models, no efforts, no rewind modes) is
+  a host serving `[]`, which is deliberate: the inert host answers with empty
+  everything rather than the default host's words, so an unknown tool is never
+  OFFERED Claude Code's models. `plugins.host_vocabulary(plugins.host_named(x))`
+  is the direct check.
 
 ### A codex SUBAGENT renders as a "codex run" (no launch/result cards, raw JS commands, folds into "ran N codex runs")
 - The symptom is a REGISTER that never got selected. A codex-native subagent
