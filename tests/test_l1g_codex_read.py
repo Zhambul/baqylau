@@ -172,6 +172,33 @@ def test_codex_conversation_reads_event_msg_register_deduped(tmp_path, monkeypat
         ("prompt", "hi there"), ("message", "hello back")]   # each once, not twice
 
 
+def test_codex_conversation_drops_system_scaffolding_keeps_input_output(tmp_path, monkeypatch):
+    # A subagent's conversation must read like Claude's: only the real input +
+    # assistant output, never codex's system scaffolding (docs/codex.md *Two
+    # registers*). The role=developer block and the role=user `<recommended_plugins>`
+    # wrapper are dropped structurally; a `<task>` INPUT wrapper is kept, unwrapped.
+    from core import sessionapi as API
+    from plugins.codex import read
+    p = _rollout(tmp_path, [
+        _resp("message", role="developer",
+              content=[{"type": "input_text", "text": "<multi_agent_mode>\nscaffold"}]),
+        _resp("message", role="user",
+              content=[{"type": "input_text", "text": "<recommended_plugins>\nlist…"}]),
+        _resp("message", role="user",
+              content=[{"type": "input_text", "text": "<task>\nGet the weather in Bali\n</task>"}]),
+        _resp("message", role="assistant",
+              content=[{"type": "output_text", "text": "Bali is 27°C."}]),
+    ])
+    monkeypatch.setattr(API, "session_row", lambda sid: {"transcript_path": p})
+    recs, _pos = read.conversation("sid1", 0, "")
+    assert [(r["kind"], r["text"]) for r in recs] == [
+        ("prompt", "Get the weather in Bali"),   # <task> kept + unwrapped
+        ("message", "Bali is 27°C.")]            # assistant output
+    # no scaffolding text anywhere in the bubbles
+    blob = " ".join(r["text"] for r in recs)
+    assert "recommended_plugins" not in blob and "multi_agent_mode" not in blob
+
+
 def test_codex_conversation_sidecar_by_agent_id(tmp_path, monkeypatch):
     import plugins
     from core import sessionapi as API

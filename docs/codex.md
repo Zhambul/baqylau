@@ -121,14 +121,21 @@ its own mirror when run standalone (wiring in [wiring.md](wiring.md)).
     every think twice — a shared `message`/`reasoning` kind would have, since
     `feed_rollout`'s table already handles those.
     A `chat` record carries `role` (assistant/user/developer) and a
-    `synthetic` flag: codex re-injects its own context blocks *as user
-    messages* every turn, so a presenter must drop them from the bubbles.
-    The marker list is the module constant `rollout.SYNTHETIC_PREFIXES`
-    (`<turn_aborted>`, `<environment_context>`, `<permissions instructions>`,
-    `<skills_instructions>`, `<plugins_instructions>`,
-    `<collaboration_mode>`, `<model_switch>`, `<app-context>`,
-    `Approved command prefix saved:`, `# AGENTS.md instructions`) with
-    `is_synthetic()` its one reader — a presenter must not re-encode it.
+    `synthetic` flag: codex re-injects its own context blocks *as
+    user/developer messages* every turn, so a presenter must drop them from the
+    bubbles (else a subagent's input reads `<recommended_plugins>…` instead of
+    its real prompt). The rule is STRUCTURAL, not an allowlist (`is_synthetic(text,
+    role)`, the one owner): **(1)** role `developer`/`system` is the system channel
+    → always synthetic (catches `<multi_agent_mode>`, `<permissions instructions>`,
+    … with no list); **(2)** a role=`user` `<tag>` wrapper is a system injection BY
+    DEFAULT — robust to new tags like `<recommended_plugins>` — EXCEPT an
+    `INPUT_WRAPPER` (`<task>`, the wrapper codex delivers a subagent's task in),
+    which is KEPT and unwrapped to its inner text (`strip_input_wrapper`) so the
+    bubble reads as the prompt; a real prompt is free prose. `SYNTHETIC_PREFIXES`
+    shrank to the two NON-tag supplements (`Approved command prefix saved:`,
+    `# AGENTS.md instructions`) — the `<…>` markers are now caught by rule (2).
+    A real prompt always survives via the CLEAN event_msg register even if its
+    response_item twin is a `<tag>` block, so the deny-by-default can't hide input.
   - **The rest of the response_item grammar** (parsed for the same
     conversation presenter; none of it reaches the mirror):
     - **`custom_tool_call` / `custom_tool_call_output`** — codex ≥ 0.13x runs

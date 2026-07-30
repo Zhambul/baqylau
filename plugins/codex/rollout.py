@@ -151,26 +151,58 @@ def owns(path):
         return False
     return "sessions" in os.path.normpath(path).split(os.sep)[:-1]
 
-# The SYNTHETIC-message vocabulary: a `response_item/message` whose text opens
-# with one of these is codex's own machinery talking to the model, not a turn
-# of the conversation — the context blocks it re-injects every turn, the
-# abort marker it writes in the user's voice, the approval bookkeeping. A
-# conversation presenter drops them from the bubbles (the record is still
-# emitted, flagged `synthetic:True`, so a debugging view can still see them).
-# Verified over a 34-file rollout corpus + fresh 0.144.1 runs; the ONE owner of
-# this list — a presenter must not re-encode it.
+# Telling codex MACHINERY from a real conversation turn — STRUCTURAL, not an
+# ever-growing allowlist (the ONE owner of codex's synthetic vocabulary,
+# styleguide table; a presenter must not re-encode it). Two structural facts +
+# one tiny supplement:
+#
+#   1. ROLE. A `response_item/message` with role developer/system is the SYSTEM
+#      CHANNEL — never a conversation turn (the context codex re-injects, the
+#      multi-agent/permissions/skills scaffolding). Caught by role alone, so a new
+#      developer-role block needs no list entry.
+#   2. `<tag>` WRAPPER. Every codex role=user system injection is a
+#      `<lower_or spaced tag>…` block (<recommended_plugins>, <environment_context>,
+#      <turn_aborted>, …); a real prompt is free prose. So a role=user `<tag>` block
+#      is synthetic BY DEFAULT — robust to new tags — EXCEPT an INPUT wrapper.
+#
+# INPUT_WRAPPERS: a role=user `<tag>` that IS a real turn, not scaffolding —
+# codex delivers a subagent's task as `<task>…</task>`. Kept AND unwrapped to its
+# inner text (strip_input_wrapper) so the bubble reads as the prompt, not markup.
+INPUT_WRAPPERS = ("task",)
+
+# The NON-tag synthetic prefixes the structural rule can't see (codex machinery
+# that is neither role-marked nor `<tag>`-wrapped). The `<…>` entries the old list
+# carried are now caught structurally by fact 2 above.
 SYNTHETIC_PREFIXES = (
-    "<turn_aborted>",
-    "<environment_context>",
-    "<permissions instructions>",
-    "<skills_instructions>",
-    "<plugins_instructions>",
-    "<collaboration_mode>",
-    "<model_switch>",
-    "<app-context>",
     "Approved command prefix saved:",
     "# AGENTS.md instructions",
 )
+
+_WRAP_RE = re.compile(r"^<([A-Za-z][A-Za-z0-9_ -]*)>")
+
+
+def _wrapper_tag(text):
+    """The leading `<tag>` name of a wrapper block (lowercased, inner spaces kept
+    — `<permissions instructions>` → 'permissions instructions'), or "". codex
+    wraps every system injection AND the subagent task in one such tag."""
+    m = _WRAP_RE.match((text or "").lstrip())
+    return m.group(1).strip().lower() if m else ""
+
+
+def strip_input_wrapper(text):
+    """A role=user INPUT wrapper (`<task>…</task>`) reduced to its inner text — the
+    real prompt a subagent is spawned with; any other text is returned unchanged.
+    The ONE owner of the unwrap, so both registers (event_msg + response_item) that
+    a prompt can arrive in de-double to the same bubble."""
+    s = (text or "").strip()
+    tag = _wrapper_tag(s)
+    if tag not in INPUT_WRAPPERS:
+        return text
+    inner = s[len("<%s>" % tag):]
+    close = "</%s>" % tag
+    if inner.rstrip().endswith(close):
+        inner = inner.rstrip()[:-len(close)]
+    return inner.strip()
 
 
 def _patch_delta(ch):
@@ -201,11 +233,23 @@ def usage_split(u):
     return max(tin - tcache, 0), tout, tcache, tin
 
 
-def is_synthetic(text):
-    """Is this `chat` text codex machinery rather than a conversation turn?
-    The one reader of SYNTHETIC_PREFIXES."""
+def is_synthetic(text, role=""):
+    """Is this `chat` text codex MACHINERY rather than a conversation turn?
+    Structural (see the vocabulary block above), not an allowlist:
+      * role developer/system      -> the system channel, always synthetic.
+      * role user (or unknown)     -> a `<tag>` wrapper is a system injection
+                                      UNLESS it is an INPUT wrapper (`<task>`);
+                                      free prose is a real prompt.
+      * the non-tag SYNTHETIC_PREFIXES supplement.
+    The one reader of that vocabulary."""
+    r = (role or "").strip().lower()
+    if r in ("developer", "system"):
+        return True
     s = (text or "").lstrip()
-    return s.startswith(SYNTHETIC_PREFIXES)
+    if s.startswith(SYNTHETIC_PREFIXES):
+        return True
+    tag = _wrapper_tag(s)
+    return bool(tag) and tag not in INPUT_WRAPPERS
 
 
 def _content_text(c):
@@ -322,7 +366,9 @@ def _ev_turn_aborted(p):
 
 
 def _ev_user_message(p):
-    msg = (p.get("message") or "").strip()
+    # Unwrap an INPUT wrapper here too so a `<task>` that also lands in the
+    # event_msg register de-doubles with the response_item one to a single bubble.
+    msg = strip_input_wrapper((p.get("message") or "").strip())
     return {"kind": "prompt", "text": msg} if msg else None
 
 
@@ -365,8 +411,12 @@ def _rsp_message(p):
     txt = _content_text(p.get("content"))
     if not txt:
         return None
-    return {"kind": "chat", "role": (p.get("role") or "").strip(),
-            "text": txt, "synthetic": is_synthetic(txt)}
+    role = (p.get("role") or "").strip()
+    # role-aware synthetic on the RAW text (the `<tag>` is the signal), THEN unwrap
+    # an INPUT wrapper so a kept `<task>` prompt reads as its inner text.
+    synth = is_synthetic(txt, role)
+    return {"kind": "chat", "role": role,
+            "text": strip_input_wrapper(txt), "synthetic": synth}
 
 
 def _rsp_reasoning(p):

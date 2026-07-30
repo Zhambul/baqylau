@@ -216,19 +216,38 @@ def test_response_item_message_is_its_own_chat_register():
     assert RO.parse(_rsp("message", role="user", content=None)) is None
 
 
-def test_every_synthetic_marker_is_flagged():
-    """Codex re-injects its own context blocks as user/developer messages —
-    each must come back flagged so a conversation presenter drops it."""
+def test_synthetic_is_structural_not_an_allowlist():
+    """codex machinery is told from a real turn STRUCTURALLY (docs/codex.md *Two
+    registers*): the system channel is role developer/system; a role=user `<tag>`
+    wrapper is a system injection UNLESS it is the INPUT wrapper `<task>`; a small
+    non-tag supplement covers the rest. Robust to NEW system tags."""
+    def synth(text, role):
+        return RO.parse(_rsp("message", role=role, content=[
+            {"type": "input_text", "text": text}]))["synthetic"]
+    # 1. role developer/system -> always synthetic (no list needed)
+    assert synth("<multi_agent_mode>\n…", "developer") is True
+    assert synth("plain text with no tag", "developer") is True
+    assert synth("anything", "system") is True
+    # 2. role=user <tag> wrappers -> synthetic by default (incl. ones NEVER listed)
+    for tag in ("<recommended_plugins>", "<environment_context>", "<turn_aborted>",
+                "<permissions instructions>", "<brand_new_2027_tag>"):
+        assert synth(tag + "\nbody", "user") is True, tag
+    # ...leading whitespace can't smuggle one past
+    assert synth("\n  <turn_aborted>x", "user") is True
+    # 3. the non-tag supplement
     for mark in RO.SYNTHETIC_PREFIXES:
-        rec = RO.parse(_rsp("message", role="user", content=[
-            {"type": "input_text", "text": mark + "\nbody\n"}]))
-        assert rec["synthetic"] is True, mark
-    # leading whitespace must not smuggle one past the check
-    assert RO.parse(_rsp("message", role="user", content=[
-        {"type": "input_text", "text": "\n  <turn_aborted>x"}]))["synthetic"]
-    # ...and a real turn that merely mentions one is not synthetic
-    assert RO.parse(_rsp("message", role="user", content=[
-        {"type": "input_text", "text": "why <turn_aborted>?"}]))["synthetic"] is False
+        assert synth(mark + "\nbody", "user") is True, mark
+    # a REAL user prompt (free prose, even mentioning a tag) is NOT synthetic
+    assert synth("Get the current weather in Bali", "user") is False
+    assert synth("why does <turn_aborted> happen?", "user") is False
+    # the INPUT wrapper <task> is a real turn, kept AND unwrapped to its inner text
+    rec = RO.parse(_rsp("message", role="user", content=[
+        {"type": "input_text", "text": "<task>\nReview the plan at /x/y.md\n</task>"}]))
+    assert rec["synthetic"] is False
+    assert rec["text"] == "Review the plan at /x/y.md"
+    # strip_input_wrapper leaves non-wrapped text alone
+    assert RO.strip_input_wrapper("just a prompt") == "just a prompt"
+    assert RO.strip_input_wrapper("<recommended_plugins>x") == "<recommended_plugins>x"
 
 
 def test_response_item_reasoning_summary():
