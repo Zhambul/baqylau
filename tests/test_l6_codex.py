@@ -330,6 +330,52 @@ def test_standalone_exec_renders_as_a_claude_command_block(test_env, codex, reap
     host.terminate()
 
 
+def test_standalone_streams_every_turn_across_an_idle_gap(test_env, codex, reaper):
+    """A standalone codex host's rollout IS the whole session, so its stream must
+    keep tailing EVERY turn — it must NOT end on the per-turn task-complete grace
+    the way a discrete sidecar run does. Regression: the stream ended after the
+    first turn's grace and never resumed, so a codex session froze after the first
+    idle gap and later commands went unstreamed (docs/codex.md *Standalone streams
+    the whole session*). Here: render turn 1, wait out MORE than the (test-short)
+    grace, then APPEND a second turn to the same rollout and assert it renders."""
+    import json as _json
+    import time
+    host = subprocess.Popen(["sleep", "60"])
+    reaper.append(host)
+    codex.start_watcher(host_pid=host.pid)
+    path, _u = codex.add_rollout(originator="codex-tui", u=codex.s.sid, events=[
+        {"type": "event_msg", "payload": {"type": "task_started"}},
+        {"type": "response_item", "payload": {
+            "type": "custom_tool_call", "name": "exec", "call_id": "t1",
+            "input": 'await tools.exec_command({cmd:"echo one"});'}},
+        {"type": "response_item", "payload": {
+            "type": "custom_tool_call_output", "call_id": "t1",
+            "output": "Output:\none\n"}},
+        {"type": "event_msg", "payload": {"type": "task_complete"}},
+    ])
+    wait_until(lambda: "echo one" in codex.s.ops_text(),
+               desc="turn 1 streamed")
+    # sit idle well past the (test-shortened) grace — the OLD code ended here
+    time.sleep(float(test_env["CLAUDE_CODEX_GRACE_S"]) + 0.5)
+    with open(path, "a", encoding="utf-8") as fh:  # a LATER turn, same rollout
+        for e in (
+            {"type": "event_msg", "payload": {"type": "task_started"}},
+            {"type": "response_item", "payload": {
+                "type": "custom_tool_call", "name": "exec", "call_id": "t2",
+                "input": 'await tools.exec_command({cmd:"echo two"});'}},
+            {"type": "response_item", "payload": {
+                "type": "custom_tool_call_output", "call_id": "t2",
+                "output": "Output:\ntwo\n"}},
+        ):
+            fh.write(_json.dumps(e) + "\n")
+    wait_until(lambda: "echo two" in codex.s.ops_text(), timeout=15,
+               desc="a later turn still streams (the stream did not freeze)")
+    # and no per-task footer was emitted mid-session (a standalone run has none)
+    assert "codex cli ended" not in codex.s.ops_text(), \
+        "a standalone run must not emit a per-task footer while the session lives"
+    host.terminate()
+
+
 def test_standalone_watcher_ignores_foreign_rollouts(test_env, codex, reaper):
     """Standalone pins to its OWN session id: a different codex run in the same
     repo (a stray rollout with another uuid) is NOT adopted — each standalone tab

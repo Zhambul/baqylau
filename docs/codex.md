@@ -580,6 +580,30 @@ SAME components so a future change lands in one place:
   surfaced; richer backgrounded-exec rendering (the `stdin` kind) stays a
   follow-up.
 
+### Standalone streams the whole session (never ends on a per-turn grace)
+
+A codex run's stream (`plugins/codex/stream.py`) was built for a discrete SIDECAR
+task (a `/codex:review`, a `codex exec`): it ends `CLAUDE_CODEX_GRACE_S` after the
+last `task_complete` with no new turn, folds the run's cumulative tokens, and
+paints the `■ codex … ended` footer. For a STANDALONE host that is WRONG — the
+rollout is the whole multi-turn session, so ending on the first turn's grace froze
+the mirror: the stream exited, the standalone watcher never respawns it
+(`standalone_scan` streams a uuid once), and every later command went unstreamed.
+Found by self-testing (a session that sits idle between commands), invisible to a
+single-command check.
+
+Fix — a STANDALONE stream tails until SESSION END, like a Claude mirror:
+- The loop skips the task-complete grace AND the stuck-run backstop when
+  `STANDALONE`; only the parked state DB (session end / host-pid teardown) stops
+  it. No per-task footer is emitted (it exits at the parked branch, which returns
+  before the footer — and the footer is dropped on the web anyway).
+- Tokens fold INCREMENTALLY instead of once at that footer: `_ro_usage` folds each
+  `token_count`'s DELTA over what's already folded (the totals are cumulative), so
+  the scoreboard stays live across turns — the same shape the OTLP receiver gives
+  a Claude session. `_fold_bump` is the one owner of that bump; the sidecar footer
+  still calls it once with the cumulative total (unchanged). A SIDECAR run is
+  untouched — it still ends on grace with its footer.
+
 ### Host-labeled UI copy (no hardcoded "Claude")
 
 The dashboard was built for one host, so a pile of user-facing strings hardcoded

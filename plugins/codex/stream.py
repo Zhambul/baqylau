@@ -221,6 +221,12 @@ class Renderer:
         # its exec_result to append the output + finish chip (the Claude live-block
         # split — header out now, outcome later).
         self.pending_exec = {}
+        # STANDALONE only: the cumulative token totals already folded into the
+        # scoreboard. A standalone stream tails the WHOLE session (never ends on a
+        # per-turn grace), so tokens fold INCREMENTALLY — each token_count's DELTA
+        # over these — instead of once at a footer that would never come; live,
+        # like the OTLP receiver feeds a Claude session.
+        self.f_fresh = self.f_out = self.f_cache = 0
 
     def _emit_exit_chip(self, code):
         # The red failed-exit chip, shared by both sources (companion
@@ -315,11 +321,41 @@ class Renderer:
             self.ro_model, self.ro_tag = model, tag
             O.emit(LOG, dim_gut("⚙ " + tag))
 
+    def _fold_bump(self, fresh, tout, tcache):
+        # The attributed codex scoreboard fold — the ONE place the token/cost
+        # deltas are bumped (kind=codex meta, so the Σ row + cost are re-derivable
+        # from the audit alone). Shared by the sidecar footer (folds the cumulative
+        # total ONCE) and the standalone incremental path (folds each DELTA).
+        # O.split_tokens owns the Σ-row tk_* arithmetic; create=0 (codex reports no
+        # cache-creation category, and `fresh` is already net of its cache reads).
+        deltas = {}
+        usd = codex_cost_usd(self.ro_model, fresh, tout, tcache)
+        if usd:
+            deltas["cost"] = usd
+        if fresh or tout:
+            deltas["tokens"] = fresh + tout
+        if fresh or tout or tcache:
+            deltas.update(O.split_tokens(fresh, tout, tcache, 0))
+        if deltas:
+            O.bump(LOG, meta={"agent_id": "", "kind": "codex",
+                              "model": self.ro_model, "in": fresh, "out": tout,
+                              "cache": tcache, "create": 0, "src": LOGFILE,
+                              "label": LABEL}, **deltas)
+
     def _ro_usage(self, rec):
-        # Cumulative usage snapshot. Folded into the scoreboard ONCE, at the
-        # footer — the totals are cumulative, so summing per-record would
-        # double-count.
+        # Cumulative usage snapshot. The SIDECAR folds it ONCE at the footer (the
+        # totals are cumulative, so summing per-record would double-count).
         self.ro_usage = rec["usage"]
+        if STANDALONE:
+            # A standalone stream has no per-turn footer, so fold the DELTA over
+            # what's already folded — the cumulative total keeps rising across
+            # turns, and only the increment is new spend.
+            fresh, tout, tcache, _tin = RO.usage_split(rec["usage"])
+            df, do, dc = (fresh - self.f_fresh, tout - self.f_out,
+                          tcache - self.f_cache)
+            if df > 0 or do > 0 or dc > 0:
+                self._fold_bump(max(0, df), max(0, do), max(0, dc))
+                self.f_fresh, self.f_out, self.f_cache = fresh, tout, tcache
 
     def _ro_patch(self, rec):
         render_patch(rec)
@@ -505,16 +541,25 @@ def main(run):
         if S.parked(LOG):                        # session ended (state DB parked) -> stop
             end("state-db-parked (session end)")
             # No footer: writing it would go into the parked *.keep snapshot via
-            # the cached connection — or recreate the DB file outright.
+            # the cached connection — or recreate the DB file outright. A
+            # standalone run's tokens are already folded incrementally (_ro_usage).
             return
         if ROLLOUT:
-            if rd.ro_done_wall and not rd.ro_active and (time.time() - rd.ro_done_wall) >= GRACE:
+            # A STANDALONE codex host's rollout IS the whole session — it must
+            # stream EVERY turn, like a Claude session's mirror, so it NEVER ends
+            # on a per-turn grace (nor the stuck-run backstop): only session end
+            # (the parked DB above) stops it. Ending on task-complete froze the
+            # mirror after the first idle gap — later turns went unstreamed
+            # (docs/codex.md *Standalone streams the whole session*). The
+            # per-task grace + footer are for a SIDECAR run (a discrete task).
+            if (not STANDALONE and rd.ro_done_wall and not rd.ro_active
+                    and (time.time() - rd.ro_done_wall) >= GRACE):
                 pump(); end("task-complete"); break
         elif read_status() in ("completed", "failed", "cancelled"):
             time.sleep(0.2); pump(); pump()  # drain the tail
             end("sidecar-status: " + read_status())
             break
-        if time.time() - start > T.BACKSTOP_S:   # backstop for a stuck run
+        if not STANDALONE and time.time() - start > T.BACKSTOP_S:  # stuck-run backstop
             end("backstop-timeout")
             break
         time.sleep(T.POLL_S)
@@ -522,6 +567,8 @@ def main(run):
     if not ROLLOUT and rd.cur_head is not None:
         rd.render_record(rd.cur_head, rd.cur_body)
 
+    # Only a SIDECAR run reaches here — a standalone run returns at the parked
+    # exit above (no per-task footer, tokens folded incrementally).
     if ROLLOUT:
         state = "failed" if rd.ro_aborted else "ended"
         sec = (rd.ro_completed - rd.ro_started) if (rd.ro_started and rd.ro_completed) \
@@ -535,13 +582,11 @@ def main(run):
         # Cumulative rollup from the run's last token_count: fresh billed
         # input (input minus cached) / generated output / cache-hit share —
         # the same figures a subagent footer shows, so runs compare at a
-        # glance. Folded into the session scoreboard ONCE here (bump-agent —
-        # the meta carries agent kind/model + the split, so the Σ row and cost
-        # are re-derivable from the audit DB alone). No fold on the parked-DB
-        # exit above, and none for companion (.log) runs — their usage isn't
-        # in the activity log (their rollout is deliberately not adopted).
-        # rollout.usage_split is the ONE total_token_usage mapping (the
-        # timeline read model consumes the same figures).
+        # glance. Folded into the session scoreboard ONCE here (the shared
+        # _fold_bump — bump-agent, the meta carries agent kind/model + the
+        # split, so the Σ row and cost are re-derivable from the audit DB
+        # alone). None for companion (.log) runs — their usage isn't in the
+        # activity log. rollout.usage_split is the ONE total_token_usage mapping.
         fresh, tout, tcache, tin = RO.usage_split(rd.ro_usage)
         # Shared footer fragment (core/streamfmt.py) — reads=tin: codex's
         # cumulative input_tokens already includes the cached share.
@@ -549,21 +594,7 @@ def main(run):
         usd = codex_cost_usd(rd.ro_model, fresh, tout, tcache)
         if usd:
             foot += " · ≈ " + O.fmt_usd(usd)
-        deltas = {}
-        if usd:
-            deltas["cost"] = usd
-        if fresh or tout:
-            deltas["tokens"] = fresh + tout
-        if fresh or tout or tcache:
-            # O.split_tokens owns the Σ-row tk_* arithmetic. create=0: codex
-            # reports no cache-creation category, and `fresh` is already net of
-            # its cache reads, so tk_in == fresh (nothing to subtract).
-            deltas.update(O.split_tokens(fresh, tout, tcache, 0))
-        if deltas:
-            O.bump(LOG, meta={"agent_id": "", "kind": "codex",
-                              "model": rd.ro_model, "in": fresh, "out": tout,
-                              "cache": tcache, "create": 0, "src": LOGFILE,
-                              "label": LABEL}, **deltas)
+        rd._fold_bump(fresh, tout, tcache)
     O.emit(LOG, O.rule(), O.label(foot, SLOT_RGB), O.rule())
 
 
