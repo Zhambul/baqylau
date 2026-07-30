@@ -748,7 +748,7 @@ def test_every_hosts_vocabulary_is_a_closed_word_list():
     assert hosts["codex"].plan_decisions() == ("decide", "dismiss")
 
 
-def test_every_host_serves_its_whole_new_session_vocabulary():
+def test_every_host_serves_its_whole_new_session_vocabulary(tmp_path, monkeypatch):
     """`/api/hosts` carries everything the page needs to BUILD ITS FORM for a
     host it has never heard of: the picker row, both option menus with their
     first-ever defaults, how a menu row matches a running model, whether the
@@ -787,7 +787,16 @@ def test_every_host_serves_its_whole_new_session_vocabulary():
     assert cc["model_match"] == "family" and cx["model_match"] == "exact"
     # the account switcher is DERIVED from the plugin providing that registry
     assert cc["accounts"] is True and cx["accounts"] is False
-    assert bool(plugins.accounts()) and plugins.host_named("codex").mention("/p") == ""
+    # …and the registry itself is MACHINE state (the switcher's accounts.tsv),
+    # so seed a fake one instead of asserting on this machine's — the original
+    # bare `bool(plugins.accounts())` was green locally and red on CI, which
+    # has no switcher (the hermeticity rule in docs/styleguide.md).
+    from plugins.claude_code import account as ACC
+    tsv = tmp_path / "accounts.tsv"
+    tsv.write_text("c1\toboard\tsvc\n", encoding="utf-8")
+    monkeypatch.setattr(ACC, "ACCOUNTS_TSV", str(tsv))
+    assert bool(plugins.accounts())
+    assert plugins.host_named("codex").mention("/p") == ""
     # …and the mention grammar from HostControl.mention
     assert cc["attach"] is True and cx["attach"] is False
     # the rewind menu, modes AND the words for them
