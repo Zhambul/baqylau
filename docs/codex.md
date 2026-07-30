@@ -853,14 +853,24 @@ codex runs". Two bugs made it show nothing:
    the reply reads "codex", not msg_html's default "claude".
 
 2. **The prose folded into "ran N codex runs".** The prose OPS (⇢/✎/⋯/⇠) still
-   wore the codex palette → `ACT_CODEX` → folded. `op_items(codex_lead=True)` —
-   set by `mirror.host_lead(sid, agent)` for a codex-owned session's own view
-   (not an agent scope) — DROPS a standalone codex session's prose ops
-   (`actclass.codex_prose`) AND its codex CHROME (the `codex ▶ <label>` banner +
-   the `⚙ model` tag, `actclass.codex_chrome`), exactly as agent scope drops an
-   agent's prose. The prose comes back as bubbles (1); the banners are sub-run
-   scaffolding a standalone session doesn't need (the model shows in the
-   scoreboard). Command / file / footer ops STAY.
+   wore the codex palette → `ACT_CODEX` → folded. Both the prose and the codex
+   CHROME (the `codex ▶ <label>` banner, the `⚙ model` tag, the run footer) are
+   dropped from the session view, exactly as agent scope drops an agent's prose:
+   the prose comes back as bubbles (1), and the banners are sub-run scaffolding a
+   standalone session doesn't need (the model shows in the scoreboard). Command
+   and file ops STAY.
+
+   It took a per-host flag to do that — `op_items(codex_lead=True)`, later
+   `host_lead=`, resolved from the owning host's `lead_prose` trait. It no longer
+   does, and no host declares anything: a LIVE standalone run emits no prose ops
+   at all (`stream.py` returns early in that register), the runs that DO emit
+   prose stamp `bubbled` on it, and the frame is stamped `chrome` — three
+   producer-side facts where there was one host-side flag. What survives is
+   `actclass.codex_prose`/`codex_chrome` as PARKED-history sniffers, palette-
+   gated so they match only codex's own unstamped ops, and frozen: a new host
+   stamps the flags from its first op and needs no sniffer of its own. Measured
+   over the 187-session parked corpus, the session view is byte-identical for
+   every session, the 25 standalone codex ones included.
 
 ### Standalone command parity (a codex command reads like a Claude command)
 
@@ -1186,21 +1196,23 @@ A Claude subagent stamps its ops `sub:<aid>`/`team:<aid>` — the SAME id
 (`paths.codex_aid`), so `agent_scope` had a codex-only branch that looked the label
 up off the run's row — a mismatch there silently yielded an EMPTY scoped mirror.
 Now `watch.spawn` stamps `<register>:<codex_aid(srcfile)>`, so the op stamp EQUALS
-the agent id and `agent_scope` is one tool-agnostic rule
-(`{sub:,team:,codex:}+<aid>`), no lookup. `paths.codex_aid` is the single owner of
-that id (both the producer and plugins/codex/nested.py stamp off it).
+the agent id and `agent_scope` is one tool-agnostic rule — the ID ITSELF, matched
+against `src.split(":", 1)[-1]`, no lookup and no prefix list. `paths.codex_aid`
+is the single owner of that id (both the producer and plugins/codex/nested.py
+stamp off it). Resolving the id into the SET of prefixes it might wear was the
+step before this one: right for the registers in the table, and silently BLANK
+for a host outside it, which is the same empty-mirror failure by another route.
 
 The PREFIX carries the second fact: a SIDECAR stamps `codex:<aid>`, a native
 SUBAGENT stamps `sub:<aid>` — the very prefix a Claude child uses. That is what
-makes one child-agent vocabulary cover both tools, and `actclass._classify` reads
-it FIRST (`codex:`→`ACT_CODEX`, `team:`→`ACT_TEAM`, `sub:`→`ACT_AGENT`), with the
-palette as the fallback for ops that carry no stamp — a standalone host's own
-(unstamped by design) and every parked op. `as_lead`'s recolour gate follows the
-same order, so a block cannot be recoloured as an agent's and then classified as
-something else.
+makes one child-agent vocabulary cover both tools. It is no longer what CLASSIFIES
+a block, though: the producer stamps the `act` field (core/ops.py) and
+`actclass._classify` reads that first, with the register→act map and the palette
+behind it as the parked-history fallback for ops written before the stamp — a
+standalone host's own (unstamped by design) and every parked op.
 
 Re-pointing the stamp was safe because nothing keys on `codex:` to FIND a run:
-`agent_scope` already resolved all three prefixes for one id (so scoping keeps
+`agent_scope` matches the id whatever prefix precedes it (so scoping keeps
 working for NEW and PARKED ops alike), and `plugins.runs()` reads the audit
 `streams` rows rather than the op stamp — so a native subagent still lists as a
 clickable card, it simply classifies and folds as the agent it is. Parked

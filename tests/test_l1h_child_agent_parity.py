@@ -26,11 +26,19 @@
 #      exactly what a hand-rolled copy forgets.
 #   2. Emit the launch card ONCE when the child's own work begins, and hold the
 #      final message so it lands as `result` rather than `message`.
-#   3. Stamp the ops `sub:<agent-id>` (or `team:`) so the same scope/classify
+#   3. Stamp the ops `<its register>:<agent-id>` so the same scope/classify
 #      machinery finds them, and mark the HOST's own scaffolding `chrome=1`.
 #   4. Add a `_<tool>_ops()` builder below returning that adapter's op list for
 #      the same sequence, and add it to ADAPTERS. Nothing else in this file
 #      changes — if the new adapter is a real child-agent stream, it passes.
+#
+# …and `_third_host_ops` below IS that instruction followed, as a test: a host
+# this repo does not have, with a register row and a palette of its own and no
+# plugin package at all, driven through the same sequence. It exists to prove
+# the claim the whole abstraction rests on — that a new host needs ZERO
+# presenter changes — by being the case nothing was written for. It fails the
+# moment the presenter re-learns a host's vocabulary: the palette it paints in
+# is in no table this build ships, and its register is added at RUN TIME.
 import json
 import os
 import sys
@@ -149,7 +157,58 @@ def _codex_ops(tmp_path, monkeypatch):
     return _ops(log)
 
 
-ADAPTERS = (("claude", _claude_ops, "Explore"), ("codex", _codex_ops, "Hooke"))
+# --------------------------------------------------- the THIRD host (synthetic)
+
+# A host this build has never heard of: its own register name, its own `src`
+# prefix, its own display word, and a palette that is in NO table core ships.
+REG_THIRD = "opencode"
+THIRD_PALETTE = [(11, 99, 200), (13, 101, 202)]
+THIRD_ROW = {"src": "oc", "act": O.ACT_AGENT, "word": SF.host_word("Opencode"),
+             "palette": THIRD_PALETTE}
+
+
+def _third_host_ops(tmp_path, monkeypatch):
+    """THE THIRD-HOST PROOF: a ~25-line adapter, no plugin package, no presenter
+    change, no registry edit that outlives this function.
+
+    Everything host-specific it owns is the register ROW (added here at run time,
+    which is the point — the presenter cannot have been written for it) and the
+    calls it makes. The op STAMPS, the block shapes, the notes, the classes and
+    the scope behaviour all come from core/agentblocks, and every assertion in
+    this file then runs on it unchanged."""
+    monkeypatch.setitem(AB.REGISTERS, REG_THIRD, THIRD_ROW)
+    log = str(tmp_path / "claude-mirror-parity-third.log")
+    blocks = AB.AgentStream(label="Kepler", rgb=THIRD_PALETTE[0],
+                            register=REG_THIRD,
+                            tags=lambda: "oc-1·high", agent_dur=lambda: "42.0s")
+    # …and it declares itself the way every child does: the ambient producer
+    # stamp, `<its prefix>:<agent id>` (core/ops.set_src). Restored after, since
+    # the stamp is process state.
+    monkeypatch.setattr(O, "_SRC", AB.src_stamp(REG_THIRD) + "k1", raising=False)
+    monkeypatch.setattr(O, "_SRC_INIT", True, raising=False)
+    g = O.new_group(log)
+    O.emit(log, *blocks.launch(BRIEF, g))                      # ⇢ launch card
+    g = O.new_group(log)
+    O.emit(log, *blocks.tool_open("web.search", TOOL_REQ, g))  # · tool + request
+    O.emit(log, *blocks.tool_close(g, TOOL_OUT))
+    g = O.new_group(log)
+    O.emit(log, *blocks.cmd_open(CMD_OK, g))                   # ▶ command (ok)
+    O.emit(log, *blocks.cmd_close(g, CMD_OUT))
+    g = O.new_group(log)
+    O.emit(log, *blocks.cmd_open(CMD_BAD, g))                  # ▶ command (failed)
+    O.emit(log, *blocks.cmd_close(g, CMD_ERR, failed=True))
+    O.emit(log, *blocks.file_line("Update", "app.py", O.YELLOW,  # file one-liner
+                                  added=2, removed=1))
+    O.emit(log, *blocks.message(MSG, O.new_group(log)))        # ✎ message
+    O.emit(log, *blocks.result(RESULT, O.new_group(log)))      # ⇠ result card
+    O.emit(log, *blocks.footer("ended", "42.0s", FOOT_EXTRA))
+    return _ops(log)
+
+
+# (name, builder, the child's label, the REGISTER it is painted in)
+ADAPTERS = (("claude", _claude_ops, "Explore", AB.REG_AGENT),
+            ("codex", _codex_ops, "Hooke", AB.REG_AGENT),
+            ("opencode", _third_host_ops, "Kepler", REG_THIRD))
 
 
 # ------------------------------------------------------------------ normalisation
@@ -177,8 +236,14 @@ def _head(op, label):
     return text
 
 
-def _norm(ops, label):
-    """One adapter's ops as comparable tuples, identity normalised away."""
+def _norm(ops, label, word=SF.AGENT_WORD):
+    """One adapter's ops as comparable tuples, identity normalised away.
+
+    `word` is the REGISTER's naming template (core/agentblocks.REGISTERS' `word`
+    row) — `Agent "%s"`, `Codex "%s"`, a third host's own. It is identity, like
+    the child's name: WHICH word the web calls a child is the one thing a
+    register selects, so the comparison erases it and the sentence around it —
+    the verb, the duration, the `·` — is what must match."""
     groups, out = {}, []
     for op in ops:
         t = op.get("t")
@@ -188,7 +253,7 @@ def _norm(ops, label):
         g = op.get("g")
         if g and g not in groups:
             groups[g] = "g%d" % len(groups)          # topology, not the ids
-        note = (op.get("note") or "").replace('"%s"' % label, '"<label>"')
+        note = (op.get("note") or "").replace(word % label, "<child>")
         stamps = ",".join(k for k in ("web", "bubbled", "chrome", "mem")
                           if op.get(k)) + ("|lk" if op.get("lk") else "")
         head = _head(op, label) if t == "label" else ""
@@ -197,26 +262,37 @@ def _norm(ops, label):
 
 
 def _both(tmp_path, monkeypatch):
-    return [(name, fn(tmp_path, monkeypatch), label)
-            for name, fn, label in ADAPTERS]
+    """Every adapter's (name, ops, label, register word). The builder runs FIRST
+    and the word is read after, so a register a builder adds at run time (the
+    third host) is in the table by the time its word is asked for."""
+    out = []
+    for name, fn, label, reg in ADAPTERS:
+        ops = fn(tmp_path, monkeypatch)
+        out.append((name, ops, label, AB.register_word(reg)))
+    return out
 
 
 # ------------------------------------------------------------------------- the pins
 
 def test_both_adapters_paint_the_same_block_sequence(tmp_path, monkeypatch):
     """Op-by-op: same kinds, same block markers, same web/bubbled/chrome/lk
-    stamps, same notes (modulo the child's name), same copy-group topology."""
-    (n1, a, l1), (n2, b, l2) = _both(tmp_path, monkeypatch)
-    na, nb = _norm(a, l1), _norm(b, l2)
-    assert na == nb, "%s and %s paint different streams:\n%s\n%s" % (
-        n1, n2, "\n".join(map(str, na)), "\n".join(map(str, nb)))
+    stamps, same notes (modulo the child's name), same copy-group topology.
+
+    Every adapter is compared against the FIRST, so adding one adds a column
+    rather than a case."""
+    (n1, a, l1, w1), *rest = _both(tmp_path, monkeypatch)
+    na = _norm(a, l1, w1)
+    for n2, b, l2, w2 in rest:
+        nb = _norm(b, l2, w2)
+        assert na == nb, "%s and %s paint different streams:\n%s\n%s" % (
+            n1, n2, "\n".join(map(str, na)), "\n".join(map(str, nb)))
 
 
 def test_both_adapters_carry_the_child_identity_on_every_header(tmp_path, monkeypatch):
     """…and each is stamped with its OWN identity: every block header names the
     child (`who`) and no header leaks the other adapter's vocabulary. This is the
     half _norm deliberately erases, so it is pinned separately."""
-    for name, ops, label in _both(tmp_path, monkeypatch):
+    for name, ops, label, _w in _both(tmp_path, monkeypatch):
         heads = [op for op in ops
                  if op.get("t") == "label" and op.get("g")]
         assert heads, name
@@ -228,28 +304,38 @@ def test_both_adapters_classify_the_same(tmp_path, monkeypatch):
     """The DERIVED layer the view modes count: identical activity-class
     sequences. A block that classifies differently folds differently, which is
     the whole `Ran 1 codex run` bug in one assertion."""
-    (n1, a, _), (n2, b, _) = _both(tmp_path, monkeypatch)
-    acts = [[AC.classify(op) for op in ops if op.get("t") in ("label", "line")]
-            for ops in (a, b)]
-    assert acts[0] == acts[1], "%s vs %s: %r != %r" % (n1, n2, acts[0], acts[1])
+    def _acts(ops):
+        return [AC.classify(op) for op in ops
+                if op.get("t") in ("label", "line")]
+
+    (n1, a, _l1, _w1), *rest = _both(tmp_path, monkeypatch)
+    want = _acts(a)
+    for n2, b, _l, _w in rest:
+        assert _acts(b) == want, "%s vs %s: %r != %r" % (n1, n2, _acts(b), want)
 
 
 def test_both_adapters_keep_and_drop_the_same_in_both_views(tmp_path, monkeypatch):
     """op_items agrees in BOTH views: the session view (scope=None — only the two
     `web` endpoints survive the src stamp) and the child's own agent scope (its
-    prose dropped in favour of conversation bubbles, everything else kept)."""
+    prose dropped in favour of conversation bubbles, everything else kept).
+
+    Each adapter is stamped with its OWN register's prefix, which is the half
+    that matters for a third host: the scope is the agent ID, so a prefix this
+    build has never seen is filtered identically to `sub:`."""
     got = []
-    for name, ops, _label in _both(tmp_path, monkeypatch):
+    for name, ops, _label, _w in _both(tmp_path, monkeypatch):
         aid = "a-" + name
-        stamped = [dict(op, src="sub:" + aid) for op in ops]
+        pre = {"opencode": THIRD_ROW["src"]}.get(name, "sub")
+        stamped = [dict(op, src=pre + ":" + aid) for op in ops]
         lead = OH.op_items(stamped, "sid")
         scoped = OH.op_items(stamped, "sid", scope=aid)
         got.append((name, [it.get("act") for it in lead],
                     [it.get("act") for it in scoped],
                     [bool(it.get("note")) for it in lead]))
-    assert got[0][1:] == got[1][1:], \
-        "%s and %s disagree on keep/drop: %r vs %r" % (got[0][0], got[1][0],
-                                                       got[0][1:], got[1][1:])
+    for row in got[1:]:
+        assert got[0][1:] == row[1:], \
+            "%s and %s disagree on keep/drop: %r vs %r" % (got[0][0], row[0],
+                                                           got[0][1:], row[1:])
     assert got[0][1], "the session view must keep the child's launch/result cards"
 
 
@@ -258,18 +344,19 @@ def test_both_adapters_reach_the_quiet_register_alike(tmp_path, monkeypatch):
     coloured pill) — cmd_note is colour-gated, so this is what catches a block
     painted in the wrong palette."""
     got = []
-    for _name, ops, _label in _both(tmp_path, monkeypatch):
+    for _name, ops, _label, _w in _both(tmp_path, monkeypatch):
         quiet = [AC.cmd_note(AC.as_lead(op)) is not None for op in ops
                  if op.get("t") == "label"]
         got.append(quiet)
-    assert got[0] == got[1], "quiet-register eligibility differs: %r" % (got,)
+    assert all(q == got[0] for q in got), \
+        "quiet-register eligibility differs: %r" % (got,)
     assert any(got[0]), "a child's command blocks must reach the quiet register"
 
 
 def test_the_parity_sequence_covers_every_shared_block_kind(tmp_path, monkeypatch):
     """A guard on the guard: if a block kind is added to core/agentblocks and the
     sequence above never drives it, the parity test silently stops covering it."""
-    _n, ops, label = _both(tmp_path, monkeypatch)[0]
+    _n, ops, label, _w = _both(tmp_path, monkeypatch)[0]
     heads = {_head(op, label) for op in ops if op.get("t") == "label"}
     for mark in ("%s %s" % SF.MARK_PROMPT, "%s %s" % SF.MARK_RESULT,
                  "%s %s" % SF.MARK_MESSAGE, AB.TOOL_GLYPH, "■ <label> ended"):
@@ -281,6 +368,73 @@ def test_the_parity_sequence_covers_every_shared_block_kind(tmp_path, monkeypatc
     assert any(b.startswith(AB.FAIL_MARK) for b in bodies), "no failed block"
     # …and the file one-liner, likewise a body op in both adapters
     assert any(b.startswith("Update(") for b in bodies), "no file op"
+
+
+def test_a_third_host_classifies_scopes_and_collapses_with_no_presenter_change(
+        tmp_path, monkeypatch):
+    """THE PROOF, stated rather than implied by the columns above: everything the
+    web does with a host it has never heard of, spelled out.
+
+    The adapter's palette is in NO table this build ships and its register row is
+    added at run time, so every answer here has to come from the op — the
+    producer's `act`, its `src`, its `bubbled`/`web` stamps — and not from a
+    table of known hosts. Each assertion below was a REAL failure mode before P6:
+    a `None` class folds a whole session into "ran N agents", an unmatched scope
+    renders a BLANK mirror, an un-recoloured header keeps the terminal's pill and
+    hides its file ops from every summary."""
+    ops = _third_host_ops(tmp_path, monkeypatch)
+    stamp = AB.src_stamp(REG_THIRD) + "k1"
+    assert all(op.get("src") == stamp for op in ops if op.get("t") != "rule"), \
+        "the adapter must declare its producer source"
+
+    # 1. CLASSIFICATION — off the producer's stamp, in the shared vocabulary
+    acts = [AC.classify(op)[0] for op in ops if op.get("t") == "label"]
+    assert O.ACT_AGENT in acts          # its launch/result cards: its row's act
+    assert O.ACT_TOOL in acts and O.ACT_BASH in acts
+    # every header names a class except the run FOOTER, which closes a block it
+    # does not name (the one deliberate None)
+    assert acts.count(None) == 1
+    # …and the file one-liner, a `gut` that IS a whole block
+    files = [op for op in ops if op.get("act") in
+             (O.ACT_READ, O.ACT_EDIT, O.ACT_WRITE)]
+    assert len(files) == 1 and files[0]["act"] == O.ACT_EDIT
+    assert (files[0].get("add"), files[0].get("rem")) == (2, 1)
+
+    # 2. SCOPE — the id alone, so an unknown PREFIX cannot blank the mirror
+    assert OH.in_scope(ops[0], "k1") and not OH.in_scope(ops[0], "other")
+    scoped = OH.op_items(ops, "sid", scope="k1")
+    assert scoped, "a third host's agent scope must not render blank"
+
+    # 3. COLLAPSE — prose dropped in scope (its conversation is bubbled), the two
+    #    endpoint cards kept in the LEAD's view, activity kept in both
+    txt = " ".join(it.get("html") or "" for it in scoped)
+    assert "message" not in txt and BRIEF not in txt      # prose gone in scope
+    # activity stays — matched on the command WORD, since the block's `code` op
+    # is syntax-highlighted and the two words are not adjacent in the HTML
+    assert "echo" in txt
+    # …and its file op arrived as a `line` carrying its own class, which is what
+    # makes it visible to a view-mode summary (a `gut` names none)
+    assert [it["t"] for it in scoped if it.get("act") == O.ACT_EDIT] == ["line"]
+    lead = OH.op_items(ops, "sid")
+    # …the two `web` endpoint CARDS (each a header + the body behind its click)
+    # and nothing between them
+    assert [it.get("act") for it in lead] == [O.ACT_AGENT, None,
+                                              O.ACT_AGENT, None], \
+        "the lead's mirror shows a child's two ENDPOINTS and nothing between"
+    assert [bool(it.get("note")) for it in lead] == [True, False, True, False]
+    # …named in ITS OWN register's word, which is a row in the table and not a
+    # branch anywhere
+    import html as _html
+    txt2 = _html.unescape(" ".join(it["html"] for it in lead))
+    assert 'Opencode "Kepler" launched' in txt2
+    assert 'Opencode "Kepler" finished · 42.0s' in txt2
+
+    # 4. as_lead RECOLOURS its command header — off the stamp, since its palette
+    #    is one no table here has ever seen
+    cmd = next(op for op in ops if op.get("act") == O.ACT_BASH)
+    assert tuple(cmd["c"]) == tuple(THIRD_PALETTE[0])
+    assert tuple(AC.as_lead(cmd)["c"]) == tuple(O.SLATE)
+    assert AC.cmd_note(AC.as_lead(cmd)) is not None        # …so it goes quiet
 
 
 def test_the_codex_adapter_needs_no_dashboard_import():

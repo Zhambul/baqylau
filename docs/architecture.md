@@ -84,8 +84,12 @@ importing claude_code),
 card, `⇠ result`, `✎ message`, `⋯ reasoning`, mail in both directions, a
 generic `· <tool>` call, a `▶/▷` shell block, a file one-liner, a compaction
 notice, the run footer — and owns the STAMP POLICY on them: which carry `web`
-(surface in the LEAD's mirror), their `note` wording, `bubbled`, and the
-`who`/`tags` fields. The shapes were already shared; the policy was not, and a
+(surface in the LEAD's mirror), their `note` wording, `bubbled`, the `act`
+ACTIVITY CLASS the web folds them by, and the `who`/`tags` fields. It also holds
+the REGISTER table (`REGISTERS`) — per register, the `src` stamp prefix, the act
+its own cards wear, the WORD the web names its child with and the slot PALETTE
+its stream is painted from, all as DATA, so a new host adds a row rather than a
+branch in each reader. The shapes were already shared; the policy was not, and a
 codex-native subagent's copy of the rules was silently missing its launch AND
 result cards. Pure — the builders return op lists, never emit, take the copy
 group from the caller and text already capped (the CAP_* tables stay per-host)

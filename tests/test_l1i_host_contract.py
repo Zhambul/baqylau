@@ -804,6 +804,75 @@ def test_no_plugin_imports_the_dashboard():
     assert bad == [], "plugin module(s) importing the dashboard: %s" % bad
 
 
+# ------------------------------------------------- 3b. the producer-stamped act
+
+# {module: the act tokens its emit sites must stamp} — the DECLARED table, one
+# row per producer that paints a block header or a one-liner. A grep rather than
+# a drive, deliberately: most of these are hook handlers that need a whole
+# payload + a live state DB to reach their emit (the e2e suites do that), and
+# what this guards is narrower and never worth a fixture — that the site KEEPS
+# saying what it paints. A producer that stops stamping does not fail: it
+# silently falls back to the glyph tables, which answer for two hosts.
+ACT_PRODUCERS = {
+    "core/agentblocks.py": ("ACT_TOOL", "ACT_BASH", "ACT_BG"),
+    "core/streamfmt.py": ("ACT_BASH",),
+    "core/errwatch.py": ("ACT_WARN",),
+    "plugins/claude_code/cmd_pre.py": ("ACT_BASH",),
+    "plugins/claude_code/cmd_fmt.py": ("ACT_BG", "ACT_READ"),
+    "plugins/claude_code/monitor_fmt.py": ("ACT_MONITOR",),
+    "plugins/claude_code/task_fmt.py": ("ACT_TASK",),
+    "plugins/claude_code/skill_fmt.py": ("ACT_SKILL",),
+    "plugins/claude_code/msgs.py": ("ACT_MAIL",),
+    "plugins/codex/stream.py": ("ACT_TOOL", "ACT_BASH"),
+}
+
+
+def test_every_producer_stamps_the_activity_class():
+    """Each producer names the `act` it paints, from the core vocabulary.
+
+    The presenter reads this FIRST and keeps its glyph/palette tables only for
+    ops already on disk — so a producer that stops stamping degrades into the
+    host-blind sniff instead of failing, which is precisely the kind of
+    regression a table has to catch."""
+    from core import ops as O
+
+    missing = []
+    for rel, tokens in sorted(ACT_PRODUCERS.items()):
+        with open(os.path.join(REPO, rel), encoding="utf-8") as fh:
+            src = fh.read()
+        assert "act=" in src, "%s stamps no act at all" % rel
+        for tok in tokens:
+            assert hasattr(O, tok), tok          # the token is core's
+            if ("O." + tok) not in src and ("ops." + tok) not in src:
+                missing.append("%s: %s" % (rel, tok))
+    assert not missing, ("producer(s) no longer stamping their activity class "
+                         "— they would fall back to the glyph sniff:\n"
+                         + "\n".join(missing))
+
+
+def test_the_act_vocabulary_is_cores_and_the_field_is_validated():
+    """core/ops.py owns the tokens (a producer may not import the dashboard) and
+    REFUSES one it doesn't know: an op stamped out of vocabulary would reach a
+    page that has no phrase for it, so the field is dropped and the reader falls
+    back to its own derivation — a worse answer, never a wrong one."""
+    from core import ops as O
+    from dashboard.opshtml import actclass
+
+    assert actclass.ACTS is O.ACTS and len(set(O.ACTS)) == len(O.ACTS)
+    assert O.label("h", (1, 2, 3), act=O.ACT_BASH)["act"] == "bash"
+    assert "act" not in O.label("h", (1, 2, 3), act="nonsense")
+    assert "act" not in O.label("h", (1, 2, 3))
+    assert O.line("x", act=O.ACT_READ)["act"] == "read"
+    assert O.gut("b", (1, 2, 3), act=O.ACT_EDIT)["act"] == "edit"
+    # …and the presenter honours a valid hint over its own tables: this chip
+    # opens with the MONITOR glyph and would classify as one
+    op = O.label("◉ monitor · x", (1, 2, 3), act=O.ACT_MAIL)
+    assert actclass.classify(op) == (O.ACT_MAIL, False)
+    # an unknown token never reaches the op, so the derivation answers
+    assert actclass.classify(O.label("◉ monitor · x", (1, 2, 3),
+                                     act="nonsense"))[0] == O.ACT_MONITOR
+
+
 # ------------------------------- no host declares how its own prose is dropped
 
 def test_the_prose_drop_asks_the_op_not_the_host():
