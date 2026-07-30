@@ -822,6 +822,26 @@ streams it stamped `codex:<nickname>` through exactly this machinery). Four part
    signal, retiring the old codex-only `codexprose:<label>` scope marker and the
    per-tool `prose_block` arms (`prose_block` survives as the legacy fallback for
    parked pre-flag ops). See *The unified agent-scope render* in docs/dashboard.md.
+4. **Clean input/output + working view modes** (a codex subagent must read AND fold
+   like a Claude subagent):
+   - **Clean bubbles** — its input is the real prompt, not codex scaffolding. The
+     synthetic rule (*Two registers* above) is STRUCTURAL: role developer/system and
+     role=user `<tag>` wrappers (except the `<task>` INPUT wrapper, kept + unwrapped)
+     are dropped, so `<recommended_plugins>`/`<multi_agent_mode>` never bubble.
+   - **A foldable LEAD card** — `_ro_prompt` sets `web=1` + a `Codex "<label>" ran`
+     note (`streamfmt.codex_note`), so the run's `⇢ prompt` surfaces in the LEAD
+     mirror as an `ACT_CODEX` card (the codex twin of a Claude subagent's launch
+     card), which default folds into "ran N codex runs" and focus/verbose
+     fold/expand — a delegating lead that was pure bubbles now has foldable activity.
+   - **Tool activity in scope** — `rollout._exec_cmd_from_js` decodes ANY
+     `tools.<fn>({…})` custom-tool input, not just `tools.exec_command`, so a
+     web/MCP lookup (`tools.web__run`) renders as a command-shaped activity block
+     (it used to parse to nothing and vanish); default folds it, verbose expands it.
+   - **No terminal chrome on the web** — agent scope drops the `codex ▶` run banner,
+     the `⚙ model · effort` line, and the `■ codex … ended` footer
+     (`actclass.codex_chrome`, BEFORE `as_lead` recolours the palette); the model +
+     duration live on the agent card, exactly as a Claude subagent scope has no such
+     inline lines.
 
 ### The unified scope key (`codex:<aid>`)
 

@@ -297,6 +297,23 @@ def test_custom_tool_call_exec_is_the_0_14x_command_channel():
     assert RO.parse(_rsp("custom_tool_call", name="exec", input="noop();")) is None
 
 
+def test_custom_tool_call_exec_handles_any_tools_fn_not_just_exec_command():
+    """codex ≥ 0.146 runs MANY tools through the same `exec` custom tool — a
+    web/MCP lookup is `tools.web__run({…})`, not `tools.exec_command({cmd:…})`. It
+    used to parse to None, so a subagent's real work never rendered (view modes had
+    nothing to fold). Now it surfaces the readable call expression as the command,
+    the wrapper (`const r = await … ; text(r)`) stripped."""
+    js = ('const r = await tools.web__run({weather:[{location:"Bali",duration:1}],'
+          'response_length:"short"}); text(r)\n')
+    rec = RO.parse(_rsp("custom_tool_call", name="exec", call_id="w1", input=js))
+    assert rec == {"kind": "exec", "call_id": "w1", "ts": None,
+                   "cmd": 'tools.web__run({weather:[{location:"Bali",duration:1}],'
+                          'response_length:"short"})'}
+    # exec_command still wins its own cleaner extraction (not the generic fallback)
+    assert RO.parse(_rsp("custom_tool_call", name="exec",
+                         input='await tools.exec_command({cmd:"ls"});'))["cmd"] == "ls"
+
+
 def test_custom_tool_call_output_is_an_exec_result():
     """A custom_tool_call_output carries no tool name, so it is the exec/patch
     OUTPUT for whatever opened its call_id — an exec_result either way (an

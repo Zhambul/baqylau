@@ -355,6 +355,17 @@ def op_items(ops, key="", ids=None, carry=None, scope=None, codex_lead=False):
             #      same merge the lead's does (actclass.prose_block).
             # In that order: the drop recognises a block by what it OPENS with,
             # which is exactly what step 1 restores for history.
+            #   0. FIRST drop a codex run's terminal-only CHROME — the `codex ▶`
+            #      banner, the `⚙ model · effort` line, the `■ codex … ended` footer
+            #      (actclass.codex_chrome). Its model + duration belong on the
+            #      agent's card, not as inline ops (a Claude subagent scope has no
+            #      such lines). BEFORE as_lead, which recolours the codex palette
+            #      to the lead's SLATE and would defeat codex_chrome's palette gate.
+            if actclass.codex_chrome(op):
+                g = op.get("g") or None
+                if g:
+                    cs.setdefault("drop", set()).add(g)
+                continue
             op = actclass.as_lead(op)
             t = op.get("t")             # as_lead may re-shape the op (gut -> line)
             g = op.get("g") or None

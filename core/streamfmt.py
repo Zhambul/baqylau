@@ -66,11 +66,24 @@ AGENT_WORD = 'Agent "%s"'
 TEAM_WORD = "Teammate @%s"
 
 
+CODEX_WORD = 'Codex "%s"'
+
+
 def agent_note(label, verb, team=False, dur=""):
     """`Agent "Explore" launched` / `Teammate @fix-smoke-dedup finished · 21m 31s` —
     the web mirror's one-liner for an agent's launch/finish. `dur` is appended when
     the caller has one (a launch has nothing to report yet)."""
     note = ((TEAM_WORD if team else AGENT_WORD) % label) + " " + verb
+    return note + " · " + dur if dur else note
+
+
+def codex_note(label, verb, dur=""):
+    """`Codex "Dewey" ran` — the web mirror's one-liner for a codex SIDECAR run's
+    launch card, the codex twin of agent_note (so a codex run surfaces in the lead
+    the same way a Claude subagent does, docs/codex.md *Sidecar → subagent
+    parity*). Its own word (`Codex`) rather than `Agent`, since a codex run is a
+    third kind the summary counts as `ran N codex runs`."""
+    note = (CODEX_WORD % label) + " " + verb
     return note + " · " + dur if dur else note
 
 

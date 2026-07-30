@@ -100,11 +100,38 @@ _JS_CMD = re.compile(
 _OUTPUT_MARK = "Output:\n"
 
 
-def _exec_cmd_from_js(js):
-    """The command out of a `custom_tool_call` name=exec JS `input`, or ''."""
-    m = _JS_CMD.search(js or "")
+_JS_TOOL = re.compile(r"tools\.[A-Za-z_][A-Za-z0-9_]*\s*\(")
+
+
+def _tool_call_from_js(js):
+    """A NON-exec_command tool call out of a `custom_tool_call` name=exec JS input,
+    as a readable `tools.<fn>({…})` expression, or "". codex ≥ 0.146 runs many
+    tools through the SAME `exec` custom tool — a shell command is
+    `tools.exec_command({cmd:…})` (handled above), but a web/MCP lookup is
+    `const r = await tools.web__run({…}); text(r)`. Without this those calls parsed
+    to nothing and the subagent's real work never rendered (view modes had nothing
+    to fold). We surface the call expression as the block's command, stripping the
+    `const r = await … ; text(r)` wrapper codex adds."""
+    m = _JS_TOOL.search(js or "")
     if not m:
         return ""
+    expr = (js[m.start():] or "").strip()
+    for suf in ("; text(r)", ";text(r)", "; console.log(r)"):
+        i = expr.rfind(suf)
+        if i > 0:
+            expr = expr[:i]
+            break
+    return expr.strip().rstrip(";").strip()
+
+
+def _exec_cmd_from_js(js):
+    """The command out of a `custom_tool_call` name=exec JS `input`, or ''. A
+    `tools.exec_command({cmd:…})` shell command yields its cmd; ANY OTHER
+    `tools.<fn>(…)` (web__run, …) yields the readable call expression, so a
+    subagent's tool activity renders (and folds) instead of vanishing."""
+    m = _JS_CMD.search(js or "")
+    if not m:
+        return _tool_call_from_js(js)       # a non-exec_command tool (web__run, …)
     raw = m.group(1)
     try:
         v = json.loads(raw)                 # "ls" or ["bash","-lc","…"] (double-quoted)

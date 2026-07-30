@@ -521,6 +521,44 @@ def test_standalone_subagent_stream_drops_the_replayed_parent_prefix(test_env, c
     host.terminate()
 
 
+def test_standalone_subagent_prompt_web_surfaces_and_tool_renders(test_env, codex, reaper):
+    """B1+B2: a codex subagent's ⇢ prompt web-surfaces (so the LEAD shows a foldable
+    card, note `Codex "…" ran`), and a NON-exec_command tool (`tools.web__run`)
+    renders as activity (it used to parse to nothing). docs/codex.md *Sidecar →
+    subagent parity*."""
+    import calendar
+    host = subprocess.Popen(["sleep", "60"])
+    reaper.append(host)
+    codex.start_watcher(host_pid=host.pid)
+    fork_iso = "2026-07-30T12:19:59.556Z"
+    fork_epoch = calendar.timegm((2026, 7, 30, 12, 19, 59, 0, 0, 0))
+    codex.add_rollout(
+        originator="codex-tui",
+        meta={"thread_source": "subagent", "timestamp": fork_iso,
+              "parent_thread_id": codex.s.sid, "agent_nickname": "Pauli",
+              "source": {"subagent": {"thread_spawn": {
+                  "parent_thread_id": codex.s.sid}}}},
+        events=[
+            {"type": "event_msg", "payload": {
+                "type": "task_started", "started_at": fork_epoch}},
+            {"type": "event_msg", "payload": {
+                "type": "user_message", "message": "look up the weather"}},
+            {"type": "response_item", "payload": {
+                "type": "custom_tool_call", "name": "exec", "call_id": "w1",
+                "input": 'const r = await tools.web__run({q:"weather Bali"}); text(r)'}},
+        ])
+    # the tool call renders (B2 — was invisible before the tools.<fn> decode)
+    wait_until(lambda: "web__run" in codex.s.ops_text(),
+               desc="the subagent's tools.web__run rendered as activity")
+    # the ⇢ prompt op is web-stamped (B1) so it surfaces in the LEAD, with the note
+    pj = [op for op in codex.s.ops()
+          if op.get("t") == "label" and "prompt" in (op.get("s") or "")]
+    assert pj and pj[0].get("web") == 1, "the codex ⇢ prompt must be web-surfaced"
+    assert pj[0].get("note") == 'Codex "Pauli" ran', \
+        "the lead card note must read Codex \"<label>\" ran"
+    host.terminate()
+
+
 def test_standalone_teardown_parks_db_on_host_exit(test_env, codex, reaper):
     """Codex fires no SessionEnd hook, so the standalone watcher owns teardown:
     when the codex host pid dies (here: killed), it parks the state DB (-> durable

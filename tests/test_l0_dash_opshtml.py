@@ -168,6 +168,34 @@ def test_op_items_scope_drops_a_bubbled_block_across_tools():
     assert [(it["g"], it["t"]) for it in items] == [("b1", "label"), ("b1", "gut")]
 
 
+def test_op_items_scope_drops_codex_terminal_chrome():
+    # A codex run's terminal-only CHROME — the `codex ▶` run banner, the
+    # `⚙ model · effort` line, the `■ codex … ended` footer — must NOT show on the
+    # web agent scope (model + duration live on the agent card, like a Claude
+    # subagent). Dropped by actclass.codex_chrome BEFORE as_lead recolours the codex
+    # palette. The run's real activity (a command) stays.
+    from core import slots as SL
+    rgb = list(SL.CODEX_PALETTE[0])
+    scope = {"codex:cli"}
+    ops = [
+        {"t": "label", "s": "codex ▶ cli", "c": rgb, "src": "codex:cli"},
+        {"t": "gut", "s": "⚙ gpt-5.6-luna · low", "c": rgb, "src": "codex:cli"},
+        {"t": "label", "s": "▶ cmd", "c": rgb, "g": "b1", "src": "codex:cli"},
+        {"t": "code", "s": "echo hi", "g": "b1", "src": "codex:cli"},
+        {"t": "label", "s": "■ codex cli ended · 3.2s · 1k in", "c": rgb,
+         "src": "codex:cli"},
+    ]
+    items = opshtml.op_items(ops, "k", scope=scope)
+    html = " ".join(it.get("html", "") for it in items)
+    assert "cmd" in html and "echo" in html        # real activity kept (highlighted)
+    assert "codex" not in html                     # banner + footer ("codex …") dropped
+    assert "gpt-5.6-luna" not in html              # ⚙ chrome dropped
+    assert "ended" not in html                     # footer dropped
+    # Claude ops (no codex palette) are untouched by the chrome drop
+    claude = [{"t": "label", "s": "⚙ not codex", "c": [1, 2, 3], "src": "sub:a1"}]
+    assert opshtml.op_items(claude, "k", scope={"sub:a1"})
+
+
 _HAVE_PYGMENTS = importlib.util.find_spec("pygments") is not None
 
 

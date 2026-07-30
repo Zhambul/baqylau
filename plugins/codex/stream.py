@@ -168,12 +168,13 @@ TS = re.compile(r"^\[\d{4}-\d\d-\d\dT[\d:.]+Z\]\s?(.*)$")
 cap = SF.cap
 
 
-def chip(glyph, kind, g=None, lk=None, bubbled=False):
-    return SF.chip("codex", glyph, kind, SLOT_RGB, g=g, lk=lk, bubbled=bubbled)
+def chip(glyph, kind, g=None, lk=None, bubbled=False, web=False, note=None):
+    return SF.chip("codex", glyph, kind, SLOT_RGB, g=g, lk=lk, bubbled=bubbled,
+                   web=web, note=note)
 
 
-def gutter(text, g=None, bubbled=False):
-    return SF.gutter(text, SLOT_RGB, g=g, bubbled=bubbled)
+def gutter(text, g=None, bubbled=False, web=False):
+    return SF.gutter(text, SLOT_RGB, g=g, bubbled=bubbled, web=web)
 
 
 def dim_gut(text, g=None, bubbled=False):
@@ -410,9 +411,16 @@ class Renderer:
     def _ro_prompt(self, rec):
         if STANDALONE:
             return
+        # web=True + a `Codex "<label>" ran` note: the ⇢ prompt is the codex run's
+        # LAUNCH card in the LEAD mirror (in_scope keeps a web-stamped op there),
+        # the exact analog of a Claude subagent's ⇢ prompt (substream render_prompt)
+        # — so the lead has a foldable ACT_CODEX card ("ran N codex runs") instead
+        # of only bubbles, and view modes fold/expand it. bubbled=True still drops
+        # it in the run's OWN scope (its conversation re-bubbles the prompt there).
         g = O.new_group(LOG)
-        O.emit(LOG, chip("⇢", "prompt", g=g, lk=O.COPY_ALL, bubbled=True),
-               gutter(cap(rec["text"], CAP_PROMPT), g=g, bubbled=True))
+        O.emit(LOG, chip("⇢", "prompt", g=g, lk=O.COPY_ALL, bubbled=True, web=True,
+                         note=SF.codex_note(LABEL, "ran")),
+               gutter(cap(rec["text"], CAP_PROMPT), g=g, bubbled=True, web=True))
 
     def _ro_reasoning(self, rec):
         if STANDALONE:
