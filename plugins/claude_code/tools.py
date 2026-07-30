@@ -274,6 +274,12 @@ def parse_redirect(cmd, cwd):
 
 _MD_EXT = (".md", ".markdown", ".mdown", ".mkd")
 _PLUMBING = ("|", ";", "&&", "||", "&", ">", ">>", "&>")
+# A trailing STDERR redirect (`2>/dev/null`, `2>&1`, `2>>log`). Deliberately not in
+# _PLUMBING: it doesn't touch stdout, so the streamed bytes are still the file
+# verbatim and such a command stays render-eligible. It only has to be recognised so
+# it can't be mistaken for the trailing FILE argument of a sed/grep (see
+# _match_reader). shlex keeps it as ONE token, which is why a bare `>` check misses it.
+_STDERR_REDIR = re.compile(r"^\d*>{1,2}(?:&\d+|\S+)$")
 
 # The two reader sets the registry rows below are built from. WHOLE readers emit
 # the file verbatim (the file may be ANY argument); FRAGMENT readers emit matching
@@ -465,10 +471,24 @@ def _match_reader(cmd, match, readers, tailarg_readers):
                 return v, w.strip("'\""), head
         return None, None, None
     if head in tailarg_readers and len(toks) > 1:
-        w = toks[-1]                        # the FILE is the trailing arg
-        v = _match(w)
-        if v:
-            return v, w.strip("'\""), head
+        # The FILE is the trailing ARGUMENT — and a redirect is not an argument,
+        # it is shell syntax, so it cannot be allowed to occupy that slot.
+        # `sed -n 1,80p note.md 2>/dev/null` (the idiom for reading a file that
+        # may not exist) silently rendered as a streamed block instead of a
+        # `Read(note.md)` one-liner, because `2>/dev/null` was the last token.
+        # Stripping them does NOT weaken the anti-masquerade guard the tailarg
+        # rule exists for: `grep 'foo.py' x.txt 2>/dev/null` still resolves to
+        # x.txt, never to the PATTERN. Only stderr forms are stripped — a stdout
+        # redirect is already refused outright by the _PLUMBING check above,
+        # since then the output isn't reaching the pane at all.
+        args = list(toks)
+        while len(args) > 1 and _STDERR_REDIR.match(args[-1]):
+            args.pop()
+        if len(args) > 1:
+            w = args[-1]
+            v = _match(w)
+            if v:
+                return v, w.strip("'\""), head
     return None, None, None
 
 

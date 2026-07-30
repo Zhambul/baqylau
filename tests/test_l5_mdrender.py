@@ -440,6 +440,39 @@ def test_read_command_takes_a_markdown_slice():
         assert read_command(other) == (None, None, None), other
 
 
+def test_read_command_ignores_a_trailing_stderr_redirect():
+    """A trailing `2>/dev/null` must not occupy the FILE slot of a tailarg reader.
+
+    `sed -n 1,80p note.md 2>/dev/null` — the idiom for reading a file that may not
+    exist — silently streamed as a raw fg block instead of collapsing to
+    `Read(note.md)`: sed/grep are TAILARG readers (the file must be the last
+    argument, so `grep 'foo.py' x.txt` can't masquerade as python), and the
+    redirect had taken that position. A redirect is shell SYNTAX, not an argument.
+    `cat` never had the bug — a WHOLE reader takes the file anywhere."""
+    from plugins.claude_code.tools import read_command
+    assert read_command("sed -n 1,80p /w/note.md 2>/dev/null") == (
+        ("md", True), "/w/note.md", "sed")
+    assert read_command("sed -n 1,120p /d/availability.md 2>&1") == (
+        ("md", True), "/d/availability.md", "sed")
+    assert read_command("grep -n foo app.py 2>/dev/null") == (
+        ("code", "python"), "app.py", "grep")
+    assert read_command("grep -n foo app.py 2>>errors.log") == (
+        ("code", "python"), "app.py", "grep")
+    # the anti-masquerade guard the tailarg rule exists for still holds — the
+    # PATTERN is never taken as the file, and a recursive grep still opts out
+    assert read_command("grep 'foo.py' x.txt 2>/dev/null") == (None, None, None)
+    assert read_command("grep -r pat src/ 2>/dev/null") == (None, None, None)
+    assert read_command("grep -ril p ~/w/ --include=*.md 2>/dev/null") == \
+        (None, None, None)
+    # a STDOUT redirect still disqualifies outright (the output never reaches the
+    # pane, so there is nothing to collapse), with or without a stderr one
+    assert read_command("sed -n 1,80p note.md > out.txt") == (None, None, None)
+    assert read_command("sed -n 1,80p note.md 2>/dev/null > out.txt") == \
+        (None, None, None)
+    # …and a redirect must not be read as the file when there is no other arg
+    assert read_command("sed -n 1,80p 2>/dev/null") == (None, None, None)
+
+
 def test_read_command_honours_both_env_gates(monkeypatch):
     """CLAUDE_MIRROR_CMD_READ=0 turns the whole collapse off (the historical
     escape hatch), and a kind's OWN CLAUDE_MIRROR_* gate turns off just that

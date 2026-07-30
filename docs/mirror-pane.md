@@ -272,6 +272,21 @@ the skeleton reports for a bare redirect) is in `read_readers`, so a kind can ta
 `sed x.md` without also taking `< x.md`; the stream plane's redirect branch stays
 reader-agnostic, as it always was.
 
+**A trailing stderr redirect is not the trailing argument.** The tailarg rule
+(`sed`/`grep` put a script/pattern first, so only the LAST token can be the file)
+exists to stop `grep 'foo.py' x.txt` masquerading as python — but it took the last
+token *literally*, so `sed -n 1,80p note.md 2>/dev/null` matched `2>/dev/null` as
+the file, found no extension, and the whole read silently fell through to a raw
+streamed block. That form is the ordinary idiom for reading a file that may not
+exist, so it was a common miss and gave no hint of what had happened. `2>…`/`2>&1`
+tokens are now stripped before the tailarg is taken (`_STDERR_REDIR`, a sibling of
+`_PLUMBING` deliberately kept OUT of it: stderr doesn't touch stdout, so the
+streamed bytes are still the file verbatim and the command stays render-eligible).
+The guard is untouched — `grep 'foo.py' x.txt 2>/dev/null` still resolves to
+`x.txt`, never the pattern — and a **stdout** redirect still disqualifies outright,
+since then the output never reaches the pane at all. `cat` never had the bug: a
+WHOLE reader takes the file from any position.
+
 **Where detection runs: in the tailer, not the launch hook.** All four
 filename-keyed modes (md/JSON/YAML/code) are decided by `claude-stream.py`
 itself (`_detect_render`), from the ORIGINAL pre-tee-wrap command every launch
