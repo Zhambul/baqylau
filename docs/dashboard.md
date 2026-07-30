@@ -6156,6 +6156,22 @@ with one answer. The per-view text SNIFFERS (`actclass.codex_chrome`,
 `agent_header`) stay as the legacy fallback for ops ALREADY ON DISK, exactly as
 `prose_block` does beside `bubbled`.
 
+*"Parked-history only" is a claim the sniffer has to EARN.* `op_items` runs it
+over every op in every view, live ones included, so a bare text test is a
+trapdoor: a codex run's search query, tool arguments, tool output and patch lines
+are all guts in the codex palette carrying arbitrary CONTENT, and a query that
+merely opened with the word `codex` was matched as a run banner — taking the
+block AND its whole copy group off the page (measured: 1 of 3 items rendered).
+So `codex_chrome` is pinned two ways, both derived from the corpus rather than
+guessed. By op TYPE: over 237 parked DBs (159,757 ops) it matches exactly 62 ops
+— 22 `codex ▶ <label>` banners and 18 `■ codex <label> ended · …` footers, every
+one a LABEL, and 22 `⚙ <model> · <effort>` lines, every one a GUT, single-line
+and ≤ 23 chars. And by the producer's STAMPS: all 62 are unstamped, so an op
+carrying `bubbled`/`act`/`web` is live and has already said what it is (`chrome`
+itself never reaches the sniffer — `op_items` tests the flag first). A live ⚙
+line is a `dim_gut` that sets `chrome=True`, which is why the one gut shape can
+still be recognised safely.
+
 **And WHICH kind of agent a block belongs to comes from the stamp, not the
 palette.** `actclass._classify` resolves the agent class from the `src` REGISTER
 first (`codex:`→`ACT_CODEX`, `team:`→`ACT_TEAM`, `sub:`→`ACT_AGENT`), with the

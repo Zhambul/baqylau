@@ -1167,7 +1167,11 @@ scope: its intermediate messages/reasoning/commands all visible. Four parts:
      live on the agent card, exactly as a Claude subagent scope has no such inline
      lines. `actclass.codex_chrome` (a text sniff) survives as the legacy fallback
      for ops ALREADY ON DISK, which carry no flag — the same role `prose_block`
-     plays beside `bubbled`.
+     plays beside `bubbled`. Because that sniff runs over LIVE ops too, it is
+     pinned by op TYPE and skips producer-stamped ops: a run's search query or
+     tool arguments are guts full of CONTENT, and one opening with the word
+     `codex` used to be eaten as a banner, copy group and all (docs/dashboard.md
+     *The HOST's scaffolding*).
 
 ### A non-shell tool call is a TOOL, not a laundered command
 

@@ -97,7 +97,7 @@ LITERAL_ALLOW = {
     # coincidence between the register name and the act token is now a
     # derivation rather than a matching pair of strings.)
     "dashboard/opshtml/actclass.py": {
-        "codex ": "parked-history sniff for the pre-`chrome` run banner (frozen)",
+        "codex ▶ ": "parked-history sniff for the pre-`chrome` run banner (frozen)",
         "■ codex ": "parked-history sniff for the pre-`chrome` run footer (frozen)",
     },
 }

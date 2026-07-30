@@ -266,6 +266,64 @@ def test_op_items_scope_drops_codex_terminal_chrome():
     assert opshtml.op_items(claude, "k", scope="a1")
 
 
+def test_the_chrome_sniffer_cannot_eat_a_live_codex_block():
+    """THE parked-history sniffer must never match a LIVE op — the failure mode
+    that makes it a trapdoor rather than a fallback.
+
+    `op_items` runs `codex_chrome` over every op in every view, and a codex run's
+    search query, tool arguments, tool output and patch lines are all guts in the
+    codex palette carrying arbitrary CONTENT (plugins/codex/stream.py). The
+    sniffer used to ask only "does this text open with `codex `/`⚙`?", so a
+    session that searched for the word `codex` lost the block AND its whole copy
+    group — one line of a three-item block rendered.
+
+    Two pins, both measured against the parked corpus (62 real chrome ops over
+    237 DBs): the op TYPE (banner and footer are LABELS, the ⚙ line is the one
+    GUT) and the producer's own stamps (every one of the 62 is unstamped)."""
+    from core import slots as SL
+    rgb = list(SL.CODEX_PALETTE[0])
+    live = [
+        # a search block: the chip, then the QUERY the user typed
+        {"t": "label", "s": "⌕ search", "c": rgb, "g": "s1", "act": "tool"},
+        {"t": "gut", "s": "codex rollout parsing", "c": rgb, "g": "s1"},
+        # a tool block whose ARGUMENTS happen to open the same way
+        {"t": "label", "s": "· web__run", "c": rgb, "g": "s2", "act": "tool"},
+        {"t": "gut", "s": "codex ▶ is a banner, but this is an argument",
+         "c": rgb, "g": "s2"},
+        # tool OUTPUT that quotes a run footer, and a long ⚙-leading body
+        {"t": "gut", "s": "■ codex cli ended · 3.2s", "c": rgb, "g": "s3"},
+        {"t": "gut", "s": "⚙ " + "settings output " * 12, "c": rgb, "g": "s4"},
+    ]
+    html = " ".join(it.get("html", "")
+                    for it in opshtml.op_items(list(live), "k"))
+    assert "rollout parsing" in html          # the query survived…
+    assert "is an argument" in html           # …and so did the arguments
+    assert "ended" in html                    # a quoted footer is CONTENT here
+    assert "settings output" in html          # a long ⚙ body is not the ⚙ line
+    # every block kept BOTH its items (the copy group was never dropped)
+    for g in ("s1", "s2"):
+        assert len([it for it in opshtml.op_items(list(live), "k")
+                    if it.get("g") == g]) == 2, g
+
+
+def test_the_chrome_sniffer_still_matches_parked_history():
+    """…and the other direction: the three PRE-FLAG shapes, exactly as they sit
+    in the parked corpus, are still dropped. The pins above tighten the sniffer;
+    they must not retire it, or every old codex session grows its banners,
+    ⚙ lines and footers back."""
+    from core import slots as SL
+    from dashboard.opshtml import actclass
+    rgb = list(SL.CODEX_PALETTE[0])
+    for op in ({"t": "label", "s": "codex ▶ cli", "c": rgb},
+               {"t": "label", "s": "codex ▶ Averroes", "c": rgb},
+               {"t": "label", "s": "■ codex cli ended · 5.0s", "c": rgb},
+               {"t": "label", "s": "■ codex Task ended · 3m27s", "c": rgb},
+               {"t": "gut", "s": "⚙ gpt-5-codex · low", "c": rgb},
+               {"t": "gut", "s": "⚙ gpt-5.6-luna · medium", "c": rgb}):
+        assert actclass.codex_chrome(op), op["s"]
+        assert not opshtml.op_items([op], "k"), op["s"]
+
+
 _HAVE_PYGMENTS = importlib.util.find_spec("pygments") is not None
 
 

@@ -472,7 +472,30 @@ def prose_block(op, scope=None):
 # match codex's OWN ops — a session that never hosted a codex run has none — and
 # they are FROZEN: a new host must never grow a fourth one. It has no history to
 # recover, because it is stamping the flags from its first op.
+#
+# "Parked-history only" is a CLAIM these predicates have to earn, not a comment:
+# op_items runs them over every op in every view, live ops included, and a
+# TEXT test over live content is a trapdoor — a codex run's search query, tool
+# arguments, tool output and patch lines are guts carrying whatever the user and
+# the tools said, and one that opened with the word "codex" was matched as a run
+# banner and took its whole copy group off the page with it. So each predicate
+# below is pinned by op TYPE as well as by text, and skips any op the producer
+# STAMPED (`bubbled`/`act`/`web` — `chrome` short-circuits before op_items ever
+# asks). Both pins are measured, not guessed: over the 237 parked DBs in the
+# corpus (159,757 ops, 2026-07-31) the sniffers match exactly 62 ops — 22
+# `codex ▶ <label>` banners and 18 `■ codex <label> ended · …` footers, both
+# LABELS; 22 `⚙ <model> · <effort>` turn-context lines, all GUTS, all one line
+# and none longer than 23 chars — and every single one of the 62 is unstamped.
 # ---------------------------------------------------------------------------
+
+# The banner/footer/turn-context shapes, per op type (see the note above). A live
+# ⚙ line is a `dim_gut` that sets chrome=True, so the only ⚙ gut that can reach
+# this test is history's.
+_CHROME_BANNER = "codex ▶ "         # `codex ▶ <label>` — the run banner (label)
+_CHROME_FOOTER = "■ codex "         # `■ codex <label> ended · …` (label)
+_CHROME_ENDED = " ended"            # …the word that finishes a footer's head
+_CHROME_GEAR = "⚙ "                 # `⚙ <model> · <effort>` (gut)
+_GEAR_MAX = 64                      # corpus max is 23; a tool output is not this
 
 def is_codex(op):
     """True when `op` wears the codex palette — a codex run's block, standalone
@@ -513,18 +536,31 @@ def codex_chrome(op):
     The PARKED-history twin of the producer-set `chrome` flag, which a live run
     stamps on all three (plugins/codex/stream.py). Frozen at those three shapes:
     a new host declares `chrome` and needs no sniffer, which is why this one
-    keeps a host's NAME in a string compare and no successor may."""
+    keeps a host's NAME in a string compare and no successor may.
+
+    Pinned by op TYPE and gated on the producer's stamps, because op_items asks
+    this of every op in every view and the ops it must NOT match are live ones
+    whose text is CONTENT (see the section note above)."""
     try:
-        if op.get("t") not in ("label", "gut") or not is_codex(op):
+        t = op.get("t")
+        if t not in ("label", "gut") or not is_codex(op):
+            return False
+        if op.get("bubbled") or op.get("act") or op.get("web"):
+            # a producer-STAMPED op: it is live and it already said what it is.
+            # (`chrome` itself never gets here — op_items tests the flag first.)
             return False
         # RAW text, NOT lead_head: lead_head strips the leading token as an
         # agent `who` name ("codex ▶ cli" -> "▶ cli", "⚙ model" -> "· …"), which
         # is exactly the prefix this predicate keys on. A real command opens
-        # "▶ foreground" in a SEMANTIC colour (not is_codex), so "codex " / the
-        # "■ codex " footer can only be the run banner/footer (no collision).
+        # "▶ foreground" in a SEMANTIC colour (not is_codex), so the banner and
+        # footer heads below can only be a run's own frame (no collision).
         text = _plain(op).lstrip()
-        return (text[:1] == "⚙" or text.startswith("codex ")
-                or text.startswith("■ codex "))
+        if t == "gut":
+            # the ⚙ turn-context line — one short line, never a body of content
+            return (text.startswith(_CHROME_GEAR) and "\n" not in text
+                    and len(text) <= _GEAR_MAX)
+        return (text.startswith(_CHROME_BANNER)
+                or (text.startswith(_CHROME_FOOTER) and _CHROME_ENDED in text))
     except Exception:
         return False
 
