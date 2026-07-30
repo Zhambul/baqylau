@@ -5453,6 +5453,55 @@ bound, invisibly to the child cap, and its live-tail card never reaches the
 bottom to be evicted. So `fillBlock` also caps each block **body** at
 `MAX_BLOCK_BODY` (800), trimming its oldest (top) op nodes as new ones append.
 
+### A `/command` turn IS a message
+
+Reported 2026-07-30: *"why don't I see my first message in the message
+transcript"* — on a session opened with `/audit-debug <sid> <question>`, and on a
+second one at the same time. The audit was clean (no anomalies, no `errors`, no
+`takeback` kv and no `web-interrupt` row), which rules out the shape this looks
+most like — the take-back prune that ate a whole tree, *Discarded prompts* above.
+
+Claude Code records a slash-command turn as an ENVELOPE in the user record's
+content: `<command-name>/audit-debug</command-name>` plus `<command-args>…`
+(a skill invocation leads with `<command-message>` instead, so the name tag is
+searched for, not anchored). `_Conv.add_prompt` dropped every prompt whose text
+starts with `<`, as plumbing — and this one is not plumbing. **The args ARE the
+message**: everything the human typed lives in them. For a SKILL the symptom was
+sharper still, because the record that follows is the loaded SKILL.md body (an
+`isMeta` prompt), so the first bubble in the feed was the skill's own
+instructions where the user's question should have been — which is exactly why
+the report blamed "the skill being used".
+
+So `conversation()` unwraps that one shape into `/name args` (`_command_text`)
+and keeps dropping the rest. **The gate is the `<command-name>` TAG, and it is
+load-bearing.** Measured over the corpus, three `<`-wrapped local-command records
+exist and only the typed one carries that tag: `<local-command-caveat>` is Claude
+Code's own isMeta injection, and `<local-command-stdout>` is the command's echoed
+OUTPUT (`Compacted (ctrl+o to see full summary)…`). Widening the gate to "starts
+with `<command`" would surface that stdout as a user bubble. Not one isMeta record
+in the corpus carries a command name, so the unwrap touches only genuine turns
+(22 of them there: `/compact`, `/audit-debug`, `/login`, `/model`).
+
+Two smaller things fell out of the same record:
+
+- **The args were newline-free.** `_CMD_ARGS_RE` excluded `\n`, so a MULTI-LINE
+  argument matched *nothing at all* — and multi-line is the normal case (a sid on
+  one line, the question on the next). That also silently cost the title ladder
+  its args. The class is now `[^<]*?`, which still stops at the closing tag.
+  `_command_parts` owns the parse, with the two renderings split off it because
+  they genuinely differ: a title is ONE line (whitespace collapsed, like the
+  prompt fallback taking its first line), a bubble is verbatim.
+- **Display and the discard prune have to agree.** `_prompt_bearing` applied the
+  same `<`-rule for `_dead_uuids`' fork counting, so an unwrapped-but-unprunable
+  command turn would be visible in the stream yet invisible to a take-back. Both
+  now go through `_command_text` (via `_typed`), so a slash command cancelled with
+  Esc-Esc prunes like a typed prompt.
+
+Rejected: dropping the wrapper but rendering a synthetic `/command` chip from the
+`Skill` tool_use instead. The tool call is a *different* record with different
+content (a skill's args, not the raw turn), it does not exist for a plain
+`/compact`, and it would put a second writer on the same fact.
+
 ## Mirror card styling
 
 The mirror stream is styled to read like the **activity-timeline cards** (which
@@ -6573,9 +6622,10 @@ a **Stop hook's blocking feedback**, a **loaded skill's whole SKILL.md body**
 (injected as a text block right after the `Skill` tool_result — the noisiest of
 them), and the resume nudge `Continue from where you left off.`. They used to
 render as `YOU` bubbles, so a hook's feedback — or an entire skill — read as
-something you had said. `<`-wrapped envelopes (`<command-name>`,
-`<local-command-caveat>`, `<system-reminder>`) were already dropped by
-`conversation()`; these are bare prose, so nothing but the flag distinguishes
+something you had said. `<`-wrapped envelopes (`<local-command-caveat>`,
+`<local-command-stdout>`, `<system-reminder>`) were already dropped by
+`conversation()` — all but the `<command-name>` one, which is UNWRAPPED (see
+*A `/command` turn IS a message* below); these are bare prose, so nothing but the flag distinguishes
 them, which is why `transcript.parse_line` now CARRIES the flag (as `meta`)
 instead of discarding it — on both record shapes, since a skill body arrives as
 list content while a hook's feedback is a plain string. `session_title` had

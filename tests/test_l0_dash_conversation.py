@@ -84,6 +84,15 @@ def test_session_title_falls_back_to_slash_command(tmp_path):
              "<command-name>/task</command-name>\n"
              "<command-args>fix the flaky test</command-args>"}})
     assert TR.session_title(q) == "/task fix the flaky test"
+    # …including MULTI-LINE args, which the old newline-free args class matched
+    # not at all (the title silently lost them). A title is one LINE, so the
+    # whitespace is collapsed here — conversation() keeps them verbatim.
+    m = _tw(tmp_path, "c4.jsonl",
+            {"type": "user", "message": {"content":
+             "<command-name>/audit-debug</command-name>\n"
+             "<command-args>63209ded\nwhy is my first message missing"
+             "</command-args>"}})
+    assert TR.session_title(m) == "/audit-debug 63209ded why is my first message missing"
     # a later plain prompt (or a summary) still WINS over the command fallback
     r = _tw(tmp_path, "c3.jsonl",
             {"type": "user", "message": {"content": "<command-name>/plugin</command-name>"}},

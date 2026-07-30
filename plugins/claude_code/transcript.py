@@ -42,7 +42,9 @@
 #       previous conversation…`), and TEAMMATE MAIL (`Another Claude session sent
 #       a message:` wrapping a peer's <teammate-message> — the one shape with no
 #       structural flag to read). The `<`-wrapped ones are dropped by
-#       conversation() anyway; the bare-prose ones are indistinguishable from a
+#       conversation() anyway — all but the `<command-name>` envelope of a
+#       `/command` turn, which it UNWRAPS (_command_text) because that one IS
+#       typed; the bare-prose ones are indistinguishable from a
 #       real prompt WITHOUT this flag, which is why it is now carried rather
 #       than dropped: the dashboard's focus mode promises "your prompt", and a
 #       hook's feedback rendered as a YOU bubble is not it (docs/dashboard.md,
@@ -441,13 +443,24 @@ def agent_paths(parent_tpath, agent_id):
 
 # --- session title + the main-thread conversation (dashboard read models) ----------
 
-# The slash-command wrapper Claude Code stores for a `/command` FIRST turn (the
+# The slash-command wrapper Claude Code stores for a `/command` turn (the
 # `<command-name>/foo</command-name>` + optional `<command-args>bar</…>` tags in
-# the user record's content). session_title's LAST-resort fallback reads the
-# command name back out so a short slash-command session gets `/foo` instead of a
-# bare sid (docs/session-naming-findings.md, *Fallbacks*).
+# the user record's content; a skill invocation leads with `<command-message>`
+# instead, so the name tag is SEARCHED for rather than anchored). session_title's
+# LAST-resort fallback reads the command name back out so a short slash-command
+# session gets `/foo` instead of a bare sid (docs/session-naming-findings.md,
+# *Fallbacks*), and conversation() unwraps it into the prompt bubble the user
+# actually typed (_command_parts is the one owner of the derivation).
+#
+# The args are deliberately NOT newline-free: a slash command's argument is
+# whatever was in the input box, which is regularly several lines (a sid on one,
+# the question on the next — measured on this repo's own /audit-debug turns). A
+# `[^<\n]*?` args class matched NONE of those, so the whole argument — the entire
+# message, as far as the human is concerned — was lost. `[^<]*?` still stops at
+# the closing tag, and the surrounding `\s*` trims the indentation Claude Code
+# puts in front of the tags without touching the interior.
 _CMD_NAME_RE = re.compile(r"<command-name>\s*(/?[^<\n]+?)\s*</command-name>")
-_CMD_ARGS_RE = re.compile(r"<command-args>\s*([^<\n]*?)\s*</command-args>")
+_CMD_ARGS_RE = re.compile(r"<command-args>\s*([^<]*?)\s*</command-args>")
 
 TITLE_SCAN = 200        # head-window lines session_title inspects: summary records
 #                         are PREPENDED on resume, so they precede the first prompt;
@@ -483,21 +496,52 @@ def _title_records(path):
     return named, ai
 
 
-def _command_label(s):
-    """The `/slash-command [args]` that STARTED a session, pulled from the
-    `<command-name>`/`<command-args>` wrapper Claude Code stores for a
-    slash-command first turn. '' when the content carries no command name.
-    session_title's last-resort fallback, below summary/prompt (a slash command
-    is less descriptive than a typed prompt, but beats a bare sid)."""
+def _command_parts(s):
+    """`(name, args)` of the `<command-name>`/`<command-args>` wrapper in `s` —
+    ('', '') when it carries no command name. The ONE owner of that derivation:
+    the title ladder wants a single LINE of it and conversation() wants the args
+    VERBATIM, which is the whole reason the parse is separated from either
+    rendering (docs/styleguide.md, *Single-owner vocabulary*).
+
+    Presence of the name tag is also what tells a user-typed command turn from
+    the two OTHER `<`-wrapped local-command records, neither of which carries one
+    (measured across the corpus): `<local-command-caveat>` is Claude Code's
+    isMeta injection, and `<local-command-stdout>` is the command's own echoed
+    OUTPUT. Both must stay dropped, so this gate is load-bearing — do not relax
+    it to "starts with <command"."""
     m = _CMD_NAME_RE.search(s)
     if not m:
-        return ""
+        return "", ""
     name = m.group(1).strip()
     if not name:
-        return ""
+        return "", ""
     a = _CMD_ARGS_RE.search(s)
-    args = a.group(1).strip() if a else ""
-    return ("%s %s" % (name, args)).strip()[:200] if args else name[:200]
+    return name, (a.group(1).strip() if a else "")
+
+
+def _command_label(s):
+    """The `/slash-command [args]` that STARTED a session, as ONE line — a title
+    can't carry the newlines a multi-line argument has, so the args' whitespace
+    is collapsed (the prompt fallback takes its first line for the same reason).
+    '' when the content carries no command name. session_title's last-resort
+    fallback, below summary/prompt (a slash command is less descriptive than a
+    typed prompt, but beats a bare sid)."""
+    name, args = _command_parts(s)
+    if not name:
+        return ""
+    if not args:
+        return name[:200]
+    return ("%s %s" % (name, " ".join(args.split())))[:200]
+
+
+def _command_text(s):
+    """The slash-command turn as the user TYPED it — `/foo` plus its argument
+    verbatim, newlines and all — for conversation()'s prompt bubble. '' when `s`
+    is not a command wrapper (see _command_parts for what else wears `<`)."""
+    name, args = _command_parts(s)
+    if not name:
+        return ""
+    return ("%s %s" % (name, args)) if args else name
 
 
 def _title_from_ladder(path, named, ai):
@@ -983,19 +1027,27 @@ def _line_ts(s):
     return _line_meta(s)[0]
 
 
+def _typed(text):
+    """Whether `text` is something the USER typed, for _prompt_bearing: a
+    `<`-prefixed wrapper (teammate message, caveat envelope, a local command's
+    echoed stdout) is not — EXCEPT a `/command` envelope, which is (the same one
+    exception _Conv.add_prompt unwraps for display, sharing _command_text so a
+    turn cannot be visible in the stream yet invisible to the discard prune)."""
+    t = (text or "").strip()
+    return bool(_command_text(t) if t.startswith("<") else t)
+
+
 def _prompt_bearing(rec):
     """Whether a parsed record carries a USER PROMPT — the only fork _dead_uuids
     counts. A plain `user` string parses as `prompt`, but a prompt with pasted
     or attached content arrives as list content, i.e. a `results` record whose
     `texts` hold the typed part; a tool_result is that same `results` kind with
     no texts, and those DO fork legitimately (parallel tool calls), so the
-    distinction is load-bearing. `<`-prefixed text is a wrapper (teammate
-    message, command/caveat envelope), not something the user typed."""
+    distinction is load-bearing."""
     if rec["kind"] == "prompt":
-        return not rec["text"].strip().startswith("<") and bool(rec["text"].strip())
+        return _typed(rec["text"])
     if rec["kind"] == "results":
-        return any(t.strip() and not t.strip().startswith("<")
-                   for t in rec["texts"])
+        return any(_typed(t) for t in rec["texts"])
     return False
 
 
@@ -1287,7 +1339,14 @@ class _Conv:
 
     def add_prompt(self, text, meta):
         """A user-prompt record, dropping the `<`-wrapped plumbing (a teammate
-        wrapper, a command/caveat envelope — never something the user typed).
+        wrapper, a caveat envelope, a local command's echoed stdout — never
+        something the user typed) but UNWRAPPING the one `<`-shape that is: a
+        `/command` turn, which Claude Code records as a `<command-name>` +
+        `<command-args>` envelope (_command_text). Dropping that one with the
+        rest is why a session opened by a slash command appeared to have no first
+        message at all — the args ARE the message, and for a skill invocation the
+        first bubble was instead the loaded SKILL.md body that follows it.
+
         `meta` means CLAUDE CODE injected the turn (`Stop hook feedback: …`, a
         resume nudge, a loaded skill body): carried, not dropped — it IS part of
         the conversation and belongs in the verbose stream, but a consumer that
@@ -1297,7 +1356,9 @@ class _Conv:
         `resumed` (the injection RESUMED an ended turn, _resumes_turn) rides
         alongside it for the same reason."""
         t = (text or "").strip()
-        if not t or t.startswith("<"):
+        if t.startswith("<"):
+            t = _command_text(t)
+        if not t:
             return
         extra = {"par": self.par, "uid": self.uid}
         if meta:

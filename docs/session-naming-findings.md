@@ -106,7 +106,12 @@ best-effort bounded read (never a full multi-MB transcript scan):
    present) is read back out (`_command_label`) so the card shows `/slack-monitor`
    instead of a bare sid. This is the LAST resort — a typed prompt or summary always
    wins. Sessions launched from `/`-commands (e.g. `/slack-monitor`, `/plugin`) that
-   die quickly were the observed bare-sid cards (2026-07-21).
+   die quickly were the observed bare-sid cards (2026-07-21). The args are pulled by
+   `_command_parts`, shared since 2026-07-30 with the dashboard's conversation
+   stream, which unwraps the SAME envelope into the prompt bubble (docs/dashboard.md,
+   *A `/command` turn IS a message*) — a title collapses them to one line, a bubble
+   keeps them verbatim. Until then the args class excluded newlines, so a MULTI-LINE
+   argument matched nothing and the title fell back to a bare `/foo`.
 
 `''` (→ the UI falls back to the sid) only when the transcript is unreadable or has
 literally none of 1–5 — e.g. its `.jsonl` was deleted (which also makes it

@@ -275,6 +275,31 @@ New always-audited swallow sites (previously silent — their absence used to ma
   pruned to nothing there are no delivered prompts to match (`_delivered_prompts`
   returns []); they drain by themselves once the conversation is whole.
 
+- **The session's FIRST message is missing on the web, and it opened with a
+  `/slash-command` or a SKILL — the first bubble is the skill's own SKILL.md
+  text** *(the command wrapper read as plumbing, reported 2026-07-30 on sessions
+  `63209ded` + `d88abe11`, fixed same day)*. Do NOT spend the take-back shape
+  above on this: it presents identically ("my first message isn't there") but the
+  audit is CLEAN — no anomalies, no `errors`, **no `takeback` kv and no
+  `web-interrupt` row at all**, which is the fastest way to tell them apart
+  (`sqlite3 <state.db> "SELECT val FROM kv WHERE key='takeback'"` empty +
+  `action='web-interrupt'` absent ⇒ it is this one). There is **no audit row for
+  it whatsoever** — the conversation reader is read-side, like the ctx/goal
+  probes — so the evidence is the transcript plus the read model, in two steps:
+  (1) the session's first `type:"user"` record has content
+  `<command-message>…</command-message>\n<command-name>/foo</command-name>\n<command-args>…</command-args>`
+  and parses `kind:prompt, meta:False` (a REAL user turn); (2)
+  `T.conversation(path, 0)` does not contain it — for a skill, `records[0]` is
+  instead the `isMeta` prompt opening `Base directory for this skill: …`. Root
+  cause: `_Conv.add_prompt` dropped every prompt whose text starts with `<` as an
+  envelope, but the args of a command turn ARE the typed message. Current builds
+  unwrap that one shape (`_command_text`, gated on the `<command-name>` tag so
+  `<local-command-caveat>`/`<local-command-stdout>` stay dropped), so a
+  recurrence means that gate or the unwrap regressed — check the running
+  dashboard is past the fix FIRST, since it does not hot-reload. Related, same
+  record: a title showing a bare `/foo` where the command had arguments is the
+  newline-free `_CMD_ARGS_RE` (multi-line args matched nothing).
+
 - **"I stopped it and my message vanished" / "the web composer stayed empty
   after a stop"**: stopping a turn EARLY makes Claude Code discard the prompt
   and hand it back to the terminal's input box — a take-back, not a bug, and
