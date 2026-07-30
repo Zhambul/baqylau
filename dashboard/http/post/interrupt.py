@@ -74,14 +74,16 @@ class _InterruptMixin:
         # ONE Esc and confirms it against the `turn_aborted` record its rollout
         # writes. `last_prompt` is the read model's half of the take-back — the
         # screen says WHETHER the box holds a restored prompt, the transcript
-        # says WHAT it is.
+        # says WHAT it is — and it is a THUNK (rsession.LastPrompt), because
+        # this ctx is built BEFORE the key is sent and resolving it is a whole
+        # -transcript parse. Only the take-back path asks.
         res = self._gesture_host(sid).interrupt(fe, win, {
             "sid": sid, "log": log, "sdb": sdb, "tab": tab, "row": row,
             "action": action, "verb": verb,
             "queueing": tab in QUEUE_TABS,
             "rollout": row.get("transcript_path") or "",
             "box": launch.WebBox(sid),
-            "last_prompt": rsession.last_prompt_rec(sid)})
+            "last_prompt": rsession.LastPrompt(sid)})
         if self._gesture_declined(res, sid, action, "interrupt",
                                   extra={"win": win, "tab": tab}):
             return

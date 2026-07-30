@@ -729,3 +729,36 @@ def last_prompt_rec(sid):
 def last_prompt(sid):
     """The last prompt's TEXT alone (see last_prompt_rec)."""
     return last_prompt_rec(sid)[0]
+
+
+class LastPrompt:
+    """`last_prompt_rec` as a THUNK a host gesture is handed through its ctx —
+    the read model's half of the interrupt take-back, resolved only if the
+    gesture actually asks.
+
+    Lazy because of WHEN the caller builds the ctx: an interrupt's ctx is
+    assembled BEFORE the Escape is sent, and this reader is a full
+    plugins.conversation parse of the whole transcript (measured 316ms on a
+    25MB one). Eager, that is 316ms of latency welded in front of every stop
+    button — paid on EVERY interrupt, including the ones that never reach the
+    take-back: a host that declines, a window that will not resolve, a turn
+    that never stopped, and every host but Claude Code (nothing else reads the
+    key at all). It is only wanted AFTER the press verifies, and only then if
+    the box turns out to hold a restored prompt.
+
+    The `.rec` property is the contract (`ctx['last_prompt'].rec` -> (text,
+    uid)), MEMOISED for the one request it lives in — unlike launch.WebBox,
+    which re-reads deliberately because the box changes under a gesture. A
+    transcript's last prompt does not change mid-gesture, and the whole point
+    here is not to pay for it twice."""
+
+    def __init__(self, sid):
+        self.sid = sid
+        self._rec = None
+
+    @property
+    def rec(self):
+        """(text, uid) of the last main-thread prompt — see last_prompt_rec."""
+        if self._rec is None:
+            self._rec = last_prompt_rec(self.sid)
+        return self._rec

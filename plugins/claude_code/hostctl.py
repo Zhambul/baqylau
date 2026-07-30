@@ -162,8 +162,10 @@ class ClaudeCodeHost(HostControl):
         size are the escape-recheck's growth baseline, READ BEFORE the key
         lands), `queueing` (is this tab one where a send would queue — the
         dashboard's own QUEUE_TABS policy), `box` (the web's input-box stash) and
-        `last_prompt` ((text, uid) of the last prompt record, the read model's
-        answer to WHAT a restore would be restoring).
+        `last_prompt` (a THUNK whose `.rec` is (text, uid) of the last prompt
+        record — the read model's answer to WHAT a restore would be restoring,
+        LAZY because resolving it parses the whole transcript and the ctx is
+        built before the key is sent; see dashboard/read/session.LastPrompt).
 
         Result {status, cid, ok, stopped, queued, restored}: `stopped` True =
         verified static (dead), False = still animating after every re-press (the
@@ -875,7 +877,11 @@ class ClaudeCodeHost(HostControl):
         log, sdb = ctx.get("log") or "", ctx.get("sdb") or ""
         action = ctx.get("action") or "web-interrupt"
         sid = ctx.get("sid") or ""
-        last, uid = ctx.get("last_prompt") or ("", "")
+        # …and asking for it HERE is the point: `last_prompt` is a thunk, and
+        # this is the one path that needs the parse behind it (the caller built
+        # the ctx before the Escape was even sent).
+        lp = ctx.get("last_prompt")
+        last, uid = (getattr(lp, "rec", None) or ("", ""))
         if not last:
             return ""
         try:
