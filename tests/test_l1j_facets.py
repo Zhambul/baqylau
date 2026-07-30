@@ -221,7 +221,8 @@ def test_core_no_longer_spells_the_fg_hand_off_protocol():
     assert not hasattr(API, "fg_running")
     assert callable(plugins.fg_running)
     src = open(os.path.join(os.path.dirname(os.path.dirname(
-        os.path.abspath(__file__))), "core", "sessionapi.py")).read()
+        os.path.abspath(__file__))), "core", "sessionapi.py"),
+        encoding="utf-8").read()
     assert 'hand_peek_at(sdb, "fg-live")' not in src
 
 
