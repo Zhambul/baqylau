@@ -42,6 +42,11 @@ MARK_RESULT = ("⇠", "result")
 # *Agent scope*).
 MARK_MESSAGE = ("✎", "message")
 MARK_MAIL = "✉"
+# …and a THINKING summary (`<who> ⋯ reasoning`), which only a host whose stream
+# carries one emits (codex's rollout does; a Claude subagent's transcript does
+# not). Named here with the rest because the web presenter reads it back too
+# (dashboard/opshtml/actclass keeps its own reader copy for parked ops).
+MARK_REASONING = ("⋯", "reasoning")
 # …and the two DIRECTIONS that mail chip's kind word spells. Named here, beside
 # the glyph, because the direction is load-bearing on the web: an INCOMING message
 # is part of the agent's conversation and arrives a second time as a transcript
@@ -59,7 +64,7 @@ MAIL_TO = "to %s"
 # finished`). They are genuinely different things — a teammate is a named, long-lived
 # peer you can mail, a subagent is a one-shot delegate — and one word for both read as
 # a bug ("I want a clear distinction Agent from Teammate"). Here, in core, because BOTH
-# sides need it: the producer stamps the note (substream_render.agent_note) and the web
+# sides need it: the producer stamps the note (agentblocks.AgentStream.note) and the web
 # presenter recovers it for pre-`note` ops (opshtml/actclass.legacy_agent_note), and a
 # dashboard module may not reach into a plugin for a string.
 AGENT_WORD = 'Agent "%s"'
@@ -212,11 +217,14 @@ def gutter(text, rgb, g=None, web=False, bubbled=False):
     return O.gut(R.unescape(text), rgb, g=g, web=web, bubbled=bubbled)
 
 
-def dim_gut(text, rgb, g=None, bubbled=False):
+def dim_gut(text, rgb, g=None, bubbled=False, chrome=False):
     """gutter(), dimmed — reasoning summaries and other low-salience body text.
     `bubbled` marks a prose body re-bubbled via plugins.conversation (a codex
-    sidecar's `⋯ reasoning` — see O.gut)."""
-    return O.gut(R.DIM + R.unescape(text) + R.RST, rgb, g=g, bubbled=bubbled)
+    sidecar's `⋯ reasoning` — see O.gut); `chrome` marks it host scaffolding
+    around a child's stream that every web view drops (a codex run's
+    `⚙ <model> · <effort>` turn line — see O.gut)."""
+    return O.gut(R.DIM + R.unescape(text) + R.RST, rgb, g=g, bubbled=bubbled,
+                 chrome=chrome)
 
 
 def file_line(verb, name, rgb, failed=False, extent="", added=0, removed=0,

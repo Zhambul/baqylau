@@ -79,6 +79,20 @@ the remaining per-caller extras — the ✗ mark, the click-to-view hyperlink �
 stay caller-side; extracted from the byte-identical copies the renderers each
 grew — shared surface lives in core because the dependency rule forbids codex
 importing claude_code),
+`agentblocks.py` (the CHILD-AGENT stream presenter, one tier above streamfmt:
+`AgentStream` builds every block a host's child paints — the `⇢ prompt` launch
+card, `⇠ result`, `✎ message`, `⋯ reasoning`, mail in both directions, a
+generic `· <tool>` call, a `▶/▷` shell block, a file one-liner, a compaction
+notice, the run footer — and owns the STAMP POLICY on them: which carry `web`
+(surface in the LEAD's mirror), their `note` wording, `bubbled`, and the
+`who`/`tags` fields. The shapes were already shared; the policy was not, and a
+codex-native subagent's copy of the rules was silently missing its launch AND
+result cards. Pure — the builders return op lists, never emit, take the copy
+group from the caller and text already capped (the CAP_* tables stay per-host)
+— so a host adapter keeps its own machinery (tee hand-offs, pend ledgers,
+scoreboard bumps, click-to-view stashes) wrapped around these calls; its three
+REGISTERS (`REG_AGENT`/`REG_TEAM`/`REG_CODEX`) select only which word the web
+calls the child),
 `render.py` (the ANSI rendering PRIMITIVES — was `claude_render.py`: width
 math, palette/`pick`, strip/wrap/gutters, the security-critical `neutralize()`,
 inline markdown; keeps thin `format_code`/`render` delegating aliases),

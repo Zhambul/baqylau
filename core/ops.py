@@ -76,6 +76,20 @@
 # body ops through the copy-group — and set on the body gut too for a group-less
 # block. Inert for the terminal renderer, like "web"/"note".
 #
+# A label/gut op may ALSO carry "chrome": this op is HOST SCAFFOLDING around a
+# child agent's stream rather than part of the stream itself — the `codex ▶
+# <label>` run banner and its `⚙ <model> · <effort>` line, the `■ codex <label>
+# ended` run footer, the lead's own `▶ <type> · <desc>` subagent launch header.
+# The terminal PAINTS it (a shared pane needs the brackets that say where one
+# stream starts and another ends); every WEB view drops it, because there the
+# child has a card of its own that already states its model, its duration and
+# its launch. Producer-set, for the same reason "web"/"bubbled" are: only the
+# producer knows which of its ops are its own frame, and the presenter's
+# alternative is sniffing a chip's text for `codex ` (which is what
+# opshtml/actclass.codex_chrome does for ops ALREADY ON DISK — history cannot be
+# re-stamped, so that fallback stays). Inert for the terminal renderer, like
+# "web"/"note"/"bubbled".
+#
 # A label/gut op may carry "mid": the id of the SUBJECT it is about, when several
 # ops speak about one thing — today a team message's msg_id (plugins/claude_code/
 # msgs.py: an arrival, its body and its read notice all wear the same mid). The
@@ -131,7 +145,7 @@ def rule():
 
 
 def label(s, c, outer=None, g=None, lk=None, web=False, note=None, mid=None,
-          who=None, tags=(), mem=False, bubbled=False):
+          who=None, tags=(), mem=False, bubbled=False, chrome=False):
     o = {"t": "label", "s": s, "c": _rgb(c)}
     if who:
         o["who"] = str(who)
@@ -142,6 +156,8 @@ def label(s, c, outer=None, g=None, lk=None, web=False, note=None, mid=None,
         o["web"] = 1
     if bubbled:
         o["bubbled"] = 1           # re-bubbled via plugins.conversation (see header)
+    if chrome:
+        o["chrome"] = 1            # host scaffolding, dropped by every web view (see header)
     if mem:
         # This block touched memory (see line()'s `mem`) — carried by the HEADER
         # here because a Bash block's memory-ness is a fact about the whole block:
@@ -189,7 +205,8 @@ def code(s, ind="  ", g=None):
 
 
 def gut(s, c, outer=None, g=None, bg=None, lex=None, num=None, view=None,
-        web=False, mem=False, mid=None, who=None, tags=(), bubbled=False):
+        web=False, mem=False, mid=None, who=None, tags=(), bubbled=False,
+        chrome=False):
     o = {"t": "gut", "s": s, "c": _rgb(c)}
     if who:
         o["who"] = str(who)            # see label()'s `who`
@@ -200,6 +217,8 @@ def gut(s, c, outer=None, g=None, bg=None, lex=None, num=None, view=None,
         o["web"] = 1
     if bubbled:
         o["bubbled"] = 1               # see label()'s `bubbled`
+    if chrome:
+        o["chrome"] = 1                # see label()'s `chrome`
     if mid:
         o["mid"] = str(mid)        # the SUBJECT this op is about (see label())
     if mem:

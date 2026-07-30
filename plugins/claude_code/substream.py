@@ -478,7 +478,11 @@ def emit_footer(cancelled, start, tail):
     ts = got[1] if (got and got[1]) else start
     sec = max(0.0, time.time() - ts)
     dur = O.fmt_dur(sec)
-    foot = f"■ {LABEL} " + ("cancelled" if cancelled else "ended") + f" · {dur}"
+    # The footer LINE is the shared child-agent presenter's (core/agentblocks.py —
+    # `■ <label> <state> · <dur>` between two rules, the shape every host's child
+    # closes on); what stays here is the TAIL, which is this host's own arithmetic.
+    state = "cancelled" if cancelled else "ended"
+    foot = ""
     global RESOLVED_MODEL
     RESOLVED_MODEL = M.parent_resolved_model(TPATH, AGENT)   # authoritative window, best-effort
     used = ctx_used()                    # final context fill (plain — the chip is dark text)
@@ -496,7 +500,7 @@ def emit_footer(cancelled, start, tail):
                        REN.tot_create, REN.tot_create_1h)
     if usd:
         foot += " · ≈ " + O.fmt_usd(usd)
-    O.emit(LOG, O.rule(), O.label(foot, SUB_RGB), O.rule())
+    O.emit(LOG, *REN.blocks.footer(state, dur, foot))
     # Checkpoint-trail bookend to the 'resume' row above: what this streamer
     # consumed and last counted. A successor whose 'resume' row disagrees with this
     # 'final' row is the handoff bug the persisted usage_last exists to prevent.

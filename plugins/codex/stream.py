@@ -177,8 +177,8 @@ def gutter(text, g=None, bubbled=False, web=False):
     return SF.gutter(text, SLOT_RGB, g=g, bubbled=bubbled, web=web)
 
 
-def dim_gut(text, g=None, bubbled=False):
-    return SF.dim_gut(text, SLOT_RGB, g=g, bubbled=bubbled)
+def dim_gut(text, g=None, bubbled=False, chrome=False):
+    return SF.dim_gut(text, SLOT_RGB, g=g, bubbled=bubbled, chrome=chrome)
 
 
 # Rollout kinds the mirror renderer deliberately does NOT paint (yet). Every
@@ -334,7 +334,12 @@ class Renderer:
         if model and tag != self.ro_tag:
             self.ro_model, self.ro_tag = model, tag
             if not STANDALONE:
-                O.emit(LOG, dim_gut("⚙ " + tag))
+                # chrome=1: the line is this run's own frame (core/ops.py's
+                # `chrome`) — the terminal paints it, every web view drops it,
+                # where the model belongs on the run's card instead. Structural
+                # now; opshtml/actclass.codex_chrome still sniffs the text for
+                # the ops already on disk, which no restart can re-stamp.
+                O.emit(LOG, dim_gut("⚙ " + tag, chrome=True))
 
     def _fold_bump(self, fresh, tout, tcache):
         # The attributed codex scoreboard fold — the ONE place the token/cost
@@ -543,8 +548,13 @@ def main(run):
     # (main-agent) mirror shows none of it, exactly like a Claude session (whose
     # mirror opens straight into activity). A SIDECAR run keeps the banner: it
     # brackets that run's own sub-stream among the host's other activity.
+    # chrome=1 on the banner (and on the footer at the end of main): host
+    # scaffolding around this run's stream — see core/ops.py's `chrome` and the
+    # ⚙ line above. The bracketing rules carry no flag because they need none:
+    # op_items drops every rule/blank before it looks at anything else.
     if not STANDALONE:
-        O.emit(LOG, O.rule(), O.label("codex ▶ " + LABEL, SLOT_RGB), O.rule())
+        O.emit(LOG, O.rule(), O.label("codex ▶ " + LABEL, SLOT_RGB, chrome=True),
+               O.rule())
 
     tail = T.FileTailer(LOGFILE)
     rd = Renderer()          # this run's mutable render state (both sources)
@@ -657,7 +667,7 @@ def main(run):
         if usd:
             foot += " · ≈ " + O.fmt_usd(usd)
         rd._fold_bump(fresh, tout, tcache)
-    O.emit(LOG, O.rule(), O.label(foot, SLOT_RGB), O.rule())
+    O.emit(LOG, O.rule(), O.label(foot, SLOT_RGB, chrome=True), O.rule())
 
 
 def entry():

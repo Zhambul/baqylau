@@ -167,7 +167,14 @@ def finalize(log, d, agent_id, atype, tpath, tag="stop"):
             dur = fmt_dur(time.time() - got[1]) if got[1] else ""
             chip = f"■ {atype} ended · {dur}" if dur else f"■ {atype} ended"
             pal = "team" if team else "sub"
-            O.emit(log, O.rule(), O.label(chip, claude_slots.color(pal, got[0])), O.rule())
+            # Stamped as THAT AGENT's op (core/ops.py's `src` — the same
+            # `team:`/`sub:` vocabulary its dead streamer stamped, from the same
+            # is_teammate verdict the palette above uses). This footer is the
+            # streamer's line, written here only because the streamer died: left
+            # unstamped it read as the LEAD's own op and leaked into the web
+            # session view, where every other line of that agent's block is absent.
+            O.emit(log, O.rule(), O.label(chip, claude_slots.color(pal, got[0])),
+                   O.rule(), src=("team:" if team else "sub:") + agent_id)
             A.hook_event(d, decision="%s: SAFETY NET footer (streamer died mid-run, "
                          "spend %s)" % (tag, rec_st))
         elif not started:
@@ -247,7 +254,12 @@ def main():
             head = f"{glyph} {atype} · teammate · {desc}" if desc else f"{glyph} {atype} · teammate"
         else:
             head = f"{glyph} {atype} · {desc}" if desc else f"{glyph} {atype}"
-        O.emit(LOG, O.blank(), O.rule(), O.label(head, rgb), O.rule())
+        # chrome=1: this header is the HOST's scaffolding around the agent's stream,
+        # not part of it (core/ops.py's `chrome`). The terminal wants it — a shared
+        # pane needs the bracket that says a new stream starts here — and every web
+        # view drops it, because there the agent's own ⇢ prompt card says the same
+        # thing AND holds the brief behind the click.
+        O.emit(LOG, O.blank(), O.rule(), O.label(head, rgb, chrome=True), O.rule())
         # Spawn the transcript streamer (detached) and record its pid so `stop` can
         # tell whether it's still running. PALETTE (argv 6) tells it which colour
         # family to use — must match the header colour chosen just above.

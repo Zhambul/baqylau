@@ -16,6 +16,7 @@
 import os
 import re
 
+from core import agentblocks as AB
 from core import ops as O
 from core import render as R
 from core import state as S
@@ -27,8 +28,6 @@ from plugins.claude_code import transcript as TR
 
 A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
 RST = R.RST
-kfmt = O.kfmt        # compact token count: 124000 -> "124k"
-AMBER = R.fg(*O.YELLOW)   # the compact-boundary notice colour
 
 # Verbs for file ops — the shared claude_code.tools table (claude-file-fmt.py
 # renders the main session's file ops with the same; the colours ride into
@@ -81,10 +80,6 @@ class Renderer:
         self.label = label
         self.rgb = rgb
         self.sub_fg = sub_fg
-        # An agent-TEAM member rather than a Task-spawned subagent (the lifecycle's
-        # `team` palette — same machinery, different KIND of agent). Only the web
-        # note's wording turns on it: `Teammate @<name>` vs `Agent "<type>"`.
-        self.team = team
         # Injected from the lifecycle module: model/effort tag + per-turn ctx tag
         # (both depend on model resolution, which stays in substream.py), and the
         # three tailer hooks (fg tee hand-off consume + the two spawners).
@@ -93,10 +88,23 @@ class Renderer:
         self._take_subfg = take_subfg
         self._spawn_fg_tailer = spawn_fg_tailer
         self._spawn_tailer = spawn_tailer
-        # …and how long this agent has been running, for the finish note's `· 21m 31s`
-        # (the slot row holds the start ts; the footer reads it the same way). Optional:
-        # without it the note simply carries no duration.
-        self._agent_dur = agent_dur
+        # The BLOCK BUILDERS: the shared child-agent presenter (core/agentblocks.py),
+        # which owns the STAMP POLICY every block below depends on — which headers
+        # carry `web` (surface in the lead's mirror), their `note` wording, `bubbled`
+        # (re-bubbled as conversation, so agent scope drops the op), and the `who` +
+        # model/ctx `tags` fields. Constructed HERE from the pieces the lifecycle
+        # already injects (rather than injected itself), so this constructor's
+        # contract is unchanged. `team` selects only the note's REGISTER: a teammate
+        # rides the very same machinery as a Task-spawned subagent (the lifecycle's
+        # `team` palette), and all that differs is the word the web calls it —
+        # `Teammate @<name>` vs `Agent "<type>"`. `agent_dur` is how long this agent
+        # has been running, for the finish note's `· 21m 31s` (the slot row holds the
+        # start ts; the footer reads it the same way) — optional, and without it the
+        # note simply carries no duration.
+        self.blocks = AB.AgentStream(
+            label=label, rgb=rgb,
+            register=AB.REG_TEAM if team else AB.REG_AGENT,
+            tags=op_tag, agent_dur=agent_dur)
 
         self.fg_live = {}         # tool_use_id -> the subfg hand-off rec, while its fg tailer runs
         self.pend = {}            # tool_use_id -> (kind, cmd)
@@ -134,27 +142,15 @@ class Renderer:
         self.usage_last = None    # O.usage_fold carry record {"id", "f"} of the last counted message
 
     # --- small line/block builders ------------------------------------------
-
-    def chip(self, glyph, kind, ctx="", g=None, lk=None, web=False, note=None,
-             mem=False, bubbled=False):
-        # ctx (e.g. "ctx 42% · 84k/200k") rides in the chip header for the first op of a
-        # turn, rather than on its own gutter line below it. g ties a block's header + its
-        # code/gut body ops into one ⧉ copy group — a tool_use_id for commands, else a
-        # fresh O.new_group() id for a message/prompt/mail block (lk=O.COPY_ALL then gives
-        # it a single whole-block ⧉copy link). Same mechanism as the main session's fg/bg
-        # blocks (core/copy.py), just double-guttered here. Shape shared with the codex
-        # stream via core/streamfmt.py; the model tag + ctx ride as trailing tags.
-        return SF.chip(self.label, glyph, kind, self.rgb,
-                       tags=(self._op_tag(), ctx), g=g, lk=lk, web=web, note=note,
-                       mem=mem, bubbled=bubbled)
+    # Every BLOCK this renderer paints is built by self.blocks (core/agentblocks.py):
+    # the chip's shape, the ctx tag that rides its header for the first op of a turn,
+    # the ⧉ copy wiring the caller's `g` ties together, the markdown body an agent's
+    # prose gets, and the stamps on all of it. What is left here is the one body line
+    # that belongs to no block — a bg/monitor launch note (_res_job), which has no
+    # header of its own to hang off.
 
     def gutter(self, text, g=None, web=False, bubbled=False):
         return SF.gutter(text, self.rgb, g=g, web=web, bubbled=bubbled)
-
-    def msg_gutter(self, text, g=None, web=False, bubbled=False):
-        # Assistant text is markdown -> render the subset (bold/italic/code/headings/bullets).
-        return O.gut(R.markdown(R.unescape(text)), self.rgb, g=g, web=web,
-                     bubbled=bubbled)
 
     # --- transcript blocks ----------------------------------------------------
 
@@ -165,29 +161,21 @@ class Renderer:
         # advanced to the next turn), so emit that, not the live value.
         if self.pending_msg is None:
             return
-        glyph, kind = SF.MARK_RESULT if is_result else SF.MARK_MESSAGE
-        # …and, for the result, the web mirror's own one-liner (core/ops.py "note"):
-        # `⏺` + this, in the register of a collapsed run's summary. No model/ctx tag —
-        # that belongs on the agent's card, not in the feed. The DURATION is appended
-        # by the page from the agents payload (it knows started_at/ended_at; this
-        # process would have to re-derive them).
-        note = self.agent_note("finished", dur=True) if is_result else None
-        # The final result is one of the two subagent blocks the web dashboard's
-        # main mirror surfaces (web=True); intermediate ✎ messages stay drill-down
-        # only — see core/ops.py's "web" field and dashboard/opshtml.op_items.
         g = O.new_group(self.log)
-        # bubbled=True: agent scope re-bubbles this message/result from the agent's
-        # transcript (plugins.conversation), so op_items drops the op there — the
-        # unified prose-drop signal, core/ops.py's "bubbled".
-        O.emit(self.log,
-               self.chip(glyph, kind, self.pending_tag, g=g, lk=O.COPY_ALL,
-                         web=is_result, note=note, bubbled=True),
-               # UNCAPPED, deliberately — the one excerpt in this renderer with no
-               # line ceiling (see the CAP_* table's note). An agent's message and
-               # its returned result are what the whole stream exists to deliver;
-               # eliding them sent the reader to the drill-down for the substance,
-               # which is the opposite of the summary's job.
-               self.msg_gutter(self.pending_msg, g=g, web=is_result, bubbled=True))
+        # The builder owns the rest, and the difference between the two is entirely
+        # its POLICY (core/agentblocks.py): the ⇠ result is one of the two blocks the
+        # web dashboard's main mirror surfaces (web=1) and the one whose note carries
+        # the run's DURATION — producer-side, from the injected agent_dur, since the
+        # note is written once and the page has no business re-wording a chip;
+        # an intermediate ✎ message stays drill-down only. Both are `bubbled` (agent
+        # scope re-bubbles them from this agent's own transcript) and both are
+        # UNCAPPED, deliberately — the one excerpt in this renderer with no line
+        # ceiling (see the CAP_* table's note). An agent's message and its returned
+        # result are what the whole stream exists to deliver; eliding them sent the
+        # reader to the drill-down for the substance, which is the opposite of the
+        # summary's job.
+        build = self.blocks.result if is_result else self.blocks.message
+        O.emit(self.log, *build(self.pending_msg, g, ctx=self.pending_tag))
         self.pending_msg = None
         self.pending_tag = ""
 
@@ -196,27 +184,9 @@ class Renderer:
         # inline (amber) so the gap in history makes sense. preTokens is always present;
         # postTokens is NOT always there, so degrade to "→ ?" when it's missing.
         self.flush_msg()
-        pre, post, trig = meta.get("preTokens"), meta.get("postTokens"), meta.get("trigger") or "?"
-        txt = "⟳ compacted"
-        if pre:
-            txt += f" · {kfmt(pre)} → " + (kfmt(post) if post else "?")
-        txt += f" ({trig})"
-        O.emit(self.log, O.gut(AMBER + txt + RST, self.rgb))
-
-    def agent_note(self, verb, dur=False):
-        """This agent's web-mirror one-liner for a launch/finish — `Agent "<type>"
-        launched` / `Teammate @<name> finished · 21m 31s` (core/ops.py's "note"). One
-        builder so the two blocks cannot drift; the WORDING (and which of Claude Code's
-        two registers a teammate vs a subagent gets) belongs to core/streamfmt, which
-        the web presenter reads too. `dur` appends how long the agent ran, when the
-        lifecycle injected a way to know (a launch has nothing to report yet)."""
-        d = ""
-        if dur and self._agent_dur:
-            try:
-                d = self._agent_dur()
-            except Exception:
-                d = ""              # a note without a duration beats no note
-        return SF.agent_note(self.label, verb, team=self.team, dur=d)
+        O.emit(self.log, *self.blocks.compact(meta.get("preTokens"),
+                                              meta.get("postTokens"),
+                                              meta.get("trigger") or "?"))
 
     def render_prompt(self, text):
         # The spawn prompt is the other subagent block the web dashboard's main
@@ -237,20 +207,17 @@ class Renderer:
         if not brief:
             return
         g = O.new_group(self.log)
-        # bubbled=True: agent scope re-bubbles the spawn prompt (core/ops.py "bubbled").
-        O.emit(self.log, self.chip(*SF.MARK_PROMPT, g=g, lk=O.COPY_ALL, web=True,
-                                   note=self.agent_note("launched"), bubbled=True),
-               self.gutter(brief, g=g, web=True, bubbled=True))
+        O.emit(self.log, *self.blocks.launch(brief, g))
 
     def render_teammsg(self, sender, body):
         # An incoming agent-team message (mail from another teammate or the lead).
+        # `sender or "?"` here and not in the builder: an INCOMING message with no
+        # sender still has to name one, where an OUTGOING SendMessage's recipient
+        # comes from the tool input and is shown as written (_use_sendmsg).
         self.flush_msg()
         g = O.new_group(self.log)
-        # bubbled=True: agent scope re-bubbles mail from the transcript (the
-        # `✉ from|to` block — prose_block matched _MAIL_MARKS; core/ops.py "bubbled").
-        O.emit(self.log, self.chip(SF.MARK_MAIL, SF.MAIL_FROM % (sender or "?"),
-                                   g=g, lk=O.COPY_ALL, bubbled=True),
-               self.gutter(cap(body.strip(), CAP_TEAMMSG), g=g, bubbled=True))
+        O.emit(self.log, *self.blocks.mail(True, sender or "?",
+                                           cap(body.strip(), CAP_TEAMMSG), g))
 
     def render_message(self, text):
         text = text.strip()
@@ -282,20 +249,16 @@ class Renderer:
                 rng = CT.edit_range(result.get("structuredPatch") if isinstance(result, dict) else None)
         # WHO did it — the agent's name/type — rides as the op's own field below, so a
         # Read/Update/Write is attributable to the subagent (or teammate) that ran it,
-        # the same identity cue chip() puts on this agent's Bash ops. The gutter bar
-        # already carries the colour, but the explicit name is what the eye reads. The
-        # one-liner itself is the shared core builder (streamfmt.file_line — same
-        # anatomy as the main session's file ops and codex patches).
+        # the same identity cue the builder puts on this agent's Bash header. The
+        # gutter bar already carries the colour, but the explicit name is what the eye
+        # reads. The one-liner itself is the shared core shape (streamfmt.file_line,
+        # via agentblocks — same anatomy as the main session's file ops and codex
+        # patches).
         # Same location-aware display as the main session's file ops
         # (streamfmt.file_display: ✎ scratchpad / dim out-of-project dir); the
         # tailer inherits the hook's cwd = the session directory, so the
         # default process-cwd baseline is the right one.
         disp, _loc = SF.file_display(path)
-        line = SF.file_line(label, disp, CT.FILE_RGB.get(label, O.SLATE),
-                            failed=failed, extent=ext,
-                            added=added, removed=removed, rng=rng)
-        if failed:
-            line += "  " + R.DIM + "✗" + RST
         # A subagent's file op runs the same OBSERVER registry as the main
         # agent's (fileobs.OBSERVERS — memory the one row; the match's cwd
         # default is this tailer's cwd = the session dir): each match bakes its
@@ -306,12 +269,15 @@ class Renderer:
         # drill-down, but the Memory tab is team-wide.
         obs = FOBS.matches(path)
         is_mem = any(o.key == "memory" for o in obs)
-        for o in obs:
-            line += "  " + R.DIM + o.mark + RST
-        # …the model/effort + ctx chips ride as the op's own `tags` field, not
-        # baked into the line (core/ops.py: the terminal composes them at paint
-        # time, the web's agent scope drops them — see the `who` beside them).
-        tags = (self._op_tag(), ctx)
+        # The failure ✗ and those markers are this caller's own tail on the shared
+        # one-liner (core/streamfmt.file_line, reached through the builder), in that
+        # order; the who + model/effort + ctx chips ride as the op's own fields when
+        # the row is built below.
+        marks = ("  " + R.DIM + "✗" + RST) if failed else ""
+        marks += "".join("  " + R.DIM + o.mark + RST for o in obs)
+        line = self.blocks.file_text(label, disp, CT.FILE_RGB.get(label, O.SLATE),
+                                     failed=failed, extent=ext, added=added,
+                                     removed=removed, rng=rng, marks=marks)
         # Click-to-view, exactly like the main session's file ops (file_fmt.py owns
         # the block builder): stash the pre-rendered content under the agent's
         # tool_use_id, bake the /view hyperlink into the line (the OSC 8 sequence is
@@ -326,8 +292,7 @@ class Renderer:
                 self.log, tid, name_tool, label, name, path, inp,
                 result if isinstance(result, dict) else {}, line,
                 who="substream render", extra={"agent": self.agent})
-        O.emit(self.log, O.gut(line, self.rgb, view=vid, mem=is_mem,
-                               who=self.label, tags=tags))
+        O.emit(self.log, *self.blocks.file_row(line, view=vid, mem=is_mem, ctx=ctx))
         for o in obs:
             o.record(self.log, path, label, agent=self.agent)
         # Feed the session scoreboard so its files/+/- chips (and the tools breakdown)
@@ -357,18 +322,18 @@ class Renderer:
         # property of the whole block; the kv snapshot happens at the RESULT, which
         # is where this transcript reveals the output a search's answer lives in.
         obs = FOBS.cmd_matches(cmd)
-        kind = "".join("  " + R.DIM + o.mark + RST for o in obs)
+        marks = "".join("  " + R.DIM + o.mark + RST for o in obs)
         mem = FOBS.cmd_mem_flag(cmd, None, obs)
         if inp.get("run_in_background"):
-            O.emit(self.log, self.chip("▷", "background" + kind, ctx, g=tid, mem=mem),
-                   O.code(cmd, g=tid))
+            O.emit(self.log, *self.blocks.cmd_open(cmd, tid, background=True,
+                                                   marks=marks, mem=mem, ctx=ctx))
             # A backgrounded command's output never reaches this transcript, so its
             # record is taken NOW, without one (same trade as the lead's bg path).
             self._observe(cmd, "")
             self.pend[tid] = ("bg", cmd)
         else:
-            O.emit(self.log, self.chip("▶", "foreground" + kind, ctx, g=tid, mem=mem),
-                   O.code(cmd, g=tid))
+            O.emit(self.log, *self.blocks.cmd_open(cmd, tid, marks=marks, mem=mem,
+                                                   ctx=ctx))
             rec = self._take_subfg(tid) if (self.sub_fg and tid) else None
             if rec and self._spawn_fg_tailer(tid, rec, cmd):
                 # A live fg tailer now owns this command's OUTPUT + finish chip; we
@@ -421,11 +386,8 @@ class Renderer:
         # the body.
         to, text = TR.mail_send(inp)
         g = O.new_group(self.log)
-        # bubbled=True: agent scope re-bubbles this send as a `sendmsg` record
-        # (TR.mail_send, conversation_for) — drop the op there (core/ops.py "bubbled").
-        O.emit(self.log, self.chip(SF.MARK_MAIL, SF.MAIL_TO % to, ctx, g=g,
-                                   lk=O.COPY_ALL, bubbled=True),
-               self.gutter(cap(text.strip(), CAP_SENDMSG), g=g, bubbled=True))
+        O.emit(self.log, *self.blocks.mail(False, to, cap(text.strip(), CAP_SENDMSG),
+                                           g, ctx=ctx))
         self.pend[tid] = ("sendmsg", "")
 
     def _use_agent(self, name, inp, tid, ctx):
@@ -446,9 +408,8 @@ class Renderer:
         # query ("I should see the result of the ToolSearch").
         g = O.new_group(self.log)
         req = input_summary(inp)                 # show the request (e.g. the query/url)
-        O.emit(self.log, self.chip("·", name or "tool", ctx, g=g, lk=O.COPY_ALL))
-        if req:
-            O.emit(self.log, self.gutter(cap(req, CAP_TOOL_REQ), g=g))
+        O.emit(self.log, *self.blocks.tool_open(
+            name, cap(req, CAP_TOOL_REQ) if req else "", g, ctx=ctx))
         self.pend[tid] = ("other", g)
 
     # tool name -> use handler; unknown names fall to _use_other. File tools share
@@ -528,13 +489,13 @@ class Renderer:
         txt = result_text(b.get("content"))
         g = tid if kind == "fg" else (cmd or None)
         body = txt.rstrip("\n")
-        if body:
-            O.emit(self.log, O.gut(R.emphasize(R.unescape(cap(body, CAP_BODY))), self.rgb, g=g))
-        else:
-            O.emit(self.log, O.gut(R.DIM + "(no output)" + RST, self.rgb, g=g))
         err = bool(b.get("is_error"))
-        if err:
-            O.emit(self.log, O.gut(R.fg(*O.RED) + "■ failed" + RST, self.rgb, g=g))
+        # Same closing shape either way (output / the dim `(no output)` stand-in /
+        # a red failure mark), asked for through the builder each block OPENED with,
+        # so a future divergence has a place to live. `body` stays UNCAPPED below —
+        # only the painted excerpt is capped; the observer's record wants it whole.
+        close = self.blocks.cmd_close if kind == "fg" else self.blocks.tool_close
+        O.emit(self.log, *close(g, cap(body, CAP_BODY), failed=err))
         if kind == "fg":
             # Team-wide command accounting, mirroring the main session's
             # claude-cmd-fmt.py — which deliberately SKIPS any agent_id event (the
