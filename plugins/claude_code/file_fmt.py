@@ -29,12 +29,10 @@
 # and the file on disk drifts — the kv stash is parked/restored with the
 # session like the ops history itself.
 import os
-from urllib.parse import quote
 
+from core import copy as C
 from core import ops as O
-from core import paths as PATHS
 from core import render as R
-from core import state as S
 from core import streamfmt as SF
 from plugins.claude_code import hookkit as H
 from plugins.claude_code import fileobs as FOBS
@@ -217,21 +215,20 @@ def stash_view(log, tid, tool, label, name, path, ti, tr, line,
     emitted op with ("v"), or (line-unchanged, None) when there is nothing to
     show or the stash failed — the caller keeps the plain unlinked line.
     `who` names the caller in the render-failure error row; `extra` merges
-    extra context (e.g. the subagent's name) into the audit row."""
+    extra context (e.g. the subagent's name) into the audit row.
+
+    What is FILE-op-specific is building the block (view_ops above); parking it,
+    linking the line and auditing the stash is the click-to-view protocol itself
+    and belongs to its owner (core.copy.stash — the toggle's other half)."""
     try:
         vops = view_ops(tool, label, name, path, ti, tr)
     except Exception:
         vops = None
         A.error(log, "view-stash (%s)" % who, {"tool": tool, "gid": tid})
-    if not (vops and S.kv_set(log, "view:" + str(tid), vops)):
-        return line, None
-    url = "claude-copy:///%s/%s/view" % (
-        quote(PATHS.sid_from_log(log), safe=""), quote(str(tid), safe=""))
-    info = {"gid": tid, "tool": tool, "ops": len(vops)}
+    info = {"tool": tool}
     if extra:
         info.update(extra)
-    A.state_file(log, S.db_path(log), "view-stash", info)
-    return R.hyperlink(url, line), tid
+    return C.stash(log, tid, vops, line, info)
 
 
 def main():

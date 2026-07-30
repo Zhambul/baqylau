@@ -26,13 +26,16 @@
 # scrolled-back and even resumed-session blocks copyable: the DB holds the whole
 # history and is parked/restored across resume.
 #
-# A fourth verb, "view" (a file-op one-liner click — Read/Update/Write lines,
-# whose hyperlink file_fmt.py bakes into the line op itself), doesn't copy:
-# it TOGGLES the block's id in the session's `view-open` kv set, and the
-# renderer expands/collapses the kv-stashed pre-rendered content block
-# (`view:<gid>`) in place under the line. The toggle is a state-DB write, which
-# is fine under the same exists-guard the feedback op already relies on — only
-# the no-DB path must stay read-only.
+# A fourth verb, "view" (a ONE-LINER click — a Read/Update/Write file op, a
+# file-reading command collapsed into a Read line, or a generic tool call like
+# `· WebFetch(https://…)`; the producer bakes the hyperlink into the line op
+# itself), doesn't copy: it TOGGLES the block's id in the session's `view-open`
+# kv set, and the renderer expands/collapses the kv-stashed pre-rendered content
+# block (`view:<gid>`) in place under the line. The toggle is a state-DB write,
+# which is fine under the same exists-guard the feedback op already relies on —
+# only the no-DB path must stay read-only. `stash()` below is that verb's WRITE
+# half — the producers build their own blocks and park them through it, so the
+# key, the URL and the audit row have one owner (docs/click-to-view.md).
 #
 # Every path audits: success/empty as a state_files row (action "copy"/"view"),
 # every failure as an errors row — a click that "did nothing" is answerable
@@ -42,7 +45,7 @@ import os
 import signal
 import sqlite3
 import subprocess
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 
 from core import paths as P
 
@@ -63,6 +66,43 @@ def parse_url(url):
             or not all(parts)):
         return None
     return tuple(parts)
+
+
+def view_url(key, gid):
+    """The `claude-copy:///<key>/<gid>/view` URL parse_url above reads back — the
+    one place that shape is WRITTEN, beside the one place it is parsed."""
+    return "claude-copy:///%s/%s/view" % (quote(key, safe=""),
+                                          quote(str(gid), safe=""))
+
+
+def stash(log, gid, vops, line, info=None):
+    """The WRITE half of click-to-view: park an ALREADY-BUILT block of paint ops
+    under the session's `view:<gid>` kv key, wrap `line` in the view URL's OSC 8
+    hyperlink, and audit the stash as a `view-stash` state_files row.
+
+    Returns `(line, gid)` — the hyperlinked line plus the id to tag the emitted
+    op with ("v") — or `(line-unchanged, None)` when there is nothing to show or
+    the kv write failed, in which case the caller keeps the plain unlinked line
+    (an un-clickable line beats a link with nothing behind it).
+
+    `info` is merged into the audit row after `gid`/`ops`, for whatever the
+    caller wants recorded about WHAT it stashed (the tool, a render kind).
+
+    Here in core/copy.py because this is the toggle's own other half: the key,
+    the URL and the audit vocabulary are this module's, and three producers now
+    stash blocks — a file op (plugins/claude_code/file_fmt.stash_view), a
+    file-READING command collapsed to a Read one-liner (cmd_fmt), and a generic
+    tool call (tool_fmt). Each BUILDS its own block, which is per-producer work;
+    parking it is not, and it was spelled twice before this."""
+    from core import render as R
+    from core import state as S
+    if not (vops and S.kv_set(log, "view:" + str(gid), vops)):
+        return line, None
+    row = {"gid": gid, "ops": len(vops)}
+    if info:
+        row.update(info)
+    A.state_file(log, S.db_path(log), "view-stash", row)
+    return R.hyperlink(view_url(P.sid_from_log(log), gid), line), gid
 
 
 def toggle_view(log, db, gid):

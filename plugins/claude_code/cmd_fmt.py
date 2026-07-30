@@ -12,10 +12,9 @@
 # subagent's whole transcript is streamed in order by claude-substream.py instead,
 # so we IGNORE agent_id events here to avoid double-rendering / mis-ordering.
 import os, re
-from urllib.parse import quote
 
+from core import copy as C
 from core import ops as O
-from core import paths as PATHS
 from core import render as R
 from core import slots as claude_slots
 from core import state as S
@@ -350,14 +349,11 @@ def _stash_read_view(log, gid, names, cmd, output, spec, line):
             O.code(cmd, g=gid),
             *body,
             O.blank()]
-    if not S.kv_set(log, "view:" + str(gid), vops):
-        return line, None
-    url = "claude-copy:///%s/%s/view" % (
-        quote(PATHS.sid_from_log(log), safe=""), quote(str(gid), safe=""))
-    A.state_file(log, S.db_path(log), "view-stash",
-                 {"gid": gid, "tool": "Bash", "kind": "read", "ops": len(vops),
-                  "render": spec.kind})
-    return R.hyperlink(url, line), gid
+    # Parking the block, linking the line and auditing the stash is the
+    # click-to-view protocol itself, owned by core.copy (the toggle's other
+    # half); what is this producer's own is the BLOCK above.
+    return C.stash(log, gid, vops, line,
+                   {"tool": "Bash", "kind": "read", "render": spec.kind})
 
 
 def _render_read(d, cmd, output, spec, files, reader):

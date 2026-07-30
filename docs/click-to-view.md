@@ -64,7 +64,9 @@ landed. Why this design and not the alternatives:
 - **File-op one-liners don't copy — they EXPAND (click-to-view, below).** A
   Read/Update/Write line's real payload isn't its path, it's the content the op
   touched; clicking the line shows that content in place instead of putting
-  anything on a clipboard.
+  anything on a clipboard. **A generic TOOL one-liner is the same bargain** —
+  `· WebFetch(https://…)`, whose payload is the page it fetched, not its url
+  (`tool_fmt.py`, dashboard.md › *Every other tool*).
 
 **Click-to-view — file-op lines expand in place.** Every successful
 Read/Update/Write one-liner — the main session's (`file_fmt.py`) and a
@@ -90,11 +92,18 @@ a soft red panel and additions on a soft green panel (the tint alone carries
 the meaning), non-adjacent hunks separated by a dim `⋮`. Mechanism, in three
 parts:
 - **The stash** (hook time): the producer pre-renders the block into paint ops
-  (`file_fmt.view_ops` — the ONE block builder, public API shared by the
-  substream renderer, so a subagent's op expands identically; the whole
-  stash-and-link step — stash, URL, hyperlink wrap, audit row — is likewise
-  ONE shared function, `file_fmt.stash_view`, parameterized only by the audit
-  `who`/`extra` context)
+  (`file_fmt.view_ops` — the ONE block builder for a FILE op, public API shared
+  by the substream renderer, so a subagent's op expands identically; the
+  stash-and-link step under it — kv write, URL, hyperlink wrap, audit row — is
+  `core.copy.stash`, the toggle's own other half, which is where it belongs:
+  the key, the URL shape and the `view-stash` vocabulary are that module's, and
+  it now has THREE producers with blocks of their own to park — a file op
+  (`file_fmt.stash_view`, which adds the `who`/`extra` audit context), a
+  file-reading command collapsed into a Read one-liner
+  (`cmd_fmt._stash_read_view`), and a generic tool call
+  (`tool_fmt.view_block` — the request + the answer, dashboard.md › *Every
+  other tool*). Building the block is per-producer; parking it is not, and it
+  was spelled twice before the third arrived)
   and writes them to the state DB kv table under `view:<tool_use_id>`
   (audited as a `view-stash` state_files row), because the payload
   (`tool_response` content, `old_string`/`new_string`) exists ONLY while the
