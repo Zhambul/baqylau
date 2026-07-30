@@ -234,40 +234,14 @@ def sessions(limit=25):
     return out
 
 
-# --- account usage read model --------------------------------------------------------
-# The per-ACCOUNT rate-limit picture, composed from what each session's status-
-# line capture stashed into its state DB (plugins/claude_code/statusline.py owns
-# the `usage`/`account` kv shapes; relimit.py owns `limit-hit`). Consumers: the
-# dashboard's accounts strip / new-session picker AND the rate-limit migration's
-# target picker (plugins/claude_code/relimit.py) — this module is the ONE owner
-# of both the freshest-per-slug aggregation and the effective-5h arithmetic
-# (docs/styleguide.md single-owner table); the dashboard's JS reads the served
-# number, never re-derives it.
-
-FIVE_HOUR_S = 5 * 3600      # the 5h window length — the rolled-over fallback
-                            # when a snapshot has no resets_at
-SEVEN_DAY_S = 7 * 86400     # the 7d window length — same fallback role
-
-LOGGED_OUT_GRACE_S = 60     # how much NEWER than a `logged-out` stamp a usage
-                            # snapshot must be to count as a re-login and clear
-                            # it (logged_out_active). Not a window length — a
-                            # margin against the dying session's OWN post-turn
-                            # status-line render, measured ~0.3s after the stamp
-                            # (see the function); anything in the tens of
-                            # seconds separates that from a real re-login
-
-# Scheduling knobs for the new-session default-account picker (sched_score,
-# docs/dashboard.md *Default account*). Objective (b): maximise total work
-# extracted across accounts per week, so we BURN perishable weekly quota first.
-SCHED_5H_GATE = 90          # effective 5h use at/above this bars an account from
-                            # the PREFERRED pool — a session-safety gate so the
-                            # picker doesn't open onto an account already at its
-                            # 5h wall (mirrors account.TARGET_MAX_PCT); the burn-
-                            # perishable ordering runs among the survivors
-SCHED_MIN_HORIZON_H = 0.5   # floor on hours-to-reset in the perishability ratio,
-                            # so a window resetting in seconds can't produce an
-                            # unbounded score (div-by-~0)
-
+# --- the generic state-DB read machinery ----------------------------------------------
+# What every per-session read below (and every PLUGIN read model above this tier)
+# stands on: a change fingerprint, a bounded memo, and "which DB file is this
+# session's". Genuinely tool-neutral — the ACCOUNT/rate-limit read model that used
+# to sit here, with Anthropic's window lengths and Claude Code's status-line
+# timing as core constants, now lives with the host that owns those facts
+# (plugins/claude_code/usage.py, reached through the plugins.usage_strip /
+# session_usage / session_account / session_costs fan-outs).
 
 def db_sig(path):
     """A change fingerprint for a sqlite state DB: (mtime_ns, size) of the DB
@@ -340,220 +314,6 @@ def session_db(row):
     stats off it, both of which tolerate an absent file)."""
     sdb = P.state_db(row["log"])
     return sdb if os.path.isfile(sdb) else P.parked_db(row["log"])
-
-
-def account_usage(limit=50, cache=None):
-    """{slug: {"usage": …, "limit_hit": …, "logged_out": …}} — per account, the
-    FRESHEST status-line usage snapshot, the freshest rate-limit-hit stamp, and
-    the freshest logged-out stamp across the recent sessions (newest `ts` wins;
-    each snapshot came from a session running under that account's own token, so
-    this is per-account by construction — no API call, no token). Slugs are
-    whatever the sessions recorded ('' = the plain-claude default account); the
-    caller joins its own registry. `cache` is an optional db_cached() memo
-    dict."""
-    def read(p):
-        return (S.kv_at(p, "account") or {}, S.kv_at(p, "usage"),
-                S.kv_at(p, "limit-hit"), S.kv_at(p, "logged-out"))
-    def file_under(best, slug, key, val):
-        ent = best.setdefault(slug, {"usage": None, "limit_hit": None,
-                                     "logged_out": None})
-        if val and (ent[key] is None
-                    or (val.get("ts") or 0) > (ent[key].get("ts") or 0)):
-            ent[key] = val
-    best = {}
-    for row in sessions(limit):
-        sdb = session_db(row)
-        acc, usage, hit, lo = (db_cached(cache, sdb, read) if cache is not None
-                               else read(sdb))
-        slug = acc.get("slug") or ""
-        file_under(best, slug, "usage", usage)
-        # The hit is filed under ITS OWN slug (relimit stamps it), not the
-        # session's: after a rate-limit migration the adopted session's
-        # `account` kv is the NEW account while the stamp in the same state DB
-        # still describes the OLD one — grouping by the session's account
-        # pinned the blocked account's chip on the healthy one AND hid the
-        # block from the target picker (which could then migrate BACK onto it).
-        file_under(best, hit.get("slug", slug) if hit else slug,
-                   "limit_hit", hit)
-        # logged-out is filed under its own stamped slug for the same reason.
-        file_under(best, lo.get("slug", slug) if lo else slug,
-                   "logged_out", lo)
-    return best
-
-
-def _window_rolled(usage, key, span, now):
-    """True when a snapshot's `key` rate-limit window has rolled over: its
-    reset time has passed, or, when the reset is unknown, the snapshot is
-    older than the window itself."""
-    reset = usage.get(key + "_reset")
-    return (reset <= now if isinstance(reset, (int, float)) and reset > 0
-            else (usage.get("ts") or 0) + span < now)
-
-
-def effective_five_hour(usage, now=None):
-    """The effective 5h-used percentage of a usage snapshot, for load
-    balancing: a rolled-over window (_window_rolled) counts as 0 used; no
-    snapshot at all means no recent traffic → also 0."""
-    if not usage:
-        return 0
-    pct = usage.get("five_hour")
-    if not isinstance(pct, (int, float)):
-        return 0
-    now = time.time() if now is None else now
-    return 0 if _window_rolled(usage, "five_hour", FIVE_HOUR_S, now) else int(pct)
-
-
-def usage_windows(usage):
-    """The window keys present in a usage snapshot, in display order: the
-    account-wide pair first (five_hour, seven_day), then any model-scoped
-    window (e.g. `seven_day_fable`) sorted by key. A window is a numeric
-    used-% that isn't the `ts` stamp or a `*_reset` sibling. The dict itself
-    is already built in this order (statusline.parse_usage) and json/JS
-    preserve it, but consumers that ENUMERATE go through here — the one owner
-    of what counts as a window (docs/styleguide.md single-owner table)."""
-    keys = [k for k, v in (usage or {}).items()
-            if isinstance(v, (int, float)) and k != "ts"
-            and not k.endswith("_reset")]
-    known = [k for k in ("five_hour", "seven_day") if k in keys]
-    return known + sorted(k for k in keys if k not in ("five_hour", "seven_day"))
-
-
-def window_span(key):
-    """A window key's length in seconds: 5h for the five_hour* family, 7d for
-    everything else — model-scoped windows are weekly, like the seven_day pair
-    they extend. Only the rolled-over fallback arithmetic uses this (a
-    snapshot with a resets_at never needs it)."""
-    return FIVE_HOUR_S if key.startswith("five_hour") else SEVEN_DAY_S
-
-
-def effective_usage(usage, now=None):
-    """A display-ready copy of a usage snapshot: each window (the 5h/7d pair
-    AND any model-scoped window — usage_windows) that rolled over
-    (_window_rolled) has its used% zeroed and its reset dropped. Without
-    this, an account with no recent session serves its last-known
-    percentages with an already-past reset epoch, which the dashboard pill
-    renders as 'resets now' — forever. Same single-owner arithmetic as
-    effective_five_hour; the page reads the served values, never re-derives
-    (docs/styleguide.md single-owner table)."""
-    if not usage:
-        return usage
-    now = time.time() if now is None else now
-    out = dict(usage)
-    for key in usage_windows(out):
-        if _window_rolled(out, key, window_span(key), now):
-            out[key] = 0
-            out.pop(key + "_reset", None)
-    return out
-
-
-def sched_score(usage, now=None):
-    """The PERISHABILITY of an account's weekly (7d) quota, for the new-session
-    default-account picker (docs/dashboard.md *Default account*). Objective (b) —
-    maximise total work extracted across accounts per week — means BURNING quota
-    that will otherwise be wiped soon: score = remaining% / hours-to-7d-reset, so
-    an account with quota still left AND a near reset scores HIGH (spend it before
-    it resets), while the same headroom with a distant reset scores low (conserve
-    it — it survives to next week). The picker prefers the highest score among
-    accounts under the 5h session-safety gate (SCHED_5H_GATE); the automigrate
-    safety net (docs/relimit.md) catches the higher per-session wall risk this
-    accepts. The single owner of the scheduling arithmetic — the dashboard serves
-    this number and never re-derives it (docs/styleguide.md single-owner table).
-
-    A rolled-over / unknown-reset 7d window (or no snapshot at all) counts as full
-    quota over a full-week horizon — a baseline, non-urgent score, never a spike.
-    An exhausted window (0 remaining) scores 0. Only the account-wide `seven_day`
-    window is scored: per-MODEL weekly caps still HARD-block via limit_hit, but a
-    soft per-model perishability tie-break is a deliberate non-goal for now (the
-    tokenless snapshot the migration picker shares carries no per-model window)."""
-    now = time.time() if now is None else now
-    used = (usage or {}).get("seven_day")
-    if (not isinstance(used, (int, float))
-            or _window_rolled(usage, "seven_day", SEVEN_DAY_S, now)):
-        remaining, horizon_h = 100.0, SEVEN_DAY_S / 3600.0
-    else:
-        remaining = max(0.0, 100.0 - used)
-        reset = usage.get("seven_day_reset")
-        horizon_h = ((reset - now) / 3600.0
-                     if isinstance(reset, (int, float)) and reset > now
-                     else SEVEN_DAY_S / 3600.0)
-    return remaining / max(horizon_h, SCHED_MIN_HORIZON_H)
-
-
-def sched_ok(usage, now=None):
-    """Whether an account clears the 5h session-safety gate (SCHED_5H_GATE) —
-    i.e. it belongs in the PREFERRED pool the new-session picker ranks by
-    sched_score. False = near its 5h wall, kept as a fallback only. The gate owner
-    (docs/dashboard.md *Default account*); the dashboard serves this boolean."""
-    return effective_five_hour(usage, now) < SCHED_5H_GATE
-
-
-def limit_hit_active(hit, now=None):
-    """True while a `limit-hit` stamp still BLOCKS its account: its reset time
-    hasn't passed (or, with no reset known, it is younger than the limit's OWN
-    window — a model-scoped stamp caps a WEEKLY per-model quota, so its fallback
-    span is one week, not the 5h of an account-wide session limit). Without the
-    scope-aware span a Fable ('model'-scoped) stamp inherited the 5h fallback
-    (its snapshot carries no per-model reset — statusline.parse_usage), so the
-    chip vanished ~5h in while the weekly limit was still in force (reported
-    2026-07-19). The dashboard pill gates purely on this (a limited account is
-    flagged regardless of which model was capped); the migration target-picker
-    layers per-model scope on top via model_available."""
-    if not hit:
-        return False
-    now = time.time() if now is None else now
-    reset = hit.get("resets_at")
-    if isinstance(reset, (int, float)) and reset > 0:
-        return reset > now
-    span = SEVEN_DAY_S if hit.get("model") else FIVE_HOUR_S
-    return (hit.get("ts") or 0) + span > now
-
-
-def logged_out_active(stamp, usage):
-    """True while a `logged-out` stamp still describes the account's current
-    state — i.e. no SUCCESSFUL session has run under it since. Unlike a
-    rate-limit, being logged out has no reset epoch; the clear signal is a
-    re-login, which (being a `/login` session) captures a fresh status-line
-    `usage` snapshot. So the stamp is active while no usage snapshot is more
-    than LOGGED_OUT_GRACE_S newer than it. No snapshot at all (never captured)
-    → the stamp stands. relimit stamps it on a StopFailure
-    error='authentication_failed'; account._rank and the dashboard pill gate on
-    this (docs/relimit.md *Logged-out accounts*).
-
-    Why the GRACE margin and not a plain `stamp.ts >= usage.ts`: the original
-    predicate assumed the dead session's own status line was captured at the
-    prompt BEFORE the turn died on auth (older ts). It isn't — Claude Code
-    re-renders the status line at the END of every turn, INCLUDING a failed one,
-    so the dying session stashed a `usage` snapshot ~0.3s AFTER its own stamp and
-    the badge self-cleared instantly (session 518b6f4d, 2026-07-26: stamp
-    ts=…534.026, usage ts=…534.328). That snapshot's CONTENT can't be screened
-    either — it carries the account's last-known percentages, which look
-    perfectly healthy. The margin also survives repeated failed turns (each
-    restamps, and its post-mortem render is again only ~0.3s later); the cost is
-    that a re-login inside the SAME session clears the flag only on the first
-    status-line render past the margin. A stricter "proof of a successful turn"
-    signal (a clean Stop / an OTEL datapoint under that account) was considered
-    and rejected as stickier: a bare `/login` produces no turn to prove."""
-    if not stamp:
-        return False
-    return ((stamp.get("ts") or 0) + LOGGED_OUT_GRACE_S
-            >= ((usage or {}).get("ts") or 0))
-
-
-def model_available(hit, model, now=None):
-    """Whether `model` (a family word — model.family / relimit.limit_model
-    vocabulary: 'fable'/'opus'/'sonnet') is still runnable on an account, given
-    that account's freshest `limit-hit` stamp. True unless an ACTIVE stamp
-    (limit_hit_active) bars it: an ACCOUNT-WIDE stamp (no `model` scope — nothing
-    on the account works) bars every model; a MODEL-scoped stamp bars ONLY its
-    own family (a Fable weekly cap leaves Opus/Sonnet on that same account fully
-    usable). This is the per-model successor to the old coarse limit_hit_blocks
-    — the migration ladder (account.pick_target, docs/relimit.md *Model-downgrade
-    ladder*) asks it once per rung. The ONE owner of 'does this stamp bar this
-    model on this account' (docs/styleguide.md single-owner table)."""
-    if not limit_hit_active(hit, now):
-        return True
-    scope = (hit or {}).get("model")
-    return bool(scope) and scope != model
 
 
 def session_row(sid):
@@ -899,27 +659,19 @@ def agent_transcript(sid, agent_id):
 
 
 def costs(sid):
-    """OTEL cost/token totals, chain-aware (pre-fork datapoints live under the
-    OLD sid). Same ground truth as the audit CLI's otel breakdown: SUM(value)
-    over the raw datapoints — {"tokens": {query_source: {type: n}},
-    "cost": {query_source: usd}, "total_usd": x}."""
-    chain = sid_chain(sid)
-    db = audit_db()
-    ins = in_clause(len(chain))
-    tokens = {}
-    for qs, typ, n in db_rows(
-            db, "SELECT query_source, type, SUM(value) FROM otel"
-                " WHERE session_id IN (%s) AND metric='token'"
-                " GROUP BY query_source, type" % ins, tuple(chain)):
-        tokens.setdefault(qs or "?", {})[typ or "?"] = n or 0
-    cost = {}
-    for qs, usd in db_rows(
-            db, "SELECT query_source, SUM(value) FROM otel"
-                " WHERE session_id IN (%s) AND metric='cost'"
-                " GROUP BY query_source" % ins, tuple(chain)):
-        cost[qs or "?"] = usd or 0.0
-    return {"tokens": tokens, "cost": cost,
-            "total_usd": sum(cost.values())}
+    """A session's token/cost totals — {"tokens": {source: {type: n}}, "cost":
+    {source: usd}, "total_usd": x} — from the host that OWNS the session
+    (plugins.session_costs; the empty envelope when none answers).
+
+    The numbers used to be an OTEL query right here, which read a truthful-
+    looking ZERO for every session of a host that does not feed that table:
+    the `otel` rows come from a receiver only Claude Code spawns, and its
+    `query_source` split (main/subagent/auxiliary) is Claude Code's taxonomy.
+    Each host banks its spend where it can and reports it here (codex prices
+    its own turns into its scoreboard as it folds them). Lazy plugins import,
+    the same shape agents()/nested_owners() use in this module."""
+    import plugins
+    return plugins.session_costs(sid)
 
 
 def running(sid):
@@ -995,23 +747,23 @@ def error_count(sid):
 
 
 def account(sid):
-    """The subscription account a session runs under — {slug, label} stamped
-    into the state DB at SessionStart / refreshed by the status-line shim
-    (plugins.claude_code.account / statusline). {} when unknown (an old
-    session, or the plain default account with no slug). Reads the RESOLVED
-    path (live or parked), so a parked session keeps its label."""
-    sdb = state_db_for(sid)
-    return (S.kv_at(sdb, "account") or {}) if sdb else {}
+    """The subscription account a session runs under — {slug, label} — from the
+    host that OWNS it (plugins.session_account); {} when unknown, or when that
+    host has no accounts at all. Claude Code's is the kv the status-line shim
+    stashes; a host without a switcher says what it can (codex: its plan)."""
+    import plugins
+    return plugins.session_account(sid)
 
 
 def usage(sid):
-    """The session's last-seen rate-limit snapshot — {five_hour, five_hour_reset,
-    seven_day, seven_day_reset, ts} — captured from the status-line stdin by the
-    shim (docs/dashboard.md). None when none has been captured (no shim, a fresh
-    account before its first API response, an old session). Per-account by
+    """The session's last-seen rate-limit reading, from the host that OWNS it
+    (plugins.session_usage) — the shared `windows` vocabulary plus whatever flat
+    keys that host's own snapshot carries (Claude's kv shape, {five_hour,
+    five_hour_reset, seven_day, seven_day_reset, ts}, is served verbatim as it
+    always was). None when the session has no reading. Per-account by
     construction: the number came from THIS session's own token."""
-    sdb = state_db_for(sid)
-    return (S.kv_at(sdb, "usage") or None) if sdb else None
+    import plugins
+    return plugins.session_usage(sid)
 
 
 def session(sid):

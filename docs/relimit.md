@@ -65,7 +65,7 @@ ONE parser of the message's scope, docs/styleguide.md). Consumers:
 - the new-session auto-picker skips the account only when the limited model
   is the one being launched (docs/dashboard.md);
 - **`pick_target` walks the model-downgrade ladder** (below), asking
-  `core.sessionapi.model_available(hit, model)` — the single owner of the
+  `plugins.claude_code.usage.model_available(hit, model)` — the single owner of the
   per-model bar rule — once per rung: a model-scoped stamp bars ONLY its own
   family (a Fable cap leaves Opus/Sonnet on that same account usable), an
   account-wide stamp (no `model` scope) bars every model on it. This replaces
@@ -118,8 +118,8 @@ Ordered guards, every skip audited as a decision row:
    (`model.session_model` → `model.family`), else None. The picker walks the
    downgrade ladder (below) and returns the best-headroom account + the model to
    run there (or None → skip: ping-ponging between exhausted accounts helps
-   nobody). Ranking is `sessionapi.effective_five_hour` over the freshest
-   per-account snapshots (`sessionapi.account_usage` — the same numbers the
+   nobody). Ranking is `usage.effective_five_hour` over the freshest
+   per-account snapshots (`usage.account_usage` — the same numbers the
    dashboard strip shows); candidates at/above `TARGET_MAX_PCT` (90) are refused.
 8. Otherwise: stamp `relimit-attempt`, emit the AMBER announce op — `⚠ <label>
    hit its rate limit → resuming on <slug>` for a same-model migrate, or
@@ -214,7 +214,7 @@ The `authentication_failed` StopFailure Claude Code already fires is precise,
 free, and touches no credentials — the house-style event signal.
 
 **Clearing (a re-login).** Being logged out has no reset epoch, so the stamp is
-cleared **read-side**: `sessionapi.logged_out_active(stamp, usage)` reports it
+cleared **read-side**: `usage.logged_out_active(stamp, usage)` reports it
 active until the account's freshest status-line `usage` snapshot is more than
 `sessionapi.LOGGED_OUT_GRACE_S` (60s) **newer** than the stamp. A later
 successful session — and a `/login` **is** a session — captures such a snapshot
@@ -243,7 +243,7 @@ clear signal: it is strictly stickier, because a bare `/login` produces no turn
 to prove, so the badge would outlive the re-login until unrelated work happened
 to run on that account.
 
-**Where it surfaces.** `sessionapi.account_usage` files the `logged-out` stamp
+**Where it surfaces.** `usage.account_usage` files the `logged-out` stamp
 per slug (freshest wins, under the stamp's OWN slug — same reasoning as
 `limit-hit`); `dashboard/read/lists.py accounts_payload` serves `logged_out`
 (bool) + `logged_out_msg`; the dashboard's account strip paints a filled red
@@ -359,7 +359,7 @@ gains a copy step; today one would be dead code.
   is misleading at exactly the moment it matters (see The trigger above).
 - **The stamp survives the migration in the SUCCESSOR's state DB** (the adopt
   renames the DB), whose `account` kv now names the NEW account. So
-  `sessionapi.account_usage` files each `limit-hit` under the stamp's own
+  `usage.account_usage` files each `limit-hit` under the stamp's own
   `slug` field, never the session's account — grouping by the session pinned
   the blocked account's chip on the healthy one and hid the block from
   `pick_target` (which could then migrate a later limit-hit straight back

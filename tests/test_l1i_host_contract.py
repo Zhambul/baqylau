@@ -48,14 +48,9 @@ LITERAL_ALLOW = {
         "plugins.claude_code.memory":
             "the ext's declared producer, documentation only — never imported",
     },
-    # A host-NAMED endpoint over a generic fan-out: /api/codex-usage +
-    # get_codex_usage serve plugins.usage_windows(), which is first-plugin-wins
-    # and therefore single-host by construction. P3 replaces both with one
-    # host-keyed usage surface and these two rows go.
-    "dashboard/http/get.py": {
-        "codex-usage": "P3: the host-named rate-limit endpoint, becomes /api/usage",
-        "get_codex_usage": "P3: its handler name, deleted with the route",
-    },
+    # (P3 deleted this file's two rows: the host-NAMED /api/codex-usage endpoint
+    # and its get_codex_usage handler are gone, folded into the one host-keyed
+    # usage strip that /api/accounts now serves over plugins.usage_strip.)
     # The presenter's parked-history sniffers. ACT_CODEX is the dashboard's own
     # activity-class token (the page's ACT_PHRASE table is keyed by it) and only
     # COINCIDES with the register name — check 3 below pins that coincidence
@@ -195,7 +190,17 @@ COVERAGE = {
     "conversation":      {"claude_code": IMPL,     "codex": IMPL,     "otel": DECLINED},
     "ask_preamble":      {"claude_code": IMPL,     "codex": DECLINED, "otel": DECLINED},
     "pending_dialog":    {"claude_code": DECLINED, "codex": IMPL,     "otel": DECLINED},
-    "usage_windows":     {"claude_code": DECLINED, "codex": IMPL,     "otel": DECLINED},
+    # P3 — limits/accounts/costs, one vocabulary, BOTH hosts. `usage_strip`
+    # replaced the old single-host `usage_windows` (first-plugin-wins, so codex
+    # was the only possible answer and Claude's accounts rode a separate,
+    # un-abstracted payload); the three session_* facets replaced core reads that
+    # asked no host at all and therefore answered Claude's kv/OTEL shapes for
+    # everyone. otel declines all four: it is a cross-cutting receiver, not a
+    # host — the telemetry it collects is reported by the host that produced it.
+    "usage_strip":       {"claude_code": IMPL,     "codex": IMPL,     "otel": DECLINED},
+    "session_usage":     {"claude_code": IMPL,     "codex": IMPL,     "otel": DECLINED},
+    "session_account":   {"claude_code": IMPL,     "codex": IMPL,     "otel": DECLINED},
+    "session_costs":     {"claude_code": IMPL,     "codex": IMPL,     "otel": DECLINED},
 }
 
 

@@ -186,15 +186,15 @@ def test_logged_out_active_clears_on_a_fresher_usage_snapshot():
     """The read-side clear: a `logged-out` stamp is active until a usage snapshot
     lands more than LOGGED_OUT_GRACE_S newer than it — a later successful
     session's snapshot (a re-login) clears it (core.sessionapi)."""
-    from core import sessionapi as API
+    from plugins.claude_code import usage as U
     now = time.time()
-    grace = API.LOGGED_OUT_GRACE_S
+    grace = U.LOGGED_OUT_GRACE_S
     stamp = {"slug": "c2", "ts": now}
-    assert API.logged_out_active(stamp, None) is True          # never captured
-    assert API.logged_out_active(stamp, {"ts": now - 10}) is True   # older usage
-    assert API.logged_out_active(
+    assert U.logged_out_active(stamp, None) is True          # never captured
+    assert U.logged_out_active(stamp, {"ts": now - 10}) is True   # older usage
+    assert U.logged_out_active(
         stamp, {"ts": now + grace + 10}) is False                   # re-login
-    assert API.logged_out_active(None, {"ts": now}) is False        # no stamp
+    assert U.logged_out_active(None, {"ts": now}) is False        # no stamp
 
 
 def test_logged_out_active_survives_the_dying_sessions_own_status_line():
@@ -202,12 +202,12 @@ def test_logged_out_active_survives_the_dying_sessions_own_status_line():
     so its OWN `usage` snapshot lands a fraction of a second AFTER the stamp —
     which used to self-clear the badge instantly (session 518b6f4d, 2026-07-26).
     LOGGED_OUT_GRACE_S is exactly that margin."""
-    from core import sessionapi as API
+    from plugins.claude_code import usage as U
     now = time.time()
     stamp = {"slug": "c1", "ts": now}
-    assert API.logged_out_active(stamp, {"ts": now + 0.301}) is True
+    assert U.logged_out_active(stamp, {"ts": now + 0.301}) is True
     # and a repeated failed turn (restamp + its own post-mortem render) too
-    assert API.logged_out_active({"slug": "c1", "ts": now + 30},
+    assert U.logged_out_active({"slug": "c1", "ts": now + 30},
                                  {"ts": now + 30.3}) is True
 
 
@@ -475,7 +475,7 @@ def test_pick_target_prefers_least_used_and_skips_limited(monkeypatch,
     model couldn't be read): migrate to the least-used OTHER account, skipping
     any with an active limit-hit and any at/above the ceiling. The direct
     successor of the pre-ladder picker."""
-    from core import sessionapi as API
+    from plugins.claude_code import usage as U
     from plugins.claude_code import account as ACC
     tsv = tmp_path / "accounts.tsv"
     tsv.write_text("c1\toboard\tsvc-1\nc2\tclaude-01\tsvc-2\nc3\tspare\tsvc-3\n")
@@ -485,7 +485,7 @@ def test_pick_target_prefers_least_used_and_skips_limited(monkeypatch,
                               "ts": now}, "limit_hit": None},
              "c3": {"usage": {"five_hour": 20, "five_hour_reset": now + 1000,
                               "ts": now}, "limit_hit": None}}
-    monkeypatch.setattr(API, "account_usage", lambda limit=50, cache=None: fresh)
+    monkeypatch.setattr(U, "account_usage", lambda limit=50, cache=None: fresh)
     assert ACC.pick_target("c1", None) == {"slug": "c3", "alias": "c3",
                                            "model": "", "eff": 20}
     # the current account is never its own target; an account with NO snapshot
@@ -520,9 +520,9 @@ def test_pick_target_prefers_least_used_and_skips_limited(monkeypatch,
 
 def test_pick_target_skips_a_logged_out_account(monkeypatch, tmp_path):
     """A logged-out account (login revoked) is never a migration target — a
-    resume there dies on auth (account._rank via sessionapi.logged_out_active).
+    resume there dies on auth (account._rank via usage.logged_out_active).
     A re-login (fresher usage snapshot) makes it eligible again."""
-    from core import sessionapi as API
+    from plugins.claude_code import usage as U
     from plugins.claude_code import account as ACC
     tsv = tmp_path / "accounts.tsv"
     tsv.write_text("c1\toboard\tsvc-1\nc2\tclaude-01\tsvc-2\nc3\tspare\tsvc-3\n")
@@ -532,13 +532,13 @@ def test_pick_target_skips_a_logged_out_account(monkeypatch, tmp_path):
                               "ts": now}, "limit_hit": None, "logged_out": None},
              "c3": {"usage": {"five_hour": 60, "five_hour_reset": now + 1000,
                               "ts": now}, "limit_hit": None, "logged_out": None}}
-    monkeypatch.setattr(API, "account_usage", lambda limit=50, cache=None: fresh)
+    monkeypatch.setattr(U, "account_usage", lambda limit=50, cache=None: fresh)
     assert ACC.pick_target("c1", None)["slug"] == "c2"      # least-used wins
     # c2 logged out (no usage snapshot past the grace margin) → skipped
     fresh["c2"]["logged_out"] = {"slug": "c2", "ts": now}
     assert ACC.pick_target("c1", None)["slug"] == "c3"
     # a re-login (usage snapshot past LOGGED_OUT_GRACE_S) clears the skip
-    fresh["c2"]["usage"]["ts"] = now + API.LOGGED_OUT_GRACE_S + 5
+    fresh["c2"]["usage"]["ts"] = now + U.LOGGED_OUT_GRACE_S + 5
     assert ACC.pick_target("c1", None)["slug"] == "c2"
 
 
@@ -547,7 +547,7 @@ def test_pick_target_walks_the_model_ladder(monkeypatch, tmp_path):
     as high as possible (same model on another account before any downgrade),
     rank each rung by most headroom, never skip a rung, and rejoin the current
     account at downgrade rungs (its Fable cap doesn't bar Opus)."""
-    from core import sessionapi as API
+    from plugins.claude_code import usage as U
     from plugins.claude_code import account as ACC
     tsv = tmp_path / "accounts.tsv"
     tsv.write_text("c1\toboard\tsvc-1\nc2\tclaude-01\tsvc-2\nc3\tspare\tsvc-3\n")
@@ -565,7 +565,7 @@ def test_pick_target_walks_the_model_ladder(monkeypatch, tmp_path):
     fresh = {"c1": {"usage": u(50), "limit_hit": fable()},
              "c2": {"usage": u(40), "limit_hit": None},
              "c3": {"usage": u(20), "limit_hit": None}}
-    monkeypatch.setattr(API, "account_usage", lambda limit=50, cache=None: fresh)
+    monkeypatch.setattr(U, "account_usage", lambda limit=50, cache=None: fresh)
     assert ACC.pick_target("c1", "fable") == {"slug": "c3", "alias": "c3",
                                               "model": "", "eff": 20}
 
@@ -574,7 +574,7 @@ def test_pick_target_walks_the_model_ladder(monkeypatch, tmp_path):
     fresh = {"c1": {"usage": u(10), "limit_hit": fable()},
              "c2": {"usage": u(40), "limit_hit": fable()},
              "c3": {"usage": u(20), "limit_hit": fable()}}
-    monkeypatch.setattr(API, "account_usage", lambda limit=50, cache=None: fresh)
+    monkeypatch.setattr(U, "account_usage", lambda limit=50, cache=None: fresh)
     t = ACC.pick_target("c1", "fable")
     assert t == {"slug": "c1", "alias": "c1", "model": "opus", "eff": 10}, t
 
@@ -585,7 +585,7 @@ def test_pick_target_walks_the_model_ladder(monkeypatch, tmp_path):
     fresh = {"c1": {"usage": u(10), "limit_hit": opus()},
              "c2": {"usage": u(40), "limit_hit": opus()},
              "c3": {"usage": u(30), "limit_hit": opus()}}
-    monkeypatch.setattr(API, "account_usage", lambda limit=50, cache=None: fresh)
+    monkeypatch.setattr(U, "account_usage", lambda limit=50, cache=None: fresh)
     assert ACC.pick_target("c1", "opus") == {"slug": "c1", "alias": "c1",
                                              "model": "sonnet", "eff": 10}
     # ...and a raw model id normalizes to its family (the dashboard passes the id)
@@ -596,7 +596,7 @@ def test_pick_target_walks_the_model_ladder(monkeypatch, tmp_path):
     fresh = {"c1": {"usage": u(95), "limit_hit": fable()},
              "c2": {"usage": u(96), "limit_hit": fable()},
              "c3": {"usage": u(97), "limit_hit": fable()}}
-    monkeypatch.setattr(API, "account_usage", lambda limit=50, cache=None: fresh)
+    monkeypatch.setattr(U, "account_usage", lambda limit=50, cache=None: fresh)
     assert ACC.pick_target("c1", "fable") is None            # every rung over ceiling
     assert ACC.pick_target("c1", "fable", ceiling=None)["model"] == "opus"
 
@@ -606,7 +606,7 @@ def test_pick_target_walks_the_model_ladder(monkeypatch, tmp_path):
     fresh = {"c1": {"usage": u(10), "limit_hit": wide()},
              "c2": {"usage": u(10), "limit_hit": wide()},
              "c3": {"usage": u(10), "limit_hit": wide()}}
-    monkeypatch.setattr(API, "account_usage", lambda limit=50, cache=None: fresh)
+    monkeypatch.setattr(U, "account_usage", lambda limit=50, cache=None: fresh)
     assert ACC.pick_target("c1", "fable", ceiling=None) is None
 
 
@@ -617,7 +617,7 @@ def test_pick_target_explain_records_the_reasoning(monkeypatch, tmp_path):
     FALLBACK branch, whose coarse "any active limit-hit disqualifies" rule bars
     an account whose stamp is scoped to a DIFFERENT model — one the LADDER would
     happily use. The trace must show both."""
-    from core import sessionapi as API
+    from plugins.claude_code import usage as U
     from plugins.claude_code import account as ACC
     tsv = tmp_path / "accounts.tsv"
     tsv.write_text("c1\toboard\tsvc-1\nc2\tclaude-01\tsvc-2\n")
@@ -630,7 +630,7 @@ def test_pick_target_explain_records_the_reasoning(monkeypatch, tmp_path):
                               "ts": now},
                     "limit_hit": {"ts": now, "resets_at": None, "model": "fable",
                                   "slug": "c2"}}}
-    monkeypatch.setattr(API, "account_usage", lambda limit=50, cache=None: fresh)
+    monkeypatch.setattr(U, "account_usage", lambda limit=50, cache=None: fresh)
 
     # cur_model unknown → fallback branch → c2 refused over its fable stamp.
     e = {}
@@ -653,16 +653,16 @@ def test_pick_target_explain_records_the_reasoning(monkeypatch, tmp_path):
 
 
 def test_model_available_single_owner():
-    """core.sessionapi.model_available is the ONE per-model bar rule: an
+    """plugins.claude_code.usage.model_available is the ONE per-model bar rule: an
     account-wide stamp blocks every model, a model-scoped stamp only its own,
     an expired/absent stamp blocks nothing."""
-    from core import sessionapi as API
+    from plugins.claude_code import usage as U
     now = time.time()
     scoped = {"ts": now, "resets_at": now + 500, "model": "fable"}
     wide = {"ts": now, "resets_at": now + 500, "model": None}
     expired = {"ts": now - 9000, "resets_at": now - 10, "model": "fable"}
-    assert API.model_available(scoped, "fable", now) is False
-    assert API.model_available(scoped, "opus", now) is True
-    assert API.model_available(wide, "opus", now) is False
-    assert API.model_available(expired, "fable", now) is True
-    assert API.model_available(None, "fable", now) is True
+    assert U.model_available(scoped, "fable", now) is False
+    assert U.model_available(scoped, "opus", now) is True
+    assert U.model_available(wide, "opus", now) is False
+    assert U.model_available(expired, "fable", now) is True
+    assert U.model_available(None, "fable", now) is True

@@ -679,8 +679,10 @@ def test_every_plugin_fanout_reaches_a_declared_provider():
             continue
         fn = n.func
         # the fan-out primitives take the name as their first argument (_named
-        # is the single-plugin router — host-scoped slash_commands rides it) …
+        # is the single-plugin router — host-scoped slash_commands rides it;
+        # _first_owner the sid-keyed one that routes to the session's owner) …
         if isinstance(fn, ast.Name) and fn.id in ("_first", "_first_path",
+                                                  "_first_owner",
                                                   "_concat_unique", "_named"):
             a = n.args[0]
             if isinstance(a, ast.Constant):

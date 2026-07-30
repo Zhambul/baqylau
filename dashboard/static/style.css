@@ -555,22 +555,21 @@ body.in-session.fs-on #fsbtn { display: revert; }
 .vmode:hover { color: var(--text); }
 .vmode.on { color: var(--text); background: var(--panel2); }
 
-/* ---- account usage strip (under the header) ----------------------------- */
-/* #codexusage is the codex host's usage pill, a sibling strip directly under
-   the accounts one — same container styling, same .acct row pill inside. */
-body.in-session #accounts,
-body.in-session #codexusage { display: none; }
-#accounts,
-#codexusage {
+/* ---- usage strip (under the header) ------------------------------------- */
+/* ONE strip over every host's rate-limit rows — a Claude subscription account
+   and a codex host reading are the same `.acct` pill, stacked in one container
+   and grouped by host in the painter (app.01-attention.renderAccounts). The
+   codex half used to be a SECOND container (#codexusage) with its own endpoint,
+   poll and painter, welded flush under this one so the two would read as a
+   single strip; now they are one. */
+body.in-session #accounts { display: none; }
+#accounts {
   display: flex; flex-direction: column; gap: 12px; align-items: flex-start;
   padding: 14px max(var(--gx), env(safe-area-inset-right))
            14px max(var(--gx), env(safe-area-inset-left));
   background: var(--panel);
   box-shadow: inset 0 -1px 0 var(--hair);
 }
-/* the codex strip sits flush UNDER the accounts one — drop its top padding so
-   the two read as one strip when both are shown */
-#accounts:not([hidden]) + #codexusage { padding-top: 0; }
 /* wrap + max-width: the row (name + two ubars, ~500px) must fold on a narrow
    screen — #accounts has no internal scroll, an unwrapped row widens the page.
    each row is its own padded, rounded chip (left edge still on the --gx page

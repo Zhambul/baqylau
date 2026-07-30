@@ -1,7 +1,7 @@
 # L0 — plugins/claude_code/model_usage.py, the per-model weekly-usage fetch.
 # In-process unit tests: the I/O boundaries (keychain read/write, the OAuth
 # endpoint, the token refresh) are the seams we monkeypatch; the account→slug
-# mapping is driven through the REAL core.sessionapi.account_usage by
+# mapping is driven through the REAL plugins.claude_code.usage.account_usage by
 # monkeypatching only its return (the mapping arithmetic is what's under test).
 # No network, no keychain — every external call is stubbed.
 import sys
@@ -88,7 +88,7 @@ def test_pct_clamped():
 
 def test_slug_for_7d_tie_broken_by_5h(monkeypatch):
     # two accounts share the 7d boundary; only the 5h reset disambiguates them
-    monkeypatch.setattr(MU.API, "account_usage", lambda cache=None: {
+    monkeypatch.setattr(MU.U, "account_usage", lambda cache=None: {
         "c1": {"usage": {"five_hour_reset": 2000, "seven_day_reset": 9000}},
         "": {"usage": {"five_hour_reset": 1000, "seven_day_reset": 9000}}})
     u = _usage(2000, 9000)
@@ -100,12 +100,12 @@ def test_slug_for_7d_tie_broken_by_5h(monkeypatch):
 def test_slug_for_unique_7d_survives_rolled_5h(monkeypatch):
     # the 2026-07-20 bug: the captured 5h epoch is from an OLD window (no
     # session ran recently), but the 7d epoch matches uniquely — must attach
-    monkeypatch.setattr(MU.API, "account_usage", lambda cache=None: {
+    monkeypatch.setattr(MU.U, "account_usage", lambda cache=None: {
         "c1": {"usage": {"five_hour_reset": 1111, "seven_day_reset": 9000}},
         "c2": {"usage": {"five_hour_reset": 2000, "seven_day_reset": 5000}}})
     assert MU._slug_for(_usage(2000, 9000)) == "c1"    # stale 5h ignored
     # …and even with NO captured 5h epoch at all
-    monkeypatch.setattr(MU.API, "account_usage", lambda cache=None: {
+    monkeypatch.setattr(MU.U, "account_usage", lambda cache=None: {
         "c1": {"usage": {"seven_day_reset": 9000}}})
     assert MU._slug_for(_usage(2000, 9000)) == "c1"
 
@@ -113,14 +113,14 @@ def test_slug_for_unique_7d_survives_rolled_5h(monkeypatch):
 def test_slug_for_ambiguous_7d_stale_5h_returns_none(monkeypatch):
     # a 7d tie the 5h epoch CANNOT break (both captured 5h are stale) must
     # refuse to guess — a wrong attach is worse than a missing bar
-    monkeypatch.setattr(MU.API, "account_usage", lambda cache=None: {
+    monkeypatch.setattr(MU.U, "account_usage", lambda cache=None: {
         "c1": {"usage": {"five_hour_reset": 1111, "seven_day_reset": 9000}},
         "": {"usage": {"five_hour_reset": 2222, "seven_day_reset": 9000}}})
     assert MU._slug_for(_usage(7777, 9000)) is None
 
 
 def test_slug_for_no_match_returns_none(monkeypatch):
-    monkeypatch.setattr(MU.API, "account_usage", lambda cache=None: {
+    monkeypatch.setattr(MU.U, "account_usage", lambda cache=None: {
         "c1": {"usage": {"five_hour_reset": 2000, "seven_day_reset": 9000}}})
     assert MU._slug_for(_usage(5555, 6666)) is None
 
@@ -238,7 +238,7 @@ def test_windows_by_slug_end_to_end(monkeypatch):
     responses = {"T-svc-personal": _usage(2000, 9000, fable=91),
                  "T-svc-work": _usage(1000, 8000, fable=100)}
     monkeypatch.setattr(MU, "_get", lambda url, tok: responses[tok])
-    monkeypatch.setattr(MU.API, "account_usage", lambda cache=None: {
+    monkeypatch.setattr(MU.U, "account_usage", lambda cache=None: {
         "c1": {"usage": {"five_hour_reset": 2000, "seven_day_reset": 9000}},
         "c2": {"usage": {"five_hour_reset": 1000, "seven_day_reset": 8000}}})
     out = MU.windows_by_slug()
@@ -251,7 +251,7 @@ def test_windows_by_slug_one_bad_credential_is_isolated(monkeypatch):
     monkeypatch.setattr(MU, "_access_token",
                         lambda svc: None if svc == "dead" else "T")
     monkeypatch.setattr(MU, "_get", lambda url, tok: _usage(2000, 9000, fable=77))
-    monkeypatch.setattr(MU.API, "account_usage", lambda cache=None: {
+    monkeypatch.setattr(MU.U, "account_usage", lambda cache=None: {
         "c1": {"usage": {"five_hour_reset": 2000, "seven_day_reset": 9000}}})
     out = MU.windows_by_slug()
     assert out == {"c1": {"seven_day_fable": 77,
@@ -319,7 +319,7 @@ def test_windows_by_slug_stale_serves_previous_and_refreshes_behind(monkeypatch)
     single-flight, and the fresh value is served once it lands."""
     monkeypatch.setattr(MU, "_login_services", lambda: ["svc"])
     monkeypatch.setattr(MU, "_access_token", lambda svc: "T")
-    monkeypatch.setattr(MU.API, "account_usage", lambda limit=50, cache=None: {
+    monkeypatch.setattr(MU.U, "account_usage", lambda limit=50, cache=None: {
         "c1": {"usage": {"five_hour_reset": 2000, "seven_day_reset": 9000}}})
     pct = {"v": 10}
     gate = threading.Event()
@@ -358,7 +358,7 @@ def test_windows_by_slug_fans_out_in_parallel(monkeypatch):
         per_calls["n"] += 1
         return {"c1": {"usage": {"five_hour_reset": 2000, "seven_day_reset": 9000}},
                 "c2": {"usage": {"five_hour_reset": 1000, "seven_day_reset": 8000}}}
-    monkeypatch.setattr(MU.API, "account_usage", usage_map)
+    monkeypatch.setattr(MU.U, "account_usage", usage_map)
     monkeypatch.setattr(MU, "_login_services", lambda: ["p", "w"])
     monkeypatch.setattr(MU, "_access_token", lambda svc: "T-" + svc)
     responses = {"T-p": _usage(2000, 9000, fable=91),
@@ -379,7 +379,7 @@ def test_windows_by_slug_cached(monkeypatch):
                         lambda: (calls.update(n=calls["n"] + 1), ["svc"])[1])
     monkeypatch.setattr(MU, "_access_token", lambda svc: "T")
     monkeypatch.setattr(MU, "_get", lambda url, tok: _usage(2000, 9000))
-    monkeypatch.setattr(MU.API, "account_usage", lambda cache=None: {
+    monkeypatch.setattr(MU.U, "account_usage", lambda cache=None: {
         "c1": {"usage": {"five_hour_reset": 2000, "seven_day_reset": 9000}}})
     MU.windows_by_slug()
     MU.windows_by_slug()

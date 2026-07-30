@@ -3,17 +3,14 @@
 // cohesive files (classic scripts share one global scope; load order is set in
 // index.html). See app.13-init.js for the boot/init sequence.
 
+// the whole usage strip, every host's rows in one payload (the boot fetch + the
+// SSE-down fallback poll; the `accounts` SSE event keeps it live). A host with
+// no account switcher rides the same array — its own endpoint, poll and painter
+// are gone, and with them the one thing that never worked: it had no SSE
+// channel, so its bars only moved on the 60s poll.
 function refreshAccounts() {
   fetch("/api/accounts").then(r => r.json())
     .then(renderAccounts).catch(() => {});
-}
-
-// the codex usage strip beside the accounts one (GET /api/codex-usage). Poll-
-// only (no SSE): codex's windows are TTL-cached server-side over a bounded
-// `codex app-server` spawn, so a 60s fallback poll is plenty and never floods.
-function refreshCodexUsage() {
-  fetch("/api/codex-usage").then(r => r.json())
-    .then(renderCodexUsage).catch(() => {});
 }
 
 /* ---------- global event stream ---------- */

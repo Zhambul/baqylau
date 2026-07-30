@@ -116,8 +116,6 @@ route();
 renderAttention();
 refreshAccounts();
 setInterval(refreshAccounts, ACCOUNTS_POLL_MS);
-refreshCodexUsage();
-setInterval(refreshCodexUsage, ACCOUNTS_POLL_MS);
 setInterval(() => { if (!S.cur) renderList(true); }, LIST_REFRESH_MS);
 
 // --- presence heartbeat -------------------------------------------------------

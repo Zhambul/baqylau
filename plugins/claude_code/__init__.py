@@ -242,6 +242,42 @@ def model_windows(cache=None):
     return model_usage.windows_by_slug(cache=cache)
 
 
+def usage_strip(cache=None, limit=50):
+    """The usage-strip provider (plugins.usage_strip fan-out) — ONE ROW PER
+    SUBSCRIPTION ACCOUNT, because that is the unit Claude Code's rate limits are
+    per: each row is that account's freshest status-line snapshot in the shared
+    usage-window vocabulary, plus the picker's load-balancing signals and its
+    limit-hit / logged-out state. See usage.usage_strip (the module that now owns
+    every Anthropic window constant core/sessionapi.py used to hold)."""
+    from plugins.claude_code import usage
+    return usage.usage_strip(cache=cache, limit=limit)
+
+
+def session_usage(sid):
+    """The per-session usage provider (plugins.session_usage fan-out) — the
+    session's last status-line rate-limit snapshot, flat window keys AND the
+    shared `windows` vocabulary; None when the shim captured none. See
+    usage.session_usage."""
+    from plugins.claude_code import usage
+    return usage.session_usage(sid)
+
+
+def session_account(sid):
+    """The per-session account provider (plugins.session_account fan-out) — the
+    subscription account {slug, label} this session runs under. See
+    usage.session_account."""
+    from plugins.claude_code import usage
+    return usage.session_account(sid)
+
+
+def session_costs(sid):
+    """The per-session cost provider (plugins.session_costs fan-out) — the OTEL
+    token/cost totals, whose `query_source` taxonomy (main/subagent/auxiliary) is
+    Claude Code's own. See usage.session_costs."""
+    from plugins.claude_code import usage
+    return usage.session_costs(sid)
+
+
 def launch_argv(words, cmd="claude"):
     """The launch-shell provider (plugins.launch_argv fan-out) — the argv that
     runs an account's launch word through the user's interactive login shell.

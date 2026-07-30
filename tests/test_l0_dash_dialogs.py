@@ -22,7 +22,10 @@ import core.audit as A
 from core import paths as P
 from core import state as S
 from dashboard import server as DS
+from plugins.claude_code import account as CCACC
 from plugins.claude_code import askdialog as ASKD
+from plugins.claude_code import model_usage as CCMU
+from plugins.claude_code import usage as CCU
 from plugins.claude_code import plandialog as PLD
 from plugins.claude_code import rewindmenu as RWM
 from plugins.claude_code import suggestion as SUG
@@ -1673,7 +1676,7 @@ def test_stats_payload_aggregates_cross_session(dash, monkeypatch):
 
 def test_accounts_payload_aggregates_usage(dash, monkeypatch, tmp_path):
     # /api/accounts returns the registry + newest usage per account slug
-    monkeypatch.setattr(DS.plugins, "accounts", lambda: [
+    monkeypatch.setattr(CCACC, "registry", lambda: [
         {"slug": "", "label": "default", "alias": "claude"},
         {"slug": "c2", "label": "claude-01", "alias": "c2"}])
     A.session_start({"session_id": "accs1", "cwd": "/w", "transcript_path": ""})
@@ -1697,7 +1700,7 @@ def test_accounts_payload_aggregates_usage(dash, monkeypatch, tmp_path):
 
 
 def test_accounts_payload_serves_fresh_eff_and_limit_hit(dash, monkeypatch):
-    monkeypatch.setattr(DS.plugins, "accounts", lambda: [
+    monkeypatch.setattr(CCACC, "registry", lambda: [
         {"slug": "c1", "label": "oboard", "alias": "c1"}])
     A.session_start({"session_id": "accs2", "cwd": "/w", "transcript_path": ""})
     log = P.mirror_log("accs2")
@@ -1720,7 +1723,7 @@ def test_accounts_payload_serves_fresh_eff_and_limit_hit(dash, monkeypatch):
 def test_accounts_payload_serves_sched_signals(dash, monkeypatch):
     # the new-session picker's load-balancing signals ride the payload:
     # sched_score (weekly-quota perishability) + sched_ok (5h safety gate).
-    monkeypatch.setattr(DS.plugins, "accounts", lambda: [
+    monkeypatch.setattr(CCACC, "registry", lambda: [
         {"slug": "c1", "label": "oboard", "alias": "c1"},
         {"slug": "c2", "label": "claude-01", "alias": "c2"}])
     now = time.time()
@@ -1745,7 +1748,7 @@ def test_accounts_payload_files_limit_hit_under_its_own_slug(dash, monkeypatch):
     # still describes the OLD one — it must surface on the blocked account's
     # pill, not the healthy one's (and the migration target picker keys off
     # the same aggregation).
-    monkeypatch.setattr(DS.plugins, "accounts", lambda: [
+    monkeypatch.setattr(CCACC, "registry", lambda: [
         {"slug": "c1", "label": "oboard", "alias": "c1"},
         {"slug": "c2", "label": "claude-01", "alias": "c2"}])
     A.session_start({"session_id": "accs3", "cwd": "/w", "transcript_path": ""})
@@ -1770,8 +1773,7 @@ def test_accounts_payload_flags_a_logged_out_account(dash, monkeypatch):
     # LOGGED_OUT_GRACE_S newer (a re-login `/login` session) clears it — the
     # dying session's own post-turn snapshot does not. docs/dashboard.md
     # *Logged-out accounts*.
-    from core import sessionapi as SAPI
-    monkeypatch.setattr(DS.plugins, "accounts", lambda: [
+    monkeypatch.setattr(CCACC, "registry", lambda: [
         {"slug": "c1", "label": "oboard", "alias": "c1"}])
     A.session_start({"session_id": "accs_lo", "cwd": "/w", "transcript_path": ""})
     log = P.mirror_log("accs_lo")
@@ -1786,7 +1788,7 @@ def test_accounts_payload_flags_a_logged_out_account(dash, monkeypatch):
     assert by["c1"]["logged_out_msg"] == "run /login"
     # a re-login: a snapshot past the grace margin supersedes the stamp → clears
     S.kv_set(log, "usage", {"five_hour": 10, "five_hour_reset": now + 8000,
-                            "ts": now + SAPI.LOGGED_OUT_GRACE_S + 5})
+                            "ts": now + CCU.LOGGED_OUT_GRACE_S + 5})
     by = {r["slug"]: r for r in _get_json(dash + "/api/accounts")}
     assert by["c1"]["logged_out"] is False
     assert by["c1"]["logged_out_msg"] is None
@@ -1798,7 +1800,7 @@ def test_accounts_payload_pegs_5h_to_100_on_account_wide_limit(dash, monkeypatch
     # STALE, pre-limit capture (25% / 98 min old). Under an active ACCOUNT-WIDE
     # limit-hit the 5h bar must read 100% (the truth), not the frozen snapshot —
     # presentation-only, mirroring the model-scoped override. docs/dashboard.md.
-    monkeypatch.setattr(DS.plugins, "accounts", lambda: [
+    monkeypatch.setattr(CCACC, "registry", lambda: [
         {"slug": "c2", "label": "claude-01", "alias": "c2"}])
     A.session_start({"session_id": "accs_5h", "cwd": "/w", "transcript_path": ""})
     log = P.mirror_log("accs_5h")
@@ -1828,10 +1830,10 @@ def test_accounts_payload_merges_model_windows(dash, monkeypatch):
     # fetch) are MERGED into each account's usage alongside the tokenless 5h/7d
     # snapshot, so the generic bar renderer paints a third bar. five_hour_eff
     # keeps keying off the tokenless snapshot, never the merged-in window.
-    monkeypatch.setattr(DS.plugins, "accounts", lambda: [
+    monkeypatch.setattr(CCACC, "registry", lambda: [
         {"slug": "c1", "label": "oboard", "alias": "c1"},
         {"slug": "c2", "label": "claude-01", "alias": "c2"}])
-    monkeypatch.setattr(DS.plugins, "model_windows", lambda cache=None: {
+    monkeypatch.setattr(CCMU, "windows_by_slug", lambda cache=None: {
         "c1": {"seven_day_fable": 91, "seven_day_fable_reset": time.time() + 8000},
         "c2": {"seven_day_fable": 100, "seven_day_fable_reset": time.time() + 8000}})
     A.session_start({"session_id": "accs4", "cwd": "/w", "transcript_path": ""})
@@ -1854,11 +1856,11 @@ def test_accounts_payload_live_window_clears_model_limit_hit(dash, monkeypatch):
     # assumes a week of blockage — but the live per-model window is the fresher
     # truth: below 100% means the cap cleared (Anthropic mid-week resets), so
     # the pill drops; AT 100% the stamp stays.
-    monkeypatch.setattr(DS.plugins, "accounts", lambda: [
+    monkeypatch.setattr(CCACC, "registry", lambda: [
         {"slug": "c2", "label": "claude-01", "alias": "c2"}])
     win = {"c2": {"seven_day_fable": 100,
                   "seven_day_fable_reset": time.time() + 8000}}
-    monkeypatch.setattr(DS.plugins, "model_windows", lambda cache=None: win)
+    monkeypatch.setattr(CCMU, "windows_by_slug", lambda cache=None: win)
     A.session_start({"session_id": "accs5", "cwd": "/w", "transcript_path": ""})
     log = P.mirror_log("accs5")
     now = time.time()

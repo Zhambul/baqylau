@@ -2371,7 +2371,7 @@ New always-audited swallow sites (previously silent — their absence used to ma
   the per-account reject reasons; `pick.branch=fallback` = the transcript model
   was unreadable, same tell as the automatic path). This closed the manual
   twin of the original migration blind spot. Both paths now walk the same fable→opus→sonnet ladder
-  (`account.pick_target(cur_slug, cur_model)`, `sessionapi.model_available` per
+  (`account.pick_target(cur_slug, cur_model)`, `usage.model_available` per
   rung), so a `no target`/`no fallback account` means NO account can serve any
   rung: check each account's `state_files` `limit-hit` content — an
   ACCOUNT-WIDE stamp (`model: null`) bars every rung, a model-scoped stamp bars
@@ -2405,7 +2405,7 @@ New always-audited swallow sites (previously silent — their absence used to ma
   account's stamp under the NEW account — `account_usage` must file by the
   stamp's slug; compare the `state_files` `limit-hit` content's slug with the
   pill showing it). A usage bar stuck at `resets now` = a stale snapshot
-  served raw — `/api/accounts` serves `sessionapi.effective_usage` (ANY
+  served raw — `/api/accounts` serves `usage.effective_usage` (ANY
   window — the 5h/7d pair or a model-scoped one like `seven_day_fable` —
   whose reset passed is zeroed, reset dropped); the raw stash is still
   readable in the session's state-DB `usage` kv for comparison. A MISSING
@@ -2469,7 +2469,7 @@ New always-audited swallow sites (previously silent — their absence used to ma
   event — launch a session under it, or it stays clean), OR the session was
   UNHOSTED (no state DB — the stamp is skipped with `auth_failed: no live state
   DB`, never creating the DB), OR a `usage` snapshot for the slug that post-dates
-  the stamp by more than `sessionapi.LOGGED_OUT_GRACE_S` (60s) cleared it — the
+  the stamp by more than `plugins.claude_code.usage.LOGGED_OUT_GRACE_S` (60s) cleared it — the
   pill clears on the next successful/`/login` session by design, so compare the
   `logged-out` stamp `ts` against the account's newest `usage` kv `ts`
   (`kv_at(<state db>, 'usage')` across the slug's recent sessions, newest wins).
@@ -2485,6 +2485,26 @@ New always-audited swallow sites (previously silent — their absence used to ma
   (a rotated cached access token reads valid post-logout) and dangerous (a
   refresh-grant call can rotate/orphan the keychain token and log the account
   out) — docs/relimit.md *Logged-out accounts*.
+- **"a codex session shows no limits / its cost reads $0"** — these are READ-side
+  and add NO audit rows, so the DB will not have the answer; check the sources
+  instead. Limits: a codex session's `usage` comes from its ROLLOUT, not from a kv
+  (codex writes none) — `plugins/codex/read.usage` scans the tail for the last
+  `token_count` whose `rate_limits` is NON-NULL. Nothing shown means the rollout
+  holds no such record: grep it (`grep -c '"rate_limits"' <rollout>`), and note
+  the field is NULLABLE, so a run that has not talked to the API recently can
+  have trailing usage events without one. The LIST-page row is different
+  machinery (`codex app-server account/rateLimits/read`); when THAT is missing,
+  the app-server degrade IS audited — an `errors` row script `codex-usage`, func
+  "codex app-server account/rateLimits/read", once per TTL window (usually a
+  stripped `PATH` that finds neither `codex` nor its `node` — `usage.codex_spawn_env`).
+  Cost $0: codex never writes the `otel` table (that receiver is Claude Code's
+  telemetry), so its spend is the state DB's own scoreboard counters, priced by
+  `CODEX_PRICES` as the stream folded each turn — read `kv`/stats off the state DB
+  (`bin/claude-audit.py`), and check the `bump` rows with `meta.kind='codex'`. A
+  `total_usd: 0.0` from the OTEL sum for a codex sid was the pre-P3 bug; the
+  payload now routes through `plugins.session_costs`, which asks the OWNING host.
+  The corpus-wide Stats page is still OTEL-only and legitimately undercounts
+  non-Claude hosts (documented in docs/dashboard.md, not a bug to chase).
 - **"I couldn't submit my answer to the web ask card"** — look at the
   `web-answer` `state_files` rows (+ paired `errors` func `dashboard answer
   (<step>)`). `ok: false, step: cursor, detail: "cursor never reached Chat

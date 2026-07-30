@@ -84,7 +84,11 @@ PROVIDERS = {
     "conversation": 3,       # (sid, pos, agent_id) — ONE identity's records
     "ask_preamble": 2,       # (sid, tool_use_id)   — the ask card's preamble
     "pending_dialog": 1,     # (sid)                — a host's OPEN modal (ask)
-    "usage_windows": 0,      # ()                   — a host's rate-limit windows
+    "usage_strip": 0,        # (cache=, limit=)     — this host's usage-strip
+    #                          rows (keywords at the call site, hence 0)
+    "session_usage": 1,      # (sid)                — one session's limit windows
+    "session_account": 1,    # (sid)                — …its subscription account
+    "session_costs": 1,      # (sid)                — …its token/cost totals
 }
 
 
@@ -169,6 +173,28 @@ def _first_path(method, path, *args, **kwargs):
     first record — can tell them apart (plugins/claude_code/transcript.owns)."""
     return _first(method, path, *args, skip=lambda p: not _owns(p, path),
                   **kwargs)
+
+
+def _first_owner(method, sid, *args, default=None, **kwargs):
+    """The SID-KEYED fan-out primitive, routed by OWNERSHIP: resolve the
+    session's transcript path, and ask ONLY the host that owns it — the default
+    host when the path is empty/unclaimed (the same fail-OPEN rule
+    read/session.session_caps applies, so an unprovable session keeps behaving
+    exactly as it does today). `default` when that host has no such provider.
+
+    The sid-keyed twin of _first_path, and it exists for the same reason: these
+    providers PARSE, and a parser asked about another tool's session does not
+    fail, it answers. A session belongs to exactly ONE host, so first-plugin-wins
+    is not merely imprecise here — it is a claim by the wrong host about someone
+    else's session (a Claude OTEL sum over a codex run reads a truthful-looking
+    zero for work that really happened).
+
+    Costs one session_row() lookup per call; the read model already resolves the
+    row for every one of these payload fields, and the audit query is indexed."""
+    from core import sessionapi as API
+    tpath = (API.session_row(sid) or {}).get("transcript_path") or ""
+    fn = _named(method, owns_by(tpath) or default_host())
+    return default if fn is None else fn(sid, *args, **kwargs)
 
 
 def owns_by(path):
@@ -695,11 +721,84 @@ def pending_dialog(sid):
     return _first("pending_dialog", sid)
 
 
-def usage_windows():
-    """A host's own account rate-limit windows — {planType, windows:[{used_pct,
-    window_mins, resets_at}]} from the first plugin that has them, None otherwise.
-    Claude's per-account caps ride the status-line/model_windows path; codex has
-    no status line, so it reads them off `codex app-server`
-    account/rateLimits/read (plugins.codex.usage). Read-side; same exception
-    contract as accounts() (the caller is the read-side dashboard, not a hook)."""
-    return _first("usage_windows")
+def usage_strip(cache=None, limit=50):
+    """THE USAGE-WINDOW VOCABULARY — the one shape every host states its
+    rate limits in, and the list page's usage strip, CONCATENATED across hosts
+    (each answers for itself; [] from a host with nothing to say).
+
+    One row per thing that has its own limits — for claude_code that is one per
+    SUBSCRIPTION ACCOUNT, for codex a single host-wide reading, because that is
+    the difference between a tool with an account switcher and one without:
+
+      {
+        "host":       the owning plugin's short name — the painter's GROUPING
+                      key, so one strip can stack several hosts and each host's
+                      columns still line up within its own group,
+        "label":      the row's display name ("claude-01" / "Codex · plus"),
+        "slug":       the switcher account id, "" for a host with no accounts,
+        "switchable": may the new-session picker offer this row as an ACCOUNT?
+        "plan":       the subscription plan word, "" when the host has none,
+        "ts":         when the reading was taken (epoch), None when unknown,
+        "windows":    the limits themselves, in display order:
+            [{"key":        unique WITHIN this host's rows (the union the
+                            painter lays out as columns),
+              "label":      the host's OWN short spelling of the window — the
+                            same 10080 minutes is "7d" to Claude and "1w" to
+                            codex, and neither is wrong,
+              "used_pct":   int 0..100, or None when this row has no reading
+                            for a window a SIBLING row has (the painter ghosts
+                            the column rather than shifting the stack),
+              "resets_at":  epoch, or None when the window carries no reset,
+              "window_mins": its length,
+              "scope":      "account" (its own reset column) or "model" (a
+                            per-model cap, which resets on the account-wide
+                            window above it and would only repeat it)}],
+      }
+
+    A host with an account switcher stamps its picker/limit fields on top of
+    this (usage/five_hour_eff/sched_score/sched_ok/limit_hit/logged_out — see
+    plugins/claude_code/usage.strip_rows); a host without them serves the honest
+    empty, so ONE painter reads every row the same way.
+
+    `cache` is the caller's db_cached() memo dict and `limit` how many recent
+    sessions a per-account aggregation may scan — both are hints a host is free
+    to ignore. Read-side; same exception contract as accounts() (the caller is
+    the read-side dashboard, not a hook)."""
+    out = []
+    for p in all_plugins():
+        fn = provider(p, "usage_strip")
+        if fn is None:
+            continue
+        out += list(fn(cache=cache, limit=limit) or [])
+    return out
+
+
+def session_usage(sid):
+    """ONE session's rate-limit reading, from the host that OWNS it
+    (_first_owner) — the `windows` list of the usage-strip vocabulary above,
+    plus whatever flat fields that host's own snapshot carries; None when it has
+    no reading. Claude's is the status-line kv the shim stashed; codex's is its
+    rollout's last non-null `rate_limits`. Read-side, no audit rows."""
+    return _first_owner("session_usage", sid)
+
+
+def session_account(sid):
+    """ONE session's subscription account as {slug, label}, from the host that
+    OWNS it (_first_owner); {} when unknown or when the host has no accounts at
+    all. The header's ◈ chip. Read-side, no audit rows."""
+    return _first_owner("session_account", sid, default={})
+
+
+def session_costs(sid):
+    """ONE session's token/cost totals, from the host that OWNS it
+    (_first_owner): {"tokens": {source: {type: n}}, "cost": {source: usd},
+    "total_usd": x}. The empty envelope when no host answers.
+
+    Ownership-routed rather than first-wins because the two hosts BANK their
+    spend in different places — Claude Code in the audit `otel` table its
+    telemetry receiver fills, codex in its own scoreboard counters, priced at
+    read time by the stream that folded them — and each reads ZERO for the
+    other's work. A zero is indistinguishable from a cheap session, which is
+    exactly the kind of wrong number nobody reports."""
+    return _first_owner("session_costs", sid,
+                        default={"tokens": {}, "cost": {}, "total_usd": 0.0})

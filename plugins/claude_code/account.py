@@ -14,8 +14,8 @@
 import os
 import re
 
-from core import sessionapi as API
 from plugins.claude_code import model as M
+from plugins.claude_code import usage as U
 
 # The switcher's registry: TSV rows `slug<TAB>label<TAB>keychain-service`.
 ACCOUNTS_TSV = os.path.expanduser(
@@ -131,7 +131,7 @@ def _rank(per, model, cur_slug, skip_cur, now, ceiling, trace=None):
     `model` (a family word), or None. Skips the current account when `skip_cur`
     (the same-model rung — you never migrate a model to the account that just
     ran out of it), any account an active limit-hit bars for `model`
-    (core.sessionapi.model_available), and any account at/above the % ceiling.
+    (usage.model_available), and any account at/above the % ceiling.
     When `trace` is a list, append one record per account it considered (rung,
     slug, effective 5h, limit-hit scope, and the reject reason or None) — the
     pick-reasoning the audit records (pick_target's `explain`)."""
@@ -140,12 +140,12 @@ def _rank(per, model, cur_slug, skip_cur, now, ceiling, trace=None):
         slug = a["slug"]
         ent = per.get(slug) or {}
         hit = ent.get("limit_hit")
-        eff = API.effective_five_hour(ent.get("usage"), now)
+        eff = U.effective_five_hour(ent.get("usage"), now)
         if skip_cur and slug == cur_slug:
             reject = "current account (just ran out of this model)"
-        elif API.logged_out_active(ent.get("logged_out"), ent.get("usage")):
+        elif U.logged_out_active(ent.get("logged_out"), ent.get("usage")):
             reject = "logged out (login revoked — a resume would die on auth)"
-        elif not API.model_available(hit, model, now):
+        elif not U.model_available(hit, model, now):
             reject = "limit-hit bars this rung"
         elif ceiling is not None and eff >= ceiling:
             reject = "over %d%% 5h ceiling" % ceiling
@@ -196,7 +196,7 @@ def pick_target(cur_slug, cur_model, now=None, cache=None, ceiling=TARGET_MAX_PC
     (rung / eff5h / limit-hit scope / reject reason), and the `chosen` target —
     so a refusal is reconstructible from the audit DB, never re-derived by hand
     (docs/relimit.md *Audit trail*). Purely additive: the return is unchanged."""
-    per = API.account_usage(cache=cache)
+    per = U.account_usage(cache=cache)
     # Accept EITHER a family word (relimit's limit_model/session_model already
     # collapse to one) OR a raw model id (the dashboard passes what it reads off
     # the transcript) — family() is idempotent on a family word.
@@ -224,12 +224,12 @@ def pick_target(cur_slug, cur_model, now=None, cache=None, ceiling=TARGET_MAX_PC
         slug = a["slug"]
         ent = per.get(slug) or {}
         hit = ent.get("limit_hit")
-        eff = API.effective_five_hour(ent.get("usage"), now)
+        eff = U.effective_five_hour(ent.get("usage"), now)
         if slug == cur_slug:
             reject = "current account"
-        elif API.logged_out_active(ent.get("logged_out"), ent.get("usage")):
+        elif U.logged_out_active(ent.get("logged_out"), ent.get("usage")):
             reject = "logged out (login revoked — a resume would die on auth)"
-        elif API.limit_hit_active(hit, now):
+        elif U.limit_hit_active(hit, now):
             # The fallback branch is COARSER than the ladder on purpose: with an
             # unknown cur_model it can't prove the kept model survives a
             # model-scoped stamp, so ANY active limit-hit disqualifies (even one

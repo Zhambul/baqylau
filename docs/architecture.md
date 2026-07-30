@@ -158,7 +158,10 @@ scorebar's whole diet — same function objects, zero behavior change) plus a
 read model over the state DB (live + parked), the audit
 `sessions`/`streams`/`otel`/`errors` tables (fork-aware via `sid_chain()`),
 the tab DB, and — plugin-side, through the registry's read fan-outs — the
-transcripts; see [sessionapi.md](sessionapi.md)).
+transcripts, a session's `account`/`usage`/`costs` among them, since each of
+those is one HOST's vocabulary (subscription slugs, rate-limit windows, a
+telemetry taxonomy) and core answering them meant answering for every host with
+one host's shapes; see [sessionapi.md](sessionapi.md)).
 
 `plugins/claude_code/` is the HOST-tool adapter — everything that reads
 Claude Code's own signals: `hookkit.py` (the hook-handler harness, was
@@ -175,7 +178,16 @@ fan-out — see [dashboard.md](dashboard.md)), `account.py` (the
 subscription-account vocabulary: the switcher's env contract + `accounts.tsv`
 registry, behind `plugins.accounts`/`account_alias`), `statusline.py` (the
 status-line shim's capture half — stashes per-session 5h/7d usage + account
-from the status-line stdin, behind `bin/claude-statusline.py`), `host.py` (the
+from the status-line stdin, behind `bin/claude-statusline.py`), `usage.py` (the
+LIMITS / ACCOUNTS / COSTS read model over what statusline/relimit stashed and
+what the OTLP receiver banked: Anthropic's window LENGTHS + the rolled-over,
+effective-5h, perishability, limit-still-active and logged-out-still-active
+arithmetic, the per-account strip rows, and the OTEL `query_source` cost query —
+all of it MOVED here from `core/sessionapi.py`, which is tool-agnostic and was
+spelling one vendor's window lengths and one CLI's status-line timing as core
+constants; behind the `plugins.usage_strip`/`session_usage`/`session_account`/
+`session_costs` fan-outs, and the numbers the rate-limit migration picker runs
+on), `host.py` (the
 `plugins.host.HostControl` adapter — Claude Code drives every control gesture,
 so its derived caps read all-True; behind the `host` provider), the seven hook-handler bodies (`cmd_pre`, `cmd_fmt`,
 `file_fmt`, `subagent_fmt`, `monitor_fmt`, `task_fmt`, `stop_fmt`), the

@@ -790,6 +790,173 @@ def test_codex_spawn_env_prepends_node_bin_dirs(monkeypatch, tmp_path):
     assert parts[-2:] == ["/usr/bin", "/bin"]   # the original PATH is preserved
 
 
+# --------------------------------------------------- per-session rate limits (P3)
+
+def _token_count(rate_limits, total=1000, window=272000):
+    """A real-shaped `token_count` event. `info` is null on a RATE-LIMIT-ONLY
+    event (codex really emits those), which is why the limits are read on their
+    own rather than off the `usage` record — that record needs info."""
+    p = {"rate_limits": rate_limits}
+    if total is not None:
+        p["info"] = {"total_token_usage": {"total_tokens": total},
+                     "last_token_usage": {"total_tokens": total},
+                     "model_context_window": window}
+    else:
+        p["info"] = None
+    return _ev("token_count", **p)
+
+
+# The rate_limits block exactly as measured in rollout 019fb363 (2026-07-30):
+# snake_case, a WEEKLY primary, a null secondary, an epoch resets_at.
+_RL = {"limit_id": "codex", "limit_name": None,
+       "primary": {"used_percent": 4.0, "window_minutes": 10080,
+                   "resets_at": 1785944457},
+       "secondary": None, "credits": {"has_credits": False},
+       "plan_type": "plus", "rate_limit_reached_type": None}
+
+
+def test_codex_usage_probe_takes_the_last_non_null_rate_limits(tmp_path):
+    """read.usage scans the tail for the last token_count whose `rate_limits` is
+    non-null — NOT simply the last token_count.
+
+    The field is nullable and codex emits usage events without it, so "the
+    newest event" and "the newest event that says anything about limits" are
+    different records. Reading the newest event would report None for a session
+    that has perfectly good limits a few records back."""
+    from plugins.codex import read
+    path = _rollout(tmp_path, [
+        _token_count(dict(_RL, primary=dict(_RL["primary"], used_percent=1.0))),
+        _token_count(_RL),                       # the newest reading …
+        _token_count(None),                      # … then two that carry none
+        _token_count(None, total=None),          # (incl. the info-null shape)
+    ])
+    got = read.usage(path)
+    assert got["planType"] == "plus"
+    assert [w["window_mins"] for w in got["windows"]] == [10080]
+    assert got["windows"][0]["used_pct"] == 4.0
+    assert got["windows"][0]["resets_at"] == 1785944457
+    # a rollout with no rate_limits anywhere says so, rather than inventing zeros
+    assert read.usage(_rollout(tmp_path, [_token_count(None)])) is None
+    assert read.usage("/nope/rollout.jsonl") is None
+
+
+def test_codex_usage_probe_reads_both_windows(tmp_path):
+    """A plan with two windows yields both, primary first — the order codex
+    reports them in and the order the strip lays them out."""
+    from plugins.codex import read
+    rl = dict(_RL, primary={"used_percent": 42.4, "window_minutes": 300,
+                            "resets_at": 111},
+              secondary={"used_percent": 7.0, "window_minutes": 10080,
+                         "resets_at": 222})
+    got = read.usage(_rollout(tmp_path, [_token_count(rl)]))
+    assert [w["window_mins"] for w in got["windows"]] == [300, 10080]
+
+
+def test_codex_window_rows_speak_the_shared_vocabulary():
+    """codex's windows map into the SAME row shape Claude's do — the point of the
+    one vocabulary — but with codex's OWN labels: it names a window by its
+    DURATION (there is no key like `five_hour` in its payload), and the same
+    10080 minutes it calls "1w" Claude calls "7d". Every codex window is
+    account-wide, so each keeps its reset column; percentages are rounded
+    server-side, since only one host reported floats and the painter should not
+    have to know which."""
+    from plugins.codex import usage
+    rows = usage.window_rows([
+        {"used_pct": 42.4, "window_mins": 300, "resets_at": 111},
+        {"used_pct": 7.0, "window_mins": 10080, "resets_at": 222},
+        {"used_pct": None, "window_mins": None, "resets_at": None},
+    ])
+    assert [r["label"] for r in rows] == ["5h", "1w", "secondary"]
+    assert [r["key"] for r in rows] == ["w300", "w10080", "secondary"]
+    assert [r["used_pct"] for r in rows] == [42, 7, None]
+    assert {r["scope"] for r in rows} == {"account"}
+    assert usage.window_label(1440) == "1d" and usage.window_label(90) == "90m"
+
+
+def test_codex_strip_row_is_one_host_wide_reading():
+    """codex contributes ONE row, not one per account: it has no subscription
+    switcher, so `switchable` is False (which is what keeps it out of the
+    new-session account picker) and there is no slug. The account-switcher
+    fields are served as the honest empty so one painter reads every row the
+    same way."""
+    from plugins.codex import usage
+    row = usage.strip_row({"planType": "plus", "windows": [
+        {"used_pct": 4.0, "window_mins": 10080, "resets_at": 1785944457}]})
+    assert row["host"] == "codex" and row["switchable"] is False
+    assert row["slug"] == "" and row["label"] == "Codex · plus"
+    assert row["plan"] == "plus"
+    assert row["usage"] is None and row["limit_hit"] is None
+    assert row["logged_out"] is False
+    assert row["windows"][0]["label"] == "1w"
+    # no plan word → just the host name; no windows at all → no row (the strip
+    # shows nothing rather than an empty pill)
+    assert usage.strip_row({"windows": [{"used_pct": 1, "window_mins": 300,
+                                         "resets_at": 0}]})["label"] == "Codex"
+    assert usage.strip_row({"planType": "plus", "windows": []}) is None
+    assert usage.strip_row(None) is None
+
+
+def test_session_facets_route_to_the_OWNING_host(tmp_path, monkeypatch):
+    """plugins.session_usage / session_account / session_costs are sid-keyed and
+    routed by OWNERSHIP (_first_owner), so a codex session gets codex's answers.
+
+    This is the whole point of the routing: these providers PARSE, and the
+    Claude ones answer confidently about a session they have never seen — its
+    `usage` kv is absent (None, fine) but its OTEL sum is a truthful-looking
+    ZERO for a run that really did cost something. First-plugin-wins would have
+    served that zero."""
+    import plugins
+    from core import sessionapi as API
+    from plugins.codex import usage as CXU
+    p = _rollout(tmp_path, [_token_count(_RL)])
+    monkeypatch.setattr(API, "session_row", lambda sid: {"transcript_path": p})
+    # usage: the rollout's own last reading, in the shared vocabulary — where a
+    # PARKED session's limits stood, which the app server can no longer say
+    u = plugins.session_usage("cx1")
+    assert u["plan"] == "plus"
+    assert [w["label"] for w in u["windows"]] == ["1w"]
+    assert u["windows"][0]["used_pct"] == 4
+    # account: the minimal honest shape for a host with no switcher — no slug
+    # (nothing to switch to), just the plan, so the header chip still reads
+    assert plugins.session_account("cx1") == {"slug": "", "label": "Codex · plus"}
+    # costs: codex's OWN priced scoreboard (CODEX_PRICES folded it as the stream
+    # read each turn), reported in the same envelope the OTEL side returns —
+    # under one query_source named for the host, since codex has no
+    # main/subagent/auxiliary split to report
+    from core import ops as O
+    from core import paths as P
+    monkeypatch.setattr(P, "PREFIX", str(tmp_path) + "/claude-mirror-")
+    monkeypatch.setattr(P, "HISTORY_DIR", str(tmp_path / "park"))
+    log = P.mirror_log("cx1")
+    O.bump(log, cost=0.42, tokens=900, tk_in=500, tk_out=400)
+    costs = plugins.session_costs("cx1")
+    assert costs["total_usd"] == 0.42
+    assert costs["cost"] == {"codex": 0.42}
+    assert costs["tokens"]["codex"] == {"tk_in": 500, "tk_out": 400}
+    assert CXU.HOST == "codex"
+
+
+def test_codex_session_facets_are_silent_without_a_rollout(tmp_path, monkeypatch):
+    """A rollout that reports no limits yields None / {} — not a zeroed reading.
+    "We do not know" and "0% used" are different claims, and only one of them is
+    true here."""
+    import plugins
+    from core import sessionapi as API
+    p = _rollout(tmp_path, [_token_count(None)])
+    monkeypatch.setattr(API, "session_row", lambda sid: {"transcript_path": p})
+    assert plugins.session_usage("cx2") is None
+    assert plugins.session_account("cx2") == {}
+
+
+def test_codex_usage_strip_provider_degrades_to_no_row(monkeypatch):
+    """An unreachable app server contributes NO row (the strip simply has no
+    codex entry) — it never raises into the read-side dashboard, and the degrade
+    is audited once inside usage_windows, not here."""
+    from plugins.codex import usage
+    monkeypatch.setattr(usage, "usage_windows", lambda: None)
+    assert usage.usage_strip() == []
+
+
 def test_codex_spawn_env_override_wins(monkeypatch, tmp_path):
     from plugins.codex import usage
     over = tmp_path / "custom"

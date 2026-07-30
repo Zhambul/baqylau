@@ -12,7 +12,7 @@
 # ("Claude Code-credentials[-<hash>]"): read the access token, refresh it when
 # expired, call the endpoint, and shape the model caps into the SAME
 # `seven_day_<model>` window kv the dashboard's generic bar renderer already
-# paints (the fable-ready pipeline — sessionapi.usage_windows / app.js
+# paints (the fable-ready pipeline — usage.usage_windows / app.js
 # windowLabel). Layer: this is the CONSUMER-tier read model's helper — the
 # dashboard calls it (via plugins.model_windows); core and hooks never do (core
 # stays tokenless; account_usage/the relimit picker must not depend on an API).
@@ -52,8 +52,9 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
-from core import sessionapi as API
 from core.noaudit import load_audit
+
+from plugins.claude_code import usage as U
 
 A = load_audit()
 
@@ -318,7 +319,7 @@ def _slug_for(usage_json, per=None):
     if e7 is None:
         return None
     if per is None:
-        per = API.account_usage() or {}
+        per = U.account_usage() or {}
     cands = []
     for slug, ent in per.items():
         cu = ent.get("usage") or {}
@@ -369,7 +370,7 @@ def _recompute(cache):
     answer for every service, and the shared db_cached memo dict must not be
     hit from the pool threads. ex.map preserves service order, so slug
     collisions merge exactly as the sequential loop did."""
-    per = API.account_usage(cache=cache) or {}
+    per = U.account_usage(cache=cache) or {}
     services = _login_services()
     out = {}
     if not services:

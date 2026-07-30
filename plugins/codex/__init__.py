@@ -39,11 +39,12 @@ def on_session_start(log, cwd, sid):
 # --- the PROVIDER surface (docs/sessionapi.md; plugins.PROVIDERS declares each) ---
 # codex is now a first-class HOST and read source: it OWNS its rollouts and
 # answers the path-keyed read fan-outs for them (ctx/prompts/title/conversation/
-# effort), plus the codex-specific usage_windows + pending_dialog. Every one is a
-# thin delegation to the concern module (rollout=parse, read=rollout read models,
-# title=naming, hostctl=control, usage=app-server) — the same shape claude_code's
-# __init__ providers take. Read-only: these add NO audit rows (like ctx/goal),
-# EXCEPT usage_windows, which audits a degrade (usage.py).
+# effort), the per-session limits/account/costs facets, the usage strip, and
+# pending_dialog. Every one is a thin delegation to the concern module
+# (rollout=parse, read=rollout read models, title=naming, hostctl=control,
+# usage=limits+costs) — the same shape claude_code's __init__ providers take.
+# Read-only: these add NO audit rows (like ctx/goal), EXCEPT the app-server
+# account read behind usage_strip, which audits a degrade once (usage.py).
 
 
 def owns(path):
@@ -178,9 +179,37 @@ def pending_dialog(sid):
     return read.pending_dialog(sid)
 
 
-def usage_windows():
-    """The account rate-limit provider (plugins.usage_windows fan-out) — codex's
-    5h/weekly windows over `codex app-server` account/rateLimits/read (P6 renders
-    them), or None. See usage.usage_windows."""
+def usage_strip(cache=None, limit=50):
+    """The usage-strip provider (plugins.usage_strip fan-out) — ONE host-wide
+    row (codex has no account switcher, so there is nothing to have one row per),
+    built from `codex app-server` account/rateLimits/read. [] when codex is
+    unconfigured / unreachable. See usage.usage_strip."""
     from plugins.codex import usage
-    return usage.usage_windows()
+    return usage.usage_strip(cache=cache, limit=limit)
+
+
+def session_usage(sid):
+    """The per-session usage provider (plugins.session_usage fan-out) — this
+    run's last rate-limit reading, probed from its own ROLLOUT so a PARKED
+    session still shows where its limits stood (the app server only answers for
+    now). See usage.session_usage / read.usage."""
+    from plugins.codex import usage
+    return usage.session_usage(sid)
+
+
+def session_account(sid):
+    """The per-session account provider (plugins.session_account fan-out) — the
+    minimal shape for a host with no switcher: no slug, just the rollout's plan
+    ("Codex · plus"), or {} when it names none. See usage.session_account."""
+    from plugins.codex import usage
+    return usage.session_account(sid)
+
+
+def session_costs(sid):
+    """The per-session cost provider (plugins.session_costs fan-out) — codex's
+    own scoreboard counters, already priced by CODEX_PRICES when the stream
+    folded them. codex never reaches the `otel` table the Claude side sums, so
+    without this a codex session reports 0 for work it really did. See
+    usage.session_costs."""
+    from plugins.codex import usage
+    return usage.session_costs(sid)

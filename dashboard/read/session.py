@@ -14,8 +14,9 @@ from core import tabs
 from dashboard import config, ext, opshtml, prefs
 from dashboard.control import launch
 from dashboard.read.meta import (canon_cwd, cmd_names, git_info, session_ctx,
-                                 session_fallback, session_goal, session_kv,
-                                 session_prompts, session_title, session_slug)
+                                 session_effort, session_fallback, session_goal,
+                                 session_kv, session_prompts, session_title,
+                                 session_slug)
 
 
 def visible_agents(agents):
@@ -325,26 +326,12 @@ def session_payload(sid, agent=""):
     data["compacting"] = session_compacting(sid)
     data["cwd"] = canon_cwd(data.get("cwd") or "")   # collapse the /kitty symlink
     data["git"] = git_info(data["cwd"])
-    # the effort quick-button's label (docs/dashboard.md, *Web quick
-    # commands*). A codex session's effort is a per-turn ROLLOUT fact (its last
-    # turn_context, surfaced on `ctx.effort`) — codex has no cwd-keyed default and
-    # a `/effort` it never persists, so the ctx value is the ONLY true source and
-    # is preferred here (else the cwd default showed a stale/foreign level, e.g.
-    # `high` on a `low` codex run). Claude's `ctx` carries no effort, so it falls
-    # back to the SAVED level — every Claude `/effort` persists itself there, the
-    # last applied value, resolved for the session's ACCOUNT (its statusline-
-    # stashed slug picks the config dir — accounts each carry their own
-    # settings.json).
-    if (plugins.owns_by(_tp) or plugins.default_host()) != plugins.default_host():
-        # a NON-default host (codex): its effort is a rollout fact — the ctx
-        # probe's turn_context effort, else the path-keyed `effort` read (which
-        # needs no usage record). NEVER effort_default: that is Claude's cwd-keyed
-        # default and leaked `high` onto a `low` codex run.
-        data["effort"] = (data.get("ctx") or {}).get("effort") \
-            or plugins.effort(_tp)
-    else:
-        data["effort"] = (data.get("ctx") or {}).get("effort") \
-            or plugins.effort_default(data.get("cwd") or "", session_slug(sid))
+    # the effort quick-button's label (docs/dashboard.md, *Web quick commands*),
+    # resolved by the ONE owner of that precedence — read/meta.session_effort,
+    # shared with the resume picker and the SSE tick so the three cannot disagree
+    # (they did: two of them served Claude's cwd-keyed default for codex rows).
+    data["effort"] = session_effort(_tp, data.get("cwd") or "",
+                                    session_slug(sid), data.get("ctx"))
     # the agent cards' per-agent model·effort — reuses the ctx just stamped, so
     # the session effort resolved above is its inherit-default
     agents_model_effort(data["agents"], data["effort"])

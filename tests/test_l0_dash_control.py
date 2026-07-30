@@ -1411,19 +1411,40 @@ def test_hosts_endpoint_lists_launchable_hosts(dash):
     assert all(isinstance(h["launchable"], bool) for h in hosts)
 
 
-def test_codex_usage_endpoint_renders_stubbed_windows(dash, monkeypatch):
-    """GET /api/codex-usage renders plugins.usage_windows() for the usage strip;
-    {} when codex is unconfigured/unreachable (the strip then hides)."""
-    import plugins
-    monkeypatch.setattr(plugins, "usage_windows",
-                        lambda: {"planType": "pro",
-                                 "windows": [{"used_pct": 42, "window_mins": 300,
-                                              "resets_at": 0}]})
-    data = _get_json(dash + "/api/codex-usage")
-    assert data["planType"] == "pro"
-    assert data["windows"][0]["used_pct"] == 42
-    monkeypatch.setattr(plugins, "usage_windows", lambda: None)
-    assert _get_json(dash + "/api/codex-usage") == {}
+def test_usage_strip_is_one_payload_over_every_host(dash, monkeypatch):
+    """GET /api/accounts serves the WHOLE usage strip — every host's rows in one
+    array, in the one usage-window vocabulary — so a single painter renders it.
+
+    codex used to have an endpoint of its own (/api/codex-usage), which is
+    deleted: a host-NAMED route over a first-plugin-wins fan-out could only ever
+    describe one host, and the second one had to be a second everything (route,
+    DOM node, poll, painter, CSS). Here it is one more row, told apart by
+    `switchable` — which is also what keeps it OUT of the new-session account
+    picker, since it is not an account you can launch under."""
+    from plugins import codex as CX
+    monkeypatch.setattr(CX, "usage_strip", lambda cache=None, limit=50: [
+        {"host": "codex", "switchable": False, "slug": "", "plan": "pro",
+         "label": "Codex · pro", "ts": None,
+         "usage": None, "limit_hit": None, "logged_out": False,
+         "windows": [{"key": "w300", "label": "5h", "used_pct": 42,
+                      "resets_at": 0, "window_mins": 300, "scope": "account"}]}])
+    rows = _get_json(dash + "/api/accounts")
+    by_host = {}
+    for r in rows:
+        by_host.setdefault(r["host"], []).append(r)
+    cx = by_host["codex"]
+    assert len(cx) == 1 and cx[0]["label"] == "Codex · pro"
+    assert cx[0]["windows"][0]["used_pct"] == 42
+    assert cx[0]["switchable"] is False
+    # …and the CLAUDE rows are still there, still switchable, still carrying the
+    # picker's fields — the strip merge changed no account's wire shape
+    for r in by_host.get("claude_code", []):
+        assert r["switchable"] is True
+        assert {"slug", "usage", "five_hour_eff", "sched_score", "sched_ok",
+                "limit_hit", "logged_out", "windows"} <= set(r)
+    # a host with nothing to say contributes nothing (no empty pill)
+    monkeypatch.setattr(CX, "usage_strip", lambda cache=None, limit=50: [])
+    assert all(r["host"] != "codex" for r in _get_json(dash + "/api/accounts"))
 
 
 def _stop_rows(sid):

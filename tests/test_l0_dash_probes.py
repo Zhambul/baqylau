@@ -641,6 +641,12 @@ def test_accounts_strip_rows_stack_column_for_column():
 
     All three now render the column anyway (a ghost bar / an empty reset cell /
     a `visibility: hidden` badge), which is what these signatures pin.
+
+    The stack is per HOST GROUP, not per strip: window sets belong to a host
+    (the same 10080-minute window is Claude's "7d" and codex's "1w"), so rows of
+    different hosts deliberately do NOT share columns — unioning across them
+    would ghost a window onto a host that simply does not have it, which reads
+    as a missing reading rather than a different vocabulary.
     Skipped without `node` (docs/testing.md)."""
     node = shutil.which("node")
     if not node:
@@ -656,18 +662,20 @@ def test_accounts_strip_rows_stack_column_for_column():
     for name, case in d["cases"].items():
         rows = case["rows"]
         assert len(rows) == 2, (name, rows)
-        # every row lays out the SAME cells in the SAME order (the signature is
-        # ghost-blind and value-blind by construction — a placeholder is the
-        # same box with the ink turned down)
-        assert rows[0] == rows[1], (name, rows)
+        # rows of ONE host lay out the SAME cells in the SAME order (the
+        # signature is ghost-blind and value-blind by construction — a
+        # placeholder is the same box with the ink turned down)
+        if case["hosts"][0] == case["hosts"][1]:
+            assert rows[0] == rows[1], (name, rows)
         # every ACCOUNT-WIDE window carries its reset cell, present or empty;
         # a model-scoped one ("7d fable") carries NONE — its reset duplicates
         # the 7d bar above it, and it is dropped for the same key on every row,
         # so the stack still aligns (docs/dashboard.md *Row alignment*)
-        for bar in [c for c in rows[0] if c["kind"] == "ubar"]:
-            tail = ["ureset"] if bar["label"] in ("5h", "7d") else []
-            assert bar["cells"] == ["ulabel", "utrack", "upct"] + tail, \
-                (name, bar)
+        for row in rows:
+            for bar in [c for c in row if c["kind"] == "ubar"]:
+                tail = [] if bar["label"].startswith("7d ") else ["ureset"]
+                assert bar["cells"] == ["ulabel", "utrack", "upct"] + tail, \
+                    (name, bar)
 
     # the placeholders are where the missing data is, and NOT anywhere else
     assert d["cases"]["live_shape"]["ghosts"] == [[False] * 4, [False] * 4]
@@ -679,6 +687,17 @@ def test_accounts_strip_rows_stack_column_for_column():
     assert "7d fable—" in d["cases"]["model_window_on_one"]["text"][1]
     # the name column sizes to the widest name on the strip ("c2 · " + 19)
     assert d["cases"]["model_window_on_one"]["aname"] == "24ch"
+
+    # TWO HOSTS, one strip, one painter: each group lays out its OWN windows,
+    # and neither borrows the other's — no ghost "1w" on an account, no ghost
+    # "7d fable" on the codex row. This is what let the second endpoint, DOM
+    # node, poll and painter be deleted.
+    two = d["cases"]["two_hosts"]
+    labels = [[c["label"] for c in row if c["kind"] == "ubar"]
+              for row in two["rows"]]
+    assert labels == [["5h", "7d"], ["1w"]]
+    assert two["ghosts"] == [[False, False, False], [False, False]]
+    assert not two["hidden"]
 
 
 def test_ctx_bar_compaction_and_drain():

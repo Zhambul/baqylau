@@ -590,17 +590,82 @@ account", reproduced live) — a dead turn with no assistant reply, which read o
 the dashboard as an empty session. Both `-m` and `-c model_reasoning_effort=` now
 always ride a fresh codex launch (no reliance on the config default).
 
-### Codex usage strip
+### Codex in the usage strip (one payload, one painter)
 
-`plugins.usage_windows()` (the app-server rate limits above) renders as its OWN
-pill in the dashboard's top usage strip, BESIDE the Claude accounts —
-`GET /api/codex-usage` → `dashboard.read.lists.codex_usage_payload`, painted by
-`app.01-attention.renderCodexUsage` into `#codexusage`, poll-only on the same
-`ACCOUNTS_POLL_MS` fallback cadence (no SSE — the windows are TTL-cached over a
-bounded app-server spawn). Deliberately NOT folded into `accounts_payload`: an
-account SWITCHER registry and a single host-wide reading are different shapes, and
-`plugins.accounts()` is empty for codex. Hidden when codex is
-unconfigured/unreachable (empty payload). Labelled `Codex · <planType>`.
+Codex contributes ONE row to the dashboard's single usage strip — not a strip of
+its own. `plugins/codex/usage.usage_strip()` maps the app-server rate limits
+above into the shared usage-window vocabulary (`plugins.usage_strip`,
+docs/dashboard.md *One usage-window vocabulary, every host*) and the row rides
+`GET /api/accounts` beside the Claude accounts.
+
+What makes it a different KIND of row is two fields: `switchable: False` (codex
+has no account switcher, so it is not something the new-session picker can offer
+you a launch under) and an empty `slug`. The account-switcher fields
+(`usage`/`limit_hit`/`logged_out`) are served as the honest empty so one painter
+reads every row the same way. Labelled `Codex · <planType>`; no windows (codex
+unconfigured/unreachable) means no row at all, rather than an empty pill.
+
+Codex names a window by its DURATION, because that is all it reports — there is
+no key like Claude's `five_hour`, just `primary`/`secondary` and a length in
+minutes. So `usage.window_label` is codex's OWN vocabulary: 300 → `5h`,
+10080 → `1w`, 1440 → `1d`. The same 10080-minute window Claude calls `7d` codex
+calls `1w`, and neither is wrong — which is exactly why the label is a per-host
+FIELD of the served row rather than something the browser derives. Every codex
+window is account-wide (`scope: "account"`), so each keeps its own reset column;
+codex reports no per-model cap. Percentages are rounded server-side (codex
+reports floats, Claude ints — the painter should not have to know which).
+
+This used to be a whole parallel surface: `/api/codex-usage`,
+`codex_usage_payload`, `renderCodexUsage`, `#codexusage`, its own CSS and its own
+poll, on the argument that "an account registry and a single host reading are
+different shapes". They are — by two fields. The split's real cost was that the
+codex strip had NO SSE channel (the `accounts` event carries the accounts
+payload), so its bars moved only on the 60s fallback poll while the Claude ones
+moved live. Folding it in fixed that for free.
+
+### Per-session rate limits (the rollout probe)
+
+The app server answers for the ACCOUNT as it stands NOW, which is the right
+answer for the list strip and the wrong one for a session you are looking back
+at. So a codex session's own limits come from its ROLLOUT:
+`plugins/codex/read.usage(path)` — a bounded tail scan, the same probe family as
+`context()`, behind `plugins.session_usage(sid)`. A PARKED run therefore still
+shows where its limits stood, and a machine with no codex installed can still
+open the session.
+
+The scan looks for the last `token_count` whose **`rate_limits` is NON-NULL**,
+not simply the last `token_count`. The field is nullable and codex emits usage
+events without it, so "the newest event" and "the newest event that says anything
+about limits" are different records. It is also NOT part of the parsed `usage`
+record: codex emits a `token_count` with `info: null` on a RATE-LIMIT-ONLY event,
+which `_ev_token_count` drops entirely (it has no `total_token_usage` to report)
+— the limits ride an independently-nullable field of the same event, so
+`rollout.rate_limits(payload)` reads them on their own.
+
+Measured shape (rollout `019fb363`, 2026-07-30 — 12 of 12 `token_count` records
+carried one): snake_case `used_percent` / `window_minutes` / `resets_at` (epoch
+seconds) / `plan_type`, with `secondary: null` on a plan with one window. That is
+the same information the app server returns in camelCase
+(`usage._normalize`), and both are mapped to ONE codex-internal shape so a single
+strip mapper serves both.
+
+`plugins.session_account(sid)` is the minimal honest companion: no slug (there is
+nothing to switch to, and a slug is what the migrate/launch paths key on), just
+`{slug: "", label: "Codex · <plan>"}` so the header chip reads `◈ Codex · plus`.
+A rollout naming no plan yields `{}` and the chip is absent — better than a bare
+"Codex" claiming a subscription reading nobody has.
+
+### Codex session costs come from its own scoreboard
+
+`plugins.session_costs(sid)` for a codex session reports its state-DB scoreboard
+counters, already priced by `CODEX_PRICES` when the stream folded each turn.
+Codex never reaches the audit `otel` table — that receiver is Claude Code's
+telemetry, and its `query_source` split (main/subagent/auxiliary) is Claude
+Code's taxonomy — so the OTEL sum that answers for a Claude session returned a
+truthful-looking `total_usd: 0.0` for a codex run that really cost money. The
+envelope is the same; the single `query_source` is named for the host, since
+codex has no such split to report. (The corpus-wide Stats page still sums OTEL
+only — documented in docs/dashboard.md.)
 
 ### The "/" menu speaks codex (host-scoped slash commands)
 

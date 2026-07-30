@@ -15,7 +15,8 @@ from dashboard.config import (RESUMABLE_SCAN, SESSIONS_LIMIT, STATS_TOP_PROJECTS
 from dashboard.control import launch
 from dashboard.read.cache import MEMO_CAP, _db_cached, ttl_cached
 from dashboard.read.meta import (canon_cwd, git_info, session_ctx,
-                                 session_title, group_dir, session_slug)
+                                 session_effort, session_title, group_dir,
+                                 session_slug)
 
 
 def _last_active(row, sdb):
@@ -170,7 +171,11 @@ def resumable_payload(cwd, limit, q=""):
             "last_active": _last_active(row, sdb),
             "live": bool(row.get("live")),
             "model": (ctx or {}).get("model") or "",
-            "effort": plugins.effort_default(want, slug),
+            # the SAME host-branched resolution the session payload uses
+            # (read/meta.session_effort, the one owner): this row used to serve
+            # the DEFAULT host's cwd-keyed saved level for every session in the
+            # directory, so a codex resume row showed Claude's effort.
+            "effort": session_effort(tpath, want, slug, ctx),
             # WHICH host owns this conversation — so the resume picker can switch
             # the new-session form's tool (a codex rollout resumes with `codex
             # resume`, a claude transcript with `claude --resume`). The launch is
@@ -213,88 +218,27 @@ def row_key(wire_row):
 
 
 def accounts_payload():
-    """The launchable accounts + their latest known usage, for the new-session
-    picker AND the dashboard's top usage strip. Registry from
-    plugins.accounts(); the per-slug freshest `usage`/`limit-hit` aggregation
-    is core/sessionapi.account_usage (shared with the rate-limit migration's
-    target picker — docs/relimit.md). Per-account by construction — each
-    snapshot came from a session running under that account's own token
-    (docs/dashboard.md). No API call, no token. Everything the page shows is
-    server-computed (single-owner rule): `usage` is the EFFECTIVE snapshot
-    (sessionapi.effective_usage — a rolled-over 5h/7d window is zeroed and
-    its reset dropped, so a stale snapshot can't render 'resets now'
-    forever), `five_hour_eff` the load-balancing 5h figure the new-session
-    form preselects by, and `limit_hit` the still-active limit stamp
-    (else None).
+    """The list page's USAGE STRIP: every host's rate-limit rows, in the one
+    usage-window vocabulary (plugins.usage_strip — that fan-out's docstring owns
+    the shape). Concatenated across hosts, so ONE painter renders the whole strip
+    and a new host appears in it without a line of dashboard code.
 
-    The one exception to 'no API call': per-MODEL weekly windows (e.g.
-    `seven_day_fable`) exist in NO tokenless channel, so plugins.model_windows
-    fetches them from the OAuth /usage endpoint (piggybacking Claude Code's
-    keychain login — docs/dashboard.md 'Per-model usage bars') and they are
-    MERGED into `usage`, after which the generic renderer paints them like any
-    other window. five_hour_eff/limit_hit stay on the tokenless snapshot; the
-    merge only ADDS windows, so a missing/failed fetch simply omits them.
+    Claude Code contributes one row per SUBSCRIPTION ACCOUNT (the unit its limits
+    are per), which is why the route is still `/api/accounts` and why those rows
+    still carry the new-session picker's fields (`slug`, `five_hour_eff`,
+    `sched_score`, `sched_ok`, `limit_hit`, `logged_out`) — the picker reads the
+    same payload and offers the rows marked `switchable`. codex contributes ONE
+    host-wide row: it has no account switcher, so there is nothing to have a row
+    per, and it is `switchable: False`. That asymmetry used to be a whole second
+    endpoint (`/api/codex-usage`), a second DOM node and a second painter; it is
+    now two fields.
 
-    One live-data override on the pill: a MODEL-scoped limit_hit stamp carries
-    no reset epoch (the CLI message doesn't state one), so limit_hit_active
-    falls back to 'blocked for a week from the hit'. When the fetched live
-    window for that very model reads BELOW 100%, the cap has demonstrably
-    cleared (Anthropic resets limits mid-week sometimes — reported
-    2026-07-20), so the stale stamp is dropped here. Dashboard-presentation
-    only — core (the relimit target picker) stays tokenless and keeps its
-    conservative week-long fallback."""
-    per = API.account_usage(SESSIONS_LIMIT, cache=_ACCT)
-    model_win = plugins.model_windows(cache=_ACCT)
-    out = []
-    for a in plugins.accounts():
-        ent = per.get(a["slug"]) or {}
-        usage, hit = ent.get("usage"), ent.get("limit_hit")
-        mw = model_win.get(a["slug"])
-        if mw:                                   # per-model windows the tokenless
-            usage = dict(usage or {}, **mw)      # snapshot can't carry
-        active = API.limit_hit_active(hit)
-        if active and (hit or {}).get("model"):
-            pct = (mw or {}).get("seven_day_%s" % hit["model"])
-            if isinstance(pct, (int, float)) and pct < 100:
-                active = False                   # live window says the cap cleared
-        eff_usage = API.effective_usage(usage)
-        if active and not (hit or {}).get("model"):
-            # An active ACCOUNT-WIDE limit-hit ("session limit") means the 5h
-            # window is MAXED right now, but the tokenless status-line snapshot
-            # froze BELOW 100: it lags the block (~13s, the header the JSON
-            # never carries) and — the reported bug — once the session MIGRATED
-            # to another account its state DB was re-stamped to the NEW account
-            # (adopt.py), so this account's freshest snapshot is whatever a
-            # stale/older session last captured (measured: 98 min old / 25% for a
-            # migrated c2 sitting at its cap, so the bar read 25% under a "limit
-            # hit" chip). The account-wide session limit resets on the 5h window
-            # (relimit sources the stamp's resets_at from five_hour_reset), so
-            # peg the 5h bar to 100% + the limit's own reset. Presentation-only,
-            # like the model-scoped override above — the tokenless snapshot and
-            # the relimit target picker stay honest (docs/dashboard.md).
-            eff_usage = dict(eff_usage or {}, five_hour=100)
-            if hit.get("resets_at"):
-                eff_usage["five_hour_reset"] = hit["resets_at"]
-        # LOGGED OUT (the account's OAuth login was revoked/expired — a session
-        # on it died on error='authentication_failed', relimit's `logged-out`
-        # stamp). Server-computed via sessionapi.logged_out_active, which clears
-        # it the moment a fresher usage snapshot for the slug appears (a re-login
-        # `/login` session) — docs/dashboard.md *Logged-out accounts*.
-        lo = ent.get("logged_out")
-        logged_out = API.logged_out_active(lo, ent.get("usage"))
-        out.append(dict(
-            a, usage=eff_usage,
-            five_hour_eff=API.effective_five_hour(ent.get("usage")),
-            # the new-session picker's load-balancing signals: sched_score is the
-            # weekly-quota perishability it ranks by, sched_ok the 5h session-
-            # safety gate it filters on (core/sessionapi, docs/dashboard.md
-            # *Default account*). Server-computed; the page never re-derives them.
-            sched_score=API.sched_score(usage),
-            sched_ok=API.sched_ok(ent.get("usage")),
-            limit_hit=hit if active else None,
-            logged_out=logged_out,
-            logged_out_msg=(lo or {}).get("msg") if logged_out else None))
-    return out
+    All server-computed (single-owner rule): the page renders the served numbers
+    and labels — including each window's own SHORT LABEL, since the same 10080
+    minutes is "7d" to one host and "1w" to another and only the host knows which.
+    Read-only, adds NO audit rows (a codex app-server degrade is audited once in
+    plugins/codex/usage.py, never here)."""
+    return plugins.usage_strip(cache=_ACCT, limit=SESSIONS_LIMIT)
 
 
 def accounts_key(payload):
@@ -308,21 +252,6 @@ def accounts_key(payload):
     when a snapshot, stamp, or window boundary actually moves."""
     return json.dumps([{k: v for k, v in a.items() if k != "sched_score"}
                        for a in payload], default=str, sort_keys=True)
-
-
-def codex_usage_payload():
-    """The codex host's account rate-limit windows for the top usage strip,
-    shown BESIDE the Claude accounts (docs/dashboard.md *Codex usage strip*). A
-    DEDICATED read surface, deliberately NOT folded into accounts_payload: codex
-    has no account SWITCHER (plugins.accounts is empty for it), so its usage is a
-    single host-wide reading, not a per-account registry. Reads codex's own
-    windows off `codex app-server` account/rateLimits/read through the
-    plugins.usage_windows fan-out (bounded + TTL-cached in plugins.codex.usage; a
-    failure is audited THERE, once, never here). Returns {planType, windows:
-    [{used_pct, window_mins, resets_at}]}, or {} when codex is unconfigured /
-    unreachable / not installed (the strip then renders nothing). Read-only, adds
-    NO audit rows (like accounts_payload/ctx)."""
-    return plugins.usage_windows() or {}
 
 
 # The stats aggregate's TTL memo (read/cache.ttl_cached, keyed by the single

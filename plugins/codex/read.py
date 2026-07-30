@@ -118,6 +118,40 @@ def context(path, main=False):
             "effort": effort}
 
 
+def usage(path):
+    """The rollout's LAST rate-limit reading — codex's per-SESSION twin of
+    Claude's status-line snapshot, as {"planType", "windows": [{used_pct,
+    window_mins, resets_at}]}; None when the tail holds none. The same probe
+    family as context(): one bounded tail read, newest record wins, no audit
+    rows.
+
+    The scan is for the last `token_count` whose `rate_limits` IS NON-NULL, not
+    simply the last token_count: the field is nullable and codex emits plenty of
+    usage events without it, so "the newest event" and "the newest event that
+    says anything about limits" are different records (12/12 carried one in the
+    measured rollout, but a run that has not talked to the API since its last
+    compaction has trailing events that do not).
+
+    This is what makes a codex session's limit bars real: the ACCOUNT-level twin
+    (plugins/codex/usage.usage_windows, over `codex app-server`) answers for the
+    list-page strip, but a PARKED session has no app server to ask and its
+    rollout is the only surviving record of where its limits stood."""
+    lines = TL.tail_lines(path, CTX_TAIL_B)
+    if lines is None:
+        return None
+    for raw in reversed(lines):
+        if b'"token_count"' not in raw or b'"rate_limits"' not in raw:
+            continue
+        try:
+            payload = (json.loads(raw).get("payload") or {})
+        except Exception:
+            continue
+        got = RO.rate_limits(payload)
+        if got:
+            return got
+    return None
+
+
 def codex_effort(path):
     """The LAST `turn_context`'s reasoning-effort token (low/medium/high/xhigh/
     max/ultra), or "" — the newest wins (a mid-session switch is reflected).

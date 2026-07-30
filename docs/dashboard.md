@@ -171,19 +171,23 @@ own model. An owner the dashboard can't launch (an unclaimed transcript, a tool
 with no host) is a 409. The web-launch audit row names the launching `tool`. See
 docs/codex.md *Launching & resuming codex from the web*.
 
-**Codex usage strip.** Codex has no account SWITCHER (`plugins.accounts` is empty
-for it), so its rate limits are ONE host-wide reading rendered as its own pill in
-the top usage strip, directly beside the Claude accounts — `GET /api/codex-usage`
-→ `read/lists.codex_usage_payload` over the `plugins.usage_windows` fan-out
-(`codex app-server` `account/rateLimits/read`, bounded + TTL-cached in
-`plugins.codex.usage`; a degrade is audited THERE, once, never in the read model),
-painted by `app.01-attention.renderCodexUsage` into `#codexusage`. Poll-only on
-the same `ACCOUNTS_POLL_MS` fallback cadence as the accounts strip — no SSE, since
-the windows are already TTL-cached over a bounded app-server spawn. Labelled
-`Codex · <planType>`; hidden entirely when Codex is unconfigured/unreachable (an
-empty payload). Deliberately NOT folded into `accounts_payload`: an account
-registry and a single host reading are different shapes. Read-only, adds no audit
-rows (like `accounts_payload`/ctx/goal).
+**Codex in the usage strip.** Codex's rate limits are ONE host-wide reading (it
+has no account SWITCHER), and they ride the SAME strip as the Claude accounts —
+one payload, one painter. See *Accounts & usage* below; the codex row is
+`plugins/codex/usage.strip_row` over `codex app-server`
+`account/rateLimits/read`, marked `switchable: False` and labelled
+`Codex · <planType>`.
+
+This used to be a strip of its own — `GET /api/codex-usage` →
+`codex_usage_payload` → `renderCodexUsage` → `#codexusage`, with its own CSS and
+its own poll, welded flush under the accounts strip so the two would READ as one.
+All of it is deleted. The argument for a separate surface was that "an account
+registry and a single host reading are different shapes", which is true and turns
+out to be two FIELDS (`switchable`, and a `slug` that is empty), not two of
+everything. What the split actually cost was visible: the codex strip had no SSE
+channel, because the `accounts` event carries the accounts payload — so its bars
+only moved on the 60s fallback poll while the Claude ones moved live. Folding it
+in fixed that for free.
 
 **The POST tables hold the handler FUNCTIONS, not method-name strings.** That is
 what let the control plane split: a table that can only name methods of `self`
@@ -2102,6 +2106,18 @@ terminal-side `/effort` reaches the open page on the SSE slow cadence). The
 honest residual: a session started with `--effort X` that never ran
 `/effort` shows the saved default, not X — that flag is recorded nowhere
 readable.
+
+**One owner: `read/meta.session_effort(tpath, cwd, slug, ctx)`.** The precedence
+above (the ctx probe's own effort → the path-keyed `plugins.effort` → the
+cwd-keyed `plugins.effort_default`) is stated ONCE, and the last step is gated
+on the DEFAULT host owning the session. That gate is the point: `effort_default`
+is cwd-keyed, and a cwd-keyed fan-out cannot be ownership-gated
+(first-TRUTHY-wins), so the default host's saved settings answer for any session
+opened in that directory. Three surfaces resolve this and only one of them had
+the branch — the RESUME PICKER served Claude's saved level for every codex row
+in the folder, and the SSE `effort` channel overwrote the correct value one slow
+tick after load. The first argument is the transcript PATH, so the ownership
+question can be asked at all.
 
 `POST /api/sessions/new` `{"cwd", "model"?, "effort"?, "prompt"?}` validates
 `cwd` is an existing directory (`os.path.isdir`, else `400`), `model` against
@@ -4448,6 +4464,66 @@ the list over the stats page.
 
 ## Accounts & usage
 
+### One usage-window vocabulary, every host (`plugins.usage_strip`)
+
+The list page's top strip is EVERY host's rate limits, in one payload and one
+painter. The vocabulary is owned by the `plugins.usage_strip()` fan-out's
+docstring, and the fan-out is a CONCAT: each host answers for itself and a host
+with nothing to say contributes nothing.
+
+One row per thing that HAS its own limits — which is per SUBSCRIPTION ACCOUNT for
+Claude Code and one host-wide reading for codex, the difference between a tool
+with an account switcher and one without:
+
+```
+{host, label, slug, switchable, plan, ts,
+ windows: [{key, label, used_pct, resets_at, window_mins, scope}]}
+```
+
+- **`host`** is the painter's GROUPING key. Columns are unioned WITHIN a host,
+  never across: window sets belong to a host, and the same 10080 minutes is
+  Claude's `7d` and codex's `1w`. Unioning across hosts would ghost a window onto
+  a host that simply does not have one, which reads as a missing reading rather
+  than a different vocabulary.
+- **`label`** is per host, and so is each window's **`label`** — the server owns
+  every string the strip shows (the browser used to derive both, in two different
+  client-side functions, one per host).
+- **`scope`** (`account` | `model`) is what tells the painter whether a window
+  owns a reset column. A per-model weekly cap resets on the same clock as the
+  account-wide `seven_day` bar above it, so repeating it was pure duplication —
+  and the rule has to come from the server, because only the host knows which of
+  its windows is a cap under another one.
+- **`used_pct`** is an int (rounded server-side — only one host reported floats)
+  or `None`, which the painter GHOSTS: a column a sibling row has and this one
+  does not still renders, or the stack stops aligning (*Row alignment*).
+- **`switchable`** marks a row that is a real account you can launch under. It is
+  what keeps the codex row out of the new-session account picker, and it is the
+  entire remaining difference between "an account registry" and "a host reading".
+
+A host with a switcher stamps its picker/limit fields on top (`usage`,
+`five_hour_eff`, `sched_score`, `sched_ok`, `limit_hit`, `logged_out`); a host
+without them serves the honest empty, so one painter reads every row the same
+way. The route is still `GET /api/accounts` — Claude's accounts are most of what
+it carries, and the name kept the whole client half working unchanged.
+
+Everything is server-computed, per the single-owner rule: the page renders served
+numbers and served words, and re-derives nothing. Read-only, no audit rows (like
+ctx/goal); a codex app-server degrade is audited once inside
+`plugins/codex/usage.py`, never in the read model.
+
+**Where the numbers live.** The Anthropic window LENGTHS (5h/7d), the rolled-over
+arithmetic, the scheduling gates and the limit-hit semantics are
+`plugins/claude_code/usage.py` — they were in `core/sessionapi.py`, which calls
+itself tool-agnostic while spelling one vendor's window lengths, one vendor's
+model ladder and one CLI's status-line re-render timing as core constants. Core
+keeps the generic machinery those stand on (`sessions()`, `session_db()`,
+`db_cached()`, the audit query helpers). The arithmetic itself moved VERBATIM:
+the rate-limit migration's target picker (`account.pick_target`,
+docs/relimit.md) runs on exactly these functions, and a drift here silently
+migrates a session onto a blocked account.
+
+### The Claude subscription accounts
+
 The machine juggles several Claude subscriptions through the `claude-subscription`
 wrapper (github.com/leegunwoo98/claude-code-account-switcher; the user's `c1`/`c2`
 zsh aliases). Each `claude-subscription <slug>` exports `CLAUDE_SUBSCRIPTION_SLUG`
@@ -4528,6 +4604,60 @@ its dropdown label.
 SessionStart (`split.cmd_open` → `state.kv_set("account", account.current())`,
 read from the env contract — no token touched) and shown in the session header
 (`◈ c2 · claude-01`) and the terminal scoreboard's id row.
+
+### Per-session limits, for whichever host owns the session
+
+The header chip's account name and its `5h 12% · 7d 40%` tail are both the
+OWNING host's answers — `plugins.session_account(sid)` and
+`plugins.session_usage(sid)`, sid-keyed and routed by ownership
+(`plugins._first_owner`). Claude Code answers from the status-line kv; codex
+answers from its ROLLOUT (docs/codex.md *Per-session rate limits*), which is why
+a parked codex session can still say where its limits stood — the app server
+only speaks for now, and a machine without codex installed can still open the
+session.
+
+The chip reads `usage.windows` — the shared vocabulary — not Claude's flat
+`five_hour`/`seven_day` keys, which no other host has. For a Claude session the
+rendered text is unchanged: its `windows` list carries the same two account-scope
+windows with the same labels, and the flat keys are still served verbatim beside
+it (the account picker and every older reader know that shape). Only
+ACCOUNT-scope windows reach the chip: a per-model weekly cap belongs on the
+strip, not in a one-line header.
+
+A host with no account switcher says what it can rather than blanking: codex
+serves `{slug: "", label: "Codex · plus"}`, so the chip reads `◈ Codex · plus`.
+An empty `{}` (no plan in the rollout) hides the chip — the honest answer, rather
+than a bare "Codex" claiming a subscription reading nobody has.
+
+### Session costs are the owning host's too (`plugins.session_costs`)
+
+`session()["costs"]` — `{tokens: {source: {type: n}}, cost: {source: usd},
+total_usd}` — is answered by the host that owns the session, for one reason: the
+two hosts BANK their spend in different places and each reads ZERO for the
+other's. Claude Code's costs are the audit `otel` table, filled by a receiver
+only Claude Code sessions spawn and grouped by ITS `query_source` taxonomy
+(main/subagent/auxiliary). Codex never reaches that table — it prices each turn
+with `CODEX_PRICES` as its stream folds it and banks the result in the session's
+own scoreboard counters, which is what its provider reports (under one
+`query_source` named for the host: codex has no main/subagent/auxiliary split).
+
+Summing OTEL for a codex session returned `total_usd: 0.0`, and a zero is
+indistinguishable from a cheap session — exactly the kind of wrong number nobody
+reports. (The session card's cost figure happened to look right anyway, because
+the JS falls back to the scoreboard's own `stats.cost` when `total_usd` is
+falsy; the fallback was masking the payload, not fixing it.)
+
+**Known limitation — the Stats page still undercounts non-Claude hosts.** The
+Stats / Insights aggregates (`activity_stats`) sum the `otel` table across the
+WHOLE corpus in two indexed `GROUP BY`s, so a codex session contributes 0 tokens
+and $0 there even though its own session page is now correct. Fixing it honestly
+means reading each session's state DB — one SQLite open per row, over every
+session that ever ran (`activity_stats` takes no limit), against one indexed
+query today. That is a real cost for a page whose other numbers are session
+COUNTS, so it is documented rather than paid: the per-session figure is right,
+the corpus token/cost totals are Claude-Code-only. A cheap fix would need codex's
+spend in a durable cross-session store — which is what `otel` is, and writing to
+it is a write path, not a read model.
 
 **Usage limits (5h / 7d).** Claude Code exposes per-session rate-limit data to
 exactly ONE place — the **status-line command's stdin** JSON

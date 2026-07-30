@@ -242,6 +242,39 @@ def session_ctx(tpath, main=False):
     return size_cached(_CTX, tpath, lambda: plugins.context(tpath, main=main))
 
 
+def session_effort(tpath, cwd="", slug="", ctx=None):
+    """The session's reasoning-effort level, resolved for whichever host OWNS
+    it — the ONE owner of that resolution (docs/styleguide.md single-owner
+    table), called by the session payload, the resume picker, and the SSE tick.
+
+    Precedence, most specific first:
+      1. the ctx probe's own `effort`, when the caller already holds one (a
+         codex rollout's last turn_context carries it; a Claude transcript
+         never does),
+      2. the path-keyed `plugins.effort` — the owning host's answer from its
+         own file,
+      3. the cwd-keyed `plugins.effort_default`, and ONLY when the DEFAULT host
+         owns the session.
+
+    That last gate is the whole point. `effort_default` is cwd-keyed, and a
+    cwd-keyed fan-out cannot be ownership-gated — first-TRUTHY-wins means the
+    default host's saved settings answer for ANY session opened in that
+    directory, which is how `high` was shown on a `low` codex run. The session
+    payload already had this branch; the resume picker (read/lists) did not and
+    served Claude's saved level for every codex resume row, and the SSE effort
+    channel did not either and OVERWROTE the correct value one slow tick after
+    load. Three call sites, one rule, stated here once.
+
+    Returns "" when nothing is known — the caller shows no level rather than a
+    borrowed one."""
+    eff = (ctx or {}).get("effort") or plugins.effort(tpath)
+    if eff:
+        return eff
+    if (plugins.owns_by(tpath) or plugins.default_host()) != plugins.default_host():
+        return ""
+    return plugins.effort_default(cwd or "", slug)
+
+
 _GOAL = API.BoundedLRU(MEMO_CAP)   # transcript_path -> (size, goal): same
 #                   (path, size) cache key as _CTX — the active /goal only
 #                   changes when the transcript grows, so the list/session

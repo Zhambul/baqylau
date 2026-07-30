@@ -361,6 +361,40 @@ def _ev_token_count(p):
             "window": win if isinstance(win, int) else None}
 
 
+def rate_limits(p):
+    """A `token_count` payload's `rate_limits` block, normalized to codex's
+    windows shape — {"planType", "windows": [{used_pct, window_mins,
+    resets_at}]} — or None when the event carries none (the field is NULLABLE)
+    or names no window.
+
+    Deliberately NOT part of the `usage` record and NOT in the `_EVENT` table:
+    codex emits a token_count with `info: null` on a RATE-LIMIT-ONLY event, which
+    _ev_token_count drops entirely because it has no total_token_usage to report.
+    The limits ride a different, independently-nullable field of the same event,
+    so they are read on their own (plugins/codex/read.usage — the bounded tail
+    probe for the last event that HAS them).
+
+    Measured shape (rollout 019fb363, 2026-07-30): snake_case `used_percent` /
+    `window_minutes` / `resets_at` (epoch seconds) / `plan_type`, `secondary`
+    null on a plan with one window. That is the same information the app server
+    returns in camelCase (plugins/codex/usage._normalize), and both are mapped
+    here to ONE codex-internal shape so a single strip mapper serves both."""
+    rl = p.get("rate_limits")
+    if not isinstance(rl, dict):
+        return None
+    wins = []
+    for key in ("primary", "secondary"):
+        w = rl.get(key)
+        if not isinstance(w, dict):
+            continue
+        wins.append({"used_pct": w.get("used_percent"),
+                     "window_mins": w.get("window_minutes"),
+                     "resets_at": w.get("resets_at")})
+    if not wins:
+        return None
+    return {"planType": rl.get("plan_type") or "", "windows": wins}
+
+
 def _ev_patch_apply_end(p):
     # The authoritative file-op record: RESOLVED absolute paths + per-file
     # diffs. The apply_patch call itself (a `patch_call` record, from either

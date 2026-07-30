@@ -99,6 +99,12 @@ function render(list) {
     text: $accounts.children.map(r => r.textContent),
     aname: $accounts.style.getPropertyValue("--aname-w"),
     hidden: $accounts.hidden === true,
+    // which HOST each rendered row belongs to, in render order — the stacking
+    // rule is per host GROUP (columns are a host's own window set), so the
+    // python assertions need to know where one group ends. Taken from the
+    // fixture, not the DOM: the row carries no host marker on screen, and it
+    // should not — the grouping is layout, not something to label.
+    hosts: (list || []).map(a => a.host),
   };
 }
 
@@ -109,16 +115,33 @@ function step(name, fn) {
   catch (e) { out.ok = false; out.errors.push(name + ": " + e.message); }
 }
 
+/* The rows are served in the shared usage-window vocabulary
+   (plugins.usage_strip): `windows` is the LIST the painter lays out, each entry
+   carrying its own label, reset and `scope` — the server decides those, since
+   only the owning host knows whether a window is account-wide (its own reset
+   column) or a per-model cap under one. The flat `usage` dict rides along for
+   the new-session account picker and is deliberately NOT what the strip reads.
+   Fixtures state both, exactly as the server serves them. */
+const W = (key, label, pct, reset, mins, scope) => ({
+  key, label, used_pct: pct, resets_at: reset, window_mins: mins, scope,
+});
+const H5 = (pct, reset) => W("five_hour", "5h", pct, reset, 300, "account");
+const D7 = (pct, reset) => W("seven_day", "7d", pct, reset, 10080, "account");
+const F7 = (pct, reset) =>
+  W("seven_day_fable", "7d fable", pct, reset, 10080, "model");
+
 // (1) The reported shape, verbatim from a live /api/accounts: c1 is the busy
 // account (every window used, every reset present); c2 has been idle, so its
 // 5h window ROLLED OVER — effective_usage zeroed it and dropped its reset —
 // and its 7d reset is a DAY away where c1's is hours.
 step("live_shape", () => render([
-  { slug: "c1", label: "oboard",
+  { host: "claude_code", slug: "c1", label: "oboard",
+    windows: [H5(60, now + 3600), D7(97, now + 10222), F7(32, now + 10222)],
     usage: { five_hour: 60, five_hour_reset: now + 3600,
              seven_day: 97, seven_day_reset: now + 10222, ts: now,
              seven_day_fable: 32, seven_day_fable_reset: now + 10222 } },
-  { slug: "c2", label: "claude-01",
+  { host: "claude_code", slug: "c2", label: "claude-01",
+    windows: [H5(0, null), D7(82, now + 89422), F7(56, now + 89422)],
     usage: { five_hour: 0,
              seven_day: 82, seven_day_reset: now + 89422, ts: now,
              seven_day_fable: 56, seven_day_fable_reset: now + 89422 } },
@@ -127,11 +150,13 @@ step("live_shape", () => render([
 // (2) The per-model window attached to ONE account only (the OAuth //usage
 // fetch matches a slug by its 7d epoch and can miss — docs/dashboard.md).
 step("model_window_on_one", () => render([
-  { slug: "c1", label: "oboard",
+  { host: "claude_code", slug: "c1", label: "oboard",
+    windows: [H5(60, now + 3600), D7(97, now + 10222), F7(32, now + 10222)],
     usage: { five_hour: 60, five_hour_reset: now + 3600,
              seven_day: 97, seven_day_reset: now + 10222, ts: now,
              seven_day_fable: 32, seven_day_fable_reset: now + 10222 } },
-  { slug: "c2", label: "a-much-longer-label",
+  { host: "claude_code", slug: "c2", label: "a-much-longer-label",
+    windows: [H5(12, now + 900), D7(82, now + 89422)],
     usage: { five_hour: 12, five_hour_reset: now + 900,
              seven_day: 82, seven_day_reset: now + 89422, ts: now } },
 ]));
@@ -139,12 +164,31 @@ step("model_window_on_one", () => render([
 // (3) One account LOGGED OUT: its ⚠ badge sits before the bars, so the healthy
 // row has to reserve the same slot or its bars start a badge-width to the left.
 step("one_logged_out", () => render([
-  { slug: "c1", label: "oboard", logged_out: true, logged_out_msg: "run /login",
+  { host: "claude_code", slug: "c1", label: "oboard",
+    logged_out: true, logged_out_msg: "run /login",
+    windows: [H5(60, now + 3600), D7(97, now + 10222)],
     usage: { five_hour: 60, five_hour_reset: now + 3600,
              seven_day: 97, seven_day_reset: now + 10222, ts: now } },
-  { slug: "c2", label: "claude-01",
+  { host: "claude_code", slug: "c2", label: "claude-01",
+    windows: [H5(0, null), D7(82, now + 89422)],
     usage: { five_hour: 0, seven_day: 82, seven_day_reset: now + 89422,
              ts: now } },
+]));
+
+// (4) TWO HOSTS in one strip — the whole reason the codex-only endpoint, DOM
+// node, poll and painter could go. Window sets are per host, so the column
+// union must be per host too: unioning across them would ghost Claude's "7d
+// fable" onto the codex row and codex's "1w" onto both accounts, which is not
+// a missing reading — it is a window that host does not have. The codex row is
+// a plain row with no slug and no switcher fields.
+step("two_hosts", () => render([
+  { host: "claude_code", slug: "c1", label: "oboard",
+    windows: [H5(60, now + 3600), D7(97, now + 10222)],
+    usage: { five_hour: 60, five_hour_reset: now + 3600,
+             seven_day: 97, seven_day_reset: now + 10222, ts: now } },
+  { host: "codex", slug: "", label: "Codex · plus", switchable: false,
+    plan: "plus", usage: null, limit_hit: null, logged_out: false,
+    windows: [W("w10080", "1w", 4, now + 522456, 10080, "account")] },
 ]));
 
 /* ---------- the reset column's width ------------------------------------

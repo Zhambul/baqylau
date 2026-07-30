@@ -419,6 +419,57 @@ def test_resumable_endpoint_dir_scoped_enriched(dash, monkeypatch):
     assert _get_json(dash + "/api/resumable?cwd=/nope") == []
 
 
+def test_session_effort_is_one_owner_and_never_borrows_another_hosts_default(
+        monkeypatch):
+    """read/meta.session_effort is the ONE resolution of a session's effort, and
+    the cwd-keyed default is gated on OWNERSHIP.
+
+    `plugins.effort_default` is cwd-keyed, and a cwd-keyed fan-out cannot be
+    ownership-gated (first-TRUTHY-wins): the default host's saved settings answer
+    for ANY session opened in that directory. The session payload had the branch;
+    the RESUME PICKER did not, and served Claude's saved `high` for every codex
+    row in the folder (bug 12) — the same class as the SSE channel that
+    overwrote the right value one tick after load. One owner, three callers."""
+    from dashboard.read import meta
+    monkeypatch.setattr(plugins, "effort_default", lambda cwd, slug="": "high")
+    monkeypatch.setattr(plugins, "effort", lambda tp: "low" if "roll" in tp else "")
+    monkeypatch.setattr(plugins, "owns_by",
+                        lambda tp: "codex" if "roll" in tp else "claude_code")
+    # a NON-default host: its own path-keyed answer, and NEVER the cwd default
+    assert meta.session_effort("/x/rollout.jsonl", "/proj", "c1") == "low"
+    monkeypatch.setattr(plugins, "effort", lambda tp: "")
+    assert meta.session_effort("/x/rollout.jsonl", "/proj", "c1") == ""
+    # the DEFAULT host still falls back to its saved level (unchanged behaviour)
+    assert meta.session_effort("/x/chat.jsonl", "/proj", "c1") == "high"
+    # an unprovable path behaves as the default host does — the fail-OPEN rule
+    monkeypatch.setattr(plugins, "owns_by", lambda tp: None)
+    assert meta.session_effort("", "/proj", "c1") == "high"
+    # the ctx probe's own effort outranks both (a codex rollout records it
+    # per turn, which is fresher than anything a settings file knows)
+    monkeypatch.setattr(plugins, "owns_by", lambda tp: "codex")
+    assert meta.session_effort("/x/rollout.jsonl", "/proj", "c1",
+                               {"effort": "xhigh"}) == "xhigh"
+
+
+def test_resumable_rows_resolve_effort_through_that_one_owner(dash, monkeypatch):
+    """The resume picker's `effort` column comes from session_effort — so a row
+    for a session the default host does not own no longer shows the default
+    host's saved level (bug 12)."""
+    from dashboard.read import lists
+    seen = []
+    monkeypatch.setattr(lists, "session_effort",
+                        lambda tp, cwd="", slug="", ctx=None:
+                        (seen.append((tp, cwd, slug)), "medium")[1])
+    A.session_start({"session_id": "rzeff", "cwd": "/effproj",
+                     "transcript_path": "/effproj/rollout.jsonl"})
+    rows = _get_json(dash + "/api/resumable?cwd=/effproj")
+    assert [r["effort"] for r in rows] == ["medium"]
+    # …called with the row's OWN transcript path first (path-keyed, so the
+    # ownership gate inside it can fire), then the cwd and account slug
+    assert seen and seen[0][0] == "/effproj/rollout.jsonl"
+    assert seen[0][1] == "/effproj"
+
+
 def test_resumable_search_across_history(dash):
     """?q= searches the directory's WHOLE history (title + sid), not just the
     loaded rows — the fix for 'search does not search all history'. Here we match
@@ -1565,14 +1616,18 @@ def test_accounts_strip_sse_push_is_score_blind(dash, monkeypatch):
     push perpetually on an idle dashboard. Connect pushes nothing (the page
     boot-fetches /api/accounts); a real usage change pushes a payload that
     still carries the exact score."""
-    from core import sessionapi as API_MOD
+    from plugins.claude_code import account as CCACC
+    from plugins.claude_code import usage as CCU
     monkeypatch.setattr(DS.config, "GLOBAL_TICK_S", 0.05)
     now = time.time()
     usage = {"ts": now, "five_hour": 12, "five_hour_reset": now + 3600,
              "seven_day": 40, "seven_day_reset": now + 86400}
-    monkeypatch.setattr(plugins, "accounts",
+    # the strip's Claude rows are built by the OWNING plugin (plugins.usage_strip
+    # → plugins/claude_code/usage.strip_rows), so its registry and its snapshot
+    # aggregation are what a fixture stands in for
+    monkeypatch.setattr(CCACC, "registry",
                         lambda: [{"slug": "c1", "label": "acct", "alias": "c1"}])
-    monkeypatch.setattr(API_MOD, "account_usage", lambda limit=50, cache=None: {
+    monkeypatch.setattr(CCU, "account_usage", lambda limit=50, cache=None: {
         "c1": {"usage": dict(usage), "limit_hit": None, "logged_out": None}})
     got = []
     r = _req(dash + "/events")

@@ -269,11 +269,13 @@ function renderAttention() {
 
 const ACCOUNTS_POLL_MS = 60000;
 
-// The window keys of a usage snapshot, in the server's serve order (the
-// account-wide 5h/7d pair first, then model-scoped windows like
-// seven_day_fable — core/sessionapi.usage_windows is the owner of this rule;
-// the served dict is already built in that order and JSON preserves it):
-// numeric used-%, never the ts stamp or a *_reset sibling.
+// The window keys of a Claude usage snapshot DICT, in the server's serve order
+// (the account-wide 5h/7d pair first, then model-scoped windows like
+// seven_day_fable — plugins/claude_code/usage.usage_windows owns that rule; the
+// served dict is already built in that order and JSON preserves it): numeric
+// used-%, never the ts stamp or a *_reset sibling. Read by the new-session
+// ACCOUNT PICKER, which works off that per-account snapshot; the usage STRIP
+// reads the served `windows` list instead — one vocabulary, every host.
 function usageWindows(u) {
   return Object.keys(u || {}).filter(k =>
     typeof u[k] === "number" && k !== "ts" && !k.endsWith("_reset"));
@@ -304,14 +306,16 @@ function acctName(a) {
   return a.slug ? a.slug + " · " + a.label : a.label;
 }
 
-// `cols` is the UNION of window keys across every rendered account and `anyOut`
-// whether ANY of them is logged out — both computed once by renderAccounts, so
-// every row lays out the same columns in the same order and the rows STACK
-// (docs/dashboard.md *Row alignment*). A row missing a window still renders it,
-// as a ghost; a window whose reset was dropped (rolled over) still reserves its
-// reset column; a row that is fine still reserves the ⚠ badge's slot.
+// `cols` is the UNION of window DESCRIPTORS ({key, label, scope}) across every
+// row of one HOST's group and `anyOut` whether ANY of them is logged out — both
+// computed once by renderAccounts, so every row lays out the same columns in the
+// same order and the rows STACK (docs/dashboard.md *Row alignment*). A row
+// missing a window still renders it, as a ghost; a window whose reset was
+// dropped (rolled over) still reserves its reset column; a row that is fine
+// still reserves the ⚠ badge's slot.
 function acctPill(a, cols, anyOut) {
-  const u = a.usage;
+  const byKey = {};
+  for (const w of a.windows || []) byKey[w.key] = w;
   const pill = el("div", "acct");
   pill.append(el("span", "aname", acctName(a)));
   // LOGGED OUT: the account's OAuth login was revoked/expired — a session on it
@@ -327,8 +331,7 @@ function acctPill(a, cols, anyOut) {
     else chip.setAttribute("aria-hidden", "true");
     pill.append(chip);
   }
-  const wins = usageWindows(u);
-  if (!wins.length) {
+  if (!(a.windows || []).length) {
     if (!a.logged_out) pill.append(el("span", "adim", "no usage yet"));
     return pill;
   }
@@ -338,9 +341,11 @@ function acctPill(a, cols, anyOut) {
   // show at all (effective_usage drops a rolled-over one), so the column read
   // blank exactly where the duplicate would have been. Drop the reset column
   // for those windows entirely: it is dropped for the SAME key on every row,
-  // so the stack still aligns (docs/dashboard.md *Row alignment*).
-  const hasReset = (k) => k === "five_hour" || k === "seven_day";
-  const bar = (label, pct, resetKey, showReset) => {
+  // so the stack still aligns (docs/dashboard.md *Row alignment*). Which
+  // windows those are is the SERVER's call — the `scope` field of the usage
+  // vocabulary (plugins.usage_strip), since only the host knows whether a
+  // window is account-wide or a per-model cap under another one.
+  const bar = (label, pct, reset, showReset) => {
     const has = typeof pct === "number";       // false → this account has no
     const seg = el("span", "ubar" + (!has ? " ghost"    // snapshot for the window
       : pct >= 90 ? " hot" : pct >= 70 ? " warn" : ""));
@@ -355,9 +360,8 @@ function acctPill(a, cols, anyOut) {
     // account's 5h reads 0% with no reset). Absent, the bar would be 17ch
     // narrower than the other account's and everything after it would slide.
     if (showReset) {
-      const reset = has && u && u[resetKey];
       const box = el("span", "ureset");
-      if (reset) {
+      if (has && reset) {
         // dim "resets in" prefix, keep the duration (4h 12m) at full weight
         const txt = resetAgo(reset);        // "in 4h 12m" | "in <1m" | "now"
         const hasIn = txt.startsWith("in ");
@@ -368,10 +372,15 @@ function acctPill(a, cols, anyOut) {
     }
     return seg;
   };
-  // one bar per column — the 5h/7d pair plus any model-scoped window the CLI
-  // reports (e.g. "7d fable"), in the served order (renderAccounts' union)
-  cols.forEach(k => pill.append(bar(windowLabel(k), u ? u[k] : undefined,
-                                    k + "_reset", hasReset(k))));
+  // one bar per column, in the served order (renderAccounts' per-host union):
+  // Claude's 5h/7d pair plus any model-scoped window the CLI reports ("7d
+  // fable"), codex's own 5h/1w. A column this row has no reading for renders
+  // as a ghost — that is what keeps the stack aligned.
+  cols.forEach(c => {
+    const w = byKey[c.key];
+    pill.append(bar(c.label, w ? w.used_pct : undefined,
+                    w && w.resets_at, c.scope === "account"));
+  });
   // The account is BLOCKED right now (a session on it died on error=
   // rate_limit — the `limit-hit` stamp, served only while still active):
   // say so outright; the frozen usage bar alone reads ~95% at exactly the
@@ -404,81 +413,42 @@ function resetAgo(epochS) {
 // stack; the font is `--mono`, so `ch` is exact.
 const ANAME_MIN_CH = 14;
 
+// THE ONE usage-strip painter, over every host's rows (GET /api/accounts →
+// plugins.usage_strip). It knows no host by name: rows are GROUPED by their
+// `host` field, and each group decides its own columns, because window sets are
+// per host and unioning them across hosts would ghost Claude's "7d fable" onto
+// a codex row and codex's "1w" onto every account. codex used to have a whole
+// second endpoint, DOM node, poll and painter for exactly this; it is now one
+// group of one row.
 function renderAccounts(list) {
   if (!$accounts) return;
-  // show an account with a usage snapshot OR a logged-out warning (a dead
-  // account may have no fresh usage, but the ⚠ still needs to surface)
-  const shown = (list || []).filter(a => a.usage || a.logged_out);
+  // show a row with any usage window OR a logged-out warning (a dead account
+  // may have no fresh usage, but the ⚠ still needs to surface)
+  const shown = (list || []).filter(a => (a.windows || []).length || a.logged_out);
   $accounts.hidden = !shown.length;
   $accounts.textContent = "";
-  // The rows are read as a STACK — c1's 5h bar directly above c2's 5h bar — so
-  // the column set is decided ONCE for the whole strip, not per row: the union
-  // of every account's windows in served order (an account whose model-window
-  // fetch didn't match has no `seven_day_fable`, and dropping the column from
-  // that row alone would shift nothing on it but everything after it on the
-  // others). docs/dashboard.md *Row alignment*.
-  const cols = [];
-  for (const a of shown)
-    for (const k of usageWindows(a.usage)) if (!cols.includes(k)) cols.push(k);
-  const anyOut = shown.some(a => a.logged_out);
+  // The name column is sized across the WHOLE strip so every host's rows share
+  // one left edge, even though their bar columns differ.
   const nameCh = shown.reduce((n, a) => Math.max(n, acctName(a).length),
                               ANAME_MIN_CH);
   $accounts.style.setProperty("--aname-w", nameCh + "ch");
-  for (const a of shown) $accounts.append(acctPill(a, cols, anyOut));
-}
-
-/* ---------- codex usage strip (beside the accounts strip) ---------- */
-// codex has no subscription SWITCHER (no per-account rows), so its rate limits
-// are ONE host-wide reading, rendered as a single pill in the accounts strip's
-// visual language (.acct/.ubar/…) directly under it (GET /api/codex-usage →
-// plugins.usage_windows, docs/dashboard.md *Codex usage strip*). Painted by the
-// boot fetch + the same ACCOUNTS_POLL_MS fallback poll as the accounts strip
-// (refreshCodexUsage, app.02-router.js); hidden entirely when codex is
-// unconfigured/unreachable (empty payload). Deliberately NOT folded into
-// accounts_payload — an account registry and a single host reading are
-// different shapes.
-
-// A codex window's short label from its duration (primary is usually the 5h
-// window, secondary the weekly): 300min → "5h", 10080min → "1w"; falls back to
-// primary/secondary by position when the duration is missing.
-function codexWindowLabel(mins, i) {
-  if (typeof mins === "number" && mins > 0) {
-    if (mins % (60 * 24 * 7) === 0) return (mins / (60 * 24 * 7)) + "w";
-    if (mins % (60 * 24) === 0) return (mins / (60 * 24)) + "d";
-    if (mins % 60 === 0) return (mins / 60) + "h";
-    return mins + "m";
+  const groups = [];
+  for (const a of shown) {
+    let g = groups.find(x => x.host === a.host);
+    if (!g) groups.push(g = { host: a.host, rows: [], cols: [] });
+    g.rows.push(a);
   }
-  return i === 0 ? "primary" : "secondary";
-}
-
-function renderCodexUsage(u) {
-  if (!$codexusage) return;
-  const wins = (u && Array.isArray(u.windows)) ? u.windows : [];
-  $codexusage.hidden = !wins.length;
-  $codexusage.textContent = "";
-  if (!wins.length) return;
-  const pill = el("div", "acct");
-  const plan = (u.planType || "").trim();
-  pill.append(el("span", "aname", plan ? "Codex · " + plan : "Codex"));
-  wins.forEach((w, i) => {
-    const pct = typeof w.used_pct === "number" ? w.used_pct : null;
-    const seg = el("span", "ubar" + (pct === null ? " ghost"
-      : pct >= 90 ? " hot" : pct >= 70 ? " warn" : ""));
-    seg.append(el("span", "ulabel", codexWindowLabel(w.window_mins, i)));
-    const track = el("span", "utrack");
-    const fill = el("span", "ufill");
-    fill.style.width = (pct === null ? 0 : Math.max(0, Math.min(100, pct))) + "%";
-    track.append(fill);
-    seg.append(track, el("span", "upct", pct === null ? "—" : Math.round(pct) + "%"));
-    const box = el("span", "ureset");
-    if (w.resets_at) {
-      const txt = resetAgo(w.resets_at);      // "in 4h 12m" | "in <1m" | "now"
-      const hasIn = txt.startsWith("in ");
-      box.append(el("span", "rlbl", hasIn ? "resets in " : "resets "));
-      box.append(el("span", "rval", hasIn ? txt.slice(3) : txt));
-    }
-    seg.append(box);
-    pill.append(seg);
-  });
-  $codexusage.append(pill);
+  for (const g of groups) {
+    // The rows of one host are read as a STACK — c1's 5h bar directly above
+    // c2's 5h bar — so the column set is decided ONCE per group, not per row:
+    // the union of its windows in served order (an account whose model-window
+    // fetch didn't match has no `seven_day_fable`, and dropping the column from
+    // that row alone would shift nothing on it but everything after it on the
+    // others). docs/dashboard.md *Row alignment*.
+    for (const a of g.rows)
+      for (const w of a.windows || [])
+        if (!g.cols.some(c => c.key === w.key)) g.cols.push(w);
+    const anyOut = g.rows.some(a => a.logged_out);
+    for (const a of g.rows) $accounts.append(acctPill(a, g.cols, anyOut));
+  }
 }

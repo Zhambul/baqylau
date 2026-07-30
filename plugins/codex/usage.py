@@ -131,7 +131,8 @@ def usage_windows():
     window_mins, resets_at}]}, or None (app server unreachable / unconfigured /
     protocol drift). TTL-cached; a failure is audited once and cached too (so a
     poller doesn't respawn the app server every tick against a broken setup).
-    Behind plugins.usage_windows."""
+    The ACCOUNT-level source behind usage_strip(); the per-SESSION twin is the
+    rollout probe (plugins/codex/read.usage), which produces the same shape."""
     global _CACHE
     now = time.time()
     if _CACHE and _CACHE[0] > now:
@@ -148,3 +149,153 @@ def usage_windows():
             pass
     _CACHE = (now + USAGE_TTL_S, out)
     return out
+
+
+# --- the shared usage-window vocabulary (plugins.usage_strip) -----------------
+# codex names a window by its DURATION, because that is all it reports: there is
+# no key like Claude's `five_hour`, just `primary`/`secondary` and a length in
+# minutes. The label vocabulary is codex's own and deliberately NOT shared with
+# claude_code's — the SAME 10080-minute window is "1w" here and "7d" there, and
+# each host says it the way its own UI does.
+
+HOST = "codex"              # this plugin's name, stamped on its strip row so
+#                             ONE painter can group the strip by host
+
+MINS_WEEK = 60 * 24 * 7
+MINS_DAY = 60 * 24
+
+
+def window_label(mins, i=0):
+    """A codex window's short label from its duration: 300 → "5h", 10080 → "1w",
+    1440 → "1d". Falls back to primary/secondary by position when the duration is
+    missing — the same rule the browser used to apply client-side, moved here so
+    the server owns every string the strip shows (docs/styleguide.md)."""
+    if isinstance(mins, (int, float)) and mins > 0:
+        mins = int(mins)
+        if mins % MINS_WEEK == 0:
+            return "%dw" % (mins // MINS_WEEK)
+        if mins % MINS_DAY == 0:
+            return "%dd" % (mins // MINS_DAY)
+        if mins % 60 == 0:
+            return "%dh" % (mins // 60)
+        return "%dm" % mins
+    return "primary" if i == 0 else "secondary"
+
+
+def window_rows(windows):
+    """codex's [{used_pct, window_mins, resets_at}] → the shared usage-window
+    vocabulary [{key, label, used_pct, resets_at, window_mins, scope}] (owned by
+    plugins.usage_strip's docstring). `key` is the duration, which is the only
+    stable identity a codex window has — it must only be unique WITHIN this
+    host's rows, since the painter unions columns per host. Every codex window is
+    account-wide (`scope`), so each carries a reset column; there is no per-MODEL
+    cap in codex's reporting. A window with no readable percentage is kept with
+    used_pct None — the painter ghosts it rather than dropping the column."""
+    out = []
+    for i, w in enumerate(windows or []):
+        mins = w.get("window_mins")
+        pct = w.get("used_pct")
+        out.append({
+            "key": ("w%d" % int(mins)) if isinstance(mins, (int, float)) and mins
+                   else ("primary" if i == 0 else "secondary"),
+            "label": window_label(mins, i),
+            "used_pct": int(round(pct)) if isinstance(pct, (int, float)) else None,
+            "resets_at": w.get("resets_at"),
+            "window_mins": mins,
+            "scope": "account",
+        })
+    return out
+
+
+def strip_row(windows, ts=None):
+    """codex's usage-strip row from a windows payload, or None when it names no
+    window. ONE row, not one per account: codex has no subscription SWITCHER, so
+    its limits are a single host-wide reading — which is why the row carries
+    `switchable: False` (the new-session account picker offers only rows that are
+    an account you can launch under) and no slug."""
+    rows = window_rows((windows or {}).get("windows"))
+    if not rows:
+        return None
+    plan = ((windows or {}).get("planType") or "").strip()
+    return {"host": HOST, "switchable": False, "slug": "", "plan": plan,
+            "label": "Codex · " + plan if plan else "Codex",
+            "windows": rows, "ts": ts,
+            # the account-switcher fields a Claude row carries. Served as the
+            # honest empty so ONE painter can read every row the same way
+            # without asking which host wrote it.
+            "usage": None, "limit_hit": None, "logged_out": False}
+
+
+def usage_strip(cache=None, limit=50):
+    """The usage-strip provider (plugins.usage_strip fan-out) — codex's single
+    host-wide row, from the app server's account rate limits. [] when codex is
+    unconfigured / unreachable / not installed (the strip then simply has no
+    codex row). `cache`/`limit` are the fan-out's per-host arguments and are not
+    used here: the app-server read has its own TTL cache and scans no sessions."""
+    row = strip_row(usage_windows())
+    return [row] if row else []
+
+
+def _rollout_usage(sid):
+    """The session's own rollout rate-limit reading (read.usage over the
+    standalone host's rollout), or None. Lazy import: read.py imports this
+    module's sibling parse half, and the providers below are read-side only."""
+    from plugins.codex import read
+    path = read._rollout_for(sid, "")
+    return read.usage(path) if path else None
+
+
+def session_usage(sid):
+    """The per-session usage provider (plugins.session_usage fan-out) — this
+    codex session's last rate-limit reading, as {plan, ts, windows:[…]} in the
+    shared vocabulary; None when its rollout carries none.
+
+    Read from the ROLLOUT rather than the app server on purpose: the app server
+    answers for the account as it stands NOW, which is the right answer for the
+    list-page strip and the wrong one for a session you are looking back at — a
+    parked run's header should say where its limits stood, and a machine with no
+    codex installed can still open it. Unlike Claude's, the payload carries no
+    flat window keys: there is no kv row behind it, and `windows` is the whole
+    vocabulary (dashboard/read/session serves it, the header renders it)."""
+    got = _rollout_usage(sid)
+    if not got:
+        return None
+    return {"plan": (got.get("planType") or "").strip(),
+            "windows": window_rows(got.get("windows")), "ts": None}
+
+
+def session_account(sid):
+    """The per-session account provider (plugins.session_account fan-out) — the
+    minimal honest shape for a host with NO account switcher: no slug (there is
+    nothing to switch to, and a slug is what the migrate/launch paths key on),
+    just the plan the rollout reported, so the header chip reads "◈ Codex · plus"
+    instead of blanking. {} when the rollout names no plan — the chip is then
+    absent, which is the honest answer rather than a bare "Codex" that claims a
+    subscription reading we do not have."""
+    got = _rollout_usage(sid)
+    plan = ((got or {}).get("planType") or "").strip()
+    return {"slug": "", "label": "Codex · " + plan} if plan else {}
+
+
+def session_costs(sid):
+    """The per-session cost provider (plugins.session_costs fan-out) — a codex
+    session's token/cost totals from its OWN scoreboard counters.
+
+    codex never reaches the `otel` table (that receiver is Claude Code's
+    telemetry), so the OTEL sum that answers for a Claude session reads a
+    truthful-looking 0 for a codex one. The real numbers are already in the state
+    DB: plugins/codex/stream.py folds each turn's usage delta and prices it with
+    CODEX_PRICES at the moment it reads it. This just reports what is banked
+    there, in the same envelope the OTEL side returns — one `query_source`, named
+    for the host, since codex has no main/subagent/auxiliary split to report."""
+    from core import sessionapi as API
+    from core import state as S
+    sdb = API.state_db_for(sid)
+    st = (S.stats_at(sdb) or {}) if sdb else {}
+    usd = st.get("cost") or 0.0
+    toks = {k: int(st.get(k) or 0)
+            for k in ("tk_in", "tk_out", "tk_read", "tk_create")
+            if st.get(k)}
+    return {"tokens": {HOST: toks} if toks else {},
+            "cost": {HOST: usd} if usd else {},
+            "total_usd": usd}

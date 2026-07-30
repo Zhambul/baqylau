@@ -82,19 +82,24 @@ function chromeIdentity(ses, meta) {
   ses.gitChip = gitc;
   setGitChip(gitc, meta.git);
   l1.append(gitc);
-  // which subscription account this chat runs under (◈ c2 · claude-01)
+  // which account this chat runs under (◈ c2 · claude-01), and where its rate
+  // limits stood when it last reported them (5h 12% · 7d 40%). Both come from
+  // the session's OWNING host: a host with no account switcher names itself and
+  // its plan instead of a slug (◈ Codex · plus), and states its windows in the
+  // same served vocabulary — so the chip reads the `windows` list rather than
+  // Claude's flat five_hour/seven_day keys, which no other host has. Only
+  // ACCOUNT-wide windows are shown: a per-model weekly cap belongs on the strip,
+  // not in a one-line header chip.
   const acc = meta.account || {};
   if (acc.slug || acc.label) {
     const chip = el("span", "acctchip");
     chip.append(el("span", "ag", "◈"), tnode(
       " " + (acc.slug ? acc.slug + " · " + acc.label : acc.label)));
-    const u = meta.usage;
-    if (u) {
-      const parts = [];
-      if (typeof u.five_hour === "number") parts.push("5h " + u.five_hour + "%");
-      if (typeof u.seven_day === "number") parts.push("7d " + u.seven_day + "%");
-      if (parts.length) chip.append(el("span", "ausage", parts.join(" · ")));
-    }
+    const wins = ((meta.usage || {}).windows || []).filter(
+      w => w.scope === "account" && typeof w.used_pct === "number");
+    if (wins.length)
+      chip.append(el("span", "ausage",
+                     wins.map(w => w.label + " " + w.used_pct + "%").join(" · ")));
     l1.append(chip);
   }
   return l1;
