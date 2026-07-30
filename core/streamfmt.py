@@ -95,7 +95,7 @@ def skill_note(name, failed=False):
 
 
 def chip(who, glyph, kind, rgb, tags=(), g=None, lk=None, web=False, note=None,
-         mem=False):
+         mem=False, bubbled=False):
     """The block-header label op: `<glyph> <kind>` in the stream's colour, with
     `who` (the agent's name) and `tags` (its model/effort + ctx chips) carried as
     the op's OWN fields rather than concatenated into the text (core/ops.py — the
@@ -106,9 +106,11 @@ def chip(who, glyph, kind, rgb, tags=(), g=None, lk=None, web=False, note=None,
     header — see core/ops.py's "web" field), and `note` is that surface's own
     wording for it (the quiet one-liner). `mem` marks the block as a memory-wiki
     touch (see O.label) — an agent's vault read/search, the same flag the lead's
-    command header carries."""
+    command header carries. `bubbled` marks a PROSE block re-bubbled via
+    plugins.conversation (see O.label) — the one unified agent-scope prose-drop
+    signal across Claude subagents and codex sidecars."""
     return O.label(f"{glyph} {kind}", rgb, g=g, lk=lk, web=web, note=note,
-                   who=who, tags=tags, mem=mem)
+                   who=who, tags=tags, mem=mem, bubbled=bubbled)
 
 
 def compose(op, s=None):
@@ -189,16 +191,19 @@ def strip_who(s, rgb):
     return s[:at] + s[end + len(R.RST):]
 
 
-def gutter(text, rgb, g=None, web=False):
+def gutter(text, rgb, g=None, web=False, bubbled=False):
     """Body text behind the stream-coloured gutter bar (escapes neutralised).
     web=True keeps this stamped op in the web dashboard's main mirror (a subagent
-    prompt/result body — see core/ops.py's "web" field)."""
-    return O.gut(R.unescape(text), rgb, g=g, web=web)
+    prompt/result body — see core/ops.py's "web" field). `bubbled` marks a prose
+    body re-bubbled via plugins.conversation (see O.gut / chip)."""
+    return O.gut(R.unescape(text), rgb, g=g, web=web, bubbled=bubbled)
 
 
-def dim_gut(text, rgb, g=None):
-    """gutter(), dimmed — reasoning summaries and other low-salience body text."""
-    return O.gut(R.DIM + R.unescape(text) + R.RST, rgb, g=g)
+def dim_gut(text, rgb, g=None, bubbled=False):
+    """gutter(), dimmed — reasoning summaries and other low-salience body text.
+    `bubbled` marks a prose body re-bubbled via plugins.conversation (a codex
+    sidecar's `⋯ reasoning` — see O.gut)."""
+    return O.gut(R.DIM + R.unescape(text) + R.RST, rgb, g=g, bubbled=bubbled)
 
 
 def file_line(verb, name, rgb, failed=False, extent="", added=0, removed=0,

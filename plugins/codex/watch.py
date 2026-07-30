@@ -40,6 +40,7 @@ import glob, hashlib, json, os, re, subprocess, sys, tempfile, time
 from datetime import datetime, timedelta
 
 from core.slots import CODEX_PALETTE
+from core import paths as P
 from core import env as EV
 from core import locks as LK
 from core import state as S
@@ -302,14 +303,18 @@ def spawn(srcfile, jsonfile, label, subagent=False):
     #     SUBAGENT spawned by a standalone host (`subagent=True`) — gets the
     #     producer-source stamp ($CLAUDE_OPS_SRC -> core.ops stamps every op). It is
     #     NOT the host session's main agent, so the web dashboard's main-agent-only
-    #     mirror drops its ops and its agent-scope view (sessionapi.codex_runs mints
-    #     a card; read/mirror.agent_scope matches `codex:<label>`) shows them — the
-    #     codex twin of a Claude subagent (docs/codex.md *Sidecar → subagent parity*).
+    #     mirror drops its ops and its agent-scope view shows them — the codex twin
+    #     of a Claude subagent (docs/codex.md *Sidecar → subagent parity*). The stamp
+    #     is `codex:<codex_aid>` — the run's synthesized AGENT ID (paths.codex_aid,
+    #     the same id sessionapi.codex_runs mints the card with), NOT the display
+    #     `label`: making the stamp EQUAL the agent id is what lets
+    #     read/mirror.agent_scope match it directly, no per-tool label lookup (the
+    #     unification — a Claude subagent stamps `sub:<aid>` the same way).
     env = dict(os.environ)
     if STANDALONE and not subagent:
         env["CLAUDE_CODEX_STANDALONE"] = "1"
     else:
-        env["CLAUDE_OPS_SRC"] = "codex:" + label
+        env["CLAUDE_OPS_SRC"] = "codex:" + P.codex_aid(srcfile)
     purpose = ("stream:codex-subagent " if subagent else "stream:codex ") + label
     spawn_detached(STREAM, [LOG, rgb, srcfile, jsonfile, label], LOG, env=env,
                    purpose=purpose, audit_argv=[srcfile, label])

@@ -338,14 +338,13 @@ def prose_block(op, scope=None):
     because it reads that agent's conversation from its transcript instead
     (docs/dashboard.md *Agent scope*).
 
-    A CODEX sidecar's prose (docs/codex.md *sidecar parity*) drops the same way,
-    but ONLY when the run is ROLLOUT-backed — its `chat`/`think` bubbles then come
-    from plugins.conversation, exactly as a Claude subagent's do. A COMPANION
-    `.log` run has no rollout to re-bubble from, so its prose must STAY as ops;
-    read/mirror.agent_scope signals the difference with a `codexprose:<label>`
-    marker in `scope` (present only for a rollout-backed run), which is why this
-    predicate now takes the scope set. Without the marker a codex prose op is
-    kept, so a companion run's scoped mirror is unchanged.
+    This is now the LEGACY FALLBACK for parked PRE-`bubbled` ops: a fresh op
+    declares its own re-bubbling via the producer-set `bubbled` flag (core/ops.py),
+    which op_items drops directly — one signal across Claude subagents AND codex
+    sidecars, replacing this predicate's old per-tool arms (a Claude agent-palette
+    sniff here, a `codexprose:<label>` scope marker for codex). Kept because ops
+    already ON DISK carry no flag, so a parked session's agent scope still needs
+    the structural recognition below.
 
     The lead's stream works exactly this way already: its prose is not in the ops
     at all, only in its transcript, and the merge puts it back as bubbles. The
@@ -358,6 +357,10 @@ def prose_block(op, scope=None):
     Colour-gated to the agent palettes so a lead-stream op can never match: `✎`
     and `⇢` are not the lead's vocabulary, but the gate costs nothing and keeps
     the "whose op is this" question answered the one way this module answers it.
+    (A parked codex sidecar predates the flag AND wears the codex palette, not an
+    agent one, so its rollout prose is the one legacy case this fallback no longer
+    catches — a narrow, cosmetic doubling in an aged codex sidecar scope, accepted
+    over a blunt palette sniff that would wrongly drop a companion run's prose.)
 
     Reads the text as `lead_head` leaves it, so a pre-field header — which opens
     with the agent's NAME, not its marker — is recognised too. Without that every
@@ -367,15 +370,6 @@ def prose_block(op, scope=None):
     try:
         if op.get("t") != "label":
             return False
-        # a rollout-backed codex sidecar's prose (colour-agnostic — a codex chip
-        # wears its own palette, not an agent one — keyed on the src stamp + the
-        # scope marker)
-        src = str(op.get("src") or "")
-        if scope and src.startswith("codex:") \
-                and ("codexprose:" + src[len("codex:"):]) in scope:
-            h = lead_head(_plain(op))[:1]
-            if h in _PROSE_MARKS or h == _CODEX_REASONING:
-                return True
         if tuple(op.get("c") or ()) not in _AGENT_RGB:
             return False
         text = lead_head(_plain(op))

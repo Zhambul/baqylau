@@ -168,16 +168,16 @@ TS = re.compile(r"^\[\d{4}-\d\d-\d\dT[\d:.]+Z\]\s?(.*)$")
 cap = SF.cap
 
 
-def chip(glyph, kind, g=None, lk=None):
-    return SF.chip("codex", glyph, kind, SLOT_RGB, g=g, lk=lk)
+def chip(glyph, kind, g=None, lk=None, bubbled=False):
+    return SF.chip("codex", glyph, kind, SLOT_RGB, g=g, lk=lk, bubbled=bubbled)
 
 
-def gutter(text, g=None):
-    return SF.gutter(text, SLOT_RGB, g=g)
+def gutter(text, g=None, bubbled=False):
+    return SF.gutter(text, SLOT_RGB, g=g, bubbled=bubbled)
 
 
-def dim_gut(text, g=None):
-    return SF.dim_gut(text, SLOT_RGB, g=g)
+def dim_gut(text, g=None, bubbled=False):
+    return SF.dim_gut(text, SLOT_RGB, g=g, bubbled=bubbled)
 
 
 # Rollout kinds the mirror renderer deliberately does NOT paint (yet). Every
@@ -401,27 +401,33 @@ class Renderer:
     # into the mirror. A SIDECAR run (codex inside a Claude host) still emits it —
     # there the run reads as its own bracketed sub-stream (pending the subagent
     # abstraction, docs/codex.md *Sidecar → subagent parity*).
+    # bubbled=True on the three PROSE emitters below: a SIDECAR run's prose is
+    # re-bubbled from its rollout by plugins.conversation (docs/codex.md *Sidecar →
+    # subagent parity*), so agent scope drops the op — the unified prose-drop signal
+    # (core/ops.py "bubbled"), replacing the codexprose: scope marker. Reached ONLY
+    # for a sidecar (each returns early when STANDALONE); a companion .log run never
+    # reaches these (render_record paints it, no rollout to re-bubble → no bubbled).
     def _ro_prompt(self, rec):
         if STANDALONE:
             return
         g = O.new_group(LOG)
-        O.emit(LOG, chip("⇢", "prompt", g=g, lk=O.COPY_ALL),
-               gutter(cap(rec["text"], CAP_PROMPT), g=g))
+        O.emit(LOG, chip("⇢", "prompt", g=g, lk=O.COPY_ALL, bubbled=True),
+               gutter(cap(rec["text"], CAP_PROMPT), g=g, bubbled=True))
 
     def _ro_reasoning(self, rec):
         if STANDALONE:
             return
         g = O.new_group(LOG)
-        O.emit(LOG, chip("⋯", "reasoning", g=g, lk=O.COPY_ALL),
-               dim_gut(cap(rec["text"], CAP_THINK), g=g))
+        O.emit(LOG, chip("⋯", "reasoning", g=g, lk=O.COPY_ALL, bubbled=True),
+               dim_gut(cap(rec["text"], CAP_THINK), g=g, bubbled=True))
 
     def _ro_message(self, rec):
         self.last_msg = rec["text"]
         if STANDALONE:
             return
         g = O.new_group(LOG)
-        O.emit(LOG, chip("✎", "message", g=g, lk=O.COPY_ALL),
-               gutter(cap(rec["text"], CAP_MSG), g=g))
+        O.emit(LOG, chip("✎", "message", g=g, lk=O.COPY_ALL, bubbled=True),
+               gutter(cap(rec["text"], CAP_MSG), g=g, bubbled=True))
 
     def _ro_search(self, rec):
         g = O.new_group(LOG)

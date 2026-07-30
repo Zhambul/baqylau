@@ -105,7 +105,9 @@ backed by grep-style regression tests that will fail the build):
 | Fact | Owner |
 |---|---|
 | `/tmp/claude-mirror-<key>.log` path format, `ROOT`, `BIN` | `core/paths.py` |
+| A codex run's synthesized AGENT ID (`codex_aid` = stream-source basename, ext stripped) | `core/paths.codex_aid` — the PRODUCER stamps a run's ops `codex:<aid>` (`plugins/codex/watch.spawn`) and the READ model matches the same id (`sessionapi.codex_aid` delegates here; `read/mirror.agent_scope` keys on it), so the op stamp EQUALS the card's agent id with no per-tool lookup |
 | Semantic colours `SLATE/ORANGE/RED/…`, `fmt_dur`, `kfmt`, `fmt_usd`, `split_tokens()`, `token_parts()` | `core/ops.py` |
+| The `bubbled` op field — "this block's content is ALSO a `plugins.conversation` record, so drop the op wherever that conversation renders" | `core/ops.py` (set via `streamfmt.chip`/`gutter`); the ONE cross-tool agent-scope prose-drop signal, set by the producer that emits both halves (`substream_render` for a Claude subagent; `plugins/codex/stream._ro_*` for a codex SIDECAR rollout), dropped by `opshtml.op_items`. Replaces the per-tool sniffing (`actclass.prose_block`'s palette/`codexprose:` arms), which survives only as the legacy fallback for parked pre-flag ops |
 | Tab states + `COLORS` hex table + tab-DB schema | `core/tabs.py` (read cross-module via `state.tab_state`) |
 | The tab PAINT engine — dedup against the persisted row + persist-only-on-`rc==0` + the `tab_transitions` audit on every applied/skipped/failed path | `core/tabpaint.paint(fe, win, state, reason, sid=, dispatch=)` — frontend-INJECTED; a producer plugin owns only the DECISION (its `{event → (state, reason)}`) and the WINDOW resolver, and gets this for free (`plugins/claude_code/tabstatus.py` is the reference producer; a second copy would drift and lose the `rc==0` rule) |
 | Slot claim-token format (both directions: `_token`/`_untoken`) | `core/slots.py` |

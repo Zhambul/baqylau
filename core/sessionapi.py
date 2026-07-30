@@ -613,13 +613,12 @@ def agents(sid):
 
 
 def codex_aid(src_path):
-    """The synthesized agent identity of a codex run — codex tailers record
-    no hook agent_id (a run is session/cwd-attributed, docs/codex.md), so the
-    read model names one by its stream src_path basename, extension stripped:
-    'rollout-<ts>-<uuid>' for a native rollout, the job id for a companion
-    log. One owner (here, styleguide table); the codex activity provider
-    resolves the same ids back through codex_runs()."""
-    return os.path.splitext(os.path.basename(src_path or ""))[0]
+    """The synthesized agent identity of a codex run — its stream src_path
+    basename, extension stripped ('rollout-<ts>-<uuid>' / a companion job id).
+    Delegates to the ONE owner core.paths.codex_aid (styleguide table); the
+    producer stamps `codex:<aid>` off the same primitive so the op stamp equals
+    this id (read/mirror.agent_scope matches it with no per-tool lookup)."""
+    return P.codex_aid(src_path)
 
 
 def codex_runs(sid):

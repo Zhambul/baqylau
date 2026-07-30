@@ -293,12 +293,19 @@ def agent_scope(sid, agent):
     session view (a falsy `agent`). It is what the ops are filtered on
     (opshtml.in_scope).
 
-    A subagent and a teammate are both named by their hook agent_id, so both
-    spellings are accepted. A CODEX run is the exception the SET exists for: it
-    is stamped `codex:<label>` (plugins/codex/watch.spawn) while its synthesized
-    agent id is the rollout basename (sessionapi.codex_aid), so its label is
-    looked up off the run's row — matching the id against the stamp would
-    silently show an empty mirror.
+    A subagent, a teammate AND a codex run are all named by the SAME id now: the
+    producer stamps every op with the id that IS the scope key — `sub:<aid>` /
+    `team:<aid>` for a Claude agent, `codex:<aid>` for a codex run (the run's
+    synthesized agent id, paths.codex_aid — plugins/codex/watch.spawn), so no
+    per-tool label lookup is needed (the unification: a codex run used to be
+    stamped `codex:<label>` and matched by a lookup off its card, which an id
+    mismatch could turn into an empty mirror). All three spellings are accepted;
+    the non-matching prefixes are inert.
+
+    Prose-drop is no longer signalled here (the retired `codexprose:` marker): an
+    agent's re-bubbled prose ops carry the producer-set `bubbled` flag (core/ops.py),
+    which opshtml.op_items drops directly — one signal across tools, decided where
+    the producer knows both halves.
 
     The agent's NAME is deliberately not part of this. It used to be, to strip
     the name the substream baked into every block it painted; producers carry it
@@ -308,21 +315,7 @@ def agent_scope(sid, agent):
     an agent's name to render its stream."""
     if not agent:
         return None
-    srcs = {"sub:" + agent, "team:" + agent}
-    for rec in API.agents(sid):
-        if rec.get("agent_id") == agent and rec.get("kind") == "codex":
-            if rec.get("desc"):
-                srcs.add("codex:" + rec["desc"])
-                # A ROLLOUT-backed codex run (its transcript is a .jsonl)
-                # re-bubbles its prose through plugins.conversation, so its prose
-                # OPS are dropped in scope (opshtml.actclass.prose_block) — the
-                # marker below is that signal. A COMPANION .log run has no rollout,
-                # so it gets no marker and its prose stays as ops (docs/codex.md
-                # *sidecar parity*).
-                if (rec.get("transcript") or "").endswith(".jsonl"):
-                    srcs.add("codexprose:" + rec["desc"])
-            break
-    return srcs
+    return {"sub:" + agent, "team:" + agent, "codex:" + agent}
 
 
 def is_codex_lead(sid, agent):

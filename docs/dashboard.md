@@ -5725,6 +5725,24 @@ scoped page is linkable, survives a reload, and a monitor/job detail nests insid
 it (`…/a/<aid>/m/<task>`). The tab bar, the components and the stream engine are
 the session's own; what changes is a `?agent=<id>` on every read.
 
+**The unified agent-scope render (one code path for every tool).** A Claude
+subagent, a teammate AND a codex run all go through the SAME scope pipeline, keyed
+the SAME way. `agent_scope(sid, aid)` is one tool-agnostic rule —
+`{sub:<aid>, team:<aid>, codex:<aid>}` — because every producer stamps its ops
+with the id that IS the scope key (a codex run's `codex:<aid>` is
+`paths.codex_aid`, no longer a `codex:<label>` matched by a per-tool lookup off
+the run's card, which an id mismatch could turn into an empty mirror). And an
+agent's PROSE (its ⇢ prompt / ✎ message / ⇠ result / ⋯ reasoning) is dropped in
+scope — so its conversation, re-bubbled from its transcript via
+`plugins.conversation`, isn't shown twice — by ONE signal: the producer-set
+`bubbled` op field (`core/ops.py`), set by whichever stream emits both the op and
+the conversation record. `opshtml.op_items` drops a `bubbled` op directly;
+`actclass.prose_block` survives only as the legacy fallback for parked pre-flag
+ops. This retired the codex-only fork (`agent_scope`'s codex branch, the
+`codexprose:<label>` marker, palette-sniffing) — a change to how an agent's
+stream renders now lands in one place for every tool (docs/codex.md *Sidecar →
+subagent parity*, *The unified scope key*).
+
 **What re-scopes, and what deliberately doesn't.** The **mirror**, **monitors**
 and **jobs** follow the agent — *including their tab BADGES*, which is the same
 split declared once in the read model's `BADGES` table (`scoped`) and reached

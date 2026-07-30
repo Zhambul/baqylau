@@ -145,6 +145,18 @@ def log_for_key(key):
     return PREFIX + key + ".log"
 
 
+def codex_aid(src_path):
+    """The synthesized agent identity of a codex run — its stream source basename
+    with the extension stripped: 'rollout-<ts>-<uuid>' for a native rollout, the
+    job id for a companion log. codex tailers record no hook agent_id (a run is
+    session/cwd-attributed, docs/codex.md), so this names one deterministically.
+    ONE owner (styleguide table): the PRODUCER stamps a run's ops `codex:<aid>`
+    (plugins/codex/watch.spawn) and the READ model resolves the same id back
+    (sessionapi.codex_aid delegates here; read/mirror.agent_scope matches it) — so
+    the op stamp EQUALS the card's agent id and needs no per-tool lookup."""
+    return os.path.splitext(os.path.basename(src_path or ""))[0]
+
+
 def state_db(log):
     """The per-session runtime state DB for a mirror log (see core/state.py)."""
     return log + ".state.db"

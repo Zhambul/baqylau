@@ -785,32 +785,33 @@ def test_codex_blocks_classify_as_codex_act():
     assert AC.ACT_CODEX in AC.ACTS
 
 
-def test_codex_prose_drops_in_scope_only_for_rollout_backed_runs():
-    """Sidecar parity: a rollout-backed codex run's prose ops drop in scope (its
-    bubbles come from conversation()), a companion .log run's stay (no rollout to
-    re-bubble from) — keyed on the `codexprose:<label>` scope marker
-    (deliverable C)."""
+def test_codex_prose_drops_in_scope_via_the_bubbled_flag():
+    """Sidecar parity, UNIFIED: a codex sidecar run's prose ops carry the
+    producer-set `bubbled` flag (a ROLLOUT-backed run re-bubbles them via
+    conversation()), so op_items drops them in agent scope — the SAME signal a
+    Claude subagent uses, no per-tool `codexprose:` marker. A companion `.log`
+    run's prose has NO bubbled (no rollout to re-bubble from) and stays; a command
+    op (never bubbled) stays."""
     from core import ops as O
     from core import slots as SL
-    from dashboard.opshtml import actclass as AC
+    from dashboard import opshtml
     rgb = SL.CODEX_PALETTE[0]
-    msg = O.label("✎ message", rgb, g="c1")
-    msg["src"] = "codex:cli"
-    think = O.label("⋯ reasoning", rgb, g="c2")
-    think["src"] = "codex:cli"
-    cmd = O.label("▶ cmd", rgb, g="c3")
-    cmd["src"] = "codex:cli"
-    rollout_scope = {"codex:cli", "codexprose:cli"}
-    companion_scope = {"codex:cli"}                 # no prose marker
-    # rollout-backed: prose drops, command stays
-    assert AC.prose_block(msg, rollout_scope) is True
-    assert AC.prose_block(think, rollout_scope) is True
-    assert AC.prose_block(cmd, rollout_scope) is False
-    # companion: nothing drops (no bubbles to replace it)
-    assert AC.prose_block(msg, companion_scope) is False
-    assert AC.prose_block(think, companion_scope) is False
-    # no scope (session view) never drops a codex prose op
-    assert AC.prose_block(msg, None) is False
+    # a rollout sidecar: prose carries bubbled=1 (stream._ro_message/_ro_reasoning)
+    msg = O.label("✎ message", rgb, g="c1", bubbled=True); msg["src"] = "codex:cli"
+    think = O.label("⋯ reasoning", rgb, g="c2", bubbled=True); think["src"] = "codex:cli"
+    # a companion .log run: prose has NO bubbled; a command is never bubbled
+    comp = O.label("✎ message", rgb, g="c4"); comp["src"] = "codex:cli"
+    cmd = O.label("▶ cmd", rgb, g="c3"); cmd["src"] = "codex:cli"
+    scope = {"codex:cli"}                            # agent_scope for aid 'cli'
+    def kinds(items):
+        return "".join(it.get("html", "") for it in items)
+    assert "message" not in kinds(opshtml.op_items([msg], "k", scope=scope))
+    assert "reasoning" not in kinds(opshtml.op_items([think], "k", scope=scope))
+    assert "message" in kinds(opshtml.op_items([comp], "k", scope=scope))
+    assert "cmd" in kinds(opshtml.op_items([cmd], "k", scope=scope))
+    # the SESSION view (scope None) keeps a stamped op only when web/unstamped —
+    # a bubbled codex sidecar op is stamped and not web, so it drops there too
+    assert opshtml.op_items([msg], "k", scope=None) == []
 
 
 def test_op_items_codex_lead_drops_prose_and_chrome_keeps_activity():

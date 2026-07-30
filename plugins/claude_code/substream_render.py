@@ -136,7 +136,7 @@ class Renderer:
     # --- small line/block builders ------------------------------------------
 
     def chip(self, glyph, kind, ctx="", g=None, lk=None, web=False, note=None,
-             mem=False):
+             mem=False, bubbled=False):
         # ctx (e.g. "ctx 42% · 84k/200k") rides in the chip header for the first op of a
         # turn, rather than on its own gutter line below it. g ties a block's header + its
         # code/gut body ops into one ⧉ copy group — a tool_use_id for commands, else a
@@ -146,14 +146,15 @@ class Renderer:
         # stream via core/streamfmt.py; the model tag + ctx ride as trailing tags.
         return SF.chip(self.label, glyph, kind, self.rgb,
                        tags=(self._op_tag(), ctx), g=g, lk=lk, web=web, note=note,
-                       mem=mem)
+                       mem=mem, bubbled=bubbled)
 
-    def gutter(self, text, g=None, web=False):
-        return SF.gutter(text, self.rgb, g=g, web=web)
+    def gutter(self, text, g=None, web=False, bubbled=False):
+        return SF.gutter(text, self.rgb, g=g, web=web, bubbled=bubbled)
 
-    def msg_gutter(self, text, g=None, web=False):
+    def msg_gutter(self, text, g=None, web=False, bubbled=False):
         # Assistant text is markdown -> render the subset (bold/italic/code/headings/bullets).
-        return O.gut(R.markdown(R.unescape(text)), self.rgb, g=g, web=web)
+        return O.gut(R.markdown(R.unescape(text)), self.rgb, g=g, web=web,
+                     bubbled=bubbled)
 
     # --- transcript blocks ----------------------------------------------------
 
@@ -175,15 +176,18 @@ class Renderer:
         # main mirror surfaces (web=True); intermediate ✎ messages stay drill-down
         # only — see core/ops.py's "web" field and dashboard/opshtml.op_items.
         g = O.new_group(self.log)
+        # bubbled=True: agent scope re-bubbles this message/result from the agent's
+        # transcript (plugins.conversation), so op_items drops the op there — the
+        # unified prose-drop signal, core/ops.py's "bubbled".
         O.emit(self.log,
                self.chip(glyph, kind, self.pending_tag, g=g, lk=O.COPY_ALL,
-                         web=is_result, note=note),
+                         web=is_result, note=note, bubbled=True),
                # UNCAPPED, deliberately — the one excerpt in this renderer with no
                # line ceiling (see the CAP_* table's note). An agent's message and
                # its returned result are what the whole stream exists to deliver;
                # eliding them sent the reader to the drill-down for the substance,
                # which is the opposite of the summary's job.
-               self.msg_gutter(self.pending_msg, g=g, web=is_result))
+               self.msg_gutter(self.pending_msg, g=g, web=is_result, bubbled=True))
         self.pending_msg = None
         self.pending_tag = ""
 
@@ -233,17 +237,20 @@ class Renderer:
         if not brief:
             return
         g = O.new_group(self.log)
+        # bubbled=True: agent scope re-bubbles the spawn prompt (core/ops.py "bubbled").
         O.emit(self.log, self.chip(*SF.MARK_PROMPT, g=g, lk=O.COPY_ALL, web=True,
-                                   note=self.agent_note("launched")),
-               self.gutter(brief, g=g, web=True))
+                                   note=self.agent_note("launched"), bubbled=True),
+               self.gutter(brief, g=g, web=True, bubbled=True))
 
     def render_teammsg(self, sender, body):
         # An incoming agent-team message (mail from another teammate or the lead).
         self.flush_msg()
         g = O.new_group(self.log)
+        # bubbled=True: agent scope re-bubbles mail from the transcript (the
+        # `✉ from|to` block — prose_block matched _MAIL_MARKS; core/ops.py "bubbled").
         O.emit(self.log, self.chip(SF.MARK_MAIL, SF.MAIL_FROM % (sender or "?"),
-                                   g=g, lk=O.COPY_ALL),
-               self.gutter(cap(body.strip(), CAP_TEAMMSG), g=g))
+                                   g=g, lk=O.COPY_ALL, bubbled=True),
+               self.gutter(cap(body.strip(), CAP_TEAMMSG), g=g, bubbled=True))
 
     def render_message(self, text):
         text = text.strip()
@@ -414,8 +421,11 @@ class Renderer:
         # the body.
         to, text = TR.mail_send(inp)
         g = O.new_group(self.log)
-        O.emit(self.log, self.chip(SF.MARK_MAIL, SF.MAIL_TO % to, ctx, g=g, lk=O.COPY_ALL),
-               self.gutter(cap(text.strip(), CAP_SENDMSG), g=g))
+        # bubbled=True: agent scope re-bubbles this send as a `sendmsg` record
+        # (TR.mail_send, conversation_for) — drop the op there (core/ops.py "bubbled").
+        O.emit(self.log, self.chip(SF.MARK_MAIL, SF.MAIL_TO % to, ctx, g=g,
+                                   lk=O.COPY_ALL, bubbled=True),
+               self.gutter(cap(text.strip(), CAP_SENDMSG), g=g, bubbled=True))
         self.pend[tid] = ("sendmsg", "")
 
     def _use_agent(self, name, inp, tid, ctx):

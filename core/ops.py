@@ -62,6 +62,20 @@
 # reformat in the presenter: the wording is stream vocabulary, and parsing a chip
 # back apart to reword it is the sniffing actclass exists to have ended.
 #
+# A label/gut op may carry "bubbled": this block's content is ALSO emitted as a
+# `plugins.conversation` record (a chat bubble), so any view that renders that
+# conversation must DROP the op to avoid showing it twice. It is the ONE unified
+# prose-drop signal across tools — a Claude subagent's ⇢ prompt / ✎ message /
+# ⇠ result (substream_render) and a codex SIDECAR run's ⇢/✎/⋯ prose
+# (plugins/codex/stream, ROLLOUT-backed only — a companion `.log` run has no
+# rollout to re-bubble from, so it sets NO bubbled and its prose stays as ops).
+# The PRODUCER sets it because only the producer knows it emitted both halves;
+# the presenter (opshtml.op_items agent scope) drops it by this flag rather than
+# sniffing the block glyph or the stream palette (what actclass.prose_block did
+# per-tool). Carried on the HEADER label — the drop propagates to the block's
+# body ops through the copy-group — and set on the body gut too for a group-less
+# block. Inert for the terminal renderer, like "web"/"note".
+#
 # A label/gut op may carry "mid": the id of the SUBJECT it is about, when several
 # ops speak about one thing — today a team message's msg_id (plugins/claude_code/
 # msgs.py: an arrival, its body and its read notice all wear the same mid). The
@@ -117,7 +131,7 @@ def rule():
 
 
 def label(s, c, outer=None, g=None, lk=None, web=False, note=None, mid=None,
-          who=None, tags=(), mem=False):
+          who=None, tags=(), mem=False, bubbled=False):
     o = {"t": "label", "s": s, "c": _rgb(c)}
     if who:
         o["who"] = str(who)
@@ -126,6 +140,8 @@ def label(s, c, outer=None, g=None, lk=None, web=False, note=None, mid=None,
         o["tags"] = tags
     if web:
         o["web"] = 1
+    if bubbled:
+        o["bubbled"] = 1           # re-bubbled via plugins.conversation (see header)
     if mem:
         # This block touched memory (see line()'s `mem`) — carried by the HEADER
         # here because a Bash block's memory-ness is a fact about the whole block:
@@ -173,7 +189,7 @@ def code(s, ind="  ", g=None):
 
 
 def gut(s, c, outer=None, g=None, bg=None, lex=None, num=None, view=None,
-        web=False, mem=False, mid=None, who=None, tags=()):
+        web=False, mem=False, mid=None, who=None, tags=(), bubbled=False):
     o = {"t": "gut", "s": s, "c": _rgb(c)}
     if who:
         o["who"] = str(who)            # see label()'s `who`
@@ -182,6 +198,8 @@ def gut(s, c, outer=None, g=None, bg=None, lex=None, num=None, view=None,
         o["tags"] = tags               # …and its `tags`
     if web:
         o["web"] = 1
+    if bubbled:
+        o["bubbled"] = 1               # see label()'s `bubbled`
     if mid:
         o["mid"] = str(mid)        # the SUBJECT this op is about (see label())
     if mem:

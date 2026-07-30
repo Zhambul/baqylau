@@ -358,7 +358,12 @@ def op_items(ops, key="", ids=None, carry=None, scope=None, codex_lead=False):
             op = actclass.as_lead(op)
             t = op.get("t")             # as_lead may re-shape the op (gut -> line)
             g = op.get("g") or None
-            if actclass.prose_block(op, scope):
+            # Drop a re-bubbled PROSE block: the producer-set `bubbled` flag is the
+            # ONE unified signal (a Claude subagent's ⇢/✎/⇠/✉ and a codex sidecar's
+            # ⇢/✎/⋯ alike — core/ops.py), so its conversation twin (plugins.
+            # conversation) isn't doubled. `prose_block` stays as the LEGACY fallback
+            # for parked pre-flag ops (no `bubbled` on disk).
+            if op.get("bubbled") or actclass.prose_block(op, scope):
                 if g:
                     cs.setdefault("drop", set()).add(g)
                 continue

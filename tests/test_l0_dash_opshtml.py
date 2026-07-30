@@ -141,6 +141,33 @@ def test_ops_label_gut_web_field():
     assert "web" not in O.gut("b", (1, 2, 3))
 
 
+def test_ops_label_gut_bubbled_field():
+    # core/ops.py sets the bubbled prose-drop signal only when asked; default off.
+    assert O.label("h", (1, 2, 3), bubbled=True).get("bubbled") == 1
+    assert O.gut("b", (1, 2, 3), bubbled=True).get("bubbled") == 1
+    assert "bubbled" not in O.label("h", (1, 2, 3))
+    assert "bubbled" not in O.gut("b", (1, 2, 3))
+
+
+def test_op_items_scope_drops_a_bubbled_block_across_tools():
+    # THE unified prose-drop: in agent scope, an op carrying `bubbled` (its content
+    # is re-bubbled via plugins.conversation) is dropped with its whole copy group,
+    # while the agent's non-bubbled activity (a command) stays — one signal for a
+    # Claude subagent AND a codex sidecar, no per-tool sniffing.
+    scope = {"sub:a1", "team:a1", "codex:a1"}
+    items = opshtml.op_items(
+        [{"t": "label", "s": "⇢ prompt", "c": [1, 2, 3], "g": "p1",
+          "src": "sub:a1", "bubbled": 1, "web": 1},
+         {"t": "gut", "s": "the brief", "c": [1, 2, 3], "g": "p1",
+          "src": "sub:a1", "bubbled": 1, "web": 1},
+         {"t": "label", "s": "▶ foreground", "c": [1, 2, 3], "g": "b1",
+          "src": "sub:a1"},
+         {"t": "gut", "s": "cmd output", "c": [1, 2, 3], "g": "b1",
+          "src": "sub:a1"}], "k", scope=scope)
+    # the bubbled prompt block (header + body, same group) is gone; the command stays
+    assert [(it["g"], it["t"]) for it in items] == [("b1", "label"), ("b1", "gut")]
+
+
 _HAVE_PYGMENTS = importlib.util.find_spec("pygments") is not None
 
 

@@ -804,14 +804,29 @@ streams it stamped `codex:<nickname>` through exactly this machinery). Four part
 1. **Grammar** — the rollout `chat`/`think`/exec/patch records already parse.
 2. **`conversation()`** — the run's PROSE becomes bubbles from its rollout,
    exactly as a Claude subagent's does.
-3. **Prose-op drop, ROLLOUT-backed only.** In scope, a codex run's prose ops
-   (`⇢`/`✎`/`⇠`/`⋯`) are dropped so the bubbles don't DOUBLE them
-   (`actclass.prose_block`), while its exec/patch ops STAY. But this drop fires
-   ONLY for a run whose transcript is a rollout (`.jsonl`) — a **companion `.log`**
-   run has no rollout to re-bubble from, so its prose must stay as ops.
-   `read/mirror.agent_scope` signals the difference with a `codexprose:<label>`
-   marker in the scope set (present only for a rollout-backed run); `prose_block`
-   drops a codex prose op only when that marker is present.
+3. **Prose-op drop via the unified `bubbled` FLAG.** In scope, a codex run's prose
+   ops (`⇢`/`✎`/`⇠`/`⋯`) are dropped so the bubbles don't DOUBLE them, while its
+   exec/patch ops STAY. The signal is `core/ops.py`'s **`bubbled`** field, set by
+   the PRODUCER (`stream.py` `_ro_prompt`/`_ro_message`/`_ro_reasoning`) — and ONLY
+   for a ROLLOUT-backed run, because only a rollout re-bubbles through
+   `conversation()`; a **companion `.log`** run sets no `bubbled` and its prose
+   stays as ops. `opshtml.op_items` drops a `bubbled` op directly. This is the SAME
+   flag a Claude subagent's prose carries (`substream_render`) — ONE cross-tool
+   signal, retiring the old codex-only `codexprose:<label>` scope marker and the
+   per-tool `prose_block` arms (`prose_block` survives as the legacy fallback for
+   parked pre-flag ops). See *The unified agent-scope render* in docs/dashboard.md.
+
+### The unified scope key (`codex:<aid>`)
+
+A Claude subagent stamps its ops `sub:<aid>`/`team:<aid>` — the SAME id
+`read/mirror.agent_scope` keys on. A codex run used to be stamped `codex:<label>`
+(the display label) while its card's agent id was the rollout basename
+(`paths.codex_aid`), so `agent_scope` had a codex-only branch that looked the label
+up off the run's row — a mismatch there silently yielded an EMPTY scoped mirror.
+Now `watch.spawn` stamps `codex:<codex_aid(srcfile)>`, so the op stamp EQUALS the
+agent id and `agent_scope` is one tool-agnostic rule
+(`{sub:,team:,codex:}+<aid>`), no lookup. `paths.codex_aid` is the single owner of
+that id (the producer stamps off it; `sessionapi.codex_aid` delegates to it).
 
 ### The standalone self-run empty-scope fix
 

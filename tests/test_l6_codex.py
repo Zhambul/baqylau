@@ -114,10 +114,14 @@ def test_companion_job_discovered_streamed_and_completed(test_env, codex):
     wait_until(lambda: "echo codex-hi" in codex.s.ops_text(),
                desc="companion log command chip")
     # A SECONDARY-source run's ops carry the codex producer-source stamp
-    # (watch.spawn's $CLAUDE_OPS_SRC → core.ops) — the web mirror drops them.
-    assert all(op.get("src") == "codex:Fix the thing"
+    # `codex:<aid>` (watch.spawn's $CLAUDE_OPS_SRC → core.ops) — the run's
+    # synthesized agent id (paths.codex_aid = the source basename), the id
+    # agent_scope matches, so the main web mirror drops them.
+    from core import paths as _P
+    aid = _P.codex_aid(logfile)
+    assert all(op.get("src") == "codex:" + aid
                for op in codex.s.ops() if "echo codex-hi" in str(op)), \
-        "secondary codex stream ops must be src-stamped"
+        "secondary codex stream ops must be src-stamped codex:<aid>"
     codex.log_event(logfile, "Assistant message", "all fixed now")
     codex.log_event(logfile, "Turn completed")     # flushes the message block
     wait_until(lambda: "all fixed now" in codex.s.ops_text(),
@@ -439,7 +443,7 @@ def test_standalone_watcher_streams_a_subagent_stamped(test_env, codex, reaper):
             "type": "custom_tool_call", "name": "exec", "call_id": "m1",
             "input": 'await tools.exec_command({cmd:"echo MAIN"});'}}])
     # OUR subagent — its own rollout, parent_thread_id == our SID, nickname Pauli
-    codex.add_rollout(originator="codex-tui", events=[
+    sub_path, _u = codex.add_rollout(originator="codex-tui", events=[
         {"type": "response_item", "payload": {
             "type": "custom_tool_call", "name": "exec", "call_id": "s1",
             "input": 'await tools.exec_command({cmd:"echo SUBWORK"});'}}],
@@ -461,15 +465,18 @@ def test_standalone_watcher_streams_a_subagent_stamped(test_env, codex, reaper):
                desc="the codex subagent run streamed")
     assert "echo FOREIGN" not in codex.s.ops_text(), \
         "a subagent of another session leaked into this session's mirror"
-    # the main run's ops are UNSTAMPED; the subagent's carry the codex:<nickname>
-    # producer stamp so the web mirror drops them into that agent's scope
+    # the main run's ops are UNSTAMPED; the subagent's carry `codex:<aid>` — the
+    # run's synthesized AGENT ID (paths.codex_aid = the rollout basename), the
+    # same id agent_scope matches, so the web mirror drops them into that scope
+    from core import paths as _P
+    aid = _P.codex_aid(sub_path)
     ops = codex.s.ops()
     main = [op for op in ops if "echo MAIN" in str(op)]
     sub = [op for op in ops if "echo SUBWORK" in str(op)]
     assert main and all(not op.get("src") for op in main), \
         "the standalone main run's ops must stay unstamped"
-    assert sub and all(op.get("src") == "codex:Pauli" for op in sub), \
-        "the subagent run's ops must be stamped codex:Pauli"
+    assert sub and all(op.get("src") == "codex:" + aid for op in sub), \
+        "the subagent run's ops must be stamped codex:<aid>"
     host.terminate()
 
 
