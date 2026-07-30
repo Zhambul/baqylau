@@ -6596,6 +6596,37 @@ a note and its card can never disagree; a failing op inside the block (`data-bad
 reddens that row on its own, exactly as it does for the summary dot. A row with no agent
 (team mail) gets no `data-out` and stays dim.
 
+**Some notes know their own outcome, and are stamped server-side.** The agent join
+above exists because an agent's outcome is a fact about the AGENT, not about the op.
+Three note kinds are not like that, and `actclass.note_out` answers for them at render
+time (`data-out` straight on the `.anote` div, so history and the live tail agree and
+the page needs no second pass):
+
+| note | dot | why |
+|---|---|---|
+| `⏺ Skill(slack)` | **green** (red when the call failed) | the skill is LOADED by the time the row exists — grey read as "still running" for a thing already over (*"skills loaded should be a green dot and not grey"*) |
+| `⏺ task #4 · <subject> · completed` | **green** | …and a *created* row keeps the dim dot: it is genuinely still pending |
+| `⏺ audit: <script>: <exception>` | **red** | an audit error is never a clean outcome |
+
+**Task rows, the ⚠ warning line and the ⇆ migrate notice joined the quiet register**
+with the same change (*"task cards should not be in these legacy ugly coloured
+boxes"*). Each was a full-width coloured pill — `✓ task #4 · P4: web presenter` in
+GREEN, `⚠ audit: …` in AMBER — for the same reason the command pills were: the
+terminal pane needs colour to be scannable, and the web already says everything those
+hues said with its dot, its wording and its layout. All three follow the established
+route rather than a fourth mechanism: the PRODUCER stamps the wording as the op's
+`note` (`task_fmt.task_note`, `errwatch.warn_note`, `relimit.migrate_note` — each the
+single owner of its own sentence), and `actclass` recovers the same wording from the
+glyph for ops ALREADY ON DISK, which no restart can re-stamp (`legacy_task_note` /
+`legacy_warn_note`, behind the one `legacy_note` door). A task's DONE state moves from
+the glyph's colour into the word `completed` plus the green dot, so two rows about one
+task never read identically.
+
+The ⚠ line also gained its activity class on the way: `errwatch` emits a `label`, and
+`classify` only tested the warn glyph on a `line`, so every audit warning fell through
+to the agent fallback and could fold into "ran N agents". It is `ACT_WARN` (and always
+`bad`) on both op types now.
+
 **A brief carries no injected reminders, and an empty one gets no click.** Claude
 Code injects `<system-reminder>` blocks into the text it hands an agent, so a launch
 note opened onto the roster of every addressable teammate instead of the task.

@@ -35,6 +35,7 @@
 # is an agent. No palette entry collides with a semantic colour (core/slots.py).
 import re
 
+from core import errwatch as EW
 from core import ops as O
 from core import render as R
 from core import slots as SL
@@ -138,8 +139,9 @@ _FILE_RE = re.compile(r"^(%s)\(" % "|".join(sorted(set(FILE_LABEL.values()))))
 _DIFF_RE = re.compile(r"\)\s+\+(\d+)(?:\s+-(\d+))?|\)\s+-(\d+)")
 
 # The audit warning light's own one-liner (core/errwatch.py emits `⚠ audit: …`);
-# it must never be swallowed by a collapse, so it gets its own class.
-_WARN_GLYPH = "⚠"
+# it must never be swallowed by a collapse, so it gets its own class. The glyph is
+# that module's vocabulary, imported rather than spelled again.
+_WARN_GLYPH = EW.GLYPH
 
 
 def _is_team(op):
@@ -631,10 +633,75 @@ def legacy_mail_note(op):
             else MSGS.note_message(frm, to))
 
 
+def legacy_task_note(op):
+    """The web wording for a pre-`note` TASK row (`✚ task #4 · <subj>` /
+    `✓ …`), or None. The terminal pill said created-vs-completed in its COLOUR;
+    the quiet register says it with the dot plus the producer's own DONE word
+    (plugins.claude_code.task_fmt.task_note — the same wording a live op now
+    carries, so history and today read identically)."""
+    try:
+        if op.get("t") != "label" or op.get("note"):
+            return None
+        text = _plain(op)
+        glyph = text[:1]
+        if glyph not in TASKS.GLYPHS:
+            return None
+        rest = text[1:].strip()          # `task #4 · <subject>`, already worded
+        if not rest:
+            return None
+        return (rest + " · " + TASKS.DONE_WORD
+                if glyph == TASKS.GLYPH_DONE else rest)
+    except Exception:
+        return None                     # unreadable: keep the chip
+
+
+def legacy_warn_note(op):
+    """…and for a pre-`note` audit ⚠ line (core/errwatch.py), reworded through
+    its owner. Colourless like every other note — the RED dot is what says an
+    audit error is never a clean outcome (see note_out)."""
+    try:
+        if op.get("t") != "label" or op.get("note"):
+            return None
+        text = _plain(op)
+        return EW.warn_note(text) if text.startswith(_WARN_GLYPH) else None
+    except Exception:
+        return None                     # unreadable: keep the chip
+
+
 def legacy_note(op):
     """The web wording for a chip written before its producer carried one — an
-    agent's, or team mail's. One door, so op_html/op_items ask the question once."""
-    return legacy_agent_note(op) or legacy_mail_note(op)
+    agent's, team mail's, a task row's, an audit warning's. One door, so
+    op_html/op_items ask the question once."""
+    return (legacy_agent_note(op) or legacy_mail_note(op)
+            or legacy_task_note(op) or legacy_warn_note(op))
+
+
+# The note OUTCOMES this module can answer from the op ALONE — the `data-out`
+# the quiet register's dot is tinted by (style.css `[data-out]`). Deliberately
+# NOT the agent notes' route: an agent's outcome is a fact about the AGENT, not
+# about the op (a launch note is written before there is one), so the page joins
+# it from the agents payload (app.05-session.js tintAgentNotes) and this function
+# says nothing about it. These three do know:
+#   skill — Claude Code loaded it (green) unless the call failed (red); the dot
+#           was grey, which read as "still running" for a thing that is over
+#           ("skills loaded should be a green dot and not grey"),
+#   task  — green once COMPLETED; a created/pending row keeps the dim dot,
+#   warn  — an audit error is never ok.
+def note_out(op):
+    """`"ok"`/`"bad"` for a note whose outcome the op itself knows, else None."""
+    try:
+        act, bad = classify(op)
+        if act == ACT_WARN:
+            return "bad"
+        if act == ACT_SKILL:
+            return "bad" if bad else "ok"
+        if act == ACT_TASK:
+            if bad:
+                return "bad"
+            return "ok" if _plain(op)[:1] == TASKS.GLYPH_DONE else None
+        return None
+    except Exception:
+        return None                     # unknown outcome: the dim dot
 
 
 def mail_plumbing(op, body_follows=False):
@@ -714,6 +781,11 @@ def _classify(op):
         agent_act = ACT_TEAM
     else:
         agent_act = ACT_AGENT
+    if text.startswith(_WARN_GLYPH):
+        # the audit warning light's own line, `label` or `line` alike (errwatch
+        # emits a label). Before this it fell through to the agent fallback below
+        # and a ⚠ folded into "ran N agents".
+        return ACT_WARN, True
     head = text[:1]
     if not head:
         # An empty / unreadable chip names nothing. It must NOT reach the agent

@@ -64,6 +64,21 @@ GLYPH_NEW  = "✚"        # a task created
 GLYPH_DONE = "✓"        # a task completed
 GLYPHS     = (GLYPH_NEW, GLYPH_DONE)
 
+# The DONE word the web wording appends (the terminal says it with the glyph's
+# colour, which the quiet register drops — see task_note).
+DONE_WORD  = "completed"
+
+
+def task_note(tid, subj, done):
+    """`task #4 · P4: web presenter` — the web mirror's one-liner for a task row
+    (the quiet `⏺` register, docs/dashboard.md *View modes*). The terminal's
+    coloured pill said "created" vs "completed" with its GLYPH's colour, which
+    that register has no room for: the dot carries the state (green once done)
+    and a completed row also says the word, so two rows about one task never read
+    identically."""
+    note = "task #%s · %s" % (tid, subj) if subj else "task #%s" % tid
+    return note + " · " + DONE_WORD if done else note
+
 KEY = "tasks"          # the state-DB kv stash the dashboard's tasks card reads
 PIN_KEY = "tasks-dir"  # kv: the drift-resolved task dir (see the header note)
 SCAN_MAX = 40          # newest sibling session-* dirs probed on a drift scan
@@ -247,12 +262,10 @@ def main():
     # task_subject with a task_description fallback — the payload carries these two
     # (NOT the "task_title" the docs mention; a speculative fallback on it was dropped).
     subj = d.get("task_subject") or d.get("task_description") or ""
-    if ev == "TaskCompleted":
-        glyph, rgb = GLYPH_DONE, DONE_RGB
-    else:                                    # TaskCreated (or anything task-ish)
-        glyph, rgb = GLYPH_NEW, CREATED_RGB
+    done = ev == "TaskCompleted"
+    glyph, rgb = (GLYPH_DONE, DONE_RGB) if done else (GLYPH_NEW, CREATED_RGB)
     text = f"{glyph} task #{tid} · {subj}" if subj else f"{glyph} task #{tid}"
-    O.emit(LOG, O.blank(), O.label(text, rgb))
+    O.emit(LOG, O.blank(), O.label(text, rgb, note=task_note(tid, subj, done)))
     A.hook_event(d, decision=f"rendered: {text}; {snapshot(d, LOG)}")
 
 

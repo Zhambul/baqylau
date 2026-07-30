@@ -70,6 +70,22 @@ COOLDOWN_S = EV.env_float("CLAUDE_RELIMIT_COOLDOWN_S", 600)
 # The auto-continue message that rides the --resume argv (the user chose
 # fully-transparent migration: the failed turn's prompt is already in the
 # transcript, so the resumed session just needs a push to pick it back up).
+# The migrate notice's GLYPH + its two wordings — the terminal's coloured pill
+# and the web mirror's quiet `⏺` note (which drops the glyph: it carried meaning
+# only through its AMBER). One owner, two call sites below.
+MIGRATE_GLYPH = "⇆"
+
+
+def migrate_note(slug):
+    """`migrating to c2 (web)` — the web mirror's wording for the ⇆ notice."""
+    return "migrating to %s (web)" % slug
+
+
+def _migrate_op(slug):
+    return O.label("%s %s" % (MIGRATE_GLYPH, migrate_note(slug)), O.AMBER,
+                   note=migrate_note(slug))
+
+
 NUDGE = ("Continue where you left off — the previous turn was cut off by the "
          "account's rate limit and this session was resumed on another account.")
 
@@ -314,7 +330,7 @@ def migrate(log, sid, slug, alias, cwd, mode="auto", model=""):
                 # just before the close so the line parks and replays in the
                 # successor's mirror. (A parked session skips this branch and
                 # must: a paint op would recreate the live DB.)
-                O.emit(log, O.label("⇆ migrating to %s (web)" % slug, O.AMBER))
+                O.emit(log, _migrate_op(slug))
             if not fe.close_tab(win):
                 A.error(log, "relimit close_tab", {"win": win})
                 run.end("close-failed")
@@ -347,7 +363,7 @@ def migrate(log, sid, slug, alias, cwd, mode="auto", model=""):
                 A.error(log, "relimit window gone but session live", {"sid": sid})
                 run.end("window-gone")
                 return
-            O.emit(log, O.label("⇆ migrating to %s (web)" % slug, O.AMBER))
+            O.emit(log, _migrate_op(slug))
         # `--model` (a downgrade rung) precedes the positional nudge; the auto
         # nudge names the new model so the resumed turn knows why it changed.
         nudge = NUDGE + (

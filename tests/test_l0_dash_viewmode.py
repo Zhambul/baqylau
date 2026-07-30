@@ -20,6 +20,7 @@ if REPO not in sys.path:
     sys.path.insert(0, REPO)
 
 import core.audit as A
+from core import errwatch
 from core import ops as O
 from dashboard import opshtml
 from dashboard import prefs
@@ -1008,10 +1009,36 @@ def test_a_subagent_block_reads_as_one_quiet_note_line(dash):
     assert "Agent &quot;Fix infra/vcs subprocess bugs&quot; finished" in legacy["html"]
     assert "ctx 22%" not in legacy["html"] and legacy["note"] == 1
 
-    # a label in NEITHER quiet register — no note of its own, and not command family
-    # (a task row) — is untouched: the coloured chip is still the default
-    plain = opshtml.op_items([O.label("✚ task · ship it", O.GREEN, g="t1")], "sid")[0]
+    # a label in NEITHER quiet register — no note of its own, no legacy wording and
+    # not command family — is untouched: the coloured chip is still the default
+    plain = opshtml.op_items([O.label("✽ something · new", O.GREEN, g="t1")], "sid")[0]
     assert 'class="chip"' in plain["html"] and "anote" not in plain["html"]
+
+    # …and a TASK row IS in that register now, with its dot carrying the state: a
+    # created row keeps the dim dot, a completed one goes green (docs/dashboard.md
+    # *Web tasks*). Live ops carry the producer's own note; a parked one is reworded
+    # from the glyph.
+    for op, out in ((O.label("✚ task #4 · ship it", O.AMBER), ""),
+                    (O.label("✓ task #4 · ship it", O.GREEN), ' data-out="ok"')):
+        it = opshtml.op_items([op], "sid")[0]
+        assert it["note"] == 1 and it["act"] == "task"
+        assert 'class="chip"' not in it["html"]
+        assert ('<div class="anote"%s>' % out) in it["html"]
+        assert "task #4 · ship it" in it["html"]
+    assert "completed" in opshtml.op_items(
+        [O.label("✓ task #4 · ship it", O.GREEN)], "sid")[0]["html"]
+
+    # a SKILL note's dot is green — Claude Code loaded it, and grey read as "still
+    # running" for something already over
+    skill = opshtml.op_items(
+        [O.label("✦ skill · slack", O.VIOLET, note="Skill(slack)", g="k1")], "sid")[0]
+    assert 'data-out="ok"' in skill["html"] and "Skill(slack)" in skill["html"]
+
+    # …and the audit warning light's ⚠ line is a RED-dotted note, classified `warn`
+    # (it used to fall through to the agent fallback and fold into "ran N agents")
+    warn = opshtml.op_items([errwatch._warn("⚠ audit: claude-x.py: boom")], "sid")[0]
+    assert warn["act"] == "warn" and 'data-out="bad"' in warn["html"]
+    assert "⚠" not in warn["html"] and "audit: claude-x.py: boom" in warn["html"]
 
     # …and the page knows to let the note BE the line (no first-body-line summary
     # crowding it), which it reads off the served item rather than the HTML

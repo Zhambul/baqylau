@@ -861,7 +861,14 @@ def test_f8_task_rows(run_hook, test_env, session, seed):
     run_hook("claude-task-fmt.py", P.task_created(s, "3", "Refactor the seams"))
     run_hook("claude-task-fmt.py", P.task_completed(s, "3", "Refactor the seams"))
     text = s.ops_text()
-    assert text.count("Refactor the seams") == 2
+    # the terminal chip (glyph + colour) …
+    assert "✚ task #3 · Refactor the seams" in text
+    assert "✓ task #3 · Refactor the seams" in text
+    # …and the web mirror's own wording on the same ops (the quiet ⏺ register —
+    # the dot says created/completed where the pill said it in colour), which is
+    # why the subject appears twice per row
+    assert text.count("Refactor the seams") == 4
+    assert "task #3 · Refactor the seams · completed" in text
     oracle.assert_clean(test_env, s.sid)
 
 

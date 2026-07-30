@@ -154,9 +154,15 @@ def op_html(op, key=""):
             # as a collapsed run's summary (`.vsum`: a 7px dot, an 8px gap, then the
             # words). One `⏺ …` string in a single div put the glyph and the text at
             # neither column, and the two line kinds read as a ragged pair.
-            return ("<div class=\"anote\"><span class=\"anmark\">%s</span>"
+            # …and the dot's OUTCOME, when the op itself knows it (a skill that
+            # loaded, a completed task, an audit ⚠ — actclass.note_out). An agent
+            # note carries none here: its outcome is joined from the agents payload
+            # by the page, which stamps the same attribute.
+            out = actclass.note_out(op)
+            oattr = " data-out=\"%s\"" % out if out else ""
+            return ("<div class=\"anote\"%s><span class=\"anmark\">%s</span>"
                     "<span class=\"atext\">%s</span></div>"
-                    % (NOTE_GLYPH, html.escape(note)))
+                    % (oattr, NOTE_GLYPH, html.escape(note)))
         # …and a COMMAND-family chip goes quiet the same way (a foreground command, a
         # background job, a monitor — actclass.cmd_note). One row here, because a lone
         # op has no header to be a slot of; the STREAM path splits it (op_items).

@@ -156,6 +156,24 @@ def _summary(tb):
     return "?"
 
 
+# The warning light's own GLYPH — this module's vocabulary, read back by the web
+# mirror's classifier (dashboard/opshtml/actclass.py, the `warn` activity class).
+GLYPH = "⚠"
+
+
+def warn_note(text):
+    """The web mirror's wording for a ⚠ line: the same sentence without the glyph.
+    The quiet `⏺` register carries the outcome in its DOT (red — an audit error is
+    the one note that is never "ok"), so the glyph, whose whole meaning was its
+    AMBER, would only repeat it."""
+    return text[len(GLYPH):].strip() if text.startswith(GLYPH) else text
+
+
+def _warn(text):
+    """One AMBER ⚠ label, web-worded."""
+    return O.label(text, O.AMBER, note=warn_note(text))
+
+
 def err_ops(rows, sid, who=""):
     """Mirror paint ops for a batch of NEW errors rows [(id, script, func,
     traceback), …]: one AMBER ⚠ label per row, or — past FLOOD_N — a single
@@ -167,8 +185,8 @@ def err_ops(rows, sid, who=""):
     tag = f"{who}: " if who else ""
     target = "''" if who else sid
     if len(rows) > FLOOD_N:
-        return [O.label(f"⚠ audit: {tag}{len(rows)} new errors "
-                        f"(bin/claude-audit.py errors {target})", O.AMBER)]
+        return [_warn(f"{GLYPH} audit: {tag}{len(rows)} new errors "
+                      f"(bin/claude-audit.py errors {target})")]
     out = []
     for _id, script, func, tb in rows:
         what = _summary(tb)
@@ -178,8 +196,8 @@ def err_ops(rows, sid, who=""):
         # message — show it instead of the noise.
         if what in ("NoneType: None", "?") and func:
             what = func
-        text = SF.cap(f"⚠ audit: {tag}{script}: {what}", 1)
-        out.append(O.label(text[:TEXT_MAX], O.AMBER))
+        text = SF.cap(f"{GLYPH} audit: {tag}{script}: {what}", 1)
+        out.append(_warn(text[:TEXT_MAX]))
     return out
 
 
