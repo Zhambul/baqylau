@@ -9,7 +9,7 @@ from core.noaudit import load_audit
 from dashboard import (askdialog, plandialog)
 from dashboard.screendrive import clip_screen
 from dashboard.control import launch
-from dashboard.read.mirror import (heal_stash)
+from dashboard.read.mirror import (drop_stash, heal_stash)
 from dashboard.read.session import (ask_pending, plan_pending)
 
 A = load_audit()
@@ -118,9 +118,11 @@ class _DialogMixin:
         dialog step that didn't verify (AskError — the dialog is left OPEN,
         never Escape-closed: Escape would DECLINE the questions; `step` says
         what failed and a retry from the card re-normalizes). Every attempt
-        is a `web-answer` state_files row, failures also an A.error. The
-        card itself clears via the SSE `ask` event when the answer's
-        PostToolUse drops the stash — the true end-to-end signal."""
+        is a `web-answer` state_files row, failures also an A.error. The card
+        itself clears via the SSE `ask` event when the stash drops: for an
+        `answers` submission that is the PostToolUse, the true end-to-end
+        signal; a `chat` DECLINE fires no hook, so this endpoint drops it (see
+        the drop_stash call below)."""
         body = self._post_guard()
         if body is None:
             return
@@ -172,6 +174,21 @@ class _DialogMixin:
         A.state_file(log, sdb, "web-answer",
                      {"win": win, "ok": True, "chat": chat,
                       "tool_use_id": pending.get("tool_use_id") or ""})
+        # "Chat about this" DECLINES the questions, and a decline fires no hook —
+        # the plan card's bug in the other dialog (see post_plan_decision), and
+        # sharper here, because this path's whole purpose is to hand you the
+        # composer ("questions dismissed — type your message below") while the
+        # lingering stash made the modal gate refuse that very message. `drive`
+        # waited for the dialog AND the review screen to be gone before
+        # returning, so the stash is provably stale. The draft dies with its
+        # question, exactly as ask_fmt couples them.
+        #
+        # ANSWERS are left alone: their PostToolUse owns that clear (and may end
+        # on the review screen rather than a closed dialog, so this could not
+        # prove staleness there anyway).
+        if chat:
+            for key in ("ask-pending", "ask-draft"):
+                drop_stash(sid, log, sdb, key, "web decline (chat)")
         # a PREVIEW-layout question has no typed-answer row (askdialog
         # _require_type_row), so the card routes a TYPED answer through 'Chat
         # about this' AND carries the typed text here as `message`: once the
@@ -281,9 +298,11 @@ class _DialogMixin:
         409 on stash mismatch or any unverified step (PlanError — the dialog
         is left OPEN: an Escape bail would REJECT a plan the user may still
         approve; `open` bails self-heal the stash). Every attempt is a
-        `web-plan` state_files row, failures also an A.error. The card
-        clears via the SSE `plan` event when the stash drops (approval's
-        PostToolUse, or the turn boundary after a reject)."""
+        `web-plan` state_files row, failures also an A.error. The card clears
+        via the SSE `plan` event when the stash drops: an approval's own
+        PostToolUse, or — for the two DECLINE kinds, which fire no hook — this
+        endpoint itself (see the drop_stash call below; waiting for "the turn
+        boundary after a reject" is what blocked the composer for 9 minutes)."""
         body, pending, fe, win, log, sdb = self._plan_guard(sid)
         if body is None:
             return
@@ -319,4 +338,21 @@ class _DialogMixin:
         A.state_file(log, sdb, "web-plan",
                      {"win": win, "ok": True, "kind": kind,
                       "label": body.get("label") or "", "tool_use_id": tid})
+        # A DECLINE has no closing hook and sends no message, so NOTHING else
+        # drops the stash until the next turn boundary — which after a decline is
+        # however long the model's continuation runs, or NEVER if you interrupt
+        # it. Two things then break at once: the card sits stale, and the
+        # composer's modal gate 409s every send ("I couldn't send you a message
+        # before or after rejection" — session e683c445, 2026-07-30: a dismiss at
+        # 10:36:21, two sends 30s later both `blocked: modal`, the 104-char
+        # message lost, and it only came back 9 minutes on when an unrelated turn
+        # boundary finally cleared it). So drop it HERE — the driver verified the
+        # dialog is GONE before returning (plandialog's `submit` step), which is
+        # exactly what the stash claims otherwise.
+        #
+        # Declines ONLY: an approval's own PostToolUse is the single owner of
+        # that clear and it fires reliably, so this fills the gap where there is
+        # no owner rather than taking the clear away from one that works.
+        if kind in ("feedback", "dismiss"):
+            drop_stash(sid, log, sdb, "plan-pending", "web decline (%s)" % kind)
         return self._json({"ok": True, "kind": kind})

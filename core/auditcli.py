@@ -238,6 +238,25 @@ ANOMALY_SECTIONS = [
      "  AND json_extract(d.content, '$.phase')='done' "
      "  AND json_extract(d.content, '$.win')=json_extract(a.content, '$.win') "
      "  AND d.ts >= a.ts)", 1),
+    # "I couldn't send you a message." The composer's modal gate refuses a send
+    # while an ask/plan stash is set (a message pasted into an open dialog goes
+    # INTO the dialog), so a stash that outlives its dialog silently blocks every
+    # send — the shape reported as "I couldn't send you a message before or after
+    # rejection" (session e683c445, 2026-07-30). This flags a `blocked: modal`
+    # send that follows a SUCCESSFUL web decision on the same dialog: the dialog
+    # was decided, so the block is stale by definition. Both endpoints now drop
+    # their own stash on a decline (docs/dashboard.md, *A DECLINE drops the stash
+    # itself*), so a hit here means either an OLD session or a NEW leak — check
+    # whether a `plan-pending`/`ask-pending` remove row sits between the two.
+    ("send refused by a STALE modal gate (web-send blocked:modal after the "
+     "dialog was already decided)",
+     "SELECT s.ts, s.content FROM state_files s WHERE s.session_id=? "
+     "AND s.action='web-send' AND json_valid(s.content) "
+     "AND json_extract(s.content, '$.blocked')='modal' "
+     "AND EXISTS (SELECT 1 FROM state_files d WHERE d.session_id=s.session_id "
+     "  AND d.action IN ('web-plan','web-answer') AND json_valid(d.content) "
+     "  AND json_extract(d.content, '$.ok')=1 "
+     "  AND d.ts < s.ts AND d.ts > s.ts - 1800)", 1),
     # A dashboard STOP (interrupt) whose verify never saw the working spinner
     # clear — the synthesized Escape (only ~2/3 reliable) never reached the TUI,
     # so the turn kept running. `stopped:false` is the endpoint reporting the

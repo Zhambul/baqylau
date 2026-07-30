@@ -18,22 +18,32 @@ from dashboard.read.meta import session_cmds, session_kv
 A = load_audit()
 
 
-def heal_stash(sid, log, sdb, key, step):
-    """An endpoint's `open` bail means the dialog is GONE while the stash
-    lingers (resolved in the terminal; the turn-boundary clear hasn't fired
-    yet) — drop the stash so the page's card clears on the next SSE tick
-    instead of sitting stale. Audited like ask_fmt's own removes."""
-    if step != "open":
-        return
+def drop_stash(sid, log, sdb, key, reason):
+    """Drop a pending-dialog stash the DASHBOARD knows is stale — the one
+    writer for every case where the web can prove the dialog is gone but no
+    hook will say so. `reason` names the case, in the same `state_files` row
+    shape ask_fmt's own removes use, so the stash lifecycle stays readable as
+    one write→remove story whoever did the removing.
+
+    Two callers, both in http/post/dialogs.py: an endpoint's `open` bail
+    (heal_stash below) and a successful DECLINE, which fires no hook at all."""
     try:
         # kv_del_at, not kv_del: this runs on a request-handler THREAD, and
         # kv_del's cached connection is bound to whichever thread created it
         # (sqlite check_same_thread) — the delete would silently no-op
         if ST.kv_del_at(sdb, key):
-            A.state_file(log, sdb, key,
-                         {"action": "remove", "reason": "web open-bail"})
+            A.state_file(log, sdb, key, {"action": "remove", "reason": reason})
     except Exception:
         A.error(log, "dashboard stash heal (%s)" % key, {"sid": sid})
+
+
+def heal_stash(sid, log, sdb, key, step):
+    """An endpoint's `open` bail means the dialog is GONE while the stash
+    lingers (resolved in the terminal; the turn-boundary clear hasn't fired
+    yet) — drop the stash so the page's card clears on the next SSE tick
+    instead of sitting stale. Audited like ask_fmt's own removes."""
+    if step == "open":
+        drop_stash(sid, log, sdb, key, "web open-bail")
 
 
 def conv_items(recs, cmds=()):

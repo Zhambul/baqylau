@@ -979,6 +979,33 @@ def test_post_answer_chat_about_this(dash, monkeypatch):
     assert fe.chatted and fe.submitted is None
 
 
+def test_post_answer_chat_drops_the_stash_so_the_composer_unblocks(
+        dash, monkeypatch):
+    """"Chat about this" DECLINES the questions, and a decline fires no hook —
+    the plan card's bug in the other dialog. Sharper here: this path's whole
+    purpose is to hand you the composer ("questions dismissed — type your
+    message below") while the lingering stash made the modal gate refuse that
+    very message. The draft dies with its question, as ask_fmt couples them."""
+    fe = _AskFE(_ASK_1S)
+    _ask_env(monkeypatch, "askd", "48", fe, _ASK_1S)
+    S.kv_set(DS.P.mirror_log("askd"), "ask-draft",
+             {"tool_use_id": "toolu_a1", "answers": [{"selected": ["Apple"]}]})
+    code, _b = _post(dash + "/api/session/askd/answer",
+                     {"tool_use_id": "toolu_a1", "chat": True})
+    assert code == 200 and fe.chatted
+    assert _stash("askd", "ask-pending") is None
+    assert _stash("askd", "ask-draft") is None
+    assert [c for s, c in _sf_rows_full("ask-pending") if s == "askd"][-1] == \
+        {"action": "remove", "reason": "web decline (chat)"}
+    # a real ANSWERS submission is left alone — its PostToolUse owns that clear
+    # (and it may end on the review screen, so the web cannot prove staleness)
+    _ask_env(monkeypatch, "aske", "49", _AskFE(_ASK_1S), _ASK_1S)
+    code, _b = _post(dash + "/api/session/aske/answer",
+                     {"tool_use_id": "toolu_a1",
+                      "answers": [{"selected": ["Apple"]}]})
+    assert code == 200 and _stash("aske", "ask-pending") is not None
+
+
 def test_post_answer_chat_delivers_message(dash, monkeypatch):
     """A TYPED answer on a preview-layout question is routed by the card through
     'Chat about this' AND carries the typed text as `message` — the server
@@ -1326,6 +1353,42 @@ def test_post_plan_feedback_and_dismiss(dash, monkeypatch):
                        {"tool_use_id": "toolu_p1", "dismiss": True})
     assert code == 200 and json.loads(body)["kind"] == "dismiss"
     assert fe2.decided == "esc"
+
+
+def _stash(sid, key):
+    return S.kv_at(DS.P.state_db(DS.P.mirror_log(sid)), key)
+
+
+def test_post_plan_decline_drops_the_stash_so_the_composer_unblocks(
+        dash, monkeypatch):
+    """A plan DECLINE fires no closing hook and sends no message, so nothing
+    else dropped `plan-pending` until the next turn boundary — and meanwhile the
+    composer's modal gate 409'd every send. Measured: a dismiss at 10:36:21,
+    two sends 30s later both `blocked: modal`, the message lost, unblocking only
+    9 minutes on (session e683c445, 2026-07-30). The endpoint drops it itself."""
+    for sid, win, body, kind in (("pld1", "61", {"feedback": "shorter"},
+                                  "feedback"),
+                                 ("pld2", "62", {"dismiss": True}, "dismiss")):
+        _plan_env(monkeypatch, sid, win, _PlanFE())
+        assert _stash(sid, "plan-pending") is not None
+        code, resp = _post(dash + "/api/session/%s/plan-decision" % sid,
+                           dict(body, tool_use_id="toolu_p1"))
+        assert code == 200 and json.loads(resp)["kind"] == kind
+        assert _stash(sid, "plan-pending") is None, kind
+        # …and the drop is AUDITED, in ask_fmt's own write→remove row shape, so
+        # the stash lifecycle reads as one story whoever did the removing
+        rows = [c for s, c in _sf_rows_full("plan-pending") if s == sid]
+        assert rows[-1] == {"action": "remove",
+                            "reason": "web decline (%s)" % kind}
+
+    # An APPROVAL is left alone: its PostToolUse is the single owner of that
+    # clear and fires reliably, so this fills the gap where there is no owner
+    # rather than taking the clear from one that works.
+    _plan_env(monkeypatch, "pld3", "63", _PlanFE())
+    code, _r = _post(dash + "/api/session/pld3/plan-decision",
+                     {"tool_use_id": "toolu_p1", "digit": "2",
+                      "label": "Yes, manually approve edits"})
+    assert code == 200 and _stash("pld3", "plan-pending") is not None
 
 
 def test_post_plan_guards_and_open_bail_heals(dash, monkeypatch):

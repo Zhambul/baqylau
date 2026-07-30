@@ -3671,6 +3671,70 @@ the ask card's `open` bail. Every attempt is a `web-plan` state_files
 row (`{win, ok, kind: decide|feedback|dismiss, label, tool_use_id}`,
 +`step` on a bail), failures also an `A.error`.
 
+### A DECLINE drops the stash itself (it has no hook to wait for)
+
+A successful decline used to leave `plan-pending` in place, on the theory
+that "the turn boundary after a reject" would clear it. It does not, in
+time: after a decline Claude Code hands the rejection back to the model,
+which **continues the same turn** — so `Stop` is however long that
+continuation runs away, and if you interrupt it, `Stop` never fires at
+all. Two things break for that whole window:
+
+- the card sits **stale** on the page (`web-hint` `{"op":"plan",
+  "phase":"stale","wait_ms":20003}`);
+- **every send 409s.** The composer's modal gate (`http/post/typing.py`
+  — a message pasted while a dialog is up goes *into* the dialog) keys on
+  exactly that stash, so it refuses with *"this session has an open
+  question — answer it in the card above"* for a dialog that is long gone.
+
+Measured (session `e683c445`, 2026-07-30 — *"I couldn't send you a
+message before or after rejection"*): plan stashed 10:36:17, dismissed
+10:36:21 (`web-plan ok:true kind:dismiss`), **no hook row after it at
+all**, then two sends at 10:36:51 and 10:36:54 both `web-send {"ok":
+false, "blocked": "modal"}` → `web-clientfail` → the 104-char message
+dropped. It only unblocked at 10:45:39, nine minutes later, when an
+unrelated turn boundary finally cleared the stash.
+
+The same session holds the control case, one minute earlier, which is what
+makes the diagnosis airtight — an **approve** clears in zero seconds and a
+**decline** never clears:
+
+| 10:33:51 | `web-plan kind:decide` | `plan-pending remove reason:answered` **same second** | send 10:34:09 ✔ |
+| 10:34:56 | `web-plan kind:feedback` | *no clear row at all* | send 10:35:28 `blocked:modal` ✘ |
+| 10:36:21 | `web-plan kind:dismiss` | *no clear row at all* | sends 10:36:51 + 10:36:54 `blocked:modal` ✘ |
+
+The 10:35:28 block was "cured" only by the NEXT round overwriting the
+stash one second later, which is why the symptom read as intermittent.
+The canned anomaly *"send refused by a STALE modal gate"* finds all three.
+
+So both dialog endpoints now drop their own stash on a successful
+**decline**, through `read/mirror.drop_stash` (the single writer
+`heal_stash` was refactored onto — same `state_files` `{action: remove,
+reason}` shape as `ask_fmt`'s own removes, so the lifecycle still reads
+as one write→remove story whoever did the removing):
+
+| endpoint | kinds that drop it | reason |
+|---|---|---|
+| `plan-decision` | `feedback`, `dismiss` | `web decline (<kind>)` |
+| `answer` | `chat` (+ `ask-draft`) | `web decline (chat)` |
+
+This is safe because each driver **verifies the dialog is gone** before
+returning success (`plandialog`'s `submit` step; `askdialog.drive` polls
+`not dialog_open and not review_open`) — which is precisely what the
+stash claims otherwise.
+
+It is scoped to declines on purpose. A plan `decide` and an ask `answers`
+complete the tool, so their `PostToolUse` is the single owner of that
+clear and it fires reliably; this fills the gap where there is **no**
+owner rather than taking the clear away from one that works (and an
+`answers` submission can end on the review screen, so the web could not
+prove staleness there anyway).
+
+The ask side was the same bug and worse in effect: "Chat about this"
+exists to hand you the composer — its own toast says *"questions
+dismissed — type your message below"* — while the lingering stash made
+the gate refuse that very message.
+
 Verified live end-to-end (2026-07-18): feedback → Claude revised the
 plan (and the final output honored it), dismiss → rejected in place,
 approve by digit+label → PostToolUse + the plan executed; options parsed
