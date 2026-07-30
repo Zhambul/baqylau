@@ -195,6 +195,7 @@ IGNORE_KINDS = frozenset({
     "compact_boundary",  # top-level compaction boundary — the event_msg `compact` already paints ⟳
     "ask",               # request_user_input dialog — surfaced via the web question card, not the mirror
     "plan",              # plan-mode Plan item — surfaced via the web plan card + transcript, not the mirror
+    "settings",          # thread_settings_applied — the picker's model/effort state, read by ctx/effort, not painted
     "bad",               # malformed/undecodable line — counted in the malformed audit, never painted
 })
 

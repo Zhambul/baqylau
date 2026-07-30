@@ -287,6 +287,19 @@ def _ev_task_complete(p):
     return {"kind": "task_complete", "at": p.get("completed_at")}
 
 
+def _ev_thread_settings_applied(p):
+    """codex's PICKER state: a `thread_settings_applied` fires on EVERY /model
+    change (model or reasoning level) — so it is FRESHER than `turn_context`,
+    which is written only per-TURN. Its `thread_settings.model` +
+    `reasoning_effort` are the current model/effort even before the next turn, so
+    the ctx/effort reads take the NEWEST of this and turn_context (else the header
+    lagged behind picker changes — a `terra high` run reading a stale `sol high`
+    from the last turn_context, docs/codex.md *token_count keeps three things*)."""
+    ts = p.get("thread_settings") or {}
+    return {"kind": "settings", "model": ts.get("model") or "",
+            "effort": (ts.get("reasoning_effort") or "").strip()}
+
+
 def _ev_item_completed(p):
     """codex's PLAN-mode plan: an `item_completed` whose `item.type == "Plan"`
     carries the full plan as markdown (`item.text`) with a stable id. This is
@@ -473,6 +486,7 @@ def _top_world_state(p):
 _EVENT = {"token_count": _ev_token_count, "patch_apply_end": _ev_patch_apply_end,
           "context_compacted": _ev_context_compacted,
           "task_started": _ev_task_started, "task_complete": _ev_task_complete,
+          "thread_settings_applied": _ev_thread_settings_applied,
           "item_completed": _ev_item_completed,
           "turn_aborted": _ev_turn_aborted, "user_message": _ev_user_message,
           "agent_reasoning": _ev_agent_reasoning,
@@ -518,7 +532,7 @@ KINDS = frozenset({
     "turn_context", "usage", "patch", "compact", "task_started",
     "task_complete", "turn_aborted", "prompt", "reasoning", "message",
     "search", "exec", "exec_result", "stdin", "chat", "think", "patch_call",
-    "ask", "plan", "compact_boundary", "bad",
+    "ask", "plan", "settings", "compact_boundary", "bad",
 })
 
 

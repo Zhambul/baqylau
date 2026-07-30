@@ -568,6 +568,34 @@ def test_codex_effort_provider_reads_the_last_turn_context(tmp_path):
     assert plugins.effort(str(tmp_path / "nope.jsonl")) == ""
 
 
+def test_codex_effort_prefers_newest_picker_change_over_turn_context(tmp_path):
+    """A /model change writes a `thread_settings_applied` but NO turn_context
+    (that is per-turn) — so after a switch made without running a turn, the
+    settings record is FRESHER. context()/codex_effort take the newest of the
+    two, else the header lagged (the reported `terra high` picker state read as a
+    stale `sol high` from the last turn_context)."""
+    import plugins
+    p = _rollout(tmp_path, [
+        {"type": "session_meta", "payload": {"cwd": "/w"}},
+        # the one turn that ran, at sol/high
+        {"type": "turn_context", "payload": {"model": "gpt-5.6-sol",
+                                             "effort": "high"}},
+        {"type": "event_msg", "payload": {"type": "token_count",
+            "info": {"total_token_usage": {"input_tokens": 1000},
+                     "last_token_usage": {"total_tokens": 1000},
+                     "model_context_window": 100000}}},
+        # then the user switched model+level via the picker — settings only
+        {"type": "event_msg", "payload": {
+            "type": "thread_settings_applied",
+            "thread_settings": {"model": "gpt-5.6-terra",
+                                "reasoning_effort": "low"}}}])
+    from plugins.codex import read as RD
+    assert RD.codex_effort(p) == "low"                 # the picker's, not sol/high
+    ctx = RD.context(p)
+    assert ctx["model"] == "gpt-5.6-terra" and ctx["effort"] == "low"
+    assert plugins.effort(p) == "low"
+
+
 def test_slash_commands_fan_out_is_host_scoped():
     """plugins.slash_commands routes to exactly the OWNING host, not a concat: a
     codex session gets codex's list, a Claude one gets Claude's, an unknown host

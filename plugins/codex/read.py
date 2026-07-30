@@ -96,12 +96,17 @@ def context(path, main=False):
                 tot = rec["last"].get("total_tokens")
                 if isinstance(tot, int) and tot > 0:
                     used, window = tot, rec["window"]
-        elif not model and b'"turn_context"' in raw:
+        elif not model and (b'"turn_context"' in raw
+                            or b'"thread_settings_applied"' in raw):
+            # model/effort come from the NEWEST of turn_context (per-turn) OR
+            # thread_settings_applied (every picker change) — scanning newest→
+            # oldest, the first of either wins, so a /model switch shows at once
+            # instead of lagging until the next turn.
             try:
                 rec = RO.parse(json.loads(raw))
             except Exception:
                 rec = None
-            if rec and rec["kind"] == "turn_context":
+            if rec and rec["kind"] in ("turn_context", "settings"):
                 model = rec.get("model") or ""
                 effort = rec.get("effort") or ""
         if used is not None and model:
@@ -123,12 +128,16 @@ def codex_effort(path):
     if lines is None:
         return ""
     for raw in reversed(lines):
-        if b'"turn_context"' in raw:
+        # the NEWEST of turn_context (per-turn) or thread_settings_applied (every
+        # picker change) — the latter is fresher after a /model switch made
+        # without running a turn (the reported `terra high` shown as a stale
+        # level from the last turn_context).
+        if b'"turn_context"' in raw or b'"thread_settings_applied"' in raw:
             try:
                 rec = RO.parse(json.loads(raw))
             except Exception:
                 rec = None
-            if rec and rec["kind"] == "turn_context":
+            if rec and rec["kind"] in ("turn_context", "settings"):
                 return rec.get("effort") or ""
     return ""
 
