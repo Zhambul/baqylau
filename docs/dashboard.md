@@ -4530,9 +4530,14 @@ zsh aliases). Each `claude-subscription <slug>` exports `CLAUDE_SUBSCRIPTION_SLU
 + `CLAUDE_SUBSCRIPTION_LABEL` and injects that account's keychain token; the plain
 `claude` alias is the default account (empty slug). Three surfaces:
 
-**Launch under an account.** The new-session form's account picker is
-`plugins.accounts()` (`plugins/claude_code/account.registry` — one entry per
-`accounts.tsv` row). There is **no "default" option**: the plain-`claude` login
+**Launch under an account.** The new-session form's account picker reads the
+same `/api/accounts` payload the strip does, and keeps only the rows marked
+`switchable` — the payload is the whole usage STRIP now, and only a switcher
+account is something you can launch UNDER. It filters on that served flag rather
+than on a host name, so a host-wide reading (codex, no slug) stays on the strip
+and out of the picker without the page knowing whose row it is. The rows
+themselves are `plugins.accounts()` (`plugins/claude_code/account.registry` —
+one entry per `accounts.tsv` row). There is **no "default" option**: the plain-`claude` login
 resolves to whichever account is interactively signed in — a duplicate of one of
 the listed accounts — so offering it just yields an unlabeled session that's
 really c1 or c2. The chosen slug is resolved server-side to a registry-vetted

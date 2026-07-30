@@ -688,6 +688,19 @@ def test_accounts_strip_rows_stack_column_for_column():
     # the name column sizes to the widest name on the strip ("c2 · " + 19)
     assert d["cases"]["model_window_on_one"]["aname"] == "24ch"
 
+    # The new-session ACCOUNT PICKER reads the same /api/accounts payload, which
+    # is now the whole usage STRIP — so it must offer only rows that ARE an
+    # account you can launch under. It filters on the served `switchable` flag,
+    # not on a host name: a host-wide reading (codex) carries no slug, and an
+    # option with an empty slug would submit a launch under nothing. Grepped
+    # because the filter lives inside openNewSession's closure, which no jsdom
+    # harness reaches (the sibling pin at *ctx bar keys* uses the same device).
+    with open(os.path.join(REPO, "dashboard", "static",
+                           "app.09-newsession.js"), encoding="utf-8") as fh:
+        ns = fh.read()
+    assert "filter(a => a.switchable)" in ns, \
+        "the account picker must drop non-switchable usage-strip rows"
+
     # TWO HOSTS, one strip, one painter: each group lays out its OWN windows,
     # and neither borrows the other's — no ghost "1w" on an account, no ghost
     # "7d fable" on the codex row. This is what let the second endpoint, DOM

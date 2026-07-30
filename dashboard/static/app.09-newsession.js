@@ -901,7 +901,14 @@ function nsPickers(F) {
     acct.value = pool.reduce((b, a) => schedScore(a) > schedScore(b) ? a : b).slug;
   };
   model.onpick = () => { modelPicked = true; autoAcct(); };
-  const fillAccts = (list) => {
+  const fillAccts = (rows) => {
+    // /api/accounts is the whole usage STRIP now — every host's rate-limit rows,
+    // not just the switcher's accounts. Only a `switchable` row is an account
+    // you can launch under, which is what this picker offers; a host-wide
+    // reading (codex) carries no slug and belongs on the strip alone. Filtering
+    // on the served FLAG rather than on a host name keeps the picker honest for
+    // a host nobody has written yet.
+    const list = (rows || []).filter(a => a.switchable);
     acctList = list;
     acctRow.style.display = acctVisible() ? "" : "none";
     acct.fill(list.map(a => {
