@@ -295,12 +295,14 @@ def agent_scope(sid, agent):
 
     A subagent, a teammate AND a codex run are all named by the SAME id now: the
     producer stamps every op with the id that IS the scope key — `sub:<aid>` /
-    `team:<aid>` for a Claude agent, `codex:<aid>` for a codex run (the run's
-    synthesized agent id, paths.codex_aid — plugins/codex/watch.spawn), so no
-    per-tool label lookup is needed (the unification: a codex run used to be
-    stamped `codex:<label>` and matched by a lookup off its card, which an id
-    mismatch could turn into an empty mirror). All three spellings are accepted;
-    the non-matching prefixes are inert.
+    `team:<aid>` for a Claude agent, `codex:<aid>` for a codex SIDECAR and
+    `sub:<aid>` for a codex-NATIVE subagent (the run's synthesized agent id,
+    paths.codex_aid — plugins/codex/watch.spawn), so no per-tool label lookup is
+    needed (the unification: a codex run used to be stamped `codex:<label>` and
+    matched by a lookup off its card, which an id mismatch could turn into an
+    empty mirror). All three spellings are accepted — which is also why
+    re-pointing a native subagent's PREFIX to `sub:` needed no change here, for
+    new ops or for parked ones; the non-matching prefixes are inert.
 
     Prose-drop is no longer signalled here (the retired `codexprose:` marker): an
     agent's re-bubbled prose ops carry the producer-set `bubbled` flag (core/ops.py),

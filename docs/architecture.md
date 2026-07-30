@@ -195,8 +195,13 @@ import both core and plugins).
 session AND a first-class HOST on its own: `launch.py` (the detach-fast
 launcher), `watch.py` (the discovery watcher — in a Claude host it streams
 every repo codex run; given a `HOST_PID` it becomes a standalone session
-manager, streaming just this codex session's own rollout and owning teardown),
-`stream.py` (one tailer per codex run — the paint half), `rollout.py`
+manager, streaming just this codex session's own rollout AND every subagent it
+spawns — `spawn(subagent=True)`, which stamps `sub:<aid>` and hands out a SUB
+palette colour, because a native subagent is a CHILD AGENT rather than a codex
+run), `stream.py` (one tailer per codex run — the paint half, in one of three
+REGISTERS: standalone / sidecar / subagent, the last driving the shared
+`core/agentblocks.py` so it paints the same cards a Claude subagent does, see
+[codex.md](codex.md) › *Three registers*), `rollout.py`
 (rollout-record parsing — the parse half of the codex parse/paint split, one
 record-grammar owner for the mirror renderer, see
 [sessionapi.md](sessionapi.md)), and

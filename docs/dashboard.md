@@ -442,13 +442,16 @@ block elements, `text-overflow`), so each op maps to a structured block and
 **Main-agent-only (the op `src` stamp).** The web stream shows the MAIN
 agent's activity only, unlike the terminal mirror, which paints everything.
 `core/ops.py` stamps every op with its producer source (`src`:
-`sub:<agent_id>` / `team:<agent_id>` / `codex:<label>`; absent = the main
+`sub:<agent_id>` / `team:<agent_id>` / `codex:<aid>`; absent = the main
 session) — an ambient per-process value, because every detached streamer
 serves exactly one source: the substream calls `set_src` at init, which also
 exports `$CLAUDE_OPS_SRC` so the fg/bg/monitor tailers it spawns inherit the
 stamp through `stream_env`'s environ copy; the codex watcher sets the env on
 SECONDARY-source spawns only (a STANDALONE codex host's own rollout is the
-main agent — stamping it would blank that session's web mirror); the one
+main agent — stamping it would blank that session's web mirror), and the
+PREFIX names the register there too — a codex SIDECAR is `codex:<aid>`, a
+codex-NATIVE subagent `sub:<aid>`, because it is a child agent and classifies
+as one (docs/codex.md *The unified scope key*); the one
 in-hook-process producer of agent ops (a subagent's monitor header,
 `monitor_fmt`) passes the explicit `emit(src=)` kwarg. `op_items` drops
 stamped ops (and `read/mirror._cut_blocks` skips them when sizing the backlog
@@ -5755,6 +5758,29 @@ ops. This retired the codex-only fork (`agent_scope`'s codex branch, the
 stream renders now lands in one place for every tool (docs/codex.md *Sidecar →
 subagent parity*, *The unified scope key*).
 
+**The HOST's scaffolding is dropped the same way — the `chrome` flag.** A run
+banner, a `⚙ model · effort` line, a run footer, the lead's own
+`▶ <type> · <desc>` subagent launch header: all of it is the host's FRAME around a
+child's stream rather than part of it. The terminal wants the frame (a shared pane
+needs the brackets that say where one stream starts); no web view does, because
+there the child has a CARD that already states its model, its duration and its
+launch. So the producer stamps `chrome` (`core/ops.py`) and `op_items` drops it
+FIRST in every arm — session view, agent scope and the standalone-codex lead view
+alike — carrying the block's body ops with it through the same copy-group drop set
+the prose drops use. It is one check in all three views because it is one question
+with one answer. The per-view text SNIFFERS (`actclass.codex_chrome`,
+`agent_header`) stay as the legacy fallback for ops ALREADY ON DISK, exactly as
+`prose_block` does beside `bubbled`.
+
+**And WHICH kind of agent a block belongs to comes from the stamp, not the
+palette.** `actclass._classify` resolves the agent class from the `src` REGISTER
+first (`codex:`→`ACT_CODEX`, `team:`→`ACT_TEAM`, `sub:`→`ACT_AGENT`), with the
+palette as the fallback for unstamped ops — a standalone codex host's own, and
+every parked op. That order is what lets a codex-NATIVE subagent classify and fold
+as the AGENT it is while `codex:` keeps meaning a sidecar run; keyed off the
+palette instead, a codex child folded into "ran 1 codex run" whatever it did.
+`as_lead`'s recolour gate reads the same order.
+
 **What re-scopes, and what deliberately doesn't.** The **mirror**, **monitors**
 and **jobs** follow the agent — *including their tab BADGES*, which is the same
 split declared once in the read model's `BADGES` table (`scoped`) and reached
@@ -5796,9 +5822,11 @@ terminal mirror paints them, the web drops them (*Main-agent-only* above).
 `opshtml.in_scope` is the ONE producer-source predicate: with no scope it keeps
 the unstamped (plus `web`-stamped) ops, with a scope it keeps only that agent's.
 `read/mirror.agent_scope` resolves the scope to a SET of exact `src` strings
-rather than passing the bare id, because the stamps are not uniform — a codex run
-is stamped `codex:<label>` while its agent id is the rollout basename
-(`sessionapi.codex_aid`), so its label is looked up off the run's row.
+rather than passing the bare id, because the PREFIX is not uniform: one agent id
+can be stamped `sub:`, `team:` or `codex:` depending on which register produced it
+(a codex sidecar is `codex:<aid>`, a codex-native subagent `sub:<aid>`), so the
+set covers all three and no per-tool lookup is needed. The id itself is always
+`paths.codex_aid` for a codex run — the same id its card carries.
 
 **The conversation is the same call, keyed by identity.** `plugins.conversation(
 sid, pos, agent_id)` reads the LEAD's main thread for `""` and that agent's own
@@ -8289,10 +8317,12 @@ dashboard-side special-casing: `sessionapi.agents()` merges the audit
 `streams` rows of `kind='codex'` in the same row shape (kind `codex`, `desc`
 = the run label, `agent_id` = `sessionapi.codex_aid()` — synthesized from the
 stream's src_path basename, since codex tailers record no hook agent_id), and
-its scoped mirror is the ops that run already painted. That last part needs one
-resolution step the others don't: a codex run is `src`-stamped `codex:<label>`
-while its agent id is the rollout basename, so `read/mirror.agent_scope` looks
-the label up off the run's row (*Agent scope*). A codex run exposes no
+its scoped mirror is the ops that run already painted. The stamp EQUALS that
+agent id (`<register>:<codex_aid>`), so no resolution step is needed at all —
+`agent_scope` covers the three prefixes one id can wear, which is also how a
+codex-NATIVE subagent (stamped `sub:<aid>`, and classified as the AGENT it is)
+lands in the same list and the same scope as a sidecar (*Agent scope*,
+docs/codex.md *The unified scope key*). A codex run exposes no
 `agent_usage` provider — its tokens are folded from the rollout and priced at
 its footer (`CODEX_PRICES`), so the scoped scoreboard simply shows no Σ/≈cost
 rather than a second, differently-derived figure.

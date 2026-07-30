@@ -784,13 +784,114 @@ The fix routes every one of those through the OWNING host's label:
 The jsdom `newsession` verdict asserts the placeholder says "Codex" (never
 "Claude") after the tool switch.
 
+### Three registers: standalone / sidecar / SUBAGENT
+
+WHO a codex run is to the session is the only thing its paint forks on, so the
+stream names that fact once and reads it everywhere (`stream.py` `REGISTER`,
+selected by the watcher through an explicit env flag each — the rollout itself
+cannot say which role its watcher spawned it for):
+
+| register | who it is | env | stamp | palette |
+|---|---|---|---|---|
+| `standalone` | a codex host on its OWN — the session's MAIN agent | `CLAUDE_CODEX_STANDALONE=1` | none (unstamped) | semantic colours |
+| `sidecar` | a codex run INSIDE a Claude host | — | `codex:<aid>` | CODEX_PALETTE |
+| `subagent` | a codex-NATIVE child of a standalone host | `CLAUDE_CODEX_SUBAGENT=1` | `sub:<aid>` | SUB_PALETTE |
+
+STANDALONE paints like a main agent: no banner, no `⚙` line, no prose (that
+comes back as conversation bubbles), commands in Claude's own semantic colours,
+file ops as bare `line`s. SIDECAR is the historical shape: its own bracketed
+sub-stream in the codex palette, banner and footer included. SUBAGENT is the
+subject of the next section.
+
+### A codex-native subagent IS a child agent (not a codex run)
+
+**Rejected design: folding a native subagent into the codex-run vocabulary.** It
+was the shape the code had, and it was wrong in a way that only shows in the
+product. A codex subagent used to be stamped `codex:<aid>`, painted in the codex
+palette, opened with a `codex ▶` banner, and classified `ACT_CODEX` — so the web
+folded an agent's entire run into "Ran 1 codex run" no matter what it did, gave it
+no launch card and no result card (its `⇢ prompt` came from a `chat`-register
+record inside the trimmed parent prefix, so no op was ever emitted, and there was
+no result twin at all), and rendered its tool calls as `▶ cmd` blocks of raw
+JavaScript. Measured side by side against a Claude session running the same
+prompt, the two were unrecognisable as the same kind of thing. The fold is
+rejected because a native subagent is not a *run the lead made* — it is a CHILD
+AGENT, exactly what a Claude subagent is, and the moment it says so every stage
+downstream (scope, classify, quiet register, view-mode fold, the cards) covers it
+with no codex special-casing. `codex:` now means exactly one thing: a SIDECAR run
+inside a Claude host, which is the only thing the web still counts as
+"ran N codex runs".
+
+So the SUBAGENT register builds every block through **`core/agentblocks.py`** —
+the same `AgentStream` the Claude substream paints its agent with, bound to this
+run's identity (`label` = the agent nickname, `rgb` = its SUB_PALETTE colour,
+`tags` = the model·effort `turn_context` keeps current, `agent_dur` = its task
+timing). The mapping:
+
+| rollout record | what it paints |
+|---|---|
+| the replayed-parent prefix | dropped (the gate below) |
+| the child's bootstrap `task_started` | the LAUNCH CARD, once — `blocks.launch(subagent_brief(...))` |
+| `turn_context` / `settings` | model/effort TAGS only — no `⚙` line (a Claude child has none) |
+| `exec` | `blocks.cmd_open` + the pending ledger; closed by its result |
+| `tool` | `blocks.tool_open` — the quiet `· <name>` block (see *A non-shell tool call* below) |
+| `exec_result` | `blocks.cmd_close` / `tool_close`, paired by `call_id` |
+| `patch` | `blocks.file_line` per file + the usual scoreboard bump |
+| `message` | BUFFERED — see below |
+| `reasoning` / mid-run `prompt` / `compact` / `search` | `blocks.reasoning` / `blocks.prompt` (a follow-up task, NOT a second launch) / `blocks.compact` / a `· search` tool block |
+| grace end | `blocks.footer(state, dur, tok_rollup + cost)`; `_fold_bump` unchanged |
+
+**The message is BUFFERED because the last one is the RESULT.** A child's final
+message is what it returned, and that is a different block from an intermediate
+one (the `⇠ result` card carries `web=1` and the `Agent "<name>" finished · <dur>`
+note; a `✎ message` carries neither). Which one it is cannot be known when the
+message arrives — only when something follows it. So the message is held and
+committed by whichever comes first: the next record that OPENS a block
+(`_FLUSH_BEFORE` — deliberately not "any record", because a `token_count` always
+trails the last message and flushing on one would demote the result card to an
+ordinary message), or `task_complete`, which flushes it as the RESULT. This is
+the substream's `flush_msg` discipline, arrived at from the same constraint.
+
+**Lifecycle:** a subagent is a discrete TASK, like a sidecar — the per-turn grace
+end, the stuck-run backstop and the footer all apply. Only STANDALONE has the
+never-ends rule (its rollout IS the whole session).
+
+**`subagent_brief` — and where the brief actually is.** The launch card needs the
+task behind its click, and the child's own NEW_TASK record cannot give it: codex
+delivers the task as a `response_item/agent_message` whose plaintext is only the
+envelope (`Message Type: NEW_TASK / Task name: /root/bali_weather / Sender: /root
+/ Payload:`) — the payload itself is an `encrypted_content` part, so it is not
+readable here at all (measured on the real cli 0.146 child rollout). What IS in
+plaintext is the fork PREFIX: a subagent rollout opens by replaying the parent
+thread, and the LAST REAL HUMAN TURN in that replay is the task the parent was
+working on when it spawned the child. That is the closest available statement of
+why the child exists, and it is what `rollout.subagent_brief` returns (bounded
+head read, fail-open ""). The 2.1KB team-scaffolding message ("You are an agent in
+a team of agents…") needs no preamble heuristic to exclude — it is `role=developer`,
+codex's system channel, and carries no task text whatsoever, so the structural
+synthetic rule already drops it along with `<environment_context>`. A
+`<task>…</task>` delivery (the UNencrypted shape) is kept and unwrapped by the
+shared `strip_input_wrapper`. The same brief is prepended as the first bubble of
+the scoped `conversation()` — it cannot double with the card, because the card is
+`bubbled`.
+
+**The parity is CONTRACT-TESTED, not asserted.** `tests/test_l1h_child_agent_parity.py`
+drives ONE synthetic sequence (launch → tool req+result → command ok → command
+failed → file op → intermediate message → result → footer) through BOTH adapters —
+`substream_render.Renderer` over transcript records and `stream.Renderer` in the
+SUBAGENT register over rollout records — and compares them after normalising
+identity away: same op kinds, same block markers, same `web`/`bubbled`/`chrome`/`lk`
+stamps, same notes modulo the child's name, same copy-group topology, then the
+DERIVED layer (identical `actclass.classify` sequences, identical keep/drop through
+`op_items` in both views, identical quiet-register eligibility). Its docstring says
+how a third adapter (opencode) passes it. Two differences are DECLARED: a codex
+result carries an exit code where a Claude tool_result does not (`■ failed (exit 1)`
+vs `■ failed`), and the tool NAME is per-host.
+
 ### Sidecar → subagent parity
 
 A codex run launched INSIDE a Claude session must read like a subagent in agent
-scope: its intermediate messages/reasoning/commands all visible. The same is now
-true of a codex subagent spawned by a STANDALONE codex host (cli 0.146+, its own
-child rollout — see *Per-subagent codex streams* above for the discovery, which
-streams it stamped `codex:<nickname>` through exactly this machinery). Four parts:
+scope: its intermediate messages/reasoning/commands all visible. Four parts:
 0. **The replayed-parent PREFIX is trimmed.** A subagent rollout OPENS with a
    burst replaying the PARENT thread's history as of the fork — two `session_meta`
    records (the child's `thread_source=="subagent"`, then the parent's), the
@@ -833,27 +934,99 @@ streams it stamped `codex:<nickname>` through exactly this machinery). Four part
      mirror as an `ACT_CODEX` card (the codex twin of a Claude subagent's launch
      card), which default folds into "ran N codex runs" and focus/verbose
      fold/expand — a delegating lead that was pure bubbles now has foldable activity.
-   - **Tool activity in scope** — `rollout._exec_cmd_from_js` decodes ANY
-     `tools.<fn>({…})` custom-tool input, not just `tools.exec_command`, so a
-     web/MCP lookup (`tools.web__run`) renders as a command-shaped activity block
-     (it used to parse to nothing and vanish); default folds it, verbose expands it.
-   - **No terminal chrome on the web** — agent scope drops the `codex ▶` run banner,
-     the `⚙ model · effort` line, and the `■ codex … ended` footer
-     (`actclass.codex_chrome`, BEFORE `as_lead` recolours the palette); the model +
-     duration live on the agent card, exactly as a Claude subagent scope has no such
-     inline lines.
+   - **Tool activity in scope** — a NON-shell tool call is its own record and its
+     own block (*A non-shell tool call is a TOOL* below), so a web/MCP lookup
+     (`tools.web__run`) renders as the quiet `· <name>` block with its arguments
+     behind the click; default folds it, verbose expands it.
+   - **No terminal chrome on the web** — the run banner, the `⚙ model · effort`
+     line and the `■ codex … ended` footer are stamped **`chrome`** by the
+     PRODUCER (core/ops.py), and every web view drops them; the model + duration
+     live on the agent card, exactly as a Claude subagent scope has no such inline
+     lines. `actclass.codex_chrome` (a text sniff) survives as the legacy fallback
+     for ops ALREADY ON DISK, which carry no flag — the same role `prose_block`
+     plays beside `bubbled`.
 
-### The unified scope key (`codex:<aid>`)
+### A non-shell tool call is a TOOL, not a laundered command
+
+codex ≥ 0.146 runs MANY tools through the SAME `exec` custom tool: a shell command
+is `tools.exec_command({cmd:…})`, but a web/MCP lookup is
+`const r = await tools.web__run({…}); text(JSON.stringify(r))`. The parser used to
+launder the second into the exec/command shape and hand the whole JS expression
+over as the "command" — which is how a codex subagent's entire real work came to
+render as `▶ cmd` blocks of raw JavaScript (measured: five such calls in the real
+child rollout, not one shell command among them).
+
+It is now its OWN record — `{"kind":"tool","name","args","call_id"}` — so a
+presenter can paint the block every generic tool call in this repo gets: the quiet
+`· <name>` with the ARGUMENTS behind the click and the answer behind the same one
+(paired by `call_id`, because codex returns every custom-tool output through one
+record that carries no tool name). `rollout.js_tool_call` cuts the args at the
+call's MATCHING close paren, quote-aware: codex's wrapper tail VARIES per call
+(`text(JSON.stringify(r))`, `text(r.content.map(x=>x.text||"").join("\n"))`), and
+the previous fixed suffix list matched NONE of the five real calls, so the whole
+`; text(…)` tail was riding into the rendered command.
+
+STANDALONE paints it in the SEMANTIC command colour, so it classifies `ACT_TOOL`
+and folds into the quiet `⏺` register like the lead's own activity. That is
+deliberately MORE than the Claude lead shows — Claude's hooks paint no generic
+tool block at all — because here the record exists, and hiding a run's real work
+for symmetry would be the same mistake the laundering made by another route.
+
+**`web_search_end` is where a codex search actually is.** The real child rollout
+carries FIVE `web_search_end` events and ZERO `web_search_call` response_items, so
+without parsing the event a codex web search rendered nothing. Only a search that
+NAMES a query yields a record — four of those five are the web tool's non-search
+actions (`action.type == "other"`, empty query). `search` is now the one kind BOTH
+registers can answer, so the RENDERER collapses an immediately-repeated query
+(adjacency, not a seen-set, so a genuine later repeat still gets its own block);
+the parser keeps reporting what the file says.
+
+**Known issue (undecided):** a custom-exec output whose preamble says
+`Script failed` but carries no `Exit code:` / `Process exited with code` line is
+NOT marked failed — the exit extraction is the only failure signal, and codex's
+JS-runtime errors don't use it. The block still shows the error text, just without
+the red mark. Pre-existing for exec blocks, inherited by tool blocks; left alone
+rather than guessed at.
+
+**Deliberately unparsed (future work):** `sub_agent_activity` (a
+`{kind:"interacted"}` ping about a child thread — the child has its own rollout and
+its own stream, so parsing it here would only duplicate) and
+`inter_agent_communication_metadata` (`{trigger_turn:true}` — plumbing). Both are
+measured and pinned by a test so the next reader sees a decision rather than a gap.
+The interesting one is the NEW_TASK/`agent_message` channel behind them: if codex
+ever emits those payloads in plaintext, inter-agent mail maps cleanly onto the
+existing mail builder (`agentblocks.mail`, the `✉ from|to <peer>` block) rather
+than onto anything codex-specific.
+
+### The unified scope key — and the PREFIX is the register
 
 A Claude subagent stamps its ops `sub:<aid>`/`team:<aid>` — the SAME id
 `read/mirror.agent_scope` keys on. A codex run used to be stamped `codex:<label>`
 (the display label) while its card's agent id was the rollout basename
 (`paths.codex_aid`), so `agent_scope` had a codex-only branch that looked the label
 up off the run's row — a mismatch there silently yielded an EMPTY scoped mirror.
-Now `watch.spawn` stamps `codex:<codex_aid(srcfile)>`, so the op stamp EQUALS the
-agent id and `agent_scope` is one tool-agnostic rule
+Now `watch.spawn` stamps `<register>:<codex_aid(srcfile)>`, so the op stamp EQUALS
+the agent id and `agent_scope` is one tool-agnostic rule
 (`{sub:,team:,codex:}+<aid>`), no lookup. `paths.codex_aid` is the single owner of
 that id (the producer stamps off it; `sessionapi.codex_aid` delegates to it).
+
+The PREFIX carries the second fact: a SIDECAR stamps `codex:<aid>`, a native
+SUBAGENT stamps `sub:<aid>` — the very prefix a Claude child uses. That is what
+makes one child-agent vocabulary cover both tools, and `actclass._classify` reads
+it FIRST (`codex:`→`ACT_CODEX`, `team:`→`ACT_TEAM`, `sub:`→`ACT_AGENT`), with the
+palette as the fallback for ops that carry no stamp — a standalone host's own
+(unstamped by design) and every parked op. `as_lead`'s recolour gate follows the
+same order, so a block cannot be recoloured as an agent's and then classified as
+something else.
+
+Re-pointing the stamp was safe because nothing keys on `codex:` to FIND a run:
+`agent_scope` already resolved all three prefixes for one id (so scoping keeps
+working for NEW and PARKED ops alike), and `sessionapi.codex_runs` reads the audit
+`streams` rows rather than the op stamp — so a native subagent still lists as a
+clickable card, it simply classifies and folds as the agent it is. Parked
+`codex:`-stamped subagent ops from before the refactor still resolve, still
+classify `ACT_CODEX`, and still render through the legacy sniffers; their raw-JS
+`▶ cmd` blocks stay as written, because history is not rewritten.
 
 ### The standalone self-run empty-scope fix
 

@@ -334,9 +334,11 @@ _AGENT_RGB = frozenset(tuple(c) for c in (SL.SUB_PALETTE + SL.TEAM_PALETTE))
 
 # The codex palette a codex run's chips wear (core/slots.CODEX_PALETTE) — disjoint
 # from every other palette and from the semantic colours, so a chip in it is a
-# codex block whoever the host is (a standalone codex session, unstamped; a codex
-# sidecar inside a Claude host, `codex:<label>`-stamped). Classifying it ACT_CODEX
-# is deliverable B; dropping its PROSE in agent scope is deliverable C.
+# codex block whoever the host is. It is the FALLBACK for deciding that, behind
+# the `src` register (see _SRC_ACT): a standalone codex session's own ops are
+# unstamped by design and every parked op predates the stamp, and those are what
+# this covers. A codex-NATIVE subagent wears the SUB palette and stamps `sub:`,
+# because it is a child agent — it is not this.
 _CODEX_RGB = frozenset(tuple(c) for c in SL.CODEX_PALETTE)
 # codex's reasoning chip glyph (plugins/codex/stream.py `⋯ reasoning`) — its
 # prompt/message/result glyphs already coincide with the substream's _PROSE_MARKS

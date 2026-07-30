@@ -279,9 +279,10 @@ def in_scope(op, scope=None):
     endpoints described in op_items. A scope — the SET of `src` strings that
     belong to one agent, e.g. {"sub:a1b2", "team:a1b2"} (read/mirror.agent_scope)
     — inverts it: keep only those, which is how the same pipeline renders ONE
-    agent's mirror. A resolved set rather than a bare id because the stamps are
-    not uniform: a codex run is stamped `codex:<label>` while its agent id is the
-    rollout basename."""
+    agent's mirror. A resolved set rather than a bare id because the PREFIX is
+    not uniform: one agent id can be stamped `sub:`, `team:` or `codex:`
+    depending on which register produced it (a codex sidecar is `codex:<aid>`, a
+    codex-native subagent `sub:<aid>`)."""
     src = op.get("src") or ""
     if scope is None:
         return not src or bool(op.get("web"))

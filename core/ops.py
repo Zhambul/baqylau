@@ -34,9 +34,11 @@
 #
 # Any op may carry "src": the PRODUCER-SOURCE stamp — absent for the main
 # session's own activity, else who painted it: "sub:<agent_id>" /
-# "team:<agent_id>" (the substream + the tailers it spawns) or "codex:<label>"
-# (a secondary-source codex run; a STANDALONE codex host's own rollout is
-# unstamped — there codex IS the main agent). Stamped by emit() from the
+# "team:<agent_id>" (the substream + the tailers it spawns) or "codex:<aid>"
+# (a secondary-source codex SIDECAR run; a STANDALONE codex host's own rollout
+# is unstamped — there codex IS the main agent, and a codex-NATIVE subagent
+# stamps "sub:<aid>", because it is a child agent and the PREFIX is the
+# register — docs/codex.md *The unified scope key*). Stamped by emit() from the
 # ambient per-process source (set_src / $CLAUDE_OPS_SRC) or an explicit
 # src= kwarg. The terminal renderer ignores it (it paints everything); the web
 # dashboard's mirror is main-agent-only and drops stamped ops at render
