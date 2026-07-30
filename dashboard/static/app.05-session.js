@@ -1531,9 +1531,13 @@ function buildViewBar() {
 // its own oninput (autoGrow) and calls sm.key(e) FIRST in onkeydown — a true
 // return means the menu consumed the key.
 
-function cmdsFor(cwd, cache, key) {
+// `sid` (optional) host-SCOPES the menu: the server resolves the session's
+// owning tool and returns ITS vocabulary (a codex session gets /plan etc., not
+// Claude's). The new-session form passes none (no session yet → default host).
+function cmdsFor(cwd, cache, key, sid) {
   if (!cache[key])
-    cache[key] = fetch("/api/commands?cwd=" + encodeURIComponent(cwd || ""))
+    cache[key] = fetch("/api/commands?cwd=" + encodeURIComponent(cwd || "")
+                       + (sid ? "&sid=" + encodeURIComponent(sid) : ""))
       .then(r => r.ok ? r.json() : [])
       .catch(() => []);
   return cache[key];

@@ -439,6 +439,43 @@ def test_codex_declines_the_cwd_keyed_effort_default(monkeypatch):
     assert plugins.provider(codex, "effort_default") is None
 
 
+# ------------------------------------------------------------------ slash commands
+
+def test_codex_slash_commands_are_codex_vocabulary(monkeypatch, tmp_path):
+    """A codex session's "/" menu is codex's OWN commands (/plan, /approvals, …),
+    never Claude's (/goal, /rewind, /agents) — the reported '/plan not
+    recognized' gap. Custom user prompts ($CODEX_HOME/prompts/*.md) layer in."""
+    from plugins.codex import commands
+    home = tmp_path / "codexhome"
+    (home / "prompts").mkdir(parents=True)
+    (home / "prompts" / "shipit.md").write_text(
+        "---\ndescription: ship the release\n---\nbody\n")
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    rows = {c["name"]: c for c in commands.slash_commands("")}
+    assert rows["plan"]["src"] == "built-in"
+    assert "approvals" in rows and "review" in rows and "usage" in rows
+    assert "goal" not in rows and "rewind" not in rows   # never Claude's
+    assert rows["shipit"] == {"name": "shipit", "desc": "ship the release",
+                              "src": "user"}
+    names = [c["name"] for c in commands.slash_commands("")]
+    assert names == sorted(names)
+
+
+def test_slash_commands_fan_out_is_host_scoped():
+    """plugins.slash_commands routes to exactly the OWNING host, not a concat: a
+    codex session gets codex's list, a Claude one gets Claude's, an unknown host
+    an empty menu (never another tool's), and host=None defaults to Claude (the
+    new-session form's tool today)."""
+    import plugins
+    cx = {c["name"] for c in plugins.slash_commands("", "codex")}
+    cc = {c["name"] for c in plugins.slash_commands("", "claude_code")}
+    assert "plan" in cx and "goal" not in cx
+    assert "goal" in cc and "plan" not in cc
+    assert plugins.slash_commands("", "copilot") == []
+    assert [c["name"] for c in plugins.slash_commands("")] == \
+        [c["name"] for c in plugins.slash_commands("", "claude_code")]
+
+
 # ------------------------------------------------------------------ usage windows
 
 def test_codex_usage_windows_normalizes(monkeypatch):

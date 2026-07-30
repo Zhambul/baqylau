@@ -613,9 +613,10 @@ def test_every_plugin_fanout_reaches_a_declared_provider():
         if not isinstance(n, ast.Call):
             continue
         fn = n.func
-        # the three fan-out primitives take the name as their first argument …
+        # the fan-out primitives take the name as their first argument (_named
+        # is the single-plugin router — host-scoped slash_commands rides it) …
         if isinstance(fn, ast.Name) and fn.id in ("_first", "_first_path",
-                                                  "_concat_unique"):
+                                                  "_concat_unique", "_named"):
             a = n.args[0]
             if isinstance(a, ast.Constant):
                 reached.add(a.value)

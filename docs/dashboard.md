@@ -584,7 +584,7 @@ reflow for free and keeps the no-build rule.
 | `/api/session/<sid>/errors` | swallowed-exception rows |
 | `/api/accounts` | `[{slug, label, alias, usage}, …]` — the launchable subscription accounts (`plugins.accounts`) plus each one's freshest captured usage: every status-line rate-limit window (the 5h/7d pair, aggregated across sessions, served EFFECTIVE — a rolled-over window reads 0 with no reset) PLUS per-model weekly windows fetched from the OAuth `/usage` endpoint and merged in (`plugins.model_windows`, *Per-model usage bars*); each row also carries `sched_score` (weekly-quota perishability) and `sched_ok` (5h safety gate) for the new-session default-account picker, plus the `five_hour_eff` figure `sched_ok` itself gates on (*Default account*), plus `limit_hit` (active rate-limit stamp else null) and `logged_out`/`logged_out_msg` (the account's login was revoked — *Logged-out accounts*); backs the new-session picker and the top usage strip; never blocks on the OAuth fetch — past its TTL the model-window cache serves the previous value while one background thread refreshes (*Per-model usage bars*), and changes reach open pages as the global stream's `accounts` event |
 | `/api/stats` | the **Stats / Insights** page (`stats_payload` over `sessionapi.activity_stats`): `{total_sessions, daily:[[day,n]], punch:[[dow,hour,n]], windows:{7d,30d,all}, projects:[…]}` — cross-session aggregates for the contribution heatmap, day×hour punch card, per-window Pulse summary, and per-project cards; server-computed + memo-cached (`STATS_TTL_S`), read-only (no audit rows) (*Stats / Insights* below) |
-| `/api/commands?cwd=<dir>` | the "/" menus: `[{name, desc, src}, …]` — CLI built-ins + the directory's discovered `.claude` commands/skills (`plugins.slash_commands`); cwd-keyed, not sid-keyed — the new-session form completes for a directory with no session yet (non-directory → built-ins + user-level) |
+| `/api/commands?cwd=<dir>[&sid=<sid>]` | the "/" menus: `[{name, desc, src}, …]` — the OWNING host's built-ins + the directory's discovered commands (`plugins.slash_commands(cwd, host)`); HOST-SCOPED — the composer passes `sid` so a codex session is offered codex's vocabulary (`/plan`, `/approvals`, …), resolved server-side via `owns_by`; the new-session form passes `cwd` only (no session → default host, Claude). Non-directory → built-ins + user-level |
 | `/api/resumable?cwd=<dir>&limit=25&q=<text>` | the new-session **resume picker**'s rows (`resumable_payload`): the directory's sessions (canon-cwd-scoped, newest-first, `limit` clamped to `RESUMABLE_MAX`), each `{sid, title, last_active, live, model, effort, account{slug,label}}` — enough to reuse a session's model/effort on resume (*Resume picker* below); `q` filters by title+sid across the directory's WHOLE history (discovery scans up to `RESUMABLE_SCAN`, not just the newest — the client can't); blank/unknown cwd → `[]` |
 | `/api/session/<sid>/view/<gid>` | rendered click-to-view stash (HTML); leaves a `web-view` `state_files` row (`gid`/`ok`) — the web twin of the terminal ⧉view toggle's audit |
 | `/api/session/<sid>/copy/<gid>/<what>` | copy text (`core/copy.collect`); leaves a `web-copy` `state_files` row (`gid`/`what`/`chars`) — the web twin of the terminal `copy` row (the dashboard calls `collect()` directly, bypassing `claude-copy.py`'s audit) |
@@ -1262,6 +1262,20 @@ Claude Code's own palette parses and executes it — the menu only has to be
 good enough to complete against, never to validate, so `BUILTINS` drifting
 behind the CLI is harmless (an un-listed command still types fine).
 
+**Host-scoped, not concatenated.** A session belongs to exactly ONE host, so
+its menu is that host's vocabulary — never a union. `plugins.slash_commands(cwd,
+host)` routes to the single owning plugin (`_named`, the single-plugin twin of
+`host_named`): a codex session gets `plugins/codex/commands.py`'s codex builtins
+(`/plan`, `/approvals`, `/review`, `/undo`, …) plus its `$CODEX_HOME/prompts/*.md`
+user prompts, and NOT Claude's `/goal`/`/rewind`/`/agents`; an unknown host gets
+`[]` (an empty menu, never another tool's). `host=None` defaults to Claude — the
+new-session form has no session to own it and launches Claude today (a tool
+picker would pass the choice, P6). The composer resolves the host from its `sid`
+server-side (`owns_by` over the transcript path), so the JS never learns host
+names. This closed the reported "`/plan` isn't recognized" gap: the old fan-out
+concatenated every plugin, which was only ever right because `claude_code` was
+the sole provider, so a codex session was completed against Claude's palette.
+
 **The picked command reads TINTED in the box** (`cmdHighlight`, both boxes —
 it lives inside the shared `slashMenu`, which is what makes the composer and
 the new-session first prompt carry it alike), echoing the TUI, which paints a
@@ -1299,11 +1313,13 @@ messages quote commands often enough that tinting them would be noise, and the
 question/answer/recap bubbles aren't things you typed); the **leading** token
 only (whitespace/EOL-terminated — `/gh:fix some args` tints just the `/gh:fix`);
 and only when it **names a real command**. "Real" is `read.meta.cmd_names(cwd)`
-— a TTL'd (`CMDS_TTL_S`) frozenset over the same `plugins.slash_commands(cwd)`
-the "/" menu lists, so the menu and the tint can never disagree about what a
-command is, and a `.md` added mid-session starts tinting without a restart. The
-walk is per-cwd-per-TTL, resolved ONCE per render by `merged_backlog` /
-`history` / the SSE tick (`session_cmds`), never per bubble.
+— a TTL'd (`CMDS_TTL_S`) frozenset over the same `plugins.slash_commands(cwd,
+host)` the "/" menu lists (host-scoped alike — `session_cmds` resolves the
+session's owner so a codex bubble tints `/plan`, not Claude's `/goal`), so the
+menu and the tint can never disagree about what a command is, and a `.md` added
+mid-session starts tinting without a restart. The walk is per-`(cwd, host)`-per-
+TTL, resolved ONCE per render by `merged_backlog` / `history` / the SSE tick
+(`session_cmds`), never per bubble.
 
 Rendering is `opshtml.msg_html`'s `_lead_cmd` + `_tint_lead`. The wrap is
 **structural, not a blind replace**: the escaped token must sit immediately

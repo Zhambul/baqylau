@@ -519,6 +519,23 @@ account SWITCHER registry and a single host-wide reading are different shapes, a
 `plugins.accounts()` is empty for codex. Hidden when codex is
 unconfigured/unreachable (empty payload). Labelled `Codex · <planType>`.
 
+### The "/" menu speaks codex (host-scoped slash commands)
+
+A codex session's composer completes against **codex's** slash commands, not
+Claude's. `plugins/codex/commands.py` is the codex twin of
+`plugins/claude_code/slashcmds.py`: a curated `BUILTINS` snapshot of the codex
+TUI's palette (`/plan`, `/approvals`, `/review`, `/new`, `/init`, `/compact`,
+`/undo`, `/diff`, `/mention`, `/status`, `/usage`, `/skills`, `/mcp`, `/logout`,
+`/quit`, `/model`) plus discovered `$CODEX_HOME/prompts/*.md` user prompts (the
+codex analog of a user-level `.claude/commands` dir). The fan-out
+`plugins.slash_commands(cwd, host)` is now **host-scoped** (`_named` routes to
+the one owning plugin) — a codex session gets exactly codex's vocabulary, never
+Claude's `/goal`/`/rewind` mixed in, and vice-versa. The composer passes its
+`sid`; the server resolves the owner via `owns_by`. Same authority model as
+Claude's: the TUI executes the command, the menu only completes against it, so
+`BUILTINS` drift is harmless. This closed the reported "`/plan` isn't
+recognized" gap (docs/dashboard.md *The "/" menu*).
+
 ### View modes — a codex run is its own act
 
 A codex block wears the **codex palette** (`core/slots.CODEX_PALETTE`, disjoint

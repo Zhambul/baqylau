@@ -135,6 +135,14 @@ def set_session_title(transcript_path, name):
 # rollout-side reader context() uses, not a cwd-keyed provider.
 
 
+def slash_commands(cwd):
+    """The "/" menu vocabulary provider (plugins.slash_commands fan-out, now
+    HOST-SCOPED — a codex session's composer completes against codex's own
+    commands, not Claude's). [{name, desc, src}, …]. See commands.slash_commands."""
+    from plugins.codex import commands
+    return commands.slash_commands(cwd)
+
+
 def pending_dialog(sid):
     """The pending-dialog provider (plugins.pending_dialog fan-out) — a codex
     run's OPEN request_user_input question for the web ask card (P5 drives it),

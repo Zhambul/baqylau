@@ -944,7 +944,7 @@ function buildComposer() {
                    || (meta.tab || ""));
   // the "/" menu — commands for THIS session's cwd, fetched once per view
   const sm = slashMenu(ta, wrap,
-    () => cmdsFor(meta.cwd, ses, "cmds"),
+    () => cmdsFor(meta.cwd, ses, "cmds", sid),
     { enterSends: !IS_IPAD });
   ta.oninput = () => {
     ses.histIdx = null;   // typing leaves history navigation (see recallHistory)

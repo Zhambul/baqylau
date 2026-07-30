@@ -448,14 +448,31 @@ def launch_argv(words, cmd="claude"):
     return _first("launch_argv", words, cmd, default=[cmd, *words])
 
 
-def slash_commands(cwd):
-    """Slash-command fan-out for the web composer's "/" menu (cwd-keyed like
-    session_title is path-keyed — the caller already holds the session's cwd):
-    concatenates every plugin's [{name, desc, src}, …], first occurrence of a
-    name wins (claude_code is the only provider today). Same exception
-    contract as census()/activity(): the caller is the read-side dashboard,
-    not a hook."""
-    return _concat_unique("slash_commands", lambda c: c.get("name"), cwd)
+def _named(method, name):
+    """The `method` provider FUNCTION of the plugin whose short name is `name`,
+    or None (unknown tool / plugin lacks the method). The single-plugin twin of
+    host_named — it turns a tool NAME into one of its providers, for a fan-out
+    that must route to exactly ONE host rather than concatenate."""
+    if not name:
+        return None
+    for p in all_plugins():
+        if p.__name__.rsplit(".", 1)[-1] == name:
+            return provider(p, method)
+    return None
+
+
+def slash_commands(cwd, host=None):
+    """Slash-command fan-out for the web composer's "/" menu — HOST-SCOPED, not
+    concatenated: a session belongs to exactly ONE host, so it is offered that
+    host's vocabulary (a codex session shows /plan, /approvals, …; a Claude one
+    its own /goal, /rewind, …). `host` is the OWNING tool's short name (from
+    owns_by); None defaults to the DEFAULT host (claude_code) — the new-session
+    form has no session to own it yet and launches Claude today. An unknown
+    host, or one with no slash_commands provider, yields [] (an empty menu is
+    the honest answer for a tool with no vocabulary — never another tool's).
+    Same read-side exception contract as census()/activity()."""
+    fn = _named("slash_commands", host or "claude_code")
+    return list(fn(cwd) or []) if fn is not None else []
 
 
 def config_dirs(cwd):

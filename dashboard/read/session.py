@@ -378,7 +378,8 @@ def session_payload(sid, agent=""):
     # bubbles it builds ITSELF (the optimistic stand-in + the ⧗ queued chip),
     # which never pass through msg_html. Shipped here rather than fetched: one
     # source, so the two renderers can't disagree about what a real command is.
-    data["commands"] = sorted(cmd_names(data.get("cwd") or ""))
+    data["commands"] = sorted(cmd_names(
+        data.get("cwd") or "", plugins.owns_by(tpath) or None))
     return data
 
 

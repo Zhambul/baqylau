@@ -312,31 +312,36 @@ _CMDS = API.BoundedLRU(MEMO_CAP)   # cwd -> (monotonic expiry, frozenset(names))
 CMDS_TTL_S = 60.0      # command-set staleness bound (a new .md shows within it)
 
 
-def cmd_names(cwd):
+def cmd_names(cwd, host=None):
     """The set of REAL slash-command names available in `cwd` — the truth behind
     the prompt bubbles' `/command` tint (docs/dashboard.md, *The "/" menu*).
     Names only: the "/" menu fetches the full {name, desc, src} rows through the
     same `plugins.slash_commands` provider — this is its projection, so the tint
-    and the menu can never disagree about what a real command is."""
+    and the menu can never disagree about what a real command is. `host` is the
+    session's OWNING tool short name so the tint matches the host-scoped menu (a
+    codex session tints /plan, not Claude's /goal); memoized per (cwd, host)."""
     if not cwd:
         return frozenset()
 
     def walk():
         try:
             return frozenset(c.get("name") or ""
-                             for c in plugins.slash_commands(cwd))
+                             for c in plugins.slash_commands(cwd, host))
         except Exception:
             return frozenset()       # discovery is best-effort: no tint, no failure
-    return ttl_cached(_CMDS, cwd, CMDS_TTL_S, walk)
+    return ttl_cached(_CMDS, (cwd, host or ""), CMDS_TTL_S, walk)
 
 
 def session_cmds(sid):
     """cmd_names for a session's cwd — the one door the mirror/SSE/meta readers
-    use, so none of them re-derives the cwd lookup."""
+    use, so none of them re-derives the cwd lookup. Resolves the session's
+    OWNING host (owns_by over its transcript path) so the tint is the host's own
+    vocabulary."""
     row = API.session_row(sid) or {}
+    host = plugins.owns_by(row.get("transcript_path") or "") or None
     # canon_cwd, like every other cwd-keyed reader here — so the mirror's
     # lookup and session_payload's share ONE memo entry (and one walk)
-    return cmd_names(canon_cwd(row.get("cwd") or ""))
+    return cmd_names(canon_cwd(row.get("cwd") or ""), host)
 
 
 def session_slug(sid):

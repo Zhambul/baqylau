@@ -183,15 +183,24 @@ class _GetMixin:
         return self._json({"available": dictate.available()})
 
     def get_commands(self, url):
-        """the "/" menus (composer + new-session prompt): built-ins + the given
-        directory's discovered .claude commands/skills. cwd-keyed, not sid-keyed
-        — the new-session form completes for a directory that has no session yet;
-        a non-directory degrades to built-ins + user-level entries, never an
-        error."""
-        cwd = (parse_qs(url.query).get("cwd") or [""])[0]
+        """the "/" menus (composer + new-session prompt): the OWNING host's
+        built-in commands + that directory's discovered commands. HOST-SCOPED:
+        the composer passes `sid` so a codex session is offered codex's
+        vocabulary (/plan, /approvals, …), not Claude's — resolved server-side
+        via owns_by so the client never has to know host names. The new-session
+        form passes cwd only (no session to own it yet) and gets the default
+        host (Claude). A non-directory degrades to built-ins + user-level
+        entries, never an error."""
+        q = parse_qs(url.query)
+        cwd = (q.get("cwd") or [""])[0]
         if not os.path.isdir(cwd):
             cwd = ""
-        return self._json(plugins.slash_commands(cwd))
+        sid = (q.get("sid") or [""])[0]
+        host = None
+        if sid:
+            row = API.session_row(sid) or {}
+            host = plugins.owns_by(row.get("transcript_path") or "") or None
+        return self._json(plugins.slash_commands(cwd, host))
 
     def get_ns_prefs(self, url):
         """the new-session form's last-used {cwd, model, effort} — moved off
