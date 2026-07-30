@@ -300,8 +300,13 @@ def pending_dialog(sid):
             except Exception:
                 rec = None
             if rec and rec["kind"] == "plan":
+                from plugins.codex import plandialog as PD
                 return {"kind": "plan", "plan": rec["text"],
-                        "plan_id": rec.get("id") or ""}
+                        "plan_id": rec.get("id") or "",
+                        # the approve rows the card shows as buttons — static
+                        # (the picker is pure TUI, not in the rollout), and
+                        # re-verified against the live screen at decide time.
+                        "options": [dict(o) for o in PD.APPROVE_OPTIONS]}
             continue
         if b'"request_user_input"' not in raw:
             continue

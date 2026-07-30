@@ -252,8 +252,12 @@ class _DialogMixin:
         if not pending:
             self._json({"error": "no pending plan"}, 409)
             return none
-        if (body.get("tool_use_id") or "") != (pending.get("tool_use_id")
-                                               or ""):
+        # match on whichever id the pending carries — claude_code's ExitPlanMode
+        # `tool_use_id`, or codex's `plan_id` (its plan has no tool_use_id) — so
+        # the staleness guard works for both hosts.
+        pend_id = pending.get("tool_use_id") or pending.get("plan_id") or ""
+        body_id = body.get("tool_use_id") or body.get("plan_id") or ""
+        if body_id != pend_id:
             self._json({"error": "plan expired — a newer plan replaced it "
                         "(refresh)"}, 409)
             return none
@@ -277,6 +281,12 @@ class _DialogMixin:
         body, pending, fe, win, log, sdb = self._plan_guard(sid)
         if body is None:
             return
+        # a NON-claude host (codex) carries its decision options in the pending
+        # read model (they're static — the picker is pure TUI, not a permission-
+        # varying dialog), so no screen read is needed. None for claude_code, so
+        # the byte-identical plandialog.options path below runs unchanged.
+        if self._gesture_host(sid) is not None:
+            return self._json({"ok": True, "options": pending.get("options") or []})
         try:
             opts = plandialog.options(fe, win)
         except plandialog.PlanError as e:
@@ -306,6 +316,13 @@ class _DialogMixin:
         body, pending, fe, win, log, sdb = self._plan_guard(sid)
         if body is None:
             return
+        # a NON-claude host (codex) decides its OWN plan picker through its
+        # HostControl.plan gesture (codex's picker geometry differs — Claude's
+        # plandialog keys on ExitPlanMode's dialog). None for claude_code / an
+        # unprovable path, so the byte-identical inline path below runs unchanged.
+        host = self._gesture_host(sid)
+        if host is not None:
+            return self._host_plan(host, sid, body, pending, log, sdb, fe, win)
         tid = pending.get("tool_use_id") or ""
         # one driver call per body shape, bound to a zero-arg callable so the
         # single try/except below owns the PlanError handling for all three
@@ -355,4 +372,36 @@ class _DialogMixin:
         # no owner rather than taking the clear away from one that works.
         if kind in ("feedback", "dismiss"):
             drop_stash(sid, log, sdb, "plan-pending", "web decline (%s)" % kind)
+        return self._json({"ok": True, "kind": kind})
+
+    def _host_plan(self, host, sid, body, pending, log, sdb, fe, win):
+        """Decide a NON-claude host's plan picker (codex) through HostControl.plan.
+        Body shapes: {dismiss:true} → keep planning; {digit, label} → approve
+        that decision row. codex's picker has NO free-text 'feedback' row (the
+        card hides that box off-Claude), so only those two arrive. The gesture
+        catches its own driver errors, returns {status, ok, step?}, and this
+        writes the canonical `web-plan` state_files row (host/status/plan_id
+        alongside) + the reply. No heal_stash: codex's pending is derived
+        read-side from the rollout, not a kv to self-heal (the next payload
+        re-reads the tail)."""
+        pid = pending.get("plan_id") or pending.get("tool_use_id") or ""
+        if body.get("dismiss"):
+            kind, decision = "dismiss", {"dismiss": True}
+        elif isinstance(body.get("label"), str) and body["label"].strip():
+            kind = "decide"
+            decision = {"digit": body.get("digit"), "label": body["label"]}
+        else:
+            return self._reject_input(
+                "web-plan", "no action", "need digit+label or dismiss",
+                {"keys": sorted(body)}, log=log, path=sdb)
+        res = host.plan(fe, win, decision, {"sid": sid, "log": log, "sdb": sdb})
+        ok = bool(res.get("ok"))
+        A.state_file(log, sdb, "web-plan",
+                     {"win": win, "ok": ok, "kind": kind, "host": host.name,
+                      "status": res.get("status"),
+                      "label": body.get("label") or "", "plan_id": pid})
+        if not ok:
+            return self._json({"error": res.get("detail")
+                               or "plan decision failed",
+                               "step": res.get("step") or ""}, 409)
         return self._json({"ok": True, "kind": kind})

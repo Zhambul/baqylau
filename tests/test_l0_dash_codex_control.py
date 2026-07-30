@@ -173,3 +173,109 @@ def test_codex_answer_routes_through_the_dialog_driver(dash, tmp_path, monkeypat
     assert fe.cursor == 2 and fe.closed   # cursored onto Banana, then Enter
     row = _last_state_file("cx5", "web-answer")
     assert row["host"] == "codex" and row["ok"] and row["tool_use_id"] == "call_9"
+
+
+# ---------------------------------------------------------------- plan mode
+
+def _plan_rollout_records(pid="p-77"):
+    """A rollout whose last turn produced a Plan item and nothing after — the
+    read-side 'plan pending' shape (plugins/codex/read.pending_dialog)."""
+    return [{"type": "session_meta", "payload": {"cwd": "/tmp"}},
+            {"type": "event_msg", "payload": {"type": "task_started",
+                                              "collaboration_mode_kind": "plan"}},
+            {"type": "event_msg", "payload": {
+                "type": "item_completed",
+                "item": {"type": "Plan", "id": pid,
+                         "text": "# Plan\n1. do the thing\n"}}},
+            {"type": "event_msg", "payload": {"type": "task_complete"}}]
+
+
+class _CxPlanFE(_FakeFE):
+    """A reactive codex plan-DECISION picker: a `›` cursor over three rows below
+    an `Implement this plan?` header (with a numbered plan BODY above it, which
+    the driver's region-scoping must ignore); DOWN/UP move, ENTER closes."""
+
+    _ROWS = ("Yes, implement this plan", "Yes, clear context and implement",
+             "No, stay in Plan mode")
+
+    def __init__(self):
+        super().__init__()
+        self.cursor, self.closed, self.chosen = 1, False, None
+
+    def get_text(self, win, extent="screen", ansi=False):
+        if ansi:
+            return ""
+        if self.closed:
+            return "codex\n❯ \n[gpt-5.6-sol] │ ready\n"
+        lines = ["• Proposed Plan", "  1. do the thing", "",
+                 "  Implement this plan?"]
+        for i, label in enumerate(self._ROWS, 1):
+            mark = "› " if i == self.cursor else "  "
+            lines.append("%s%d. %s   a description" % (mark, i, label))
+        lines.append("  Press enter to confirm or esc to go back")
+        return "\n".join(lines)
+
+    def send_key(self, win, *keys):
+        self.keyed.append((win, keys))
+        k = keys[0] if keys else ""
+        if k == "down":
+            self.cursor = min(self.cursor + 1, 3)
+        elif k == "up":
+            self.cursor = max(self.cursor - 1, 1)
+        elif k == "enter":
+            self.chosen, self.closed = self.cursor, True
+        return True
+
+
+def test_codex_plan_options_are_the_static_approve_rows(dash, tmp_path, monkeypatch):
+    monkeypatch.setenv("KITTY_WINDOW_ID", "75")
+    _seed(tmp_path, "cxp1", _plan_rollout_records())
+    _inject_fe(monkeypatch, _CxPlanFE())
+    code, body = _post(dash + "/api/session/cxp1/plan-options",
+                       {"plan_id": "p-77"})
+    assert code == 200
+    labels = [o["label"] for o in json.loads(body)["options"]]
+    # the two APPROVE rows, never the keep-planning row (the card's own button)
+    assert labels == ["Yes, implement this plan",
+                      "Yes, clear context and implement"]
+
+
+def test_codex_plan_decision_routes_through_the_gesture(dash, tmp_path, monkeypatch):
+    monkeypatch.setenv("KITTY_WINDOW_ID", "76")
+    _seed(tmp_path, "cxp2", _plan_rollout_records())
+    fe = _CxPlanFE()
+    _inject_fe(monkeypatch, fe)
+    code, body = _post(dash + "/api/session/cxp2/plan-decision",
+                       {"plan_id": "p-77", "digit": "1",
+                        "label": "Yes, implement this plan"})
+    assert code == 200 and json.loads(body) == {"ok": True, "kind": "decide"}
+    assert fe.chosen == 1 and fe.closed        # cursored onto row 1, Enter
+    row = _last_state_file("cxp2", "web-plan")
+    assert row["host"] == "codex" and row["ok"] and row["plan_id"] == "p-77"
+
+
+def test_codex_plan_dismiss_picks_keep_planning(dash, tmp_path, monkeypatch):
+    monkeypatch.setenv("KITTY_WINDOW_ID", "77")
+    _seed(tmp_path, "cxp3", _plan_rollout_records())
+    fe = _CxPlanFE()
+    _inject_fe(monkeypatch, fe)
+    code, body = _post(dash + "/api/session/cxp3/plan-decision",
+                       {"plan_id": "p-77", "dismiss": True})
+    assert code == 200 and json.loads(body) == {"ok": True, "kind": "dismiss"}
+    assert fe.chosen == 3 and fe.closed        # 'No, stay in Plan mode'
+    row = _last_state_file("cxp3", "web-plan")
+    assert row["host"] == "codex" and row["ok"] and row["kind"] == "dismiss"
+
+
+def test_codex_plan_decision_stale_plan_id_409s(dash, tmp_path, monkeypatch):
+    monkeypatch.setenv("KITTY_WINDOW_ID", "78")
+    _seed(tmp_path, "cxp4", _plan_rollout_records())
+    fe = _CxPlanFE()
+    _inject_fe(monkeypatch, fe)
+    try:
+        _post(dash + "/api/session/cxp4/plan-decision",
+              {"plan_id": "stale", "dismiss": True})
+        raise AssertionError("expected 409")
+    except urllib.error.HTTPError as e:
+        assert e.code == 409
+    assert fe.keyed == []      # nothing driven for an expired plan

@@ -418,16 +418,15 @@ Two facts make it actually paint:
 
 ### Codex control gestures (the P5 write plane)
 
-codex drives the control buttons it CAN — `interrupt`, `compact`, `rename`, and
-`ask` — through its `HostControl` (`plugins/codex/hostctl.CodexHost`). Overriding
-each gesture is what flips its DERIVED cap **True** (plugins.host), so the
-dashboard un-greys those buttons and `_caps_guard` lets them through; the ones
+codex drives the control buttons it CAN — `interrupt`, `compact`, `rename`,
+`ask`, and `plan` — through its `HostControl` (`plugins/codex/hostctl.CodexHost`).
+Overriding each gesture is what flips its DERIVED cap **True** (plugins.host), so
+the dashboard un-greys those buttons and `_caps_guard` lets them through; the ones
 codex cannot drive stay inert and read **False**: no `rewind` (codex has no
-checkpoint menu), no `plan` (no plan-approval tool), no `migrate` (no account
-switcher), no `model` (codex's `/model` is an INTERACTIVE picker, not a `/model
-<arg>` we can drive blind — deferred), no `effort` (a launch-time `-c
-model_reasoning_effort` only, no live `/effort`). `send` is a generic paste, not a
-gesture, so it is never caps-gated.
+checkpoint menu), no `migrate` (no account switcher), no `model` (codex's `/model`
+is an INTERACTIVE picker, not a `/model <arg>` we can drive blind — deferred), no
+`effort` (a launch-time `-c model_reasoning_effort` only, no live `/effort`).
+`send` is a generic paste, not a gesture, so it is never caps-gated.
 
 The dashboard's control handlers ROUTE to the gesture when the session's owner
 isn't claude_code (`_gesture_host(sid)` — `plugins.owns_by` → the host object, or
@@ -535,6 +534,54 @@ Claude's `/goal`/`/rewind` mixed in, and vice-versa. The composer passes its
 Claude's: the TUI executes the command, the menu only completes against it, so
 `BUILTINS` drift is harmless. This closed the reported "`/plan` isn't
 recognized" gap (docs/dashboard.md *The "/" menu*).
+
+### Plan mode — the plan card + the decision picker + Q/A
+
+codex has plan mode (`/plan` / shift+tab) and it reaches **full parity** with
+Claude's web plan flow — the plan card, real approve/reject buttons, and
+clarifying-question support — even though codex exposes NONE of Claude's plan
+machinery (no `ExitPlanMode` tool, no approval hook). Three verified codex facts
+make it work:
+
+1. **The plan is a STRUCTURED record.** A plan-mode turn ends with an
+   `event_msg`/`item_completed` whose `item.type == "Plan"` carries the full plan
+   as markdown (`item.text`) + a stable `id` — parsed by `rollout._ev_item_completed`
+   into a `plan` kind (mirror-ignored: it's a card, not a block). Not prose.
+2. **The decision is an on-screen PICKER**, not a tool. After the plan codex
+   shows `Implement this plan?` with numbered rows — `Yes, implement this plan`
+   (Switch to Default and start coding), `Yes, clear context and implement`, and
+   `No, stay in Plan mode` — the SAME `N. label` / `›`-cursor / `enter to confirm`
+   geometry as the `/model` picker, and driveable the same way.
+3. **Pending is read-side.** `read.pending_dialog` returns whichever modal is
+   open (ask OR plan) with a `kind`: a `Plan` item is pending until a newer
+   `task_started`/`user_message` decides it (clicking implement opens a fresh
+   default-mode turn; typing a follow-up starts its own turn). This drives the
+   card exactly as Claude's `plan-pending` kv does — `session.plan_pending` is
+   host-aware (the `_host_dialog` helper it shares with `ask_pending`), so a codex
+   plan renders in the SAME plan card, titled by the host label.
+
+**The card + gesture.** The card paints codex's two APPROVE rows directly from
+the pending read model (`plandialog.APPROVE_OPTIONS` — static; the picker is pure
+TUI, re-verified live at decide time), so no screen read is needed to render;
+`keep planning` maps to the `No, stay in Plan mode` row (an explicit choice, not
+an Esc — codex's Esc only steps BACK). codex's picker has no free-text
+"what to change" row, so the card hides the feedback box off-Claude. A decision
+POSTs `/plan-decision`, routed through `HostControl.plan` (`_host_plan`, keyed on
+`plan_id` not `tool_use_id`) → `plugins/codex/plandialog.py`, which navigates the
+`›` cursor to the label-matched row (label-keyed, so codex reordering can't press
+the wrong one) and ENTERs, screen-verified.
+
+**Clarifying questions (full Q/A).** In plan mode codex may raise a
+`request_user_input` dialog FIRST — often **multi-question** (`Question N/M`).
+`pending_dialog` surfaces every question, and the web ask card drives them all
+through `HostControl.ask` → `plugins/codex/dialog.py`, one Enter-advance per
+question. The last question's footer switches from `enter to submit answer` to
+`enter to submit all`; the driver's footer detector matches the common
+`to submit` stem so a single `drive()` carries through to the final submit (a
+live-verified bug: keyed on the exact `submit answer`, the driver bailed on the
+last question, leaving it unanswered). Verified end-to-end against a real
+plan-mode session: two multiple-choice questions asked, both answered from the
+web, then codex produced the plan and its decision picker.
 
 ### View modes — a codex run is its own act
 

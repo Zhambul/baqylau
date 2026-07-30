@@ -83,7 +83,8 @@ def test_codex_owns_real_rollouts_only(tmp_path):
 def test_codex_host_caps_reflect_wired_gestures(tmp_path):
     """codex is a launchable HOST that drives its SUPPORTED gestures (P5):
     interrupt/compact/rename/ask read True (the dashboard un-greys those buttons),
-    while the gestures codex cannot drive — rewind/plan/migrate/model/effort — stay
+    plus `plan` (codex's plan-mode DECISION picker — plugins/codex/plandialog.py),
+    while the gestures codex cannot drive — rewind/migrate/model/effort — stay
     inert and read False (greyed). `send` is not a gesture (never caps-gated). The
     caps are DERIVED from which methods CodexHost overrides, not an authored dict
     (plugins.host), so this pins the derivation end-to-end."""
@@ -94,7 +95,7 @@ def test_codex_host_caps_reflect_wired_gestures(tmp_path):
     assert h.caps() == {"interrupt": True, "send": False, "rename": True,
                         "rewind": False, "migrate": False, "compact": True,
                         "model": False, "effort": False, "ask": True,
-                        "plan": False}
+                        "plan": True}
     assert h.resume_words("sid7") == ["resume", "sid7"]
     p = _full_rollout(tmp_path)
     assert plugins.host_of(p).name == "codex"
@@ -207,6 +208,29 @@ def test_codex_pending_dialog_reads_open_ask(tmp_path, monkeypatch):
     assert plugins.pending_dialog("sid1") is None
 
 
+def test_codex_pending_dialog_reads_open_plan(tmp_path, monkeypatch):
+    import plugins
+    from core import sessionapi as API
+    recs = [_ev("task_started", collaboration_mode_kind="plan"),
+            _ev("item_completed",
+                item={"type": "Plan", "id": "p-9", "text": "# Plan\n1. do X\n"}),
+            _ev("task_complete")]
+    p = _rollout(tmp_path, recs)
+    monkeypatch.setattr(API, "session_row", lambda sid: {"transcript_path": p})
+    got = plugins.pending_dialog("sid1")
+    assert got["kind"] == "plan" and got["plan_id"] == "p-9"
+    assert "do X" in got["plan"]
+    # the static APPROVE options ride along (the card paints them without a
+    # screen read), keep-planning excluded
+    assert [o["label"] for o in got["options"]] == [
+        "Yes, implement this plan", "Yes, clear context and implement"]
+    # a DECIDED plan (a newer turn started after it) is no longer pending
+    recs2 = recs + [_ev("task_started", collaboration_mode_kind="default")]
+    p2 = _rollout(tmp_path, recs2)
+    monkeypatch.setattr(API, "session_row", lambda sid: {"transcript_path": p2})
+    assert plugins.pending_dialog("sid1") is None
+
+
 # ------------------------------------------------------ P5 control GESTURES
 
 def _ask_recs():
@@ -271,6 +295,67 @@ def test_codex_interrupt_indeterminate_without_record(tmp_path, monkeypatch):
     fe = _KeyFE(rollout=p, on_esc=lambda: [])   # nothing written
     res = hostctl.CodexHost().interrupt(fe, "42", {"rollout": p})
     assert res["status"] == "indeterminate" and res["ok"] and not res["verified"]
+
+
+class _MultiQFE:
+    """A reactive codex request_user_input dialog with TWO questions, matching the
+    live geometry: a `Question N/M` header, a `›` cursor DOWN/UP walks, and — on
+    the LAST question — the footer switches from `enter to submit answer` to
+    `enter to submit all` (the drift that made the driver bail early before FOOT
+    matched the `to submit` stem). ENTER on Q1 advances; ENTER on Q2 closes."""
+
+    def __init__(self):
+        self.n, self.cursor, self.picked = 1, 1, {}
+        self._closed = False
+
+    def get_text(self, win, extent="screen", ansi=False):
+        if ansi:
+            return ""
+        if self._closed:
+            return "Questions 2/2 answered\n❯ \n[gpt-5.6-sol] │ ready\n"
+        opts = ["a", "b"] if self.n == 1 else ["c", "d"]
+        lines = ["Question %d/2 (%d unanswered)" % (self.n, 3 - self.n)]
+        for i, label in enumerate(opts, 1):
+            mark = "› " if i == self.cursor else "  "
+            lines.append("%s%d. %s   desc" % (mark, i, label))
+        foot = "submit answer" if self.n == 1 else "submit all"
+        lines.append("tab to add notes | enter to %s | ←/→ to navigate | esc" % foot)
+        return "\n".join(lines)
+
+    def send_key(self, win, *keys):
+        k = keys[0] if keys else ""
+        if k == "down":
+            self.cursor = min(self.cursor + 1, 2)
+        elif k == "up":
+            self.cursor = max(self.cursor - 1, 1)
+        elif k == "enter":
+            self.picked[self.n] = self.cursor
+            if self.n == 1:
+                self.n, self.cursor = 2, 1     # advance to Q2
+            else:
+                self._closed = True            # submit all
+        return True
+
+    def send_text(self, win, text):
+        return True
+
+
+def test_codex_ask_driver_covers_all_questions_incl_submit_all(monkeypatch):
+    """A SINGLE drive() call answers BOTH questions of a multi-question codex
+    dialog, following the footer's switch to `submit all` on the last one (the
+    live bug the plan-with-questions experiment surfaced). Q1←'b', Q2←'c'."""
+    from plugins.codex import dialog
+    fe = _MultiQFE()
+    questions = [
+        {"id": "q1", "header": "h1", "question": "one?",
+         "options": [{"label": "a"}, {"label": "b"}]},
+        {"id": "q2", "header": "h2", "question": "two?",
+         "options": [{"label": "c"}, {"label": "d"}]}]
+    answers = [{"selected": ["b"], "other": ""},
+               {"selected": ["c"], "other": ""}]
+    assert dialog.drive(fe, "9", questions, answers, sleep=lambda s: None) \
+        == {"submitted": True}
+    assert fe.picked == {1: 2, 2: 1} and fe._closed   # b (row2), c (row1), closed
 
 
 def test_codex_compact_and_rename_paste(tmp_path):

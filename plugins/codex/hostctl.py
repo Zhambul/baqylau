@@ -13,13 +13,15 @@
 # Escape — codex's composer is NOT modal like Claude's vim, so no double-Esc —
 # verified by the `turn_aborted` RECORD landing in the rollout, since codex fires
 # NO Stop hook), `compact` (`/compact`), `rename` (a LIVE `/rename <name>` paste),
-# and `ask` (drive codex's own `request_user_input` dialog — plugins/codex/
-# dialog.py). Overriding these is what flips their DERIVED caps True so the
-# dashboard un-greys the buttons; the ones left inert (rewind/plan/migrate/model/
-# effort) read False and stay greyed, the HONEST answer — codex has no rewind, no
-# plan-approval tool, no migrate, an interactive `/model` PICKER (not a `/model
-# <arg>` we can drive blind), and no live `/effort` (effort is a launch-time `-c`
-# only). `send` is a generic paste, not a gesture (post_message is never
+# `ask` (drive codex's own `request_user_input` dialog — plugins/codex/dialog.py),
+# and `plan` (decide codex's plan-mode DECISION picker — plugins/codex/
+# plandialog.py; codex has no plan-approval TOOL, but the on-screen picker IS
+# driveable, the same geometry as the /model picker). Overriding these is what
+# flips their DERIVED caps True so the dashboard un-greys the buttons; the ones
+# left inert (rewind/migrate/model/effort) read False and stay greyed, the HONEST
+# answer — codex has no rewind, no migrate, an interactive `/model` PICKER (not a
+# `/model <arg>` we can drive blind), and no live `/effort` (effort is a launch-
+# time `-c` only). `send` is a generic paste, not a gesture (post_message is never
 # caps-gated), so it needs no override. Launch/resume plumbing (below) was live
 # since P6 and is NOT gesture-gated.
 #
@@ -177,6 +179,37 @@ class CodexHost(HostControl):
             dialog.drive(fe, win, ctx.get("questions") or [], answers or [])
         except dialog.CodexAskError as e:
             A.error(ctx.get("log") or "", "codex answer (%s)" % e.step,
+                    {"sid": ctx.get("sid"), "win": str(win), "detail": str(e)})
+            return {"status": INDETERMINATE, "cid": r["cid"], "ok": False,
+                    "step": e.step, "detail": str(e)}
+        return r
+
+    def plan(self, fe, win, decision, ctx):
+        """Decide codex's OPEN plan-mode DECISION picker by driving the on-screen
+        picker (plugins/codex/plandialog.py) — codex has NO plan-approval tool,
+        the picker is pure TUI (`Implement this plan?` + numbered rows). `decision`
+        is one of:
+          · {"dismiss": True}         — 'No, stay in Plan mode' (keep planning)
+          · {"digit": D, "label": L}  — an APPROVE row ('Yes, implement this
+                                        plan' / 'Yes, clear context and
+                                        implement'), label-verified on screen.
+        Overriding this flips codex's `plan` cap True so the dashboard un-greys
+        the plan card's decision buttons. Best-effort like `ask`: an unverified
+        step degrades to INDETERMINATE (audited, picker LEFT as-is — never Escape-
+        closed, since codex's Esc steps BACK a level). Result {status, cid, ok,
+        step?, detail?}."""
+        from plugins.codex import plandialog as PD
+        r = self._ack()
+        r["ok"] = True
+        decision = decision or {}
+        try:
+            if decision.get("dismiss"):
+                PD.dismiss(fe, win)
+            else:
+                PD.decide(fe, win, decision.get("digit"),
+                          decision.get("label") or "")
+        except PD.CodexPlanError as e:
+            A.error(ctx.get("log") or "", "codex plan (%s)" % e.step,
                     {"sid": ctx.get("sid"), "win": str(win), "detail": str(e)})
             return {"status": INDETERMINATE, "cid": r["cid"], "ok": False,
                     "step": e.step, "detail": str(e)}

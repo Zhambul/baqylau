@@ -374,13 +374,14 @@ function renderPlan() {
     wrap.append(pendingCard("plancard", "sending decision…", ses.planPend.note));
     return;
   }
+  const hostLbl = (ses.meta && ses.meta.host_label) || "the agent";
   const card = el("div", "plancard");
   const head = el("div", "askhead");
-  head.append(el("span", "plantitle", "claude has a plan — proceed?"));
+  head.append(el("span", "plantitle", hostLbl + " has a plan — proceed?"));
   const dis = el("button", "askchat", "keep planning");
-  dis.title = "reject the plan and stay in plan mode (the dialog's Esc)";
+  dis.title = "reject the plan and stay in plan mode";
   dis.onclick = () => submitPlan(plan, { dismiss: true }, "plan dismissed",
-                                 "Claude keeps planning");
+                                 hostLbl + " keeps planning");
   head.append(dis);
   card.append(head);
   const body = el("div", "planbody md");
@@ -389,40 +390,49 @@ function renderPlan() {
   const btns = el("div", "planbtns");
   btns.append(el("span", "plandim", "loading options…"));
   card.append(btns);
-  const fb = el("div", "planfb");
-  const fbIn = el("input", "askother");
-  fbIn.type = "text";
-  fbIn.spellcheck = false;
-  fbIn.placeholder = "tell Claude what to change…";
-  fbIn.onkeydown = (e) => {
-    e.stopPropagation();
-    if (e.key === "Enter" && fbIn.value.trim())
-      submitPlan(plan, { feedback: fbIn.value.trim() }, "feedback sent",
-                 "Claude will revise the plan");
-  };
-  const fbB = el("button", "askchat", "send feedback");
-  fbB.onclick = () => {
-    if (fbIn.value.trim())
-      submitPlan(plan, { feedback: fbIn.value.trim() }, "feedback sent",
-                 "Claude will revise the plan");
-  };
-  fb.append(fbIn, fbB);
-  card.append(fb);
+  // The feedback ("tell the agent what to change") row is Claude's ExitPlanMode
+  // "keep planning with changes" affordance; codex's picker has no free-text
+  // row, so it is offered ONLY when the pending plan didn't ship its own options
+  // (i.e. the claude_code screen-read path below).
+  const inlineOpts = Array.isArray(plan.options) ? plan.options : null;
+  if (!inlineOpts) {
+    const fb = el("div", "planfb");
+    const fbIn = el("input", "askother");
+    fbIn.type = "text";
+    fbIn.spellcheck = false;
+    fbIn.placeholder = "tell " + hostLbl + " what to change…";
+    const sendFb = () => {
+      if (fbIn.value.trim())
+        submitPlan(plan, { feedback: fbIn.value.trim() }, "feedback sent",
+                   hostLbl + " will revise the plan");
+    };
+    fbIn.onkeydown = (e) => {
+      e.stopPropagation();
+      if (e.key === "Enter") sendFb();
+    };
+    const fbB = el("button", "askchat", "send feedback");
+    fbB.onclick = sendFb;
+    fb.append(fbIn, fbB);
+    card.append(fb);
+  }
   wrap.append(card);
-  // the decision buttons come from the LIVE dialog (labels vary with the
-  // session's permission mode) — fetched once per card render
+  const paintOpts = (opts) => {
+    btns.textContent = "";
+    (opts || []).forEach(o => {
+      if (o.feedback) return;              // the feedback row is the box above
+      const b = el("button", "planopt", o.label);
+      b.onclick = () => submitPlan(plan, { digit: o.digit, label: o.label },
+                                   "decided", o.label);
+      btns.append(b);
+    });
+  };
+  // codex ships its (static) decision options in the pending plan — paint them
+  // directly, no screen read. Claude's labels VARY with the permission mode, so
+  // they're fetched from the LIVE dialog once per card render.
+  if (inlineOpts) { paintOpts(inlineOpts); return; }
   postJSON("/api/session/" + encodeURIComponent(S.cur) + "/plan-options",
            { tool_use_id: plan.tool_use_id || "" })
-    .then(r => {
-      btns.textContent = "";
-      (r.options || []).forEach(o => {
-        if (o.feedback) return;            // the feedback row is the box above
-        const b = el("button", "planopt", o.label);
-        b.onclick = () => submitPlan(plan, { digit: o.digit, label: o.label },
-                                     "decided", o.label);
-        btns.append(b);
-      });
-    })
+    .then(r => paintOpts(r.options))
     .catch(e => {
       btns.textContent = "";
       btns.append(el("span", "plandim",
@@ -435,10 +445,12 @@ function submitPlan(plan, body, okTitle, okDetail) {
   const ses = S.ses;
   if (!ses || !S.cur) return;
   body.tool_use_id = plan.tool_use_id || "";
+  body.plan_id = plan.plan_id || "";       // codex pairs the decision by plan_id
   // optimistic: grey the card immediately and keep it until the SSE `plan`
   // reconcile drops the stash — not the old hide-on-POST-return. Beaconed as
   // `web-hint` op=plan.
-  ses.planPend = optPending(S.cur, "plan", plan.tool_use_id || "", okDetail);
+  ses.planPend = optPending(S.cur, "plan",
+                            plan.tool_use_id || plan.plan_id || "", okDetail);
   renderPlan();
   postJSON("/api/session/" + encodeURIComponent(S.cur) + "/plan-decision", body,
            { audit: "plan" })

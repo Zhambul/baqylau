@@ -24,7 +24,9 @@
 #   - a header line `Question N/M (K unanswered)` (N/M 1-based);
 #   - numbered option rows `  N. <label>  <description>`, a `›` cursor on the
 #     current option (codex renders `›`; `❯` is tolerated for version drift);
-#   - a footer `tab to add notes | enter to submit answer | esc to interrupt`;
+#   - a footer `tab to add notes | enter to submit answer | esc to interrupt`
+#     (a MULTI-question dialog reads `enter to submit all` on the last question,
+#     and adds `←/→ to navigate questions`);
 #   - DOWN/UP walk the `›` cursor, ENTER submits the current question's answer and
 #     advances to the next (forward-only, like Claude's build), `tab` opens a
 #     free-text notes field.
@@ -35,7 +37,13 @@ POLL_S = 0.15           # screen re-read beat while waiting for a dialog state
 STEP_TIMEOUT_S = 2.5    # a key press → its screen effect visible
 NAV_STEPS = 24          # max up/down presses to walk the cursor to a target row
 
-FOOT = "submit answer"                      # codex dialog footer detector
+# codex dialog footer detector. A single-question dialog reads
+# "enter to submit answer"; on a MULTI-question dialog the LAST question's footer
+# switches to "enter to submit all" — matching the common "to submit" stem keeps
+# `dialog_open` True through that switch (a verified live bug: keyed on the exact
+# "submit answer" the driver bailed on the final question, leaving it unanswered),
+# and stays disjoint from the plan/model picker footer ("to confirm").
+FOOT = "to submit"
 _HEADER = re.compile(r"Question\s+(\d+)\s*/\s*(\d+)")
 # option row: cursor mark? · number. · label (a 2+-space run starts the dim
 # description, which is not part of the label).
