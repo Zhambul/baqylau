@@ -306,12 +306,18 @@ def _rsp_web_search_call(p):
 
 
 def _rsp_function_call_output(p):
+    # The OLDER exec channel's output. Same normalisation as the custom-tool one:
+    # the exit is scanned from the FULL head (the `Chunk ID…\nWall time…\nProcess
+    # exited with code N\n…Output:\n` preamble codex 0.14x prints leads it), THEN
+    # the body is stripped of that preamble so a standalone block shows the real
+    # output, not codex's status noise (verified live: a `run ls` used THIS
+    # channel with exactly that preamble).
     out = p.get("output") or ""
     if not isinstance(out, str):
         out = _content_text(out)
     m = EXIT_RE.search(out[:EXIT_SCAN_B])
     return {"kind": "exec_result", "exit": m.group(1) if m else None,
-            "output": out, "call_id": p.get("call_id") or ""}
+            "output": _exec_output_body(out), "call_id": p.get("call_id") or ""}
 
 
 def _rsp_message(p):

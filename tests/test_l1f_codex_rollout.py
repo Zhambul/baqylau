@@ -165,14 +165,21 @@ def test_exec_command_args_decode_and_list_join():
 
 
 def test_exec_output_exit_extraction_both_head_forms():
+    # exit is read from the FULL head (the preamble), then the body is stripped of
+    # codex's `…Output:\n` status preamble so the block shows the real output
     rec = RO.parse(_rsp("function_call_output", call_id="c1",
                         output="Process exited with code 2\nOutput:\nboom"))
-    assert rec == {"kind": "exec_result", "exit": "2",
-                   "output": "Process exited with code 2\nOutput:\nboom",
+    assert rec == {"kind": "exec_result", "exit": "2", "output": "boom",
                    "call_id": "c1", "ts": None}
     assert RO.parse(_rsp("function_call_output",
                          output="Exit code: 0\nok"))["exit"] == "0"
     assert RO.parse(_rsp("function_call_output", output="plain"))["exit"] is None
+    # the exact live 0.14x preamble (verified from a real `run ls`): exit 0, body
+    # is the listing with the Chunk-ID/Wall-time/Process-exited noise stripped
+    live = RO.parse(_rsp("function_call_output", output=(
+        "Chunk ID: 83d778\nWall time: 0.0002 seconds\nProcess exited with code 0"
+        "\nOriginal token count: 30\nOutput:\nbin\nCLAUDE.md\ncore")))
+    assert live["exit"] == "0" and live["output"] == "bin\nCLAUDE.md\ncore"
     # the status line is only trusted in the head window
     far = "x" * (RO.EXIT_SCAN_B + 10) + "\nExit code: 3\n"
     assert RO.parse(_rsp("function_call_output", output=far))["exit"] is None
