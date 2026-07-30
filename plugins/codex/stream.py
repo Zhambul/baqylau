@@ -36,6 +36,7 @@ from core import render as R
 from core import state as S
 from core import streamfmt as SF
 from core import tail as T
+from plugins.codex import facets as FX
 from plugins.codex import rollout as RO
 
 A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
@@ -730,6 +731,14 @@ class Renderer:
             self.pending_exec[rec["call_id"]] = {
                 "cmd": rec["cmd"], "ts": rec.get("ts"), "gid": gid}
             O.emit(LOG, *SF.command_open(rec["cmd"], gid))
+            # …and tell the WEB which block is running, so its ⏱ elapsed chip
+            # ticks on it (plugins.fg_running). This is the one place that knows
+            # both halves of that record: the copy group `gid` — which exists
+            # nowhere in the hook payloads, whose ids are a different space
+            # entirely (facets.py) — and the exec's own start. STANDALONE only:
+            # a nested run's LOG is the Claude host's state DB, where this key
+            # belongs to Claude's own PreToolUse.
+            FX.fg_open(LOG, gid, _iso_ts(rec.get("ts")))
             return
         g = O.new_group(LOG)
         O.emit(LOG, chip("▶", "cmd", g=g, lk=[["cmd", "⧉cmd"]]),
@@ -747,6 +756,9 @@ class Renderer:
             if failed:
                 self._emit_exit_chip(rec["exit"])
             return
+        # the block is finishing — retire the live chip BEFORE its own
+        # "■ finished · 3.2s" chip lands, so the two never both show
+        FX.fg_close(LOG, pend["gid"])
         out = (rec["output"] or "").rstrip("\n")
         body = R.emphasize(R.unescape(cap(out, CAP_OUTPUT))) if out.strip() \
             else SF.no_output_body()

@@ -339,7 +339,7 @@ def session_payload(sid, agent=""):
     # the in-flight foreground command ({g, start_ts}) — seeds the mirror's
     # live elapsed chip on RELOAD, so a page opened mid-command starts ticking
     # from the real start instead of waiting for the block to finish
-    data["fg_running"] = API.fg_running(sid)
+    data["fg_running"] = plugins.fg_running(sid)
     # Correct `live` to require an OPEN tab and gate the control plane on the
     # LIVE window (the pane currently tagged claude_session=<sid>), NOT the
     # audit row's start-time id — kitty reuses window ids, so a leaked/parked
@@ -495,13 +495,15 @@ def ask_draft(sid, ask=None):
     return draft
 
 
-def session_compacting(sid, sdb=None):
+def session_compacting(sid, sdb=None, host=None):
     """Whether this session is compacting RIGHT NOW — {"since", "trigger"} or
-    None. The `compacting` kv latch (compact_fmt.py: armed on PreCompact,
-    cleared on PostCompact) behind the ctx bar's animation (docs/dashboard.md,
-    *Compaction on the ctx bar*). Read-only (kv_at — never creates the state
-    DB). `sdb` is the SSE tick's already-resolved path (see session_kv): this
-    rides the FAST cadence, so it must not re-walk the adopt chain per tick.
+    None. The owning host's compaction latch (`plugins.compacting` — armed on
+    that host's PreCompact hook, cleared on its PostCompact) behind the ctx
+    bar's animation (docs/dashboard.md, *Compaction on the ctx bar*). Read-only
+    (kv_at — never creates the state DB). `sdb` is the SSE tick's
+    already-resolved path (see session_kv): this rides the FAST cadence, so it
+    must not re-walk the adopt chain per tick — and `host` is the same tick's
+    already-resolved owner, which spares the fan-out its OWN routing lookup.
 
     AGED OUT past config.COMPACT_MAX_S: a compaction that died on an API error
     or was interrupted fires no PostCompact, and the hook that armed the latch
@@ -513,7 +515,7 @@ def session_compacting(sid, sdb=None):
     parked mid-compaction has no animation to show anyway (the latch dies with
     the arm's age), and gating on `live` would need a second lookup here for a
     question the expiry already answers."""
-    rec = session_kv(sid, "compacting", sdb)
+    rec = plugins.compacting(sid, sdb, host)
     if not isinstance(rec, dict):
         return None
     try:
@@ -649,14 +651,12 @@ def composer_queue(sid):
 
 
 def session_tasks(sid):
-    """The session's task-list snapshot — the `tasks` kv task_fmt.py re-reads
-    from Claude Code's on-disk task dir on every task-touching hook (docs/
-    dashboard.md, *Web tasks*). A list of task records ({id, subject, status,
-    …}, id-sorted), or None when the session never had tasks / the list is
-    empty — None keeps the card hidden. Read-only (kv_at)."""
-    stash = session_kv(sid, "tasks")
-    tasks = stash.get("tasks") if isinstance(stash, dict) else None
-    return tasks if isinstance(tasks, list) and tasks else None
+    """The session's task-list snapshot from the host that OWNS it
+    (`plugins.tasks`) — a list of task records ({id, subject, status, …},
+    id-sorted), or None when the session never had tasks / its host has no
+    task-list concept at all — None keeps the card hidden either way (docs/
+    dashboard.md, *Web tasks*). Read-only (kv_at, host-side)."""
+    return plugins.tasks(sid)
 
 
 def tasks_done(tasks):

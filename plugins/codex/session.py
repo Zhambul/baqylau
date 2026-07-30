@@ -104,18 +104,25 @@ def bias():
         return HP.DEFAULT_BIAS
 
 
-def spawn_watcher(log, cwd, sid, host_pid):
-    """Detach this session's codex watcher in STANDALONE mode (host pid passed as
-    argv[4]) via the launcher, whose only job is a fast Popen(start_new_session)
-    so this hook returns immediately (the hard-won lesson in launch.py)."""
-    if not os.path.isfile(LAUNCH):
-        return
-    try:
-        subprocess.run([sys.executable or "python3", LAUNCH, log, cwd, sid,
-                        str(host_pid)],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except Exception:
-        A.error(log, "spawn codex standalone watcher", {"sid": sid})
+def plugins_start(log, cwd, sid):
+    """Run the SessionStart plugin fan-out for this standalone codex host — the
+    same `plugins.on_session_start` claude_code's split.py has always called.
+
+    This used to be a direct `subprocess.run(LAUNCH, …)` here, which is why the
+    fan-out had never run for a codex host at all: cross-cutting plugins were
+    invisible to codex sessions (otel today — harmless, it spawns its OTLP
+    receiver only under CLAUDE_CODE_ENABLE_TELEMETRY, and a codex session that
+    sets it gets the same per-machine singleton every Claude session shares),
+    and codex's OWN provider was dead code on the one path it most obviously
+    belonged to.
+
+    The watcher is still spawned exactly once, in STANDALONE mode: codex's
+    provider reads the standalone-host row this handler stamped just above and
+    appends the host pid itself (plugins/codex/__init__.on_session_start). The
+    fan-out audits and swallows a failing plugin, so this can never break a
+    SessionStart."""
+    import plugins
+    plugins.on_session_start(log, cwd, sid)
 
 
 def main():
@@ -200,10 +207,13 @@ def main():
     except Exception:
         pass
 
-    host_pid = codex_pid()
-    spawn_watcher(log, cwd, sid, host_pid)
+    # The plugin fan-out — which starts THIS session's watcher (standalone mode,
+    # resolved from the codex_host_mark above) and every cross-cutting plugin's
+    # own SessionStart work. Must come AFTER the mark, which is what tells the
+    # codex provider this is a host rather than a session to watch alongside.
+    plugins_start(log, cwd, sid)
     A.hook_event(payload, handler="codex-session",
-                 decision="standalone-open (%s, host_pid=%d)" % (fate, host_pid))
+                 decision="standalone-open (%s, plugin fan-out)" % fate)
 
 
 def entry():

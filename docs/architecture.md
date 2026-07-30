@@ -259,6 +259,30 @@ the dashboard tier plus a fifth in its notifier; `tests/test_l1i_host_contract.p
 greps that tier for host-name literals against a shrinking allowlist so they
 cannot come back.
 
+**The SID-KEYED fan-outs are ownership-ROUTED** (`_first_owner`), which is the
+same argument one key over: resolve the session's transcript path, and ask ONLY
+the host that owns it (the default host when the path is empty or unclaimed — the
+same fail-OPEN rule `session_caps` applies, so a daemon-origin session with no
+transcript keeps working). A session belongs to exactly ONE host, so
+first-plugin-wins here is not merely imprecise, it is a claim by the wrong host
+about someone else's session: `ask_preamble` answers `""` for ANY sid, and a
+non-None result ENDS the fan-out before the owner is reached. This covers the
+limits/account/cost facets, the three SESSION-STATE facets
+(`tasks`/`compacting`/`fg_running` — what a session is doing right now, which the
+dashboard used to read as raw kv rows by name), `conversation` for a session's own
+thread, `ask_preamble` and `pending_dialog`.
+
+**But the KEY decides, and an AGENT-keyed read may cross hosts.**
+`conversation(sid, pos, agent_id)` and `agent_usage(sid, agent_id)` stay
+first-wins when an `agent_id` is given, because a child need not share its
+parent's host — a codex run sidecar'd inside a Claude session is a codex agent
+under a claude_code sid, and routing by the SESSION's owner asks Claude about a
+codex rollout, which declines, losing the agent entirely. First-wins is safe
+there for the same reason it is unsafe above: the agent id is itself the
+discriminator, since each host recognizes only ids it issued. A caller that has
+already resolved the owner (the SSE tick, once per pass) may pass it as a `host=`
+hint, so an ownership-routed read on a fast cadence costs no extra row lookup.
+
 **Core's read model reaches the registry, in two places.** `sessionapi.agents()`
 splices `plugins.runs(sid)` (a host's own NESTED runs — codex answers with its
 sidecar rollouts, claude_code declines because a subagent is already a `streams`

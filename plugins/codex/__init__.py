@@ -19,13 +19,42 @@ def on_session_start(log, cwd, sid):
     entry, which Popens the watcher DETACHED (start_new_session) and exits in a
     few ms — so SessionStart can never hang on it (the hard-won lesson in
     plugins/codex/launch.py). Invoked via the plugins registry from the host's
-    SessionStart (plugins/claude_code/split.py cmd_open)."""
+    SessionStart — claude_code's (split.py cmd_open) AND, since P4, codex's own
+    (session.py main).
+
+    TWO WATCHERS, ONE PROVIDER. The watcher has two roles, selected by whether a
+    HOST_PID rides argv[4] (watch.py's header): the SECONDARY discovery watcher
+    that streams codex runs into a hosting Claude session, and the STANDALONE
+    manager that streams this session's own rollout and owns its teardown. Which
+    one to start is not the caller's business — it follows from whether THIS sid
+    is a recorded standalone codex host, which session.py has just stamped
+    (tabs.codex_host_mark) by the time it calls the fan-out. So the choice lives
+    here, and both hosts call the same one line.
+
+    That is what fixes the bug this provider had all along: codex/session.py
+    spawned its watcher DIRECTLY and never called plugins.on_session_start, so
+    the fan-out ran for Claude sessions only — every cross-cutting plugin (otel
+    today) was invisible to a standalone codex host, and this very provider was
+    dead code on that path. Routing session.py through the fan-out instead would
+    have spawned the watcher TWICE unless the provider knew the difference; now
+    it does."""
+    from core import tabs as T
     launcher = os.path.join(BIN, "claude-codex-launch.py")
     if not os.path.isfile(launcher):
         return
+    argv = [sys.executable or "python3", launcher, log, cwd, sid]
     try:
-        subprocess.run([sys.executable or "python3", launcher, log, cwd, sid],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if T.codex_host_win(sid) is not None:
+            # STANDALONE: this sid IS a codex host. The watcher additionally
+            # needs the codex process to watch for liveness — codex fires no
+            # SessionEnd, so pid death IS the teardown signal (session.py).
+            from plugins.codex import session
+            argv.append(str(session.codex_pid()))
+    except Exception:
+        pass                       # unresolvable => the secondary role, as before
+    try:
+        subprocess.run(argv, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL)
     except Exception:
         pass
 
@@ -213,3 +242,30 @@ def session_costs(sid):
     usage.session_costs."""
     from plugins.codex import usage
     return usage.session_costs(sid)
+
+
+def compacting(sid, sdb=None):
+    """The compaction-latch provider (plugins.compacting fan-out) — the RAW
+    `{ts, trigger}` record codex's own Pre/PostCompact hooks arm and clear
+    (dispatch.py → facets.on_compact), so a codex session's ctx bar breathes
+    while it compacts exactly as a Claude one does. See facets.compacting."""
+    from plugins.codex import facets
+    return facets.compacting(sid, sdb)
+
+
+def fg_running(sid, sdb=None):
+    """The in-flight-foreground-command provider (plugins.fg_running fan-out) —
+    the mirror block a standalone codex host is running a shell command in, and
+    since when, written by the ROLLOUT STREAM rather than a hook (only the stream
+    holds the block's copy group; the hook's ids name nothing paintable — see
+    facets.py's measurement). See facets.fg_running."""
+    from plugins.codex import facets
+    return facets.fg_running(sid, sdb)
+
+
+# NB `tasks` is DELIBERATELY ABSENT — codex has no task-list tool. Not in its
+# rollout vocabulary (exec_command / write_stdin / wait / spawn_agent /
+# wait_agent / send_message / apply_patch / exec, over an 80-rollout corpus), not
+# in its hook `tool_name`s. There is no material, so the honest answer is the
+# DECLINE: plugins.tasks() reads None and the pinned card stays hidden, rather
+# than the dashboard being handed an empty list that renders an empty card.

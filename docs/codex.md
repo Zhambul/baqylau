@@ -740,6 +740,83 @@ right treatment for a SIDECAR codex run inside a Claude session — a foldable
 sub-run, like a subagent (`ran N codex runs`). It is the WRONG treatment for a
 STANDALONE codex session, where the codex activity IS the session — see below.
 
+### Session-state facets: the hook dispatcher grows a second subscriber
+
+`plugins/codex/dispatch.py` used to fan its nine events out to exactly one
+subscriber, the tab producer. It now has two, and the new one —
+`plugins/codex/facets.py` — owns codex's answers to the dashboard's
+**session-state facets** (`plugins.compacting` / `plugins.fg_running` /
+`plugins.tasks`; the shared design is docs/dashboard.md *Session-state facets*).
+
+**`compacting` — from the hook pair.** `PreCompact` arms a `{ts, trigger}` kv
+latch, `PostCompact` clears it, exactly as `plugins/claude_code/compact_fmt.py`
+does; the web's ctx bar breathes for a codex compaction the same way it does for
+a Claude one. The hooks are the only signal there is — a compaction emits no
+tool call, no reply and no rollout growth for its whole duration — and the
+rollout's `context_compacted` record is only the after-the-fact crosscheck. The
+TTL that ages an un-cleared latch out lives with the READER
+(`config.COMPACT_MAX_S`), because an interrupted codex compaction fires no
+closing hook either and an animation must fail OFF.
+
+Ordering inside `route()` is deliberate: the facet step runs **before** the tab
+step, and outside its `fe.usable()` check. A latch is a state-DB write with
+nothing to do with a window; behind the frontend resolve it would be lost to a
+terminal that failed to resolve, for no reason.
+
+**`fg_running` — from the ROLLOUT STREAM, not the hook.** The record must name
+the mirror block the ⏱ chip ticks on, and the hook cannot: measured 2026-07-31,
+the hook's `tool_use_id` (`exec-<uuid>`), the rollout's `call_id` (`call_<…>`)
+and the block's copy group (an `ops.new_group()` integer) are three disjoint id
+spaces. Claude Code stamps from its hook only because *its* `tool_use_id` IS the
+copy group. So `stream.py`'s standalone `_ro_exec` calls `facets.fg_open(LOG,
+gid, ts)` right after painting the block and `_exec_close` calls `fg_close` right
+before the finish chip; the stream's own pid is the liveness backstop for a turn
+aborted mid-exec, which writes no closing record and fires no hook
+(`turn_aborted` is a rollout note, not an event). There is deliberately **no
+`tool_name` allowlist** for "which codex tools are the foreground command": the
+rollout's `exec` record is the shell family by construction, and the hook's
+`exec-` id prefix is not a shell marker (`webrun` and the MCP tools wear it too).
+
+**`tasks` — DECLINED.** No task-list tool exists in codex's rollout vocabulary
+(`exec_command` / `write_stdin` / `wait` / `spawn_agent` / `wait_agent` /
+`send_message` / `apply_patch` / `exec`, over an 80-rollout corpus) or in its
+hook `tool_name`s. There is no material, so the provider is absent and the card
+stays presence-hidden — the honest answer, recorded as a DECLINED cell in
+`tests/test_l1i_host_contract.py`'s coverage matrix rather than as an absence
+nobody notices. **Monitors and background jobs decline for the same reason**: no
+codex mechanism exists, so those counts stay an honest zero rather than fake
+data. (codex's long-running `write_stdin`/`wait` execs are the raw material a
+jobs analog would be built from, if one is ever wanted.)
+
+**The nested guard covers both halves.** A `codex exec` inside a Claude session
+fires these hooks too, and its LOG is the CLAUDE host's state DB — where both
+keys belong to Claude's own hooks. So the hook half stays behind the existing
+`tabs.codex_host_win` standalone gate, and the stream half runs only in the
+`REG_STANDALONE` register. An `agent_id` on the event is ignored as well (a
+child has no compaction of its own — `compact_fmt`'s own rule).
+
+### `plugins.on_session_start` finally runs for a codex host
+
+`plugins/codex/session.py` used to `subprocess.run` the watcher launcher
+directly, so the SessionStart plugin fan-out — which
+`plugins/claude_code/split.py` has always called — **had never run for a codex
+session at all**. Two consequences: every cross-cutting plugin was invisible to a
+codex host (today that is `plugins/otel`, whose provider spawns the per-machine
+OTLP receiver only under `CLAUDE_CODE_ENABLE_TELEMETRY` — harmless, and a codex
+session that sets it now joins the same singleton every Claude session shares),
+and codex's OWN `on_session_start` provider was dead code on the one path it most
+obviously belonged to.
+
+`session.py` now calls `plugins.on_session_start(log, cwd, sid)` and nothing
+else. The watcher is still started exactly **once**, because the provider decides
+which of its two roles to start rather than the caller: `watch.py` selects the
+STANDALONE host manager over the secondary discovery watcher by whether a
+`HOST_PID` rides `argv[4]`, and the provider reads the standalone-host mark
+(`tabs.codex_host_mark`, stamped by `session.py` just above the call) to know
+which this is, appending `session.codex_pid()` itself when it is a host. Both
+hosts therefore call the same one line, and the fan-out's audit-and-swallow means
+a failing plugin can never break a SessionStart.
+
 ### Only a codex IN A KITTY WINDOW gets a mirror (the ChatGPT-app skip)
 
 `plugins/codex/session.py` stands up a mirror + scoreboard + `sessions` row only

@@ -693,33 +693,13 @@ def running(sid):
     return out
 
 
-def fg_running(sid):
-    """The main session's IN-FLIGHT foreground command as {"g", "start_ts"}, or
-    None when nothing is executing — the block-level twin of running() (which
-    answers "is an fg slot alive" but, being slot-keyed, can't say WHICH mirror
-    block it belongs to). The source is the take-once `fg-live` hand-off record
-    claude-cmd-pre.py writes when it spawns the live tailer: its `tid` IS the
-    block's copy-group id (the tool_use_id stamped on the ▶ foreground header
-    ops) and its `ts` the command's start. PostToolUse consumes the record, so
-    its mere presence is the "still running" signal — with the owning tailer's
-    pid_alive() as the backstop for the cancel case that fires no hook at all
-    (an abandoned record whose tailer died reads as not-running, exactly as
-    cmd_pre's own staleness check treats it). The dashboard ticks a live elapsed
-    chip on that block from start_ts; a parked session yields None. A pure
-    reader — it PEEKS, never takes (consuming here would strand the real
-    consumer's finish chip)."""
-    sdb = state_db_for(sid)
-    if not sdb:
-        return None
-    rec = S.hand_peek_at(sdb, "fg-live")
-    if not isinstance(rec, dict):
-        return None
-    gid, ts, pid = rec.get("tid"), rec.get("ts"), rec.get("pid")
-    if not gid or not ts:
-        return None                 # a pre-`ts` producer's record — nothing to tick
-    if not (pid and S.pid_alive(pid)):
-        return None                 # abandoned record (cancelled command, dead tailer)
-    return {"g": gid, "start_ts": ts}
+# fg_running() USED to live here — the block-level twin of running(), reading the
+# take-once `fg-live` hand-off. It moved to plugins.fg_running (P4): every line of
+# it was one host's hook protocol (the record's fields, the fact that `tid` IS the
+# mirror block's copy-group id, the take-once consumption rule, the entry script's
+# filename), stated by a module whose whole claim is that it names no tool. Core
+# keeps the primitives it was built out of — state_db_for, S.hand_peek_at,
+# S.pid_alive — and each host now states its own protocol over them.
 
 
 def errors(sid):

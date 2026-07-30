@@ -89,6 +89,9 @@ PROVIDERS = {
     "session_usage": 1,      # (sid)                — one session's limit windows
     "session_account": 1,    # (sid)                — …its subscription account
     "session_costs": 1,      # (sid)                — …its token/cost totals
+    "tasks": 1,              # (sid[, sdb])         — the pinned task list
+    "compacting": 1,         # (sid[, sdb])         — the compaction latch, RAW
+    "fg_running": 1,         # (sid[, sdb])         — the in-flight fg command
 }
 
 
@@ -175,7 +178,7 @@ def _first_path(method, path, *args, **kwargs):
                   **kwargs)
 
 
-def _first_owner(method, sid, *args, default=None, **kwargs):
+def _first_owner(method, sid, *args, default=None, host=None, **kwargs):
     """The SID-KEYED fan-out primitive, routed by OWNERSHIP: resolve the
     session's transcript path, and ask ONLY the host that owns it — the default
     host when the path is empty/unclaimed (the same fail-OPEN rule
@@ -190,10 +193,22 @@ def _first_owner(method, sid, *args, default=None, **kwargs):
     zero for work that really happened).
 
     Costs one session_row() lookup per call; the read model already resolves the
-    row for every one of these payload fields, and the audit query is indexed."""
-    from core import sessionapi as API
-    tpath = (API.session_row(sid) or {}).get("transcript_path") or ""
-    fn = _named(method, owns_by(tpath) or default_host())
+    row for every one of these payload fields, and the audit query is indexed.
+
+    `host` SKIPS that lookup for a caller who already holds the owning host's
+    short name. It exists for the SSE tick and nothing else: the tick resolves
+    the owner ONCE per slow pass (it needs it for the prompt-bubble command
+    vocabulary anyway) and then runs `compacting`/`fg_running` on the FAST
+    cadence, where an un-hinted route would add an audit-DB `session_row` walk
+    per channel per tick to answer a question that cannot change between them.
+    Pass only a name that came from owns_by()/default_host() — an invented one
+    routes the read to the wrong host, which is the very failure this primitive
+    exists to prevent."""
+    if not host:
+        from core import sessionapi as API
+        tpath = (API.session_row(sid) or {}).get("transcript_path") or ""
+        host = owns_by(tpath) or default_host()
+    fn = _named(method, host)
     return default if fn is None else fn(sid, *args, **kwargs)
 
 
@@ -384,7 +399,14 @@ def agent_usage(sid, agent_id):
     price whatever came back with Anthropic's table, which is only correct while
     exactly one plugin answers. Exceptions propagate, same contract as census():
     the caller is the read-side dashboard, not a hook, and swallowing here would
-    hide which provider broke."""
+    hide which provider broke.
+
+    Deliberately still `_first` — it is AGENT-keyed, and an agent need not share
+    its session's host (a codex run sidecar'd inside a Claude session is a codex
+    agent under a claude_code sid). The ownership gate its sid-keyed siblings
+    gained in P4 would ask the PARENT's host about a CHILD that isn't its own;
+    the agent id already discriminates, since each host recognizes only ids it
+    issued. See conversation() — the same rule, argued there in full."""
     return _first("agent_usage", sid, agent_id)
 
 
@@ -693,32 +715,65 @@ def prompts(transcript_path):
 
 def conversation(sid, pos=0, agent_id=""):
     """Conversation records from byte `pos` for the dashboard's merged mirror
-    stream: (records, new_pos) from the first plugin that recognizes the sid,
-    None otherwise. `agent_id` picks WHOSE — the session's own main thread by
+    stream: (records, new_pos) from the host that OWNS the session, None when it
+    has nothing to say. `agent_id` picks WHOSE — the session's own main thread by
     default, a subagent/teammate's when named — so agent scope merges prose into
     an agent's mirror through this same call (docs/dashboard.md *Agent scope*).
     Records carry the tool_use `anchor` the dashboard interleaves on. Same
-    exception contract as census()."""
-    return _first("conversation", sid, pos, agent_id)
+    exception contract as census().
+
+    THE KEY DECIDES WHO IS ASKED, and this is the one fan-out where both keys
+    are in play (P4):
+
+      · no `agent_id` — the question is about the SESSION's own main thread, and
+        a session belongs to exactly one host, so it is OWNERSHIP-ROUTED
+        (_first_owner). It was `_first`, and that WORKED only because
+        claude_code's reader happens to fail CLOSED for a foreign sid (it
+        resolves no Claude transcript and returns None, so the fan-out fell
+        through to codex — measured on a real standalone codex session: 11
+        records either way, and the rendered mirror byte-identical before and
+        after). Luck, not a contract: the sibling ask_preamble on the same sid
+        answers '' for anyone, a non-None result that WINS.
+
+      · an `agent_id` — the question is about ONE CHILD, and a child need NOT
+        share its parent's host. That is the entire premise of the codex plugin's
+        original role: a codex run SIDECAR inside a Claude session is a codex
+        agent under a claude_code sid. Routing by the session's owner asks Claude
+        about a codex rollout, which declines, and the agent's conversation is
+        lost (caught by tests/test_l1g_codex_read's sidecar case, which is why
+        this branch exists). First-wins is right here AND safe here, because the
+        agent id is itself the discriminator — each host recognizes only ids it
+        issued, so the wrong host cannot fail open on one it never saw."""
+    if agent_id:
+        return _first("conversation", sid, pos, agent_id)
+    return _first_owner("conversation", sid, pos, agent_id)
 
 
 def ask_preamble(sid, tool_use_id):
-    """Claude's prose lead-in to a pending AskUserQuestion (the text framing the
-    question, shown on the dashboard's ask card): the string from the first
-    plugin that recognizes the sid, None otherwise. "" when the plugin owns the
-    sid but found no prose. Same exception contract as conversation()."""
-    return _first("ask_preamble", sid, tool_use_id)
+    """A host's prose lead-in to a pending question (the text framing it, shown
+    on the dashboard's ask card): the string from the host that OWNS the
+    session, None when it has no such provider, "" when it owns the sid but
+    found no prose.
+
+    OWNERSHIP-ROUTED for the reason its sibling conversation() documents, and it
+    is the concrete instance of that hazard: claude_code answers "" for ANY sid,
+    including a codex one — a non-None result, which under first-plugin-wins is
+    an answer and ends the fan-out before its owner is asked. Harmless only
+    while codex declines the provider; a decline is not a design."""
+    return _first_owner("ask_preamble", sid, tool_use_id)
 
 
 def pending_dialog(sid):
-    """A host's OPEN modal dialog for the web question/plan card — the first
-    plugin that recognizes the sid returns {"kind", "tool_use_id", …}, None
-    otherwise. The Claude ask/plan dialogs ride a hook-stashed kv
+    """A host's OPEN modal dialog for the web question/plan card — the host that
+    OWNS the session returns {"kind", "tool_use_id", …}, None otherwise. The
+    Claude ask/plan dialogs ride a hook-stashed kv
     (dashboard/read/session.ask_pending), so claude_code exposes no provider
     here; codex has no such hook (docs/codex.md), so it derives the pending
     request_user_input READ-side from the rollout tail. Read-side like
-    conversation(); same exception contract as census()."""
-    return _first("pending_dialog", sid)
+    conversation(); same exception contract as census(); ownership-routed for
+    the same reason (and this one PARSES a 256KB rollout tail, so asking the
+    non-owner is not merely wrong, it is wasted I/O)."""
+    return _first_owner("pending_dialog", sid)
 
 
 def usage_strip(cache=None, limit=50):
@@ -802,3 +857,67 @@ def session_costs(sid):
     exactly the kind of wrong number nobody reports."""
     return _first_owner("session_costs", sid,
                         default={"tokens": {}, "cost": {}, "total_usd": 0.0})
+
+
+# --- the SESSION-STATE FACETS --------------------------------------------------
+# Three things a session is DOING right now, each of which the dashboard used to
+# read as a raw kv/hand-off row off the state DB — by NAME, with no host in the
+# question. That worked while one host wrote them and read as a silent None for
+# the other, which is the shape of a wrong number nobody reports: a codex session
+# showed no tasks card (right, for the wrong reason), never breathed its ctx bar
+# during a compaction (wrong), and never ticked an elapsed chip on a running
+# command (wrong). Ownership-routed (_first_owner) rather than first-wins,
+# because these are FACTS ABOUT ONE SESSION and a session has exactly one host.
+#
+# All three take the caller's already-resolved state-DB path as an optional
+# second argument — see read/meta.session_kv for that contract — and `host` as
+# the SSE tick's routing hint (see _first_owner).
+
+def tasks(sid, sdb=None, host=None):
+    """The session's pinned TASK LIST — a list of task records ({id, subject,
+    status, …}, id-sorted) from the host that owns the session, or None when it
+    has none (which keeps the card hidden). claude_code re-snapshots Claude
+    Code's on-disk task dir into a kv on every task-touching hook
+    (task_fmt.tasks); codex DECLINES — no task-list tool appears anywhere in its
+    rollout vocabulary, so there is no material and a hidden card is the honest
+    answer, not a bug (docs/codex.md). Read-side, no audit rows."""
+    return _first_owner("tasks", sid, sdb, host=host)
+
+
+def compacting(sid, sdb=None, host=None):
+    """Is this session COMPACTING right now — the RAW latch `{ts, trigger}` from
+    the owning host, or None. Both hosts arm it on their PreCompact hook and
+    clear it on PostCompact, into the same kv shape (claude_code
+    compact_fmt.compacting, codex facets.compacting), because both fire that
+    hook PAIR and nothing else in either tool marks the two minutes a compaction
+    takes: no tool call, no reply, no transcript growth, and a tab colour it
+    shares with every think.
+
+    RAW on purpose — the TTL that ages an un-cleared latch out lives with the
+    reader (dashboard config.COMPACT_MAX_S), not with either producer. A
+    compaction that dies on an API error or is interrupted fires no closing hook
+    in EITHER tool, the arming process has long exited, and an animation must
+    fail OFF; putting the clock in the providers would let two hosts disagree
+    about how long a bar may breathe. Read-side, no audit rows."""
+    return _first_owner("compacting", sid, sdb, host=host)
+
+
+def fg_running(sid, sdb=None, host=None):
+    """The session's IN-FLIGHT foreground command as {"g", "start_ts"}, or None
+    — `g` being the MIRROR BLOCK's copy-group id, which is the whole point: the
+    server says WHICH block is running and since when, and the browser ticks the
+    ⏱ elapsed chip on it (docs/dashboard.md, *Live command elapsed*).
+
+    The two hosts stamp it from opposite ends, and it could not be otherwise.
+    claude_code writes it in the PreToolUse HOOK (cmd_pre.fg_running), where the
+    tool_use_id it already stamps on the ▶ header IS the copy group. codex has no
+    such id to reuse — measured 2026-07-31: its hook's `tool_use_id` is
+    `exec-<uuid>`, the rollout's exec record's `call_id` is `call_<…>`, and the
+    mirror block's copy group is a fresh `ops.new_group()` integer, three
+    disjoint id spaces — so a hook-stamped id would name no block and the chip
+    would tick on nothing. Its rollout STREAM owns the record instead
+    (facets.fg_open/fg_close), the one place that holds the group id and the
+    command's start together. Same record either way, same reader.
+
+    Read-side, no audit rows (the WRITES are audited by their producers)."""
+    return _first_owner("fg_running", sid, sdb, host=host)

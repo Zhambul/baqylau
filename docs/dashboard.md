@@ -8386,12 +8386,22 @@ the live tailer, keyed to the tool call by `tid` — and `tid` **is** the mirror
 block's copy-group id (the `g` stamped on the `▶ foreground` header ops, the
 same id ⧉ copy collects by). Adding a `ts` (the command's start) to that record
 makes it, verbatim, the statement the dashboard needs: *block `<tid>` has been
-running since `<ts>`*. `sessionapi.fg_running(sid)` reads it through the new
-read-only `state.hand_peek_at` twin and returns `{g, start_ts}` or `None`. It
+running since `<ts>`*. `plugins.fg_running(sid)` reads it through the read-only
+`state.hand_peek_at` twin and returns `{g, start_ts}` or `None`. It
 **peeks, never takes** — consuming it here would strand PostToolUse's finish
 chip — and it drops a record whose owning tailer pid is dead, the same staleness
 verdict `cmd_pre` itself reaches before clearing an abandoned record (a manually
 cancelled command fires no hook at all, so nothing consumes its record).
+
+The reader is a REGISTRY FAN-OUT, not a core function. It was
+`sessionapi.fg_running` until P4, and every line of it was one host's hook
+protocol — the record's fields, the fact that `tid` is the copy group, the
+take-once rule, even the entry script's filename — stated by a module whose whole
+claim is that it names no tool. The body moved to
+`plugins/claude_code/cmd_pre.py`, beside the writer; core keeps the primitives it
+is built from (`state_db_for`, `hand_peek_at`, `pid_alive`). **Codex answers the
+same fan-out**, and its chip works — see *Codex facets: compaction and the
+elapsed chip*.
 
 Because the record is take-once, *its presence is the liveness signal*: it
 appears when the command starts and is gone the instant PostToolUse (or the
@@ -8473,6 +8483,156 @@ re-homed to that slot by the op that sets the flag. Read-only
 throughout, so it adds no audit rows (like the ctx bars and the goal card); the
 one producer change — `ts` in the record — is covered by the `state:fg-live`
 `state_files` row `cmd_pre` already writes with the record as its content.
+
+## Session-state facets (tasks · compacting · fg elapsed), and who answers them
+
+Three of the cards above answer the same kind of question — *what is this
+session DOING right now* — and all three were read the same wrong way: the
+dashboard opened the session's state DB and asked for a **kv row by name**.
+
+| card | row | writer |
+|---|---|---|
+| pinned tasks | `tasks` kv | `plugins/claude_code/task_fmt.py` |
+| ctx-bar breath | `compacting` kv | `plugins/claude_code/compact_fmt.py` |
+| ⏱ elapsed chip | `fg-live` hand-off | `plugins/claude_code/cmd_pre.py` |
+
+Every one of those writers is **claude_code's**, and the read asked no host at
+all. While one host existed that was merely untidy. With two it is a class of
+wrong answer that nobody reports, because *every* symptom is a **silent None**:
+a codex session's ctx bar never breathed while it compacted, its running
+commands never ticked, and its tasks card was hidden — which happened to be
+right, for entirely the wrong reason. A missing card looks exactly like a card
+with nothing to show.
+
+So each is now a registry fan-out — **`plugins.tasks(sid)`,
+`plugins.compacting(sid)`, `plugins.fg_running(sid)`** — routed by OWNERSHIP
+(`_first_owner`: resolve the session's transcript path, ask the host that owns
+it, fail open to the default host for an unprovable one, exactly as
+`session_caps` does). Each host's read half lives **beside its writer**, which is
+the point: the record's shape is the writer's own protocol, and a shared reader
+could only be right about it by accident.
+
+**Two design rules the implementation turns on.**
+
+*The TTL stays with the reader.* `plugins.compacting` returns the **raw** latch
+(`{ts, trigger}`); `read/session.session_compacting` is what ages it out past
+`config.COMPACT_MAX_S`. Both hosts fire a `PreCompact` whose `PostCompact` may
+never arrive (an API error, an interrupt — no closing hook in either tool), the
+arming process has long exited, and an animation must fail OFF. Putting the
+clock in the providers would state that policy twice and let two hosts disagree
+about how long a bar may breathe.
+
+*The KEY decides who is asked, and an agent may cross hosts.* The sid-keyed
+siblings (`conversation` for the session's own thread, `ask_preamble`,
+`pending_dialog`) became ownership-routed in the same pass — first-plugin-wins
+is first-PARSER-wins, and `ask_preamble` is the proof: claude_code answers `""`
+for **any** sid, a non-None result that WINS and ends the fan-out before the
+owner is reached. But `conversation(sid, pos, agent_id)` and `agent_usage(sid,
+agent_id)` are keyed by an **agent**, and a child need not share its parent's
+host: a codex run sidecar'd inside a Claude session is a codex agent under a
+claude_code sid. Routing those by the session's owner asks Claude about a codex
+rollout, it declines, and the agent's conversation is lost. So they stay
+first-wins, where the agent id is itself the discriminator — each host recognizes
+only ids it issued. (`conversation` therefore branches: ownership-routed with no
+`agent_id`, first-wins with one.)
+
+**Measured before/after** on the standalone codex session
+`019fb363-0a3d-73d1-9538-3929fa560b23`: 11 conversation records and a
+byte-identical rendered mirror (23 items, zero duplicated prose) in both
+directions, at scope `None` and at agent scope. The survey's worry — that
+ownership-routing `conversation` would double a standalone codex lead's prose,
+since its ops already carry it — does not materialise, because the lead's prose
+ops are already dropped and re-bubbled (`bubbled` / `host_lead`). The survey's
+*other* claim, that claude_code's `[]` shadows codex today, is also wrong: it
+returns `None`, so the fan-out already fell through. That was luck, not a
+contract, and the routing makes it one.
+
+**The SSE tick resolves the owner ONCE.** `_Tick.host` is stamped in `adopt()`
+alongside `cwd`/`tpath`, and three readers use it: the prompt bubbles' command
+vocabulary and the two fast facet channels, which pass it as a hint so an
+ownership-routed read on the 0.6s cadence costs no extra `session_row` walk per
+channel per tick.
+
+### Two SSE channels that disagreed with their own payload
+
+Both were the same shape of bug — the payload had the fix and the live channel
+did not, so the value was right on load and wrong one tick later.
+
+- **`effort`.** The channel pushed `plugins.effort_default(cwd, slug)` flat. That
+  lookup is **cwd-keyed**, and a cwd-keyed fan-out cannot be ownership-gated:
+  first-TRUTHY-wins means the default host's saved settings answer for any
+  session opened in that directory. A codex session showed its real rollout
+  effort on load and then had Claude's saved `high` pushed over its `low` on the
+  first slow tick — and the same value fed `agents_model_effort`, so the agent
+  cards inherited it too. Both sides now go through the ONE owner,
+  `read/meta.session_effort(tpath, cwd, slug, ctx)`, which only reaches
+  `effort_default` when the DEFAULT host owns the session. Claude's value is
+  unchanged by construction; this moves codex's alone.
+- **`cmd_names`.** The live tick called it with no host, so the registry fell
+  back to the default one: a codex session's LIVE prompt bubbles tinted Claude's
+  `/goal` vocabulary while its reloaded BACKLOG — which goes through
+  `session_cmds`, and *does* resolve the owner — tinted codex's `/plan`. Same
+  session, same tick, two vocabularies. It now passes `ctx.host`.
+
+### Codex facets: compaction and the elapsed chip
+
+Codex answers `compacting` and `fg_running`, and **declines `tasks`** — no
+task-list tool appears anywhere in its rollout vocabulary or its hook
+`tool_name`s, so the card stays presence-hidden, which is the honest answer
+rather than an empty list that renders an empty card.
+
+The two it answers are written from **different places**, and the asymmetry is
+load-bearing:
+
+- **compaction — the HOOKS.** Codex fires `PreCompact`/`PostCompact` with
+  Claude-shaped payloads (`trigger: "manual"`), and its dispatcher
+  (`plugins/codex/dispatch.py`) now fans out to a second subscriber,
+  `plugins/codex/facets.py`, which arms and clears the same latch shape. The
+  facet step runs **before** the tab step and deliberately outside its frontend
+  check: a compaction latch has nothing to do with a window, and riding behind
+  `fe.usable()` would lose it for no reason.
+- **the fg chip — the ROLLOUT STREAM.** The record must carry the **mirror
+  block's copy-group id**, and the hook cannot know it. Measured 2026-07-31
+  against the audit trail and a real rollout, there are three disjoint id spaces:
+
+  | source | id | example |
+  |---|---|---|
+  | codex hook payload | `tool_use_id` | `exec-dcecc41c-1683-410e-87cc-e44041b13d22` |
+  | rollout exec record | `call_id` | `call_65mJCSCDWK6F7G9OxYCAD8PF` |
+  | mirror block | copy group | `ops.new_group()` — a per-session integer |
+
+  Claude Code gets away with the hook because *its* `tool_use_id` is literally
+  the copy group its own header ops are stamped with. Codex has no such id to
+  reuse, so a hook-stamped record would name a block that does not exist and the
+  chip would tick on nothing — a feature that ships and never appears. The
+  standalone rollout stream's `_ro_exec` is the one place holding the group id
+  and the command's start together, so it calls `facets.fg_open(LOG, gid, ts)`
+  right after painting the block, and `_exec_close` calls `fg_close(LOG, gid)`
+  right before the `■ finished` chip. Its own pid rides the record as the
+  liveness backstop — the exact analog of Claude's fg tailer pid — because a
+  codex turn aborted mid-exec writes no closing record and fires no hook
+  (`turn_aborted` is a rollout note, not an event to wait on).
+
+  This also answers "which codex tools count as the foreground command": none of
+  them, as a hook-side allowlist. The rollout's `exec` record **is** the shell
+  family by construction, so there is no `tool_name` set to maintain. (Codex's
+  hook `tool_name` for a shell command is `Bash`; `webrun` and the MCP tools
+  share the same `exec-` id prefix, so that prefix is not a shell marker either
+  — another reason the hook was the wrong side.)
+
+**The nested guard applies to both halves.** A codex run inside a Claude session
+writes into the CLAUDE host's state DB, where these keys belong to Claude's own
+hooks: latching there would breathe the host's ctx bar for a compaction that is
+not its own, and an fg record would collide with the one Claude Code's
+PreToolUse just wrote. So the hook half runs only for a recorded STANDALONE host
+(the existing `tabs.codex_host_win` gate) and the stream half only in the
+`REG_STANDALONE` register.
+
+Audit: the dispatcher's row now carries every subscriber's decision joined into
+one `hook_event` (`compacting armed (manual); <tab decision>`), plus the
+`state_files` rows the facet writes — the `compact_fmt` and `cmd_pre`
+precedents, unchanged in shape so a row reads the same whichever host produced
+it.
 
 ## Subagent scoreboard swap (in scope → the scoreboard becomes the agent's)
 

@@ -168,6 +168,30 @@ def model_fallback(transcript_path, pos=0):
     return transcript.fallback_scan(transcript_path, pos)
 
 
+def tasks(sid, sdb=None):
+    """The task-list provider (plugins.tasks fan-out) — the session's pinned
+    tasks card, from the `tasks` kv task_fmt.py re-snapshots on every
+    task-touching hook. See task_fmt.tasks."""
+    from plugins.claude_code import task_fmt
+    return task_fmt.tasks(sid, sdb)
+
+
+def compacting(sid, sdb=None):
+    """The compaction-latch provider (plugins.compacting fan-out) — the RAW
+    `{ts, trigger}` record armed on PreCompact and cleared on PostCompact; the
+    caller ages it out. See compact_fmt.compacting."""
+    from plugins.claude_code import compact_fmt
+    return compact_fmt.compacting(sid, sdb)
+
+
+def fg_running(sid, sdb=None):
+    """The in-flight-foreground-command provider (plugins.fg_running fan-out) —
+    {"g", "start_ts"} for the mirror block the live ⏱ elapsed chip ticks on, off
+    the take-once `fg-live` hand-off. See cmd_pre.fg_running."""
+    from plugins.claude_code import cmd_pre
+    return cmd_pre.fg_running(sid, sdb)
+
+
 def conversation(sid, pos=0, agent_id=""):
     """The conversation provider (plugins.conversation fan-out) for the
     dashboard's merged mirror stream — ONE identity's records: the session's own

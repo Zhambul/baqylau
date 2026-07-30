@@ -5,8 +5,12 @@
 # Codex's SessionStart stays on claude-codex-session.py (it stands up the mirror
 # pane + records the standalone-host bit); this dispatcher handles the OTHER nine
 # codex hook events (UserPromptSubmit / Pre/PostToolUse / PermissionRequest /
-# Pre/PostCompact / SubagentStart/Stop / Stop) and drives the codex TAB PRODUCER
-# (plugins/codex/tabstatus.py) over the shared core/tabpaint engine.
+# Pre/PostCompact / SubagentStart/Stop / Stop) and fans them out to its
+# SUBSCRIBERS: the codex TAB PRODUCER (plugins/codex/tabstatus.py) over the
+# shared core/tabpaint engine, and the SESSION-STATE FACETS
+# (plugins/codex/facets.py) — the compaction latch the web's ctx bar breathes on,
+# which exists only because Pre/PostCompact are the sole signal that a
+# compaction is running.
 #
 # NESTED GUARD (load-bearing). Those nine events fire for BOTH a standalone codex
 # host AND a codex-inside-Claude subagent run (`codex exec` in a Claude session,
@@ -32,34 +36,48 @@ A = load_audit()   # audit trail (real module, or an inert stub if it can't impo
 HANDLER = "claude-codex-hook.py"   # the audit handler vocabulary (entry filename)
 
 
-def route(payload):
-    """Fan a codex hook event out to the tab producer, gated on the standalone
-    bit. Every path audits a hook_event with a decision (incl. the nested bail)."""
-    from core import tabs
+def _tab(payload, event, sid, win):
+    """The TAB subscriber: paint the codex tab for this event. Returns its
+    decision string. Needs a usable frontend, and says so when there isn't one."""
     import frontends
     from plugins.codex import tabstatus as TS
+    if not win:
+        # a known host whose window couldn't be resolved (scrubbed env) — can't
+        # paint, but it is NOT nested, so record the distinct outcome.
+        return "standalone host, no tab window (%s)" % (event or "?")
+    fe = frontends.get(resolve=True)
+    if not fe.usable():
+        return "no usable frontend (%s)" % (event or "?")
+    return TS.handle(fe, event, payload, sid, win)
+
+
+def route(payload):
+    """Fan a codex hook event out to its SUBSCRIBERS, gated on the standalone
+    bit. Every path audits ONE hook_event carrying every subscriber's decision
+    (incl. the nested bail) — the audit's only record of what this chose.
+
+    Two subscribers today, and the order is deliberate: the session-state FACETS
+    first, the tab producer second. The facets are pure state-DB writes and must
+    not be lost to a terminal that failed to resolve — which is exactly what
+    would happen if they rode behind the tab step's frontend check, since a
+    compaction latch has nothing to do with a window (plugins/codex/facets.py).
+
+    The NESTED gate stays in front of both: a codex run inside a Claude session
+    must neither paint that session's tab nor write its kv rows."""
+    from core import tabs
+    from plugins.codex import facets as FX
     event = str(payload.get("hook_event_name") or "")
     sid = str(payload.get("session_id") or "")
-    # NESTED GATE: only a recorded STANDALONE codex host paints the tab.
+    # NESTED GATE: only a recorded STANDALONE codex host paints or latches.
     win = tabs.codex_host_win(sid) if sid else None
     if win is None:
         A.hook_event(payload, handler=HANDLER,
                      decision="nested-skip (%s: not a standalone codex host)"
                      % (event or "?"))
         return
-    if not win:
-        # a known host whose window couldn't be resolved (scrubbed env) — can't
-        # paint, but it is NOT nested, so record the distinct outcome.
-        A.hook_event(payload, handler=HANDLER,
-                     decision="standalone host, no tab window (%s)" % (event or "?"))
-        return
-    fe = frontends.get(resolve=True)
-    if not fe.usable():
-        A.hook_event(payload, handler=HANDLER,
-                     decision="no usable frontend (%s)" % (event or "?"))
-        return
-    decision = TS.handle(fe, event, payload, sid, win)
-    A.hook_event(payload, handler=HANDLER, decision=decision)
+    notes = [FX.on_compact(payload, sid), _tab(payload, event, sid, win)]
+    A.hook_event(payload, handler=HANDLER,
+                 decision="; ".join(n for n in notes if n))
 
 
 def _run_watcher(argv):

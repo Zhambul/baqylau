@@ -85,6 +85,29 @@ SCAN_MAX = 40          # newest sibling session-* dirs probed on a drift scan
 RECENT_S = 30          # a matched record younger than this is "the write this hook is about"
 
 
+def tasks(sid, sdb=None):
+    """READ half of the `tasks` kv snapshot() stashes: the session's task-list
+    as a list of task records ({id, subject, status, …}, id-sorted), or None
+    when the session never had tasks / the list is empty (None keeps the card
+    hidden). Behind `plugins.tasks(sid)` — the dashboard's pinned tasks card
+    (docs/dashboard.md, *Web tasks*).
+
+    Beside the writer, because the kv's envelope (`{"tasks": [...]}`) and the
+    record shape are both Claude Code's on-disk task-dir format, re-snapshotted
+    here on every task-touching hook. codex DECLINES this provider outright — an
+    80-rollout corpus holds no task-list tool, so there is no material to fake
+    and the card stays presence-hidden, which is the honest answer.
+
+    `sdb` is the caller's already-resolved state-DB path, same contract as
+    read/meta.session_kv — mode=ro, never creates the state DB."""
+    from core import sessionapi as API
+    if sdb is None:
+        sdb = API.state_db_for(sid)
+    stash = API.kv_at(sdb, KEY) if sdb else None
+    got = stash.get("tasks") if isinstance(stash, dict) else None
+    return got if isinstance(got, list) and got else None
+
+
 def tasks_dir(sid):
     """The session's DEFAULT on-disk task-list dir. Claude Code keys it by the
     FIRST uuid segment of the session id under the active config root

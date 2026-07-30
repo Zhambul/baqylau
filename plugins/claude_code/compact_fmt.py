@@ -37,6 +37,31 @@ A = H.A
 KEY = "compacting"
 
 
+def compacting(sid, sdb=None):
+    """READ half of the latch below: the RAW `{ts, trigger}` record, or None.
+    Behind `plugins.compacting(sid)`, which is what the dashboard's ctx-bar
+    breath animation reads (docs/dashboard.md, *Compaction on the ctx bar*).
+
+    Beside the writer, because the record's SHAPE is this handler's own — and
+    because codex's twin (plugins/codex/facets.py) had to be able to state the
+    SAME shape independently rather than inherit a Claude module's kv name.
+
+    Deliberately RAW: the ttl is NOT applied here. Ageing a latch out is the
+    READ side's job (dashboard config.COMPACT_MAX_S) precisely because the hook
+    that armed it has already exited and cannot retract anything — see the
+    module header. A provider that expired its own record would put that policy
+    in two places and let the two hosts disagree about how long an animation may
+    run. One shape, one reader, one clock.
+
+    `sdb` is the caller's already-resolved state-DB path (the SSE fast tick's),
+    same contract as read/meta.session_kv — mode=ro, never creates the DB."""
+    from core import sessionapi as API
+    if sdb is None:
+        sdb = API.state_db_for(sid)
+    rec = API.kv_at(sdb, KEY) if sdb else None
+    return rec if isinstance(rec, dict) else None
+
+
 def main():
     d, LOG = H.read_payload()
     if d is None:

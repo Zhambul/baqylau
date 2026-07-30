@@ -37,6 +37,49 @@ LBL_FG = O.SLATE   # same colour claude-cmd-fmt.py uses for an OK foreground blo
 HAND_RETRY_S = 0.1   # pause before the one fg-live hand_put retry (a transient
                      # writer holding the state DB past busy_timeout)
 
+HAND_KEY = "fg-live"   # the take-once hand-off key — see fg_running() below
+
+
+def fg_running(sid, sdb=None):
+    """READ half of the `fg-live` hand-off this module writes: the main session's
+    IN-FLIGHT foreground command as {"g", "start_ts"}, or None. Behind
+    `plugins.fg_running(sid)`, which is what the dashboard's live ⏱ elapsed chip
+    reads (docs/dashboard.md, *Live command elapsed*).
+
+    It lives HERE, beside the writer, rather than in core: every field below is
+    this handler's own protocol, and core.sessionapi used to spell it out —
+    the record shape, the fact that `tid` IS the mirror block's copy-group id,
+    the take-once consumption rule, even the entry script's filename. That is a
+    Claude Code hook contract, and a tool-agnostic module had no way to be right
+    about it for anyone else (docs/styleguide.md *Layering*).
+
+    The protocol: main()'s `hand_put` writes {src, own, pid, done, tid, ts} when
+    it spawns the live tailer. `tid` is the tool_use_id stamped on the ▶
+    foreground header ops, so it names WHICH block; `ts` is the command's start.
+    PostToolUse (cmd_fmt) CONSUMES the record, so its mere presence is the
+    "still running" signal — with the owning tailer's pid_alive() as the backstop
+    for the cancel case that fires no hook at all (an abandoned record whose
+    tailer died reads as not-running, exactly as main()'s own staleness check
+    treats it). A parked session yields None for the same reason.
+
+    A pure reader — it PEEKS, never takes (consuming here would strand the real
+    consumer's finish chip). `sdb` is the caller's already-resolved state-DB path
+    (the SSE fast tick's), same contract as read/meta.session_kv."""
+    from core import sessionapi as API
+    if sdb is None:
+        sdb = API.state_db_for(sid)
+    if not sdb:
+        return None
+    rec = S.hand_peek_at(sdb, HAND_KEY)
+    if not isinstance(rec, dict):
+        return None
+    gid, ts, pid = rec.get("tid"), rec.get("ts"), rec.get("pid")
+    if not gid or not ts:
+        return None                 # a pre-`ts` producer's record — nothing to tick
+    if not (pid and S.pid_alive(pid)):
+        return None                 # abandoned record (cancelled command, dead tailer)
+    return {"g": gid, "start_ts": ts}
+
 
 def _tee_wrap(cmd, src):
     # The tee wrapper's SHAPE lives in tools.py, with its inverse beside it: the
@@ -149,7 +192,7 @@ def main():
                         "(claude-cmd-fmt renders it as Read)"
                         % (spec.kind, len(read_files)))
 
-    held = S.hand_peek(log, "fg-live")
+    held = S.hand_peek(log, HAND_KEY)
     if held:
         # Normally consumed by claude-cmd-fmt.py's PostToolUse handler — but a
         # MANUALLY CANCELLED command fires no hook at all (same gap noted throughout
@@ -164,7 +207,7 @@ def main():
         if not stale:
             A.hook_event(d, decision="ignored: a live fg block is already in flight")
             return                                  # a live fg block is genuinely still in flight
-        S.hand_del(log, "fg-live")
+        S.hand_del(log, HAND_KEY)
         A.state_file(log, "state:fg-live", "remove-stale",
                      "dead tailer pid — record abandoned")
 
@@ -226,7 +269,7 @@ def main():
     # no tool_use_id — nothing there ties it to a block.
     rec = {"src": src, "own": own, "pid": proc.pid, "done": done,
            "tid": d.get("tool_use_id") or "", "ts": time.time()}
-    if not S.hand_put(log, "fg-live", rec):
+    if not S.hand_put(log, HAND_KEY, rec):
         # One retry: a failed hand_put here loses the OUTCOME hand-off — the
         # tailer is already spawned, but PostToolUse (cmd-fmt) can't hand it the
         # finish chip without this record. hand_put's realistic failure mode is a
@@ -235,7 +278,7 @@ def main():
         A.error(log, "write fg-live record (retrying)",
                 {"src": src, "tid": rec["tid"]})
         time.sleep(HAND_RETRY_S)
-        if not S.hand_put(log, "fg-live", rec):
+        if not S.hand_put(log, HAND_KEY, rec):
             A.error(log, "write fg-live record", {"src": src, "tid": rec["tid"]})
             return                             # tailer will notice via its own backstop eventually
     A.state_file(log, "state:fg-live", "write", rec)

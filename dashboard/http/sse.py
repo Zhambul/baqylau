@@ -22,7 +22,7 @@ from dashboard.notify.broker import BROKER
 from dashboard.read.lists import (accounts_key, accounts_payload,
                                   sessions_payload, row_key, wire_row)
 from dashboard.read.meta import (cmd_names, git_info, session_ctx,
-                                 session_fallback, session_goal,
+                                 session_effort, session_fallback, session_goal,
                                  session_prompts, session_title, session_slug)
 from dashboard.read.mirror import (agent_scope, host_lead, merged_backlog,
                                    merge_live, TAIL_BLOCKS)
@@ -131,6 +131,9 @@ _SLOW_CHANS = (
     # that write moves no task, so a list-only diff would never fire (the wire
     # shape is unchanged for the list: `hidden` is a second field beside it)
     _Chan("tasks", "tasks", lambda c: tasks_card(c.sid), None),
+    # (tasks_card routes through plugins.tasks — a host with no task-list
+    # concept answers None and the card stays hidden, rather than the dashboard
+    # reading a kv only one host ever writes)
     # the pinned goal card — the active `/goal` scanned from the transcript
     # tail (read-side, no hook fires). Slow, for the same reason as tasks
     _Chan("goal", "goal", lambda c: session_goal(c.tpath), "goal"),
@@ -175,7 +178,13 @@ _SLOW_CHANS = (
 # indexed SELECT + a pid probe), pushed only on change.
 _FAST_CHANS = (
     _Chan("tab", "tab", lambda c: c.tab, "tab"),
-    _Chan("fgrun", "fgrun", lambda c: API.fg_running(c.sid), "fg"),
+    # both fast channels take the tick's already-resolved state-DB path AND its
+    # already-resolved owning host: they are the two ownership-routed facet reads
+    # on the 0.6s cadence, and without the host hint each would add its own
+    # audit-DB `session_row` walk per tick to re-answer a question the slow
+    # prologue settled (plugins._first_owner).
+    _Chan("fgrun", "fgrun",
+          lambda c: plugins.fg_running(c.sid, c.sdb, c.host), "fg"),
     # the ctx bar's compaction animation. FAST for the same reason as `fgrun`:
     # what the event is for is the START and the END, and on the slow cadence
     # the bar would keep rehearsing a collapse for seconds after the real fill
@@ -184,7 +193,7 @@ _FAST_CHANS = (
     # timestamp), so it is stable across ticks while a compaction runs and this
     # channel stays silent between the two transitions.
     _Chan("compacting", "compacting",
-          lambda c: session_compacting(c.sid, c.sdb), "compacting"),
+          lambda c: session_compacting(c.sid, c.sdb, c.host), "compacting"),
 )
 
 # Channels that stay INLINE in the loop and so own their own `prev` slot: the
@@ -208,25 +217,36 @@ class _Tick:
     """The per-tick facts the channel producers read — the single mutable
     context object a named-phase loop shares (styleguide, *Module shape*).
     `sdb`/`tab` are refreshed every tick; the slow prologue additionally
-    re-resolves the session row and stamps `win`/`cwd`/`tpath`/`eff`. `agent`
-    is this CONNECTION's scope, fixed for its lifetime (a scope change is a new
-    connection) — the badge channels are the only readers."""
+    re-resolves the session row and stamps `win`/`cwd`/`tpath`/`host`/`eff`.
+    `agent` is this CONNECTION's scope, fixed for its lifetime (a scope change
+    is a new connection) — the badge channels are the only readers."""
 
-    __slots__ = ("sid", "sdb", "win", "cwd", "tpath", "eff", "tab", "agent")
+    __slots__ = ("sid", "sdb", "win", "cwd", "tpath", "host", "eff", "tab",
+                 "agent")
 
     def __init__(self, sid, row, agent=""):
         self.sid = sid
-        self.sdb = self.tab = self.win = self.eff = ""
+        self.sdb = self.tab = self.win = self.eff = self.host = ""
         self.agent = agent or ""
         self.adopt(row)
 
     def adopt(self, row):
         """Take the per-session facts off a freshly-read `sessions` row. `win`
         is sticky: a resume moves the session to a NEW kitty window, but a row
-        that momentarily reports none must not blank the one we have."""
+        that momentarily reports none must not blank the one we have.
+
+        `host` is the OWNING tool's short name, resolved HERE — once per tick
+        context — because three different things in the loop need it and each
+        had been answering the question its own way or not at all: the prompt
+        bubbles' `/command` vocabulary (which asked nobody and so tinted the
+        default host's commands onto every session), and the two fast facet
+        channels (which would each pay a `session_row` walk per tick to route
+        themselves). Same fail-OPEN rule as session_caps: an unprovable path
+        BEHAVES AS the default host."""
         self.win = str(row.get("kitty_window_id") or "") or self.win
         self.cwd = row.get("cwd") or ""
         self.tpath = row.get("transcript_path") or ""
+        self.host = plugins.owns_by(self.tpath) or plugins.default_host()
 
 
 class _SseMixin:
@@ -408,8 +428,15 @@ class _SseMixin:
             if ops or recs:
                 # the prompt bubbles' `/command` tint is resolved per tick off
                 # the cwd (a TTL memo — a command file added mid-session starts
-                # tinting without a reconnect), never per bubble
-                items = merge_live(ops, recs, key, cmd_names(ctx.cwd), scope,
+                # tinting without a reconnect), never per bubble — and scoped to
+                # the session's OWN host, which this call used to omit: with no
+                # host the registry falls back to the default one, so a codex
+                # session's LIVE bubbles tinted Claude's `/goal` vocabulary while
+                # its reloaded backlog (which goes through session_cmds, and does
+                # resolve the owner) tinted codex's `/plan`. Same tick, same
+                # session, two vocabularies.
+                items = merge_live(ops, recs, key,
+                                   cmd_names(ctx.cwd, ctx.host), scope,
                                    host_lead=lead)
                 if items and not self._sse("ops", {"last": last2, "mpos": mpos,
                                                    "items": items}):
@@ -428,8 +455,20 @@ class _SseMixin:
                 # lingering tab state forever (green while kitty is magenta)
                 ctx.adopt(API.session_row(sid) or {})
                 # resolved up front so the agent cards' inherit-default effort
-                # matches the effort quick-button pushed below (one resolve)
-                ctx.eff = plugins.effort_default(ctx.cwd, session_slug(sid))
+                # matches the effort quick-button pushed below (one resolve) —
+                # and through the SAME owner the payload uses
+                # (read/meta.session_effort). This channel used to call
+                # plugins.effort_default() flat, which is CWD-keyed and so
+                # cannot be ownership-gated: a codex session showed its real
+                # rollout effort on load and then had Claude's saved default
+                # pushed over it one slow tick later. The payload had carried
+                # the host branch for exactly this since it was written; the
+                # live channel simply never got it (docs/dashboard.md,
+                # *Effort*). session_ctx is (path, size)-memoized, so passing
+                # the probe here costs nothing the `ctx` channel below isn't
+                # already paying.
+                ctx.eff = session_effort(ctx.tpath, ctx.cwd, session_slug(sid),
+                                         session_ctx(ctx.tpath, main=True))
                 if not self._push_chans(_SLOW_CHANS, prev, ctx):
                     return
             # -- fast channels -------------------------------------------------
