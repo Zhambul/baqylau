@@ -601,7 +601,7 @@ def d_stop(args=()):
     # a "task-manager" orchestrator tab) carries agent_type on its own genuine
     # turn-end Stops — filtering on it left that tab permanently stuck on
     # magenta (confirmed live).
-    if p.get("agent_id"):
+    if tabpaint.agent_inner_event(p):   # main-tab doctrine, one owner (core/tabpaint)
         audit_tx("", "", 0, "ignored: agent stop, not the lead's")
         return None
     AUDIT_SID = (p.get("session_id") or "").strip()
@@ -877,7 +877,7 @@ def d_pretool(args=()):
     global AUDIT_SID
     p = read_payload()
     AUDIT_SID = (p.get("session_id") or "").strip()
-    if p.get("agent_id"):
+    if tabpaint.agent_inner_event(p):   # main-tab doctrine, one owner (core/tabpaint)
         return None                     # subagent/teammate inner call -> don't touch the tab
     tool = p.get("tool_name") or ""
     reason = f"pretool: {tool}"
@@ -896,7 +896,7 @@ def d_posttool(args=()):
     global AUDIT_SID
     p = read_payload()
     AUDIT_SID = (p.get("session_id") or "").strip()
-    if p.get("agent_id"):
+    if tabpaint.agent_inner_event(p):   # main-tab doctrine, one owner (core/tabpaint)
         return None                     # subagent/teammate inner call -> don't touch the tab
     return WORKING, "posttool: main agent between tools"
 

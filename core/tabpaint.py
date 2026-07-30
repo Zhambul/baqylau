@@ -28,6 +28,20 @@ A = load_audit()   # audit trail (real module, or an inert stub if it can't impo
 from core.tabs import COLORS, tab_clear, tab_get, tab_set  # noqa: E402  (the tab vocabulary)
 
 
+def agent_inner_event(payload):
+    """THE main-tab doctrine, one owner: a hook event carrying an `agent_id` is a
+    SUBAGENT's / TEAMMATE's own inner call, NOT the lead's — the tab tracks the
+    MAIN session only, so a producer must NOT paint on it (the agent's own
+    lifecycle is bracketed by the LEAD's tool events + its final Stop). Every tab
+    producer consults this: the Claude handlers (`plugins/claude_code/tabstatus`)
+    and the codex producer (`plugins/codex/tabstatus`). Codex re-implementing the
+    tab as a stateless event→colour map WITHOUT this rule is what left a standalone
+    codex host stuck magenta — a late `SubagentStop` (which carries the child's
+    agent_id) repainted WORKING over the resting green after the turn's real Stop
+    (docs/tab-colors.md *Main session only*)."""
+    return bool((payload or {}).get("agent_id"))
+
+
 def paint(fe, win, state, reason="", *, sid="", dispatch=""):
     """Paint `win`'s tab to `state` through frontend `fe`, with the engine's dedup
     + persist-on-rc==0 + `tab_transitions` audit. `state` is a literal tab state (a

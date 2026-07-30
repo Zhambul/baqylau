@@ -86,10 +86,21 @@ IDENTITY, which `audit_tx()` and the long watcher loops read well after a
 handler returned. Pinned by
 `test_dispatch_handlers_take_args_and_return_their_reason`.
 
-The tab tracks the **main session only**: any `PreToolUse`/`PostToolUse` carrying an
-`agent_id` is a subagent's / teammate's *own* inner tool call and is **ignored**, so
-it never flips the tab while the main session is thinking or has handed back to you.
-The main session still goes blue while it *awaits* an agent (see below).
+The tab tracks the **main session only**: any hook event carrying an `agent_id`
+is a subagent's / teammate's *own* inner call and is **ignored**, so it never flips
+the tab while the main session is thinking or has handed back to you. The main
+session still goes blue while it *awaits* an agent (see below).
+
+This rule has ONE owner both producers consult — `core/tabpaint.agent_inner_event`
+(the tab ENGINE, so a third tool inherits it). Claude's handlers call it
+(`pretool`/`posttool`/`stop`); the codex producer calls it at the top of
+`resolve()`. Codex first shipped its tab as a stateless `event→colour` map WITHOUT
+this rule and mapped `SubagentStop → working` — and because a codex SubagentStop
+carries the child's `agent_id` and can arrive *after* the turn's real Stop, it
+repainted **working** over the resting **green** with nothing left to clear it: a
+standalone codex host stuck magenta forever (the fix is exactly the shared gate —
+the lead's own `wait_agent` tool events hold the tab busy while it awaits the
+subagent, and its final Stop turns it green).
 
 - **`pretool`** — reads the hook's stdin JSON. If it carries an `agent_id` (a
   subagent/teammate inner call) → **ignored** (no change). Otherwise by tool name:

@@ -87,6 +87,14 @@ def resolve(event, payload):
     Duplicate/out-of-order hooks are fine: every mapping is a pure function of
     THIS event, and tabpaint dedups an identical colour, so re-deriving the state
     defensively per event can only re-assert what the tab already shows."""
+    # MAIN SESSION ONLY (the shared doctrine, one owner): an event carrying an
+    # agent_id is a codex SUBAGENT's own inner call — never paint the lead's tab on
+    # it. This covers SubagentStart/SubagentStop (both carry the child agent_id) and
+    # is why the late SubagentStop no longer repaints WORKING over the resting green
+    # after a turn's real Stop (the stuck-magenta bug). The lead's own wait_agent
+    # PreToolUse/PostToolUse keep the tab busy while it awaits the subagent.
+    if tabpaint.agent_inner_event(payload):
+        return None, "codex: agent_id inner call — main tab untouched"
     tool = payload.get("tool_name") or ""
     if event == "UserPromptSubmit":
         return THINKING, "codex: prompt submitted"
@@ -103,11 +111,13 @@ def resolve(event, payload):
     if event == "PreCompact":
         return WORKING, "codex: compacting"
     if event == "Stop":
-        # Codex Stop fires PER TURN (even headless) — it's your turn (green).
+        # Codex Stop fires PER TURN (even headless) — it's your turn (green). Any
+        # Stop reaching here is the LEAD's (an agent's Stop carries an agent_id and
+        # was gated out above), so it can never fire while the lead is mid-turn.
         return AWAITING_RESPONSE, "codex stop: turn ended"
-    if event in ("SubagentStart", "SubagentStop"):
-        # Codex blocks on its subagents (no bg-watch analog needed in v1).
-        return WORKING, "codex: %s (awaiting a codex subagent)" % event
+    # SubagentStart/SubagentStop are handled by the agent_id gate at the top (they
+    # carry the child's agent_id) — they never reach here and never paint the main
+    # tab; the lead's own wait_agent tool events hold it busy meanwhile.
     # PostCompact + anything unrecognised: no tab change.
     return None, "codex: no tab change for %s" % (event or "?")
 

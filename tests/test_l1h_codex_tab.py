@@ -31,14 +31,35 @@ def test_resolve_maps_every_codex_event():
     assert TS.resolve("PermissionRequest", {})[0] == AWAITING_COMMAND
     assert TS.resolve("PreCompact", {})[0] == WORKING
     assert TS.resolve("Stop", {})[0] == AWAITING_RESPONSE
-    assert TS.resolve("SubagentStart", {})[0] == WORKING
-    assert TS.resolve("SubagentStop", {})[0] == WORKING
 
 
 def test_resolve_no_op_events():
     # PostCompact lets the next event repaint; an unknown event never paints.
     assert TS.resolve("PostCompact", {})[0] is None
     assert TS.resolve("SomethingBrandNew", {})[0] is None
+
+
+def test_resolve_ignores_agent_id_inner_events():
+    """MAIN SESSION ONLY (the shared tab doctrine): any codex event carrying an
+    agent_id is a SUBAGENT's inner call and must NOT paint the lead's tab. This is
+    the stuck-magenta fix — a codex SubagentStart/Stop always carries the child's
+    agent_id, and a LATE SubagentStop (after the turn's real Stop) used to repaint
+    WORKING over the resting green with nothing left to clear it."""
+    for ev in ("SubagentStart", "SubagentStop", "PreToolUse", "PostToolUse", "Stop"):
+        assert TS.resolve(ev, {"agent_id": "019fb2f7-9b51", "tool_name": "webrun"})[0] \
+            is None, "%s with an agent_id must not paint the main tab" % ev
+    # the SAME events with NO agent_id are the LEAD's and DO paint
+    assert TS.resolve("Stop", {})[0] == AWAITING_RESPONSE
+    assert TS.resolve("PostToolUse", {})[0] == WORKING
+
+
+def test_bug_b_late_subagent_stop_leaves_the_tab_green():
+    """Replay the 019fb2f7 sequence: the lead's Stop ends the turn (green), then a
+    LATE SubagentStop (carrying the child's agent_id) arrives — it must be a NO-OP,
+    so the tab stays green instead of stuck magenta."""
+    assert TS.resolve("Stop", {})[0] == AWAITING_RESPONSE            # lead turn ends
+    state, _ = TS.resolve("SubagentStop", {"agent_id": "019fb2f7-9b51"})
+    assert state is None, "a late SubagentStop must not repaint the resting tab"
 
 
 # --- interrupt recovery: record-matched abort + steer --------------------------
