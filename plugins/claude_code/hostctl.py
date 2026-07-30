@@ -104,6 +104,15 @@ RESTORE_MATCH_CHARS = 40           # prefix length compared when deciding
 #                                    still matches; long enough that two real
 #                                    prompts don't collide.
 
+# The ✦ / ✧ menu vocabularies — Claude Code's own model aliases and reasoning
+# levels, and the SINGLE owner of both (the dashboard's two client tables read
+# them off the wire now). Aliases rather than concrete ids: the CLI resolves
+# `opus` to whatever opus it currently ships, which is also why a running
+# session's id matches a row by FAMILY (model_match below). The first model is
+# the new-session form's first-ever default (model_default).
+MODEL_CHOICES = ("fable", "opus", "sonnet", "haiku")
+EFFORT_CHOICES = ("low", "medium", "high", "xhigh", "max")
+
 # A Claude Code thinking-spinner gerund (a spinner glyph, then a word, then the
 # `…` ellipsis — e.g. `✻ Sock-hopping…`). DIAGNOSTIC ONLY: it labels an
 # `interrupt-probe` capture's phase; the interrupt's liveness decision is
@@ -767,6 +776,28 @@ class ClaudeCodeHost(HostControl):
         from plugins.claude_code import rewindmenu
         return tuple(rewindmenu.MODE_LABELS)
 
+    def rewind_mode_label(self, mode):
+        """One rewind mode's menu row text, from the SAME rewindmenu.MODE_LABELS
+        table the on-screen match uses — so the web menu and the TUI menu cannot
+        word the same restore differently."""
+        from plugins.claude_code import rewindmenu
+        return rewindmenu.MODE_LABELS.get(mode, "")
+
+    def command_floor(self, cmd):
+        """Claude Code's two measured quick-command refusals, as floors on the
+        number of YOUR prompts in the conversation:
+
+          compact — `/compact` bounces with "Not enough messages to compact" on a
+            barely-started chat. 2 is deliberately the LOWEST floor that catches
+            the reported case (you sent one message and it bounced); past it the
+            TUI stays the authority, since its exact rule is unpublished.
+          rename  — the ARGLESS `/rename` bounces with "Could not generate a name:
+            no conversation context yet" on an EMPTY conversation (v2.1.220), so
+            it needs 1.
+
+        Both were client-side constants applied to every host."""
+        return {"compact": 2, "rename": 1}.get(cmd, 0)
+
     def title_key(self, tpath):
         """The durable rename-override key for a transcript — the `.jsonl` STEM
         of a Claude session transcript, "" for anything else. Both sides of the
@@ -929,6 +960,34 @@ class ClaudeCodeHost(HostControl):
                     {"win": win})
 
     # --- model VOCABULARY / launch plumbing (NOT capability-gated) ------------
+
+    def model_choices(self):
+        """The models Claude Code's ✦ menu and the new-session form offer —
+        FAMILY aliases (the CLI resolves each to a concrete id), which is why
+        `model_match` below is "family". Moved here from the two client tables
+        that spelled them (app.10-control.js MODEL_CHOICES and
+        app.09-newsession.js TOOL_MODELS.claude_code), unchanged."""
+        return list(MODEL_CHOICES)
+
+    def effort_choices(self):
+        """The reasoning-effort levels Claude Code accepts (`/effort <level>`
+        and the launch's `--effort`). Deliberately NOT dashboard.config.EFFORTS,
+        which is the UNION over hosts the arg validator allows: `ultra` is
+        codex's level, and offering it here would type a word Claude bounces."""
+        return list(EFFORT_CHOICES)
+
+    def model_default(self):
+        """The new-session form's first-ever model (was TOOL_MODEL_DEF)."""
+        return MODEL_CHOICES[0]
+
+    def effort_default(self):
+        """The new-session form's first-ever effort (was TOOL_EFFORT_DEF)."""
+        return "high"
+
+    # Claude's menu rows are FAMILY words (`opus`) while a running session
+    # reports a full id (`claude-opus-4-8` → `opus-4.8`), so the picker's current
+    # row is matched on the leading word. codex keeps the base "exact".
+    model_match = "family"
 
     def model_short(self, model_id):
         """Claude's display spelling of a model id ("claude-opus-4-8" →

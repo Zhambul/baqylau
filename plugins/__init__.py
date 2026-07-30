@@ -256,11 +256,27 @@ def default_host():
 
 
 def hosts():
-    """The registered HOST tools, for the future new-session tool picker:
-    [{name, label, launchable}, …], host first. A plugin is a HOST iff it
-    provides `host` (a plugins.host.HostControl adapter); claude_code is the
-    only one today, codex's arrives with its own `owns` in a later phase. Same
-    read-side exception contract as accounts()."""
+    """Every registered HOST tool and its whole new-session VOCABULARY, host
+    first — the one payload behind `/api/hosts`, and the reason the page carries
+    no per-host table of its own any more.
+
+    Per row: `name`/`label`/`launchable` (the picker), `default` (the tool a
+    launch that names none picks — default_host, so the client never spells it),
+    `model_choices`/`effort_choices` + `model_default`/`effort_default` (that
+    host's menus and their first-ever selections), `model_match` (how a menu row
+    matches a RUNNING model id — see HostControl.model_match), `accounts`
+    (does this tool have a subscription switcher — DERIVED from the plugin
+    providing the `accounts` registry, so the picker's account row follows the
+    fact rather than a host name), `attach` (does it have an inline file-mention
+    grammar — HostControl.mention; a host without one is handed bare paths) and
+    `quick_commands` ([{cmd, min_prompts}] — the QUICK_COMMANDS wire words this
+    host actually implements, each with its measured refusal floor, so the
+    header greys a button instead of typing a command the TUI will bounce).
+
+    Everything here is DERIVED from the HostControl object plus the plugin's own
+    providers; nothing is authored twice. Same read-side exception contract as
+    accounts()."""
+    dflt = default_host()
     out = []
     for p in all_plugins():
         fn = provider(p, "host")
@@ -270,8 +286,53 @@ def hosts():
         if h is None:
             continue
         out.append({"name": h.name, "label": h.label,
-                    "launchable": bool(h.launchable)})
+                    "launchable": bool(h.launchable),
+                    "default": h.name == dflt,
+                    "accounts": provider(p, "accounts") is not None,
+                    "attach": bool(h.mention(_MENTION_PROBE)),
+                    **host_vocabulary(h)})
     return out
+
+
+# A path handed to HostControl.mention purely to ask "does this host HAVE a
+# mention grammar" — the answer is a rewritten path or "", and no file is
+# touched. A probe rather than a second `attaches = True` declaration: the
+# grammar is already declared, and two spellings of one fact drift.
+_MENTION_PROBE = "/probe"
+
+
+def host_vocabulary(host):
+    """The menu/refusal words ONE host declares, in the shape both wire surfaces
+    serve them: `/api/hosts` (per tool, for the new-session form) and the session
+    payload (for the session's OWN owner — the ✦/✧ pickers, ⊜ compact's floor,
+    the ↶ rewind menu). One builder so the two cannot disagree about a host, and
+    so a new word is added in one place.
+
+    `rewind_modes` carries its LABEL beside each mode (rewind_mode_label): the
+    words name what that host's checkpoint menu restores, and the client used to
+    hold a copy of Claude Code's three."""
+    from plugins.host import QUICK_COMMANDS
+    return {
+        "model_choices": list(host.model_choices()),
+        "effort_choices": list(host.effort_choices()),
+        "model_default": host.model_default(),
+        "effort_default": host.effort_default(),
+        "model_match": host.model_match,
+        "rewind_modes": [{"mode": m, "label": host.rewind_mode_label(m)}
+                         for m in host.rewind_modes()],
+        "quick_commands": [{"cmd": c, "min_prompts": host.command_floor(c)}
+                           for c, (method, _cap) in QUICK_COMMANDS.items()
+                           if host.implements(method)],
+    }
+
+
+def quick_command_caps():
+    """{wire word: the capability it rides} over plugins.host.QUICK_COMMANDS —
+    the registry-root door for the dashboard's /command guard, which used to
+    re-spell the same four rows (and once shipped without `rename`, which is how
+    Claude Code's argless `/rename` got pasted into a codex composer)."""
+    from plugins.host import QUICK_COMMANDS
+    return {cmd: cap for cmd, (_method, cap) in QUICK_COMMANDS.items()}
 
 
 def host_named(name):

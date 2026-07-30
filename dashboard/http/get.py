@@ -160,11 +160,15 @@ class _GetMixin:
         return self._json(accounts_payload())
 
     def get_hosts(self, url):
-        """the launchable HOST tools for the new-session form's tool picker —
-        [{name, label, launchable}, …], host first (plugins.hosts). The page
-        shows the picker only when more than one host is launchable; a machine
-        with only claude_code hides it entirely (docs/dashboard.md *Tool
-        picker*). Read-only, no audit rows."""
+        """the HOST tools and their whole new-session VOCABULARY (plugins.hosts,
+        which owns the row shape): name/label/launchable/default, each host's
+        model+effort menus and first-ever defaults, its model-match rule, whether
+        it has an account switcher or a file-mention grammar, and its quick
+        commands with their refusal floors. The page builds the tool picker, both
+        pickers, the account row and the launch body out of THIS — it carries no
+        per-host table of its own (docs/dashboard.md *Tool picker*). The picker
+        row itself shows only when more than one host is launchable. Read-only,
+        no audit rows."""
         return self._json(plugins.hosts())
 
     def get_stats(self, url):
@@ -184,16 +188,22 @@ class _GetMixin:
         built-in commands + that directory's discovered commands. HOST-SCOPED:
         the composer passes `sid` so a codex session is offered codex's
         vocabulary (/plan, /approvals, …), not Claude's — resolved server-side
-        via owns_by so the client never has to know host names. The new-session
-        form passes cwd only (no session to own it yet) and gets the default
-        host (Claude). A non-directory degrades to built-ins + user-level
-        entries, never an error."""
+        via owns_by so the client never has to know host names.
+
+        The new-session form has no session to own it yet, so it names the TOOL
+        its picker is on (`tool=`): the menu then follows the host you are about
+        to launch instead of always answering with the default host's commands
+        (a codex launch was offered /goal and /rewind). An unregistered name gets
+        that host's empty vocabulary — the registry's own answer, never a
+        substituted one — and no tool at all still means the default host. A
+        non-directory degrades to built-ins + user-level entries, never an
+        error."""
         q = parse_qs(url.query)
         cwd = (q.get("cwd") or [""])[0]
         if not os.path.isdir(cwd):
             cwd = ""
         sid = (q.get("sid") or [""])[0]
-        host = None
+        host = (q.get("tool") or [""])[0] or None
         if sid:
             row = API.session_row(sid) or {}
             host = plugins.owns_by(row.get("transcript_path") or "") or None

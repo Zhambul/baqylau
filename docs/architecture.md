@@ -326,8 +326,10 @@ CAPABILITIES are DERIVED from which gestures its subclass OVERRODE
 (`caps()` compares each `GESTURES` method against `HostControl`'s own) — never
 an authored `{name: bool}` a new gesture can silently drift out of sync with.
 A plugin exposes its adapter through the `host` provider, and the registry root
-resolves it: `plugins.hosts()` enumerates the launchable tools for the future
-new-session picker, `plugins.host_named(name)` / `host_of(path)` / `host_for(sid)`
+resolves it: `plugins.hosts()` enumerates the tools AND each one's whole
+new-session vocabulary (the picker, both option menus, their defaults, the
+account/mention flags, the rewind modes and the quick commands — see below),
+`plugins.host_named(name)` / `host_of(path)` / `host_for(sid)`
 hand back the adapter, and `plugins.host_caps(name)` its derived caps. The
 dashboard serves those caps per session (`read/session.session_caps`) and GATES
 every control button on them, client-side (`capOk` greys it) and server-side
@@ -354,6 +356,22 @@ inline body for any host left in the dashboard tier. Three things came with that
   `ask_region` / `typed_input`, whose inert defaults are what make "no probe for
   a tool we cannot read" the default rather than a host-name check in the read
   model.
+- The same class carries the **words the PAGE puts on screen** (as of P5), so the
+  client stops carrying a table per host: `model_choices` / `effort_choices` and
+  their `model_default` / `effort_default`, `model_match` (how a menu row matches
+  a running model id — `family` for Claude Code's alias rows, `exact` for codex's
+  full ids; a rule DECLARED because sniffing the id mis-reads any host that
+  didn't coin it), `rewind_mode_label(mode)` beside `rewind_modes()`, and
+  `command_floor(cmd)` — the measured refusal floor of each `QUICK_COMMANDS` wire
+  word. One builder, `plugins.host_vocabulary(host)`, serves the whole set on
+  `/api/hosts` (per tool, for the new-session form) and on the session payload
+  (per owner, for the header bar); WHICH quick commands a host offers is derived
+  from its overrides exactly as caps are. What this deleted from
+  `dashboard/static/` is the last place a host was known by NAME: four
+  host-name-keyed option tables whose fallback handed an unknown tool Claude
+  Code's models and defaults, and a `shortModel` that branched two hosts' model-id
+  grammars inline (`tests/test_l1i_host_contract.py` ratchets both tiers'
+  remaining literals).
 - Each host's **screen drivers moved into its own package** (see below), which is
   what made the routing possible at all.
 

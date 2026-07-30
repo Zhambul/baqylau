@@ -20,15 +20,18 @@ from dashboard.read.session import (ask_pending, plan_pending)
 A = load_audit()
 
 # The quick-command → host CAPABILITY key each command is gated on
-# (_caps_guard). `rename` is the argless AUTO-rename (the ✦ button), and it
-# rides the `rename` cap rather than one of its own — being told a name and
-# inventing one are the same capability from the button's point of view. It used
-# to be absent, which is how Claude Code's argless `/rename` got pasted into a
-# codex composer that has no such command (the P2 bug list, item 3); the host's
-# `autoname` gesture is the other half of that fix, since a host may implement
-# `rename` and not `autoname` (codex does) and only the gesture can say so.
-CAP_BY_CMD = {"compact": "compact", "model": "model", "effort": "effort",
-              "rename": "rename"}
+# (_caps_guard), DERIVED from plugins.host.QUICK_COMMANDS — the one owner of
+# that closed vocabulary, which the page now also reads (per host, with each
+# command's refusal floor) off /api/hosts. `rename` is the argless AUTO-rename
+# (the ✦ button) and rides the `rename` cap rather than one of its own — being
+# told a name and inventing one are the same capability from the button's point
+# of view. It used to be ABSENT from this table, which is how Claude Code's
+# argless `/rename` got pasted into a codex composer that has no such command
+# (the P2 bug list, item 3); the host's `autoname` gesture is the other half of
+# that fix, since a host may implement `rename` and not `autoname` (codex does)
+# and only the gesture can say so. A second hand-written copy is exactly how the
+# row went missing, so there is one.
+CAP_BY_CMD = plugins.quick_command_caps()
 
 
 class _TypingMixin:

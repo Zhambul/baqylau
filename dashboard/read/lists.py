@@ -171,6 +171,12 @@ def resumable_payload(cwd, limit, q=""):
             "last_active": _last_active(row, sdb),
             "live": bool(row.get("live")),
             "model": (ctx or {}).get("model") or "",
+            # …and its OWNING host's display spelling of that id (session_ctx
+            # stamps it — HostControl.model_short). The picker row shows this
+            # and the form's model prefill matches the host's menu against it;
+            # the page used to shorten the raw id itself, through a grammar that
+            # knew exactly two hosts.
+            "model_short": (ctx or {}).get("model_short") or "",
             # the SAME host-branched resolution the session payload uses
             # (read/meta.session_effort, the one owner): this row used to serve
             # the DEFAULT host's cwd-keyed saved level for every session in the

@@ -236,10 +236,38 @@ _CTX = API.BoundedLRU(MEMO_CAP)   # transcript_path -> (size, ctx): same
 #                   out of the key.
 
 
+def path_host(tpath):
+    """The HostControl that OWNS one transcript/rollout path, falling back to the
+    DEFAULT host for a path that is empty or that no plugin claims (a husk row, a
+    companion-job .log no parser speaks). The ONE place the read model turns a
+    PATH into a host's vocabulary — never a model-id grammar, which is what
+    reading another tool's ids through Claude's spelling amounted to.
+
+    Lives here rather than in read/session.py (where it was `row_host`) because
+    the ctx/fallback probes below need it too, and meta.py is the module those
+    two tiers share."""
+    return (plugins.host_of(tpath or "")
+            or plugins.host_named(plugins.default_host()))
+
+
 def session_ctx(tpath, main=False):
     """plugins.context() (the {used, window, pct, model} saturation of the
-    file's last turn) behind the (path, size) cache; None when unknown."""
-    return size_cached(_CTX, tpath, lambda: plugins.context(tpath, main=main))
+    file's last turn) behind the (path, size) cache; None when unknown.
+
+    Stamps `model_short` beside the raw `model`: the OWNING host's own display
+    spelling of that id (HostControl.model_short — "claude-opus-4-8" →
+    "opus-4.8", a codex id unchanged). The client shows it and matches the ✦
+    picker's current row against it; it used to re-derive both from a two-host
+    grammar in JS (`startsWith("gpt-")`, strip `claude-`), which is a model-id
+    sniff for a fact the file's owner simply knows. The RAW id stays — the
+    fallback gate compares it to `fallbackModel`, and a display string is not an
+    id."""
+    def probe():
+        cx = plugins.context(tpath, main=main)
+        if cx and cx.get("model"):
+            cx["model_short"] = path_host(tpath).model_short(cx["model"])
+        return cx
+    return size_cached(_CTX, tpath, probe)
 
 
 def session_effort(tpath, cwd="", slug="", ctx=None):
@@ -306,7 +334,12 @@ def session_fallback(tpath):
     probe's current model must equal `to`, so a later /model switch (either
     away or back to the original) retires the warning by itself. Backs the ⚠
     on the ✦ model button (docs/dashboard.md *Model fallback warning*). None
-    otherwise; read-side, adds no audit rows (same as ctx/goal)."""
+    otherwise; read-side, adds no audit rows (same as ctx/goal).
+
+    Both model ids ride WITH the owning host's display spelling
+    (`from_short`/`to_short`, HostControl.model_short) — the hover text says
+    "fell back fable-5 → opus-4.8", and shortening it in the page meant a JS copy
+    of one host's id grammar applied to whatever record it was handed."""
     if not tpath:
         return None
     try:
@@ -323,7 +356,11 @@ def session_fallback(tpath):
     if not fb:
         return None
     cx = session_ctx(tpath, main=True)
-    return fb if cx and cx.get("model") == fb.get("to") else None
+    if not (cx and cx.get("model") == fb.get("to")):
+        return None
+    h = path_host(tpath)
+    return dict(fb, from_short=h.model_short(fb.get("from") or ""),
+                to_short=h.model_short(fb.get("to") or ""))
 
 
 _PROMPTS = API.BoundedLRU(MEMO_CAP)   # transcript_path -> (size, count): the

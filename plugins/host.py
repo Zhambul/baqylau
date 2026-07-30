@@ -64,6 +64,24 @@ ACK = "acknowledged"          # the host confirmed it did the thing
 REJECTED = "rejected"         # the host refused / cannot do it (the inert base)
 INDETERMINATE = "indeterminate"   # fired, outcome unconfirmable from here
 
+# The QUICK-COMMAND vocabulary — the closed set of slash commands the header's
+# leading action row types into a TUI, as {wire word: (method, the cap it rides)}.
+# The WIRE word is what the client POSTs to /command and what the served
+# `quick_commands` rows are keyed by; the METHOD is the HostControl body that
+# runs it, and WHICH commands a host offers is DERIVED from those overrides
+# (implements()), exactly as caps are — never an authored per-host list.
+#
+# `rename` is the ARGLESS auto-rename (the ✦ button): its method is `autoname`
+# and its cap is `rename`, which is why the two names differ here at all. This
+# table is the one owner of that mapping — dashboard/http/post/typing.py's
+# _caps_guard reads its caps out of it rather than re-spelling them.
+QUICK_COMMANDS = {
+    "compact": ("compact", "compact"),
+    "model": ("model", "model"),
+    "effort": ("effort", "effort"),
+    "rename": ("autoname", "rename"),
+}
+
 _CID = itertools.count(1)
 
 
@@ -301,6 +319,27 @@ class HostControl:
         both/conversation/code). () when it cannot rewind."""
         return ()
 
+    def rewind_mode_label(self, mode):
+        """The web menu's row text for one rewind_modes() mode ("restore code
+        and conversation"). The words are the HOST's — they name what ITS
+        checkpoint menu restores — so the client stops carrying a copy of
+        Claude Code's three. "" for a mode this host does not offer."""
+        return ""
+
+    def command_floor(self, cmd):
+        """How many of YOUR prompts a conversation needs before this host will
+        accept quick command `cmd` (a QUICK_COMMANDS wire word) — the REFUSAL
+        FLOOR the dashboard greys the button below, so it stops typing a command
+        the TUI is going to bounce. 0 = no floor (the honest default: a host that
+        has not measured a refusal must not invent one).
+
+        Claude Code's two are measured, not guessed: `/compact` bounces with
+        "Not enough messages to compact" on a barely-started chat, and a bare
+        `/rename` with "Could not generate a name: no conversation context yet"
+        on an empty one. They were client constants (COMPACT_MIN_PROMPTS = 2 and
+        an inline `prompts < 1`) applied to EVERY host."""
+        return 0
+
     def title_key(self, tpath):
         """The durable rename-override key for one of this host's transcripts
         (its filename STEM), or "" when the path isn't one / the host has no such
@@ -341,16 +380,45 @@ class HostControl:
     # provide them regardless of which gestures it drives). `launchable` above is
     # what the new-session picker reads; these are the how.
     def model_choices(self):
-        """The model ids this host's ✦ menu offers — [] means the client uses
-        its own default list (claude_code's are client-hardcoded; codex's differ,
-        so it supplies them here). Not a gesture (no cap): a READ the session
-        payload serves so the menu is the owning host's own vocabulary."""
+        """The model ids this host's ✦ menu offers — its OWN vocabulary, served
+        both per-session (the quick-command picker) and per-host (/api/hosts, the
+        new-session form). [] means the host declares none, and the menu is then
+        EMPTY: a client default here used to mean "an unknown host is offered
+        Claude's models", which is the thing this interface exists to delete.
+        Not a gesture (no cap) — a READ."""
         return []
 
     def effort_choices(self):
-        """The reasoning-effort tokens this host's ✧ menu offers — [] means the
-        client default. The effort twin of model_choices."""
+        """The reasoning-effort tokens this host's ✧ menu offers — [] = an empty
+        menu, never another host's levels. The effort twin of model_choices."""
         return []
+
+    def model_default(self):
+        """The model a FRESH launch of this host picks when nothing is
+        remembered — the new-session form's first-ever selection. "" = let the
+        tool's own config decide (the launch omits the flag)."""
+        return ""
+
+    def effort_default(self):
+        """The reasoning effort a FRESH launch picks when nothing is remembered.
+        The effort twin of model_default; "" = the tool's own default."""
+        return ""
+
+    # How a menu ROW matches the model a session is actually RUNNING, so the ✦
+    # picker can mark the current one and a just-clicked switch can clear its
+    # optimistic label. Two shapes exist and neither can be sniffed off an id:
+    #
+    #   "exact"  — the rows ARE full model ids (codex: `gpt-5.6-terra`), so the
+    #              running id matches a row verbatim.
+    #   "family" — the rows are FAMILY words (claude_code: `opus`), so the
+    #              running id's leading word is what matches.
+    #
+    # The client used to decide by prefix-sniffing the id (`startsWith("gpt-")`),
+    # which mis-reads every id neither host coined AND silently mis-matches a
+    # real one: `gpt-5.4-codex` is not in codex's menu, and a family compare
+    # would have marked `gpt-5.4` as the current row. "exact" is the base because
+    # it never claims a row the host did not name.
+    model_match = "exact"
 
     # --- model VOCABULARY (a host reading its own model ids) ------------------
     # Not gestures either: these turn a raw model id into the words this host

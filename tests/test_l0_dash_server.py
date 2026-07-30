@@ -2751,7 +2751,13 @@ def test_context_saturation_payloads_and_sse(dash, tmp_path):
     tails, (path, size)-cached): sessions rows and the session overview carry
     the MAIN transcript's {used, window, pct, model} — sidechain records
     skipped — agent rows carry their OWN transcript's, and the per-session SSE
-    announces the main figure as a `ctx` event."""
+    announces the main figure as a `ctx` event.
+
+    The raw model id rides with `model_short`, the OWNING host's own display
+    spelling of it (HostControl.model_short, stamped once by the cached probe):
+    the page shows that string and matches the ✦ picker's current row against
+    it, where it used to re-derive both from a two-host id grammar in JS. The
+    RAW id stays because the fallback gate compares it to `fallbackModel`."""
     tp = tmp_path / "ctx-main.jsonl"
     tp.write_text(
         json.dumps({"type": "assistant", "message": {
@@ -2772,7 +2778,8 @@ def test_context_saturation_payloads_and_sse(dash, tmp_path):
                    src_path=str(atp))
     row = next(r for r in _get_json(dash + "/api/sessions") if r["sid"] == "ctxS")
     assert row["ctx"] == {"used": 100000, "window": 200000, "pct": 50,
-                          "model": "claude-haiku-4-5"}
+                          "model": "claude-haiku-4-5",
+                          "model_short": "haiku-4.5"}
     ov = _get_json(dash + "/api/session/ctxS")
     assert ov["ctx"]["pct"] == 50                   # the sidechain row didn't win
     ag = next(a for a in ov["agents"] if a["agent_id"] == "agC")

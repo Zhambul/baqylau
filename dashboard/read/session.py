@@ -13,10 +13,10 @@ from core import sessionapi as API
 from core import tabs
 from dashboard import config, ext, opshtml, prefs
 from dashboard.control import launch
-from dashboard.read.meta import (canon_cwd, cmd_names, git_info, session_ctx,
-                                 session_effort, session_fallback, session_goal,
-                                 session_kv, session_prompts, session_title,
-                                 session_slug)
+from dashboard.read.meta import (canon_cwd, cmd_names, git_info, path_host,
+                                 session_ctx, session_effort, session_fallback,
+                                 session_goal, session_kv, session_prompts,
+                                 session_title, session_slug)
 
 
 def visible_agents(agents):
@@ -48,16 +48,6 @@ def agents_ctx(agents):
     return agents
 
 
-def row_host(tpath):
-    """The HostControl that OWNS an agent row's file, falling back to the
-    DEFAULT host for a row whose transcript is empty or unclaimed (a husk row, a
-    companion-job .log no parser speaks). The one place the read model turns a
-    PATH into a host's vocabulary — never a model-id grammar, which is what
-    reading another tool's ids through Claude's spelling amounted to."""
-    return (plugins.host_of(tpath or "")
-            or plugins.host_named(plugins.default_host()))
-
-
 def agents_model_effort(agents, effort):
     """Stamp each agent row with the short model id + effort level it runs — the
     web card's echo of the terminal mirror's `opus-4.8·high` op tag
@@ -65,7 +55,7 @@ def agents_model_effort(agents, effort):
     stamped (ctx["model"] is the raw id of the agent's last assistant turn), so
     no extra file read.
 
-    BOTH words are the OWNING HOST's (row_host → HostControl.model_short /
+    BOTH words are the OWNING HOST's (path_host → HostControl.model_short /
     model_default_effort): the display spelling of a model id and the level a
     model defaults to are per-tool facts, and applying Claude's to every row is
     how a codex agent card wore a mangled id and an inherited `high`.
@@ -83,7 +73,7 @@ def agents_model_effort(agents, effort):
         raw = ctx.get("model") or ""
         if not raw:
             continue
-        h = row_host(a.get("transcript") or "")
+        h = path_host(a.get("transcript") or "")
         a["model"] = h.model_short(raw)
         eff = ctx.get("effort") or effort or h.model_default_effort(raw)
         if eff:
@@ -305,13 +295,17 @@ def session_payload(sid, agent=""):
     # host DISPLAY label ("Codex" / "Claude Code") for the client's user-facing
     # copy — every string that used to hardcode "Claude" reads meta.host_label.
     data["host_label"] = host_label(tpath)
-    # the OWNING host's ✦ model / ✧ effort menu vocabulary — [] means "use the
-    # client's own default list" (claude_code's are hardcoded; codex supplies
-    # its own, since its models/levels differ). The client's quick-command menus
-    # read these so a codex session's picker offers codex models, not Claude's.
-    _h = plugins.host_named(plugins.owns_by(tpath) or plugins.default_host())
-    data["model_choices"] = list(_h.model_choices()) if _h else []
-    data["effort_choices"] = list(_h.effort_choices()) if _h else []
+    # the OWNING host's whole control VOCABULARY (plugins.host_vocabulary, the
+    # same builder /api/hosts serves per tool): the ✦ model / ✧ effort menus and
+    # how a row matches the running model, the ↶ rewind menu's modes+labels, and
+    # the quick commands this host offers with their refusal floors. Every one of
+    # these was a client-side table that spelled Claude Code's answer and applied
+    # it to every host; [] / absent means the host declares none, and the menu is
+    # EMPTY rather than another tool's words. A path no plugin claims resolves to
+    # the default host, the same "behave as today" rule session_caps applies.
+    _h = (plugins.host_named(plugins.owns_by(tpath) or plugins.default_host())
+          or plugins.inert_host())
+    data.update(plugins.host_vocabulary(_h))
     # Whether the session's transcript .jsonl is GONE (known path, absent on
     # disk) — the composer's resume-&-send door is dead for it (`claude
     # --resume` finds no conversation, the launched tab exits at once). An

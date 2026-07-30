@@ -443,6 +443,30 @@ class CodexHost(HostControl):
         from plugins.codex import modeldialog as MD
         return list(MD.EFFORT_CHOICES)
 
+    def model_default(self):
+        """The new-session form's first-ever codex model — the menu's own head
+        (modeldialog.MODEL_CHOICES[0]), which is what the client's
+        TOOL_MODEL_DEF spelled separately. An EXPLICIT value, never the empty
+        "codex default" pseudo-option: you always know what you launched."""
+        from plugins.codex import modeldialog as MD
+        return MD.MODEL_CHOICES[0]
+
+    def effort_default(self):
+        """The new-session form's first-ever codex effort. `low` deliberately —
+        codex's own default, and a level its cheapest models actually run at
+        (Claude Code's high would be a foreign default applied to another tool,
+        which is exactly what the shared client table did before the split)."""
+        return "low"
+
+    # model_match: NOT overridden — codex's menu rows ARE full model ids
+    # (`gpt-5.6-terra`), so the base "exact" is right. A family compare would
+    # mark `gpt-5.4` as the current row for a session running `gpt-5.4-codex`, a
+    # model its menu does not offer at all.
+
+    # command_floor / rewind_mode_label: likewise inert. codex has no measured
+    # quick-command refusal floor (its /compact takes any conversation) and no
+    # rewind at all, so 0 and "" are the honest answers rather than Claude's.
+
     # model_short: NOT overridden — codex's ids (`gpt-5.4-codex`) ARE their own
     # display spelling, and the base identity is exactly right. It matters that
     # this is now a DECISION rather than an accident: the read model used to run
