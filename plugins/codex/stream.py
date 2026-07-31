@@ -31,6 +31,7 @@ from datetime import datetime
 
 from core import agentblocks as AB
 from core import childtask as CT
+from core import copy as C
 from core import env as EV
 from core import ops as O
 from core import render as R
@@ -211,6 +212,30 @@ FILE_VERB = {"add": ("Write", O.GREEN, "Write"),
              "move": ("Update", O.YELLOW, "Edit")}
 
 
+def patch_view_ops(f, verb, name, rgb):
+    """One Codex patch file -> the host-neutral file expansion paint ops."""
+    change = f["change"]
+    if change == "add":
+        text = f.get("content") or ""
+        if not text.strip():
+            return None
+        body = SF.file_md_ops(text, rgb) if SF.file_is_md(f["path"]) \
+            else SF.file_code_ops(f["path"], text, 1, rgb)
+    elif change in ("update", "move"):
+        rows = SF.unified_diff_rows(f.get("diff") or "")
+        body = SF.file_diff_ops(rows, f["path"], rgb)
+    elif change == "delete":
+        rows = [("-", no, line) for no, line in
+                enumerate((f.get("content") or "").splitlines(), 1)]
+        body = SF.file_diff_ops(rows, f["path"], rgb)
+    else:
+        return None
+    suffix = " ".join(p for p in (
+        ("+%d" % f["added"]) if f["added"] else "",
+        ("-%d" % f["removed"]) if f["removed"] else "") if p)
+    return SF.file_view_ops(verb, name, rgb, body, suffix)
+
+
 def render_patch(rec, blocks=None):
     """A parsed rollout `patch` record (plugins/codex/rollout.py — built from
     patch_apply_end, the authoritative file-op record for a codex run: it
@@ -235,8 +260,8 @@ def render_patch(rec, blocks=None):
         # line does (`blocks` is passed only in that register) — and that builder
         # owns the text too, so only the other registers shape it here.
         if blocks is not None:
-            O.emit(LOG, *blocks.file_line(verb, name, rgb, added=f["added"],
-                                          removed=f["removed"]))
+            line = blocks.file_text(verb, name, rgb, added=f["added"],
+                                    removed=f["removed"])
         else:
             # A STANDALONE run is the session's main agent, so its file op is the
             # LEAD's shape: a bare `line`, exactly what claude_code's file_fmt
@@ -248,10 +273,28 @@ def render_patch(rec, blocks=None):
             # own bar.
             line = SF.file_line(verb, name, rgb, added=f["added"],
                                 removed=f["removed"])
-            act, a, r = SF.file_act(verb), f["added"], f["removed"]
-            O.emit(LOG, O.line(line, act=act, add=a, rem=r)
+        # Codex's patch body exists only on this event. Turn it into the same
+        # durable view:<gid> stash + whole-row hyperlink Claude's Read/Update/
+        # Write formatter uses before those bytes disappear from the tailer.
+        vid = None
+        gid = O.new_group(LOG)
+        if gid:
+            try:
+                vops = patch_view_ops(f, verb, name, rgb)
+            except Exception:
+                vops = None
+                A.error(LOG, "view-stash (codex patch)",
+                        {"tool": tool, "gid": gid, "path": f["path"]})
+            line, vid = C.stash(LOG, gid, vops, line,
+                                {"tool": tool, "kind": "codex-patch"})
+        act, a, r = SF.file_act(verb), f["added"], f["removed"]
+        if blocks is not None:
+            O.emit(LOG, *blocks.file_row(line, view=vid, verb=verb,
+                                         added=a, removed=r))
+        else:
+            O.emit(LOG, O.line(line, view=vid, act=act, add=a, rem=r)
                    if REGISTER == REG_STANDALONE
-                   else O.gut(line, SLOT_RGB, act=act, add=a, rem=r))
+                   else O.gut(line, SLOT_RGB, view=vid, act=act, add=a, rem=r))
         O.bump(LOG, tool=tool, file=f["path"], added=f["added"], removed=f["removed"])
 
 # A companion job-log line is prefixed with an ISO timestamp; the tail is the event

@@ -69,8 +69,9 @@ landed. Why this design and not the alternatives:
   (`tool_fmt.py`, dashboard.md › *Every other tool*).
 
 **Click-to-view — file-op lines expand in place.** Every successful
-Read/Update/Write one-liner — the main session's (`file_fmt.py`) and a
-subagent's/teammate's (`substream_render.py` `render_file`) — is itself an OSC 8
+Read/Update/Write one-liner — the main session's (`file_fmt.py`), a
+subagent's/teammate's (`substream_render.py` `render_file`), and a Codex
+patch's (`plugins/codex/stream.py`) — is itself an OSC 8
 hyperlink (`claude-copy:///<key>/<tool_use_id>/view`, baked into the op's text
 by the producer; the renderer needs no geometry). Clicking it expands the op's
 full content directly under the line; clicking again collapses it. What
@@ -81,7 +82,7 @@ line-number gutter from its real start line — **except a `.md`/`.markdown`
 file, which is instead pretty-rendered as markdown** (headings→amber banners,
 bold/emphasis, lists, blockquotes, GFM tables, fenced code in its own CODE_BG
 panel) by the same `core/mdrender.py` AST renderer the live streaming path uses
-(`file_fmt.md_ops` → `mdrender.MarkdownStreamer`, gated by `tools.is_md`; the same
+(`streamfmt.file_md_ops` → `mdrender.MarkdownStreamer`; the same
 builder a markdown-reading command's Read one-liner expands through), with
 no line-number gutter (prose isn't source); a **Write** its written body,
 same treatment (markdown when `.md`, else syntax-highlighted code); an
@@ -91,14 +92,19 @@ additions/context; no +/- signs), the code syntax-highlighted with removals on
 a soft red panel and additions on a soft green panel (the tint alone carries
 the meaning), non-adjacent hunks separated by a dim `⋮`. Mechanism, in three
 parts:
-- **The stash** (hook time): the producer pre-renders the block into paint ops
-  (`file_fmt.view_ops` — the ONE block builder for a FILE op, public API shared
-  by the substream renderer, so a subagent's op expands identically; the
+- **The stash** (producer time): the producer adapts its own payload into the
+  shared file-view paint primitives (`core/streamfmt.py` — code/markdown
+  bodies, unified-diff numbering + soft-red/green rows, and the common framed
+  block). Claude's `file_fmt.view_ops` interprets Read/Write/structuredPatch;
+  Codex's `patch_view_ops` interprets `patch_apply_end` content/unified_diff.
+  Both therefore expand identically without either plugin importing the other;
+  the
   stash-and-link step under it — kv write, URL, hyperlink wrap, audit row — is
   `core.copy.stash`, the toggle's own other half, which is where it belongs:
   the key, the URL shape and the `view-stash` vocabulary are that module's, and
-  it now has THREE producers with blocks of their own to park — a file op
+  it has FOUR producers with blocks of their own to park — a Claude file op
   (`file_fmt.stash_view`, which adds the `who`/`extra` audit context), a
+  Codex patch file (`plugins/codex/stream.render_patch`), a
   file-reading command collapsed into a Read one-liner
   (`cmd_fmt._stash_read_view`), and a generic tool call
   (`tool_fmt.view_block` — the request + the answer, dashboard.md › *Every
@@ -336,8 +342,8 @@ This was the request "make sed and sed-like reads of code look like Read ops".
     line numbers aren't recoverable from its output (`sed -n 120,400p` prints
     none), and numbering from 1 would assert a falsehood.
   - `md` → the markdown AST render, through the SAME builder a native `.md`
-    Read expands with (`file_fmt.md_ops` → `core/mdrender.py`; public for
-    exactly this second caller), so `sed -n 120,400p CLAUDE.md` and
+    Read expands with (`core/streamfmt.file_md_ops` → `core/mdrender.py`),
+    so `sed -n 120,400p CLAUDE.md` and
     `Read(CLAUDE.md, offset=120)` look identical. Prose is *styled*, not lexed,
     so these ops carry no `lex`/`num` — and the trade is that `⧉out` copies the
     RENDERED text rather than the raw bytes, the same trade a native `.md` Read's

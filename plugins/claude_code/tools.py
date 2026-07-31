@@ -7,6 +7,7 @@
 import difflib, os, re, shlex
 from collections import namedtuple
 
+from core import streamfmt as SF
 from core.ops import BLUE, GREEN, YELLOW
 
 
@@ -285,7 +286,7 @@ def parse_redirect(cmd, cwd):
 # EXCLUDED everywhere: bat/glow/mdcat/less/more (they already style their output —
 # re-rendering would double-format) and jq/yq (pretty-print + colour themselves).
 
-_MD_EXT = (".md", ".markdown", ".mdown", ".mkd")
+_MD_EXT = SF.FILE_MD_EXT
 _PLUMBING = ("|", ";", "&&", "||", "&", ">", ">>", "&>")
 # A trailing STDERR redirect (`2>/dev/null`, `2>&1`, `2>>log`). Deliberately not in
 # _PLUMBING: it doesn't touch stdout, so the streamed bytes are still the file
@@ -564,7 +565,7 @@ def is_md(path):
     """True when `path`'s extension is a markdown one (the same set the streaming
     md_source() reader-allowlist uses). Lets the file-op click-to-view blocks
     pretty-render a .md Read/Write instead of plain-text/lexer highlighting."""
-    return (path or "").lower().endswith(_MD_EXT)
+    return SF.file_is_md(path)
 
 
 # Thin per-kind wrappers over the registry (the historical public names).
@@ -683,34 +684,12 @@ def diff_rows(tool_name, inp, resp):
     nothing is determinable."""
     inp = inp or {}
 
-    def walk(hunks):
-        """hunks: [(old_start, new_start, [signed lines])] -> numbered rows."""
-        rows = []
-        for hi, (old, new, lines) in enumerate(hunks):
-            if hi:
-                rows.append(("@", None, "⋮"))
-            for l in lines:
-                sign, body = (l[:1] or " "), l[1:]
-                if sign == "\\":
-                    # The diff library's literal "\ No newline at end of file"
-                    # marker — metadata, not a file line. Numbering it as
-                    # context shifted every later lineno in the hunk by one.
-                    # Skipped outright (like `git diff --stat`-style summaries;
-                    # the mirror's diff shows content, not byte-level trivia).
-                    continue
-                if sign == "+":
-                    rows.append(("+", new, body)); new += 1
-                elif sign == "-":
-                    rows.append(("-", old, body)); old += 1
-                else:
-                    rows.append((" ", new, body)); old += 1; new += 1
-        return rows
-
     sp = resp.get("structuredPatch") if isinstance(resp, dict) else None
     if isinstance(sp, list) and sp and all(
             isinstance(h, dict) and isinstance(h.get("lines"), list) for h in sp):
-        return walk([(int(h.get("oldStart") or 1), int(h.get("newStart") or 1),
-                      [str(l) for l in h["lines"]]) for h in sp])
+        return SF.file_diff_rows([
+            (int(h.get("oldStart") or 1), int(h.get("newStart") or 1),
+             [str(l) for l in h["lines"]]) for h in sp])
 
     def uni(old, new):
         hunks = []
@@ -724,13 +703,13 @@ def diff_rows(tool_name, inp, resp):
         return hunks
 
     if tool_name == "Edit":
-        return walk(uni(inp.get("old_string"), inp.get("new_string")))
+        return SF.file_diff_rows(uni(inp.get("old_string"), inp.get("new_string")))
     if tool_name == "MultiEdit":
         hunks = []
         for e in inp.get("edits") or []:
             if isinstance(e, dict):
                 hunks.extend(uni(e.get("old_string"), e.get("new_string")))
-        return walk(hunks)
+        return SF.file_diff_rows(hunks)
     if tool_name == "NotebookEdit":
         sign = "-" if inp.get("edit_mode") == "delete" else "+"
         return [(sign, None, l)

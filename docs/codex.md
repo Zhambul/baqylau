@@ -211,7 +211,13 @@ its own mirror when run standalone (wiring in [wiring.md](wiring.md)).
       `Update(name) +a -r` / `Write(name) +n` / `Delete(name)` line per changed
       file in the Claude file-op look, each fed to the scoreboard exactly like
       a subagent's file ops (unique-path `files` set, ± line sums, Edit/Write
-      tool tallies). The `apply_patch` call itself is deliberately NOT a file
+      tool tallies). Each successful line is also click-to-expand through the
+      same `core/streamfmt` file-view primitives and `core.copy.stash` protocol
+      Claude Read/Update/Write uses: an Update preserves and shows the event's
+      unified diff, while a Write preserves and shows its content. The rollout
+      parser must carry those ephemeral bytes into the painter; re-reading the
+      post-patch file cannot recover removed lines. The `apply_patch` call
+      itself is deliberately NOT a file
       op — it only carries repo-relative patch text, and counting both would
       duplicate; it parses to the lightweight `patch_call`
       marker the mirror never paints (*Two registers* above). A

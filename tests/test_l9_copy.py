@@ -224,6 +224,23 @@ def test_file_op_line_carries_view_link_and_stash(session, run_hook, test_env):
     assert gutop["lex"] == "python" and gutop["num"] == 1
 
 
+def test_write_op_line_carries_view_link_and_stash(session, run_hook, test_env):
+    """Write stays on the same expansion contract as Read and Update."""
+    s = session.make()
+    path = os.path.join(s.cwd, "written.py")
+    body = "def written():\n    return True\n"
+    run_hook("claude-file-fmt.py",
+             P.post_file(s, tool="Write", path=path, new_string=body))
+
+    lop = next(op for op in s.ops() if op["t"] == "line" and "Write" in op["s"])
+    assert lop.get("v") == "toolu_001"
+    assert "claude-copy:///%s/toolu_001/view" % s.sid in lop["s"]
+    stash = _kv(s, "view:toolu_001")
+    gutop = next(op for op in stash if op["t"] == "gut")
+    assert gutop["s"] == body.rstrip()
+    assert gutop["lex"] == "python" and gutop["num"] == 1
+
+
 def test_stash_view_pins_shared_kv_and_url_shape(session, seed, test_env):
     """file_fmt.stash_view — the ONE stash-and-link implementation shared by the
     main session's formatter and the substream renderer — pins the protocol:
@@ -745,7 +762,7 @@ def test_code_reader_renders_as_read_with_copiable_stash(session, run_hook,
 def test_md_reader_stash_is_markdown_rendered_and_copiable(session, run_hook,
                                                            test_env, tmp_path):
     """A markdown-reading Bash command (a sed SLICE of a .md) collapses the same
-    way, but its stash body is the markdown AST render (file_fmt.md_ops — the ONE
+    way, but its stash body is the markdown AST render (streamfmt.file_md_ops — the ONE
     builder a native .md Read expands through), not a lexed gut op. ⧉cmd still
     copies the exact command; ⧉out copies the RENDERED prose (markdown is styled,
     not lexed, so the raw bytes aren't in the stash — the same trade a native .md

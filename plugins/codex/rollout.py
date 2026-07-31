@@ -44,7 +44,7 @@
 #   {"kind": "usage", "usage": dict,      cumulative total_token_usage snapshot
 #    "last": dict|None, "window": int|None}   last turn's usage + ctx window
 #   {"kind": "patch", "success": bool,
-#    "files": [{"path", "change", "added", "removed"}, …]}
+#    "files": [{"path", "change", "added", "removed", "diff"?/"content"?}, …]}
 #   {"kind": "compact"} | {"kind": "task_started", "at": …, "ts": …}
 #   {"kind": "task_complete", "at": …, "ts": …} | {"kind": "turn_aborted"}
 #   {"kind": "prompt" | "reasoning" | "message", "text": str}   (never empty)
@@ -429,8 +429,20 @@ def _ev_patch_apply_end(p):
         if not isinstance(ch, dict):
             continue
         add, rem = _patch_delta(ch)
-        files.append({"path": path, "change": ch.get("type"),
-                      "added": add, "removed": rem})
+        change = ch.get("type")
+        row = {"path": path, "change": change,
+               "added": add, "removed": rem}
+        # Keep the ephemeral patch body in the typed record. The painter needs
+        # it NOW to build the durable click-to-view stash; re-reading the file
+        # later cannot recover an Update's removed lines (and an eventual
+        # delete has no file left to read). These fields remain producer data,
+        # not paint ops: rollout.py owns the native event grammar, stream.py
+        # decides how it is presented.
+        if change in ("update", "move"):
+            row["diff"] = ch.get("unified_diff") or ""
+        elif change in ("add", "delete"):
+            row["content"] = ch.get("content") or ""
+        files.append(row)
     return {"kind": "patch", "success": bool(p.get("success")), "files": files}
 
 

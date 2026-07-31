@@ -89,11 +89,12 @@ def stash(log, gid, vops, line, info=None):
     caller wants recorded about WHAT it stashed (the tool, a render kind).
 
     Here in core/copy.py because this is the toggle's own other half: the key,
-    the URL and the audit vocabulary are this module's, and three producers now
-    stash blocks — a file op (plugins/claude_code/file_fmt.stash_view), a
-    file-READING command collapsed to a Read one-liner (cmd_fmt), and a generic
-    tool call (tool_fmt). Each BUILDS its own block, which is per-producer work;
-    parking it is not, and it was spelled twice before this."""
+    the URL and the audit vocabulary are this module's, and four producers now
+    stash blocks — a Claude file op (plugins/claude_code/file_fmt.stash_view),
+    a Codex patch file (plugins/codex/stream.render_patch), a file-READING
+    command collapsed to a Read one-liner (cmd_fmt), and a generic tool call
+    (tool_fmt). Each BUILDS its own block, which is per-producer work; parking
+    it is not, and it was spelled twice before this."""
     from core import render as R
     from core import state as S
     if not (vops and S.kv_set(log, "view:" + str(gid), vops)):

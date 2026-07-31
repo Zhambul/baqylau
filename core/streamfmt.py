@@ -311,6 +311,123 @@ def file_line(verb, name, rgb, failed=False, extent="", added=0, removed=0,
     return line
 
 
+# The shared click-to-view FILE body vocabulary. Claude tool events and Codex
+# patch events carry different payload shapes, but both paint the same durable
+# Read/Update/Write expansion. These primitives live beside file_line because
+# the dependency rule forbids either plugin importing the other.
+FILE_MD_EXT = (".md", ".markdown", ".mdown", ".mkd")
+FILE_ADD_BG = (36, 52, 40)     # soft green panel behind addition rows
+FILE_DEL_BG = (62, 34, 38)     # soft red panel behind removal rows
+
+
+def file_is_md(path):
+    """Whether a file path names the markdown family rendered as prose."""
+    return (path or "").lower().endswith(FILE_MD_EXT)
+
+
+def file_lexer(path):
+    """The paint-time lexer for a file path, or None when none is known."""
+    from core.coderender import LANGS
+    return LANGS.get(os.path.splitext(path or "")[1].lower())
+
+
+def file_code_ops(path, text, start, rgb):
+    """A raw code body deferred to the renderer for lexing and numbering."""
+    return [O.gut((text or "").rstrip("\n"), rgb,
+                  lex=file_lexer(path), num=start)]
+
+
+def file_md_ops(text, rgb):
+    """A markdown file body rendered into width-independent gut paint ops."""
+    from core import mdrender as MDR
+    stream = MDR.MarkdownStreamer()
+    segs = stream.feed(text or "") + stream.close()
+    return [O.gut(t.rstrip("\n"), rgb, bg=bg) for t, bg in segs
+            if t.strip() or bg is not None]
+
+
+def file_diff_rows(hunks):
+    """Number ``(old_start, new_start, signed_lines)`` unified-diff hunks."""
+    rows = []
+    for hi, (old, new, lines) in enumerate(hunks):
+        if hi:
+            rows.append(("@", None, "⋮"))
+        for line in lines:
+            sign, body = (line[:1] or " "), line[1:]
+            if sign == "\\":              # no-newline marker is metadata
+                continue
+            if sign == "+":
+                rows.append(("+", new, body)); new += 1
+            elif sign == "-":
+                rows.append(("-", old, body)); old += 1
+            else:
+                rows.append((" ", new, body)); old += 1; new += 1
+    return rows
+
+
+def unified_diff_rows(text):
+    """A unified diff string -> numbered rows for a file expansion."""
+    hunks = []
+    for line in (text or "").splitlines():
+        if line.startswith("@@"):
+            m = re.match(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@", line)
+            # Older Codex records sometimes carry only a bare @@ marker. The
+            # body is still useful; snippet-relative numbering is honest when
+            # the producer omitted both ranges.
+            hunks.append((int(m.group(1)), int(m.group(2)), [])
+                         if m else (1, 1, []))
+        elif hunks and not line.startswith(("---", "+++")):
+            hunks[-1][2].append(line)
+    return file_diff_rows(hunks)
+
+
+def file_diff_ops(rows, path, rgb):
+    """Numbered, syntax-highlightable delta rows as file-view gut ops."""
+    ops = []
+    buf, cur_sign, cur_start = [], None, None
+    lexer = file_lexer(path)
+
+    def flush():
+        nonlocal buf
+        if not buf:
+            return
+        bg = FILE_ADD_BG if cur_sign == "+" else \
+            FILE_DEL_BG if cur_sign == "-" else None
+        if lexer:
+            ops.append(O.gut("\n".join(buf), rgb, bg=bg, lex=lexer,
+                             num=cur_start))
+        else:
+            col = (R.fg(*O.GREEN) if cur_sign == "+" else
+                   R.fg(*O.RED) if cur_sign == "-" else R.COL["def"])
+            body = "\n".join(
+                R.DIM + ("%5d " % (cur_start + i) if cur_start is not None
+                         else " " * 6) + R.RST + col + text + R.RST
+                for i, text in enumerate(buf))
+            ops.append(O.gut(body, rgb, bg=bg) if bg else O.gut(body, rgb))
+        buf = []
+
+    for sign, no, text in rows:
+        if sign == "@":
+            flush()
+            cur_sign = None
+            ops.append(O.gut(R.DIM + "    ⋮" + R.RST, rgb))
+            continue
+        if sign != cur_sign:
+            flush()
+            cur_sign, cur_start = sign, no
+        buf.append(text)
+    flush()
+    return ops
+
+
+def file_view_ops(label, name, rgb, body, suffix=""):
+    """Wrap a file expansion body with its shared rule/header/blank frame."""
+    if not body:
+        return None
+    hdr = label + " " + name + ((" · " + suffix) if suffix else "")
+    return [O.rule(), O.label(hdr, rgb)] + list(body) + [O.blank()]
+
+
 # The three DISPLAY VERBS a file one-liner opens with, and the activity class
 # each names (core/ops.py's `act`). The verbs are file_line's own vocabulary —
 # every host paints the same three so an edit reads the same whoever made it

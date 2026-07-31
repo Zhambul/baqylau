@@ -90,10 +90,22 @@ def test_patch_counts_add_delete_and_diff_lines():
     }))
     assert rec["kind"] == "patch" and rec["success"] is True
     assert rec["files"] == [
-        {"path": "/w/a.py", "change": "update", "added": 2, "removed": 1},
-        {"path": "/w/b.sh", "change": "add", "added": 2, "removed": 0},
-        {"path": "/w/c.txt", "change": "delete", "added": 0, "removed": 2}]
+        {"path": "/w/a.py", "change": "update", "added": 2, "removed": 1,
+         "diff": "@@\n-old\n+new\n+more\n"},
+        {"path": "/w/b.sh", "change": "add", "added": 2, "removed": 0,
+         "content": "#!/bin/sh\necho hi\n"},
+        {"path": "/w/c.txt", "change": "delete", "added": 0, "removed": 2,
+         "content": "one\ntwo\n"}]
     assert RO.parse(_ev("patch_apply_end", success=False, changes={}))["success"] is False
+
+
+def test_codex_unified_diff_uses_shared_file_view_numbering():
+    from core import streamfmt as SF
+    assert SF.unified_diff_rows(
+        "@@ -10,3 +20,4 @@ section\n ctx\n-old\n+new\n+more\n"
+        "\\ No newline at end of file\n") == [
+            (" ", 20, "ctx"), ("-", 11, "old"),
+            ("+", 21, "new"), ("+", 22, "more")]
 
 
 def test_messages_strip_and_empty_is_none():

@@ -544,14 +544,14 @@ def test_read_plane_and_body_builders_agree():
 
 def test_file_op_lexer_covers_the_web_extensions():
     """The file-op click-to-view expand keys its lexer off the same table
-    (file_fmt._lexer, splitext-keyed), so a Read/Write of a .js/.ts/.css
+    (streamfmt.file_lexer, splitext-keyed), so a Read/Write of a .js/.ts/.css
     highlights in the mirror too — not just a command that streams one."""
-    from plugins.claude_code.file_fmt import _lexer
+    from core.streamfmt import file_lexer
     for path, exp in [("/a/b/domshim.js", "javascript"), ("/a/Panel.tsx", "tsx"),
                       ("/a/main.ts", "typescript"), ("/a/index.html", "html"),
                       ("/a/style.css", "css"), ("/a/build.gradle.kts", "kotlin"),
                       ("/a/notes.txt", None)]:
-        assert _lexer(path) == exp, path
+        assert file_lexer(path) == exp, path
 
 
 # ---- golden byte-identity ------------------------------------------------------

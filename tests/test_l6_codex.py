@@ -252,6 +252,24 @@ def test_rollout_deepening_files_tokens_search_model(test_env, codex):
     assert "kitty remote control docs" in text        # web_search_call query
     assert "Update" in text and "a.py" in text        # patch: updated file
     assert "Write" in text and "b.sh" in text         # patch: added file
+    # A Codex patch must use the same click-to-view contract as native file
+    # tools: the row carries a view id + hyperlink and the ephemeral diff/body
+    # is parked durably behind that id. Before this, Codex painted identical-
+    # looking Update/Write rows with neither field, so clicks did nothing.
+    file_ops = [op for op in codex.s.ops()
+                if op.get("v") and any(v in (op.get("s") or "")
+                                       for v in ("Update", "Write"))]
+    assert len(file_ops) == 2
+    assert all("claude-copy:///" in op["s"] and "/view" in op["s"]
+               for op in file_ops)
+    views = {key: json.loads(val) for key, val in
+             codex.s.query_state("SELECT key, val FROM kv WHERE key LIKE 'view:%'")}
+    update_id = next(op["v"] for op in file_ops if "Update" in op["s"])
+    write_id = next(op["v"] for op in file_ops if "Write" in op["s"])
+    update_body = "\n".join(op.get("s", "") for op in views["view:" + update_id])
+    write_body = "\n".join(op.get("s", "") for op in views["view:" + write_id])
+    assert "old" in update_body and "new" in update_body and "more" in update_body
+    assert "#!/bin/sh" in write_body and "echo hi" in write_body
     assert "■ exit 2" in text                         # failed exec output
     assert "⟳ compacted" in text                      # context_compacted
     # footer rollup: fresh in = 1000-600, out = 50, cache 600/1000

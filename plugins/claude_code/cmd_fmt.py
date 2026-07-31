@@ -302,14 +302,13 @@ def _read_body_code(output, spec, gid):
 
 
 def _read_body_md(output, _spec, gid):
-    """The `md` kind's stash body: the markdown AST render (file_fmt.md_ops →
+    """The `md` kind's stash body: the markdown AST render (streamfmt.file_md_ops →
     core.mdrender — headings to amber banners, lists, tables, fenced code), so a
     `sed -n 120,400p CLAUDE.md` expands EXACTLY like a native Read of that extent
     — one shared builder, not a second markdown rendering. Prose is styled, not
     lexed, so these ops carry no `lex`; the trade is that ⧉out copies the RENDERED
     text rather than the raw bytes (identical to a native .md Read's expansion)."""
-    from plugins.claude_code import file_fmt as FF
-    return [dict(op, g=str(gid)) for op in FF.md_ops(output, O.BLUE)]
+    return [dict(op, g=str(gid)) for op in SF.file_md_ops(output, O.BLUE)]
 
 
 def _read_body_plain(output, _spec, gid):

@@ -45,19 +45,6 @@ A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
 LABEL = CT.FILE_LABEL
 
 
-# SGR primitives are core.render's (R.fg/R.DIM/R.RST — the shared One Dark
-# palette); DEF is its default-foreground entry, aliased for the diff fallback.
-DEF = R.COL["def"]
-
-# Click-to-view diff panel tints — the git/delta-style SOFT row backgrounds;
-# the fg stays the shared semantic GREEN/RED; the tint is what reads "diff".
-# The view body is deliberately UNCAPPED (owner's call): the stash lives in
-# SQLite and the pane scrolls — truncating the very content the click asked for
-# would defeat the feature (a bare Read already caps itself at 2000 lines).
-ADD_BG = (36, 52, 40)     # soft green panel behind '+' rows
-DEL_BG = (62, 34, 38)     # soft red panel behind '-' rows
-
-
 def _read_text(path, ti, tr):
     """(text, first_line_number) a Read actually returned: the result's file
     content when the payload carries it, else the file re-read from disk at hook
@@ -79,93 +66,6 @@ def _read_text(path, ti, tr):
     return "\n".join(lines), off
 
 
-def _lexer(path):
-    """The pygments lexer for a path's extension (python/kotlin/java/bash,
-    js/ts/jsx/tsx, html/css and friends — the shared coderender.LANGS table),
-    or None."""
-    from core.coderender import LANGS
-    return LANGS.get(os.path.splitext(path)[1].lower())
-
-
-def _code_ops(path, text, start, rgb):
-    """One gut op carrying the RAW body plus the paint-time spec: 'lex' (the
-    extension-picked pygments lexer) and 'num' (first line number).
-    Highlighting and numbering happen in the RENDERER, the one process
-    guaranteed a pygments (hook producers may run a bare python3 — the same
-    reason `code` ops ship raw text). Uncapped — the whole extent the op
-    touched is what a click asks for."""
-    return [O.gut(text.rstrip("\n"), rgb, lex=_lexer(path), num=start)]
-
-
-def md_ops(text, rgb):
-    """gut ops for a markdown body, pretty-rendered by the SAME
-    AST renderer the live streaming path uses (core.mdrender.MarkdownStreamer):
-    headings→amber banners, bold/emphasis, lists, blockquotes, GFM tables, and
-    fenced code blocks in their own CODE_BG panel. Each `(text, bg)` segment
-    becomes one already-styled gut op (mirrors stream.py's emit_md) — no
-    'lex'/'num', so it paints verbatim (no line-number gutter; prose isn't
-    source). mdrender degrades gracefully when wenmode/pygments are absent
-    (this hook may run a bare python3), exactly as the streaming path relies on.
-    Falls back to a plain code op if rendering yields nothing.
-
-    PUBLIC because a second caller shares it: the Read one-liner a markdown-
-    READING Bash command collapses to (`sed -n 120,400p CLAUDE.md` —
-    cmd_fmt._read_body_md) expands through this too, so a command's slice of a
-    .md renders exactly like a native Read of the same extent."""
-    from core import mdrender as MDR
-    stream = MDR.MarkdownStreamer()
-    segs = stream.feed(text) + stream.close()
-    ops = [O.gut(t.rstrip("\n"), rgb, bg=bg) for t, bg in segs
-           if t.strip() or bg is not None]
-    return ops
-
-
-def _diff_ops(rows, rgb, lexer):
-    """gut ops for diff rows (CT.diff_rows), delta-style: contiguous same-signed
-    runs share one op, every row keeps a dim line-number gutter (the OLD number
-    for a removal, the NEW one for an addition/context — no +/- signs), and
-    when the file's extension maps to a lexer the run ships RAW with a
-    'lex'/'num' spec so the RENDERER syntax-highlights the code at paint time
-    (same deferral as Read/Write bodies) — the soft red/green panel ('bg')
-    alone carries the removal/addition meaning. Without a lexer the run falls
-    back to red/green foreground text. Hunk separators paint a dim ⋮. A run's
-    numbers are sequential by construction (diff_rows walks each hunk in
-    order), which is what lets 'num' number the whole run from its first row."""
-    ops = []
-    buf, cur_sign, cur_start = [], None, None
-
-    def flush():
-        nonlocal buf
-        if not buf:
-            return
-        bg = ADD_BG if cur_sign == "+" else DEL_BG if cur_sign == "-" else None
-        if lexer:
-            ops.append(O.gut("\n".join(buf), rgb, bg=bg, lex=lexer,
-                             num=cur_start))
-        else:
-            col = (R.fg(*O.GREEN) if cur_sign == "+" else
-                   R.fg(*O.RED) if cur_sign == "-" else DEF)
-            body = "\n".join(
-                R.DIM + ("%5d " % (cur_start + i) if cur_start is not None
-                         else " " * 6) + R.RST + col + t + R.RST
-                for i, t in enumerate(buf))
-            ops.append(O.gut(body, rgb, bg=bg) if bg else O.gut(body, rgb))
-        buf = []
-
-    for sign, no, text in rows:
-        if sign == "@":
-            flush()
-            cur_sign = None
-            ops.append(O.gut(R.DIM + "    ⋮" + R.RST, rgb))
-            continue
-        if sign != cur_sign:
-            flush()
-            cur_sign, cur_start = sign, no
-        buf.append(text)
-    flush()
-    return ops
-
-
 def view_ops(tool, label, name, path, ti, tr):
     """The click-to-view block for one file op, as a list of paint-op dicts
     (JSON-clean — exactly what claude-copy.py O.emit()s on a /view click), or
@@ -183,24 +83,25 @@ def view_ops(tool, label, name, path, ti, tr):
         text, start = _read_text(path, ti, tr)
         if text is None or not text.strip():
             return None
-        body = md_ops(text, rgb) if CT.is_md(path) else _code_ops(path, text, start, rgb)
+        body = SF.file_md_ops(text, rgb) if SF.file_is_md(path) \
+            else SF.file_code_ops(path, text, start, rgb)
         suffix = CT.read_extent(tr.get("file") if isinstance(tr, dict) else None, ti)
     elif tool == "Write":
         text = ti.get("content") or ""
         if not text.strip():
             return None
-        body = md_ops(text, rgb) if CT.is_md(path) else _code_ops(path, text, 1, rgb)
+        body = SF.file_md_ops(text, rgb) if SF.file_is_md(path) \
+            else SF.file_code_ops(path, text, 1, rgb)
         suffix = "+%d" % len(text.splitlines())
     else:
         rows = CT.diff_rows(tool, ti, tr)
         if not rows:
             return None
-        body = _diff_ops(rows, rgb, _lexer(path))
+        body = SF.file_diff_ops(rows, path, rgb)
         a, r = CT.diff_counts(tool, ti)
         suffix = " ".join(p for p in (("+%d" % a) if a else "",
                                       ("-%d" % r) if r else "") if p)
-    hdr = label + " " + name + ((" · " + suffix) if suffix else "")
-    return [O.rule(), O.label(hdr, rgb)] + body + [O.blank()]
+    return SF.file_view_ops(label, name, rgb, body, suffix)
 
 
 def stash_view(log, tid, tool, label, name, path, ti, tr, line,
