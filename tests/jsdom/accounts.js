@@ -99,23 +99,13 @@ function place(row) {
     kind: c.className.split(/\s+/)[0],
     label: c.className.split(/\s+/)[0] === "ubar" && c.children[0]
       ? c.children[0].textContent : "",
+    sep: c._cls().includes("usep"),
     col: c.style.gridColumn,
   }));
 }
 
 function ghosts(row) {
   return row.children.map(c => c._cls().includes("ghost"));
-}
-
-/* A HOLE is the other kind of placeholder, and the two mean different things:
-   a GHOST says "this account has no reading for a window its SIBLING reports",
-   a HOLE says "this column is another host's window entirely". Both reserve the
-   box (that is what keeps the duration columns aligned across hosts); only the
-   ghost claims a missing reading. A hole is a ghost too, in class terms — it is
-   built by the same `bar()` call — so it has to be reported separately or the
-   ghost map would say codex is missing readings it was never going to make. */
-function holes(row) {
-  return row.children.map(c => c._cls().includes("hole"));
 }
 
 function render(list) {
@@ -129,14 +119,13 @@ function render(list) {
     // layout engine across the rows (`max-content`)
     tracks: $accounts.style.getPropertyValue("--acct-tracks"),
     ghosts: $accounts.children.map(ghosts),
-    holes: $accounts.children.map(holes),
     text: $accounts.children.map(r => r.textContent),
     aname: $accounts.style.getPropertyValue("--aname-w"),
     hidden: $accounts.hidden === true,
     // which HOST each rendered row belongs to, in render order. Columns now span
     // the WHOLE strip (keyed by duration), but rows are still GROUPED by host in
-    // render order and the ghost-vs-hole rule is per host, so the python
-    // assertions need to know which row is whose. Taken from the fixture, not
+    // render order, so the python assertions need to know which row is whose.
+    // Taken from the fixture, not
     // the DOM: the row carries no host marker on screen, and it should not.
     hosts: (list || []).map(a => a.host),
   };
@@ -228,8 +217,8 @@ step("two_hosts", () => render([
 // The 5h bars and the 7d bars each share ONE column across the hosts (the
 // columns are keyed by DURATION — Claude's key is `seven_day`, codex's `w10080`,
 // and keying on that gave them separate columns). The "7d fable" column is
-// Claude's alone, so the codex row renders a HOLE there, not a ghost: it has no
-// per-model cap and never will, and "—" would claim a reading it owes.
+// Claude's alone, so the codex row emits no item there: it has no per-model cap
+// and never will, and "—" would claim a reading it owes.
 step("both_hosts_have_5h", () => render([
   { host: "claude_code", slug: "c1", label: "oboard",
     windows: [H5(60, now + 3600), D7(97, now + 10222), F7(32, now + 10222)],

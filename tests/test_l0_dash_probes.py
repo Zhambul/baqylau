@@ -648,14 +648,14 @@ def test_accounts_strip_rows_stack_column_for_column():
     EMPTY rather than sliding left into it. The columns used to be unioned per
     HOST, which are two layouts that only look stacked while both hosts report
     the same shape — a codex row with only a weekly window started its bar where
-    Claude's 5h bar starts. Hence the unconditional `rows[0] == rows[1]` below:
-    EVERY row of the strip lays out the same boxes now, whoever produced it.
+    Claude's 5h bar starts. Real bars now name their shared tracks directly;
+    rows from one host keep the same boxes, while foreign-only columns need no
+    fake item.
 
-    The per-host distinction that survives is GHOST vs HOLE, and it is a claim
-    about meaning, not width: a ghost ("—") says this account has no reading for
-    a window a SIBLING OF ITS OWN HOST reports; a hole says the column is another
-    host's window entirely, which this host was never going to report. Both
-    reserve the identical box.
+    A ghost ("—") says this account has no reading for a window a SIBLING OF ITS
+    OWN HOST reports. A column belonging only to another host emits no item at
+    all: the shared grid already reserves and sizes that track, and retaining an
+    invisible item made iPad Safari grow the Codex row to a second line.
     Skipped without `node` (docs/testing.md)."""
     node = shutil.which("node")
     if not node:
@@ -671,11 +671,10 @@ def test_accounts_strip_rows_stack_column_for_column():
     for name, case in d["cases"].items():
         rows = case["rows"]
         assert len(rows) == 2, (name, rows)
-        # EVERY row of the strip lays out the SAME cells in the SAME order —
-        # across hosts, not just within one (the signature is ghost/hole-blind
-        # and value-blind by construction: a placeholder is the same box with
-        # the ink turned down, or off)
-        assert rows[0] == rows[1], (name, rows)
+        # Rows of one host lay out the same cells. Across hosts, a foreign-only
+        # column emits no invisible item: explicit grid placement reserves it.
+        if len(set(case["hosts"])) == 1:
+            assert rows[0] == rows[1], (name, rows)
         # every ACCOUNT-WIDE window carries its reset cell, present or empty;
         # a model-scoped one ("7d fable") carries NONE — its reset duplicates
         # the 7d bar above it, and it is dropped for the same key on every row,
@@ -696,7 +695,9 @@ def test_accounts_strip_rows_stack_column_for_column():
         assert all(s == "1 / -1" for s in case["rowspan"]), (name, case["rowspan"])
         by_label = [{c["label"]: c["col"] for c in row if c["kind"] == "ubar"}
                     for row in pl]
-        assert by_label[0] == by_label[1], (name, by_label)
+        # Every label the two hosts share names the exact same grid track.
+        for label in set(by_label[0]) & set(by_label[1]):
+            assert by_label[0][label] == by_label[1][label], (name, by_label)
         for row in pl:
             # the name opens every row, and the cells march across the tracks
             assert row[0]["kind"] == "aname" and row[0]["col"] == "1", (name, row)
@@ -705,7 +706,8 @@ def test_accounts_strip_rows_stack_column_for_column():
         # one track per column: the name, the badge slot when ANY row is logged
         # out, one per duration column, and the trailing limit-hit cell
         badge = 1 if any(c["kind"] == "uauth" for c in pl[0]) else 0
-        assert len(case["tracks"].split()) == 1 + badge + len(by_label[0]) + 1, \
+        bar_cols = {col for row in by_label for col in row.values()}
+        assert len(case["tracks"].split()) == 1 + badge + len(bar_cols) + 1, \
             (name, case["tracks"])
         assert set(case["tracks"].split()) == {"max-content"}, case["tracks"]
 
@@ -714,11 +716,6 @@ def test_accounts_strip_rows_stack_column_for_column():
     assert d["cases"]["model_window_on_one"]["ghosts"][1][-1] is True
     assert d["cases"]["one_logged_out"]["ghosts"] == \
         [[False, False, False, False], [False, True, False, False]]
-    # ...and a single-host strip has no HOLES at all: a hole is only ever
-    # another host's column, so within one host every placeholder is a ghost
-    for name in ("live_shape", "model_window_on_one", "one_logged_out"):
-        assert not any(any(r) for r in d["cases"][name]["holes"]), name
-
     # the ghosted 5h/7d-fable bar says "—", not a fabricated 0%
     assert "7d fable—" in d["cases"]["model_window_on_one"]["text"][1]
     # the name column sizes to the widest name on the strip ("c2 · " + 19)
@@ -748,17 +745,19 @@ def test_accounts_strip_rows_stack_column_for_column():
                 for row in case["rows"]]
 
     two = d["cases"]["two_hosts"]
-    # codex reports no 5h window: the column is still THERE, as a hole
-    assert ubars(two) == [["5h", "7d"], ["5h", "7d"]]
-    assert two["holes"] == [[False, False, False], [False, True, False]]
+    # codex reports no 5h window: the track is still there, but no invisible
+    # bar is needed to reserve it. Its real 7d bar names column 3 directly.
+    assert ubars(two) == [["5h", "7d"], ["7d"]]
+    assert {c["label"]: c["col"] for c in two["places"][1]
+            if c["kind"] == "ubar"} == {"7d": "3"}
+    assert [c["sep"] for c in two["places"][1] if c["kind"] == "ubar"] == [True]
     assert not two["hidden"]
 
     # BOTH hosts report 5h: the 5h bars and the 7d bars each share one column,
-    # and Claude's per-model "7d fable" is a HOLE on the codex row (a window it
-    # does not have) rather than a ghost (a reading it failed to make)
+    # and Claude's per-model "7d fable" emits nothing on the codex row (it is a
+    # window Codex does not have, rather than a reading it failed to make)
     both = d["cases"]["both_hosts_have_5h"]
-    assert ubars(both) == [["5h", "7d", "7d fable"]] * 2
-    assert both["holes"] == [[False] * 4, [False, False, False, True]]
+    assert ubars(both) == [["5h", "7d", "7d fable"], ["5h", "7d"]]
 
     # THE EMPTY CELL, and the reason the columns are SORTED by duration rather
     # than taken in first-seen order: codex is served FIRST with only its weekly
@@ -766,26 +765,23 @@ def test_accounts_strip_rows_stack_column_for_column():
     # left into the 5h column, which is the reported symptom.
     first = d["cases"]["codex_first_no_5h"]
     assert first["hosts"] == ["codex", "claude_code"]
-    assert ubars(first) == [["5h", "7d"], ["5h", "7d"]]
-    assert first["holes"] == [[False, True, False], [False, False, False]]
+    assert ubars(first) == [["7d"], ["5h", "7d"]]
+    assert {c["label"]: c["col"] for c in first["places"][0]
+            if c["kind"] == "ubar"} == {"7d": "3"}
+    assert [c["sep"] for c in first["places"][0] if c["kind"] == "ubar"] == [True]
 
-    # A hole reads EMPTY on screen — the codex row must not claim a 5h reading
-    # it owes. It keeps the ghost's markup (that is how its width comes out
-    # right BY CONSTRUCTION, rather than from a second measurement that could
-    # drift), so what makes it blank is one CSS rule, and the rule is the pin.
     with open(os.path.join(REPO, "dashboard", "static", "style.css"),
               encoding="utf-8") as fh:
         css = fh.read()
-    assert re.search(r"\.ubar\.hole\s*\{[^}]*visibility:\s*hidden", css), \
-        "a hole must reserve the column and paint nothing"
     # `ghost` is also the header-button skin. It MUST stay element-qualified:
-    # an unqualified `.ghost` gives `.ubar.ghost.hole` the button's vertical
-    # padding. Codex currently has Claude-only holes on both sides of its lone
-    # 7d bar, so those invisible boxes made only that row visibly taller.
+    # an unqualified `.ghost` gives a missing-reading `.ubar.ghost` the button's
+    # vertical padding and makes that account row taller.
     assert re.search(r"button\.ghost\s*\{", css), \
         "the ghost button skin must be scoped to buttons"
     assert not re.search(r"(?m)^\.ghost(?:\s|:|\{)", css), \
         "placeholder modifiers must not inherit the ghost button skin"
+    assert re.search(r"\.ubar\.usep\s*\{", css), \
+        "usage-window separators must follow the shared grid-column index"
     # …and the tracks the placements above name have to BE shared tracks: the
     # strip owns them and each row is a `subgrid` of it. Without that the
     # grid-column values would place cells in each row's OWN grid, which is the

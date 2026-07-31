@@ -398,9 +398,10 @@ function place(node, col) {
 // (stripTracks) and `anyOut` whether ANY row on the strip is logged out — all
 // computed once by renderAccounts, so every row places its cells in the same
 // tracks and the rows STACK (docs/dashboard.md *Row alignment*). A row missing a
-// window still renders it, as a ghost or a hole; a window whose reset was
-// dropped (rolled over) still reserves its reset column; a row that is fine
-// still reserves the ⚠ badge's slot.
+// window from its own host still renders a ghost; a foreign-host-only window
+// emits no item because the grid already owns its track. A window whose reset
+// rolled over still reserves its reset column; a fine row still reserves the ⚠
+// badge's slot.
 function acctPill(a, cols, anyOut, tr) {
   const slots = rowSlots(a);
   const pill = el("div", "acct");
@@ -470,28 +471,34 @@ function acctPill(a, cols, anyOut, tr) {
   // then the 7d block — Claude's account-wide 7d and codex's weekly bar in the
   // SAME column, any model-scoped 7d cap right after it.
   //
-  // A row with nothing to put in a column still renders the box, or the stack
-  // stops aligning — but WHICH nothing depends on whose column it is:
+  // A row with nothing to put in a column owned by ITS host still renders a
+  // ghost: that says the account has no reading for a window a sibling account
+  // reports. A column owned only by ANOTHER host is different: the shared grid
+  // already reserves and sizes that track from the rows that own it, and every
+  // real bar names its exact grid column. Emitting an invisible box there is
+  // redundant — and made iPad Safari give the Codex row a second line even
+  // though the box painted nothing. So foreign-host columns emit no DOM item.
+  //
+  // The distinction is:
   //   * a window a SIBLING ROW OF THE SAME HOST reports is a missing READING —
   //     ghost it (label + empty track + "—"): this account has no snapshot;
   //   * a column belonging entirely to ANOTHER host is a window this host does
-  //     not HAVE, and "—" would claim a reading it was never going to make. So
-  //     it is a HOLE: the identical box painted with nothing in it (`.ubar.hole`
-  //     is `visibility: hidden`, so the width is right BY CONSTRUCTION rather
-  //     than by a second measurement), which is what lets a host with no 5h
-  //     window leave that column empty instead of shifting left into it.
+  //     not HAVE, and "—" would claim a reading it was never going to make. It
+  //     emits nothing; the explicit grid placement leaves that track empty.
   //
   // Each bar NAMES its track (place → grid-column), so the column a duration
   // owns is the same one in every row by construction rather than by every
   // preceding cell measuring the same.
   cols.forEach((c, i) => {
     const w = (slots.get(c.slot) || [])[c.i];
+    if (!w && !c.hosts.has(a.host)) return;
     const seg = bar(c.label, w ? w.used_pct : undefined,
                     w && w.resets_at, c.scope === "account");
-    if (!w && !c.hosts.has(a.host)) {
-      seg.classList.add("hole");
-      seg.setAttribute("aria-hidden", "true");
-    }
+    // Separator follows the GRID column, not DOM adjacency. A foreign-host
+    // column before this one now emits no sibling, but this bar must keep the
+    // same inset/divider as the same column in rows that do fill the earlier
+    // track.
+    if (i) seg.classList.add("usep");
     pill.append(place(seg, tr.bar0 + i));
   });
   // The account is BLOCKED right now (a session on it died on error=
@@ -545,8 +552,8 @@ const ANAME_MIN_CH = 14;
 //
 // Rows stay GROUPED by host in render order (a host's rows belong together, and
 // the logged-out badge is a Claude fact), but the columns span the groups. What
-// per-host grouping still buys is the GHOST-vs-HOLE distinction in acctPill: a
-// missing reading and an absent window are different claims.
+// per-host grouping still buys is the missing-reading distinction in acctPill:
+// a sibling-host window becomes a ghost, while a foreign-host window is absent.
 //
 // And the columns are a REAL GRID, not a per-row agreement to emit the same
 // boxes in the same order: `#accounts` owns the tracks and every `.acct` is a

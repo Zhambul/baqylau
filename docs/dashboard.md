@@ -4579,10 +4579,9 @@ with an account switcher and one without:
   decides how an empty cell reads. It no longer decides the COLUMNS: those are
   strip-wide and keyed by **`window_mins`** (*Row alignment*), so codex's weekly
   bar lands in the same column as Claude's 7d. What `host` still buys is the
-  GHOST-vs-HOLE distinction — a window a sibling of the SAME host reports is a
-  missing reading (`—`), a column belonging to another host entirely is a window
-  this one does not have, and saying `—` there would claim a reading it was never
-  going to make.
+  missing-reading distinction — a window a sibling of the SAME host reports is
+  a ghost (`—`); a column belonging to another host entirely emits no item,
+  because saying `—` there would claim a reading it was never going to make.
 - **`label`** (the ROW's name) is per host. Each WINDOW's **`label`** is not: it
   comes from one shared table keyed by DURATION —
   `plugins.window_label(mins, fallback=)` / `WINDOW_LABELS`, `300 → "5h"`,
@@ -4863,9 +4862,10 @@ whole story under `@supports not (grid-template-columns: subgrid)`, which
 restores the flex strip for a browser that predates subgrid — Firefox 71,
 Safari 16, Chrome 117, i.e. none in use).
 
-What each row must nonetheless CONTAIN is unchanged, and it is still structure
-rather than measurement — four ways it broke, each fixed by rendering the column
-anyway:
+What each row must nonetheless CONTAIN is still structure rather than
+measurement. Missing readings within one host render their column; columns that
+belong only to another host do not need an item because the shared grid already
+owns the track:
 
 - **A window with no reset.** `effective_usage` DROPS the reset epoch of a
   rolled-over window (above), so an idle account's 5h reads `0%` with no
@@ -4902,12 +4902,15 @@ anyway:
   duration (Claude's account-wide `seven_day` plus a per-model
   `seven_day_fable`) keeps its own order inside that duration's block, so the
   shared bars still line up and the per-model extras hang off the end of it.
-  A row with nothing for a column renders the box either way, but not the same
-  way: within a host it is a **ghost** (`—`, "no reading"), across hosts a
-  **hole** (`.ubar.hole`, `visibility: hidden`) — because codex has no per-model
-  cap and never will, and `—` would claim a reading it owes. The hole is the
-  ghost's own markup with the ink off, so its width is right BY CONSTRUCTION
-  rather than by a second measurement free to drift.
+  Within a host, a missing window is a **ghost** (`—`, "no reading"). Across
+  hosts, no item is emitted: codex has no per-model cap and never will, and `—`
+  would claim a reading it owes. The item is unnecessary because every real bar
+  explicitly names its grid column and the owning rows size that shared track.
+  Keeping invisible foreign-host bars was actively harmful on iPad Safari: it
+  laid the Codex placeholders onto a second line and doubled only that row's
+  height. Separators likewise follow the strip-wide column index (`.ubar.usep`),
+  not DOM adjacency, so omitting a preceding foreign bar cannot move the next
+  real bar's content within its track.
 - **A model-scoped window has NO reset column at all** (`hasReset(k)` — only
   `five_hour`/`seven_day` carry one). "7d fable" resets on the same weekly
   clock as the `seven_day` bar directly above it, so its own `resets in …` was
@@ -4918,15 +4921,14 @@ anyway:
   same columns at the same widths, not "every bar has every part".
 
 The jsdom harness (`tests/jsdom/accounts.js`) renders the real painter over
-real-shaped payloads and reports each row's cells WITH the track each was placed
-in, which is what `tests/test_l0_dash_probes.py` pins: same boxes in the same
-order AND the same column — `{label: column}` must be identical across the rows
-of every case, so "codex's 7d bar and Claude's 7d bar are both column 3" is a
-fact the DOM states rather than one two independent flex lines happen to agree
-on. The track count is pinned the same way (name + optional badge + one per
-duration + tail), and the CSS pin is that `.acct` really does `subgrid` — a
-`grid-column` value placed in each row's OWN grid would be the per-row layout
-wearing a grid's clothes.
+real-shaped payloads and reports each real cell WITH the track it was placed in,
+which is what `tests/test_l0_dash_probes.py` pins: sibling accounts have the same
+boxes, while across hosts each shared label names the same column — "codex's 7d
+bar and Claude's 7d bar are both column 3" is a fact the DOM states without a
+fake Codex 5h item. The track count is pinned the same way (name + optional badge
++ one per duration + tail), and the CSS pin is that `.acct` really does
+`subgrid` — a `grid-column` value placed in each row's OWN grid would be the
+per-row layout wearing a grid's clothes.
 
 **Per-model usage bars (the OAuth `/usage` fetch).** The `/usage` screen's
 third bar — a **weekly per-MODEL cap** (e.g. "Fable") — is exposed by no

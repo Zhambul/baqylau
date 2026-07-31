@@ -126,8 +126,8 @@ code, pre, .mono { font-family: var(--mono); }
 /* Header controls use `ghost` as a button skin. Keep the element qualifier:
    the usage strip also uses `ghost` as a placeholder modifier
    (`.ubar.ghost` / `.uauth.ghost`). An unqualified rule gave those invisible
-   boxes button padding, making a Codex row with Claude-only holes 7px taller
-   than the account rows beside it. */
+   boxes button padding, making a usage row with a missing-reading placeholder
+   taller than the account rows beside it. */
 button.ghost {
   background: transparent; color: var(--dim);
   border: none; box-shadow: var(--card); border-radius: var(--r);
@@ -619,9 +619,12 @@ body.in-session #accounts { display: none; }
   min-width: var(--aname-w, 14ch); }
 .acct .adim { color: var(--dim2); font: 11px/1 var(--mono); }
 .ubar { display: inline-flex; align-items: center; gap: 5px; }
-/* separate each usage window (5h · 7d · 7d fable) with a hairline + extra
-   space so its "resets in …" tail doesn't run into the next window's label */
-.ubar + .ubar { padding-left: 14px; border-left: 1px solid var(--hair); }
+/* separate each usage-window GRID COLUMN (5h · 7d · 7d fable) with a hairline
+   + extra space so its "resets in …" tail doesn't run into the next label.
+   `usep` is assigned from the strip-wide column index, not sibling adjacency:
+   a foreign-host column emits no invisible DOM box, but the next real bar must
+   keep the same inset as that column on rows which do fill the earlier track. */
+.ubar.usep { padding-left: 14px; border-left: 1px solid var(--hair); }
 .ubar .ulabel { color: var(--dim); font: 10px/1 var(--mono); flex: none; }
 .ubar .utrack {
   width: 60px; height: 6px; border-radius: 999px; overflow: hidden;
@@ -664,14 +667,6 @@ body.in-session #accounts { display: none; }
    drop the ink */
 .ubar.ghost .ulabel, .ubar.ghost .upct { color: var(--dim2); }
 .ubar.ghost .utrack { opacity: .45; }
-/* a duration column that belongs to ANOTHER host entirely (the columns span the
-   whole strip now, keyed by duration, so a host with no 5h window still has a 5h
-   column). Not a ghost: a ghost says "no reading", and this host was never going
-   to report one. Hidden rather than sized, so the column width is right by
-   CONSTRUCTION — it is literally the same box (docs/dashboard.md *Row
-   alignment*). `.ubar + .ubar`'s divider rule is a border on the box itself, so
-   it disappears with it and the hole reads as blank, not as an empty cell. */
-.ubar.hole { visibility: hidden; }
 /* the ⚠ badge's reserved slot on an account that is NOT logged out — hidden,
    not absent, so the dead account's bars stay in column with the others */
 .acct .uauth.ghost { visibility: hidden; }
