@@ -285,12 +285,33 @@ def test_bg_recheck_refuses_while_job_still_running(run_hook, test_env, session,
 def test_bg_recheck_only_fg_clears_executing(run_hook, test_env, session,
                                              fake_kitten):
     """The release-before-recheck / cross-clear guard: a finishing subagent
-    must never clear the main's own executing blue."""
+    must never clear the main's own executing blue. fg may — to WORKING."""
     s = session.make()
     run_hook(TAB, P.base(s, ""), argv=("executing",))
     run_hook(TAB, {}, argv=("bg-recheck", s.log, "sub"))
     assert oracle.tab_state(test_env, fake_kitten.window_id) == "executing"
     run_hook(TAB, {}, argv=("bg-recheck", s.log, "fg"))
+    assert oracle.tab_state(test_env, fake_kitten.window_id) == "working"
+
+
+def test_bg_recheck_fg_never_paints_your_turn(run_hook, test_env, session,
+                                              fake_kitten):
+    """THE regression guard. A finished fg stream is MID-TURN evidence and says
+    only "this command's writer is gone" — never "the turn is over". Reading it
+    as a cancel painted GREEN over live turns whenever the command had in fact
+    been DENIED before it ran (session 674d78d1, 2026-07-31): no PostToolUse, an
+    orphaned tailer, writer-gone in 2s, "your turn" on a busy session. A real
+    cancel is covered by interrupt-watch's transcript record instead, so nothing
+    needs green here (docs/tab-colors.md *A Bash call that never ran*)."""
+    s = session.make()
+    for start in ("executing", "awaiting-bg"):
+        run_hook(TAB, P.base(s, ""), argv=(start,))
+        run_hook(TAB, {}, argv=("bg-recheck", s.log, "fg"))
+        assert oracle.tab_state(test_env, fake_kitten.window_id) == "working", start
+    # …while a BACKGROUND job finishing still does mean it: the tab only reaches
+    # awaiting-bg because `stop` put it there, i.e. the turn had already ended.
+    run_hook(TAB, P.base(s, ""), argv=("awaiting-bg",))
+    run_hook(TAB, {}, argv=("bg-recheck", s.log, "monitor"))
     assert oracle.tab_state(test_env, fake_kitten.window_id) == "awaiting-response"
 
 

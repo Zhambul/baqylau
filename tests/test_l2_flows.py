@@ -1081,8 +1081,11 @@ def test_f9a2_blocked_fg_command_never_paints_your_turn(
     assert "■ blocked · never ran" in txt          # not a fake "■ finished · 0.0s"
     assert "don't pipe" in txt                     # …and WHY, from the response
     assert "■ foreground finished" not in txt
-    # The tailer must not have asked for a bg-recheck at all: its fg branch reads a
-    # finished foreground stream as a CANCELLED command, i.e. "the turn is over".
+    # The tailer must not have asked for a bg-recheck at all — the blocked hand-off
+    # tells it nothing finished. (Belt-and-braces only: since 2026-07-31 a
+    # bg-recheck(fg) clears executing to WORKING anyway, see
+    # test_bg_recheck_fg_never_paints_your_turn — because this handler cannot be
+    # the sole defence: Claude Code does not always fire PostToolBatch.)
     assert not [r for r in oracle.transitions(test_env, s.sid) if r[0] == "bg-recheck"]
     assert oracle.tab_state(test_env, fake_kitten.window_id) != "awaiting-response"
     # Both allowances are the POINT of the test, not slack: the turn is still

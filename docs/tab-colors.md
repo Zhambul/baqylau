@@ -151,14 +151,31 @@ background agents linger.)
 There is no "background finished" hook, so the tab can't be flipped back the
 instant a job ends — but it no longer has to wait for the next exchange either:
 - When `claude-stream.py` finishes a job it **releases its slot row first**,
-  then calls `claude-tab-status.py bg-recheck`, which flips a **stale `awaiting-bg`
-  OR `executing`** back to green — but only if the tab is *currently* in one of
+  then calls `claude-tab-status.py bg-recheck`, which clears a **stale
+  `awaiting-bg` OR `executing`** — but only if the tab is *currently* in one of
   those states (so it never overrides a working/idle/awaiting-command colour) and
   no other tailer row is still live. (Releasing before the recheck is essential,
   or it would see its own row.) Recognizing `executing` here (not just
-  `awaiting-bg`) is what makes a **manually cancelled** foreground command flip the
-  tab green promptly — cancelling fires no hook at all, but the `fg` tailer notices
-  its process died (`has_writer` goes false) and calls `bg-recheck` itself.
+  `awaiting-bg`) is what un-sticks a **manually cancelled** foreground command,
+  which fires no hook at all: the `fg` tailer notices its writer is gone
+  (`has_writer` goes false) and calls `bg-recheck` itself.
+  **WHICH colour it clears to depends on what the finished stream proves**, and
+  only a *background* job finishing proves the turn is over:
+  - **`bg` / `monitor` → green.** The tab is on `awaiting-bg`, which `stop`
+    painted *because* the turn had already ended with that job still running. The
+    job ending genuinely is "your turn".
+  - **`sub` → working.** A finishing subagent/teammate means the main session is
+    about to be re-invoked to process the result: it is taking over, not handing
+    back. Green here produced a visible flash before the main's own hooks
+    repainted magenta.
+  - **`fg` → working.** The tab is on `executing`, i.e. **mid-turn**, and a
+    finished fg stream says only "this command's writer is gone". Reading that as
+    a cancel — "so the turn is over" — was the green-mid-turn bug below. Nothing
+    is lost for a *real* cancel: Esc kills the **turn**, which writes
+    `[Request interrupted by user]` to the transcript, and `interrupt-watch`
+    (next section) flips green off that record within one 0.5 s tick. Magenta is
+    also the safe direction to be wrong in — "busy" on a finished turn costs a
+    glance; "your turn" on a live one is a lie the user acts on.
 - As a backstop for an *untracked* finished job (a tailer that died without
   rechecking), the `stop` dispatch — when it goes blue — also spawns **one detached
   `bg-watch` watcher** that polls until no live row remains, then flips the
@@ -213,11 +230,35 @@ and carries every call of it *with its `tool_response`*, including the blocked o
    would have. That alone makes the tailer's later `bg-recheck` a no-op ("tab not
    on a bg-running colour").
 
-The hand-off also carries a `blocked` flag, which is the belt to that braces: the
-tailer ends `blocked-before-it-ran` and **skips its `bg-recheck` call entirely**, so
-even if this handler ever lost the race to the 2s `writer-gone` the green cannot be
-painted. The slot is still released, so a genuinely running sibling job clears its
-own blue when *it* finishes.
+The hand-off also carries a `blocked` flag: the tailer ends `blocked-before-it-ran`
+and **skips its `bg-recheck` call entirely**. The slot is still released, so a
+genuinely running sibling job clears its own blue when *it* finishes.
+
+#### …and why that was not enough on its own
+
+Shipped, measured on the same session an hour later, the handler worked exactly as
+designed — `blocked before it ran: toolu_01SHwR (handed off, 310 chars)`, the block
+closed in 1 s instead of timing out — **and the tab went green anyway.** Two holes,
+both structural:
+
+- **`PostToolBatch` is not guaranteed.** For one blocked call
+  (`toolu_016m9Pbn`, 15:08:14) Claude Code fired **no `PostToolBatch` at all** —
+  five minutes later there was still no `PostToolUse`, no batch hook, nothing. Its
+  orphaned tailer timed out and painted green at 15:08:22.
+- **A parallel batch clobbers the record.** `cmd_pre` keys the fg-live hand-off on
+  ONE state-DB key, so only one live fg block exists at a time; in a 4-call batch it
+  streamed #1, refused #2 and #3 (`ignored: a live fg block is already in flight`),
+  and by #4 the first tailer had already reclaimed its own record — so #4 wrote a
+  fresh one and #1's tailer became an orphan **`cmd_blocked` can never reach**. Its
+  `bg-recheck` was saved only by luck (`state moved on in the gap`, because the
+  handler had just painted WORKING for #4).
+
+So the guess itself had to go: **`bg-recheck(fg)` now clears `executing` to WORKING,
+never to green** (previous section). That is what actually closes the class — no
+race to win, no record to survive, and it holds for any future path that resolves a
+teed command without reaching either hook. `cmd_blocked` stays for what it uniquely
+gives: the honest `■ blocked · never ran` block with the refusal text, the reclaimed
+record, and an immediate correct colour instead of a 2-second-late one.
 
 **Why a cancel can't be confused with this.** An interrupt kills the turn, so no
 `PostToolBatch` fires for that batch at all — and even if one somehow did, painting
@@ -229,7 +270,9 @@ live turn is not. That asymmetry is why the test is "did this call reach
 The regression signature is its own canned anomaly, **`bg-recheck painted green
 mid-turn (the turn ran on after it)`**: an applied `bg-recheck` green whose next
 turn-boundary-or-tool transition is a `pretool`/`posttool` rather than a
-`thinking`. A legitimate green is always followed by the next prompt.
+`thinking`. A legitimate green is always followed by the next prompt. On a current
+build a `bg-recheck(fg)` cannot paint green at all, so ANY hit there names a path
+that reached green some other way.
 
 Each **applied** color-set persists the state to the **global tab DB**
 (`/tmp/claude-kitty-tab.db`, `tab` table keyed by window id — was a

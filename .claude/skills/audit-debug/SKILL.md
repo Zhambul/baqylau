@@ -1148,11 +1148,22 @@ This is usually the abstraction working, not failing — but the DB says which:
   decision under that handler, a `state:done:…` `write` with `"blocked": true`, a
   `posttool` → `working` transition, an `fg` stream ending
   **`blocked-before-it-ran`**, and NO `bg-recheck` row for that tailer at all.
-  Seeing the old shape again means either the `PostToolBatch` route was dropped
-  (check for the handler's row — the `subscriber` row for the event will still be
-  there) or the fg-live record was clobbered by a NEXT command's `PreToolUse`
-  before the batch hook ran, which is benign: a new command is genuinely running,
-  so `bg-recheck` bails on "another job still running".
+  **`claude-cmd-blocked.py` is NOT the whole fix, and must not be triaged as if
+  it were** — measured on the same session an hour after it shipped, it did its
+  job (`blocked before it ran: toolu_01SHwR (handed off, 310 chars)`, stream
+  ended `blocked-before-it-ran` in 1s) and the tab went green ANYWAY, twice over:
+  (a) for one blocked call Claude Code fired **no `PostToolBatch` at all** (no
+  batch row, no `PostToolUse`, nothing, five minutes on) — its orphan timed out
+  and painted green; (b) a PARALLEL batch clobbers the single-key fg-live record
+  (`cmd_pre` logs `ignored: a live fg block is already in flight` for the calls
+  it refuses, and the 4th call's own record overwrites the 1st tailer's), leaving
+  an orphan the batch hook can never reach. So since 2026-07-31 the inference is
+  RETIRED: **`bg-recheck(fg)` clears `executing` to WORKING, never to green**,
+  and a real cancel is covered by interrupt-watch's transcript record instead.
+  Consequences for triage: a `bg-recheck(fg)` row with `new_state` of
+  `awaiting-response` AT ALL is now either pre-fix history or the regression —
+  the healthy row reads `executing → working`. A hit in the anomaly on a current
+  build therefore names some OTHER path that reached green, not this one.
   A specific green-too-early shape (fixed 2026-07-18): **interrupt with a
   QUEUED message** — Claude Code delivers the queued prompt the instant the
   interrupt lands, a new turn starts thinking, and the interrupt-watch's green

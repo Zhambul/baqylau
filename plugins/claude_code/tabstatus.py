@@ -675,8 +675,9 @@ def d_bg_recheck(args=()):
     fires NO hook at all (the same no-hook-on-interrupt gap noted above), so
     EXECUTING would otherwise stick until the next interaction. But the fg
     tailer (claude-cmd-pre.py) DOES notice its process died (has_writer goes
-    false) and calls bg-recheck right then — a fast, reliable signal for exactly
-    this case, so we honour it here too."""
+    false) and calls bg-recheck right then — a fast signal for exactly this
+    case, so we honour it here too. It clears to WORKING, never to green: see
+    the comment on the return below."""
     global MLOG, AUDIT_SID
     MLOG = args[0] if args else ""                    # this session's log key
     kind = args[1] if len(args) > 1 else ""           # fg / bg / monitor / sub
@@ -711,15 +712,37 @@ def d_bg_recheck(args=()):
         audit_tx(cur2, "", 0, f"bg-recheck({kind}): state moved on in the gap")
         return None
     reason = f"bg-recheck({kind}): no live markers remain"
-    # A finishing SUBAGENT/TEAMMATE (kind=sub) does NOT mean it's your turn:
-    # Claude Code re-invokes the main session to process the teammate's result
-    # the instant it completes, so the main is about to TAKE OVER, not hand back
-    # to you. Painting green here produced a visible green flash before the
-    # main's own hooks (or its next Stop) repainted magenta. Go straight to
-    # WORKING (magenta) so the tab reflects the main resuming; its subsequent
-    # Stop sets green once that follow-up turn genuinely ends. Untracked shell
-    # jobs (fg/bg/monitor) don't re-invoke the main, so those still go green.
-    return (WORKING if kind == "sub" else AWAITING_RESPONSE), reason
+    # WHICH colour depends on what the finished stream PROVES about the turn, and
+    # only a BACKGROUND job finishing proves anything:
+    #
+    #   bg / monitor — the tab is on AWAITING_BG, which `stop` painted BECAUSE the
+    #     turn had already ended with that job still running. The job ending is
+    #     therefore genuinely "your turn" -> GREEN.
+    #
+    #   sub — a finishing SUBAGENT/TEAMMATE does NOT mean it's your turn: Claude
+    #     Code re-invokes the main session to process the result the instant it
+    #     completes, so the main is about to TAKE OVER, not hand back. Painting
+    #     green produced a visible green flash before the main's own hooks (or its
+    #     next Stop) repainted magenta -> WORKING.
+    #
+    #   fg — the tab is on EXECUTING, i.e. we are MID-TURN, and a finished fg
+    #     stream says only "this command's writer is gone". It used to be read as
+    #     "the user cancelled it, so the turn is over" -> green. That inference is
+    #     WRONG whenever the command never ran at all: a PreToolUse hook denial or
+    #     a rejected permission prompt fires no PostToolUse, so cmd_pre's tailer is
+    #     orphaned, times out on writer-liveness in 2s, and lands here MID-TURN.
+    #     claude-cmd-blocked.py (PostToolBatch) catches that at the source and is
+    #     the honest fix — but it CANNOT be the only one: measured on session
+    #     674d78d1 (2026-07-31), Claude Code fired no PostToolBatch at all for one
+    #     such call, and a parallel batch can clobber the single-key fg-live record
+    #     so a second orphan is unreachable either way. So the guess is retired:
+    #     the fg clear goes to WORKING. Nothing is lost for a REAL cancel — Esc
+    #     kills the TURN, which writes `[Request interrupted by user]` to the
+    #     transcript, and interrupt-watch flips green off that RECORD within one
+    #     0.5s tick. Magenta is also the safe direction to be wrong in: "busy" on a
+    #     finished turn costs a glance, "your turn" on a live one is a lie the user
+    #     acts on (docs/tab-colors.md *A Bash call that never ran*).
+    return (AWAITING_RESPONSE if kind in ("bg", "monitor") else WORKING), reason
 
 
 def d_escape_recheck(args=()):
