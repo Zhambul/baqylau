@@ -778,6 +778,14 @@ def test_accounts_strip_rows_stack_column_for_column():
         css = fh.read()
     assert re.search(r"\.ubar\.hole\s*\{[^}]*visibility:\s*hidden", css), \
         "a hole must reserve the column and paint nothing"
+    # `ghost` is also the header-button skin. It MUST stay element-qualified:
+    # an unqualified `.ghost` gives `.ubar.ghost.hole` the button's vertical
+    # padding. Codex currently has Claude-only holes on both sides of its lone
+    # 7d bar, so those invisible boxes made only that row visibly taller.
+    assert re.search(r"button\.ghost\s*\{", css), \
+        "the ghost button skin must be scoped to buttons"
+    assert not re.search(r"(?m)^\.ghost(?:\s|:|\{)", css), \
+        "placeholder modifiers must not inherit the ghost button skin"
     # …and the tracks the placements above name have to BE shared tracks: the
     # strip owns them and each row is a `subgrid` of it. Without that the
     # grid-column values would place cells in each row's OWN grid, which is the
