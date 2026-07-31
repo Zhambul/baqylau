@@ -400,11 +400,21 @@ def file_display(path, cwd=None):
 CMD_OK, CMD_BG, CMD_FAIL = O.SLATE, O.ORANGE, O.RED
 
 
-def finish_chip(dur, failed=False, interrupted=False, exit_code=None):
+def finish_chip(dur, failed=False, interrupted=False, exit_code=None, blocked=False):
     """The block-CLOSING chip's (text, colour) for a finished command — the shared
     shape cmd_fmt._render_finished and the codex stream both paint: `■ finished ·
     3.2s` (slate), `■ failed (exit N) · …` (red), `■ interrupted · …` (orange).
-    `dur` is the caller's already-formatted duration string ('?' when unknown)."""
+    `dur` is the caller's already-formatted duration string ('?' when unknown).
+
+    `blocked` is the one chip that carries NO duration, deliberately: the command
+    was resolved WITHOUT EVER RUNNING (a PreToolUse hook denied it, or the
+    permission prompt was rejected — neither fires PostToolUse, see
+    plugins/claude_code/cmd_blocked.py), so every elapsed figure available here is
+    the tailer's own idle wait and printing it would assert the command ran for
+    that long. It reads red because a blocked call is a failed call from the
+    turn's point of view."""
+    if blocked:
+        return "■ blocked · never ran", CMD_FAIL
     if not failed:
         return "■ finished · " + dur, CMD_OK
     if interrupted:

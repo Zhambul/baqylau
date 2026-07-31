@@ -52,6 +52,32 @@ def post_bash(s, cmd, tid="toolu_001", stdout="ok\n", stderr="",
     return d
 
 
+# The two tool_response shapes a Bash call that never RAN comes back with — both
+# measured verbatim out of the audit's own payloads (2026-07-31). Neither fires a
+# PostToolUse, which is the whole reason claude-cmd-blocked.py exists; they are
+# here as DATA rather than as a matcher, because the product deliberately keys on
+# the unconsumed fg-live record instead of on this wording.
+BLOCKED_BY_HOOK = ('PreToolUse:Bash hook error: '
+                   '[python3 "$CLAUDE_PROJECT_DIR/.claude/hooks/block.py"]: '
+                   "Blocked: don't pipe `adapters logs` output into grep/rg")
+REJECTED_BY_USER = ("The user doesn't want to proceed with this tool use. "
+                    "The tool use was rejected.")
+
+
+def post_batch(s, calls, agent_id=None):
+    """PostToolBatch — fires once a whole tool batch has resolved and carries
+    EVERY call of it with its `tool_response`, INCLUDING the ones that never ran.
+    `calls` is [(tool_use_id, command, tool_response), …]; a plain string response
+    is what a never-ran call carries, a dict what a real run produces."""
+    d = base(s, "PostToolBatch", tool_calls=[
+        {"tool_name": "Bash", "tool_use_id": tid,
+         "tool_input": {"command": cmd}, "tool_response": resp}
+        for tid, cmd, resp in calls])
+    if agent_id:
+        d["agent_id"] = agent_id
+    return d
+
+
 def post_file(s, tool="Edit", path=None, patch=None, failure=False, agent_id=None,
               tid="toolu_001", old_string="old line", new_string="new line\nmore"):
     path = path or os.path.join(s.cwd, "example.py")

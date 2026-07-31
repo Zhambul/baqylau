@@ -170,6 +170,67 @@ instant a job ends — but it no longer has to wait for the next exchange either
   failed spawn indistinguishable from a watcher never requested, exactly the
   non-firing-invisible failure class these recovery watchers exist to close.
 
+#### A Bash call that never ran (`PostToolBatch` → `claude-cmd-blocked.py`)
+
+That last bullet's inference — *a finished `fg` tailer means the command was
+CANCELLED, so the turn is over, so paint green* — is the one place `bg-recheck`
+guesses rather than reads an event, and there is a second way for a foreground
+command's writer never to appear: **the call was resolved without ever running.**
+Two outcomes do that, and neither fires `PostToolUse`:
+
+- another `PreToolUse` hook **denies** it (`tool_response` = `PreToolUse:Bash hook
+  error: […]: Blocked: …`), or
+- the permission prompt is **rejected** (`The user doesn't want to proceed with
+  this tool use.`).
+
+`claude-cmd-pre.py` has already committed by then: header painted, command teed,
+fg slot claimed, tailer spawned, tab **blue**. With no `PostToolUse`, nothing hands
+that tailer an outcome — so it waits out `CLAUDE_STREAM_GRACE_S` (2s), ends
+`writer-gone`, paints a fake `■ foreground finished · 0.0s`, releases its slot and
+calls `bg-recheck`, which reads the vanished writer as a cancel and paints the tab
+**green — "your turn" — in the middle of a live turn.** Measured on session
+`674d78d1` (2026-07-31): deny at 13:59:10, tailer gave up 13:59:12, tab green
+13:59:16, the model's next command 13:59:27. Eleven seconds of a lie, and the same
+shape fired seven more times in a sibling session that used the same project hook.
+
+The fix is an **event**, per the rule that every no-hook path needs a real signal
+and never an idle timeout: **`PostToolBatch`** fires once the batch has resolved
+and carries every call of it *with its `tool_response`*, including the blocked one.
+`plugins/claude_code/cmd_blocked.py` runs there and
+
+1. tests for "never ran" **without matching the response wording** — that string is
+   version-fragile and there are two of them. The exact local fact is the
+   **fg-live hand-off**: `cmd_pre` writes one per foreground command and `cmd_fmt`
+   consumes it at `PostToolUse`; by `PostToolBatch` every call in the batch has
+   resolved, so a record still sitting there is a call whose `PostToolUse` never
+   fired. That covers every present and future reason Claude Code resolves a call
+   without executing it;
+2. hands the orphaned tailer an outcome on the same take-once `done:` key
+   `cmd_fmt` uses, so the block closes at once with `■ blocked · never ran` (the
+   one finish chip carrying **no duration** — the command never ran, so any elapsed
+   figure would be the tailer's own idle wait) and the refusal text as its body;
+3. paints the tab `posttool` → **WORKING**, exactly what the missing `PostToolUse`
+   would have. That alone makes the tailer's later `bg-recheck` a no-op ("tab not
+   on a bg-running colour").
+
+The hand-off also carries a `blocked` flag, which is the belt to that braces: the
+tailer ends `blocked-before-it-ran` and **skips its `bg-recheck` call entirely**, so
+even if this handler ever lost the race to the 2s `writer-gone` the green cannot be
+painted. The slot is still released, so a genuinely running sibling job clears its
+own blue when *it* finishes.
+
+**Why a cancel can't be confused with this.** An interrupt kills the turn, so no
+`PostToolBatch` fires for that batch at all — and even if one somehow did, painting
+WORKING is the recoverable direction (`interrupt-watch` flips green off the
+transcript's own interrupt record, next section), whereas painting green over a
+live turn is not. That asymmetry is why the test is "did this call reach
+`PostToolUse`", not "is the turn dead".
+
+The regression signature is its own canned anomaly, **`bg-recheck painted green
+mid-turn (the turn ran on after it)`**: an applied `bg-recheck` green whose next
+turn-boundary-or-tool transition is a `pretool`/`posttool` rather than a
+`thinking`. A legitimate green is always followed by the next prompt.
+
 Each **applied** color-set persists the state to the **global tab DB**
 (`/tmp/claude-kitty-tab.db`, `tab` table keyed by window id — was a
 `/tmp/claude-tab-state-<window_id>` file) so `bg-recheck`/`bg-watch` can make the

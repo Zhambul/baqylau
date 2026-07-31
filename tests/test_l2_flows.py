@@ -1053,6 +1053,82 @@ def test_f9a_cancelled_fg_command_self_heals(run_hook, test_env, session):
     oracle.assert_clean(test_env, s.sid)
 
 
+def test_f9a2_blocked_fg_command_never_paints_your_turn(
+        run_hook, test_env, session, fake_kitten):
+    """A Bash call DENIED by another PreToolUse hook fires no PostToolUse at all,
+    yet cmd_pre has already painted the header, claimed a slot and turned the tab
+    BLUE. PostToolBatch is the only signal it resolved — and the turn is still
+    running, so the tab must land on WORKING, never on the green the orphaned
+    tailer's writer-gone -> bg-recheck used to paint (session 674d78d1)."""
+    s = session.make()
+    run_hook(TAB, P.user_prompt(s), argv=("thinking",))
+    run_hook(TAB, P.pre_bash(s, "adapters logs | grep x"), argv=("pretool",))
+    assert oracle.tab_state(test_env, fake_kitten.window_id) == "executing"
+    run_hook("claude-cmd-pre.py", P.pre_bash(s, "adapters logs | grep x"))
+    assert fg_live_record(s) is not None
+
+    # …the deny. No PostToolUse — the batch's own hook is the whole signal.
+    run_hook("claude-cmd-blocked.py",
+             P.post_batch(s, [("toolu_001", "adapters logs | grep x",
+                               P.BLOCKED_BY_HOOK)]))
+
+    assert oracle.tab_state(test_env, fake_kitten.window_id) == "working"
+    assert fg_live_record(s) is None, "blocked call's fg-live record not reclaimed"
+    wait_until(lambda: "blocked-before-it-ran" in end_reasons(test_env, s.sid),
+               desc="tailer closes on the blocked hand-off")
+    wait_until(lambda: not s.live("fg"), desc="fg slot released")
+    txt = s.ops_text()
+    assert "■ blocked · never ran" in txt          # not a fake "■ finished · 0.0s"
+    assert "don't pipe" in txt                     # …and WHY, from the response
+    assert "■ foreground finished" not in txt
+    # The tailer must not have asked for a bg-recheck at all: its fg branch reads a
+    # finished foreground stream as a CANCELLED command, i.e. "the turn is over".
+    assert not [r for r in oracle.transitions(test_env, s.sid) if r[0] == "bg-recheck"]
+    assert oracle.tab_state(test_env, fake_kitten.window_id) != "awaiting-response"
+    # Both allowances are the POINT of the test, not slack: the turn is still
+    # running, so the tab is deliberately left on a busy colour and the turn's
+    # interrupt-watch is deliberately still open.
+    oracle.assert_clean(test_env, s.sid,
+                        allow=("tab left on a busy colour",
+                               "streams that never ended"))
+
+
+def test_f9a3_batch_leaves_a_normally_finished_command_alone(
+        run_hook, test_env, session):
+    """The same batch hook fires after every ordinary batch too. A call whose
+    PostToolUse already consumed its fg-live record must be recognised as having
+    RUN — no second hand-off, no blocked chip, no tab paint."""
+    s = session.make()
+    run_hook("claude-cmd-pre.py", P.pre_bash(s, "echo ok"))
+    src = fg_live_record(s)["src"]
+    with open(src, "a", encoding="utf-8") as f:
+        f.write("ok\n")
+    run_hook("claude-cmd-fmt.py", P.post_bash(s, "echo ok", stdout="ok\n"))
+    wait_until(lambda: "sentinel" in end_reasons(test_env, s.sid),
+               desc="fg stream ends on the real outcome")
+
+    run_hook("claude-cmd-blocked.py",
+             P.post_batch(s, [("toolu_001", "echo ok", {"stdout": "ok\n"})]))
+    assert any("no foreground command left unresolved" in d
+               for d in oracle.decisions(test_env, s.sid, "claude-cmd-blocked.py"))
+    assert "■ blocked" not in s.ops_text()
+    assert "■ finished" in s.ops_text()
+    oracle.assert_clean(test_env, s.sid)
+
+
+def test_f9a4_blocked_batch_ignores_a_subagent(run_hook, test_env, session):
+    """agent_id = a subagent's own batch: the substream owns that stream and the
+    tab tracks the lead only (the standing main-session-only invariant)."""
+    s = session.make()
+    run_hook("claude-cmd-pre.py", P.pre_bash(s, "echo lead"))
+    run_hook("claude-cmd-blocked.py",
+             P.post_batch(s, [("toolu_001", "echo lead", P.REJECTED_BY_USER)],
+                          agent_id="agent-x"))
+    assert fg_live_record(s) is not None, "the lead's record must be untouched"
+    assert any("subagent event" in d
+               for d in oracle.decisions(test_env, s.sid, "claude-cmd-blocked.py"))
+
+
 def test_f9b_cancelled_subagent_stops_via_meta(run_hook, test_env, session):
     """SubagentStop never fires on cancel — stoppedByUser in meta.json is the
     recovery signal the substream polls."""

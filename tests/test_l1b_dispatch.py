@@ -213,6 +213,11 @@ def test_plan_sequences_pinned():
     # else fires until the next turn, which can be minutes away).
     assert _names("PreCompact") == [tab, "claude-compact-fmt.py"]
     assert _names("PostCompact") == ["claude-compact-fmt.py"]
+    # PostToolBatch: the ONLY signal for a Bash call that resolved WITHOUT ever
+    # running (a PreToolUse hook denial / a rejected permission prompt — neither
+    # fires PostToolUse), which cmd_pre has already painted blue and staffed with
+    # a tailer by then.
+    assert _names("PostToolBatch") == ["claude-cmd-blocked.py"]
     # Unknown/other events: empty plan (subscriber-only, recorded by route()).
     for ev in ("PermissionRequest", "Setup", ""):
         assert _names(ev) == []

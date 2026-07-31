@@ -70,7 +70,7 @@ MD = SNIFF = False
 # both main()'s tail step by way of stream_lifecycle's on_exit AND the crash
 # path's) plus the tailed path, bound in main() the moment wait_source resolves
 # it so a crash after that point can still remove our own tee file.
-_CLEANED = {"done": False, "path": None}
+_CLEANED = {"done": False, "path": None, "blocked": False}
 
 
 def _init(argv):
@@ -128,6 +128,7 @@ def _init(argv):
     AGENT = os.environ.get("CLAUDE_STREAM_AGENT") or ""
 
     _CLEANED["done"], _CLEANED["path"] = False, None   # fresh run, fresh teardown
+    _CLEANED["blocked"] = False
 
     RKIND, RVALUE = _detect_render(CMD)
     MD = bool(RKIND and RKIND.name == "md")
@@ -737,6 +738,13 @@ def make_is_done(tail, path, mon_pid, st):
         taken = S.hand_take(LOG, sentinel) if sentinel else None
         if taken is not None:
             st["override"] = taken
+            if taken.get("blocked"):
+                # The command was resolved WITHOUT EVER RUNNING (claude-cmd-blocked.py
+                # — a PreToolUse hook denial / a rejected permission prompt). cleanup()
+                # reads this to skip its bg-recheck: nothing finished here, so nothing
+                # may be read as "your turn".
+                _CLEANED["blocked"] = True
+                return "blocked-before-it-ran"
             return "sentinel"
         if writer_gone(now):
             return "writer-gone"                # process gone, sentinel never showed
@@ -891,6 +899,16 @@ def cleanup():
     release_slot()
 
     if parked:
+        return
+    if _CLEANED["blocked"]:
+        # This command never RAN (claude-cmd-blocked.py's hand-off said so), so
+        # nothing about this tailer's exit means a job finished. bg-recheck's fg
+        # branch reads a finished foreground stream as a manually CANCELLED
+        # command — i.e. "the turn is over" — and paints the tab GREEN; here the
+        # turn is very much alive (the model is about to act on the refusal), and
+        # cmd_blocked has already painted the honest colour. The slot is released
+        # above either way, so a genuinely-running sibling job still clears its
+        # own blue when IT finishes.
         return
     # No "background finished" hook exists, so if the tab went red while Claude
     # handed back to the user, it would stay red. Now that this job is done, ask

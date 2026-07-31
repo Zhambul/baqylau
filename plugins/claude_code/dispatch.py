@@ -194,6 +194,14 @@ _ROUTES = {
     # only signal that compaction ENDED — nothing else fires, and the next
     # turn's hooks can be minutes away.
     "PostCompact": [_COMPACT],
+    # PostToolBatch was previously unrouted (audit-subscriber only). It is the
+    # only signal for a Bash call that RESOLVED WITHOUT EVER RUNNING — a
+    # PreToolUse hook denied it, or the permission prompt was rejected — since
+    # neither fires PostToolUse, and cmd_pre has already painted the header,
+    # claimed a slot and turned the tab blue by then. Left alone, the orphaned
+    # tailer times out on writer-liveness and its bg-recheck paints the tab
+    # GREEN mid-turn (cmd_blocked.py's header has the measured trace).
+    "PostToolBatch": [_fmt("claude-cmd-blocked.py", "cmd_blocked")],
 }
 _ROUTES["PostToolUseFailure"] = _ROUTES["PostToolUse"]
 # StopFailure = Stop's steps + the rate-limit migration (docs/relimit.md):

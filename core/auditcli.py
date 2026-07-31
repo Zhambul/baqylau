@@ -486,6 +486,26 @@ ANOMALY_SECTIONS = [
     ("fg tailer gave up on a late redirect target (tab wrongly cleared)",
      "SELECT id, task_id, started_at, ended_at FROM streams WHERE session_id=? "
      "AND kind='fg' AND end_reason='output-file-not-found'", 1),
+    # bg-recheck(fg) paints GREEN on the premise that a finished foreground stream
+    # means a manually CANCELLED command, i.e. the turn is over. When that premise
+    # is wrong the tab says "your turn" mid-turn — and the tell is that the SAME
+    # turn goes on running: another pretool/posttool lands after the green with no
+    # `stop` in between. The shipped cause was a Bash call another PreToolUse hook
+    # DENIED (it fires no PostToolUse, so the orphaned tailer timed out on
+    # writer-liveness — session 674d78d1, 2026-07-31, fixed by claude-cmd-blocked.py
+    # on PostToolBatch). A non-empty row on a current build means some other path
+    # still resolves a teed command without reaching either hook.
+    # The NEXT turn-boundary-or-tool transition after the green is what decides it:
+    # a legitimate green is followed by `thinking` (the next prompt), while a
+    # `pretool`/`posttool` there means the same turn was still mid-flight. Only
+    # those five dispatch words are consulted — a `notify` in between says nothing
+    # either way and must not hide the shape.
+    ("bg-recheck painted green mid-turn (the turn ran on after it)",
+     "SELECT g.ts, g.reason FROM tab_transitions g WHERE g.session_id=? "
+     "AND g.dispatch='bg-recheck' AND g.applied=1 AND g.new_state='awaiting-response' "
+     "AND (SELECT n.dispatch FROM tab_transitions n WHERE n.session_id=g.session_id "
+     "AND n.id > g.id AND n.dispatch IN ('pretool','posttool','thinking','stop','clear') "
+     "ORDER BY n.id LIMIT 1) IN ('pretool','posttool') ORDER BY g.ts", 1),
     # Since the single-dispatcher refactor every event runs through claude-hook.py
     # -> dispatch.py. A crash in the DISPATCHER itself (not a subsystem) records
     # script='dispatch' — that means route() threw before/around fanning out, so a

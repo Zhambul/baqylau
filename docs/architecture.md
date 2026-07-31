@@ -205,7 +205,12 @@ constants; behind the `plugins.usage_strip`/`session_usage`/`session_account`/
 `session_costs` fan-outs, and the numbers the rate-limit migration picker runs
 on), `host.py` (the
 `plugins.host.HostControl` adapter — Claude Code drives every control gesture,
-so its derived caps read all-True; behind the `host` provider), the eight hook-handler bodies (`cmd_pre`, `cmd_fmt`,
+so its derived caps read all-True; behind the `host` provider), the nine hook-handler bodies (`cmd_pre`, `cmd_fmt`,
+`cmd_blocked` — the `PostToolBatch` one, for a Bash call RESOLVED WITHOUT EVER
+RUNNING (a `PreToolUse` hook denial / a rejected permission prompt, neither of
+which fires `PostToolUse`), which is the only way the tailer cmd_pre already
+spawned learns its command never started, see [tab-colors.md](tab-colors.md) ›
+*A Bash call that never ran* —
 `file_fmt`, `subagent_fmt`, `monitor_fmt`, `task_fmt`, `stop_fmt`, and
 `tool_fmt` — the one that runs by DEFAULT, for every tool the others do not
 claim: one quiet `· <name>(<request>)` line with the request + the answer behind

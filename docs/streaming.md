@@ -323,6 +323,22 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     live elapsed chip on that block. See docs/dashboard.md, *Live command
     elapsed*, for why neither the ops' own timestamps nor the slot row's
     `start_ts` could serve.
+  - **…and an UNCONSUMED record is itself the signal that the call never ran.**
+    A Bash call can be resolved with **no `PostToolUse` at all** — another
+    `PreToolUse` hook denies it, or the permission prompt is rejected — by which
+    point cmd-pre has already painted the header, teed, claimed the slot and
+    turned the tab blue. `PostToolBatch` fires when the batch resolves and lists
+    every call of it, so `plugins/claude_code/cmd_blocked.py` runs there and takes
+    any fg-live record still matching a resolved call: still-there ⇒ its
+    `PostToolUse` never fired ⇒ it never ran. It writes the same `done:` hand-off
+    with `blocked: true`, and the tailer ends **`blocked-before-it-ran`** — closing
+    the block with `■ blocked · never ran` plus the refusal text as its fallback
+    body, instead of sitting out the 2s grace and painting a fake
+    `■ foreground finished · 0.0s`. The flag also makes the tailer skip its
+    `bg-recheck` call: nothing finished, so nothing may be read as "your turn"
+    (that read is what painted the tab green mid-turn — see
+    [tab-colors.md](tab-colors.md) › *A Bash call that never ran* for the measured
+    trace and why the wording of the refusal is deliberately **not** the test).
   - **Redirect detection is quote-aware** (`tools.parse_redirect`,
     `posix=False` tokens): posix tokenising stripped quotes, so `grep '>' file`
     parsed as a *redirect to `file`* — cmd-pre then skipped the tee rewrite and
