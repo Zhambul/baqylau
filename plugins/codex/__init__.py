@@ -40,8 +40,9 @@ def on_session_start(log, cwd, sid):
     dead code on that path. Routing session.py through the fan-out instead would
     have spawned the watcher TWICE unless the provider knew the difference; now
     it does."""
-    from core import audit as A
     from core import tabs as T
+    from core.noaudit import load_audit
+    A = load_audit()
     launcher = os.path.join(BIN, "claude-codex-launch.py")
     if not os.path.isfile(launcher):
         return

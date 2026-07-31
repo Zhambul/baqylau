@@ -1203,6 +1203,51 @@ scope: its intermediate messages/reasoning/commands all visible. Four parts:
      synthetic rule (*Two registers* above) is STRUCTURAL: role developer/system and
      role=user `<tag>` wrappers (except the `<task>` INPUT wrapper, kept + unwrapped)
      are dropped, so `<recommended_plugins>`/`<multi_agent_mode>` never bubble.
+
+### Plan mode in the conversation
+
+Two bugs a plan-mode codex session showed on the web, both from the same place —
+codex writes plan mode with NO tool call and no event of its own, so the
+conversation reader had to learn two record shapes it was structurally set up to
+miss. Reproduced from the rollouts of 2026-07-30/31 before fixing.
+
+**The `/plan` prompt bubbled TWICE.** Not two registers of one turn (the reader
+already de-doubles those by text): codex records the turn twice ITSELF. It
+writes the raw submission — `/plan/plan give me a bogus plan`, the command word
+doubled, which is codex's own spelling — then ABORTS that turn (`turn_aborted`),
+injects the mode's `<collaboration_mode># Plan Mode` developer message, and
+RE-SUBMITS the same prompt with the command stripped (`give me a bogus plan`).
+The two differ by exactly that prefix, so a text key could never match them.
+`read._strip_slash` removes a leading run of `/word` tokens from the de-double
+KEY only, and the guard compares against the IMMEDIATELY PRECEDING prompt: the
+abort and the re-submission are adjacent by construction, while `/plan do X` now
+and `do X` an hour later are two real turns. The bubble keeps the FIRST text —
+what the human actually typed, slash command included.
+
+**The plan itself never appeared at all.** codex's proposal is an ordinary
+`role=assistant` response_item whose text is wrapped in
+`<proposed_plan>…</proposed_plan>`, and that turn writes NO `agent_message`, so
+the response_item is its only register. The structural synthetic rule above then
+did exactly what it is for and dropped it as machinery — an unknown wrapper tag
+IS codex scaffolding, except for this one. `rollout.PLAN_WRAPPER`/`plan_body`
+carve it out, answered BEFORE the synthetic question, and it parses to its own
+`plan` kind (already a member of `KINDS`) rather than a `chat`, because it is a
+different KIND of turn. `read.conversation` emits it as a `plan` conversation
+record stamped `who: "codex"`, so `opshtml.msg_html` words it `codex ▸ proposes
+a plan` through the same `PLAN_WHO` template a Claude ExitPlanMode plan uses —
+the bubble, the class and the label are shared, only the label's name differs.
+
+**There is deliberately no `plandecision` twin.** Claude's pair works because
+ExitPlanMode is a TOOL: its `tool_result` carries approved/changes/rejected, so
+the verdict is a fact on disk. codex records no decision anywhere — measured
+across every plan-bearing rollout in the corpus, the only thing that follows a
+`<proposed_plan>` is more planning or a developer message switching the
+collaboration mode back to Default. That switch is not a verdict: leaving plan
+mode is what approving the plan does AND what changing mode does, and the file
+cannot tell them apart. Pinning `approved` on it would be a verdict claimed from
+a guess — the failure Claude's own implementation avoids by matching the plan's
+tool_use id and failing quiet. So the plan bubbles alone until codex writes a
+decision to read.
    - **A foldable LEAD card** — `_ro_prompt` sets `web=1` + a `Codex "<label>" ran`
      note (`streamfmt.register_note`, worded from `agentblocks.REGISTERS`), so the run's `⇢ prompt` surfaces in the LEAD
      mirror as an `ACT_CODEX` card (the codex twin of a Claude subagent's launch

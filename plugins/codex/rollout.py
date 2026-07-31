@@ -227,6 +227,15 @@ def owns(path):
 # inner text (strip_input_wrapper) so the bubble reads as the prompt, not markup.
 INPUT_WRAPPERS = ("task",)
 
+# The ASSISTANT wrapper that is a PLAN. codex's plan mode has no tool call and
+# no event of its own: the proposal arrives as an ordinary role=assistant
+# response_item whose text is wrapped in `<proposed_plan>…</proposed_plan>`, and
+# it is the ONLY register it appears in (that turn writes no `agent_message`).
+# So the structural synthetic rule — "a wrapper tag we don't know is codex
+# machinery" — swallowed it, and a codex plan session showed the plan NOWHERE on
+# the web while every other bubble in the thread rendered (the reported bug).
+PLAN_WRAPPER = "proposed_plan"
+
 # The NON-tag synthetic prefixes the structural rule can't see (codex machinery
 # that is neither role-marked nor `<tag>`-wrapped). The `<…>` entries the old list
 # carried are now caught structurally by fact 2 above.
@@ -244,6 +253,20 @@ def _wrapper_tag(text):
     wraps every system injection AND the subagent task in one such tag."""
     m = _WRAP_RE.match((text or "").lstrip())
     return m.group(1).strip().lower() if m else ""
+
+
+def plan_body(text):
+    """The PLAN markdown inside a `<proposed_plan>…</proposed_plan>` assistant
+    message, or "" when this text is not one. The one reader of PLAN_WRAPPER, so
+    the parser and any later consumer agree on where the plan starts."""
+    s = (text or "").lstrip()
+    if _wrapper_tag(s) != PLAN_WRAPPER:
+        return ""
+    inner = s[len("<%s>" % PLAN_WRAPPER):]
+    close = "</%s>" % PLAN_WRAPPER
+    if inner.rstrip().endswith(close):
+        inner = inner.rstrip()[:-len(close)]
+    return inner.strip()
 
 
 def strip_input_wrapper(text):
@@ -525,6 +548,15 @@ def _rsp_message(p):
     if not txt:
         return None
     role = (p.get("role") or "").strip()
+    # A PLAN before anything else: it is an assistant turn wearing a wrapper tag,
+    # so the structural synthetic rule below would drop it as machinery (see
+    # PLAN_WRAPPER). Its own kind, not a `chat`, because it is a different KIND of
+    # turn — the web renders it as a plan bubble, exactly as a Claude
+    # ExitPlanMode plan is (docs/codex.md *Plan mode in the conversation*).
+    if role == "assistant":
+        plan = plan_body(txt)
+        if plan:
+            return {"kind": "plan", "role": role, "text": plan}
     # role-aware synthetic on the RAW text (the `<tag>` is the signal), THEN unwrap
     # an INPUT wrapper so a kept `<task>` prompt reads as its inner text.
     synth = is_synthetic(txt, role)

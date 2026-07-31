@@ -230,6 +230,46 @@ def _rollout_for(sid, agent_id):
     return path if RO.owns(path) and os.path.isfile(path) else ""
 
 
+_SLASH_MAX = 4                  # leading `/word` tokens a re-submission may drop
+
+
+def _strip_slash(key):
+    """A prompt key with its leading SLASH-COMMAND tokens removed — `/plan/plan
+    do X` -> `do X`, `do X` -> `do X`.
+
+    codex records a slash-command turn twice (see the note in `_add`), the two
+    copies differing only by this prefix; stripping it is what lets them
+    de-double. Bounded (`_SLASH_MAX`) and prefix-only: a message that merely
+    CONTAINS a slash keeps every word of it.
+
+    The doubled `/plan/plan` spelling is codex's own — the TUI writes the command
+    word alongside the expansion — so the tokens are taken as a RUN rather than
+    assumed to be one."""
+    s = key.lstrip()
+    for _ in range(_SLASH_MAX):
+        if not s.startswith("/"):
+            break
+        head = s.split(" ", 1)
+        tok = head[0]
+        # a bare `/word` (possibly several run together, `/plan/plan`)
+        if len(tok) < 2 or not tok[1:].replace("/", "").replace("-", "").isalnum():
+            break
+        s = (head[1] if len(head) > 1 else "").lstrip()
+    return s
+
+
+# NO `plandecision` twin for codex, and this is the evidence rather than an
+# omission. Claude's pair works because ExitPlanMode is a TOOL: its tool_result
+# carries the verdict, so approved/changes/rejected is a fact on disk. codex's
+# plan mode has no tool and writes NO decision record at all — measured over
+# every plan-bearing rollout in the corpus (2026-07-31), the only thing that
+# follows a `<proposed_plan>` is either more planning or a developer message
+# switching the collaboration mode back to Default. That switch is NOT a
+# verdict: it means "we left plan mode", which the user reaches by approving the
+# plan AND by simply changing mode, and the two are indistinguishable in the
+# file. Claiming `approved` from it would be a verdict pinned on a guess — the
+# same failure Claude's own implementation avoids by matching the plan's tool_use
+# id and failing QUIET. So the plan bubbles alone until codex records a decision.
 def conversation(sid, pos=0, agent_id=""):
     """ONE codex identity's conversation records from byte `pos`, as
     (records, new_pos) — the codex twin of transcript.conversation_for, behind
@@ -286,19 +326,39 @@ def conversation(sid, pos=0, agent_id=""):
     # interactive session and the web showed no messages. Read BOTH and de-double
     # by text: the same turn in both registers must bubble ONCE (first wins).
     seen = set()
+    last_prompt = [""]          # the previous prompt's slash-stripped key
 
     def _add(kind, text, ts):
         body = (text or "").strip()
         key = " ".join(body.split())
         if not body or key in seen:
             return
-        seen.add(key)
+        if kind == "prompt":
+            # THE SLASH-COMMAND RE-SUBMISSION. A `/plan …` turn is recorded
+            # TWICE by codex itself, and not as two registers of one turn: it
+            # writes the raw submission (`/plan/plan do X`), ABORTS that turn
+            # (turn_aborted), injects the mode's developer instructions, and
+            # re-submits the SAME prompt with the command stripped (`do X`).
+            # The two differ by exactly that prefix, so the text key above can
+            # never match them and the message bubbled twice (the reported bug).
+            #
+            # Matched against the IMMEDIATELY PRECEDING prompt only, never the
+            # whole `seen` set: the abort and the re-submission are adjacent by
+            # construction, while "/plan do X" typed now and "do X" typed an
+            # hour later are two real turns that must both show.
+            bare = _strip_slash(key)
+            if bare and bare == last_prompt[0]:
+                return
+            last_prompt[0] = bare
         rec = {"kind": kind, "text": body, "anchor": None, "ts": ts}
         # the assistant bubble's author — "codex", so the web reply bubble reads
         # "codex" instead of the msg_html default "claude" (a codex session must
         # not attribute its reply to Claude). The `prompt` bubble stays "you".
-        if kind == "message":
+        # A PLAN is the assistant's too: msg_html words it `<who> ▸ proposes a
+        # plan`, so without this a codex plan would read as Claude's.
+        if kind in ("message", "plan"):
             rec["who"] = "codex"
+        seen.add(key)
         out.append(rec)
 
     if brief:
@@ -334,6 +394,11 @@ def conversation(sid, pos=0, agent_id=""):
             # developer/system non-synthetic turns are codex machinery — skip
         elif k == "think":
             _add("message", rec.get("text"), ts)
+        elif k == "plan":
+            # codex's plan-mode proposal (rollout.PLAN_WRAPPER) — its own bubble,
+            # the twin of the `plan` record a Claude ExitPlanMode writes. No
+            # `plandecision` twin follows it: see the note above the parser.
+            _add("plan", rec.get("text"), ts)
     return out, new_pos
 
 

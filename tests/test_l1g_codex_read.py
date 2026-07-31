@@ -304,7 +304,7 @@ def test_codex_interrupt_verifies_turn_aborted(tmp_path):
     from plugins.codex import hostctl
     p = _rollout(tmp_path, [{"type": "session_meta", "payload": {"cwd": "/w"}}])
     fe = _KeyFE(rollout=p, on_esc=lambda: [_ev("turn_aborted")])
-    res = hostctl.CodexHost().interrupt(fe, "42", {"rollout": p})
+    res = hostctl.CodexHost().interrupt(fe, "42", {"transcript": p})
     assert res["status"] == "acknowledged"
     assert res["ok"] and res["verified"] and not res["steered"]
     assert res["tries"] == 1 and ("escape",) in fe.keys
@@ -318,7 +318,7 @@ def test_codex_interrupt_reports_steer(tmp_path):
     fe = _KeyFE(rollout=p, on_esc=lambda: [_ev("turn_aborted"),
                                            _ev("task_started"),
                                            _ev("user_message", message="go on")])
-    res = hostctl.CodexHost().interrupt(fe, "42", {"rollout": p})
+    res = hostctl.CodexHost().interrupt(fe, "42", {"transcript": p})
     assert res["status"] == "acknowledged" and res["verified"] and res["steered"]
 
 
@@ -330,7 +330,7 @@ def test_codex_interrupt_indeterminate_without_record(tmp_path, monkeypatch):
     monkeypatch.setattr(hostctl, "INTERRUPT_TRIES", 1)
     p = _rollout(tmp_path, [{"type": "session_meta", "payload": {"cwd": "/w"}}])
     fe = _KeyFE(rollout=p, on_esc=lambda: [])   # nothing written
-    res = hostctl.CodexHost().interrupt(fe, "42", {"rollout": p})
+    res = hostctl.CodexHost().interrupt(fe, "42", {"transcript": p})
     assert res["status"] == "indeterminate" and res["ok"] and not res["verified"]
 
 
@@ -529,6 +529,125 @@ def test_codex_title_falls_back_to_first_prompt(tmp_path, monkeypatch):
     monkeypatch.setattr(title, "_CODEX_DIR",
                         _fake_state_index(tmp_path, "other-uuid", "x"))
     assert plugins.session_title(p) == "fix the parser"
+
+
+# ------------------------------------------------- plan mode in the conversation
+
+# The REAL shape of a codex plan turn, transcribed from
+# ~/.codex/sessions/2026/07/30/rollout-…-019fb1b3-….jsonl (2026-07-31): the
+# `/plan` submission, codex's own abort, the mode injection, the SAME prompt
+# re-submitted with the command stripped, then the plan as an ASSISTANT message
+# wrapped in <proposed_plan>. Both reported bugs live in these eight records.
+_PLAN_MD = "# Bogus Test Plan\n\n## Summary\n\nPretend to add moon logging."
+
+
+def _plan_turn_records():
+    return [
+        _resp("message", role="user",
+              content=[{"type": "input_text",
+                        "text": "/plan/plan give me a bogus plan"}]),
+        _ev("user_message", message="/plan/plan give me a bogus plan"),
+        _resp("message", role="user",
+              content=[{"type": "input_text",
+                        "text": "<turn_aborted>\nThe user interrupted the "
+                                "previous turn on purpose.\n</turn_aborted>"}]),
+        _ev("turn_aborted"),
+        _resp("message", role="developer",
+              content=[{"type": "input_text",
+                        "text": "<collaboration_mode># Plan Mode\n rules"}]),
+        # …the SAME prompt again, the slash command stripped by codex itself
+        _resp("message", role="user",
+              content=[{"type": "input_text", "text": "give me a bogus plan"}]),
+        _ev("user_message", message="give me a bogus plan"),
+        _resp("message", role="assistant",
+              content=[{"type": "output_text",
+                        "text": "<proposed_plan>\n%s\n</proposed_plan>"
+                                % _PLAN_MD}]),
+    ]
+
+
+def test_a_codex_plan_turn_bubbles_the_prompt_once_and_the_plan(tmp_path,
+                                                                monkeypatch):
+    """The two reported codex plan-mode bugs, from the real record shapes.
+
+    (1) THE DOUBLE: codex records a slash-command turn TWICE — the raw
+    submission, then (after aborting the turn and injecting the mode's
+    instructions) the same prompt with the command stripped. They differ by
+    exactly that prefix, so a text-keyed de-double could never match them and the
+    message bubbled twice.
+
+    (2) THE MISSING PLAN: the proposal is an ordinary assistant message wrapped
+    in <proposed_plan>, and it is the ONLY register that turn writes (no
+    agent_message) — so the structural "an unknown wrapper tag is machinery"
+    rule dropped it and the plan appeared NOWHERE."""
+    from plugins.codex import read
+    p = _rollout(tmp_path, _plan_turn_records())
+    monkeypatch.setattr(read, "_rollout_for", lambda sid, aid: p)
+    recs, _pos = read.conversation("sid", 0, "")
+    kinds = [(r["kind"], r.get("who")) for r in recs]
+
+    # ONE prompt bubble, and it is the text the human actually typed
+    prompts = [r for r in recs if r["kind"] == "prompt"]
+    assert len(prompts) == 1, kinds
+    assert prompts[0]["text"] == "/plan/plan give me a bogus plan"
+    # …and the PLAN is there, as its own kind, authored by codex
+    plans = [r for r in recs if r["kind"] == "plan"]
+    assert len(plans) == 1, kinds
+    assert plans[0]["text"] == _PLAN_MD
+    assert plans[0]["who"] == "codex"       # msg_html: "codex ▸ proposes a plan"
+    # no plandecision twin — codex records no verdict (see read.py's note)
+    assert not [r for r in recs if r["kind"] == "plandecision"]
+
+
+def test_the_slash_dedouble_is_adjacent_only(tmp_path, monkeypatch):
+    """…and it must not swallow a real turn. The abort-and-re-submit pair is
+    ADJACENT by construction, so the guard compares against the PREVIOUS prompt
+    only: a stripped match further back is a genuine second turn, and dropping
+    it would lose a message.
+
+    (The session-wide `seen` set beside it — which de-doubles the two REGISTERS
+    of one turn — is unchanged and still collapses a VERBATIM repeat; that
+    coarseness predates this fix and is deliberately left alone here.)"""
+    from plugins.codex import read
+    p = _rollout(tmp_path, [
+        _ev("user_message", message="/plan alpha"),
+        _ev("user_message", message="alpha"),        # the re-submit -> dropped
+        _ev("agent_message", message="ok"),
+        _ev("user_message", message="beta"),
+        _ev("user_message", message="alpha"),        # a REAL later turn -> kept
+    ])
+    monkeypatch.setattr(read, "_rollout_for", lambda sid, aid: p)
+    recs, _pos = read.conversation("sid", 0, "")
+    texts = [r["text"] for r in recs if r["kind"] == "prompt"]
+    assert texts == ["/plan alpha", "beta", "alpha"], texts
+
+
+def test_the_slash_stripper_only_eats_a_leading_command(tmp_path):
+    """The prefix rule, pinned: a run of `/word` tokens at the FRONT (codex
+    writes `/plan/plan`), nothing else — a message that merely contains a slash
+    keeps every word."""
+    from plugins.codex import read as R
+    assert R._strip_slash("/plan/plan do X") == "do X"
+    assert R._strip_slash("/plan do X") == "do X"
+    assert R._strip_slash("do X") == "do X"
+    assert R._strip_slash("what about a/b testing") == "what about a/b testing"
+    assert R._strip_slash("/only") == ""
+    # bounded: a wall of slashes cannot strip the whole message away
+    assert R._strip_slash("/a /b /c /d /e keep me") == "/e keep me"
+
+
+def test_the_plan_wrapper_is_not_confused_with_machinery(tmp_path):
+    """`plan_body` is the one reader of the wrapper, and every OTHER wrapper
+    stays machinery: the structural synthetic rule is what keeps codex's
+    injections out of the conversation, and this must carve out exactly one."""
+    from plugins.codex import rollout as RO
+    assert RO.plan_body("<proposed_plan>\nhi\n</proposed_plan>") == "hi"
+    assert RO.plan_body("<proposed_plan>\nhi") == "hi"       # unterminated
+    assert RO.plan_body("<collaboration_mode>x</collaboration_mode>") == ""
+    assert RO.plan_body("just prose") == ""
+    # …and a plan is still SYNTHETIC by the generic rule, which is why the
+    # parser has to answer it BEFORE asking
+    assert RO.is_synthetic("<proposed_plan>\nhi\n</proposed_plan>", "assistant")
 
 
 def test_codex_corpus_costs_reports_what_the_scoreboard_banked(monkeypatch):
