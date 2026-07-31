@@ -797,16 +797,21 @@ def activity_stats(heatmap_days=371):
     db = audit_db()
     now = time.time()
     scwd = "start_cwd" if _sessions_has_start_cwd(db) else "cwd"
-    # per-session token + cost totals in TWO grouped passes folded in Python —
-    # one query each instead of one per session (the otel table is indexed on
-    # (session_id, ts), so these are cheap).
+    # Per-session token + cost totals, asked of the HOSTS in bulk
+    # (plugins.corpus_costs) rather than summed here. Core used to run the two
+    # grouped `otel` queries itself — but the otel table is filled only by the
+    # receiver a CLAUDE CODE session spawns, so this fold reported every codex
+    # session as free while that session's own page showed its real spend (one
+    # number disagreeing with itself across two pages). Each host now answers
+    # for all of its own sessions in one pass: Claude Code with those same two
+    # queries, codex with a scan of the scoreboards it banks its spend in.
+    # Lazily imported for the reason every registry reach in this module is
+    # (plugins reaches back into core, and import-time purity forbids it).
+    import plugins
     tok, cost = {}, {}
-    for sid, n in db_rows(db, "SELECT session_id, SUM(value) FROM otel"
-                            " WHERE metric='token' GROUP BY session_id"):
-        tok[sid] = n or 0
-    for sid, usd in db_rows(db, "SELECT session_id, SUM(value) FROM otel"
-                              " WHERE metric='cost' GROUP BY session_id"):
-        cost[sid] = usd or 0.0
+    for sid, row in plugins.corpus_costs().items():
+        tok[sid] = row.get("tokens") or 0
+        cost[sid] = row.get("cost") or 0.0
     err = {}
     for sid, n in db_rows(db, "SELECT session_id, COUNT(*) FROM errors"
                             " GROUP BY session_id"):

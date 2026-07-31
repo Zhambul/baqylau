@@ -302,6 +302,14 @@ def session_costs(sid):
     return usage.session_costs(sid)
 
 
+def corpus_costs():
+    """The BULK cost provider (plugins.corpus_costs fan-out) — every Claude
+    Code session's totals in two grouped OTEL queries, the pair core's
+    corpus fold used to run itself for every host. See usage.corpus_costs."""
+    from plugins.claude_code import usage
+    return usage.corpus_costs()
+
+
 def launch_argv(words, cmd="claude"):
     """The launch-shell provider (plugins.launch_argv fan-out) — the argv that
     runs an account's launch word through the user's interactive login shell.

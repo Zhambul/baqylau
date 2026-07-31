@@ -531,6 +531,69 @@ def test_codex_title_falls_back_to_first_prompt(tmp_path, monkeypatch):
     assert plugins.session_title(p) == "fix the parser"
 
 
+def test_codex_corpus_costs_reports_what_the_scoreboard_banked(monkeypatch):
+    """#/stats read every codex session as FREE: the corpus fold summed the
+    audit `otel` table, which only Claude Code's telemetry receiver fills, so a
+    codex session showed its real spend on its own page and 0 in the
+    cross-session view. `corpus_costs` is the bulk twin of session_costs —
+    codex answers for its own sessions out of the scoreboards its stream banked
+    them in, and only for the rollouts it OWNS."""
+    from core import sessionapi as API
+    from core import state as S
+    from plugins.codex import usage
+    rows = [("cx1", "/x/.codex/sessions/2026/07/31/rollout-1-%s.jsonl" % _UUID),
+            ("cl1", "/x/.claude/projects/p/abc.jsonl"),   # not ours
+            ("cx2", "/x/.codex/sessions/2026/07/31/rollout-2-%s.jsonl" % _UUID),
+            ("cx3", "/x/.codex/sessions/2026/07/31/rollout-3-%s.jsonl" % _UUID)]
+    monkeypatch.setattr(API, "audit_db", lambda: ":memory:")
+    monkeypatch.setattr(API, "db_rows", lambda *a, **k: rows)
+    monkeypatch.setattr(API, "state_db_for", lambda sid: "/db/" + sid)
+    banked = {"/db/cx1": {"tokens": 51571, "cost": 0.25},
+              "/db/cx2": {"tokens": 0, "cost": 0.0},      # nothing banked
+              "/db/cx3": {"tokens": 7557, "cost": 0.0}}   # tokens, no price yet
+    monkeypatch.setattr(S, "stats_at", lambda db: banked.get(db, {}))
+
+    got = usage.corpus_costs()
+    assert got == {"cx1": {"tokens": 51571, "cost": 0.25},
+                   "cx3": {"tokens": 7557, "cost": 0.0}}
+    assert "cl1" not in got          # a Claude transcript is not codex's to price
+    assert "cx2" not in got          # nothing banked reads as no row, not a zero
+
+
+def test_corpus_costs_merges_hosts_without_overwriting(monkeypatch):
+    """The registry fan-out MERGES (a host reads zero for another's work, and a
+    zero is indistinguishable from a cheap session), and an later plugin never
+    overwrites an earlier one's row — ownership is exclusive, so two hosts
+    claiming one sid is a bug and keeping the first answer makes it stable."""
+    import plugins
+
+    class P1:
+        __name__ = "p1"
+
+        @staticmethod
+        def corpus_costs():
+            return {"a": {"tokens": 1, "cost": 0.1}}
+
+    class P2:
+        __name__ = "p2"
+
+        @staticmethod
+        def corpus_costs():
+            return {"a": {"tokens": 999, "cost": 9.9},   # a collision
+                    "b": {"tokens": 2, "cost": 0.2}}
+
+    class P3:
+        __name__ = "p3"
+
+        @staticmethod
+        def corpus_costs():
+            raise RuntimeError("this host cannot answer")
+
+    monkeypatch.setattr(plugins, "all_plugins", lambda: [P1, P2, P3])
+    assert plugins.corpus_costs() == {"a": {"tokens": 1, "cost": 0.1},
+                                      "b": {"tokens": 2, "cost": 0.2}}
+
+
 def test_a_codex_rename_moves_the_title_memo_key(tmp_path, monkeypatch):
     """THE codex-rename staleness bug: the name lives in codex's state index,
     so a rename leaves the ROLLOUT byte-identical — and the read model's title

@@ -89,6 +89,8 @@ PROVIDERS = {
     "session_usage": 1,      # (sid)                — one session's limit windows
     "session_account": 1,    # (sid)                — …its subscription account
     "session_costs": 1,      # (sid)                — …its token/cost totals
+    "corpus_costs": 0,       # ()                   — {sid: (tokens, usd)} for the
+    #                          WHOLE corpus, the bulk twin of session_costs
     "tasks": 1,              # (sid[, sdb])         — the pinned task list
     "compacting": 1,         # (sid[, sdb])         — the compaction latch, RAW
     "fg_running": 1,         # (sid[, sdb])         — the in-flight fg command
@@ -958,6 +960,42 @@ def session_costs(sid):
     exactly the kind of wrong number nobody reports."""
     return _first_owner("session_costs", sid,
                         default={"tokens": {}, "cost": {}, "total_usd": 0.0})
+
+
+def corpus_costs():
+    """EVERY session's token/cost totals, {sid: {"tokens": n, "cost": usd}} —
+    the BULK twin of session_costs, merged across hosts.
+
+    The cross-session views (the #/stats corpus fold) need one number per
+    session for the whole corpus at once, and asking `session_costs` per row
+    would be a `sessions` lookup + an ownership resolution per session over
+    hundreds of them. So each host answers for ALL of its own sessions in one
+    pass — Claude Code with a grouped otel query, codex with a scan of the
+    scoreboards its sessions banked their spend in — and the dicts are merged.
+
+    Merged rather than first-wins for the reason session_costs is
+    ownership-routed: a host reads ZERO for another host's work, and a zero is
+    indistinguishable from a cheap session. #/stats read every codex session as
+    free (it sums the `otel` table, which only Claude Code's receiver fills)
+    while the session's own page showed the real figure — the same number
+    disagreeing with itself across two pages.
+
+    A LATER plugin never overwrites an earlier one's row: ownership is
+    exclusive, so two hosts claiming one sid is a bug, and keeping the first
+    answer makes it a stable one."""
+    out = {}
+    for p in all_plugins():
+        fn = provider(p, "corpus_costs")
+        if fn is None:
+            continue
+        try:
+            got = fn() or {}
+        except Exception:
+            continue                    # a host that cannot answer reports none
+        for sid, row in got.items():
+            if sid and sid not in out:
+                out[sid] = row
+    return out
 
 
 # --- the SESSION-STATE FACETS --------------------------------------------------

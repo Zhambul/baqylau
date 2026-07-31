@@ -4736,17 +4736,27 @@ reports. (The session card's cost figure happened to look right anyway, because
 the JS falls back to the scoreboard's own `stats.cost` when `total_usd` is
 falsy; the fallback was masking the payload, not fixing it.)
 
-**Known limitation — the Stats page still undercounts non-Claude hosts.** The
-Stats / Insights aggregates (`activity_stats`) sum the `otel` table across the
-WHOLE corpus in two indexed `GROUP BY`s, so a codex session contributes 0 tokens
-and $0 there even though its own session page is now correct. Fixing it honestly
-means reading each session's state DB — one SQLite open per row, over every
-session that ever ran (`activity_stats` takes no limit), against one indexed
-query today. That is a real cost for a page whose other numbers are session
-COUNTS, so it is documented rather than paid: the per-session figure is right,
-the corpus token/cost totals are Claude-Code-only. A cheap fix would need codex's
-spend in a durable cross-session store — which is what `otel` is, and writing to
-it is a write path, not a read model.
+**…and the Stats page counts every host too** (`plugins.corpus_costs`, the BULK
+twin of `session_costs`). `activity_stats` used to sum the `otel` table itself in
+two indexed `GROUP BY`s — but only the receiver a CLAUDE CODE session spawns
+fills that table, so a codex session contributed 0 tokens and $0 to the corpus
+fold while its own session page showed the real figure: one number disagreeing
+with itself across two pages.
+
+Core asks the registry now and each host answers for ALL of its own sessions in
+one pass — Claude Code with those same two queries, codex with a scan of the
+scoreboards its stream banks each turn's priced delta in. The dicts are MERGED
+(a host reads zero for another's work, and a zero is indistinguishable from a
+cheap session); a later plugin never overwrites an earlier one's row, since
+ownership is exclusive and keeping the first answer makes a collision stable
+rather than order-dependent.
+
+The cost objection that kept this open — "one SQLite open per row over every
+session that ever ran" — was answered by asking the OWNERSHIP question first:
+codex opens a state DB only for the audit `sessions` rows whose transcript is a
+codex rollout, which is a handful, not the corpus. Measured on the real corpus:
+29 codex sessions holding 587,588 tokens and $0.62 that the page had been
+reporting as free, with zero sid overlap between the two hosts.
 
 **Usage limits (5h / 7d).** Claude Code exposes per-session rate-limit data to
 exactly ONE place — the **status-line command's stdin** JSON

@@ -375,6 +375,10 @@ COVERAGE = {
     "session_usage":     {"claude_code": IMPL,     "codex": IMPL,     "otel": DECLINED},
     "session_account":   {"claude_code": IMPL,     "codex": IMPL,     "otel": DECLINED},
     "session_costs":     {"claude_code": IMPL,     "codex": IMPL,     "otel": DECLINED},
+    # …and its BULK twin, for the cross-session folds. otel declines it for the
+    # same reason it declines the other three: it is a receiver, not a host —
+    # the spend it collects is reported by whoever produced it.
+    "corpus_costs":      {"claude_code": IMPL,     "codex": IMPL,     "otel": DECLINED},
     # P4 — the three SESSION-STATE FACETS the dashboard used to read as raw kv /
     # hand-off rows by NAME, asking no host at all (and so answering Claude's
     # shapes for everyone, silently None for codex). `tasks` is the one honest

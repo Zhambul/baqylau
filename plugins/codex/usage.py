@@ -338,3 +338,39 @@ def session_costs(sid):
     return {"tokens": {HOST: toks} if toks else {},
             "cost": {HOST: usd} if usd else {},
             "total_usd": usd}
+
+
+def corpus_costs():
+    """EVERY codex session's totals — {sid: {"tokens": n, "cost": usd}}, the
+    bulk twin of session_costs (plugins.corpus_costs).
+
+    Without it the cross-session views read codex as FREE: they sum the audit
+    `otel` table, which only Claude Code's telemetry receiver fills, so a codex
+    session showed real spend on its own page and 0 in the corpus fold.
+
+    codex's spend is banked in each session's own SCOREBOARD (the stream folds
+    the turn delta and prices it with CODEX_PRICES as it reads it), so this is
+    a scan rather than a query — but only over sessions this plugin OWNS: the
+    audit `sessions` rows whose transcript is a codex rollout. That is what
+    keeps it cheap (a handful of state DBs, not the whole corpus), and it is
+    the same ownership question `owns` answers everywhere else. A session with
+    nothing banked is omitted, exactly as a zero-cost row would read."""
+    from core import sessionapi as API
+    from core import state as S
+    from plugins.codex import rollout
+    out = {}
+    db = API.audit_db()
+    for sid, tpath in API.db_rows(
+            db, "SELECT session_id, transcript_path FROM sessions"
+                " WHERE transcript_path IS NOT NULL AND transcript_path != ''"):
+        if not sid or not rollout.owns(tpath or ""):
+            continue
+        try:
+            sdb = API.state_db_for(sid)
+            st = (S.stats_at(sdb) or {}) if sdb else {}
+        except Exception:
+            continue                    # an unreadable session reports nothing
+        toks, usd = int(st.get("tokens") or 0), float(st.get("cost") or 0.0)
+        if toks or usd:
+            out[sid] = {"tokens": toks, "cost": usd}
+    return out

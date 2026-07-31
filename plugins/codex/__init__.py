@@ -259,6 +259,15 @@ def session_costs(sid):
     return usage.session_costs(sid)
 
 
+def corpus_costs():
+    """The BULK cost provider (plugins.corpus_costs fan-out) — every codex
+    session's token/cost totals in one pass, so the cross-session views stop
+    reading codex as free (they sum `otel`, which codex never reaches). See
+    usage.corpus_costs."""
+    from plugins.codex import usage
+    return usage.corpus_costs()
+
+
 def compacting(sid, sdb=None):
     """The compaction-latch provider (plugins.compacting fan-out) — the RAW
     `{ts, trigger}` record codex's own Pre/PostCompact hooks arm and clear

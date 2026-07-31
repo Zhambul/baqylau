@@ -486,3 +486,32 @@ def session_costs(sid):
                 " GROUP BY query_source" % ins, tuple(chain)):
         cost[qs or "?"] = usd or 0.0
     return {"tokens": tokens, "cost": cost, "total_usd": sum(cost.values())}
+
+
+def corpus_costs():
+    """EVERY Claude Code session's totals in TWO grouped queries —
+    {sid: {"tokens": n, "cost": usd}}, the bulk twin of session_costs
+    (plugins.corpus_costs).
+
+    This IS the pair of GROUP BYs that used to sit in core.sessionapi.
+    activity_stats, moved to the host whose telemetry taxonomy they read: the
+    `otel` table is filled only by the receiver a Claude Code session spawns,
+    so summing it for the whole corpus silently reported every OTHER host's
+    sessions as free. Core asks the registry now and each host answers for its
+    own.
+
+    Deliberately NOT chain-resolved (unlike session_costs): a fold over the
+    whole corpus keeps each row under the sid the `sessions` table holds, and
+    an adopt chain's pre-fork datapoints are already rows of their own there.
+    Attributing them twice is the one error a total must not make."""
+    db = API.audit_db()
+    out = {}
+    for sid, n in API.db_rows(db, "SELECT session_id, SUM(value) FROM otel"
+                                  " WHERE metric='token' GROUP BY session_id"):
+        if sid:
+            out.setdefault(sid, {})["tokens"] = n or 0
+    for sid, usd in API.db_rows(db, "SELECT session_id, SUM(value) FROM otel"
+                                    " WHERE metric='cost' GROUP BY session_id"):
+        if sid:
+            out.setdefault(sid, {})["cost"] = usd or 0.0
+    return out
