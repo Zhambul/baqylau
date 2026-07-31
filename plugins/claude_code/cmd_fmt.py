@@ -118,7 +118,7 @@ def main():
     # own outcome into the cancelled command's block while itself never rendering.
     # A mismatched record is left alone: its tailer finishes via writer-liveness and
     # removes it itself, and this call just renders normally (live=None).
-    live = S.hand_take(LOG, "fg-live", match={"tid": d.get("tool_use_id") or ""})
+    live = S.hand_take(LOG, S.FG_LIVE, match={"tid": d.get("tool_use_id") or ""})
     if live:
         A.state_file(LOG, "state:fg-live", "remove", live)
     # Hand-off key for giving the outcome to the fg tailer: the session-keyed token

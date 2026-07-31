@@ -81,7 +81,7 @@ class _InterruptMixin:
             "sid": sid, "log": log, "sdb": sdb, "tab": tab, "row": row,
             "action": action, "verb": verb,
             "queueing": tab in QUEUE_TABS,
-            "rollout": row.get("transcript_path") or "",
+            "transcript": row.get("transcript_path") or "",
             "box": launch.WebBox(sid),
             "last_prompt": rsession.LastPrompt(sid)})
         if self._gesture_declined(res, sid, action, "interrupt",

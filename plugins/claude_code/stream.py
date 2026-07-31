@@ -880,7 +880,7 @@ def cleanup():
         # cancelled command fires no hook at all, and the surviving record made
         # the next command's Pre think a live fg block was still in flight (no
         # live-streaming) until it noticed the dead pid.
-        if S.hand_take(LOG, "fg-live", match={"pid": os.getpid()}) is not None:
+        if S.hand_take(LOG, S.FG_LIVE, match={"pid": os.getpid()}) is not None:
             A.state_file(LOG, "state:fg-live", "remove-own",
                          "fg tailer exiting — reclaimed its own record")
 

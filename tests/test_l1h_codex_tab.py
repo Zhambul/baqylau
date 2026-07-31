@@ -123,7 +123,7 @@ def test_codex_host_registry_roundtrip(tmp_path, monkeypatch):
 
 # --- the Claude screen-scraper host-gates --------------------------------------
 
-def test_notifier_screen_scrapable_gate():
+def test_notifier_asks_the_owning_host_for_each_screen_probe():
     # The gate is no longer a per-sid BOOLEAN the notifier computes from a host
     # NAME: each probe is asked of the session's OWNING host, and a host with no
     # such screen geometry answers None by not implementing it (P2). What the

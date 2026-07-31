@@ -88,7 +88,7 @@ TEAM_WORD = "Teammate @%s"
 # …and the three VERBS those notes end on — a child's whole lifecycle as far as
 # the web is concerned: it `launched` (or `resumed`, a Claude subagent picked
 # back up) and it `finished`. One owner because two surfaces write them: the
-# producer, through agent_note/codex_note below (core/agentblocks.AgentStream
+# producer, through register_note below (core/agentblocks.AgentStream
 # passes the verb), and the web presenter, which recovers the SAME sentence for
 # a chip written before producers carried a `note` at all
 # (dashboard/opshtml/actclass._LEGACY_NOTE) — two spellings of `finished` is a

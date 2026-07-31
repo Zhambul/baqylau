@@ -186,6 +186,12 @@ class HostControl:
     #                      host's own message QUEUE rather than starting a turn
     #                      (the caller's policy table, not the host's)
     #   row              — the audit `sessions` row (transcript_path/cwd)
+    #   transcript       — that row's transcript path, for a gesture that reads
+    #                      the session's own file to VERIFY itself (codex's
+    #                      interrupt watches its rollout for `turn_aborted`).
+    #                      Host-NEUTRAL by name on purpose: it is one column of
+    #                      the caller's row, and spelling it `rollout` put one
+    #                      host's word for the file into every host's contract
     #   box              — the WEB's input-box stash: `.draft` (text we left in
     #                      the box), `.set_draft(text) -> bool`, `.note_send()`.
     #                      INJECTED like `fe`, for the same reason: the stash is

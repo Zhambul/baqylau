@@ -55,7 +55,7 @@ from core.noaudit import load_audit
 A = load_audit()   # audit trail (real module, or an inert stub if it can't import)
 
 COMPACT_KEY = "compacting"   # kv:      {ts, trigger}
-FG_KEY = "fg-live"           # hand-off: {tid, ts, pid} — take-once
+FG_KEY = ST.FG_LIVE           # hand-off: {tid, ts, pid} — take-once
 
 
 # --- compaction: the hook half ------------------------------------------------

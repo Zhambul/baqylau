@@ -77,12 +77,16 @@ class CodexHost(HostControl):
         the abort, so this reports `steered=True` and the ⧗ chip drains via the
         normal conversation reconciliation — NOT treated as a plain stop.
 
-        `ctx['rollout']` is the session's rollout path (the verify source). Result
+        `ctx['transcript']` is this session's transcript — for codex its rollout,
+        which is the verify source. (The ctx key is HOST-NEUTRAL: it is the
+        caller's `sessions.transcript_path` column, and naming it after one
+        host's word for the file put a codex noun in a contract every host
+        reads.) Result
         {status, cid, ok, verified, steered, tries}: ACK when turn_aborted was
         observed, INDETERMINATE when the Esc landed but no record appeared (audited
         — the codex-interrupt anomaly signature), REJECTED when nothing could be
         pressed."""
-        rp = ctx.get("rollout") or ""
+        rp = ctx.get("transcript") or ""
         log, sdb = ctx.get("log") or "", ctx.get("sdb") or ""
         verb = ctx.get("verb") or "interrupt"
         r = self._ack()          # borrow its cid; the status is corrected below

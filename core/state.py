@@ -919,6 +919,18 @@ def desc_pop(log):
 
 # --- hand-off records (was the .fg-live marker + <src>.done sentinel files) ---------
 
+# THE key of the in-flight foreground-command hand-off — "block <tid> running
+# since <ts>", whose take-once presence IS the liveness the dashboard's ⏱ chip
+# reads (plugins.fg_running). Owned here because the record is a hand-off and
+# this module owns those, and because BOTH hosts write one: it had four
+# spellings (claude_code's HAND_KEY, codex's FG_KEY and two bare literals in
+# the Claude producer itself), which is a protocol string agreeing with itself
+# by luck. The pend-ledger KIND of the same spelling in substream_render.py is
+# DELIBERATELY not this: it names a row in that renderer's private table of
+# outstanding blocks, not a key in any DB.
+FG_LIVE = "fg-live"
+
+
 def hand_put(log, key, obj):
     """Publish a hand-off record (overwrites). Returns True on success."""
     conn = connect(log)

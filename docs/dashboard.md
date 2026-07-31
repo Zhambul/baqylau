@@ -1258,7 +1258,7 @@ web message via bracketed paste (`paste_text`) — so every send/launch is expos
 It is undocumented Claude Code behaviour (v2.1.x, no opt-out flag). The fix, since
 the paste itself does the grab and can't be dodged, is to **empty an IMAGE
 clipboard right before each web send/launch** (`clear_clipboard_image` — macOS
-`osascript`, gated on `_clip_has_image` so a TEXT clipboard is left untouched;
+`osascript`, gated on `core/clipimg.has_image` so a TEXT clipboard is left untouched;
 best-effort, no-op off macOS). Wired ahead of every bracketed paste
 (`post_message`, `post_command`, the ask-chat send) and, when a launch carries a
 first prompt, ahead of `launch_tab` (the argv-startup grab). Each of those rows
@@ -7098,7 +7098,7 @@ terminal keeps its dense colour-coded chip, the browser gets the sentence. Not a
 reformat in the presenter — parsing a chip back apart to reword it is the sniffing
 `actclass` exists to have ended. The **duration** comes from the same place
 `emit_footer` reads it (the agent's own slot row, via the injected `agent_dur`
-hook), so the note and the footer cannot disagree. One builder, `agent_note`, words
+hook), so the note and the footer cannot disagree. One builder, `register_note`, words
 both lines.
 
 **An AGENT and a TEAMMATE are worded apart**, in Claude Code's own two registers: a
@@ -7107,7 +7107,7 @@ Task-spawned subagent is `Agent "<type>"` (quoted), an agent-TEAM member is
 finished`, 2.1.220). One word for both read as a bug (*"I want a clear distinction Agent
 from Teammate in those summaries and message transcripts"*), and they ARE different
 things: a named, long-lived peer you can mail, versus a one-shot delegate. The wording
-lives in `core/streamfmt.agent_note` (`AGENT_WORD`/`TEAM_WORD`) because BOTH sides need
+lives in `core/streamfmt.register_note` (`AGENT_WORD`/`TEAM_WORD`, the word itself DATA in `agentblocks.REGISTERS`) because BOTH sides need
 it — the producer stamps the note, and the presenter recovers it for pre-`note` ops — and
 a dashboard module may not reach into a plugin for a string. Which register an op gets is
 read off the `src` stamp it already wears (`team:` vs `sub:`), never its name or its

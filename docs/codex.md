@@ -1204,7 +1204,7 @@ scope: its intermediate messages/reasoning/commands all visible. Four parts:
      role=user `<tag>` wrappers (except the `<task>` INPUT wrapper, kept + unwrapped)
      are dropped, so `<recommended_plugins>`/`<multi_agent_mode>` never bubble.
    - **A foldable LEAD card** — `_ro_prompt` sets `web=1` + a `Codex "<label>" ran`
-     note (`streamfmt.codex_note`), so the run's `⇢ prompt` surfaces in the LEAD
+     note (`streamfmt.register_note`, worded from `agentblocks.REGISTERS`), so the run's `⇢ prompt` surfaces in the LEAD
      mirror as an `ACT_CODEX` card (the codex twin of a Claude subagent's launch
      card), which default folds into "ran N codex runs" and focus/verbose
      fold/expand — a delegating lead that was pure bubbles now has foldable activity.

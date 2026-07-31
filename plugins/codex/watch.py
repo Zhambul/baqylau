@@ -316,12 +316,13 @@ def spawn(srcfile, jsonfile, label, subagent=False):
     #     Claude host" (the thing the web counts as `ran N codex runs`), while a
     #     native subagent classifies, scopes and folds as an AGENT with no
     #     per-tool special-casing. Safe to re-point because nothing keys on the
-    #     `codex:` prefix to FIND a run: read/mirror.agent_scope accepts all three
-    #     prefixes for one id, and sessionapi.codex_runs reads the audit `streams`
-    #     rows, not the op stamp.
+    #     `codex:` prefix to FIND a run: read/mirror.agent_scope is the BARE agent
+    #     id (it consults no prefix vocabulary at all), and the `runs` provider
+    #     (plugins/codex/nested.session_runs) reads the audit `streams` rows,
+    #     not the op stamp.
     #   * A SECONDARY-source run inside a Claude host keeps `codex:<codex_aid>`.
     #     Either way the stamp is the run's synthesized AGENT ID (paths.codex_aid,
-    #     the same id sessionapi.codex_runs mints the card with), NOT the display
+    #     the same id nested.session_runs mints the card with), NOT the display
     #     `label`: making the stamp EQUAL the agent id is what lets
     #     read/mirror.agent_scope match it directly, no per-tool label lookup.
     #     Both are NOT the host session's main agent, so the web dashboard's

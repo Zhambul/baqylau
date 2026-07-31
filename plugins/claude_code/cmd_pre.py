@@ -37,7 +37,7 @@ LBL_FG = O.SLATE   # same colour claude-cmd-fmt.py uses for an OK foreground blo
 HAND_RETRY_S = 0.1   # pause before the one fg-live hand_put retry (a transient
                      # writer holding the state DB past busy_timeout)
 
-HAND_KEY = "fg-live"   # the take-once hand-off key — see fg_running() below
+HAND_KEY = S.FG_LIVE   # the take-once hand-off key (core.state owns the word)
 
 
 def fg_running(sid, sdb=None):

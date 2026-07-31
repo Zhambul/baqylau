@@ -212,8 +212,12 @@ def main():
     # own SessionStart work. Must come AFTER the mark, which is what tells the
     # codex provider this is a host rather than a session to watch alongside.
     plugins_start(log, cwd, sid)
+    # host_pid stays IN the decision: it is what the standalone watcher polls for
+    # liveness (codex fires no SessionEnd), so a teardown that never happened is
+    # triaged from this row alone.
     A.hook_event(payload, handler="codex-session",
-                 decision="standalone-open (%s, plugin fan-out)" % fate)
+                 decision="standalone-open (%s, plugin fan-out, host_pid=%d)"
+                          % (fate, codex_pid()))
 
 
 def entry():
