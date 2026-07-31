@@ -101,7 +101,8 @@ def test_messages_strip_and_empty_is_none():
         {"kind": "prompt", "text": "fix it"}
     assert RO.parse(_ev("user_message", message="  ")) is None
     assert RO.parse(_ev("agent_message", message="done")) == \
-        {"kind": "message", "text": "done"}
+        {"kind": "message", "text": "done", "phase": "",
+         "ts": None}
     assert RO.parse(_ev("agent_reasoning", text="hmm")) == \
         {"kind": "reasoning", "text": "hmm"}
     assert RO.parse(_ev("agent_reasoning", text="")) is None
@@ -109,11 +110,55 @@ def test_messages_strip_and_empty_is_none():
 
 def test_lifecycle_and_compact_records():
     assert RO.parse(_ev("task_started", started_at=1.5)) == \
-        {"kind": "task_started", "at": 1.5, "ts": None}
+        {"kind": "task_started", "at": 1.5, "ts": None, "turn": ""}
     assert RO.parse(_ev("task_complete", completed_at=9.0)) == \
-        {"kind": "task_complete", "at": 9.0, "ts": None}
+        {"kind": "task_complete", "at": 9.0, "ts": None, "turn": "", "last": ""}
     assert RO.parse(_ev("turn_aborted")) == {"kind": "turn_aborted"}
     assert RO.parse(_ev("context_compacted")) == {"kind": "compact"}
+
+
+def test_the_task_lifecycle_carries_the_turn_id_and_the_last_message():
+    """The CHILD-TASK model's codex half (core/childtask.py). Measured payloads,
+    session 019fb66b-12a0 (2026-07-31): `task_started`/`task_complete` name the
+    TURN, and task_complete repeats what the turn answered.
+
+    `turn` is what a child rollout's replayed prefix gives it — the parent turn it
+    was spawned in — and `last` is the FALLBACK result text for a stream that
+    never saw the message record itself. Both were dropped on the floor, which is
+    why a child's completion could only ever be placed by its clock."""
+    started = RO.parse(_ev("task_started", started_at=1785471906,
+                           turn_id="019fb66b-325d", model_context_window=258400))
+    assert started["turn"] == "019fb66b-325d" and started["at"] == 1785471906
+    done = RO.parse(_ev("task_complete", turn_id="019fb66b-325d",
+                        last_agent_message=" Denpasar: shower, 29C. ",
+                        started_at=1785471906, completed_at=1785471929,
+                        duration_ms=23023))
+    assert done["turn"] == "019fb66b-325d"
+    assert done["last"] == "Denpasar: shower, 29C."     # stripped, like every text
+    # a rollout written before turn_id existed says so with "" — never a guess
+    assert RO.parse(_ev("task_complete", completed_at=9.0))["turn"] == ""
+    assert RO.parse(_ev("task_complete", completed_at=9.0))["last"] == ""
+
+
+def test_an_agent_message_carries_its_phase_in_both_registers():
+    """`phase: "final_answer"` is codex SAYING which message is the turn's answer
+    — the fact that tells a child's result from its intermediate notes, instead of
+    inferring it from whichever message happened to be pending at task_complete.
+
+    Both registers carry it: codex writes one turn as an event_msg AND a
+    response_item, and the web's conversation read takes whichever arrives first
+    (plugins/codex/read.conversation), so a phase surviving only one spelling
+    survives neither."""
+    assert RO.parse(_ev("agent_message", message="working on it",
+                        phase="commentary"))["phase"] == "commentary"
+    final = RO.parse(_ev("agent_message", message="29C, shower",
+                         phase=RO.PHASE_FINAL))
+    assert final["phase"] == RO.PHASE_FINAL and final["text"] == "29C, shower"
+    twin = RO.parse(_rsp("message", role="assistant", phase=RO.PHASE_FINAL,
+                         content=[{"type": "output_text", "text": "29C, shower"}]))
+    assert twin["kind"] == "chat" and twin["phase"] == RO.PHASE_FINAL
+    # pre-phase rollouts: "" — the renderer's own fallback decides there
+    assert RO.parse(_ev("agent_message", message="hi"))["phase"] == ""
 
 
 def test_lifecycle_surfaces_the_envelope_timestamp():
@@ -122,8 +167,8 @@ def test_lifecycle_surfaces_the_envelope_timestamp():
     never folded into the numeric `at` the mirror subtracts."""
     o = _ev("task_complete")
     o["timestamp"] = "2026-07-29T10:00:00.000Z"
-    assert RO.parse(o) == {"kind": "task_complete", "at": None,
-                           "ts": "2026-07-29T10:00:00.000Z"}
+    assert RO.parse(o) == {"kind": "task_complete", "at": None, "turn": "",
+                           "last": "", "ts": "2026-07-29T10:00:00.000Z"}
     o2 = _ev("task_started")
     o2["timestamp"] = "2026-07-29T09:59:00.000Z"
     assert RO.parse(o2)["ts"] == "2026-07-29T09:59:00.000Z"
@@ -136,8 +181,15 @@ def test_lifecycle_surfaces_the_envelope_timestamp():
     orr = _rsp("function_call_output", output="ok")
     orr["timestamp"] = "2026-07-29T09:59:03.500Z"
     assert RO.parse(orr)["ts"] == "2026-07-29T09:59:03.500Z"
-    # a non-lifecycle record is not stamped
-    assert "ts" not in RO.parse(_ev("agent_message", message="hi"))
+    # …and an assistant MESSAGE, whose clock a child's ⇠ result card is measured
+    # to: a `final_answer` message ENDS the task ~100ms before task_complete, so
+    # without this the card's duration would be measured to time.time() and a
+    # replayed rollout would report the age of the file
+    om = _ev("agent_message", message="hi")
+    om["timestamp"] = "2026-07-29T09:59:04.000Z"
+    assert RO.parse(om)["ts"] == "2026-07-29T09:59:04.000Z"
+    # a record in neither family is not stamped
+    assert "ts" not in RO.parse(_ev("agent_reasoning", text="hmm"))
 
 
 def test_web_search_query():
@@ -203,11 +255,11 @@ def test_response_item_message_is_its_own_chat_register():
     rec = RO.parse(_rsp("message", role="assistant",
                         content=[{"type": "output_text", "text": " hi there "}]))
     assert rec == {"kind": "chat", "role": "assistant", "text": "hi there",
-                   "synthetic": False}
+                   "synthetic": False, "phase": ""}
     rec2 = RO.parse(_rsp("message", role="user",
                          content=[{"type": "input_text", "text": "fix it"}]))
     assert rec2 == {"kind": "chat", "role": "user", "text": "fix it",
-                    "synthetic": False}
+                    "synthetic": False, "phase": ""}
     # multi-part content joins; empty content is not a record
     assert RO.parse(_rsp("message", role="user", content=[
         {"type": "input_text", "text": "a"},

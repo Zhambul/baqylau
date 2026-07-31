@@ -23,6 +23,7 @@
 # in substream_render.py (the Renderer instance `REN`).
 import json, os, subprocess, sys, time
 
+from core import childtask as CT
 from core import env as EV
 from core import ops as O
 from core import render as R
@@ -374,6 +375,33 @@ def restore_checkpoint():
     return pos
 
 
+def declare_task(pos):
+    """Declare WHICH TASK this streamer's launch and result cards belong to — the
+    shared child-task model (core/childtask.py), the same one a codex child's
+    stream fills in.
+
+    A Claude agent's task is ONE STREAMER GENERATION: this process paints exactly
+    one ⇠ result card (at SubagentStop, or at a cancellation), and a TEAMMATE
+    re-tasked by mail after an idle SubagentStop gets a whole new streamer over
+    the same transcript — a second task, whose result must not fold into the
+    first's card. So the id is Claude Code's own name for the spawn
+    (meta.json's `toolUseId`, the key its cancellation recovery already keys on)
+    plus the byte checkpoint this generation resumed FROM, which is the one thing
+    that tells two generations of one agent apart.
+
+    No PARENT TURN, deliberately: Claude Code records no turn id anywhere, and a
+    guessed one would reorder real conversation. The endpoints are stamped, the
+    ordering rule stays inert, and a synchronous Task cannot need it anyway — its
+    tool_result reaches the lead before the lead can write the reply that uses it
+    (core/childtask.py has the whole argument)."""
+    try:
+        REN.blocks.task(CT.key(AGENT, "%s@%d" % (META.get("toolUseId") or "t",
+                                                 int(pos or 0))))
+    except Exception:
+        # A stamp is an ordering HINT: never let one cost the stream its cards.
+        A.error(LOG, "substream declare_task", {"agent": AGENT})
+
+
 def make_pump(tail, ckpt):
     def pump():
         # Loop while the per-pump read ceiling (core/tail.py PUMP_MAX_B) left a
@@ -536,6 +564,7 @@ def main(run):
         return
 
     pos = restore_checkpoint()
+    declare_task(pos)
     tail = T.FileTailer(JSONL, pos=pos)
     pump = make_pump(tail, {"pos": -1})
     parent_resolved = make_parent_resolved(start)

@@ -8,6 +8,7 @@
 import bisect
 
 import plugins
+from core import childtask as CT
 from core import paths as P
 from core import sessionapi as API
 from core import state as ST
@@ -86,6 +87,17 @@ def conv_items(recs, cmds=()):
                                        # the record names its host (a codex reply
                                        # bubble reads "codex", not "claude")
                                        r.get("who") or "claude")}
+        # WHICH TURN this record belongs to, and whether it is that turn's FINAL
+        # response (core/childtask.py) — the parent half of the child-task
+        # ordering. Served to the page for the same reason the op's `ctask` is:
+        # a completion arriving after this bubble is already rendered has to find
+        # it in the DOM (docs/dashboard.md *Semantic child-task order*). Absent
+        # for every host that names no turns, and then nothing downstream fires.
+        turn = str(r.get(CT.REC_TURN) or "")
+        if turn:
+            it["turn"] = turn
+            if CT.final_turn(r):
+                it["final"] = 1
         if r["kind"] == "prompt":
             it["text"] = r.get("text", "")
             it["par"] = r.get("par") or ""
@@ -105,6 +117,62 @@ def conv_items(recs, cmds=()):
                 if r.get("resumed"):
                     it["resumed"] = 1
         out.append(it)
+    return out
+
+
+def task_order(entries):
+    """THE SEMANTIC ORDERING RULE, over a ts-merged (slot, kind, obj) list: a
+    child task's RESULT belongs before the final response of the parent turn the
+    task ran in, whatever the clocks say.
+
+    Why time alone is wrong (docs/dashboard.md *Semantic child-task order*): a
+    child's completion can land after the parent has already answered — measured
+    in session 019fb66b-12a0, the child's report reached the parent at 04:25:26.8,
+    the parent answered at 04:25:28.9, and the child's own `final_answer` +
+    `task_complete` followed at 04:25:29.3/.4. Merged by ts, the `Agent finished`
+    card sorted after the answer it had contributed to.
+
+    The join is the child-task model (core/childtask.py): the END ops of a task
+    name the parent turn (`ends_turn`), and one conversation record per turn is
+    that turn's final response (`final_turn`). A record that sorts BEFORE such an
+    END op is moved to just after it — the RECORD moves, never the op, because op
+    ids are the slot backbone every window cut and history cursor rides on (they
+    must stay ascending); the record adopts the op's slot, which is exactly what a
+    conversation record's slot means ("the op I follow").
+
+    Inert unless BOTH halves are present, so: no reordering for a host that names
+    no turns (Claude Code), none for a mid-turn message, none for a task whose
+    parent turn is unknown, and none when the order is already right. Several
+    tasks in one turn all land before that turn's answer (the LAST end wins as the
+    anchor). Pure — returns the list to use, `entries` untouched."""
+    ends = {}                      # parent turn -> (index, slot) of its last END op
+    for i, (slot, kind, obj) in enumerate(entries):
+        if kind == "op":
+            turn = CT.ends_turn(obj)
+            if turn:
+                ends[turn] = (i, slot)
+    if not ends:
+        return entries
+    moves = {}                     # index of a final response -> where it belongs
+    for i, (_slot, kind, obj) in enumerate(entries):
+        if kind != "msg":
+            continue
+        got = ends.get(CT.final_turn(obj))
+        if got and got[0] > i:
+            moves[i] = got
+    if not moves:
+        return entries
+    out, held = [], {}
+    for i, e in enumerate(entries):
+        tgt = moves.get(i)
+        if tgt is not None:
+            held.setdefault(tgt[0], []).append((tgt[1], e[1], e[2]))
+            continue
+        out.append(e)
+        for h in held.pop(i, ()):          # …re-emitted after the END op it follows
+            out.append(h)
+    for i in sorted(held):                 # defence in depth: never lose an entry
+        out.extend(held[i])
     return out
 
 
@@ -130,27 +198,37 @@ def merge_live(ops, recs, key="", cmds=(), scope=None):
     always empty (the caller stops reading the main thread) and the ops are
     filtered to that agent, so a tick carrying only the lead's ops renders to
     nothing and sends no event."""
-    items, i, j = [], 0, 0
-    run = []                       # consecutive ops awaiting one batched render
+    entries, i, j = [], 0, 0
+    while i < len(ops) and j < len(recs):
+        ot, rt = ops[i].get("_ts"), recs[j].get("ts")
+        if rt is not None and (ot is None or rt < ot):
+            entries.append((0, "msg", recs[j]))
+            j += 1
+        else:
+            entries.append((0, "op", ops[i]))
+            i += 1
+    entries.extend((0, "op", op) for op in ops[i:])
+    entries.extend((0, "msg", r) for r in recs[j:])
+    # …then the SAME semantic pass the backlog merge runs (task_order): one tick
+    # routinely carries a child's completion AND the parent's answer, and the
+    # ts-merge above would send the answer first. Slots are all 0 here — a live
+    # delta has no window cuts to be consistent with, and the rule only reorders
+    # WITHIN the list it is given (a completion whose answer went out on an
+    # EARLIER tick is the browser's half of the same rule, appendItems).
+    items, run = [], []             # consecutive ops awaiting one batched render
 
     def flush():
         if run:
             items.extend(opshtml.op_items(run, key, scope=scope))
             run.clear()
 
-    while i < len(ops) and j < len(recs):
-        ot, rt = ops[i].get("_ts"), recs[j].get("ts")
-        if rt is not None and (ot is None or rt < ot):
-            flush()
-            items.extend(conv_items([recs[j]], cmds))
-            j += 1
-        else:
-            run.append(ops[i])
-            i += 1
-    run.extend(ops[i:])
+    for _slot, kind, obj in task_order(entries):
+        if kind == "op":
+            run.append(obj)
+            continue
+        flush()
+        items.extend(conv_items([obj], cmds))
     flush()
-    if j < len(recs):
-        items.extend(conv_items(recs[j:], cmds))
     return items
 
 
@@ -165,7 +243,8 @@ def _merge_order(sid, key, agent=None):
     the block cut discards most ops before the costly op_html render runs. Also
     returns (last_op_id, transcript_pos).
 
-    Interleave is by TIMESTAMP first: ops carry a wall-clock `_ts` (core.state)
+    Interleave is by TIMESTAMP first, then by MEANING (task_order — a child task's
+    result before the answer of the turn it ran in): ops carry a wall-clock `_ts` (core.state)
     and conversation records carry the transcript line's `ts`
     (transcript.conversation) — when both are present a record lands after the
     last op that chronologically precedes it. Pre-migration history (no ts)
@@ -242,7 +321,12 @@ def _merge_order(sid, key, agent=None):
         for r in buckets.get(i, []):
             entries.append((oid, "msg", r))
     entries.extend((tail_slot, "msg", r) for r in buckets.get(TAIL, []))
-    return entries, last, mpos
+    # …and then the one pass that is NOT about time: a child task's result belongs
+    # before the answer of the turn it ran in (task_order above). Applied HERE, on
+    # the whole merge and before any window is cut, so the initial backlog, every
+    # /history page and the live delta all agree — the reason a reload and a live
+    # session read the same way.
+    return task_order(entries), last, mpos
 
 
 def _cut_blocks(entries, blocks, scope=None):

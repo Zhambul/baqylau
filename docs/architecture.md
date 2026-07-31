@@ -104,6 +104,18 @@ activity-class token, and whether `as_lead` recolours its headers — read throu
 same closed list out; a fourth host adds a row instead of an edit in three
 packages, and the failure mode of missing one is silent (an unmatched prefix
 renders that agent's mirror BLANK)),
+`childtask.py` (the CHILD-TASK model — the identity of ONE task a child agent was
+handed, the two ENDPOINT steps its launch/result cards are stamped with (the op
+field `ctask`, written by `agentblocks` and by nothing else), and the parent TURN
+the task ran in, plus the two questions every consumer asks of that stamp
+(`ends_turn` on an op, `final_turn` on a conversation record). Host-neutral and
+stdlib-only, like `paths.py`, because the producers, the web read model and the
+page's own reconcile all speak this one vocabulary. It exists because a child's
+completion can arrive AFTER the parent's final answer — the web merges by
+timestamp, so the finished card sorted after the answer it had contributed to
+(docs/dashboard.md *Semantic child-task order*) — and because a child is not always
+one task: codex hands a running child a follow-up, a teammate is re-tasked by mail,
+and a stream keyed on the AGENT merged two results into one card),
 `render.py` (the ANSI rendering PRIMITIVES — was `claude_render.py`: width
 math, palette/`pick`, strip/wrap/gutters, the security-critical `neutralize()`,
 inline markdown; keeps thin `format_code`/`render` delegating aliases),

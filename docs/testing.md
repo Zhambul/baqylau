@@ -216,6 +216,20 @@ top-level `function` DOES become a property of the `vm` global — so the click
 recorder has to be re-pointed AFTER the source is evaluated, or the real one runs
 and the click goes unobserved.
 
+And an eighth: `tests/jsdom/taskorder.js` drives the real feed builder
+`appendItems` (app.05-session.js) behind
+`test_the_feed_lands_a_late_child_result_under_the_answer_it_precedes`. Its
+subject is the BROWSER's half of the semantic child-task order (docs/dashboard.md):
+the server orders a child's result and the parent turn's final answer whenever both
+are in one payload, but a completion arriving when that answer is ALREADY on screen
+can only be placed by the page — and the feed is newest-TOP, so a plain prepend puts
+the finished card above the answer it contributed to. A grep cannot tell "inserted
+under the right bubble" from "inserted anywhere". This harness is why the shim's
+`insertAdjacentHTML` now honours its POSITION argument (it always appended, which
+is invisible to a harness that builds its DOM directly and fatal to one that
+measures the feed: `appendItems` prepends with `"afterbegin"` and reads
+`firstElementChild` back to stamp it).
+
 The DOM shim these harnesses share lives in
 `tests/jsdom/domshim.js` (`El` + `domGlobals()`): a copy per harness would be
 exactly the duplication these harnesses were written to catch. Note that a

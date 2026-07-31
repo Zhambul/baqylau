@@ -31,7 +31,16 @@ for the counters these streams feed).
     carry a `note` — `⏺ Agent "<name>" launched` / `… finished · 21m 31s` — the
     browser's own quiet wording for them, duration read from the same slot row
     `emit_footer` uses (docs/dashboard.md *View modes*). The pane keeps the chip. All in the subagent's colour. (Messages are committed one event late
-    so the last one can be tagged `⇠ result`.)
+    so the last one can be tagged `⇠ result`.) Both cards also carry the
+    **child-TASK stamp** (`core/childtask.py`): which task of this child they are
+    the endpoints of — one streamer GENERATION, since this process paints exactly
+    one result card and an idle teammate re-tasked by mail gets a whole new
+    streamer, whose result must not fold into the previous one's card. No parent
+    TURN rides along: Claude Code records no turn id anywhere, and the web's
+    child-task ordering (docs/dashboard.md *Semantic child-task order*) is inert
+    without one — deliberately, since a synchronous Task's `tool_result` reaches
+    the lead before the lead can write the reply that uses it, so the inversion
+    that rule exists for cannot arise here.
   - **A message and the result are UNCAPPED; everything else is excerpted.** Every
     other block kind the renderer paints has a line ceiling (the `CAP_*` table in
     `substream_render.py` — a command's output body, the spawn prompt, a teammate

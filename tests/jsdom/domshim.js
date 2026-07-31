@@ -129,10 +129,21 @@ class El {
   // Enough of insertAdjacentHTML for the block filler: the served HTML is opaque
   // to these tests (they measure counts, classes and data-*), so it is kept as
   // one text-bearing child rather than parsed.
-  insertAdjacentHTML(_pos, html) {
+  //
+  // The POSITION is honoured, because one caller's whole meaning is its position:
+  // the feed is newest-TOP, so appendItems prepends with "afterbegin" and then
+  // reads `firstElementChild` back to stamp it — a shim that appended handed it
+  // the OLDEST row every time, which is exactly the ordering a harness measuring
+  // the feed has to be able to see.
+  insertAdjacentHTML(pos, html) {
     const n = new El("#html", "", html);
     n.parentNode = this;
-    this.children.push(n);
+    if (pos === "afterbegin") this.children.unshift(n);
+    else this.children.push(n);
+  }
+  prepend(...kids) {
+    const kids2 = this._flat(kids).map(k => this._adopt(k));
+    this.children.unshift(...kids2);
   }
   _all(out) { for (const c of this.children) { out.push(c); c._all(out); } return out; }
   querySelectorAll(sel) {              // only ".cls" / ".cls[data-x]" / "[data-x]"

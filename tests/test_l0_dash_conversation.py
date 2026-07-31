@@ -14,6 +14,7 @@ if REPO not in sys.path:
 
 import plugins
 import core.audit as A
+from core import childtask as CT
 from core import ops as O
 from core import paths as P
 from dashboard import server as DS
@@ -399,6 +400,111 @@ def test_merge_live_interleaves_delta_by_timestamp(dash, tmp_path):
     assert "before cmd" in items[0]["html"]
     assert "cmd A" in items[1]["html"]
     assert "after cmd" in items[2]["html"]
+
+
+# ------------------------------------------- the semantic child-task order
+# A child task's RESULT belongs before the final answer of the parent turn it ran
+# in, whatever the clocks say (read/mirror.task_order, core/childtask.py). The
+# model itself and the codex producer are pinned in tests/test_l1k_childtask.py;
+# these are the MERGE's own contract — including that the live delta and a reload
+# reorder identically, which is the whole point of one shared pass.
+PTURN = "019fb66b-13a6"                     # the measured session's parent turn
+CTASK = "019fb66b-31de#019fb66b-325d"       # …and the child task inside it
+
+
+def _child_result(g="cr1"):
+    """The two ops of a child's ⇠ result card, stamped as that task's END — what
+    core/agentblocks.result() emits."""
+    ct = CT.stamp(CTASK, CT.STEP_END, PTURN)
+    return [O.label("⇠ result", (170, 185, 210), g=g, ctask=ct),
+            O.gut("Denpasar: shower, 29C.", (170, 185, 210), g=g, ctask=ct)]
+
+
+def _turn_recs(final_text="Bali: a shower, 29C.", mid_text="Asking a subagent."):
+    """A parent turn's conversation records as a codex host's read produces them
+    (plugins/codex/read.conversation): a mid-turn note, then the turn's FINAL
+    answer. Timestamps are set by the caller."""
+    return [{"kind": "message", "text": mid_text, "anchor": None, "ts": None,
+             CT.REC_TURN: PTURN},
+            {"kind": "message", "text": final_text, "anchor": None, "ts": None,
+             CT.REC_TURN: PTURN, CT.REC_FINAL: 1}]
+
+
+def test_task_order_moves_the_turns_answer_after_a_late_child_result():
+    """The reported inversion, as the merge sees it: the answer's ts (28.9) is
+    OLDER than the child's completion (29.4), so the ts-merge puts the finished
+    card after it. The answer moves to the END op's slot — the RECORD moves,
+    never the op, because op ids are the slot backbone every window cut rides."""
+    from dashboard.read import mirror as M
+    head, body = _child_result()
+    mid, final = _turn_recs()
+    entries = [(1, "op", O.label("⇢ prompt", (1, 2, 3), g="cl1",
+                                 ctask=CT.stamp(CTASK, CT.STEP_START, PTURN))),
+               (2, "msg", mid), (3, "msg", final),
+               (4, "op", head), (5, "op", body)]
+    got = M.task_order(entries)
+    assert [(slot, kind, obj.get("s") or obj.get("text"))
+            for slot, kind, obj in got] == [
+        (1, "op", "⇢ prompt"),
+        (2, "msg", "Asking a subagent."),        # mid-turn prose never moves
+        (4, "op", "⇠ result"),
+        (5, "op", "Denpasar: shower, 29C."),
+        (5, "msg", "Bali: a shower, 29C.")]      # …and it adopts that op's slot
+    # …and the rule is INERT when it has nothing to join: an answer already after
+    # the result, a task naming no parent turn (every Claude agent), a turn with
+    # no answer record at all
+    ok = [(1, "op", head), (2, "msg", final)]
+    assert M.task_order(ok) == ok
+    plain = [(1, "msg", final), (2, "op", O.label("x", (1, 2, 3)))]
+    assert M.task_order(plain) == plain
+    noturn = [(1, "msg", final),
+              (2, "op", O.label("⇠ result", (1, 2, 3),
+                                ctask=CT.stamp(CTASK, CT.STEP_END)))]
+    assert M.task_order(noturn) == noturn
+
+
+def test_backlog_and_live_merges_place_a_late_child_result_alike(dash, tmp_path,
+                                                                monkeypatch):
+    """LIVE and RELOAD must read the same. Both merges run the same pass, so the
+    same session renders identically whether the ops arrived over SSE or were
+    re-merged from disk — the acceptance criterion a client-side-only fix could
+    not meet."""
+    import time
+    A.session_start({"session_id": "ctask1", "cwd": "/w", "transcript_path": ""})
+    log = P.mirror_log("ctask1")
+    O.emit(log, O.label("⇢ prompt", (170, 185, 210), g="cl1",
+                        ctask=CT.stamp(CTASK, CT.STEP_START, PTURN)))
+    time.sleep(0.02)
+    O.emit(log, *_child_result())
+    sdb = DS.API.state_db_for("ctask1")
+    _, ops = DS.API.ops_at(sdb, 0)
+    # the parent's answer is stamped BETWEEN the launch and the completion — the
+    # measured order, and the one a pure ts-merge gets wrong
+    mid, final = _turn_recs()
+    mid["ts"] = ops[0]["_ts"] + 0.001
+    final["ts"] = ops[1]["_ts"] - 0.001
+    monkeypatch.setattr(plugins, "conversation",
+                        lambda sid, pos=0, agent="": ([mid, final], 1))
+
+    def _kinds(items):
+        # classified off what the SERVER served, not off the paint: the endpoint
+        # step is exactly what the page reads too (its `ctask`), and a note-form
+        # header carries no marker text to match on
+        out = []
+        for it in items:
+            if it.get("t") == "msg":
+                out.append("answer" if "Bali" in it["html"] else "msg")
+            else:
+                out.append("result"
+                           if (it.get("ctask") or {}).get("step") == CT.STEP_END
+                           else "op")
+        return out
+
+    _last, _mpos, _oldest, backlog = DS.merged_backlog("ctask1", "ctask1")
+    live = DS.merge_live(ops, [mid, final], "ctask1")
+    assert _kinds(backlog) == _kinds(live)
+    # …and both put the child's finished card BEFORE that answer
+    assert _kinds(live).index("result") < _kinds(live).index("answer")
 
 
 def _blocks(sid, n):

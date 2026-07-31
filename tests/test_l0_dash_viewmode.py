@@ -51,6 +51,53 @@ def _viewmode_verdict(_dash=None):
     return json.loads(r.stdout)
 
 
+def _taskorder_verdict():
+    """Run the child-task ordering harness over the REAL feed builder
+    (appendItems) and return its verdict. Same shape and same skip as
+    _viewmode_verdict — the second JS-executing path, for the one half of the
+    semantic child-task order that lives only in the browser."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("no node on PATH")
+    harness = os.path.join(REPO, "tests", "jsdom", "taskorder.js")
+    app = os.path.join(REPO, "dashboard", "static", "app.05-session.js")
+    r = subprocess.run([node, harness, app], capture_output=True, text=True,
+                       timeout=60)
+    assert r.returncode == 0, r.stderr
+    return json.loads(r.stdout)
+
+
+def test_the_feed_lands_a_late_child_result_under_the_answer_it_precedes():
+    """The BROWSER's half of the semantic child-task order (core/childtask.py,
+    docs/dashboard.md *Semantic child-task order*), executed rather than grepped.
+
+    The server orders a completion and the parent turn's final answer whenever
+    both are in one payload (read/mirror.task_order, pinned in
+    test_l0_dash_conversation.py). What only the page can fix is a completion
+    arriving when the answer is ALREADY on screen — the measured session
+    019fb66b-12a0 exactly: the answer at 04:25:28.9, the child's task_complete at
+    04:25:29.4. The feed is newest-TOP, so a plain prepend put the `Agent
+    finished` card ABOVE the answer it had contributed to.
+
+    The verdict lists the feed top->bottom (newest first), so the result reading
+    BELOW the answer is the fix."""
+    d = _taskorder_verdict()
+    assert d["late"] == ["answer", "task:end"]
+    assert d["lateBlocks"] == 2          # …as ONE card, not a card plus a stray row
+    # both in one tick: the server already ordered them, and the page lays them
+    # down as given — the reason a reload and a live session read the same
+    assert d["together"] == d["late"]
+    # CONTROL: an ordinary block still lands at the top, however many answers are
+    # on screen. Only a task END with a known parent turn is ever re-placed…
+    assert d["control"] == ["commands", "answer"]
+    # …not another turn's completion, not a task naming no turn (every Claude
+    # agent — Claude Code records no turn id at all), and not a LAUNCH card, which
+    # is emitted while the turn is still running
+    assert d["otherTurn"] == ["task:end", "answer"]
+    assert d["noTurn"] == ["task:end", "answer"]
+    assert d["startEndpoint"] == ["task:start", "answer"]
+
+
 def _css_rules(css):
     """The stylesheet as {selector: body}, keyed by the whole selector LIST *and* by
     each selector in it — a rule two registers share (`.stream > .blk[data-note],

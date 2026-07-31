@@ -5788,6 +5788,79 @@ interleaving single ops with conv items is identical to a batch render. The old
 `msgs` event is gone; `/api/session/<sid>/ops` stays PURE ops (the mirror-parity
 endpoint).
 
+### Semantic child-task order
+
+Timestamps are not enough, and one shape proves it. A child agent's completion can
+land AFTER the parent has already printed its final answer — measured in session
+`019fb66b-12a0` (2026-07-31, a codex host with one native subagent):
+
+| time | what |
+|---|---|
+| 04:25:26.784 | the child's report is delivered to the parent |
+| 04:25:28.901 | the PARENT prints its final answer (`phase: "final_answer"`) |
+| 04:25:29.322 | the CHILD emits its own `final_answer` |
+| 04:25:29.422 | the child's `task_complete` |
+
+Merged by ts, the child's `⏺ Agent "bali_weather" finished` card sorted AFTER the
+answer it had contributed to. Chronologically true, semantically backwards: the
+child's work is part of the turn that answer CLOSES, and a reader looking at the
+feed sees the lead answer a question and only then sees who helped it. Time cannot
+decide this — the stream has to know which task belongs to which turn.
+
+**The model is host-neutral and lives in `core/childtask.py`** (the styleguide's
+single-owner table has the row). Three facts, spelled once:
+
+- a child TASK has an identity of its own (`childtask.key(agent, task)`) — NOT the
+  agent's. A child can be handed a SECOND task (codex's follow-up task, a teammate
+  re-tasked by mail), and grouping by agent id merges two results into one card;
+- its two ENDPOINT blocks carry that identity and which endpoint they are — the op
+  field `ctask` (`{id, step: start|end, turn}`), stamped by
+  `core/agentblocks.AgentStream` and by nothing else, so every host's child cards
+  carry it by construction (the parity contract pins the steps);
+- the task names the PARENT TURN it was started in, and the parent's own
+  conversation records name the turn they belong to plus whether they ARE that
+  turn's final response (`turn` / `final`). Those two halves are the join.
+
+**`read/mirror.task_order()` is the rule**, applied to the FULL merge before any
+window is cut and to the live delta through the same function: for each task END
+op naming a parent turn, that turn's final-response record moves to just after it.
+The RECORD moves, never the op — op ids are the slot backbone every window cut and
+`/history` cursor rides on, so they must stay ascending; the record adopts the op's
+slot, which is exactly what a conversation record's slot already means ("the op I
+follow"). Nothing else moves: mid-turn prose is never touched (only a `final`
+record is an anchor), an already-correct order is left alone, and several tasks in
+one turn all land before that turn's answer.
+
+**Live and reload agree because it is one pass.** A tick routinely carries both the
+completion and the answer, and `merge_live` runs the same `task_order` over its own
+delta. The one case the server cannot fix is a completion arriving when the answer
+went out on an EARLIER tick and is already in the DOM: the feed is newest-TOP, so a
+prepend would put the finished card ABOVE it. That is the BROWSER's half —
+`appendItems`/`taskAnchor` (app.05-session.js) finds the `[data-final][data-turn]`
+bubble and inserts the card (or its block root) just below it. Both halves are
+executed in tests, not grepped: `tests/test_l0_dash_conversation.py` for the merge
+(including that backlog and live produce the same order) and
+`tests/jsdom/taskorder.js` for the feed.
+
+**Who fills the parent turn, and why Claude Code does not.** codex writes a
+`turn_id` on every `task_started`/`task_complete`, and a child rollout opens by
+replaying the parent thread — so the last replayed `task_started` before the
+child's own bootstrap names the turn that spawned it (the only place it appears;
+`plugins/codex/stream.py` takes it on the way past the gate). The parent's answer
+is marked from codex's own `phase: "final_answer"` in `plugins/codex/read.py`.
+Claude Code records NO turn id anywhere — a turn is delimited by the prompt/reply
+chain and nothing on disk names it — so its child tasks carry the identity and the
+endpoints but no turn, and the rule is simply inert for them. That is deliberate,
+not a gap: a synchronous Task's `tool_result` reaches the lead BEFORE the lead can
+write the reply that uses it, so the inversion cannot arise through the hook path,
+and a GUESSED turn key would reorder real conversation. A host that can name its
+turns gets the ordering; one that cannot keeps the presentation, unchanged.
+
+Read-side only, so it adds NO audit rows (like ctx saturation and the goal card) —
+the evidence is already in the DB: every `ctask` stamp is part of the op the
+`paint_ops` audit records, so "why did this card land there" is answerable from the
+ops themselves.
+
 **The `tab` event re-resolves the window mid-stream.** `sse_session` resolves
 the session's `kitty_window_id` at connect, but a RESUME moves the session to
 a NEW kitty window while streams are open (the SessionStart upsert refreshes

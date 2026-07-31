@@ -5,6 +5,7 @@
 # turned into <a data-cc> hooks. Builds on ansi.py for escaping/colour.
 import html
 
+from core import childtask as CT
 from core import codefmt as CF
 from core import render as R
 from dashboard.opshtml import actclass
@@ -524,6 +525,15 @@ def op_items(ops, key="", ids=None, carry=None, scope=None):
         src = op.get("src") or ""
         if ":" in src:
             it["agent"] = src.split(":", 1)[1]
+        # …and WHICH CHILD TASK this block is an endpoint of (core/childtask.py's
+        # `ctask`), carried through verbatim so the PAGE can do what the server's
+        # merge does: a completion that arrives after the parent's final answer is
+        # already on screen has to land BELOW it, and the browser can only know
+        # that if the item says which task ended and in whose turn
+        # (docs/dashboard.md *Semantic child-task order*).
+        ct = CT.of(op)
+        if ct:
+            it["ctask"] = ct
         # …and the same for a MESSAGE (core/ops.py's `mid`): an arrival, its body and
         # its read notice are three rows about one message, and a run summary that
         # counted rows said "passed 4 messages" where two had been sent.

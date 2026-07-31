@@ -19,6 +19,7 @@ import json
 import os
 from datetime import datetime
 
+from core import childtask as CT
 from core import tail as TL
 
 from plugins.codex import rollout as RO
@@ -327,8 +328,14 @@ def conversation(sid, pos=0, agent_id=""):
     # by text: the same turn in both registers must bubble ONCE (first wins).
     seen = set()
     last_prompt = [""]          # the previous prompt's slash-stripped key
+    # The TURN each record belongs to (codex's `turn_id`, off every task_started —
+    # "" for a pre-turn_id rollout). The parent half of the child-task model
+    # (core/childtask.py): a record stamped with its turn, plus the `final` mark
+    # below, is what lets the web's merge place a child's result BEFORE the answer
+    # that turn ended on instead of after it. A list because _add closes over it.
+    turn = [""]
 
-    def _add(kind, text, ts):
+    def _add(kind, text, ts, final=False):
         body = (text or "").strip()
         key = " ".join(body.split())
         if not body or key in seen:
@@ -351,6 +358,16 @@ def conversation(sid, pos=0, agent_id=""):
                 return
             last_prompt[0] = bare
         rec = {"kind": kind, "text": body, "anchor": None, "ts": ts}
+        # WHICH TURN this record belongs to, and whether it is that turn's FINAL
+        # response (core/childtask.py's REC_TURN / REC_FINAL). Only the turn's
+        # answer is an ordering anchor — mid-turn prose must never be moved — so
+        # `final` is set from codex's own `phase: "final_answer"` and from nothing
+        # else. Written whenever the rollout names a turn; absent (and the whole
+        # mechanism inert) on a rollout that does not.
+        if turn[0]:
+            rec[CT.REC_TURN] = turn[0]
+            if final:
+                rec[CT.REC_FINAL] = 1
         # the assistant bubble's author — "codex", so the web reply bubble reads
         # "codex" instead of the msg_html default "claude" (a codex session must
         # not attribute its reply to Claude). The `prompt` bubble stays "you".
@@ -379,10 +396,18 @@ def conversation(sid, pos=0, agent_id=""):
             continue
         k = rec["kind"]
         ts = _line_ts(s)
+        if k == "task_started":
+            # the turn every record after this one belongs to (see `turn` above)
+            turn[0] = rec.get("turn") or turn[0]
+            continue
+        _final = rec.get("phase") == RO.PHASE_FINAL
         # event_msg register (a turn's only source in interactive mode)
         if k == "prompt":
             _add("prompt", rec.get("text"), ts)
-        elif k in ("message", "reasoning"):
+        elif k == "message":
+            _add("message", rec.get("text"), ts, _final)
+        elif k == "reasoning":
+            # a thinking summary is never a turn's answer, whatever follows it
             _add("message", rec.get("text"), ts)
         # response_item register (exec mode + some interactive turns)
         elif k == "chat" and not rec.get("synthetic"):
@@ -390,7 +415,7 @@ def conversation(sid, pos=0, agent_id=""):
             if role == "user":
                 _add("prompt", rec.get("text"), ts)
             elif role == "assistant":
-                _add("message", rec.get("text"), ts)
+                _add("message", rec.get("text"), ts, _final)
             # developer/system non-synthetic turns are codex machinery — skip
         elif k == "think":
             _add("message", rec.get("text"), ts)

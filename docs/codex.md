@@ -1197,27 +1197,79 @@ timing). The mapping:
 
 | rollout record | what it paints |
 |---|---|
-| the replayed-parent prefix | dropped (the gate below) |
-| the child's bootstrap `task_started` | the LAUNCH CARD, once — `blocks.launch(subagent_brief(...))` |
+| the replayed-parent prefix | dropped (the gate below) — except the PARENT TURN id, taken on the way past (*The child TASK* below) |
+| the child's bootstrap `task_started` | opens the TASK (`blocks.task`) + the LAUNCH CARD, once — `blocks.launch(subagent_brief(...))` |
 | `turn_context` / `settings` | model/effort TAGS only — no `⚙` line (a Claude child has none) |
 | `exec` | `blocks.cmd_open` + the pending ledger; closed by its result |
 | `tool` | `blocks.tool_open` — the quiet `· <name>` block (see *A non-shell tool call* below) |
 | `exec_result` | `blocks.cmd_close` / `tool_close`, paired by `call_id` |
 | `patch` | `blocks.file_line` per file + the usual scoreboard bump |
-| `message` | BUFFERED — see below |
+| `message` | `phase: "final_answer"` ⇒ the RESULT card, now; anything else BUFFERED — see below |
+| a later `task_started` | a FOLLOW-UP task: a new task id, so its result is its own card |
 | `reasoning` / mid-run `prompt` / `compact` / `search` | `blocks.reasoning` / `blocks.prompt` (a follow-up task, NOT a second launch) / `blocks.compact` / a `· search` tool block |
 | grace end | `blocks.footer(state, dur, tok_rollup + cost)`; `_fold_bump` unchanged |
 
-**The message is BUFFERED because the last one is the RESULT.** A child's final
-message is what it returned, and that is a different block from an intermediate
-one (the `⇠ result` card carries `web=1` and the `Agent "<name>" finished · <dur>`
-note; a `✎ message` carries neither). Which one it is cannot be known when the
-message arrives — only when something follows it. So the message is held and
-committed by whichever comes first: the next record that OPENS a block
-(`_FLUSH_BEFORE` — deliberately not "any record", because a `token_count` always
-trails the last message and flushing on one would demote the result card to an
-ordinary message), or `task_complete`, which flushes it as the RESULT. This is
-the substream's `flush_msg` discipline, arrived at from the same constraint.
+**codex SAYS which message is the answer — so stop inferring it.** A child's final
+message is what it returned, and that is a different block from an intermediate one
+(the `⇠ result` card carries `web=1`, the `ctask` END stamp and the
+`Agent "<name>" finished · <dur>` note; a `✎ message` carries none of them). The
+`agent_message` event carries a **`phase`**, and the measured values are
+`commentary` and `final_answer` — the latter is codex stating that this message IS
+the turn's answer. That message becomes the result card the moment it arrives, and
+`result_sent` then keeps anything after it an ordinary `✎ message`.
+
+The buffer stays, for everything NOT so marked: a held message is committed by
+whichever comes first — the next record that OPENS a block (`_FLUSH_BEFORE`;
+deliberately not "any record", because a `token_count` always trails the last
+message and flushing on one would demote the result card to an ordinary message) —
+or by `task_complete`, which for a rollout that named no phase promotes it exactly
+as before. That is the whole compatibility story for older logs: no phase ⇒ the old
+inference, unchanged.
+
+**Rejected: "whatever is pending at `task_complete` is the result."** It was the
+code, and it is wrong in both directions. A child that says something after its
+answer (a note, a caveat) had that trailing remark promoted to its RESULT while the
+real answer stayed a `✎ message`; and a child whose answer was already flushed by a
+following block got NO result card at all. The phase is a fact on disk; the pending
+buffer was a guess about arrival order.
+
+**`last_agent_message` is the LAST RESORT, never the primary.** `task_complete`
+repeats the answer's text, which makes it a good fallback for a stream that never
+saw the message record (a tailer that joined mid-run) and a bad primary: it says
+nothing about WHICH message is the answer and would repaint a message already on
+screen. So it is used only when no result was sent, nothing is pending, and the
+text differs from the last message actually painted.
+
+### The child TASK, and where its result belongs in the feed
+
+A codex child is not one task. codex hands a running child FOLLOW-UP tasks on the
+same rollout (each its own `task_started`/`task_complete` pair with its own
+`turn_id`), so "the run" and "the task" are different spans: each task gets its own
+identity, its own `⇠ result` card and its own duration on that card's note, while
+the run's FOOTER keeps timing the whole run. Grouping by agent id merged two uses of
+one child into one result.
+
+That identity is the host-neutral child-task model (`core/childtask.py`, docs/
+dashboard.md *Semantic child-task order*), and codex is the host that can fill all
+of it:
+
+- **the task id** is codex's `turn_id` (its ordinal for a pre-`turn_id` rollout —
+  what matters is only that two tasks of one child differ);
+- **the parent turn** comes from the replayed prefix. A child rollout opens by
+  replaying the parent thread, and a replayed `task_started` carries a `started_at`
+  from BEFORE the fork — which is already the bootstrap gate's own test — so the
+  last one before the bootstrap names the turn the child was spawned in. It is the
+  ONLY place a child can read it: its own records name only its own turn, and its
+  NEW_TASK payload is `encrypted_content`. The gate drops those records; this one
+  fact is taken on the way past;
+- **the parent's answer** is marked in `plugins/codex/read.conversation` off the
+  same `phase: "final_answer"`, with the `turn` tracked from every `task_started`.
+
+The web then places the child's result BEFORE that answer instead of after it. The
+duration on the card is measured to the answering MESSAGE's own envelope
+timestamp — which is why `message` joined `_ENVELOPE_TS` in the parser: the card is
+painted ~100ms before `task_complete` exists, and measuring to `time.time()` would
+make a rollout replayed from disk report the age of the file.
 
 **Lifecycle:** a subagent is a discrete TASK, like a sidecar — the per-turn grace
 end, the stuck-run backstop and the footer all apply. Only STANDALONE has the

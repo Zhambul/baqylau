@@ -575,21 +575,57 @@ function fillBlock(b, it) {
   }
 }
 
+// The BROWSER's half of the semantic child-task order (docs/dashboard.md,
+// *Semantic child-task order*). The server orders a child's completion and the
+// parent turn's final answer whenever both are in ONE payload (read/mirror.
+// task_order, backlog and live delta alike) — but a completion whose answer went
+// out on an EARLIER tick arrives with that bubble already on screen, and the feed
+// is newest-TOP, so prepending puts the `Agent finished` card ABOVE the answer it
+// contributed to. This is that case: an END endpoint of a task whose parent turn's
+// answer is in the feed lands just BELOW that bubble (below == older here).
+//
+// Returns the bubble to land under, or null — an item that is not a task END, a
+// task whose parent turn is unknown (every Claude agent: core/childtask.py), or an
+// answer not on screen (the ordinary case — the server already placed it) all
+// prepend exactly as before. A SCAN, not a selector: a turn id is opaque and
+// `querySelector` would need it escaped, where the top-level children are the
+// bubbles and there are at most a few thousand of them.
+function taskAnchor(it) {
+  const ct = it.ctask;
+  if (!ct || ct.step !== "end" || !ct.turn) return null;
+  for (const elem of S.ses.stream.children)
+    if (elem.dataset && elem.dataset.final === "1"
+        && elem.dataset.turn === ct.turn) return elem;
+  return null;
+}
+
 function appendItems(items) {
   const st = S.ses.stream;
   const w = st.querySelector(".waiting");
   if (w) w.remove();
   for (const it of items) {
+    const anchor = taskAnchor(it);
     if (!it.g) {
-      st.insertAdjacentHTML("afterbegin", it.html);
-      const elem = st.firstElementChild;
+      let elem;
+      if (anchor) {                              // …under the answer it precedes
+        const tmp = el("div");
+        tmp.innerHTML = it.html;
+        elem = tmp.firstElementChild;
+        if (elem) st.insertBefore(elem, anchor.nextElementSibling);
+      } else {
+        st.insertAdjacentHTML("afterbegin", it.html);
+        elem = st.firstElementChild;
+      }
       if (elem) stampItem(elem, it);
       continue;
     }
     let b = S.ses.blocks.get(it.g);
     if (!b) {
       b = createBlock();
-      st.prepend(b.root);
+      // the block card takes the position of its FIRST op, so the anchor applies
+      // here and nowhere else: later ops of the same group fill the card in place
+      if (anchor) st.insertBefore(b.root, anchor.nextElementSibling);
+      else st.prepend(b.root);
       S.ses.blocks.set(it.g, b);
       b.root.dataset.vk = String(++S.ses.viewSeq);
       b.root.dataset.vt = String(Date.now() / 1000);
@@ -839,6 +875,10 @@ const ACT_KIND = {
 
 function refineBlockKind(b, it) {
   if (it.agent) b.root.dataset.agent = it.agent;       // whose agent block (src id)
+  if (it.ctask) {                                      // …and which child TASK it is
+    b.root.dataset.ctask = it.ctask.id;                //   an endpoint of, so a card
+    b.root.dataset.cstep = it.ctask.step;              //   says which task it closed
+  }
   if (it.mid) b.root.dataset.mid = it.mid;             // which message (mail msg_id)
   if (it.plumb) b.root.dataset.plumb = "1";            // …and whether it IS one
   if (b.root.dataset.kind === "agents") return;        // agent wins, monotonic
@@ -884,6 +924,16 @@ function stampItem(elem, it) {
   //                                                 (a multi-file Bash read is one
   //                                                 block) — the summary's weight
   if (it.kind) elem.dataset.msg = it.kind;
+  // WHICH TURN this bubble belongs to, and whether it is that turn's FINAL answer
+  // (core/childtask.py). The answer bubble is the ANCHOR a late child completion
+  // lands under (taskAnchor) — the one thing in the feed a later item has to be
+  // able to find.
+  if (it.turn) elem.dataset.turn = it.turn;
+  if (it.final) elem.dataset.final = "1";
+  if (it.ctask) {                                // …and, on an op row, which child
+    elem.dataset.ctask = it.ctask.id;            //   TASK this block is an endpoint
+    elem.dataset.cstep = it.ctask.step;           //   of (start | end)
+  }
   if (it.agent) elem.dataset.agent = it.agent;   // the run summary counts agents,
   //                                                not agent-ish rows
   if (it.mid) elem.dataset.mid = it.mid;         // …and messages, not mail-ish rows

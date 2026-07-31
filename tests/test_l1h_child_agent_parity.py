@@ -26,6 +26,11 @@
 #      exactly what a hand-rolled copy forgets.
 #   2. Emit the launch card ONCE when the child's own work begins, and hold the
 #      final message so it lands as `result` rather than `message`.
+#   2b. Declare each TASK (`AgentStream.task`, core/childtask.py) before its
+#      endpoints paint — the identity that keeps two tasks of one child two
+#      results, and (where the host names its turns) what lets the web place a
+#      completion before the answer of the turn it belongs to. Named in _norm's
+#      stamps below, so an adapter that skips it fails the columns.
 #   3. Stamp the ops `<its register>:<agent-id>` so the same scope/classify
 #      machinery finds them, and mark the HOST's own scaffolding `chrome=1`.
 #   4. Add a `_<tool>_ops()` builder below returning that adapter's op list for
@@ -49,6 +54,7 @@ if REPO not in sys.path:
     sys.path.insert(0, REPO)
 
 from core import agentblocks as AB
+from core import childtask as CT
 from core import ops as O
 from core import render as R
 from core import slots as SL
@@ -89,6 +95,9 @@ def _claude_ops(tmp_path, monkeypatch):
         spawn_fg_tailer=lambda tid, rec, cmd="": None,
         spawn_tailer=lambda kind, taskid, cmd="", group=None: None,
         agent_dur=lambda: "42.0s")
+    # the TASK its endpoints belong to — what plugins/claude_code/substream.
+    # declare_task() does for a real streamer (one generation == one task)
+    r.blocks.task(CT.key("a1b2", "tool_use_1@0"))
     r.render_prompt(BRIEF)                                   # ⇢ launch card
     r.on_tool_use({"name": "ToolSearch", "id": "t1",
                    "input": {"query": '{"q": "bali"}'}})     # · tool + request
@@ -186,6 +195,9 @@ def _third_host_ops(tmp_path, monkeypatch):
     # the stamp is process state.
     monkeypatch.setattr(O, "_SRC", AB.src_stamp(REG_THIRD) + "k1", raising=False)
     monkeypatch.setattr(O, "_SRC_INIT", True, raising=False)
+    # …and the TASK its two endpoint cards are about (step 2b above). No parent
+    # turn: a host that cannot name its turns simply passes none.
+    blocks.task(CT.key("k1", "job-7"))
     g = O.new_group(log)
     O.emit(log, *blocks.launch(BRIEF, g))                      # ⇢ launch card
     g = O.new_group(log)
@@ -256,6 +268,14 @@ def _norm(ops, label, word=SF.AGENT_WORD):
         note = (op.get("note") or "").replace(word % label, "<child>")
         stamps = ",".join(k for k in ("web", "bubbled", "chrome", "mem")
                           if op.get(k)) + ("|lk" if op.get("lk") else "")
+        # …and which ENDPOINT of a child task this op is (core/childtask.py). The
+        # task's ID is identity (one host's turn id, another's tool_use id) and is
+        # erased like the child's name; the STEP is the contract — an adapter that
+        # declares no task stamps neither endpoint, and its launch/result cards
+        # then order differently in the web feed from every other host's.
+        ct = CT.of(op)
+        if ct:
+            stamps += "|task:" + ct["step"]
         head = _head(op, label) if t == "label" else ""
         out.append((t, groups.get(g, ""), stamps, head + ("|" + note if note else "")))
     return out

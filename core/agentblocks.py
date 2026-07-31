@@ -25,10 +25,19 @@
 # bumps, memory observers, click-to-view stashes — stays in the caller, wrapped
 # AROUND these calls; nothing about one tool's payloads may leak in here.
 #
+# The same argument covers WHICH TASK a child's two endpoint cards are about
+# (core/childtask.py): a child is not always one task — codex hands a running
+# child a follow-up, a teammate is re-tasked by mail — and a stream that stamped
+# only the agent id merged two results into one card and gave the web's merge no
+# way to tell a completion from the turn it belonged to. So `task()` below is part
+# of the same policy: the host says which task started, the two endpoint builders
+# stamp it, and every consumer reads one vocabulary.
+#
 # In core, and not in a plugin, for exactly the reason core/streamfmt.py is: the
 # dependency rule forbids codex importing claude_code, and both hosts need the
 # same answers. This module composes streamfmt's vocabulary and re-spells none
 # of it.
+from core import childtask as CT
 from core import ops as O
 from core import render as R
 from core import slots as SL
@@ -188,6 +197,15 @@ class AgentStream:
         self.register = register
         self._tags = tags
         self._agent_dur = agent_dur
+        # This child's CURRENT TASK (core/childtask.py) — the identity its launch
+        # and result cards are stamped with, and the parent turn that task runs
+        # in. A child is not necessarily one task: codex hands a running child a
+        # follow-up task, a teammate is re-tasked by mail, so the host calls
+        # `task()` whenever a new one starts and the two endpoint builders stamp
+        # whatever is current. Empty until a host says otherwise, which is what
+        # keeps a host that names no tasks painting exactly as before.
+        self._task = ""
+        self._turn = ""
         # This child's ACTIVITY CLASS (core/ops.py's `act`), from the register
         # table — every block this stream paints that is the CHILD ITSELF (its
         # launch card, its prose, its result) carries it, so the web classifies
@@ -199,6 +217,27 @@ class AgentStream:
         self.act = REGISTERS[register]["act"]
 
     # --- identity -----------------------------------------------------------
+
+    def task(self, task="", turn=""):
+        """Declare WHICH TASK this child is now working on, and the PARENT TURN
+        it was started in — the shared child-task model (core/childtask.py).
+
+        `task` is the task's own identity (`childtask.key`), stable while it runs
+        and different for the next one the same child is handed: that is what
+        makes two uses of one child two results instead of one merged card.
+        `turn` is the parent turn the task belongs to, "" when the host cannot
+        name one (Claude Code records no turn id anywhere) — the ordering rule is
+        then simply inert, and the cards are unchanged.
+
+        Called by the host at each task boundary; `launch()` and `result()` stamp
+        whatever is current, which is why the two endpoints of one task cannot
+        disagree about which task they close."""
+        self._task, self._turn = str(task or ""), str(turn or "")
+
+    def _endpoint(self, step):
+        # The `ctask` op field for one endpoint of the current task, or None when
+        # this host names no task (childtask.stamp validates and returns None).
+        return CT.stamp(self._task, step, self._turn)
 
     def _tagset(self, ctx=""):
         # The op's `tags` field: the model/effort chip, then this turn's ctx
@@ -231,23 +270,24 @@ class AgentStream:
     # --- the shared op shapes, bound to this stream -------------------------
 
     def _chip(self, glyph, kind, ctx="", g=None, lk=None, web=False, note=None,
-              mem=False, bubbled=False, act=None):
+              mem=False, bubbled=False, act=None, ctask=None):
         # `act` defaults to the child's own class (self.act): most of these
         # blocks ARE the child speaking, and the ones that are a kind of WORK
         # pass their own.
         return SF.chip(self.label, glyph, kind, self.rgb, tags=self._tagset(ctx),
                        g=g, lk=lk, web=web, note=note, mem=mem, bubbled=bubbled,
-                       act=self.act if act is None else act)
+                       act=self.act if act is None else act, ctask=ctask)
 
-    def _gut(self, text, g=None, web=False, bubbled=False):
-        return SF.gutter(text, self.rgb, g=g, web=web, bubbled=bubbled)
+    def _gut(self, text, g=None, web=False, bubbled=False, ctask=None):
+        return SF.gutter(text, self.rgb, g=g, web=web, bubbled=bubbled,
+                         ctask=ctask)
 
-    def _md(self, text, g=None, web=False, bubbled=False):
+    def _md(self, text, g=None, web=False, bubbled=False, ctask=None):
         # A child's own PROSE is markdown — render the subset (bold/italic/code/
         # headings/bullets). Command output is NOT (that goes through _gut's
         # emphasise path), which is why the two body shapes stay apart.
         return O.gut(R.markdown(R.unescape(text)), self.rgb, g=g, web=web,
-                     bubbled=bubbled)
+                     bubbled=bubbled, ctask=ctask)
 
     # --- the blocks ---------------------------------------------------------
 
@@ -257,12 +297,18 @@ class AgentStream:
         One of the TWO blocks stamped `web` (core/ops.py): the lead's mirror
         shows a child's launch and its result and nothing in between, and this
         is the launch, with the brief itself behind the click. `bubbled` because
-        agent scope re-bubbles the same brief from the child's own transcript."""
+        agent scope re-bubbles the same brief from the child's own transcript.
+
+        Also the START endpoint of the current task (core/childtask.py, `task()`
+        above): stamped on BOTH ops, header and body, exactly as `bubbled` is —
+        a consumer holding only the header would have to reconstruct the block to
+        know where it ends."""
+        ct = self._endpoint(CT.STEP_START)
         return [self._chip(*SF.MARK_PROMPT, g=g, lk=O.COPY_ALL, web=True,
                            note=self.note(SF.VERB_RESUMED if resumed
                                           else SF.VERB_LAUNCHED),
-                           bubbled=True),
-                self._gut(brief, g=g, web=True, bubbled=True)]
+                           bubbled=True, ctask=ct),
+                self._gut(brief, g=g, web=True, bubbled=True, ctask=ct)]
 
     def prompt(self, text, g, ctx=""):
         """`⇢ prompt` again, MID-RUN — a follow-up task handed to a child that is
@@ -278,11 +324,18 @@ class AgentStream:
     def result(self, text, g, ctx=""):
         """`⇠ result` — what the child returned. The other `web`-stamped block,
         and the only one whose note carries a duration (the run is over, so
-        there is one to report)."""
+        there is one to report).
+
+        …and the END endpoint of the current task — the one stamp the web's stream
+        merge acts on, because this is the block whose place in the feed the
+        parent's final answer must follow rather than precede (core/childtask.py).
+        A child handed a SECOND task emits a second result card with a second task
+        id, which is what keeps the two from folding into one."""
+        ct = self._endpoint(CT.STEP_END)
         return [self._chip(*SF.MARK_RESULT, ctx, g=g, lk=O.COPY_ALL, web=True,
                            note=self.note(SF.VERB_FINISHED, dur=True),
-                           bubbled=True),
-                self._md(text, g=g, web=True, bubbled=True)]
+                           bubbled=True, ctask=ct),
+                self._md(text, g=g, web=True, bubbled=True, ctask=ct)]
 
     def message(self, text, g, ctx=""):
         """`✎ message` — an INTERMEDIATE assistant message. Deliberately NOT

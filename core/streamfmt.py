@@ -134,7 +134,7 @@ def skill_note(name, failed=False):
 
 
 def chip(who, glyph, kind, rgb, tags=(), g=None, lk=None, web=False, note=None,
-         mem=False, bubbled=False, act=None):
+         mem=False, bubbled=False, act=None, ctask=None):
     """The block-header label op: `<glyph> <kind>` in the stream's colour, with
     `who` (the agent's name) and `tags` (its model/effort + ctx chips) carried as
     the op's OWN fields rather than concatenated into the text (core/ops.py — the
@@ -149,9 +149,13 @@ def chip(who, glyph, kind, rgb, tags=(), g=None, lk=None, web=False, note=None,
     plugins.conversation (see O.label) — the one unified agent-scope prose-drop
     signal across Claude subagents and codex sidecars. `act` is the block's
     ACTIVITY CLASS (see O.label): what the web folds a run of these into, said by
-    the producer instead of recovered from `glyph` + `rgb`."""
+    the producer instead of recovered from `glyph` + `rgb`. `ctask` marks the
+    block as an ENDPOINT of one child task (see O.label / core/childtask.py) —
+    passed through, never built here: which task a block closes is the producer's
+    fact and core/agentblocks is the one place that knows it."""
     return O.label(f"{glyph} {kind}", rgb, g=g, lk=lk, web=web, note=note,
-                   who=who, tags=tags, mem=mem, bubbled=bubbled, act=act)
+                   who=who, tags=tags, mem=mem, bubbled=bubbled, act=act,
+                   ctask=ctask)
 
 
 def compose(op, s=None):
@@ -232,12 +236,14 @@ def strip_who(s, rgb):
     return s[:at] + s[end + len(R.RST):]
 
 
-def gutter(text, rgb, g=None, web=False, bubbled=False):
+def gutter(text, rgb, g=None, web=False, bubbled=False, ctask=None):
     """Body text behind the stream-coloured gutter bar (escapes neutralised).
     web=True keeps this stamped op in the web dashboard's main mirror (a subagent
     prompt/result body — see core/ops.py's "web" field). `bubbled` marks a prose
-    body re-bubbled via plugins.conversation (see O.gut / chip)."""
-    return O.gut(R.unescape(text), rgb, g=g, web=web, bubbled=bubbled)
+    body re-bubbled via plugins.conversation (see O.gut / chip); `ctask` marks a
+    child-task endpoint's body op (see chip)."""
+    return O.gut(R.unescape(text), rgb, g=g, web=web, bubbled=bubbled,
+                 ctask=ctask)
 
 
 def dim_gut(text, rgb, g=None, bubbled=False, chrome=False):

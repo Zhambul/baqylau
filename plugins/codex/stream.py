@@ -30,6 +30,7 @@ import json, os, re, sys, time
 from datetime import datetime
 
 from core import agentblocks as AB
+from core import childtask as CT
 from core import env as EV
 from core import ops as O
 from core import render as R
@@ -106,6 +107,17 @@ def _init(argv):
         REGISTER = REG_STANDALONE
     else:
         REGISTER = REG_SIDECAR
+
+
+def _agent_id():
+    """This run's AGENT ID — the bare id out of the producer stamp `sub:<aid>`
+    (core/ops.py's `src`, exported by plugins/codex/watch.spawn as
+    $CLAUDE_OPS_SRC), or the run LABEL when the stream runs unstamped (a manual
+    invocation, a test). One half of the child-task key (core/childtask.key); the
+    prefix is deliberately dropped, exactly as the web's scope key drops it — the
+    register says who PRODUCED an op, never which child it is about."""
+    src = O.op_src() or ""
+    return src.split(":", 1)[1] if ":" in src else (src or LABEL)
 
 
 def _iso_ts(s):
@@ -331,12 +343,27 @@ class Renderer:
                                      register=AB.REG_AGENT,
                                      tags=lambda: self.ro_tag,
                                      agent_dur=self._agent_dur)
-        # …and its buffered assistant message: the LAST message a child sends
-        # before it completes is its RESULT (the ⇠ card), so a message is held
-        # until either the next block paints (making it an intermediate ✎ message)
-        # or the task completes. Exactly the substream's flush_msg discipline.
+        # …and its buffered assistant message. codex SAYS which message is the
+        # turn's answer (`phase: "final_answer"` — rollout.PHASE_FINAL), and that
+        # message becomes the ⇠ result card the moment it arrives. The buffer is
+        # what serves every message that is NOT so marked: it is held until the
+        # next block paints (making it an intermediate ✎ message) or the task
+        # completes with no final answer ever seen, which is the PRE-PHASE
+        # inference and stays exactly as it was for rollouts written without a
+        # phase. Same discipline as the substream's flush_msg.
         self.pending_msg = None
         self.last_msg = ""    # last assistant-message body, to de-dup a repeated "Final output"
+        # The CHILD-TASK model (core/childtask.py) — this child's current task and
+        # the parent turn it belongs to. A codex child can be handed a FOLLOW-UP
+        # task on the same rollout, so "the run" and "the task" are not the same
+        # thing: each task gets its own id, its own result card and its own
+        # duration, while the run's footer keeps timing the whole run.
+        self.parent_turn = ""   # the turn that spawned this child (replayed prefix)
+        self.cur_turn = ""      # this task's own turn id ("" pre-turn_id rollouts)
+        self.task_n = 0         # tasks opened so far — the id when there is no turn
+        self.task_start = None  # this task's start / end epoch (the ⇠ card's `· dur`)
+        self.task_end = None
+        self.result_sent = False   # …and whether its ⇠ result card is already out
         # companion: the `[ts]` block currently being accumulated (a head only
         # renders when the NEXT timestamped line flushes it)
         self.cur_head, self.cur_body = None, []
@@ -376,15 +403,39 @@ class Renderer:
     # --- SUBAGENT register: the child-agent lifecycle ---------------------------
 
     def _agent_dur(self):
-        """How long this child has been running, for the finish note — from its
-        BOOTSTRAP task_started (`ro_started`, stamped at the gate flip below,
-        because the bootstrap record itself is dropped as turn chrome) to its
-        completion, or to now while it still runs. "" when the start is unknown,
-        and the note then simply carries no duration."""
-        if not self.ro_started:
+        """How long this child's CURRENT TASK has run, for the finish note — from
+        that task's `task_started` to its end, or to now while it still runs. ""
+        when the start is unknown, and the note then simply carries no duration.
+
+        Per TASK, not per run: a child handed a follow-up task emits a second ⇠
+        result card, and reporting the whole run's elapsed on it would say the
+        second task took as long as both. Falls back to the run's own window
+        (`ro_started`/`ro_completed`) when no task boundary was seen, which is
+        every pre-turn_id rollout — there the two are the same span."""
+        start = self.task_start or self.ro_started
+        if not start:
             return ""
-        end = self.ro_completed or time.time()
-        return O.fmt_dur(max(0.0, end - self.ro_started))
+        end = self.task_end or self.ro_completed or time.time()
+        return O.fmt_dur(max(0.0, end - start))
+
+    def _task_open(self, rec):
+        """A TASK of this child begins (its bootstrap task_started, or a later one
+        for a follow-up task) — mint its identity and hand it to the block
+        builders, which stamp the launch and result cards with it
+        (core/agentblocks.AgentStream.task).
+
+        The id is codex's `turn_id` where the rollout has one, else this child's
+        task ORDINAL: what matters is only that two tasks of one child differ, and
+        a pre-turn_id rollout still gets one id per task. The PARENT turn comes
+        from the replayed prefix (see feed_rollout) and is what the web's merge
+        joins the parent's final answer on."""
+        self.task_n += 1
+        self.cur_turn = rec.get("turn") or ""
+        self.task_start = rec.get("at") or _iso_ts(rec.get("ts")) or time.time()
+        self.task_end = None
+        self.result_sent = False
+        self.blocks.task(CT.key(_agent_id(), self.cur_turn or self.task_n),
+                         self.parent_turn)
 
     def _emit_launch(self, rec):
         """The child's LAUNCH CARD, emitted once, at the moment its own turns
@@ -398,13 +449,17 @@ class Renderer:
         O.emit(LOG, *self.blocks.launch(brief, O.new_group(LOG)))
 
     def flush_msg(self, is_result=False):
-        """Commit the buffered assistant message — as the ⇠ RESULT card when the
-        run is completing, else as an intermediate ✎ message."""
+        """Commit the buffered assistant message — as the ⇠ RESULT card when it is
+        this task's answer, else as an intermediate ✎ message. `result_sent` then
+        records that this task's result is out, so nothing that follows can become
+        a second one."""
         if self.pending_msg is None:
             return
         text, self.pending_msg = self.pending_msg, None
         build = self.blocks.result if is_result else self.blocks.message
         O.emit(LOG, *build(text, O.new_group(LOG)))
+        if is_result:
+            self.result_sent = True
 
     def _emit_exit_chip(self, code):
         # The red failed-exit chip, shared by both sources (companion
@@ -565,15 +620,45 @@ class Renderer:
         self.ro_active = True
         if self.ro_started is None:
             self.ro_started = rec["at"]
+        # A task_started reaching HERE is a task of this run's own (the child's
+        # bootstrap one is consumed at the gate) — for a child that means a
+        # FOLLOW-UP task, which gets an identity of its own so its result cannot
+        # merge with the previous one's.
+        self._task_open(rec)
 
     def _ro_task_complete(self, rec):
         self.ro_active = False
         self.ro_completed = rec["at"] or self.ro_completed
+        self.task_end = rec["at"] or _iso_ts(rec.get("ts")) or self.task_end
         self.ro_done_wall = time.time()
-        # …and the message the child was holding is its RESULT: the ⇠ card, whose
-        # note carries the duration this record just closed (set above, so
-        # _agent_dur reports the real task time and not "still running").
-        if REGISTER == REG_SUBAGENT:
+        if REGISTER != REG_SUBAGENT:
+            return
+        if self.result_sent:
+            # codex already NAMED this task's answer (a `final_answer` message,
+            # painted as the ⇠ card there) — so whatever is held now is an
+            # ordinary trailing message, not a second result. This is the whole
+            # "do not treat an ordinary message as a final result" rule: it used
+            # to be whichever message happened to be pending at this record.
+            self.flush_msg()
+            return
+        if self.pending_msg is not None:
+            # THE PRE-PHASE INFERENCE, unchanged: no message said it was the
+            # answer, so the one the child was holding is it — the ⇠ card, whose
+            # note carries the duration this record just closed (set above, so
+            # _agent_dur reports the real task time and not "still running").
+            # This is what keeps rollouts written before `phase` existed reading
+            # exactly as they did.
+            self.flush_msg(is_result=True)
+            return
+        # …and the LAST RESORT: codex's own `last_agent_message`. Only reachable
+        # when this stream never saw the message record itself (a tailer that
+        # joined mid-run), which is why the text is checked against the last
+        # message actually painted — repainting a message already on screen as a
+        # result would double it, and having no result card is what this run did
+        # before.
+        last = rec.get("last") or ""
+        if last and last != self.last_msg:
+            self.pending_msg = last
             self.flush_msg(is_result=True)
 
     def _ro_turn_aborted(self, rec):
@@ -632,12 +717,22 @@ class Renderer:
         if REGISTER == REG_STANDALONE:
             return
         if REGISTER == REG_SUBAGENT:
-            # BUFFERED, not painted: which card this message becomes is only known
-            # once something follows it (see flush_msg). UNCAPPED, like the
-            # substream's — a child's message and its result are what the stream
-            # exists to deliver.
+            # UNCAPPED, like the substream's — a child's message and its result
+            # are what the stream exists to deliver.
             self.flush_msg()                  # commit the previous one
             self.pending_msg = rec["text"]
+            if rec.get("phase") == RO.PHASE_FINAL:
+                # codex SAYS this message is the turn's answer, so it is this
+                # task's RESULT and it can be painted now — no inference, and no
+                # waiting for task_complete to guess from what is pending. The
+                # card's duration is measured to THIS record's own clock (the
+                # completion is ~100ms away and a replayed rollout has no business
+                # measuring to now).
+                self.task_end = _iso_ts(rec.get("ts")) or self.task_end
+                self.flush_msg(is_result=True)
+                return
+            # …anything else stays BUFFERED: which card an unmarked message becomes
+            # is only known once something follows it (see flush_msg).
             return
         g = O.new_group(LOG)
         O.emit(LOG, chip("✎", "message", g=g, lk=O.COPY_ALL, bubbled=True),
@@ -835,7 +930,18 @@ class Renderer:
             if RO.is_child_bootstrap(rec, self.fork_epoch):
                 self.sub_open = True
                 if REGISTER == REG_SUBAGENT:
-                    self._emit_launch(rec)     # the ⇢ card, once, right here
+                    self._task_open(rec)       # this child's FIRST task…
+                    self._emit_launch(rec)     # …and its ⇢ card, once, right here
+                return
+            # …and ONE fact is taken from the prefix on the way past: a replayed
+            # `task_started` is the PARENT's turn (its `started_at` predates the
+            # fork — that is the very test above), so the last one before the
+            # bootstrap names the turn this child was spawned in. It is the only
+            # place a child can learn it, and it is what lets the web place this
+            # child's result before that turn's final answer
+            # (core/childtask.py).
+            if rec["kind"] == "task_started" and rec.get("turn"):
+                self.parent_turn = rec["turn"]
             return
         if REGISTER == REG_SUBAGENT and rec["kind"] in _FLUSH_BEFORE:
             # a block is about to paint, so the held message is an INTERMEDIATE
@@ -986,9 +1092,12 @@ def main(run):
         sec = max(0.0, time.time() - start)
     dur = O.fmt_dur(sec)
     # A SUBAGENT that ended without a task_complete (aborted, backstopped) still
-    # owes its held message — as the RESULT, since nothing more is coming.
+    # owes its held message — as the RESULT, since nothing more is coming. Unless
+    # this task's result is already out (codex named its `final_answer` and a
+    # trailing message followed it): a second ⇠ card for one task would claim the
+    # child returned twice.
     if REGISTER == REG_SUBAGENT:
-        rd.flush_msg(is_result=True)
+        rd.flush_msg(is_result=not rd.result_sent)
     foot = ""
     if ROLLOUT and isinstance(rd.ro_usage, dict):
         # Cumulative rollup from the run's last token_count: fresh billed

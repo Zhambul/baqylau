@@ -439,11 +439,26 @@ def _ev_context_compacted(p):
 
 
 def _ev_task_started(p):
-    return {"kind": "task_started", "at": p.get("started_at")}
+    # `turn_id` is codex's identity for the TURN this task is — the fact the
+    # child-task model is built on (core/childtask.py). A child rollout opens by
+    # replaying the parent thread, so the task_started records BEFORE the child's
+    # own bootstrap carry the PARENT's turn id, which is how a child learns the
+    # turn it was spawned in (plugins/codex/stream.py). Absent on older rollouts:
+    # "" then, and every consumer degrades to its pre-turn behaviour.
+    return {"kind": "task_started", "at": p.get("started_at"),
+            "turn": p.get("turn_id") or ""}
 
 
 def _ev_task_complete(p):
-    return {"kind": "task_complete", "at": p.get("completed_at")}
+    # …and the same turn id closing it, plus `last_agent_message`: codex's own
+    # statement of what the turn ANSWERED. Kept because it is the FALLBACK result
+    # text (plugins/codex/stream._ro_task_complete) for a run whose messages
+    # carried no `phase` — a pre-phase rollout, or a tailer that joined mid-run
+    # and never saw the message record. Never the primary: the `final_answer`
+    # phase says which message IS the result, where this only repeats text.
+    return {"kind": "task_complete", "at": p.get("completed_at"),
+            "turn": p.get("turn_id") or "",
+            "last": (p.get("last_agent_message") or "").strip()}
 
 
 def _ev_thread_settings_applied(p):
@@ -491,9 +506,18 @@ def _ev_agent_reasoning(p):
     return {"kind": "reasoning", "text": txt} if txt else None
 
 
+# The PHASE codex stamps on an assistant message. `final_answer` is the one that
+# matters: it is codex SAYING this message is the turn's answer, which is what
+# tells a child's stream that this message is its RESULT rather than one more
+# intermediate note (`commentary` is the other measured value). Absent on older
+# rollouts — "" then, and the result falls back to the pre-phase inference.
+PHASE_FINAL = "final_answer"
+
+
 def _ev_agent_message(p):
     msg = (p.get("message") or "").strip()
-    return {"kind": "message", "text": msg} if msg else None
+    return {"kind": "message", "text": msg,
+            "phase": (p.get("phase") or "").strip()} if msg else None
 
 
 def _ev_web_search_end(p):
@@ -560,8 +584,13 @@ def _rsp_message(p):
     # role-aware synthetic on the RAW text (the `<tag>` is the signal), THEN unwrap
     # an INPUT wrapper so a kept `<task>` prompt reads as its inner text.
     synth = is_synthetic(txt, role)
+    # …carrying the assistant PHASE too (see PHASE_FINAL): this register is the
+    # twin of the event_msg one, and the web's conversation read takes whichever
+    # arrives first — so the fact that a reply is the turn's FINAL ANSWER has to
+    # survive both spellings or it survives neither.
     return {"kind": "chat", "role": role,
-            "text": strip_input_wrapper(txt), "synthetic": synth}
+            "text": strip_input_wrapper(txt), "synthetic": synth,
+            "phase": (p.get("phase") or "").strip()}
 
 
 def _rsp_reasoning(p):
@@ -715,13 +744,19 @@ _TOP = {"turn_context": _turn_context, "compacted": _top_compacted,
         "world_state": _top_world_state}
 
 # Record kinds that carry the ENVELOPE's `timestamp` as a separate `ts` string.
-# Two families: the task lifecycle records whose OWN timestamp field is absent in
-# many codex versions (task_started/task_complete), and the exec pair — a codex
+# Three families: the task lifecycle records whose OWN timestamp field is absent
+# in many codex versions (task_started/task_complete), the exec pair — a codex
 # exec record carries no duration of its own, so the standalone command block
 # times itself from the exec's `ts` to its exec_result's `ts` (the elapsed on
-# `■ finished · Ns`, plugins/codex/stream.py). `ts` is always the ISO envelope
-# string, never folded into the numeric `at` a task duration subtracts.
-_ENVELOPE_TS = ("task_started", "task_complete", "exec", "exec_result")
+# `■ finished · Ns`, plugins/codex/stream.py) — and an assistant `message`, whose
+# clock a child's RESULT card needs: a `final_answer` message ENDS the task
+# (plugins/codex/stream.py paints the ⇠ card there, ~100ms before task_complete),
+# so without it the card's `· 23.0s` would be measured to `time.time()` and a
+# rollout being replayed from disk would report the age of the file. `ts` is
+# always the ISO envelope string, never folded into the numeric `at` a task
+# duration subtracts.
+_ENVELOPE_TS = ("task_started", "task_complete", "exec", "exec_result",
+                "message")
 
 
 def _stamp(rec, o):

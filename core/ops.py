@@ -92,6 +92,19 @@
 # re-stamped, so that fallback stays). Inert for the terminal renderer, like
 # "web"/"note"/"bubbled".
 #
+# A label/gut op may carry "ctask": this block is an ENDPOINT of one child
+# agent's TASK — its launch card or its result card — naming the task, which
+# endpoint, and the parent TURN the task was started in (core/childtask.py owns
+# the shape and the vocabulary; `_ctask` below only stamps what it built). The
+# web's stream merge reads it to place a child's result BEFORE the parent turn's
+# final response, which pure timestamp order gets backwards whenever a child's
+# completion lands after the answer it contributed to (docs/dashboard.md
+# *Semantic child-task order*). Producer-set for the same reason "web"/"bubbled"/
+# "chrome" are: only the producer knows which task a block belongs to. Stamped by
+# core/agentblocks (every host's child blocks come from there) and inert for the
+# terminal renderer, like the other web fields. Deliberately NOT called "task":
+# ACT_TASK below is a TaskCreate/TaskUpdate todo row, a different thing entirely.
+#
 # A label/gut op may carry "mid": the id of the SUBJECT it is about, when several
 # ops speak about one thing — today a team message's msg_id (plugins/claude_code/
 # msgs.py: an arrival, its body and its read notice all wear the same mid). The
@@ -130,6 +143,7 @@
 # equivalent, runnable bash either way); ⧉out/⧉copy the ANSI-stripped gut text.
 import os
 
+from core import childtask as CT       # the child-task stamp's shape (see `ctask`)
 from core.noaudit import load_audit
 
 A = load_audit()   # always-on audit trail (CLAUDE_AUDIT=0 disables); inert stub if it can't import
@@ -184,6 +198,18 @@ def _act(o, act):
     return o
 
 
+def _ctask(o, ct):
+    """Stamp a CHILD-TASK endpoint marker on op `o` — which task this block is an
+    endpoint of, which endpoint, and the parent turn the task ran in
+    (core/childtask.py owns the shape; `stamp()` there is what builds a valid
+    value and returns None for anything else, so an unstampable call writes
+    nothing and the consumer simply has no ordering hint). Returns the op, like
+    _act."""
+    if isinstance(ct, dict) and ct.get("id"):
+        o[CT.FIELD] = dict(ct)
+    return o
+
+
 def blank():
     return {"t": "blank"}
 
@@ -209,8 +235,9 @@ def rule():
 
 
 def label(s, c, outer=None, g=None, lk=None, web=False, note=None, mid=None,
-          who=None, tags=(), mem=False, bubbled=False, chrome=False, act=None):
-    o = _act({"t": "label", "s": s, "c": _rgb(c)}, act)
+          who=None, tags=(), mem=False, bubbled=False, chrome=False, act=None,
+          ctask=None):
+    o = _ctask(_act({"t": "label", "s": s, "c": _rgb(c)}, act), ctask)
     if who:
         o["who"] = str(who)
     tags = [str(t) for t in (tags or ()) if t]
@@ -270,14 +297,15 @@ def code(s, ind="  ", g=None):
 
 def gut(s, c, outer=None, g=None, bg=None, lex=None, num=None, view=None,
         web=False, mem=False, mid=None, who=None, tags=(), bubbled=False,
-        chrome=False, act=None, add=0, rem=0):
+        chrome=False, act=None, add=0, rem=0, ctask=None):
     # `act` on a BODY op is only meaningful for the one gut that is a whole block
     # by itself — a child agent's file-op one-liner, which agent scope converts
     # into the `line` op the lead paints (actclass.as_lead) and which carries the
     # hint across that conversion. Ordinary body ops take their class from the
     # header above them and pass nothing. `add`/`rem` ride the same op and for
     # the same reason (see line()).
-    o = _diff(_act({"t": "gut", "s": s, "c": _rgb(c)}, act), add, rem)
+    o = _ctask(_diff(_act({"t": "gut", "s": s, "c": _rgb(c)}, act), add, rem),
+               ctask)
     if who:
         o["who"] = str(who)            # see label()'s `who`
     tags = [str(t) for t in (tags or ()) if t]
