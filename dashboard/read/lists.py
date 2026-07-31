@@ -104,8 +104,26 @@ def sessions_payload():
         row["group_dir"] = group_dir(
             canon_cwd(row.get("start_cwd") or "") or row["cwd"])
         row["last_active"] = _last_active(row, sdb)
+        # PROJECTLESS rows are dropped outright: a session whose group key
+        # resolves to the empty string has no directory to belong to (a daemon
+        # /headless start with a scrubbed env, a minimal parked row with neither
+        # start_cwd nor cwd). The list used to aggregate them under a "no
+        # project" header, which is noise, never actionable, and never what you
+        # are looking for — so the whole group AND its sessions are gone from
+        # every overview this payload feeds (list, SSE, dir_live_sessions,
+        # the Stats live tally). A direct /#/s/<sid> link still works.
+        if not group_key(row):
+            continue
         out.append(row)
     return out
+
+
+def group_key(row):
+    """The list-page group key of a row (the SAME `group_dir || cwd || ""` the
+    page's groupKey computes), truthy only when the row HAS a project directory.
+    The one owner of 'does this session belong to a project' — sessions_payload
+    filters on it so no other view has to."""
+    return row.get("group_dir") or row.get("cwd") or ""
 
 
 def dir_live_sessions(key):
@@ -118,8 +136,7 @@ def dir_live_sessions(key):
     cheapest call, but a hide is a rare user action, and reusing it keeps the
     'is this dir active' answer byte-identical to what the page shows."""
     return [r for r in sessions_payload()
-            if r.get("live")
-            and (r.get("group_dir") or r.get("cwd") or "") == key]
+            if r.get("live") and group_key(r) == key]
 
 
 def resumable_payload(cwd, limit, q=""):
@@ -293,6 +310,8 @@ def _stats_compute():
     projects = {}
     for r in rows:
         key = r["_key"]
+        if not key:       # projectless: no card, same as the list page's drop
+            continue
         p = projects.get(key)
         if p is None:
             p = projects[key] = {"dir": key, "name": os.path.basename(key) or key,
@@ -317,6 +336,8 @@ def _stats_compute():
         wr = [r for r in rows if (r.get("started_at") or 0) >= cut]
         by_proj = {}
         for r in wr:
+            if not r["_key"]:            # projectless rows name no project
+                continue
             by_proj[r["_key"]] = by_proj.get(r["_key"], 0) + 1
         top = sorted(by_proj.items(), key=lambda kv: kv[1],
                      reverse=True)[:STATS_TOP_PROJECTS]

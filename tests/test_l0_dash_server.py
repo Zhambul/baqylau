@@ -357,6 +357,30 @@ def test_sessions_last_active_fallback_chain(dash, tmp_path):
     assert rows["dla4"]["last_active"] == rows["dla4"]["started_at"] > 0
 
 
+def test_projectless_sessions_are_not_listed(dash, monkeypatch):
+    """A session whose group key resolves to the EMPTY string — no start_cwd AND
+    no cwd, the shape a minimal parked row with no audit `sessions` row has — is
+    dropped from the list entirely, so there is no "no project" group left to
+    render (docs/dashboard.md *Grouping and titles*). A session WITH a cwd is
+    unaffected. (A.session_start can't produce the shape: it backfills cwd with
+    os.getcwd(), so the keyless row is injected at the API seam.)"""
+    from dashboard.read import lists
+    A.session_start({"session_id": "npj2", "cwd": "/w", "transcript_path": ""})
+    A.session_start({"session_id": "npj1", "cwd": "/w", "transcript_path": ""})
+
+    def _keyless(n):                     # blank npj1's cwds at the API seam
+        rows = [dict(r) for r in real(n)]
+        for r in rows:
+            if r["sid"] == "npj1":
+                r["cwd"] = r["start_cwd"] = ""
+        return rows
+    real = lists.API.sessions
+    monkeypatch.setattr(lists.API, "sessions", _keyless)
+    sids = {r["sid"] for r in _get_json(dash + "/api/sessions")}
+    assert "npj2" in sids
+    assert "npj1" not in sids
+
+
 def test_stats_active_counts_only_live_sessions(dash):
     """Stats Pulse `active` is GENUINE liveness (sessions_payload's live), NOT
     `ended_at IS NULL`. A session that died without a clean SessionEnd keeps

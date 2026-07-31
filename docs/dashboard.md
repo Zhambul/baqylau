@@ -5301,6 +5301,20 @@ returns the worktree owner (`root`) or the dir itself. Two consequences:
   bug this pinning fixes. `start_cwd` is server-internal (it only feeds
   `group_dir`) and is stripped from the wire by `wire_row`.
 
+**A session with NO project directory is not shown at all.** If the group key
+resolves to the empty string — neither a `start_cwd` nor a `cwd` survives (a
+daemon-origin / headless start with a scrubbed env, an audit-less minimal parked
+row) — `sessions_payload` DROPS the row (`lists.group_key`, the one owner of
+"does this session belong to a project"). The list used to collect them under a
+"no project" header: a bucket of unrelated sessions with no directory, no "+"
+launch target, and nothing to act on. Dropping it server-side means every
+overview fed by that payload agrees — the list, its SSE ticks, `dir_live_sessions`
+and the Stats page's live tally — and the Stats project cards / top-projects bars
+skip the same keyless rows. Only the OVERVIEWS are filtered: a direct
+`#/s/<sid>` link still opens such a session in full. app.js keeps its `"no
+project"` header fallback as dead defensive code, since the empty key can no
+longer reach it.
+
 A parked session whose worktree was since REMOVED degrades to its own
 start-cwd-keyed group (`_git_resolve` returns null once the `.git` file is
 gone — the branch chip drops the same way). Groups are ordered by their newest session's `started_at`
