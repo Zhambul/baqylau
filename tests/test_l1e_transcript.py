@@ -919,6 +919,77 @@ def test_context_probe_only_the_newest_boundary_speaks(tmp_path):
     assert TR.context_probe(p)["used"] == 180000
 
 
+def _u(o, uuid, parent=None, **kw):
+    o = dict(o, uuid=uuid)
+    o["parentUuid"] = parent
+    o.update(kw)
+    return o
+
+
+_ASSIST = {"type": "assistant", "message": {"model": "claude-haiku-4-5",
+           "usage": {"input_tokens": 180000, "output_tokens": 9}}}
+
+
+def test_context_probe_honours_a_boundary_its_branch_still_holds(tmp_path):
+    # The graph check must not cost the normal case anything: the summary and
+    # everything after it descend from the boundary, so postTokens still wins.
+    p = _wt(tmp_path, "cb5.jsonl",
+            _u(_ASSIST, "a1"),
+            _u(_boundary(post=8969), "b1"),
+            _u({"type": "user", "message": {"content": "summary…"}},
+               "s1", "b1"),
+            _u({"type": "attachment", "attachment": {}}, "s2", "s1"))
+    assert TR.context_probe(p)["used"] == 8969
+
+
+def test_context_probe_drops_a_REVERTED_compactions_boundary(tmp_path):
+    # A compaction can be REVERTED and Claude Code writes NOTHING when it
+    # happens — no hook, not one byte. The record GRAPH is the only trace:
+    # the next record appended lands back on the PRE-compaction leaf, below
+    # the boundary (measured, session c2442d36: boundary branch 720→734, the
+    # post-revert prompt's parentUuid pointed at record 703). Honouring the
+    # boundary there reported 13,805 tokens for a context holding 223,546.
+    p = _wt(tmp_path, "cb6.jsonl",
+            _u(_ASSIST, "a1"),
+            _u(_boundary(post=8969), "b1"),
+            _u({"type": "user", "message": {"content": "summary…"}},
+               "s1", "b1"),
+            # the revert: the new prompt hangs off the pre-compaction leaf
+            _u({"type": "user", "message": {"content": "actually, no"}},
+               "p1", "a1"))
+    got = TR.context_probe(p)
+    assert got["used"] == 180000        # the pre-compaction turn, right again
+    assert (got["window"], got["model"]) == (200000, "claude-haiku-4-5")
+
+
+def test_context_probe_boundary_survives_a_sidechain_leaf(tmp_path):
+    # An agent's records can be the last thing in the file. Its chain roots in
+    # the main thread and is NOT what a boundary speaks for, so the leaf is the
+    # last NON-sidechain uuid — here the summary, still on the branch.
+    p = _wt(tmp_path, "cb7.jsonl",
+            _u(_ASSIST, "a1"),
+            _u(_boundary(post=8969), "b1"),
+            _u({"type": "user", "message": {"content": "summary…"}},
+               "s1", "b1"),
+            _u({"type": "user", "message": {"content": "agent turn"}},
+               "g1", "zzz-outside-the-window", isSidechain=True))
+    assert TR.context_probe(p)["used"] == 8969
+
+
+def test_context_probe_boundary_fails_open_with_nothing_after_it(tmp_path):
+    # A revert with no bytes after it is undetectable BY CONSTRUCTION — the
+    # file is identical to the moment before — and every ambiguous case keeps
+    # the boundary, which is right until a revert happens.
+    p = _wt(tmp_path, "cb8.jsonl", _u(_ASSIST, "a1"), _u(_boundary(post=8969), "b1"))
+    assert TR.context_probe(p)["used"] == 8969
+    # …and so does a branch too long to index (real work happened on it).
+    tail = [_u({"type": "user", "message": {"content": "x"}},
+               "n%d" % n, "n%d" % (n - 1)) for n in range(TR.BRANCH_SCAN_MAX + 2)]
+    big = _wt(tmp_path, "cb9.jsonl", _u(_ASSIST, "a1"),
+              _u(_boundary(post=8969), "b1"), *tail)
+    assert TR.context_probe(big)["used"] == 8969
+
+
 def test_context_probe_bounded_tail(tmp_path):
     # The no-full-read rule: a usage record buried deeper than CTX_TAIL_B is
     # deliberately out of reach; one within the window is found past torn-line

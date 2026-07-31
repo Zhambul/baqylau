@@ -743,18 +743,87 @@ CTX_TAIL_B = 262144     # tail-window bytes context_probe scans backwards for th
 
 
 def _boundary_meta(raw):
-    """`compactMetadata` of a `compact_boundary` record, or None when `raw` is
-    not one. Matched as a RECORD (through parse_line, the single owner of the
-    shape), never as raw bytes: a transcript quotes its own vocabulary
+    """(`compactMetadata`, `uuid`) of a `compact_boundary` record, or None when
+    `raw` is not one. Matched as a RECORD (through parse_line, the single owner
+    of the shape), never as raw bytes: a transcript quotes its own vocabulary
     constantly — a Read of the file documenting it, a grep hit inside a
     tool_result — and byte-matching a marker is exactly what once flipped a
-    tab green mid-turn (CLAUDE.md, the interrupt-watch invariant)."""
+    tab green mid-turn (CLAUDE.md, the interrupt-watch invariant).
+
+    The uuid rides along raw (parse_line's `compact` record carries only the
+    metadata, and its consumers want only that) because it is not part of the
+    compaction's story — it is the boundary's identity in the record GRAPH,
+    which is the one place a REVERTED compaction shows (_boundary_live)."""
     try:
-        rec = parse_line(raw.decode("utf-8", "replace")
-                         if isinstance(raw, bytes) else raw)
+        s = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw
+        rec = parse_line(s)
+        if not rec or rec.get("kind") != "compact":
+            return None
+        return rec.get("meta"), (json.loads(s).get("uuid") or "")
     except Exception:
         return None
-    return rec.get("meta") if rec and rec.get("kind") == "compact" else None
+
+
+BRANCH_SCAN_MAX = 600   # records after a boundary _boundary_live will index before
+#                         giving up and honouring it. When the boundary is
+#                         consulted at all there is no assistant usage after it,
+#                         so the region is a summary record plus its attachments
+#                         — a bigger one means real work happened on the compacted
+#                         branch, which is itself evidence it was not thrown away.
+
+
+def _boundary_live(lines, i, buuid):
+    """Is the compaction at `lines[i]` still the conversation's LIVE branch?
+
+    A compaction can be REVERTED (the rewind menu's restore) and Claude Code
+    writes NOTHING when that happens — no hook, not one byte, not even an
+    mtime. The only trace is in the record GRAPH: everything the compaction
+    wrote descends from the boundary, and the next record appended after a
+    revert lands back on the PRE-compaction leaf. Measured, session c2442d36:
+    the boundary's branch ran records 720→734 (summary, attachments, a
+    /rename), then the post-revert prompt's parentUuid pointed at record 703 —
+    below the boundary. Its `postTokens` said 13,805 for a context the very
+    next turn reported holding 223,546.
+
+    So the walk is leaf → parents: reaching `buuid` means the compaction still
+    holds, leaving the post-boundary region means it was reverted. The LEAF is
+    the last NON-sidechain uuid record — an agent's chain roots in the main
+    thread and is not what a boundary speaks for.
+
+    FAILS OPEN (True) on everything it cannot prove: nothing appended since the
+    boundary (a revert with no bytes after it is undetectable BY CONSTRUCTION —
+    the transcript is byte-identical to the moment before), an unparseable
+    tail, or more than BRANCH_SCAN_MAX records to index. The boundary is the
+    better answer in every ambiguous case: it is right until a revert happens,
+    and a revert is rare."""
+    parents, leaf, n = {}, None, 0
+    for raw in lines[i + 1:]:
+        n += 1
+        if n > BRANCH_SCAN_MAX:
+            return True
+        try:
+            o = json.loads(raw)
+        except Exception:
+            continue
+        if not isinstance(o, dict):
+            continue
+        u = o.get("uuid")
+        if not isinstance(u, str) or not u:
+            continue
+        parents[u] = o.get("parentUuid")
+        if not o.get("isSidechain"):
+            leaf = u
+    if leaf is None:
+        return True                     # nothing appended — the boundary IS the leaf
+    seen, u = set(), leaf
+    while u and u not in seen:
+        if u == buuid:
+            return True
+        seen.add(u)
+        if u not in parents:
+            return False                # the chain left the compacted branch
+        u = parents[u]
+    return False
 
 
 def context_probe(path, main=False):
@@ -779,24 +848,34 @@ def context_probe(path, main=False):
     that same record's context_used (522,826) agree to 0.04%, so the two are
     the same measure and swapping one for the other cannot change scale. The
     `window`/`model` still come from the assistant record — a boundary names
-    no model, and compaction doesn't change the one in use."""
+    no model, and compaction doesn't change the one in use.
+
+    …but ONLY while that compaction is still the conversation's live branch: a
+    REVERTED compaction leaves its boundary sitting in the file describing a
+    context that was thrown away, and _boundary_live is the record-graph test
+    that catches it. Dropping the boundary there falls straight back to the
+    last assistant usage — which after a revert is the PRE-compaction turn, the
+    right answer again."""
     from plugins.claude_code import model as M   # deferred: keep parse_line import-light
     lines = TL.tail_lines(path, CTX_TAIL_B)
     if lines is None:
         return None
     post = None          # the newest boundary's postTokens, when it sits AFTER
     seen_boundary = False    # the assistant record we settle on
-    for raw in reversed(lines):
+    for i in range(len(lines) - 1, -1, -1):
+        raw = lines[i]
         if not seen_boundary and b'"compact_boundary"' in raw:
-            meta = _boundary_meta(raw)
-            if meta is not None:
+            hit = _boundary_meta(raw)
+            if hit is not None:
                 # Only the NEWEST boundary can speak for the current context,
                 # so the flag latches even when that one carries no postTokens
                 # (older Claude Code builds wrote none) — an EARLIER boundary
                 # describes a context two compactions ago.
+                meta, buuid = hit
                 seen_boundary = True
                 tok = meta.get("postTokens")
-                post = tok if isinstance(tok, int) and tok > 0 else None
+                post = (tok if isinstance(tok, int) and tok > 0
+                        and _boundary_live(lines, i, buuid) else None)
                 continue
         if b'"usage"' not in raw or b'"assistant"' not in raw:
             continue

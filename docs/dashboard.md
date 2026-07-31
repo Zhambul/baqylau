@@ -5210,6 +5210,42 @@ the one in use. The marker is matched as a RECORD (through `parse_line`), never
 as raw bytes — a transcript quotes its own vocabulary constantly, and
 byte-matching a marker is what once flipped a tab green mid-turn.
 
+**…and a boundary only speaks while its branch is still LIVE.** A compaction
+can be REVERTED (the rewind menu's restore), and Claude Code writes NOTHING
+when that happens: no hook fires, not one byte is appended, the mtime doesn't
+move. The boundary just sits there describing a context that was thrown away —
+so the bar kept reporting the post-compaction figure for a conversation that
+was back to its full size (measured, session `c2442d36`: 13,805 shown against a
+context the very next turn reported holding 223,546).
+
+The only trace of a revert is in the record GRAPH. Everything a compaction
+writes descends from the boundary (summary → attachments → hook records), and
+after a revert the next record appended hangs off the PRE-compaction leaf
+instead — in that session the boundary's branch ran records 720→734 (including
+a `/rename` that landed on it), then the post-revert prompt's `parentUuid`
+pointed at record 703, below the boundary. So `_boundary_live` walks leaf →
+parents: reaching the boundary means the compaction still holds, leaving the
+post-boundary region means it was reverted, and a reverted boundary is dropped
+— which falls straight back to the last assistant usage, and after a revert
+that IS the current context again (223,208 measured, 0.15% off the next turn's
+own figure). The leaf is the last NON-sidechain uuid record: an agent's chain
+roots in the main thread and is not what a boundary speaks for.
+
+It **fails OPEN** on everything it cannot prove — nothing appended since the
+boundary, an unparseable tail, or more than `BRANCH_SCAN_MAX` records to index
+(when the boundary is consulted at all there is no assistant usage after it, so
+a large region means real work happened on the compacted branch, which is
+itself evidence it was not thrown away). The boundary is the better answer in
+every ambiguous case: it is right until a revert happens, and a revert is rare.
+
+**What stays wrong, deliberately.** Between the revert and the next record the
+transcript is byte-identical to the moment before it, so that window is
+undetectable BY CONSTRUCTION — the bar keeps the post-compaction figure until
+you type. There is no hook for a revert and no screen scrape worth adding for
+it (the ctx bars are read-side, no-audit, and must work for PARKED sessions
+too); the fix moves the correction from "the next assistant reply" to "the next
+record of any kind", which is where the user notices it.
+
 **Why the drain needs JS at all.** `ctxBar` builds a fresh node on every
 repaint, and a fresh node has nothing to transition *from* — which is why
 `.ubar`'s identical `transition: width` rule has never actually animated

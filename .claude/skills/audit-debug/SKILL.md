@@ -2841,6 +2841,19 @@ This is usually the abstraction working, not failing — but the DB says which:
     unless it honours the `compact_boundary`'s `postTokens`. Confirm by
     tail-scanning the transcript for the last `compact_boundary` and comparing
     its `postTokens` against what the bar showed.
+  * **the number stayed SMALL after the user REVERTED the compaction** = the
+    same probe, the opposite direction: the boundary is still in the file but
+    the branch it describes was thrown away. A revert emits NO hook and appends
+    NO byte, so the audit is silent by construction — the evidence is the
+    transcript's record GRAPH. Walk `parentUuid` back from the last
+    non-`isSidechain` record: reaching the boundary's `uuid` = the compaction
+    holds, landing BELOW it = reverted (measured, session `c2442d36`: the
+    boundary's branch ran records 720→734, the post-revert prompt pointed at
+    703, and the bar showed 13,805 against a context holding 223,546).
+    `_boundary_live` now drops such a boundary, so a wrong number here means
+    either a stale dashboard process (it does not hot-reload) or the still-open
+    window before ANY record is appended after the revert, which nothing can
+    see.
 - **"the draft didn't clear after I sent"** — the `composer-draft` rows: a
   `stale` row around the send = the debounced save/clear reordered over the
   tunnel and the `seq` guard dropped the loser (working as intended); a MISSING
