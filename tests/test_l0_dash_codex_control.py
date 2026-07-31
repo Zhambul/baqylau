@@ -12,6 +12,8 @@ import json
 import sys
 import urllib.error
 
+import pytest
+
 from conftest import REPO
 
 if REPO not in sys.path:
@@ -212,46 +214,127 @@ def test_codex_interrupt_is_a_single_verified_esc(dash, tmp_path, monkeypatch):
 
 
 class _CxAskFE(_FakeFE):
-    """A reactive codex request_user_input dialog: a `›` cursor over two options
-    that DOWN/UP move and ENTER submits (closing the dialog)."""
+    """A reactive codex request_user_input dialog, modelled on the LIVE geometry
+    (re-measured 2026-07-31 against codex-cli 0.146.0 — docs/codex.md):
 
-    def __init__(self):
+      · `Question N/M (K unanswered)`, DOWN/UP walking a `›` cursor and
+        RIGHT/LEFT moving between questions WITHOUT answering them;
+      · codex's OWN `None of the above` row appended after the model's options
+        (invisible to the rollout, and the one way to give a free-text answer);
+      · `tab` opening a notes field (footer `tab or esc to clear notes`);
+      · THE CURSOR IS NOT THE SELECTION, but ENTER and TAB both TAKE it — the
+        exact behaviour that made a typed answer submit option 1 with the user's
+        real answer demoted to `user_note:`;
+      · a submit that leaves any question unanswered raising `Submit with
+        unanswered questions?` → `Proceed` / `Go back`.
+
+    `submitted` is what codex would have recorded: {question index: [answers]},
+    an unanswered question carrying []."""
+
+    def __init__(self, questions=(("Apple", "Banana"),)):
         super().__init__()
-        self.cursor, self.closed = 1, False
+        self.qopts = [list(o) for o in questions]
+        self.m = len(self.qopts)
+        self.q, self.cursor = 1, 1
+        self.notes = None                    # None = closed, str = open
+        self.submitted = {i: [] for i in range(self.m)}
+        self.confirm, self.ccursor, self.closed = False, 1, False
+
+    # --- what the screen shows ------------------------------------------------
+    def _rows(self):
+        return self.qopts[self.q - 1] + ["None of the above"]
 
     def get_text(self, win, extent="screen", ansi=False):
         if ansi:
             return ""
         if self.closed:
             return "codex done\n❯ \n[gpt-5.1-codex] │ ready\n"
-        lines = ["Question 1/1 (1 unanswered)"]
-        for i, label in enumerate(("Apple", "Banana"), 1):
+        if self.confirm:
+            miss = sum(1 for v in self.submitted.values() if not v)
+            return "\n".join([
+                "Submit with unanswered questions?",
+                "%d unanswered question" % miss,
+                "%s1. Proceed  Submit with %d unanswered question."
+                % ("› " if self.ccursor == 1 else "  ", miss),
+                "%s2. Go back  Return to the first unanswered question."
+                % ("› " if self.ccursor == 2 else "  "),
+                "Press enter to confirm or esc to go back"])
+        miss = sum(1 for v in self.submitted.values() if not v)
+        lines = ["Question %d/%d (%d unanswered)" % (self.q, self.m, miss)]
+        for i, label in enumerate(self._rows(), 1):
             mark = "› " if i == self.cursor else "  "
             lines.append("%s%d. %s   a short description" % (mark, i, label))
-        lines.append("tab to add notes | enter to submit answer | esc to interrupt")
+        if self.notes is not None:
+            lines.append("› " + (self.notes or "Add notes"))
+            lines.append("tab or esc to clear notes | enter to submit answer")
+        else:
+            lines.append("tab to add notes | enter to submit %s | %s esc to interrupt"
+                         % ("all" if self.q == self.m else "answer",
+                            "←/→ to navigate questions |" if self.m > 1 else ""))
         return "\n".join(lines)
+
+    # --- what the keys do -----------------------------------------------------
+    def _submit_question(self):
+        """ENTER (or the notes field's) — the cursor row becomes the answer."""
+        ans = [self._rows()[self.cursor - 1]]
+        if self.notes:
+            ans.append("user_note: " + self.notes)
+        self.submitted[self.q - 1] = ans
+        self.notes = None
+        if self.q < self.m:
+            self.q, self.cursor = self.q + 1, 1
+        elif any(not v for v in self.submitted.values()):
+            self.confirm, self.ccursor = True, 1
+        else:
+            self.closed = True
 
     def send_key(self, win, *keys):
         self.keyed.append((win, keys))
         k = keys[0] if keys else ""
+        if self.confirm:
+            if k == "down":
+                self.ccursor = min(self.ccursor + 1, 2)
+            elif k == "up":
+                self.ccursor = max(self.ccursor - 1, 1)
+            elif k == "enter":
+                if self.ccursor == 1:
+                    self.closed, self.confirm = True, False
+                else:
+                    self.confirm = False
+            return True
         if k == "down":
-            self.cursor = min(self.cursor + 1, 2)
+            self.cursor = min(self.cursor + 1, len(self._rows()))
         elif k == "up":
             self.cursor = max(self.cursor - 1, 1)
+        elif k == "right":
+            self.q, self.cursor, self.notes = min(self.q + 1, self.m), 1, None
+        elif k == "left":
+            self.q, self.cursor, self.notes = max(self.q - 1, 1), 1, None
+        elif k == "tab":
+            self.notes = "" if self.notes is None else None
         elif k == "enter":
-            self.closed = True
+            self._submit_question()
+        return True
+
+    def send_text(self, win, text):
+        """kitten_send_text: the bytes, then a SEPARATE Enter."""
+        if self.notes is None:            # would land in codex's composer
+            return False
+        self.notes += text
+        self._submit_question()
         return True
 
 
-def _ask_rollout_records():
+def _ask_rollout_records(questions=(("q1", "pick", "which?",
+                                     ("Apple", "Banana")),)):
     return [{"type": "response_item",
              "payload": {"type": "function_call", "name": "request_user_input",
                          "call_id": "call_9",
                          "arguments": json.dumps({"questions": [
-                             {"id": "q1", "header": "pick", "question": "which?",
-                              "options": [{"label": "Apple", "description": ""},
-                                          {"label": "Banana", "description": ""}]}
-                         ]})}}]
+                             {"id": qid, "header": hdr, "question": text,
+                              "options": [{"label": o, "description": ""}
+                                          for o in opts]}
+                             for qid, hdr, text, opts in questions]})}}]
 
 
 def test_codex_answer_routes_through_the_dialog_driver(dash, tmp_path, monkeypatch):
@@ -264,8 +347,119 @@ def test_codex_answer_routes_through_the_dialog_driver(dash, tmp_path, monkeypat
                         "answers": [{"selected": ["Banana"], "other": ""}]})
     assert code == 200 and json.loads(body) == {"ok": True, "chat": False}
     assert fe.cursor == 2 and fe.closed   # cursored onto Banana, then Enter
+    assert fe.submitted == {0: ["Banana"]}
     row = _last_state_file("cx5", "web-answer")
     assert row["host"] == "codex" and row["ok"] and row["tool_use_id"] == "call_9"
+
+
+def test_codex_free_text_answers_on_none_of_the_above(dash, tmp_path, monkeypatch):
+    """A typed answer with NO option chosen must reach codex as the user's OWN
+    words — not as a note stapled to option 1.
+
+    codex's `tab` (add notes) TAKES the cursor as the selection, so the old
+    driver's tab-and-type from the cursor's resting place recorded
+    `["Apple", "user_note: <the real answer>"]` — measured in a live rollout
+    (2026-07-31): the first option submitted as the answer, the user's own
+    demoted to a footnote. The row codex appends for exactly this, `None of the
+    above`, is invisible to the rollout, so the driver has to find it on SCREEN
+    and cursor onto it BEFORE pressing tab."""
+    monkeypatch.setenv("KITTY_WINDOW_ID", "75")
+    _seed(tmp_path, "cx5b", _ask_rollout_records())
+    fe = _CxAskFE()
+    _inject_fe(monkeypatch, fe)
+    code, body = _post(dash + "/api/session/cx5b/answer",
+                       {"tool_use_id": "call_9",
+                        "answers": [{"selected": [], "other": "neither — cherry"}]})
+    assert code == 200 and json.loads(body) == {"ok": True, "chat": False}
+    assert fe.closed and fe.cursor == 3            # the appended row, not Apple
+    assert fe.submitted == {0: ["None of the above",
+                                "user_note: neither — cherry"]}
+
+
+def test_codex_an_option_plus_a_note_rides_the_same_tab(dash, tmp_path,
+                                                        monkeypatch):
+    """codex's dialog natively carries a note BESIDE a pick ("Optionally, add
+    details in notes (tab)"), so a chosen option and typed text are not rivals —
+    the driver cursors onto the option and types the text as its note."""
+    monkeypatch.setenv("KITTY_WINDOW_ID", "76")
+    _seed(tmp_path, "cx5c", _ask_rollout_records())
+    fe = _CxAskFE()
+    _inject_fe(monkeypatch, fe)
+    code, _ = _post(dash + "/api/session/cx5c/answer",
+                    {"tool_use_id": "call_9",
+                     "answers": [{"selected": ["Apple"], "other": "the red one"}]})
+    assert code == 200 and fe.closed
+    assert fe.submitted == {0: ["Apple", "user_note: the red one"]}
+
+
+def test_codex_chat_declines_by_submitting_unanswered(dash, tmp_path, monkeypatch):
+    """"chat about this" on codex. It has no decline ROW (its Esc ABORTS the
+    turn), so the word maps onto the next best thing codex does have: a submit
+    that leaves questions UNANSWERED (`Submit with unanswered questions?` →
+    `Proceed`, which sends them as `answers: []`).
+
+    What codex does NOT have is a zero-answer submit — the submitting key takes
+    the cursor — so the driver navigates to the LAST question (RIGHT never
+    answers) and spends the one forced answer on `None of the above`. Everything
+    before it goes through empty. The card used to show this button and get a
+    409, since codex declared no decline at all."""
+    monkeypatch.setenv("KITTY_WINDOW_ID", "77")
+    _seed(tmp_path, "cx5d",
+          _ask_rollout_records((("q1", "fruit", "which fruit?",
+                                 ("Apple", "Banana")),
+                                ("q2", "size", "which size?",
+                                 ("Small", "Large")))))
+    fe = _CxAskFE((("Apple", "Banana"), ("Small", "Large")))
+    _inject_fe(monkeypatch, fe)
+    code, body = _post(dash + "/api/session/cx5d/answer",
+                       {"tool_use_id": "call_9", "chat": True})
+    assert code == 200 and json.loads(body) == {"ok": True, "chat": True}
+    assert fe.closed and not fe.confirm
+    assert fe.submitted == {0: [], 1: ["None of the above"]}
+    # …and it got there without ever answering question 1
+    assert ("77", ("right",)) in fe.keyed
+    row = _last_state_file("cx5d", "web-answer")
+    assert row["host"] == "codex" and row["ok"] and row["chat"] is True
+
+
+def test_codex_chat_carries_the_typed_message_as_the_note(dash, tmp_path,
+                                                          monkeypatch):
+    """A `chat` that carries typed text puts it in the decline row's NOTE, so the
+    words ride the tool RESULT rather than racing the resumed turn as a pasted
+    follow-up — and the host says so (`message_sent`) so the handler does not
+    ALSO deliver them."""
+    monkeypatch.setenv("KITTY_WINDOW_ID", "78")
+    _seed(tmp_path, "cx5e", _ask_rollout_records())
+    fe = _CxAskFE()
+    _inject_fe(monkeypatch, fe)
+    code, body = _post(dash + "/api/session/cx5e/answer",
+                       {"tool_use_id": "call_9", "chat": True,
+                        "message": "let's research this first"})
+    assert code == 200
+    assert json.loads(body) == {"ok": True, "chat": True, "message_sent": True}
+    assert fe.submitted == {0: ["None of the above",
+                                "user_note: let's research this first"]}
+    assert fe.pasted == []            # NOT also delivered into the composer
+
+
+def test_codex_free_text_fails_loudly_without_the_appended_row(dash, tmp_path,
+                                                               monkeypatch):
+    """The `None of the above` row is codex's, not the tool call's — so a codex
+    that stops appending it must FAIL the step, never fall back to "cursor
+    wherever it is and type". The whole bug was a silent wrong answer; a 409 the
+    card can retry is the better failure, and the dialog is left OPEN."""
+    monkeypatch.setenv("KITTY_WINDOW_ID", "79")
+    _seed(tmp_path, "cx5f", _ask_rollout_records())
+    fe = _CxAskFE()
+    fe._rows = lambda: list(fe.qopts[fe.q - 1])      # no appended row
+    _inject_fe(monkeypatch, fe)
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/cx5f/answer",
+              {"tool_use_id": "call_9",
+               "answers": [{"selected": [], "other": "something else"}]})
+    assert e.value.code == 409
+    assert json.loads(e.value.read())["step"] == "noneof"
+    assert not fe.closed and fe.submitted == {0: []}   # nothing was answered
 
 
 # ---------------------------------------------------------------- plan mode

@@ -110,9 +110,11 @@ class _DialogMixin:
         Body: `tool_use_id` — must match the `ask-pending` stash (a stale
         card is refused before any key is pressed); either `chat: true` (a
         DECLINE — Claude Code's own "Chat about this" row, which declines +
-        invites discussion, the page then focusing its composer; 409 for a host
-        whose `ask_declines()` has no such word, since a decline that cannot be
-        delivered must not be silently answered instead) or `answers` — a list
+        invites discussion, the page then focusing its composer; codex spells
+        the same word as a submit that leaves the questions UNANSWERED, having
+        no decline row at all; 409 for a host whose `ask_declines()` has no such
+        word, since a decline that cannot be delivered must not be silently
+        answered instead) or `answers` — a list
         aligned with the stash's questions: {"selected": [labels…], "other":
         "text"} per question (multiSelect may combine both; single-select uses
         one or the other).
@@ -169,10 +171,12 @@ class _DialogMixin:
         # unverified dialog OPEN rather than Escape-closing it, and writes the
         # `web-answer` row.
         tid = pending.get("tool_use_id") or ""
+        msg = body.get("message")
+        message = msg.strip() if (chat and isinstance(msg, str)) else ""
         res = host.ask(fe, win, answers or [], {
             "sid": sid, "log": log, "sdb": sdb, "action": "web-answer",
             "verb": "answer", "chat": chat, "questions": questions,
-            "tool_use_id": tid})
+            "message": message, "tool_use_id": tid})
         if self._gesture_declined(res, sid, "web-answer", "ask",
                                   extra={"win": win, "chat": chat}):
             return
@@ -205,9 +209,15 @@ class _DialogMixin:
         # dialog is dismissed (drive waited for that), deliver it as the
         # follow-up so the user's custom answer reaches the session as a
         # normal message (docs/dashboard.md, *Web ask*). Only with chat.
-        msg = body.get("message")
+        #
+        # …UNLESS the host already put those words INSIDE the dialog it just
+        # declined (`message_sent` — codex types them as its decline row's note,
+        # so they ride the tool RESULT). A second delivery there would paste the
+        # same sentence into the turn that decline just resumed.
         resp = {"ok": True, "chat": chat}
-        if chat and isinstance(msg, str) and msg.strip():
+        if message and res.get("message_sent"):
+            resp["message_sent"] = True
+        elif message:
             out = host.deliver(fe, win, msg, {
                 "sid": sid, "log": log, "sdb": sdb, "via": "ask-chat"})
             resp["message_sent"] = bool(out.get("ok"))

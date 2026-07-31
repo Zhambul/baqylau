@@ -565,10 +565,11 @@ memo is a bug rather than a cache.
   host-aware: a codex session with no hook-stashed `ask-pending` kv derives its
   open request_user_input from the rollout tail via `plugins.pending_dialog`), and
   the same card JS (`{header, question, options[{label, description}]}`) renders
-  it. `request_user_input` is plan-mode-only and model-nondeterministic (the model
-  sometimes answers in prose instead of raising the tool), so the card appears
-  rarely — that is expected, not a gap. Codex's "chat about this" / free-text notes
-  are best-effort (no codex analog to Claude's decline).
+  it. `request_user_input` is model-nondeterministic (the model sometimes answers
+  in prose instead of raising the tool), so the card appears rarely — that is
+  expected, not a gap. A FREE-TEXT answer goes onto codex's own appended `None of
+  the above` row, and "chat about this" onto its unanswered-submit confirm — both
+  screen-driven, both live-verified; see *Clarifying questions* below.
 - **`model` / `effort`** — codex has NO `/model <arg>` and NO `/effort`: both axes
   are set through ONE interactive 3-step `/model` picker, driven by
   **`plugins/codex/modeldialog.py`** (Step 1 `Select Model` → `All models`; Step 2
@@ -814,6 +815,98 @@ live-verified bug: keyed on the exact `submit answer`, the driver bailed on the
 last question, leaving it unanswered). Verified end-to-end against a real
 plan-mode session: two multiple-choice questions asked, both answered from the
 web, then codex produced the plan and its decision picker.
+
+(Not plan-mode-only any more, incidentally: the `default_mode_request_user_input`
+feature flag lets codex raise the dialog in Default mode too, which is where the
+free-text bug below was measured.)
+
+#### The cursor is not the selection — but every submitting key TAKES it
+
+Re-measured live against codex-cli 0.146.0 (2026-07-31), because the free-text
+answer was silently wrong for the whole of the driver's first life.
+
+A fresh question's header reads `Question 1/1 (1 unanswered)` with the `›` cursor
+resting on row 1 — so nothing is selected yet. But **both** submitting keys take
+whatever row the cursor sits on: ENTER answers it, and so does TAB (`tab to add
+notes`), which selects the cursor row and opens a note *for that row*. The old
+driver's free-text path pressed `tab` from wherever the cursor happened to be and
+typed, so codex recorded
+
+```json
+{"answers":{"long_context_choice":{"answers":[
+  "Switch to GPT-5.4 (Recommended)",
+  "user_note: wait, let's research more about this. …"]}}}
+```
+
+— the **first option** submitted as the answer, and the user's real one demoted to
+a footnote. (Verbatim from a live rollout; the user had chosen no option at all.)
+
+What the dialog actually offers for "none of these" is a row **codex appends
+itself**, after the model's options:
+
+```
+  › 1. Red                A bold, energetic choice.
+    2. Green              A fresh, balanced choice.
+    3. Blue               A calm, dependable choice.
+    4. None of the above  Optionally, add details in notes (tab).
+  tab to add notes | enter to submit answer | esc to interrupt
+```
+
+It is codex's, not the tool call's, so `pending_dialog` cannot see it and the web
+card does not render it as a button — the card's free-text box IS that row, and
+the driver has to find it **on screen**. `dialog.none_row()` matches it by label
+(tolerating a pane-truncated `None of the…`), falling back to POSITION (exactly
+one row more than the tool call's options, and last) and otherwise returning ""
+so the step fails LOUDLY: a codex that stops appending the row must produce a 409
+the card can retry, never another silently-wrong option. Then `_cursor_to` runs
+FIRST — on every path — and only then `tab`. A note typed there arrives as
+`["None of the above", "user_note: <text>"]`.
+
+The same `tab` also carries a note **beside a chosen option** ("Optionally, add
+details in notes"), so an option and typed text are not rivals on codex: the
+driver cursors onto the option and types the text as its note.
+
+#### "Chat about this" — the decline codex spells as an unanswered submit
+
+codex has no decline ROW, and its Esc **aborts the turn** (the opposite of
+declining) — which is why `ask_declines()` used to be empty and the card's `chat
+about this` button 409'd. It does, however, have the next best thing: a submit
+that leaves questions unanswered raises a confirmation of its own,
+
+```
+  Submit with unanswered questions?
+  1 unanswered question
+  › 1. Proceed  Submit with 1 unanswered question.
+    2. Go back  Return to the first unanswered question.
+  Press enter to confirm or esc to go back
+```
+
+and `Proceed` sends those questions as `answers: []`. So `chat` IS in codex's
+vocabulary now, driven by `dialog.decline`.
+
+What codex does **not** have is a zero-answer submit — the submitting key takes
+the cursor, so the question you submit *from* is always answered (measured: ENTER
+on a fresh single-question dialog recorded option 1). The honest maximum is
+therefore: walk RIGHT to the LAST question (`←/→ to navigate questions` moves
+without answering), and spend the one forced answer on codex's own least-committal
+row, `None of the above`. Everything before it goes through empty:
+
+```json
+{"answers":{"city":{"answers":[]},
+            "month":{"answers":["None of the above","user_note: …"]}}}
+```
+
+The typed text the card carries with a chat escalation rides as that row's
+**note** rather than as a follow-up paste, so the words reach the model *inside
+the tool result* instead of racing the turn `decline` just resumed. The host says
+so with `message_sent: True`, and `post_answer` then skips `deliver` — the other
+way the same words reach a session, kept for Claude Code's preview-layout
+questions, whose dialog has nowhere to put them.
+
+All three paths verified end-to-end against a live codex window (2026-07-31):
+free-text + option across a two-question dialog, a two-question decline through
+the confirm, and a single-question decline (no confirm — one question, one
+answer, nothing left unanswered).
 
 ### View modes — a codex run is its own act
 

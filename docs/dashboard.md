@@ -1203,7 +1203,7 @@ what that host accepts:
 
 | vocabulary | claude_code | codex | what a bad word used to do |
 |---|---|---|---|
-| `ask_declines()` | `("chat",)` — the dialog's "Chat about this" row | `()` — its Esc ABORTS the turn, so there is no decline | silently dropped, and the question got ANSWERED instead of dodged |
+| `ask_declines()` | `("chat",)` — the dialog's "Chat about this" row | `("chat",)` — no decline ROW (its Esc ABORTS the turn), spelled instead as a submit that leaves the questions UNANSWERED (`dialog.decline`) | silently dropped, and the question got ANSWERED instead of dodged |
 | `plan_decisions()` | `("decide", "feedback", "dismiss")` | `("decide", "dismiss")` — its picker has no free-text row | a generic 400 "no action", and the typed feedback vanished |
 | `rewind_modes()` | the keys of `rewindmenu.MODE_LABELS` | `()` | a dashboard-side table of modes with no menu row behind them |
 
@@ -3800,11 +3800,34 @@ make that work without a second card:
   declines) and degrades to `indeterminate`, audited; the `web-answer` row
   carries `host: codex`.
 
-`request_user_input` is plan-mode-only and model-nondeterministic (the
-model sometimes answers in prose rather than raising the tool), so the
-codex card appears rarely — that is expected, not a gap. codex's free-text
-"notes" / "chat about this" are best-effort (no codex analog to Claude's
-decline).
+`request_user_input` is model-nondeterministic (the model sometimes
+answers in prose rather than raising the tool), so the codex card appears
+rarely — that is expected, not a gap.
+
+**A codex free-text answer and a codex decline both go through rows the
+card cannot see** (measured live, codex-cli 0.146.0 — docs/codex.md *The
+cursor is not the selection*). codex's cursor selects nothing until a key
+takes it, and BOTH submitting keys do: ENTER answers the cursor row, and
+so does TAB (`tab to add notes`). So the driver's old "press tab and
+type" recorded the FIRST option as the answer with the user's real one
+demoted to `user_note:` — a silently wrong answer, submitted from a card
+where the user had chosen no option at all. The free-text answer belongs
+on the row codex APPENDS after the model's options, `None of the above`;
+it is codex's row, not the tool call's, so `pending_dialog` never sees it
+and the card renders no button for it — the card's free-text box IS that
+row, and `dialog.none_row()` finds it on screen (by label, then by
+position) before `_cursor_to` moves there and `tab` opens the note.
+
+"chat about this" is likewise real on codex now, not a 409: a submit that
+leaves questions unanswered raises codex's own `Submit with unanswered
+questions?` → `Proceed`, sending them as `answers: []`. codex forces ONE
+answer regardless (the submitting key takes the cursor), so `decline`
+walks RIGHT to the last question — navigation never answers — and spends
+it on `None of the above`. A typed message rides as that row's NOTE, so
+it reaches the model inside the tool result rather than as a paste racing
+the resumed turn; the host reports `message_sent: True` and `post_answer`
+skips `deliver` (still the route for Claude Code's preview-layout
+questions, whose dialog has nowhere to put the text).
 
 ## Web plan mode (`POST /api/session/<sid>/plan-decision`) — ExitPlanMode from the browser
 

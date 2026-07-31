@@ -1388,8 +1388,11 @@ def test_a_plan_decision_names_the_hosts_own_vocabulary(dash, monkeypatch,
     assert _vocab_help(claude.plan_decisions()) \
         == "digit+label, feedback, or dismiss"
     assert _vocab_help(codex.plan_decisions()) == "digit+label or dismiss"
+    # …while `chat` IS in both ask vocabularies: Claude Code has a decline ROW,
+    # codex spells the same word as a submit that leaves the questions
+    # unanswered (plugins/codex/dialog.decline).
     assert _vocab(claude.ask_declines()) == "chat"
-    assert _vocab(codex.ask_declines()) == "none"
+    assert _vocab(codex.ask_declines()) == "chat"
 
 
 def test_post_new_session_bad_tool_is_400(dash, monkeypatch, tmp_path):

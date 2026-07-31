@@ -260,7 +260,13 @@ class HostControl:
         return self._unsupported("effort")
 
     def ask(self, fe, win, answer, ctx):
-        """Answer the session's open question dialog."""
+        """Answer the session's open question dialog. `ctx['chat']` DECLINES it
+        instead (only ever set for a word this host's ask_declines() names), and
+        `ctx['message']` is the typed text the card carries along with such a
+        decline. A host that can put that text INSIDE the dialog says so with
+        `message_sent: True` in its result — the caller then skips `deliver`,
+        which is the OTHER way the same words reach the session (a follow-up
+        paste, for a dialog with nowhere to put them)."""
         return self._unsupported("ask")
 
     def plan(self, fe, win, decision, ctx):
@@ -341,7 +347,9 @@ class HostControl:
         """The words that DECLINE this host's question dialog rather than
         answering it (Claude Code: "chat", its 'Chat about this' row). ()
         means the host has no decline — the caller 409s naming the vocabulary
-        instead of silently dropping the flag and answering the question."""
+        instead of silently dropping the flag and answering the question.
+        A decline need not be a ROW: codex has none, and spells the same word
+        as a submit that leaves the questions unanswered."""
         return ()
 
     def plan_decisions(self):

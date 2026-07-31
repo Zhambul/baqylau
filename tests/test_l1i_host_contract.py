@@ -857,7 +857,7 @@ HOST_SURFACE = {
     "mention":        {"claude_code": IMPL, "codex": DECLINED},
     "clear_input":    {"claude_code": IMPL, "codex": DECLINED},
     "turn_live":      {"claude_code": IMPL, "codex": DECLINED},
-    "ask_declines":   {"claude_code": IMPL, "codex": DECLINED},
+    "ask_declines":   {"claude_code": IMPL, "codex": IMPL},
     "plan_decisions": {"claude_code": IMPL, "codex": IMPL},
     "rewind_modes":   {"claude_code": IMPL, "codex": DECLINED},
     "rewind_mode_label": {"claude_code": IMPL, "codex": DECLINED},
@@ -1051,7 +1051,10 @@ def test_every_hosts_vocabulary_is_a_closed_word_list():
     hosts = _host_objs()
     # today's per-host truth, pinned so a change is deliberate
     assert hosts["claude_code"].ask_declines() == ("chat",)
-    assert hosts["codex"].ask_declines() == ()
+    # codex names the same word for a DIFFERENT mechanism: it has no decline row
+    # (its Esc aborts the turn), and spells `chat` as a submit that leaves the
+    # questions unanswered — the vocabulary is the WORD, never the keystrokes.
+    assert hosts["codex"].ask_declines() == ("chat",)
     assert hosts["claude_code"].plan_decisions() == ("decide", "feedback",
                                                      "dismiss")
     assert hosts["codex"].plan_decisions() == ("decide", "dismiss")

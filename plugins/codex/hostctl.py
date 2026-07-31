@@ -263,31 +263,49 @@ class CodexHost(HostControl):
         return ok
 
     def ask(self, fe, win, answers, ctx):
-        """Answer codex's OPEN request_user_input dialog (plan-mode-only,
-        model-nondeterministic) by driving its ON-SCREEN dialog — the codex twin
-        of Claude's askdialog, keyed on codex's OWN geometry (`Question N/M`,
-        numbered options with a `›` cursor, the `enter to submit answer` footer;
-        Claude's askdialog.region() returns "" on a codex screen). DOWN walks the
-        cursor onto the chosen option, ENTER submits each question in order.
-        `answers` aligns with ctx['questions'] ([{selected:[label], other:text}]).
+        """Answer codex's OPEN request_user_input dialog (model-nondeterministic)
+        by driving its ON-SCREEN dialog — the codex twin of Claude's askdialog,
+        keyed on codex's OWN geometry (`Question N/M`, numbered options with a `›`
+        cursor, the `enter to submit answer` footer; Claude's askdialog.region()
+        returns "" on a codex screen). DOWN walks the cursor onto the chosen
+        option, ENTER submits each question in order; a FREE-TEXT answer walks to
+        codex's own appended `None of the above` row and types the text as its
+        note, which is the ONLY way codex takes an answer that is not one of the
+        offered options. `answers` aligns with ctx['questions']
+        ([{selected:[label], other:text}]).
+
+        `ctx['chat']` is the card's "chat about this" — DECLINED rather than
+        answered (the caller already checked the word against ask_declines()):
+        `dialog.decline` submits with every question codex will let it leave
+        unanswered, carrying ctx['message'] as the one forced row's note.
 
         Best-effort: a step that never verifies degrades to INDETERMINATE (audited,
         dialog LEFT OPEN for a retry — never Escape-closed, since codex's Esc
         aborts the turn). Result {status, cid, ok, step?, detail?}."""
         from plugins.codex import dialog
         log, sdb = ctx.get("log") or "", ctx.get("sdb") or ""
+        chat = bool(ctx.get("chat"))
+        message = (ctx.get("message") or "").strip()
         r = self._ack()
         r["ok"] = True
         try:
-            dialog.drive(fe, win, ctx.get("questions") or [], answers or [])
+            if chat:
+                dialog.decline(fe, win, ctx.get("questions") or [], message)
+                # the words went in as the decline row's NOTE, so they are
+                # already in the tool result — the caller must not ALSO paste
+                # them as a follow-up into the turn that just resumed.
+                r["message_sent"] = bool(message)
+            else:
+                dialog.drive(fe, win, ctx.get("questions") or [], answers or [])
         except dialog.CodexAskError as e:
             A.error(log, "codex answer (%s)" % e.step,
-                    {"sid": ctx.get("sid"), "win": str(win), "detail": str(e)})
+                    {"sid": ctx.get("sid"), "win": str(win), "chat": chat,
+                     "detail": str(e)})
             r = {"status": INDETERMINATE, "cid": r["cid"], "ok": False,
                  "step": e.step, "detail": str(e)}
         A.state_file(log, sdb, ctx.get("action") or "web-answer",
                      {"win": win, "ok": bool(r.get("ok")),
-                      "chat": bool(ctx.get("chat")), "host": self.name,
+                      "chat": chat, "host": self.name,
                       "tool_use_id": ctx.get("tool_use_id") or "",
                       "status": r.get("status"), "cid": r.get("cid"),
                       "step": r.get("step")})
@@ -427,11 +445,18 @@ class CodexHost(HostControl):
         nowhere to go, and pretending otherwise loses it."""
         return ("decide", "dismiss")
 
-    # ask_declines: NOT overridden — codex's request_user_input dialog has no
-    # decline row at all (its Esc ABORTS the turn, the opposite of declining), so
-    # the base's empty vocabulary is the honest answer and a `chat` flag aimed at
-    # it now 409s instead of being ignored.
-    #
+    def ask_declines(self):
+        """codex's request_user_input dialog has no decline ROW (its Esc ABORTS
+        the turn, the opposite of declining) — but it does have a submit that
+        leaves questions UNANSWERED (`Submit with unanswered questions?` →
+        `Proceed`), which is what "chat about this" actually wants: the tool
+        returns, the turn resumes, the composer is yours. `plugins/codex/
+        dialog.decline` drives that, so the word IS in this host's vocabulary
+        and the card's button no longer 409s. The one thing codex still forces
+        is a single answer (the submitting key takes the cursor), delivered on
+        its own least-committal row — see decline()'s docstring."""
+        return ("chat",)
+
     # mention / clear_input / turn_live / rewind_modes: likewise inert. codex has
     # no `@path` mention grammar (the caller delivers bare paths), no verified
     # line-kill repertoire for its composer (see title_key's neighbour note
