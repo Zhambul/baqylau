@@ -503,7 +503,17 @@ def test_the_codex_provider_picks_standalone_mode_from_the_host_mark(
 
     monkeypatch.setattr(tabs, "TABDB", str(tmp_path / "tab.db"))
     tabs._RO_CONNS.clear()
+    # Pin the stub across EVERY import-resolution path the provider's lazy
+    # `from plugins.codex import session` can take (sys.modules entries AND the
+    # package attribute), not just this test's module object. On CI (ubuntu,
+    # xdist+randomly) the plain setattr was bypassed once — the provider reached
+    # a session module whose REAL codex_pid ran and returned the worker's ppid
+    # (asserted 4242, got 2110) — an order-dependent module-identity split this
+    # belt-and-suspenders pinning makes impossible regardless of mechanism.
     monkeypatch.setattr(CS, "codex_pid", lambda: 4242)
+    monkeypatch.setitem(sys.modules, "plugins.codex", PCX)
+    monkeypatch.setitem(sys.modules, "plugins.codex.session", CS)
+    monkeypatch.setattr(PCX, "session", CS, raising=False)
     seen = []
     monkeypatch.setattr(PCX.subprocess, "run", lambda argv, **kw: seen.append(list(argv)))
     monkeypatch.setattr(PCX.os.path, "isfile", lambda p: True)
