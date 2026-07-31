@@ -39,10 +39,27 @@
 #       they match ops written BEFORE the `chrome` flag existed (25 sessions in
 #       the parked corpus) and no restart can re-stamp a parked op. A live run
 #       stamps the flag, so a new host neither needs nor may add a third.
-#   JS_LITERAL_ALLOW (3 files, 4 rows) — all VOCABULARY, none a host branch:
-#     the slot-KIND ribbon (core/slots.py's five kinds), the ACT token, and two
-#     protocol constants named after the product (the X-Claude-Dash header, the
-#     push tag pinned to notify/channels.push_tag). Each row says which.
+#   JS_LITERAL_ALLOW (4 files, 5 rows) — all VOCABULARY, none a host branch:
+#     the slot-KIND ribbon (core/slots.py's five kinds) in BOTH its JS and CSS
+#     halves, the ACT token, and two protocol constants named after the product
+#     (the X-Claude-Dash header, the push tag pinned to notify/channels.push_tag).
+#     Each row says which.
+#
+# P7 AUDIT ADDENDUM — the ratchet's own reach was re-tested, and the words and
+# the scanner were where the slack was:
+#   · the WORDS are DERIVED from the registry now (host names + labels; model-id
+#     grammars off each host's `model_choices`), not two hardcoded tuples that
+#     could only ever ratchet the hosts that already exist. A third host is
+#     covered the day it registers.
+#   · the PAGE scanner walks js/mjs/css/html RECURSIVELY (a `.css` rule named
+#     after a host was off the ratchet entirely), counts OCCURRENCES rather than
+#     LINES (a second literal on an allowed line used to be free — two files
+#     were over budget the moment this landed), and strips comments with a
+#     STRING-AWARE state machine. Its two predecessors' holes were demonstrated:
+#     a URL inside a string ate the rest of its line, a `"/*"` inside a string
+#     ate everything to the next `*/`. Both fail toward a MISSED literal, so a
+#     second net checks the property directly — a host word inside a STRING must
+#     survive the strip.
 #   DASHBOARD_PLUGIN_REACHES (test_l1_contracts.py, 4 rows) — also re-tested:
 #     opshtml/tools.py cannot shrink without INVERTING the layering (a
 #       `plugins.tool_html` fan-out would have the plugin emit the page's own
@@ -60,14 +77,26 @@
 #   cannot be widened by writing another literal in a file already on it.
 import ast
 import os
-import re
 
 from conftest import REPO
 
 # ---------------------------------------------------------------- 1. literals
 
-# The host names the dashboard tier must not learn by heart.
-HOST_WORDS = ("claude_code", "codex")
+# The host names the dashboard tier must not learn by heart — DERIVED from the
+# registry, never typed here. A hardcoded two-host tuple can only ratchet the
+# hosts that already exist: the day a THIRD registers, every `=== "copilot"` in
+# the dashboard is invisible to this file, which is precisely when the check is
+# worth having. Names AND labels, because a label is a host name the user reads
+# ("Claude Code") and branching on it is the same bug in nicer clothing.
+def _host_words():
+    """{host name, host label}, lowercased — the registry's own vocabulary."""
+    import plugins
+    out = set()
+    for h in plugins.hosts():
+        for w in (h.get("name"), h.get("label")):
+            if w:
+                out.add(w.lower())
+    return out
 
 # file -> {literal: why it is still there}. THE RATCHET: rows come OUT as later
 # phases route each fact through an abstraction; a new row must be argued.
@@ -138,7 +167,7 @@ def _host_literals():
             for n in ast.walk(tree):
                 if (isinstance(n, ast.Constant) and isinstance(n.value, str)
                         and id(n) not in docs
-                        and any(w in n.value.lower() for w in HOST_WORDS)):
+                        and any(w in n.value.lower() for w in _host_words())):
                     found.setdefault(rel, set()).add(n.value)
     return found
 
@@ -200,7 +229,34 @@ def test_every_allowlisted_literal_states_a_reason():
 # `gpt-`/`claude-` join the two plugin names because a MODEL-ID grammar is the
 # same bug wearing a different string: `startsWith("gpt-")` names a host as
 # surely as `=== "codex"` does.
-JS_WORDS = ("claude_code", "codex", "gpt-", "claude-")
+# The PRODUCT's own name prefix. Not a host fact and not derivable from the
+# registry — it is what the two protocol constants below are named after (the
+# X-Claude-Dash header, the push tag) — but it stays in the scan because
+# `startsWith("claude-")` over a MODEL ID is the model-grammar bug, and Claude
+# Code's raw ids are the one grammar no host enumerates (its menu rows are
+# family words, `model_match="family"`).
+PRODUCT_WORDS = ("claude-",)
+
+
+def _model_grammar_words():
+    """The model-ID GRAMMARS a page could branch on — the leading `<vendor>-` of
+    every model id the hosts offer, DERIVED like the host words above. A third
+    host bringing `gemini-2.0-flash` puts `gemini-` under the ratchet the day it
+    registers, where a hand-typed list would notice years later."""
+    import plugins
+    out = set()
+    for h in plugins.hosts():
+        ho = plugins.host_named(h["name"])
+        for mid in list(ho.model_choices() or []) + [ho.model_default() or ""]:
+            if "-" in (mid or ""):
+                out.add(mid.split("-", 1)[0].lower() + "-")
+    return out
+
+
+def _js_words():
+    """Every word the PAGE scan looks for: host names + labels, model-id
+    grammars, and the product prefix."""
+    return sorted(_host_words() | _model_grammar_words() | set(PRODUCT_WORDS))
 
 # {file: {word: (count, why)}} — an EXACT count, both directions: a new
 # occurrence in an already-listed file fails just as a deleted one does, so the
@@ -214,7 +270,7 @@ JS_LITERAL_ALLOW = {
     # codex RUN", which stays true no matter which tool hosts the session; the
     # unknown-kind path beside them (app.11-chrome.js) is already generic.
     "app.00-core.js": {
-        "codex": (2, "the slot-KIND ribbon glyph + order (core/slots.py's "
+        "codex": (3, "the slot-KIND ribbon glyph + order (core/slots.py's "
                      "kinds), not a host check"),
         "claude-": (1, "the X-Claude-Dash request header — a protocol constant "
                        "named after the product, matched by http/base.py"),
@@ -234,9 +290,19 @@ JS_LITERAL_ALLOW = {
     # for. A fourth host adds a token here the same way, and that is the
     # designed cost of a client-side phrase table.
     "app.05-session.js": {
-        "codex": (5, "the act/view-mode vocabulary token (the ACT_CODEX twin) "
+        "codex": (7, "the act/view-mode vocabulary token (the ACT_CODEX twin) "
                      "— core owns the token, the page owns the phrase; not a "
                      "host branch"),
+    },
+    # The RIBBON's stylesheet half, found only once the scan learned to walk
+    # non-JS assets: `.rk-codex` is the CSS class for the same slot KIND
+    # app.00-core.js gives a glyph to (`rk-` + the kind, `.rk-sub-pid` beside
+    # it), so it says how to DRAW a codex run — true whichever tool hosts the
+    # session. It sat off the ratchet entirely under the old `*.js` listdir.
+    "style.css": {
+        "codex": (1, "the slot-KIND ribbon's CSS class (.rk-codex, sibling of "
+                     ".rk-sub-pid) — the same kind vocabulary, not a host "
+                     "check"),
     },
     # The Web Push notification TAG, which must agree byte for byte with
     # notify/channels.push_tag — a retraction deletes the banner by tag, so the
@@ -248,38 +314,185 @@ JS_LITERAL_ALLOW = {
     },
 }
 
-# /* … */ blocks and // line comments are stripped before the scan: PROSE may
-# name a host freely (it is how the design is explained), the same rule the
-# Python scan applies to docstrings. Line comments are cut only where the `//`
-# is not preceded by `:` — enough to keep a `https://…` inside a string from
-# eating the rest of its line. The failure mode of a bad strip is a MISSED
-# literal, never a false one.
-_JS_BLOCK = re.compile(r"/\*.*?\*/", re.S)
-_JS_LINE = re.compile(r"(^|[^:])//.*$")
+# Comments are blanked before the scan: PROSE may name a host freely (it is how
+# the design is explained), the same rule the Python scan applies to docstrings.
+#
+# STRING-AWARE, because the old regex pair was not and both holes were
+# demonstrated: `split`ing on `//` let a URL inside a string eat the rest of its
+# line (every literal after it invisible), and a `/*` inside a string ate
+# everything up to the next `*/` — potentially hundreds of real lines. Both fail
+# toward a MISSED literal, which is the direction a ratchet must never fail in.
+# So this is a small state machine over quotes (' " `) and comments, and it
+# BLANKS rather than deletes, preserving offsets and line numbers so a failure
+# can name the line.
+_SCAN_EXT = (".js", ".mjs", ".css", ".html")
 
 
-def _js_uncommented(src):
-    """`src` with its comments blanked, LINE NUMBERS preserved."""
-    src = _JS_BLOCK.sub(lambda m: "\n" * m.group(0).count("\n"), src)
-    return [_JS_LINE.sub(r"\1", ln) for ln in src.split("\n")]
+def _blank_comments(src, ext):
+    """`src` with comment bytes replaced by spaces (newlines kept), so offsets
+    and line numbers survive. `.css` has no `//` comments and `.html` has only
+    `<!-- -->`; spelling that per extension is what keeps a CSS `url(//x)` or an
+    HTML attribute from being read as a comment."""
+    js = ext in (".js", ".mjs")
+    out = list(src)
+    i, n = 0, len(src)
+    quote = None                        # the string delimiter we are inside
+    while i < n:
+        c = src[i]
+        if quote:
+            if c == "\\":
+                i += 2
+                continue
+            if c == quote:
+                quote = None
+            i += 1
+            continue
+        if ext != ".html" and c in "\"'" or (js and c == "`"):
+            quote = c
+            i += 1
+            continue
+        if js and src.startswith("//", i):
+            while i < n and src[i] != "\n":
+                out[i] = " "
+                i += 1
+            continue
+        if ext != ".html" and src.startswith("/*", i):
+            j = src.find("*/", i + 2)
+            j = n if j < 0 else j + 2
+            for k in range(i, j):
+                if out[k] != "\n":
+                    out[k] = " "
+            i = j
+            continue
+        if ext == ".html" and src.startswith("<!--", i):
+            j = src.find("-->", i + 4)
+            j = n if j < 0 else j + 3
+            for k in range(i, j):
+                if out[k] != "\n":
+                    out[k] = " "
+            i = j
+            continue
+        i += 1
+    return "".join(out)
+
+
+def _string_literals(src, ext):
+    """[(line number, text)] for every STRING LITERAL in `src` — the material
+    the second net checks. Same quoting rules as `_blank_comments`, run as a
+    separate pass so the net does not simply inherit the stripper's opinion of
+    where a string is."""
+    out = []
+    js = ext in (".js", ".mjs")
+    if ext == ".html":
+        return out                      # no string grammar worth claiming here
+    i, n, line = 0, len(src), 1
+    while i < n:
+        c = src[i]
+        if c == "\n":
+            line += 1
+            i += 1
+            continue
+        if js and src.startswith("//", i):
+            while i < n and src[i] != "\n":
+                i += 1
+            continue
+        if src.startswith("/*", i):
+            j = src.find("*/", i + 2)
+            j = n if j < 0 else j + 2
+            line += src.count("\n", i, j)
+            i = j
+            continue
+        if c in "\"'" or (js and c == "`"):
+            start, at = i + 1, line
+            i += 1
+            while i < n:
+                if src[i] == "\\":
+                    i += 2
+                    continue
+                if src[i] == c:
+                    break
+                if src[i] == "\n":
+                    line += 1
+                i += 1
+            out.append((at, src[start:i]))
+            i += 1
+            continue
+        i += 1
+    return out
+
+
+def _scan_files():
+    """[(key, path)] — every page asset, walked RECURSIVELY. `os.listdir` over
+    `*.js` alone missed subdirectories and every non-JS asset, which is how
+    `style.css`'s `.rk-codex` rule sat off the ratchet entirely. The key is the
+    path relative to static/, so top-level files keep the plain filenames the
+    allowlist is written in."""
+    root = os.path.join(REPO, "dashboard", "static")
+    out = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in ("node_modules",)]
+        for fn in sorted(filenames):
+            if fn.endswith(_SCAN_EXT):
+                p = os.path.join(dirpath, fn)
+                out.append((os.path.relpath(p, root), p))
+    return sorted(out)
 
 
 def _js_host_literals():
-    """{file: {word: [line numbers]}} — every host name / model-id grammar left
-    in the page's CODE."""
+    """{file: {word: {"n": occurrences, "lines": [line numbers]}}} — every host
+    name / model-id grammar left in the page's CODE.
+
+    OCCURRENCES, not lines: counting lines let a second `=== "codex"` onto an
+    already-allowed line for free, and one line can hold a whole branch ladder.
+    """
     found = {}
-    root = os.path.join(REPO, "dashboard", "static")
-    for fn in sorted(os.listdir(root)):
-        if not fn.endswith(".js"):
-            continue
-        with open(os.path.join(root, fn), encoding="utf-8") as fh:
-            lines = _js_uncommented(fh.read())
-        for i, ln in enumerate(lines, 1):
+    words = _js_words()
+    for key, path in _scan_files():
+        with open(path, encoding="utf-8") as fh:
+            src = fh.read()
+        code = _blank_comments(src, os.path.splitext(path)[1])
+        for i, ln in enumerate(code.split("\n"), 1):
             low = ln.lower()
-            for w in JS_WORDS:
-                if w in low:
-                    found.setdefault(fn, {}).setdefault(w, []).append(i)
+            for w in words:
+                c = low.count(w)
+                if c:
+                    row = found.setdefault(key, {}).setdefault(
+                        w, {"n": 0, "lines": []})
+                    row["n"] += c
+                    row["lines"].append(i)
     return found
+
+
+def _js_unattributable():
+    """The SECOND NET: a host word inside a STRING LITERAL that the comment
+    strip made disappear.
+
+    The first net trusts the stripper; this one checks it, and it checks the
+    exact property both demonstrated holes broke — that a STRING is code. The
+    old scanner cut at `//` (so a URL in a string ate every literal after it on
+    that line) and at `/*` (so a `"/*"` in a string ate everything down to the
+    next `*/`, whole functions at a time). Both report FEWER literals, which
+    reads exactly like a clean page, so no count on the code side can notice.
+
+    Scoping the net to strings rather than to "lines with no comment marker" is
+    what makes it precise: a genuine multi-line comment has middle lines with no
+    marker of their own, and flagging those would be a false alarm on prose that
+    is allowed to name any host it likes."""
+    bad = []
+    words = _js_words()
+    for key, path in _scan_files():
+        ext = os.path.splitext(path)[1]
+        with open(path, encoding="utf-8") as fh:
+            src = fh.read()
+        code = _blank_comments(src, ext).split("\n")
+        for line, text in _string_literals(src, ext):
+            low = text.lower()
+            keep = code[line - 1].lower() if line - 1 < len(code) else ""
+            for w in words:
+                if low.count(w) > keep.count(w):
+                    bad.append("%s:%d: %r is inside a STRING but the comment "
+                               "strip removed it" % (key, line, w))
+    return bad
 
 
 def test_no_host_name_literal_in_the_page_off_the_allowlist():
@@ -294,16 +507,53 @@ def test_no_host_name_literal_in_the_page_off_the_allowlist():
     offenders = []
     for fn, words in sorted(found.items()):
         allowed = JS_LITERAL_ALLOW.get(fn, {})
-        for w, lines in sorted(words.items()):
+        for w, row in sorted(words.items()):
             want = (allowed.get(w) or (0, ""))[0]
-            if len(lines) != want:
+            if row["n"] != want:
                 offenders.append("%s: %r ×%d (allowed %d) at line(s) %s"
-                                 % (fn, w, len(lines), want,
-                                    ", ".join(str(n) for n in lines)))
+                                 % (fn, w, row["n"], want,
+                                    ", ".join(str(n) for n in row["lines"])))
     assert not offenders, (
         "host-name / model-grammar literal(s) in the page — read the fact off "
         "the served host vocabulary (/api/hosts, meta.*), or adjust "
         "JS_LITERAL_ALLOW with a reason:\n" + "\n".join(offenders))
+
+
+def test_the_page_scan_cannot_be_blinded_by_a_comment_strip():
+    """The second net (see _js_unattributable): no word may vanish from a line
+    that carries no comment marker. A stripper fooled into eating real code is
+    the one failure a code-side count cannot see — it reports FEWER literals,
+    which reads exactly like a clean page."""
+    bad = _js_unattributable()
+    assert not bad, ("the comment strip removed host words from lines with no "
+                     "comment on them — the scan is blind there:\n"
+                     + "\n".join(bad))
+
+
+def test_the_page_scan_reads_every_asset_and_counts_occurrences():
+    """The scanner's own reach, pinned so it cannot silently narrow again: it
+    walks RECURSIVELY over js/mjs/css/html (a `.css` rule named after a host was
+    off the ratchet entirely under the old `os.listdir` + `*.js`), and it counts
+    OCCURRENCES, so a second literal on an already-allowed line is not free."""
+    keys = [k for k, _p in _scan_files()]
+    assert any(k.endswith(".css") for k in keys), keys
+    assert any(k.endswith(".html") for k in keys), keys
+    assert len([k for k in keys if k.endswith(".js")]) > 5, keys
+    # occurrences, not lines
+    src = 'a === "codex" || b === "codex";\n'
+    assert _blank_comments(src, ".js").lower().count("codex") == 2
+    # …and the two demonstrated stripper holes stay CODE
+    url = 'const u = "https://x.test//y"; if (t === "codex") {}\n'
+    assert "codex" in _blank_comments(url, ".js")
+    star = 'const s = "/*"; if (t === "codex") {}\n'
+    assert "codex" in _blank_comments(star, ".js")
+    # a real comment is still blanked, in each dialect
+    assert "codex" not in _blank_comments("// codex here\n", ".js")
+    assert "codex" not in _blank_comments("/* codex */\n", ".css")
+    assert "codex" not in _blank_comments("<!-- codex -->\n", ".html")
+    # …and a CSS url(//…) is not a comment
+    assert "codex" in _blank_comments("a{background:url(//codex.test/x)}",
+                                      ".css")
 
 
 def test_the_page_literal_allowlist_has_no_stale_rows():
