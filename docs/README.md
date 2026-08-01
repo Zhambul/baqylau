@@ -24,3 +24,4 @@ to already-rejected designs.
 | [remote.md](remote.md) | Remote access — cloudflared tunnel + Cloudflare Access in front of the dashboard, the `CLAUDE_DASH_ORIGINS`/`CLAUDE_DASH_READONLY` knobs, the threat model (the control plane is RCE), rejected exposure shapes |
 | [relimit.md](relimit.md) | Rate-limit account migration — the StopFailure `error="rate_limit"` trigger, the hook/migrator split, target picking over `sessionapi.account_usage`, why accounts share `~/.claude` (no file copying), the `limit hit` pill, rejected designs |
 | [testing.md](testing.md) | The hermetic e2e suite and its test-only env knobs |
+| [rewrite-design.md](rewrite-design.md) | **PROPOSED** v2 rewrite design — daemon + intake/canonical event logs (eventsourcing spine), mappers/folds/policies/reactors, `baqylau-exec` Rust wrapper + shims, FastAPI position-keyed API, cooperation/MCP, migration strategy, tradeoff ledger |
