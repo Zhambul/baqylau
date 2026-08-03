@@ -17,6 +17,10 @@ the final form: **no replay capability** (§2.4), and **the engine writes a
 domain model directly; the API maps it to DTOs** (§3). New empirical
 measurements taken during the session (transcript/rollout write granularity,
 headless stream cadence) are recorded in §11 — they exist nowhere else.
+Later the same day, six read-only subagents audited the entire v1 codebase
+against this document; **§17** records that gap audit and its amendments.
+Where §17 tightens an earlier section, §17 wins; the earlier sections carry
+pointers.
 
 ---
 
@@ -232,11 +236,16 @@ justifies:
   one-line reason. This generalizes v1's `decision` column — the thing that
   made `hook_events` diagnostic rather than a log.
 
-Nothing reads these at runtime. Retention is bounded and class-based. The
-v1 audit CLI's successor (sessions / anomalies / errors / timeline / sql)
-queries these tables plus the domain model; the canned anomaly queries port
-with their signatures. The one-transaction rule means the audit can never
-disagree with the domain model about what happened — they commit together.
+Retention is bounded and class-based, and pruning may never silently
+decrement a user-visible count (§17.3). The evidence tables have exactly
+one sanctioned RUNTIME read plane — the warning light (the ⚠ chip and
+per-session error lines, §17.3) — plus the offline CLI: the v1 audit CLI's
+successor (sessions / anomalies / errors / timeline / sql) queries these
+tables plus the domain model; the canned anomaly queries port with their
+signatures. The one-transaction rule means the audit can never disagree
+with the domain model about what happened — they commit together on the
+happy path; the degrade ladder when the store itself is unwritable is
+§17.3's spool rule.
 
 Swallow discipline is unchanged from v1's crown invariant: every caught
 exception records an evidence row before it is swallowed, and the warning
@@ -252,7 +261,10 @@ ports: the error path's own failure is recorded at most once per process.
 One engine per live session. One asyncio task owns it; only that task
 writes that session's state. Engines communicate with nothing except the
 store and the outbox. Sync work (SQLite commits, `kitten @` calls in
-reactors) runs in executors; anyio task groups supervise.
+reactors) runs in executors; anyio task groups supervise. Not every fact is
+session-scoped: machine-, account- and window-scoped facts live in named
+machine-scope services beside the engines (§17.1), still inside the one
+daemon.
 
 ### 6.2 What the engine holds (all mirrored in domain rows)
 
@@ -338,7 +350,9 @@ Per-session order is arrival order at the daemon. A subagent's story:
 **volumetric events attach on arrival by correlation key** — review 4.6's
 split, stated as the rule, preserving live subagent fg output. Spooled/late
 frames merge by time with a `late` flag; every rule tolerates duplicates
-and lateness by construction.
+and lateness by construction. Arrival order governs TOOL observations only:
+a surface-authored write (drafts, queue pins) is ordered by its AUTHOR's
+sequence — CAS on an author seq, tombstones over deletes (§17.12).
 
 ### 6.10 Session end, park, resume
 
@@ -397,6 +411,11 @@ reconnect resumes from them; the list page is a query over the session
 index table. The static-asset half of v1's boot-id survives as-is
 (cache-busted assets + the "updated — refresh" toast).
 
+Amended by the gap audit: arrival ids remain the cursor backbone, but
+DISPLAY placement is an item attribute, and the live stream carries
+amendment frames (retract / supersede / move) beside appends; agent scope
+is a subscription dimension with its own cursors — §17.4.
+
 ### 8.2 Backlog vs live
 
 The initial mirror backlog is a compressed plain GET (v1 measured 8–9×
@@ -443,6 +462,9 @@ time, the edge proceeds unwrapped and the PostToolUse witness covers the
 outcome — the tool never waits on us and never fails because of us.
 Injection remains auto-approval on tools where `updatedInput` requires an
 allow decision (v1's known trade), per-tool config.
+
+Amended by the gap audit: the answer is the LAST step of an all-or-nothing
+PREPARE with rollback, not a pure computation — §17.6.
 
 ---
 
@@ -502,8 +524,11 @@ Rules that make it correct:
 - **Deltas are evidence, never truth.** Tokens are not journaled; the
   delta accumulation lives in engine memory + spool. The authoritative
   record (transcript assistant record, keyed by message id + block index)
-  **supersedes** the accumulated deltas at finalize. If they disagree, the
-  transcript wins.
+  **supersedes** the accumulated deltas at finalize — for MESSAGE blocks.
+  Finalize authority is declared PER KIND: a command block's streamed bytes
+  are themselves the authoritative copy, and the tool's capture is a
+  fallback only when nothing streamed (§17.7). The lifecycle also has a
+  third terminal outcome, ownership TRANSFER (Ctrl+B — §17.7).
 - **Every closer flushes open blocks.** An interrupt that finds an open
   message closes it as *partial, interrupted* — a feature gain over v1,
   which loses what the model was mid-writing at Esc.
@@ -693,20 +718,29 @@ log" keystone (replaced by per-session revisions).
 
 1. The system never blocks a tool and never fails a tool.
 2. Evidence is written in the same transaction as the domain change it
-   justifies; every decision has a decision row.
-3. One writer per session's state.
-4. Open facts are rows, not memory.
-5. Only evidence closes a fact — no idle timeouts (the web-interrupt
-   recheck is the one sanctioned exception; display expiry is a view rule).
+   justifies (happy path — the spool degrade ladder is §17.3, and
+   invariant 1 outranks this one); every decision has a decision row.
+3. One writer per session's state; machine-, account- and window-scoped
+   facts have one named machine-scope owner (§17.1).
+4. Open facts are rows, not memory (declared live-only facets excepted —
+   §17.7).
+5. Silence alone never closes a fact; closing needs evidence, and a
+   sampler channel's named grace/debounce/ceiling constants are part of
+   its evidence rule (§17.8). Display expiry is a view rule; the
+   web-interrupt recheck stays the one event-we-generated exception.
 6. Bulk bytes never travel the row path.
-7. The domain model is tool-neutral and presentation-free; sanitization
-   happens at the leaf of every renderer.
+7. The domain model is tool-neutral and free of colours, glyphs and
+   layout; audience/register facts are domain facts (§17.10);
+   sanitization happens at the leaf of every renderer.
 8. Every effect is idempotent or leased; every outcome returns as an
    effect record; dedup is against verified outcomes only.
-9. Deltas are provisional; the tool's artifact supersedes them.
-10. A missing capability is a named refusal, never a silent absence.
+9. Deltas are provisional; the block's declared authority finalizes them
+   (§17.7).
+10. A missing capability is a named refusal, never a silent absence — at
+    read time as a reachability map, at drive time as a verdict (§17.5).
 11. Wrong derived data is repaired by recorded, auditable corrections
     (there is no replay).
+12. A closer closes only a correlation whose identity it matched (§17.7).
 
 ---
 
@@ -740,3 +774,414 @@ log" keystone (replaced by per-session revisions).
   until its gate passes. The v1→v2 coverage appendix recommended by the
   review (every CLAUDE.md feature/env knob/doc lesson → its v3 home or an
   explicit drop) is the migration checklist and remains to be written.
+
+---
+
+## 17. Amendments from the legacy gap audit (2026-08-03)
+
+Method: six read-only subagents (five Opus, one Sonnet) read this document,
+then the whole v1 codebase in slices — core; the claude_code hook side; the
+claude_code control/read side; codex + otel + frontends; the dashboard
+backend; the SPA — each hunting for mechanisms this design cannot express,
+covers lossily, or is silent about. ~65 verified findings consolidated into
+the amendments below (file:line citations are the auditors', checked
+against the code). Where an amendment tightens an earlier section, the
+amendment wins.
+
+### 17.1 The scope model: not every fact is session-scoped
+
+The audit's largest single result: v1 holds load-bearing facts whose scope
+is the MACHINE, the ACCOUNT, or the terminal WINDOW, and the spine as
+written ("one engine per session, engines share nothing") had no owner for
+any of them.
+
+- Machine: the alert watcher is ONE 1s tick diffing the whole tab table
+  across sessions (`notify/notifier.py:448-494`) with a cross-session
+  needs-you badge (a per-session count was measured wrong — 148 shown with
+  one asking session), ONE `kitten @ ls` per scan amortized over every
+  armed entry, and a terminal-presence prober that runs continuously
+  precisely to build HISTORY ("I was at the terminal two minutes ago"
+  cannot be recovered later). codex-run discovery watches two GLOBAL
+  directories and only secondarily decides which session (if any) owns a
+  discovered rollout, across a grace window (`plugins/codex/watch.py`).
+- Account: quota windows, limit-hit/logged-out latches, the burn-aware
+  default-account picker, the per-model OAuth poll (§17.9).
+- Window: tab state keys on the kitty window id, which OUTLIVES any one
+  session (`core/tabs.py:87-99`); "flip only a currently-blue tab" is a
+  window-arbitration rule; the scorebar's `paused` counter integrates over
+  the tab colour.
+
+Amendment. The daemon gains a small set of NAMED **machine-scope
+services** beside the session engines — the attention/alert watcher (the
+one tick, the one device map, the amortized terminal probes), the account
+service (§17.9), the discovery service (codex global dirs; its claim
+arbitration DISSOLVES — v1's per-repo claims DB existed because many
+processes raced; one daemon arbitrates in memory over domain rows, with
+audit rows keeping the outcome auditable), and the window registry
+(window↔session binding, tab-state rows, the arbitration rules). Each
+service is one owner with its own domain rows and probes (invariant 3
+amended). Engines never reach into another session; engines and services
+meet only in the store.
+
+### 17.2 The session-env contract
+
+BLOCKER (control-plane audit): several facts exist ONLY in the session
+process's environment, which a machine-global daemon cannot see — the
+subscription account slug/label (`account.py:31-39`, THE account
+contract), `CLAUDE_CONFIG_DIR`, `CLAUDE_PROJECT_DIR`, the effort override,
+the 1M-context kill switch (the ctx facet's DENOMINATOR), `CLAUDE_RELIMIT`,
+and the per-project mirror/read gates (settings.json env blocks, layered
+project-over-global; v1 already re-layers them out-of-process in
+`model.settings_env`, having hit this exact problem once).
+
+Amendment. The edge frame contract gains a declared **env snapshot**: an
+allowlisted variable set harvested by the shim, shipped with
+SessionStart-class frames and re-stamped on change, stored as session
+facts. Per-project configuration is resolved engine-side by the ported
+settings-layering walk over the session's cwd — never from the daemon's
+own environment. The allowlist is part of protocol conformance tests; an
+unlisted variable is invisible by design.
+
+### 17.3 Evidence-log corrections
+
+1. **Own failure domain.** v1's audit degrades to an append-only spool
+   and — critically — spools STATE TRANSITIONS, not just inserts:
+   pseudo-table rows replay as UPDATEs on re-ingest, which is what keeps
+   `ended_at IS NULL` anomaly signatures honest across an outage
+   (`core/audit.py:184-270`). §5's one-transaction rule is the happy path
+   only: the evidence writer keeps the spool degrade with UPDATE replay,
+   its own failure is recorded at most once per process, and an engine
+   whose store is unwritable keeps observing into the spool rather than
+   stopping — invariant 1 outranks invariant 2.
+2. **The warning-light plane.** "Nothing reads these at runtime" was false
+   in v1 and stays false: the ⚠ chip and per-session error lines are a
+   live 5s read of the errors table with a persisted at-most-once emission
+   checkpoint, flood collapse past FLOOD_N, a GLOBAL-rows second plane
+   (machine-wide failures surface in every session), and a
+   benign-signature suppression list — `A.error` is also called for
+   EXPECTED degrades (`core/errwatch.py`). Amendment: the plane is
+   sanctioned and specified; evidence rows carry a SEVERITY/VISIBILITY
+   class so an expected 4xx refusal is evidence but never lights the chip
+   (v1's `_reject_input` rule); and the chip reads a domain counter
+   maintained at write time, so class-based pruning can never silently
+   decrement it.
+3. **The promotion list.** v1 serves several RUNTIME reads out of audit
+   payloads because domain rows didn't exist: nested bg/monitor ownership
+   (`json_extract` over hook payloads per poll — `nested.py:49-75`), the
+   streams row as the agent-identity/end-reason keystone, the frozen
+   `start_cwd` the list groups by. In v3 these are domain rows written at
+   observation time; the evidence log returns to being evidence.
+
+### 17.4 The read model: display order is not arrival order
+
+BLOCKERs (SPA + backend audits). One append-only `(session, seq)` with
+increments-only SSE cannot express four measured contracts:
+
+- **Late structural records.** The feed interleaves an op backbone with
+  transcript records merged BY TIMESTAMP — and §11.2's own measurement
+  makes lateness the NORMAL case (a thinking record lands ~16s after its
+  content, timestamped earlier). v1 rides two cursors (op id + merge pos).
+- **Slot adoption.** A child task's result renders BEFORE the parent's
+  final answer whatever the clocks say; v1 moves the RECORD, never the op
+  — "op ids are the slot backbone every cursor rides on"
+  (`read/mirror.py:123-176`) — applied to the backlog merge AND the live
+  delta AND already-painted DOM.
+- **Un-painting.** Three live paths remove/move bubbles already on
+  screen: a superseded prompt (same-parentUuid replacement), an interrupt
+  take-back, a rewind truncation. A query-time ancestry filter heals a
+  reload; it says nothing to a browser holding the painted node.
+- **Agent scope** is a second read model, not a filter: inverted src
+  filter on the bare agent id, a DIFFERENT conversation source (the
+  agent's own transcript + synthesized outgoing-mail records that exist in
+  no transcript), different window boundaries per scope, a vocabulary
+  normalization stage (`as_lead`), and mixed scoping in one payload
+  (jobs/monitors scoped; errors/memory session-wide) on one SSE
+  connection.
+
+Amendment to §8. (a) Arrival ids stay the cursor backbone; DISPLAY
+placement is an item attribute — a ts plus an optional "renders in the
+slot of X" adoption — and one shared placement rule is applied by backlog
+cut, live merge and browser alike. (b) The live stream carries a small
+closed set of AMENDMENT frames beside appends — `retract(id)`,
+`supersede(old→new)`, `move(id, anchor)`, `amend(id)` — each idempotent,
+each derivable from a full re-read. (c) Agent scope is a declared
+SUBSCRIPTION DIMENSION: cursors are (session, scope, backbone-id); a scope
+names its conversation source and its normalization; badges declare
+scoped-vs-session-wide per facet. (d) With no replay, every field added
+later is NULL on prior rows: the read model declares a per-field FALLBACK
+LADDER with a precedence rule (v1 has five independent instances of this
+discipline).
+
+### 17.5 Gestures: verdicts, preconditions, late refusals, delivery proof
+
+- **Verdict payloads.** v1 gestures return DATA the page acts on:
+  `queued` (measured on the screen BEFORE the paste — our own paste is
+  screen motion), `restored` (the take-back text), `confirm`, live
+  plan-option labels (they vary with permission mode), rename's
+  `{queued, channel, title}`. Amendment: a gesture's completion carries a
+  TYPED VERDICT; screen-measured preconditions are part of the gesture
+  body, ordering included; interactions that only read (plan-options, the
+  take-back box read) are declared CONTROL READS, not effects.
+- **Late refusals.** A cap-sharer (`rewind_to`→`rewind`,
+  `autoname`→`rename`) is only discoverable at drive time — after the
+  202. The named-refusal shape applies to completion verdicts too; the
+  SPA's "greyed, never gone" bar is served by a READ-side per-gesture
+  reachability map (caps + refusal floors + tab state), the 409 remaining
+  the backstop, not the affordance.
+- **Delivery proof.** A composer send is proven delivered ONLY by a
+  transcript prompt record matching by SUFFIX (attachments prepend; a
+  terminal-restored draft glues with no separator), pinned durably across
+  reloads/devices. Amendment: an **outbound-message correlation** —
+  opened by the send gesture, closed by transcript evidence, surviving
+  restarts — distinct from the paste effect record, with the suffix rule
+  owned once and exported to the client as data.
+- **Optimistic-UI evidence.** The browser beacons
+  shown→reconciled/dropped(+stale-watchdog) lifecycles for its optimistic
+  stand-ins — evidence justifying NO domain change. Amendment:
+  surface-reported evidence is a sanctioned free-standing evidence class;
+  it matters MORE under a 202 model, not less.
+
+### 17.6 The synchronous answer is a prepared commit
+
+BLOCKER (hook-side audit). v1's PreToolUse answer is the LAST step of an
+all-or-nothing sequence — create the tee file, claim the fg slot, spawn
+the tailer, write the hand-off record, THEN reply with `updatedInput`;
+any failure rolls back (unlink, release) and answers no-rewrite, encoding
+one rule: **never rewrite a command you are not certain you can tail**
+(`cmd_pre.py:94-306`). The reply also fixes the block's copy-group
+identity and the fg-liveness record the elapsed chip peeks. Amendment to
+§9: the responder is a PREPARE-THEN-ANSWER transaction with declared
+rollback; the <5ms figure covers the commit, the budget covers the
+prepare; a "yes" that cannot guarantee a watcher is a "no". The v1 gate
+set (read-command collapse, existing-redirect, env gates via §17.2, the
+subagent variant, in-flight/stale reclaim) is the conformance checklist.
+
+### 17.7 Streaming and correlation corrections
+
+- **Finalize authority is PER KIND.** Message blocks: the transcript
+  record supersedes deltas. Command blocks: the streamed bytes ARE the
+  authoritative copy; the tool's `tool_response` is a fallback only when
+  nothing streamed (v1 `fallback_body`). "Transcript wins" applied to
+  commands would replace a 50MB streamed log with a truncated capture.
+- **A third outcome: ownership TRANSFER.** Ctrl+B converts a running fg
+  command into a bg job mid-flight (undocumented `backgroundTaskId` +
+  `backgroundedByUser`; duration covers only up to the keypress; the
+  pinned sentinel→pos0→spawn hand-off order). The lifecycle gains
+  `transferred(new_owner)`.
+- **Closers must MATCH before closing.** v1's take-once hand-off consumes
+  only on identity match — without it a cancelled command's surviving
+  record was consumed by the NEXT call's PostToolUse, cross-wiring two
+  commands (`state.py:960-984`). "Every closer flushes open blocks" is
+  amended: a closer flushes only blocks whose identity it matched; an
+  orphan is closed by ITS OWN closer, never a neighbor's. Peek-vs-consume
+  is part of the model (the elapsed chip's liveness IS the record's
+  unconsumed presence), and the never-ran inference reads the ABSENCE of
+  a consumption, which take-once semantics make expressible.
+- **Completion gates on drained ingestion.** A completion signal must not
+  finalize a block while its source's tail is behind (`capped` — the
+  writer can be long gone while unread bytes remain; `tail.py:92-98`);
+  resume checkpoints record the last SURFACED line (`consumed`), not the
+  last read byte.
+- **Live-only facets.** The ghost suggestion and `fg_running` are
+  deliberately ephemeral — never persisted, absent after restart (a
+  rehydrated engine must not re-serve a suggestion no longer on screen).
+  Invariant 4 gains the declared exception.
+
+### 17.8 The liveness vocabulary: graces are evidence rules, not timeouts
+
+Stated absolutely, "no idle timeouts" deletes a family of MEASURED rules
+that are part of how evidence is READ: burst-scoped markers need
+N-consecutive-miss debounces (a teammate drops its marker between tasks —
+`BG_MISS_GRACE_N=4`, the early-green bug); writer-gone needs idle≥grace
+AND no lsof write-holder, a hung lsof reading "assume still writing";
+monitors whose process was never located have an idle-fallback that is
+the ONLY closer they get; give-up ceilings bound watchers; the compaction
+latch may NEVER receive closing evidence and expires on the read side.
+Amendment: invariant 5 recast — SILENCE ALONE never closes a fact; where
+the evidence channel is a sampler, its named grace/debounce/ceiling
+constants (each with its measured rationale) are part of the evidence
+rule. The mail census is the extreme case: a poll-diff sampler where
+disappearance-between-samples IS the read signal and most transitions are
+structurally missed (2 of 33 messages left a poller row) — declared
+cumulative-over-a-lossy-sampler, a class §7.2 now names. The monitor
+ownership INVERSION is also declared: a child's monitor is observed by
+the HOST (the child's in-order source never carries it) and attributed by
+an out-of-band stamp — the one sanctioned exception to "the child owns
+its story".
+
+### 17.9 Accounts, credentials, and the relimit saga
+
+- **The account domain model.** Quota windows (5h/7d, per-model
+  weeklies), window-rollover arithmetic (a stale snapshot whose window
+  rolled reads 0, not its frozen %), limit-hit and logged-out latches
+  with measured graces, and the vendor-message parsers (scope + reset
+  prose → epoch) become account-scoped domain rows owned by the account
+  service — single-owner, because drift here "silently migrates onto a
+  blocked account". The statusline shim's contract is stated: `statusLine`
+  is a SINGULAR slot already occupied by the user's HUD, so the shim
+  captures-and-DELEGATES — exec the real HUD with the same stdin, relay
+  verbatim, never fail the render path.
+- **The credential port.** The per-model weekly poll uses Claude Code's
+  own OAuth tokens from the keychain and — the hard-won part — WRITES THE
+  ROTATED TOKEN BACK into Claude Code's keychain entry, merging over the
+  prior blob (Anthropic revokes the whole family on refresh replay; the
+  mirror-entry design caused daily 401 /login loops —
+  `model_usage.py:222-250`). Amendment: a narrow **credential port**
+  (read + writeback, leased, audited) owned by the account service; its
+  result feeds a display-only table; the migration path stays tokenless.
+- **The relimit saga.** Nothing is exported in an account migration:
+  accounts are symlink farms over one `~/.claude`, `--resume` forks the
+  sid, adopt/lineage carries history. The flow is a cross-session SAGA —
+  stamp limit-hit, cooldown-gate, pick target, announce BEFORE park (so
+  the successor replays it), detach, wait for the dying session's park,
+  relaunch under the new account — beginning at the exact moment §6.10
+  releases the engine, spanning one dead session and one not yet born.
+  Amendment: sagas are machine-scope service state (durable step rows,
+  arms for cooldowns); §13's framing is corrected — relimit is a
+  same-artifact RELAUNCH saga, provider handover is the export path: two
+  mechanisms, one saga skeleton.
+- **Session-less observations.** Launch/upload/notify/prefs evidence
+  precedes or outlives any session (a launch's outcome IS the birth of a
+  lineage, matched by window id/cwd over a wake poll; v1 measured a
+  log-less upload filing rows into an unrelated session's timeline).
+  Machine-scope evidence rows are first-class — no fake sid — and the
+  launch lease closes on lineage-birth correlation.
+
+### 17.10 Presentation vs audience facts; the slot allocator
+
+The "presentation-free domain" rule over-reached in three measured places:
+
+- **Audience facts.** `chrome` (host scaffolding every web view drops),
+  `bubbled` (prose the scoped view trades away), and producer-authored
+  REGISTER wordings (the web's quiet ⏺ register has no colour channel, so
+  the producer writes the word where the terminal used the glyph's
+  colour) are SEMANTIC facts about audience and register, decided where
+  the tool knowledge is — a DTO layer cannot reconstruct them from the
+  rendered artifact. The domain model carries audience/register facts;
+  the ban stays on colours, glyphs and layout.
+- **The slot allocator.** Stable per-entity palette assignment is a
+  persisted, liveness-contended ALLOCATION (persisted round-robin so a
+  freed colour is not immediately reused; a resumed teammate re-pins its
+  original slot; the same rows are the tab tracker's liveness signal —
+  `core/slots.py`). A stateless DTO mapper would recolour siblings as
+  jobs finish. Amendment: the engine owns a slot-allocation fact per
+  concurrent stream (a stable small integer, kind-scoped); leaves map
+  slot→palette; liveness stays on the correlation row it already shares a
+  transaction with.
+- **The no-mapper default.** An observation with NO mapper must still
+  render (v1's measured allowlist-silence bug: WebFetch/Grep produced
+  nothing). The mapper registry declares a complement/default case
+  producing the generic tool fact.
+
+### 17.11 Terminal port additions
+
+The Terminal port was written effect-only. It now declares: window
+ENUMERATION with user-var tag read/WRITE (pane identity, retagged on
+`SidAliased` — how an internal lineage alias reaches a terminal that only
+knows the tool's sid); the audited stale-mirror sweep ("one tab holds
+exactly one host session" — an unaudited sweep is how a cross-session
+pane hijack stays invisible); the NESTED-HOST refusal as a three-valued
+answer (host / nested / host-without-window — a `claude` launched inside
+another session's tab inherits the outer window id and would sweep the
+outer session's panes; distinct from the anchorless case); tab-LIVENESS
+reads (the pane's user-var is the authoritative live signal; an empty
+`kitten @ ls` is tri-state can't-tell, never "everything died"; a
+just-started session gets a grace because its audit row precedes its pane
+tag); focus/frontmost probes (presence; `--keep-focus` passed only while
+kitty is frontmost — the active bounce-back was shipped and reverted
+same-day); and the launch guards as port semantics: login-shell argv,
+registry-vetted barewords, wrong-tool 409 with the gone-transcript 410
+checked FIRST, live-lineage resume 409 off a fresh window scan, the
+DECLARED clipboard-image clear (the OS clipboard is a shared resource —
+its wipe is a leased effect behind a host declaration), and the
+trust-prompt hazard (an untrusted cwd stalls a launch that neither
+succeeds nor fails). The pid-liveness probe keeps v1's ONE rule:
+`kill(pid, 0)` with EPERM = exists-but-foreign = ALIVE (kqueue
+`EVFILT_PROC` cannot attach to foreign pids, so the fallback carries the
+rule).
+
+### 17.12 The web-local plane
+
+v2 had a §12.5 this document dropped; it returns, with its concurrency
+model:
+
+- **Uploads are NOT blobs**: a staged attachment needs a STABLE,
+  tool-readable absolute path outside any repo working tree, living the
+  conversation's lifetime — the opposite of a content-addressed expiring
+  store. The realpath jail (`_attachment_paths`) and the mention grammar
+  being the RECEIVING host's are ported verbatim. Clipboard file-paste
+  resolution stays server-side with the basename-agreement rule (a remote
+  paste can never be answered with a host path). Dictation: the API key
+  never leaves the server; short grant JWTs; keyterms layered
+  project-first.
+- **Prefs concurrency.** Surface-authored state (composer draft, ask
+  draft, queue pins, view mode, tasks-dismissal, per-DIRECTORY ns-drafts
+  with blur-settle) is multi-writer: every save is CAS on an author
+  wall-clock seq, a clear is a TOMBSTONE (never a delete — the seq must
+  survive to reject a straggler), `origin` echo suppresses the writer's
+  own SSE reflection, and the TERMINAL is a second writer of the composer
+  draft with an asymmetric rule (non-empty box wins; empty clears only
+  what we synced; per-connection first-probe adoption).
+- **The session-less API plane** (ns-prefs/drafts, hosts, limits,
+  notify-config, commands, stats, presence, clipboard, dictate) with its
+  GLOBAL SSE channel is a declared surface beside the per-session
+  document; prefs∩facet joins are named patterns (tasks-hidden is the
+  SERVER's verdict; hidden-dirs' expiry is a client predicate over
+  `started_at`, with the live-session 409 reading the SAME list payload
+  the page shows).
+
+### 17.13 Usage and pricing corrections
+
+- Token facts are FIVE categories, not one: in, out, cache-read,
+  cache-create-5m, cache-create-1h (the 1h tier is +0.75× vs +0.25× —
+  pricing everything at the 5m rate measurably undercounted). Cost-on-read
+  (§8.5) therefore needs the categories stored AND a TIME-INDEXED price
+  table (an introductory rate expires; the spend's own timestamp picks
+  the row).
+- Temporality is DECLARED PER SOURCE: OTLP is delta (sum, never gauge);
+  Claude transcripts repeat a GROWING usage snapshot per content-block
+  line (the `message.id` dedup, v1's 2.2× fix); codex `token_count` is a
+  CUMULATIVE snapshot that must be DIFFED against the last-seen snapshot
+  (`rollout.py:304-313`) — "sum deltas" applied to it recreates the
+  order-of-magnitude bug in the other direction. The ledger records
+  tokens per (source, temporality-rule); codex is priced by its own
+  table, on read, like everything else.
+- The post-end amendment (§12) names its owner: a parked session's ENGINE
+  is rehydrated for the write (single-writer preserved), never written
+  around.
+
+### 17.14 Small corrections, one line each
+
+- The task list is an artifact the tool DELETES at session end, and its
+  directory key DRIFTS after resume: the engine's snapshot-on-observation
+  is the ONLY durable copy — a declared VOLATILE-artifact class ("the
+  tool keeps its artifacts" does not hold here), with key re-resolution
+  by content recency.
+- The subagent description hand-off is a deliberately UNKEYED FIFO (the
+  payloads share no id; a resumed teammate must NOT pop) — correlation
+  rows may be queue-shaped.
+- Duplicate-stop dedup is an ATOMIC TAKE (the DELETE's rowcount is the
+  once-only licence), and a stop for an agent that NEVER started (hidden
+  summarizers: SubagentStop only, no transcript) is a third shape, not a
+  duplicate.
+- Memory SEARCHES are domain objects extracted AT INGEST (qmd stdout
+  exists only at PostToolUse; hits attach only to a single-search
+  command), and per-feature project SCOPE GATES exist.
+- `set_session_title` is the ONE sanctioned WRITE into a tool artifact
+  (parked rename), keyed by the filename stem, gated by `renameable` —
+  §4.1's "never written" gains this carve-out.
+- The ctx compaction animation needs an atomicity rule: no ctx
+  recomputation is published while the latch is set, and the latch clear
+  + post-compaction occupancy share one revision.
+- SSE facets declare channel classes (fast / slow / inline-gated
+  expensive producers), and the list stream ships snapshot + delta with
+  diff blinding for continuously-clocked fields (a full snapshot per tick
+  measured 2.2 MB/min per remote viewer).
+- External-RPC reads (codex's app-server rate-limit handshake) join
+  git-status as named read-time subprocess classes (TTL-cached,
+  evidence-free on success).
+- The ⧉ copy source must OUTLIVE the session and the blob horizon for
+  blocks the user can still scroll to: copyability is a retention CLASS
+  on the timeline's resident window, and the click channel is a
+  terminal-originated gesture (OSC8 → handler → daemon), declared in §3's
+  ingest list.
