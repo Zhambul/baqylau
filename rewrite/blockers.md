@@ -124,7 +124,9 @@ silently treated as resolved merely because the design now states a decision.
   `03a-contract-blocker-resolution`)
 - Affected: step 04 (canonical-read-model), coverage rows for §§38.24/38.36–38.38
   and §42.1; implementation commit e780fdd in
-  /Users/z.yermagambet/code/personal/baqylau2; index status: in progress
+  /Users/z.yermagambet/code/personal/baqylau2; resolved by
+  03a-contract-blocker-resolution, final commit 84b809d
+  (branch step-03a-contract-blockers); index status: completed
 - Design references:
   - §42.1 line 14040: "The daemon owns client limits through `GET
     /api/v1/limits`. The response contains `upload_max`, `rename_max`,
@@ -365,3 +367,65 @@ silently treated as resolved merely because the design now states a decision.
   occur.
 - Owner: impl-04 (step 04 implementor); resolution owner step 06
 - Last updated: 2026-08-06T00:00:00Z
+
+## BLOCKER-STEP03A-001 (BC-1): §38.24's endpoint table lacks the `getLimits` row
+
+- Timestamps: 2026-08-07T00:00:00Z opened
+- Status: `open`, non-blocking (workaround derives the row from §43.4 with a citation
+  and a test that fails loudly if §38.24 ever grows a conflicting row)
+- Affected: step 03a (contract-blocker-resolution), coverage rows for §38.24/§38.36
+- Design references: §43.4 item 3; §38.36 line 10120 (114-endpoint set-equality gate);
+  §38.24 (lines 6491–6699), no `/api/v1/limits` row present
+- Observed: §38.24 and §38.38 would disagree (113 vs 114) without the derived row;
+  `extract_api.extract_binding_endpoints`/`merge_binding_endpoints` in
+  /Users/z.yermagambet/code/personal/baqylau2/phase0/tools/extract_api.py implement the
+  workaround and raise if §38.24 ever gains its own conflicting row
+- Required decision: add the `GET /api/v1/limits` row to §38.24's table in the design
+- Owner: impl-03a; resolution owner: design-doc maintainer
+
+## BLOCKER-STEP03A-002 (BC-2): §38.38's `getLimits` row names a durable owner table that does not exist
+
+- Timestamps: 2026-08-07T00:00:00Z opened
+- Status: `open`, non-blocking (served response is built from configuration, not the
+  named table; nothing depends on the table today)
+- Affected: step 03a/04, storage matrix, generated endpoint manifest
+- Design references: §38.38's `getLimits` row, trace cell
+  `DiagnosticService.limits / DiagnosticStore.read_limits / runtime_limits / -`
+- Observed: `runtime_limits` appears in none of the 152 schema tables, the generated
+  catalog, or the storage matrix; only the generated endpoint manifest carries it as
+  provenance
+- Required decision: whether `runtime_limits` is a real table a later step must create,
+  or a design transcription error that should read `-`
+- Owner: impl-03a; resolution owner: whoever owns persisted client limits (unassigned)
+
+## BLOCKER-STEP03A-003 (BC-3): the unresolved-parity override is advisory, not enforced
+
+- Timestamps: 2026-08-07T00:00:00Z opened
+- Status: `open`, non-blocking (correct and tested today; risk is in a future consumer)
+- Affected: step 10 (migration, parity, and cutover) — future
+- Design references: §43.4 item 9 ("silently mark parity passed" forbidden)
+- Observed: `docs/parity/unresolved-legacy-dimensions.json` correctly marks
+  `legacy_jobs`/`legacy_monitor_streams`/`legacy_running`/`legacy_errors` as
+  `unknown`/`may_be_used_as_golden: false`, but `phase0/parity/index.json` and the
+  frozen oracle files still say `status: "captured"` with an empty golden value, and
+  nothing forces a future parity loader to consult the override
+- Required decision: either the future parity loader must treat the override as a
+  mandatory input (with a test proving a loader that ignores it fails), or
+  `capture_parity.py` gains a status value for "the reader and its own audit rows
+  disagree" and the corpus is recaptured on the original capture machine
+- Owner: impl-03a; resolution owner: step 10 implementor
+
+## BLOCKER-STEP03A-004 (BC-4): `phase0/run_all.sh --verify` cannot pass off the original capture machine
+
+- Timestamps: 2026-08-07T00:00:00Z opened
+- Status: `open`, non-blocking (design-derived half is reproducible and green; only the
+  live-recapture half is machine-dependent)
+- Affected: phase0 CI/verification tooling
+- Observed: measured on one machine, one legacy checkout: baseline `cdf54a1` and
+  step-03a HEAD both differ from a fresh recapture by 563 lines, of which 0 are
+  design-citation lines; remaining drift is live provider-build/payload churn
+  (Claude Code 2.1.222 → 2.1.223 mid-session)
+- Required decision: split the gate into a design-derived half (reproducible, CI-suitable)
+  and a live-recapture half (capture-machine only)
+- Owner: impl-03a; resolution owner: phase0 tooling maintainer
+- Last updated: 2026-08-07T00:00:00Z
