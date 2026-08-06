@@ -682,3 +682,52 @@ silently treated as resolved merely because the design now states a decision.
   pre-fix commit and pass against the fix.
 - Owner: impl-05b (continuation implementor); verified by review1-05
 - Last updated: 2026-08-06T00:00:00Z
+
+## BLOCKER-STEP06-001: §19.1's `attention_transitions.cause` prose tuple conflicts with §38.27's DDL column `cause_operation_id`
+
+- Timestamps: 2026-08-06T00:00:00Z opened, 2026-08-06T00:00:00Z resolved
+- Status: `resolved` (dedicated resolver confirmed prose is a truncated sketch; DDL is
+  authoritative per §43.4.4; no schema change, migration, or digest regeneration required)
+- Affected: step 06 (projections-and-machine-services), attention/notification services
+- Design references:
+  - §19.1 (design lines ~2579-2581) prints `attention_transitions(..., cause, ...)` and
+    `attention_projection(scope_type, scope_id, state, source_revision, ...)` — the
+    latter literally ends in `...` and both tuples omit real columns present in the
+    executable DDL (e.g. `source_revision` is omitted from the transitions tuple despite
+    being a real DDL column).
+  - §38.27/§40.7's executable DDL for `attention_transitions` (design lines ~9631-9642,
+    inside the §38.35 DDL unit #1, not §38.27 as originally miscited) has no `cause` text
+    column — only a nullable `cause_operation_id` FK to `operations`.
+  - §41.4 (design line ~13950) requires "AttentionService... writes a reason string for
+    every probe/timer transition" — a requirement that cannot be satisfied by an FK alone,
+    since most probe/timer transitions have no associated Operation row.
+  - §43.4.4 (design lines ~14150-14153): "the generated schema artifact and its SHA-256
+    digest are authoritative. Prose... is regenerated from that artifact and cannot
+    override it." Matches the precedent set by the frame-header-length resolution
+    (BLOCKER-STEP02-001/§43.4 item 1).
+- Observed: attempting to write a `cause` column via 3 of 285 declared statements failed
+  with `OperationalError: table attention_transitions has no column named cause` against
+  the installed, digest-sealed schema.
+- Required decision: whether to (a) amend the DDL to add a real `cause TEXT` column
+  (schema/digest/migration change) or (b) treat §19.1's tuple as an imprecise sketch and
+  route the reason string through existing durable homes.
+- Resolution: (b). No DTO or event payload anywhere in §38.36-38.38 surfaces an attention
+  reason (`ConversationDTO.attention` is a bare state token); the reason now lives on the
+  in-memory `AttentionVerdict` plus routes through four existing durable homes depending
+  on transition-trigger type: `notification_intents.cause` (alert-arming transitions),
+  `ingestion_decisions.decision_code` under `consumer_kind='attention'` (observation-driven
+  transitions, using §38.5's registered decision-code vocabulary), the existing
+  `attention_transitions.cause_operation_id`/`attention_projection.source_transition_id`
+  (Operation-caused transitions), and `notification_intents.cancel_reason` against the
+  seeded registry (alert cancellation). Pure timer/probe transitions with no registered
+  consumer are log-only, which is the documented residual case, not a narrowing.
+- Evidence: `cause` removed from the 3 failing statements; all 285 now EXPLAIN against
+  the installed schema. `TransitionTrigger`→`ReasonHome` routing implemented in
+  `application/machine/attention.py`, reusing `ConsumerKind.ATTENTION` and the existing
+  `DecisionCode` enum rather than parallel vocabularies. Guards added:
+  `test_the_installed_table_has_no_cause_column`,
+  `test_no_declared_statement_writes_a_cause_column`,
+  `TestTheSeededCancelReasonGuardMatchesTheSchema` — so this cannot be mistaken for a
+  lost column later.
+- Owner: impl-06; resolved by resolver-06-1
+- Last updated: 2026-08-06T00:00:00Z
