@@ -729,5 +729,16 @@ silently treated as resolved merely because the design now states a decision.
   `test_no_declared_statement_writes_a_cause_column`,
   `TestTheSeededCancelReasonGuardMatchesTheSchema` — so this cannot be mistaken for a
   lost column later.
+- Update (2026-08-07): review found only 2 of the 4 durable homes had a real
+  executor at first (`notification_intents.insert` and its `cancel_reason` update
+  had none, because the alert plane's SQLite writers did not yet exist). All four
+  homes are reachable as of commit `7faef22`: `AlertPolicyService`
+  (`application/notifications/delivery.py`) now arms intents through
+  `SqliteAlertStore`, so both notification homes have real callers.
+  `tests/contract/storage/test_machine_stores.py::TestTheFacetAndAlertWritersHaveRealCallers`
+  reads an armed intent back from real storage. `tests/architecture/test_storage_matrix.py`
+  additionally enforces that every declared statement has an executor or a recorded
+  reason, and that every store class executing SQL is actually constructed somewhere
+  (a reachability check, not just AST-scanning for `.execute()` syntax).
 - Owner: impl-06; resolved by resolver-06-1
-- Last updated: 2026-08-06T00:00:00Z
+- Last updated: 2026-08-07T00:00:00Z
