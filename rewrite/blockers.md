@@ -742,3 +742,37 @@ silently treated as resolved merely because the design now states a decision.
   (a reachability check, not just AST-scanning for `.execute()` syntax).
 - Owner: impl-06; resolved by resolver-06-1
 - Last updated: 2026-08-07T00:00:00Z
+
+## BLOCKER-STEP06-002: §29's printed `runtime/` file list has no home for `PresenceExpiryWorker`/`TerminalFrontmostPoller`
+
+- Timestamps: 2026-08-06T00:00:00Z opened, 2026-08-06T00:00:00Z resolved
+- Status: `resolved` (dedicated resolver confirmed a new file is the correct, non-ADR-triggering
+  addition; implemented and self-guarded)
+- Affected: step 06 (projections-and-machine-services), runtime worker layout
+- Design references:
+  - §29 (design lines ~3863-3881) prints an exact 18-file `runtime/` list containing
+    neither worker, and states (lines ~3936-3938) "this layout is required, not
+    illustrative. New top-level source directories require an architecture decision
+    that updates this section."
+  - §38.26 (design lines ~6995-6999) names both `PresenceExpiryWorker` and
+    `TerminalFrontmostPoller` as runtime tasks but assigns no file/module ownership.
+  - §38.10 (design lines ~5434-5446) gives `TerminalFrontmostPoller`'s full behavioral
+    spec (1s/5s cadence, reserved `terminal` device, verified tab-focus fact,
+    `unknown` on enumeration failure, no HTTP-callable trusted write path).
+- Observed: every other §38.26 runtime task maps unambiguously onto one of §29's 18
+  printed files; these two do not, and folding them into an existing file
+  (`projection_workers.py`/`observation_workers.py`) would misstate ownership since
+  neither produces presence truth.
+- Required decision: add a new file to `runtime/`, fold into an existing file, or
+  confirm an existing file was simply misread as not fitting.
+- Resolution: add `src/baqylau/runtime/presence_workers.py` owning both workers. §29's
+  escape-valve clause gates only NEW TOP-LEVEL DIRECTORIES, not new files inside an
+  already-approved package, so this addition does not trip the formal ADR gate — but
+  it is still a real, recorded deviation from a list the design calls "required."
+- Evidence: `tests/architecture/test_package_tree.py`'s
+  `RUNTIME_FILES_ADDED_BEYOND_SECTION_29` records the file with its citation, and
+  `test_no_undocumented_runtime_file_was_added` fails on any OTHER unlisted runtime
+  file, so the precedent cannot be silently extended. Verified non-vacuous (a planted
+  unlisted file fails the guard by name).
+- Owner: impl-06; resolved by resolver-06-2
+- Last updated: 2026-08-06T00:00:00Z
