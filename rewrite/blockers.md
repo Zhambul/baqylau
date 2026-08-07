@@ -837,3 +837,345 @@ silently treated as resolved merely because the design now states a decision.
   the guard real. Small, non-blocking fix.
 - Owner: impl-07; identified by review1-07
 - Last updated: 2026-08-07T00:00:00Z
+
+## BLOCKER-STEP08-001: §36.2's registered-build gate has no design-specified channel for the provider's *running* build
+
+- Timestamps: 2026-08-07T00:00:00Z opened
+- Status: `open`, non-blocking (implemented with a three-valued verdict and a measured
+  discovery mechanism; the narrow decision below is still owed)
+- Affected: step 08 (providers-backends-and-accounts), coverage rows for §36.2 and §38.37.9;
+  branch `step-08-providers-backends-accounts` in
+  /Users/z.yermagambet/code/personal/baqylau2
+- Design references:
+  - §36.2 (design lines ~4451-4458): "An unregistered build is fail-closed for `answerable`
+    and `delegating` families: no command rewrite, launch, or control is attempted.
+    Observational families fail open to a typed generic record with
+    `provenance=unverified_build` ... This distinction is a closed manifest rule, not an
+    implementation choice."
+  - §38.37.9 (design line ~10975): "Provider version discovery is a measured implementation
+    input ... Until captured, that adapter version is unsupported."
+  - §10.3 (lines 1605-1640): the environment allowlist contains no version key for any
+    provider.
+  - §38.37.6's status-line row: "exact session/account plus usage windows" - no version.
+- Observed behavior: the rule needs to compare the build the provider is *running* against
+  the set of builds the repository has captured fixtures for, and no design-named field
+  carries the former.
+  ```
+  $ python3 -c "…read phase0/fixtures/provider_records/claude_hook_payloads/input/
+      one_payload_per_family.json and print each family's payload keys…"
+  # 24 families, zero version/build fields in any payload
+  $ cd ../baqylau && grep -n "version" plugins/claude_code/statusline.py
+  35:    has sent this as either seconds or milliseconds across versions; >1e12 is
+  # the legacy status-line consumer reads no version field either
+  ```
+  Codex rollouts do carry `session_meta.cli_version`, but that is the version that wrote a
+  possibly old file - the frozen June rollout records `0.136.0` while the capture build was
+  `0.146.0` - so it cannot answer §36.2's question.
+- Expected behavior: a named, observed source for the running provider build, or an explicit
+  statement that the daemon discovers it itself.
+- Impact: does not block. It does mean §36.2's fail-closed half can only fire when discovery
+  succeeded, and it forced a third registration state the design does not name.
+- Attempted alternatives:
+  1. Read the build from the hook payload. Rejected on measurement: no family carries one.
+  2. Read it from `session_meta.cli_version` for Codex. Rejected: wrong question (see above),
+     and there is no equivalent for Claude at all.
+  3. Treat "not discovered" as "unregistered". Rejected: it would disable foreground capture
+     and every control on any machine where a `--version` probe failed, on the strength of the
+     daemon's own ignorance rather than evidence about the provider - and §38.37.1's
+     typed-absence rule forbids collapsing a fact we failed to look up into one we measured.
+- Decision taken (documented, not approved): the daemon discovers the build with a
+  `<binary> --version` shell-out - the same mechanism `phase0/tools/capture_fixtures.py`
+  already uses to produce the `provider_builds` values the adapters' `SUPPORTED_BUILDS` are
+  asserted against - refreshed by the §38.26 `ProviderEdgeVerifier` at startup and every ten
+  minutes. `Registration` is three-valued: `registered` / `unregistered` / `undiscovered`.
+  Only `unregistered` triggers §36.2's rule; `undiscovered` proceeds with provider-edge health
+  degraded and no fixture-registration task, because §36.2's task means "capture fixtures for
+  build X" and there is no X yet.
+  Code: `src/baqylau/application/provider_edges/manager.py` (`Registration`, `gate_family`,
+  `ProviderBuildGate`), `src/baqylau/adapters/providers/version_probe.py`.
+  Tests: `tests/unit/application/test_step08_build_gate.py` asserts the whole three-by-three
+  table, including reading the rule out of
+  `phase0/fixtures/negative/unknown_provider_build/input/contract.json` rather than retyping it.
+- Narrowest decision needed: whether the running provider build is (a) a daemon-performed
+  version discovery, as implemented, or (b) a field the edge must start reporting - in which
+  case §10.3's key table or the status-line row needs it added. Nothing about the gate's
+  outcomes changes either way.
+- Autonomous next action: none; the gate is implemented and wired at both call sites.
+- Retry condition: re-run `tests/unit/application/test_step08_build_gate.py` if a version
+  channel is added; the `undiscovered` branch should become unreachable in production.
+- Owner: impl-08 (step 08 implementor)
+- Last updated: 2026-08-07T00:00:00Z
+
+## BLOCKER-STEP08-002: two planning artifacts disagree about who owns backends and the remote protocol
+
+- Timestamps: 2026-08-07T00:00:00Z opened; 2026-08-07T08:30:00Z resolved
+- Status: `resolved`
+- Affected: steps 08 and 09; `src/baqylau/application/ports/backends.py`,
+  `src/baqylau/application/ports/relay.py`, `src/baqylau/runtime/remote_connection_workers.py`
+- References:
+  - `rewrite/index.md` line 105: "Step 08 owns remote backend/provider protocol adapters;
+    Step 09 owns only future-feature contract rows and plugin/relay/collaboration workflows."
+  - `rewrite/08-providers-backends-and-accounts/task.md`: "local/remote backends, execution
+    targets, connected-only remote protocol, mTLS, liveness, file transfer, no replay".
+  - `rewrite/09-handover-collaboration-and-future-features/task.md`: "public links/deep links,
+    remote connected-only backend, mTLS, certificate rotation/revocation, capabilities, and file
+    transfer" - i.e. step 09's own bundle also claimed the same three nouns.
+  - `src/baqylau/application/ports/backends.py:19` and
+    `src/baqylau/runtime/remote_connection_workers.py:21`: `IMPLEMENTED_BY_STEP: Final = "09"`.
+- **Correction to this entry's original premise.** As first filed, this blocker claimed "The
+  placeholders were written by step 02, before `index.md`'s ownership note." That is false, and
+  the correction matters because it changes what kind of artifact the marker was. Measured:
+  ```
+  $ cd baqylau && git log --format="%h %ci" -S "Step 08 owns remote backend" -- rewrite/index.md
+  8c67811 2026-08-06 01:27:45 +0800
+  $ cd baqylau2 && git log --format="%h %ci %s" -S 'IMPLEMENTED_BY_STEP: Final = "09"' \
+      -- src/baqylau/application/ports/backends.py
+  591f4f5 2026-08-06 08:58:55 +0800  Phase 1 step 02: supervised daemon and machine-wide ...
+  ```
+  The ownership boundary landed **7 hours 31 minutes before** the placeholder. So the `"09"` was
+  a wrong guess by an implementor who - by `index.md`'s own rule that implementors are not told
+  step numbers - had no way to know, not a stale pre-arbitration artifact. Same resolution
+  either way; recorded so the false premise is not repeated.
+- Resolution (orchestrator, 2026-08-07): **step 08 owns it.** `index.md` line 105 is the
+  arbitration layer and step 08's own bundle independently agrees; step 09's overlapping bullet
+  is a loose sketch of what a later slice touches rather than an assignment - it also re-claims
+  public/deep links, which steps 06/07 already own.
+  - Step 08 builds: all of §38.33's online remote backend protocol, plus §22's
+    Backend/ExecutionTarget services with the probe/start/read/write/control separation.
+  - **Certificate revocation checking is step 08's**, not step 09's: §38.36 requires it on
+    connection and on every request, with long-lived connections rechecking at least every 15
+    seconds, and that check lives inside the transport. Step 09 gets the rotation *operation*
+    only.
+  - The CA/serial/validity model had to be **overlap-capable from the start** (two concurrently
+    valid certificates per backend), so step 09's rotate operation is additive rather than a
+    migration landing on a mid-rotation connection.
+  - `ports/relay.py` stays at `"09"`: relay is explicitly step 09's.
+- Delivered on branch `step-08-providers-backends-accounts`, commit `63ac918`:
+  `application/backends/service.py`, `application/backends/remote_protocol.py`, and
+  `runtime/remote_connection_workers.py` as a real §38.26 liveness worker. Both stale markers
+  now read `"08"`. Tests: `tests/unit/application/test_step08_backends.py` (118) and the
+  remote-disconnect half of `tests/integration/test_step08_recovery_scenarios.py`.
+- **One factual correction to the ruling itself**, recorded because acting on it as written would
+  have deleted correct code. The ruling stated that "SPIFFE appears nowhere in the design" and
+  that an identity scheme should not be invented. Measured:
+  ```
+  $ grep -in "spiffe" docs/rewrite-design-v4-codex.md
+  10300:   `spiffe://baqylau/<role>/<principal-uuid>` where role is `edge`, `terminal`,
+  $ grep -in "pinned controller" docs/rewrite-design-v4-codex.md
+  8723:Controller and agent use mutual-TLS WebSocket with pinned controller/agent
+  ```
+  Both appear, once each, and they are complementary rather than alternative: §38.36 mechanism 5
+  fixes the SAN grammar and says "remote-agent certificates can use the remote protocol only",
+  while §38.33 additionally requires pinning. Pinning answers "is this the exact configured
+  certificate"; the SAN answers "which principal and role does it claim". Pinning alone would let
+  a pinned *edge* certificate drive the remote protocol, which mechanism 5 forbids. Both are
+  therefore implemented, which satisfies the ruling's intent (follow §38.33's pinning; invent no
+  identity scheme) without removing a §38.36 requirement.
+- Owner: impl-08b; resolution owner: orchestrator (ruled)
+- Last updated: 2026-08-07T09:00:00Z
+
+## BLOCKER-STEP08-003: step 08 is delivered partially, and the shortfall is a scope narrowing rather than a design problem
+
+- Timestamps: 2026-08-07T00:00:00Z opened
+- Status: `needs-user-decision`
+- Affected: step 08 (providers-backends-and-accounts), branch
+  `step-08-providers-backends-and-accounts` in /Users/z.yermagambet/code/personal/baqylau2
+- Observed: the step-08 bundle covers three provider integrations plus backend, account,
+  credential, and authentication infrastructure. This branch delivers §36.2's build gate wired
+  at both real call sites, §38.4's installation/trust/health machinery and its §38.26 verifier,
+  §10.3's key-table move into the adapters, §41.1's measured input-field table, and §41.2's
+  Codex parse/admission/boundary/discovery rules driven by the six frozen Phase 0 rollouts.
+  It does not deliver: Codex/OpenCode `ObservationDecoder`s, `AccountLaunchService` (§41.3),
+  the pricing/effort ladders (§41.3), §41.1's child metadata reader, local/remote backends and
+  §38.33's protocol, §38.36's authentication model, §38.37.9's 38 named fixtures, or the
+  account-migration and remote-disconnect recovery scenarios.
+- Why this is recorded here: BLOCKER-STEP05-003's process note established that a scope
+  narrowing must be stopped-and-reported rather than decided. It was reported to the
+  orchestrator while the work was still in progress, and it is recorded here so the shortfall
+  is on the record independently of that message.
+- Enforcement: the shortfall is a committed artifact, not prose.
+  `tests/architecture/test_step08_reachability.py` holds `DEFERRED_COMPONENTS` (exists,
+  tested, no production consumer - checked in both directions) and `NOT_DELIVERED` (absent
+  entirely - each entry asserted *absent*, so it cannot quietly describe something that later
+  lands), with a design citation required on every entry.
+- Narrowest decision needed: whether the remaining items become a step-08 continuation or a
+  separate step, and whether the completion gate is re-run against the whole bundle before
+  step 09 starts.
+- Owner: impl-08; resolution owner: orchestrator
+- Last updated: 2026-08-07T00:00:00Z
+
+## BLOCKER-STEP08-003 update (2026-08-07): items 1, 2, and 4 delivered on the orchestrator's ruling
+
+- The orchestrator chose option (b) from the capacity report: finish the "required provider
+  rows" half - Codex/OpenCode `ObservationDecoder`s, `AccountLaunchService`, and §41.1's child
+  metadata reader - and hand backends/auth/fixtures/recovery-tests to a continuation implementor.
+- Delivered in commit on branch `step-08-providers-backends-accounts`:
+  `adapters/providers/codex/decoder.py`, `adapters/providers/opencode/decoder.py`,
+  `adapters/providers/claude_code/child_metadata.py`, `application/machine/launch.py`. All three
+  bundled providers now satisfy §10.5's "an ObservationDecoder or HistoryReader" and are
+  registered with `IngestionService`, so the ingestion fan-out is no longer Claude-only.
+- Still not delivered, and now the *whole* of `NOT_DELIVERED` in
+  `tests/architecture/test_step08_reachability.py`: `application/backends/service.py`,
+  `application/backends/remote_protocol.py` (§38.33), `application/auth/{service,sessions,
+  certificates}.py` (§38.36), `application/machine/discovery.py` (§29), §41.3's pricing/effort
+  ladder, §38.37.9's 38 named fixtures, and the account-migration/remote-disconnect recovery
+  tests (§30.6). Each entry is asserted *absent* by a test, so none can be silently claimed as
+  done.
+- One process note worth recording: the reachability metric in that artifact was wrong twice in
+  the direction that understated delivered work, and both times a test caught it rather than a
+  reviewer. First it reported the decoders as unreached because the composition root builds them
+  into a local dict before handing it over; then, after that was fixed, it reported them
+  unreached again because a formatting pass turned the dict assignment into an annotated one and
+  the fixed point only walked `ast.Assign`. Recorded because "the metric changed its answer
+  because of a `black` run" is exactly the kind of measurement this project has been burned by.
+- Owner: impl-08; resolution owner: orchestrator (continuation implementor for the remainder)
+- Last updated: 2026-08-07T00:00:00Z
+
+## BLOCKER-STEP08-003 update (2026-08-07, impl-08b continuation): all but the fixture corpus delivered
+
+- The continuation implementor picked up the remainder after the orchestrator's option-(b) ruling
+  and, following the BLOCKER-STEP08-002 ruling above, the expanded backends/remote-protocol scope.
+- Delivered on branch `step-08-providers-backends-accounts`, commits `00a219e`, `96fd731`,
+  `a34e293`, `63ac918`:
+  - `application/auth/{service,sessions,certificates}.py` plus
+    `adapters/storage/sqlite/stores/{auth,auth_plane}.py` and 22 declared statements - all six
+    §38.36 mechanisms, HMAC-SHA-256 credential pepper with §38.36's 24-hour rotation overlap.
+  - `application/backends/{service,remote_protocol}.py` and
+    `runtime/remote_connection_workers.py` (§22, §38.33).
+  - `application/machine/model_resolution.py` - §41.3's price prefix resolution and the
+    effort/context-window ladders, consumed by `usage/queries.py`'s `price_table` and
+    `AccountLaunchService.plan_launch`.
+  - `application/machine/discovery.py` - §38.37.5's placement/order/collision rules. Disclosed
+    unreached, with the reason measured rather than asserted.
+  - `tests/integration/test_step08_recovery_scenarios.py` - real fork+`SIGKILL` recovery for
+    account migration, credentials, launch, and remote disconnect.
+- **Two step-07 disclosures closed as a consequence.** `test_step07_reachability.py`'s
+  `DEFERRED_ENTRY_POINTS` went from three entries to one: `principal_now` closed because
+  `bootstrap._local_owner_principal` is gone and the pre-effect recheck reads a real `principals`
+  row, and `check_csrf` closed because a browser session can now exist. `revoke_principal`
+  remains, but its reason is rewritten - it now performs four of §38.36's five consequences and
+  only its *caller* is missing.
+- **A production defect the recovery work found.** `SqliteMigrationSagaPlane.persist` opened a
+  machine-scope write while both `account_migration_details` and `account_migration_checkpoints`
+  are declared `conversation_write` in the storage matrix, so `_require_boundary` refused the very
+  first `append_checkpoint_in` and the §21.4 migration runner could not persist a single
+  checkpoint. Invisible because nothing in this build creates a migration saga, so `claim_batch`
+  always returned empty. Fixed in `a34e293`. Filed separately as BLOCKER-STEP08-004.
+- **Still not delivered: §38.37.9's 38 named provider fixtures**, and this is now the *whole* of
+  `NOT_DELIVERED` in `tests/architecture/test_step08_reachability.py`. The blocking fact is
+  measured, not an excuse:
+  ```
+  $ cat phase0/fixtures/provider_records/opencode_state/manifest.json
+    authenticity = "derived"            # not "captured"
+    description  = "OpenCode SQLite schema and non-secret configuration."
+    uncertainty  = "...A static capture cannot show a reset, so the reset fixture stays synthetic."
+  $ ls phase0/fixtures/provider_records/opencode_state/input/
+    opencode.db.schema.json  opencode-next.db.schema.json     # schema only
+  $ python -c "print(sorted(json.load(open(...))))"
+    ['object_count', 'objects', 'row_counts_omitted']
+  ```
+  Phase 0 captured **no OpenCode records at all**, so 8 of the 38 cannot be built from real frozen
+  data. Claude (6 real transcripts, 24 real hook families) and Codex (6 real rollouts plus
+  history/session_index) do have captures, so 30 of the 38 are buildable today.
+  Narrowest decision needed: either a new Phase 0 capture run against a live OpenCode, or an
+  explicit ruling that the 8 OpenCode fixtures may be synthetic with `authenticity` recorded as
+  such. §38.37.9 calls provider capture "a measured implementation input" that "cannot be
+  truthfully invented in an architecture document", which is why an implementor did not decide it.
+- Owner: impl-08b; resolution owner: orchestrator
+- Last updated: 2026-08-07T09:15:00Z
+
+## BLOCKER-STEP08-004: the account-migration saga runner could never persist a checkpoint
+
+- Timestamps: 2026-08-07T08:45:00Z opened and fixed
+- Status: `resolved` (fix landed); recorded because the *class* of bug is a process finding
+- Affected: `src/baqylau/adapters/storage/sqlite/stores/effect_plane.py`
+  (`SqliteMigrationSagaPlane.persist`); step 07 wrote it, step 08's completion gate found it
+- Design references:
+  - storage matrix: `account_migration_details` and `account_migration_checkpoints` are both
+    `conversation_write` (§21.4; §38.18 continuation).
+  - §38.37.1 fixes the `MachineWrite.owner` set and the conversation/machine scope split.
+- Observed: `persist` opened `machine_write(owner="account")`. `_require_boundary` refused the
+  first `append_checkpoint_in` with
+  `ScopeMismatch: account_migration_checkpoints.insert: expected scope conversation_write, got
+  machine`. The §21.4 runner therefore could not advance a saga at all.
+- Why it went unnoticed: nothing in this build creates a migration saga, so
+  `SqliteMigrationSagaPlane.claim_batch` always returned an empty tuple and `persist` was never
+  reached. Every existing test passed. It surfaced only when the step-08 recovery scenario seeded
+  a real saga - real AgentSession through the real inbox, real selection-evidence Blob, real
+  Operation, satisfying all three RESTRICT foreign keys.
+- Fix: open the scope the statements themselves declare, resolving the Conversation from the
+  saga's AgentSession (`account_migration_details` has no `conversation_id` column; §38.35 keys it
+  by `operation_id` and reaches the Conversation through `agent_session_id`).
+- Process note worth keeping: a worker that *cannot run*, in a build where nothing invokes it, is
+  invisible to every gate this project currently runs. The same mismatch may exist in the
+  handover, backup, and restore saga reducers; it is unchecked because §31 phases 7-8 have not
+  written them.
+- Owner: impl-08b
+- Last updated: 2026-08-07T09:15:00Z
+
+## BLOCKER-STEP08-005: §38.36's prose tables disagree with §38.35's authoritative DDL in three places
+
+- Timestamps: 2026-08-07T06:00:00Z opened
+- Status: `open`, non-blocking (all three resolved in favour of the DDL and documented in code)
+- Affected: `src/baqylau/application/auth/service.py`, `.../certificates.py`,
+  `adapters/storage/sqlite/stores/auth.py`
+- Observed, with §38.35's DDL as the authoritative side (it is the transcription in `schema.sql`
+  that every generated artifact is checked against, and §43.2 makes the digests generated outputs
+  over it):
+  1. §38.36 lists `principals(... authorization_revision ...)` and its `PrincipalDTO` prints
+     `state:enum(active,suspended,revoked)`. The DDL has **no** `authorization_revision` column
+     and its CHECK is `('active','disabled','revoked')`. Resolved: `suspended` is the domain word
+     and `disabled` the stored one (one mapping, `STORED_STATES`), and the revision is *derived*
+     in one SQL read from the facts §38.36 itself names as revision-advancing. Adding the column
+     would change the design's printed DDL and the five-unit digest.
+  2. §38.36 lists `auth_credentials(... audience, scopes ...)`. The DDL has neither. Resolved:
+     scopes are derived from principal kind plus machine role bindings, which additionally makes
+     §38.36's "`machine.admin` never follows from collaboration" structural - the bindings table
+     has no `conversation_id`.
+  3. §38.36 requires "serial, validity, SPKI digest, role, and principal must match
+     `auth_credentials`", and the DDL has exactly one verifier column, `secret_digest`. Resolved:
+     the five-field match is one keyed HMAC over canonical material, which is stronger than five
+     comparisons because no check can be skipped and no field forgotten.
+- Narrowest decision needed: whether §38.36's prose tables should be amended to match §38.35, so
+  the next reader does not re-derive these three resolutions. No behaviour changes either way.
+- Owner: impl-08b; resolution owner: design maintainer
+- Last updated: 2026-08-07T09:15:00Z
+
+## BLOCKER-STEP08-006: §38.37.1's machine-scope owner set has no `auth` member
+
+- Timestamps: 2026-08-07T06:15:00Z opened
+- Status: `open`, non-blocking (implemented under `account` and documented)
+- Affected: `src/baqylau/adapters/storage/sqlite/stores/auth.py`, `.../auth_plane.py`
+- Observed: §38.37.1 prints `MachineWrite.owner` as a closed `Literal` of eight values -
+  `account`, `backend`, `backup`, `collaboration`, `diagnostics`, `extension`, `maintenance`,
+  `provider_edge` - and authentication is not among them, while §38.36 requires its tables in the
+  same SQLite database. "A workflow without a listed owner has no machine scope", so the choice
+  was one of the eight or none.
+- Decision taken (documented, not approved): `account`, because it is the owner whose subject
+  matter is the identity a credential belongs to; §40.5 pairs privileged local features with
+  account cutover, and `accounts` already shares the `identity_and_security_evidence` retention
+  class the matrix assigns to every §38.36 table. Recorded as `AUTH_SCOPE_OWNER` in one place so a
+  future `auth` owner is a one-line change.
+- Narrowest decision needed: add `auth` to §38.37.1's owner set, or ratify `account`.
+- Owner: impl-08b; resolution owner: design maintainer
+- Last updated: 2026-08-07T09:15:00Z
+
+## BLOCKER-STEP08-007: the `__Host-` cookie prefix and §38.36's loopback-development profile are incompatible
+
+- Timestamps: 2026-08-07T06:20:00Z opened
+- Status: `open`, non-blocking (resolved in favour of keeping `Secure` semantics)
+- Affected: `src/baqylau/application/auth/sessions.py`
+- Observed: §38.36 mechanism 2 requires the cookie `__Host-baqylau_session` and says it "is
+  `Secure; HttpOnly; SameSite=Strict; Path=/` **outside the declared loopback-development
+  profile**". RFC 6265bis §4.1.3.1 makes the `__Host-` prefix *require* `Secure` - a browser
+  rejects such a cookie without it - so a profile that drops `Secure`, as §38.36 permits, cannot
+  keep the prefix.
+- Decision taken: the development profile drops the prefix along with the attribute, keeping
+  `HttpOnly; SameSite=Strict; Path=/`. Dropping the prefix is the lesser loss: `Secure` keeps the
+  cookie off a plaintext hop, while the prefix only stops a sibling subdomain shadowing the name,
+  and a loopback development origin has no siblings. Production is verbatim §38.36.
+- Narrowest decision needed: confirm, or state that the development profile keeps `Secure` (which
+  is in fact workable, since browsers treat `http://localhost` as a secure context) and therefore
+  keeps the prefix too.
+- Owner: impl-08b; resolution owner: design maintainer
+- Last updated: 2026-08-07T09:15:00Z
