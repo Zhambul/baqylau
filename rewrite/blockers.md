@@ -1179,3 +1179,48 @@ silently treated as resolved merely because the design now states a decision.
   keeps the prefix too.
 - Owner: impl-08b; resolution owner: design maintainer
 - Last updated: 2026-08-07T09:15:00Z
+
+## BLOCKER-STEP08-008: §38.37.9's 38 provider fixtures cannot all be built from real Phase 0 captures
+
+- Timestamps: 2026-08-07T00:00:00Z opened, 2026-08-07T00:00:00Z resolved
+- Status: `resolved` (orchestrator ruling: label the uncapturable fixtures honestly
+  synthetic using this project's own established authenticity vocabulary, rather
+  than blocking or inventing fake-real data)
+- Affected: step 08 (providers-backends-and-accounts), §38.37.9's provider fixture
+  corpus at tests/fixtures/providers/
+- Design references: §38.37.9 requires provider capture as "a measured
+  implementation input" that "cannot be truthfully invented in an architecture
+  document," and states "until captured, that adapter version is unsupported."
+- Observed: Phase 0 (step 01) captured no OpenCode records at all —
+  phase0/fixtures/provider_records/opencode_state/manifest.json records
+  authenticity="derived" (not "captured") and its own uncertainty field already
+  concedes "a static capture cannot show a reset, so the reset fixture stays
+  synthetic." Separately, 5 non-OpenCode fixtures (a deleted transcript, a deleted
+  remote thread, a child meta.json Phase 0 never froze, a cwd-adoption note written
+  by the legacy host into its own state directory, and an app-server-reconnect
+  scenario needing a live socket) are uncapturable by construction — there is no
+  real artifact to freeze, not a Phase 0 gap.
+- Measured final split (verified by impl-08b, re-checked against Phase 0's actual
+  manifests): 38 fixtures total — claude_code 18 (12 captured, 3 derived,
+  3 synthetic), codex 12 (6 captured, 4 derived, 2 synthetic), opencode 8
+  (8 synthetic). 25 fixtures are built from real captures, 13 are honestly labeled
+  synthetic with a specific reason each.
+- Required decision: (a) run a new Phase 0 capture against a live OpenCode
+  instance, (b) label the uncapturable fixtures synthetic with authenticity
+  recorded honestly, or (c) declare OpenCode unsupported for fixture parity in
+  this slice.
+- Decision taken: (b), applied consistently to all 13 uncapturable fixtures (8
+  OpenCode + 5 non-OpenCode), using Phase 0's own established `authenticity`/
+  `synthetic_reason` field vocabulary (verified identical field names to
+  phase0/fixtures/negative/malformed_inputs, which already documents "negative
+  cases are synthesized by definition" as the same class of justification).
+- Evidence: tools/generate_provider_fixtures.py + tools/provider_fixture_specs.py
+  generate all 238 files byte-exactly from frozen Phase 0 captures where real data
+  exists, with a `--check` mode in CI; corpus names verified against §38.37.6-38.37.8's
+  printed fixture blocks with set equality in both directions;
+  `test_phase_zero_still_has_no_opencode_records` re-measures the OpenCode-absence
+  justification on every run and fails (forcing the labels to be revisited) if a
+  real OpenCode capture ever lands, so the synthetic label cannot silently outlive
+  its justification.
+- Owner: impl-08b; resolution owner: team-lead (orchestrator ruling)
+- Last updated: 2026-08-07T00:00:00Z
