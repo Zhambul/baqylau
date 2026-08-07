@@ -1216,7 +1216,10 @@ silently treated as resolved merely because the design now states a decision.
   cases are synthesized by definition" as the same class of justification).
 - Evidence: tools/generate_provider_fixtures.py + tools/provider_fixture_specs.py
   generate all 238 files byte-exactly from frozen Phase 0 captures where real data
-  exists, with a `--check` mode in CI; corpus names verified against §38.37.6-38.37.8's
+  exists, with a `--check` mode asserted by
+  `tests/contract/providers/test_step08_provider_fixture_corpus.py::test_the_committed_corpus_matches_what_the_generator_produces`
+  (this repository has no CI pipeline; the check is carried by the test suite, not
+  a pipeline); corpus names verified against §38.37.6-38.37.8's
   printed fixture blocks with set equality in both directions;
   `test_phase_zero_still_has_no_opencode_records` re-measures the OpenCode-absence
   justification on every run and fails (forcing the labels to be revisited) if a
