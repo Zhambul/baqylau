@@ -776,3 +776,64 @@ silently treated as resolved merely because the design now states a decision.
   unlisted file fails the guard by name).
 - Owner: impl-06; resolved by resolver-06-2
 - Last updated: 2026-08-06T00:00:00Z
+
+## BLOCKER-STEP07-001: outbox row cannot durably store principal/credential/policy/authorization revision per §38.36; §17.2's "unknown" outcome not in the outbox.state CHECK
+
+- Timestamps: 2026-08-06T00:00:00Z opened, 2026-08-06T00:00:00Z resolved
+- Status: `resolved` (dedicated resolver confirmed both readings; no schema change needed)
+- Affected: step 07 (controls-and-effects), outbox/effect-attempt machinery
+- Design references:
+  - §38.36 (design lines ~10323-10327): "Each outbox row stores principal, credential,
+    required policy, and authorization revision" vs the closed `outbox` DDL (§38.35,
+    lines ~9590-9611, 15 columns) which has none of these as dedicated columns.
+  - §17.2 (design lines ~2267-2291) never actually uses the word "unknown" — its
+    outcome enum is `succeeded | failed_before_action | rejected | indeterminate`.
+    The real "unknown" language is §38.26 (lines ~7021-7025): after ten inconclusive
+    reconciliation attempts an effect is left "`unknown` with manual guidance," which
+    is a described terminal condition, not an enumerated `outbox.state` value.
+  - Separately identified during resolution: `rejected` appears in §17.2's enum and
+    in AttemptDTO's wire enum but is absent from the `effect_attempts.state` CHECK.
+- Resolution: (1) auth context is carried in the sealed, immutable payload Blob the
+  outbox row already references (NOT NULL REFERENCES blob_objects ON DELETE RESTRICT),
+  since the digest-pinned schema cannot be amended unilaterally and the design itself
+  uses both "real column" and "opaque payload carrier" patterns elsewhere for similar
+  needs. (2) §38.26's "unknown" is represented as terminal `indeterminate` plus a
+  `health_errors` row carrying the manual-guidance detail, with a claim-predicate count
+  bound (ten attempts) reproducing §38.26's own threshold exactly. (3) `rejected` is
+  correctly mapped to `failed_before_action` in storage (the CHECK has no `rejected`
+  value) with a recovery function (`attempt_wire_outcome`) that reconstructs the wire
+  outcome from the attempt's receipt/outbox-state so the distinction isn't lost on
+  read-back.
+- Evidence: `SqliteEffectPlane.cancel_safe_pending_effects` implements §38.36's
+  "cancels safe pending effects" sweep (found to be entirely missing on first
+  self-review, then built); `attempt_wire_outcome` in
+  `application/effects/service.py` recovers `rejected` distinctly from a transient
+  `failed_before_action`, with `reconciled_failed` deliberately never promoted to
+  `rejected` (a probe cannot distinguish a refusal from a never-landed attempt) and
+  unregistered receipt words ignored rather than corrupting the closed wire enum.
+- Owner: impl-07; resolved by resolver-07-1
+- Last updated: 2026-08-06T00:00:00Z
+
+## BLOCKER-STEP07-002 (non-blocking, tracked): outbox.finish's lease-expiry guard is currently vacuous
+
+- Timestamps: 2026-08-07T00:00:00Z opened
+- Status: `open`, non-blocking (safe today — no runtime lease reaper exists; fails in
+  the safe direction; hardening added for a future reaper is currently ineffective)
+- Affected: step 07 (controls-and-effects), outbox lease/settle machinery
+- Observed: `outbox.finish`'s `lease_expires_at > :now` guard is structurally always
+  true because `OutboxEffectDispatcher.run_once` captures one `now` at pass start and
+  passes that same value to both `claim_batch` (writes `lease_expires_at = now + 30`)
+  and `settle` — so the comparison is always `now + 30 > now` regardless of real
+  elapsed execution time. Reviewer proved it: claimed a batch with `now` 600s in the
+  past, settled with the same stale `now`, guard did not fire.
+- Impact: none today (no runtime lease reaper calls `recover_expired_leases` outside
+  startup, which is correctly ordered after orphan detection). Gives false confidence
+  to whoever adds a runtime reaper later; `outbox.recover_expired_leases` itself still
+  has no attempt-ledger guard, and there is no lease-renewal mechanism, so a 100-item
+  batch against a 30-second lease means the lease does not actually bound the holding
+  period in practice.
+- Required decision: read the real clock inside `settle`/`begin_attempt` instead of
+  reusing the pass-start `now`, or add lease renewal before each row — either makes
+  the guard real. Small, non-blocking fix.
+- Owner: impl-07; identified by review1-07
+- Last updated: 2026-08-07T00:00:00Z
