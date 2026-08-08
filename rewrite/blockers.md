@@ -1227,3 +1227,45 @@ silently treated as resolved merely because the design now states a decision.
   its justification.
 - Owner: impl-08b; resolution owner: team-lead (orchestrator ruling)
 - Last updated: 2026-08-07T00:00:00Z
+
+## BLOCKER-STEP04-005: `getOperation` is declared in the read manifest but served by nothing, so its `404` carries no information
+
+- Timestamps: 2026-08-08T00:00:00Z opened
+- Status: `open` (recorded, not fixed; fixing it is step 04's read surface, not step 09's)
+- Affected: step 04 (canonical read model); surfaced by step 09's manual test
+  (28/28 checks passed; this was the one thing the tester flagged as pre-existing)
+- Design references: §38.38 declares `getOperation` as `GET /api/v1/operations/{id}`,
+  policy `CR`, application owner `OperationQueryService.get`, storage port
+  `OperationStore.get`, durable owners `operations,operation_details,effect_attempts`,
+  error `404 operation_not_found`. §17.3 tells a caller that a `202` returns an Operation
+  id and that completion arrives through the structural feed.
+- Observed: `src/baqylau/entrypoints/http/read_endpoints.json` carries the `getOperation`
+  row and it is in no exclusion class, but no handler is supplied for it anywhere in
+  `src/`. `HttpServer._compile` routes only the manifest rows it was handed a handler for,
+  so the path is never routed and answers `404` for every id. Measured: 41 declared read
+  rows, 8 served (`listConversations`, `getConversationActivity`, `getLimits`, and step
+  09's five §38.39 workflow reads), 33 unserved. The gap predates step 09 —
+  `read_endpoints.json` was last touched by `3201fcc`, an ancestor of step 09's base
+  `97d43fc`.
+- Second observation, narrower and worth fixing on its own: `HttpServer._compile`'s
+  docstring claims "`tests/contract/http/test_served_read_endpoints.py` reports the gap
+  instead of it being invisible." That test only asserts routed ⊆ manifest. Nothing
+  asserts manifest ⊆ routed ∪ exclusions, which is the direction that would have caught
+  this. The docstring describes a check that does not exist.
+- Why it matters: step 09's BC-1 discloses that a machine-scoped workflow's `202` returns
+  an Operation id that resolves to nothing, and names the `404` from `getOperation` as the
+  observable consequence. Because `getOperation` `404`s for *every* id, that signal is
+  currently indistinguishable from "this endpoint is not served at all". A future caller
+  probing the endpoint could read BC-1 as fixed, or as broader than it is, and be wrong
+  either way. Step 09 could not fix this without implementing another step's endpoint.
+- Required decision: (a) implement `getOperation` as part of step 04's read surface,
+  (b) add an explicit exclusion-class row for the unserved manifest entries so the gap is
+  declared rather than silent, or (c) both — and separately, either add the
+  manifest ⊆ routed ∪ exclusions assertion or correct `_compile`'s docstring so it stops
+  claiming a check that is not written.
+- Decision taken: none. Recorded only. Step 09 added a note to BC-1 in
+  `baqylau2:docs/operations/future-feature-contracts.md` so the `404` is not misread, and
+  deliberately did **not** add the missing assertion, because it would fail on 33
+  pre-existing rows and turn another step's disclosed shortfall into step 09's red suite.
+- Owner: implementor-09 (recorded); resolution owner: step 04 read-surface owner
+- Last updated: 2026-08-08T00:00:00Z
