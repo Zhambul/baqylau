@@ -1269,3 +1269,53 @@ silently treated as resolved merely because the design now states a decision.
   pre-existing rows and turn another step's disclosed shortfall into step 09's red suite.
 - Owner: implementor-09 (recorded); resolution owner: step 04 read-surface owner
 - Last updated: 2026-08-08T00:00:00Z
+
+## BLOCKER-STEP10-001: §33 law 42's positive half is unimplemented — a registered closer that never fires has no independently safe verdict
+
+- Timestamps: 2026-08-08T00:00:00Z opened
+- Status: `open` (recorded, not fixed; the plane belongs to an earlier step, not step 10)
+- Affected: the closer/prober matrix (§31 Phase 3, step 05 streaming and coordination) for
+  the runtime verdict; the provider subscription manifests (step 08) for the declaration
+  surface. Surfaced by step 10's FINDING-STEP10-003 spot-check and independently
+  confirmed by reviewer1-10.
+- Design references: §33 law 42 — "A registered closer may fail to fire, so absence of
+  that closer must have an independently safe verdict." §12.3 gives the closer catalogue
+  its discipline; §33 law 11 ("silence alone never proves success") and law 12 ("missing
+  evidence yields `unknown` or `lost`, not invented success") are the negative half of the
+  same rule.
+- Observed, measured in `baqylau2` at `ce39c92`:
+  - `closer_for` is declared on both provider manifest rows
+    (`adapters/providers/claude_code/manifest.py:75`,
+    `adapters/providers/codex/manifest.py:47`) and populated for real families
+    (`PostToolUse` closes `PreToolUse`; `SubagentStop` closes `SubagentStart`/`PreToolUse`).
+    It has **zero runtime consumers**: the only reads anywhere are three shape assertions
+    in tests (`test_step08_codex_rollout.py:506`, `test_step08_edge_installation.py:118`,
+    `test_claude_decoder.py:240`), each asserting `== ()` or `isinstance(..., tuple)`.
+    Nothing derives a verdict, a probe, or a timeout from the field.
+  - `DecisionCode.CLOSER_ABSENT` is declared at
+    `application/ingestion/provenance.py:53` and appears **nowhere else** in `src/` or
+    `tests/` — never emitted, never asserted.
+  - No test exercises "a registered closer never fires".
+- What *is* implemented: the negative half. Attention and the manifests refuse to read
+  silence as success, so an Operation whose closer never arrives does not become
+  `completed`. What is missing is law 42's *positive* requirement — that the absence
+  itself resolve to a named, independently safe verdict rather than to an open fact that
+  simply stays open.
+- Why it matters: §12.5's grace rules and §33 law 44's bounded reconciliation probe both
+  assume something eventually adjudicates an unfired closer. Without that, a registered
+  closer that never fires leaves a durable open Operation with no scheduled probe and no
+  decision record — which is honest (nothing is invented) but unbounded, and it is
+  indistinguishable from a closer that has not fired *yet*.
+- Required decision: (a) give the closer catalogue a probe-on-absence field and a runtime
+  consumer that emits `CLOSER_ABSENT` with a safe verdict when the bound elapses, or
+  (b) if the intended reading is that the negative half alone satisfies law 42, record
+  that as an explicit design decision so `closer_for` and `CLOSER_ABSENT` stop implying a
+  mechanism that does not exist.
+- Decision taken: none. Recorded only. Step 10 deliberately did **not** implement this:
+  it is another step's plane, and step 10's own gate forbids changing a plane it cannot
+  produce parity evidence for. Step 10 also removed it from its FINDING-STEP10-003
+  "14 uncited laws" bucket, because it is a real gap rather than a citation gap and would
+  have been misread as the latter.
+- Owner: implementor-10 (recorded); resolution owner: step 05 closer/prober matrix owner,
+  with the manifest field owned by step 08
+- Last updated: 2026-08-08T00:00:00Z
