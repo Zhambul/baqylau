@@ -61,6 +61,7 @@ from domain.events import (
     FileAccessed,
     GoalChanged,
     MessageCreated,
+    EffortChanged,
     ModelChanged,
     OperationFinished,
     OperationInputProvided,
@@ -3526,3 +3527,105 @@ def test_codex_question_uses_the_same_attention_prompt_model():
     attention = payloads(translation, AttentionRequested)[0].payload
     assert attention.prompts[0].prompt == "Continue?"
     assert attention.prompts[0].choices[0].description == "Proceed"
+
+
+# A `/command` turn is THREE user-shaped transcript records (measured, session
+# 6a23d1c5): the isMeta caveat, the `<command-name>` envelope, and the command's
+# echoed stdout. Two of them carried no structural flag, so each became its own
+# `role="user"` message and one keystroke drew three blocks, two labelled "you".
+CLAUDE_SLASH_COMMAND_TURN = (
+    ("caveat", "<local-command-caveat>Caveat: The messages below were generated "
+               "by the user while running local commands.</local-command-caveat>", True),
+    ("envelope", "<command-name>/model</command-name>\n            "
+                 "<command-message>model</command-message>\n            "
+                 "<command-args>opus</command-args>", False),
+    ("stdout", "<local-command-stdout>Set model to Opus 5 and saved as your "
+               "default for new sessions</local-command-stdout>", False),
+)
+
+
+def _slash_turn_events():
+    translator = ClaudeCanonicalTranslator()
+    events = []
+    for uuid, content, is_meta in CLAUDE_SLASH_COMMAND_TURN:
+        document = {"type": "user", "uuid": uuid, "message": {"content": content}}
+        if is_meta:
+            document["isMeta"] = True
+        events.extend(
+            translator.translate(
+                raw_event(
+                    document,
+                    harness="claude_code",
+                    source_type="transcript",
+                    raw_event_id="slash-" + uuid,
+                )
+            ).events
+        )
+    return events
+
+
+def test_claude_slash_command_turn_is_one_prompt_not_three_blocks():
+    messages = [e.payload for e in _slash_turn_events() if isinstance(e.payload, MessageCreated)]
+    assert len(messages) == 1
+    assert messages[0].role == "user"
+    assert messages[0].phase == "prompt"
+    # what the human typed, not the envelope Claude Code stored it in
+    assert messages[0].content.text == "/model opus"
+
+
+def test_claude_slash_model_reports_the_selection_at_the_moment_it_was_made():
+    models = [e.payload for e in _slash_turn_events() if isinstance(e.payload, ModelChanged)]
+    assert len(models) == 1
+    assert models[0].reason == "selected"
+    # the transcript carries the ALIAS here; the native id arrives a turn later
+    # on the next assistant record, as `reported_by_harness`
+    assert models[0].current.selection_id == "opus"
+
+
+def test_claude_slash_effort_reports_the_selection():
+    translation = ClaudeCanonicalTranslator().translate(
+        raw_event(
+            {"type": "user", "uuid": "eff", "message": {"content":
+                "<command-name>/effort</command-name><command-args>high</command-args>"}},
+            harness="claude_code",
+            source_type="transcript",
+            raw_event_id="slash-effort",
+        )
+    )
+    assert payloads(translation, EffortChanged)[0].payload.current == "high"
+    assert payloads(translation, EffortChanged)[0].payload.reason == "selected"
+
+
+def test_claude_argless_slash_command_settles_no_state():
+    translation = ClaudeCanonicalTranslator().translate(
+        raw_event(
+            {"type": "user", "uuid": "bare", "message": {"content":
+                "<command-name>/model</command-name>"}},
+            harness="claude_code",
+            source_type="transcript",
+            raw_event_id="slash-bare",
+        )
+    )
+    # a bare `/model` opens the picker and chooses nothing
+    assert not payloads(translation, ModelChanged)
+    assert payloads(translation, MessageCreated)[0].payload.content.text == "/model"
+
+
+def test_claude_prompt_quoting_a_command_envelope_stays_a_prompt():
+    # the anchor: a message ABOUT a slash command has prose in front of the tag
+    for content in (
+        "why is <command-name>/model</command-name> in my transcript?",
+        "explain <local-command-stdout>Set model to Opus 5</local-command-stdout>",
+    ):
+        translation = ClaudeCanonicalTranslator().translate(
+            raw_event(
+                {"type": "user", "uuid": "quote", "message": {"content": content}},
+                harness="claude_code",
+                source_type="transcript",
+                raw_event_id="quote-" + content[:6],
+            )
+        )
+        message = payloads(translation, MessageCreated)[0].payload
+        assert message.role == "user"
+        assert message.content.text == content
+        assert not payloads(translation, ModelChanged)

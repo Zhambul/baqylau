@@ -41,10 +41,9 @@
 #       the post-/compact summary (`This session is being continued from a
 #       previous conversation…`), and TEAMMATE MAIL (`Another Claude session sent
 #       a message:` wrapping a peer's <teammate-message> — the one shape with no
-#       structural flag to read). The `<`-wrapped ones are dropped by
-#       conversation() anyway — all but the `<command-name>` envelope of a
-#       `/command` turn, which it UNWRAPS (_command_text) because that one IS
-#       typed; the bare-prose ones are indistinguishable from a
+#       structural flag to read). The `<`-wrapped local-command ones never reach
+#       here at all: they are the `slash_command` kind below; the bare-prose ones
+#       are indistinguishable from a
 #       real prompt WITHOUT this flag, which is why it is now carried rather
 #       than dropped: the dashboard's focus mode promises "your prompt", and a
 #       hook's feedback rendered as a YOU bubble is not it (docs/dashboard.md,
@@ -53,6 +52,12 @@
 #       `resumed` is the ONE flavour distinction on top of it: this injection
 #       RESUMED a turn Claude Code had already ENDED (see _RESUMES_TURN), so the
 #       reply in front of it was a turn's FINAL answer and not mid-turn prose.
+#   {"kind": "slash_command", "name": str, "args": str, "text": str}
+#       a `/command` turn the human typed. `text` is it as TYPED (`/model opus`);
+#       `name`/`args` are kept apart so a command that changes SESSION STATE can
+#       also emit that state event. Claude Code writes such a turn as THREE
+#       user-shaped records — see _CMD_STDOUT_RE — and this kind is the ONE
+#       record they collapse to; the other two are dropped (return None)
 #   {"kind": "teammsg", "sender": str, "body": str} an incoming teammate message
 #   {"kind": "results", "blocks": [...], "tur": …, "texts": [str, ...]}
 #       a user record carrying tool_result blocks (in order) — `tur` is the
@@ -375,6 +380,17 @@ def parse_line(s):
             kind, a, b = classify_user_text(content)
             if kind == "teammsg":
                 return {"kind": "teammsg", "sender": a, "body": b}
+            # The three records of a `/command` turn (see _CMD_STDOUT_RE): the
+            # envelope becomes ONE record carrying what the human typed, and the
+            # caveat + the command's echoed stdout are dropped. Ordered before
+            # the prompt return because that is the only thing they could
+            # otherwise become.
+            cmd_name, cmd_args = _command_envelope(content)
+            if cmd_name:
+                return {"kind": "slash_command", "name": cmd_name, "args": cmd_args,
+                        "text": _command_text(content)}
+            if _CMD_CAVEAT_RE.match(content) or _CMD_STDOUT_RE.match(content):
+                return None
             # isMeta = Claude Code injected this user turn (see the header) —
             # carried so consumers can tell it from something the human typed.
             # The content goes in too: the teammate-mail envelope is injected
@@ -491,6 +507,33 @@ def agent_paths(parent_tpath, agent_id):
 _CMD_NAME_RE = re.compile(r"<command-name>\s*(/?[^<\n]+?)\s*</command-name>")
 _CMD_ARGS_RE = re.compile(r"<command-args>\s*([^<]*?)\s*</command-args>")
 
+# A `/command` turn is written as THREE user-shaped records, not one (measured on
+# this repo's own `/model opus` turn, session 6a23d1c5): the `<local-command-caveat>`
+# isMeta injection, the `<command-name>` envelope, and the command's echoed
+# `<local-command-stdout>`. Only the first carries a structural flag, so without
+# these two marks the other two each became a `message.created` with role "user"
+# — the user saw one system block and TWO "you" bubbles for one keystroke.
+#
+# Both are ANCHORED at the start of the content, for the reason _TEAM_ENVELOPE is:
+# a message that merely QUOTES an envelope — a paste asking about it, this repo's
+# own docs, a grep hit — has something in front of it and stays a prompt. The same
+# anchor gates the envelope itself (_command_envelope): _command_parts SEARCHES for
+# the name tag, which is right for a title fallback but would silently swallow a
+# pasted message's text into a fake command bubble.
+_CMD_STDOUT_RE = re.compile(r"^\s*<local-command-stdout>")
+_CMD_CAVEAT_RE = re.compile(r"^\s*<local-command-caveat>")
+_CMD_OPEN_RE = re.compile(r"^\s*<command-(?:message|name|args)>")
+
+
+def _command_envelope(s):
+    """`(name, args)` when `s` IS a slash-command envelope Claude Code wrote —
+    ('', '') otherwise. The anchored gate on top of _command_parts: the envelope
+    is the whole record and opens with one of its own tags, so a record with
+    prose in front of the tag is a human's prompt about a command, not one."""
+    if not _CMD_OPEN_RE.match(s):
+        return "", ""
+    return _command_parts(s)
+
 TITLE_SCAN = 200        # head-window lines session_title inspects: summary records
 #                         are PREPENDED on resume, so they precede the first prompt;
 #                         a title must never cost a full multi-MB transcript read
@@ -578,8 +621,10 @@ def _command_label(s):
 
 def _command_text(s):
     """The slash-command turn as the user TYPED it — `/foo` plus its argument
-    verbatim, newlines and all — for conversation()'s prompt bubble. '' when `s`
-    is not a command wrapper (see _command_parts for what else wears `<`)."""
+    verbatim, newlines and all — the text of parse_line's `slash_command` record
+    and so of the prompt bubble the dashboard shows. '' when `s` is not a command
+    wrapper (see _command_parts for what else wears `<`). The ONE owner of that
+    rendering; _command_label is its collapsed single-line twin, for titles."""
     name, args = _command_parts(s)
     if not name:
         return ""

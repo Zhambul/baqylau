@@ -1670,6 +1670,41 @@ a browser visit to keep transcript, rollout, foreground, usage, or OTLP facts
 moving. “Dashboard” is one frontend served by this host, not the owner of the
 canonical runtime.
 
+#### One gesture may be several records
+
+A translator must not assume one source record is one fact. The clearest case is
+a Claude Code slash command: typing `/model opus` writes **three** user-shaped
+transcript records — the `<local-command-caveat>` injection, the
+`<command-name>`/`<command-args>` envelope, and the command's echoed
+`<local-command-stdout>`. Only the caveat carries a structural flag (`isMeta`),
+so a translator that keys on flags alone emitted three `message.created` events
+for one keystroke, two of them `role="user"`. Measured in session 6a23d1c5: the
+user saw one system block and two "you" bubbles.
+
+`plugins/claude_code/transcript.py` collapses them in the parse stage — the
+envelope becomes the `slash_command` record carrying the text as typed, and the
+other two return `None`. The translator's `_slash_command` then emits one
+`message.created` plus, for a command that settles session state, that state
+event.
+
+Two rules generalise from it:
+
+- **Anchor any text-shaped classification at the start of the content.** These
+  records carry no flag, so they must be recognised by their text — and a
+  message that merely *quotes* an envelope (a paste asking about it, this repo's
+  own docs, a grep hit) is byte-identical to the real thing except that it has
+  prose in front. Anchoring is what makes reading the text safe. The same
+  discipline already governs `_TEAM_ENVELOPE` and the interrupt marker.
+- **Record what the source actually said, and let a later source correct it.**
+  `/model opus` carries a selection *alias*; the native id (`claude-opus-5`)
+  first appears a turn later on the next assistant record. So the command emits
+  `ModelChanged(reason="selected")` holding the alias — which is what lets the
+  switch be seen at the moment it was made — and the assistant record still
+  emits its `reported_by_harness` event with the native id. Two events describe
+  one switch; neither invents a fact the source did not carry. Inventing the
+  native id (an alias→native table) was rejected: it is a shared fact needing an
+  owner and it goes stale the day a new model ships.
+
 ### 9.4 Synchronous hook intake
 
 Hooks are not all passive observations. A native hook may require synchronous

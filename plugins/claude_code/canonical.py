@@ -35,6 +35,7 @@ from domain.events import (
     CompactionFinished,
     CompactionStarted,
     ContextReported,
+    EffortChanged,
     FileAccessed,
     GoalChanged,
     MessageCreated,
@@ -593,6 +594,8 @@ class ClaudeCanonicalTranslator:
             )
             payload = MessageCreated(MessageId(native_identity), role, _content(record["text"]), phase, None)
             return [self._event(raw_event, "message", native_identity, "created", payload, occurred_at=occurred_at)]
+        if kind == "slash_command":
+            return self._slash_command(raw_event, record, native_identity, occurred_at)
         if kind == "goal":
             payload = GoalChanged(record.get("objective"), record["state"], record.get("reason"))
             return [self._event(raw_event, "goal", native_identity, "changed", payload, occurred_at=occurred_at)]
@@ -768,6 +771,52 @@ class ClaudeCanonicalTranslator:
             )
             return [self._event(raw_event, "message", native_identity, "created", payload, occurred_at=occurred_at)]
         return []
+
+    def _slash_command(
+        self,
+        raw_event: RawEvent,
+        record: dict,
+        native_identity: str,
+        occurred_at: float | None,
+    ) -> list[CanonicalEvent]:
+        """A `/command` turn: ONE prompt bubble holding what the human typed,
+        plus the SESSION-STATE event the command asked for, where there is one.
+
+        The state event is emitted from the ARGUMENT, which is a selection ALIAS
+        ("opus"), not a native model id — Claude Code's transcript never carries
+        the native id here, and the true one arrives a turn later on the next
+        assistant record as `reported_by_harness`. Recording the alias is what
+        lets the switch be seen AT THE MOMENT it was made; the two events
+        describe one switch and the later one is authoritative on the id.
+
+        A bare `/model` (no argument) opens the picker and settles nothing, and a
+        multi-token argument is not a selection, so neither emits a state event.
+        """
+        role = "parent" if raw_event.parent_actor_id is not None else "user"
+        events = [
+            self._event(
+                raw_event,
+                "message",
+                native_identity,
+                "created",
+                MessageCreated(MessageId(native_identity), role, _content(record["text"]), "prompt", None),
+                occurred_at=occurred_at,
+            )
+        ]
+        name = record["name"].lstrip("/").strip().lower()
+        selection = record["args"].strip()
+        if not selection or len(selection.split()) != 1:
+            return events
+        if name == "model":
+            payload = ModelChanged(None, _model_reference(selection), "selected")
+        elif name == "effort":
+            payload = EffortChanged(None, selection, "selected")
+        else:
+            return events
+        events.append(
+            self._event(raw_event, name, native_identity, "selected", payload, occurred_at=occurred_at)
+        )
+        return events
 
     def _transcript_metadata(self, raw_event: RawEvent, document: dict) -> list[CanonicalEvent]:
         if raw_event.parent_actor_id is not None:
