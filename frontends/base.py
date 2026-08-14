@@ -4,7 +4,7 @@
 # silent no-op with the same failure-shaped return the callers already handle
 # (rc 1 / [] / None), so code written against a Frontend never needs to check
 # which terminal — or whether ANY terminal — is present. Frontends are
-# best-effort and silent by contract, exactly like the old claude_kitty
+# best-effort and silent by contract, exactly like the old harness_kitty
 # helpers: a failed call returns its failure value, never raises; the CALLER
 # audits what matters.
 #
@@ -23,6 +23,9 @@
 # `kitten` constructor attrs, which nothing outside frontends/ may touch).
 
 
+from contracts.terminal import SESSION_WINDOW_TAG
+
+
 # Default inactive-tab foreground for set_tab_color — a soft grey every frontend
 # shares (kitty imports this rather than re-encoding the hex).
 INACTIVE_FG = "#c0c4cc"
@@ -37,8 +40,8 @@ class Frontend:
 
     # --- presence ---------------------------------------------------------------
     # Slice consumers: everyone gates on this first — tabstatus (available/
-    # usable/export_env), split + codex/session + adopt + scorebar (usable),
-    # hostpane + split + codex/session (current_window as the pane anchor).
+    # usable/export_env), split + harness/session + adopt + scorebar (usable),
+    # hostpane + split + harness/session (current_window as the pane anchor).
     def available(self):
         """True when the terminal's control channel is reachable in principle
         (env says we're inside this terminal). Cheap — no I/O."""
@@ -55,8 +58,7 @@ class Frontend:
 
     def export_env(self):
         """Stamp whatever env detached children need to reach this terminal
-        (kitty: KITTY_LISTEN_ON — streamers and the codex watcher inherit the
-        hook's env and later shell out to the tab dispatcher)."""
+        (kitty uses KITTY_LISTEN_ON)."""
         return None
 
     def app_id(self):
@@ -68,7 +70,7 @@ class Frontend:
         return ""
 
     # --- tab colour ---------------------------------------------------------
-    # Slice consumers: plugins/claude_code/tabstatus.py only (the tab
+    # Slice consumers: plugins/harness_code/tabstatus.py only (the tab
     # dispatcher paints and clears; nothing else touches tab colour).
     def set_tab_color(self, win, active_bg, active_fg, inactive_bg,
                       inactive_fg=INACTIVE_FG):
@@ -82,7 +84,7 @@ class Frontend:
 
     # --- window enumeration -------------------------------------------------
     # Slice consumers: hostpane (ls/find_window liveness probes), split
-    # (iter_windows, window_for_session), tabstatus + codex/session +
+    # (iter_windows, window_for_session), tabstatus + harness/session +
     # scorebar (window_for_session), adopt (find_window to retag panes).
     def ls(self):
         """The raw OS-window/tab/window tree, [] on failure."""
@@ -99,9 +101,9 @@ class Frontend:
                 return w
         return None
 
-    def window_for_session(self, sid, tree=None):
-        """Window id (str) of the pane tagged claude_session=<sid>, or None."""
-        w = self.find_window("claude_session", sid, tree)
+    def window_for_session(self, session_id, tree=None):
+        """Window id (str) of the pane tagged for this session, or None."""
+        w = self.find_window(SESSION_WINDOW_TAG, session_id, tree)
         return str(w.get("id")) if w else None
 
     def app_focused(self, tree=None):
@@ -135,7 +137,7 @@ class Frontend:
     # --- pane management ------------------------------------------------------
     # Slice consumers: core/hostpane.py (goto_splits_layout/launch_pane/
     # close_pane/resize_pane — the mirror+scorebar lifecycle), split +
-    # codex/session + adopt (set_user_vars pane tagging), split (resize_pane
+    # harness/session + adopt (set_user_vars pane tagging), split (resize_pane
     # grow/shrink).
     def goto_splits_layout(self, win=None):
         """Switch a tab to a layout where directional splits with a size bias
@@ -148,9 +150,7 @@ class Frontend:
                     keep_focus=True):
         """Open a new pane running `argv`. location is "vsplit"/"hsplit";
         `var` is a {name: value} user-var tag dict; `next_to` is a raw window
-        match string anchoring the split (e.g. "id:42",
-        "var:claude_mirror=<sid>") — without it the terminal splits whatever
-        window happens to be active. `in_tab_of` is a window id whose TAB the
+        match string anchoring the split. `in_tab_of` is a window id whose TAB the
         pane must open in — next_to alone cannot cross tabs (see
         frontends/kitty.py). Exit code."""
         return 1
@@ -225,36 +225,19 @@ class Frontend:
     def close_tab(self, win):
         """Close the whole tab CONTAINING window `win` (the session's main
         window + its mirror/scorebar panes). The session process gets SIGHUP
-        and exits gracefully — Claude Code fires SessionEnd on it (verified
-        2026-07-18, docs/dashboard.md), so the normal end-of-session lifecycle
-        (mirror park, audit close) runs on its own. True on success."""
+        and exits gracefully. True on success."""
         return False
 
     def set_tab_title(self, win, title):
         """Explicitly title the tab CONTAINING window `win`. STICKY in kitty:
         an explicit tab title stops following the active window's OSC title —
-        which is how Claude Code publishes the session name — for the rest of
-        the session (docs/session-naming-findings.md §4). True when the
-        terminal accepted the call, else False.
-
-        DELIBERATELY unused by CLAUDE CODE's rename since 2026-07-29, and don't
-        put it back there: a live rename goes through Claude Code's own
-        `/rename`, which re-emits that OSC, so the tab follows on its own.
-        Calling this too would make the tab a SECOND writer of the name — free
-        to disagree with the one the session actually has, which is precisely
-        the split the rename bug presented as (a tab asserting the manual name
-        while every other reader had the auto one).
-
-        That argument is about a host that PUBLISHES its title, and it inverts
-        for one that does not. codex's TUI emits no OSC title at all, so its tab
-        never followed anything and a codex rename left the tab stale forever;
-        there `CodexHost.rename` is the FIRST writer, not a second one, and it
-        is this capability's one sanctioned caller (docs/codex.md *The tab title
-        is ours to write*)."""
+        which may be owned by a harness's native title publisher. Use this only
+        when the owning plugin declares that the terminal is the title writer.
+        True when the terminal accepted the call, else False."""
         return False
 
     # --- viewport scroll / read ---------------------------------------------
-    # Slice consumers: claude-mirror.py only (the renderer's click-to-view
+    # Slice consumers: harness-mirror.py only (the renderer's click-to-view
     # scroll restore + get_text scroll-position anchor). A frontend without
     # scroll control may leave these inert — the mirror still renders, only
     # the exact-scroll restore degrades.
@@ -282,7 +265,7 @@ class Frontend:
         return None
 
     # --- geometry -------------------------------------------------------------
-    # Slice consumers: plugins/claude_code/split.py only (setpct/reset and the
+    # Slice consumers: plugins/harness_code/split.py only (setpct/reset and the
     # remembered pane size need the pane's share of its row).
     def split_geometry(self, var, exclude_var=None):
         """(pane_columns, row_total_columns) for the pane tagged by the

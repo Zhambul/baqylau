@@ -1,4 +1,4 @@
-# The web dashboard (`dashboard/` + `bin/claude-dashboard.py`)
+# The web dashboard (`dashboard/` + `bin/baqylau-dashboard.py`)
 
 A localhost web UI over the whole session estate: every session (live and
 parked) with its mirror stream, scoreboard stats, agents, costs and errors —
@@ -17,7 +17,7 @@ opens a tab) through the `Frontend` interface, and Claude Code's own hooks then
 produce the resulting state. See *Control plane (web writes)* below.
 
 ```
-bin/claude-dashboard.py     thin CLI shim — delegates to dashboard/cli.py
+bin/baqylau-dashboard.py     thin CLI shim — delegates to dashboard/cli.py
 dashboard/cli.py            the CLI lifecycle: serve | start | stop | status |
                             open (holder/url/start/stop/status/open_browser +
                             the command dispatch) — importable/testable
@@ -251,7 +251,7 @@ actually breaks, since a verb the page fetches but nothing routes is a silent
 404 (an empty tab, a control gesture that never lands) with no handler to leave
 an audit row.
 
-`./bin/claude-dashboard.py` (default verb `open`) starts the server if needed
+`./bin/baqylau-dashboard.py` (default verb `open`) starts the server if needed
 and opens `http://127.0.0.1:8377` (`CLAUDE_DASH_PORT` overrides).
 
 ## No emoji: the glyph vocabulary
@@ -419,10 +419,10 @@ Decisions inherited from the sessionapi design review (docs/sessionapi.md's
   attempt (`plugins/claude_code/split._maybe_autostart_dashboard`, alongside the
   OTLP fan-out in `cmd_open`): a cheap `locks.lock_holder` + `pid_alive` check —
   never a port bind from a hook — and, only when nothing is up,
-  `core/spawn.spawn_detached` of `claude-dashboard.py serve`. This changes only
+  `core/spawn.spawn_detached` of `baqylau-dashboard.py serve`. This changes only
   the *start* trigger; the explicit-lifecycle story above is otherwise unchanged
   — there is still no idle-exit and no auto-STOP (you stop it with
-  `claude-dashboard.py stop`). The dashboard's own singleton lock + port-bind
+  `baqylau-dashboard.py stop`). The dashboard's own singleton lock + port-bind
   second guard make a lost race harmless (a loser exits with an audited
   lock-denied/port-busy row), so spawning from every session is safe. OFF by
   default: with the env unset the gate returns before touching anything and
@@ -4492,7 +4492,7 @@ Collapsing the two into a single "lag" number would put the next report right
 back at guessing. Read them with:
 
 ```sh
-python3 bin/claude-audit.py sql "SELECT ts, content FROM state_files
+python3 bin/baqylau-audit.py sql "SELECT ts, content FROM state_files
   WHERE action='web-client' AND content LIKE '%dictate.%' ORDER BY ts DESC LIMIT 40"
 ```
 
@@ -4795,7 +4795,7 @@ kv, the aggregation, and the strip's bars with no code change — but until then
 the per-model bars come from the OAuth endpoint instead (*Per-model usage
 bars* below). Rate-limit data is NOT in any hook payload, the transcript, or
 OTEL (all checked). So the account-wide number is captured by
-**wrapping the status line**: `bin/claude-statusline.py`
+**wrapping the status line**: `plugins/claude_code/statusline.py`
 (`plugins/claude_code/statusline`) becomes `settings.json`'s
 `statusLine.command`, with the user's real status-line command (their HUD) as its
 argv. It reads the stdin once, stashes `usage` + `account` into the session state

@@ -2,7 +2,7 @@
 #
 # The response/SSE/guard machinery every route shares: gzip-aware _send, the
 # JSON + SSE framing, the CORS/preflight/origin control-plane guard, the static
-# whitelist server, and the valid_sid/_qint/_qstr request parsers. The concrete
+# whitelist server and small request parsers. The concrete
 # Handler (http/handler.py) inherits this and mixes GET/POST/SSE in.
 import gzip
 import json
@@ -11,14 +11,18 @@ import re
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 
-from core import paths as P
-from core import sessionapi as API
-from core.noaudit import load_audit
+from core import audit as A
 from dashboard import config
-from dashboard.config import (BOOT_ID, CLIENTLOG_FIELD_MAX, CLIENTLOG_STR_MAX,
-                              GZIP_MIN, POST_HEADER, POST_MAX, STATIC, STATIC_DIR, SID_OK)
+from dashboard.config import (
+    BOOT_ID,
+    GZIP_MIN,
+    POST_HEADER,
+    POST_MAX,
+    STATIC,
+    STATIC_DIR,
+    SESSION_ID_PATTERN,
+)
 
-A = load_audit()
 
 
 class _Base(BaseHTTPRequestHandler):
@@ -94,7 +98,7 @@ class _Base(BaseHTTPRequestHandler):
         path, content = code + reason). This is the ONE place a control-plane
         POST could vanish without a trace: _post_guard rejects BEFORE any
         handler runs, so a browser POST that arrives but fails the guard (a
-        missing X-Claude-Dash header, a cross-origin Origin, read-only mode) wrote
+        missing X-Baqylau header, a cross-origin Origin, read-only mode) wrote
         nothing — the `/stop that produced a client `web-hint op=close` beacon
         yet no `web-stop` row` blind spot. Audit-only telemetry (not an `errors`
         row — an expected 4xx, same rationale as _reject_input), so it never
@@ -115,7 +119,7 @@ class _Base(BaseHTTPRequestHandler):
         caller stays at the tiny control-plane default).
 
         Two accepted proofs of a same-origin caller, EITHER suffices:
-          * the `X-Claude-Dash` custom header (a cross-origin *simple* POST can't
+          * the `X-Baqylau` custom header (a cross-origin *simple* POST can't
             set it, and a cross-origin fetch that tries triggers a preflight this
             no-CORS server never answers), OR
           * a present-and-allowlisted `Origin` — because `navigator.sendBeacon`
@@ -159,188 +163,21 @@ class _Base(BaseHTTPRequestHandler):
             return self._reject(400, "invalid JSON")
         return body
 
-    @staticmethod
-    def _clip_scalars(d):
-        """Keep only JSON scalars from a client-supplied dict — bounded count,
-        strings capped — so telemetry can't smuggle bulk/nesting into the audit.
-
-        `bool` needs no arm of its own: it is a subclass of `int`, so the numeric
-        test already admits True/False (the separate `isinstance(v, bool)` clause
-        it used to carry was unreachable)."""
-        out = {}
-        for k, v in list(d.items())[:CLIENTLOG_FIELD_MAX]:
-            if not isinstance(k, str):
-                continue
-            if isinstance(v, (int, float)):
-                out[k] = v
-            elif isinstance(v, str):
-                out[k] = v[:CLIENTLOG_STR_MAX]
-        return out
-
-    @staticmethod
-    def _audit_target(sid):
-        """A session id -> (row, log, sdb): the audit `sessions` row (or {}), the
-        mirror-log KEY every audit row is filed under, and the state-DB path
-        `A.state_file` records as the row's `path`. The ONE owner of that
-        resolution — nearly every session-scoped handler needs it, and it was
-        re-encoded inline at 13 sites in four slightly different spellings.
-
-        Both fallbacks are load-bearing, not defensive padding: a sid with no
-        audit row (a session this machine never saw, or one whose row is still
-        being written) must STILL file its rejection/attempt somewhere
-        attributable, so `log` degrades to the derived P.mirror_log(sid) and
-        `sdb` to the derived live path. That keeps a 404/4xx from being a silent
-        no-row hole — the same blind spot `_reject`/`_reject_input` close.
-
-        DELIBERATELY not used by get_copy/get_view (http/get.py), which resolve
-        the same `log` but need the STRICT `API.state_db_for` — they branch on a
-        missing state DB (a gone/parked session is their no-op path), and the
-        derived fallback here is a path that need not exist, so it would never be
-        falsy. Same two lines, different fact; don't unify them."""
-        row = API.session_row(sid) or {}
-        log = row.get("log") or P.mirror_log(sid)
-        return row, log, API.state_db_for(sid) or P.state_db(log)
-
-    def _reject_input(self, action, why, message, detail, code=400,
-                      sid="", log="", path=""):
-        """A control-plane INPUT-validation reject (the client sent a bad
-        field). Audited as an `ok:False` state_files row under the handler's own
-        `action` vocabulary, carrying the reason (`why`) and the EXACT received
-        bytes (repr — a remote client's "but I picked it from the dropdown" is
-        undebuggable otherwise, invisible characters included). Deliberately NOT
-        an `errors` row: these are expected 4xx from client input (an
-        abandoned/partial cwd, a typo'd model, a bad quick-command), not
-        swallowed exceptions — their traceback would be a bare `NoneType: None`
-        — and must not light the errwatch warning chip, which surfaces every
-        session_id='' `errors` row as a `⚠ global:` in EVERY session's
-        scorebar. This is the shape `post_dictate_token` already used inline for
-        its bad-rate reject; the reject sites that mis-used A.error now share it.
-        Distinct from `_reject` (the low-level guard rejection that closes the
-        connection because it hasn't read the body — the input body is already
-        consumed by `_post_guard` here, so no desync to guard against).
-
-        Pass `sid` to file the row under a SESSION (the session-scoped POSTs —
-        web-send/web-rename/web-answer/…, so a rejected attempt lands in THAT
-        session's audit timeline, not just the global stream); omitting it keeps
-        the GLOBAL row the session-less endpoints (web-launch/notify-mute/
-        hide-dir/dictate) already relied on. Without this every empty-message /
-        empty-name / bad-payload reject was a silent 4xx — the same class of
-        blind spot `_reject` closed for guard rejections. Returns the response
-        so callers stay `return self._reject_input(...)`.
-
-        `sid` resolves through `_audit_target` — the ONE owner — precisely so a
-        handler's reject row and its success row land in the SAME place. The 11
-        session-scoped sites used to pass `log=P.mirror_log(sid)`, re-deriving
-        the key instead: `_audit_target` prefers the audit row's own `log`, and
-        `session_row` walks the adopt FORK CHAIN, so for a sid whose row hasn't
-        been written yet (a `--resume`/backgrounding fork before adopt.py catches
-        up) the two disagree — the success row joined the predecessor's timeline
-        while the reject landed under a sid with no `sessions` row at all, which
-        is itself a canned anomaly signature. They also dropped `path`, so a
-        reject carried no state-DB attribution while its sibling did. `log`/
-        `path` stay as the explicit escape hatch (post_client_log resolves one
-        target per BATCHED event, and the session-LESS rows want a bare '')."""
-        if sid:
-            _row, log, path = self._audit_target(sid)
+    def _reject_input(
+        self,
+        action,
+        why,
+        message,
+        detail,
+        code=400,
+        log="",
+        path="",
+    ):
+        """Audit and reject malformed application input."""
         A.state_file(log, path, action,
                      dict({"ok": False, "why": why},
                           **{k: repr(v) for k, v in detail.items()}))
         return self._json({"error": message}, code)
-
-    def _caps_guard(self, sid, key, action):
-        """Refuse a control gesture the session's OWNING HOST does not support —
-        the server-side twin of the client's greyed button. Resolve the row's
-        transcript path → its host's DERIVED caps (read.session.session_caps →
-        plugins.host_caps); when `key` is absent, 409 `{"error":…, "cap":key}`
-        AND write the handler's OWN `web-*` failure state_files row (ok:False +
-        cap + host), matching the audit discipline of every reject site here.
-        Returns True when it HANDLED the request (already responded — the caller
-        `return`s at once), False to proceed.
-
-        claude_code drives every gesture, so for a Claude session — and for an
-        unprovable empty transcript_path, which session_caps defaults to the
-        Claude host — every cap is True and this NEVER fires: byte-identical to
-        the pre-P1a control plane. It bites only a session OWNED by another tool
-        whose host leaves that gesture inert (a not-yet-wired codex, a future
-        copilot/opencode), which is the whole point of the abstraction.
-
-        Degrades OPEN on a caps-resolution failure: a read error must never
-        disable a real Claude session's control plane, so it audits and returns
-        False (proceed) rather than a spurious 409."""
-        row, log, sdb = self._audit_target(sid)
-        try:
-            from dashboard.read import session as rsession
-            host, caps = rsession.session_caps(row.get("transcript_path") or "")
-        except Exception:
-            A.error(log, "dashboard caps (%s)" % action,
-                    {"sid": sid, "cap": key})
-            return False
-        if caps.get(key):
-            return False
-        A.state_file(log, sdb, action,
-                     {"ok": False, "cap": key, "host": host,
-                      "why": "unsupported by this session's tool"})
-        self._json({"error": "not supported by this session's tool",
-                    "cap": key}, 409)
-        return True
-
-    def _gesture_host(self, sid):
-        """The session's owning HostControl — the ONE door every control gesture
-        goes through. Not a branch any more: a session PROVABLY owned by a host
-        gets that host, and an unprovable/empty transcript path (owns_by → None)
-        gets the DEFAULT host, which is exactly what "behaves as" meant when the
-        handlers still had inline bodies for it. The P2 move deleted those
-        bodies (they live in plugins/<tool>/hostctl.py now), so there is nothing
-        left to fall back TO and no `if host is not None:` anywhere.
-
-        Degrades to the default host on any resolution error, exactly as
-        _caps_guard degrades OPEN — a read hiccup must never divert a real
-        Claude session off its own control plane. Only if even THAT can't be
-        resolved (a registry with no host at all — a state no build ships) does
-        it return an inert HostControl, whose gestures all answer `unsupported`:
-        a 409 naming the capability, audited, rather than a 500.
-
-        The caps guard (called first by every gesture handler) has already 409'd
-        a gesture this host can't drive, so this normally hands back a host for a
-        gesture the caps say it CAN — the exceptions are the two cap SHARERS
-        (autoname rides `rename`, rewind_to rides `rewind`), where a host may
-        implement one and not the other and the `unsupported` result is the 409."""
-        import plugins
-        try:
-            tpath = (API.session_row(sid) or {}).get("transcript_path") or ""
-            owner = plugins.owns_by(tpath) if tpath else None
-            host = plugins.host_named(owner) if owner else None
-            if host is not None:
-                return host
-        except Exception:
-            pass
-        try:
-            return (plugins.host_named(plugins.default_host())
-                    or plugins.inert_host())
-        except Exception:
-            return plugins.inert_host()
-
-    def _gesture_declined(self, res, sid, action, cap, *, extra=None):
-        """Answer a gesture the owning host DECLARED it cannot drive (its inert
-        base body returned `unsupported`) — the same 409 + `web-*` reject row
-        `_caps_guard` writes, for the cases the cap map cannot express: a cap
-        SHARER the host didn't implement (autoname under `rename`, rewind_to
-        under `rewind`). Returns True when it handled the request.
-
-        Deliberately NOT collapsed into "any rejected result": a host that TRIED
-        and failed returns `_rejected()` WITHOUT that key, and that is a 502 —
-        "your tool can't do this" and "it didn't work" are different answers and
-        the client shows them differently."""
-        if not (res or {}).get("unsupported"):
-            return False
-        row, log, sdb = self._audit_target(sid)
-        A.state_file(log, sdb, action,
-                     dict({"ok": False, "cap": cap,
-                           "why": "unsupported by this session's tool"},
-                          **(extra or {})))
-        self._json({"error": "not supported by this session's tool",
-                    "cap": cap}, 409)
-        return True
 
     # the SPA parts (app.NN-name.js, split from the former monolithic app.js) are
     # admitted by SHAPE, not a per-file whitelist entry — still no user-path
@@ -403,8 +240,8 @@ class _Base(BaseHTTPRequestHandler):
         return self._send(200, data, ctype, cache=cache)
 
 
-def valid_sid(s):
-    return bool(SID_OK.match(s or ""))
+def valid_session_id(value):
+    return bool(SESSION_ID_PATTERN.match(value or ""))
 
 
 def _qint(url, name):

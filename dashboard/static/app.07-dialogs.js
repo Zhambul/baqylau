@@ -20,7 +20,7 @@
 
 function buildAskCard() {
   const wrap = el("div", "askwrap");
-  S.ses.askEl = wrap;
+  S.sessionView.askEl = wrap;
   renderAsk();
   return wrap;
 }
@@ -42,35 +42,35 @@ function askHasPreview(ask) {
 }
 
 function renderAsk() {
-  const ses = S.ses;
-  if (!ses || !ses.askEl) return;
-  const wrap = ses.askEl;
+  const sessionView = S.sessionView;
+  if (!sessionView || !sessionView.askEl) return;
+  const wrap = sessionView.askEl;
   wrap.textContent = "";
-  const ask = ses.meta && ses.meta.ask;
+  const ask = sessionView.meta && sessionView.meta.ask;
   wrap.hidden = !ask;
   if (!ask) return;
   // an optimistic answer is in flight — show the card greyed until the SSE
   // `ask` reconcile drops the stash (or a failure clears askPend and rebuilds
   // the interactive card). Reasserted on every render so a stray draft/rebuild
   // can't resurrect the live controls mid-submit.
-  if (ses.askPend && ses.askPend.live) {
-    wrap.append(pendingCard("askcard", "submitting answer…", ses.askPend.note));
+  if (sessionView.askPend && sessionView.askPend.live) {
+    wrap.append(pendingCard("askcard", "submitting answer…", sessionView.askPend.note));
     return;
   }
   const qs = ask.questions || [];
   const preview = askHasPreview(ask);
   // per-ask draft state, keyed by tool_use_id so a NEW ask resets it —
-  // SEEDED from the persisted `ask-draft` (ses.meta.ask_draft) so a device
+  // SEEDED from the persisted `ask-draft` (sessionView.meta.ask_draft) so a device
   // switch / reopen restores whatever selections were made but not submitted
-  if (!ses.askState || ses.askState.id !== ask.tool_use_id)
-    ses.askState = { id: ask.tool_use_id,
-                     answers: seedAskAnswers(qs, ses.meta && ses.meta.ask_draft,
+  if (!sessionView.askState || sessionView.askState.id !== ask.tool_use_id)
+    sessionView.askState = { id: ask.tool_use_id,
+                     answers: seedAskAnswers(qs, sessionView.meta && sessionView.meta.ask_draft,
                                              ask.tool_use_id) };
-  const st = ses.askState;
+  const st = sessionView.askState;
   const card = el("div", "askcard");
   const head = el("div", "askhead");
   head.append(el("span", "asktitle",
-                 ((ses.meta && ses.meta.host_label) || "the agent") + " is asking"
+                 ((sessionView.meta && sessionView.meta.host_label) || "the agent") + " is asking"
                  + (qs.length > 1 ? " — " + qs.length + " questions" : "")));
   const chatB = el("button", "askchat", "chat about this");
   chatB.title = "dismiss the questions and discuss in the chat instead";
@@ -191,10 +191,10 @@ function renderAsk() {
 }
 
 // Build the per-question answer array, seeding from a persisted draft when it
-// belongs to THIS ask (tool_use_id + question count match) — otherwise fresh.
+// belongs to this canonical attention request and the question count matches.
 function seedAskAnswers(qs, draft, tuid) {
   const blank = () => qs.map(() => ({ selected: [], other: "" }));
-  if (!draft || draft.tool_use_id !== tuid
+  if (!draft || draft.attention_id !== tuid
       || !Array.isArray(draft.answers) || draft.answers.length !== qs.length)
     return blank();
   return draft.answers.map(a => ({
@@ -207,19 +207,20 @@ function seedAskAnswers(qs, draft, tuid) {
 // any device restores them. Best-effort — a failed save just retries on the
 // next edit; the local card keeps its state regardless.
 function saveAskDraft(ask, st) {
-  const ses = S.ses;
-  if (!ses || !S.cur || !ask || !ask.tool_use_id) return;
+  const sessionView = S.sessionView;
+  if (!sessionView || !S.currentSessionId || !ask || !ask.tool_use_id) return;
   const answers = st.answers.map(a =>
     ({ selected: a.selected.slice(), other: a.other || "" }));
   // keep meta in sync so a tab-switch rebuild seeds from what we just typed,
   // and so our own SSE echo (same origin) is a no-op against current state
-  if (ses.meta)
-    ses.meta.ask_draft = { tool_use_id: ask.tool_use_id, origin: CLIENT_ID,
+  if (sessionView.meta)
+    sessionView.meta.ask_draft = { attention_id: ask.attention_id, origin: CLIENT_ID,
                            answers };
-  clearTimeout(ses._askDraftTimer);
-  ses._askDraftTimer = setTimeout(() => {
-    postJSON("/api/session/" + encodeURIComponent(S.cur) + "/ask-draft",
-             { tool_use_id: ask.tool_use_id, origin: CLIENT_ID, answers })
+  clearTimeout(sessionView._askDraftTimer);
+  sessionView._askDraftTimer = setTimeout(() => {
+    postJSON("/api/sessions/" + encodeURIComponent(S.currentSessionId)
+             + "/application/dialog-draft",
+             { attention_id: ask.attention_id, origin: CLIENT_ID, answers })
       .catch(() => {});                       // draft save is best-effort
   }, ASK_DRAFT_DEBOUNCE_MS);
 }
@@ -227,29 +228,29 @@ function saveAskDraft(ask, st) {
 // A peer device's draft update arrived over SSE. Adopt it and repaint the card
 // — but ignore our OWN echo (same origin), and stale drafts (wrong ask).
 function applyAskDraft(draft) {
-  const ses = S.ses;
-  if (!ses) return;
-  if (ses.meta) ses.meta.ask_draft = draft || null;   // for a later rebuild
-  if (ses.askPend && ses.askPend.live) return;   // don't un-grey a submitting card
-  const ask = ses.meta && ses.meta.ask;
-  if (!draft || !ask || draft.tool_use_id !== ask.tool_use_id) return;
+  const sessionView = S.sessionView;
+  if (!sessionView) return;
+  if (sessionView.meta) sessionView.meta.ask_draft = draft || null;   // for a later rebuild
+  if (sessionView.askPend && sessionView.askPend.live) return;   // don't un-grey a submitting card
+  const ask = sessionView.meta && sessionView.meta.ask;
+  if (!draft || !ask || draft.attention_id !== ask.attention_id) return;
   if (draft.origin && draft.origin === CLIENT_ID) return;   // our own write
-  if (!ses.askState || ses.askState.id !== ask.tool_use_id) return;
+  if (!sessionView.askState || sessionView.askState.id !== ask.tool_use_id) return;
   // don't yank the card out from under an ACTIVE local edit: renderAsk()
   // rebuilds the DOM (wrap.textContent = ""), which would drop focus + caret
   // mid-keystroke on the device that's typing. Skip while the card holds
-  // focus — ses.meta.ask_draft is already updated above, so the next remote
+  // focus — sessionView.meta.ask_draft is already updated above, so the next remote
   // change (or a manual rebuild) applies it once the field blurs.
-  if (ses.askEl && ses.askEl.contains(document.activeElement)) return;
-  ses.askState.answers = (draft.answers || []).map(a =>
+  if (sessionView.askEl && sessionView.askEl.contains(document.activeElement)) return;
+  sessionView.askState.answers = (draft.answers || []).map(a =>
     ({ selected: Array.isArray(a && a.selected) ? a.selected.slice() : [],
        other: (a && a.other) || "" }));
   renderAsk();
 }
 
 function submitAsk(ask, answers, chat) {
-  const ses = S.ses;
-  if (!ses || !S.cur) return;
+  const sessionView = S.sessionView;
+  if (!sessionView || !S.currentSessionId) return;
   // A TYPED answer on a preview-layout question has no free-text row in the TUI
   // dialog, so route it through "Chat about this" (now keyboard-reachable — the
   // _cursor_to two-❯ fix) and ride the typed text as `message`: the server
@@ -307,10 +308,14 @@ function submitAsk(ask, answers, chat) {
   const note = chat
     ? (message ? "delivering your answer via chat…" : "dismissing the questions…")
     : "answer submitted — waiting for the session…";
-  ses.askPend = optPending(S.cur, "answer", ask.tool_use_id || "", note);
+  sessionView.askPend = optPending(S.currentSessionId, "answer", ask.tool_use_id || "", note);
   renderAsk();
-  postJSON("/api/session/" + encodeURIComponent(S.cur) + "/answer", body,
-           { audit: "answer" })
+  canonicalControl("answer_question", {
+    attention_id: ask.attention_id || ask.tool_use_id,
+    decision: chat ? "discuss" : "answer",
+    answers: chat ? null : (body.answers || []),
+    discussion: chat ? (body.message || null) : null,
+  }, { audit: "answer" })
     .then(() => {
       if (chat) {
         if (message)
@@ -319,7 +324,7 @@ function submitAsk(ask, answers, chat) {
         else
           toast("done", "over to chat",
                 "questions dismissed — type your message below");
-        if (!message && ses.composer) ses.composer.focus();
+        if (!message && sessionView.composer) sessionView.composer.focus();
       } else {
         toast("done", "answered", "answers submitted to the session");
       }
@@ -334,9 +339,9 @@ function submitAsk(ask, answers, chat) {
       const hint = (step === "cursor" || step === "type")
         ? "couldn't drive the dialog — pick an option, or answer in the terminal"
         : (e && e.error) || "";
-      if (ses.askPend) {
-        ses.askPend.settle("dropped", { reason: step || "failed" });
-        ses.askPend = null;
+      if (sessionView.askPend) {
+        sessionView.askPend.settle("dropped", { reason: step || "failed" });
+        sessionView.askPend = null;
       }
       toast("ask", "answer failed", hint);
       renderAsk();                           // rebuild the interactive card to retry
@@ -355,26 +360,26 @@ function submitAsk(ask, answers, chat) {
 
 function buildPlanCard() {
   const wrap = el("div", "planwrap");
-  S.ses.planEl = wrap;
+  S.sessionView.planEl = wrap;
   renderPlan();
   return wrap;
 }
 
 function renderPlan() {
-  const ses = S.ses;
-  if (!ses || !ses.planEl) return;
-  const wrap = ses.planEl;
+  const sessionView = S.sessionView;
+  if (!sessionView || !sessionView.planEl) return;
+  const wrap = sessionView.planEl;
   wrap.textContent = "";
-  const plan = ses.meta && ses.meta.plan;
+  const plan = sessionView.meta && sessionView.meta.plan;
   wrap.hidden = !plan;
   if (!plan) return;
   // an optimistic decision is in flight — grey the card until the SSE `plan`
   // reconcile drops the stash (or a failure clears planPend and rebuilds it)
-  if (ses.planPend && ses.planPend.live) {
-    wrap.append(pendingCard("plancard", "sending decision…", ses.planPend.note));
+  if (sessionView.planPend && sessionView.planPend.live) {
+    wrap.append(pendingCard("plancard", "sending decision…", sessionView.planPend.note));
     return;
   }
-  const hostLbl = (ses.meta && ses.meta.host_label) || "the agent";
+  const hostLbl = (sessionView.meta && sessionView.meta.host_label) || "the agent";
   const card = el("div", "plancard");
   const head = el("div", "askhead");
   head.append(el("span", "plantitle", hostLbl + " has a plan — proceed?"));
@@ -430,9 +435,14 @@ function renderPlan() {
   // directly, no screen read. Claude's labels VARY with the permission mode, so
   // they're fetched from the LIVE dialog once per card render.
   if (inlineOpts) { paintOpts(inlineOpts); return; }
-  postJSON("/api/session/" + encodeURIComponent(S.cur) + "/plan-options",
-           { tool_use_id: plan.tool_use_id || "" })
-    .then(r => paintOpts(r.options))
+  canonicalControl("read_plan_choices", {
+    attention_id: plan.attention_id || plan.tool_use_id || plan.plan_id,
+  })
+    .then(r => paintOpts((r.choices || []).map(choice => ({
+      digit: choice.value,
+      label: choice.label,
+      feedback: choice.description === "feedback",
+    }))))
     .catch(e => {
       btns.textContent = "";
       btns.append(el("span", "plandim",
@@ -442,26 +452,27 @@ function renderPlan() {
 }
 
 function submitPlan(plan, body, okTitle, okDetail) {
-  const ses = S.ses;
-  if (!ses || !S.cur) return;
-  body.tool_use_id = plan.tool_use_id || "";
-  body.plan_id = plan.plan_id || "";       // codex pairs the decision by plan_id
+  const sessionView = S.sessionView;
+  if (!sessionView || !S.currentSessionId) return;
   // optimistic: grey the card immediately and keep it until the SSE `plan`
   // reconcile drops the stash — not the old hide-on-POST-return. Beaconed as
   // `web-hint` op=plan.
-  ses.planPend = optPending(S.cur, "plan",
+  sessionView.planPend = optPending(S.currentSessionId, "plan",
                             plan.tool_use_id || plan.plan_id || "", okDetail);
   renderPlan();
-  postJSON("/api/session/" + encodeURIComponent(S.cur) + "/plan-decision", body,
-           { audit: "plan" })
+  canonicalControl("decide_plan", {
+    attention_id: plan.attention_id || plan.tool_use_id || plan.plan_id,
+    decision: body.dismiss ? "dismiss" : body.digit || "feedback",
+    feedback: body.feedback || null,
+  }, { audit: "plan" })
     .then(() => {
       toast("done", okTitle, okDetail);
       // stay greyed — the SSE `plan` event is the real confirmation
     })
     .catch(e => {
-      if (ses.planPend) {
-        ses.planPend.settle("dropped", { reason: (e && e.step) || "failed" });
-        ses.planPend = null;
+      if (sessionView.planPend) {
+        sessionView.planPend.settle("dropped", { reason: (e && e.step) || "failed" });
+        sessionView.planPend = null;
       }
       toast("ask", "plan decision failed", (e && e.error) || "");
       renderPlan();                          // rebuild the interactive card to retry
@@ -484,7 +495,7 @@ function submitPlan(plan, body, okTitle, okDetail) {
 let dictProbe = null;              // the one /api/dictate probe (Promise<bool>)
 function dictAvailable() {
   if (!dictProbe)
-    dictProbe = fetch("/api/dictate").then(r => r.json())
+    dictProbe = fetch("/api/application/dictation").then(r => r.json())
       .then(d => !!(d && d.available)).catch(() => false);
   return dictProbe;
 }

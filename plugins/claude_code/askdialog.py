@@ -56,7 +56,7 @@
 import re
 import time
 
-from core import screendrive
+from plugins.claude_code import screen_driver as screendrive
 
 POLL_S = 0.15          # screen re-read beat while waiting for a dialog state
 STEP_TIMEOUT_S = 2.5   # a key press → its screen effect visible

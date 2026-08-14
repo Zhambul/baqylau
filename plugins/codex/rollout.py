@@ -52,9 +52,11 @@
 #   {"kind": "exec", "cmd": str, "call_id": str, "ts": str|None}
 #   {"kind": "tool", "name": str, "args": str, "call_id": str}   a NON-shell
 #    tool call through the same `exec` custom tool (`tools.web__run({…})`)
-#   {"kind": "exec_result", "exit": str|None, "output": str,
-#    "call_id": str, "ts": str|None}
-#   {"kind": "stdin", "text": str, "call_id": str}      backgrounded-exec poll
+#   {"kind": "exec_result", "exit": str|int|None, "output": str,
+#    "call_id": str, "process_id": str|None, "running": bool, "ts": str|None}
+#   {"kind": "stdin", "text": str, "call_id": str, "process_id": str}
+#   {"kind": "command_completed", "process_id": str, "output": str,
+#    "exit": int|None}
 #   {"kind": "chat", "role": str, "text": str, "synthetic": bool}
 #   {"kind": "think", "text": str}                      (never empty)
 #   {"kind": "patch_call", "patch": str, "call_id": str}
@@ -70,6 +72,7 @@
 # subagent rollout's replayed-parent PREFIX is a fact about the file's shape, not
 # about one record, so it cannot be answered from a parsed line — each is bounded
 # and fails open.
+import ast
 import json
 import os
 import re
@@ -80,6 +83,7 @@ from datetime import datetime
 # output, and a multi-MB output must not be regex-walked whole.
 EXIT_RE = re.compile(r"(?:^|\n)(?:Exit code|Process exited with code)[: ]+(\d+)")
 EXIT_SCAN_B = 300
+CITATION_RE = re.compile(r"cite[^]+\s*")
 
 # codex has TWO exec channels across versions (docs/codex.md, the
 # custom_tool_call exec channel), both funnelled to the same
@@ -109,6 +113,12 @@ _OUTPUT_MARK = "Output:\n"
 _JS_TOOL = re.compile(r"tools\.([A-Za-z_][A-Za-z0-9_]*)\s*\(")
 # The quote characters the argument scan below must not read structure inside.
 _JS_QUOTES = "\"'`"
+_JS_PLAN_STEP = re.compile(
+    r'''["']?step["']?\s*:\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')'''
+)
+_JS_PLAN_STATUS = re.compile(
+    r'''["']?status["']?\s*:\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')'''
+)
 
 
 def js_tool_call(js):
@@ -152,6 +162,34 @@ def js_tool_call(js):
         i += 1
     args = js[m.end():i - 1] if not depth else js[m.end():]
     return m.group(1), args.strip()
+
+
+def _plan_tasks(arguments):
+    if isinstance(arguments, dict):
+        plan = arguments.get("plan")
+        return plan if isinstance(plan, list) else None
+    try:
+        decoded = json.loads(arguments)
+    except (TypeError, json.JSONDecodeError):
+        decoded = None
+    if isinstance(decoded, dict) and isinstance(decoded.get("plan"), list):
+        return decoded["plan"]
+    matches = list(_JS_PLAN_STEP.finditer(arguments or ""))
+    if not matches:
+        return None
+    tasks = []
+    for index, step_match in enumerate(matches):
+        item_end = matches[index + 1].start() if index + 1 < len(matches) else len(arguments)
+        status_match = _JS_PLAN_STATUS.search(arguments, step_match.end(), item_end)
+        if status_match is None:
+            return None
+        try:
+            step = ast.literal_eval(step_match.group(1))
+            status = ast.literal_eval(status_match.group(1))
+        except (SyntaxError, ValueError):
+            return None
+        tasks.append({"step": step, "status": status})
+    return tasks
 
 
 def _exec_cmd_from_js(js):
@@ -384,6 +422,22 @@ def _ev_token_count(p):
             "window": win if isinstance(win, int) else None}
 
 
+def _ev_thread_goal_updated(p):
+    goal = p.get("goal")
+    if not isinstance(goal, dict):
+        return None
+    return {
+        "kind": "goal",
+        "objective": goal.get("objective"),
+        "status": goal.get("status"),
+        "reason": goal.get("reason"),
+    }
+
+
+def _ev_thread_goal_cleared(p):
+    return {"kind": "goal", "objective": None, "status": "cleared", "reason": None}
+
+
 def rate_limits(p):
     """A `token_count` payload's `rate_limits` block, normalized to codex's
     windows shape — {"planType", "windows": [{used_pct, window_mins,
@@ -418,32 +472,29 @@ def rate_limits(p):
     return {"planType": rl.get("plan_type") or "", "windows": wins}
 
 
-def _ev_patch_apply_end(p):
-    # The authoritative file-op record: RESOLVED absolute paths + per-file
-    # diffs. The apply_patch call itself (a `patch_call` record, from either
-    # the function_call or the custom_tool_call spelling) carries only
-    # repo-relative patch TEXT and is deliberately a lightweight "started"
-    # marker — the file ops are counted here, exactly once.
+def _file_change(item):
+    """Normalize Codex's authoritative completed FileChange item."""
     files = []
-    for path, ch in (p.get("changes") or {}).items():
+    for path, ch in (item.get("changes") or {}).items():
         if not isinstance(ch, dict):
             continue
         add, rem = _patch_delta(ch)
         change = ch.get("type")
+        move_path = ch.get("move_path")
         row = {"path": path, "change": change,
                "added": add, "removed": rem}
-        # Keep the ephemeral patch body in the typed record. The painter needs
-        # it NOW to build the durable click-to-view stash; re-reading the file
-        # later cannot recover an Update's removed lines (and an eventual
-        # delete has no file left to read). These fields remain producer data,
-        # not paint ops: rollout.py owns the native event grammar, stream.py
-        # decides how it is presented.
+        if move_path:
+            row.update(path=move_path, previous_path=path, change="move")
         if change in ("update", "move"):
             row["diff"] = ch.get("unified_diff") or ""
         elif change in ("add", "delete"):
             row["content"] = ch.get("content") or ""
         files.append(row)
-    return {"kind": "patch", "success": bool(p.get("success")), "files": files}
+    return {
+        "kind": "patch",
+        "success": item.get("status") == "completed",
+        "files": files,
+    }
 
 
 def _ev_context_compacted(p):
@@ -452,7 +503,7 @@ def _ev_context_compacted(p):
 
 def _ev_task_started(p):
     # `turn_id` is codex's identity for the TURN this task is — the fact the
-    # child-task model is built on (core/childtask.py). A child rollout opens by
+    # actor-assignment model is built on (core/childtask.py). A child rollout opens by
     # replaying the parent thread, so the task_started records BEFORE the child's
     # own bootstrap carry the PARENT's turn id, which is how a child learns the
     # turn it was spawned in (plugins/codex/stream.py). Absent on older rollouts:
@@ -495,6 +546,40 @@ def _ev_item_completed(p):
     also completes messages/reasoning as items) is already covered by its own
     event/response record, so only Plan produces a record here."""
     item = p.get("item") or {}
+    if item.get("type") == "FileChange":
+        return _file_change(item)
+    if item.get("type") == "CommandExecution":
+        process_id = item.get("process_id")
+        if process_id is None:
+            return None
+        output = item.get("aggregated_output")
+        if not isinstance(output, str):
+            output = item.get("formatted_output")
+        if not isinstance(output, str):
+            stdout = item.get("stdout") if isinstance(item.get("stdout"), str) else ""
+            stderr = item.get("stderr") if isinstance(item.get("stderr"), str) else ""
+            output = stdout + stderr
+        return {
+            "kind": "command_completed",
+            "process_id": str(process_id),
+            "output": output,
+            "exit": item.get("exit_code"),
+            "item_id": item.get("id") or "",
+        }
+    if item.get("type") == "SubAgentActivity":
+        actor_id = item.get("agent_thread_id") or ""
+        agent_path = str(item.get("agent_path") or "")
+        if not actor_id:
+            return None
+        return {
+            "kind": "actor_activity",
+            "activity": item.get("kind") or "",
+            "actor_id": actor_id,
+            "actor_path": agent_path,
+            "call_id": item.get("id") or "",
+            "turn": p.get("turn_id") or "",
+            "at": (p.get("started_at_ms") or 0) / 1000 or None,
+        }
     if item.get("type") != "Plan":
         return None
     text = (item.get("text") or "").strip()
@@ -503,7 +588,7 @@ def _ev_item_completed(p):
 
 
 def _ev_turn_aborted(p):
-    return {"kind": "turn_aborted"}
+    return {"kind": "turn_aborted", "turn": p.get("turn_id") or ""}
 
 
 def _ev_user_message(p):
@@ -569,6 +654,8 @@ def _rsp_function_call_output(p):
     out = p.get("output") or ""
     if not isinstance(out, str):
         out = _content_text(out)
+    if not out:
+        return None
     m = EXIT_RE.search(out[:EXIT_SCAN_B])
     return {"kind": "exec_result", "exit": m.group(1) if m else None,
             "output": _exec_output_body(out), "call_id": p.get("call_id") or ""}
@@ -600,9 +687,11 @@ def _rsp_message(p):
     # twin of the event_msg one, and the web's conversation read takes whichever
     # arrives first — so the fact that a reply is the turn's FINAL ANSWER has to
     # survive both spellings or it survives neither.
+    metadata = p.get("internal_chat_message_metadata_passthrough") or {}
     return {"kind": "chat", "role": role,
             "text": strip_input_wrapper(txt), "synthetic": synth,
-            "phase": (p.get("phase") or "").strip()}
+            "phase": (p.get("phase") or "").strip(),
+            "turn": metadata.get("turn_id") or ""}
 
 
 def _rsp_reasoning(p):
@@ -632,6 +721,21 @@ def _rsp_custom_tool_call(p):
         # subagent's web lookups as a `▶ cmd` block of raw JS.
         fn, args = js_tool_call(js)
         if fn:
+            if fn == "apply_patch":
+                return None
+            if fn == "write_stdin":
+                return _stdin_record(p.get("call_id") or "", args)
+            if fn == "update_plan":
+                plan = _plan_tasks(args)
+                if not isinstance(plan, list):
+                    return {"kind": "unmapped_tool", "name": "update_plan"}
+                return {
+                    "kind": "task_list",
+                    "tasks": plan,
+                    "call_id": p.get("call_id") or "",
+                }
+            if fn in ("create_goal", "get_goal", "update_goal"):
+                return {"kind": "goal_tool", "call_id": p.get("call_id") or ""}
             return {"kind": "tool", "name": fn, "args": args,
                     "call_id": p.get("call_id") or ""}
         return None
@@ -653,9 +757,46 @@ def _rsp_custom_tool_call_output(p):
     # renderer path handles both.
     out = p.get("output")
     txt = out if isinstance(out, str) else _content_text(out)
+    body = CITATION_RE.sub("", _exec_output_body(txt))
+    try:
+        combined_result = json.loads(body)
+    except (TypeError, json.JSONDecodeError):
+        combined_result = None
+    # An apply_patch-only wrapper returns `{}`; the authoritative FileChange
+    # item carries the immutable patch. A combined patch + command wrapper
+    # returns both results, so retain only the command result that its matching
+    # custom_tool_call opened.
+    if combined_result == {}:
+        return None
+    if isinstance(combined_result, dict) and "patch" in combined_result:
+        command_result = combined_result.get("test")
+        if not isinstance(command_result, dict):
+            return None
+        return {
+            "kind": "exec_result",
+            "exit": command_result.get("exit_code"),
+            "output": command_result.get("output") or "",
+            "process_id": command_result.get("session_id"),
+            "running": command_result.get("session_id") is not None
+                       and command_result.get("exit_code") is None,
+            "call_id": p.get("call_id") or "",
+        }
+    if isinstance(combined_result, dict) and any(
+        field in combined_result for field in ("output", "session_id", "exit_code")
+    ):
+        process_id = combined_result.get("session_id")
+        exit_code = combined_result.get("exit_code")
+        return {
+            "kind": "exec_result",
+            "exit": exit_code,
+            "output": combined_result.get("output") or "",
+            "process_id": str(process_id) if process_id is not None else None,
+            "running": process_id is not None and exit_code is None,
+            "call_id": p.get("call_id") or "",
+        }
     m = EXIT_RE.search(txt[:EXIT_SCAN_B])
     return {"kind": "exec_result", "exit": m.group(1) if m else None,
-            "output": _exec_output_body(txt), "call_id": p.get("call_id") or ""}
+            "output": body, "call_id": p.get("call_id") or ""}
 
 
 def _call_exec(p, args):
@@ -672,9 +813,41 @@ def _call_stdin(p, args):
     # exec session and reads more of its output. Its function_call_output is
     # an ordinary `exec_result` — this record exists so that output is not
     # orphaned (a presenter pairs the two by call_id).
-    ch = args.get("chars")
-    return {"kind": "stdin", "text": ch if isinstance(ch, str) else "",
-            "call_id": p.get("call_id") or ""}
+    return _stdin_record(p.get("call_id") or "", args)
+
+
+def _stdin_record(call_id, arguments):
+    """Normalize only the measured write_stdin argument shape.
+
+    Current custom-tool rollouts contain either JSON or a JavaScript object
+    literal with unquoted keys. This parser does not interpret JavaScript; it
+    extracts the two fields that define the continuation.
+    """
+    if isinstance(arguments, dict):
+        fields = arguments
+    else:
+        try:
+            fields = json.loads(arguments)
+        except (TypeError, json.JSONDecodeError):
+            process_match = re.search(r'(?:^|[,{])\s*["\']?session_id["\']?\s*:\s*(\d+)', arguments or "")
+            chars_match = re.search(
+                r'(?:^|[,{])\s*["\']?chars["\']?\s*:\s*("(?:[^"\\]|\\.)*")',
+                arguments or "",
+            )
+            if process_match is None or chars_match is None:
+                return {"kind": "stdin", "text": "", "call_id": call_id, "process_id": ""}
+            fields = {
+                "session_id": process_match.group(1),
+                "chars": json.loads(chars_match.group(1)),
+            }
+    process_id = fields.get("session_id") if isinstance(fields, dict) else None
+    chars = fields.get("chars") if isinstance(fields, dict) else None
+    return {
+        "kind": "stdin",
+        "text": chars if isinstance(chars, str) else "",
+        "call_id": call_id,
+        "process_id": str(process_id) if process_id is not None else "",
+    }
 
 
 def _call_ask(p, args):
@@ -706,7 +879,23 @@ _CALL = {"exec_command": _call_exec, "shell": _call_exec,
 
 def _rsp_function_call(p):
     h = _CALL.get(p.get("name"))
-    return h(p, _args(p)) if h else None
+    if h:
+        return h(p, _args(p))
+    if p.get("name") in {
+        "spawn_agent",
+        "wait_agent",
+        "send_message",
+        "followup_task",
+        "interrupt_agent",
+        "list_agents",
+    }:
+        return {
+            "kind": "collaboration_call",
+            "name": p.get("name"),
+            "args": _args(p),
+            "call_id": p.get("call_id") or "",
+        }
+    return {"kind": "unmapped_tool", "name": p.get("name") or ""}
 
 
 def _top_compacted(p):
@@ -730,7 +919,9 @@ def _top_world_state(p):
     return None
 
 
-_EVENT = {"token_count": _ev_token_count, "patch_apply_end": _ev_patch_apply_end,
+_EVENT = {"token_count": _ev_token_count,
+          "thread_goal_updated": _ev_thread_goal_updated,
+          "thread_goal_cleared": _ev_thread_goal_cleared,
           "context_compacted": _ev_context_compacted,
           "task_started": _ev_task_started, "task_complete": _ev_task_complete,
           "thread_settings_applied": _ev_thread_settings_applied,
@@ -792,8 +983,10 @@ def _stamp(rec, o):
 KINDS = frozenset({
     "turn_context", "usage", "patch", "compact", "task_started",
     "task_complete", "turn_aborted", "prompt", "reasoning", "message",
-    "search", "exec", "exec_result", "stdin", "chat", "think", "patch_call",
-    "ask", "plan", "settings", "compact_boundary", "tool", "bad",
+    "search", "exec", "exec_result", "stdin", "command_completed", "chat", "think", "patch_call",
+    "ask", "plan", "settings", "compact_boundary", "tool",
+    "actor_activity", "collaboration_call", "task_list", "goal", "goal_tool",
+    "unmapped_tool", "bad",
 })
 
 
@@ -852,8 +1045,12 @@ def subagent_fork_epoch(path):
         if o.get("type") != "session_meta":
             return None
         p = o.get("payload") or {}
-        spawn = (((p.get("source") or {}).get("subagent") or {})
-                 .get("thread_spawn") or {})
+        source = p.get("source")
+        spawn = (
+            ((source.get("subagent") or {}).get("thread_spawn") or {})
+            if isinstance(source, dict)
+            else {}
+        )
         if p.get("thread_source") != "subagent" and not spawn:
             return None
         ts = p.get("timestamp") or o.get("timestamp") or ""

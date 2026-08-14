@@ -103,13 +103,19 @@ class El {
     a.splice(a.indexOf(this), 1);
     this.parentNode = null;
   }
-  // Enough of innerHTML for appendItems/appendOlder, which set it on a scratch
-  // div and take firstElementChild: one child element carrying the outermost
-  // tag's class. The served HTML is otherwise opaque to these tests.
+  // Enough of innerHTML for canonical DashboardItem insertion: one complete
+  // top-level node. A block also exposes its header/body because the browser
+  // binds its fold interaction after insertion.
   set innerHTML(html) {
     const m = /^\s*<(\w+)[^>]*?(?:\sclass="([^"]*)")?[^>]*>/.exec(String(html));
     this.children = [];
-    if (m) this.append(new El(m[1], m[2] || ""));
+    if (m) {
+      const node = new El(m[1], m[2] || "");
+      if (node.classList.contains("blk")) {
+        node.append(new El("div", "bhead"), new El("div", "bbody"));
+      }
+      this.append(node);
+    }
   }
   get innerHTML() { return ""; }
   // sibling walks — the click-to-view panel is tied to its host row by ADJACENCY
@@ -165,6 +171,7 @@ function domGlobals() {
       createElement: t => new El(t),
       createTextNode: s => new El("#text", "", s),
       createDocumentFragment: () => new El("#frag"),
+      addEventListener: () => {},
     },
     el: (tag, cls, text) => new El(tag, cls, text),
     tnode: s => new El("#text", "", s),

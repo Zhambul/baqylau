@@ -8,7 +8,7 @@
 # status-line command and the user already runs one (a HUD), the shim wraps it:
 # read the stdin once, stash the rate limits + account into this session's state
 # DB, then hand the SAME stdin to the real status-line command and forward its
-# output verbatim (bin/claude-statusline.py). The capture is tokenless — the
+# output verbatim (plugins/claude_code/statusline.py). The capture is tokenless — the
 # number is per-account for free, no user:profile scope, no API call (this is
 # exactly how the account switcher's own usage cache is populated).
 #
@@ -22,12 +22,13 @@ import re
 import subprocess
 import sys
 
-from core import paths as P
-from core import state as S
-from core.noaudit import load_audit
-from plugins.claude_code import account as ACC
+if __package__ in (None, ""):
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-A = load_audit()
+from core import audit as A
+from plugins.claude_code import account as ACC
+from plugins.claude_code import usage_state
+
 
 
 def _epoch_s(v):
@@ -103,15 +104,16 @@ def capture(raw):
         sid = (data.get("session_id") or "").strip()
         if not sid:
             return
-        log = P.mirror_log(sid)
-        if not os.path.isfile(P.state_db(log)):
-            return                              # no live DB → nothing to attach to
         acc = ACC.current()
-        S.kv_set(log, "account", acc)
         usage = parse_usage(data)
         if usage is not None:
-            usage["ts"] = data.get("_ts") or _now()
-            S.kv_set(log, "usage", usage)
+            usage_state.record(
+                sid,
+                acc.get("slug") or None,
+                acc.get("label") or acc.get("slug") or "default",
+                usage,
+                data.get("_ts") or _now(),
+            )
     except Exception:
         try:
             A.error("", "statusline capture")
@@ -143,8 +145,12 @@ def run(argv, stdin_bytes):
 
 
 def main():
-    """The bin/claude-statusline.py entry: read stdin, capture, delegate.
+    """Read stdin, capture usage, then invoke the configured status line.
     argv[1:] is the real status-line command (the user's HUD invocation)."""
     raw = sys.stdin.buffer.read()
     capture(raw)
     sys.exit(run(sys.argv[1:], raw))
+
+
+if __name__ == "__main__":
+    main()

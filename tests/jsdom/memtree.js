@@ -13,7 +13,8 @@
 // or a fold that springs back open — each of which renders a correct server
 // tree unreadable.
 //
-// Usage: node tests/jsdom/memtree.js dashboard/static/app.11-chrome.js
+// Usage: node tests/jsdom/memtree.js dashboard/static/app.11-chrome.js \
+//                                      dashboard/static/app.11-ext-memory.js
 // SKIPPED when `node` is absent (docs/testing.md) — never a build requirement.
 "use strict";
 const fs = require("fs");
@@ -48,7 +49,7 @@ const sandbox = {
   updateMoreBtn: () => {}, updateShownCount: () => {}, closeMonitorStream: () => {},
   IS_IPAD: false,
   $view: new El("div"),
-  S: { cur: "sid1", ses: null },
+  S: { currentSessionId: "sid1", sessionView: null },
   fetch: () => Promise.resolve({ json: () => Promise.resolve({}) }),
 };
 sandbox.document.addEventListener = () => {};
@@ -56,8 +57,7 @@ sandbox.window = sandbox;
 sandbox.window.addEventListener = () => {};
 vm.createContext(sandbox);
 // every app part on argv, concatenated into ONE script (the chrome part
-// defines extRegister/SECTIONS; app.11-ext-memory.js holds the renderers
-// under test and registers into them)
+// defines SECTIONS; app.11-memory.js holds the renderers under test.
 vm.runInContext(process.argv.slice(2).map(p => fs.readFileSync(p, "utf8")).join("\n"),
                 sandbox, { filename: process.argv[2] });
 // the source declares its OWN openNoteRef (a top-level `function` becomes a
@@ -70,76 +70,76 @@ sandbox.openNoteRef = (ref, reset) => { opened.push({ path: ref.path, reset: !!r
    (platform/concepts), a real fork (providers → egt + hacksaw), a folded leaf
    dir riding a note LABEL (egt's concepts/), and a vault-root note. */
 const TREE = {
-  name: "", path: "", count: 6, writes: 3,
-  dirs: [
-    { name: "platform/concepts", path: "platform/concepts", count: 2, writes: 1,
-      dirs: [],
+  name: "", path: "", note_count: 6, write_count: 3,
+  directories: [
+    { name: "platform/concepts", path: "platform/concepts", note_count: 2, write_count: 1,
+      directories: [],
       notes: [
         { path: "/w/platform/concepts/architecture.md", label: "architecture.md",
-          verb: "Update", count: 2 },
+          action: "Update", access_count: 2 },
         { path: "/w/platform/concepts/networking.md", label: "networking.md",
-          verb: "Read", count: 1 },
+          action: "Read", access_count: 1 },
       ] },
-    { name: "providers", path: "providers", count: 3, writes: 2, notes: [],
-      dirs: [
-        { name: "egt", path: "providers/egt", count: 2, writes: 2, dirs: [],
+    { name: "providers", path: "providers", note_count: 3, write_count: 2, notes: [],
+      directories: [
+        { name: "egt", path: "providers/egt", note_count: 2, write_count: 2, directories: [],
           notes: [
             { path: "/w/providers/egt/concepts/acl.md", label: "concepts/acl.md",
-              verb: "Write", count: 1, agent: "note-writer" },
+              action: "Write", access_count: 1, actor_name: "note-writer" },
             { path: "/w/providers/egt/egt.md", label: "egt.md",
-              verb: "Update", count: 1 },
+              action: "Update", access_count: 1 },
           ] },
-        { name: "hacksaw", path: "providers/hacksaw", count: 1, writes: 0,
-          dirs: [],
+        { name: "hacksaw", path: "providers/hacksaw", note_count: 1, write_count: 0,
+          directories: [],
           notes: [{ path: "/w/providers/hacksaw/hacksaw.md", label: "hacksaw.md",
-                    verb: "Read", count: 3 }] },
+                    action: "Read", access_count: 3 }] },
       ] },
   ],
-  notes: [{ path: "/w/index.md", label: "index.md", verb: "Read", count: 1 }],
+  notes: [{ path: "/w/index.md", label: "index.md", action: "Read", access_count: 1 }],
 };
 
 function freshSes(tree) {
   const wrap = new El("div", "memtree");
-  const ses = { tab: "memory", body: new El("div"), memWrap: wrap,
+  const sessionView = { tab: "memory", body: new El("div"), memWrap: wrap,
                 memTree: tree, memShut: new Set(), memory: [], noteTrail: null };
-  sandbox.S.ses = ses;
-  return ses;
+  sandbox.S.sessionView = sessionView;
+  return sessionView;
 }
 
 /* Every painted row, in order: what it is, how deep it sits, what it says. */
-function rows(ses) {
-  return ses.memWrap.children.map(c => ({
+function rows(sessionView) {
+  return sessionView.memWrap.children.map(c => ({
     cls: c.className,
     pad: c.style.paddingLeft || "",
     text: c.textContent,
   }));
 }
 
-const ses = freshSes(TREE);
+const sessionView = freshSes(TREE);
 sandbox.renderMemoryTree();
-const out = { open: rows(ses) };
+const out = { open: rows(sessionView) };
 
 // collapse `providers` — the subtree goes, the row stays (with its rollup)
 sandbox.toggleMemDir("providers");
-out.collapsed = rows(ses);
-out.shut = [...ses.memShut];
+out.collapsed = rows(sessionView);
+out.shut = [...sessionView.memShut];
 
 // …and a repaint (what the `memory` SSE fires on every touched note) must NOT
 // spring it back open
 sandbox.renderMemoryTree();
-out.afterRepaint = rows(ses);
+out.afterRepaint = rows(sessionView);
 
 // re-expanding restores exactly the first paint
 sandbox.toggleMemDir("providers");
-out.reopened = rows(ses);
+out.reopened = rows(sessionView);
 
 // a note row opens THAT note, on a fresh breadcrumb trail
-const note = ses.memWrap.children.find(c => c.className === "memnote");
+const note = sessionView.memWrap.children.find(c => c.className === "memnote");
 note.onclick();
 out.opened = opened.slice();
 
 // nothing touched → the empty line, not an empty panel
-const bare = freshSes({ name: "", path: "", count: 0, writes: 0, dirs: [], notes: [] });
+const bare = freshSes({ name: "", path: "", note_count: 0, write_count: 0, directories: [], notes: [] });
 sandbox.renderMemoryTree();
 out.empty = rows(bare);
 
@@ -156,36 +156,36 @@ out.noTree = rows(none);
    `memory` SSE fires on every touched note, and a hit whose note is gone must
    render as a row rather than a dead link. */
 const SEARCHES = [
-  { kind: "qmd", sub: "query", query: "how does rscheck answer getstatus",
-    count: 1, agent: null,
-    expanded: ["lex: how rscheck returns", "vec: getstatus in rscheck"],
+  { command_name: "qmd", command_action: "query", query: "how does rscheck answer getstatus",
+    search_count: 1, actor_name: null,
+    expanded_queries: ["lex: how rscheck returns", "vec: getstatus in rscheck"],
     hits: [
-      { rel: "platform/concepts/rscheck-healthcheck.md", name: "rscheck-healthcheck",
-        line: 13, score: "86%", title: "rscheck — what answers /getstatus:81",
+      { relative_path: "platform/concepts/rscheck-healthcheck.md", name: "rscheck-healthcheck",
+        line_number: 13, score: "86%", title: "rscheck — what answers /getstatus:81",
         snippet: "Documented in the internal docs repo.", path: "/w/a.md",
         viewable: true },
-      { rel: "platform/concepts/gone.md", name: "gone", line: null, score: "41%",
+      { relative_path: "platform/concepts/gone.md", name: "gone", line_number: null, score: "41%",
         title: "", snippet: "", path: "", viewable: false },
     ] },
-  { kind: "qmd", sub: "search", query: "manifest started healthcheck",
-    count: 2, agent: "note-writer", expanded: [], hits: [] },
+  { command_name: "qmd", command_action: "search", query: "manifest started healthcheck",
+    search_count: 2, actor_name: "note-writer", expanded_queries: [], hits: [] },
 ];
 
 function freshSearchSes(searches) {
   const wrap = new El("div", "memsearches");
-  const ses = { tab: "memory", body: new El("div"),
+  const sessionView = { tab: "memory", body: new El("div"),
                 memWrap: new El("div", "memtree"), memTree: null,
                 memSearchWrap: wrap, memSearch: searches,
                 memSearchShown: new Set(), memShut: new Set(),
                 memory: [], noteTrail: null };
-  sandbox.S.ses = ses;
-  return ses;
+  sandbox.S.sessionView = sessionView;
+  return sessionView;
 }
 
 /* Each card as (class, its head line, the body lines under it) — a collapsed
    card has no body at all, which is the thing being asserted. */
-function cards(ses) {
-  return ses.memSearchWrap.children.slice(1).map(c => ({
+function cards(sessionView) {
+  return sessionView.memSearchWrap.children.slice(1).map(c => ({
     cls: c.className,
     head: c.children[0].textContent,
     body: c.children.length > 1

@@ -2,8 +2,8 @@
 #
 # Talking to kitty happens over the socket in $KITTY_LISTEN_ON via the `kitten`
 # client (hooks run with no controlling terminal, so never the TTY). The
-# module-level helpers are the historical claude_kitty.py API (kept: the
-# deleted claude_kitty compat shim re-exported this module); KittyFrontend wraps them in
+# module-level helpers are the historical harness_kitty.py API (kept: the
+# deleted harness_kitty compat shim re-exported this module); KittyFrontend wraps them in
 # the Frontend interface (frontends/base.py) that tab-status / split / scorebar
 # now speak. Everything is best-effort and silent: a failed call returns
 # rc 1 / [] / None, never raises (callers audit what matters).
@@ -21,20 +21,20 @@ from frontends.base import Frontend, INACTIVE_FG, TAB_COLOR_NONE
 # client-side response timeout, but a hang on socket CONNECT is unbounded, and
 # every split op (and every tab paint whose raw-socket attempt missed) runs
 # through here from hook processes — which must never block.
-KITTEN_TIMEOUT_S = 10
+KITTEN_TIMEOUT_SECONDS = 10
 # Tighter timeout for read-only queries (get-text / ls): they run on hot paths
 # (renderer reflow, geometry probes) where a stale answer is useless anyway.
-KITTEN_QUERY_TIMEOUT_S = 5
+KITTEN_QUERY_TIMEOUT_SECONDS = 5
 # Timeout for a raw unix-socket remote-control exchange (_rc_raw): the whole
 # point of the raw path is sub-millisecond latency, so give up fast and let
 # the caller fall back to the kitten subprocess.
-RC_SOCKET_TIMEOUT_S = 0.5
+REMOTE_CONTROL_SOCKET_TIMEOUT_SECONDS = 0.5
 # Gap between send_text's message write and its Enter (CR) write. Delivered in
-# the SAME write, Claude Code's chunk-based paste detection sometimes read
+# the SAME write, harness TUI's chunk-based paste detection sometimes read
 # text+CR as one pasted chunk, turning the CR into a draft newline instead of a
 # submit (timing-dependent → intermittent). The gap makes the CR arrive as its
 # own stdin read = an unambiguous Enter keypress.
-SEND_ENTER_GAP_S = 0.15
+SEND_ENTER_DELAY_SECONDS = 0.15
 # The remote-control protocol version stamped into every @kitty-cmd envelope
 # (what a current kitten client sends; kitty accepts any version <= its own).
 KITTY_RC_VERSION = [0, 26, 0]
@@ -64,13 +64,13 @@ def find_kitten():
 
 def kitten_run(kitten, listen, *args):
     """A silenced `kitten @ …` call; returns the exit code (1 on any failure).
-    Bounded by KITTEN_TIMEOUT_S (see its comment): hook processes must never
+    Bounded by KITTEN_TIMEOUT_SECONDS (see its comment): hook processes must never
     block on a hung socket connect."""
     try:
         return subprocess.run([kitten, "@", "--to", listen, *args],
                               stdout=subprocess.DEVNULL,
                               stderr=subprocess.DEVNULL,
-                              timeout=KITTEN_TIMEOUT_S).returncode
+                              timeout=KITTEN_TIMEOUT_SECONDS).returncode
     except Exception:
         return 1
 
@@ -87,7 +87,7 @@ def kitten_get_text(kitten, listen, win_id, extent="screen", ansi=False):
         if ansi:
             argv.append("--ansi")
         r = subprocess.run(argv, capture_output=True,
-                           timeout=KITTEN_QUERY_TIMEOUT_S)
+                           timeout=KITTEN_QUERY_TIMEOUT_SECONDS)
         return r.stdout.decode("utf-8", "replace") if r.returncode == 0 else None
     except Exception:
         return None
@@ -97,9 +97,9 @@ def kitten_send_text(kitten, listen, win, text, bracketed=False):
     """`kitten @ send-text --stdin` to window `win`: the text goes over STDIN
     precisely so it is never a shell argument NOR a kitten escape vector —
     `--stdin` sends the bytes verbatim, no `\\n`/`\\x1b` interpretation. The
-    Enter (CR) is a SEPARATE second call after SEND_ENTER_GAP_S (see its
+    Enter (CR) is a SEPARATE second call after SEND_ENTER_DELAY_SECONDS (see its
     comment: one write let paste detection swallow the CR into the draft).
-    True only when both writes rc 0. Bounded by KITTEN_TIMEOUT_S like every
+    True only when both writes rc 0. Bounded by KITTEN_TIMEOUT_SECONDS like every
     other mutating call.
 
     `bracketed=True` wraps the text in bracketed-paste escapes
@@ -114,13 +114,13 @@ def kitten_send_text(kitten, listen, win, text, bracketed=False):
             if bracketed else argv
         r = subprocess.run(text_argv, input=text.encode("utf-8"),
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                           timeout=KITTEN_TIMEOUT_S)
+                           timeout=KITTEN_TIMEOUT_SECONDS)
         if r.returncode != 0:
             return False
-        time.sleep(SEND_ENTER_GAP_S)
+        time.sleep(SEND_ENTER_DELAY_SECONDS)
         r = subprocess.run(argv, input=b"\r",
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                           timeout=KITTEN_TIMEOUT_S)
+                           timeout=KITTEN_TIMEOUT_SECONDS)
         return r.returncode == 0
     except Exception:
         return False
@@ -157,7 +157,7 @@ def kitten_launch_tab(kitten, listen, cwd, argv):
     try:
         r = subprocess.run([kitten, "@", "--to", listen, "launch",
                             "--type=tab", "--cwd", cwd, *argv],
-                           capture_output=True, timeout=KITTEN_TIMEOUT_S)
+                           capture_output=True, timeout=KITTEN_TIMEOUT_SECONDS)
     except Exception:
         return None
     if r.returncode != 0:
@@ -206,7 +206,7 @@ def kitten_ls(kitten, listen):
     try:
         out = subprocess.run([kitten, "@", "--to", listen, "ls"],
                              capture_output=True, text=True,
-                             timeout=KITTEN_QUERY_TIMEOUT_S).stdout
+                             timeout=KITTEN_QUERY_TIMEOUT_SECONDS).stdout
         return json.loads(out)
     except Exception:
         return []
@@ -256,9 +256,8 @@ def resolve_listen_on():
     """The controlling kitty instance's socket when $KITTY_LISTEN_ON is absent
     (a keymap-driven `launch --type=background` child does NOT inherit it):
     listen_on `unix:/tmp/kitty` yields `/tmp/kitty-<kitty-pid>`, and that kitty
-    pid is an ancestor of this process. Falls back to the lone socket if just
-    one instance. (Moved here from claude-split.py — it is pure kitty
-    knowledge.)"""
+    pid is an ancestor of this process. Uses the lone socket when exactly one
+    kitty instance exists."""
     if os.environ.get("KITTY_LISTEN_ON"):
         return os.environ["KITTY_LISTEN_ON"]
     pid = os.getppid()
@@ -397,7 +396,7 @@ class KittyFrontend(Frontend):
         if keep_focus and kitten_app_focused(self.kitten, self.listen):
             # --keep-focus only while kitty IS the frontmost app: that's the
             # case it exists for (don't yank the user's cursor out of the
-            # claude window into the new pane) and the only case where it is
+            # harness window into the new pane) and the only case where it is
             # safe — on a BACKGROUND kitty the flag's focus-restore raises the
             # OS window and macOS activates kitty over the user's current app
             # (the web-launch steal; see kitten_app_focused). Background cost:
@@ -439,7 +438,7 @@ class KittyFrontend(Frontend):
                          f"{int(lines_up)}-")
 
     def _rc_raw(self, cmd, payload, want_response=False,
-                timeout=RC_SOCKET_TIMEOUT_S):
+                timeout=REMOTE_CONTROL_SOCKET_TIMEOUT_SECONDS):
         """A remote-control command over a RAW unix-socket write of the
         @kitty-cmd DCS — sub-millisecond vs the ~30-100ms kitten subprocess
         spawn. The wire bytes are exactly what the kitten client sends

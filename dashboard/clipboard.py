@@ -27,16 +27,14 @@
 # non-macOS host. The caller then falls back to the bare name.
 #
 # Env knob (read at CALL time — the in-process test server flips it per-test):
-# CLAUDE_DASH_CLIPBOARD_FILES is a `:`-separated path list that REPLACES the
+# BAQYLAU_DASHBOARD_CLIPBOARD_FILES is a `:`-separated path list that REPLACES the
 # real pasteboard read, which is what makes this hermetically testable (and
 # testable at all off macOS).
 import os
 
-from core.noaudit import load_audit
+from core import audit as A
 
-A = load_audit()
-
-ENV_FILES = "CLAUDE_DASH_CLIPBOARD_FILES"
+ENV_FILES = "BAQYLAU_DASHBOARD_CLIPBOARD_FILES"
 FILES_MAX = 20          # a sane multi-select ceiling; a runaway pasteboard
 #                         must not become a runaway message
 NAMES_TYPE = "NSFilenamesPboardType"   # plist array of POSIX paths (multi-file)

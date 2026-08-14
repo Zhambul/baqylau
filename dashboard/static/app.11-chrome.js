@@ -7,79 +7,75 @@
    builder — small functions named for what they build, one visible order):
    identity chips → action buttons → quick-command row → the live rows the SSE
    patchers fill → the tab strip → the open tab's body. Each phase returns its
-   element and parks on `ses` whatever the patchers reach for later.
+   element and parks on `sessionView` whatever the patchers reach for later.
 
    It was one 350-line function, which is a poor place to look for any single one
    of those six jobs: the ✕ close button sat 130 lines below the identity chips it
    shares nothing with, and "does the effort picker exist when parked?" meant
    scrolling for the live gate rather than reading one signature. */
 function renderSessionChrome(tab) {
-  const ses = S.ses;
-  if (!ses) return;
+  const sessionView = S.sessionView;
+  if (!sessionView) return;
   // In AGENT SCOPE the header keeps showing that agent (its own scoreboard,
   // name and status); outside it there is nothing focused. Derived from the
   // scope rather than cleared, so a tab switch inside scope stays in scope.
-  ses.agentFocus = ses.agent ? { aid: ses.agent, data: null } : null;
-  ses.monitorFocus = null;    // …nor monitor-focused (a drill-down sets it again)
-  ses.jobFocus = null;        // …nor background-job-focused
-  clearSectionPoll("monitors");   // leaving a secondary tab stops its live poll
-  clearSectionPoll("jobs");
-  const meta = ses.meta || {};
-  // a SCOPED extension tab (memory: in-scope aggregator-adapters sessions
-  // only) — a deep-link / stale bookmark to it elsewhere falls back to the mirror
-  if (EXT[tab] && EXT[tab].scopeField && !meta[EXT[tab].scopeField]) tab = "mirror";
+  sessionView.agentFocus = sessionView.agent ? { actorId: sessionView.agent, data: null } : null;
+  sessionView.monitorFocus = null;    // …nor monitor-focused (a drill-down sets it again)
+  sessionView.jobFocus = null;        // …nor background-job-focused
+  const meta = sessionView.meta || {};
+  if (tab === "memory" && !meta.memory_scope) tab = "mirror";
   $view.textContent = "";
 
   const head = el("div", "shead");
   head.dataset.tab = meta.tab || "";    // state tint; live via setBadge()
-  head.append(chromeIdentity(ses, meta));
+  head.append(chromeIdentity(sessionView, meta));
   // the action buttons are mounted in the PAGE HEADER (mountHeaderActions), not
   // here — the top-right corner the list page fills with ▦ stats / ⛶ / +
   // session is dead space inside a session, and those gestures aren't about the
   // session you're reading.
-  mountHeaderActions(ses, meta);
-  head.append(...chromeLiveRows(ses));
+  mountHeaderActions(sessionView, meta);
+  head.append(...chromeLiveRows(sessionView));
   $view.append(head);
   updateStatsRow();
   updateRunning();
 
-  $view.append(chromeTabs(ses, meta, tab));
+  $view.append(chromeTabs(sessionView, meta, tab));
   const body = el("div");
-  ses.body = body;
+  sessionView.body = body;
   $view.append(body);
   resetBody();                // the way out of agent scope, above every tab
-  chromeBody(ses, tab, body);
+  chromeBody(sessionView, tab, body);
   applyAgentActionVis();      // session-only header actions don't apply in scope
 }
 
-/* l1: who this session IS — title, state badge, directory, sid, checkout,
-   account. Every chip is static except the three parked on `ses`, which the
+/* l1: who this session IS — title, state badge, directory, sessionId, checkout,
+   account. Every chip is static except the three parked on `sessionView`, which the
    `title` / `tab` / `git` SSE events patch in place. */
-function chromeIdentity(ses, meta) {
+function chromeIdentity(sessionView, meta) {
   const l1 = el("div", "l1");
   const projSpan = el("span", "proj",
-                      meta.title || (meta.cwd ? proj(meta) : shortSid(S.cur)));
-  ses.projEl = projSpan;                // the `title` SSE + inline rename target
+                      meta.title || (meta.workingDirectory ? proj(meta) : shortSid(S.currentSessionId)));
+  sessionView.projEl = projSpan;                // the `title` SSE + inline rename target
   l1.append(projSpan);
   const badge = el("span", "badge");
-  ses.badge = badge;
+  sessionView.badge = badge;
   setBadge(badge, meta.tab || "");
   l1.append(badge);
   // "live" goes unsaid (state tint + badge carry it); parked still shows
   if (!meta.live) l1.append(el("span", "chip2 parked", "parked"));
-  if (meta.cwd) {
+  if (meta.workingDirectory) {
     // just the directory name (basename) — the full path rides the tooltip
-    const cwdChip = el("span", "sid", meta.cwd.split("/").filter(Boolean).pop());
-    cwdChip.title = meta.cwd;
+    const cwdChip = el("span", "sessionId", meta.workingDirectory.split("/").filter(Boolean).pop());
+    cwdChip.title = meta.workingDirectory;
     l1.append(cwdChip);
   }
-  const sidChip = el("span", "sid copysid", shortSid(S.cur));
+  const sidChip = el("span", "sessionId copysid", shortSid(S.currentSessionId));
   sidChip.title = "click to copy the full session id";
-  sidChip.onclick = () => copySid(S.cur);
+  sidChip.onclick = () => copySid(S.currentSessionId);
   l1.append(sidChip);
   // the checkout this session runs in — live via the `git` SSE event
   const gitc = el("span", "gitchip");
-  ses.gitChip = gitc;
+  sessionView.gitChip = gitc;
   setGitChip(gitc, meta.git);
   l1.append(gitc);
   // which account this chat runs under (◈ c2 · claude-01), and where its rate
@@ -120,10 +116,10 @@ function chromeIdentity(ses, meta) {
    arm. Mounted here rather than built inline so there is ONE owner of "the
    header belongs to this session" — and one place to empty it when you leave
    (clearHeaderActions, called by the router for every non-session route). */
-function mountHeaderActions(ses, meta) {
+function mountHeaderActions(sessionView, meta) {
   if (!$sessact) return;
   clearHeaderActions();
-  for (const row of [chromeQuickCmds(ses, meta), chromeActions(ses, meta)])
+  for (const row of [chromeQuickCmds(sessionView, meta), chromeActions(sessionView, meta)])
     if (row.childElementCount) $sessact.append(row);
   $sessact.hidden = !$sessact.childElementCount;
 }
@@ -153,13 +149,11 @@ function gate(btn, ok, why) {
 // The server's _caps_guard 409s the same gesture; this just says so up front.
 const CAP_OFF = "not supported by this session's tool";
 
-// Does the owning host support gesture `key`? meta.caps is the DERIVED
-// capability map the payload carries (read.session.session_caps). Absent (an
-// older payload / mid-load) is NOT a denial — degrade open, exactly as the
-// server does; a Claude session has every cap True, so this never restricts it.
+// Does the owning harness support gesture `key`? Missing capability state is a
+// denial; the current contract never guesses support.
 function capOk(meta, key) {
   const caps = meta && meta.caps;
-  return !caps || !!caps[key];
+  return !!(caps && caps[key]);
 }
 
 // The QUICK-COMMAND vocabulary of the session's owning host: meta.quick_commands
@@ -169,12 +163,11 @@ function capOk(meta, key) {
 // answer and applied it to every host: a `COMPACT_MIN_PROMPTS = 2` and an inline
 // `prompts < 1` for ✦ auto.
 //
-// Absent (an older payload, mid-load) is NOT a denial — degrade open, exactly as
-// capOk does. Present-but-missing-the-row IS one: the host declared its
-// vocabulary and this command is not in it (codex has no argless rename).
+// A missing command is unsupported; the browser never borrows another
+// harness's command vocabulary.
 function cmdOffered(meta, cmd) {
   const list = meta && meta.quick_commands;
-  return !Array.isArray(list) || list.some(c => c && c.cmd === cmd);
+  return Array.isArray(list) && list.some(c => c && c.cmd === cmd);
 }
 
 // How many of YOUR prompts (meta.prompts, capped server-side) this host needs
@@ -200,7 +193,7 @@ const NO_WINDOW = "this session is parked — there is no terminal to type into"
    alerts work live AND parked (they touch the transcript or a dashboard pref,
    not the terminal); rewind / stop / close need a window to type into and close
    the row on its destructive end, and resume is the parked-only counterpart. */
-function chromeActions(ses, meta) {
+function chromeActions(sessionView, meta) {
   const act = el("div", "actrow");
   const windowed = !!(meta.live && meta.kitty_window_id);
   // rename: deliberately OUTSIDE the live gate — it works for live AND parked
@@ -237,7 +230,8 @@ function chromeActions(ses, meta) {
   paintNotif(meta.notify_muted);
   notif.onclick = () => {
     const next = !meta.notify_muted;
-    postJSON("/api/session/" + encodeURIComponent(S.cur) + "/notify",
+    postJSON("/api/sessions/" + encodeURIComponent(S.currentSessionId)
+             + "/application/notifications-muted",
              { muted: next })
       .then(() => {
         meta.notify_muted = next;
@@ -261,7 +255,7 @@ function chromeActions(ses, meta) {
   const stop = el("button", "sstop actstop", "■ stop");
   stop.dataset.tip = "stop the turn (Esc) — takes your message back if nothing ran yet";
   stop.onclick = () => lockDuring(stop, interruptSession,
-                                  () => ses.stopMode(liveTab()));
+                                  () => sessionView.stopMode(liveTab()));
   // rewind: idle-only picking mode — click a message below, choose what to
   // restore, and the server drives the TUI's own checkpoint menu
   const rew = el("button", "sstop actses", "↶ rewind");
@@ -274,24 +268,24 @@ function chromeActions(ses, meta) {
   // Both are tab-state gated, and re-derived from the tab on every SSE `tab`
   // event — never blindly re-enabled. ■ stop applies only while a turn is
   // RUNNING (an Esc when idle can clear queued input instead), and NOT on a red
-  // awaiting-command, where an Esc declines the open dialog. ↶ rewind is the
+  // awaiting_attention, where an Esc declines the open dialog. ↶ rewind is the
   // exact complement: it drives the TUI's checkpoint menu, which needs an idle
   // session — rewindSession bails on a busy or red tab with a toast, and the
   // button now says so before the click rather than after it.
-  ses.stopMode = (t) => {
+  sessionView.stopMode = (t) => {
     const iCap = capOk(meta, "interrupt"), rCap = capOk(meta, "rewind");
     gate(stop, iCap && windowed && BUSY_TABS.includes(t),
          !iCap ? CAP_OFF
            : !windowed ? NO_WINDOW
-           : t === "awaiting-command" ? "a question is waiting — answer it in the card"
+           : t === "awaiting_attention" ? "a question is waiting — answer it in the card"
            : "nothing is running to stop");
-    gate(rew, rCap && windowed && !BUSY_TABS.includes(t) && t !== "awaiting-command",
+    gate(rew, rCap && windowed && !BUSY_TABS.includes(t) && t !== "awaiting_attention",
          !rCap ? CAP_OFF
            : !windowed ? NO_WINDOW
-           : t === "awaiting-command" ? "a question is waiting — answer it first"
+           : t === "awaiting_attention" ? "a question is waiting — answer it first"
            : "a turn is running — stop it first, then rewind");
   };
-  ses.stopMode(liveTab());
+  sessionView.stopMode(liveTab());
   act.append(rew, stop);       // rewind before stop — the row ends destructive
   // close: closes the session's kitty tab — a graceful stop (Claude Code
   // exits on the HUP and SessionEnd runs the normal lifecycle).
@@ -302,23 +296,23 @@ function chromeActions(ses, meta) {
   armConfirm(cls, "✕ close", "close session?", () => {
     cls.disabled = true;
     cls.textContent = "closing…";
-    const sid = S.cur;
+    const sessionId = S.currentSessionId;
     // optimistic close: beacon the `close` lifecycle (web-hint op=close) and
     // navigate back to the list on the POST ack — the list card shows greyed
-    // 'closing…' (S.closing) until reconcileCloses parks it from the poll.
-    closeBegin(sid);
-    closeSession(sid, "header")
+    // 'closing…' (S.closing) until snapshot reconciliation parks it.
+    closeBegin(sessionId);
+    closeSession(sessionId, "header")
       .then(() => {
         toast("done", "session closed", "terminal tab closed");
         // the session just ended — back to the list, unless the user
         // already navigated elsewhere while the POST was in flight
-        if (S.cur === sid) location.hash = "#/";
+        if (S.currentSessionId === sessionId) location.hash = "#/";
       })
       .catch(e => {
-        closeSettle(sid, "dropped", { reason: "failed" });
+        closeSettle(sessionId, "dropped", { reason: "failed" });
         gate(cls, true);
         cls.textContent = "✕ close";
-        clientFail(sid, "close", e);   // a lost/rejected /stop the audit can't see
+        clientFail(sessionId, "close", e);   // a lost/rejected /stop the audit can't see
         toast("ask", "close failed", (e && e.error) || "");
       });
   });
@@ -329,15 +323,15 @@ function chromeActions(ses, meta) {
   // two swap: a LIVE session has nothing to resume, and it is the one button the
   // bar still builds conditionally rather than greying.
   //
-  // It does grey for the other refusal, though — a parked session with no cwd
+  // It does grey for the other refusal, though — a parked session with no workingDirectory
   // (an old row whose directory was never recorded) has nowhere to launch, and
   // the form would open on an empty folder field. That used to be half of the
   // same `if`, i.e. a button that silently wasn't there.
   if (!meta.live) {
     const res = el("button", "sresume actses", "↻ resume");
     res.dataset.tip = "start a new tab resuming this conversation";
-    res.onclick = () => openNewSession(meta.cwd, S.cur);
-    gate(res, !!meta.cwd,
+    res.onclick = () => openNewSession(meta.workingDirectory, S.currentSessionId);
+    gate(res, !!meta.workingDirectory,
          "no directory recorded for this session — nowhere to resume it");
     act.append(res);
   }
@@ -349,7 +343,7 @@ function chromeActions(ses, meta) {
    (docs/dashboard.md, *Web quick commands*). First because these are the knobs
    you reach for mid-conversation. Every one needs a window to type into, so on a
    parked session they are all greyed rather than absent (see gate()). */
-function chromeQuickCmds(ses, meta) {
+function chromeQuickCmds(sessionView, meta) {
   const act2 = el("div", "actrow");
   const windowed = !!(meta.live && meta.kitty_window_id);
   // compact: two-step confirm like close — a misclick summarizes the whole
@@ -362,7 +356,7 @@ function chromeQuickCmds(ses, meta) {
   // (live via the `ctx` SSE event → updateStatsRow)
   const mwrap = el("span", "qcwrap actses");
   const mdl = el("button", "sstop");
-  ses.modelBtn = mdl;
+  sessionView.modelBtn = mdl;
   setModelBtn(mdl);
   mdl.dataset.tip = "switch the model (/model — also saves as your new-session default)";
   mdl.onclick = () => openQuickMenu(mwrap, "model", hostChoices("model"),
@@ -372,11 +366,11 @@ function chromeQuickCmds(ses, meta) {
   // from any transcript, see plugins/claude_code/model.py — so no label)
   const ewrap = el("span", "qcwrap actses");
   const eff = el("button", "sstop");
-  ses.effortBtn = eff;
+  sessionView.effortBtn = eff;
   setEffortBtn(eff);
   eff.dataset.tip = "set the reasoning effort (/effort — also saves as your new-session default)";
   eff.onclick = () => openQuickMenu(ewrap, "effort", hostChoices("effort"),
-                                    (ses.meta && ses.meta.effort) || "");
+                                    (sessionView.meta && sessionView.meta.effort) || "");
   ewrap.append(eff);
   act2.append(mwrap, ewrap, cpt);
   // a red tab = a modal dialog is up — pasted text would land IN it (the
@@ -388,8 +382,8 @@ function chromeQuickCmds(ses, meta) {
   // `min_prompts` — Claude Code's 2), and a session under it greys the button
   // instead of typing a command the TUI will bounce (`prompts`, patched live by
   // its SSE event).
-  ses.quickMode = (t) => {
-    const dialog = t === "awaiting-command";
+  sessionView.quickMode = (t) => {
+    const dialog = t === "awaiting_attention";
     const base = windowed && !dialog;
     const baseWhy = !windowed ? NO_WINDOW
                               : "a question is waiting — answer it in the card";
@@ -398,81 +392,76 @@ function chromeQuickCmds(ses, meta) {
     gate(mdl, capOk(meta, "model") && base, !capOk(meta, "model") ? CAP_OFF : baseWhy);
     gate(eff, capOk(meta, "effort") && base, !capOk(meta, "effort") ? CAP_OFF : baseWhy);
     const cCap = capOk(meta, "compact") && cmdOffered(meta, "compact");
-    const thin = tooThin(ses.meta, "compact");
+    const thin = tooThin(sessionView.meta, "compact");
     gate(cpt, cCap && base && !thin,
          !cCap ? CAP_OFF : !base ? baseWhy
                : "not enough conversation to compact yet");
   };
-  ses.quickMode(liveTab());
+  sessionView.quickMode(liveTab());
   return act2;
 }
 
 /* The three header rows that start EMPTY and are filled by the patchers
    (updateStatsRow / the ctx bar / updateRunning), in paint order. */
-function chromeLiveRows(ses) {
+function chromeLiveRows(sessionView) {
   const sr = el("div", "statsrow");
-  ses.statsRow = sr;
-  ses._statsSig = null;      // fresh (empty) row — force the next paint through
-  const cr = el("div", "ctxrow");     // the main thread's ctx bar, its own row
-  ses.ctxRow = cr;
-  const rr = el("div", "runrow");
-  ses.runRibbon = rr;
-  return [sr, cr, rr];
+  sessionView.statsRow = sr;
+  sessionView._statsSig = null;      // fresh (empty) row — force the next paint through
+  const contextRow = el("div", "ctxrow");
+  sessionView.ctxRow = contextRow;
+  const runningRow = el("div", "runrow");
+  sessionView.runRibbon = runningRow;
+  return [sr, contextRow, runningRow];
 }
 
-/* The tab strip. Each count is the fetched list's length once we have it, else
-   the cheap eager count the overview payload carried — so a badge is right
-   before its tab has ever been opened. The tabs whose badge is patched live are
-   parked on `ses`. */
-function chromeTabs(ses, meta, tab) {
+/* The tab strip. Each count is the canonical snapshot list's length once it is
+   present, otherwise the global snapshot's summary count. */
+function chromeTabs(sessionView, meta, tab) {
   const tabs = el("div", "tabs");
-  const scoped = ses.agent || "";
+  const scoped = sessionView.agent || "";
   const mk = (key, label, count) => {
     const a = el("a", key === tab ? "on" : "");
     // in agent scope every tab stays in scope (docs/dashboard.md *Agent
     // scope*) — the `agents` tab is the one that must not, since a list of the
     // SESSION's agents is what you navigate between them with
     a.href = (scoped && key !== "agents")
-      ? agentHref(S.cur, scoped, key)
-      : "#/s/" + encodeURIComponent(S.cur) + (key === "mirror" ? "" : "/" + key);
+      ? agentHref(S.currentSessionId, scoped, key)
+      : "#/s/" + encodeURIComponent(S.currentSessionId) + (key === "mirror" ? "" : "/" + key);
     a.append(tnode(label));
     if (count) a.append(el("span", "count", String(count)));
     tabs.append(a);
     return a;
   };
   mk("mirror", "mirror");
-  mk("agents", "agents", (ses.agents || []).length);
-  // the ◉ monitors count: the actual list length once fetched, else the cheap
-  // eager streams count (monitor_count) so the tab shows before the tab is opened
-  ses.monTab = mk("monitors", "monitors",
-                  ses.monitors ? ses.monitors.length : (meta.monitor_count || 0));
-  // ◷ background jobs — actual list length once fetched, else the cheap eager count
-  ses.jobTab = mk("jobs", "jobs",
-                  ses.jobs ? ses.jobs.length : (meta.job_count || 0));
-  // …then every EXTENSION tab anchored here (memory — ❖ wiki notes touched,
-  // gated by its scopeField so only in-scope sessions get the tab at all)
-  for (const anchor of ["mirror", "agents", "monitors", "jobs"])
-    extTabs(ses, meta, mk, anchor);
-  ses.errTab = mk("errors", "errors", meta.error_count || 0);   // live ⚠ count patches it
+  mk("agents", "agents", (sessionView.agents || []).length);
+  // Prefer the focused list; the global summary count is available before open.
+  sessionView.monTab = mk("monitors", "monitors",
+                  sessionView.monitors ? sessionView.monitors.length : (meta.monitor_count || 0));
+  // Background jobs follow the same snapshot-backed count rule.
+  sessionView.jobTab = mk("jobs", "jobs",
+                  sessionView.jobs ? sessionView.jobs.length : (meta.job_count || 0));
+  if (meta.memory_scope)
+    sessionView.memoryTab = mk("memory", "memory",
+      sessionView.memory ? sectionCount(SECTIONS.memory, sessionView) : (meta.memory_count || 0));
+  sessionView.errTab = mk("errors", "errors", meta.error_count || 0);   // live ⚠ count patches it
   // errors and the unscoped extension tabs (memory) have no agent dimension (a
   // note is the team's, an error is a script's), so in agent scope they still
   // show the SESSION's — said out loud rather than left ambiguous.
-  if (scoped && (tab === "errors" || (EXT[tab] && !EXT[tab].scoped)))
+  if (scoped && (tab === "errors" || tab === "memory"))
     tabs.append(el("span", "tabnote", "session-wide"));
   return tabs;
 }
 
 /* The open tab's body. The mirror tab is the composite one (cards → composer →
-   view bar → the stream/rail split); the rest are a grid or a renderer plus
-   the fetch that fills it. */
-function chromeBody(ses, tab, body) {
+   view bar → the stream/rail split); the rest render snapshot-backed grids. */
+function chromeBody(sessionView, tab, body) {
   if (tab === "mirror") {
     // The pinned cards and the composer are the SESSION's — its goal, its task
     // list, its pending dialogs, its input box. In agent scope they would all
     // be lies about what you're looking at (worst of all the composer, which
     // types to the lead, not the agent you drilled into), so the scoped mirror
     // is the stream and its view bar alone.
-    if (!ses.agent) {
+    if (!sessionView.agent) {
       body.append(buildGoalCard());         // the active /goal, pinned at the very top
       body.append(buildTasksCard());        // the session's task list, pinned first
       body.append(buildPlanCard());         // pending plan approval …
@@ -485,7 +474,7 @@ function chromeBody(ses, tab, body) {
       // redirects plain typing. Not on an iPad: an unasked-for focus pops the
       // on-screen keyboard over the stream on every session open (and focus is
       // what triggers Safari's page auto-zoom — see style.css touch section).
-      if (!ses.composer.disabled && !IS_IPAD) ses.composer.focus();
+      if (!sessionView.composer.disabled && !IS_IPAD) sessionView.composer.focus();
     }
     body.append(buildViewBar());
     const split = el("div", "split");
@@ -493,10 +482,10 @@ function chromeBody(ses, tab, body) {
     // stream (so incoming activity never buries them) until they're delivered
     const scol = el("div", "scol");
     scol.append(buildQueuePin());
-    scol.append(ses.stream);
+    scol.append(sessionView.stream);
     split.append(scol);
     const rail = el("div", "rail");
-    ses.rail = rail;
+    sessionView.rail = rail;
     split.append(rail);
     body.append(split);
     updateAgents();
@@ -504,21 +493,20 @@ function chromeBody(ses, tab, body) {
     updateShownCount();                   // count items already in the stream
   } else if (tab === "agents") {
     const wrap = el("div", "sgrid");
-    ses.agentsGrid = wrap;
+    sessionView.agentsGrid = wrap;
     body.append(wrap);
     updateAgents();
   } else if (tab === "monitors" || tab === "jobs") {
-    // the two grid sections are one machine (SECTIONS) — same cached-or-
-    // placeholder paint, same (re)fetch that also starts the live poll
+    // The two grid sections share one snapshot-backed rendering machine.
     const sec = SECTIONS[tab];
     const wrap = el("div", "sgrid");
-    ses[sec.grid] = wrap;
+    sessionView[sec.grid] = wrap;
     body.append(wrap);
-    if (ses[sec.list]) renderSectionGrid(tab);   // cached from a prior fetch
+    if (sessionView[sec.list]) renderSectionGrid(tab);
     else wrap.append(el("div", "empty", "loading " + sec.label + "…"));
-    loadSection(tab);                     // (re)fetch fresh + start the live poll
-  } else if (EXT[tab]) {
-    EXT[tab].body(ses, body);             // the extension's own tab renderer
+    loadSection(tab);
+  } else if (tab === "memory") {
+    showMemoryBody(sessionView);
   } else if (tab === "errors") {
     renderErrorsInto(body);
   }
@@ -531,44 +519,44 @@ function chromeBody(ses, tab, body) {
 // reflows the header, which on iPad Safari drops an in-progress text selection
 // (the "selection vanishes after ~1s" report, 2026-07-19). The clock still
 // advances whenever any real datum changes (constant during active work).
-function statsSig(ses) {
-  const f = ses.agentFocus;
+function statsSig(sessionView) {
+  const f = sessionView.agentFocus;
   if (f) {
-    const d = agentUsage(ses);
-    const rec = (ses.agents || []).find(a => a.agent_id === f.aid) || {};
-    return "A|" + [f.aid, rec.kind, rec.desc, rec.ended_at, rec.started_at,
+    const d = agentUsage(sessionView);
+    const rec = (sessionView.agents || []).find(a => a.agent_id === f.actorId) || {};
+    return "A|" + [f.actorId, rec.kind, rec.desc, rec.ended_at, rec.started_at,
       rec.tools, rec.model, rec.effort, rec.end_reason, rec.done,
       d.cost, d.model].join(",")
-      + "|" + JSON.stringify(d.usage || {}) + "|" + JSON.stringify(rec.ctx || {});
+      + "|" + JSON.stringify(d.usage || {}) + "|" + JSON.stringify(rec.contextWindow || {});
   }
-  const st = ses.stats || {};
-  const cost = (ses.costs && ses.costs.total_usd) || st.cost;
+  const st = sessionView.stats || {};
+  const cost = (sessionView.costs && sessionView.costs.total_usd) || st.cost;
   return "S|" + [st.commands, st.failed, st.start, st.paused, st.files,
     st.added, st.removed, st.tk_in, st.tk_out, st.tk_read, st.tk_create, cost,
-    st.msg_delivered, st.msg_read, (ses.meta && ses.meta.error_count) || 0,
-    ses.meta && ses.meta.model,
+    st.msg_delivered, st.msg_read, (sessionView.meta && sessionView.meta.error_count) || 0,
+    sessionView.meta && sessionView.meta.model,
     // compaction is a ctx-ROW state, not a stats number, but it lives on the
     // same signature: without it the row never rebuilds when compaction
     // starts (nothing else about the session changes for those ~2 minutes —
     // that is the whole point) and the animation would never appear. `since`
     // is constant while one compaction runs, so this adds no extra rebuilds.
-    (ses.compacting && ses.compacting.since) || 0].join(",")
-    + "|" + JSON.stringify(ses.ctx || {});
+    (sessionView.compacting && sessionView.compacting.since) || 0].join(",")
+    + "|" + JSON.stringify(sessionView.contextWindow || {});
 }
 
 function updateStatsRow() {
-  const ses = S.ses;
-  if (!ses || !ses.statsRow) return;
-  const sig = statsSig(ses);
-  if (sig === ses._statsSig) return;   // nothing the row shows changed — skip
-  ses._statsSig = sig;                 // the teardown (preserves iPad selection)
-  const sr = ses.statsRow;
+  const sessionView = S.sessionView;
+  if (!sessionView || !sessionView.statsRow) return;
+  const sig = statsSig(sessionView);
+  if (sig === sessionView._statsSig) return;   // nothing the row shows changed — skip
+  sessionView._statsSig = sig;                 // the teardown (preserves iPad selection)
+  const sr = sessionView.statsRow;
   sr.textContent = "";
   // drilled into a subagent → the scoreboard shows THAT agent, not the session
   // (the "swap scoreboard on click" behaviour). SSE stats/costs/ctx events still
   // land here, but this branch keeps them from clobbering the agent view.
-  if (ses.agentFocus) { renderAgentScoreboard(sr, ses.agentFocus); return; }
-  const st = ses.stats || {};
+  if (sessionView.agentFocus) { renderAgentScoreboard(sr, sessionView.agentFocus); return; }
+  const st = sessionView.stats || {};
   const add = chipAdder(sr);
   if (st.commands) {
     add("", st.commands + " cmds");
@@ -581,17 +569,17 @@ function updateStatsRow() {
   if (st.removed) add("", "−" + st.removed, "neg");
   sigmaChip(add, { in: st.tk_in, out: st.tk_out,
                    cache: st.tk_read, create: st.tk_create });
-  const cost = (ses.costs && ses.costs.total_usd) || st.cost;
+  const cost = (sessionView.costs && sessionView.costs.total_usd) || st.cost;
   if (cost) add("≈", usd(cost), "cost");
   if (st.msg_delivered)
     add("✉", st.msg_delivered + " msgs" +
         (st.msg_read ? " · " + st.msg_read + " read" : ""));
-  const errn = (ses.meta && ses.meta.error_count) || 0;
+  const errn = (sessionView.meta && sessionView.meta.error_count) || 0;
   if (errn) add("", "⚠ " + errn, "warn");
   // the main thread's ctx bar on its own row — live via the `ctx` SSE event
   // the model quick-button's label follows the same ctx probe
-  if (ses.modelBtn) setModelBtn(ses.modelBtn);
-  paintCtxRow(ses.ctx);
+  if (sessionView.modelBtn) setModelBtn(sessionView.modelBtn);
+  paintCtxRow(sessionView.contextWindow);
 }
 
 /* Header-action visibility for the agent-focus state (docs/dashboard.md,
@@ -605,15 +593,15 @@ function updateStatsRow() {
    Scoped to the header bar (`$sessact`), which is where those buttons now
    live — the one query root, so this can't drift from where they are mounted. */
 function applyAgentActionVis() {
-  const ses = S.ses;
-  if (!ses || !$sessact) return;
-  const focused = !!ses.agentFocus;
+  const sessionView = S.sessionView;
+  if (!sessionView || !$sessact) return;
+  const focused = !!sessionView.agentFocus;
   $sessact.querySelectorAll(".actses").forEach(b => { b.style.display = focused ? "none" : ""; });
   const stop = $sessact.querySelector(".actstop");
   if (stop) {
     let show = true;
     if (focused) {
-      const rec = (ses.agents || []).find(a => a.agent_id === ses.agentFocus.aid);
+      const rec = (sessionView.agents || []).find(a => a.agent_id === sessionView.agentFocus.actorId);
       show = !!(rec && agentStatus(rec)[1] === "st-run");
     }
     stop.style.display = show ? "" : "none";
@@ -626,35 +614,35 @@ function applyAgentActionVis() {
 
 /* The scoreboard for a drilled-into subagent — replaces the session totals with
    THAT agent's own numbers (docs/dashboard.md, *Subagent scoreboard swap*). It
-   resolves the freshest agent row from ses.agents each render (so an `agents`
+   resolves the freshest agent row from sessionView.agents each render (so an `agents`
    SSE that finishes the agent updates the status here too) and reads tokens/cost
    from the session payload's `agent_usage` (served whenever a `?agent=` scope is
-   in play, so this needs no fetch of its own). The prominent header NAME becomes
+   in play, so this needs no request of its own). The prominent header NAME becomes
    the agent's; the stats row leads with a "← session" link that leaves scope, and
    the ctx row repaints from the agent's own ctx bar. */
 /* The scoped agent's own token rollup + priced cost — served on the session
    payload when a `?agent=` is in play (read/session.agent_usage), so the
-   scoreboard needs no fetch of its own. {} before meta lands, or for an agent
+   scoreboard needs no request of its own. {} before meta lands, or for an agent
    with no transcript to fold (a codex run prices itself). */
-function agentUsage(ses) {
-  return ((ses && ses.meta) || {}).agent_usage || {};
+function agentUsage(sessionView) {
+  return ((sessionView && sessionView.meta) || {}).agent_usage || {};
 }
 
 function renderAgentScoreboard(sr, focus) {
-  const ses = S.ses;
-  const rec = (ses.agents || []).find(a => a.agent_id === focus.aid) || {};
-  const d = agentUsage(ses);
+  const sessionView = S.sessionView;
+  const rec = (sessionView.agents || []).find(a => a.agent_id === focus.actorId) || {};
+  const d = agentUsage(sessionView);
   const [sttxt, stcls] = agentStatus(rec);
   // the header badge/dot + .shead wash follow THIS agent's status, not the
   // session tab (the session pill said "busy" over a finished subagent).
-  setBadgeAgent(ses.badge, sttxt, stcls);
+  setBadgeAgent(sessionView.badge, sttxt, stcls);
   // the big header name updates to the subagent (the session title returns when
   // renderSessionChrome rebuilds on the way back). Skip during an inline rename.
-  if (ses.projEl && !ses.projEl.querySelector("input"))
-    ses.projEl.textContent =
-      (rec.kind === "teammate" ? "◈ " : "◇ ") + (rec.desc || focus.aid);
+  if (sessionView.projEl && !sessionView.projEl.querySelector("input"))
+    sessionView.projEl.textContent =
+      (rec.kind === "teammate" ? "◈ " : "◇ ") + (rec.desc || focus.actorId);
   const back = el("a", "backses", "← session");
-  back.href = "#/s/" + encodeURIComponent(S.cur);   // the mirror = the main agent
+  back.href = "#/s/" + encodeURIComponent(S.currentSessionId);   // the mirror = the main agent
   sr.append(back);
   const add = chipAdder(sr);
   add("", sttxt, stcls);
@@ -666,7 +654,7 @@ function renderAgentScoreboard(sr, focus) {
     add("⏱", rec.ended_at ? dur(rec.ended_at - rec.started_at) : ago(rec.started_at));
   sigmaChip(add, d.usage || {});     // the agent shape IS in/out/cache/create
   if (d.cost) add("≈", usd(d.cost), "cost");
-  paintCtxRow(rec.ctx, focus.aid);   // the agent's own saturation, same row
+  paintCtxRow(rec.contextWindow, focus.actorId);   // the agent's own saturation, same row
 }
 
 /* The ctx-saturation row under the scoreboard — its own row, shown only while
@@ -675,57 +663,52 @@ function renderAgentScoreboard(sr, focus) {
    `ctx` SSE event, a drilled-in agent's from its own record, and the row is
    REPLACED (not appended) on every repaint.
 
-   `aid` names a drilled-in agent. It decides BOTH extras: the compaction
+   `actorId` names a drilled-in agent. It decides BOTH extras: the compaction
    animation is the SESSION's (compaction folds the main thread's conversation —
    an agent has none of its own to compact, and painting the lead's rehearsal
    over an agent's bar would attribute it to the wrong context), and the
    drain's identity key keeps each agent's bar animating from its own last
    width rather than from whichever bar this row showed before. */
-function paintCtxRow(cx, aid) {
-  const ses = S.ses;
-  if (!ses || !ses.ctxRow) return;
-  ses.ctxRow.textContent = "";
-  if (cx && cx.used)
-    ses.ctxRow.append(ctxBar(cx, true, {
-      comp: aid ? null : ses.compacting,
-      // S.cur, NOT a field on `ses` — the session object carries no sid, so
-      // `ses.sid` would key every session as "s:undefined" and switching
+function paintCtxRow(contextWindow, actorId) {
+  const sessionView = S.sessionView;
+  if (!sessionView || !sessionView.ctxRow) return;
+  sessionView.ctxRow.textContent = "";
+  if (contextWindow && contextWindow.used)
+    sessionView.ctxRow.append(contextBar(contextWindow, true, {
+      comp: actorId ? null : sessionView.compacting,
+      // S.currentSessionId, NOT a field on `sessionView` — the session object carries no sessionId, so
+      // `sessionView.sessionId` would key every session as "s:undefined" and switching
       // sessions would drain the new bar out of the old one's width
-      key: (aid ? "a:" + aid : "s:" + S.cur),
+      key: (actorId ? "a:" + actorId : "s:" + S.currentSessionId),
     }));
-  ses.ctxRow.style.display = cx && cx.used ? "" : "none";
+  sessionView.ctxRow.style.display = contextWindow && contextWindow.used ? "" : "none";
 }
 
-/* Live ⚠ error badge — the web sibling of the scorebar's errwatch chip
-   (count-only on the fast path; full tracebacks stay behind the errors tab).
-   Patches the stats-row chip and the errors-tab count in place (no full
-   re-render), and re-fetches the errors list only when that tab is open and
-   the count grew. */
+/* Live ⚠ error badge. The selected-session application snapshot contains both
+   the count and the complete error rows. */
 function updateErrCount(n) {
-  const prev = (S.ses && S.ses.meta && S.ses.meta.error_count) || 0;   // pre-patch
-  const ses = setTabBadge("error_count", "errTab", n);
-  if (!ses) return;
+  const prev = (S.sessionView && S.sessionView.meta && S.sessionView.meta.error_count) || 0;   // pre-patch
+  const sessionView = setTabBadge("error_count", "errTab", n);
+  if (!sessionView) return;
   updateStatsRow();                  // the ⚠ chip lives in the scoreboard row too
-  if (ses.tab === "errors" && n > prev && ses.body) renderErrorsInto(ses.body);
+  if (sessionView.tab === "errors" && n > prev && sessionView.body) renderErrorsInto(sessionView.body);
 }
 
 /* Patch a tab's count badge AND the cached meta it is rebuilt from, together —
    the shared body of the monitors / jobs / memory / errors counters. Both halves
-   are needed: setTabCount paints the badge now, ses.meta[field] is what a later
+   are needed: setTabCount paints the badge now, sessionView.meta[field] is what a later
    renderSessionChrome rebuilds it from (drop that and the badge reverts on the
    next rebuild). Returns the session (null when there's none), so a caller can
    chain its own "…and refresh the list if that tab is open" tail.
 
-   That tail is exactly why each counter comes in two flavours and they must not
-   be merged: setXCount is called BY the fetch that just loaded the list (an
-   exact length — re-fetching there would loop), updateXCount by the cheap SSE
-   count (a refetch is the point). */
+   Snapshot reconciliation calls the exact-list and summary-count paths at
+   different times, so both update the same cached count and badge. */
 function setTabBadge(field, tabKey, n) {
-  const ses = S.ses;
-  if (!ses) return null;
-  if (ses.meta) ses.meta[field] = n;
-  setTabCount(ses[tabKey], n);
-  return ses;
+  const sessionView = S.sessionView;
+  if (!sessionView) return null;
+  if (sessionView.meta) sessionView.meta[field] = n;
+  setTabCount(sessionView[tabKey], n);
+  return sessionView;
 }
 
 function setTabCount(a, n) {
@@ -740,25 +723,26 @@ function setTabCount(a, n) {
 }
 
 /* The "running now" ribbon — one chip per alive `live`-table slot row
-   (sessionapi.running(), grouped by kind), hidden when nothing is running.
+   (canonical operation projections grouped by execution kind), hidden when
+   nothing is running.
    Live-updated by the `running` SSE event. */
 function updateRunning() {
-  const ses = S.ses;
-  if (!ses || !ses.runRibbon) return;
-  const run = ses.running || {};
-  const rr = ses.runRibbon;
+  const sessionView = S.sessionView;
+  if (!sessionView || !sessionView.runRibbon) return;
+  const run = sessionView.running || {};
+  const rr = sessionView.runRibbon;
   rr.textContent = "";
   // the running ribbon is session-scoped; hide it while a subagent scoreboard
   // is showing (the header is about that one agent then, not the session)
-  if (ses.agentFocus) { rr.style.display = "none"; return; }
+  if (sessionView.agentFocus) { rr.style.display = "none"; return; }
   const kinds = RUN_ORDER.concat(
     Object.keys(run).filter(k => !RUN_ORDER.includes(k)));
   let any = false;
   for (const kind of kinds) {
-    const rows = run[kind];
-    if (!rows || !rows.length) continue;
-    const [glyph, label] = RUN_GLYPH[kind] || ["•", kind];
-    for (let i = 0; i < rows.length; i++) {
+    const count = Number(run[kind]) || 0;
+    if (!count) continue;
+    const [glyph, label] = RUN_APPEARANCE[kind] || ["•", kind];
+    for (let index = 0; index < count; index++) {
       any = true;
       const chip = el("span", "rchip rk-" + kind.replace(".", "-"));
       chip.append(el("span", "rg", glyph), tnode(" " + label));
@@ -779,9 +763,7 @@ function agentStatus(a) {
 }
 
 function isHusk(a) {
-  // a slot row with no kind/desc/transcript: an agent whose streamer never
-  // ran (hidden auxiliary spawns) — shown dim, after the attributed ones
-  return !a.kind && !a.desc && !a.transcript;
+  return !a.kind && !a.desc;
 }
 
 function sortedAgents(agents) {
@@ -793,9 +775,9 @@ function agentCard(a) {
   const [sttxt, stcls] = agentStatus(a);
   const card = el("a", "acard" + (isHusk(a) ? " husk" : ""));
   card.dataset.st = stcls;              // state tint keyed off agent status
-  card.href = agentHref(S.cur, a.agent_id, "mirror");   // into AGENT SCOPE
+  card.href = agentHref(S.currentSessionId, a.agent_id, "mirror");   // into AGENT SCOPE
   const name = a.desc || a.agent_id;      // the Task description IS the name
-  card.append(el("div", "aid", (a.kind === "teammate" ? "◈ " : "◇ ") + name));
+  card.append(el("div", "actorId", (a.kind === "teammate" ? "◈ " : "◇ ") + name));
   if (a.desc) card.append(el("div", "desc", a.agent_id));
   const m = el("div", "meta");
   m.append(el("span", stcls, sttxt));
@@ -808,34 +790,34 @@ function agentCard(a) {
   else if (a.started_at)
     m.append(el("span", "", ago(a.started_at)));
   card.append(m);
-  if (a.ctx) card.append(ctxBar(a.ctx));
+  if (a.contextWindow) card.append(contextBar(a.contextWindow));
   return card;
 }
 
 function updateAgents() {
-  const ses = S.ses;
-  if (!ses) return;
+  const sessionView = S.sessionView;
+  if (!sessionView) return;
   // a focused subagent finishing (running → done) must drop the ■ stop button
   // AND flip its scoreboard status/badge/wash (renderAgentScoreboard reads the
   // fresh agents row) — an `agents` SSE doesn't move statsSig, so re-render here
   // rather than via updateStatsRow's change-gate.
-  if (ses.agentFocus) {
+  if (sessionView.agentFocus) {
     applyAgentActionVis();
-    if (ses.statsRow) {
-      ses.statsRow.textContent = "";
-      renderAgentScoreboard(ses.statsRow, ses.agentFocus);
+    if (sessionView.statsRow) {
+      sessionView.statsRow.textContent = "";
+      renderAgentScoreboard(sessionView.statsRow, sessionView.agentFocus);
     }
   }
-  const agents = sortedAgents(ses.agents || []);
-  if (ses.tab === "mirror" && ses.rail && ses.rail.isConnected) {
-    ses.rail.textContent = "";
-    if (agents.length) ses.rail.append(el("div", "mhead", "agents"));
-    for (const a of agents) ses.rail.append(agentCard(a));
+  const agents = sortedAgents(sessionView.agents || []);
+  if (sessionView.tab === "mirror" && sessionView.rail && sessionView.rail.isConnected) {
+    sessionView.rail.textContent = "";
+    if (agents.length) sessionView.rail.append(el("div", "mhead", "agents"));
+    for (const a of agents) sessionView.rail.append(agentCard(a));
   }
-  if (ses.tab === "agents" && ses.agentsGrid && ses.agentsGrid.isConnected) {
-    ses.agentsGrid.textContent = "";
-    if (!agents.length) ses.agentsGrid.append(el("div", "empty", "no subagents in this session"));
-    for (const a of agents) ses.agentsGrid.append(agentCard(a));
+  if (sessionView.tab === "agents" && sessionView.agentsGrid && sessionView.agentsGrid.isConnected) {
+    sessionView.agentsGrid.textContent = "";
+    if (!agents.length) sessionView.agentsGrid.append(el("div", "empty", "no subagents in this session"));
+    for (const a of agents) sessionView.agentsGrid.append(agentCard(a));
   }
   // …and the mirror's agent NOTES carry the same outcome on their dot (they read
   // agentStatus above, so this event is what turns a launch note green when its
@@ -844,13 +826,8 @@ function updateAgents() {
 }
 
 /* ---------- monitors (list tab + drill-down) ---------- */
-/* The monitors tab mirrors the agents tab: a grid of monitor cards (each a
-   Monitor tool run with its lifecycle state) that drills into a per-monitor
-   detail on click. Data comes from plugins.monitors(sid) — the MAIN transcript
-   (command/description/events) merged with the audit streams lifecycle state
-   (running/ended/duration). Loaded lazily on tab open (a transcript parse), then
-   re-fetched on a light poll while any monitor is live — the count badge stays
-   fresh live via the cheap `monitors` SSE (docs/dashboard.md, *Monitors tab*). */
+/* The monitors tab mirrors the agents tab: canonical monitor activities render
+   as cards and drill into a per-monitor detail on click. */
 
 function monitorStatus(m) {
   if (m.live) return ["running", "st-run"];
@@ -868,9 +845,9 @@ function monitorCard(m) {
   const [sttxt, stcls] = monitorStatus(m);
   const card = el("a", "acard");
   card.dataset.st = stcls;
-  card.href = sectionHref(S.cur, "m", m.task);
+  card.href = sectionHref(S.currentSessionId, "m", m.task);
   const name = m.description || m.command || m.task;
-  card.append(el("div", "aid", "◉ " + name));
+  card.append(el("div", "actorId", "◉ " + name));
   // subtitle: the command when the name is the description, else the task id
   const sub = (m.description && m.command) ? m.command : m.task;
   if (sub) card.append(el("div", "desc", sub));
@@ -885,103 +862,16 @@ function monitorCard(m) {
   return card;
 }
 
-/* ---------- secondary list tabs: the ONE engine ----------------------------
-
-   Monitors and background jobs are the same machine, and it was written twice:
-   fourteen near-identical function pairs 200 lines apart, several of them
-   byte-identical apart from a parameter name (sortedMonitors/sortedJobs). Fetch
-   a list from /api/session/<sid>/<api>, cache it on S.ses, render a card grid or
-   one item's detail, poll while anything in it is live, keep a tab badge. The
-   SECTIONS descriptor names the seven things that actually differ; everything
-   below is generic over it. (The SECONDARY_POLL_MS constant had already been
-   unified for exactly this reason — the constant, and then nothing else.)
-
-   An EXTENSION's tab (extRegister below — memory is the first) is a member
-   too, for its fetch + badge; it usually renders through its own painter
-   (memory: a grid OR an open note viewer) and has no per-item drill-down —
-   `repaint` and the absence of `detail` are what say so. */
-
-/* ---------- dashboard EXTENSIONS (the JS half; docs/dashboard.md *Web
-   extensions*) ----------
-
-   The server half is dashboard/ext/<name>/ (same `name`). An extension ships
-   as its own ordered classic part (app.NN-ext-<name>.js, listed in index.html
-   AFTER this file — the manual list IS the registry order) and calls
-   extRegister at load with a descriptor:
-
-     name        the tab key = the server ext's NAME (SSE event, <name>_count)
-     label       the tab strip label
-     after       which built-in tab it follows ("jobs"); errors stays last
-     scopeField  meta field gating the tab ("memory_scope"); absent = always on
-     scoped      does the tab follow AGENT scope (false ⇒ "session-wide" note)
-     init(ses)   stamp the extension's per-session state slots
-     body(ses, body)   render the open tab into `body`
-     section     merged into SECTIONS (stash/repaint/showing/… — the generic
-                 fetch/badge/poll engine covers the rest by convention:
-                 api=list=name, tabEl=<name>Tab, countField=<name>_count)
-     page        optional top-level page {route, title, render(wrap)} → #/x/<route>
-
-   Lives HERE rather than app.00 because registration MERGES into SECTIONS —
-   the tab machinery this file owns; every reader below runs long after load,
-   so parts that load earlier (the router, app.05's whitelist) can reach EXT
-   at runtime. */
-const EXT = {};
-
-function extRegister(d) {
-  EXT[d.name] = d;
-  if (d.section)
-    SECTIONS[d.name] = Object.assign(
-      { api: d.name, list: d.name, tabEl: d.name + "Tab",
-        countField: d.name + "_count", label: d.label || d.name,
-        scoped: !!d.scoped },
-      d.section);
-}
-
-function extList() { return Object.values(EXT); }
-
-/* A section tab's badge from the FETCHED payload — the list's length, unless the
-   section declares its own `count` (memory does: its badge is notes PLUS vault
-   searches, two independent lists in one payload, and the SERVER's own
-   memory_count says the same). The two callers below — the poll's
-   setSectionCount and extTabs' initial build — must ask the same question, or a
-   tab's number changes the moment its first fetch lands. */
-function sectionCount(sec, ses) {
-  if (sec.count) return sec.count(ses);
-  return (ses[sec.list] || []).length;
-}
-
-function extPage(route) {
-  return extList().find(x => x.page && x.page.route === route) || null;
-}
-
-/* An extension's top-level page (#/x/<route> — the router's arm; nothing
-   registers one yet, pinned by tests/jsdom/ext.js). */
-function showExtPage(x) {
-  document.title = x.page.title || x.label;
-  $view.textContent = "";
-  const wrap = el("div", "extpage");
-  $view.append(wrap);
-  x.page.render(wrap);
-}
-
-/* The extension tabs anchored after built-in tab `anchor` — chromeTabs calls
-   this after each built-in it builds. The badge is the fetched list's length
-   once we have it, else the eager served count, same as every section tab. */
-function extTabs(ses, meta, mk, anchor) {
-  for (const x of extList()) {
-    if ((x.after || "jobs") !== anchor) continue;
-    if (x.scopeField && !meta[x.scopeField]) continue;
-    const sec = SECTIONS[x.name];
-    ses[sec.tabEl] = mk(x.name, x.label || x.name,
-                        ses[sec.list] ? sectionCount(sec, ses)
-                                      : (meta[sec.countField] || 0));
-  }
+/* Shared snapshot-backed list mechanics for monitors, jobs, and memory. */
+function sectionCount(sec, sessionView) {
+  if (sec.count) return sec.count(sessionView);
+  return (sessionView[sec.list] || []).length;
 }
 
 const SECTIONS = {
   monitors: {
     api: "monitors", list: "monitors", grid: "monitorsGrid",
-    focus: "monitorFocus", poll: "monPoll", tabEl: "monTab",
+    focus: "monitorFocus", tabEl: "monTab",
     countField: "monitor_count", route: "m", glyph: "◉", label: "monitors",
     scoped: true,          // follows agent scope (the lead's own by default)
     empty: "no monitors in this session", missing: "monitor not found",
@@ -990,21 +880,17 @@ const SECTIONS = {
   },
   jobs: {
     api: "jobs", list: "jobs", grid: "jobsGrid",
-    focus: "jobFocus", poll: "jobPoll", tabEl: "jobTab",
+    focus: "jobFocus", tabEl: "jobTab",
     countField: "job_count", route: "j", glyph: "◷", label: "jobs",
     scoped: true,          // …as do background jobs
     empty: "no background jobs in this session", missing: "job not found",
     name: (j) => firstLine(j.command) || j.task,
     card: (j) => jobCard(j), detail: (wrap, j) => renderJobDetail(wrap, j),
-    // a live job's OUTPUT grows outside the jobs payload (it lives in the ops),
-    // so an unchanged-list poll still refreshes the open drill-down's output —
-    // in place, only when the text moved
-    tick: () => refreshJobOutput(),
   },
 };
 
 /* Drop the cached rows of every section that FOLLOWS AGENT SCOPE, on a scope
-   change. Their contents belong to the scope that fetched them, and the tab
+   change. Their contents belong to the selected actor scope, and the tab
    badge prefers a cached list's LENGTH to the served count (the list is the
    authority once you've opened the tab) — so entering an agent kept showing the
    previous scope's numbers until you opened that tab yourself, which is the one
@@ -1013,19 +899,14 @@ const SECTIONS = {
    Table-driven, so a future scoped section is covered by its own `scoped` flag;
    memory is session-wide and its cache survives. */
 function resetScopedSections() {
-  const ses = S.ses;
-  if (!ses) return;
+  const sessionView = S.sessionView;
+  if (!sessionView) return;
   for (const [kind, sec] of Object.entries(SECTIONS)) {
     if (!sec.scoped) continue;
-    clearSectionPoll(kind);
-    ses[sec.list] = null;
-    ses[sec.focus] = null;
-    // …and the repaint-skip signature: a null list means "nothing painted", and
-    // a stale signature matching the next fetch would skip the paint that fills
-    // the placeholder in
-    if (ses.secRaw) ses.secRaw[kind] = null;
+    sessionView[sec.list] = null;
+    sessionView[sec.focus] = null;
   }
-  ses.jobOut = null;                       // the output cache is the scope's too
+  sessionView.jobOut = null;                       // the output cache is the scope's too
 }
 
 /* live-first, then most-recently-started on top — the order every section
@@ -1036,138 +917,85 @@ function sortedItems(items) {
 }
 
 function loadSection(kind) {
-  const sec = SECTIONS[kind], ses = S.ses, sid = S.cur;
-  if (!ses || !sid) return;
-  // monitors + jobs follow AGENT SCOPE (sec.scoped); memory is session-wide,
-  // so it never carries the filter — docs/dashboard.md *Agent scope*.
-  fetch("/api/session/" + encodeURIComponent(sid) + "/" + sec.api
-        + (sec.scoped ? agentQ() : ""))
-    .then(r => r.json())
-    .then(d => {
-      if (S.cur !== sid || !S.ses) return;
-      // Repaint ONLY when the payload moved. The poll re-fetches every
-      // SECONDARY_POLL_MS while anything is live, and a wholesale
-      // teardown-and-rebuild on each tick flickered the grid — and flashed
-      // "loading output…" over a job drill-down's output — while a quiet live
-      // job changed nothing at all ("nothing really changes… I don't want the
-      // flickering"). Same shape as statsSig: diff the content, not the clock.
-      const raw = JSON.stringify(d);
-      const same = (S.ses.secRaw = S.ses.secRaw || {})[kind] === raw;
-      S.ses.secRaw[kind] = raw;
-      S.ses[sec.list] = d[sec.api] || [];
-      if (sec.stash) sec.stash(S.ses, d);
-      setSectionCount(kind, sectionCount(sec, S.ses));
-      if (same) {
-        // the list is what it was — leave the DOM alone; a job's OUTPUT can
-        // still be growing (it lives in the ops, not this payload), so the
-        // section's `tick` refreshes it in place
-        if (sec.tick) sec.tick();
-        scheduleSectionPoll(kind);
-        return;
-      }
-      if (sec.repaint) { sec.repaint(); return; }
-      if (S.ses[sec.focus]) repaintSectionDetail(kind);
-      else renderSectionGrid(kind);
-      scheduleSectionPoll(kind);
-    })
-    .catch(() => {});
+  const sec = SECTIONS[kind], sessionView = S.sessionView, sessionId = S.currentSessionId;
+  if (!sessionView || !sessionId) return;
+  setSectionCount(kind, sectionCount(sec, sessionView));
+  if (sec.repaint) { sec.repaint(); return; }
+  if (sessionView[sec.focus]) repaintSectionDetail(kind);
+  else renderSectionGrid(kind);
 }
 
 function renderSectionGrid(kind) {
-  const sec = SECTIONS[kind], ses = S.ses;
-  if (!(ses && ses.tab === kind && ses[sec.grid] && ses[sec.grid].isConnected))
+  const sec = SECTIONS[kind], sessionView = S.sessionView;
+  if (!(sessionView && sessionView.tab === kind && sessionView[sec.grid] && sessionView[sec.grid].isConnected))
     return;
-  ses[sec.grid].textContent = "";
-  const items = ses[sec.list] || [];
+  sessionView[sec.grid].textContent = "";
+  const items = sessionView[sec.list] || [];
   if (!items.length) {
-    ses[sec.grid].append(el("div", "empty", sec.empty));
+    sessionView[sec.grid].append(el("div", "empty", sec.empty));
     return;
   }
-  for (const it of sortedItems(items)) ses[sec.grid].append(sec.card(it));
+  for (const it of sortedItems(items)) sessionView[sec.grid].append(sec.card(it));
 }
 
-// The secondary tabs poll while something in them is still live — ONE cadence,
-// not two: they are the same fact (a background list the SSE doesn't push,
-// refreshed only while you're looking at it). Slow on purpose — these are GETs
-// outside the SSE, and the tab is only polled while focused/live.
-const SECONDARY_POLL_MS = 4000;
-
-function scheduleSectionPoll(kind) {
-  const sec = SECTIONS[kind], ses = S.ses;
-  clearSectionPoll(kind);
-  if (!ses) return;
-  const live = (ses[sec.list] || []).some(x => x.live);
-  // keep the list / detail fresh while something is still firing
-  if (live && (ses.tab === kind || ses[sec.focus]))
-    ses[sec.poll] = setInterval(() => loadSection(kind), SECONDARY_POLL_MS);
-}
-
-function clearSectionPoll(kind) {
-  const sec = SECTIONS[kind], ses = S.ses;
-  if (ses && ses[sec.poll]) { clearInterval(ses[sec.poll]); ses[sec.poll] = null; }
-}
-
-/* The tab badge: the cheap eager SSE count (a new launch bumps it) or the exact
-   list length once fetched. updateSectionCount is the SSE half — it also
-   refreshes the list when that tab is the one open. */
+/* The tab badge uses the global summary count or the focused snapshot's exact
+   list length. */
 function setSectionCount(kind, n) {
   const sec = SECTIONS[kind];
   return setTabBadge(sec.countField, sec.tabEl, n);
 }
 
 function updateSectionCount(kind, n) {
-  const ses = setSectionCount(kind, n);
+  const sessionView = setSectionCount(kind, n);
   // a section may say its list is NOT the thing on screen (memory's `showing`
   // is false while a note viewer is open) — don't refresh under it
   const sec = SECTIONS[kind];
   const showing = sec.showing ? sec.showing() : true;
-  if (ses && ses.tab === kind && showing) loadSection(kind);
+  if (sessionView && sessionView.tab === kind && showing) loadSection(kind);
 }
 
-/* Open one item's drill-down (router #/s/<sid>/<route>/<task>). */
-function showSection(kind, sid, task, agent) {
+/* Open one item's drill-down (router #/s/<sessionId>/<route>/<task>). */
+function showSection(kind, sessionId, task, agent) {
   const sec = SECTIONS[kind];
-  // a scoped detail (…/a/<aid>/m/<task>) enters that agent's scope first, so
+  // a scoped detail (…/a/<actorId>/m/<task>) enters that agent's scope first, so
   // the list this task is looked up in is the agent's, not the lead's
-  if (S.cur !== sid || (agent || "") !== ((S.ses && S.ses.agent) || ""))
-    showSession(sid, kind, agent);
-  const ses = S.ses;
-  if (!ses) return;
-  clearSectionPoll(kind);
-  ses.tab = kind.slice(0, -1) + ":" + task;      // "monitor:<task>" / "job:<task>"
-  ses[sec.focus] = task;
+  if (S.currentSessionId !== sessionId || (agent || "") !== ((S.sessionView && S.sessionView.agent) || ""))
+    showSession(sessionId, kind, agent);
+  const sessionView = S.sessionView;
+  if (!sessionView) return;
+  sessionView.tab = kind.slice(0, -1) + ":" + task;      // "monitor:<task>" / "job:<task>"
+  sessionView[sec.focus] = task;
   // no tab-bar entry is "<kind>:<task>", so light the section's own tab (the
   // same "you are here" cue the agents drill-down restores on its tab)
   const re = new RegExp("\\/" + kind + "$");
   $view.querySelectorAll(".tabs a").forEach(a =>
     a.classList.toggle("on", re.test(a.getAttribute("href") || "")));
   updateRunning();
-  if (ses[sec.list]) repaintSectionDetail(kind);
-  else loadSection(kind);        // direct navigation / reload — fetch then paint
+  if (sessionView[sec.list]) repaintSectionDetail(kind);
+  else loadSection(kind);        // direct navigation / reload
 }
 
 function repaintSectionDetail(kind) {
-  const sec = SECTIONS[kind], ses = S.ses;
-  if (!ses || !ses[sec.focus] || !ses.body) return;
-  const task = ses[sec.focus];
-  const item = (ses[sec.list] || []).find(x => x.task === task);
+  const sec = SECTIONS[kind], sessionView = S.sessionView;
+  if (!sessionView || !sessionView[sec.focus] || !sessionView.body) return;
+  const task = sessionView[sec.focus];
+  const item = (sessionView[sec.list] || []).find(x => x.task === task);
   resetBody();
-  ses.body.append(sectionCrumbs(kind, S.cur, item || { task: task }));
+  sessionView.body.append(sectionCrumbs(kind, S.currentSessionId, item || { task: task }));
   const wrap = el("div");
-  ses.body.append(wrap);
+  sessionView.body.append(wrap);
   if (!item) { wrap.append(el("div", "empty", sec.missing)); return; }
   sec.detail(wrap, item);
-  scheduleSectionPoll(kind);     // still live -> keep its detail refreshing
 }
 
 /* The drill-down breadcrumb — <glyph> <label> (back to the list) › this item. */
-function sectionCrumbs(kind, sid, item) {
+function sectionCrumbs(kind, sessionId, item) {
   const sec = SECTIONS[kind];
   const nav = el("div", "crumbs");
   const back = el("a", "crumb");
-  back.href = (S.ses && S.ses.agent)
-    ? agentHref(sid, S.ses.agent, kind)          // back to the SCOPED list
-    : "#/s/" + encodeURIComponent(sid) + "/" + kind;
+  back.href = (S.sessionView && S.sessionView.agent)
+    ? agentHref(sessionId, S.sessionView.agent, kind)          // back to the SCOPED list
+    : "#/s/" + encodeURIComponent(sessionId) + "/" + kind;
   back.title = "back to the " + sec.label + " list";
   back.append(el("span", "cg", sec.glyph), tnode(" " + sec.label));
   const cur = el("span", "crumb cur");
@@ -1184,9 +1012,8 @@ function sectionCrumbs(kind, sid, item) {
    panels had drifted into presenting the same facts differently ("they kinda
    look totally different … make the job the same"). `pill`/`rows` are all that
    genuinely differs. The COMMAND is the same block in both, and it is now the
-   same block the MIRROR paints: highlighted and pretty-printed server-side
-   (`cmd_html` — see opshtml.cmd_html for why the reflow happens there and not
-   at op creation). `command` still rides along as text for the card titles and
+   same block the MIRROR paints: highlighted and pretty-printed by the dashboard
+   presenter. `command` still rides along as text for the card titles and
    the crumb, which must stay single-line. */
 function detailInfo(item, pill, status, rows) {
   const [sttxt, stcls] = status;
@@ -1252,14 +1079,8 @@ function monitorEventRow(e) {
 }
 
 /* ---------- background jobs (list tab + drill-down) ---------- */
-/* The jobs tab mirrors the monitors/agents tabs for `run_in_background` Bash
-   jobs (and Ctrl+B conversions): a grid of job cards with lifecycle state, each
-   drilling into command + full output. Data comes from sessionapi.jobs(sid) —
-   the audit streams state (kind='bg') merged with the command from the mirror
-   ops (copy-group). A job's OUTPUT is NOT in the transcript (it streams to the
-   ops), so the drill-down fetches it from the same ops via /copy/<task>/out (the
-   ⧉out copy endpoint). Loaded lazily on tab-open, re-fetched on a light poll
-   while any job is live; the count badge stays fresh via the `jobs` SSE. */
+/* Background operations render as job cards with canonical lifecycle, command,
+   and output facts. Each card drills into the complete snapshot-backed detail. */
 
 function jobStatus(j) {
   if (j.live) return ["running", "st-run"];
@@ -1275,9 +1096,9 @@ function jobCard(j) {
   const [sttxt, stcls] = jobStatus(j);
   const card = el("a", "acard");
   card.dataset.st = stcls;
-  card.href = sectionHref(S.cur, "j", j.task);
+  card.href = sectionHref(S.currentSessionId, "j", j.task);
   const name = firstLine(j.command) || j.task;
-  card.append(el("div", "aid", "◷ " + name));
+  card.append(el("div", "actorId", "◷ " + name));
   card.append(el("div", "desc", j.task));
   const meta = el("div", "meta");
   meta.append(el("span", stcls, sttxt));
@@ -1302,29 +1123,20 @@ function renderJobDetail(container, j) {
   });
   container.append(info);
 
-  // Output lives in the ops, not the transcript — fetch it from the copy
-  // endpoint, by the job's ops COPY GROUP. Which is the taskId for the lead's
-  // own jobs (its tailer paints under it) but the tool_use_id for an AGENT's,
-  // whose block the substream opened before any taskId existed — so the server
-  // carries `group` for exactly this, and asking by `task` returned an empty
-  // body for every subagent job ("I clicked on the background jobs of that
-  // subagent and I cannot see the output it is making"). `task` stays the
-  // fallback for a row that predates the field.
+  // Output is part of the canonical job projection in the focused snapshot.
   const outwrap = el("div", "mevents");
   outwrap.append(el("div", "mhead", "output"));
   const box = el("div", "joutput");
-  // seed from the last-fetched text (ses.jobOut) so a repaint — the poll saw
-  // the list move, or you navigated back — never flashes "loading output…"
+  // Seed from the last snapshot text so a repaint or navigation never flashes
   // over output that was just on screen; only a first-ever open shows it
-  const ses = S.ses;
-  const cached = ses && ses.jobOut && ses.jobOut.task === j.task
-    ? ses.jobOut.text : null;
+  const sessionView = S.sessionView;
+  const cached = sessionView && sessionView.jobOut && sessionView.jobOut.task === j.task
+    ? sessionView.jobOut.text : null;
   if (cached != null) paintJobOutput(box, j, cached);
   else box.append(el("div", "empty", "loading output…"));
   outwrap.append(box);
   container.append(outwrap);
-  if (ses) ses.jobOutBox = box;            // where refreshJobOutput lands
-  fetchJobOutput(j, box);
+  updateJobOutput(j, box);
 }
 
 function paintJobOutput(box, j, t) {
@@ -1333,60 +1145,35 @@ function paintJobOutput(box, j, t) {
     j.live ? "no output yet" : "(no output)"));
 }
 
-/* Fetch one job's output and swap it into `box` ONLY when the text moved —
-   the DOM (and the user's scroll/selection in it) is left alone on the quiet
-   ticks. Output lives in the ops, not the transcript — the ⧉out copy endpoint,
-   by the job's ops COPY GROUP (see renderJobDetail's group note). */
-function fetchJobOutput(j, box) {
-  const ses = S.ses, sid = S.cur;
-  fetch("/api/session/" + encodeURIComponent(sid) + "/copy/"
-        + encodeURIComponent(j.group || j.task) + "/out")
-    .then(r => r.text())
-    .then(t => {
-      if (!box.isConnected || S.cur !== sid || S.ses !== ses) return;
-      const prev = ses.jobOut && ses.jobOut.task === j.task
-        ? ses.jobOut.text : null;
-      ses.jobOut = { task: j.task, text: t };
-      if (t === prev) return;              // unchanged — leave the DOM alone
-      paintJobOutput(box, j, t);
-    })
-    .catch(() => {
-      // keep whatever is showing (cached output beats an error note); only a
-      // box still on its "loading output…" placeholder learns of the failure
-      if (box.isConnected && !(ses && ses.jobOut && ses.jobOut.task === j.task)) {
-        box.textContent = "";
-        box.append(el("div", "empty", "output unavailable"));
-      }
-    });
-}
-
-/* The unchanged-list poll's refresh of an OPEN job drill-down (SECTIONS.jobs
-   `tick`): same box, same job, in-place. */
-function refreshJobOutput() {
-  const ses = S.ses;
-  if (!ses || !ses.jobFocus || !ses.jobOutBox || !ses.jobOutBox.isConnected)
-    return;
-  const j = (ses.jobs || []).find(x => x.task === ses.jobFocus);
-  if (j) fetchJobOutput(j, ses.jobOutBox);
+/* Swap snapshot output into `box` only when the text changed, preserving DOM
+   selection and scroll position while the projection is quiet. */
+function updateJobOutput(j, box) {
+  const sessionView = S.sessionView, sessionId = S.currentSessionId;
+  if (!box.isConnected || S.currentSessionId !== sessionId || S.sessionView !== sessionView) return;
+  const text = j.output || "";
+  const previous = sessionView.jobOut && sessionView.jobOut.task === j.task
+    ? sessionView.jobOut.text : null;
+  sessionView.jobOut = { task: j.task, text };
+  if (text !== previous) paintJobOutput(box, j, text);
 }
 
 /* ---------- agent scope ---------- */
 
 /* The href of one tab in agent scope — the scoped route
-   (#/s/<sid>/a/<aid>/<tab>) that showSession's router entry reads back. Kept
+   (#/s/<sessionId>/a/<actorId>/<tab>) that showSession's router entry reads back. Kept
    beside the crumbs because the tab bar and the "← session" link are the only
    places that spell the scoped URL. */
-function agentHref(sid, aid, tab) {
-  return "#/s/" + encodeURIComponent(sid) + "/a/" + encodeURIComponent(aid)
+function agentHref(sessionId, actorId, tab) {
+  return "#/s/" + encodeURIComponent(sessionId) + "/a/" + encodeURIComponent(actorId)
     + (tab && tab !== "mirror" ? "/" + tab : "");
 }
 
 /* The href of ONE monitor/job detail, keeping whatever scope its card was
-   listed under: `#/s/<sid>/m/<task>` for the lead's, nested under the agent's
+   listed under: `#/s/<sessionId>/m/<task>` for the lead's, nested under the agent's
    route for a scoped one, so a reload/share lands on the same list. */
-function sectionHref(sid, route, task) {
-  const a = (S.ses && S.ses.agent) || "";
-  const base = "#/s/" + encodeURIComponent(sid)
+function sectionHref(sessionId, route, task) {
+  const a = (S.sessionView && S.sessionView.agent) || "";
+  const base = "#/s/" + encodeURIComponent(sessionId)
     + (a ? "/a/" + encodeURIComponent(a) : "");
   return base + "/" + route + "/" + encodeURIComponent(task);
 }
@@ -1404,31 +1191,31 @@ function sectionHref(sid, route, task) {
    browser's Back ("when I click on monitors or jobs on a subagent, I still want
    to have that breadcrumb — it never goes away"). */
 function resetBody() {
-  const ses = S.ses;
-  if (!ses || !ses.body) return;
-  ses.body.textContent = "";
-  if (ses.agent)
-    ses.body.append(agentCrumbs(S.cur, ses.agent,
-                                (ses.agents || []).find(a => a.agent_id === ses.agent)));
+  const sessionView = S.sessionView;
+  if (!sessionView || !sessionView.body) return;
+  sessionView.body.textContent = "";
+  if (sessionView.agent)
+    sessionView.body.append(agentCrumbs(S.currentSessionId, sessionView.agent,
+                                (sessionView.agents || []).find(a => a.agent_id === sessionView.agent)));
 }
 
 /* The agent-hierarchy breadcrumb in agent scope — the MAIN agent → this agent
    (docs/dashboard.md, *Breadcrumbs*). Just the two nodes (the hierarchy is one
    level deep — a session's flat agent list): the main agent is a link back to
-   its own mirror (#/s/<sid>), labelled by the session's title; the current
+   its own mirror (#/s/<sessionId>), labelled by the session's title; the current
    agent is the highlighted end node. Icons: ◆ the main agent, ◇/◈ the
    subagent/teammate. Clicking the main node is how you leave scope. */
-function agentCrumbs(sid, aid, rec) {
+function agentCrumbs(sessionId, actorId, rec) {
   const nav = el("div", "crumbs");
-  const meta = (S.ses && S.ses.meta) || {};
-  const sesName = meta.title || (meta.cwd ? proj(meta) : shortSid(sid));
+  const meta = (S.sessionView && S.sessionView.meta) || {};
+  const sesName = meta.title || (meta.workingDirectory ? proj(meta) : shortSid(sessionId));
   const main = el("a", "crumb");
-  main.href = "#/s/" + encodeURIComponent(sid);       // the mirror = the main agent
+  main.href = "#/s/" + encodeURIComponent(sessionId);       // the mirror = the main agent
   main.title = "back to the main agent";
   main.append(el("span", "cg", "◆"), tnode(" " + sesName));
   const cur = el("span", "crumb cur");
   cur.append(el("span", "cg", rec && rec.kind === "teammate" ? "◈" : "◇"),
-             tnode(" " + ((rec && rec.desc) || aid)));
+             tnode(" " + ((rec && rec.desc) || actorId)));
   nav.append(main, el("span", "csep", "›"), cur);
   return nav;
 }
@@ -1445,61 +1232,20 @@ function pre(text) { const p = el("pre"); p.textContent = text == null ? "" : St
 /* ---------- errors tab ---------- */
 
 function renderErrorsInto(container) {
-  container.append(el("div", "empty", "loading…"));
-  fetch("/api/session/" + encodeURIComponent(S.cur) + "/errors")
-    .then(r => r.json()).then(rows => {
-      if (!container.isConnected) return;
-      container.textContent = "";
-      const wrap = el("div", "errs");
-      if (!rows.length) wrap.append(el("div", "empty", "no swallowed exceptions — clean session"));
-      for (const r of rows) {
-        const e = el("div", "err");
-        e.append(el("div", "h", "⚠ " + (r.script || "?") + " · " + (r.func || "?")
-                    + (r.ts ? " · " + new Date(r.ts * 1000).toLocaleString() : "")));
-        if (r.traceback) e.append(pre(r.traceback));
-        wrap.append(e);
-      }
-      container.append(wrap);
-    });
-}
-
-/* ---------- ⧉ copy / click-to-view (server-rendered .cc anchors) ---------- */
-
-document.addEventListener("click", (e) => {
-  const a = e.target.closest && e.target.closest("a.cc");
-  if (!a) return;
-  e.preventDefault();
-  const cc = (a.dataset.cc || "").split("/");
-  if (cc.length !== 3) return;
-  const [key, gid, what] = cc;
-  if (what === "view") return toggleView(a, key, gid);
-  fetch("/api/session/" + encodeURIComponent(key) + "/copy/"
-        + encodeURIComponent(gid) + "/" + encodeURIComponent(what))
-    .then(r => r.text())
-    .then(text => {
-      if (!text.trim()) return toast("", "nothing to copy", "");
-      // clipboard is undefined over a plain-http tunnel (non-secure context);
-      // guard it so the ⧉ copy doesn't reject unhandled there.
-      if (!navigator.clipboard) return toast("ask", "copy failed", "needs https");
-      navigator.clipboard.writeText(text).then(
-        () => toast("done", "copied " + (what === "cmd" ? "command" : what === "out" ? "output" : "block"),
-                    text.length + " chars"),
-        () => toast("ask", "copy failed", "clipboard permission?"));
-    })
-    .catch(() => toast("ask", "copy failed", "try again"));
-});
-
-function toggleView(anchor, key, gid) {
-  const host = anchor.closest("[data-v]");
-  if (!host) return;
-  const next = host.nextElementSibling;
-  if (next && next.classList.contains("view-block")) { next.remove(); return; }
-  fetch("/api/session/" + encodeURIComponent(key) + "/view/" + encodeURIComponent(gid))
-    .then(r => r.ok ? r.text() : null)
-    .then(html => {
-      if (html == null) return toast("", "nothing to show", "");
-      host.insertAdjacentHTML("afterend", html);
-    });
+  container.textContent = "";
+  const rows = (S.sessionView && S.sessionView.errors) || [];
+  const wrap = el("div", "errs");
+  if (!rows.length) wrap.append(el("div", "empty", "no swallowed exceptions — clean session"));
+  for (const row of rows) {
+    const error = el("div", "err");
+    error.append(el("div", "h", "⚠ " + (row.component || "?") + " · "
+                    + (row.action || "?")
+                    + (row.timestamp ? " · "
+                       + new Date(row.timestamp * 1000).toLocaleString() : "")));
+    if (row.traceback) error.append(pre(row.traceback));
+    wrap.append(error);
+  }
+  container.append(wrap);
 }
 
 /* ---------- viewport diagnostics (?vpdiag) ----------
@@ -1511,27 +1257,25 @@ function toggleView(anchor, key, gid) {
 
 
 // ---- the pinned goal card (docs/dashboard.md, *Web goal*) -------------------
-// Claude Code's `/goal <condition>` built-in puts the session into autonomous
-// mode toward a completion condition. No hook fires for it, so the server scans
-// the transcript tail (session_goal → plugins.goal → transcript.goal_probe) and
-// pushes {condition, met} on the `goal` SSE event. Pinned at the very top of the
+// A harness goal puts the session into autonomous mode toward an objective.
+// Canonical goal facts from the owning harness are projected into the session
+// snapshot and pushed over the existing application SSE stream. Pinned at the
 // mirror tab (above tasks), amber while working and green "✓ achieved" once the
-// checker confirms; hidden when there is no active goal. Read-only — the goal is
-// set/cleared at the terminal (or via the composer's `/goal`), never here.
+// harness confirms; hidden when there is no current goal. Read-only.
 
 function buildGoalCard() {
   const wrap = el("div", "goalwrap");
-  S.ses.goalEl = wrap;
+  S.sessionView.goalEl = wrap;
   renderGoal();
   return wrap;
 }
 
 function renderGoal() {
-  const ses = S.ses;
-  if (!ses || !ses.goalEl) return;
-  const wrap = ses.goalEl;
+  const sessionView = S.sessionView;
+  if (!sessionView || !sessionView.goalEl) return;
+  const wrap = sessionView.goalEl;
   wrap.textContent = "";
-  const goal = (ses.meta && ses.meta.goal) || null;
+  const goal = (sessionView.meta && sessionView.meta.goal) || null;
   wrap.hidden = !goal || !goal.condition;
   if (wrap.hidden) return;
   const met = !!goal.met;
@@ -1546,11 +1290,9 @@ function renderGoal() {
 }
 
 // ---- the pinned tasks card (docs/dashboard.md, *Web tasks*) -----------------
-// The session's native task list (TaskCreate/TaskUpdate), pinned at the very
-// top of the mirror tab — fed by the `tasks` kv snapshot task_fmt.py re-reads
-// from Claude Code's on-disk task dir on every task-touching hook, so it works
-// live AND parked (the on-disk files are deleted at session end; the stash is
-// the only surviving record). Read-only as far as the TASKS go: unlike ask/plan
+// The session's canonical task list, pinned at the very top of the mirror tab.
+// Each harness owns its native task grammar and emits shared task facts; this
+// page reads only the shared snapshot. Read-only as far as the TASKS go: unlike ask/plan
 // there is no dialog to drive — the TUI has no modal to answer, and nothing here
 // ever completes or deletes a task. Completed tasks render struck-through and
 // dimmed; the in_progress one carries the accent and shows its activeForm.
@@ -1565,7 +1307,7 @@ function renderGoal() {
 
 function buildTasksCard() {
   const wrap = el("div", "taskswrap");
-  S.ses.tasksEl = wrap;
+  S.sessionView.tasksEl = wrap;
   renderTasks();
   return wrap;
 }
@@ -1583,21 +1325,22 @@ function tasksHideBtn(tasks, allDone) {
   }
   btn.title = "hide this finished list (comes back with the next task)";
   armConfirm(btn, "✕", "hide?", () => {
-    const sid = S.cur;
-    const meta = S.ses && S.ses.meta;
+    const sessionId = S.currentSessionId;
+    const meta = S.sessionView && S.sessionView.meta;
     if (!meta) return;
     meta.tasks_hidden = true;      // optimistic — the card goes at once
     renderTasks();
-    postJSON("/api/session/" + encodeURIComponent(sid) + "/tasks-hide",
+    postJSON("/api/sessions/" + encodeURIComponent(sessionId)
+             + "/application/tasks-hidden",
              { hidden: true },
-             { audit: "tasks-hide", sid, auditData: { tasks: tasks.length } })
+             { audit: "tasks-hide", sessionId, auditData: { tasks: tasks.length } })
       .then(() => toast("done", "tasks hidden",
                         "the card returns with the next task"))
       .catch(e => {
         // the write never landed — put the card back rather than leave the page
         // showing a dismissal no other device will ever see
-        if (S.cur === sid && S.ses && S.ses.meta) {
-          S.ses.meta.tasks_hidden = false;
+        if (S.currentSessionId === sessionId && S.sessionView && S.sessionView.meta) {
+          S.sessionView.meta.tasks_hidden = false;
           renderTasks();
         }
         toast("ask", "hide failed", (e && e.error) || "");
@@ -1607,14 +1350,14 @@ function tasksHideBtn(tasks, allDone) {
 }
 
 function renderTasks() {
-  const ses = S.ses;
-  if (!ses || !ses.tasksEl) return;
-  const wrap = ses.tasksEl;
+  const sessionView = S.sessionView;
+  if (!sessionView || !sessionView.tasksEl) return;
+  const wrap = sessionView.tasksEl;
   wrap.textContent = "";
-  const tasks = (ses.meta && ses.meta.tasks) || null;
+  const tasks = (sessionView.meta && sessionView.meta.tasks) || null;
   // `tasks_hidden` is the SERVER's verdict (read/session.py tasks_hidden — the
   // dismissal AND whether it still applies to this list), never a local flag
-  wrap.hidden = !tasks || !tasks.length || !!(ses.meta && ses.meta.tasks_hidden);
+  wrap.hidden = !tasks || !tasks.length || !!(sessionView.meta && sessionView.meta.tasks_hidden);
   if (wrap.hidden) return;
   const done = tasks.filter(t => t.status === "completed").length;
   const card = el("div", "taskscard");
@@ -1630,7 +1373,7 @@ function renderTasks() {
     const row = el("div", "taskrow " + st);
     row.append(el("span", "taskmark",
                   st === "done" ? "✓" : st === "active" ? "▸" : "○"));
-    row.append(el("span", "taskid", "#" + (t.id || "?")));
+    row.append(el("span", "taskid", "#" + (t.label || t.id || "?")));
     const subj = el("span", "tasksubj", t.subject || "");
     if (t.description) subj.title = t.description;
     row.append(subj);

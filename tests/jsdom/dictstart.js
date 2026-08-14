@@ -126,7 +126,7 @@ const sandbox = {
   // that keeps the startup path honest
   el: (tag, cls, text) => new El(tag, cls, text),
   toast: (kind, title, detail) => H.toasts.push(`${title}|${detail}`),
-  clog: (sid, ev, data) => H.clogs.push({ sid, ev, data }),
+  clog: (sessionId, ev, data) => H.clogs.push({ sessionId, ev, data }),
   postJSON: (path, body) => { H.tokens.push({ path, body }); return H.tok; },
   IS_IPAD: false,
 };
@@ -144,7 +144,12 @@ async function arm() {
   H.toasts.length = 0; H.clogs.length = 0; H.tokens.length = 0;
   H.mic = defer(); H.mod = defer(); H.tok = defer();
   const ta = textarea();
-  const dic = vm.runInContext("dictation", sandbox)(ta, () => "/tmp/proj", "s1");
+  const dic = vm.runInContext("dictation", sandbox)(
+    ta,
+    () => "/tmp/proj",
+    () => "claude_code",
+    "s1",
+  );
   dic.btn.onclick();                       // press
   H.mic.resolve(stream);
   H.mod.resolve();
@@ -163,7 +168,7 @@ async function arm() {
     ck("a_sockets_before", H.sockets.length, 0);
     // the sample rate must be the WIRE rate, decided before the mint
     ck("a_mint_rate", H.tokens[0].body.sample_rate, 16000);
-    ck("a_mint_cwd", H.tokens[0].body.cwd, "/tmp/proj");
+    ck("a_mint_cwd", H.tokens[0].body.working_directory, "/tmp/proj");
     ck("a_worklet_rate", H.nodes[0].opts.processorOptions.outRate, 16000);
     // three chunks spoken while the socket is still coming up
     node.emit(100); node.emit(200); node.emit(300);
@@ -227,7 +232,12 @@ async function arm() {
     H.sockets.length = 0; H.toasts.length = 0; H.tokens.length = 0;
     H.mic = defer(); H.mod = defer(); H.tok = defer();
     const ta = textarea();
-    const dic = vm.runInContext("dictation", sandbox)(ta, () => "", "s1");
+    const dic = vm.runInContext("dictation", sandbox)(
+      ta,
+      () => "",
+      () => "claude_code",
+      "s1",
+    );
     dic.btn.onclick();
     H.mic.reject(new Error("NotAllowedError"));
     H.mod.resolve();

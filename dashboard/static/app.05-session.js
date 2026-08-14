@@ -3,18 +3,13 @@
 // cohesive files (classic scripts share one global scope; load order is set in
 // index.html). See app.13-init.js for the boot/init sequence.
 
-// Two SEPARATE retries that happen to share a delay — deliberately not one
-// constant. META_RETRY_MS re-fetches the session meta after a failed GET (the
-// view is unusable without it: no composer, no title, and global snapshots
-// never repair it); SES_RECONNECT_MS re-opens the per-session SSE after the
-// browser drops it. Same beat today, different failures, tunable apart.
-const META_RETRY_MS = 1500;
-const SES_RECONNECT_MS = 1500;
+// Re-open the per-session stream after a transport disconnect.
 // A menu that closes on blur must let the CLICK land first: the mousedown blurs
 // the textarea before the click event reaches the row, so closing synchronously
 // would swallow every pick. (The rows themselves preventDefault on mousedown;
 // this delay is what catches a click AWAY from the menu.)
 const MENU_BLUR_MS = 150;
+const HISTORY_FETCH = 40;
 
 /* The session view, optionally SCOPED to one agent (docs/dashboard.md *Agent
    scope*). `agent` re-points the mirror, monitors and jobs at that agent — the
@@ -22,26 +17,24 @@ const MENU_BLUR_MS = 150;
    memory and errors stay session-wide (they have no agent dimension). Entering
    or leaving scope on the SAME session rebuilds the stream, because the feed's
    cursors and painted blocks belong to whichever scope produced them. */
-function showSession(sid, tab, agent) {
+function showSession(sessionId, tab, agent) {
   agent = agent || "";
-  // unknown / retired tab (e.g. an old #/…/activity bookmark) → the mirror;
-  // extension tabs (EXT — memory is the first) count as known
-  if (!["mirror", "agents", "monitors", "jobs", "errors"].includes(tab) && !EXT[tab])
+  // Unknown or retired tabs return to the mirror.
+  if (!["mirror", "agents", "monitors", "jobs", "memory", "errors"].includes(tab))
     tab = "mirror";
-  if (S.cur !== sid) {
+  if (S.currentSessionId !== sessionId) {
     leaveSession();
-    S.cur = sid;
-    S.ses = { agent: agent,
+    S.currentSessionId = sessionId;
+    S.sessionView = { agent: agent,
               lastId: 0, mpos: 0, oldest: 0, stream: el("div", "stream"), stats: {},
-              agents: [], costs: null, ctx: null, compacting: null,
+              agents: [], costs: null, contextWindow: null, compacting: null,
               running: {}, meta: null, es: null,
-              fgRun: null, fgTimer: null, fgEnded: null, fgChipAt: null,  // live fg elapsed
-              timer: null, poll: null, blocks: new Map(), moreEl: null,
+              timer: null, poll: null, itemNodes: new Map(), moreEl: null,
               monitors: null, monitorFocus: null, monPoll: null,
               jobs: null, jobFocus: null, jobPoll: null,
               // the section engine's repaint-skip signatures + the job
               // drill-down's output cache/box (app.11-chrome.js loadSection)
-              secRaw: {}, jobOut: null, jobOutBox: null,
+              jobOut: null,
               loadingOlder: false, queue: [], pending: [],
               askPend: null, planPend: null,   // in-flight optimistic ask/plan decisions
               // the view mode + its derived state: `view` is seeded from the
@@ -51,21 +44,19 @@ function showSession(sid, tab, agent) {
               // expanded, `viewSeq` names items, `viewFill` bounds the auto-load
               view: VIEW_DEFAULT, viewOpen: new Set(), viewSeq: 0,
               viewTimer: null, viewFill: 0 };
-    // each extension stamps its own per-session state slots (memory: the
-    // fetched list/tree, the collapse set, the open-note trail)
-    for (const x of extList()) if (x.init) x.init(S.ses);
-    loadSessionData(sid);
-  } else if ((S.ses.agent || "") !== agent) {
+    initializeMemoryState(S.sessionView);
+    loadCanonicalSession(sessionId);
+  } else if ((S.sessionView.agent || "") !== agent) {
     // SCOPE CHANGE on the same session (into an agent, between agents, or back
     // out). The feed's cursors and painted blocks belong to the scope that
     // produced them, so the stream is torn down and refetched rather than
     // filtered client-side — the server decides what is in scope, once.
-    S.ses.agent = agent;
+    S.sessionView.agent = agent;
     resetStream();
     resetScopedSections();
-    loadSessionData(sid);
+    loadCanonicalSession(sessionId);
   }
-  S.ses.tab = tab;
+  S.sessionView.tab = tab;
   renderSessionChrome(tab);
 }
 
@@ -73,510 +64,478 @@ function showSession(sid, tab, agent) {
    the SSE (its cursors are scope-relative), the rendered blocks, the lazy
    cursors, and the view-mode bookkeeping that names items by sequence. */
 function resetStream() {
-  const ses = S.ses;
-  if (ses.es) { try { ses.es.close(); } catch (e) { /* already closed */ } }
-  ses.es = null;
-  ses.lastId = 0; ses.mpos = 0; ses.oldest = 0;
-  ses.blocks = new Map();
-  ses.moreEl = null;
-  ses.loadingOlder = false;
-  ses.viewOpen = new Set(); ses.viewSeq = 0; ses.viewFill = 0;
-  ses.stream.textContent = "";
+  const sessionView = S.sessionView;
+  if (sessionView.es) { try { sessionView.es.close(); } catch (e) { /* already closed */ } }
+  sessionView.es = null;
+  sessionView.lastId = 0; sessionView.mpos = 0; sessionView.oldest = 0;
+  sessionView.itemNodes = new Map();
+  sessionView.moreEl = null;
+  sessionView.loadingOlder = false;
+  sessionView.viewOpen = new Set(); sessionView.viewSeq = 0; sessionView.viewFill = 0;
+  sessionView.stream.textContent = "";
 }
 
-function loadSessionData(sid) {
-  S.ses.stream.append(el("div", "waiting", "waiting for activity…"));
-  // meta (live/kitty_window_id/title/…) comes ONLY from this fetch — global
-  // snapshots never repair it (updateHeadFromList no-ops while meta is null),
-  // so a transient failure left the whole view stuck unusable (composer
-  // disabled, no title) until a reload. Retry while still on this session and
-  // still unpopulated; the guards make a late retry after a leave a harmless
-  // no-op. In agent scope it also carries `agent_usage` — that agent's token
-  // rollup + priced cost, which the scoreboard swap shows.
-  let resolveTries = 0;
-  const loadMeta = () => fetch("/api/session/" + encodeURIComponent(sid) + agentQ())
-      .then(r => r.json())
-      .then(d => {
-        if (S.cur !== sid || !S.ses) return;
-        S.ses.meta = d;
-        S.ses.stats = d.stats || {};
-        S.ses.agents = d.agents || [];
-        S.ses.costs = d.costs || null;
-        S.ses.ctx = d.ctx || null;
-        // a page opened MID-compaction picks the animation up from the payload
-        // (the SSE channel only speaks on the two transitions)
-        S.ses.compacting = d.compacting || null;
-        S.ses.running = d.running || {};
-        // the durable per-session view mode (dashboard/prefs.py) — seeded before
-        // the chrome is built, so the view bar renders with the right segment
-        // lit and the backlog collapses on first paint rather than flashing
-        // verbose first
-        if (VIEW_MODES.includes(d.view_mode)) S.ses.view = d.view_mode;
-        renderSessionChrome(S.ses.tab || "mirror");
-        applyViewMode();
-        // a page opened MID-command ticks from the real start (the SSE `fgrun`
-        // only fires on CHANGE, so without this seed a reload would show no
-        // elapsed until the next command)
-        setFgRun(d.fg_running || null);
-        // startup TAG-RACE self-heal: a just-launched session momentarily
-        // reports live:true with a BLANK kitty_window_id (its kitty pane isn't
-        // tagged claude_session=<sid> yet, so session_payload can't resolve the
-        // window). That partial meta fails BOTH composer gates — canSend
-        // (live && window) AND canResume (!live) — so the box locks and the
-        // live-gated ✕ close button never renders (the reported "no close
-        // button + can't type, fixed only by reload"). Re-fetch until the pane
-        // tags: authoritative and self-healing where the fragile global-poll
-        // heal (updateHeadFromList, raw-vs-resolved window id spaces) misses.
-        // Bounded — a truly headless session never resolves a window.
-        if (d.live && !d.kitty_window_id && resolveTries < LAUNCH_RESOLVE_TRIES) {
-          resolveTries++;
-          setTimeout(loadMeta, LAUNCH_RESOLVE_MS);
-        } else if (d.live && !d.kitty_window_id) {
-          // the tag-race NEVER resolved — the composer + ✕ close stay dead. The
-          // "no close button, can't type, only a reload fixes it" report, now a
-          // row instead of a mystery (vs a truly headless session, which never
-          // has a window and is EXPECTED to land here).
-          clog(sid, "meta.stuck", { tries: resolveTries });
-        } else if (d.live && d.kitty_window_id && resolveTries > 0) {
-          clog(sid, "meta.resolved", { tries: resolveTries });   // self-heal worked
-        }
-      })
-      .catch(() => {
-        clog(sid, "meta.fail", {});   // the session-view meta GET rejected
-        if (S.cur === sid && S.ses && !S.ses.meta) setTimeout(loadMeta, META_RETRY_MS);
-      });
-  loadMeta();
-  // Initial stream content over a plain GET, NOT the SSE fresh-connect
-  // backlog: _send gzips this HTML 8-9x, while SSE frames are never
-  // compressed — on a remote/tunnel connection that difference IS the
-  // "waiting for activity…" wait. The SSE then connects with the returned
-  // cursors and only streams increments (the same no-gap resume contract a
-  // reconnect uses); on any fetch failure it connects with zero cursors
-  // and the server-side SSE backlog covers us like before.
-  fetch("/api/session/" + encodeURIComponent(sid) + "/backlog" + agentQ())
+function canonicalActorRow(actor) {
+  return {
+    id: actor.actor_id,
+    agent_id: actor.actor_id,
+    parent: actor.parent_actor_id || "",
+    kind: actor.role,
+    name: actor.name || actor.actor_id,
+    desc: actor.description || actor.name || "",
+    description: actor.description || "",
+    model: actor.model ? actor.model.native_id : "",
+    effort: actor.effort || "",
+    state: actor.state,
+    active: actor.state === "running",
+    done: actor.state === "finished",
+    started_at: actor.started_at || null,
+    ended_at: actor.finished_at || null,
+  };
+}
+
+function canonicalUsageStats(usage) {
+  const tokens = (usage && usage.tokens) || {};
+  return {
+    tk_in: tokens.input_tokens || 0,
+    tk_out: tokens.output_tokens || 0,
+    tk_read: tokens.cache_read_tokens || 0,
+    tk_create: (tokens.cache_write_tokens || 0)
+      + (tokens.one_hour_cache_write_tokens || 0),
+    cost: usage && usage.cost_in_usd != null ? Number(usage.cost_in_usd) : null,
+  };
+}
+
+function canonicalActivityStats(snapshot) {
+  const activity = snapshot.statistics || {};
+  return Object.assign(canonicalUsageStats(snapshot.usage), {
+    commands: activity.shell_command_count || 0,
+    failed: activity.failed_shell_command_count || 0,
+    files: activity.file_count || 0,
+    added: activity.lines_added || 0,
+    removed: activity.lines_removed || 0,
+    msg_delivered: activity.actor_message_count || 0,
+    start: snapshot.session && snapshot.session.started_at || 0,
+  });
+}
+
+function canonicalSessionMeta(snapshot) {
+  const session = snapshot.session || {};
+  const actorId = (S.sessionView && S.sessionView.agent) || session.lead_actor_id || "";
+  const pendingAttention = ((snapshot.attention || {}).pending || [])
+    .find(item => !actorId || item.actor_id === actorId) || null;
+  const ask = pendingAttention && pendingAttention.attention_type !== "plan" ? {
+    attention_id: pendingAttention.attention_id,
+    tool_use_id: pendingAttention.attention_id,
+    questions: (pendingAttention.questions || []).map(question => ({
+      id: question.question_id,
+      header: question.title || "",
+      question: question.text,
+      multiSelect: !!question.multiple,
+      options: (question.options || []).map(option => ({
+        value: option.value,
+        label: option.label,
+        description: option.description || "",
+      })),
+    })),
+  } : null;
+  const plan = pendingAttention && pendingAttention.attention_type === "plan" ? {
+    attention_id: pendingAttention.attention_id,
+    tool_use_id: pendingAttention.attention_id,
+    plan_id: pendingAttention.attention_id,
+    plan_html: pendingAttention.plan_html || "",
+  } : null;
+  return {
+    harness: session.harness || "",
+    title: session.title || "",
+    workingDirectory: session.working_directory || "",
+    model: session.model ? session.model.native_id : "",
+    effort: session.effort || "",
+    account: session.account ? {
+      slug: session.account.account_id,
+      label: session.account.display_name || session.account.account_id,
+    } : {},
+    prompts: session.prompt_count || 0,
+    tasks: (snapshot.tasks || []).map(task => ({
+      id: task.task_id,
+      label: task.label,
+      subject: task.subject,
+      description: task.description || "",
+      status: task.state,
+      owner_actor_id: task.owner_actor_id || null,
+    })),
+    goal: snapshot.goal ? {
+      condition: snapshot.goal.objective,
+      met: snapshot.goal.state === "completed",
+    } : null,
+    ask,
+    plan,
+    monitor_count: (snapshot.background_work || {}).monitor_count || 0,
+    job_count: (snapshot.background_work || {}).background_job_count || 0,
+  };
+}
+
+function canonicalBackgroundOperation(operation) {
+  return {
+    task: operation.task,
+    agent_id: operation.actor_id || "",
+    group: operation.task,
+    command: operation.command || "",
+    cmd_html: operation.command_html || "",
+    description: operation.description || "",
+    live: !!operation.live,
+    started_at: operation.started_at,
+    ended_at: operation.ended_at,
+    end_reason: operation.end_reason || "",
+    output: operation.output || "",
+    lines: operation.line_count || 0,
+    persistent: false,
+    timeout_ms: null,
+    event_count: (operation.events || []).length,
+    events_truncated: false,
+    events: (operation.events || []).map(event => ({
+      event: event.event || "",
+      status: event.status || "",
+      summary: event.summary || "",
+      ts: event.timestamp,
+    })),
+  };
+}
+
+function applyCanonicalBackgroundWork(backgroundWork) {
+  if (!S.sessionView) return;
+  S.sessionView.monitors = (backgroundWork.monitors || []).map(canonicalBackgroundOperation);
+  S.sessionView.jobs = (backgroundWork.jobs || []).map(canonicalBackgroundOperation);
+}
+
+function applySessionApplication(snapshot) {
+  if (!S.sessionView || !snapshot) return;
+  const terminal = snapshot.terminal || {};
+  const input = terminal.input_state || {};
+  const preferences = snapshot.preferences || {};
+  const composer = snapshot.composer || {};
+  const dialog = snapshot.dialog || {};
+  const memory = snapshot.memory || {};
+  const previousMemoryCount = (S.sessionView.meta || {}).memory_count || 0;
+  const errors = snapshot.errors || [];
+  S.sessionView.errors = errors;
+  updateErrCount(errors.length);
+  S.sessionView.meta = Object.assign({}, S.sessionView.meta || {}, {
+    live: !!terminal.window_id,
+    kitty_window_id: terminal.window_id || "",
+    suggestion: input.suggestion || "",
+    typed_text: input.typed_text || "",
+    view_mode: preferences.view_mode || "default",
+    notify_muted: !!preferences.notifications_muted,
+    tasks_hidden: !!preferences.tasks_hidden,
+    composer_draft: composer.draft || null,
+    composer_queue: composer.queue || null,
+    ask_draft: dialog.draft || null,
+    memory_scope: !!memory.enabled,
+    memory_count: memory.item_count || 0,
+  });
+  applyComposerDraft(composer.draft || null);
+  applyComposerQueue(composer.queue || null);
+  applyAskDraft(dialog.draft || null);
+  if (S.sessionView.tab === "memory" && previousMemoryCount !== (memory.item_count || 0))
+    loadMemory(true);
+}
+
+function applyCanonicalSnapshot(snapshot) {
+  if (!S.sessionView || !snapshot) return;
+  const previous = S.sessionView.meta || {};
+  S.sessionView.meta = Object.assign({}, previous, canonicalSessionMeta(snapshot));
+  S.sessionView.meta.tab = snapshot.tab_state || "";
+  applyCanonicalBackgroundWork(snapshot.background_work || {});
+  S.sessionView.stats = canonicalActivityStats(snapshot);
+  const leadActorId = (snapshot.session || {}).lead_actor_id || "";
+  S.sessionView.agents = (snapshot.actors || [])
+    .filter(actor => actor.actor_id !== leadActorId)
+    .map(canonicalActorRow);
+  S.sessionView.costs = {
+    total_usd: snapshot.usage && snapshot.usage.cost_in_usd != null
+      ? Number(snapshot.usage.cost_in_usd) : null,
+  };
+  const actorId = S.sessionView.agent || ((snapshot.session || {}).lead_actor_id || "");
+  S.sessionView.contextWindow = actorId && snapshot.context && snapshot.context.by_actor
+    ? (() => {
+        const context = snapshot.context.by_actor[actorId];
+        if (!context) return null;
+        const used = context.used_tokens || 0;
+        const window = context.window_tokens || 0;
+        return {
+          used,
+          window,
+          pct: window ? Math.round(used * 100 / window) : 0,
+          model_short: context.model
+            ? (context.model.display_name || context.model.native_id) : "",
+          model_selection: context.model ? context.model.selection_id : null,
+        };
+      })() : null;
+  S.sessionView.compacting = snapshot.context
+    && (snapshot.context.compacting_actor_ids || []).includes(actorId)
+    ? { active: true } : null;
+  const backgroundWork = snapshot.background_work || {};
+  const monitorCount = backgroundWork.monitor_count || 0;
+  const backgroundCount = backgroundWork.background_job_count || 0;
+  const runningCount = (backgroundWork.running_operation_ids || []).length;
+  S.sessionView.running = {
+    operation: Math.max(0, runningCount - monitorCount - backgroundCount),
+    background: backgroundCount,
+    monitor: monitorCount,
+  };
+}
+
+function canonicalSessionQuery() {
+  const actor = (S.sessionView && S.sessionView.agent) || "";
+  return actor ? "?actor_id=" + encodeURIComponent(actor) : "";
+}
+
+function applyCanonicalCatalog(snapshot, catalog) {
+  if (!S.sessionView || !S.sessionView.meta || !snapshot || !snapshot.session) return;
+  const harness = snapshot.session.harness || "";
+  const host = hostRow(harness);
+  const controls = new Set((host && host.controls) || []);
+  S.sessionView.meta.host_label = (host && host.label) || harness;
+  S.sessionView.meta.model_choices = (catalog.models || []).map(option => option.model_id);
+  S.sessionView.meta.effort_choices = (catalog.efforts || []).map(option => option.value);
+  S.sessionView.meta.rewind_modes = (catalog.rewind_modes || []).map(option => ({
+    mode: option.value,
+    label: option.display_name,
+  }));
+  S.sessionView.meta.quick_commands = (catalog.commands || []).map(option => ({
+    cmd: option.command,
+    min_prompts: option.minimum_prompt_count || 0,
+  }));
+  S.sessionView.meta.caps = {
+    send: controls.has("send_text"),
+    interrupt: controls.has("interrupt"),
+    close: controls.has("close_session"),
+    rename: controls.has("rename_session"),
+    autoname: controls.has("auto_name_session"),
+    rewind: controls.has("apply_rewind"),
+    migrate: controls.has("migrate_account"),
+    compact: controls.has("compact"),
+    model: controls.has("select_model"),
+    effort: controls.has("select_effort"),
+    answer: controls.has("answer_question"),
+    plan: controls.has("decide_plan"),
+  };
+}
+
+function loadCanonicalSession(sessionId) {
+  const query = canonicalSessionQuery();
+  S.sessionView.stream.append(el("div", "waiting", "waiting for activity…"));
+  loadCanonicalSessionSnapshot(sessionId, query);
+  fetch("/api/sessions/" + encodeURIComponent(sessionId) + "/activity?block_count=100"
+        + (query ? "&" + query.slice(1) : ""))
     .then(r => r.json())
-    .then(d => {
-      if (S.cur !== sid || !S.ses) return;
-      S.ses.lastId = Math.max(S.ses.lastId, d.last | 0);
-      S.ses.mpos = Math.max(S.ses.mpos, d.mpos | 0);
-      if (d.oldest != null) { S.ses.oldest = d.oldest | 0; updateMoreBtn(); }
-      if (d.items && d.items.length) appendItems(d.items);
+    .then(page => {
+      if (S.currentSessionId !== sessionId || !S.sessionView) return;
+      S.sessionView.lastId = page.latest_cursor || 0;
+      S.sessionView.oldest = page.has_more ? (page.oldest_cursor || 0) : 0;
+      appendItems(page.items || []);
     })
-    .catch(() => { clog(sid, "backlog.fail", {}); })   // stream may read empty
-    .finally(() => { if (S.cur === sid) connectSession(sid); });
+    .catch(() => { clog(sessionId, "backlog.fail", {}); })
+    .finally(() => { if (S.currentSessionId === sessionId) connectCanonicalSession(sessionId); });
 }
 
-function connectSession(sid) {
-  if (!S.ses || S.cur !== sid) return;
-  // Never leak a prior EventSource. Two backlog fetches can race a leave/return
-  // to the SAME sid (on a slow/tunnel link the backlog is deliberately a plain
-  // GET), and each fires this from its .finally; the onerror reconnect re-enters
-  // too. Without closing first, the earlier ES is orphaned — never closed, still
-  // streaming, and its overlapping ops double-append into the feed.
-  if (S.ses.es) { try { S.ses.es.close(); } catch (e) { /* already closed */ } }
-  const es = new EventSource("/events/session/" + encodeURIComponent(sid)
-                             + "?after=" + S.ses.lastId + "&mpos=" + S.ses.mpos
-                             + agentQ("&"));
-  S.ses.es = es;
-  // ops AND main-thread conversation arrive on this ONE event, already
-  // interleaved oldest->newest by ts server-side (merge_live) — sending them as
-  // two arrival-order events prepended a turn's text ABOVE its command in the
-  // newest-top feed (the "messages come after commands" inversion).
-  es.addEventListener("ops", (e) => {
-    const d = JSON.parse(e.data);
-    if (d.last <= S.ses.lastId && !d.items.length) return;
-    S.ses.lastId = Math.max(S.ses.lastId, d.last);
-    if (d.mpos != null) S.ses.mpos = Math.max(S.ses.mpos, d.mpos);
-    // the initial (fresh-connection) backlog carries `oldest` — the smallest
-    // op id painted; >0 means older blocks exist to lazy-load downward.
-    if (d.oldest != null) { S.ses.oldest = d.oldest | 0; updateMoreBtn(); }
-    appendItems(d.items);
-  });
-  es.addEventListener("stats", (e) => { if (!S.ses) return; S.ses.stats = JSON.parse(e.data); updateStatsRow(); });
-  es.addEventListener("agents", (e) => { if (!S.ses) return; S.ses.agents = JSON.parse(e.data); updateAgents(); });
-  es.addEventListener("costs", (e) => { if (!S.ses) return; S.ses.costs = JSON.parse(e.data); updateStatsRow(); });
-  es.addEventListener("ctx", (e) => { if (!S.ses) return; S.ses.ctx = JSON.parse(e.data).ctx; updateStatsRow(); });
-  // compaction start/end — the ctx bar's collapse rehearsal (docs/dashboard.md,
-  // *Compaction on the ctx bar*). FAST channel, so the animation starts within a
-  // tick of PreCompact and the eased drain follows PostCompact just as promptly.
-  es.addEventListener("compacting", (e) => {
-    if (!S.ses) return;
-    S.ses.compacting = JSON.parse(e.data).compacting || null;
+function loadCanonicalSessionSnapshot(sessionId, query) {
+  let stage = "transport";
+  fetch("/api/sessions/" + encodeURIComponent(sessionId) + query)
+    .then(response => {
+      stage = "response";
+      if (!response.ok) {
+        const error = new Error("session metadata " + response.status);
+        error.status = response.status;
+        throw error;
+      }
+      stage = "decode";
+      return response.json();
+    })
+    .then(page => {
+      stage = "render";
+      if (S.currentSessionId !== sessionId || !S.sessionView) return;
+      const snapshot = page.canonical || {};
+      applyCanonicalSnapshot(snapshot);
+      applySessionApplication(page.application || {});
+      renderSessionChrome(S.sessionView.tab || "mirror");
+      applyViewMode();
+      if (S.sessionView.meta.suggestion) applySuggestion(S.sessionView.meta.suggestion);
+      const session = snapshot.session || {};
+      const catalogQuery = "?session_id=" + encodeURIComponent(sessionId)
+        + "&working_directory=" + encodeURIComponent(session.working_directory || "");
+      fetch("/api/harnesses/" + encodeURIComponent(session.harness) + "/catalog"
+            + catalogQuery)
+        .then(response => response.json())
+        .then(catalog => {
+          if (S.currentSessionId !== sessionId || !S.sessionView) return;
+          applyCanonicalCatalog(snapshot, catalog);
+          renderSessionChrome(S.sessionView.tab || "mirror");
+        })
+        .catch(() => { clog(sessionId, "catalog.fail", {}); });
+    })
+    .catch(error => {
+      clog(sessionId, "meta.fail", {
+        stage,
+        status: (error && error.status) || 0,
+        error: String((error && error.message) || error || "").slice(0, 160),
+      });
+    });
+}
+
+function connectCanonicalSession(sessionId) {
+  if (!S.sessionView || S.currentSessionId !== sessionId) return;
+  if (S.sessionView.es) { try { S.sessionView.es.close(); } catch (error) { /* already closed */ } }
+  const actor = (S.sessionView.agent || "");
+  const query = "?after_cursor=" + (S.sessionView.lastId || 0)
+    + (actor ? "&actor_id=" + encodeURIComponent(actor) : "");
+  const stream = new EventSource(
+    "/api/sessions/" + encodeURIComponent(sessionId) + "/stream" + query
+  );
+  S.sessionView.es = stream;
+  stream.addEventListener("activity", event => {
+    if (!S.sessionView || S.currentSessionId !== sessionId) return;
+    const frame = JSON.parse(event.data);
+    S.sessionView.lastId = Math.max(S.sessionView.lastId || 0, frame.cursor || 0);
+    applyCanonicalSnapshot(frame.snapshot);
+    appendItems(frame.items || []);
     updateStatsRow();
-  });
-  es.addEventListener("git", (e) => {
-    const g = JSON.parse(e.data).git || null;
-    if (!S.ses) return;
-    if (S.ses.meta) S.ses.meta.git = g;
-    if (S.ses.gitChip) setGitChip(S.ses.gitChip, g);
-  });
-  es.addEventListener("title", (e) => {
-    // a web rename or a fresh auto ai-title — retitle the header in place, but
-    // never clobber an inline rename edit in progress, and never in AGENT SCOPE:
-    // there the header name is that AGENT's (renderAgentScoreboard paints it
-    // into the same element). The session's title is still recorded on `meta`,
-    // so leaving scope shows the fresh one. Without the guard the name was
-    // correct for a second and then reverted to the session's on the next slow
-    // tick — the same guard the state badge beside it already had ("it does have
-    // a name, but of the original agent").
-    const t = JSON.parse(e.data).title || "";
-    if (!S.ses) return;
-    if (S.ses.meta) S.ses.meta.title = t;
-    if (t && !S.ses.agentFocus && S.ses.projEl && !S.ses.projEl.querySelector("input"))
-      S.ses.projEl.textContent = t;
-  });
-  es.addEventListener("effort", (e) => {
-    if (S.ses && S.ses.meta) {
-      S.ses.meta.effort = JSON.parse(e.data).effort;
-      if (S.ses.effortBtn) setEffortBtn(S.ses.effortBtn);
-    }
-  });
-  es.addEventListener("running", (e) => { if (!S.ses) return; S.ses.running = JSON.parse(e.data); updateRunning(); });
-  es.addEventListener("fgrun", (e) => { setFgRun((JSON.parse(e.data) || {}).fg || null); });
-  es.addEventListener("errors", (e) => { updateErrCount(JSON.parse(e.data).count | 0); });
-  // the secondary-tab badges — built-ins plus every extension's (one shape:
-  // SECTIONS, app.11-chrome.js; an ext badge's SSE event is its name):
-  // patch the count, and refresh that list when its tab is the one open
-  for (const kind of ["monitors", "jobs", ...Object.keys(EXT)])
-    es.addEventListener(kind, (e) =>
-      updateSectionCount(kind, JSON.parse(e.data).count | 0));
-  es.addEventListener("ask", (e) => {
-    const d = JSON.parse(e.data);
-    if (!S.ses) return;
-    const newAsk = d.ask || null;
-    // the REAL confirmation of an optimistic answer: the stash we submitted
-    // against is gone (cleared, or replaced by a different ask) — swap the
-    // greyed card away and beacon the reconcile latency
-    const pend = S.ses.askPend;
-    if (pend && pend.live && (!newAsk || newAsk.tool_use_id !== pend.id)) {
-      pend.settle("reconciled");
-      S.ses.askPend = null;
-    }
-    if (S.ses.meta) S.ses.meta.ask = newAsk;
+    updateAgents();
+    updateRunning();
     renderAsk();
-  });
-  es.addEventListener("ask-draft", (e) => {
-    const d = JSON.parse(e.data);
-    if (!S.ses) return;
-    applyAskDraft(d.draft);
-  });
-  es.addEventListener("composer-draft", (e) => {
-    const d = JSON.parse(e.data);
-    if (!S.ses) return;
-    applyComposerDraft(d.draft);
-  });
-  es.addEventListener("view-mode", (e) => {
-    // another DEVICE (or tab) switched this session's density — follow it, so
-    // the selection is set once and holds everywhere. Guarded on an actual
-    // change: the event repeats only on change server-side, but our own POST's
-    // echo would otherwise clear the runs the user just expanded.
-    const m = JSON.parse(e.data).mode;
-    if (!S.ses || !VIEW_MODES.includes(m) || S.ses.view === m) return;
-    S.ses.view = m;
-    if (S.ses.meta) S.ses.meta.view_mode = m;
-    S.ses.viewOpen.clear();
-    S.ses.viewFill = 0;
-    applyViewMode();
-    if (S.ses.modeBtns)
-      S.ses.modeBtns.forEach((b, k) => b.classList.toggle("on", k === m));
-  });
-  es.addEventListener("composer-queue", (e) => {
-    const d = JSON.parse(e.data);
-    if (!S.ses) return;
-    applyComposerQueue(d.queue);
-  });
-  es.addEventListener("suggestion", (e) => {
-    const d = JSON.parse(e.data);
-    if (!S.ses) return;
-    applySuggestion(d.suggestion);
-  });
-  es.addEventListener("plan", (e) => {
-    const d = JSON.parse(e.data);
-    if (!S.ses) return;
-    const newPlan = d.plan || null;
-    // real confirmation of an optimistic plan decision — the stash dropped
-    const pend = S.ses.planPend;
-    if (pend && pend.live && (!newPlan || newPlan.tool_use_id !== pend.id)) {
-      pend.settle("reconciled");
-      S.ses.planPend = null;
-    }
-    if (S.ses.meta) S.ses.meta.plan = newPlan;
     renderPlan();
-  });
-  es.addEventListener("tasks", (e) => {
-    const d = JSON.parse(e.data);
-    if (!S.ses) return;
-    // the event carries the card's WHOLE state: the list AND whether it was
-    // dismissed — so a ✕ on another device un-pins this page's copy too
-    if (S.ses.meta) {
-      S.ses.meta.tasks = d.tasks || null;
-      S.ses.meta.tasks_hidden = !!d.hidden;
-    }
     renderTasks();
-  });
-  es.addEventListener("goal", (e) => {
-    const d = JSON.parse(e.data);
-    if (!S.ses) return;
-    if (S.ses.meta) S.ses.meta.goal = d.goal || null;
     renderGoal();
+    if (S.sessionView.tab === "monitors" || S.sessionView.monitorFocus) loadSection("monitors");
+    if (S.sessionView.tab === "jobs" || S.sessionView.jobFocus) loadSection("jobs");
+    if (S.sessionView.meta.suggestion) applySuggestion(S.sessionView.meta.suggestion);
   });
-  // the ✦ model button's ⚠ — a safeguard refusal rerouted the session to a
-  // fallback model; the server stops serving it once the ctx model moves off
-  // the fallback, and the same repaint clears the icon
-  es.addEventListener("fallback", (e) => {
-    const d = JSON.parse(e.data);
-    if (!S.ses || !S.ses.meta) return;
-    S.ses.meta.fallback = d.fallback || null;
-    if (S.ses.modelBtn) setModelBtn(S.ses.modelBtn);
-  });
-  // how many prompts you have typed — the ⊜ compact gate's input (Claude Code
-  // refuses to compact a conversation that has barely started). Re-runs the
-  // quick-command gates so the button un-greys on the message that crosses the
-  // floor, without a reload.
-  es.addEventListener("prompts", (e) => {
-    const d = JSON.parse(e.data);
-    if (!S.ses || !S.ses.meta) return;
-    S.ses.meta.prompts = d.prompts;
-    if (S.ses.quickMode) S.ses.quickMode(liveTab());
-  });
-  es.addEventListener("tab", (e) => {
-    const d = JSON.parse(e.data);
-    // while drilled into a subagent the badge/wash belong to that agent's
-    // status (setBadgeAgent) — a session tab event must not repaint them
-    // (same focus guard as updateRunning/updateStatsRow).
-    if (S.ses && S.ses.badge && !S.ses.agentFocus) setBadge(S.ses.badge, d.tab || "");
-    if (S.ses && S.ses.composerMode) S.ses.composerMode(d.tab || "");
-    if (S.ses && S.ses.stopMode) S.ses.stopMode(d.tab || "");
-    if (S.ses && S.ses.quickMode) S.ses.quickMode(d.tab || "");
-    // patch the open session's row so the session strip reacts before the
-    // next global snapshot lands (item 4: react to the per-session tab event)
-    const row = S.sessions.find(r => r.sid === S.cur);
-    if (row) row.tab = d.tab || "";
-    renderAttention();
-    // a settled tab retires the newest run's grey dot + ticking elapsed (the
-    // turn is over, so nothing in that run is still going)
+  stream.addEventListener("application", event => {
+    if (!S.sessionView || S.currentSessionId !== sessionId) return;
+    applySessionApplication(JSON.parse(event.data));
     applyViewMode();
+    if (S.sessionView.meta.suggestion) applySuggestion(S.sessionView.meta.suggestion);
   });
-  es.onopen = () => { $conn.dataset.on = "1"; sseMark("session", true, { sid }); };
-  es.onerror = () => {
-    sseMark("session", false, { sid });
-    es.close();
-    if (S.cur !== sid) return;
-    S.ses.timer = setTimeout(() => connectSession(sid), SES_RECONNECT_MS);
-  };
 }
 
-// Stream items ({g, t, html}) fold into collapsible BLOCK cards by copy-group
-// id: label ops become the block's summary chips (start chip, then the
-// finished/duration chip), everything else goes to the fold-away body.
-//
-// EVERY block arrives FOLDED — its one-line summary is the feed, and the body
-// is what the click is for ("everything by default should be not expanded ...
-// make sure that everything is not expanded, not only those I mentioned").
-// A block that expands itself is a block that decides how much of your screen
-// it deserves, and the ones that took the most were the least interesting: a
-// ToolSearch's request/response pair, a TaskGet's payload, the wall of output
-// from a command that ran a minute ago. The agent NOTES had already been
-// singled out for this treatment (fillBlock's `it.note`); this is the same rule
-// with no exceptions left, so the feed is a list of what happened and depth is
-// always one click.
-//
-// Only a user toggle opens one, and it is sticky (`userSet`/`data-userset`) —
-// which is why there is no re-fold pass any more: nothing here ever opens a
-// block, so nothing needs to close it. Ungrouped items (messages, file-op
-// one-liners) are single lines and stay inline, unaffected.
-const HISTORY_FETCH = 40;      // blocks per lazy-backlog /history page
+const RUN_TIMER_INTERVAL_MS = 1000;
 
-// The stream is a FEED: newest on top. Items arrive oldest→newest and each
-// is inserted at the top, so the batch lands newest-first; a block keeps the
-// position of its first op (its body still reads top-down) and new blocks
-// appear above it.
-// A collapsible block card (root/head/chips/sum/body + fold-toggle handler),
-// unplaced — the caller inserts .root and decides tracking. Shared by the live
-// top-prepend path (appendItems) and the older-history bottom-append path
-// (appendOlder).
-function createBlock() {
-  const root = el("div", "blk");
-  root.dataset.open = "0";                       // folded until YOU open it
-  root.dataset.kind = "commands";                // refineBlockKind upgrades to "agents"
-  const head = el("div", "bhead");
-  const chips = el("span", "bchips");
-  const sum = el("span", "bsum");
-  // …and the two slots a QUIET command header uses (opshtml.cmd_note): its closing
-  // words after the command, where `· 0.6s` reads as that command's duration, and the
-  // ⧉ links at the far right, out of the line the eye reads.
-  const tail = el("span", "btail");
-  const links = el("span", "blinks");
-  const body = el("div", "bbody");
-  head.append(chips, sum, tail, links);
-  root.append(head, body);
-  const b = { root, chips, sum, tail, links, body, userSet: false,
-              kindLocked: false };
-  head.onclick = (e) => {
-    if (e.target.closest("a")) return;           // ⧉ links keep working
-    // nothing to reveal, nothing to toggle: a TEAMMATE's launch note has no body
-    // (its spawn record is only Claude Code's injected reminders, dropped server-
-    // side — its real instructions arrive as mail), and opening an empty panel
-    // reads as a broken click
-    if (!b.body.childElementCount) return;
-    b.userSet = true;
-    // …mirrored onto the node, because the view-mode pass reads this off the DOM:
-    // it folds the blocks a run reveals, and must not re-fold one you opened
-    // yourself. `b.userSet` is unreachable there — history blocks have no entry
-    // in S.ses.blocks at all (appendOlder tracks them locally).
-    root.dataset.userset = "1";
-    root.dataset.open = root.dataset.open === "1" ? "0" : "1";
-  };
-  return b;
+function dashboardNode(item) {
+  const container = el("div");
+  container.innerHTML = item.html;
+  const node = container.firstElementChild;
+  if (!node || node.nextElementSibling)
+    throw new Error("DashboardItem.html must contain one top-level node");
+  stampItem(node, item);
+  if (node.classList.contains("blk"))
+    node.dataset.open = S.sessionView.view === "verbose" ? "1" : "0";
+  bindCanonicalContent(node, item);
+  bindDashboardBlock(node);
+  return node;
 }
 
-/* The live elapsed chip on the IN-FLIGHT foreground command (docs/dashboard.md,
-   *Live command elapsed*). The server says WHICH block is running and since
-   when (`fgrun` = sessionapi.fg_running — the fg-live hand-off's tool_use_id,
-   which IS the block's copy-group id, plus its start); the seconds are counted
-   HERE, so the number advances on a 1s local tick instead of costing an event
-   per second. The chip lives in the block's `.bchips` summary row (so a folded
-   block still shows it) right after the `▶ foreground` chip, and is retired the
-   moment the block's own finish chip ("■ finished · 3.2s") lands — that chip is
-   the authoritative duration, and a ticking twin beside it would only disagree.
-   Foreground only: a bg job / monitor / subagent has its own card with a
-   "running for" line, and the fg block is the one the eye is on. */
-const FG_TICK_MS = 1000;
-
-function fgClearChip(g) {
-  const b = g && S.ses.blocks.get(g);
-  const c = b && b.root.querySelector(".blive");   // chips row, or a quiet head's tail
-  if (c) c.remove();
+function canonicalContentUrl(reference) {
+  return "/api/content/" + encodeURIComponent(reference);
 }
 
-function tickFgElapsed() {
-  const ses = S.ses;
-  if (!ses) return;
-  const fg = ses.fgRun;
-  if (ses.fgChipAt && (!fg || ses.fgChipAt !== fg.g)) {
-    fgClearChip(ses.fgChipAt);              // the command it belonged to ended
-    ses.fgChipAt = null;
+function canonicalContentLinks() {
+  const links = el("span", "cl");
+  const copy = el("a", "cc canonical-content", "⧉copy");
+  copy.dataset.contentAction = "copy";
+  const view = el("a", "cc canonical-content", "⧉view");
+  view.dataset.contentAction = "view";
+  links.append(copy, view);
+  return links;
+}
+
+function canonicalOperationContentLinks(item) {
+  const links = el("span", "cl");
+  for (const [label, reference] of [
+    ["⧉cmd", item.command_reference],
+    ["⧉out", item.output_reference],
+  ]) {
+    if (!reference) continue;
+    const copy = el("a", "cc canonical-content", label);
+    copy.dataset.contentAction = "copy";
+    copy.dataset.contentReference = reference;
+    links.append(copy);
   }
-  if (!fg) {
-    if (ses.fgTimer) { clearInterval(ses.fgTimer); ses.fgTimer = null; }
+  return links;
+}
+
+function bindCanonicalContent(node, item) {
+  const links = node.querySelector(".blinks");
+  if (item.command_reference || item.output_reference) {
+    if (links) links.append(canonicalOperationContentLinks(item));
     return;
   }
-  const b = ses.blocks.get(fg.g);
-  if (!b) return;              // the block's ops haven't landed yet — next tick
-  let c = b.root.querySelector(".blive");
-  // in a QUIET head it belongs where the finish chip's duration will land, so the
-  // ticking number and the final one appear in the same column of the line
-  if (!c) {
-    c = el("span", "chip blive");
-    (b.root.dataset.quiet ? b.tail : b.chips).append(c);
-  }
-  ses.fgChipAt = fg.g;
-  // NO GLYPH, and no emoji risk: this was `"⏱ " + dur(…)` written straight to
-  // textContent — bypassing tp(), so U+23F1 fell through to the colour-emoji font
-  // ("No emoji", docs/dashboard.md). A pin (U+FE0E) is only a REQUEST, which a font
-  // without the text glyph ignores — the ☀ wake button learned that and became an SVG.
-  // Here the glyph was never needed: the line already reads `· 91.4s` when the command
-  // ends, so the ticking form is the same words, and "still counting" is carried by the
-  // grey dot plus the pulse. Runs through tp() anyway, since this is the one page path
-  // that assigns text without el()/tnode() doing it (test_no_page_glyph_can_turn_colour).
-  c.textContent = tp("· " + dur(Date.now() / 1000 - fg.start_ts));
-}
-
-function setFgRun(fg) {
-  const ses = S.ses;
-  if (!ses) return;
-  // the finish chip beat the `fgrun` clear (both ride the same 0.6s tick, in no
-  // fixed order) — don't resurrect a ticker on a command already reported done
-  if (fg && fg.g === ses.fgEnded) fg = null;
-  ses.fgRun = fg;
-  if (fg && !ses.fgTimer) ses.fgTimer = setInterval(tickFgElapsed, FG_TICK_MS);
-  tickFgElapsed();
-  // a collapsed run showing this command re-anchors its elapsed on the command's
-  // real start (and drops it once the command is done) — the same hand-off the
-  // ⏱ chip above uses, applied to the summary line standing in for the block
-  applyViewMode();
-}
-
-// A single copy-group's body is capped: a long-lived group (a bg stream, a
-// monitor, `tail -f`, a subagent) keeps emitting line/code/gut ops that all
-// share ONE block id, and the `.stream` child cap in appendItems() only counts
-// top-level cards — never the ops nested inside one — so without this a
-// continuous stream grows the DOM without bound (one node per op, forever).
-const MAX_BLOCK_BODY = 800;
-
-// Add one grouped item to a block: label ops become summary chips, everything
-// else appends to the body (and seeds the one-line summary). Body always reads
-// oldest->newest (top-down), matching arrival order.
-function fillBlock(b, it) {
-  if (it.t === "label") {
-    // A label op on the block carrying the live elapsed chip that CLOSES it is this
-    // command's finish chip ("■ finished · 3.2s") — retire the ticker here rather than
-    // wait for the `fgrun` clear, so the counting number can never be seen still
-    // running next to the final duration.
-    //
-    // The role test is load-bearing, not a refinement: an OPENER must never retire it.
-    // `cmd_pre` writes the fg-live record and the `▶ foreground` op in one hook run,
-    // and the `fgrun` event rides a FASTER cadence than the ops — so the ticker is
-    // routinely armed BEFORE the block exists (tickFgElapsed bails, "next tick"), and
-    // the opener then arrived to a matching `fgRun.g` and killed it. Permanently:
-    // `fgEnded` makes setFgRun refuse to resurrect that g. The ⏱ simply never painted
-    // ("for running foreground commands, I still want to see the live time"). Before
-    // the served roles existed this branch could not tell the two labels apart.
-    if (S.ses && S.ses.fgRun && S.ses.fgRun.g === it.g
-        && it.quiet !== "open" && it.quiet !== "sub") {
-      fgClearChip(it.g);
-      S.ses.fgEnded = it.g;
-      S.ses.fgRun = null;
-    }
-    // A QUIET COMMAND header (a foreground command, a background job, a monitor —
-    // opshtml.cmd_note): the served pieces go to their slots, and the line's dot
-    // carries the outcome the way an agent note's does — grey while the command runs,
-    // green/red once its `■ …` closer lands. The card itself recedes to a plain line
-    // (see `[data-quiet]` in style.css); the body behind the click is unchanged.
-    if (it.quiet) {
-      if (!b.root.dataset.quiet) {
-        b.root.dataset.quiet = "1";
-        b.root.dataset.out = "run";
-        // …and a ⏱ armed BEFORE the header knew its register moves to the slot it
-        // belongs in (the ticker picks the slot off this flag, and the flag can only
-        // be set by the op that arrives after it)
-        const live = b.chips.querySelector(".blive");
-        if (live) b.tail.append(live);
-      }
-      if (it.links && !b.links.childElementCount) b.links.innerHTML = it.links;
-      if (it.quiet === "close") {
-        b.tail.innerHTML = it.html;
-        b.root.dataset.out =
-          (it.bad || b.root.dataset.bad === "1") ? "bad" : "ok";
-      } else if (it.html) {
-        b.chips.insertAdjacentHTML("beforeend", it.html);
-      }
-      return;
-    }
-    // a NOTE header (a subagent's `⏺ Agent "…" launched / finished · 21m 31s`) IS the
-    // whole line — no first-body-line summary beside it, because the body is what the
-    // click is for: the brief, or the result
-    if (it.note) {
-      b.noteOnly = true;
-      b.root.dataset.note = "1";
-      // (it arrives closed like every other block now — see createBlock. This
-      // treatment started here, on agent notes, and is the rule.)
-    }
-    b.chips.insertAdjacentHTML("beforeend", it.html);
-  } else {
-    b.body.insertAdjacentHTML("beforeend", it.html);
-    while (b.body.childElementCount > MAX_BLOCK_BODY)
-      b.body.firstElementChild.remove();       // trim oldest (top) — arrival order
-    if (!b.sum.textContent && b.body.lastElementChild && !b.noteOnly) {
-      const line = (b.body.lastElementChild.textContent || "")
-        .trim().split("\n").find(l => l.trim());
-      if (line) b.sum.textContent = line.slice(0, 160);
-    }
+  if (item.content_reference) {
+    node.dataset.contentReference = item.content_reference;
+    if (item.file_path) node.dataset.filePath = item.file_path;
+    if (links) links.append(canonicalContentLinks());
+    if (item.item_type === "file") node.dataset.contentAction = "view";
   }
 }
 
-// The BROWSER's half of the semantic child-task order (docs/dashboard.md,
-// *Semantic child-task order*). The server orders a child's completion and the
+function toggleCanonicalContent(node, text) {
+  const next = node.nextElementSibling;
+  if (next && next.classList.contains("view-block")) {
+    next.remove();
+    return;
+  }
+  const view = el("div", "view-block");
+  if (node.dataset.itemGroup === "files") view.innerHTML = text;
+  else view.append(pre(text));
+  node.insertAdjacentElement("afterend", view);
+}
+
+function canonicalViewUrl(node) {
+  const url = canonicalContentUrl(node.dataset.contentReference);
+  if (node.dataset.itemGroup !== "files") return url;
+  const view = node.dataset.summaryKind === "file_edit" ? "diff" : "source";
+  const query = new URLSearchParams({ view, path: node.dataset.filePath });
+  return url + "?" + query.toString();
+}
+
+document.addEventListener("click", event => {
+  const actionNode = event.target.closest && event.target.closest("[data-content-action]");
+  if (!actionNode) return;
+  const itemNode = actionNode.closest("[data-content-reference]");
+  if (!itemNode) return;
+  if (actionNode === itemNode && event.target.closest("a,button") !== actionNode) return;
+  event.preventDefault();
+  const action = actionNode.dataset.contentAction;
+  fetch(action === "view"
+    ? canonicalViewUrl(itemNode)
+    : canonicalContentUrl(itemNode.dataset.contentReference))
+    .then(response => {
+      if (!response.ok) throw new Error("content request failed");
+      return response.text();
+    })
+    .then(text => {
+      if (action === "view") return toggleCanonicalContent(itemNode, text);
+      if (action !== "copy") throw new Error("unknown content action");
+      if (!navigator.clipboard) throw new Error("clipboard unavailable");
+      return navigator.clipboard.writeText(text).then(() =>
+        toast("done", "copied block", text.length + " chars"));
+    })
+    .catch(() => toast("ask", action + " failed", "try again"));
+});
+
+function bindDashboardBlock(node) {
+  if (!node.classList.contains("blk")) return;
+  const header = node.querySelector(".bhead");
+  const body = node.querySelector(".bbody");
+  if (!header || !body) throw new Error("dashboard block is missing its header or body");
+  header.onclick = event => {
+    if (event.target.closest("a") || !body.childElementCount) return;
+    node.dataset.userset = "1";
+    node.dataset.open = node.dataset.open === "1" ? "0" : "1";
+  };
+}
+// The BROWSER's half of the semantic actor-assignment order (docs/dashboard.md,
+// *Semantic actor-assignment order*). The server orders a child's completion and the
 // parent turn's final answer whenever both are in ONE payload (read/mirror.
 // task_order, backlog and live delta alike) — but a completion whose answer went
 // out on an EARLIER tick arrives with that bubble already on screen, and the feed
@@ -590,127 +549,75 @@ function fillBlock(b, it) {
 // prepend exactly as before. A SCAN, not a selector: a turn id is opaque and
 // `querySelector` would need it escaped, where the top-level children are the
 // bubbles and there are at most a few thousand of them.
-function taskAnchor(it) {
-  const ct = it.ctask;
-  if (!ct || ct.step !== "end" || !ct.turn) return null;
-  for (const elem of S.ses.stream.children)
+function assignmentAnchor(it) {
+  if (it.actor_assignment_phase !== "finished" || !it.turn_id) return null;
+  for (const elem of S.sessionView.stream.children)
     if (elem.dataset && elem.dataset.final === "1"
-        && elem.dataset.turn === ct.turn) return elem;
+        && elem.dataset.turn === it.turn_id) return elem;
   return null;
 }
 
 function appendItems(items) {
-  const st = S.ses.stream;
-  const w = st.querySelector(".waiting");
-  if (w) w.remove();
-  for (const it of items) {
-    const anchor = taskAnchor(it);
-    if (!it.g) {
-      let elem;
-      if (anchor) {                              // …under the answer it precedes
-        const tmp = el("div");
-        tmp.innerHTML = it.html;
-        elem = tmp.firstElementChild;
-        if (elem) st.insertBefore(elem, anchor.nextElementSibling);
-      } else {
-        st.insertAdjacentHTML("afterbegin", it.html);
-        elem = st.firstElementChild;
+  const stream = S.sessionView.stream;
+  const waiting = stream.querySelector(".waiting");
+  if (waiting) waiting.remove();
+  for (const item of items) {
+    const node = dashboardNode(item);
+    const existing = S.sessionView.itemNodes.get(item.item_id);
+    if (existing && existing.isConnected) {
+      node.dataset.viewKey = existing.dataset.viewKey;
+      if (existing.dataset.userset) {
+        node.dataset.userset = existing.dataset.userset;
+        node.dataset.open = existing.dataset.open;
       }
-      if (elem) stampItem(elem, it);
-      continue;
+      existing.replaceWith(node);
+    } else {
+      const anchor = assignmentAnchor(item);
+      if (anchor) stream.insertBefore(node, anchor.nextElementSibling);
+      else stream.prepend(node);
     }
-    let b = S.ses.blocks.get(it.g);
-    if (!b) {
-      b = createBlock();
-      // the block card takes the position of its FIRST op, so the anchor applies
-      // here and nowhere else: later ops of the same group fill the card in place
-      if (anchor) st.insertBefore(b.root, anchor.nextElementSibling);
-      else st.prepend(b.root);
-      S.ses.blocks.set(it.g, b);
-      b.root.dataset.vk = String(++S.ses.viewSeq);
-      b.root.dataset.vt = String(Date.now() / 1000);
-    }
-    fillBlock(b, it);
-    refineBlockKind(b, it);
+    S.sessionView.itemNodes.set(item.item_id, node);
   }
   drainQueue(items);
   drainPending(items);
   dropSuperseded(items);
-  while (st.childElementCount > 3000) {
-    let last = st.lastElementChild;
-    if (last === S.ses.moreEl) last = last.previousElementSibling;  // the load-older
+  while (stream.childElementCount > 3000) {
+    let last = stream.lastElementChild;
+    if (last === S.sessionView.moreEl) last = last.previousElementSibling;  // the load-older
     if (!last) break;                          //   affordance stays pinned at the bottom
-    if (last.classList.contains("blk"))        // evict a trimmed block card, or later
-      for (const [g, b] of S.ses.blocks)       //   ops for its group would render into
-        if (b.root === last) { S.ses.blocks.delete(g); break; }   // a detached node
+    for (const [itemId, itemNode] of S.sessionView.itemNodes)
+      if (itemNode === last) S.sessionView.itemNodes.delete(itemId);
     last.remove();
   }
   tintAgentNotes();              // the notes' dots follow their agents' outcomes
   applyViewMode();               // re-cut the collapsed runs over the final DOM
+  ensureElapsedTimer();
   updateShownCount();
 }
 
 // The lazy-backlog downward path (item 3): a chunk of OLDER items (server order
 // oldest->newest) appended at the BOTTOM of the feed — the feed is newest-top,
 // so older loads downward, and each successive page is older still, going lower.
-// Blocks born in this chunk are NOT tracked in the live S.ses.blocks map (they
-// are history, not the live tail) — they start folded like every other block.
-// A group that STRADDLES the load boundary (already live in the map) has
-// its older ops appended into the existing card body at the end — acceptable;
-// older ops trail the newer ones (docs/dashboard.md).
-//
-// The page is laid out REVERSED (`tops`, filled in server order, inserted last
+// The page is laid out REVERSED (filled in server order, inserted last
 // first), because the feed is newest-top and a page is only a page: inserting it
 // in arrival order made the loaded stretch read bottom-up (oldest first) while
-// the live tail above it read top-down — the "order is backwards" report. Each
-// item taking the position a live top-prepend would have given it is what makes
-// the whole feed monotonic across the boundary, and a block still holds the
-// position of its FIRST op with its body top-down, exactly like appendItems.
+// the live tail above it read top-down. Each item takes the position a live
+// top-prepend would have given it, keeping the whole feed monotonic.
 function appendOlder(items) {
-  const st = S.ses.stream;
-  const local = new Map();                       // g -> block, for this chunk only
-  const tops = [];                               // this page's top-level nodes,
-  //                                                oldest->newest (server order)
-  const frag = document.createDocumentFragment();
-  for (const it of items) {
-    if (!it.g) {
-      const tmp = el("div");
-      tmp.innerHTML = it.html;
-      const elem = tmp.firstElementChild;
-      if (elem) { stampItem(elem, it); tops.push(elem); }
-      continue;
-    }
-    const live = S.ses.blocks.get(it.g);         // straddling group: fold in-place
-    if (live) {
-      fillBlock(live, it);
-      refineBlockKind(live, it);
-      continue;
-    }
-    let b = local.get(it.g);
-    if (!b) {
-      b = createBlock();
-      b.root.dataset.open = "0";                 // history blocks arrive folded
-      b.root.dataset.vk = String(++S.ses.viewSeq);
-      b.root.dataset.vt = String(Date.now() / 1000);
-      local.set(it.g, b);
-      tops.push(b.root);
-    }
-    fillBlock(b, it);
-    refineBlockKind(b, it);
-  }
-  for (let i = tops.length - 1; i >= 0; i--) frag.append(tops[i]);
-  if (S.ses.moreEl) st.insertBefore(frag, S.ses.moreEl);
-  else st.append(frag);
+  const stream = S.sessionView.stream;
+  const fragment = document.createDocumentFragment();
+  const nodes = items.map(dashboardNode);
+  for (let index = nodes.length - 1; index >= 0; index--) fragment.append(nodes[index]);
+  if (S.sessionView.moreEl) stream.insertBefore(fragment, S.sessionView.moreEl);
+  else stream.append(fragment);
   tintAgentNotes();              // history's notes carry their outcome too
   applyViewMode();
   updateShownCount();
 }
 
 // Render a self-contained mirror snapshot into an ARBITRARY container (the
-// resume-picker's preview panel), not the live #stream. Same server items
-// ({g,t,html}, oldest->newest) and same block grouping as appendOlder, but into
-// a throwaway local map (never S.ses), no filters/eviction. DELIBERATELY the
-// other direction — don't unify: this paints in arrival order, so the preview
+// resume-picker's preview panel), not the live #stream. It paints server items
+// in arrival order, so the preview
 // reads oldest->newest (chronological). It is a short standalone tail read
 // top-down, not a feed being prepended to, and nothing lands in it after the
 // render — the newest-top convention (and appendOlder's page reversal) exists
@@ -720,69 +627,51 @@ function appendOlder(items) {
 // inline in full; a click on any block header expands it.
 function renderPreview(container, items) {
   container.textContent = "";
-  const local = new Map();                        // g -> block, this render only
-  for (const it of items) {
-    if (!it.g) {
-      const tmp = el("div");
-      tmp.innerHTML = it.html;
-      const elem = tmp.firstElementChild;
-      if (elem) container.append(elem);
-      continue;
-    }
-    let b = local.get(it.g);
-    if (!b) {
-      b = createBlock();
-      b.root.dataset.open = "0";                  // previews start folded (compact)
-      local.set(it.g, b);
-      container.append(b.root);
-    }
-    fillBlock(b, it);
-    refineBlockKind(b, it);
-  }
+  for (const item of items) container.append(dashboardNode(item));
   if (!container.childElementCount)
     container.append(el("div", "nspreview-empty", "no mirror history"));
 }
 
 // The "load older" affordance: a button pinned at the BOTTOM of the feed (a
 // child of the stream, so appendItems' top-prepends never disturb it), shown
-// while older blocks remain (S.ses.oldest > 0) and hidden once /history is
+// while older blocks remain (S.sessionView.oldest > 0) and hidden once /history is
 // exhausted (oldest 0). Each click fetches the previous page and appends it
 // downward via appendOlder; filters apply to those items in appendOlder.
 function ensureMoreEl() {
-  const ses = S.ses;
-  if (!ses) return null;
-  if (ses.moreEl && ses.moreEl.isConnected) return ses.moreEl;
+  const sessionView = S.sessionView;
+  if (!sessionView) return null;
+  if (sessionView.moreEl && sessionView.moreEl.isConnected) return sessionView.moreEl;
   const b = el("button", "loadmore");
   b.hidden = true;
   b.onclick = () => loadOlder();
-  ses.moreEl = b;
-  ses.stream.append(b);                          // bottom of the feed
+  sessionView.moreEl = b;
+  sessionView.stream.append(b);                          // bottom of the feed
   return b;
 }
 
 function updateMoreBtn() {
-  const ses = S.ses;
-  if (!ses) return;
+  const sessionView = S.sessionView;
+  if (!sessionView) return;
   const b = ensureMoreEl();
   if (!b) return;
-  const has = (ses.oldest | 0) > 0;
+  const has = (sessionView.oldest | 0) > 0;
   b.hidden = !has;
-  if (has && !ses.loadingOlder)
+  if (has && !sessionView.loadingOlder)
     // "blocks" only in verbose, where a block IS what appears. In default/focus
     // the promise is kept in VISIBLE items (see loadOlder) — most of the blocks
     // fetched to satisfy it collapse into the summary lines, so promising
     // "blocks" there would be promising the wrong noun.
     b.textContent = "load older · " + HISTORY_FETCH
-      + (ses.view === "verbose" ? " more blocks…" : " more…");
+      + (sessionView.view === "verbose" ? " more blocks…" : " more…");
 }
 
 // What the reader can actually SEE right now: unhidden stream items plus the
 // collapsed-run summary lines standing in for the rest.
 function visibleCount() {
-  const ses = S.ses;
-  if (!ses || !ses.stream) return 0;
+  const sessionView = S.sessionView;
+  if (!sessionView || !sessionView.stream) return 0;
   return streamItems().filter(elem => !itemHidden(elem)).length
-    + ses.stream.querySelectorAll(".vsum").length;
+    + sessionView.stream.querySelectorAll(".vsum").length;
 }
 
 const OLDER_TRIES = 6;        // /history requests one fill may spend
@@ -811,139 +700,79 @@ function olderPageSize(want, gained, blocks) {
 // "load older 40 blocks doesn't give me 40" report; the fix has to live here,
 // since only the client knows what its current mode leaves visible.
 function loadOlder(want) {
-  const ses = S.ses;
-  if (!ses || ses.loadingOlder || (ses.oldest | 0) <= 0) return;
+  const sessionView = S.sessionView;
+  if (!sessionView || sessionView.loadingOlder || (sessionView.oldest | 0) <= 0) return;
   const target = want || HISTORY_FETCH;
   const start = visibleCount();
-  const sid = S.cur;
+  const sessionId = S.currentSessionId;
   let tries = 0, blocks = HISTORY_FETCH;
-  ses.loadingOlder = true;
-  if (ses.moreEl) ses.moreEl.textContent = "loading…";
+  sessionView.loadingOlder = true;
+  if (sessionView.moreEl) sessionView.moreEl.textContent = "loading…";
 
-  const step = () => fetch("/api/session/" + encodeURIComponent(sid)
-                           + "/history?before=" + (ses.oldest | 0)
-                           + "&blocks=" + blocks + agentQ("&"))
+  const step = () => fetch("/api/sessions/" + encodeURIComponent(sessionId)
+                           + "/activity?before_cursor=" + (sessionView.oldest | 0)
+                           + "&block_count=" + blocks
+                           + ((sessionView.agent || "")
+                             ? "&actor_id=" + encodeURIComponent(sessionView.agent) : ""))
     .then(r => r.json())
     .then(d => {
-      if (S.cur !== sid || !S.ses) return;         // navigated away mid-fetch
+      if (S.currentSessionId !== sessionId || !S.sessionView) return;         // navigated away mid-fetch
       tries++;
       appendOlder(d.items || []);
-      ses.oldest = d.oldest | 0;
+      sessionView.oldest = d.has_more ? (d.oldest_cursor | 0) : 0;
       const gained = visibleCount() - start;
-      if (gained >= target || (ses.oldest | 0) <= 0 || tries >= OLDER_TRIES) return;
+      if (gained >= target || (sessionView.oldest | 0) <= 0 || tries >= OLDER_TRIES) return;
       blocks = olderPageSize(target, gained, blocks);
-      if (ses.moreEl) ses.moreEl.textContent = "loading… " + gained + "/" + target;
+      if (sessionView.moreEl) sessionView.moreEl.textContent = "loading… " + gained + "/" + target;
       return step();
     });
 
   step().catch(() => {}).then(() => {
-    if (S.cur !== sid || !S.ses) return;
-    ses.loadingOlder = false;
+    if (S.currentSessionId !== sessionId || !S.sessionView) return;
+    sessionView.loadingOlder = false;
     updateMoreBtn();
   });
 }
 
 /* ---------- stream item kinds ---------- */
-// Every top-level stream child carries a data-kind (commands · files · memory ·
-// agents · messages). It no longer drives a filter chip row (that control is
-// gone), but it stays load-bearing: `streamItems()` uses its presence as the
-// "this is a top-level item" test, the memory tab and the run summaries route on
-// `memory`, and it is stamped once at creation (`stampItem`) from the SERVED
-// activity class rather than from the rendered chip text — the sniffing this
-// file used to do has one owner, server-side (dashboard/opshtml/actclass.py).
+// Every top-level stream child carries a dashboard-owned kind. View modes use
+// this explicit field and never infer it from HTML, glyphs, or harness names.
 
-// Which kind each served ACTIVITY CLASS belongs to. The `act` stamp
-// (dashboard/opshtml/actclass.py — one owner, server-side) replaced the glyph
-// regex the page used to run over the block-opening chip text: same answer, but
-// classified where the structured op is, not re-sniffed out of rendered HTML.
-const ACT_KIND = {
-  bash: "commands", bg: "commands", monitor: "commands", warn: "commands",
-  agent: "agents", team: "agents", read: "files", edit: "files", write: "files",
-  msg: "messages",
-  // a SKILL is work the session did, not a file or an agent — it files under the
-  // commands kind, the catch-all for "the session doing something"
-  skill: "commands",
-  // …and so does any OTHER tool call (ToolSearch, WebFetch, Grep — an agent's
-  // `· <name>` block): same reasoning, the session doing something.
-  tool: "commands",
-  // a CODEX run's block (standalone host OR sidecar) — the session doing
-  // something via codex, so the commands kind (docs/codex.md). It gets its OWN
-  // act (not "agent") so the default summary NAMES it ("ran N codex runs")
-  // instead of "ran N agents".
-  codex: "commands",
-};
-
-function refineBlockKind(b, it) {
-  if (it.agent) b.root.dataset.agent = it.agent;       // whose agent block (src id)
-  if (it.ctask) {                                      // …and which child TASK it is
-    b.root.dataset.ctask = it.ctask.id;                //   an endpoint of, so a card
-    b.root.dataset.cstep = it.ctask.step;              //   says which task it closed
-  }
-  if (it.mid) b.root.dataset.mid = it.mid;             // which message (mail msg_id)
-  if (it.plumb) b.root.dataset.plumb = "1";            // …and whether it IS one
-  if (b.root.dataset.kind === "agents") return;        // agent wins, monotonic
-  if (it.g) b.root.dataset.g = it.g;                   // the run pass reads it
-  if (/class="og"/.test(it.html)) {                    // outer gutter == nested subagent job
-    b.root.dataset.kind = "agents";
-    b.root.dataset.act = "agent";
-    return;
-  }
-  if (it.bad) b.root.dataset.bad = "1";                // any failing op reddens the block
-  if (it.act && !b.kindLocked) {                       // the block-opening chip
-    b.root.dataset.kind = ACT_KIND[it.act] || "commands";
-    b.root.dataset.act = it.act;
-    b.kindLocked = true;
-  }
-}
-
-function ungroupedKind(it, elem) {
-  if (it.t === "msg") return "messages";
-  // memory-wiki file ops carry data-mem (❖) — their own kind, checked before
-  // the generic files test (a memory op is also a data-v file op).
-  if (elem.matches("[data-mem]") || elem.querySelector("[data-mem]")) return "memory";
-  // file-op one-liners carry the click-to-view id as data-v (.opl / gut ops)
-  if (elem.matches("[data-v]") || elem.querySelector("[data-v]")) return "files";
+function dashboardItemGroup(item) {
+  if (["message", "reasoning", "attention"].includes(item.item_type)) return "messages";
+  if (item.item_type === "file") return "files";
+  if (item.item_type === "actor_assignment") return "agents";
   return "commands";
 }
 
 // Stamp one freshly-created top-level stream child with everything the view-mode
 // pass reads off the DOM: its item kind, its served activity class + failure
 // flag, the conversation kind (focus mode narrows on it), a monotonic key that
-// names the item for as long as it lives, and its arrival time (the fallback
-// anchor for the live elapsed on a run with no running command in it).
-function stampItem(elem, it) {
-  elem.dataset.kind = ungroupedKind(it, elem);
-  if (it.act) elem.dataset.act = it.act;
-  // a GROUP-LESS quiet command row (the `▷ backgrounded (ctrl+b)` notice) — the flag
-  // that gives it the same plain-line box as a quiet block's header
-  if (it.quiet) elem.dataset.quiet = "1";
-  if (it.bad) elem.dataset.bad = "1";
-  if (it.add) elem.dataset.add = String(it.add);   // a mutation's line counts, for
-  if (it.rem) elem.dataset.rem = String(it.rem);   //   focus mode's edit summary
-  if (it.nf) elem.dataset.nf = String(it.nf);      // how many files ONE read row read
-  //                                                 (a multi-file Bash read is one
-  //                                                 block) — the summary's weight
-  if (it.kind) elem.dataset.msg = it.kind;
+// names the item for as long as it lives, and its recorded activity time.
+function stampItem(node, item) {
+  node.dataset.itemGroup = dashboardItemGroup(item);
+  node.dataset.summaryKind = item.summary_kind;
+  if (item.state === "failed" || item.state === "cancelled") node.dataset.bad = "1";
+  if (item.lines_added) node.dataset.add = String(item.lines_added);
+  if (item.lines_removed) node.dataset.rem = String(item.lines_removed);
+  if (item.conversation_kind) node.dataset.conversationKind = item.conversation_kind;
   // WHICH TURN this bubble belongs to, and whether it is that turn's FINAL answer
-  // (core/childtask.py). The answer bubble is the ANCHOR a late child completion
-  // lands under (taskAnchor) — the one thing in the feed a later item has to be
+  // The answer bubble anchors a late actor-assignment completion
+  // (assignmentAnchor) — the one thing in the feed a later item has to be
   // able to find.
-  if (it.turn) elem.dataset.turn = it.turn;
-  if (it.final) elem.dataset.final = "1";
-  if (it.ctask) {                                // …and, on an op row, which child
-    elem.dataset.ctask = it.ctask.id;            //   TASK this block is an endpoint
-    elem.dataset.cstep = it.ctask.step;           //   of (start | end)
+  if (item.turn_id) node.dataset.turn = item.turn_id;
+  if (item.final) node.dataset.final = "1";
+  if (item.actor_assignment_id) {
+    node.dataset.actorAssignmentId = item.actor_assignment_id;
+    node.dataset.actorAssignmentPhase = item.actor_assignment_phase;
   }
-  if (it.agent) elem.dataset.agent = it.agent;   // the run summary counts agents,
-  //                                                not agent-ish rows
-  if (it.mid) elem.dataset.mid = it.mid;         // …and messages, not mail-ish rows
-  if (it.plumb) elem.dataset.plumb = "1";        // the mail system, not the message
-  if (it.meta) elem.dataset.injected = "1";   // a prompt Claude Code injected,
-  //                                             not one the human typed
-  if (it.resumed) elem.dataset.resumed = "1"; // …and it RESUMED an ended turn (a
-  //             blocking Stop hook), so the reply above it was a final answer
-  elem.dataset.vk = String(++S.ses.viewSeq);
-  elem.dataset.vt = String(Date.now() / 1000);
+  if (item.actor_assignment_id) node.dataset.summaryKindorId = item.actor_assignment_id;
+  if (item.message_id) node.dataset.messageId = item.message_id;
+  if (item.state) node.dataset.state = item.state;
+  if (item.started_at) node.dataset.startedAt = String(item.started_at);
+  if (item.finished_at) node.dataset.finishedAt = String(item.finished_at);
+  node.dataset.viewKey = String(++S.sessionView.viewSeq);
+  node.dataset.summaryKindivityTime = String(item.started_at || item.finished_at || 0);
 }
 
 // An agent note's DOT carries the OUTCOME, exactly like a collapsed run's `.vdot`:
@@ -958,12 +787,12 @@ function stampItem(elem, it) {
 // as `data-out` on the ROW (the CSS tints the mark inside it), and re-run on every
 // `agents` SSE, which is how a launch note goes green the moment its agent ends.
 function tintAgentNotes() {
-  const ses = S.ses;
-  if (!ses || !ses.stream) return;
+  const sessionView = S.sessionView;
+  if (!sessionView || !sessionView.stream) return;
   const by = new Map();
-  for (const a of ses.agents || []) by.set(a.agent_id, a);
-  for (const row of ses.stream.querySelectorAll("[data-agent]")) {
-    const a = by.get(row.dataset.agent);
+  for (const a of sessionView.agents || []) by.set(a.agent_id, a);
+  for (const row of sessionView.stream.querySelectorAll("[data-actor-id]")) {
+    const a = by.get(row.dataset.summaryKindorId);
     const st = a ? agentStatus(a)[1] : "";
     // a failing op inside the block reddens it too (`data-bad` — the same rule the
     // run summary's dot follows), so a bad result shows even before the agent's row
@@ -974,7 +803,8 @@ function tintAgentNotes() {
 }
 
 function streamItems() {
-  return [...S.ses.stream.children].filter(el => el.dataset && el.dataset.kind);
+  return [...S.sessionView.stream.children].filter(
+    element => element.dataset && element.dataset.itemGroup);
 }
 
 // Hidden by the ONE remaining axis: `.vhide` is the view mode's. (There used to
@@ -986,11 +816,11 @@ function itemHidden(elem) {
 }
 
 function updateShownCount() {
-  const ses = S.ses;
-  if (!ses || !ses.countEl || !ses.countEl.isConnected) return;
+  const sessionView = S.sessionView;
+  if (!sessionView || !sessionView.countEl || !sessionView.countEl.isConnected) return;
   const items = streamItems();
   const shown = items.filter(elem => !itemHidden(elem)).length;
-  ses.countEl.textContent = shown + " of " + items.length + " shown";
+  sessionView.countEl.textContent = shown + " of " + items.length + " shown";
 }
 
 /* ---------- view modes: verbose · default · focus ---------- */
@@ -1045,13 +875,15 @@ const VIEW_DEFAULT = "default";
 // output you came to read.
 const VIEW_FOLD = {
   verbose: [],
-  default: ["bash", "read", "monitor", "task", "mail", "codex"],
+  default: ["shell", "file_read", "monitor", "task", "message_delivery",
+            "actor_message"],
   // `tool` folds in FOCUS only, exactly like `skill`: a generic tool call is a
   // quiet one-liner the lead now emits too (plugins/claude_code/tool_fmt.py),
   // so default SHOWS it — that line is the whole point — and focus collapses a
   // run of them into "used 3 tools".
-  focus: ["bash", "read", "bg", "monitor", "edit", "write", "agent", "team",
-          "task", "mail", "skill", "tool", "codex"],
+  focus: ["shell", "file_read", "background", "monitor", "file_edit",
+          "file_write", "actor_assignment", "task", "message_delivery",
+          "actor_message", "skill", "search", "network", "workspace", "media"],
 };
 
 // THE SUMMARY VOCABULARY — Claude Code's own, extracted from the 2.1.220 binary
@@ -1063,57 +895,32 @@ const VIEW_FOLD = {
 // The keys are actclass.ACTS tokens (plus the two memory flavours), so a new act
 // with no row here would be counted into nothing (grep-tested both ways).
 const VIEW_FRAGMENTS = [
-  ["edit", "editing", "edited", "file", "files"],
-  ["read", "reading", "read", "file", "files"],
-  ["agent", "running", "ran", "agent", "agents"],
-  // …and a TEAMMATE counts as its own kind, beside the subagents. Claude Code has
-  // no fragment for it (its own summary line predates the agent team), so this
-  // follows the same shape and the note wording it must agree with
-  // (core/streamfmt.TEAM_WORD): a named peer is not a one-shot delegate.
-  ["team", "running", "ran", "teammate", "teammates"],
-  // a SKILL, in the same shape (Claude Code has no fragment of its own for one): it
-  // shows as a line in default and is counted here in focus, `used 2 skills`
+  ["file_change", "editing", "edited", "file", "files"],
+  ["file_read", "reading", "read", "file", "files"],
+  ["actor_assignment", "running", "ran", "agent", "agents"],
   ["skill", "using", "used", "skill", "skills"],
-  // …and every OTHER tool call — `used 3 tools`. An agent's (`· ToolSearch`,
-  // shown in its own scope) and, since plugins/claude_code/tool_fmt.py, the
-  // LEAD's own (`· WebFetch(https://…)`, one expandable line in the main
-  // mirror). Deliberately generic: the line itself names WHICH tool, and a
-  // per-tool fragment table would have to grow forever.
   ["tool", "using", "used", "tool", "tools"],
-  ["bash", "running", "ran", "shell command", "shell commands"],
-  ["bg", "running", "ran", "background job", "background jobs"],
+  ["shell", "running", "ran", "shell command", "shell commands"],
+  ["background", "running", "ran", "background job", "background jobs"],
   ["monitor", "watching", "watched", "monitor", "monitors"],
-  // a CODEX run (standalone host OR sidecar) — named so the default summary reads
-  // "ran 1 codex run" instead of "ran N agents" (docs/codex.md). Not Claude Code
-  // vocabulary (codex is another tool), so it follows the agent shape.
-  ["codex", "running", "ran", "codex run", "codex runs"],
-  // team plumbing — folded (and COUNTED) in both collapsing modes. Not Claude
-  // Code vocabulary (it has no agent-team surface to word), so these two follow
-  // the same shape: an active participle and a plain past tense.
   ["task", "tracking", "tracked", "task", "tasks"],
-  ["mail", "passing", "passed", "message", "messages"],
-  ["mem-read", "recalling", "recalled", "memory", "memories"],
-  ["mem-write", "writing", "wrote", "memory", "memories"],
-  // a vault SEARCH — the qmd queries the session asked memory (docs/dashboard.md
-  // *Memory searches*). Its own fragment because it is not a read: no note was
-  // opened, a question was answered, and "recalled 2 memories" for two searches
-  // that opened nothing would overstate what happened.
-  ["mem-search", "querying", "queried", "memory", "memories"],
+  ["message_delivery", "passing", "passed", "message", "messages"],
 ];
 
-// Claude Code counts a Write as an edit (one `editFileCount` over its whole
-// edit-tool set), so the two share a fragment here too — the mirror still shows
-// them as distinct Update/Write one-liners when expanded.
-const VIEW_COUNTER = { write: "edit" };
+const VIEW_COUNTER = {
+  file_edit: "file_change",
+  file_write: "file_change",
+  search: "tool",
+  network: "tool",
+  workspace: "tool",
+  media: "tool",
+  actor_message: "message_delivery",
+};
 
-// Counters that count a SUBJECT rather than a row, and the served attribute that
-// names it. One subagent contributes a launch note, a finish note (and a resume,
-// and a second result if it reports twice); one message contributes an arrival,
-// its body and its read notice — counting rows said "ran 77 agents" for a session
-// with 21 of them, and "passed 4 messages" where two had been sent. `data-agent`
-// is the producer-source id and `data-mid` the mail msg_id, both stamped
-// server-side (opshtml.op_items) from the op itself.
-const VIEW_SUBJECT = { agent: "agent", team: "agent", mail: "mid", codex: "agent" };
+const VIEW_SUBJECT = {
+  actor_assignment: "actorAssignmentId",
+  message_delivery: "messageId",
+};
 
 // Don't show a run's elapsed until it has actually been running a moment —
 // Claude Code's own threshold for the same chip, and it keeps a fast run from
@@ -1146,21 +953,8 @@ const VIEW_FILL_MIN = 15;
 // `data-mem` VALUE (core/ops.label) — "search" asked a question, "1" opened a
 // note — because after collapsing there is nothing else left to tell them apart.
 function viewCounter(elem) {
-  const act = elem.dataset.act || "";
-  const mem = elem.dataset.kind === "memory";
-  if (mem && memFlavour(elem) === "search") return "mem-search";
-  if (mem && (act === "read" || act === "bash")) return "mem-read";
-  if (mem && (act === "edit" || act === "write")) return "mem-write";
-  return VIEW_COUNTER[act] || act;
-}
-
-// The memory flavour an item's ops carry ("1" | "search" | ""), from whichever op
-// stamped it (the item is the block; the flag rides its header or its one-liner).
-function memFlavour(elem) {
-  const own = elem.dataset.mem;
-  if (own) return own;
-  const node = elem.querySelector("[data-mem]");
-  return node ? (node.dataset.mem || "") : "";
+  const summaryKind = elem.dataset.summaryKind || "";
+  return VIEW_COUNTER[summaryKind] || summaryKind;
 }
 
 // Whether a reply reads as a BOOKKEEPING REPORT rather than an answer: it
@@ -1172,11 +966,6 @@ function memFlavour(elem) {
 // two errand shapes, which are otherwise identical on every structural axis
 // there is (docs/dashboard.md, *Errand boundaries*), and it is asked of the
 // RENDERED message because that is where "how much is here" lives.
-function soloReply(elem) {
-  const md = elem.querySelector(".md");
-  return !!md && md.children.length <= 1;
-}
-
 // The one-line summary of a run, as nodes: "Read 3 files, ran 2 shell commands"
 // (done) / "Reading 3 files, running 2 shell commands…" (still going). `counts`
 // is a counter->n map carrying optional `add`/`rem` line totals for the edit
@@ -1191,7 +980,7 @@ function viewSummaryNodes(counts, running) {
     else out.push(tnode(", "));
     out.push(tnode(verb + " "), el("b", "", String(n)),
              tnode(" " + (n === 1 ? one : many)));
-    if (key === "edit" && (counts.add || counts.rem)) {
+    if (key === "file_change" && (counts.add || counts.rem)) {
       out.push(tnode(" "));
       if (counts.add) out.push(el("span", "dadd", "+" + counts.add));
       if (counts.add && counts.rem) out.push(tnode(" "));
@@ -1219,7 +1008,8 @@ function buildRunSummary(key, members, running, anchor, bad, open) {
     if (idk) {
       // a row without an id is its own subject, so an unattributable row still
       // counts once (and can never merge with another one)
-      (seen[c] || (seen[c] = new Set())).add(m.dataset[idk] || ("vk" + m.dataset.vk));
+      (seen[c] || (seen[c] = new Set())).add(
+        m.dataset[idk] || ("view-" + m.dataset.viewKey));
     } else if (c) {
       // WEIGHT the row: one item usually stands for one thing, but a Bash read of
       // several files at once is ONE block (the command produced one undivided
@@ -1227,7 +1017,7 @@ function buildRunSummary(key, members, running, anchor, bad, open) {
       // actually read (served per item, actclass.readmore). Counting rows made a
       // `cat app.py utils.py` read "Read 1 file", the same under-report the
       // one-liner itself used to make by naming only the first file.
-      counts[c] = (counts[c] | 0) + (+(m.dataset.nf || 1) || 1);
+      counts[c] = (counts[c] | 0) + 1;
     }
     counts.add += +(m.dataset.add || 0);       // served per item (actclass.diffstat)
     counts.rem += +(m.dataset.rem || 0);
@@ -1245,7 +1035,7 @@ function buildRunSummary(key, members, running, anchor, bad, open) {
     paintRunTimer(row);
   }
   row.onclick = () => {
-    const open = S.ses.viewOpen;
+    const open = S.sessionView.viewOpen;
     if (open.has(key)) open.delete(key);
     else open.add(key);
     applyViewMode();
@@ -1265,16 +1055,31 @@ function paintRunTimer(row) {
     ? " · " + dur(secs) : "";
 }
 
+function paintActivityTimer(timer) {
+  const anchor = +timer.dataset.anchor || 0;
+  timer.textContent = anchor ? tp("· " + dur(Date.now() / 1000 - anchor)) : "";
+}
+
+function ensureElapsedTimer() {
+  const session = S.sessionView;
+  if (!session || session.viewTimer) return;
+  if (session.stream.querySelector(".vsum[data-anchor], .blive[data-anchor]"))
+    session.viewTimer = setInterval(tickRunTimers, RUN_TIMER_INTERVAL_MS);
+  tickRunTimers();
+}
+
 function tickRunTimers() {
-  const ses = S.ses;
-  if (!ses) return;
-  const rows = [...ses.stream.querySelectorAll(".vsum[data-anchor]")];
-  if (!rows.length) {
-    clearInterval(ses.viewTimer);
-    ses.viewTimer = null;
+  const sessionView = S.sessionView;
+  if (!sessionView) return;
+  const rows = [...sessionView.stream.querySelectorAll(".vsum[data-anchor]")];
+  const activityTimers = [...sessionView.stream.querySelectorAll(".blive[data-anchor]")];
+  if (!rows.length && !activityTimers.length) {
+    clearInterval(sessionView.viewTimer);
+    sessionView.viewTimer = null;
     return;
   }
   rows.forEach(paintRunTimer);
+  activityTimers.forEach(paintActivityTimer);
 }
 
 // The whole pass: decide each item's disposition, cut maximal runs of foldable
@@ -1290,16 +1095,16 @@ function clearViewMarks(items) {
 }
 
 function applyViewMode() {
-  const ses = S.ses;
-  if (!ses || !ses.stream) return;
-  const mode = VIEW_MODES.includes(ses.view) ? ses.view : VIEW_DEFAULT;
+  const sessionView = S.sessionView;
+  if (!sessionView || !sessionView.stream) return;
+  const mode = VIEW_MODES.includes(sessionView.view) ? sessionView.view : VIEW_DEFAULT;
   const items = streamItems();
   if (mode === "verbose") {
-    if (ses.viewSig === "verbose") return;      // already plain — nothing to undo
-    for (const old of [...ses.stream.children])
+    if (sessionView.viewSig === "verbose") return;      // already plain — nothing to undo
+    for (const old of [...sessionView.stream.children])
       if (old.classList.contains("vsum")) old.remove();
     clearViewMarks(items);
-    ses.viewSig = "verbose";
+    sessionView.viewSig = "verbose";
     updateShownCount();
     return;
   }
@@ -1308,64 +1113,21 @@ function applyViewMode() {
   // DOM order is newest -> oldest, so "the first reply seen since the last
   // prompt" IS that turn's final one — which is the only assistant prose focus
   // mode keeps. A prompt closes the turn: items below it are the older one's.
-  const fgg = (ses.fgRun && ses.fgRun.g) || "";
   const busy = typeof BUSY_TABS !== "undefined" && BUSY_TABS.includes(liveTab());
   let sawReply = false;
   // Still inside the NEWEST turn: the feed is newest-top and a turn reads
   // [replies … activity … prompt], so everything above the first prompt we meet
   // belongs to the turn in progress.
   let inNewestTurn = true;
-  // An ERRAND BOUNDARY — the point in a turn where the work you asked for
-  // stopped and Claude Code's own housekeeping began. Everything after it is
-  // bookkeeping, so the message in FRONT of it is a final answer in its own
-  // right and focus mode restarts its reply search there (a prompt does the
-  // same, and additionally shows itself and starts a new turn). The errand is
-  // also, by definition, over: what follows is not the provisional prose of a
-  // turn in flight, so the reply it releases is never greyed.
-  //
-  // Two things mark one, both from the SAME reported bug (docs/dashboard.md,
-  // *View modes*): a memory-note nudge that ran on every turn left focus mode
-  // showing "persisted the note" and dropping the answer.
-  //   · a blocking STOP HOOK's feedback (`data-resumed`) — it fires BECAUSE
-  //     the turn ended, so the reply above it is what the turn ended on;
-  //   · a MEMORY-WIKI WRITE (`mem-write`) — persisting a note is the errand
-  //     itself, and the model often does it BEFORE the hook can nudge, which
-  //     is why the hook alone was not enough: the message the hook boundary
-  //     rescued was then the "persisted the note" line, not the answer.
-  //
-  // …but the memory boundary only fires while ARMED, and it is armed by the
-  // reply this segment ENDS on being a bookkeeping report (`soloReply`) — with
-  // no other reply between it and the write. A wiki-heavy turn persists all the
-  // way THROUGH its work, so an unconditional write boundary released the
-  // narration in front of every one of them ("Now the catalog rows and the
-  // neighbour notes that this changes.") and a 3-turn session showed 16 replies
-  // where it should show 6 — reported as *"there's too many fucking messages"*.
-  // Armed, the release costs one reply and only where the segment reads as
-  // housekeeping. Cleared by any OTHER reply (the run is over) and by every cut.
-  let memArmed = false;
-  const errandCut = () => { sawReply = false; inNewestTurn = false;
-                            memArmed = false; };
   const disp = items.map(elem => {
-    const kind = elem.dataset.kind;
-    if (kind === "messages") {
-      const mk = elem.dataset.msg || "";
-      // An INJECTED prompt (a Stop hook's feedback, a loaded skill's whole
-      // SKILL.md body, a resume nudge, the thousands-of-words summary a
-      // /compact replays as the new context) is not something you said, so
-      // neither non-verbose mode shows it, and it does NOT close the turn: the
-      // reply that follows it belongs to the prompt you actually typed, and
-      // treating it as a boundary would surface a second "final" reply per
-      // injection.
-      //
-      // …EXCEPT one that RESUMED a turn Claude Code had already ENDED
-      // (`data-resumed` — a blocking Stop hook's feedback, transcript
-      // _RESUMES_TURN): one of the two ERRAND BOUNDARIES (`errandCut` below).
-      // The bubble itself stays hidden — it is still not something you said.
-      if (elem.dataset.injected) {
-        if (elem.dataset.resumed) errandCut();
-        return "hide";
+    const itemGroup = elem.dataset.itemGroup;
+    if (itemGroup === "messages") {
+      const mk = elem.dataset.conversationKind || "";
+      if (mk === "prompt") {
+        sawReply = false;
+        inNewestTurn = false;
+        return "show";
       }
-      if (mk === "prompt") { errandCut(); return "show"; }
       if (mode === "focus" && mk === "message") {
         // Exactly ONE message survives per turn — the newest, which is the one
         // the turn ends on. The rest are the running commentary and stay hidden.
@@ -1378,46 +1140,15 @@ function applyViewMode() {
         // the answer" and "this is where it's got to".
         const newest = !sawReply;
         sawReply = true;
-        // …and it is this reply that ARMS the memory boundary behind it: a
-        // segment ending on a one-block report is a segment whose last act was
-        // bookkeeping. Any reply that is NOT the segment's last disarms — the
-        // write we are looking for sits in the run DIRECTLY behind that report.
-        memArmed = newest && soloReply(elem);
         if (!newest) return "hide";
         return (busy && inNewestTurn) ? "dim" : "show";
       }
       // a recap / an ask / a plan or its verdict / mail — another reply, same
       // rule. All of them SHOW in every mode: each is a turn-level fact of the
       // conversation, not the mid-turn prose focus mode thins out.
-      memArmed = false;
       return "show";
     }
-    // MAIL PLUMBING — the inbox poller reporting on a message (delivered / read / a
-    // teammate lifecycle frame) rather than the message itself, which now has its own
-    // send-time row (opshtml.op_items stamps `data-plumb` — actclass.mail_plumbing).
-    // Dropped here for the same reason an injected prompt is: it is not the thing it
-    // looks like, and counting it said "passed 4 messages" over rows that held no
-    // message. Verbose returns before any of this and shows every one of them, each
-    // labelled `Mail … · delivered/read/idle`.
-    if (elem.dataset.plumb) return "hide";
-    // …the SECOND errand boundary: a memory-wiki WRITE (the ❖ ops — `data-mem`
-    // + an edit/write act, which viewCounter already words as "wrote N
-    // memories"). It still FOLDS into the summary like any other activity;
-    // what it additionally does is release the reply in front of it. Only in
-    // focus (default keeps every message anyway), and only for a WRITE — a
-    // memory READ is Claude Code looking something up to ANSWER you, which is
-    // the work itself and mid-turn by nature. `data-mem` is stamped only for
-    // sessions in the one project that opted into the memory wiki
-    // (plugins/claude_code/memory.in_scope), so this rule is dormant elsewhere.
-    //
-    // ARMED only (see `memArmed`): the write releases a reply exactly where the
-    // segment ends on a bookkeeping report. Everything BETWEEN the two is left
-    // alone deliberately — persisting a note runs shell commands of its own (the
-    // wiki's `qmd update`, the daily-log append), and having those close the
-    // window put the release back on the wrong side of the answer.
-    if (mode === "focus" && memArmed && viewCounter(elem) === "mem-write")
-      errandCut();
-    return fold.includes(elem.dataset.act || "") ? "fold" : "show";
+    return fold.includes(elem.dataset.summaryKind || "") ? "fold" : "show";
   });
 
   // PLAN first, mutate second: the runs are computed into a list, and the DOM is
@@ -1458,31 +1189,49 @@ function applyViewMode() {
     const members = span.filter((_, k) => disp[i + k] === "fold");
     i = j;
     if (!members.length) continue;
-    const key = span[span.length - 1].dataset.vk || "";
-    const running = members.some(m => m.dataset.g && m.dataset.g === fgg)
-      || (span[0] === items[0] && busy);
+    const key = span[span.length - 1].dataset.viewKey || "";
+    // A actor assignment has two canonical rows: started and finished. Both share one
+    // subject id and can sit in this run together; the newest row is its current
+    // state. Looking for ANY running row kept the superseded start alive forever.
+    const currentSubjects = new Set();
+    let explicitRunning = false;
+    let hasUnstatedMember = false;
+    for (const member of members) {
+      const counter = viewCounter(member);
+      const subjectField = VIEW_SUBJECT[counter];
+      const subject = subjectField && member.dataset[subjectField];
+      if (subject && currentSubjects.has(counter + ":" + subject)) continue;
+      if (subject) currentSubjects.add(counter + ":" + subject);
+      if (member.dataset.state === "running") explicitRunning = true;
+      else if (!member.dataset.state) hasUnstatedMember = true;
+    }
+    const running = explicitRunning
+      || (span[0] === items[0] && busy && hasUnstatedMember);
+    const startedAt = members
+      .map(member => +(member.dataset.startedAt || 0))
+      .filter(value => value > 0);
     plan.push({
       key, span, members, running,
-      open: ses.viewOpen.has(key),
+      open: sessionView.viewOpen.has(key),
       bad: members.some(m => m.dataset.bad === "1"),
       anchor: running
-        ? ((ses.fgRun && members.some(m => m.dataset.g === fgg))
-           ? ses.fgRun.start_ts : +(span[span.length - 1].dataset.vt || 0))
+        ? (startedAt.length ? Math.min(...startedAt)
+           : +(span[span.length - 1].dataset.activityTime || 0))
         : 0,
     });
   }
   // Everything the painted lines DEPEND on — deliberately not the elapsed
   // seconds, which the 1s timer owns (a signature carrying the clock would
   // rebuild the DOM every second, the very thing this avoids).
-  const sig = mode + "!" + hidden.map(s => s.dataset.vk).join(",")
-    + "!" + dims.map(s => s.dataset.vk).join(",") + "!"
+  const sig = mode + "!" + hidden.map(s => s.dataset.viewKey).join(",")
+    + "!" + dims.map(s => s.dataset.viewKey).join(",") + "!"
     + plan.map(p => [p.key, p.open ? 1 : 0, p.running ? 1 : 0, p.bad ? 1 : 0,
-                     p.anchor, p.members.map(m => m.dataset.vk).join(".")].join(":"))
+                     p.anchor, p.members.map(m => m.dataset.viewKey).join(".")].join(":"))
         .join(";");
-  if (sig === ses.viewSig) return;
-  ses.viewSig = sig;
+  if (sig === sessionView.viewSig) return;
+  sessionView.viewSig = sig;
 
-  for (const old of [...ses.stream.children])
+  for (const old of [...sessionView.stream.children])
     if (old.classList.contains("vsum")) old.remove();
   clearViewMarks(items);
   for (const s of hidden) hideIt(s);
@@ -1514,11 +1263,10 @@ function applyViewMode() {
     } else {
       for (const m of p.span) hideIt(m);
     }
-    ses.stream.insertBefore(
+    sessionView.stream.insertBefore(
       buildRunSummary(p.key, p.members, p.running, p.anchor, p.bad, p.open),
       p.span[0]);
-    if (p.running && !ses.viewTimer)
-      ses.viewTimer = setInterval(tickRunTimers, FG_TICK_MS);
+    if (p.running) ensureElapsedTimer();
   }
   updateShownCount();
   viewAutoFill();
@@ -1528,28 +1276,33 @@ function applyViewMode() {
 // summary lines). Pull the next history page or two so there is something to
 // read, bounded by VIEW_FILL_TRIES per mode switch.
 function viewAutoFill() {
-  const ses = S.ses;
-  if (!ses || ses.view === "verbose" || ses.loadingOlder) return;
-  if ((ses.viewFill | 0) >= VIEW_FILL_TRIES || (ses.oldest | 0) <= 0) return;
+  const sessionView = S.sessionView;
+  if (!sessionView || sessionView.view === "verbose" || sessionView.loadingOlder) return;
+  if ((sessionView.viewFill | 0) >= VIEW_FILL_TRIES || (sessionView.oldest | 0) <= 0) return;
   if (visibleCount() >= VIEW_FILL_MIN) return;
-  ses.viewFill = (ses.viewFill | 0) + 1;
+  sessionView.viewFill = (sessionView.viewFill | 0) + 1;
   loadOlder(VIEW_FILL_MIN);      // the same loader, aimed at a smaller target —
   //                                two independent pagers would fight over
   //                                `loadingOlder` and double-fetch the boundary
 }
 
 function setViewMode(mode) {
-  const ses = S.ses;
-  if (!ses || !VIEW_MODES.includes(mode)) return;
-  ses.view = mode;
-  ses.viewOpen.clear();          // expansions belong to the mode that made them
-  ses.viewFill = 0;
-  if (ses.meta) ses.meta.view_mode = mode;
+  const sessionView = S.sessionView;
+  if (!sessionView || !VIEW_MODES.includes(mode)) return;
+  sessionView.view = mode;
+  sessionView.viewOpen.clear();          // expansions belong to the mode that made them
+  sessionView.viewFill = 0;
+  for (const block of sessionView.stream.querySelectorAll(".blk")) {
+    block.dataset.open = mode === "verbose" ? "1" : "0";
+    delete block.dataset.userset;
+  }
+  if (sessionView.meta) sessionView.meta.view_mode = mode;
   applyViewMode();
   // Durable + per-session (dashboard/prefs.py): re-opening this session — on
   // this device or another — comes back at the mode you left it in.
-  postJSON("/api/session/" + encodeURIComponent(S.cur) + "/viewmode",
-           { mode }, { audit: "viewmode" });
+  postJSON("/api/sessions/" + encodeURIComponent(S.currentSessionId)
+           + "/application/view-mode",
+           { view_mode: mode }, { audit: "viewmode" });
 }
 
 // The stream's control row: the view-mode segment on the left, the visible-item
@@ -1558,31 +1311,31 @@ function setViewMode(mode) {
 // view modes are the density cut that gets used, and two axes over one stream
 // only ever had to explain which one had hidden a block.
 function buildViewBar() {
-  const ses = S.ses;
+  const sessionView = S.sessionView;
   const bar = el("div", "fbar");
 
   const modes = el("div", "vmodes");
   const mbtns = new Map();
-  ses.modeBtns = mbtns;              // the `view-mode` SSE repaints these
+  sessionView.modeBtns = mbtns;              // the `view-mode` SSE repaints these
   for (const key of VIEW_MODES) {
-    const c = el("button", "vmode" + (ses.view === key ? " on" : ""), key);
+    const c = el("button", "vmode" + (sessionView.view === key ? " on" : ""), key);
     c.onclick = () => {
       setViewMode(key);
-      mbtns.forEach((cc, k) => cc.classList.toggle("on", k === ses.view));
+      mbtns.forEach((cc, k) => cc.classList.toggle("on", k === sessionView.view));
     };
     mbtns.set(key, c);
     modes.append(c);
   }
 
   const count = el("span", "fcount");
-  ses.countEl = count;
+  sessionView.countEl = count;
   bar.append(modes, count);
   return bar;
 }
 
 /* ---------- the "/" command menu (composer + new-session prompt) ---------- */
 // Claude-Code-style completion: a leading "/" with no whitespace yet opens a
-// menu over GET /api/commands?cwd=… (built-ins + that directory's .claude
+// menu over the selected harness catalog (built-ins + that directory's native
 // commands/skills), matched by SUBSTRING (`cmdMatches`, prefix hits ranked
 // first) — the memorable middle of a name is enough, no prefix needed.
 // ↑/↓ move, Tab completes, Esc closes; Enter completes —
@@ -1597,19 +1350,26 @@ function buildViewBar() {
 // return means the menu consumed the key.
 
 // The menu is host-SCOPED, by whichever of the two handles the caller has:
-// `sid` (the composer) — the server resolves that session's OWNING tool and
+// `sessionId` (the composer) — the server resolves that session's OWNING tool and
 // returns ITS vocabulary (a codex session gets /plan etc., not Claude's) — or
 // `tool` (the new-session form, which has no session yet, only a picker), so
 // the menu follows the host you are ABOUT to launch. Passing neither means the
 // default host, which is what the form used to do unconditionally: it offered
 // Claude Code's commands for a codex launch. `key` must vary with whichever one
 // is passed, since the cache is per-menu.
-function cmdsFor(cwd, cache, key, sid, tool) {
+function cmdsFor(workingDirectory, cache, key, sessionId, tool) {
+  const harness = tool || (sessionId && S.sessionView && S.sessionView.meta && S.sessionView.meta.harness);
+  if (!harness) return Promise.resolve([]);
   if (!cache[key])
-    cache[key] = fetch("/api/commands?cwd=" + encodeURIComponent(cwd || "")
-                       + (sid ? "&sid=" + encodeURIComponent(sid) : "")
-                       + (tool ? "&tool=" + encodeURIComponent(tool) : ""))
-      .then(r => r.ok ? r.json() : [])
+    cache[key] = fetch("/api/harnesses/" + encodeURIComponent(harness)
+                       + "/catalog?working_directory=" + encodeURIComponent(workingDirectory || "")
+                       + (sessionId ? "&session_id=" + encodeURIComponent(sessionId) : ""))
+      .then(r => r.ok ? r.json() : { commands: [] })
+      .then(catalog => (catalog.commands || []).map(command => ({
+        name: command.command,
+        desc: command.description,
+        min_prompts: command.minimum_prompt_count || 0,
+      })))
       .catch(() => []);
   return cache[key];
 }
@@ -1824,14 +1584,14 @@ const QUEUE_TABS = ["thinking", "working", "executing"];
 function buildQueuePin() {
   const q = el("div", "pinq");
   q.hidden = true;
-  S.ses.queueEl = q;
+  S.sessionView.queueEl = q;
   // restore the pinned queued messages persisted server-side (composer-queue kv)
   // so a reload / device switch keeps showing what the TUI still holds unqueued —
   // seed only when the in-memory queue is empty (a live session already has its
   // entries); drainQueue reconciles them out as their prompts arrive.
-  const cq = S.ses.meta && S.ses.meta.composer_queue;
-  if (cq && Array.isArray(cq.items) && !S.ses.queue.length)
-    S.ses.queue = cq.items.map(it => ({ text: (it && it.text) || "" }));
+  const cq = S.sessionView.meta && S.sessionView.meta.composer_queue;
+  if (cq && Array.isArray(cq.items) && !S.sessionView.queue.length)
+    S.sessionView.queue = cq.items.map(it => ({ text: (it && it.text) || "" }));
   renderQueue();
   return q;
 }
@@ -1840,24 +1600,25 @@ function buildQueuePin() {
 // survives a reload; called on every queue mutation (queued-send, delivery
 // drain, ✕-hide). Best-effort — a failed write just retries on the next
 // change. meta is kept in sync so our own SSE echo is a no-op.
-function saveQueue(ses) {
-  ses = ses || S.ses;
-  if (!ses || !S.cur) return;
-  const items = ses.queue.map(m => ({ text: m.text }));
-  if (ses.meta)
-    ses.meta.composer_queue = items.length ? { items, origin: CLIENT_ID } : null;
-  postJSON("/api/session/" + encodeURIComponent(S.cur) + "/composer-queue",
+function saveQueue(sessionView) {
+  sessionView = sessionView || S.sessionView;
+  if (!sessionView || !S.currentSessionId) return;
+  const items = sessionView.queue.map(m => ({ text: m.text }));
+  if (sessionView.meta)
+    sessionView.meta.composer_queue = items.length ? { items, origin: CLIENT_ID } : null;
+  postJSON("/api/sessions/" + encodeURIComponent(S.currentSessionId)
+           + "/application/composer-queue",
            { items, origin: CLIENT_ID }).catch(() => {});
 }
 
 // A peer device's (or our own reload's) queue update arrived over SSE — adopt
 // it, ignoring our OWN echo (same origin) so a local drain isn't clobbered.
 function applyComposerQueue(q) {
-  const ses = S.ses;
-  if (!ses) return;
-  if (ses.meta) ses.meta.composer_queue = q || null;
+  const sessionView = S.sessionView;
+  if (!sessionView) return;
+  if (sessionView.meta) sessionView.meta.composer_queue = q || null;
   if (q && q.origin && q.origin === CLIENT_ID) return;   // our own write
-  ses.queue = ((q && q.items) || []).map(it => ({ text: (it && it.text) || "" }));
+  sessionView.queue = ((q && q.items) || []).map(it => ({ text: (it && it.text) || "" }));
   renderQueue();
 }
 
@@ -1867,12 +1628,12 @@ function applyComposerQueue(q) {
 // .msg.prompt shape (minus the rewind ↶ — a not-yet-delivered prompt isn't
 // re-runnable), plus a ⧗ badge and a ✕ to drop a stale marker.
 function renderQueue() {
-  const ses = S.ses;
-  if (!ses || !ses.queueEl) return;
-  const q = ses.queueEl;
+  const sessionView = S.sessionView;
+  if (!sessionView || !sessionView.queueEl) return;
+  const q = sessionView.queueEl;
   q.textContent = "";
-  q.hidden = !ses.queue.length;
-  ses.queue.forEach((m, i) => {
+  q.hidden = !sessionView.queue.length;
+  sessionView.queue.forEach((m, i) => {
     const d = el("div", "msg prompt queued");
     d.title = "queued in the terminal — delivers when this turn ends";
     const who = el("span", "who");
@@ -1880,7 +1641,7 @@ function renderQueue() {
     d.append(who);
     const x = el("button", "qx", "✕");
     x.title = "remove this queued marker (the message stays queued in the terminal)";
-    x.onclick = () => { ses.queue.splice(i, 1); renderQueue(); saveQueue(ses); };
+    x.onclick = () => { sessionView.queue.splice(i, 1); renderQueue(); saveQueue(sessionView); };
     d.append(x);
     d.append(promptMd(m.text));
     q.append(d);
@@ -1888,19 +1649,19 @@ function renderQueue() {
 }
 
 function drainQueue(items) {
-  const ses = S.ses;
-  if (!ses || !ses.queue || !ses.queue.length) return;
+  const sessionView = S.sessionView;
+  if (!sessionView || !sessionView.queue || !sessionView.queue.length) return;
   let hit = false;
   for (const it of items) {
-    if (it.t !== "msg" || it.kind !== "prompt") continue;
-    const real = (it.text || "").trim();
+    if (it.item_type !== "message" || it.conversation_kind !== "prompt") continue;
+    const real = (it.plain_text || "").trim();
     // suffix match (promptMatches — the one rule, shared with drainPending and
     // mirrored server-side): the delivered prompt may carry attachment mentions
     // OR a terminal-restored draft in front of what we sent.
-    const i = ses.queue.findIndex(m => promptMatches(real, m.text));
-    if (i >= 0) { ses.queue.splice(i, 1); hit = true; }
+    const i = sessionView.queue.findIndex(m => promptMatches(real, m.text));
+    if (i >= 0) { sessionView.queue.splice(i, 1); hit = true; }
   }
-  if (hit) { renderQueue(); saveQueue(ses); }
+  if (hit) { renderQueue(); saveQueue(sessionView); }
 }
 
 // A prompt the terminal DISCARDED (Esc-Esc right after sending, or a rewind)
@@ -1912,13 +1673,14 @@ function drainQueue(items) {
 // is the first match in DOM order; only server-rendered bubbles carry data-par,
 // so the optimistic .pending / ⧗ .queued stand-ins are untouched.
 function dropSuperseded(items) {
-  const st = S.ses && S.ses.stream;
+  const st = S.sessionView && S.sessionView.stream;
   if (!st) return;
   for (const it of items) {
-    if (it.t !== "msg" || it.kind !== "prompt" || !it.par) continue;
+    if (it.item_type !== "message" || it.conversation_kind !== "prompt"
+        || !it.reply_to_message_id) continue;
     let live = false;
     for (const el of st.querySelectorAll(".msg.prompt[data-par]")) {
-      if (el.dataset.par !== it.par) continue;
+      if (el.dataset.par !== it.reply_to_message_id) continue;
       if (!live) { live = true; continue; }        // keep the newest
       el.remove();
     }

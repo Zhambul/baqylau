@@ -34,15 +34,15 @@ const sandbox = {
   toast: () => {}, clog: () => {}, optPending: () => ({ live: true }),
   renderAsk: () => {}, autoGrow: () => {}, saveComposerDraft: () => {},
   askDraftClear: () => {}, closeAskMenu: () => {},
-  postJSON: (url, body) => {
-    posts.push({ url, body });
+  canonicalControl: (controlName, fields) => {
+    posts.push({ body: { control_name: controlName, ...fields } });
     return Promise.resolve({});
   },
   ASK_DRAFT_DEBOUNCE_MS: 400,
   CLIENT_ID: "test-client",
   IS_IPAD: false,
   $view: new El("div"),
-  S: { cur: "sid1", ses: null },
+  S: { currentSessionId: "sid1", sessionView: null },
 };
 sandbox.document.addEventListener = () => {};
 sandbox.document.activeElement = null;
@@ -55,7 +55,7 @@ vm.runInContext(fs.readFileSync(process.argv[2], "utf8"), sandbox,
 /* One submitAsk run: returns the body it POSTed. */
 function submit(ask, answers, chat) {
   posts.length = 0;
-  sandbox.S.ses = { meta: {}, askEl: new El("div"), composer: new El("textarea") };
+  sandbox.S.sessionView = { meta: {}, askEl: new El("div"), composer: new El("textarea") };
   sandbox.submitAsk(ask, answers, chat);
   return (posts[0] || {}).body || null;
 }
@@ -70,7 +70,7 @@ const MIXED = {
   questions: [
     { header: "Dock", options: [PREV("top"), PREV("bottom")] },
     { header: "Colour", options: [OPT("white"), OPT("state")] },
-    { header: "Extras", multiSelect: true, options: [OPT("sid"), OPT("vmodes")] },
+    { header: "Extras", multiSelect: true, options: [OPT("sessionId"), OPT("vmodes")] },
   ],
 };
 // every question preview-laid-out, and the typed text is on a preview question:
@@ -90,13 +90,13 @@ const out = {
   // THE REGRESSION: picks on every question, plus typed text on the NON-preview
   // multiSelect. Must submit answers — the preview on Q1 is none of Q3's business.
   typed_on_plain_question: submit(MIXED,
-    [A(["top"]), A(["white"]), A(["sid"], "testing")]),
+    [A(["top"]), A(["white"]), A(["sessionId"], "testing")]),
   // picks only, mixed ask: plainly a normal answer submission
-  picks_only: submit(MIXED, [A(["top"]), A(["white"]), A(["sid"])]),
+  picks_only: submit(MIXED, [A(["top"]), A(["white"]), A(["sessionId"])]),
   // typed text ON the preview question: escalation is correct, but the message
   // must still carry the OTHER questions' picks rather than dropping them
   typed_on_preview_question: submit(MIXED,
-    [A([], "my own dock"), A(["white"]), A(["sid", "vmodes"])]),
+    [A([], "my own dock"), A(["white"]), A(["sessionId", "vmodes"])]),
   // single question, all preview, typed: escalates, message is the typed text
   all_preview_typed: submit(ALL_PREVIEW, [A([], "custom")]),
   // no previews anywhere: typed text has always ridden as `other`

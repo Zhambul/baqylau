@@ -7,7 +7,7 @@
 # (iTerm2, ghostty, …) means adding ONE sibling module here and teaching get()
 # to detect it — no other file changes. kitty is the only implementation today.
 #
-# Selection: $CLAUDE_FRONTEND pins one explicitly ("kitty", or "none" for an
+# Selection: $BAQYLAU_FRONTEND pins one explicitly ("kitty", or "none" for an
 # inert stub); unset defaults to kitty. Detection-by-environment (ITERM_*,
 # GHOSTTY_*) slots in here when a second frontend exists.
 import os
@@ -15,12 +15,12 @@ import os
 
 def get(resolve=False):
     """The active Frontend. `resolve=True` lets the frontend hunt for its
-    control channel beyond the environment (kitty: the ppid walk / lone-socket
-    fallback claude-split.py needs for keybinding launches — see
-    frontends.kitty.resolve_listen_on)."""
-    name = (os.environ.get("CLAUDE_FRONTEND") or "kitty").strip().lower()
+    control channel beyond the environment."""
+    name = (os.environ.get("BAQYLAU_FRONTEND") or "kitty").strip().lower()
     if name == "kitty":
         from frontends.kitty import KittyFrontend
         return KittyFrontend(resolve=resolve)
-    from frontends.base import Frontend
-    return Frontend()                        # "none" / unknown -> inert stub
+    if name == "none":
+        from frontends.base import Frontend
+        return Frontend()
+    raise ValueError(f"unsupported terminal frontend: {name}")

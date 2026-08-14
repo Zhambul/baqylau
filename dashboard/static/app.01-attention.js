@@ -43,7 +43,9 @@ function urlB64ToUint8(b64) {
 async function ensureSubscribed() {
   if (!swReg || !("Notification" in window) || Notification.permission !== "granted") return;
   let cfg;
-  try { cfg = await fetch("/api/push/config").then((r) => r.json()); } catch (_) { return; }
+  try {
+    cfg = await fetch("/api/application/push-configuration").then((r) => r.json());
+  } catch (_) { return; }
   if (!cfg || !cfg.enabled || !cfg.key) return;      // feature off / no server key
   try {
     let sub = await swReg.pushManager.getSubscription();
@@ -53,8 +55,9 @@ async function ensureSubscribed() {
         applicationServerKey: urlB64ToUint8(cfg.key),
       });
     }
-    await postJSON("/api/push/subscribe",
-                   { subscription: sub.toJSON(), device: DEVICE_ID, label: DEVICE_LABEL },
+    await postJSON("/api/application/push-subscriptions",
+                   { subscription: sub.toJSON(), device_id: DEVICE_ID,
+                     device_label: DEVICE_LABEL },
                    { audit: "push-sub" });
   } catch (e) {
     clog("", "push.fail", { error: String((e && e.message) || e) });
@@ -81,7 +84,7 @@ async function initPush() {
 /* ---------- stale-banner sweep --------------------------------------------
    The client half of retraction (docs/dashboard.md, *Alert retraction*). The
    server takes an alert back by pushing a resolve to the service worker, but
-   that push can be refused, dropped, or switched off (CLAUDE_DASH_RESOLVE_PUSH),
+   that push can be refused, dropped, or switched off (BAQYLAU_DASHBOARD_RESOLVE_PUSH),
    and the handles it needs live only in the running server's memory — a restart
    forgets them. So the page also clears up after itself: on coming to the
    foreground it closes every banner whose session no longer needs you.
@@ -93,15 +96,15 @@ let sweepArmed = true;
 
 async function sweepStale() {
   if (!swReg || !swReg.getNotifications) return;
-  const needs = new Set(needsYouRows().map(r => r.sid));
+  const needs = new Set(needsYouRows().map(sessionId));
   let ns;
   try { ns = await swReg.getNotifications(); } catch (_) { return; }
-  // A banner with no sid can't be attributed to a session — that's either a
+  // A banner with no sessionId can't be attributed to a session — that's either a
   // legacy alert or the placeholder WebKit substitutes for a push that showed
   // nothing. Both are ours and both are stale, so both go.
   for (const n of ns) {
-    const sid = (n.data && n.data.sid) || "";
-    if (!needs.has(sid)) n.close();
+    const sessionId = (n.data && n.data.session_id) || "";
+    if (!needs.has(sessionId)) n.close();
   }
   updateBadge();
 }
@@ -118,7 +121,9 @@ async function sweepStale() {
 // closed. Cleared to nothing at 0 so the icon has no stray dot.
 function needsYouRows(sessions) {
   return (sessions || S.sessions || []).filter(
-    r => r.live && (r.tab === "awaiting-command" || r.tab === "awaiting-response"));
+    row => sessionIsLive(row)
+      && (sessionTabState(row) === "awaiting_attention"
+          || sessionTabState(row) === "awaiting_response"));
 }
 function needsYouCount(sessions) {
   return needsYouRows(sessions).length;
@@ -172,7 +177,7 @@ function initWakeBtn() {
 // a session view it doubles as the chat switcher. Fed from the global
 // S.sessions snapshots the app already holds, plus the open session's `tab`
 // SSE event (which patches its row in place so the bar reacts before the next
-// snapshot). Within a state group pills sort by label+sid, NOT recency: the
+// snapshot). Within a state group pills sort by label+sessionId, NOT recency: the
 // bar re-renders every snapshot tick, and pills that shuffle under the cursor
 // are a misclick trap.
 
@@ -194,50 +199,52 @@ const FAV_GLYPH =
   + "<line x1='84' y1='100' x2='18' y2='100'/>"
   + "<line x1='88.69' y1='88.69' x2='42.02' y2='42.02'/>"
   + "</g>"
-  + "<circle cx='100' cy='100' r='82' fill='none' stroke='#E9B949' stroke-width='8'/>"
+  + "<circle contextWindow='100' cy='100' r='82' fill='none' stroke='#E9B949' stroke-width='8'/>"
   + "<g fill='#E9B949'>"
-  + "<circle cx='100' cy='18' r='9'/><circle cx='157.98' cy='42.02' r='9'/>"
-  + "<circle cx='182' cy='100' r='9'/><circle cx='157.98' cy='157.98' r='9'/>"
-  + "<circle cx='100' cy='182' r='9'/><circle cx='42.02' cy='157.98' r='9'/>"
-  + "<circle cx='18' cy='100' r='9'/><circle cx='42.02' cy='42.02' r='9'/>"
+  + "<circle contextWindow='100' cy='18' r='9'/><circle contextWindow='157.98' cy='42.02' r='9'/>"
+  + "<circle contextWindow='182' cy='100' r='9'/><circle contextWindow='157.98' cy='157.98' r='9'/>"
+  + "<circle contextWindow='100' cy='182' r='9'/><circle contextWindow='42.02' cy='157.98' r='9'/>"
+  + "<circle contextWindow='18' cy='100' r='9'/><circle contextWindow='42.02' cy='42.02' r='9'/>"
   + "</g>"
-  + "<circle cx='100' cy='100' r='16' fill='none' stroke='#9aa7b0' stroke-width='6'/>"
-  + "<circle cx='100' cy='100' r='8' fill='#E9B949'/>";
+  + "<circle contextWindow='100' cy='100' r='16' fill='none' stroke='#9aa7b0' stroke-width='6'/>"
+  + "<circle contextWindow='100' cy='100' r='8' fill='#E9B949'/>";
 const favData = (extra) =>
   "data:image/svg+xml," + encodeURIComponent(
     "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200'>"
     + FAV_GLYPH + (extra || "") + "</svg>");
 const FAVICON = favData("");
-const FAVICON_ASK = favData("<circle cx='168' cy='32' r='30' fill='#e06c75'/>");
+const FAVICON_ASK = favData("<circle contextWindow='168' cy='32' r='30' fill='#e06c75'/>");
 
 // tab state → pill class (the dot/ring color, mirroring the kitty tab
 // palette) + its needs-you-first sort rank. Anything unmapped — idle, or ""
 // for a tabless headless/daemon session — is the grey idle pill.
 const ATTN_CLASS = {
-  "awaiting-command": "ask", "awaiting-response": "done",
+  "awaiting_attention": "ask", "awaiting_response": "done",
   "thinking": "busy", "working": "busy",
-  "executing": "run", "awaiting-bg": "run",
+  "executing": "run", "awaiting_background": "run",
 };
 const ATTN_RANK = { ask: 0, done: 1, busy: 2, run: 3, idle: 4 };
 
 function attnPill(row) {
-  const cls = ATTN_CLASS[row.tab] || "idle";
-  const a = el("a", "attn-pill " + cls + (row.sid === S.cur ? " self" : ""));
-  a.href = "#/s/" + encodeURIComponent(row.sid);
+  const cls = ATTN_CLASS[sessionTabState(row)] || "idle";
+  const a = el("a", "attn-pill " + cls + (sessionId(row) === S.currentSessionId ? " self" : ""));
+  a.href = "#/s/" + encodeURIComponent(sessionId(row));
   a.append(el("span", "adot"));
-  a.append(el("span", "alabel", row.title || proj(row)));
-  a.title = (TAB_LABEL[row.tab] || row.tab || "no tab") + " · " + row.sid;
+  a.append(el("span", "alabel", row.session.title || proj(row)));
+  a.title = (TAB_LABEL[sessionTabState(row)] || sessionTabState(row) || "no tab") + " · " + sessionId(row);
   return a;
 }
 
 function renderAttention() {
   if (!$attn) return;
-  const live = S.sessions.filter(r => r.live);
+  const live = S.sessions.filter(sessionIsLive);
   live.sort((a, b) =>
-    ATTN_RANK[ATTN_CLASS[a.tab] || "idle"] - ATTN_RANK[ATTN_CLASS[b.tab] || "idle"]
-    || (a.title || proj(a)).localeCompare(b.title || proj(b))
-    || (a.sid < b.sid ? -1 : 1));
-  const asking = live.filter(r => r.tab === "awaiting-command").length;
+    ATTN_RANK[ATTN_CLASS[sessionTabState(a)] || "idle"]
+      - ATTN_RANK[ATTN_CLASS[sessionTabState(b)] || "idle"]
+    || (a.session.title || proj(a)).localeCompare(b.session.title || proj(b))
+    || (sessionId(a) < sessionId(b) ? -1 : 1));
+  const asking = live.filter(
+    row => sessionTabState(row) === "awaiting_attention").length;
   const show = live.length > 0;
   $attn.hidden = !show;
   document.body.classList.toggle("attn-on", show);
@@ -259,15 +266,10 @@ function renderAttention() {
 
 /* ---------- account usage strip (top of every page) ---------- */
 // A slim strip under the header showing each subscription account's latest
-// 5-hour / 7-day rate-limit usage (GET /api/accounts — aggregated per account
-// from the status-line capture, docs/dashboard.md). Painted by the boot
-// fetch, then kept live by the `accounts` SSE push (app.02-router.js); the
-// slow poll below survives as the SSE-down fallback (usage moves slowly, and
-// it's ambient). Hidden entirely when no account has any usage captured yet.
+// 5-hour / 7-day rate-limit usage from the typed global application snapshot.
+// Hidden entirely when no account has any usage captured yet.
 // The default account is labeled "default"; others by their switcher label
 // (c2 · claude-01).
-
-const ACCOUNTS_POLL_MS = 60000;
 
 // The window keys of a Claude usage snapshot DICT, in the server's serve order
 // (the account-wide 5h/7d pair first, then model-scoped windows like
@@ -276,34 +278,24 @@ const ACCOUNTS_POLL_MS = 60000;
 // used-%, never the ts stamp or a *_reset sibling. Read by the new-session
 // ACCOUNT PICKER, which works off that per-account snapshot; the usage STRIP
 // reads the served `windows` list instead — one vocabulary, every host.
-function usageWindows(u) {
-  return Object.keys(u || {}).filter(k =>
-    typeof u[k] === "number" && k !== "ts" && !k.endsWith("_reset"));
-}
-
-// "five_hour" → "5h", "seven_day" → "7d", "seven_day_fable" → "7d fable"
-function windowLabel(k) {
-  return k.replace(/^five_hour/, "5h").replace(/^seven_day/, "7d")
-    .replace(/_/g, " ").trim();
-}
-
 // The new-session picker's weekly-quota PERISHABILITY (higher = burn first).
 // SERVER-computed (core/sessionapi.sched_score, the single owner of the
 // scheduling arithmetic); missing → 0 (no snapshot / no urgency).
 function schedScore(a) {
-  return typeof a.sched_score === "number" ? a.sched_score : 0;
+  const score = Number(a.scheduling_score);
+  return Number.isFinite(score) ? score : 0;
 }
 
 // The limit-hit chip/marker text: "fable limit hit" for a model-scoped stamp
 // (limit_hit.model, parsed server-side by relimit.limit_model), "limit hit"
 // for an account-wide one.
 function limitLabel(hit) {
-  return (hit.model ? hit.model + " " : "") + "limit hit";
+  return (hit.model_id ? hit.model_id + " " : "") + "limit hit";
 }
 
 // The account name as shown: "c2 · claude-01" (the default account has no slug).
 function acctName(a) {
-  return a.slug ? a.slug + " · " + a.label : a.label;
+  return a.account_id ? a.account_id + " · " + a.display_name : a.display_name;
 }
 
 // A window's COLUMN SLOT — its DURATION in minutes, which is what the whole
@@ -313,8 +305,8 @@ function acctName(a) {
 // gave the two hosts two different columns for one duration. A window with no
 // readable duration can share a column with nothing, so it stands on its key.
 function winSlot(w) {
-  return typeof w.window_mins === "number" && w.window_mins > 0
-    ? "m" + w.window_mins : "k" + w.key;
+  return typeof w.duration_minutes === "number" && w.duration_minutes > 0
+    ? "m" + w.duration_minutes : "k" + w.key;
 }
 function slotMins(slot) {
   return slot[0] === "m" ? parseInt(slot.slice(1), 10) : Number.MAX_SAFE_INTEGER;
@@ -353,7 +345,7 @@ function stripColumns(rows) {
         // the first row to claim a position names the column; with the labels
         // now shared per DURATION (plugins.window_label) the rows agree on it
         if (!at[i]) at[i] = { label: w.label, scope: w.scope, hosts: new Set() };
-        at[i].hosts.add(a.host);
+        at[i].hosts.add(a.harness);
       });
     }
   }
@@ -414,16 +406,16 @@ function acctPill(a, cols, anyOut, tr) {
   // The badge sits BEFORE the bars, so a healthy row keeps its slot (hidden, not
   // absent) or the one dead account would shove its own bars out of column.
   if (anyOut) {
-    const chip = el("span", "uauth" + (a.logged_out ? "" : " ghost"), "⚠ logged out");
-    if (a.logged_out)
-      chip.title = a.logged_out_msg || "run /login — the account's login was revoked";
+    const chip = el("span", "uauth" + (a.authentication_error ? "" : " ghost"), "⚠ logged out");
+    if (a.authentication_error)
+      chip.title = a.authentication_error;
     else chip.setAttribute("aria-hidden", "true");
     pill.append(place(chip, tr.badge));
   }
   if (!(a.windows || []).length) {
     // nothing to lay out in the bar tracks: the notice spans all of them (a
     // one-track cell would leave the row's chip ending at the first column)
-    if (!a.logged_out) {
+    if (!a.authentication_error) {
       const dim = el("span", "adim", "no usage yet");
       dim.style.gridColumn = tr.bar0 + " / -1";
       pill.append(dim);
@@ -491,8 +483,8 @@ function acctPill(a, cols, anyOut, tr) {
   // preceding cell measuring the same.
   cols.forEach((c, i) => {
     const w = (slots.get(c.slot) || [])[c.i];
-    if (!w && !c.hosts.has(a.host)) return;
-    const seg = bar(c.label, w ? w.used_pct : undefined,
+    if (!w && !c.hosts.has(a.harness)) return;
+    const seg = bar(c.label, w ? Number(w.used_percent) : undefined,
                     w && w.resets_at, c.scope === "account");
     // Separator follows the GRID column, not DOM adjacency. A foreign-host
     // column before this one now emits no sibling, but this bar must keep the
@@ -510,15 +502,15 @@ function acctPill(a, cols, anyOut, tr) {
   // It rides ONE trailing cell (`.utail`) in the last track, chip and reset
   // together: two loose spans would be two cells competing for one column, and
   // giving each its own track would widen the strip for every other row.
-  if (a.limit_hit) {
+  if (a.limit) {
     // model-scoped stamps ("fable limit hit" — only that model is blocked,
     // relimit.limit_model) name the model; account-wide ones stay bare
     const tail = place(el("span", "utail"), tr.tail);
-    const chip = el("span", "ulimit", limitLabel(a.limit_hit));
-    if (a.limit_hit.msg) chip.title = a.limit_hit.msg;
+    const chip = el("span", "ulimit", limitLabel(a.limit));
+    if (a.limit.message) chip.title = a.limit.message;
     tail.append(chip);
-    if (a.limit_hit.resets_at)
-      tail.append(el("span", "ureset", "resets " + resetAgo(a.limit_hit.resets_at)));
+    if (a.limit.resets_at)
+      tail.append(el("span", "ureset", "resets " + resetAgo(a.limit.resets_at)));
     pill.append(tail);
   }
   return pill;
@@ -569,7 +561,7 @@ function renderAccounts(list) {
   if (!$accounts) return;
   // show a row with any usage window OR a logged-out warning (a dead account
   // may have no fresh usage, but the ⚠ still needs to surface)
-  const shown = (list || []).filter(a => (a.windows || []).length || a.logged_out);
+  const shown = (list || []).filter(a => (a.windows || []).length || a.authentication_error);
   $accounts.hidden = !shown.length;
   $accounts.textContent = "";
   // The name column is sized across the WHOLE strip so every host's rows share
@@ -581,7 +573,7 @@ function renderAccounts(list) {
   // strip-wide too: the ⚠ badge sits BEFORE the bars, so one logged-out account
   // anywhere means EVERY row reserves the slot, or the bars of the rows that
   // don't start a badge-width to the left of the ones that do.
-  const anyOut = shown.some(a => a.logged_out);
+  const anyOut = shown.some(a => a.authentication_error);
   const tr = stripTracks(cols, anyOut);
   // THE tracks, on the container every row subgrids into. All `max-content`:
   // each track is as wide as the widest cell any row puts in it, measured by
@@ -592,8 +584,8 @@ function renderAccounts(list) {
   $accounts.style.setProperty("--acct-tracks",
                               new Array(tr.n).fill("max-content").join(" "));
   const hosts = [];
-  for (const a of shown) if (!hosts.includes(a.host)) hosts.push(a.host);
+  for (const a of shown) if (!hosts.includes(a.harness)) hosts.push(a.harness);
   for (const h of hosts)
     for (const a of shown)
-      if (a.host === h) $accounts.append(acctPill(a, cols, anyOut, tr));
+      if (a.harness === h) $accounts.append(acctPill(a, cols, anyOut, tr));
 }

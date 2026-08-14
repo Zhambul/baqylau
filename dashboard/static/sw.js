@@ -16,7 +16,7 @@ self.addEventListener("activate", (e) => e.waitUntil(self.clients.claim()));
 // The tag a session's alert is shown under. MUST agree with
 // notify/channels.push_tag — a resolve push closes by tag, so a mismatch here
 // leaves the banner up forever.
-const tagFor = (sid) => "claude-" + (sid || "");
+const tagFor = (sessionId) => "baqylau-" + (sessionId || "");
 
 // Close every notification this session's alert is showing. This is the
 // RETRACTION (docs/dashboard.md, *Alert retraction*): the server sends a
@@ -29,16 +29,16 @@ const tagFor = (sid) => "claude-" + (sid || "");
 // placeholder, and can revoke the subscription if it becomes a habit. Two
 // things keep that survivable: the server sends at most ONE resolve per
 // delivered alert (bounded 1:1 against visible pushes, not background chatter),
-// and CLAUDE_DASH_RESOLVE_PUSH=0 turns it off. If a resolve is ever refused or
+// and BAQYLAU_DASHBOARD_RESOLVE_PUSH=0 turns it off. If a resolve is ever refused or
 // dropped, app.js's foreground sweep still clears the stale banner on next open.
 function resolveAlert(d) {
-  return self.registration.getNotifications({ tag: d.tag || tagFor(d.sid) })
+  return self.registration.getNotifications({ tag: d.tag || tagFor(d.session_id) })
     .then((ns) => ns.forEach((n) => n.close()))
     .catch(() => {});
 }
 
 // A push arrives as the JSON the server encrypted (notify/channels.py):
-// an ALERT {title, body, sid, url, badge} or a RETRACTION {type:"resolve", sid,
+// an ALERT {title, body, sessionId, url, badge} or a RETRACTION {type:"resolve", sessionId,
 // tag, badge}. userVisibleOnly subscriptions MUST show a notification for every
 // push, so a missing/blank payload still surfaces one — the resolve is the sole
 // deliberate exception (see resolveAlert).
@@ -47,7 +47,7 @@ self.addEventListener("push", (e) => {
   try { d = e.data ? e.data.json() : {}; } catch (_) { d = {}; }
   const title = d.title || "baqylau";
   const body = d.body || "";
-  const sid = d.sid || "";
+  const sessionId = d.session_id || "";
   // update the app-icon badge to the needs-you count carried in the push, so
   // the icon is right even though the app is closed (the app itself keeps the
   // badge live from the sessions snapshot while open). docs/dashboard.md
@@ -63,15 +63,15 @@ self.addEventListener("push", (e) => {
     // tag collapses repeat alerts for the same session into one banner (a
     // re-fired asking/done replaces rather than stacks), and is what a resolve
     // push closes by.
-    tag: tagFor(sid),
+    tag: tagFor(sessionId),
     renotify: true,
-    data: { url: d.url || "/", sid },
+    data: { url: d.url || "/", session_id: sessionId },
   }));
 });
 
 // Tapping the notification focuses an already-open dashboard window (navigating
-// it to the deep link) or opens a fresh one. The URL is the same ?s=<sid> deep
-// link the Telegram alert uses — app.js translates it into the #/s/<sid> route.
+// it to the deep link) or opens a fresh one. The URL is the same ?s=<sessionId> deep
+// link the Telegram alert uses — app.js translates it into the #/s/<sessionId> route.
 self.addEventListener("notificationclick", (e) => {
   e.notification.close();
   const url = (e.notification.data && e.notification.data.url) || "/";

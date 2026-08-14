@@ -35,7 +35,7 @@ import re
 import shlex
 
 from plugins.claude_code import memory as MEM
-from plugins.claude_code import tools as CT
+from plugins.claude_code import shell
 
 # Commands whose presence in a statement means it READS file contents. Checked
 # across the whole statement, not just its head, because the reader is routinely
@@ -204,7 +204,10 @@ def plan(cmd, cwd=None):
     Pure: reads the filesystem to CONFIRM a path, writes nothing."""
     base = cwd or os.getcwd()
     found, searches = [], []
-    for stmt, at in CT.statement_cwds(CT.unwrap_tee(cmd or ""), base, tilde=True):
+    for stmt, at in shell.statement_directories(
+        shell.original_command(cmd or ""),
+        base,
+    ):
         toks = _toks(stmt)
         if not toks:
             continue

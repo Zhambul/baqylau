@@ -3,14 +3,12 @@
 // dashboard/static/app.11-chrome.js) over the shared DOM shim, and prints one
 // JSON verdict object that test_l0_dashboard.py asserts on.
 //
-// Why this exists: monitors and jobs used to be fourteen near-identical
-// function pairs 200 lines apart. Folding them onto one descriptor is only safe
-// if BOTH still render what they rendered — and nothing in the Python suite
-// executes this file, it can only grep it. A grep cannot catch "the jobs grid
-// now says 'no monitors in this session'", or a breadcrumb pointing at the
-// wrong list, or a poll that keeps ticking for a section with nothing live.
+// It verifies both canonical snapshot-backed sections still render their
+// existing cards, order, empty labels, breadcrumbs, and badges. It also proves
+// the browser no longer starts a secondary fetch or polling timer.
 //
-// Usage: node tests/jsdom/sections.js dashboard/static/app.11-chrome.js
+// Usage: node tests/jsdom/sections.js dashboard/static/app.11-chrome.js \
+//                                      dashboard/static/app.11-memory.js
 // SKIPPED when `node` is absent (docs/testing.md) — never a build requirement.
 "use strict";
 const fs = require("fs");
@@ -36,7 +34,7 @@ const sandbox = {
   // `agentQ` is the agent-scope query suffix (app.00-core.js) — a cross-part
   // global like clog/pre, stubbed with its real 3-line body so the URLs this
   // harness records are the ones the browser would send
-  agentQ: (sep) => { const a = (sandbox.S && sandbox.S.ses && sandbox.S.ses.agent) || "";
+  agentQ: (sep) => { const a = (sandbox.S && sandbox.S.sessionView && sandbox.S.sessionView.agent) || "";
                      return a ? (sep || "?") + "agent=" + encodeURIComponent(a) : ""; },
   sigmaChip: () => new El("span", "chip"),
   paintCtxRow: () => {},
@@ -50,7 +48,7 @@ const sandbox = {
   updateMoreBtn: () => {}, updateShownCount: () => {}, closeMonitorStream: () => {},
   IS_IPAD: false,
   $view: new El("div"),
-  S: { cur: "sid1", ses: null },
+  S: { currentSessionId: "sid1", sessionView: null },
   __fetched: [],
   fetch: (url) => {
     sandbox.__fetched.push(url);
@@ -68,8 +66,7 @@ vm.createContext(sandbox);
 // property of the vm global the way a `function` declaration does. Evaluate the
 // source and the export in ONE script so they share that scope.
 // every app part on argv, concatenated into ONE script so lexical top-level
-// bindings (const SECTIONS/EXT) are shared — the chrome part plus the
-// extension part(s) that register into it (app.11-ext-memory.js)
+// bindings (const SECTIONS) are shared across the chrome and memory parts.
 vm.runInContext(process.argv.slice(2).map(p => fs.readFileSync(p, "utf8")).join("\n")
                 + "\n;globalThis.SECTIONS = SECTIONS;",
                 sandbox, { filename: process.argv[2] });
@@ -91,7 +88,7 @@ const FIXTURES = {
 };
 
 function freshSes() {
-  const ses = {
+  const sessionView = {
     tab: null, body: new El("div"),
     monitors: null, monitorFocus: null, monPoll: null,
     jobs: null, jobFocus: null, jobPoll: null,
@@ -101,19 +98,19 @@ function freshSes() {
     // stub), so give it the meta map and the three tab anchors it patches
     meta: {}, monTab: new El("a"), jobTab: new El("a"), memoryTab: new El("a"),
   };
-  sandbox.S.ses = ses;
-  return ses;
+  sandbox.S.sessionView = sessionView;
+  return sessionView;
 }
 
 /* Render one section's GRID and report what came out. */
 function grid(kind) {
   const sec = sandbox.SECTIONS[kind];
-  const ses = freshSes();
-  ses.tab = kind;
+  const sessionView = freshSes();
+  sessionView.tab = kind;
   const wrap = new El("div", "sgrid");
   wrap.isConnected = true;
-  ses[sec.grid] = wrap;
-  ses[sec.list] = FIXTURES[kind];
+  sessionView[sec.grid] = wrap;
+  sessionView[sec.list] = FIXTURES[kind];
   sandbox.renderSectionGrid(kind);
   return {
     cards: wrap.children.length,
@@ -125,12 +122,12 @@ function grid(kind) {
 
 function emptyGrid(kind) {
   const sec = sandbox.SECTIONS[kind];
-  const ses = freshSes();
-  ses.tab = kind;
+  const sessionView = freshSes();
+  sessionView.tab = kind;
   const wrap = new El("div", "sgrid");
   wrap.isConnected = true;
-  ses[sec.grid] = wrap;
-  ses[sec.list] = [];
+  sessionView[sec.grid] = wrap;
+  sessionView[sec.list] = [];
   sandbox.renderSectionGrid(kind);
   return wrap.textContent;
 }
@@ -141,20 +138,24 @@ function crumbs(kind) {
   return { back: nav.children[0].href, text: nav.textContent };
 }
 
-/* The poll only runs while something in the section is LIVE and that tab (or
-   its drill-down) is what you are looking at. */
-function pollRuns(kind, opts) {
+
+
+function loaded(kind) {
   const sec = sandbox.SECTIONS[kind];
-  const ses = freshSes();
-  ses.tab = opts.tab;
-  ses[sec.focus] = opts.focus || null;
-  ses[sec.list] = opts.live ? FIXTURES[kind]
-    : FIXTURES[kind].map(x => ({ ...x, live: false }));
-  const before = timers.set;
-  sandbox.scheduleSectionPoll(kind);
-  const started = timers.set > before;
-  sandbox.clearSectionPoll(kind);
-  return started;
+  const sessionView = freshSes();
+  sessionView.tab = kind;
+  const wrap = new El("div", "sgrid");
+  wrap.isConnected = true;
+  sessionView[sec.grid] = wrap;
+  sessionView[sec.list] = FIXTURES[kind];
+  sandbox.__fetched = [];
+  sandbox.loadSection(kind);
+  const count = sessionView[sec.tabEl].querySelector(".count");
+  return {
+    count: count ? count.textContent : "",
+    cards: wrap.children.length,
+    fetched: sandbox.__fetched.slice(),
+  };
 }
 
 const out = {
@@ -162,84 +163,19 @@ const out = {
   grids: { monitors: grid("monitors"), jobs: grid("jobs") },
   empty: { monitors: emptyGrid("monitors"), jobs: emptyGrid("jobs") },
   crumbs: { monitors: crumbs("monitors"), jobs: crumbs("jobs") },
-  poll: {
-    liveOnTab: pollRuns("monitors", { tab: "monitors", live: true }),
-    liveOnDrill: pollRuns("jobs", { tab: "job:j-live", focus: "j-live", live: true }),
-    liveElsewhere: pollRuns("jobs", { tab: "mirror", live: true }),
-    deadOnTab: pollRuns("jobs", { tab: "jobs", live: false }),
-  },
-  badges: {},
-  fetched: {},
+  loaded: { monitors: loaded("monitors"), jobs: loaded("jobs") },
+  timers,
 };
 
-/* loadSection: one fetch per kind, the badge patched from the list length, the
-   grid painted. Memory takes the same fetch + badge path but repaints through
-   its own paintMemory (a grid OR an open note viewer) and has no drill-down. */
-const seq = ["monitors", "jobs", "memory"];
-let chain = Promise.resolve();
-for (const kind of seq) {
-  chain = chain.then(() => {
-    const sec = sandbox.SECTIONS[kind];
-    const ses = freshSes();
-    ses.tab = kind;
-    if (sec.grid) {
-      const wrap = new El("div", "sgrid");
-      wrap.isConnected = true;
-      ses[sec.grid] = wrap;
-    }
-    sandbox.__fetched = [];
-    sandbox.loadSection(kind);
-    return new Promise(r => {
-      let n = 0;
-      const tick = () => (++n < 30 ? Promise.resolve().then(tick) : r());
-      tick();
-    }).then(() => {
-      // the badge is the tab anchor's `.count` text AND the cached meta field —
-      // both patched from the fetched list length
-      const a = ses[sec.tabEl];
-      const c = a.querySelector(".count");
-      out.badges[kind] = { count: c ? c.textContent : "",
-                           meta: ses.meta[sec.countField],
-                           painted: sec.grid ? ses[sec.grid].children.length
-                                             : null };
-      out.fetched[kind] = sandbox.__fetched.slice();
-    });
-  });
-}
-
-/* Repaint-skip: the poll refetches every SECONDARY_POLL_MS while anything is
-   live, and an UNCHANGED payload must leave the DOM alone — the wholesale
-   teardown flickered the grid (and flashed "loading output…" over a job
-   drill-down) every tick while a quiet live job changed nothing. A sentinel
-   child survives the same-bytes reload and is torn down by a changed one. */
-const settle = () => new Promise(r => {
-  let n = 0;
-  const tick = () => (++n < 30 ? Promise.resolve().then(tick) : r());
-  tick();
-});
-chain = chain.then(() => {
-  const sec = sandbox.SECTIONS.jobs;
-  const ses = freshSes();
-  ses.tab = "jobs";
-  const wrap = new El("div", "sgrid");
-  wrap.isConnected = true;
-  ses[sec.grid] = wrap;
-  const sentinel = new El("div", "sentinel");
-  sandbox.loadSection("jobs");
-  return settle().then(() => {
-    wrap.append(sentinel);
-    sandbox.loadSection("jobs");                       // same bytes → no repaint
-    return settle();
-  }).then(() => {
-    out.skip = { same: wrap.children.includes(sentinel) };
-    FIXTURES.jobs = FIXTURES.jobs.concat(
-      [{ task: "j-new", command: "true", live: false, started_at: 400 }]);
-    sandbox.loadSection("jobs");                       // moved → full repaint
-    return settle();
-  }).then(() => {
-    out.skip.changed = !wrap.children.includes(sentinel);
-    out.skip.cards = wrap.children.length;
-  });
-});
-
-chain.then(() => process.stdout.write(JSON.stringify(out, null, 1)));
+const errors = [];
+if (out.grids.monitors.cards !== 2) errors.push("monitor cards");
+if (out.grids.jobs.cards !== 2) errors.push("job cards");
+if (!out.empty.monitors.includes("no monitors")) errors.push("monitor empty text");
+if (!out.empty.jobs.includes("no background jobs")) errors.push("job empty text");
+if (out.loaded.monitors.fetched.length || out.loaded.jobs.fetched.length)
+  errors.push("canonical sections must not fetch");
+if (timers.set || timers.cleared) errors.push("canonical sections must not poll");
+out.ok = errors.length === 0;
+out.errors = errors;
+process.stdout.write(JSON.stringify(out, null, 1));
+if (errors.length) process.exitCode = 1;

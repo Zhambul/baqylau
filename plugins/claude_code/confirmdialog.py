@@ -21,7 +21,7 @@
 import re
 import time
 
-from core import screendrive
+from plugins.claude_code import screen_driver as screendrive
 
 OPEN_TIMEOUT_S = 4.0   # paste delivered → menu visible (slash-cmd latency);
 #                        no menu inside this window = the switch applied

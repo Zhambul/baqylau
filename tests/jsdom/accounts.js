@@ -45,7 +45,7 @@ const sandbox = {
   $accounts,
   $notifybtn: new El("button"), $wakebtn: new El("button"),
   $attn: new El("div"),
-  S: { sessions: [], accts: null, cur: null },
+  S: { sessions: [], accts: null, currentSessionId: null },
   clog: () => {}, toast: () => {}, route: () => {},
   postJSON: () => Promise.resolve({}),
   ago: () => "", shortSid: (s) => s, proj: () => "",
@@ -127,7 +127,7 @@ function render(list) {
     // render order, so the python assertions need to know which row is whose.
     // Taken from the fixture, not
     // the DOM: the row carries no host marker on screen, and it should not.
-    hosts: (list || []).map(a => a.host),
+    hosts: (list || []).map(a => a.harness),
   };
 }
 
@@ -146,7 +146,8 @@ function step(name, fn) {
    the new-session account picker and is deliberately NOT what the strip reads.
    Fixtures state both, exactly as the server serves them. */
 const W = (key, label, pct, reset, mins, scope) => ({
-  key, label, used_pct: pct, resets_at: reset, window_mins: mins, scope,
+  key, label, used_percent: pct, resets_at: reset, duration_minutes: mins, scope,
+  model_id: scope === "model" ? "fable" : null,
 });
 const H5 = (pct, reset) => W("five_hour", "5h", pct, reset, 300, "account");
 const D7 = (pct, reset) => W("seven_day", "7d", pct, reset, 10080, "account");
@@ -158,12 +159,12 @@ const F7 = (pct, reset) =>
 // 5h window ROLLED OVER — effective_usage zeroed it and dropped its reset —
 // and its 7d reset is a DAY away where c1's is hours.
 step("live_shape", () => render([
-  { host: "claude_code", slug: "c1", label: "oboard",
+  { harness: "claude_code", account_id: "c1", display_name: "oboard",
     windows: [H5(60, now + 3600), D7(97, now + 10222), F7(32, now + 10222)],
     usage: { five_hour: 60, five_hour_reset: now + 3600,
              seven_day: 97, seven_day_reset: now + 10222, ts: now,
              seven_day_fable: 32, seven_day_fable_reset: now + 10222 } },
-  { host: "claude_code", slug: "c2", label: "claude-01",
+  { harness: "claude_code", account_id: "c2", display_name: "claude-01",
     windows: [H5(0, null), D7(82, now + 89422), F7(56, now + 89422)],
     usage: { five_hour: 0,
              seven_day: 82, seven_day_reset: now + 89422, ts: now,
@@ -173,12 +174,12 @@ step("live_shape", () => render([
 // (2) The per-model window attached to ONE account only (the OAuth //usage
 // fetch matches a slug by its 7d epoch and can miss — docs/dashboard.md).
 step("model_window_on_one", () => render([
-  { host: "claude_code", slug: "c1", label: "oboard",
+  { harness: "claude_code", account_id: "c1", display_name: "oboard",
     windows: [H5(60, now + 3600), D7(97, now + 10222), F7(32, now + 10222)],
     usage: { five_hour: 60, five_hour_reset: now + 3600,
              seven_day: 97, seven_day_reset: now + 10222, ts: now,
              seven_day_fable: 32, seven_day_fable_reset: now + 10222 } },
-  { host: "claude_code", slug: "c2", label: "a-much-longer-label",
+  { harness: "claude_code", account_id: "c2", display_name: "a-much-longer-label",
     windows: [H5(12, now + 900), D7(82, now + 89422)],
     usage: { five_hour: 12, five_hour_reset: now + 900,
              seven_day: 82, seven_day_reset: now + 89422, ts: now } },
@@ -187,12 +188,12 @@ step("model_window_on_one", () => render([
 // (3) One account LOGGED OUT: its ⚠ badge sits before the bars, so the healthy
 // row has to reserve the same slot or its bars start a badge-width to the left.
 step("one_logged_out", () => render([
-  { host: "claude_code", slug: "c1", label: "oboard",
-    logged_out: true, logged_out_msg: "run /login",
+  { harness: "claude_code", account_id: "c1", display_name: "oboard",
+    authentication_error: "run /login",
     windows: [H5(60, now + 3600), D7(97, now + 10222)],
     usage: { five_hour: 60, five_hour_reset: now + 3600,
              seven_day: 97, seven_day_reset: now + 10222, ts: now } },
-  { host: "claude_code", slug: "c2", label: "claude-01",
+  { harness: "claude_code", account_id: "c2", display_name: "claude-01",
     windows: [H5(0, null), D7(82, now + 89422)],
     usage: { five_hour: 0, seven_day: 82, seven_day_reset: now + 89422,
              ts: now } },
@@ -204,12 +205,12 @@ step("one_logged_out", () => render([
 // (plugins.window_label): the same 10080 minutes is one column whoever reported
 // it, so codex's bar has to wear the name Claude's does.
 step("two_hosts", () => render([
-  { host: "claude_code", slug: "c1", label: "oboard",
+  { harness: "claude_code", account_id: "c1", display_name: "oboard",
     windows: [H5(60, now + 3600), D7(97, now + 10222)],
     usage: { five_hour: 60, five_hour_reset: now + 3600,
              seven_day: 97, seven_day_reset: now + 10222, ts: now } },
-  { host: "codex", slug: "", label: "codex · plus", switchable: false,
-    plan: "plus", usage: null, limit_hit: null, logged_out: false,
+  { harness: "codex", account_id: "", display_name: "codex · plus", switchable: false,
+    plan: "plus", limit: null, authentication_error: null,
     windows: [W("w10080", "7d", 4, now + 522456, 10080, "account")] },
 ]));
 
@@ -220,13 +221,13 @@ step("two_hosts", () => render([
 // Claude's alone, so the codex row emits no item there: it has no per-model cap
 // and never will, and "—" would claim a reading it owes.
 step("both_hosts_have_5h", () => render([
-  { host: "claude_code", slug: "c1", label: "oboard",
+  { harness: "claude_code", account_id: "c1", display_name: "oboard",
     windows: [H5(60, now + 3600), D7(97, now + 10222), F7(32, now + 10222)],
     usage: { five_hour: 60, five_hour_reset: now + 3600,
              seven_day: 97, seven_day_reset: now + 10222, ts: now,
              seven_day_fable: 32, seven_day_fable_reset: now + 10222 } },
-  { host: "codex", slug: "", label: "codex · plus", switchable: false,
-    plan: "plus", usage: null, limit_hit: null, logged_out: false,
+  { harness: "codex", account_id: "", display_name: "codex · plus", switchable: false,
+    plan: "plus", limit: null, authentication_error: null,
     windows: [W("w300", "5h", 41, now + 1800, 300, "account"),
               W("w10080", "7d", 4, now + 522456, 10080, "account")] },
 ]));
@@ -238,10 +239,10 @@ step("both_hosts_have_5h", () => render([
 // the reported bug: with the columns unioned per host, codex's lone weekly bar
 // started where Claude's 5h bar starts.
 step("codex_first_no_5h", () => render([
-  { host: "codex", slug: "", label: "codex · plus", switchable: false,
-    plan: "plus", usage: null, limit_hit: null, logged_out: false,
+  { harness: "codex", account_id: "", display_name: "codex · plus", switchable: false,
+    plan: "plus", limit: null, authentication_error: null,
     windows: [W("w10080", "7d", 4, now + 522456, 10080, "account")] },
-  { host: "claude_code", slug: "c1", label: "oboard",
+  { harness: "claude_code", account_id: "c1", display_name: "oboard",
     windows: [H5(60, now + 3600), D7(97, now + 10222)],
     usage: { five_hour: 60, five_hour_reset: now + 3600,
              seven_day: 97, seven_day_reset: now + 10222, ts: now } },

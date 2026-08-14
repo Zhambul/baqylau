@@ -3,113 +3,73 @@
 // cohesive files (classic scripts share one global scope; load order is set in
 // index.html). See app.13-init.js for the boot/init sequence.
 
-// the whole usage strip, every host's rows in one payload (the boot fetch + the
-// SSE-down fallback poll; the `accounts` SSE event keeps it live). A host with
-// no account switcher rides the same array — its own endpoint, poll and painter
-// are gone, and with them the one thing that never worked: it had no SSE
-// channel, so its bars only moved on the 60s poll.
-function refreshAccounts() {
-  fetch("/api/accounts").then(r => r.json())
-    .then(renderAccounts).catch(() => {});
-}
-
+// The complete application snapshot owns sessions, usage, preferences and
+// notifications. There is no secondary fetch, field event or polling path.
 /* ---------- global event stream ---------- */
 
 function connectGlobal() {
-  const es = new EventSource("/events");
+  const es = new EventSource("/api/stream");
   S.esGlobal = es;
   es.onopen = () => { $conn.dataset.on = "1"; sseMark("global", true); };
   es.onerror = () => { $conn.dataset.on = "0"; sseMark("global", false); };
-  es.addEventListener("sessions", (e) => {
-    S.sessions = JSON.parse(e.data);
-    reconcileCloses();
-    if (!S.cur) renderList();
-    else updateHeadFromList();
-    renderAttention();
-    checkJump();
-  });
-  // Only changed rows (the server sends the full `sessions` snapshot for
-  // membership/order moves, so a delta always merges in place by sid) —
-  // during activity this replaces the full 131-row resend every tick
-  // (~2.2MB/min uncompressed over a tunnel) with a few hundred bytes.
-  es.addEventListener("sessions-delta", (e) => {
-    const rows = (JSON.parse(e.data) || {}).rows || [];
-    if (!rows.length) return;
-    const at = new Map(S.sessions.map((r, i) => [r.sid, i]));
-    for (const row of rows) {
-      const i = at.get(row.sid);
-      if (i !== undefined) S.sessions[i] = row;
-    }
-    reconcileCloses();
-    if (!S.cur) renderList();
-    else updateHeadFromList();
-    renderAttention();
-    // a delta can carry the armed jump's hit too (e.g. a known row flipping
-    // parked→live without an order move) — the watch must not depend on the
-    // full-snapshot path alone
-    checkJump();
-  });
-  // the accounts strip, pushed on change (the server diff is sched_score-blind
-  // — dashboard/read/lists.accounts_key). Connect sends nothing: the boot
-  // refreshAccounts() paints the first strip, this keeps it live. S.accts is
-  // updated too so an open new-session form's account picker sees the same
-  // freshness (app.09 still re-fetches on open; this just keeps its cache
-  // from going stale between opens).
-  es.addEventListener("accounts", (e) => {
-    const list = JSON.parse(e.data);
-    S.accts = list;
-    renderAccounts(list);
-  });
-  // the launch-wake fast path: the server's launch_wake watcher spotted the
-  // session a web launch produced and named its sid — the page that armed the
-  // matching jump navigates NOW, without waiting for the row to ride a
-  // snapshot. Every open page receives every wake, so ownership is checked:
-  // the launch's window id when both sides know it (exact), the resumed sid,
-  // else the armed cwd (same heuristic the snapshot path uses).
-  es.addEventListener("wake", (e) => {
-    const d = JSON.parse(e.data) || {};
-    const j = S.jump;
-    if (!j || !d.sid) return;
-    const mine = (j.win && d.win && j.win === d.win)
-      || (j.resumeSid && j.resumeSid === d.sid)
-      || (!j.win && !d.win && j.cwd === d.cwd);
-    if (mine) jumpHit(d.sid, "");
-  });
-  es.addEventListener("notify", (e) => {
-    const d = JSON.parse(e.data);
-    // Only the device you're LOOKING AT shows the immediate in-page toast; a
-    // backgrounded / other device is reached by the server's device-targeted
-    // deferred push (+ Telegram escalation), so no more cross-device buzz — the
-    // idle iPad no longer pops an OS notification while you work on the Mac
-    // (docs/dashboard.md *Device routing*).
-    const vis = document.visibilityState === "visible";
-    const focus = !document.hasFocus || document.hasFocus();
-    const shown = vis && focus;
-    // Audit whether THIS device received the toast and whether it showed it —
-    // the frontend side of "did device X get notified" (a gated recv explains a
-    // missing toast: you weren't looking at this device).
-    clog(d.sid || "", "notify.recv",
-         { kind: d.kind, shown: shown, vis: vis, focus: focus });
-    if (!shown) return;
-    const asking = d.kind === "asking";
-    const t1 = (d.project || d.sid) + (asking ? " needs you" : " is done");
-    const t2 = d.title || (asking ? "a question is waiting" : "finished — your turn");
-    toast(asking ? "ask" : "done", t1, t2, () => { location.hash = "#/s/" + d.sid; });
-  });
-  es.addEventListener("notify-config", (e) => {
-    // the GLOBAL alerts toggle was flipped on ANOTHER device — repaint this
-    // page's header button so its state stays in sync everywhere (the actual
-    // suppression is already live cross-device, gated server-side by the
-    // notifier; docs/dashboard.md *Global alerts toggle*).
-    notifyOn = (JSON.parse(e.data) || {}).enabled !== false;
+  es.addEventListener("application", (event) => {
+    const snapshot = JSON.parse(event.data) || {};
+    const previous = S.globalApplication;
+    const notifications = snapshot.notifications;
+    const preferences = snapshot.preferences;
+    const newSession = preferences.new_session;
+    const limits = preferences.limits;
+    const previousNotifications = previous && previous.notifications
+      ? previous.notifications : {};
+    applyCanonicalSessions(snapshot.sessions);
+    S.nsPrefs = {
+      workingDirectory: newSession.working_directory || "",
+      tool: newSession.harness || "",
+      model: newSession.model || "",
+      effort: newSession.effort || "",
+    };
+    S.nsDrafts = {};
+    for (const draft of preferences.new_session_drafts)
+      S.nsDrafts[draft.working_directory] = {
+        text: draft.text,
+        sequence: draft.sequence,
+      };
+    S.hidden = preferences.hidden_directories;
+    LIMITS.upload_max = limits.upload_bytes;
+    LIMITS.rename_max = limits.rename_characters;
+    LIMITS.view_ttl_s = limits.presence_seconds;
+    if (typeof armBeat === "function") armBeat();
+    S.usageRows = snapshot.usage_rows;
+    renderAccounts(S.usageRows);
+    notifyOn = notifications.enabled;
     if (typeof paintNotify === "function") paintNotify();
+    if (previous && notifications.latest
+        && (!previousNotifications.latest
+            || previousNotifications.latest.revision !== notifications.latest.revision)) {
+      const d = notifications.latest;
+      // Only the device you're LOOKING AT shows the immediate in-page toast.
+      const vis = document.visibilityState === "visible";
+      const focus = !document.hasFocus || document.hasFocus();
+      const shown = vis && focus;
+      clog(d.session_id || "", "notify.recv",
+           { kind: d.kind, shown: shown, vis: vis, focus: focus });
+      const asking = d.kind === "asking";
+      const t1 = (d.project || d.session_id) + (asking ? " needs you" : " is done");
+      const t2 = d.title || (asking ? "a question is waiting" : "finished — your turn");
+      if (shown) {
+        toast(asking ? "ask" : "done", t1, t2,
+              () => { location.hash = "#/s/" + d.session_id; });
+      }
+    }
+    S.globalApplication = snapshot;
+    if (!S.currentSessionId) renderList(true);
   });
   // hello carries the server's boot id: the EventSource reconnects on a
   // server restart, and a CHANGED boot id means this open page's JS may be
   // stale (a redeploy happened underneath) — twice a stale open page ran old
   // handlers against a new server and the mismatch read as a product bug.
-  es.addEventListener("hello", (e) => {
-    const boot = (JSON.parse(e.data) || {}).boot;
+  es.addEventListener("ready", (e) => {
+    const boot = (JSON.parse(e.data) || {}).boot_id;
     if (!S.boot) {
       S.boot = boot;
       // anchor this client to the server build it FIRST connected to — so a later
@@ -119,15 +79,13 @@ function connectGlobal() {
       return;
     }
     if (boot !== S.boot) {
-      // the server redeployed under an OPEN page — its JS is now stale. This
-      // caused "product bugs" that were really stale-code mismatches; the row
-      // makes "was the user on old code?" answerable from the DB (the reload
-      // toast is easily missed / dismissed).
+      // The server redeployed under an open page. Old handlers cannot safely
+      // operate against the new API; drafts already live on the backend, so
+      // reload immediately instead of leaving correctness behind an optional
+      // toast that can be missed while the page is hidden.
       clog("", "stale", { was: S.boot || "", now: boot || "" });
       S.boot = boot;
-      toast("ask", "dashboard updated",
-            "refresh the page to load the latest UI",
-            () => location.reload());
+      location.reload();
     }
   });
 }
@@ -157,26 +115,26 @@ function route() {
   if (S.jump && parts[0] !== "launching") S.jump.quiet = true;
   if (parts[0] === "s" && parts[1]) {
     S.pendingUI = false;
-    const sid = decodeURIComponent(parts[1]);
+    const sessionId = decodeURIComponent(parts[1]);
     // AGENT SCOPE: the whole session view re-pointed at one agent, with its own
-    // tab in the URL (#/s/<sid>/a/<aid>/<tab>) so a scoped page is linkable and
+    // tab in the URL (#/s/<sessionId>/a/<actorId>/<tab>) so a scoped page is linkable and
     // survives a reload (docs/dashboard.md *Agent scope*). A monitor/job detail
-    // nests INSIDE it (…/a/<aid>/m/<task>) — reached unscoped, the task simply
+    // nests INSIDE it (…/a/<actorId>/m/<task>) — reached unscoped, the task simply
     // isn't in the lead's list.
     if (parts[2] === "a" && parts[3]) {
-      const aid = decodeURIComponent(parts[3]);
+      const actorId = decodeURIComponent(parts[3]);
       if (parts[4] === "m" && parts[5])
-        return showSection("monitors", sid, decodeURIComponent(parts[5]), aid);
+        return showSection("monitors", sessionId, decodeURIComponent(parts[5]), actorId);
       if (parts[4] === "j" && parts[5])
-        return showSection("jobs", sid, decodeURIComponent(parts[5]), aid);
-      return showSession(sid, parts[4] || "mirror", aid);
+        return showSection("jobs", sessionId, decodeURIComponent(parts[5]), actorId);
+      return showSession(sessionId, parts[4] || "mirror", actorId);
     }
     // the two drill-downs route through the one section engine (SECTIONS)
     if (parts[2] === "m" && parts[3])
-      return showSection("monitors", sid, decodeURIComponent(parts[3]));
+      return showSection("monitors", sessionId, decodeURIComponent(parts[3]));
     if (parts[2] === "j" && parts[3])
-      return showSection("jobs", sid, decodeURIComponent(parts[3]));
-    return showSession(sid, parts[2] || "mirror");
+      return showSection("jobs", sessionId, decodeURIComponent(parts[3]));
+    return showSession(sessionId, parts[2] || "mirror");
   }
   if (parts[0] === "launching") {
     // the optimistic post-launch view — back in the waiting room, so auto-jump
@@ -193,19 +151,12 @@ function route() {
     return location.replace("#/");
   }
   if (parts[0] === "stats") { S.pendingUI = false; return showStats(); }
-  // an EXTENSION's top-level page (#/x/<route>, docs/dashboard.md *Web
-  // extensions* — none registered yet, pinned by tests/jsdom/ext.js); an
-  // unknown route falls through to the list
-  if (parts[0] === "x" && parts[1]) {
-    const x = extPage(parts[1]);
-    if (x) { S.pendingUI = false; return showExtPage(x); }
-  }
   S.pendingUI = false;
   showList();
 }
 
 /* ---------- stats / insights page (GitHub-Insights-inspired) ----------
-   All numbers are server-computed (dashboard/server.stats_payload); this only
+   All numbers are server-computed from application insights; this only
    renders. Charts are hand-rolled SVG (no chart library, matching micIcon's
    createElementNS idiom) + the CSS bar idiom — contribution heatmap, day×hour
    punch card, per-window Pulse summary, per-project cards. */

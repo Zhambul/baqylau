@@ -23,7 +23,7 @@ import os
 import time
 
 from core import env as EV
-from core import tail as TL
+from plugins.claude_code.transcript import tail_lines
 
 # How much of a transcript's tail session_model() scans for the last assistant
 # turn: the latest turn is near the end, so a bounded read stays cheap even on
@@ -250,7 +250,7 @@ def session_model(tpath):
     the last assistant turn in its transcript. Gives a precise version for agents
     that INHERIT, before the agent's own first turn reveals it. Tail-scan only
     (TAIL_SCAN_BYTES — see its comment)."""
-    lines = TL.tail_lines(tpath, TAIL_SCAN_BYTES)
+    lines = tail_lines(tpath, TAIL_SCAN_BYTES)
     if lines is None:
         return None
     last = None

@@ -1,5 +1,5 @@
 // tests/jsdom/ctxbar.js — drives the REAL context-saturation bar renderer
-// (dashboard/static/app.04-list.js `ctxBar`) over the shared DOM shim and
+// (dashboard/static/app.04-list.js `contextBar`) over the shared DOM shim and
 // prints one JSON verdict object, which tests/test_l0_dash_probes.py asserts on.
 //
 // Why this exists: the bar grew two behaviours that are pure DOM logic and so
@@ -12,7 +12,7 @@
 //     left there: the calm reading is that geometry never moves while
 //     compacting, and only a rendered width can show that;
 //   * the eased DRAIN — the bar is a FRESH node on every repaint, which has no
-//     previous width to transition from, so ctxBar paints it at its REMEMBERED
+//     previous width to transition from, so contextBar paints it at its REMEMBERED
 //     width and moves it on the next frame. That memory is the whole mechanism
 //     and it is per-bar: a grep can see the rAF call but not that session A's
 //     drain animates from session A's last width (the bug the key exists to
@@ -31,7 +31,7 @@ const vm = require("vm");
 
 const { El, domGlobals } = require("./domshim");
 
-// rAF is the drain's second half: ctxBar paints the remembered width, then asks
+// rAF is the drain's second half: contextBar paints the remembered width, then asks
 // for a frame to move to the real one. Queue the callbacks rather than running
 // them inline — the POINT is that the two widths are set in different frames,
 // and a shim that ran the callback immediately would report the final width for
@@ -48,7 +48,7 @@ const sandbox = {
   navigator: { userAgent: "node", onLine: true, standalone: false },
   matchMedia: () => ({ matches: false }),
   ...domGlobals(),
-  S: { sessions: [], cur: null, ses: null },
+  S: { sessions: [], currentSessionId: null, sessionView: null },
   clog: () => {}, toast: () => {}, route: () => {},
   postJSON: () => Promise.resolve({}),
   ago: () => "", shortSid: (s) => s, proj: () => "", dur: () => "",
@@ -88,7 +88,7 @@ function read(bar) {
   };
 }
 
-function bar(cx, big, opts) { return read(sandbox.ctxBar(cx, big, opts)); }
+function bar(contextWindow, big, opts) { return read(sandbox.contextBar(contextWindow, big, opts)); }
 
 const out = { ok: true, errors: [], cases: {} };
 function step(name, fn) {

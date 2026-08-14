@@ -3,9 +3,27 @@
 // cohesive files (classic scripts share one global scope; load order is set in
 // index.html). See app.13-init.js for the boot/init sequence.
 
+let canonicalRequestSequence = 0;
+function sessionControl(sessionId, controlName, fields, options) {
+  if (!sessionId) return Promise.reject({ error: "no session selected" });
+  const body = Object.assign({
+    control_name: controlName,
+    request_id: String(Date.now()) + "-" + String(++canonicalRequestSequence),
+  }, fields || {});
+  return postJSON(
+    "/api/sessions/" + encodeURIComponent(sessionId) + "/controls",
+    body,
+    options || {}
+  );
+}
+
+function canonicalControl(controlName, fields, options) {
+  return sessionControl(S.currentSessionId, controlName, fields, options);
+}
+
 function migrateSession() {
-  if (!S.cur) return Promise.resolve();
-  return postJSON("/api/session/" + encodeURIComponent(S.cur) + "/migrate", {},
+  if (!S.currentSessionId) return Promise.resolve();
+  return canonicalControl("migrate_account", {},
                   { audit: "migrate" })
     .then(r => toast("done", "migrating",
                      "resuming on " + ((r && r.to) || "another account")))
@@ -15,27 +33,27 @@ function migrateSession() {
 // Returns the POST promise for the same in-flight button lock (a double-tap
 // mid round-trip would send Escape to the terminal twice).
 function interruptSession() {
-  const meta = (S.ses && S.ses.meta) || {};
-  if (!S.cur || !meta.live || !meta.kitty_window_id) return Promise.resolve();
+  const meta = (S.sessionView && S.sessionView.meta) || {};
+  if (!S.currentSessionId || !meta.live || !meta.kitty_window_id) return Promise.resolve();
   // a red "asking you" tab means a MODAL DIALOG is open (ask/plan/permission).
   // An Esc there DECLINES the dialog, it doesn't interrupt a turn — sending one
   // once killed the answer the user was giving via the ask card. Respond
   // through the card instead (the server 409s as the backstop, but the toast is
   // the honest UX; docs/tab-colors.md).
-  if (liveTab() === "awaiting-command") {
+  if (liveTab() === "awaiting_attention") {
     toast("done", "a question is waiting",
           "answer it in the card above — Esc would decline it");
     return Promise.resolve();
   }
-  return postJSON("/api/session/" + encodeURIComponent(S.cur) + "/interrupt", {},
+  return canonicalControl("interrupt", {},
                   { audit: "interrupt" })
     .then(r => {
       // `restored` = Claude Code handed the message back to its input box
       // (an early-enough interrupt discards the prompt instead of keeping
       // partial work — the terminal decides, the server READ the box). Mirror
       // it into the composer so the web side doesn't lose the text.
-      if (r && r.restored) {
-        applyTakeBack(r.restored);
+      if (r && r.restored_text) {
+        applyTakeBack(r.restored_text);
         toast("done", "took it back", "message restored below — edit and resend");
       } else if (r && r.queued) {
         // the stop handed the turn over to the message you had queued — Claude
@@ -54,12 +72,12 @@ function interruptSession() {
       // quick out of the busy state NOW; a real tab change — the escape-recheck's
       // green, or the next prompt — reconciles, and if the turn somehow kept
       // going that next tab event flips it right back to "queue".
-      const ses = S.ses;
-      if (ses && !(r && r.queued) && BUSY_TABS.includes(r && r.tab)) {
-        const yourTurn = "awaiting-response";   // green, not a QUEUE_TAB
-        if (ses.composerMode) ses.composerMode(yourTurn);
-        if (ses.stopMode) ses.stopMode(yourTurn);
-        if (ses.quickMode) ses.quickMode(yourTurn);
+      const sessionView = S.sessionView;
+      if (sessionView && !(r && r.queued) && BUSY_TABS.includes(r && r.tab)) {
+        const yourTurn = "awaiting_response";   // green, not a QUEUE_TAB
+        if (sessionView.composerMode) sessionView.composerMode(yourTurn);
+        if (sessionView.stopMode) sessionView.stopMode(yourTurn);
+        if (sessionView.quickMode) sessionView.quickMode(yourTurn);
       }
     })
     .catch(e => toast("ask", "interrupt failed", (e && e.error) || ""));
@@ -68,11 +86,11 @@ function interruptSession() {
 // REWIND: enter picking mode (click a message below, choose what to restore).
 // Idle only — mid-turn there is nothing to rewind TO yet, and the server 409s.
 function rewindSession() {
-  const meta = (S.ses && S.ses.meta) || {};
-  if (!S.cur || !meta.live || !meta.kitty_window_id) return;
+  const meta = (S.sessionView && S.sessionView.meta) || {};
+  if (!S.currentSessionId || !meta.live || !meta.kitty_window_id) return;
   // red "asking you" tab: a dialog is open — a rewind (/rewind) would land in
   // it and dismiss or corrupt it. Answer via the card instead.
-  if (liveTab() === "awaiting-command") {
+  if (liveTab() === "awaiting_attention") {
     toast("done", "a question is waiting",
           "answer it in the card above first");
     return;
@@ -87,8 +105,9 @@ function rewindSession() {
 // The live tab state of the open session (the SSE `tab` event patches the
 // row; meta.tab is the initial fallback).
 function liveTab() {
-  return ((S.sessions.find(r => r.sid === S.cur) || {}).tab)
-      || ((S.ses && S.ses.meta && S.ses.meta.tab) || "");
+  const row = S.sessions.find(item => sessionId(item) === S.currentSessionId);
+  return (row ? sessionTabState(row) : "")
+      || ((S.sessionView && S.sessionView.meta && S.sessionView.meta.tab) || "");
 }
 
 // The web side of an interrupt that TOOK THE MESSAGE BACK: the restored text
@@ -101,13 +120,13 @@ function liveTab() {
 // paste (clear_draft → the server's Ctrl+U/K + bracketed paste, the only
 // reliable way to replace the draft: a raw send drops leading bytes after it).
 function applyTakeBack(restored) {
-  const ses = S.ses;
-  if (!ses) return;
+  const sessionView = S.sessionView;
+  if (!sessionView) return;
   // the taken-back bubble is the newest prompt YOU sent (items prepend, so it is
   // the FIRST in the feed) — `:not(.sys)` because an INJECTED turn can be newer
   // than it (teammate mail, a Stop hook's feedback: they land as prompt-shaped
   // bubbles too) and removing that one would delete the wrong thing
-  const feed = ses.stream;
+  const feed = sessionView.stream;
   const bubble = feed && feed.querySelector(".msg.prompt:not(.sys)");
   if (bubble) bubble.remove();
   prefillComposer(restored);
@@ -118,9 +137,9 @@ function applyTakeBack(restored) {
 // text (only when empty — never clobber what you were typing) and make the
 // next send replace the TUI draft (clear_draft) instead of appending to it.
 function prefillComposer(restored) {
-  const ses = S.ses;
-  if (!ses) return;
-  const ta = ses.composer;
+  const sessionView = S.sessionView;
+  if (!sessionView) return;
+  const ta = sessionView.composer;
   if (ta && restored && !ta.value.trim()) {
     ta.value = restored;
     autoGrow(ta);
@@ -131,9 +150,9 @@ function prefillComposer(restored) {
     // message on the floor — while the transcript, which had not yet forked,
     // showed it again ("it disappeared from the box and reappeared in the
     // chat", 2026-07-25). Same stash a typed character would have written.
-    saveComposerDraft(ses, S.cur);
+    saveComposerDraft(sessionView, S.currentSessionId);
   }
-  ses.clearDraftNext = true;
+  sessionView.clearDraftNext = true;
 }
 
 /* ---------- quick commands (docs/dashboard.md, *Web quick commands*) ----------
@@ -151,7 +170,7 @@ function prefillComposer(restored) {
 // none gets an EMPTY menu rather than Claude Code's, which is what the
 // hardcoded fallback pair that used to sit here would have handed it.
 function hostChoices(kind) {
-  const meta = S.ses && S.ses.meta;
+  const meta = S.sessionView && S.sessionView.meta;
   const list = meta && Array.isArray(meta[kind + "_choices"])
     ? meta[kind + "_choices"] : null;
   return list ? list.map(v => [v, v]) : [];
@@ -162,19 +181,24 @@ function closeQuickMenu() {
 }
 
 function sendQuickCmd(cmd, arg) {
-  if (!S.cur) return;
+  if (!S.currentSessionId) return;
   const label = "/" + cmd + (arg ? " " + arg : "");
-  postJSON("/api/session/" + encodeURIComponent(S.cur) + "/command",
-           arg ? { cmd, arg } : { cmd }, { audit: "command", auditData: { cmd } })
+  const controlName = cmd === "model" ? "select_model"
+    : cmd === "effort" ? "select_effort" : "compact";
+  const fields = controlName === "select_model" ? { model_id: arg }
+    : controlName === "select_effort" ? { effort: arg } : {};
+  canonicalControl(controlName, fields,
+                   { audit: "command", auditData: { cmd } })
     .then(r => {
       // `confirm`: the server auto-answers the TUI's switch-confirm menu
       // when /model // /effort opens one (the prompt-cache warning)
+      const confirmation = r.confirmation || null;
       const sub = r.queued ? "queued — runs when the turn ends"
-        : r.confirm === "failed"
+        : confirmation === "failed"
           ? "sent — answer the confirm dialog in the terminal"
-          : r.confirm === "confirmed" ? "switched (dialog confirmed)" : "sent";
-      toast(r.confirm === "failed" ? "ask" : "done", label, sub);
-      if (!r.queued && r.confirm !== "failed") applyQuickSwitch(cmd, arg);
+          : confirmation === "confirmed" ? "switched (dialog confirmed)" : "sent";
+      toast(confirmation === "failed" ? "ask" : "done", label, sub);
+      if (!r.queued && confirmation !== "failed") applyQuickSwitch(cmd, arg);
     })
     .catch(e => toast("ask", label + " failed", (e && e.error) || ""));
 }
@@ -206,46 +230,26 @@ document.addEventListener("click", (e) => {
 // assistant turn, and a settings write reaches the SSE `effort` push on the
 // slow cadence — the successful click itself is the freshest signal.
 function applyQuickSwitch(cmd, arg) {
-  const ses = S.ses;
-  if (!ses) return;
+  const sessionView = S.sessionView;
+  if (!sessionView) return;
   if (cmd === "model") {
-    // `arg` is a MENU ROW — a word out of the host's own model_choices — so it
-    // is already in the vocabulary modelKey() compares against (the "[1m]" strip
-    // that used to be here normalised a Claude id, and the server's model_short
-    // owns that now).
-    ses.pendingModel = arg;
-    if (ses.modelBtn) setModelBtn(ses.modelBtn);
+    // `arg` is a catalog model id. The next canonical model reference confirms
+    // it through selection_id; the browser never parses the native id.
+    sessionView.pendingModel = arg;
+    if (sessionView.modelBtn) setModelBtn(sessionView.modelBtn);
   } else if (cmd === "effort") {
-    if (ses.meta) ses.meta.effort = arg;
-    if (ses.effortBtn) setEffortBtn(ses.effortBtn);
+    if (sessionView.meta) sessionView.meta.effort = arg;
+    if (sessionView.effortBtn) setEffortBtn(sessionView.effortBtn);
   }
 }
 
-// Which MENU ROW a running model id sits under, per the owning host's declared
-// match rule (meta.model_match — HostControl.model_match):
-//   "family" — the rows are family words (claude_code: `opus`), so the row is
-//              the id's leading word ("opus-4.8" → "opus");
-//   "exact"  — the rows ARE full ids (codex: `gpt-5.6-terra`), so the id is the
-//              row, and a model the menu doesn't offer matches NOTHING.
-// The page used to decide this by sniffing the id itself
-// (`sm.startsWith("gpt-") ? sm : sm.split("-")[0]`), which reads a third host's
-// ids through whichever host's grammar their spelling resembles — and even for
-// codex mis-fires: a session on `gpt-5.4-codex` (not a menu row) would have been
-// shown as `gpt-5.4` under a family compare. Unknown/absent rule = "exact", the
-// answer that never claims a row the host did not name.
-function modelKey(short, match) {
-  const s = short || "";
-  return match === "family" ? s.split("-")[0] : s;
-}
-
-// The menu row the session is CURRENTLY on — the server's display spelling of
-// the ctx probe's model (ctx.model_short), reduced to a row by the host's rule.
+// The menu row the session is currently on is translated by its plugin and
+// carried as canonical model_selection. Presentation never parses native ids.
 function curModelFamily() {
-  const ses = S.ses;
-  if (ses && ses.pendingModel) return ses.pendingModel;
-  const cx = (ses && (ses.ctx || (ses.meta && ses.meta.ctx))) || null;
-  const meta = (ses && ses.meta) || {};
-  return modelKey(shortModel(cx && cx.model_short), meta.model_match);
+  const sessionView = S.sessionView;
+  if (sessionView && sessionView.pendingModel) return sessionView.pendingModel;
+  const contextWindow = (sessionView && (sessionView.contextWindow || (sessionView.meta && sessionView.meta.contextWindow))) || null;
+  return (contextWindow && contextWindow.model_selection) || "";
 }
 
 // The model button's label carries the session's CURRENT model when the ctx
@@ -260,21 +264,16 @@ function curModelFamily() {
 // switch (away or back) retires the icon on the next probe. A pendingModel
 // (just-clicked switch) hides it optimistically for the same reason.
 function setModelBtn(btn) {
-  const ses = S.ses;
-  const cx = (ses && (ses.ctx || (ses.meta && ses.meta.ctx))) || null;
-  const meta = (ses && ses.meta) || {};
-  const m = shortModel(cx && cx.model_short);
-  if (ses && ses.pendingModel) {
-    // clear the optimistic label once the probe confirms it — the host's own
-    // match rule decides what "confirms" means (Claude Code by FAMILY, since its
-    // menu row `opus` never equals the running `opus-4.8`; codex by the full id)
-    if (m === ses.pendingModel
-        || modelKey(m, meta.model_match) === ses.pendingModel)
-      ses.pendingModel = null;
-    else { btn.textContent = "✦ " + ses.pendingModel + " ▾"; return; }
+  const sessionView = S.sessionView;
+  const contextWindow = (sessionView && (sessionView.contextWindow || (sessionView.meta && sessionView.meta.contextWindow))) || null;
+  const m = shortModel(contextWindow && contextWindow.model_short);
+  if (sessionView && sessionView.pendingModel) {
+    if (contextWindow && contextWindow.model_selection === sessionView.pendingModel)
+      sessionView.pendingModel = null;
+    else { btn.textContent = "✦ " + sessionView.pendingModel + " ▾"; return; }
   }
   btn.textContent = "✦ " + (m || "model") + " ▾";
-  const fb = ses && ses.meta && ses.meta.fallback;
+  const fb = sessionView && sessionView.meta && sessionView.meta.fallback;
   if (fb) {
     const w = el("span", "fbwarn", "⚠");
     // both ids in the OWNING host's spelling, served beside the raw ones
@@ -290,7 +289,7 @@ function setModelBtn(btn) {
 // `effort` — the settings' effortLevel, which every applied /effort writes
 // through); bare "effort" when unknown.
 function setEffortBtn(btn) {
-  const meta = (S.ses && S.ses.meta) || {};
+  const meta = (S.sessionView && S.sessionView.meta) || {};
   btn.textContent = "✧ " + (meta.effort || "effort") + " ▾";
 }
 
@@ -305,21 +304,21 @@ function setEffortBtn(btn) {
 // Picking mode: the idle meaning of ↶ rewind / double-Esc. Reveals every
 // bubble's ↶ and waits for a click; Esc or a second toggle leaves.
 function rewindPickMode(on) {
-  const ses = S.ses;
-  if (!ses || !ses.stream) return;
+  const sessionView = S.sessionView;
+  if (!sessionView || !sessionView.stream) return;
   // the ↶ header button is cap-gated; so are the two ways INTO pick mode that
   // bypass it (the Esc gesture, a bubble's own ↶) — a host with no rewind must
   // not be able to open a menu whose every row the server 409s
-  if (!capOk(ses.meta, "rewind")) return;
-  const want = on === undefined ? !ses.stream.classList.contains("rwpick") : !!on;
-  ses.stream.classList.toggle("rwpick", want);
+  if (!capOk(sessionView.meta, "rewind")) return;
+  const want = on === undefined ? !sessionView.stream.classList.contains("rwpick") : !!on;
+  sessionView.stream.classList.toggle("rwpick", want);
   if (want)
     toast("done", "rewind", "pick a message to rewind to (Esc to leave)");
   else closeRewindMenu();
 }
 
 function inRewindPick() {
-  const st = S.ses && S.ses.stream;
+  const st = S.sessionView && S.sessionView.stream;
   return !!(st && st.classList.contains("rwpick"));
 }
 
@@ -338,7 +337,7 @@ function closeRewindMenu() {
 // matched against). Claude Code's three, minus the summarize pair (a web
 // summarize would need the composer anyway), used to be spelled here.
 function rwModes() {
-  const list = S.ses && S.ses.meta && S.ses.meta.rewind_modes;
+  const list = S.sessionView && S.sessionView.meta && S.sessionView.meta.rewind_modes;
   return Array.isArray(list) ? list.map(r => [r.mode, r.label || r.mode]) : [];
 }
 
@@ -346,7 +345,7 @@ function openRewindMenu(bubble) {
   closeRewindMenu();
   // same cap gate as the header button and pick mode: no rewind, no menu (and
   // with no modes served there would be nothing in it but "never mind")
-  if (!capOk(S.ses && S.ses.meta, "rewind")) return;
+  if (!capOk(S.sessionView && S.sessionView.meta, "rewind")) return;
   const menu = el("div", "rwmenu");
   menu.append(el("div", "rwhead", "rewind to before this message?"));
   for (const [mode, label] of rwModes()) {
@@ -361,14 +360,18 @@ function openRewindMenu(bubble) {
 }
 
 function doRewindTo(bubble, mode, menu) {
-  const meta = (S.ses && S.ses.meta) || {};
-  if (!S.cur || !meta.live || !meta.kitty_window_id) return;
+  const meta = (S.sessionView && S.sessionView.meta) || {};
+  if (!S.currentSessionId || !meta.live || !meta.kitty_window_id) return;
   if (BUSY_TABS.includes(liveTab())) {
     toast("ask", "session is busy", "stop the turn first");
     return;
   }
   const text = bubble.dataset.txt || "";
   if (!text.trim()) return;
+  if (!bubble.dataset.messageId) {
+    toast("ask", "rewind unavailable", "this message has no canonical identity");
+    return;
+  }
   // the jump hint: the target's `up`-press distance from the menu's
   // "(current)" cursor start = newer prompts + 1. Newer bubbles precede it
   // in the feed (newest-first); a stale count only slows the server's
@@ -378,12 +381,16 @@ function doRewindTo(bubble, mode, menu) {
     if (n.classList && n.classList.contains("prompt")) ups++;
   menu.querySelectorAll("button").forEach(b => b.disabled = true);
   toast("done", "rewinding…", "driving the checkpoint menu");
-  postJSON("/api/session/" + encodeURIComponent(S.cur) + "/rewind-to",
-           { text, mode, ups }, { audit: "rewind-to", auditData: { mode, ups } })
+  canonicalControl("apply_rewind", {
+    target_message_id: bubble.dataset.messageId,
+    target_text: text,
+    newer_prompt_count: Math.max(0, ups - 1),
+    mode,
+  }, { audit: "rewind-to", auditData: { mode, ups } })
     .then(r => {
       rewindPickMode(false);
-      if (r && r.restored) {
-        applyRewind(bubble, r.restored);
+      if (r && r.restored_text) {
+        applyRewind(bubble, r.restored_text);
         // degraded: "both" at a no-code-change checkpoint — the code was
         // already in that state, so only the conversation had to move
         toast("done", "rewound", r.degraded
@@ -445,15 +452,15 @@ document.addEventListener("click", (e) => {
 const ESC_DOUBLE_MS = 450;
 let escHold = null;
 let escFired = 0;                    // when the busy fast path last fired
-const BUSY_TABS = ["thinking", "working", "executing", "awaiting-bg"];
+const BUSY_TABS = ["thinking", "working", "executing", "awaiting_background"];
 function escGesture() {
-  const meta = (S.ses && S.ses.meta) || {};
-  if (!S.cur || !meta.live || !meta.kitty_window_id) return;
+  const meta = (S.sessionView && S.sessionView.meta) || {};
+  if (!S.currentSessionId || !meta.live || !meta.kitty_window_id) return;
   // a modal dialog is open (red asking-you tab) — an Esc here would DECLINE the
   // ask/plan/permission dialog, not interrupt or rewind a turn. Swallow the
   // gesture entirely (no interrupt hold-timer, no rewind) so a stray keypress
   // can't kill the answer the user is composing in the card.
-  if (liveTab() === "awaiting-command") {
+  if (liveTab() === "awaiting_attention") {
     clearTimeout(escHold);
     escHold = null;
     toast("done", "a question is waiting",
@@ -524,13 +531,13 @@ function startRenameHeader() {
   // arrives on the `title` SSE once it applies — which is at the TURN BOUNDARY
   // when the reply says `queued`, so there is nothing to show optimistically
   // then. A PARKED rename (`channel: "transcript"`) lands immediately.
-  const ses = S.ses;
-  if (!ses || !ses.projEl || ses.projEl.querySelector("input")) return;
-  const span = ses.projEl;
+  const sessionView = S.sessionView;
+  if (!sessionView || !sessionView.projEl || sessionView.projEl.querySelector("input")) return;
+  const span = sessionView.projEl;
   const old = span.textContent;
   const inp = el("input", "renamein");
-  inp.value = (ses.meta && ses.meta.title) || "";
-  inp.maxLength = LIMITS.rename_max;    // the server's RENAME_MAX (/api/limits)
+  inp.value = (sessionView.meta && sessionView.meta.title) || "";
+  if (LIMITS.rename_max !== null) inp.maxLength = LIMITS.rename_max;
   let done = false;
   const restore = (txt) => span.replaceChildren(tnode(txt));
   const cancel = () => { if (!done) { done = true; restore(old); } };
@@ -540,8 +547,7 @@ function startRenameHeader() {
     if (!name) return cancel();
     done = true;
     inp.disabled = true;
-    postJSON("/api/session/" + encodeURIComponent(S.cur) + "/rename", {name},
-             { audit: "rename" })
+    canonicalControl("rename_session", { name }, { audit: "rename" })
       .then((d) => {
         if (d.queued) {
           // Claude Code has it in its message queue — showing the new name now
@@ -552,12 +558,10 @@ function startRenameHeader() {
                 "queued — applies when the turn ends");
           return;
         }
-        if (ses.meta) ses.meta.title = d.title || name;
-        restore(d.title || name);
-        toast("done", "renamed",
-              d.channel === "tui"
-                ? "sent to " + ((ses.meta && ses.meta.host_label) || "the agent")
-                : "picker (applies on resume)");
+        if (sessionView.meta) sessionView.meta.title = name;
+        restore(name);
+        toast("done", "renamed", "sent to "
+              + ((sessionView.meta && sessionView.meta.host_label) || "the agent"));
       })
       .catch((e) => {
         restore(old);
@@ -583,13 +587,13 @@ function startRenameHeader() {
   // yet" on an empty one, the ⊜ compact bounce class. Like that gate, an UNKNOWN
   // prompt count never greys.
   const auto = el("button", "sstop renameauto", "✦ auto");
-  const hostLbl = (ses.meta && ses.meta.host_label) || "the agent";
+  const hostLbl = (sessionView.meta && sessionView.meta.host_label) || "the agent";
   auto.dataset.tip = "let " + hostLbl + " name this session (/rename)";
-  const meta = ses.meta || {};
+  const meta = sessionView.meta || {};
   const windowed = !!(meta.live && meta.kitty_window_id);
   const cap = capOk(meta, "rename") && cmdOffered(meta, "rename");
   const empty = tooThin(meta, "rename");
-  gate(auto, cap && windowed && !empty && liveTab() !== "awaiting-command",
+  gate(auto, cap && windowed && !empty && liveTab() !== "awaiting_attention",
        !cap ? CAP_OFF
          : !windowed ? NO_WINDOW
          : empty ? "nothing to name yet — the conversation is empty"
@@ -601,8 +605,8 @@ function startRenameHeader() {
     if (done) return;
     done = true;
     restore(old);              // the `title` SSE repaints when the name lands
-    postJSON("/api/session/" + encodeURIComponent(S.cur) + "/command",
-             { cmd: "rename" }, { audit: "command", auditData: { cmd: "rename" } })
+    canonicalControl("auto_name_session", {},
+                     { audit: "command", auditData: { cmd: "rename" } })
       .then((r) => toast("done", "/rename",
                          r.queued ? "queued — " + hostLbl + " names it when the turn ends"
                                   : "sent — " + hostLbl + " is picking a name"))
@@ -627,7 +631,7 @@ function lockDuring(btn, run, rest) {
 }
 
 
-// The close POST rides the plain-fetch channel (postJSON — X-Claude-Dash header,
+// The close POST rides the plain-fetch channel (postJSON — X-Baqylau header,
 // JSON body, a CLOSE_POST_MS timeout), tagged `audit:"close"` so its whole
 // transport lifecycle lands in the frontend audit (close.begin/ok/fail). This is
 // the transport PROVEN to traverse the tunnel (baqylau/dash.zhambyl.top): the
@@ -638,8 +642,8 @@ function lockDuring(btn, run, rest) {
 // tunnel: no `web-stop`, no `web-reject`, just the 20s `web-hint … stale`. The
 // timeout turns a genuine upstream stall into a VISIBLE, retryable, audited
 // failure (close.fail transport + web-clientfail) instead of a silent hang.
-function closeSession(sid, via) {
-  const url = "/api/session/" + encodeURIComponent(sid) + "/stop";
-  return postJSON(url, {}, { timeout: CLOSE_POST_MS, audit: "close", sid,
-                             auditData: { via: via || "" } });
+function closeSession(sessionId, via) {
+  return sessionControl(sessionId, "close_session", {},
+                        { timeout: CLOSE_POST_MS, audit: "close", sessionId,
+                          auditData: { via: via || "" } });
 }

@@ -30,7 +30,7 @@ stuck blue or a block never closed, the evidence evaporated with the processes.
   per-session table including `pane_events` (once omitted from the prune loops,
   which grew it unboundedly with permanently orphaned rows).
 
-What's recorded (all tables keyed by `session_id`, written by `core/audit.py` — the read/report side, every `bin/claude-audit.py` subcommand plus the `ANOMALY_SECTIONS` catalogue, lives in `core/auditcli.py`, which imports it and is imported by nothing but the CLI entry):
+What's recorded (all tables keyed by `session_id`, written by `core/audit.py` — the read/report side, every `bin/baqylau-audit.py` subcommand plus the `ANOMALY_SECTIONS` catalogue, lives in `core/auditcli.py`, which imports it and is imported by nothing but the CLI entry):
 
 | table | one row per |
 |---|---|
@@ -40,7 +40,7 @@ What's recorded (all tables keyed by `session_id`, written by `core/audit.py` �
 `hook_events` is fed two ways. The mirror's own handlers record the events they
 process, *with* the decision they took. On top of that, a **universal subscriber**
 records **every** event with its full payload, `handler = 'subscriber'`. It used to
-be its own `async` settings entry (`bin/claude-audit.py hook subscriber`); since the
+be its own `async` settings entry (`bin/baqylau-audit.py hook subscriber`); since the
 single-dispatcher refactor ([wiring.md](wiring.md)) the dispatcher writes it in-process at the end
 of `route()` — `A.hook_event(d, handler="subscriber")` — for **all 30 hook events**,
 so it still covers the ones nothing else listens to:
@@ -62,15 +62,15 @@ subscriber's independent record of the same event.
 Explore it with the CLI (from the repo root):
 
 ```sh
-python3 bin/claude-audit.py sessions            # recent sessions
-python3 bin/claude-audit.py timeline  <sid> [limit] [--ops] [--otel]
+python3 bin/baqylau-audit.py sessions            # recent sessions
+python3 bin/baqylau-audit.py timeline  <sid> [limit] [--ops] [--otel]
                                                 # merged chronological story
                                                 # (--ops/--otel merge those high-volume tables in)
-python3 bin/claude-audit.py errors    <sid>     # swallowed exceptions, full tracebacks
-python3 bin/claude-audit.py anomalies <sid>     # canned queries for known bug signatures
-python3 bin/claude-audit.py sql "<query>"       # free-form read-only SQL (mode=ro)
-python3 bin/claude-audit.py sql-write "<query>" # read-write SQL for deliberate manual fixups
-python3 bin/claude-audit.py prune [days]        # manual retention pass
+python3 bin/baqylau-audit.py errors    <sid>     # swallowed exceptions, full tracebacks
+python3 bin/baqylau-audit.py anomalies <sid>     # canned queries for known bug signatures
+python3 bin/baqylau-audit.py sql "<query>"       # free-form read-only SQL (mode=ro)
+python3 bin/baqylau-audit.py sql-write "<query>" # read-write SQL for deliberate manual fixups
+python3 bin/baqylau-audit.py prune [days]        # manual retention pass
 ```
 
 **The warning light (live, push):** the audit used to be pull-only — every
@@ -81,7 +81,7 @@ the DB) and shows an AMBER **`⚠ N` chip** on its `▪` row when N > 0, and emi
 AMBER **`⚠ audit: <script>: <exception>` one-liner into the mirror** for each new
 row, exactly once (rowid checkpoint in the state-DB kv `errseen`, its advance
 audited as a `state_files` row), flood-collapsed past 3 rows into one line
-pointing at `bin/claude-audit.py errors <sid>`. GLOBAL rows (`session_id=''` —
+pointing at `bin/baqylau-audit.py errors <sid>`. GLOBAL rows (`session_id=''` —
 auditor-outage rows, pre-session/CLI errors) are surfaced too, in EVERY live
 session (an audit outage affects them all): counted on the chip, emitted as
 `⚠ audit: global: …` one-liners, deduped per session via a second kv checkpoint

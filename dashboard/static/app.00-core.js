@@ -26,56 +26,57 @@ const $accounts = document.getElementById("accounts");
 
 const S = {
   sessions: [],          // last global snapshot
-  stats: null,           // last /api/stats payload (Stats page); refetched on show
-  statsWindow: "7d",     // selected Pulse period toggle (persists across renders)
-  cur: null,             // sid of the open session view
-  ses: null,             // per-session state {es, lastId, stream, stats, agents, costs, meta, timer}
+  usageRows: [],         // current typed usage rows from the global snapshot
+  stats: null,           // last /api/insights snapshot; refetched on show
+  statsWindow: "last_seven_days", // selected Pulse period toggle
+  currentSessionId: null,
+  sessionView: null,             // per-session state {es, lastId, stream, stats, agents, costs, meta, timer}
   esGlobal: null,
-  folds: new Set(),      // open parked/archived subdivisions ("<cwd>|parked") —
+  globalApplication: null,
+  folds: new Set(),      // open parked/archived subdivisions ("<workingDirectory>|parked") —
                          // survives the list re-renders SSE snapshots trigger
-  jump: null,            // pending jump-to-new-session watch ({cwd, resumeSid,
+  jump: null,            // pending jump-to-new-session watch ({workingDirectory, resumeSid,
                          // win, show, quiet, armedAt, known, liveAtArm, until}
                          // — armJump; quiet = user navigated away mid-wait, so
                          // resolution toasts instead of yanking)
-  jumpDone: null,        // "#/s/<sid>" of a QUIETLY resolved launch — lets a
+  jumpDone: null,        // "#/s/<sessionId>" of a QUIETLY resolved launch — lets a
                          // return to #/launching forward to the session that
                          // arrived while the user was away (consumed once)
   pendingUI: false,      // the #/launching "starting session…" view is mounted
                          // (renderList must not clobber it — same role as
-                         // S.cur for the session view)
-  cards: new Map(),      // sid -> mounted list-card element (the patch targets)
-  rowPrev: new Map(),    // sid -> JSON of the row the mounted card shows
+                         // S.currentSessionId for the session view)
+  cards: new Map(),      // sessionId -> mounted list-card element (the patch targets)
+  rowPrev: new Map(),    // sessionId -> JSON of the row the mounted card shows
   listKey: null,         // listShape() of the last full list render
-  armClose: null,        // {sid, until} — the one armed card-✕ confirm; a
+  armClose: null,        // {sessionId, until} — the one armed card-✕ confirm; a
                          // DEADLINE held here (not in the button) so it
                          // survives the per-tick card rebuilds (patchCards)
   closing: new Set(),    // sids with a close POST in flight (card ✕ disabled)
-  closePend: {},         // sid -> optPending handle for a close in flight (the
+  closePend: {},         // sessionId -> optPending handle for a close in flight (the
                          // web-hint lifecycle + reconcile). MUST be an object:
                          // reconcileCloses does Object.keys(S.closePend) on every
-                         // sessions tick and closeBegin does S.closePend[sid]=…
+                         // sessions tick and closeBegin does S.closePend[sessionId]=…
                          // — an undefined here threw a TypeError BEFORE closeSession
                          // ran, so /stop never fired (THE "still not closing" bug,
                          // caught by the js.error frontend-audit row at app.js:878).
                          // Mutated ONLY via closeBegin/closeSettle below; every
                          // other site reads it
   hidden: {},            // {group_key: hidden_at_epoch} — directories the ✕
-                         // hid from the list (server prefs, /api/dirs/hidden).
+                         // hid from the list (global application preferences).
                          // A group stays hidden only while it has no session
                          // started AFTER hidden_at, so a new session there
                          // re-shows it (groupSessions filters, dirHidden)
-  nsPrefs: {},           // the new-session form's last-used {cwd, model, effort}
-                         // — the backend prefs cache (GET/POST /api/ns-prefs;
-                         // fetched at boot), so nsLast() reads it synchronously
+  nsPrefs: {},           // the new-session form's last-used {workingDirectory, model, effort}
+                         // — the global application preferences cache, so
+                         // nsLast() reads it synchronously
   hosts: null,           // the HOST vocabulary (GET /api/hosts, fetched at
                          // boot): one row per registered tool with its menus,
                          // defaults, match rule and account/attach flags — the
                          // new-session form is built entirely out of it, and
                          // null means "not yet known", never "assume Claude"
                          // (docs/dashboard.md, *Tool picker*)
-  nsDrafts: {},          // its UNSENT first prompts, {cwd: {text, seq}} — one
-                         // per directory (GET/POST /api/ns-draft), cached the
-                         // same way so openNewSession and a directory switch
+  nsDrafts: {},          // its UNSENT first prompts, {workingDirectory: {text, sequence}} — one
+                         // per directory, cached so openNewSession and a directory switch
                          // seed the box synchronously; an accidental close must
                          // not lose a half-typed prompt, and two projects must
                          // not share one (docs/dashboard.md, *New-session
@@ -84,7 +85,7 @@ const S = {
 
 const ARCHIVE_S = 3 * 86400;   // sessions older than this fold into "archived"
 const ARM_MS = 4000;   // two-step-confirm window (card ✕ / header ✕ / compact)
-// A just-launched session's kitty pane isn't tagged claude_session=<sid> for a
+// A just-launched session's kitty pane isn't tagged claude_session=<sessionId> for a
 // moment, so /api/session reports live:true with a blank kitty_window_id — the
 // startup tag-race. showSession re-fetches meta until the window resolves so the
 // composer + ✕ close button don't stay stuck (docs/dashboard.md, *Launch tag-
@@ -98,8 +99,8 @@ const LAUNCH_RESOLVE_TRIES = 12;
 // channel*).
 const CLOSE_POST_MS = 12000;
 
-// The SERVER's numbers that the page has to agree with, fetched from
-// GET /api/limits at boot (loadLimits, app.13-init.js) — the owners are
+// The SERVER's numbers that the page has to agree with, carried by
+// the global application snapshot — the owners are
 // dashboard/config.py (upload/rename caps) and dashboard/notify/presence.py
 // (the presence TTL), and this is the one place the page keeps them:
 //
@@ -109,17 +110,10 @@ const CLOSE_POST_MS = 12000;
 //   view_ttl_s  — how long a /api/presence beat keeps a session "watched"; the
 //                 heartbeat cadence is DERIVED from it (viewBeatMs).
 //
-// Each was a literal here with a "mirrors the server's X" comment, i.e. a
-// second copy of a fact owned elsewhere — and VIEW_TTL_S is env-overridable
-// (CLAUDE_DASH_VIEW_TTL_S), so lowering it below the fixed 8s beat silently
-// broke watch-suppression with no code change on either side. The values below
-// are only the PRE-FETCH fallback (the fetch is one round-trip; an attach or a
-// rename in that window still behaves), so they may lag config.py without
-// breaking anything — the served numbers always win.
 const LIMITS = {
-  upload_max: 14 * 1024 * 1024,
-  rename_max: 120,
-  view_ttl_s: 20,
+  upload_max: null,
+  rename_max: null,
+  view_ttl_s: null,
 };
 
 // The in-flight state of an optimistic close, in ONE place. Two maps have to
@@ -129,21 +123,21 @@ const LIMITS = {
 // signal) for a close that in fact resolved. Three call sites hand-rolled that
 // pairing — the card ✕ (app.04-list.js), the header ✕ (app.11-chrome.js) and
 // reconcileCloses — in two files, which is one edit away from a map that keeps a
-// sid the other dropped (a ✕ disabled forever, or a card stuck grey).
-function closeBegin(sid) {
-  S.closing.add(sid);
-  S.closePend[sid] = optPending(sid, "close");
+// sessionId the other dropped (a ✕ disabled forever, or a card stuck grey).
+function closeBegin(sessionId) {
+  S.closing.add(sessionId);
+  S.closePend[sessionId] = optPending(sessionId, "close");
 }
 
 // End it: `phase` is the web-hint lifecycle transition — "reconciled" (the
 // sessions snapshot shows the tab actually parked) or "dropped" (the POST
 // failed, and the caller reverts its own button/card chrome). Safe to call for a
-// sid with nothing in flight (a close begun in a previous page load).
-function closeSettle(sid, phase, extra) {
-  S.closing.delete(sid);
-  const pend = S.closePend[sid];
+// sessionId with nothing in flight (a close begun in a previous page load).
+function closeSettle(sessionId, phase, extra) {
+  S.closing.delete(sessionId);
+  const pend = S.closePend[sessionId];
   if (!pend) return;
-  delete S.closePend[sid];
+  delete S.closePend[sessionId];
   pend.settle(phase, extra);
 }
 
@@ -247,7 +241,7 @@ function armConfirm(btn, label, ask, fire) {
 }
 
 // The compact endpoint label for the frontend audit — the path minus the /api/
-// prefix and the (already-separately-logged) sid, so `/api/session/<sid>/stop`
+// prefix and the (already-separately-logged) sessionId, so `/api/session/<sessionId>/stop`
 // → `session/stop`. Purely for readable `web-client` rows.
 function apiEp(url) {
   return String(url || "").replace(/^\/?api\//, "")
@@ -255,14 +249,14 @@ function apiEp(url) {
 }
 
 // The control-plane write: every POST carries the JSON content type AND the
-// custom X-Claude-Dash header the server's _post_guard demands (both force a
+// custom X-Baqylau header the server's _post_guard demands (both force a
 // CORS preflight a cross-origin page can't pass). Resolves to the parsed JSON
 // on success, rejects with the server's {error} on a 4xx/5xx.
-// opts (optional): { keepalive, timeout, audit, sid, auditData }.
+// opts (optional): { keepalive, timeout, audit, sessionId, auditData }.
 //   keepalive — send via the browser's keepalive pool (the sendBeacon infra),
 //     which is NOT starved by the page's long-lived SSE EventSource streams. On
 //     an HTTP/1.1 origin (this server) the ~6-connections/origin cap is eaten by
-//     /events + /events/session (+ agent) — a plain fetch for a control POST can
+//     /api/stream + /api/sessions/<id>/stream — a plain fetch for a control POST can
 //     then QUEUE behind them and never send, hanging with no resolve AND no
 //     reject (so no .catch, no web-clientfail — an invisible stuck close, the
 //     reported bug). Use for the tiny control POSTs (NOT uploads/messages — the
@@ -275,25 +269,25 @@ function apiEp(url) {
 //     (with a connection snapshot + optional auditData), `<audit>.ok` (ms +
 //     status) and `<audit>.fail` (ms + kind http|transport + status/error). This
 //     is the ONE place the browser records what actually happened to a control
-//     request the server may never have seen. `sid` scopes the rows; `auditData`
+//     request the server may never have seen. `sessionId` scopes the rows; `auditData`
 //     adds gesture-specific fields to the begin row. NEVER tag the telemetry
 //     endpoints themselves (/clientlog, /hint-audit, /client-fail) — that recurses.
 function postJSON(url, body, opts) {
   opts = opts || {};
   const tag = opts.audit;
-  const sid = opts.sid || (tag ? S.cur : "") || "";
+  const sessionId = opts.sessionId || (tag ? S.currentSessionId : "") || "";
   const t0 = performance.now();
   if (tag) {
     const info = connInfo();
     // es (SSE streams held open at send time) + online are the per-gesture
     // connection facts; the batch's `conn` snapshot carries the rest. No `conn`
     // key here — it would collide with that batch dict server-side.
-    clog(sid, tag + ".begin", Object.assign(
+    clog(sessionId, tag + ".begin", Object.assign(
       { ep: apiEp(url), es: info.es, online: info.online }, opts.auditData || {}));
   }
   const init = {
     method: "POST",
-    headers: { "Content-Type": "application/json", "X-Claude-Dash": "1" },
+    headers: { "Content-Type": "application/json", "X-Baqylau": "1" },
     body: JSON.stringify(body || {}),
   };
   if (opts.keepalive) init.keepalive = true;
@@ -308,7 +302,8 @@ function postJSON(url, body, opts) {
     // that isn't JSON is only expected on an error, so synthesize one there.
     r => r.json().catch(() => ({ error: "bad response", status: r.status }))
       .then(d => {
-        if (tag) clog(sid, r.ok ? tag + ".ok" : tag + ".fail", {
+        if (!r.ok && d && !d.error && d.reason) d.error = d.reason;
+        if (tag) clog(sessionId, r.ok ? tag + ".ok" : tag + ".fail", {
           ms: Math.round(performance.now() - t0), status: r.status,
           kind: r.ok ? undefined : "http",
           error: r.ok ? undefined : (d && d.error) || "" });
@@ -318,7 +313,7 @@ function postJSON(url, body, opts) {
     // never reached / no response — a transport failure (network, tunnel drop,
     // our own AbortController timeout). THE case the server can't see.
     err => {
-      if (tag) clog(sid, tag + ".fail", {
+      if (tag) clog(sessionId, tag + ".fail", {
         ms: Math.round(performance.now() - t0), kind: "transport",
         aborted: !!(err && err.name === "AbortError"),
         error: (err && err.message) || "" });
@@ -400,41 +395,32 @@ function ago(ts) {
   if (s < 86400) return (s / 3600 | 0) + "h ago";
   return (s / 86400 | 0) + "d ago";
 }
-// the session's recency: last_active (server-computed — transcript mtime,
-// with ended_at / state-DB-mtime / started_at fallbacks) for everything
-// time-flavored on the list — the card chip, the archive boundary, the
-// resume dropdown. started_at survives for rows pushed by a
-// not-yet-restarted server.
-function lastActive(row) { return row.last_active || row.started_at || 0; }
-// GROUP order sorts by this instead: started_at is fixed for the session's
-// whole life, so the order only moves when a session starts/resumes
-// somewhere — last_active is the transcript mtime, which grows on every
-// stream write, and sorting groups on it made two concurrently-live projects
-// leapfrog each other every SSE tick (order is part of listShape, so each
-// flip forced a full list rebuild — the page visibly jolted).
-function orderKey(row) { return row.started_at || lastActive(row); }
-// The PROJECT DIRECTORY a session belongs to: the server's `group_dir` — its
-// frozen ORIGINAL cwd resolved to its linked-worktree OWNER (read/meta.py
-// `group_dir`) — with row.cwd as the fallback for legacy/parked rows pushed
-// before the field existed. The ONE client-side implementation, shared by the
-// list's grouping and the new-session directory picker so both name the same
-// folder: a session running in `.claude/worktrees/<name>/` (EnterWorktree, or
-// any `git worktree add` checkout) resolves to its main checkout, and the
-// picker never offers a throwaway worktree as a place to start a session.
-function groupKey(row) { return row.group_dir || row.cwd || ""; }
+function sessionId(row) { return row.session.session_id; }
+function sessionWorkingDirectory(row) { return row.session.working_directory || ""; }
+function sessionWindowId(row) { return row.terminal.window_id || ""; }
+function sessionIsLive(row) { return !!row.terminal.window_id; }
+function sessionIsParked(row) { return row.session.state === "finished"; }
+function sessionTabState(row) { return row.tab_state || ""; }
+function lastActive(row) {
+  return row.session.finished_at || row.session.started_at || 0;
+}
+function orderKey(row) { return row.session.started_at || lastActive(row); }
+function groupKey(row) { return row.project_directory; }
 function proj(row) {
-  const c = row.cwd || "";
-  return c ? c.split("/").filter(Boolean).pop() : (row.sid || "").slice(0, 18);
+  const workingDirectory = sessionWorkingDirectory(row);
+  return workingDirectory
+    ? workingDirectory.split("/").filter(Boolean).pop()
+    : sessionId(row).slice(0, 18);
 }
 /* The `?agent=<id>` suffix every scoped read carries — "" outside agent scope,
    so an unscoped URL is byte-identical to what it was. `sep` is the separator
    this call site needs ("?" for a bare path, "&" after an existing query). */
 function agentQ(sep) {
-  const a = (S.ses && S.ses.agent) || "";
+  const a = (S.sessionView && S.sessionView.agent) || "";
   return a ? (sep || "?") + "agent=" + encodeURIComponent(a) : "";
 }
 
-function shortSid(sid) { return (sid || "").length > 20 ? sid.slice(0, 8) + "…" + sid.slice(-4) : sid; }
+function shortSid(sessionId) { return (sessionId || "").length > 20 ? sessionId.slice(0, 8) + "…" + sessionId.slice(-4) : sessionId; }
 // A model id in its host's DISPLAY spelling — now a pass-through, because the
 // SERVER does the shortening: every payload that carries a model id carries the
 // owning host's own spelling of it beside it (`model_short` on ctx and the
@@ -451,14 +437,14 @@ function shortSid(sid) { return (sid || "").length > 20 ? sid.slice(0, 8) + "…
 // the one place the page COERCES a served display string (null/number → ""), so
 // call sites keep reading the same.
 function shortModel(m) { return String(m || "").trim(); }
-function copySid(sid) {
+function copySid(sessionId) {
   // navigator.clipboard is undefined in a NON-secure context (a plain-http
   // remote tunnel); calling .writeText on it throws synchronously. 127.0.0.1 is
   // a secure context, so localhost is unaffected — this only guards the remote
   // http case (docs/remote.md) from an uncaught TypeError.
   if (!navigator.clipboard) return toast("ask", "copy failed", "needs https");
-  navigator.clipboard.writeText(sid).then(
-    () => toast("done", "copied session id", sid),
+  navigator.clipboard.writeText(sessionId).then(
+    () => toast("done", "copied session id", sessionId),
     () => toast("ask", "copy failed", "clipboard permission?"));
 }
 
@@ -482,17 +468,18 @@ function promptMatches(real, sent) {
 
 const TAB_LABEL = {
   "": "no tab", "idle": "idle", "thinking": "busy", "working": "busy",
-  "executing": "running", "awaiting-bg": "running",
-  "awaiting-command": "asking you", "awaiting-response": "your turn",
+  "executing": "running", "awaiting_background": "running",
+  "awaiting_attention": "asking you", "awaiting_response": "your turn",
 };
 
 /* The "running now" ribbon: glyph + short label per live `live`-table slot kind
    (sessionapi.running() — fg command, bg jobs, monitors, streaming agents). */
-const RUN_GLYPH = {
-  "fg": ["⚙", "fg"], "bg": ["◷", "bg"], "monitor": ["◉", "monitor"],
-  "sub.pid": ["◇", "agent"], "codex": ["◆", "codex"],
+const RUN_APPEARANCE = {
+  operation: ["⚙", "fg"],
+  background: ["◷", "bg"],
+  monitor: ["◉", "monitor"],
 };
-const RUN_ORDER = ["fg", "bg", "monitor", "sub.pid", "codex"];
+const RUN_ORDER = ["operation", "background", "monitor"];
 
 /* ---------- toasts + OS notifications ---------- */
 

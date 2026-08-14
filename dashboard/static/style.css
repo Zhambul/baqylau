@@ -280,9 +280,9 @@ body.in-session.fs-on #fsbtn { display: revert; }
    FIRST so the equal-specificity [data-tab] mappings below win. */
 .scard, .shead, .acard { --state: var(--idle); }
 [data-tab="thinking"], [data-tab="working"] { --state: var(--busy); }
-[data-tab="executing"], [data-tab="awaiting-bg"] { --state: var(--exec); }
-[data-tab="awaiting-command"] { --state: var(--ask); }
-[data-tab="awaiting-response"] { --state: var(--done); }
+[data-tab="executing"], [data-tab="awaiting_background"] { --state: var(--exec); }
+[data-tab="awaiting_attention"] { --state: var(--ask); }
+[data-tab="awaiting_response"] { --state: var(--done); }
 /* agent cards key off agent STATUS (agentStatus), not the session tab */
 .acard[data-st="st-run"] { --state: var(--exec); }
 .acard[data-st="st-ok"] { --state: var(--done); }
@@ -314,7 +314,7 @@ body.in-session.fs-on #fsbtn { display: revert; }
 }
 .scard:hover { box-shadow: var(--scard-hover); transform: translateY(-1px); }
 .scard .proj { color: var(--text); font-weight: 620; font-size: 14px; }
-.scard .sid { color: var(--dim); font-size: 11px; margin-top: 1px; font-family: var(--mono);
+.scard .sessionId { color: var(--dim); font-size: 11px; margin-top: 1px; font-family: var(--mono);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-right: 70px; }
 .scard .row { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 10px;
   color: var(--text-soft); font-size: 12px; font-family: var(--mono); }
@@ -327,10 +327,10 @@ body.in-session.fs-on #fsbtn { display: revert; }
 .badge .st { width: 7px; height: 7px; border-radius: 50%; background: var(--idle); flex: none; }
 .badge[data-tab="thinking"] .st, .badge[data-tab="working"] .st
   { background: var(--busy); animation: pulse 1.6s infinite; }
-.badge[data-tab="executing"] .st, .badge[data-tab="awaiting-bg"] .st
+.badge[data-tab="executing"] .st, .badge[data-tab="awaiting_background"] .st
   { background: var(--exec); animation: pulse 1.6s infinite; }
-.badge[data-tab="awaiting-command"] .st { background: var(--ask); animation: pulse .9s infinite; }
-.badge[data-tab="awaiting-response"] .st { background: var(--done); }
+.badge[data-tab="awaiting_attention"] .st { background: var(--ask); animation: pulse .9s infinite; }
+.badge[data-tab="awaiting_response"] .st { background: var(--done); }
 /* focused-subagent badge dot follows agent STATUS (setBadgeAgent clears
    data-tab first, so only these match while drilled in) */
 .badge[data-st="st-run"] .st { background: var(--exec); animation: pulse 1.6s infinite; }
@@ -410,9 +410,9 @@ body.in-session.fs-on #fsbtn { display: revert; }
 /* the ✦ auto button beside it — bare /rename, Claude names the session */
 .shead .proj .renameauto { margin-left: 6px; font-size: 12px;
                            vertical-align: middle; }
-.shead .sid { color: var(--dim); font-size: 11px; font-family: var(--mono); }
-.shead .sid.copysid { cursor: pointer; }
-.shead .sid.copysid:hover { color: var(--text-soft); text-decoration: underline dotted; }
+.shead .sessionId { color: var(--dim); font-size: 11px; font-family: var(--mono); }
+.shead .sessionId.copysid { cursor: pointer; }
+.shead .sessionId.copysid:hover { color: var(--text-soft); text-decoration: underline dotted; }
 .statsrow { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 8px;
   color: var(--text-soft); font-size: 12px; font-family: var(--mono); }
 .statsrow .v { color: var(--text); }
@@ -1534,7 +1534,7 @@ body.modal-open { overflow: hidden; }
    dropped — *The web presenter*). That is conversation text, so it gets the
    treatment above rather than the command-output box: its line cap was removed
    server-side, and a 480px scroller here would have quietly reinstated it. */
-.blk[data-act="agent"] > .bbody { max-height: none; overflow: visible; }
+.blk[data-summary-kind="actor_assignment"] > .bbody { max-height: none; overflow: visible; }
 
 /* loose top-level rows (file-op one-liners, standalone chip/label lines) get the
    same card treatment so the WHOLE stream reads as uniform activity-style cards.
@@ -1883,7 +1883,7 @@ body.attn-on .rail { top: calc(101px + var(--sat)); max-height: calc(100vh - 114
   transition: box-shadow .15s;
 }
 .acard:hover { box-shadow: var(--scard-hover); }
-.acard .aid { color: var(--text); font-size: 12px; font-weight: 600; font-family: var(--mono);
+.acard .actorId { color: var(--text); font-size: 12px; font-weight: 600; font-family: var(--mono);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .acard .desc { color: var(--text-soft); font-size: 11.5px; margin-top: 2px;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
@@ -2007,16 +2007,19 @@ body.attn-on .rail { top: calc(101px + var(--sat)); max-height: calc(100vh - 114
 /* unified diff: removed rows red-tinted, added green-tinted, context plain */
 .tdiff { font: 12px/1.5 var(--mono); max-height: 440px; overflow: auto;
   border-radius: calc(var(--r) / 2); box-shadow: inset 0 0 0 1px var(--hair); }
-.tdiff .dl { display: flex; gap: 10px; padding: 0 8px; white-space: pre-wrap;
-  word-break: break-word; }
+.tdiff .dl { display: grid; grid-template-columns: 4.5em minmax(0, 1fr);
+  gap: 10px; padding: 0 8px; white-space: pre; }
 .tdiff .dl .ln { flex: none; width: 3.5em; text-align: right; color: var(--dim2);
   user-select: none; }
-.tdiff .dl .tx { flex: 1; min-width: 0; color: var(--text-soft); }
+.tdiff .dl .tx { min-width: 0; color: var(--text-soft); }
 .tdiff .removed { background: color-mix(in srgb, var(--red) 14%, transparent); }
-.tdiff .removed .tx { color: color-mix(in srgb, var(--red) 70%, var(--text)); }
 .tdiff .added { background: color-mix(in srgb, var(--green) 14%, transparent); }
-.tdiff .added .tx { color: color-mix(in srgb, var(--green) 65%, var(--text)); }
 .tdiff .sep .tx { color: var(--dim2); }
+.tdiff mark.changed { color: inherit; border-radius: 2px; padding: 0; }
+.tdiff .removed mark.changed {
+  background: color-mix(in srgb, var(--red) 38%, transparent); }
+.tdiff .added mark.changed {
+  background: color-mix(in srgb, var(--green) 34%, transparent); }
 /* definition list: Grep/Glob/WebFetch/WebSearch/Task/SendMessage key fields */
 .tdl { display: grid; grid-template-columns: max-content 1fr; gap: 3px 12px;
   margin: 0; font-family: var(--mono); font-size: 12px; }

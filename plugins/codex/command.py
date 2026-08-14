@@ -1,0 +1,152 @@
+"""Run Codex with exact process-to-rollout lifecycle observation."""
+
+from __future__ import annotations
+
+import os
+import shutil
+import signal
+import subprocess
+import sys
+import time
+from typing import Literal
+
+if __package__ in (None, ""):
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+from contracts.harness import RecognizedSession, SessionCandidate
+from contracts.terminal import SessionPaneRequest
+from app import pane_preferences, pending_session
+from plugins.codex.canonical import CodexSessionRecognizer, process_event
+
+ROLLOUT_POLL_SECONDS = 0.05
+
+
+def process_rollout(process_id: int) -> RecognizedSession | None:
+    """Return the one root rollout held open by the exact Codex process."""
+    completed = subprocess.run(
+        ["lsof", "-a", "-p", str(process_id), "-Fn"],
+        capture_output=True,
+        text=True,
+        timeout=2,
+        check=True,
+    )
+    recognizer = CodexSessionRecognizer()
+    sessions = []
+    for line in completed.stdout.splitlines():
+        if not line.startswith("n") or not line.endswith(".jsonl"):
+            continue
+        path = line[1:]
+        session = recognizer.recognize(SessionCandidate(path))
+        if session is not None:
+            sessions.append(session)
+    unique_sessions = {session.session_id: session for session in sessions}
+    if len(unique_sessions) > 1:
+        raise RuntimeError(f"Codex process {process_id} owns multiple root rollouts")
+    return next(iter(unique_sessions.values()), None)
+
+
+def native_codex_process(launcher_process_id: int) -> int | None:
+    children = subprocess.run(
+        ["pgrep", "-P", str(launcher_process_id)],
+        capture_output=True,
+        text=True,
+        timeout=2,
+    ).stdout.split()
+    process_ids = [launcher_process_id, *(int(value) for value in children)]
+    completed = subprocess.run(
+        ["ps", "-o", "pid=,comm=", "-p", ",".join(str(value) for value in process_ids)],
+        capture_output=True,
+        text=True,
+        timeout=2,
+        check=True,
+    )
+    matches = []
+    for line in completed.stdout.splitlines():
+        fields = line.strip().split(None, 1)
+        if len(fields) == 2 and os.path.basename(fields[1]) == "codex":
+            matches.append(int(fields[0]))
+    if len(matches) > 1:
+        raise RuntimeError(f"Codex launcher {launcher_process_id} has multiple Codex processes")
+    return matches[0] if matches else None
+
+
+def record_process(
+    application,
+    session: RecognizedSession,
+    state: Literal["started", "finished"],
+) -> None:
+    application.event_store.register_session("codex", session)
+    application.delivery.deliver(process_event(session, state))
+    application.host.ensure_running()
+
+
+def run(arguments: list[str]) -> int:
+    from app.bootstrap import build_default_application
+
+    executable = shutil.which("codex")
+    if executable is None:
+        raise RuntimeError("codex executable is not on PATH")
+    application = build_default_application()
+    process = subprocess.Popen([executable, *arguments])
+    previous_interrupt_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
+    session = None
+    pending_session_id = None
+    try:
+        native_process_id = None
+        while process.poll() is None and native_process_id is None:
+            native_process_id = native_codex_process(process.pid)
+            if native_process_id is None:
+                time.sleep(ROLLOUT_POLL_SECONDS)
+        anchor_window_id = application.terminal.current_window()
+        if native_process_id is not None and anchor_window_id is not None:
+            pending_session_id = pending_session.identity(native_process_id)
+            opened = application.terminal.open_pending_session_panes(
+                SessionPaneRequest(
+                    pending_session_id,
+                    anchor_window_id,
+                    pane_preferences.width_percent(os.getcwd()),
+                )
+            )
+            if not opened.succeeded:
+                raise RuntimeError(opened.reason or "pending Codex panes failed to open")
+        while process.poll() is None and session is None:
+            if native_process_id is None:
+                break
+            session = process_rollout(native_process_id)
+            if session is None:
+                time.sleep(ROLLOUT_POLL_SECONDS)
+        if session is not None:
+            session = RecognizedSession(
+                session_id=session.session_id,
+                lead_actor_id=session.lead_actor_id,
+                native_session_id=session.native_session_id,
+                source_reference=session.source_reference,
+                working_directory=session.working_directory,
+                native_process_id=native_process_id,
+            )
+            record_process(application, session, "started")
+            if pending_session_id is not None:
+                adopted = application.terminal.adopt_pending_session_panes(
+                    pending_session_id,
+                    session.session_id,
+                )
+                if not adopted.succeeded:
+                    raise RuntimeError(adopted.reason or "pending Codex panes failed to adopt")
+        return_code = process.wait()
+    finally:
+        signal.signal(signal.SIGINT, previous_interrupt_handler)
+    if session is not None:
+        record_process(application, session, "finished")
+    elif pending_session_id is not None:
+        application.terminal.close_session_panes(pending_session_id)
+    if pending_session_id is not None:
+        pending_session.clear(pending_session_id)
+    return return_code
+
+
+def main() -> None:
+    raise SystemExit(run(sys.argv[1:]))
+
+
+if __name__ == "__main__":
+    main()

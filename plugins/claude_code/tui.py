@@ -9,7 +9,7 @@
 # type_command, moved here byte-identically when the gestures did).
 import time
 
-from core import clipimg
+from plugins.claude_code import clipboard_image
 
 # after the line-kill that clears whatever the box held, settle before pasting —
 # a paste into a just-cleared input drops leading bytes (measured; the mangle).
@@ -46,7 +46,7 @@ def type_command(fe, win, text):
     guard*), so no caller may paste without it — folding the two together here is
     the point of the single owner. THIS host declares
     `paste_grabs_clipboard_image`; a host that doesn't pays no osascript."""
-    clip = clipimg.clear_image()
+    clip = clipboard_image.clear_image()
     return bool(fe.paste_text(win, text)), clip
 
 

@@ -22,8 +22,7 @@ $statsbtn.onclick = () => { location.hash = "#/stats"; };
 // (docs/dashboard.md *Global alerts toggle*). The state is server-side + durable
 // (dashboard/prefs.py `notify-enabled`), so it is cross-device / cross-session
 // and covers git worktrees; default ON. OFF overrides the per-session mutes.
-// Seeded from GET /api/notify-config on load, kept in sync across devices by the
-// `notify-config` SSE event (paintNotify is called from app.02-router.js).
+// Seeded and kept in sync by the complete global application snapshot.
 let notifyOn = true;
 function paintNotify() {
   $notifytoggle.textContent = notifyOn ? "◉ alerts" : "○ alerts off";
@@ -33,12 +32,9 @@ function paintNotify() {
     : "All dashboard alerts OFF — click to re-enable";
 }
 paintNotify();
-fetch("/api/notify-config").then(r => r.json())
-  .then(d => { notifyOn = d.enabled !== false; paintNotify(); })
-  .catch(() => {});
 $notifytoggle.onclick = () => {
   const next = !notifyOn;
-  postJSON("/api/notify", { enabled: next })
+  postJSON("/api/application/notifications", { enabled: next })
     .then(() => {
       notifyOn = next;
       paintNotify();
@@ -128,12 +124,12 @@ document.addEventListener("keydown", (e) => {
   const dir = e.code === "ArrowRight" ? 1 : e.code === "ArrowLeft" ? -1 : 0;
   if (!dir) return;
   e.preventDefault();
-  const live = S.sessions.filter(r => r.live)
-    .sort((a, b) => (a.started_at || 0) - (b.started_at || 0));
+  const live = S.sessions.filter(sessionIsLive)
+    .sort((a, b) => orderKey(a) - orderKey(b));
   if (!live.length) return;
-  const at = live.findIndex(r => r.sid === S.cur);
+  const at = live.findIndex(row => sessionId(row) === S.currentSessionId);
   const to = at < 0 ? (dir > 0 ? 0 : live.length - 1)
                     : (at + dir + live.length) % live.length;
-  if (live[to].sid !== S.cur)
-    location.hash = "#/s/" + encodeURIComponent(live[to].sid);
+  if (sessionId(live[to]) !== S.currentSessionId)
+    location.hash = "#/s/" + encodeURIComponent(sessionId(live[to]));
 });

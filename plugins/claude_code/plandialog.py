@@ -25,7 +25,7 @@
 import re
 import time
 
-from core import screendrive
+from plugins.claude_code import screen_driver as screendrive
 
 POLL_S = 0.15
 STEP_TIMEOUT_S = 2.5

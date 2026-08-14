@@ -11,10 +11,10 @@
 // state reads it (a `const` further down would be in its temporal dead zone).
 const NO_HOST_LABEL = "the agent";
 
-function armJump(cwd, resumeSid, o) {
+function armJump(workingDirectory, resumeSid, o) {
   o = o || {};
   S.jumpDone = null;               // a new launch supersedes a stale forward
-  S.jump = { cwd, resumeSid: resumeSid || "",
+  S.jump = { workingDirectory, resumeSid: resumeSid || "",
              win: o.win || "",     // the launched tab's window id when the
              //                       terminal reported one — the exact match
              show: o.show || null, // what the #/launching pending view displays
@@ -27,8 +27,8 @@ function armJump(cwd, resumeSid, o) {
              onfail: o.onfail || null,  // called if the watch times out with no
              //                       pending view (a composer "resume & send",
              //                       whose disabled composer needs re-enabling)
-             known: new Set(S.sessions.map(r => r.sid)),
-             liveAtArm: new Set(S.sessions.filter(r => r.live).map(r => r.sid)),
+             known: new Set(S.sessions.map(sessionId)),
+             liveAtArm: new Set(S.sessions.filter(sessionIsLive).map(sessionId)),
              until: Date.now() + JUMP_TIMEOUT_MS };
   // the client half of the launch story (the server logs web-launch/-wake): when
   // we START waiting for the launched tab to appear on the list — paired with the
@@ -47,30 +47,37 @@ function checkJump() {
   if (Date.now() > j.until) { jumpFail(); return; }
   // the launch's window id wins when known (r.live gates out a row from a
   // previous terminal run whose window ids restarted from 1); then the
-  // resumed sid itself (its cwd may differ from the launch dir); otherwise
-  // any cwd-row that is brand-new or freshly parked→live
+  // resumed sessionId itself (its workingDirectory may differ from the launch dir); otherwise
+  // any workingDirectory-row that is brand-new or freshly parked→live
   const row = (j.win && S.sessions.find(
-    r => r.live && String(r.kitty_window_id || "") === j.win))
-    || (j.resumeSid && S.sessions.find(r => r.live && r.sid === j.resumeSid))
-    || S.sessions.find(r => r.live && r.cwd === j.cwd
-                       && (!j.known.has(r.sid) || !j.liveAtArm.has(r.sid)));
+    item => sessionIsLive(item) && String(sessionWindowId(item)) === j.win))
+    || (j.resumeSid && S.sessions.find(
+      item => sessionId(item) === j.resumeSid))
+    || S.sessions.find(item => {
+      const id = sessionId(item);
+      return sessionWorkingDirectory(item) === j.workingDirectory
+        && (!j.known.has(id) || (sessionIsLive(item) && !j.liveAtArm.has(id)));
+    });
   if (!row) return;
-  jumpHit(row.sid, row.title || proj(row));
+  jumpHit(sessionId(row), row.session.title || proj(row), sessionIsLive(row));
 }
 
-function jumpHit(sid, title) {
+function jumpHit(sessionId, title, live) {
   const quiet = !!(S.jump && S.jump.quiet);
-  clog(sid, "launch.hit",             // the launched session appeared — with latency
+  const eventName = live ? "launch.hit" : "launch.ended";
+  const toastKind = live ? "done" : "bad";
+  const toastTitle = live ? "session started" : "session exited during startup";
+  clog(sessionId, eventName,                 // the launched session resolved — with latency
        { ms: S.jump ? Date.now() - S.jump.armedAt : 0, quiet });
   S.jump = null;                       // clear FIRST — route() must never see
   //                                      this function's own hash change armed
-  const to = "#/s/" + encodeURIComponent(sid);
+  const to = "#/s/" + encodeURIComponent(sessionId);
   if (quiet) {
     // the user navigated away mid-wait — never yank them; a clickable toast
     // announces the arrival, and #/launching (browser back) forwards there
     S.jumpDone = to;
-    if (S.cur === sid) return;         // they already found it themselves
-    toast("done", "session started", title || "click to open",
+    if (S.currentSessionId === sessionId) return;         // they already found it themselves
+    toast(toastKind, toastTitle, title || "click to open",
           () => { location.hash = to; });
     return;
   }
@@ -78,7 +85,7 @@ function jumpHit(sid, title) {
   // history entry worth returning to (back should land on the list)
   if (S.pendingUI) location.replace(to);
   else location.hash = to;
-  toast("done", "session started", title || "");
+  toast(toastKind, toastTitle, title || "");
 }
 
 function jumpFail() {
@@ -115,7 +122,7 @@ function showPending() {
   const verb = show.mode === "resume" ? "resuming session"
     : show.mode === "continue" ? "continuing session" : "starting session";
   card.append(el("div", "pendtitle", verb));
-  card.append(el("div", "penddir", j.cwd));
+  card.append(el("div", "penddir", j.workingDirectory));
   const chips = el("div", "pendchips");
   [show.account, show.model, show.effort].filter(Boolean)
     .forEach(t => chips.append(el("span", "pendchip", t)));
@@ -164,7 +171,7 @@ function showPendingFail() {
 // (`/tmp`) paths dropped; optional first
 // prompt; submit POSTs /api/sessions/new and the session appears on its own via
 // SessionStart. The header "+ session" button opens it blank; a dir group's "+"
-// prefills that cwd.
+// prefills that workingDirectory.
 
 // The resume preview popup lives OUTSIDE $modal (on document.body, above the
 // form), so tearing down the form must also dismiss any open popup + its
@@ -282,10 +289,9 @@ function dropdown() {
 
 // Last-used launch prefs (directory/model/effort) — preselected the next time
 // the form opens (launches are usually the same project on the same settings).
-// STORED ON THE BACKEND now (the durable global prefs DB, GET/POST /api/ns-prefs)
-// instead of per-browser localStorage, so a launch on one device pre-selects on
-// the next — S.nsPrefs is the in-memory cache (fetched once at boot, refreshed
-// on every write) that keeps this read synchronous. The BEHAVIOUR is unchanged:
+// STORED ON THE BACKEND and carried by the global application snapshot instead
+// of per-browser localStorage, so a launch on one device pre-selects on the next.
+// S.nsPrefs is the synchronous presentation cache. The BEHAVIOUR is unchanged:
 // written only on a successful launch; an explicit prefill (a dir group's "+",
 // a resume button) still wins over the remembered directory.
 const nsLast = () => S.nsPrefs || {};
@@ -299,18 +305,23 @@ const nsLast = () => S.nsPrefs || {};
 let nsRetry = null;
 const nsRemember = (p) => {
   S.nsPrefs = p;                                   // cache first, form is sync
-  postJSON("/api/ns-prefs", p).catch(() => {});    // best-effort backend write
+  postJSON("/api/application/new-session-preferences", {
+    working_directory: p.workingDirectory || null,
+    harness: p.tool || null,
+    model: p.model || null,
+    effort: p.effort || null,
+  }).catch(() => {});                              // best-effort backend write
 };
 
 // The form's UNSENT first prompt is a DRAFT (docs/dashboard.md, *New-session
 // draft*) — the composer's `composer-draft` machinery for the one box that has
 // no session to hang a per-session kv on yet, so it lives in the same durable
-// GLOBAL prefs store as nsLast() (GET/POST /api/ns-draft). Written debounced on
+// GLOBAL application state as nsLast(). Written debounced on
 // every edit AND flushed on close: an accidental Esc / backdrop click used to
 // drop a half-typed prompt on the floor, and the next open came up blank.
 // Cleared by the launch that consumes it.
 //
-// PER DIRECTORY (`{cwd: {text, seq}}`): different projects hold different
+// PER DIRECTORY (`{workingDirectory: {text, sequence}}`): different projects hold different
 // half-typed prompts, so the box always shows the draft belonging to the
 // directory in the form. `nsDraftDir` is WHICH directory the box's text
 // currently belongs to (settled on the dir field's blur, not on every keystroke
@@ -332,31 +343,34 @@ const nsDirKey = (v) => {
   const s = (v || "").trim();
   return s.length > 1 ? s.replace(/\/+$/, "") : s;
 };
-const nsDraftFor = (cwd) =>
-  (S.nsDrafts && S.nsDrafts[nsDirKey(cwd)]) || { text: "", seq: 0 };
-function saveNsDraft(cwd, text, now) {
-  const key = nsDirKey(cwd);
+const nsDraftFor = (workingDirectory) =>
+  (S.nsDrafts && S.nsDrafts[nsDirKey(workingDirectory)]) || { text: "", sequence: 0 };
+function saveNsDraft(workingDirectory, text, now) {
+  const key = nsDirKey(workingDirectory);
   const t = text.trim() ? text : "";
-  S.nsDrafts[key] = { text: t, seq: Date.now() };   // cache: the next open (and
+  S.nsDrafts[key] = { text: t, sequence: Date.now() };   // cache: the next open (and
   //                    a directory switch) seeds from here, no round-trip
   clearTimeout(nsDraftTimer);
-  // seq is stamped at DISPATCH (like saveComposerDraft): a debounced save still
+  // sequence is stamped at DISPATCH (like saveComposerDraft): a debounced save still
   // in flight when the launch clears the box must not resurrect the sent prompt
-  // if it arrives later over the tunnel — the server keeps only the highest seq
+  // if it arrives later over the tunnel — the server keeps only the highest sequence
   // (per directory, so two folders' saves never fight). The pending post
-  // captures its OWN cwd+text, since the form's directory may have moved on.
-  const post = () => postJSON("/api/ns-draft",
-                              { cwd: key, text: t, seq: Date.now() })
+  // captures its OWN workingDirectory+text, since the form's directory may have moved on.
+  const post = () => postJSON("/api/application/new-session-drafts", {
+    working_directory: key,
+    text: t,
+    sequence: Date.now(),
+  })
     .catch(() => {});
   if (now) post();
   else nsDraftTimer = setTimeout(post, ASK_DRAFT_DEBOUNCE_MS);
 }
 
 // WHAT the directory picker offers: the snapshot's distinct PROJECT directories
-// (groupKey — a linked-worktree cwd resolves to its owning main checkout), minus
+// (groupKey — a linked-worktree workingDirectory resolves to its owning main checkout), minus
 // SCRATCH paths. A `/tmp` anywhere in the path is scratch: the hermetic test
 // suite's per-test dirs, `mktemp -d` throwaway checkouts, `$TMPDIR` (macOS
-// `/var/folders/…/T/tmpXXXXXX`, which is what a realpath'd cwd spells) — all
+// `/var/folders/…/T/tmpXXXXXX`, which is what a realpath'd workingDirectory spells) — all
 // long gone by the time anyone would click them, and they crowded the real
 // projects out of the menu. Accepted false positive: a genuine project under a
 // `/tmp`-prefixed component (`~/code/tmpl`) is menu-invisible — the field is
@@ -438,13 +452,13 @@ function suggest(input, all) {
 }
 
 // The resume picker's PREVIEW POPUP — a component of its own, with its own
-// state (which session is shown, the mounted backdrop, the per-sid item cache)
+// state (which session is shown, the mounted backdrop, the per-sessionId item cache)
 // and its own Escape handling. It was 75 lines inside resumePicker's 240-line
 // closure, sharing that scope only to reach `rows` and `list`; both are handed
 // in now, so what the popup owns is visible at a glance and the picker is back
 // to being about the LIST.
 //
-// `rowFor(sid)` gives the row record (for the title); `focusList()` returns
+// `rowFor(sessionId)` gives the row record (for the title); `focusList()` returns
 // focus to the picker when the popup closes.
 function resumePreview(rowFor, focusList) {
   let pvSid = "", pvBack = null;
@@ -469,16 +483,16 @@ function resumePreview(rowFor, focusList) {
     if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); }
   };
 
-  const show = (sid) => {
-    if (pvBack && pvSid === sid) {                  // space again on the same row closes
-      clog(sid, "resume.preview", { shown: 0 });
+  const show = (sessionId) => {
+    if (pvBack && pvSid === sessionId) {                  // space again on the same row closes
+      clog(sessionId, "resume.preview", { shown: 0 });
       close();
       return;
     }
     close();                                       // switching rows: replace the popup
-    pvSid = sid;
-    const r = rowFor(sid);
-    const title = (r && r.title) || shortSid(sid);
+    pvSid = sessionId;
+    const r = rowFor(sessionId);
+    const title = (r && r.title) || shortSid(sessionId);
     pvBack = el("div", "nspvback");
     const panel = el("div", "nspvpanel");
     const head = el("div", "nspvhead");
@@ -497,41 +511,41 @@ function resumePreview(rowFor, focusList) {
     resumePreviewCleanup = close;                        // form-close safety net
     x.focus();                                           // so Esc/tab live in the popup
 
-    const render = (items) => { if (pvSid === sid && pvBack) renderPreview(body, items); };
-    if (pvCache.has(sid)) {
-      const items = pvCache.get(sid);
+    const render = (items) => { if (pvSid === sessionId && pvBack) renderPreview(body, items); };
+    if (pvCache.has(sessionId)) {
+      const items = pvCache.get(sessionId);
       // record the item COUNT, not just "shown" — an empty-but-successful preview
       // ("no mirror history") is otherwise indistinguishable in the audit from a
       // rendered one (the blind spot that made the last diagnosis need a repro).
-      clog(sid, "resume.preview", { shown: 1, cached: 1, n: items.length });
+      clog(sessionId, "resume.preview", { shown: 1, cached: 1, n: items.length });
       render(items);
       return;
     }
     // the recent mirror TAIL is /backlog (the newest TAIL_BLOCKS slice, the
     // mirror tab's own on-load call) — NOT /history, which returns blocks OLDER
     // than a cursor (before=0 → nothing: the "no mirror history" bug).
-    fetch("/api/session/" + encodeURIComponent(sid) + "/backlog")
+    fetch("/api/sessions/" + encodeURIComponent(sessionId) + "/activity?block_count=100")
       .then(rp => rp.json())
       .then(d => {
         const items = (d && d.items) || [];
-        pvCache.set(sid, items);
-        clog(sid, "resume.preview", { shown: 1, cached: 0, n: items.length });
+        pvCache.set(sessionId, items);
+        clog(sessionId, "resume.preview", { shown: 1, cached: 0, n: items.length });
         render(items);
       })
       .catch(() => {
-        clog(sid, "resume.preview.fail", {});
-        if (pvSid !== sid || !pvBack) return;
+        clog(sessionId, "resume.preview.fail", {});
+        if (pvSid !== sessionId || !pvBack) return;
         body.textContent = "";
         body.append(el("div", "nspreview-empty", "preview unavailable"));
       });
   };
 
-  return { show, close, get sid() { return pvSid; } };
+  return { show, close, get sessionId() { return pvSid; } };
 }
 
 
 // The new-session resume picker (docs/dashboard.md *Resume picker*): a search
-// box + a scrollable list of a directory's recent sessions (GET /api/resumable,
+// box + a scrollable list of a directory's recent sessions,
 // up to RESUMABLE_MAX), each row carrying the session's model/effort/account. It
 // replaces the old three-way "start from" dropdown's resume entries — no
 // `--continue`, resuming the most-recent row IS "continue". Keyboard: ArrowDown
@@ -539,7 +553,7 @@ function resumePreview(rowFor, focusList) {
 // and SPACE toggles an inline mirror-transcript preview of the highlighted row
 // (renderPreview over /history). `onSelect(row)` fires on every selection so the
 // caller can reuse the picked session's model+effort. `value()` is the chosen
-// sid ("" = nothing picked).
+// sessionId ("" = nothing picked).
 function resumePicker() {
   const root = el("div", "nsresume");
   const search = el("input", "nsinput nsressearch");
@@ -561,23 +575,23 @@ function resumePicker() {
     }
     for (const r of rows) {
       const row = el("div", "nsresrow"
-        + (r.sid === selSid ? " sel" : "") + (r.live ? " live" : ""));
+        + (r.session_id === selSid ? " sel" : "") + (r.active ? " live" : ""));
       row.tabIndex = 0;
-      row.dataset.sid = r.sid;
-      row.append(el("div", "nsrestitle", r.title || shortSid(r.sid)));
+      row.dataset.sessionId = r.session_id;
+      row.append(el("div", "nsrestitle", r.title || shortSid(r.session_id)));
       const meta = el("div", "nsresmeta");
-      // the row's model in its OWN host's display spelling (served as
-      // `model_short`), not this page's idea of how to shorten an id
-      const fam = shortModel(r.model_short);
+      // display_name is chosen by the owning harness, not reconstructed here.
+      const fam = shortModel(
+        (r.model && (r.model.display_name || r.model.native_id)) || "");
       if (fam) meta.append(el("span", "nsreschip", fam));
       if (r.effort) meta.append(el("span", "nsreschip", r.effort));
-      if (r.account && r.account.label)
-        meta.append(el("span", "nsreschip", r.account.label));
-      if (r.live) meta.append(el("span", "nsreschip live", "live"));
-      const when = lastActive(r) ? ago(lastActive(r)) : "";
+      if (r.account && r.account.display_name)
+        meta.append(el("span", "nsreschip", r.account.display_name));
+      if (r.active) meta.append(el("span", "nsreschip live", "live"));
+      const when = r.last_activity_at ? ago(r.last_activity_at) : "";
       if (when) meta.append(el("span", "nsresago", when));
       row.append(meta);
-      row.onclick = () => { choose(r.sid); row.focus(); };
+      row.onclick = () => { choose(r.session_id); row.focus(); };
       row.onkeydown = (e) => rowKey(e, r);
       list.append(row);
     }
@@ -587,30 +601,30 @@ function resumePicker() {
   // recreate the row elements and DROP keyboard focus, so space (preview) and
   // the arrow keys would land nowhere after a pick (the "space did nothing" bug).
   const preview = resumePreview(
-    (sid) => rows.find(x => x.sid === sid),
+    (sessionId) => rows.find(x => x.session_id === sessionId),
     () => {
       const r = list.querySelector(".nsresrow.sel") || list.querySelector(".nsresrow");
       if (r) r.focus();
     });
-  const showPreview = (sid) => preview.show(sid);
+  const showPreview = (sessionId) => preview.show(sessionId);
   const closePreview = () => preview.close();
 
   const applySel = () => {
     for (const row of list.querySelectorAll(".nsresrow"))
-      row.classList.toggle("sel", row.dataset.sid === selSid);
+      row.classList.toggle("sel", row.dataset.sessionId === selSid);
   };
 
-  const choose = (sid) => {
-    selSid = sid;
+  const choose = (sessionId) => {
+    selSid = sessionId;
     applySel();
-    const r = rows.find(x => x.sid === sid);
+    const r = rows.find(x => x.session_id === sessionId);
     if (!r) return;
     // audit the pick so a "resumed with the wrong model/effort/account" report
-    // is reconstructible from the DB (docs/dashboard.md *Resume picker*): the sid
+    // is reconstructible from the DB (docs/dashboard.md *Resume picker*): the sessionId
     // chosen + the model/effort/account it CARRIED (what onSelect reuses).
-    clog(sid, "resume.pick", {
-      model: r.model || "", effort: r.effort || "",
-      account: (r.account && r.account.slug) || "", live: !!r.live });
+    clog(sessionId, "resume.pick", {
+      model: (r.model && r.model.native_id) || "", effort: r.effort || "",
+      account: (r.account && r.account.account_id) || "", live: !!r.active });
     if (api.onSelect) api.onSelect(r);
   };
 
@@ -625,10 +639,10 @@ function resumePicker() {
       else search.focus();
     } else if (e.key === "Enter") {
       e.preventDefault();
-      choose(r.sid);
+      choose(r.session_id);
     } else if (e.key === " ") {
       e.preventDefault();                          // space PREVIEWS, never scrolls
-      showPreview(r.sid);
+      showPreview(r.session_id);
     }
     // Escape with the popup open is handled by the popup's own capturing handler;
     // Escape with no popup falls through to the form's close (the expected Esc).
@@ -650,7 +664,7 @@ function resumePicker() {
   search.onkeydown = (e) => {
     const first = list.querySelector(".nsresrow");
     if (e.key === "ArrowDown" && first) { e.preventDefault(); first.focus(); }
-    else if (e.key === "Enter" && first) { e.preventDefault(); choose(first.dataset.sid); }
+    else if (e.key === "Enter" && first) { e.preventDefault(); choose(first.dataset.sessionId); }
   };
 
   const api = {
@@ -678,26 +692,27 @@ function resumePicker() {
     // (so the default resume IS "continue the most recent"). `andFocus` focuses
     // after the load (the initial resume-open): "search" → the query box (type
     // to search at once), any other truthy value → the selected row.
-    refresh(cwd, preferSid, q, andFocus) {
-      lastCwd = cwd || "";
+    refresh(workingDirectory, preferSid, q, andFocus) {
+      lastCwd = workingDirectory || "";
       q = (q || "").trim();
       closePreview();                            // a reload dismisses any open popup
       list.textContent = "";
       list.append(el("div", "nsresempty", "loading…"));
       const tok = ++qToken;                        // ignore a stale fetch's result
-      fetch("/api/resumable?cwd=" + encodeURIComponent(cwd || "")
-            + (q ? "&q=" + encodeURIComponent(q) : ""))
+      fetch("/api/resumable-sessions?working_directory="
+            + encodeURIComponent(workingDirectory || "")
+            + (q ? "&search=" + encodeURIComponent(q) : ""))
         .then(r => r.json())
         .then(data => {
           if (tok !== qToken) return;              // a newer search superseded this
           rows = Array.isArray(data) ? data : [];
           // audit the load — a "picker was empty / didn't show my session"
-          // report is answerable from the DB (cwd + query + row count).
+          // report is answerable from the DB (workingDirectory + query + row count).
           clog("", "resume.list", {
-            cwd: cwd || "", q, n: rows.length, prefer: preferSid || "" });
-          const want = (preferSid && rows.some(x => x.sid === preferSid)) ? preferSid
-            : (selSid && rows.some(x => x.sid === selSid)) ? selSid
-              : (!q && rows[0] ? rows[0].sid : "");   // auto-pick newest only unfiltered
+            workingDirectory: workingDirectory || "", q, n: rows.length, prefer: preferSid || "" });
+          const want = (preferSid && rows.some(x => x.session_id === preferSid)) ? preferSid
+            : (selSid && rows.some(x => x.session_id === selSid)) ? selSid
+              : (!q && rows[0] ? rows[0].session_id : "");
           selSid = "";
           paint();
           if (want) choose(want);                  // applySel + onSelect, no repaint
@@ -708,7 +723,7 @@ function resumePicker() {
         })
         .catch(() => {
           if (tok !== qToken) return;
-          clog("", "resume.list.fail", { cwd: cwd || "", q });
+          clog("", "resume.list.fail", { workingDirectory: workingDirectory || "", q });
           rows = []; selSid = ""; paint();
         });
     },
@@ -746,7 +761,7 @@ function nsDirField(F) {
   dir.type = "text";
   dir.spellcheck = false;
   dir.placeholder = "/path/to/project";
-  dir.value = prefillCwd || last.cwd || "";
+  dir.value = prefillCwd || last.workingDirectory || "";
   const sug = suggest(dir, nsSuggestDirs(S.sessions));
   dirRow.append(dir, sug.el);
   Object.assign(F, { dirRow, dir, sug });
@@ -759,9 +774,9 @@ function nsConversation(F) {
   // directory's recent sessions. The old three-way "start from" dropdown is split
   // into a fresh toggle + a searchable, scrollable resume picker (resumePicker,
   // docs/dashboard.md *Resume picker*): there is no `--continue` — resuming the
-  // most-recent row IS "continue". A resumed conversation forks to a new sid; the
+  // most-recent row IS "continue". A resumed conversation forks to a new sessionId; the
   // adopt machinery and the jump watch handle that on their own. The picker rows
-  // carry each session's model/effort/account (GET /api/resumable); selecting one
+  // carry each session's model/effort/account; selecting one
   // reuses its model+effort (the account still load-balances via autoAcct).
   const picker = resumePicker();
   const resumeRow = el("div", "nsfield nsresumerow");
@@ -811,7 +826,7 @@ function nsConversation(F) {
    primed at boot), one row per registered tool:
 
      {name, label, launchable, default, model_choices, effort_choices,
-      model_default, effort_default, model_match, accounts, attach,
+      model_default, effort_default, accounts, attach,
       rewind_modes, quick_commands}
 
    All of it is DERIVED server-side from that tool's HostControl + its plugin's
@@ -836,6 +851,41 @@ const hostOpts = (t, kind) => {
 // the tool a launch that names none picks: the registry's own DEFAULT host (the
 // `default` flag), so this page never spells a host name to mean "the usual one"
 const defaultHost = () => (hostList().find(h => h && h.default) || {}).name || "";
+
+function canonicalHostRows(harnesses) {
+  const reads = (harnesses || []).map(harness =>
+    fetch("/api/harnesses/" + encodeURIComponent(harness.name) + "/catalog")
+      .then(response => response.json())
+      .then(catalog => ({ harness, catalog }))
+  );
+  return Promise.all(reads).then(rows => rows.map(({ harness, catalog }) => {
+    const models = catalog.models || [];
+    const efforts = catalog.efforts || [];
+    const modelDefault = models.find(option => option.default);
+    const effortDefault = efforts.find(option => option.default);
+    return {
+      name: harness.name,
+      label: harness.display_name || harness.name,
+      launchable: !!harness.launchable,
+      default: !!harness.default_for_launch,
+      model_choices: models.map(option => option.model_id),
+      effort_choices: efforts.map(option => option.value),
+      model_default: modelDefault ? modelDefault.model_id : "",
+      effort_default: effortDefault ? effortDefault.value : "",
+      accounts: (harness.catalog_sections || []).includes("accounts"),
+      attach: !!harness.supports_attachments,
+      rewind_modes: (catalog.rewind_modes || []).map(option => option.value),
+      quick_commands: catalog.commands || [],
+      controls: harness.control_names || [],
+    };
+  }));
+}
+
+function loadCanonicalHosts() {
+  return fetch("/api/harnesses").then(response => response.json())
+    .then(canonicalHostRows)
+    .then(rows => { S.hosts = rows; return rows; });
+}
 
 function nsPickers(F) {
   const { last, dir, picker, fresh, syncFresh, presetTool } = F;
@@ -896,7 +946,7 @@ function nsPickers(F) {
   let acctPicked = false, acctList = [];
   acct.onpick = () => { acctPicked = true; };
   const limitBlocks = (a) =>
-    a.limit_hit && (!a.limit_hit.model || a.limit_hit.model === model.value);
+    a.limit && (!a.limit.model_id || a.limit.model_id === model.value);
   // an account is picked only when there IS a switcher AND the picked tool USES
   // one — the served `accounts` flag, which is true for a plugin that provides
   // the account registry those rows come from and false for one that has no
@@ -908,12 +958,12 @@ function nsPickers(F) {
     if (acctPicked || !acctList.length || !toolAccounts()) return;
     // never auto-select a logged-out account (its login is revoked — a launch
     // there dies on auth); fall back to the full list only if ALL are logged out
-    const live = acctList.filter(a => !a.logged_out);
+    const live = acctList.filter(a => !a.authentication_error);
     const base = live.length ? live : acctList;
     const open = base.filter(a => !limitBlocks(a));
-    const safe = open.filter(a => a.sched_ok);
+    const safe = open.filter(a => a.scheduling_allowed);
     const pool = safe.length ? safe : (open.length ? open : base);
-    acct.value = pool.reduce((b, a) => schedScore(a) > schedScore(b) ? a : b).slug;
+    acct.value = pool.reduce((b, a) => schedScore(a) > schedScore(b) ? a : b).account_id;
   };
   model.onpick = () => { modelPicked = true; autoAcct(); };
   const fillAccts = (rows) => {
@@ -929,13 +979,13 @@ function nsPickers(F) {
     acct.fill(list.map(a => {
       // every captured window rides into the option text ("5h 40% · 7d 55%
       // · 7d fable 80%") — same enumeration as the usage strip's bars
-      const wins = usageWindows(a.usage);
-      const usage = wins.length
-        ? "  (" + wins.map(k => windowLabel(k) + " " + a.usage[k] + "%").join(" · ") + ")"
+      const windows = a.windows || [];
+      const usage = windows.length
+        ? "  (" + windows.map(window => window.label + " " + window.used_percent + "%").join(" · ") + ")"
         : "";
-      const lim = a.limit_hit ? "  · " + limitLabel(a.limit_hit) : "";
-      const out = a.logged_out ? "  · ⚠ logged out" : "";
-      return [a.slug, a.slug + " · " + a.label + usage + lim + out];
+      const lim = a.limit ? "  · " + limitLabel(a.limit) : "";
+      const out = a.authentication_error ? "  · ⚠ logged out" : "";
+      return [a.account_id, a.account_id + " · " + a.display_name + usage + lim + out];
     }));
     // a RETRIED launch keeps the account it was submitted under (only nsRetry
     // sets last.account — the remembered prefs never carry one, so the normal
@@ -984,36 +1034,27 @@ function nsPickers(F) {
   };
   fillTools(hostList());                       // tool/model/effort defaults first…
   if (!Array.isArray(S.hosts))
-    fetch("/api/hosts").then(r => r.json())
-      .then(list => { S.hosts = list; if (!toolPicked) fillTools(list); })
+    loadCanonicalHosts()
+      .then(list => { if (!toolPicked) fillTools(list); })
       .catch(() => {});
-  if (S.accts) fillAccts(S.accts);             // …then the account pick sees them
-  fetch("/api/accounts").then(r => r.json())
-    .then(list => { S.accts = list; fillAccts(list); }).catch(() => {});
+  fillAccts(S.usageRows);
 
   // Resuming should continue where the SESSION was, not where the launcher last
   // was: on every resume-row selection, switch to the session's OWN tool (a codex
   // rollout → codex + its model/effort options) and reuse that session's model
-  // (its transcript-tail model from /api/resumable) and effort (its last-applied
+  // (its canonical current model) and effort (its last-applied
   // level), overriding the global last-used ns-prefs defaults — unless the user
   // has already hand-picked (toolPicked/modelPicked/effortPicked). The launch is
   // OWNER-routed server-side regardless (post_new_session), so the tool switch is
   // a UI convenience. The account is DELIBERATELY not reused: autoAcct re-runs
   // against the chosen model so the launch still load-balances.
   picker.onSelect = (r) => {
-    if (r.tool && !toolPicked && r.tool !== tool.value && tool.has(r.tool)) {
-      tool.value = r.tool;
+    if (r.harness && !toolPicked && r.harness !== tool.value && tool.has(r.harness)) {
+      tool.value = r.harness;
       syncTool();
     }
-    // the row's model, reduced to a MENU ROW by the owning host's own match rule
-    // (modelKey over its `model_match`) — the row carries the server's display
-    // spelling of the id (`model_short`) and its tool, so this asks the right
-    // host. It used to take the leading word of every id, which is Claude's
-    // family shape: a codex row's `gpt-5.6-sol` became "gpt" and matched nothing,
-    // so resuming a codex session never pre-selected the model it was on.
-    const fam = modelKey(shortModel(r.model_short),
-                         (hostRow(tool.value) || {}).model_match);
-    if (!modelPicked && fam && model.has(fam)) model.value = fam;
+    const selection = r.model && r.model.selection_id;
+    if (!modelPicked && selection && model.has(selection)) model.value = selection;
     if (!effortPicked && r.effort && effort.has(r.effort)) effort.value = r.effort;
     autoAcct();
   };
@@ -1058,9 +1099,14 @@ function nsPrompt(F) {
   const seeded = nsDraftFor(nsDraftDir).text;
   prompt.value = seeded;
   nsPromptBox = prompt;
-  const pdic = dictation(prompt, () => dir.value.trim());
+  const pdic = dictation(
+    prompt,
+    () => dir.value.trim(),
+    () => tool.value || defaultHost(),
+    "",
+  );
   // attachments for the initial prompt — staged under the shared "staging"
-  // bucket (no sid yet); ride the launch argv as leading @-mentions
+  // bucket (no sessionId yet); ride the launch argv as leading @-mentions
   const nsTray = attachTray(() => "");
   const nsAttach = wireAttach(nsTray, prompt, promptRow, () => true);
   const promptBox = el("div", "nsdictrow");
@@ -1085,21 +1131,6 @@ function nsPrompt(F) {
   // Every edit persists the draft (debounced) — dictation and the readline
   // keys dispatch `input` too, so their text is saved by the same handler.
   prompt.oninput = () => { autoGrow(prompt); saveNsDraft(nsDraftDir, prompt.value); };
-  // reconcile with the server: the cache can be stale (another device typed, or
-  // this page has been open since before that write). Merge per directory,
-  // newest seq wins, so our own just-typed entries survive. Never yank text out
-  // from under an edit — repaint the box only while it still holds exactly what
-  // we seeded.
-  fetch("/api/ns-draft").then(r => r.json()).then(m => {
-    if (!m || typeof m !== "object") return;
-    for (const [k, v] of Object.entries(m))
-      if (v && typeof v.text === "string" && v.seq >= (nsDraftFor(k).seq || 0))
-        S.nsDrafts[k] = v;
-    const text = nsDraftFor(nsDraftDir).text;
-    if (!prompt.isConnected || prompt.value !== seeded || text === seeded) return;
-    prompt.value = text;
-    autoGrow(prompt);
-  }).catch(() => {});
   // Switching the form to another directory switches which draft is in the box
   // — but only once the directory has SETTLED (the field blurs: you clicked or
   // tabbed into the prompt, picked a suggestion and moved on). Never per
@@ -1147,8 +1178,8 @@ function nsActions(F) {
 
   const go = () => {
     pdic.stop();         // the visible (validated) prompt is what launches
-    const cwd = dir.value.trim();
-    if (!cwd) { dir.focus(); return; }
+    const workingDirectory = dir.value.trim();
+    if (!workingDirectory) { dir.focus(); return; }
     // resuming needs a chosen conversation (no `--continue` fallback): if the
     // fresh toggle is off but nothing is selected, don't silently start fresh.
     const resumeSel = fresh.checked ? "" : picker.value();
@@ -1160,19 +1191,23 @@ function nsActions(F) {
     submit.disabled = true;
     const host = hostRow(tool.value);
     const acctful = !!(host && host.accounts);
-    // an EMPTY tool is a real state (the form opened before /api/hosts landed):
-    // the server routes an unnamed launch to its own default host, which is
-    // strictly better than this page naming one it hasn't been told about
-    const body = { cwd, tool: tool.value || "" };
-    const atts = nsTray.paths();
-    if (atts.length) body.attachments = atts;
-    if (resumeSel) body.resume = resumeSel;
-    // a host with no subscription switcher (`accounts: false`) never carries an
-    // account — the server would resolve an alias that host then ignores
-    if (acct.value && acctful) body.account = acct.value;
-    if (model.value) body.model = model.value;
-    if (effort.value) body.effort = effort.value;
-    if (prompt.value.trim()) body.prompt = prompt.value.trim();
+    if (!host) {
+      submit.disabled = false;
+      return toast("ask", "pick a harness", "the harness catalog is not loaded yet");
+    }
+    const body = {
+      harness: host.name,
+      working_directory: workingDirectory,
+      initial_text: prompt.value.trim() || null,
+      model_id: model.value || null,
+      effort: effort.value || null,
+      account_id: acct.value && acctful ? acct.value : null,
+      resume_session_id: resumeSel || null,
+      attachments: nsTray.paths().map(path => ({
+        local_path: path,
+        display_name: path.split("/").pop() || "attachment",
+      })),
+    };
     // Optimistic clear: the message is on its way — it rides the launch argv, so
     // empty the box NOW rather than leaving it looking un-sent through the
     // (kitten-slow) launch round-trip. The form tears down on success anyway;
@@ -1189,16 +1224,16 @@ function nsActions(F) {
     // DEAD AIR between the click and any feedback — the exact stretch the pending
     // view exists to cover, so it was missing precisely when it was needed
     // (docs/dashboard.md *The pending view*). Nothing in the response is needed to
-    // MOUNT it: `win` only sharpens the jump watch (which falls back to the cwd
+    // MOUNT it: `win` only sharpens the jump watch (which falls back to the workingDirectory
     // heuristic) and arrives below, and the failure path rolls the form back.
     // Arming before the POST also takes the known/live baseline from before the
     // launch, which is what checkJump wants.
     const toolLbl = (host && host.label) || NO_HOST_LABEL;
-    const show = { mode: body.resume ? "resume" : "new",
+    const show = { mode: body.resume_session_id ? "resume" : "new",
                    model: model.value, effort: effort.value, toolLabel: toolLbl,
                    account: acctful ? acct.value : "",
-                   prompt: body.prompt || "" };
-    armJump(cwd, body.resume, { show, pend: true });
+                   prompt: body.initial_text || "" };
+    armJump(workingDirectory, body.resume_session_id, { show, pend: true });
     const mine = S.jump;               // this launch's watch — a later one wins
     closeNewSession();
     // Explicit route() when the hash already IS #/launching (a second launch
@@ -1206,13 +1241,16 @@ function nsActions(F) {
     // rebuild around the new watch.
     if (location.hash === "#/launching") route();
     else location.hash = "#/launching";
-    postJSON("/api/sessions/new", body, { audit: "new", sid: "" })
+    postJSON("/api/sessions", body, { audit: "new", sessionId: "" })
       .then((d) => {
-        nsRemember({ cwd, model: model.value, effort: effort.value,
+        nsRemember({ workingDirectory, model: model.value, effort: effort.value,
                      tool: tool.value });
         // the exact-match window id, folded into the watch already running (and
         // re-checked at once: the session may have appeared while we waited)
-        if (S.jump === mine && d && d.win) { mine.win = d.win; checkJump(); }
+        if (S.jump === mine && d && d.window_id) {
+          mine.win = d.window_id;
+          checkJump();
+        }
       })
       .catch(e => {
         // roll the optimistic view back: drop OUR watch (a launch that never
@@ -1224,10 +1262,10 @@ function nsActions(F) {
         // leave the (now watchless) waiting room — but only if we're still IN
         // it: a user who navigated away mid-flight is not to be yanked back.
         if (location.hash === "#/launching") location.hash = "#/";
-        nsRetry = { cwd, model: model.value, effort: effort.value,
+        nsRetry = { workingDirectory, model: model.value, effort: effort.value,
                     account: acct.value, tool: tool.value };
-        saveNsDraft(cwd, sentPrompt, true);
-        openNewSession(cwd, body.resume);
+        saveNsDraft(workingDirectory, sentPrompt, true);
+        openNewSession(workingDirectory, body.resume_session_id);
         toast("ask", "launch failed", (e && e.error) || "");
       });
   };
@@ -1298,7 +1336,7 @@ function openNewSession(prefillCwd, resumeSid, presetTool) {
 // The header's ⇆ migrate button: resume this session under the other
 // subscription account (the server picks it — least used, active limit-hit
 // excluded, no % ceiling for a manual click; docs/relimit.md *Manual
-// migrate*). The old tab closes and a new one opens; the sid forks on
+// migrate*). The old tab closes and a new one opens; the sessionId forks on
 // resume and the adopt machinery + jump watch carry the page over.
 // Returns the POST promise so the button wiring can disable itself for the
 // round-trip — a double-click on ⇆ migrate would otherwise spawn two racing

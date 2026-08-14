@@ -1,17 +1,17 @@
-# OTEL cost pipeline (`plugins/otel/`)
+# OTEL cost pipeline (`plugins/claude_code/otel/`)
 
 The authoritative source of the scoreboard's token/cost counters
 (see [scoreboard.md](scoreboard.md) for the display, [wiring.md](wiring.md) for the
 telemetry env it requires).
 
-  - **Tokens + cost are OTEL-authoritative (`plugins/otel/`).** Cost/token accounting
+  - **Tokens + cost are OTEL-authoritative (`plugins/claude_code/otel/`).** Cost/token accounting
     no longer comes from folding the transcript — it comes from **OpenTelemetry**.
     Claude Code, with telemetry enabled (env in settings.json, see [wiring.md](wiring.md)), exports
     `claude_code.token.usage` / `claude_code.cost.usage` after **every API request**,
     tagged with `session.id`, `query_source` (`main`/`subagent`/**`auxiliary`**),
     `model`, and `type`. A per-machine singleton HTTP receiver
-    (`claude-otlp-receiver.py`, spawned at SessionStart via
-    `plugins/otel/on_session_start` → the detach-fast `claude-otlp-launch.py`) ingests
+    (`plugins/claude_code/otel/receiver.py`, spawned at SessionStart via
+    `plugins/claude_code/otel/on_session_start` → the detach-fast `plugins/claude_code/otel/launch.py`) ingests
     these and writes the SAME per-session counters the fold used to
     (`tk_in`/`tk_out`/`tk_read`/`tk_create` from the `type` attribute, `cost` from
     cost.usage), keyed by `session.id`, so the scorebar display is unchanged.
@@ -62,7 +62,7 @@ telemetry env it requires).
     SUM(otel)==counters invariant still held, so no anomaly could ever see it. **Codex is exempt**:
     it runs in a separate process OTEL can't see, so it keeps its own rollout fold
     (`bump-agent`, `meta.kind=codex`). Every raw datapoint is captured in the audit
-    `otel` table (`python3 bin/claude-audit.py otel <sid>`), so the counters are fully
+    `otel` table (`python3 bin/baqylau-audit.py otel <sid>`), so the counters are fully
     reconstructible.
   - **The transcript fold survives ONLY as a resilience fallback.**
     `accounting.bump_transcript()` (transcript JSONL → `txpos` cursor → the same

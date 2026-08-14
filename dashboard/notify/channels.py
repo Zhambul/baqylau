@@ -19,15 +19,12 @@
 # because the audit row's shape is per-channel (a Telegram message id vs a push
 # endpoint + device) and the watcher shouldn't have to know either. Nothing in
 # this module raises into the 1 s watcher loop.
-import subprocess
-import sys
 import threading
 from urllib.parse import quote
 
-from core.noaudit import load_audit
+from core import audit as A
 from dashboard import config, prefs, telegram, webpush
 
-A = load_audit()
 
 # `retract()` outcome vocabulary. Everything except PENDING is settled — the
 # caller forgets the record. PENDING means the SEND is still in flight (the
@@ -43,30 +40,30 @@ NOTHING = "nothing"     # the send never landed anything — nothing to take bac
 def alert_text(entry):
     """The alert pieces both channels build the same way from one `entry`: the
     🔴/🟢 headline (project + needs-you/is-done), the detail line (the session
-    title, or a kind-specific fallback), and the ?s=<sid> deep link. Returns the
+    title, or a kind-specific fallback), and the ?s=<session_id> deep link. Returns the
     three RAW strings only — each channel composes them differently (Telegram
     joins them into one message; Web Push splits them across the payload's
     title/body), so the joining/escaping stays at the call site.
 
-    ?s=<sid>, NOT the app's #/s/<sid> hash route: Telegram's auto-linker drops
+    ?s=<session_id>, NOT the app's #/s/<session_id> hash route: Telegram's auto-linker drops
     the URL fragment, so a #-link opens the dashboard ROOT on the phone, not the
-    session. The sid rides a query param (linkified whole); the page translates
-    ?s=<sid> back into the hash route on load."""
+    session. The session_id rides a query param (linkified whole); the page translates
+    ?s=<session_id> back into the hash route on load."""
     asking = entry.get("kind") == "asking"
-    proj = entry.get("project") or entry.get("sid") or "session"
+    proj = entry.get("project") or entry.get("session_id") or "session"
     head = ("🔴 %s needs you" if asking else "🟢 %s is done") % proj
     detail = entry.get("title") or (
         "a question is waiting" if asking else "finished — your turn")
-    url = "%s/?s=%s" % (config.NOTIFY_URL_BASE, quote(entry.get("sid") or ""))
+    url = "%s/?s=%s" % (config.PUBLIC_URL, quote(entry.get("session_id") or ""))
     return head, detail, url
 
 
-def push_tag(sid):
+def push_tag(session_id):
     """The notification tag a pushed alert is shown under — the ONE encoding of
     it, shared by the sender, the retraction and the service worker (sw.js
     builds the same string). It is what makes a repeat alert REPLACE its
     predecessor instead of stacking, and what the resolve push closes."""
-    return "claude-%s" % (sid or "")
+    return "baqylau-%s" % (session_id or "")
 
 
 # ----------------------------------------------------------------- Telegram
@@ -78,26 +75,18 @@ def send_telegram(entry, reason=None):
     `always` (_ALWAYS forced both) — so a Telegram alert is never an unexplained
     duplicate.
 
-    TWO transports, and which one runs decides whether the alert can later be
-    taken back. When `telegram.enabled()` (credentials configured) the Bot API
-    is called in-process on a daemon thread and the reply's `message_id` lands
-    in the handle — retractable. Otherwise it degrades to the LEGACY detached
-    `notify` script: the alert still reaches you, but its id is written to
-    DEVNULL, so there is nothing to delete and the handle is None.
-
-    Returns a handle (retractable) or None. Note the asymmetry with the return
-    value's usual meaning: None here does NOT mean 'nothing was sent'."""
+    The Bot API call runs on a daemon thread and its `message_id` lands in the
+    returned retractable handle. An unconfigured channel returns None."""
     head, title, url = alert_text(entry)
     msg = "%s — %s\n%s" % (head, title, url)
     if not telegram.enabled():
-        _send_telegram_legacy(entry, msg, reason)
-        return None                        # sent, but with no id to retract by
+        return None
     # The handle is created NOW and filled by the sender thread, because the
     # watcher must not block on a round-trip and a retraction can beat the send
     # home. `msg_id` None + `done` False is exactly the PENDING state retract()
     # reads. Single assignments of small immutables, read by the one watcher
     # thread — the same "atomic enough" bargain presence.py's maps make.
-    h = {"ch": "telegram", "sid": entry.get("sid"), "kind": entry.get("kind"),
+    h = {"ch": "telegram", "session_id": entry.get("session_id"), "kind": entry.get("kind"),
          "chat": None, "msg_id": None, "done": False}
     threading.Thread(target=_telegram_send_body, args=(h, msg, reason),
                      daemon=True).start()
@@ -112,13 +101,13 @@ def _telegram_send_body(h, msg, reason):
     try:
         res = telegram.send(msg)
     except Exception:
-        A.error("", "dashboard telegram notify", {"sid": h.get("sid")})
+        A.error("", "dashboard telegram notify", {"session_id": h.get("session_id")})
         h["done"] = True
         return
     if res.ok:
         h["chat"], h["msg_id"] = res.chat, res.message_id
     A.state_file("", "", "telegram-notify",
-                 {"sid": h.get("sid"), "kind": h.get("kind"), "reason": reason,
+                 {"session_id": h.get("session_id"), "kind": h.get("kind"), "reason": reason,
                   "ok": res.ok, "status": res.status, "error": res.error,
                   # the retraction contract, recorded at the send: an alert with
                   # retractable=False can never be taken back, and this row is
@@ -126,25 +115,6 @@ def _telegram_send_body(h, msg, reason):
                   "retractable": bool(res.ok and res.message_id),
                   "message_id": res.message_id})
     h["done"] = True
-
-
-def _send_telegram_legacy(entry, msg, reason):
-    """The pre-retraction transport: spawn the `notify` skill detached (DEVNULL
-    stdio, never waited on) so a slow round-trip can't stall the watcher. Kept
-    as the unconfigured-credentials degrade — an alert that reaches you but
-    can't be retracted beats no alert at all. Yields no handle at all: the
-    script writes the message id to DEVNULL, so there is none to be had."""
-    try:
-        subprocess.Popen(
-            [sys.executable or "python3", config.NOTIFY_CMD, msg],
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL, start_new_session=True)
-        A.state_file("", "", "telegram-notify",
-                     {"sid": entry.get("sid"), "kind": entry.get("kind"),
-                      "reason": reason, "ok": True, "retractable": False,
-                      "transport": "script"})
-    except Exception:
-        A.error("", "dashboard telegram notify", {"sid": entry.get("sid")})
 
 
 def _retract_telegram(h, reason, badge=0):
@@ -177,7 +147,7 @@ def _telegram_delete_body(h):
     try:
         res = telegram.delete(h["chat"], h["msg_id"])
     except Exception:
-        A.error("", "dashboard telegram retract", {"sid": h.get("sid")})
+        A.error("", "dashboard telegram retract", {"session_id": h.get("session_id")})
         h["outcome"] = FAILED
         return
     h["outcome"] = OK if res.ok else (GONE if res.gone else FAILED)
@@ -205,17 +175,17 @@ def send_webpush(entry, subs, badge=0):
     to", the signal that holds Telegram back to the escalation nudge."""
     if not (webpush.enabled() and subs):
         return None
-    sid = entry.get("sid") or ""
+    session_id = entry.get("session_id") or ""
     title, body, url = alert_text(entry)
-    payload = {"title": title, "body": body, "sid": sid,
+    payload = {"title": title, "body": body, "session_id": session_id,
                "kind": entry.get("kind"), "url": url, "badge": badge}
     threading.Thread(target=_webpush_fanout, args=(subs, payload, "send"),
                      daemon=True).start()
     # The subscriptions are the handle: a resolve push has to reach the devices
     # the alert actually went to, NOT whichever device is most-recently-used by
     # then — the banner is on the former.
-    return {"ch": "webpush", "sid": sid, "kind": entry.get("kind"),
-            "subs": subs, "tag": push_tag(sid)}
+    return {"ch": "webpush", "session_id": session_id, "kind": entry.get("kind"),
+            "subs": subs, "tag": push_tag(session_id)}
 
 
 def _webpush_fanout(subs, payload, action):
@@ -228,14 +198,14 @@ def _webpush_fanout(subs, payload, action):
             res = webpush.send(sub, payload)
         except Exception:
             A.error("", "dashboard webpush %s" % action,
-                    {"sid": payload.get("sid")})
+                    {"session_id": payload.get("session_id")})
             continue
         ep = sub.get("endpoint", "") if isinstance(sub, dict) else ""
         dev = sub.get("device") if isinstance(sub, dict) else None
         if res.gone:
             prefs.remove_push_subscription(ep)
         A.state_file("", "", "web-push",
-                     {"sid": payload.get("sid"), "kind": payload.get("kind"),
+                     {"session_id": payload.get("session_id"), "kind": payload.get("kind"),
                       "action": action, "status": res.status,
                       "ok": res.ok, "gone": res.gone,
                       "badge": payload.get("badge"),
@@ -252,7 +222,7 @@ def _retract_webpush(h, reason, badge=0):
     happening, revoke the subscription. What keeps that survivable is the
     BUDGET: exactly one resolve per delivered alert (the notifier forgets the
     record either way), so the silent:visible ratio is bounded at 1:1 rather
-    than being a background chatter channel. CLAUDE_DASH_RESOLVE_PUSH=0 turns it
+    than being a background chatter channel. BAQYLAU_DASHBOARD_RESOLVE_PUSH=0 turns it
     off, and the page's own foreground sweep (app.01-attention.js) still clears
     stale banners on open — so a refused or dropped resolve degrades to "cleared
     a bit later", never to a wrong badge."""
@@ -261,7 +231,7 @@ def _retract_webpush(h, reason, badge=0):
     subs = h.get("subs") or []
     if not subs:
         return NOTHING
-    payload = {"type": "resolve", "sid": h.get("sid") or "",
+    payload = {"type": "resolve", "session_id": h.get("session_id") or "",
                "kind": h.get("kind"), "tag": h.get("tag"), "badge": badge}
     threading.Thread(target=_webpush_fanout, args=(subs, payload, "resolve"),
                      daemon=True).start()
@@ -290,5 +260,5 @@ def retract(handle, reason, badge=0):
     try:
         return fn(handle, reason, badge)
     except Exception:
-        A.error("", "dashboard notify retract", {"sid": (handle or {}).get("sid")})
+        A.error("", "dashboard notify retract", {"session_id": (handle or {}).get("session_id")})
         return FAILED

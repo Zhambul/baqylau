@@ -26,11 +26,10 @@ import urllib.error
 import urllib.request
 from urllib.parse import urlparse
 
-from core.noaudit import load_audit
+from core import audit as A
 
 from . import prefs
 
-A = load_audit()   # always-on audit trail; inert stub if it can't import
 
 try:                                   # cryptography is the ONE hard dependency;
     from cryptography.hazmat.primitives import hashes            # absent → feature
@@ -49,10 +48,10 @@ except Exception:                      # pragma: no cover - environment-dependen
 # The VAPID `sub` claim — a contact for the push service to reach if the app
 # misbehaves (RFC 8292 §2.1). A mailto/URL; overridable, defaults to the repo
 # owner's address. Not a secret.
-VAPID_SUB = os.environ.get("CLAUDE_DASH_VAPID_SUB") or "mailto:e.zhambul@gmail.com"
+VAPID_SUB = os.environ.get("BAQYLAU_DASHBOARD_VAPID_SUB") or "mailto:e.zhambul@gmail.com"
 VAPID_KEY = "vapid-keypair"            # prefs kv key: {"priv": pkcs8-pem, "pub": b64u-point}
-TTL_S = 86400                          # how long the push service holds an undelivered message
-JWT_TTL_S = 12 * 3600                  # VAPID token lifetime (Apple caps aud-JWTs at 24h)
+DELIVERY_LIFETIME_SECONDS = 86400                          # how long the push service holds an undelivered message
+TOKEN_LIFETIME_SECONDS = 12 * 3600                  # VAPID token lifetime (Apple caps aud-JWTs at 24h)
 RECORD_SIZE = 4096                     # aes128gcm record size (rs) — our payloads are tiny
 
 
@@ -130,7 +129,7 @@ def _vapid_header(endpoint):
     header = _b64u(json.dumps({"typ": "JWT", "alg": "ES256"},
                               separators=(",", ":")).encode())
     claims = _b64u(json.dumps(
-        {"aud": aud, "exp": int(time.time()) + JWT_TTL_S, "sub": VAPID_SUB},
+        {"aud": aud, "exp": int(time.time()) + TOKEN_LIFETIME_SECONDS, "sub": VAPID_SUB},
         separators=(",", ":")).encode())
     signing_input = ("%s.%s" % (header, claims)).encode("ascii")
     der = priv.sign(signing_input, ec.ECDSA(hashes.SHA256()))
@@ -181,7 +180,7 @@ class Result:
         self.ok, self.gone, self.status, self.error = ok, gone, status, error
 
 
-def send(subscription, payload, ttl=TTL_S):
+def send(subscription, payload, ttl=DELIVERY_LIFETIME_SECONDS):
     """Deliver `payload` (a dict, JSON-encoded) to one `subscription` (its wire
     JSON: {endpoint, keys:{p256dh, auth}}). Never raises — returns a Result.
     Synchronous network I/O, so callers run it OFF the watcher thread."""

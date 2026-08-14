@@ -143,7 +143,7 @@ that colours a source file — `.py`/`.java`/`.kt`/`.sh`, the JS/TS family
 named by its extension in `LANGS`; reuses `render.pick`), `audit.py` (the audit
 trail's WRITE path — the tables, the migrations, the `A.*` row writers, the
 spool degradation; imported by every hook process on every event, which is why
-its read/report half is `auditcli.py` — the `bin/claude-audit.py` subcommands,
+its read/report half is `auditcli.py` — the `bin/baqylau-audit.py` subcommands,
 the `ANOMALY_SECTIONS` catalogue and the row formatters, 638 lines that no hook
 runs. `auditcli` imports `audit` through the public `A.connect()`, never the
 reverse), `ops.py` (paint ops, `emit`, the scoreboard
@@ -194,7 +194,7 @@ fan-out — see [dashboard.md](dashboard.md)), `account.py` (the
 subscription-account vocabulary: the switcher's env contract + `accounts.tsv`
 registry, behind `plugins.accounts`/`account_alias`), `statusline.py` (the
 status-line shim's capture half — stashes per-session 5h/7d usage + account
-from the status-line stdin, behind `bin/claude-statusline.py`), `usage.py` (the
+from the status-line stdin, behind `plugins/claude_code/statusline.py`), `usage.py` (the
 LIMITS / ACCOUNTS / COSTS read model over what statusline/relimit stashed and
 what the OTLP receiver banked: Anthropic's window LENGTHS + the rolled-over,
 effective-5h, perishability, limit-still-active and logged-out-still-active
@@ -674,7 +674,7 @@ designed for exactly that partial-capability case.
 sys.modules-redirect shims for out-of-repo muscle memory; nothing in the repo
 or the test suite imports them anymore, so they were deleted — import the
 package modules directly (`core.state`, `core.ops`, `frontends.kitty`, …).
-The audit CLI moved with the entries: `python3 bin/claude-audit.py
+The audit CLI moved with the entries: `python3 bin/baqylau-audit.py
 sessions|anomalies|…` (formerly root `claude_audit.py`). The ENTRY filenames,
 by contrast, are permanent: the audit DB's handler/script vocabulary and the
 external wiring (`~/.claude/settings.json`, kitty's `open-actions.conf`,

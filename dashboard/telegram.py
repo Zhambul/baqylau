@@ -12,18 +12,16 @@
 # Contract, deliberately the same as webpush.py's: `enabled()` is the feature
 # probe, every call returns a Result instead of raising (the caller audits and
 # swallows — nothing may escape into the Notifier's 1 s watcher loop), and the
-# whole module degrades to off when unconfigured. The Notifier's fallback when
-# `enabled()` is False is the LEGACY detached-script send: the alert still
-# reaches you, it just isn't retractable. That is the honest degrade — losing
-# the alert would be worse than losing the retraction.
+# whole module is disabled when unconfigured. There is no alternate transport
+# hidden behind this interface.
 #
 # CREDENTIALS live outside the repo, following dictate.py's Deepgram precedent
 # (plain files under ~/.config, read at CALL time so the in-process test server
 # can flip them per-test): `bot-token` and `chat-id`, one line each, in
-# ~/.config/telegram/. CLAUDE_DASH_TELEGRAM_DIR relocates the pair (which is
+# ~/.config/telegram/. BAQYLAU_DASHBOARD_TELEGRAM_DIR relocates the pair (which is
 # also how the suite stays hermetic — an autouse fixture points it at an empty
 # tmp dir, so the tests can never pick up a real token from the dev machine's
-# home and talk to the actual Bot API); CLAUDE_DASH_TELEGRAM_TOKEN / _CHAT
+# home and talk to the actual Bot API); BAQYLAU_DASHBOARD_TELEGRAM_TOKEN / _CHAT
 # supply the values directly. The token never appears in a response, an audit
 # row, or an error detail — the same rule dictate.py holds for the Deepgram key.
 import json
@@ -40,21 +38,21 @@ DEFAULT_API_BASE = "https://api.telegram.org"
 # One small HTTPS POST per call; fail fast so a Telegram outage can never hold a
 # sender thread open for long (these run off the watcher, but they still hold a
 # thread and a socket).
-TIMEOUT_S = 10.0
+REQUEST_TIMEOUT_SECONDS = 10.0
 
 # Telegram lets a bot delete its OWN messages in a private chat only within 48 h
 # (Bot API `deleteMessage`). Nothing here enforces it — the caller's retraction
 # TTL is what keeps us inside the window — but it is the hard ceiling any such
 # TTL has to stay under, so it is written down where the API call lives.
-DELETE_WINDOW_S = 48 * 3600
+DELETE_WINDOW_SECONDS = 48 * 3600
 
 
 def _api_base():
-    """The Bot API origin. Overridable (CLAUDE_DASH_TELEGRAM_API) so a hermetic
+    """The Bot API origin. Overridable (BAQYLAU_DASHBOARD_TELEGRAM_API) so a hermetic
     test can point the whole module at a local stub server — the seam that makes
     send/delete testable without patching module internals or touching the
     network."""
-    return (os.environ.get("CLAUDE_DASH_TELEGRAM_API")
+    return (os.environ.get("BAQYLAU_DASHBOARD_TELEGRAM_API")
             or DEFAULT_API_BASE).rstrip("/")
 
 
@@ -62,7 +60,7 @@ def cred_dir():
     """Where `bot-token` and `chat-id` live. One knob for the pair, so a test
     (or a second install) relocates both with a single env var."""
     return os.path.expanduser(
-        os.environ.get("CLAUDE_DASH_TELEGRAM_DIR") or DEFAULT_CRED_DIR)
+        os.environ.get("BAQYLAU_DASHBOARD_TELEGRAM_DIR") or DEFAULT_CRED_DIR)
 
 
 def _read(path):
@@ -85,17 +83,15 @@ def _cred(env, name):
 
 
 def token():
-    return _cred("CLAUDE_DASH_TELEGRAM_TOKEN", TOKEN_NAME)
+    return _cred("BAQYLAU_DASHBOARD_TELEGRAM_TOKEN", TOKEN_NAME)
 
 
 def chat_id():
-    return _cred("CLAUDE_DASH_TELEGRAM_CHAT", CHAT_NAME)
+    return _cred("BAQYLAU_DASHBOARD_TELEGRAM_CHAT", CHAT_NAME)
 
 
 def enabled():
-    """Whether the dashboard can talk to the Bot API directly — i.e. whether an
-    alert it sends will be RETRACTABLE. False means the Notifier falls back to
-    the detached `notify` script (alert yes, retraction no)."""
+    """Whether the dashboard can talk to the Bot API directly."""
     return bool(token() and chat_id())
 
 
@@ -123,7 +119,7 @@ def _call(method, params):
     data = urllib.parse.urlencode(params).encode()
     try:
         req = urllib.request.Request(url, data=data, method="POST")
-        with urllib.request.urlopen(req, timeout=TIMEOUT_S) as resp:
+        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_SECONDS) as resp:
             body = json.loads(resp.read() or b"{}")
             status = resp.status
     except urllib.error.HTTPError as e:

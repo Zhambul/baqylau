@@ -32,7 +32,7 @@
 import re
 import time
 
-from core import screendrive
+from plugins.claude_code import screen_driver as screendrive
 from plugins.claude_code import tui
 
 # One entry per selectable restore option: the requested `mode` (the POST

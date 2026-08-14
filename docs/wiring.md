@@ -5,22 +5,24 @@
   allow_remote_control yes
   listen_on unix:/tmp/kitty
   ```
-- **`~/.config/kitty/open-actions.conf`** — the ⧉ copy links (see
-  [click-to-view.md](click-to-view.md)) resolve through kitty's open-actions machinery; one rule wires the
-  custom scheme to the handler (picked up on the next config reload —
+- **`~/.config/kitty/open-actions.conf`** — canonical terminal content links
+  resolve through kitty's open-actions machinery; one rule wires the
+  harness-neutral scheme to the handler (picked up on the next config reload —
   `ctrl+shift+f5` — no kitty restart needed):
   ```
-  protocol claude-copy
-  action launch --type=background /path/to/repo/bin/claude-copy.py ${URL}
+  protocol baqylau-content
+  action launch --type=background python3 /path/to/repo/bin/baqylau-content.py ${URL}
+  protocol baqylau-view
+  action launch --type=background python3 /path/to/repo/bin/baqylau-view.py ${URL}
   ```
-- **`~/.claude/settings.json`** — a `hooks` block. **Every** hook event points at
-  a single entry, **`claude-hook.py`** (→ `plugins/claude_code/dispatch.py`), which
-  reads the payload once and fans out **in-process** to whatever that event needs:
+- **`~/.claude/settings.json`** — a `hooks` block. Every supported hook event
+  points directly at `plugins/claude_code/canonical_hook.py`. Claude-specific
+  intake and translation never leave that plugin folder:
 
   ```json
   "hooks": { "PostToolUse": [ { "hooks": [
-      { "type": "command", "command": "/ABS/PATH/baqylau/bin/claude-hook.py" } ] } ],
-      "Stop": [ { "hooks": [ { "type": "command", "command": ".../bin/claude-hook.py" } ] } ],
+      { "type": "command", "command": "python3 /ABS/PATH/baqylau/plugins/claude_code/canonical_hook.py" } ] } ],
+      "Stop": [ { "hooks": [ { "type": "command", "command": "python3 /ABS/PATH/baqylau/plugins/claude_code/canonical_hook.py" } ] } ],
       "…every other event…": [ … same single entry … ] }
   ```
 
@@ -119,10 +121,10 @@
   "env": { "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1" }
   ```
 
-  **The OTEL cost pipeline (`plugins/otel/`) requires telemetry env** in the same
+  **The OTEL cost pipeline (`plugins/claude_code/otel/`) requires telemetry env** in the same
   `env` block — without it the scoreboard's cost/tokens fall back to the SessionEnd
   transcript fold (which can't see hidden `auxiliary` agents). The receiver
-  (`claude-otlp-receiver.py`) is spawned automatically at SessionStart *only when*
+  (`plugins/claude_code/otel/receiver.py`) is spawned automatically at SessionStart *only when*
   `CLAUDE_CODE_ENABLE_TELEMETRY=1`; it derives its port from `CLAUDE_OTEL_PORT` (must
   match the OTLP endpoint):
   ```json
@@ -142,10 +144,10 @@
 
   **Opt-in web-dashboard auto-start.** Setting `CLAUDE_DASHBOARD_AUTOSTART=1`
   in the same `env` block makes each hosted SessionStart bring up the
-  per-machine web dashboard (`bin/claude-dashboard.py`, [dashboard.md](dashboard.md))
+  per-machine web dashboard (`bin/baqylau-dashboard.py`, [dashboard.md](dashboard.md))
   if it isn't already running — the same spawn-if-not-running shape as the OTLP
   receiver, but auto-START only (the dashboard never idle-exits or auto-stops;
-  stop it explicitly with `claude-dashboard.py stop`). OFF by default: without
+  stop it explicitly with `baqylau-dashboard.py stop`). OFF by default: without
   the env nothing spawns. `CLAUDE_DASH_PORT` overrides its port (default 8377).
   ```json
   "env": { "CLAUDE_DASHBOARD_AUTOSTART": "1" }
@@ -154,7 +156,7 @@
 - **`~/.claude/settings.json` `statusLine`** — the account-usage capture shim
   ([dashboard.md](dashboard.md) › *Accounts & usage*). Claude Code exposes
   per-session rate-limit data (5h/7d) ONLY on the status-line command's stdin, so
-  `bin/claude-statusline.py` is installed as the `statusLine.command` with the
+  `plugins/claude_code/statusline.py` is installed as the `statusLine.command` with the
   user's real status-line command as its argv — it stashes the usage + account
   into the state DB, then runs the real command with the same stdin and forwards
   its output. Wiring is a one-line PREPEND of the shim path to the existing
@@ -163,7 +165,7 @@
   SessionStart from the switcher env) — only the 5h/7d usage numbers go dark.
   ```json
   "statusLine": { "type": "command",
-    "command": "/ABS/PATH/baqylau/bin/claude-statusline.py <your real status-line command>" }
+    "command": "python3 /ABS/PATH/baqylau/plugins/claude_code/statusline.py <your real status-line command>" }
   ```
 
 - **`~/.codex/config.toml` + `~/.codex/hooks.json`** — the STANDALONE codex host
@@ -180,30 +182,23 @@
   { "hooks": {
       "SessionStart": [ { "matcher": "startup|resume|clear", "hooks": [ {
         "type": "command",
-        "command": "/ABS/PATH/baqylau/bin/claude-codex-session.py",
+        "command": "python3 /ABS/PATH/baqylau/plugins/codex/canonical_hook.py",
         "statusMessage": "kitty mirror" } ] } ],
-      "UserPromptSubmit":  [ { "hooks": [ { "type": "command", "command": "/ABS/PATH/baqylau/bin/claude-codex-hook.py" } ] } ],
-      "PreToolUse":        [ { "hooks": [ { "type": "command", "command": "/ABS/PATH/baqylau/bin/claude-codex-hook.py" } ] } ],
-      "PostToolUse":       [ { "hooks": [ { "type": "command", "command": "/ABS/PATH/baqylau/bin/claude-codex-hook.py" } ] } ],
-      "PermissionRequest": [ { "hooks": [ { "type": "command", "command": "/ABS/PATH/baqylau/bin/claude-codex-hook.py" } ] } ],
-      "PreCompact":        [ { "hooks": [ { "type": "command", "command": "/ABS/PATH/baqylau/bin/claude-codex-hook.py" } ] } ],
-      "PostCompact":       [ { "hooks": [ { "type": "command", "command": "/ABS/PATH/baqylau/bin/claude-codex-hook.py" } ] } ],
-      "SubagentStart":     [ { "hooks": [ { "type": "command", "command": "/ABS/PATH/baqylau/bin/claude-codex-hook.py" } ] } ],
-      "SubagentStop":      [ { "hooks": [ { "type": "command", "command": "/ABS/PATH/baqylau/bin/claude-codex-hook.py" } ] } ],
-      "Stop":              [ { "hooks": [ { "type": "command", "command": "/ABS/PATH/baqylau/bin/claude-codex-hook.py" } ] } ]
+      "UserPromptSubmit":  [ { "hooks": [ { "type": "command", "command": "python3 /ABS/PATH/baqylau/plugins/codex/canonical_hook.py" } ] } ],
+      "PreToolUse":        [ { "hooks": [ { "type": "command", "command": "python3 /ABS/PATH/baqylau/plugins/codex/canonical_hook.py" } ] } ],
+      "PostToolUse":       [ { "hooks": [ { "type": "command", "command": "python3 /ABS/PATH/baqylau/plugins/codex/canonical_hook.py" } ] } ],
+      "PermissionRequest": [ { "hooks": [ { "type": "command", "command": "python3 /ABS/PATH/baqylau/plugins/codex/canonical_hook.py" } ] } ],
+      "PreCompact":        [ { "hooks": [ { "type": "command", "command": "python3 /ABS/PATH/baqylau/plugins/codex/canonical_hook.py" } ] } ],
+      "PostCompact":       [ { "hooks": [ { "type": "command", "command": "python3 /ABS/PATH/baqylau/plugins/codex/canonical_hook.py" } ] } ],
+      "SubagentStart":     [ { "hooks": [ { "type": "command", "command": "python3 /ABS/PATH/baqylau/plugins/codex/canonical_hook.py" } ] } ],
+      "SubagentStop":      [ { "hooks": [ { "type": "command", "command": "python3 /ABS/PATH/baqylau/plugins/codex/canonical_hook.py" } ] } ],
+      "Stop":              [ { "hooks": [ { "type": "command", "command": "python3 /ABS/PATH/baqylau/plugins/codex/canonical_hook.py" } ] } ]
   } }
   ```
-  Codex hooks are Claude-compatible (stdin JSON: `session_id`/`cwd`/`source`/`tool_name`/
-  `transcript_path`/…), so both entries read the payload exactly as a Claude hook
-  does. **SessionStart stays on `claude-codex-session.py`** (it stands up the mirror
-  pane and records the standalone-host bit); **the other nine events go to the ONE
-  dispatcher `claude-codex-hook.py`** (→ `plugins/codex/dispatch.py`), which drives
-  the codex TAB colour (magenta busy · blue exec · red asking · green done) over the
-  shared paint engine and arms the interrupt-recovery watcher — see
-  [tab-colors.md](tab-colors.md) › *Codex*. Only a STANDALONE codex host paints its
-  tab; a codex-inside-Claude (`codex exec`) run's events reach the same dispatcher
-  but bail on the nested guard (the tab belongs to the Claude host). `PostCompact` is
-  wired for completeness but currently repaints nothing (the next event does).
+  Every Codex event goes through the same Codex-owned canonical hook entry. It
+  records the exact native payload, translates canonical facts, and lets the
+  registered Codex lifecycle/controller implementations apply supported effects.
+  Shared hook code contains no Codex vocabulary or alternate entry path.
   **One manual trust step:** codex will not run a non-managed hook until it is
   trusted — on the next `codex` launch, run `/hooks` in the TUI and trust it (or
   pass `--dangerously-bypass-hook-trust`); editing the hook re-triggers review
@@ -226,7 +221,7 @@ shim-launched interpreter is already the concrete binary.)
 
 Two top-level entry shapes hit the shim: the `#!/usr/bin/env python3` **shebang**
 on the `/abs/path/claude-*.py …` hook commands, and the literal `python3 …`
-prefix on the `bin/claude-audit.py hook subscriber` commands in `settings.json`.
+prefix on the `bin/baqylau-audit.py hook subscriber` commands in `settings.json`.
 **`retarget-python.py`** rewrites both to an absolute concrete-interpreter path
 (it takes `sys.executable`, which under the shim already resolves to pyenv's
 *active* version, so it honours `pyenv version`):

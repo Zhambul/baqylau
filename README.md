@@ -52,17 +52,19 @@ SQLite.
    allow_remote_control yes
    listen_on unix:/tmp/kitty
    ```
-3. Wire the hooks: point **every** hook event in `~/.claude/settings.json` at
-   the single dispatcher entry:
+3. Wire the hooks: point every supported Claude Code hook event directly at
+   the Claude Code plugin entry:
    ```json
    "hooks": { "PostToolUse": [ { "hooks": [
-       { "type": "command", "command": "/ABS/PATH/baqylau/bin/claude-hook.py" } ] } ],
+       { "type": "command", "command": "python3 /ABS/PATH/baqylau/plugins/claude_code/canonical_hook.py" } ] } ],
        "…every other event…": [ "… same single entry …" ] }
    ```
 4. Wire the ⧉ copy links (`~/.config/kitty/open-actions.conf`):
    ```
-   protocol claude-copy
-   action launch --type=background /ABS/PATH/baqylau/bin/claude-copy.py ${URL}
+   protocol baqylau-content
+   action launch --type=background python3 /ABS/PATH/baqylau/bin/baqylau-content.py ${URL}
+   protocol baqylau-view
+   action launch --type=background python3 /ABS/PATH/baqylau/bin/baqylau-view.py ${URL}
    ```
 5. Using pyenv? Run `./bin/retarget-python.py` once to skip the ~140ms/process
    shim tax.
@@ -78,7 +80,7 @@ Everything activates automatically per session — the mirror opens on
 
 ```sh
 # Mirror pane
-./bin/claude-split.py toggle|grow|shrink|reset|setpct <N>
+python3 app/terminal_panes.py toggle|grow|shrink|reset|setpct <N>
 
 # Smoke-test the tab colors (~3s each)
 for s in idle thinking working executing awaiting-bg awaiting-command awaiting-response; do
@@ -87,11 +89,11 @@ done
 ./bin/claude-tab-status.py clear
 
 # Audit CLI — the primary debugging tool
-python3 bin/claude-audit.py sessions            # recent sessions
-python3 bin/claude-audit.py anomalies <sid>     # canned queries for known bug signatures
-python3 bin/claude-audit.py errors    <sid>     # swallowed exceptions, full tracebacks
-python3 bin/claude-audit.py timeline  <sid>     # merged chronological story of a session
-python3 bin/claude-audit.py sql "<query>"       # free-form read-only SQL (sql-write for fixups)
+python3 bin/baqylau-audit.py sessions            # recent sessions
+python3 bin/baqylau-audit.py anomalies <sid>     # canned queries for known bug signatures
+python3 bin/baqylau-audit.py errors    <sid>     # swallowed exceptions, full tracebacks
+python3 bin/baqylau-audit.py timeline  <sid>     # merged chronological story of a session
+python3 bin/baqylau-audit.py sql "<query>"       # free-form read-only SQL (sql-write for fixups)
 ```
 
 ## Architecture

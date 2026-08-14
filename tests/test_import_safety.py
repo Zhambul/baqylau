@@ -1,322 +1,110 @@
-# test_import_safety.py — importing hook/streamer modules must be side-effect
-# free. dispatch.py imports plugins.claude_code.tabstatus for EVERY hook event,
-# so an import-time frontend/current-window resolution (or argv read) is work
-# paid by everything sharing the process — and substream's old import-time argv
-# parse + meta.json read made the module un-importable from tests/tooling.
-# These tests run a FRESH interpreter (no cached modules), with empty argv and
-# a scrubbed env, and a frontends.get that raises: the import must still
-# succeed, proving nothing at import time reads argv or resolves a frontend.
+"""Import safety for the canonical runtime and direct plugin entries."""
+
+from __future__ import annotations
+
 import os
 import subprocess
 import sys
 
-from conftest import REPO
+from conftest import REPOSITORY_ROOT
 
-_PROG = """
-import sys, os
-sys.argv = ["import-safety-test"]          # no argv contract available
-import frontends
-def _boom(*a, **k):
-    raise AssertionError("frontends.get() called at import time")
-frontends.get = _boom
+CANONICAL_MODULES = (
+    "app.plugins",
+    "app.terminal_process",
+    "app.scoreboard_process",
+    "dashboard.server",
+    "plugins.claude_code.plugin",
+    "plugins.claude_code.canonical_hook",
+    "plugins.claude_code.foreground",
+    "plugins.claude_code.statusline",
+    "plugins.codex.plugin",
+    "plugins.codex.canonical_hook",
+)
+
+IMPORT_PROGRAM = """
 import importlib
-importlib.import_module(sys.argv_module)
-print("OK")
-"""
-
-
-def _import_fresh(module):
-    env = {k: v for k, v in os.environ.items()
-           if not k.startswith(("KITTY_", "CLAUDE_"))}
-    prog = _PROG.replace("sys.argv_module", repr(module))
-    r = subprocess.run([sys.executable, "-c", prog], cwd=REPO, env=env,
-                       capture_output=True, text=True, timeout=30)
-    assert r.returncode == 0 and "OK" in r.stdout, (
-        f"import of {module} had side effects:\n{r.stderr}")
-
-
-def test_tabstatus_imports_clean():
-    """tabstatus must not resolve the frontend / current window / argv at
-    import — FE/WIN are lazy accessors and argv parsing lives in entry()."""
-    _import_fresh("plugins.claude_code.tabstatus")
-
-
-def test_subagent_fmt_imports_clean():
-    """subagent_fmt must not read argv at import — dispatch.py imports it for
-    every hook event; PHASE defaults to "start" and is set by entry() (argv)
-    or run_phase() (the in-process dispatcher path)."""
-    _import_fresh("plugins.claude_code.subagent_fmt")
-
-
-def test_subagent_fmt_run_phase_sets_phase(monkeypatch):
-    """The in-process dispatcher path (run_phase) must override the module
-    default — no argv involved."""
-    if REPO not in sys.path:
-        sys.path.insert(0, REPO)
-    from plugins.claude_code import subagent_fmt as SF
-    monkeypatch.setattr(SF, "main", lambda: None)   # phase set is the unit under test
-    monkeypatch.setattr(SF, "PHASE", SF.PHASE)      # restore the default at teardown
-    SF.run_phase("push")
-    assert SF.PHASE == "push"
-
-
-def test_substream_imports_clean():
-    """substream must not parse argv or read meta.json at import — the run
-    identity is bound by _init(), called only from entry()."""
-    _import_fresh("plugins.claude_code.substream")
-
-
-def test_transcript_imports_clean():
-    """transcript.py (the parse half of the substream split) is a pure parser
-    at import — no argv, no I/O, no DB; its only I/O (timeline/activity) is
-    call-time, and activity's sessionapi import is deferred."""
-    _import_fresh("plugins.claude_code.transcript")
-
-
-def test_sessionapi_imports_clean():
-    """core/sessionapi.py must open no DB at import — it's a read-side leaf
-    consumed by long-lived renderers and (transitively, via plugins.activity)
-    tooling; all its connects are per-call mode=ro."""
-    _import_fresh("core.sessionapi")
-
-
-def test_dashboard_imports_clean():
-    """dashboard/server.py must not bind a port, take the singleton lock, or
-    open a DB at import (serve() owns all three); opshtml is a pure presenter."""
-    _import_fresh("dashboard.server")
-    _import_fresh("dashboard.opshtml")
-
-
-# Reports the offending ROOTS, not the 56 wenmode submodules one hoist drags in.
-_COST_PROG = """
-import sys, importlib
-importlib.import_module(sys.argv[1])
-heavy = {n.split(".")[0] for n in sys.modules if n.split(".")[0] in ("wenmode", "pygments")}
-heavy |= {"core.mdrender"} & set(sys.modules)
-print("HEAVY " + " ".join(sorted(heavy)))
-"""
-
-# The markdown/highlighting stack, and the module that reaches it. wenmode alone
-# is ~40ms of import — 1.7x a bare interpreter, and 4x every other module in the
-# repo put together (measured: `python3 -X importtime`).
-_HEAVY_ROOTS = ("wenmode", "pygments", "core.mdrender")
-
-# Modules a HOOK EVENT imports. Each hook is a fresh short-lived process, so an
-# import here is paid per event, several times per turn.
-_PER_EVENT = ["plugins.claude_code.dispatch", "plugins.claude_code.file_fmt",
-              "plugins.claude_code.cmd_fmt", "plugins.claude_code.tabstatus"]
-
-
-def test_per_event_imports_stay_off_the_heavy_renderers():
-    """The cost half of import discipline, and the half nothing else pins.
-
-    Import PLACEMENT is not the property worth enforcing — the styleguide's rule
-    is "no import-time side effects", and the tests above check that directly, by
-    sabotage. But the OTHER reason this repo defers imports is measured cost, and
-    the compliant-looking direction is the dangerous one: hoisting
-    `from core import mdrender` to the top of file_fmt.py would satisfy every
-    linter and add ~40ms of wenmode to every file op, several times per turn.
-
-    So this asserts the outcome instead: a per-event module's import graph
-    contains neither wenmode nor pygments nor core.mdrender. Deterministic (a
-    module-set check, not a timing threshold — no flake), and it names the one
-    real hot spot rather than policing all 90 function-level imports.
-
-    The legitimate top-level import of mdrender is plugins/claude_code/stream.py:
-    a long-lived detached tailer pays the 40ms once, at spawn. Same import, other
-    placement, both right — which is why the reason belongs in a comment at the
-    site, and the budget belongs here."""
-    for module in _PER_EVENT:
-        r = subprocess.run([sys.executable, "-c", _COST_PROG, module], cwd=REPO,
-                           capture_output=True, text=True, timeout=30, check=False)
-        assert r.returncode == 0, "import of %s failed:\n%s" % (module, r.stderr)
-        heavy = r.stdout.split("HEAVY", 1)[1].split()
-        assert not heavy, (
-            "%s now imports %s at module level — that is ~40ms on EVERY hook event.\n"
-            "If it needs one, defer it into the function that uses it (see\n"
-            "plugins/claude_code/file_fmt.py) and say why in a comment."
-            % (module, ", ".join(heavy)))
-
-
-_CLI_TIER_PROG = """
 import sys
-sys.argv = ["import-direction-test"]
-import %s
-assert "core.auditcli" not in sys.modules, (
-    "the audit's read/report tier reached the write path's import graph")
-print("OK")
+import frontends
+module = sys.argv[1]
+sys.argv = ['import-safety-test']
+def fail(*arguments, **keywords):
+    raise AssertionError('frontend resolved at import time')
+frontends.get = fail
+importlib.import_module(module)
+print('OK')
 """
 
 
-def test_the_audit_write_path_never_imports_its_report_tier():
-    """core/audit.py is imported by EVERY hook process on EVERY event; its
-    read/report tier (core/auditcli.py — the ANOMALY_SECTIONS catalogue, the row
-    formatters, the command table) is imported by exactly one caller,
-    bin/claude-audit.py.
-
-    The dependency runs auditcli -> audit and must never invert. The regression
-    direction is the one that looks harmless: a query helper in auditcli that
-    audit.py "just needs", or a convenience re-export added so an old
-    `A.cli_timeline` call site keeps working — either would put 638 lines of
-    reporting back on the per-event path and undo the split. Pinned as an
-    outcome (the module is absent from sys.modules), not as a grep."""
-    for module in ["core.audit", "core.noaudit"] + _PER_EVENT:
-        r = subprocess.run([sys.executable, "-c", _CLI_TIER_PROG % module],
-                           cwd=REPO, capture_output=True, text=True,
-                           timeout=30, check=False)
-        assert r.returncode == 0, "%s pulls in core.auditcli:\n%s" % (module, r.stderr)
+def _environment():
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith(("KITTY_", "CLAUDE_"))
+    }
 
 
-_STREAM_PROG = """
-import sys, os
-sys.argv = ["import-safety-test"]          # no argv contract available
-# Importing stream must claim no palette slot and write no state DB — the old
-# top-level `SLOT, _MARKER = claude_slots.claim(KIND, LOG)` did both.
-from core import slots as claude_slots
-from core import state as S
-def _boom(*a, **k):
-    raise AssertionError("slot claim / state-DB write at import time")
-claude_slots.claim = _boom
-S.connect = _boom
-import plugins.claude_code.stream as ST
-assert ST.SLOT == 0 and ST._MARKER is None, "slot bound at import"
-print("OK")
+def test_canonical_modules_have_no_import_time_terminal_or_argument_work():
+    for module in CANONICAL_MODULES:
+        result = subprocess.run(
+            [sys.executable, "-c", IMPORT_PROGRAM, module],
+        cwd=REPOSITORY_ROOT,
+            env=_environment(),
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        assert result.returncode == 0 and "OK" in result.stdout, (
+            f"import of {module} had side effects:\n{result.stderr}"
+        )
+
+
+def test_hook_entries_do_not_load_presentation_or_legacy_semantic_stores():
+    program = """
+import importlib
+import sys
+importlib.import_module(sys.argv[1])
+forbidden = {
+    'core.ops', 'core.state', 'core.sessionapi', 'core.mdrender',
+    'dashboard.presenter', 'terminal.presenter', 'pygments', 'wenmode',
+}
+loaded = sorted(forbidden.intersection(sys.modules))
+if loaded:
+    raise SystemExit(','.join(loaded))
 """
+    for module in (
+        "plugins.claude_code.canonical_hook",
+        "plugins.claude_code.statusline",
+        "plugins.codex.canonical_hook",
+    ):
+        result = subprocess.run(
+            [sys.executable, "-c", program, module],
+            cwd=REPOSITORY_ROOT,
+            env=_environment(),
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        assert result.returncode == 0, f"{module} loaded: {result.stderr}"
 
 
-def test_stream_imports_clean():
-    """stream must not parse argv, read the CLAUDE_STREAM_* env contract, or
-    — worst of all — claim a palette slot (a state-DB WRITE) at import; the
-    run identity is bound by _init(), called only from entry()."""
-    env = {k: v for k, v in os.environ.items()
-           if not k.startswith(("KITTY_", "CLAUDE_"))}
-    r = subprocess.run([sys.executable, "-c", _STREAM_PROG], cwd=REPO, env=env,
-                       capture_output=True, text=True, timeout=30)
-    assert r.returncode == 0 and "OK" in r.stdout, (
-        f"import of plugins.claude_code.stream had side effects:\n{r.stderr}")
-
-
-_SPLIT_PROG = """
-import sys, os
-sys.argv = ["import-safety-test"]          # no argv contract available
-import frontends, glob
-def _boom(*a, **k):
-    raise AssertionError("frontends.get() called at import time")
-frontends.get = _boom
-def _globboom(*a, **k):
-    raise AssertionError("glob.glob() called at import time (legacy-size scan)")
-glob.glob = _globboom
-import plugins.claude_code.split as S
-assert S.FE is None, "frontend resolved at import"
-print("OK")
+def test_audit_write_path_does_not_import_its_report_tier():
+    program = """
+import importlib
+import sys
+importlib.import_module(sys.argv[1])
+if 'core.auditcli' in sys.modules:
+    raise SystemExit('core.auditcli loaded')
 """
-
-
-def test_split_imports_clean():
-    """split must not resolve the frontend (ppid-walk socket hunt +
-    export_env) or scan the legacy size dir at import — dispatch.py imports it
-    for EVERY hook event; FE is a lazy _fe() accessor and import_legacy_sizes()
-    runs memoized from the sizes-DB readers/writers."""
-    env = {k: v for k, v in os.environ.items()
-           if not k.startswith(("KITTY_", "CLAUDE_"))}
-    r = subprocess.run([sys.executable, "-c", _SPLIT_PROG], cwd=REPO, env=env,
-                       capture_output=True, text=True, timeout=30)
-    assert r.returncode == 0 and "OK" in r.stdout, (
-        f"import of plugins.claude_code.split had side effects:\n{r.stderr}")
-
-
-_CODEX_WATCH_PROG = """
-import sys, os, subprocess
-sys.argv = ["import-safety-test"]          # no argv contract available
-# Importing watch must fork no subprocess — the old top-level
-# `SLUGDIR = workspace_slug()` ran `git rev-parse` at import time.
-def _boom(*a, **k):
-    raise AssertionError("subprocess forked at import time (git rev-parse)")
-subprocess.run = _boom
-subprocess.Popen = _boom
-import plugins.codex.watch as W
-assert W.LOG == "" and W.SLUGDIR == "" and W.REPO_ROOT == "", "argv/slug bound at import"
-print("OK")
-"""
-
-
-def test_codex_watch_imports_clean():
-    """codex watch must not read argv or fork `git rev-parse` (workspace_slug
-    -> git_root) at import — the run identity, slug and repo root are bound by
-    _init(), called only from entry()."""
-    env = {k: v for k, v in os.environ.items()
-           if not k.startswith(("KITTY_", "CLAUDE_"))}
-    r = subprocess.run([sys.executable, "-c", _CODEX_WATCH_PROG], cwd=REPO, env=env,
-                       capture_output=True, text=True, timeout=30)
-    assert r.returncode == 0 and "OK" in r.stdout, (
-        f"import of plugins.codex.watch had side effects:\n{r.stderr}")
-
-
-_CODEX_STREAM_PROG = """
-import sys, os, subprocess
-sys.argv = ["import-safety-test"]          # no argv contract available
-def _boom(*a, **k):
-    raise AssertionError("subprocess forked at import time")
-subprocess.run = _boom
-subprocess.Popen = _boom
-import plugins.codex.stream as CS
-assert CS.LOG == "" and CS.LOGFILE == "" and not CS.ROLLOUT, "argv bound at import"
-print("OK")
-"""
-
-
-def test_codex_stream_imports_clean():
-    """codex stream must not read argv at import — LOG/SLOT_RGB/LOGFILE/JSONF/
-    LABEL/ROLLOUT are bound by _init(), called only from entry()."""
-    env = {k: v for k, v in os.environ.items()
-           if not k.startswith(("KITTY_", "CLAUDE_"))}
-    r = subprocess.run([sys.executable, "-c", _CODEX_STREAM_PROG], cwd=REPO, env=env,
-                       capture_output=True, text=True, timeout=30)
-    assert r.returncode == 0 and "OK" in r.stdout, (
-        f"import of plugins.codex.stream had side effects:\n{r.stderr}")
-
-
-def test_split_lazy_fe_memoizes(monkeypatch):
-    """split._fe() resolves + export_env()s once on first use and honours a
-    pre-seeded FE (the test seam, matching tabstatus)."""
-    if REPO not in sys.path:
-        sys.path.insert(0, REPO)
-    import frontends
-    from plugins.claude_code import split as S
-    calls = []
-
-    class _FE:
-        def export_env(self):
-            calls.append("env")
-
-    monkeypatch.setattr(frontends, "get", lambda *a, **k: calls.append("fe") or _FE())
-    monkeypatch.setattr(S, "FE", None)
-    fe = S._fe()
-    assert S._fe() is fe
-    assert calls == ["fe", "env"]          # one resolution + one env stamp
-    seeded = object()
-    monkeypatch.setattr(S, "FE", seeded)   # pre-seeded value is honoured
-    assert S._fe() is seeded
-
-
-def test_tabstatus_lazy_accessors_memoize(monkeypatch):
-    """_fe()/_win() resolve once on first use and honour pre-seeded values
-    (the daemon-env fallback and the test seams both assign FE/WIN)."""
-    if REPO not in sys.path:
-        sys.path.insert(0, REPO)
-    import frontends
-    from plugins.claude_code import tabstatus as T
-    calls = []
-
-    class _FE:
-        def current_window(self):
-            calls.append("win")
-            return "7"
-
-    monkeypatch.setattr(frontends, "get", lambda *a, **k: calls.append("fe") or _FE())
-    monkeypatch.setattr(T, "FE", None)
-    monkeypatch.setattr(T, "WIN", None)
-    assert T._win() == "7" and T._win() == "7"
-    assert calls == ["fe", "win"]          # one resolution, memoized
-    monkeypatch.setattr(T, "WIN", "")      # resolved-but-absent stays absent
-    assert T._win() == ""
+    for module in ("core.audit", *CANONICAL_MODULES):
+        result = subprocess.run(
+            [sys.executable, "-c", program, module],
+            cwd=REPOSITORY_ROOT,
+            env=_environment(),
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        assert result.returncode == 0, f"{module}: {result.stderr}"

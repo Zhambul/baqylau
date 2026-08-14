@@ -26,7 +26,7 @@ function kv(label, val, cls) {
 function showStats() {
   leaveSession();
   renderStats();                                 // instant paint from cache, if any
-  fetch("/api/stats").then(r => r.json())
+  fetch("/api/insights").then(r => r.json())
     .then(d => { S.stats = d; renderStats(); }).catch(() => {});
 }
 
@@ -36,7 +36,7 @@ function renderStats() {
   const wrap = el("div", "stats");
   const d = S.stats;
   if (!d) { wrap.append(el("div", "empty", "loading stats…")); $view.append(wrap); return; }
-  if (!d.total_sessions) {
+  if (!d.total_session_count) {
     wrap.append(el("div", "empty", "no sessions recorded yet"));
     $view.append(wrap); return;
   }
@@ -49,7 +49,7 @@ function statsHeader(d) {
   const h = el("div", "statstop");
   h.append(el("h1", "statsh1", "Insights"));
   const sub = el("div", "statssub");
-  sub.append(el("span", null, d.total_sessions + " sessions all-time"));
+  sub.append(el("span", null, d.total_session_count + " sessions all-time"));
   if (d.generated_at) sub.append(el("span", "statsgen", "updated " + ago(d.generated_at)));
   h.append(sub);
   return h;
@@ -60,39 +60,41 @@ function pulseSection(d) {
   const head = el("div", "sthead");
   head.append(el("h2", null, "Pulse"));
   const btns = el("div", "pulsebtns");
-  [["7d", "7 days"], ["30d", "30 days"], ["all", "all time"]].forEach(([w, lbl]) => {
+  [["last_seven_days", "7 days"], ["last_thirty_days", "30 days"],
+   ["all_time", "all time"]].forEach(([w, lbl]) => {
     const b = el("button", "pbtn" + (S.statsWindow === w ? " on" : ""), lbl);
     b.onclick = () => { S.statsWindow = w; renderStats(); };
     btns.append(b);
   });
   head.append(btns);
   sec.append(head);
-  const win = (d.windows && d.windows[S.statsWindow]) || { sessions: 0 };
+  const win = d[S.statsWindow] || { session_count: 0 };
   const grid = el("div", "statgrid");
   const tile = (val, label, cls) => {
     const t = el("div", "sttile");
     t.append(el("div", "stval" + (cls ? " " + cls : ""), val), el("div", "stlbl", label));
     return t;
   };
-  grid.append(tile(String(win.sessions || 0), "sessions"));
-  grid.append(tile(String(win.active || 0), "active", win.active ? "pos" : ""));
-  grid.append(tile(String(win.ended || 0), "ended"));
-  grid.append(tile(kfmt(win.tokens || 0), "tokens", "gold"));
-  grid.append(tile(usd(win.cost || 0), "cost", "cost"));
-  if (win.errors) grid.append(tile(String(win.errors), "errors", "neg"));
+  grid.append(tile(String(win.session_count || 0), "sessions"));
+  grid.append(tile(String(win.active_session_count || 0), "active",
+                   win.active_session_count ? "pos" : ""));
+  grid.append(tile(String(win.finished_session_count || 0), "ended"));
+  grid.append(tile(kfmt(win.token_count || 0), "tokens", "gold"));
+  grid.append(tile(usd(win.cost_in_usd || 0), "cost", "cost"));
+  if (win.error_count) grid.append(tile(String(win.error_count), "errors", "neg"));
   sec.append(grid);
   const tops = win.projects || [];
   if (tops.length) {
-    const max = Math.max.apply(null, tops.map(p => p.sessions));
+    const max = Math.max.apply(null, tops.map(p => p.session_count));
     const list = el("div", "pbars");
     tops.forEach(p => {
       const row = el("div", "pbrow");
       row.append(el("span", "pbname", p.name));
       const track = el("span", "pbtrack");
       const fill = el("span", "pbfill");
-      fill.style.width = (max ? Math.max(4, p.sessions / max * 100) : 0) + "%";
+      fill.style.width = (max ? Math.max(4, p.session_count / max * 100) : 0) + "%";
       track.append(fill);
-      row.append(track, el("span", "pbval", String(p.sessions)));
+      row.append(track, el("span", "pbval", String(p.session_count)));
       list.append(row);
     });
     sec.append(list);
@@ -104,9 +106,10 @@ function heatSection(d) {
   const sec = el("section", "stsec");
   sec.append(el("h2", null, "Contributions"));
   const counts = {};
-  (d.daily || []).forEach(([day, n]) => { counts[day] = n; });
+  (d.daily_sessions || []).forEach(row => { counts[row.date] = row.session_count; });
   // 5 self-normalized buckets: 0 + quartiles of the nonzero days (GitHub-style)
-  const vals = (d.daily || []).map(x => x[1]).filter(n => n > 0).sort((a, b) => a - b);
+  const vals = (d.daily_sessions || []).map(row => row.session_count)
+    .filter(n => n > 0).sort((a, b) => a - b);
   const q = p => vals.length ? vals[Math.min(vals.length - 1, Math.floor(p * vals.length))] : 0;
   const t1 = q(.25), t2 = q(.5), t3 = q(.75);
   const level = n => !n ? 0 : n <= t1 ? 1 : n <= t2 ? 2 : n <= t3 ? 3 : 4;
@@ -172,7 +175,10 @@ function punchSection(d) {
   sec.append(el("h2", null, "When you work"));
   const grid = {};
   let max = 0;
-  (d.punch || []).forEach(([dow, hr, n]) => { grid[dow + "_" + hr] = n; if (n > max) max = n; });
+  (d.hourly_sessions || []).forEach(row => {
+    grid[row.day_of_week + "_" + row.hour] = row.session_count;
+    if (row.session_count > max) max = row.session_count;
+  });
   const CELL = 20, LEFT = 34, TOP = 4, R = CELL / 2 - 2;
   const W = LEFT + 24 * CELL, H = TOP + 7 * CELL + 16;
   const s = svgel("svg", { class: "punch", viewBox: "0 0 " + W + " " + H, width: W, height: H });
@@ -190,7 +196,7 @@ function punchSection(d) {
     const n = grid[r + "_" + h] || 0;
     if (!n) continue;
     const c = svgel("circle", {
-      cx: LEFT + h * CELL + CELL / 2, cy: TOP + r * CELL + CELL / 2,
+      contextWindow: LEFT + h * CELL + CELL / 2, cy: TOP + r * CELL + CELL / 2,
       r: Math.max(2, R * Math.sqrt(n / max)), class: "punchdot" });
     const title = svgel("title");
     title.textContent = n + " session" + (n === 1 ? "" : "s") + " · " + DOW[r] + " " + h + ":00";
@@ -215,11 +221,13 @@ function projectsSection(d) {
 function projCard(p) {
   const card = el("div", "projcard");
   const h = el("div", "pchead");
-  h.append(el("span", "pcname", p.name), el("span", "pcses", p.sessions + " sess"));
-  card.append(h, sparkline(p.spark));
+  h.append(el("span", "pcname", p.name),
+           el("span", "pcses", p.session_count + " sess"));
+  card.append(h, sparkline(p.daily_sessions));
   const row = el("div", "statsrow");
-  row.append(kv("Σ", kfmt(p.tokens), "gold"), kv("$", usd(p.cost), "cost"));
-  if (p.errors) row.append(kv("⚠", String(p.errors), "neg"));
+  row.append(kv("Σ", kfmt(p.token_count), "gold"),
+             kv("$", usd(p.cost_in_usd), "cost"));
+  if (p.error_count) row.append(kv("⚠", String(p.error_count), "neg"));
   card.append(row);
   return card;
 }
@@ -230,7 +238,7 @@ function sparkline(spark) {
   const s = svgel("svg", { class: "spark", viewBox: "0 0 " + W + " " + H, preserveAspectRatio: "none" });
   if (!spark || !spark.length) return s;
   const map = {};
-  spark.forEach(([day, n]) => { map[day] = n; });
+  spark.forEach(row => { map[row.date] = row.session_count; });
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const series = [];
   for (let i = DAYS - 1; i >= 0; i--) {
@@ -249,29 +257,26 @@ function sparkline(spark) {
 
 function leaveSession() {
   stopDictation();               // a mic must never outlive its composer
-  if (S.ses) {
-    if (S.ses.es) S.ses.es.close();
-    clearSectionPoll("monitors");
-    clearSectionPoll("jobs");
-    if (S.ses.timer) clearTimeout(S.ses.timer);
-    if (S.ses.poll) clearInterval(S.ses.poll);
-    if (S.ses.fgTimer) clearInterval(S.ses.fgTimer);   // the live fg elapsed tick
-    if (S.ses.viewTimer) clearInterval(S.ses.viewTimer);  // collapsed-run elapsed
+  if (S.sessionView) {
+    if (S.sessionView.es) S.sessionView.es.close();
+    if (S.sessionView.timer) clearTimeout(S.sessionView.timer);
+    if (S.sessionView.poll) clearInterval(S.sessionView.poll);
+    if (S.sessionView.viewTimer) clearInterval(S.sessionView.viewTimer);  // collapsed-run elapsed
     // disarm optimistic stale watchdogs (composer bubbles + the ask/plan card
     // pends): navigating away is a deliberate abandon, not a stuck state, so it
     // mustn't beacon `stale` (close pends are global — S.closePend — and keep
     // reconciling from the sessions poll regardless of the current view)
-    if (S.ses.pending)
-      S.ses.pending.forEach(p => { if (p.timer) clearTimeout(p.timer); });
-    if (S.ses.askPend && S.ses.askPend.timer) clearTimeout(S.ses.askPend.timer);
-    if (S.ses.planPend && S.ses.planPend.timer) clearTimeout(S.ses.planPend.timer);
+    if (S.sessionView.pending)
+      S.sessionView.pending.forEach(p => { if (p.timer) clearTimeout(p.timer); });
+    if (S.sessionView.askPend && S.sessionView.askPend.timer) clearTimeout(S.sessionView.askPend.timer);
+    if (S.sessionView.planPend && S.sessionView.planPend.timer) clearTimeout(S.sessionView.planPend.timer);
   }
-  // a single-Esc arms a 450ms interrupt hold-timer that reads S.cur/S.ses at
+  // a single-Esc arms a 450ms interrupt hold-timer that reads S.currentSessionId/S.sessionView at
   // FIRE time; leaving within that window (e.g. ⌃⇧←/→ tab-cycle) would land the
   // interrupt on whatever session is open next. Disarm it on navigation.
   if (escHold) { clearTimeout(escHold); escHold = null; }
-  S.ses = null;
-  S.cur = null;
+  S.sessionView = null;
+  S.currentSessionId = null;
 }
 
 /* ---------- sessions list view ---------- */

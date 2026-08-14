@@ -10,3 +10,4 @@ baqylau-audit/
 spool.jsonl
 # stray live-fg streaming sentinels (tee side-files .done markers landing in cwd)
 *.done
+.DS_Store

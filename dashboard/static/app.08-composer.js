@@ -3,12 +3,12 @@
 // cohesive files (classic scripts share one global scope; load order is set in
 // index.html). See app.13-init.js for the boot/init sequence.
 
-function dictation(ta, getCwd, sid) {
+function dictation(ta, getCwd, getHarness, sessionId) {
   // Per-textarea controller — returns {btn, stop}; callers place the button.
   // getCwd (optional, zero-arg): the directory that keys the PROJECT
   // vocabulary layer — read at mic-press time, so the new-session form's
   // typed dir is honored as-typed and a keyterms edit lands next press.
-  // sid (optional): only for attributing the lag telemetry below — the
+  // sessionId (optional): only for attributing the lag telemetry below — the
   // new-session form dictates with no session to name, exactly like the
   // server-side `web-dictate` audit row.
   const btn = el("button", "micbtn");
@@ -32,18 +32,18 @@ function dictation(ta, getCwd, sid) {
     const since = () => Math.round(performance.now() - t0);
     // AudioContext FIRST, synchronously in the click's gesture chain — iOS
     // Safari creates gesture-less contexts suspended and keeps them so
-    const ctx = new AudioContext();
-    if (ctx.state === "suspended") ctx.resume();
+    const audioContext = new AudioContext();
+    if (audioContext.state === "suspended") audioContext.resume();
     // What we will actually PUT ON THE WIRE — not what the hardware runs at.
     // The worklet resamples to DICT_RATE (see DICT_WORKLET: native-rate PCM
     // saturated an iPad's uplink and the lag then grew with every sentence);
     // hardware already at or below it passes through untouched. This is the
     // rate baked into the listen URL, so it must be decided BEFORE the mint
     // and handed to the worklet unchanged — one decision, two consumers.
-    const outRate = Math.min(DICT_RATE, Math.round(ctx.sampleRate));
-    const tokBody = { sample_rate: outRate };
-    const cwd = getCwd && getCwd();
-    if (cwd) tokBody.cwd = cwd;    // keys the project keyterms layer
+    const outRate = Math.min(DICT_RATE, Math.round(audioContext.sampleRate));
+    const tokBody = { sample_rate: outRate, harness: getHarness() };
+    const workingDirectory = getCwd && getCwd();
+    if (workingDirectory) tokBody.working_directory = workingDirectory;
 
     // THREE independent legs, all started here inside the click's gesture
     // chain, none waiting on another (docs/dashboard.md *Instant-on mic*).
@@ -59,8 +59,8 @@ function dictation(ta, getCwd, sid) {
         new Blob([DICT_WORKLET], { type: "text/javascript" }));
     const micP = navigator.mediaDevices.getUserMedia(
       { audio: { echoCancellation: true, noiseSuppression: true } });
-    const modP = ctx.audioWorklet.addModule(dictWorkletURL);
-    const tokP = postJSON("/api/dictate/token", tokBody);
+    const modP = audioContext.audioWorklet.addModule(dictWorkletURL);
+    const tokP = postJSON("/api/application/dictation-token", tokBody);
     // A leg that fails cancels nothing, so a stream granted AFTER some other
     // leg failed must still be released or the tab's mic indicator sticks on.
     // (First-ever use can sit >30s in the permission prompt and outlive the
@@ -72,7 +72,7 @@ function dictation(ta, getCwd, sid) {
     modP.catch(() => {});
     const abort = (title, detail) => {     // failed BEFORE we ever captured
       micP.then(s => s.getTracks().forEach(t => t.stop()), () => {});
-      if (ctx.state !== "closed") ctx.close();
+      if (audioContext.state !== "closed") audioContext.close();
       btn.classList.remove("wait");
       starting = false;
       toast("ask", title, detail);
@@ -111,7 +111,7 @@ function dictation(ta, getCwd, sid) {
     const push = (buf) => { ws.send(buf); st.sent += buf.byteLength / 2; };
     const pump = (buf) => {
       // a stopped or torn-down mic takes no new audio — the graph can deliver
-      // one more message after ctx.close() is asked for, and a send() on a
+      // one more message after audioContext.close() is asked for, and a send() on a
       // closed socket throws
       if (st.stopping || st.closed) return;
       if (ws && ws.readyState === 1) return push(buf);
@@ -175,13 +175,13 @@ function dictation(ta, getCwd, sid) {
       // WORST backlog we ever reached, not whatever the last sample caught.
       // arm_ms/open_ms are the press-to-ready pair: how long until we were
       // HEARING you, and how long until the socket could carry it.
-      clog(sid || "", "dictate.stop", {
+      clog(sessionId || "", "dictate.stop", {
         rate: outRate, spoke_s: +(st.sent / outRate).toFixed(1),
         max_queue_s: +st.maxQueue.toFixed(2), max_svc_s: +st.maxSvc.toFixed(2),
         arm_ms: st.armed, open_ms: st.opened,
       });
       if (stream) stream.getTracks().forEach(t => t.stop());  // mic light OFF
-      if (ctx.state !== "closed") ctx.close();
+      if (audioContext.state !== "closed") audioContext.close();
       // finish() can now run while a socket is still CONNECTING (stop before
       // it came up, or the stop grace expiring), so it owns the close — a
       // socket left to open after we're done would stream into the void
@@ -216,12 +216,12 @@ function dictation(ta, getCwd, sid) {
     }
     try {
       await modP;
-      const src = ctx.createMediaStreamSource(stream);
-      const sink = new AudioWorkletNode(ctx, "dictate-pcm",
+      const src = audioContext.createMediaStreamSource(stream);
+      const sink = new AudioWorkletNode(audioContext, "dictate-pcm",
                                         { processorOptions: { outRate } });
       sink.port.onmessage = (e) => pump(e.data);
       src.connect(sink);
-      sink.connect(ctx.destination);   // pull the graph; outputs are silence
+      sink.connect(audioContext.destination);   // pull the graph; outputs are silence
     } catch (e) {
       abort("dictation failed", "audio pipeline error");
       return;
@@ -313,8 +313,8 @@ function dictation(ta, getCwd, sid) {
       // arm_ms vs open_ms IS the instant-on measurement: the first is the wait
       // you feel, the second the wait you used to feel. preroll_s is the speech
       // that would have been lost between them.
-      clog(sid || "", "dictate.start", {
-        rate: outRate, native: Math.round(ctx.sampleRate),
+      clog(sessionId || "", "dictate.start", {
+        rate: outRate, native: Math.round(audioContext.sampleRate),
         arm_ms: st.armed, open_ms: st.opened, preroll_s: +heldS.toFixed(2),
       });
       if (st.closeOnOpen) return closeStream();   // stop() got here first
@@ -322,7 +322,7 @@ function dictation(ta, getCwd, sid) {
         const l = lag();
         if (l.queue > st.maxQueue) st.maxQueue = l.queue;
         if (l.svc > st.maxSvc) st.maxSvc = l.svc;
-        clog(sid || "", "dictate.lag", {
+        clog(sessionId || "", "dictate.lag", {
           queue_s: +l.queue.toFixed(2), svc_s: +l.svc.toFixed(2),
           sent_s: +l.sent.toFixed(1), buffered: ws.bufferedAmount,
         });
@@ -331,7 +331,7 @@ function dictation(ta, getCwd, sid) {
         // that is worth knowing WHILE you speak, not after you send.
         if (!st.warned && l.queue > DICT_BACKLOG_WARN_S) {
           st.warned = true;
-          clog(sid || "", "dictate.backlog", { queue_s: +l.queue.toFixed(2) });
+          clog(sessionId || "", "dictate.backlog", { queue_s: +l.queue.toFixed(2) });
           toast("ask", "dictation lagging",
                 "slow upload — the text is behind your voice");
         }
@@ -370,11 +370,11 @@ function autoGrow(ta) {
 
 // Persist the unsent composer text to the server (debounced) so a reopen on any
 // device — or a return to this session from another — restores it. Best-effort:
-// a failed save just retries on the next edit. `ses`/`sid` are captured by the
+// a failed save just retries on the next edit. `sessionView`/`sessionId` are captured by the
 // composer so a debounce that fires after a view switch still targets the right
-// session (S.cur may have moved on). An empty box deletes the stash server-side.
-function saveComposerDraft(ses, sid) {
-  const ta = ses.composer;
+// session (S.currentSessionId may have moved on). An empty box deletes the stash server-side.
+function saveComposerDraft(sessionView, sessionId) {
+  const ta = sessionView.composer;
   if (!ta) return;
   // never save while the box is disabled — that is the send-in-flight window
   // (send() disables it, then clearComposerDraft removes the stash): a trailing
@@ -385,42 +385,44 @@ function saveComposerDraft(ses, sid) {
   const text = ta.value;
   // keep meta in sync so a tab-switch rebuild seeds from what we just typed,
   // and so our own SSE echo (same origin) is a no-op against current state
-  if (ses.meta)
-    ses.meta.composer_draft = text.trim() ? { text, origin: CLIENT_ID } : null;
-  clearTimeout(ses._composerDraftTimer);
-  ses._composerDraftTimer = setTimeout(() => {
-    // seq (wall-clock at DISPATCH) orders concurrent writes: a debounced save
+  if (sessionView.meta)
+    sessionView.meta.composer_draft = text.trim() ? { text, origin: CLIENT_ID } : null;
+  clearTimeout(sessionView._composerDraftTimer);
+  sessionView._composerDraftTimer = setTimeout(() => {
+    // sequence (wall-clock at DISPATCH) orders concurrent writes: a debounced save
     // in flight when send() fires its clear must NOT overwrite the clear if it
     // arrives later over the tunnel (the "draft didn't clear after send"
-    // reorder, 2026-07-19). The server keeps only the highest seq.
-    postJSON("/api/session/" + encodeURIComponent(sid) + "/composer-draft",
-             { text, origin: CLIENT_ID, seq: Date.now() }).catch(() => {});
+    // reorder, 2026-07-19). The server keeps only the highest sequence.
+    postJSON("/api/sessions/" + encodeURIComponent(sessionId)
+             + "/application/composer-draft",
+             { text, origin: CLIENT_ID, sequence: Date.now() }).catch(() => {});
   }, ASK_DRAFT_DEBOUNCE_MS);
 }
 
 // Sending consumes the draft — clear it immediately (not debounced), both the
 // cache and the server stash, so it never reappears after the message is on its
 // way (and, on the resume path, so the adopted session doesn't re-show it).
-function clearComposerDraft(ses, sid) {
-  clearTimeout(ses._composerDraftTimer);
-  if (ses.meta) ses.meta.composer_draft = null;
-  // a later seq than any in-flight save, so the clear always wins the race
+function clearComposerDraft(sessionView, sessionId) {
+  clearTimeout(sessionView._composerDraftTimer);
+  if (sessionView.meta) sessionView.meta.composer_draft = null;
+  // a later sequence than any in-flight save, so the clear always wins the race
   // even if an earlier save's POST lands after it (see saveComposerDraft)
-  postJSON("/api/session/" + encodeURIComponent(sid) + "/composer-draft",
-           { text: "", origin: CLIENT_ID, seq: Date.now() }).catch(() => {});
+  postJSON("/api/sessions/" + encodeURIComponent(sessionId)
+           + "/application/composer-draft",
+           { text: "", origin: CLIENT_ID, sequence: Date.now() }).catch(() => {});
 }
 
 // A peer device's composer draft arrived over SSE. Adopt it into the box — but
 // ignore our OWN echo (same origin), and never yank text out from under an
-// ACTIVE local edit (the box holding focus is being typed into; ses.meta is
+// ACTIVE local edit (the box holding focus is being typed into; sessionView.meta is
 // still updated so the next remote change applies once it blurs).
 function applyComposerDraft(draft) {
-  const ses = S.ses;
-  if (!ses) return;
-  const was = (ses.meta && ses.meta.composer_draft) || null;   // what we showed
-  if (ses.meta) ses.meta.composer_draft = draft || null;   // for a later rebuild
+  const sessionView = S.sessionView;
+  if (!sessionView) return;
+  const was = (sessionView.meta && sessionView.meta.composer_draft) || null;   // what we showed
+  if (sessionView.meta) sessionView.meta.composer_draft = draft || null;   // for a later rebuild
   if (draft && draft.origin && draft.origin === CLIENT_ID) return;   // our write
-  const ta = ses.composer;
+  const ta = sessionView.composer;
   if (!ta) return;
   const text = (draft && draft.text) || "";
   if (ta.value === text) return;
@@ -444,19 +446,19 @@ function applyComposerDraft(draft) {
 // instant the user types (a non-empty textarea hides its placeholder natively).
 // Mirror only: accepting fills the WEB box; nothing is written back to the TUI.
 function applySuggestion(text) {
-  const ses = S.ses;
-  if (!ses) return;
-  if (ses.meta) ses.meta.suggestion = text || null;
-  if (ses.composer) syncSuggestion(ses.composer);
+  const sessionView = S.sessionView;
+  if (!sessionView) return;
+  if (sessionView.meta) sessionView.meta.suggestion = text || null;
+  if (sessionView.composer) syncSuggestion(sessionView.composer);
 }
 
 // Accept the live ghost suggestion INTO the box (the shared body behind the
 // → / Tab keydown and the iPad "use hint" button). No-op unless the box is empty
 // and a suggestion is live; returns whether it filled the box.
-function acceptSuggestion(ses, ta, sid) {
-  if (ta.value || !(ses.meta && ses.meta.suggestion)) return false;
-  ta.value = ses.meta.suggestion;
-  autoGrow(ta); saveComposerDraft(ses, sid); syncSuggestion(ta);
+function acceptSuggestion(sessionView, ta, sessionId) {
+  if (ta.value || !(sessionView.meta && sessionView.meta.suggestion)) return false;
+  ta.value = sessionView.meta.suggestion;
+  autoGrow(ta); saveComposerDraft(sessionView, sessionId); syncSuggestion(ta);
   return true;
 }
 
@@ -465,12 +467,12 @@ function acceptSuggestion(ses, ta, sid) {
 // suggestion). Also toggles the iPad "use hint" button, shown only while a ghost
 // is live. Idempotent — safe to call on every input/build/SSE update.
 function syncSuggestion(ta) {
-  const ses = S.ses;
-  const sug = ses && ses.meta && ses.meta.suggestion;
+  const sessionView = S.sessionView;
+  const sug = sessionView && sessionView.meta && sessionView.meta.suggestion;
   const ghost = !!(sug && !ta.value);
   ta.placeholder = ghost ? sug : (ta.dataset.defph || "");
   ta.classList.toggle("hasghost", ghost);
-  if (ses && ses.hintBtn) ses.hintBtn.hidden = !ghost;
+  if (sessionView && sessionView.hintBtn) sessionView.hintBtn.hidden = !ghost;
 }
 
 /* ---------- composer attachments (images/screenshots + files) ----------
@@ -479,8 +481,8 @@ function syncSuggestion(ta) {
    and hands back an absolute path. On send, those paths ride the message as
    leading `@path` mentions — the TUI-native way to attach a file — so Claude
    Code itself reads/attaches them (docs/dashboard.md, *Web attachments*). */
-// The upload cap is the SERVER's (config.UPLOAD_MAX, served via /api/limits into
-// LIMITS) — read at attach time, not captured at load, so the fetched value wins.
+// The upload cap is the SERVER's (config.UPLOAD_MAX, carried in the global
+// application snapshot) — read at attach time, so current state wins.
 
 // A File → base64 (no data: prefix), the JSON-transport shape /api/upload wants.
 function fileToB64(file) {
@@ -546,6 +548,8 @@ function attachTray(getSid, onChange) {
       return toast("ask", "empty file",
                    (file.name || "that file") + " has no content to attach");
     }
+    if (LIMITS.upload_max === null)
+      return toast("ask", "configuration loading", "try the attachment again");
     if (file.size > LIMITS.upload_max) {
       return toast("ask", "file too large",
                    (file.name || "file") + " exceeds the upload limit");
@@ -559,8 +563,8 @@ function attachTray(getSid, onChange) {
     items.push(it);
     draw(); notify();
     fileToB64(file)
-      .then((data) => postJSON("/api/upload", {
-        sid: getSid() || "", name: it.name,
+      .then((data) => postJSON("/api/application/uploads", {
+        session_id: getSid() || "", name: it.name,
         mime: file.type || "application/octet-stream", data }))
       .then((d) => { it.path = d.path; it.is_image = !!d.is_image; draw(); notify(); })
       .catch((e) => {
@@ -570,7 +574,7 @@ function attachTray(getSid, onChange) {
   };
   return {
     strip,
-    sid: () => getSid() || "",
+    sessionId: () => getSid() || "",
     addFiles: (files) => { for (const f of files || []) add(f); },
     paths: () => items.filter((it) => it.path).map((it) => it.path),
     pending: () => items.some((it) => !it.path && !it.failed),
@@ -636,10 +640,12 @@ const CLIP_SVG =
 // exactly the old behavior.
 function pasteFiles(tray, ta, files) {
   const names = files.map((f) => (f && f.name) || "");
-  postJSON("/api/clipboard/files", { sid: tray.sid(), names })
+  postJSON("/api/application/clipboard-files", {
+    session_id: tray.sessionId(), names,
+  })
     .then((d) => (d && d.paths) || [], () => [])
     .then((paths) => {
-      clog(tray.sid(), "attach.paste",
+      clog(tray.sessionId(), "attach.paste",
            { n: files.length, resolved: paths.length });
       if (paths.length) insertAtCaret(ta, paths.join(" "));
       else tray.addFiles(files);
@@ -707,16 +713,16 @@ function wireAttach(tray, ta, zone, enabled) {
 // it live off the feed on each navigation so a just-sent message is included
 // the moment its bubble lands. The feed is newest-TOP (appendItems inserts
 // `afterbegin`), so document order is newest→oldest: index 0 is the MOST RECENT
-// prompt, n-1 the oldest. `ses.histIdx` is the cursor: null = the live draft
+// prompt, n-1 the oldest. `sessionView.histIdx` is the cursor: null = the live draft
 // line (not navigating), -1 stashed as the pre-nav sentinel; 0..n-1 = a history
 // entry. ↑ walks toward older (higher index), ↓ toward newer (lower); ↓ below 0
-// returns to the live draft (stashed in `ses.histBase`). Recall is EPHEMERAL —
+// returns to the live draft (stashed in `sessionView.histBase`). Recall is EPHEMERAL —
 // deliberately not persisted as a draft (saveComposerDraft) until the user
 // actually edits (oninput) or sends. Every move drops a `composer.recall`
 // clog beacon (a `web-client` audit row) so the feature is fully audit-covered.
 // Returns true when it consumed the key (the caller then preventDefaults).
-function recallHistory(ses, ta, up) {
-  const navigating = ses.histIdx != null;
+function recallHistory(sessionView, ta, up) {
+  const navigating = sessionView.histIdx != null;
   // Enter navigation only from an EDGE — ↑ with the caret at the very start —
   // so the arrow keeps moving the caret inside a multi-line draft otherwise.
   // ↓ from the live line does nothing (we're already at the newest). Once
@@ -726,28 +732,28 @@ function recallHistory(ses, ta, up) {
     if (ta.selectionStart !== 0 || ta.selectionEnd !== 0) return false;
   }
   const hist = [];
-  ses.stream.querySelectorAll(".msg.prompt[data-txt]").forEach(n => {
+  sessionView.stream.querySelectorAll(".msg.prompt[data-txt]").forEach(n => {
     const t = n.getAttribute("data-txt");
     if (t) hist.push(t);
   });
   if (!hist.length) return navigating;   // nothing to recall (swallow mid-nav)
-  let idx = ses.histIdx;
-  if (idx == null) { ses.histBase = ta.value; idx = -1; }  // -1 = the live draft line
+  let idx = sessionView.histIdx;
+  if (idx == null) { sessionView.histBase = ta.value; idx = -1; }  // -1 = the live draft line
   idx += up ? 1 : -1;                     // ↑ = older (higher index), ↓ = newer
   if (idx >= hist.length) idx = hist.length - 1;   // clamp at the oldest
   let entry;
   if (idx < 0) {                          // ↓ below the newest → back to the live draft
-    ses.histIdx = null;
-    ta.value = ses.histBase || "";
+    sessionView.histIdx = null;
+    ta.value = sessionView.histBase || "";
     entry = "draft";
   } else {
-    ses.histIdx = idx;
+    sessionView.histIdx = idx;
     ta.value = hist[idx];
     entry = idx;
   }
   ta.selectionStart = ta.selectionEnd = ta.value.length;   // caret to end
   autoGrow(ta); syncSuggestion(ta);
-  clog(S.cur || "", "composer.recall",
+  clog(S.currentSessionId || "", "composer.recall",
        { dir: up ? "up" : "down", idx: entry, n: hist.length });
   return true;
 }
@@ -757,12 +763,24 @@ function recallHistory(ses, ta, up) {
 // riding the launch ARGV, under the session's own account. Never typed into a
 // half-started TUI, so there is no readiness race.
 function composerResume(C, text, atts) {
-  const { ses, sid, meta, ta, btn, tray } = C;
-  const body = { cwd: meta.cwd, resume: S.cur, prompt: text };
-  if (atts.length) body.attachments = atts;
-  const slug = meta.account && meta.account.slug;
-  if (slug) body.account = slug;   // wake it under ITS account, silently
-  postJSON("/api/sessions/new", body, { audit: "resume-send", sid: S.cur })
+  const { sessionView, sessionId, meta, ta, btn, tray } = C;
+  const body = {
+    harness: meta.harness,
+    working_directory: meta.workingDirectory,
+    initial_text: text || null,
+    model_id: meta.model || null,
+    effort: meta.effort || null,
+    account_id: meta.account && meta.account.slug || null,
+    resume_session_id: S.currentSessionId,
+    attachments: atts.map(path => ({
+      local_path: path.path || path.local_path || path,
+      display_name: path.name || path.display_name
+        || String(path.path || path.local_path || path).split("/").pop()
+        || "attachment",
+      media_type: path.type || path.media_type || null,
+    })),
+  };
+  postJSON("/api/sessions", body, { audit: "resume-send", sessionId: S.currentSessionId })
     .then(() => {
       // the revived session appears via its own SessionStart (then forks
       // sids — adopt); the armed jump follows it, same as a form resume.
@@ -770,10 +788,10 @@ function composerResume(C, text, atts) {
       // never boots, the composer stays disabled forever (the success path
       // has no finally). onfail revives it when the watch times out so the
       // typed message isn't trapped behind a dead box.
-      armJump(meta.cwd, S.cur, { onfail: () => {
-        if (S.ses !== ses || ses.composer !== ta) return;   // moved on
+      armJump(meta.workingDirectory, S.currentSessionId, { onfail: () => {
+        if (S.sessionView !== sessionView || sessionView.composer !== ta) return;   // moved on
         ta.disabled = false; btn.disabled = false;
-        saveComposerDraft(ses, sid);   // re-stash (send-start cleared it)
+        saveComposerDraft(sessionView, sessionId);   // re-stash (send-start cleared it)
         toast("ask", "resume timed out",
               "the session never came back — your message is kept; try again");
       } });
@@ -784,9 +802,9 @@ function composerResume(C, text, atts) {
       // the draft survives in the box — nothing is lost on a failed wake
       // (re-persist it: send-start cleared the stash optimistically)
       toast("ask", "resume failed", (e && e.error) || "");
-      clientFail(sid, "resume", e, text.length);
+      clientFail(sessionId, "resume", e, text.length);
       ta.disabled = false; btn.disabled = false; ta.focus();
-      saveComposerDraft(ses, sid);
+      saveComposerDraft(sessionView, sessionId);
     });
 }
 
@@ -795,7 +813,7 @@ function composerResume(C, text, atts) {
 // an optimistic greyed stand-in bubble until the real transcript prompt lands
 // over SSE.
 function composerSend(C, text, atts) {
-  const { ses, sid, ta, btn, tray, canSend } = C;
+  const { sessionView, sessionId, ta, btn, tray, canSend } = C;
   // After an interrupt took the message back (or a rewind restored one) the
   // TUI holds it as a draft and this send must REPLACE it — but that fact is
   // the SERVER's now (launch.tui_draft): a page variable didn't survive a
@@ -804,23 +822,31 @@ function composerSend(C, text, atts) {
   // same-page hint; the server ORs its own record in either way.
   const msg = { text };
   if (atts.length) msg.attachments = atts;
-  if (ses.clearDraftNext) { msg.clear_draft = true; ses.clearDraftNext = false; }
+  if (sessionView.clearDraftNext) { msg.clear_draft = true; sessionView.clearDraftNext = false; }
   // optimistic: show the message immediately (greyed) so there's no gap
   // before its real transcript prompt arrives over SSE — drainPending swaps
   // in the real bubble when it lands (see the optimistic-bubbles section).
   // Only for typed text (empty send = attachments only: nothing to preview).
-  const pend = text ? addPending(ses, text) : null;
-  postJSON("/api/session/" + encodeURIComponent(S.cur) + "/message", msg,
+  const pend = text ? addPending(sessionView, text) : null;
+  canonicalControl("send_text", {
+    text: msg.text,
+    attachments: (msg.attachments || []).map(attachment => ({
+      local_path: attachment.path || attachment.local_path || attachment,
+      display_name: attachment.name || attachment.display_name || "attachment",
+      media_type: attachment.type || attachment.media_type || null,
+    })),
+    replace_terminal_draft: !!msg.clear_draft,
+  },
            { audit: "send", auditData: { chars: (text || "").length } })
     .then(d => {
-      ta.value = ""; autoGrow(ta); tray.clear(); ses.histIdx = null;
+      ta.value = ""; autoGrow(ta); tray.clear(); sessionView.histIdx = null;
       if (d && d.queued) {
         // queued mid-turn — the pinned ⧗ queued bubble owns this until
         // delivery; drop the stand-in so the two representations don't double up
         if (pend) settlePending(pend, "dropped", { reason: "queued" });
-        ses.queue.push({ text });
+        sessionView.queue.push({ text });
         renderQueue();
-        saveQueue(ses);
+        saveQueue(sessionView);
         toast("done", "message queued", "delivers when this turn ends");
       } else {
         toast("done", "message sent", "");
@@ -831,13 +857,13 @@ function composerSend(C, text, atts) {
       // so re-persist it — a reload mustn't lose an unsent message
       if (pend) settlePending(pend, "dropped", { reason: "send-failed" });
       toast("ask", "send failed", (e && e.error) || "");
-      clientFail(sid, "send", e, text.length);
-      saveComposerDraft(ses, sid);
+      clientFail(sessionId, "send", e, text.length);
+      saveComposerDraft(sessionView, sessionId);
     })
     .finally(() => {
       // refocus for the next message — except on an iPad, where it would
       // yank the on-screen keyboard back up after a button-tap send
-      if (ses.composer === ta) {
+      if (sessionView.composer === ta) {
         ta.disabled = !canSend; btn.disabled = !canSend;
         if (!IS_IPAD) ta.focus();
       }
@@ -846,9 +872,9 @@ function composerSend(C, text, atts) {
 
 
 function buildComposer() {
-  const ses = S.ses;
-  const meta = ses.meta || {};
-  const sid = S.cur;   // the session this composer is bound to (draft target)
+  const sessionView = S.sessionView;
+  const meta = sessionView.meta || {};
+  const currentSessionId = S.currentSessionId; // the session this composer is bound to
   const wrap = el("div", "composer");
   const ta = el("textarea", "cinput");
   ta.rows = 1;
@@ -868,11 +894,7 @@ function buildComposer() {
   // ARGV (never typed into a half-started TUI — no readiness race), under
   // the session's own account. Headless-live stays disabled — those aren't
   // asleep, they just have no window; resume is the wrong medicine.
-  // a parked session whose transcript .jsonl is gone can't be resumed —
-  // `claude --resume` would find nothing and the tab would die at once, so the
-  // server 410s it. Disable the door and say why, don't offer a dead button.
-  const gone = !meta.live && !!meta.cwd && !!meta.transcript_missing;
-  const canResume = !meta.live && !!meta.cwd && !gone;
+  const canResume = !meta.live && !!meta.workingDirectory;
   const usable = canSend || canResume;
   ta.disabled = !usable;
   ta.placeholder = canSend
@@ -882,7 +904,6 @@ function buildComposer() {
       ? (IS_IPAD ? "message this parked session — sending resumes it"
                  : "message this parked session — sending resumes it  "
                    + "(Enter to resume & send)")
-      : gone ? "this session's transcript is gone — it can't be resumed"
       : !capOk(meta, "send") ? "this session's tool can't be messaged from here"
       : (meta.live ? "no terminal window — can't message a headless session"
                    : "session is not live");
@@ -891,14 +912,14 @@ function buildComposer() {
   ta.dataset.defph = ta.placeholder;
   const btn = el("button", "csend", canResume ? "resume & send" : "send");
   btn.disabled = !usable;
-  ses.composer = ta;
-  ses.histIdx = null;   // a fresh composer starts outside history navigation
+  sessionView.composer = ta;
+  sessionView.histIdx = null;   // a fresh composer starts outside history navigation
   // restore the persisted draft (a device switch / reopen / return-to-session
   // brings back the half-typed message) — only into a usable box. rAF the grow:
   // scrollHeight needs the textarea mounted, which the caller does after this.
   if (usable && meta.composer_draft && meta.composer_draft.text) {
     ta.value = meta.composer_draft.text;
-    requestAnimationFrame(() => { if (ses.composer === ta) autoGrow(ta); });
+    requestAnimationFrame(() => { if (sessionView.composer === ta) autoGrow(ta); });
   }
   // iPad "use hint" button — the on-screen keyboard has no → / Tab, so this is
   // the ONLY way to accept a ghost suggestion there. Desktop keeps → / Tab and
@@ -908,15 +929,22 @@ function buildComposer() {
     hintBtn.type = "button";
     hintBtn.hidden = true;
     hintBtn.title = "insert the suggested reply";
-    hintBtn.onclick = () => { if (acceptSuggestion(ses, ta, sid)) ta.focus(); };
-    ses.hintBtn = hintBtn;
+    hintBtn.onclick = () => {
+      if (acceptSuggestion(sessionView, ta, currentSessionId)) ta.focus();
+    };
+    sessionView.hintBtn = hintBtn;
   }
   syncSuggestion(ta);   // show a live ghost suggestion (if any) into the empty box
-  const dic = dictation(ta, () => meta.cwd || "", sid);
+  const dic = dictation(
+    ta,
+    () => meta.workingDirectory || "",
+    () => meta.harness || "",
+    currentSessionId,
+  );
   dic.btn.disabled = !usable;    // an honest dead mic beats one that ignores you
   // attachments: staged under this session's id (live) or its own id for a
   // parked resume (the bytes are read once the revived session boots)
-  const tray = attachTray(() => S.cur);
+  const tray = attachTray(() => S.currentSessionId);
   const attachBtn = usable
     ? wireAttach(tray, ta, wrap, () => usable && !ta.disabled)
     : null;
@@ -928,7 +956,16 @@ function buildComposer() {
   // need. Same shape as the new-session form's phases: the closure scope was
   // doing that passing implicitly, and only a reader could tell what each half
   // actually touched.
-  const C = { ses, sid, meta, ta, btn, tray, canSend, canResume };
+  const C = {
+    sessionView,
+    sessionId: currentSessionId,
+    meta,
+    ta,
+    btn,
+    tray,
+    canSend,
+    canResume,
+  };
 
   const send = () => {
     dic.stop();          // the visible (validated) text is what sends
@@ -938,24 +975,28 @@ function buildComposer() {
     if (tray.pending())    // an upload is still in flight — don't drop it
       return toast("ask", "attachment still uploading", "one moment…");
     ta.disabled = true; btn.disabled = true;
-    clearComposerDraft(ses, sid);   // sending consumes the draft (both paths)
+    clearComposerDraft(sessionView, currentSessionId); // sending consumes the draft
     (canResume ? composerResume : composerSend)(C, text, atts);
   };
   // cosmetic busy hint: the send button reads "queue" while a turn is running
   // (kept fresh by the `tab` SSE event; the server's verdict stays authoritative)
-  ses.composerMode = (tab) => {
+  sessionView.composerMode = (tab) => {
     if (!canSend) return;          // the parked/headless labels are fixed
     btn.textContent = QUEUE_TABS.includes(tab) ? "queue" : "send";
   };
-  ses.composerMode(((S.sessions.find(r => r.sid === S.cur) || {}).tab)
-                   || (meta.tab || ""));
-  // the "/" menu — commands for THIS session's cwd, fetched once per view
+  const sessionRow = S.sessions.find(
+    row => sessionId(row) === S.currentSessionId);
+  sessionView.composerMode(
+    (sessionRow ? sessionTabState(sessionRow) : "") || meta.tab || "");
+  // the "/" menu — commands for THIS session's workingDirectory, fetched once per view
   const sm = slashMenu(ta, wrap,
-    () => cmdsFor(meta.cwd, ses, "cmds", sid),
+    () => cmdsFor(meta.workingDirectory, sessionView, "cmds", currentSessionId),
     { enterSends: !IS_IPAD });
   ta.oninput = () => {
-    ses.histIdx = null;   // typing leaves history navigation (see recallHistory)
-    autoGrow(ta); saveComposerDraft(ses, sid); syncSuggestion(ta);
+    sessionView.histIdx = null;   // typing leaves history navigation (see recallHistory)
+    autoGrow(ta);
+    saveComposerDraft(sessionView, currentSessionId);
+    syncSuggestion(ta);
   };
   ta.onkeydown = (e) => {
     if (sm.key(e)) return;
@@ -965,16 +1006,16 @@ function buildComposer() {
     // hides the placeholder). Skipped once the box holds text, so it never
     // steals → from caret movement / Tab from the "/" menu (both non-empty).
     if ((e.key === "ArrowRight" || e.key === "Tab") && !ta.value
-        && ses.meta && ses.meta.suggestion) {
+        && sessionView.meta && sessionView.meta.suggestion) {
       e.preventDefault();
-      acceptSuggestion(ses, ta, sid);
+      acceptSuggestion(sessionView, ta, currentSessionId);
       return;
     }
     // ↑/↓ recall previously-sent prompts into the box (Claude Code's TUI
     // history affordance). Only kicks in at the top/bottom edge of the box so
     // it never steals arrows from caret movement inside a multi-line draft.
     if ((e.key === "ArrowUp" || e.key === "ArrowDown")
-        && recallHistory(ses, ta, e.key === "ArrowUp")) {
+        && recallHistory(sessionView, ta, e.key === "ArrowUp")) {
       e.preventDefault();
       return;
     }
@@ -998,14 +1039,14 @@ function buildComposer() {
 // So the launch stashes what we already know and every following global
 // snapshot is checked — the first match navigates there. What counts as the
 // launched session depends on the start mode:
-//   fresh     — a sid we've never seen, live, in the launched cwd;
-//   resume    — THAT sid coming (back) to life: SessionStart fires under the
-//               OLD sid and restores its parked DB (the fork to a new sid
-//               only happens at the first event after, so "new sid" alone
+//   fresh     — a sessionId we've never seen, live, in the launched workingDirectory;
+//   resume    — THAT sessionId coming (back) to life: SessionStart fires under the
+//               OLD sessionId and restores its parked DB (the fork to a new sessionId
+//               only happens at the first event after, so "new sessionId" alone
 //               never matches — this shipped broken once);
-//   continue  — some already-known sid in that cwd flipping parked→live
+//   continue  — some already-known sessionId in that workingDirectory flipping parked→live
 //               (which one the CLI picks is its own history's business).
-// Hence the liveAtArm set: a hit is a live cwd-row that is either brand-new
+// Hence the liveAtArm set: a hit is a live workingDirectory-row that is either brand-new
 // OR wasn't live when we armed. Cancelled when the user opens any session
 // themselves (route() clears the watch on user navigation) or by the
 // timeout: a launch that never produces a session (claude failed to start)
@@ -1025,7 +1066,7 @@ const JUMP_TIMEOUT_MS = 120000;
 // SERVER's (meta.commands, from the same plugins.slash_commands the "/" menu
 // uses), so the two renderers can't disagree about what a real command is.
 function leadCmd(text) {
-  const names = (S.ses && S.ses.meta && S.ses.meta.commands) || null;
+  const names = (S.sessionView && S.sessionView.meta && S.sessionView.meta.commands) || null;
   if (!names || !names.length || !(text || "").startsWith("/")) return "";
   const m = /^\/(\S+)(?=\s|$)/.exec(text);
   return m && names.indexOf(m[1]) >= 0 ? m[0] : "";
@@ -1056,13 +1097,13 @@ function pendingBubble(text) {
 }
 
 // Create + track the optimistic stand-in for a send; returns its pend handle.
-function addPending(ses, text) {
+function addPending(sessionView, text) {
   const node = pendingBubble(text);
-  const w = ses.stream.querySelector(".waiting");
+  const w = sessionView.stream.querySelector(".waiting");
   if (w) w.remove();
-  ses.stream.insertBefore(node, ses.stream.firstChild);
-  const pend = { text, node, ses, sid: S.cur, t0: performance.now(), timer: null };
-  ses.pending.push(pend);
+  sessionView.stream.insertBefore(node, sessionView.stream.firstChild);
+  const pend = { text, node, sessionView, sessionId: S.currentSessionId, t0: performance.now(), timer: null };
+  sessionView.pending.push(pend);
   hintAudit(pend, "shown");
   // watchdog: a stand-in still unreconciled after STALE_HINT_MS is a stuck
   // grey bubble — the failure this audit exists to catch. Fire the beacon once
@@ -1070,7 +1111,7 @@ function addPending(ses, text) {
   // breadcrumb). Cleared by settlePending / leaveSession on a clean outcome.
   pend.timer = setTimeout(() => {
     pend.timer = null;
-    if (pend.ses.pending.indexOf(pend) >= 0) hintAudit(pend, "stale");
+    if (pend.sessionView.pending.indexOf(pend) >= 0) hintAudit(pend, "stale");
   }, STALE_HINT_MS);
   return pend;
 }
@@ -1079,22 +1120,22 @@ function addPending(ses, text) {
 function settlePending(pend, phase, extra) {
   if (!pend) return;
   if (pend.timer) { clearTimeout(pend.timer); pend.timer = null; }
-  const i = pend.ses.pending.indexOf(pend);
-  if (i >= 0) pend.ses.pending.splice(i, 1);
+  const i = pend.sessionView.pending.indexOf(pend);
+  if (i >= 0) pend.sessionView.pending.splice(i, 1);
   if (pend.node) pend.node.remove();
   hintAudit(pend, phase, extra);
 }
 
 function drainPending(items) {
-  const ses = S.ses;
-  if (!ses || !ses.pending || !ses.pending.length) return;
+  const sessionView = S.sessionView;
+  if (!sessionView || !sessionView.pending || !sessionView.pending.length) return;
   for (const it of items) {
-    if (it.t !== "msg" || it.kind !== "prompt") continue;
-    const real = (it.text || "").trim();
+    if (it.item_type !== "message" || it.conversation_kind !== "prompt") continue;
+    const real = (it.plain_text || "").trim();
     // suffix match (promptMatches — the one rule, shared with drainQueue and
     // mirrored server-side): the delivered prompt may carry attachment mentions
     // OR a terminal-restored draft in front of what we sent.
-    const i = ses.pending.findIndex(p => promptMatches(real, p.text));
-    if (i >= 0) settlePending(ses.pending[i], "reconciled");
+    const i = sessionView.pending.findIndex(p => promptMatches(real, p.text));
+    if (i >= 0) settlePending(sessionView.pending[i], "reconciled");
   }
 }

@@ -9,21 +9,21 @@ window.addEventListener("hashchange", route);
 // backgrounding) — via sendBeacon here, the one place beacon is the right tool
 // and a lost tail is acceptable. Both events fire on mobile Safari where an
 // unload alone is unreliable.
-window.addEventListener("pagehide", () => flushClog(true));
+window.addEventListener("pagehide", () => flushClog());
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "hidden") flushClog(true);
+  if (document.visibilityState === "hidden") flushClog();
 });
 // Uncaught client errors — a handler throwing and leaving NO trace is exactly the
 // blind spot this audit closes (a broken render reads as a silent product bug).
 // First stack frame is enough to locate it; capped, best-effort.
 window.addEventListener("error", (e) => {
-  clog(S.cur || "", "js.error", {
+  clog(S.currentSessionId || "", "js.error", {
     msg: (e && e.message || "").slice(0, 200), src: apiEp(e && e.filename || ""),
     line: (e && e.lineno) || 0, col: (e && e.colno) || 0 });
 });
 window.addEventListener("unhandledrejection", (e) => {
   const r = e && e.reason;
-  clog(S.cur || "", "js.reject",
+  clog(S.currentSessionId || "", "js.reject",
        { msg: String((r && (r.message || r.error)) || r || "").slice(0, 200) });
 });
 // One boot record per page load — anchors this client's event stream to a device
@@ -77,39 +77,25 @@ if (/[?&#]vpdiag/.test(location.search + location.hash)) {
 initNotifBtn();
 initPush();   // register the push service worker + (re)subscribe if already granted
 initWakeBtn();   // ☀ keep-screen-awake toggle (installed-app polish)
-// the new-session form's last-used prefs live on the backend now (cross-device)
-// — prime the cache so the first form open reads them synchronously
-fetch("/api/ns-prefs").then(r => r.json())
-  .then(p => { S.nsPrefs = p || {}; }).catch(() => {});
-// …and its per-directory unsent first prompts, so a form opened before the
-// on-open refetch lands already shows that directory's draft (nsDraftFor reads
-// this cache synchronously)
-fetch("/api/ns-draft").then(r => r.json())
-  .then(m => { if (m && typeof m === "object") S.nsDrafts = m; }).catch(() => {});
 // …and the HOST vocabulary (/api/hosts): the new-session form's tool picker,
 // both option menus, their defaults and the account row are ALL built from it,
 // so priming it here means the first form open is fully populated on the frame
 // it appears. The form refetches if this hasn't landed, and until it does it
 // shows an EMPTY picker rather than a fabricated default host — a launch that
 // names no tool is routed to the server's own default anyway.
-fetch("/api/hosts").then(r => r.json())
-  .then(l => { if (Array.isArray(l)) S.hosts = l; }).catch(() => {});
-// seed the hidden-directory set before the first list paint (the SSE snapshot
-// carries the session rows, not this pref) — a failed fetch just leaves nothing
-// hidden, never a broken list
-fetch("/api/dirs/hidden").then(r => r.json())
-  .then(d => { if (d && typeof d === "object") { S.hidden = d; if (!S.cur) renderList(true); } })
-  .catch(() => {});
+loadCanonicalHosts().catch(() => {});
+// The global application stream seeds sessions, usage, notifications, launch
+// preferences, drafts, hidden directories, and limits in one complete snapshot.
 connectGlobal();
-// A deep link from a Telegram/off-device notification lands as ?s=<sid> (a
+// A deep link from a Telegram/off-device notification lands as ?s=<sessionId> (a
 // query param, NOT a #fragment — Telegram's auto-linker drops the fragment, so
-// the sid must ride the query). Translate it into the hash route the router
+// the sessionId must ride the query). Translate it into the hash route the router
 // speaks, and strip ?s= from the URL so a later reload/share carries a clean
 // hash link. A pre-existing hash wins (an explicit #/... in the same URL).
 (function deepLinkFromQuery() {
   // ?new=1 / ?attn=1 are the manifest `shortcuts` (long-press icon on
   // Android/desktop; iOS ignores them) — land on the list, and for `new` pop
-  // the new-session form after the router paints. `?s=<sid>` is the notif deep
+  // the new-session form after the router paints. `?s=<sessionId>` is the notif deep
   // link. Any of them: strip the query so a later reload/share is clean.
   const q = location.search;
   const s = /[?&]s=([^&]+)/.exec(q);
@@ -122,15 +108,13 @@ connectGlobal();
 })();
 route();
 renderAttention();
-refreshAccounts();
-setInterval(refreshAccounts, ACCOUNTS_POLL_MS);
-setInterval(() => { if (!S.cur) renderList(true); }, LIST_REFRESH_MS);
+setInterval(() => { if (!S.currentSessionId) renderList(true); }, LIST_REFRESH_MS);
 
 // --- presence heartbeat -------------------------------------------------------
 // Tell the server, while the page is VISIBLE + FOCUSED, (a) that THIS DEVICE is
 // in use right now (its stable DEVICE_ID), so the on-device notification routes
 // to the device you most recently used (docs/dashboard.md *Device routing*),
-// and (b) if you're inside a session, that you're LOOKING at it (S.cur), so the
+// and (b) if you're inside a session, that you're LOOKING at it (S.currentSessionId), so the
 // deferred alert suppresses while you watch — the web analog of the kitty tab
 // being frontmost (*Telegram alerts*). Both ride ONE beat to /api/presence.
 // Sent from ANY view (device presence must be recorded even from the list, not
@@ -140,7 +124,8 @@ setInterval(() => { if (!S.cur) renderList(true); }, LIST_REFRESH_MS);
 function presenceBeat() {
   if (document.visibilityState !== "visible") return;
   if (document.hasFocus && !document.hasFocus()) return;
-  postJSON("/api/presence", { device: DEVICE_ID, sid: S.cur || "" })
+  postJSON("/api/application/presence",
+           { device_id: DEVICE_ID, session_id: S.currentSessionId || null })
     .catch(() => {});                              // presence is best-effort
 }
 
@@ -153,7 +138,8 @@ function presenceBeat() {
 // knows when it ended, so it reports it: blur and hide, best-effort, and a
 // `focus` beat is already wired below to re-establish presence at once.
 function presenceAway() {
-  postJSON("/api/presence", { device: DEVICE_ID, sid: S.cur || "", away: true })
+  postJSON("/api/application/presence",
+           { device_id: DEVICE_ID, session_id: S.currentSessionId || null, away: true })
     .catch(() => {});
 }
 window.addEventListener("blur", presenceAway);
@@ -162,7 +148,7 @@ document.addEventListener("visibilitychange", () => {
 });
 
 // The cadence is DERIVED from the server's presence TTL (LIMITS.view_ttl_s, the
-// env-overridable CLAUDE_DASH_VIEW_TTL_S) rather than a matching literal: a beat
+// env-overridable BAQYLAU_DASHBOARD_VIEW_TTL_S) rather than a matching literal: a beat
 // every TTL/2.5 leaves room for one to be lost/late and still not lapse, which
 // is what the alert suppression rests on — a lapsed beat is read as "nobody is
 // watching" and fires the off-device alert while you sit looking at the session.
@@ -174,6 +160,7 @@ const VIEW_BEAT_SHARE = 2.5;
 let beatTimer = null;
 let beatMs = 0;
 function armBeat() {
+  if (LIMITS.view_ttl_s === null) return;
   const ms = Math.max(VIEW_BEAT_FLOOR_MS,
                       Math.round(LIMITS.view_ttl_s * 1000 / VIEW_BEAT_SHARE));
   if (ms === beatMs) return;
@@ -181,20 +168,7 @@ function armBeat() {
   beatMs = ms;
   beatTimer = setInterval(presenceBeat, ms);
 }
-armBeat();
 
-// The server's own caps/TTL (docs/dashboard.md *Served limits*) — one round-trip
-// at boot, then the page stops guessing at them. A failure leaves the fallbacks
-// in LIMITS in place (the features degrade to the compiled-in numbers, never to
-// a dead button).
-function loadLimits() {
-  return fetch("/api/limits").then(r => r.json()).then(d => {
-    for (const k of Object.keys(LIMITS))
-      if (typeof d[k] === "number" && d[k] > 0) LIMITS[k] = d[k];
-    armBeat();
-  }).catch(() => {});
-}
-loadLimits();
 // Beat immediately when you (re)focus / reveal the page or open a session, so
 // presence is re-established at once rather than up to one interval late.
 window.addEventListener("focus", presenceBeat);

@@ -8,11 +8,20 @@ function showList() {
   renderList();
   if (!S.sessions.length)
     fetch("/api/sessions").then(r => r.json())
-      .then(d => { S.sessions = d; renderList(); renderAttention(); });
+      .then(applyCanonicalSessions);
+}
+
+function applyCanonicalSessions(sessions) {
+  S.sessions = sessions || [];
+  reconcileCloses();
+  if (!S.currentSessionId) renderList();
+  else updateHeadFromList();
+  renderAttention();
+  checkJump();
 }
 
 function renderList(force) {
-  if (S.cur || S.pendingUI || onStats()) return;   // stats owns #view on its route
+  if (S.currentSessionId || S.pendingUI || onStats()) return;   // stats owns #view on its route
   if (!S.sessions.length) {
     S.listKey = null;
     $view.textContent = "";
@@ -40,12 +49,8 @@ function renderList(force) {
 function groupSessions(rows) {
   // one group per PROJECT directory (ordered by its newest session); inside
   // each: active cards visible, parked / archived (>3d) as click-to-open
-  // folds. The group key is the server's `group_dir`: the session's frozen
-  // ORIGINAL cwd resolved to its linked-worktree owner. So N agents fanned out
-  // over worktrees of one repo file under the main checkout (the per-card ⋔
-  // chip tells them apart), AND a mid-session `cd` never moves a card between
-  // groups — group_dir ignores the live cwd entirely (row.cwd is the fallback
-  // for legacy/parked rows with no group_dir, via groupKey).
+  // folds. The canonical project directory is frozen from the session's
+  // initial working directory and resolves linked worktrees to their owner.
   const groups = new Map();
   for (const row of rows) {
     const k = groupKey(row);
@@ -60,11 +65,11 @@ function groupSessions(rows) {
   const old = r => !lastActive(r) || now - lastActive(r) > ARCHIVE_S;
   return ordered
     .filter(([k, grows]) => !dirHidden(k, grows))
-    .map(([cwd, grows]) => ({
-      cwd, count: grows.length,
-      active: grows.filter(r => r.live),
-      parked: grows.filter(r => !r.live && !old(r)),
-      archived: grows.filter(r => !r.live && old(r)),
+    .map(([workingDirectory, groupRows]) => ({
+      workingDirectory, count: groupRows.length,
+      active: groupRows.filter(sessionIsLive),
+      parked: groupRows.filter(row => !sessionIsLive(row) && !old(row)),
+      archived: groupRows.filter(row => !sessionIsLive(row) && old(row)),
     }));
 }
 
@@ -80,7 +85,7 @@ function dirHidden(key, rows) {
   // a directory with an active session can't be hidden, and one that GAINS a
   // live session re-shows at once) or one started after the hide stamp (a fresh
   // launch / resume re-shows it).
-  return !rows.some(r => r.live || (r.started_at || 0) > t);
+  return !rows.some(row => sessionIsLive(row) || row.session.started_at > t);
 }
 
 // The ✕ on a dir header: hide it from the list. Optimistic (stamp now, re-render
@@ -91,7 +96,7 @@ function dirHidden(key, rows) {
 function hideDir(key) {
   S.hidden[key] = Date.now() / 1000;
   renderList(true);
-  postJSON("/api/dirs/hide", { cwd: key })
+  postJSON("/api/application/hidden-directories", { working_directory: key })
     .then(d => { if (d && d.hidden) { S.hidden = d.hidden; renderList(true); } })
     .catch(err => {
       delete S.hidden[key];
@@ -107,27 +112,27 @@ function hideDir(key) {
 // a stats tick only touches its own card.
 function listShape(groups) {
   return JSON.stringify(groups.map(g => [
-    g.cwd, g.active.map(r => r.sid),
+    g.workingDirectory, g.active.map(sessionId),
     g.parked.length,
-    S.folds.has(g.cwd + "|parked") ? g.parked.map(r => r.sid) : 0,
+    S.folds.has(g.workingDirectory + "|parked") ? g.parked.map(sessionId) : 0,
     g.archived.length,
-    S.folds.has(g.cwd + "|archived") ? g.archived.map(r => r.sid) : 0,
+    S.folds.has(g.workingDirectory + "|archived") ? g.archived.map(sessionId) : 0,
   ]));
 }
 
 function renderDirGroups(groups) {
   for (const g of groups) {
     const hd = el("div", "dirhead");
-    hd.append(el("span", "dirname", g.cwd ? g.cwd.split("/").filter(Boolean).pop() : "no project"));
-    if (g.cwd) hd.append(el("span", "dirpath", g.cwd));
+    hd.append(el("span", "dirname", g.workingDirectory ? g.workingDirectory.split("/").filter(Boolean).pop() : "no project"));
+    if (g.workingDirectory) hd.append(el("span", "dirpath", g.workingDirectory));
     hd.append(el("span", "dircount", g.count + (g.count === 1 ? " session" : " sessions")));
-    if (g.cwd) {                        // "+" only where a launch has a cwd
+    if (g.workingDirectory) {
       const add = el("button", "dirnew", "+");
-      add.title = "new session in " + g.cwd;
-      add.onclick = () => openNewSession(g.cwd);
+      add.title = "new session in " + g.workingDirectory;
+      add.onclick = () => openNewSession(g.workingDirectory);
       hd.append(add);
     }
-    // ✕ hides ANY group, including the projectless aggregate (g.cwd === "") —
+    // ✕ hides ANY group, including the projectless aggregate (g.workingDirectory === "") —
     // its group key is the empty string, which hideDir/the server accept.
     // DISABLED while the group has an active session: you can't hide a directory
     // you're actively working in (the server 409s too — this is just the visible
@@ -138,11 +143,11 @@ function renderDirGroups(groups) {
       hide.title = "can't hide — " + g.active.length
         + (g.active.length === 1 ? " active session here" : " active sessions here");
     } else {
-      hide.title = g.cwd
+      hide.title = g.workingDirectory
         ? "hide this directory from the list (re-appears when a new session starts here)"
         : "hide the projectless sessions from the list (re-appears when a new one starts)";
     }
-    hide.onclick = () => hideDir(g.cwd);
+    hide.onclick = () => hideDir(g.workingDirectory);
     hd.append(hide);
     $view.append(hd);
     if (g.active.length) {
@@ -150,15 +155,15 @@ function renderDirGroups(groups) {
       for (const row of g.active) grid.append(mountCard(row));
       $view.append(grid);
     }
-    fold(g.cwd, "parked", g.parked);
-    fold(g.cwd, "archived", g.archived);
+    fold(g.workingDirectory, "parked", g.parked);
+    fold(g.workingDirectory, "archived", g.archived);
   }
 }
 
 function mountCard(row) {
   const c = sessionCard(row);
-  S.cards.set(row.sid, c);
-  S.rowPrev.set(row.sid, JSON.stringify(row));
+  S.cards.set(sessionId(row), c);
+  S.rowPrev.set(sessionId(row), JSON.stringify(row));
   return c;
 }
 
@@ -168,11 +173,11 @@ function mountCard(row) {
 // list's layout stay put.
 function patchCards() {
   for (const row of S.sessions) {
-    const card = S.cards.get(row.sid);
+    const card = S.cards.get(sessionId(row));
     if (!card) continue;
     const enc = JSON.stringify(row);
-    if (enc === S.rowPrev.get(row.sid)) continue;
-    S.rowPrev.set(row.sid, enc);
+    if (enc === S.rowPrev.get(sessionId(row))) continue;
+    S.rowPrev.set(sessionId(row), enc);
     const fresh = sessionCard(row);
     card.dataset.tab = fresh.dataset.tab;
     card.replaceChildren(...fresh.childNodes);
@@ -180,25 +185,25 @@ function patchCards() {
 }
 
 // The REAL confirmation of an optimistic close: the sessions snapshot now shows
-// the sid gone (or demoted to not-live) — the tab actually parked. Beacon the
+// the sessionId gone (or demoted to not-live) — the tab actually parked. Beacon the
 // reconcile, drop the in-flight state, and un-grey the (about-to-be-rebuilt)
 // card. Called on every sessions/-delta update, BEFORE the re-render so the
 // rebuilt card shows the parked chip, not a stale 'closing…'.
 function reconcileCloses() {
-  for (const sid of Object.keys(S.closePend)) {
-    const row = S.sessions.find(r => r.sid === sid);
-    if (row && row.live) continue;             // still live — close hasn't landed
-    clog(sid, "close.reconciled",
-         { ms: Math.round(performance.now() - S.closePend[sid].t0) });
-    closeSettle(sid, "reconciled");
-    const card = S.cards.get(sid);
+  for (const closingSessionId of Object.keys(S.closePend)) {
+    const row = S.sessions.find(item => sessionId(item) === closingSessionId);
+    if (row && sessionIsLive(row)) continue;             // still live — close hasn't landed
+    clog(closingSessionId, "close.reconciled",
+         { ms: Math.round(performance.now() - S.closePend[closingSessionId].t0) });
+    closeSettle(closingSessionId, "reconciled");
+    const card = S.cards.get(closingSessionId);
     if (card) card.classList.remove("closing");
   }
 }
 
-function fold(cwd, kind, rows) {
+function fold(workingDirectory, kind, rows) {
   if (!rows.length) return;
-  const key = cwd + "|" + kind;
+  const key = workingDirectory + "|" + kind;
   const open = S.folds.has(key);
   const btn = el("button", "fold" + (open ? " open" : ""),
                  (open ? "▾ " : "▸ ") + kind + " · " + rows.length);
@@ -222,42 +227,58 @@ const LIST_REFRESH_MS = 60000;
 
 function sessionCard(row) {
   const a = el("a", "scard");
-  a.dataset.tab = row.tab || "";        // state tint (style.css --state wash)
-  a.href = "#/s/" + encodeURIComponent(row.sid);
-  const st = row.stats || {};
-  a.append(el("div", "proj", row.title || proj(row)));
-  a.append(el("div", "sid", row.sid));
+  a.dataset.tab = sessionTabState(row) || "";        // state tint (style.css --state wash)
+  a.href = "#/s/" + encodeURIComponent(sessionId(row));
+  a.append(el("div", "proj", row.session.title || proj(row)));
+  a.append(el("div", "sessionId", sessionId(row)));
   // no "live" chip — the state tint + badge already say it; only the
   // inactive states (parked/gone) need explaining. A live windowed session
   // gets the ✕ close in the same corner slot instead — the header's close
   // reachable straight from the list.
   const corner = el("div", "corner");
-  if (!row.live)
-    corner.append(el("span", "chip2 parked", row.parked ? "parked" : "gone"));
-  else if (S.closing.has(row.sid)) {           // optimistic close in flight
+  if (!sessionIsLive(row))
+    corner.append(el("span", "chip2 parked", sessionIsParked(row) ? "parked" : "gone"));
+  else if (S.closing.has(sessionId(row))) {           // optimistic close in flight
     a.classList.add("closing");                // greyed until the sessions poll parks it
     corner.append(el("span", "chip2 closing", "closing…"));
-  } else if (row.kitty_window_id)
-    corner.append(cardClose(row.sid));
+  } else if (sessionWindowId(row))
+    corner.append(cardClose(sessionId(row)));
   if (corner.childNodes.length) a.append(corner);
   const r = el("div", "row");
   const badge = el("span", "badge");
-  badge.dataset.tab = row.tab || "";
-  badge.append(el("span", "st"), tnode(TAB_LABEL[row.tab || ""] || row.tab));
+  badge.dataset.tab = sessionTabState(row) || "";
+  badge.append(el("span", "st"), tnode(TAB_LABEL[sessionTabState(row) || ""] || sessionTabState(row)));
   r.append(badge);
-  if (st.commands) r.append(seg(st.commands + " cmds"));
-  const tok = (st.tk_in | 0) + (st.tk_out | 0) + (st.tk_read | 0) + (st.tk_create | 0);
-  if (tok) r.append(seg(kfmt(tok) + " tok"));
-  if (st.cost) r.append(segc(usd(st.cost), "cost"));
+  const commandCount = row.statistics.shell_command_count || 0;
+  if (commandCount) r.append(seg(commandCount + " cmds"));
+  const tokens = row.usage.tokens;
+  const tokenCount = tokens.input_tokens + tokens.output_tokens
+    + tokens.cache_read_tokens + tokens.cache_write_tokens
+    + tokens.one_hour_cache_write_tokens;
+  if (tokenCount) r.append(seg(kfmt(tokenCount) + " tok"));
+  if (row.usage.cost_in_usd != null)
+    r.append(segc(usd(Number(row.usage.cost_in_usd)), "cost"));
   // recency, not age: started_at here read as staleness — a live session an
   // hour into its work showed "1h ago" while actively streaming
   if (lastActive(row)) r.append(seg(ago(lastActive(row))));
-  if (row.git) r.append(gitChip(row.git));
+  if (row.repository) r.append(gitChip(row.repository));
   a.append(r);
-  if (row.ctx) a.append(ctxBar(row.ctx));
+  const context = row.context.by_actor[row.session.lead_actor_id];
+  if (context) {
+    const usedTokens = context.used_tokens || 0;
+    const windowTokens = context.window_tokens || 0;
+    a.append(contextBar({
+      used: usedTokens,
+      window: windowTokens,
+      pct: windowTokens ? Math.round(usedTokens * 100 / windowTokens) : 0,
+      model_short: context.model
+        ? (context.model.display_name || context.model.native_id) : "",
+      model_selection: context.model ? context.model.selection_id : null,
+    }, false, { key: sessionId(row) }));
+  }
   return a;
 }
-// the list-card ✕ — POST /api/session/<sid>/stop, the same graceful tab
+// the list-card ✕ — POST /api/session/<sessionId>/stop, the same graceful tab
 // close as the session header's "✕ close" (kitty HUPs the tab, Claude Code
 // exits, SessionEnd parks the mirror), with the same two-step confirm: first
 // click arms ("close?") for 4 s, second fires. Lives inside the card <a>, so
@@ -265,21 +286,21 @@ function sessionCard(row) {
 // card demotes to parked on its own via the SSE sessions push.
 // Deliberately different from the header ✕ (which keeps closure-local arm
 // state): the arm + in-flight state live in S (S.armClose/S.closing, keyed
-// by sid, the arm as a DEADLINE not a timer handle) because the per-tick
+// by sessionId, the arm as a DEADLINE not a timer handle) because the per-tick
 // sessions push rebuilds a changed card wholesale (patchCards
 // replaceChildren) — and a live card's row changes every tick, so
 // closure/DOM-held state died within ~1s of arming: the confirm reverted
 // before it could be clicked. The constructor re-derives both states, so a
 // rebuilt button resumes the arm with the REMAINING window; stale timers
-// from replaced predecessors are neutered by the sid+deadline check.
-function cardClose(sid) {
+// from replaced predecessors are neutered by the sessionId+deadline check.
+function cardClose(sessionId) {
   const btn = el("button", "xclose", "✕");
   btn.title = "close this session's terminal tab";
-  btn.disabled = S.closing.has(sid);
+  btn.disabled = S.closing.has(sessionId);
   const armed = () =>
-    S.armClose && S.armClose.sid === sid && Date.now() < S.armClose.until;
+    S.armClose && S.armClose.sessionId === sessionId && Date.now() < S.armClose.until;
   const disarm = () => {
-    if (S.armClose && S.armClose.sid === sid && Date.now() >= S.armClose.until)
+    if (S.armClose && S.armClose.sessionId === sessionId && Date.now() >= S.armClose.until)
       S.armClose = null;
     if (!armed()) { btn.textContent = "✕"; btn.classList.remove("arm"); }
   };
@@ -292,7 +313,7 @@ function cardClose(sid) {
   btn.onclick = (e) => {
     e.preventDefault(); e.stopPropagation();
     if (!armed()) {
-      S.armClose = { sid, until: Date.now() + ARM_MS };
+      S.armClose = { sessionId, until: Date.now() + ARM_MS };
       showArmed();
       return;
     }
@@ -302,19 +323,19 @@ function cardClose(sid) {
     // optimistic: grey THIS card + swap the ✕ to 'closing…' at once (a rebuild
     // from the sessions poll may lag a tick), and beacon the `close` lifecycle
     // (web-hint op=close). reconcileCloses swaps it to the parked chip when the
-    // snapshot shows the sid go not-live; a failed POST reverts.
-    closeBegin(sid);
+    // snapshot shows the sessionId go not-live; a failed POST reverts.
+    closeBegin(sessionId);
     btn.textContent = "closing…";
     const a = btn.closest(".scard");
     if (a) a.classList.add("closing");
-    closeSession(sid, "card")
+    closeSession(sessionId, "card")
       .then(() => toast("done", "session closed", "terminal tab closed"))
       .catch(err => {
-        closeSettle(sid, "dropped", { reason: "failed" });
+        closeSettle(sessionId, "dropped", { reason: "failed" });
         btn.disabled = false;
         btn.textContent = "✕";
         if (a) a.classList.remove("closing");
-        clientFail(sid, "close", err);   // a lost/rejected /stop the audit can't see
+        clientFail(sessionId, "close", err);   // a lost/rejected /stop the audit can't see
         toast("ask", "close failed", (err && err.error) || "");
       });
   };
@@ -342,7 +363,7 @@ function gitChip(g) {
 }
 
 // Last width each ctx bar was PAINTED at, keyed by the bar's identity (`key`).
-// The drain animation's memory: ctxBar builds a FRESH node every repaint, and a
+// The drain animation's memory: contextBar builds a FRESH node every repaint, and a
 // fresh node has no previous width to transition FROM — it just appears at its
 // final size, which is why .ubar's `transition: width` has never actually
 // animated anything. So the width the bar last showed is remembered here, the
@@ -350,15 +371,15 @@ function gitChip(g) {
 // is a real style change on a live node, so the CSS transition runs. First
 // sight of a key seeds without animating (a page load should not slide every
 // bar up from zero). Bounded: a key is one session or one agent, and the map is
-// swept when it outgrows CTXW_CAP.
-const ctxWidths = new Map();
-const CTXW_CAP = 400;
+// swept when it outgrows CONTEXT_WIDTH_LIMIT.
+const contextWidths = new Map();
+const CONTEXT_WIDTH_LIMIT = 400;
 
-function ctxWidthFor(key, pct) {
+function contextWidthFor(key, pct) {
   if (!key) return pct;                       // unkeyed caller: no animation
-  const prev = ctxWidths.get(key);
-  if (ctxWidths.size > CTXW_CAP) ctxWidths.clear();
-  ctxWidths.set(key, pct);
+  const prev = contextWidths.get(key);
+  if (contextWidths.size > CONTEXT_WIDTH_LIMIT) contextWidths.clear();
+  contextWidths.set(key, pct);
   return prev === undefined ? pct : prev;
 }
 
@@ -373,11 +394,11 @@ function ctxWidthFor(key, pct) {
 // the ⟳, the "compacting…" detail — so the motion has to carry nothing but
 // "still going", and the quietest thing that can say that is light.
 // `opts.key` identifies the bar across repaints so the post-compaction drop
-// eases instead of jumping (see ctxWidths).
-function ctxBar(cx, big, opts) {
+// eases instead of jumping (see contextWidths).
+function contextBar(contextWindow, big, opts) {
   opts = opts || {};
   const comp = opts.comp;
-  const bar = el("div", "cbar" + (cx.pct >= 90 ? " hot" : cx.pct >= 70 ? " warn" : "")
+  const bar = el("div", "cbar" + (contextWindow.pct >= 90 ? " hot" : contextWindow.pct >= 70 ? " warn" : "")
                         + (big ? " big" : "") + (comp ? " compacting" : ""));
   const label = el("span", "clabel");
   // the ⟳ is its OWN span so it can spin without taking the word with it
@@ -386,34 +407,34 @@ function ctxBar(cx, big, opts) {
   bar.append(label);
   const track = el("span", "ctrack");
   const fill = el("span", "cfill");
-  const pct = Math.max(0, Math.min(100, cx.pct));
+  const pct = Math.max(0, Math.min(100, contextWindow.pct));
   // A compacting bar is painted at its REAL width and left there — the breath
   // is a CSS opacity animation on this one node, so there is nothing extra to
   // build. (An earlier cut animated the width instead and needed a second
   // "ghost" segment to hold the true occupancy while the fill moved; nothing
   // moves now, so there is nothing to hold.) The width is still fed through the
-  // comp branch rather than ctxWidthFor so a compacting repaint does not
+  // comp branch rather than contextWidthFor so a compacting repaint does not
   // consume the key's memory — the drain that follows must start from the
   // PRE-compaction width.
-  const from = comp ? pct : ctxWidthFor(opts.key, pct);
+  const from = comp ? pct : contextWidthFor(opts.key, pct);
   fill.style.width = from + "%";
   if (from !== pct)
     requestAnimationFrame(() => { fill.style.width = pct + "%"; });
   track.append(fill);
-  bar.append(track, el("span", "cpct", cx.pct + "%"));
+  bar.append(track, el("span", "cpct", contextWindow.pct + "%"));
   bar.append(el("span", "cdetail", comp
-    ? "compacting…" : kfmt(cx.used) + " / " + kfmt(cx.window)));
+    ? "compacting…" : kfmt(contextWindow.used) + " / " + kfmt(contextWindow.window)));
   return bar;
 }
 
 function updateHeadFromList() {
-  const row = S.sessions.find(r => r.sid === S.cur);
-  if (!row || !S.ses) return;
-  if (S.ses.badge) setBadge(S.ses.badge, row.tab || "");
+  const row = S.sessions.find(item => sessionId(item) === S.currentSessionId);
+  if (!row || !S.sessionView) return;
+  if (S.sessionView.badge) setBadge(S.sessionView.badge, sessionTabState(row) || "");
   // Keep the header's live/window state honest against the authoritative global
   // snapshot. `meta` is fetched ONCE at session-open, so a session opened during
-  // its startup tag-race — the launch jumps straight to the new sid, but its
-  // kitty pane isn't tagged claude_session=<sid> yet, so the server momentarily
+  // its startup tag-race — the launch jumps straight to the new sessionId, but its
+  // kitty pane isn't tagged claude_session=<sessionId> yet, so the server momentarily
   // reports it not-live (or live-but-window-not-yet-resolved during the grace) —
   // would otherwise FREEZE on that reading: the parked chip stuck on and every
   // live-gated action (stop/cancel/rewind/close/quick-commands) missing, so the
@@ -422,25 +443,25 @@ function updateHeadFromList() {
   // on a real change — not every per-tick tab change (that reflows the header
   // each second) — and not while drilled into a subagent (renderSessionChrome
   // clears agentFocus; the ← session rebuild picks it up on the way back) or mid
-  // inline-rename. The window compare is gated on row.live: for a LIVE row the
+  // inline-rename. The window compare is gated on sessionIsLive(row): for a LIVE row the
   // list now serves the SAME live-RESOLVED kitty_window_id meta does (aligned in
   // sessions_payload — both blank until the pane is tagged, then the same id),
   // so this compare is apples-to-apples and only a REAL window move (or the
   // tag-race resolving blank→id, once) rebuilds the header. It used to serve the
   // RAW audit id, so the two disagreed across the tag-race and this fought
   // loadMeta every tick, flickering the action row (fixed 2026-07-24). A parked
-  // row still carries the raw id, but winMoved is gated on row.live so it's
+  // row still carries the raw id, but winMoved is gated on sessionIsLive(row) so it's
   // never compared.
-  const m = S.ses.meta;
-  const winMoved = row.live
-    && (m && m.kitty_window_id || "") !== (row.kitty_window_id || "");
-  if (m && (!!m.live !== !!row.live || winMoved)) {
-    m.live = row.live;
-    m.kitty_window_id = row.kitty_window_id;
-    m.parked = row.parked;
-    const renaming = S.ses.projEl && S.ses.projEl.querySelector("input");
-    if (!S.ses.agentFocus && !S.ses.monitorFocus && !S.ses.jobFocus && !renaming)
-      renderSessionChrome(S.ses.tab);
+  const m = S.sessionView.meta;
+  const winMoved = sessionIsLive(row)
+    && (m && m.kitty_window_id || "") !== (sessionWindowId(row) || "");
+  if (m && (!!m.live !== !!sessionIsLive(row) || winMoved)) {
+    m.live = sessionIsLive(row);
+    m.kitty_window_id = sessionWindowId(row);
+    m.parked = sessionIsParked(row);
+    const renaming = S.sessionView.projEl && S.sessionView.projEl.querySelector("input");
+    if (!S.sessionView.agentFocus && !S.sessionView.monitorFocus && !S.sessionView.jobFocus && !renaming)
+      renderSessionChrome(S.sessionView.tab);
   }
 }
 

@@ -24,9 +24,6 @@
 //
 // Usage: node tests/jsdom/newsession.js dashboard/static/app.10-control.js \
 //                                       dashboard/static/app.09-newsession.js
-// (app.10 rides along for `modelKey`, the host-declared model-match rule the
-// resume prefill applies — the same "load the REAL neighbour" discipline
-// headeract.js uses for BUSY_TABS/liveTab.)
 // SKIPPED when `node` is absent — it is never a build requirement
 // (docs/testing.md).
 "use strict";
@@ -36,6 +33,8 @@ const vm = require("vm");
 const { El, domGlobals } = require("./domshim");
 
 const posted = [];
+const clientEvents = [];
+const toasts = [];
 const cmdAsks = [];          // every "/" menu vocabulary request the box made
 let slashSrc = null;         // the first-prompt box's own "/" source callback
 const modal = new El("div");
@@ -70,24 +69,25 @@ const sandbox = {
   // (`toolOpts = (tbl, t) => tbl[t] || tbl.claude_code`).
   // one SWITCHABLE account row, so "is the account picker offered" is decided
   // by the picked host's `accounts` flag rather than by there being no accounts
-  S: { sessions: [], nsPrefs: {}, nsDrafts: {}, cur: null,
-       accts: [{ slug: "c1", label: "one", switchable: true, usage: {} }],
-       ses: null, jump: null, pendingUI: false,
+  S: { sessions: [], nsPrefs: {}, nsDrafts: {}, currentSessionId: null,
+       usageRows: [{ harness: "claude_code", account_id: "c1",
+                     display_name: "one", switchable: true, windows: [],
+                     scheduling_score: "0", scheduling_allowed: true,
+                     limit: null, authentication_error: null }],
+       sessionView: null, jump: null, pendingUI: false,
        hosts: [
          { name: "claude_code", label: "Claude Code", launchable: true,
-           default: true, accounts: true, attach: true, model_match: "family",
+           default: true, accounts: true, attach: true,
            model_choices: ["fable", "opus", "sonnet", "haiku"],
            effort_choices: ["low", "medium", "high", "xhigh", "max"],
            model_default: "fable", effort_default: "high" },
          { name: "codex", label: "Codex", launchable: true,
            default: false, accounts: false, attach: false,
-           model_match: "exact",
            model_choices: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.5"],
            effort_choices: ["low", "medium", "high", "xhigh", "max", "ultra"],
            model_default: "gpt-5.6-sol", effort_default: "low" },
          { name: "opencode", label: "OpenCode", launchable: true,
            default: false, accounts: false, attach: false,
-           model_match: "exact",
            model_choices: ["oc-large", "oc-small"],
            effort_choices: [], model_default: "oc-small",
            effort_default: "" },
@@ -96,7 +96,8 @@ const sandbox = {
   $modal: modal,
   $newbtn: new El("button"), $statsbtn: new El("button"),
   $notifytoggle: new El("button"), $view: new El("div"),
-  clog: () => {}, toast: () => {}, route: () => {},
+  clog: (sessionId, name) => clientEvents.push({ sessionId, name }),
+  toast: (kind, title) => toasts.push({ kind, title }), route: () => {},
   // the launch now arms the jump watch + tears the form down SYNCHRONOUSLY, on
   // the click (the waiting room must not wait for the POST — docs/dashboard.md
   // *The pending view*), so go() reaches these two other-part names before it
@@ -119,12 +120,16 @@ const sandbox = {
   slashMenu: (box, host, src) => { slashSrc = src; return { key: () => false }; },
   // the "/" menu's fetch, recorded: the new-session box must ask for the
   // vocabulary of the TOOL the picker is on (bug 13 — it used to pass neither a
-  // sid nor a tool, so the server answered with the default host's commands)
-  cmdsFor: (cwd, cache, key, sid, tool) => {
-    cmdAsks.push({ cwd, key, sid: sid || "", tool: tool || "" });
+  // sessionId nor a tool, so the server answered with the default host's commands)
+  cmdsFor: (workingDirectory, cache, key, sessionId, tool) => {
+    cmdAsks.push({ workingDirectory, key, sessionId: sessionId || "", tool: tool || "" });
     return [];
   },
-  groupKey: (r) => r.cwd || "",
+  groupKey: (r) => r.workingDirectory || "",
+  sessionId: (row) => row.session.session_id,
+  sessionWorkingDirectory: (row) => row.session.working_directory || "",
+  sessionIsLive: (row) => !!row.terminal.window_id,
+  sessionWindowId: (row) => row.terminal.window_id || "",
   // app.00-core's shortModel is a PASS-THROUGH now (the server serves each id
   // in its owning host's spelling), so the stub is the real function
   shortModel: (m) => String(m || "").trim(),
@@ -230,7 +235,7 @@ function toolShape() {
   const acct = fieldByLabel("account");
   // …and what the "/" menu would ask the server for RIGHT NOW: slashMenu's
   // source callback is the box's own, so calling it is exactly what typing "/"
-  // does (bug 13 — it used to name neither a sid nor a tool, so the server
+  // does (bug 13 — it used to name neither a sessionId nor a tool, so the server
   // answered every new-session menu with the DEFAULT host's commands).
   cmdAsks.length = 0;
   if (slashSrc) slashSrc();
@@ -264,18 +269,33 @@ step("launch", () => {
   submit.onclick();
 });
 out.posted = posted.map((p) => p.url);
-const launch = posted.find((p) => p.url === "/api/sessions/new") || {};
-out.launch_cwd = (launch.body && launch.body.cwd) || "";
+const launch = posted.find((p) => p.url === "/api/sessions") || {};
+out.launch_cwd = (launch.body && launch.body.working_directory) || "";
 // the tool routed to the launch body — "codex" after the tool step's switch, and
 // (codex has no switcher) no account rides along
-out.launch_tool = (launch.body && launch.body.tool) || "";
-out.launch_account = (launch.body && launch.body.account) || "";
+out.launch_tool = (launch.body && launch.body.harness) || "";
+out.launch_account = (launch.body && launch.body.account_id) || "";
 // codex's model/effort defaults must be EXPLICIT + supported — never the empty
 // "codex default" pseudo-option, never the ChatGPT-unsupported gpt-5-codex
-out.launch_model = (launch.body && launch.body.model) || "";
+out.launch_model = (launch.body && launch.body.model_id) || "";
 out.launch_effort = (launch.body && launch.body.effort) || "";
 // the optimistic hand-off, as it stood WHILE the launch request was open
 out.launch_armed = !!launch.armed;
 out.launch_hash = launch.hash || "";
+
+// A process can create its canonical session and exit before a live terminal
+// snapshot reaches the browser. That is still a resolved launch, not two
+// minutes of "starting session" followed by "never appeared".
+step("ended launch", () => {
+  sandbox.S.sessions = [{
+    session: { session_id: "ended-session", working_directory: "/tmp/proj",
+               title: null, state: "finished" },
+    terminal: { window_id: null },
+  }];
+  sandbox.checkJump();
+});
+out.ended_launch_hash = sandbox.location.hash;
+out.ended_launch_event = clientEvents.find((event) => event.name === "launch.ended") || null;
+out.ended_launch_toast = toasts.find((toast) => toast.title.indexOf("exited") >= 0) || null;
 
 console.log(JSON.stringify(out));

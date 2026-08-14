@@ -13,23 +13,20 @@
 # an audit row, or an error detail.
 #
 # Env knobs (read at CALL time, not import — the in-process test server flips
-# them per-test): CLAUDE_DICTATE_KEY_FILE / CLAUDE_DICTATE_KEYTERMS_FILE
-# override the file locations; CLAUDE_DICTATE_GRANT_URL points the grant call
+# them per-test): BAQYLAU_DICTATION_KEY_FILE / BAQYLAU_DICTATION_KEYTERMS_FILE
+# override the file locations; BAQYLAU_DICTATION_GRANT_URL points the grant call
 # at a fake server in tests (and is why grant() is testable hermetically).
 import json
 import os
 import urllib.request
 from urllib.parse import quote
 
-import plugins
-
 DEFAULT_KEY_FILE = "~/.config/deepgram/api-key"
 DEFAULT_KEYTERMS_FILE = "~/.config/deepgram/keyterms"
-PROJECT_KEYTERMS_NAME = "deepgram-keyterms"   # inside each applicable .claude/
 DEEPGRAM_GRANT_URL = "https://api.deepgram.com/v1/auth/grant"
 DEEPGRAM_LISTEN_URL = "wss://api.deepgram.com/v1/listen"
 
-GRANT_TIMEOUT_S = 5.0    # the grant is one small HTTPS POST; fail fast so a
+GRANT_TIMEOUT_SECONDS = 5.0    # the grant is one small HTTPS POST; fail fast so a
 #                          Deepgram outage can't hold a server thread long
 MODEL = "nova-3"         # keyterm prompting requires nova-3
 LANGUAGE = "en"
@@ -37,7 +34,7 @@ LANGUAGE = "en"
 # 2026-07-27 is Deepgram's own 16 kHz model rate, not the AudioContext's native
 # one: the worklet resamples (hardware already at or below 16k passes through),
 # because native-rate PCM is 768 kbps of sustained uplink and an iPad over the
-# tunnel could not hold that up — the send queue backed up and the transcript
+# tunnel could not hold that up — the send queue backed up and the native history
 # fell further behind with every sentence (docs/dashboard.md *Dictation lag*).
 # The range stays a sanity bound, not a config: the client is trusted to
 # declare what it sends, but anything outside hardware reality is a bogus
@@ -49,7 +46,7 @@ KEYTERMS_MAX = 100       # keep the URL sane; Deepgram tolerates ~100s of terms
 
 def key_file():
     return os.path.expanduser(
-        os.environ.get("CLAUDE_DICTATE_KEY_FILE") or DEFAULT_KEY_FILE)
+        os.environ.get("BAQYLAU_DICTATION_KEY_FILE") or DEFAULT_KEY_FILE)
 
 
 def available():
@@ -69,29 +66,16 @@ def _read(path):
         return f.read().strip()
 
 
-def keyterms(cwd=""):
-    """The dictation vocabulary for a session in `cwd`, PROJECT-FIRST: each
-    applicable `.claude/` dir's `deepgram-keyterms` (nearest-first — the same
-    `plugins.config_dirs` walk the "/" menu's discovery rides, so a nested
-    worktree inherits its project's vocabulary and a project file can be
-    COMMITTED and shared), then the user-global file (CLAUDE_DICTATE_
-    KEYTERMS_FILE / ~/.config/deepgram/keyterms). Every file parses the same:
-    one term per line, #-comments and blanks dropped. First occurrence wins
-    the dedup, and the KEYTERMS_MAX cap — biasing degrades with bloat, so
-    when something must fall off it is the FARTHEST vocabulary. Missing
-    files are silence, never errors; cwd="" (or a failed walk — audited by
-    the route, never raised) = global-only."""
-    files = []
-    if cwd:
-        try:
-            files += [os.path.join(d, PROJECT_KEYTERMS_NAME)
-                      for d in plugins.config_dirs(cwd) or []]
-        except Exception:
-            files = []          # discovery must never break the mint
-    files.append(os.path.expanduser(
-        os.environ.get("CLAUDE_DICTATE_KEYTERMS_FILE")
-        or DEFAULT_KEYTERMS_FILE))
+def keyterms(harness_terms=()):
+    """Merge plugin-owned project terms with the user-global vocabulary."""
+    files = [os.path.expanduser(
+        os.environ.get("BAQYLAU_DICTATION_KEYTERMS_FILE")
+        or DEFAULT_KEYTERMS_FILE)]
     terms, seen = [], set()
+    for term in harness_terms:
+        if term and term not in seen:
+            seen.add(term)
+            terms.append(term)
     for path in files:
         try:
             raw = _read(path)
@@ -105,23 +89,27 @@ def keyterms(cwd=""):
     return terms[:KEYTERMS_MAX]
 
 
-def grant(ttl_s=None):
+def grant(lifetime_seconds=None):
     """Trade the on-disk API key for a short-lived browser token: Deepgram's
     POST /v1/auth/grant → {"access_token", "expires_in"}. Raises on any
     failure (no key, HTTP error, malformed response) — the route turns that
     into a JSON error + audit rows; nothing here writes state."""
     key = _read(key_file())
-    url = os.environ.get("CLAUDE_DICTATE_GRANT_URL") or DEEPGRAM_GRANT_URL
-    body = json.dumps({"ttl_seconds": ttl_s}).encode() if ttl_s else b"{}"
-    req = urllib.request.Request(
+    url = os.environ.get("BAQYLAU_DICTATION_GRANT_URL") or DEEPGRAM_GRANT_URL
+    body = (
+        json.dumps({"ttl_seconds": lifetime_seconds}).encode()
+        if lifetime_seconds
+        else b"{}"
+    )
+    request = urllib.request.Request(
         url, data=body, method="POST",
         headers={"Authorization": "Token " + key,
                  "Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=GRANT_TIMEOUT_S) as r:
-        out = json.loads(r.read().decode("utf-8"))
-    if not isinstance(out, dict) or not out.get("access_token"):
+    with urllib.request.urlopen(request, timeout=GRANT_TIMEOUT_SECONDS) as response:
+        document = json.loads(response.read().decode("utf-8"))
+    if not isinstance(document, dict) or not document.get("access_token"):
         raise ValueError("grant response missing access_token")
-    return out
+    return document
 
 
 def ws_url(sample_rate, terms=()):
@@ -134,7 +122,7 @@ def ws_url(sample_rate, terms=()):
     refuses), one keyterm= per vocabulary term — the caller passes
     the keyterms() result so the merged list is read once and the audit
     count matches what actually rode the URL."""
-    base = os.environ.get("CLAUDE_DICTATE_LISTEN_URL") or DEEPGRAM_LISTEN_URL
+    base = os.environ.get("BAQYLAU_DICTATION_LISTEN_URL") or DEEPGRAM_LISTEN_URL
     params = [
         ("model", MODEL),
         ("language", LANGUAGE),

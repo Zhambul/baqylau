@@ -1,7 +1,7 @@
-"""claude-dashboard.py [serve|start|stop|status|open]
+"""baqylau-dashboard.py [serve|start|stop|status|open]
 
 The web dashboard's CLI lifecycle. The implementation behind the thin
-bin/claude-dashboard.py shim (bin/ entries stay shims; that FILENAME is audit
+bin/baqylau-dashboard.py entry (that filename is operational diagnostic
 vocabulary — the spawn below re-launches it by name). Lives in the package so
 it is importable/testable in-process, like the rest of the dashboard tier.
 
@@ -23,21 +23,22 @@ import sys
 import time
 
 from core import locks
-from core import paths as P
-from core import spawn as SP
-from core.state import pid_alive
+from core import audit
+from core.process import process_is_alive
+from dashboard import paths
 
 
 def _server():
-    from dashboard import server
-    return server
+    from dashboard.http import handler
+
+    return handler
 
 
 def holder():
     """The running server's pid, or 0 (dead holders are not 'running' — the
     next start steals the stale lock)."""
-    pid = locks.lock_holder(P.DASH_DB, "dashboard")
-    return pid if pid and pid_alive(pid) else 0
+    pid = locks.lock_holder(paths.DASHBOARD_LOCK_DATABASE, "dashboard")
+    return pid if pid and process_is_alive(pid) else 0
 
 
 def url():
@@ -45,18 +46,27 @@ def url():
     # a lazy import keeps this module import-pure like _server() does (config is
     # cheap, but `serve` must stay the only thing that pulls the server in).
     from dashboard import config
-    return "http://%s:%d" % (config.HOST, config.PORT)
+    return "http://%s:%d" % (config.HOST_ADDRESS, config.PORT_NUMBER)
 
 
 def start():
     if holder():
         print("dashboard already running · %s" % url())
         return 0
-    entry = os.path.join(P.BIN, "claude-dashboard.py")   # the load-bearing bin name
-    proc = SP.spawn_detached(entry, ["serve"], "", purpose="web dashboard")
-    if proc is None:
+    entry = os.path.join(paths.BIN_DIRECTORY, "baqylau-dashboard.py")
+    try:
+        process = subprocess.Popen(
+            [sys.executable, entry, "serve"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError:
+        audit.error("", "spawn web dashboard", {"path": entry})
         print("dashboard failed to spawn (see audit errors)", file=sys.stderr)
         return 1
+    audit.spawn("", process.pid, [entry, "serve"], purpose="web dashboard")
     for _ in range(40):                     # ~2s for the lock/port to land
         if holder():
             break
@@ -111,6 +121,6 @@ def main(argv):
         return status()
     if cmd == "open":
         return open_browser()
-    print(__doc__ or "usage: claude-dashboard.py [serve|start|stop|status|open]",
+    print(__doc__ or "usage: baqylau-dashboard.py [serve|start|stop|status|open]",
           file=sys.stderr)
     return 2

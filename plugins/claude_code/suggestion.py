@@ -19,10 +19,17 @@
 # `probe()` wraps it with the get-text call + audit-before-swallow.
 import re
 
-from core.noaudit import load_audit
-from core.render import ANSI_RE, strip_ansi
+from core import audit as A
 
-A = load_audit()
+CONTROL_SEQUENCE = re.compile(
+    r"\x1b\[[0-9;:?]*[ -/]*[@-~]"
+    r"|\x1b\][^\x1b\x07]*(?:\x07|\x1b\\)"
+    r"|\x1b[@-Z\\-_]"
+)
+
+
+def strip_ansi(text: str) -> str:
+    return CONTROL_SEQUENCE.sub("", text)
 
 PROMPT = "❯"            # the input-box prompt marker (also the dialog cursor)
 NBSP = "\xa0"           # the prompt-to-content separator the TUI uses
@@ -55,7 +62,7 @@ def _faint_chars(s):
     i, n, faint = 0, len(s), False
     while i < n:
         if s[i] == "\x1b":
-            m = ANSI_RE.match(s, i)
+            m = CONTROL_SEQUENCE.match(s, i)
             if m:
                 sgr = _SGR.fullmatch(m.group(0))
                 if sgr:
