@@ -248,15 +248,38 @@ function applyQuickSwitch(cmd, arg) {
 function curModelFamily() {
   const sessionView = S.sessionView;
   if (sessionView && sessionView.pendingModel) return sessionView.pendingModel;
-  const contextWindow = (sessionView && (sessionView.contextWindow || (sessionView.meta && sessionView.meta.contextWindow))) || null;
-  return (contextWindow && contextWindow.model_selection) || "";
+  return curModelRef(sessionView).selection || "";
 }
 
-// The model button's label carries the session's CURRENT model when the ctx
-// probe knows it (meta/SSE `ctx` — the transcript tail's last assistant
-// record), so the row doubles as a live model indicator. A just-switched
-// model shows as pendingModel until the probe's family confirms it (the
-// ctx model stays stale until the next assistant turn).
+// The session's current model for the ✦ button: the last `model.changed` (meta,
+// refreshed by the SSE `activity` snapshot), falling back to the ctx probe.
+//
+// The session model is preferred because it moves AT THE MOMENT of the switch: a
+// `/model opus` turn emits `model.changed reason="selected"` from the command
+// itself. The ctx probe cannot — its model describes the window the token figure
+// was MEASURED against, so it only moves on the next assistant record, which is
+// why this button used to sit on the old model until the session next replied
+// (reported: "the model card did not change after model was changed").
+//
+// The fallback still matters: a `selected` event carries the selection ALIAS the
+// transcript had ("opus"), and the probe's later `reported_by_harness` event
+// carries the resolved id ("opus-5"). So the label sharpens on the next turn
+// rather than waiting for it.
+function curModelRef(sessionView) {
+  const meta = (sessionView && sessionView.meta) || null;
+  if (meta && meta.model_selection)
+    return { short: meta.model_short || meta.model, selection: meta.model_selection };
+  const contextWindow = (sessionView && (sessionView.contextWindow || (meta && meta.contextWindow))) || null;
+  return contextWindow
+    ? { short: contextWindow.model_short, selection: contextWindow.model_selection }
+    : { short: "", selection: null };
+}
+
+// The model button's label carries the session's CURRENT model (curModelRef —
+// the last `model.changed`, ctx probe as fallback), so the row doubles as a live
+// model indicator. A just-switched model shows as pendingModel until the session
+// model's family confirms it, which now happens on the switch itself rather than
+// on the next assistant turn.
 // A `model_refusal_fallback` (meta/SSE `fallback` — a safeguard refusal
 // rerouted the session to a fallback model, no hook fires) appends a ⚠ whose
 // own native title carries Claude Code's full notice; the server serves the
@@ -265,10 +288,10 @@ function curModelFamily() {
 // (just-clicked switch) hides it optimistically for the same reason.
 function setModelBtn(btn) {
   const sessionView = S.sessionView;
-  const contextWindow = (sessionView && (sessionView.contextWindow || (sessionView.meta && sessionView.meta.contextWindow))) || null;
-  const m = shortModel(contextWindow && contextWindow.model_short);
+  const current = curModelRef(sessionView);
+  const m = shortModel(current.short);
   if (sessionView && sessionView.pendingModel) {
-    if (contextWindow && contextWindow.model_selection === sessionView.pendingModel)
+    if (current.selection === sessionView.pendingModel)
       sessionView.pendingModel = null;
     else { btn.textContent = "✦ " + sessionView.pendingModel + " ▾"; return; }
   }

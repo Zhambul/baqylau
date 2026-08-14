@@ -2131,10 +2131,32 @@ host's (the `MODEL_CHOICES`/`EFFORT_CHOICES` fallback pair that used to sit
 in `app.10-control.js` is deleted).
 
 The model button's label shows the session's CURRENT model (`✦ opus-4.8 ▾`)
-from the ctx probe — now its `model_short` field, the owning host's own
-display spelling of the raw id (`HostControl.model_short`, stamped by
-`read/meta.session_ctx`), refreshed by the same `ctx` SSE event that drives
-the ctx bar. `shortModel` in the page is a bare pass-through today: it used
+from the last `model.changed` event — `meta.model_short`/`model_selection`,
+carried on the session snapshot the `activity` SSE event refreshes — with the
+ctx probe as its fallback (`curModelRef`).
+
+The session model is preferred because it moves AT THE MOMENT of the switch.
+The ctx probe cannot: its model names the window the token figure was
+*measured* against, so it only advances on the next assistant record, and the
+button consequently sat on the OLD model after a `/model` typed at the
+terminal until the session next replied (reported: "the model card did not
+change after model was changed"). What made the fix available is that a
+`/model` turn now emits `model.changed` with `reason="selected"` from the
+command itself (docs/canonical-harness-architecture.md, *One gesture may be
+several records*); before that event existed, the probe was the only thing
+that ever named the current model, and the page's `pendingModel` optimism was
+the whole answer — it still is for the interval before the switch lands, and
+it now clears against the same session model.
+
+The fallback stays load-bearing rather than vestigial: a `selected` event
+carries the selection ALIAS the transcript held (`opus`), and the later
+`reported_by_harness` event carries the resolved id (`opus-5`), so the label
+sharpens on the next turn instead of waiting for it. The probe's
+`model_short` remains the owning host's own display spelling of the raw id
+(`HostControl.model_short`, stamped by `read/meta.session_ctx`), refreshed by
+the same `ctx` SSE event that drives the ctx bar — which continues to show the
+measurement model, deliberately, since that is what the ctx figure describes.
+`shortModel` in the page is a bare pass-through today: it used
 to branch TWO hosts' id grammars inline (strip `claude-` and join numeric
 version parts, but return a `gpt-`-prefixed id untouched, because that same
 parse turns `gpt-5.6-terra` into a useless `gpt`), which is a model-id sniff

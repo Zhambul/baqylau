@@ -150,6 +150,13 @@ function canonicalSessionMeta(snapshot) {
     title: session.title || "",
     workingDirectory: session.working_directory || "",
     model: session.model ? session.model.native_id : "",
+    // the session's CURRENT model, as the last model.changed named it — the ✦
+    // button's label and picked entry. Distinct from contextWindow.model, which
+    // describes the window the ctx figure was MEASURED against and so only moves
+    // on the next assistant record (see setModelBtn).
+    model_short: session.model
+      ? (session.model.display_name || session.model.native_id) : "",
+    model_selection: session.model ? session.model.selection_id : null,
     effort: session.effort || "",
     account: session.account ? {
       slug: session.account.account_id,

@@ -155,6 +155,14 @@ def test_header_and_memory_interactions_are_unchanged():
         "dashboard/static/app.11-memory.js",
     )
     assert header["idle"]["⇆ migrate"]["disabled"] is False
+    # the ✦ button follows the session's model.changed, not the ctx probe's
+    # measurement model, so a terminal `/model opus` shows at once instead of
+    # waiting for the next assistant record
+    assert header["model"]["switched"]["label"] == "✦ opus ▾"
+    assert header["model"]["switched"]["cur"] == "opus"
+    assert header["model"]["switched_clears_pending"]["pending"] == ""
+    # with no session model yet, the probe is still the fallback
+    assert header["model"]["claude"]["label"] == "✦ opus-4.8 ▾"
     assert memory["opened"] == [
         {"path": "/w/platform/concepts/architecture.md", "reset": True}
     ]

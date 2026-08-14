@@ -193,6 +193,22 @@ const out = {
                                                 model_short: "opus-4.8",
                                                 model_selection: "opus" } },
                               "sonnet"),
+    // A `/model` typed AT THE TERMINAL moves the session model at once, while
+    // the ctx probe still describes the window the last assistant record was
+    // measured against. The button follows the SWITCH, not the measurement —
+    // otherwise it sits on the old model until the session next replies.
+    switched: modelBtn({ ...LIVE,
+                         model_short: "opus", model_selection: "opus",
+                         ctx: { model: "claude-sonnet-5",
+                                model_short: "sonnet-5",
+                                model_selection: "sonnet" } }),
+    // and the optimistic label clears against the same source
+    switched_clears_pending: modelBtn({ ...LIVE,
+                                        model_short: "opus", model_selection: "opus",
+                                        ctx: { model: "claude-sonnet-5",
+                                               model_short: "sonnet-5",
+                                               model_selection: "sonnet" } },
+                                      "opus"),
   },
   // the bar is emptied when you leave the session view
   cleared: (() => { sandbox.clearHeaderActions();
