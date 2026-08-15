@@ -1,0 +1,796 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>baqylau — the harness contract, explained</title>
+<style>
+  :root {
+    --bg:#14161a; --panel:#191c22; --panel2:#1e222a; --line:#2b3038;
+    --text:#d6dae1; --soft:#9aa3b0; --dim:#6b7480;
+    --accent:#7aa2f7; --green:#9ece6a; --amber:#e0af68; --red:#f7768e; --violet:#bb9af7;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}
+  .wrap{max-width:960px;margin:0 auto;padding:48px 26px 120px}
+  h1{font-size:30px;line-height:1.25;margin:0 0 6px;letter-spacing:-.3px}
+  h2{font-size:22px;margin:56px 0 14px;padding-top:20px;border-top:1px solid var(--line)}
+  h3{font-size:18px;margin:34px 0 10px;color:var(--accent)}
+  h4{font-size:15px;margin:24px 0 8px;color:var(--soft);font-weight:600}
+  p{margin:12px 0}
+  .lede{color:var(--soft);font-size:17px}
+  code{font-family:var(--mono);font-size:.88em;background:#232833;padding:1px 5px;
+       border-radius:3px;color:#c8d3e6}
+  pre{background:var(--panel2);border:1px solid var(--line);border-radius:7px;
+      padding:14px 16px;overflow-x:auto;margin:14px 0;font-family:var(--mono);
+      font-size:13px;line-height:1.55;white-space:pre}
+  pre code{background:none;padding:0;font-size:inherit;color:var(--text)}
+  .file{font-family:var(--mono);font-size:12px;color:var(--dim);margin:16px 0 -8px;display:block}
+  table{border-collapse:collapse;width:100%;margin:16px 0;font-size:14px}
+  th,td{border:1px solid var(--line);padding:8px 11px;text-align:left;vertical-align:top}
+  th{background:var(--panel2);color:var(--soft);font-weight:600}
+  ul,ol{padding-left:22px;margin:12px 0}
+  li{margin:7px 0}
+  .note,.warn,.key,.new{border-left:3px solid var(--accent);background:var(--panel);
+       padding:12px 16px;margin:18px 0;border-radius:0 6px 6px 0}
+  .warn{border-left-color:var(--amber)}
+  .key{border-left-color:var(--green)}
+  .new{border-left-color:var(--violet)}
+  .new b{color:var(--violet)}
+  .note b,.warn b,.key b{color:#fff}
+  .toc{background:var(--panel);border:1px solid var(--line);border-radius:7px;padding:14px 20px;margin:26px 0}
+  .toc a{color:var(--accent);text-decoration:none}
+  .toc a:hover{text-decoration:underline}
+  .req{display:inline-block;font-family:var(--mono);font-size:11px;padding:1px 7px;
+       border-radius:10px;border:1px solid var(--line);color:var(--soft);
+       background:var(--panel2);margin-left:8px;vertical-align:2px}
+  .req.must{color:var(--green);border-color:#33452e}
+  .req.opt{color:var(--dim)}
+  .small{font-size:14px;color:var(--soft)}
+  .diagram{font-family:var(--mono);font-size:13px;line-height:1.7;background:var(--panel2);
+     border:1px solid var(--line);border-radius:7px;padding:16px 18px;overflow-x:auto;
+     margin:16px 0;white-space:pre}
+  .diagram .a{color:var(--accent)} .diagram .g{color:var(--green)}
+  .diagram .v{color:var(--violet)} .diagram .c{color:var(--dim)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>The harness contract, explained</h1>
+<p class="lede">Everything in <code>contracts/harness.py</code>: what each class is for, what the words mean, and how the pieces fit. Assumes you have not read the code.</p>
+
+<div class="toc">
+  <b>Contents</b>
+  <ol>
+    <li><a href="#idea">The idea in one page</a></li>
+    <li><a href="#vocab">Four words you need first</a></li>
+    <li><a href="#plugin">HarnessPlugin — the whole surface</a></li>
+    <li><a href="#find">Finding sessions</a></li>
+    <li><a href="#watch">Watching a session</a></li>
+    <li><a href="#hooks">Hooks — when the tool calls us</a></li>
+    <li><a href="#lifecycle">Lifecycle — reacting to start and end</a></li>
+    <li><a href="#control">Controls — driving the tool</a></li>
+    <li><a href="#launch">Launching</a></li>
+    <li><a href="#catalog">Catalog — what the menus offer</a></li>
+    <li><a href="#usage">Usage — limits and billing</a></li>
+    <li><a href="#memory">Memory</a></li>
+    <li><a href="#probe">Terminal probe</a></li>
+    <li><a href="#together">The whole thing on one page</a></li>
+  </ol>
+</div>
+
+<h2 id="idea">1. The idea in one page</h2>
+
+<p>Baqylau watches coding tools it does not own — Claude Code, Codex — and shows them in one interface. Those tools have nothing in common: different files, different formats, different ways of being controlled.</p>
+
+<p><code>contracts/harness.py</code> is the list of questions baqylau is allowed to ask a tool, and the shapes of the answers. Its first line says exactly that:</p>
+
+<span class="file">contracts/harness.py:1</span>
+<pre><code>"""The complete public contract implemented by every harness plugin."""</code></pre>
+
+<p>"Harness" is this codebase's word for one such tool. Claude Code is a harness. Codex is a harness. A <em>plugin</em> is the adapter that answers the contract's questions for one harness.</p>
+
+<p>The file contains two kinds of thing, and telling them apart is most of understanding it:</p>
+
+<table>
+<tr><th>kind</th><th>what it is</th><th>example</th></tr>
+<tr><td><b>Protocol</b></td><td>A list of <em>things a plugin must be able to do</em>. Behaviour. Verbs.</td><td><code>HarnessLauncher</code> — "can start a new session"</td></tr>
+<tr><td><b>dataclass</b></td><td>A <em>shape of data</em> passed in or out. Nouns.</td><td><code>LaunchRequest</code> — "start one in this folder, with this model"</td></tr>
+</table>
+
+<h2 id="vocab">2. Four words you need first</h2>
+
+<div class="new">
+<b>Protocol.</b> A Python class that lists method names and signatures with no bodies — the bodies are literally <code>...</code>. It describes a <em>shape</em>. Any class with matching methods satisfies it, whether or not it says so. That is called <em>structural typing</em>: the compiler checks the shape, not the family tree.
+<pre><code>class HarnessHook(Protocol):
+    def receive(self, payload: bytes) -&gt; HookIntake: ...</code></pre>
+This is convenient and it is also a trap, because a class can drift out of the shape in silence — rename a parameter and nothing objects until something breaks at runtime. That is why this repository requires implementations to <em>name</em> the Protocol they implement (<code>class ClaudeHook(HarnessHook):</code>) and has a test that fails when one does not.
+</div>
+
+<div class="new">
+<b>Frozen dataclass.</b> <code>@dataclass(frozen=True)</code> generates a class from a list of typed fields, and makes it immutable — assigning to a field after construction raises. Nearly every noun in this file is one. Immutability matters because these objects are passed between threads and stored as evidence; a value that can be edited after the fact is not evidence.
+</div>
+
+<div class="new">
+<b>TypeAlias / Literal.</b> <code>Literal["started", "finished"]</code> means "this string may only ever be one of these two". It is a closed set, checked by tools and by tests. When you see one, read it as a complete list of the possibilities — there is no thirteenth control name hiding somewhere.
+</div>
+
+<div class="new">
+<b>Actor.</b> Not a Python concept — this codebase's word for anything that acts inside a session. The main agent is an actor (the <em>lead</em>). Each subagent it spawns is an actor. A teammate is an actor. Every piece of evidence carries an <code>actor_id</code> saying who did it, which is how the interface can filter a whole view down to one subagent.
+</div>
+
+<h2 id="plugin">3. HarnessPlugin — the whole surface</h2>
+
+<p>This is the object a plugin hands to baqylau. Everything else in the file exists to describe one of these eleven fields.</p>
+
+<span class="file">contracts/harness.py:606</span>
+<pre><code>@dataclass(frozen=True)
+class HarnessPlugin:
+    info: HarnessInfo
+    sessions: SessionRecognizer
+    events: HarnessEvents
+    hook: HarnessHook | None = None
+    lifecycle: HarnessLifecycle | None = None
+    controller: HarnessController | None = None
+    launcher: HarnessLauncher | None = None
+    catalog: HarnessCatalog | None = None
+    usage: HarnessUsage | None = None
+    memory: HarnessMemory | None = None
+    terminal_probe: HarnessTerminalProbe | None = None</code></pre>
+
+<p>Read the <code>| None = None</code> as <b>optional</b>. Only the first three are required, and that is a deliberate statement: a harness that can only be <em>watched</em> — never driven, never launched — is a complete and legal plugin. Everything past <code>events</code> adds a capability.</p>
+
+<table>
+<tr><th>field</th><th>the question it answers</th><th></th></tr>
+<tr><td><code>info</code></td><td>Who are you?</td><td><span class="req must">required</span></td></tr>
+<tr><td><code>sessions</code></td><td>Which files on this machine are your sessions?</td><td><span class="req must">required</span></td></tr>
+<tr><td><code>events</code></td><td>What is happening inside one?</td><td><span class="req must">required</span></td></tr>
+<tr><td><code>hook</code></td><td>Here is something you pushed to me — what does it mean?</td><td><span class="req opt">optional</span></td></tr>
+<tr><td><code>lifecycle</code></td><td>A session just started or ended; do your part.</td><td><span class="req opt">optional</span></td></tr>
+<tr><td><code>controller</code></td><td>Do this to the running session.</td><td><span class="req opt">optional</span></td></tr>
+<tr><td><code>launcher</code></td><td>How do I start a new one?</td><td><span class="req opt">optional</span></td></tr>
+<tr><td><code>catalog</code></td><td>What should the menus offer?</td><td><span class="req opt">optional</span></td></tr>
+<tr><td><code>usage</code></td><td>What are the rate limits and costs?</td><td><span class="req opt">optional</span></td></tr>
+<tr><td><code>memory</code></td><td>Which notes has this session read?</td><td><span class="req opt">optional</span></td></tr>
+<tr><td><code>terminal_probe</code></td><td>What is typed in the input box right now?</td><td><span class="req opt">optional</span></td></tr>
+</table>
+
+<h4>HarnessInfo</h4>
+<span class="file">contracts/harness.py:596</span>
+<pre><code>@dataclass(frozen=True)
+class HarnessInfo:
+    name: str                       # "claude_code" — the internal key
+    display_name: str               # "Claude Code" — what people read
+    plugin_version: str             # stamped on every translation verdict
+    canonical_version: int          # which event vocabulary this was built against
+    supports_attachments: bool = False
+    default_for_launch: bool = False</code></pre>
+
+<p><code>plugin_version</code> is written into the database next to every interpretation this plugin makes. So when an interpretation turns out to be wrong, you can find every record produced by the version that made the mistake. <code>canonical_version</code> is the event-vocabulary version the plugin was written against, which is how a plugin built for an older vocabulary can be refused rather than silently misread.</p>
+
+<h2 id="find">4. Finding sessions</h2>
+
+<p>Before anything can be watched, baqylau must know a session exists. That is two questions, and they are deliberately separate.</p>
+
+<span class="file">contracts/harness.py:135</span>
+<pre><code>class SessionRecognizer(Protocol):
+    def discover(self) -&gt; tuple[RecognizedSession, ...]: ...
+    def recognize(self, candidate: SessionCandidate) -&gt; RecognizedSession | None: ...</code></pre>
+
+<ul>
+<li><b><code>discover()</code></b> — "go look around and tell me every session of yours you can find." The plugin searches its own directories. Nobody tells it where to look; only the plugin knows.</li>
+<li><b><code>recognize(candidate)</code></b> — "here is one specific file. Is it yours?" Returns <code>None</code> for no. This is how a file can be offered to every plugin in turn until one claims it.</li>
+</ul>
+
+<h4>SessionCandidate — the question</h4>
+<span class="file">contracts/harness.py:130</span>
+<pre><code>@dataclass(frozen=True)
+class SessionCandidate:
+    source_reference: str                    # a path to inspect
+    working_directory: str | None = None</code></pre>
+
+<h4>RecognizedSession — the answer</h4>
+<span class="file">contracts/harness.py:99</span>
+<pre><code>@dataclass(frozen=True)
+class RecognizedSession:
+    session_id: SessionId          # baqylau's id for it
+    lead_actor_id: ActorId         # the main agent inside it
+    native_session_id: str         # the tool's OWN id for it
+    source_reference: str          # the file that IS this session's record
+    working_directory: str | None
+    native_process_id: int | None = None</code></pre>
+
+<p>Two ids, deliberately. <code>native_session_id</code> is whatever the tool calls it. <code>session_id</code> is what baqylau calls it. Keeping both means a tool can change its identifier scheme without baqylau losing track, and it means two harnesses cannot collide.</p>
+
+<p><code>source_reference</code> is the load-bearing field: the file that <em>is</em> the session's record. Everything in the next section reads it.</p>
+
+<p>This class also has a small convenience:</p>
+
+<span class="file">contracts/harness.py:108</span>
+<pre><code>    @property
+    def event_source_context(self) -&gt; EventSourceContext:
+        return EventSourceContext(
+            session_id=self.session_id,
+            lead_actor_id=self.lead_actor_id,
+            actor_id=self.lead_actor_id,      # the lead is reading its own file
+            parent_actor_id=None,             # the lead has no parent
+            source_reference=self.source_reference,
+        )</code></pre>
+
+<p>A <b>property</b> is a method you read like a field (<code>session.event_source_context</code>, no parentheses). This one builds the context for reading the <em>lead's</em> file: the actor is the lead, and it has no parent. A subagent's file gets a different context, built by hand, where <code>actor_id</code> is the subagent and <code>parent_actor_id</code> is the lead.</p>
+
+<h2 id="watch">5. Watching a session</h2>
+
+<p>This is the heart of the contract, and it is two jobs that must not be confused: <b>collecting bytes</b> and <b>understanding them</b>.</p>
+
+<span class="file">contracts/harness.py:143</span>
+<pre><code>class HarnessEvents(Protocol):
+    def sources(
+        self,
+        session: RecognizedSession,
+        checkpoints: CheckpointStore,
+    ) -&gt; tuple[HarnessEventSource, ...]: ...
+
+    def translate(self, raw_event: RawEvent) -&gt; TranslationResult: ...</code></pre>
+
+<p>They are separate because collecting must never be blocked by a failure to understand. Bytes we cannot interpret are still stored, and can be re-interpreted later when the interpreter is fixed. If the two were one step, a translation bug would lose the evidence of itself.</p>
+
+<h3>5a. Sources — collecting</h3>
+
+<span class="file">contracts/harness.py:140</span>
+<pre><code>class HarnessEventSource(Protocol):
+    def drain(self, delivery: RawEventDelivery) -&gt; None: ...</code></pre>
+
+<p>One method. "Read whatever is new and hand it over." <b><code>drain</code> does one finite pass and returns</b> — it does not loop, does not sleep, does not wait. Repetition belongs to the one scheduler that calls it every 250ms. A source that looped forever would be a second scheduler nobody could stop.</p>
+
+<p>Where does it hand things? To the object it is given:</p>
+
+<span class="file">contracts/harness.py:86</span>
+<pre><code>class RawEventDelivery(Protocol):
+    def deliver(self, raw_event: RawEvent) -&gt; IngestionResult: ...</code></pre>
+
+<div class="note">
+<b>Why pass this in rather than let the source call the database?</b> Because the source then knows nothing about storage — not the database, not the file, not the transaction. It can be tested by handing it a fake collector. This is <em>dependency injection</em>: a component is given what it needs instead of reaching for it. You will see the same move for <code>CheckpointStore</code>, <code>TerminalControl</code> and <code>SessionLifecycleContext</code>.
+</div>
+
+<h4>RawEvent — one observation</h4>
+<span class="file">contracts/harness.py:30</span>
+<pre><code>@dataclass(frozen=True)
+class RawEvent:
+    raw_event_id: RawEventId       # must be REPRODUCIBLE, never random
+    harness: str
+    source_type: str               # "transcript", "rollout", "hook", "otel", …
+    source_name: str               # the file path, or the hook's name
+    source_position: str           # a byte offset, or the tool's own event id
+    session_id: SessionId
+    actor_id: ActorId
+    parent_actor_id: ActorId | None
+    observed_at: float             # when WE received it
+    encoding: str                  # "json" | "jsonl" — how to read the bytes
+    payload: bytes                 # the bytes, complete and unmodified</code></pre>
+
+<p><code>raw_event_id</code> must be reproducible, because the same line will be read twice — after a crash, after a restart, whenever a checkpoint is lost. For a file source the id is <code>"{which file}:{byte offset}"</code>, so re-reading line 40 produces the same id, and the store recognises it as something it already has. Random ids would fill the database with duplicates.</p>
+
+<p><code>payload</code> is the whole bytes, newline included, never trimmed or prettified. It is the evidence.</p>
+
+<h4>EventSourceContext — who is speaking</h4>
+<span class="file">contracts/harness.py:90</span>
+<pre><code>@dataclass(frozen=True)
+class EventSourceContext:
+    session_id: SessionId
+    lead_actor_id: ActorId         # the session's main agent
+    actor_id: ActorId              # whose file THIS source reads
+    parent_actor_id: ActorId | None
+    source_reference: str</code></pre>
+
+<p>A session has several files: the lead's, and one per subagent. Each gets its own source with its own context, so every byte is attributed as it is collected — not guessed at later. <code>lead_actor_id</code> is carried alongside <code>actor_id</code> so a source can ask "am I the lead?" without being told separately.</p>
+
+<h4>Checkpoints — remembering how far you read</h4>
+<span class="file">contracts/harness.py:44</span>
+<pre><code>@dataclass(frozen=True)
+class SourceCheckpoint:
+    session_id: SessionId
+    source_identity: str           # a stable name for THIS source
+    position: str                  # opaque: only the source knows what it means
+
+
+class CheckpointStore(Protocol):
+    def load(self, source_identity: str) -&gt; SourceCheckpoint | None: ...
+    def commit(self, checkpoint: SourceCheckpoint) -&gt; None: ...</code></pre>
+
+<p><code>position</code> is a <b>string</b>, not a number, and that is intentional. For a file it is a byte offset. For a source watching a directory of task files it is a JSON snapshot of them all. For a source watching a process it is the literal word <code>"finished"</code>. The store keeps it without understanding it; only the source that wrote it has to.</p>
+
+<p><code>source_identity</code> is derived from the file path, not from the object. That is what makes a checkpoint survive a restart: the rebuilt source computes the same identity and resumes at the same byte.</p>
+
+<div class="key">
+<b>Checkpoints are an optimisation, not a correctness mechanism.</b> Losing one costs re-reading a file. It does not create duplicates, because that is already prevented by the reproducible <code>raw_event_id</code>. Two mechanisms, one job each.
+</div>
+
+<h3>5b. Translate — understanding</h3>
+
+<p><code>translate()</code> takes one <code>RawEvent</code> and returns a verdict.</p>
+
+<span class="file">contracts/harness.py:57</span>
+<pre><code>@dataclass(frozen=True)
+class TranslationResult:
+    events: tuple[CanonicalEvent[EventPayload], ...]
+    decision: TranslationDecision
+    reason: str | None = None
+
+    def __post_init__(self) -&gt; None:
+        if self.decision == "translated" and not self.events:
+            raise ValueError("translated observations must produce at least one event")
+        if self.decision != "translated" and self.events:
+            raise ValueError("ignored observations cannot produce canonical events")</code></pre>
+
+<div class="new">
+<b><code>__post_init__</code></b> runs immediately after a dataclass is constructed. Here it makes a contradictory verdict <em>impossible to build</em> — you cannot claim you translated something and produce nothing, and you cannot claim you ignored something while producing events. The check happens at the moment of creation, not later at the point of use.
+</div>
+
+<p>The verdicts:</p>
+
+<span class="file">contracts/harness.py:26</span>
+<pre><code>TranslationDecision: TypeAlias = Literal["translated", "ignored_unknown", "ignored_nonsemantic"]
+RecordedTranslationDecision: TypeAlias = TranslationDecision | Literal["translation_failed"]</code></pre>
+
+<table>
+<tr><th>verdict</th><th>meaning</th><th>alarming?</th></tr>
+<tr><td><code>translated</code></td><td>Understood; here are the facts.</td><td>no</td></tr>
+<tr><td><code>ignored_nonsemantic</code></td><td>Understood, and it means nothing worth keeping. Plumbing.</td><td>no — expected in bulk</td></tr>
+<tr><td><code>ignored_unknown</code></td><td>Not recognised at all. Tools emit plenty we do not model.</td><td>no — expected in bulk</td></tr>
+<tr><td><code>translation_failed</code></td><td>The translator raised an exception.</td><td><b>yes</b> — this is the actionable one</td></tr>
+</table>
+
+<p>Notice the two type aliases. A plugin may only return the first three. <code>translation_failed</code> exists only in the <em>recorded</em> vocabulary — a plugin cannot claim it, because it is what the store writes when the plugin <em>crashes</em>:</p>
+
+<span class="file">contracts/harness.py:69</span>
+<pre><code>class TranslationError(ValueError):
+    def __init__(self, reason: str, *, context: str | None = None) -&gt; None:
+        super().__init__(reason)
+        self.reason = reason
+        self.context = context</code></pre>
+
+<p><code>context</code> usually carries the byte offset of the record that could not be read, so the failure row in the database points at the exact evidence.</p>
+
+<h4>IngestionResult — what came back</h4>
+<span class="file">contracts/harness.py:77</span>
+<pre><code>@dataclass(frozen=True)
+class IngestionResult:
+    raw_event_id: RawEventId
+    translation_decision: RecordedTranslationDecision
+    accepted_event_ids: tuple[CanonicalEventId, ...]      # facts new to us
+    deduplicated_event_ids: tuple[CanonicalEventId, ...]  # facts we already had
+    latest_cursor: int | None</code></pre>
+
+<p>The split between <b>accepted</b> and <b>deduplicated</b> is what makes re-reading safe. Several independent sources may report the same fact; the first one to arrive is stored, and the rest are recorded as corroboration rather than repeated. Side effects fire only for accepted facts, so replaying a file does not re-open a terminal pane.</p>
+
+<h2 id="hooks">6. Hooks — when the tool calls us</h2>
+
+<p>Everything above is baqylau <em>reading</em>. A hook is the opposite: the tool runs a program of ours and waits for an answer. Claude Code does this on every tool call, every prompt, every session start.</p>
+
+<span class="file">contracts/harness.py:169</span>
+<pre><code>class HarnessHook(Protocol):
+    def receive(self, payload: bytes) -&gt; HookIntake: ...</code></pre>
+
+<span class="file">contracts/harness.py:160</span>
+<pre><code>@dataclass(frozen=True)
+class HookIntake:
+    session: RecognizedSession
+    raw_events: tuple[RawEvent, ...]
+    output: bytes = b""                       # written back to the tool
+    controls: tuple[ControlRequest, ...] = ()
+    actions: tuple[HookAction, ...] = ()</code></pre>
+
+<p><code>receive</code> is <b>pure</b>: it parses and returns a description of what should happen. It writes nothing itself. The caller then performs the steps in a fixed order, and the order is the interesting part:</p>
+
+<div class="diagram"><span class="c">1.</span> register the session      <span class="c">— it must exist before facts refer to it</span>
+<span class="c">2.</span> deliver every raw_event   <span class="c">— the evidence commits</span>
+<span class="c">3.</span> run every control         <span class="c">— acting comes after recording</span>
+<span class="c">4.</span> ensure the host is up     <span class="c">— the thing that will observe the actions</span>
+<span class="c">5.</span> start every action        <span class="c">— native side effects, LAST</span>
+<span class="c">6.</span> return output to the tool</div>
+
+<span class="file">contracts/harness.py:154</span>
+<pre><code>class HookAction(Protocol):
+    """A plugin-owned native action started only after hook facts commit."""
+
+    def start(self) -&gt; None: ...</code></pre>
+
+<p>The docstring states the rule. An action might start a process that begins writing a file baqylau will later read. If it started before the facts committed, output could arrive describing a thing not yet recorded. Step 4 sits where it does for the same reason: an action is only started once the observer that will notice it is confirmed running.</p>
+
+<p><code>output</code> is a real channel, not a log. Some hooks let the answer <em>change</em> what the tool does next — this is how a command can be rewritten before it runs so its output can be streamed.</p>
+
+<h2 id="lifecycle">7. Lifecycle — reacting to start and end</h2>
+
+<p>When a session begins or ends, something outside the data has to happen: terminal panes open, panes close. That belongs to the plugin, because only it knows what its session needs.</p>
+
+<span class="file">contracts/harness.py:174</span>
+<pre><code>@dataclass(frozen=True)
+class SessionLifecycleRequest:
+    action: Literal["started", "finished"]
+
+
+@dataclass(frozen=True)
+class SessionLifecycleContext:
+    terminal: SessionTerminal
+    panes: SessionPaneControl
+
+
+class HarnessLifecycle(Protocol):
+    def apply(
+        self,
+        request: SessionLifecycleRequest,
+        session: RecognizedSession,
+        context: SessionLifecycleContext,
+    ) -&gt; None: ...</code></pre>
+
+<p>Three arguments, three distinct jobs:</p>
+
+<ul>
+<li><code>request</code> — <b>what happened.</b> Exactly two possibilities. A dataclass wrapping one field looks redundant, but it means adding a third event later changes no signature anywhere.</li>
+<li><code>session</code> — <b>which session</b>, with its directory and its native id.</li>
+<li><code>context</code> — <b>the tools to do it with.</b> The plugin never reaches for the terminal itself; it is handed exactly two capabilities. It cannot close a tab it was not given the power to close, and in a test it is handed fakes and touches nothing real.</li>
+</ul>
+
+<div class="warn">
+<b>A live example of why the shape matters.</b> Until this session, one plugin's <code>apply</code> named its second parameter <code>recognized_session</code> while the Protocol says <code>session</code>. Structural typing did not care. But a caller using keyword arguments — <code>apply(request=…, session=…, context=…)</code> — would have worked on one harness and raised <code>TypeError</code> on the other. Parameter <em>names</em> are part of a contract, not decoration. A test now enforces it.
+</div>
+
+<h2 id="control">8. Controls — driving the tool</h2>
+
+<p>This is the largest section of the file, because "make the session do something" has many shapes. The design is one closed list of verbs, one object per verb, and one result type per shape of answer.</p>
+
+<h4>The closed list of verbs</h4>
+<span class="file">contracts/harness.py:193</span>
+<pre><code>ControlName: TypeAlias = Literal[
+    "send_text", "interrupt", "close_session", "rename_session", "auto_name_session",
+    "open_rewind", "apply_rewind", "migrate_account", "compact",
+    "select_model", "select_effort", "answer_question", "read_plan_choices", "decide_plan",
+]</code></pre>
+
+<p>Fourteen. That is all of them. A web request naming anything else is rejected before it reaches a plugin.</p>
+
+<h4>Every request shares a base</h4>
+<span class="file">contracts/harness.py:211</span>
+<pre><code>@dataclass(frozen=True)
+class ControlTarget:
+    session_id: SessionId
+    request_id: str</code></pre>
+
+<p><code>request_id</code> is generated by the browser and echoed back in the result, so an answer can be matched to its question when several are in flight.</p>
+
+<p>Each verb then extends it with only the fields it needs:</p>
+
+<span class="file">contracts/harness.py:224</span>
+<pre><code>@dataclass(frozen=True)
+class SendText(ControlTarget):
+    control_name: ClassVar[ControlName] = "send_text"
+    text: str
+    attachments: tuple[AttachmentReference, ...] = ()
+    replace_terminal_draft: bool = False
+
+
+@dataclass(frozen=True)
+class Interrupt(ControlTarget):
+    control_name: ClassVar[ControlName] = "interrupt"        # no extra fields at all</code></pre>
+
+<div class="new">
+<b><code>ClassVar</code></b> means "this belongs to the class, not to each instance". Every <code>SendText</code> ever created has <code>control_name == "send_text"</code>; it is not a field you pass in and cannot be set to something else. It is a label the class carries, which is what lets the dispatcher look at any request and know which handler to call.
+</div>
+
+<p>The fourteen are then gathered into one type:</p>
+
+<span class="file">contracts/harness.py:312</span>
+<pre><code>ControlRequest: TypeAlias = (
+    SendText | Interrupt | CloseSession | RenameSession | AutoNameSession
+    | OpenRewind | ApplyRewind | MigrateAccount | Compact
+    | SelectModel | SelectEffort | AnswerQuestion | ReadPlanChoices | DecidePlan
+)</code></pre>
+
+<p>The <code>|</code> is "or" — a value of this type is exactly one of these. Because the list is closed, a tool can tell you if you forget to handle one.</p>
+
+<h4>What the plugin is given to work with</h4>
+<span class="file">contracts/harness.py:119</span>
+<pre><code>@dataclass(frozen=True)
+class ControlContext:
+    session: RecognizedSession
+    terminal: TerminalControl                    # the ability to type and press keys
+    current_model: ModelReference | None
+    current_effort: str | None
+    current_account: AccountReference | None
+    pending_attention: AttentionRequested | None # the question on screen, if any</code></pre>
+
+<p>The current state is <em>handed in</em> rather than looked up, so the plugin does not query the database and every gesture sees one consistent snapshot. <code>pending_attention</code> matters for answering: to reply to a question you must know which question is open.</p>
+
+<h4>The results</h4>
+<span class="file">contracts/harness.py:330</span>
+<pre><code>@dataclass(frozen=True)
+class ControlResult:
+    request_id: str
+    status: Literal["acknowledged", "rejected", "indeterminate"]
+    reason: str | None = None</code></pre>
+
+<p>Three outcomes, and the third is the one worth learning:</p>
+
+<table>
+<tr><th>status</th><th>meaning</th><th>HTTP</th></tr>
+<tr><td><code>acknowledged</code></td><td>Done.</td><td>200</td></tr>
+<tr><td><code>rejected</code></td><td>Refused up front — not live, not supported, not allowed.</td><td>409</td></tr>
+<tr><td><code>indeterminate</code></td><td><b>Attempted, but never confirmed.</b> The gesture ran and the tool did not visibly comply.</td><td>202</td></tr>
+</table>
+
+<div class="warn">
+<b>202 is a failure code here.</b> It is a success code in HTTP generally, which is why a browser check of "was the status 2xx?" reported a model switch as successful while the terminal sat unchanged with a dialog open. The verdict has to be read from <code>status</code>, not from the HTTP code.
+</div>
+
+<p>Some gestures need to say more, so there are subclasses — extra fields with sensible defaults, so anything that only understands <code>ControlResult</code> still works:</p>
+
+<span class="file">contracts/harness.py:337</span>
+<pre><code>@dataclass(frozen=True)
+class DeliveryResult(ControlResult):
+    queued: bool = False            # accepted but will run when the turn ends
+    restored_text: str = ""         # text taken back out of the input box
+
+
+@dataclass(frozen=True)
+class CommandResult(ControlResult):
+    confirmation: Literal["confirmed", "not_needed", "failed"] | None = None
+
+
+@dataclass(frozen=True)
+class RewindResult(ControlResult):
+    restored_text: str = ""
+    degraded: bool = False          # it worked, but not as completely as asked
+
+
+@dataclass(frozen=True)
+class MigrationResult(ControlResult):
+    target_account_id: str | None = None
+
+
+@dataclass(frozen=True)
+class PlanChoicesResult(ControlResult):
+    choices: tuple[AttentionChoice, ...] = ()</code></pre>
+
+<p><code>RewindResult.degraded</code> is worth pausing on. Rewinding a conversation can partly succeed — the messages come back but the files do not. That is neither "done" nor "failed", so it is reported as done <em>with a flag</em>, rather than being rounded to whichever is closer.</p>
+
+<h4>The controller itself is not a Protocol</h4>
+<span class="file">contracts/harness.py:377</span>
+<pre><code>ControlHandler: TypeAlias = Callable[[ControlRequest, ControlContext], ControlOutcome]
+
+
+@dataclass(frozen=True)
+class HarnessController:
+    handlers: Mapping[ControlName, ControlHandler]
+
+    def execute(self, request: ControlRequest, context: ControlContext) -&gt; ControlOutcome:
+        handler = self.handlers.get(request.control_name)
+        if handler is None:
+            return ControlResult(request.request_id, "rejected", "unsupported control")
+        return handler(request, context)</code></pre>
+
+<p>This is the one place the file provides an implementation rather than a shape, and it is worth noticing why. A plugin supplies a <b>dictionary</b> from verb to function. Supporting a gesture means adding a key; not supporting one means leaving it out, and the "unsupported" answer is written once, here, for everybody.</p>
+
+<p><code>Callable[[A, B], C]</code> is the type of a function taking an <code>A</code> and a <code>B</code> and returning a <code>C</code>. The handlers are plain functions, not classes.</p>
+
+<h2 id="launch">9. Launching</h2>
+
+<span class="file">contracts/harness.py:394</span>
+<pre><code>@dataclass(frozen=True)
+class LaunchRequest:
+    working_directory: str
+    initial_text: str | None                  # a first prompt to send
+    model_id: str | None
+    effort: str | None
+    account_id: str | None
+    resume_session_id: SessionId | None       # continue an old session
+    attachments: tuple[AttachmentReference, ...] = ()
+
+
+@dataclass(frozen=True)
+class HarnessLaunchPlan:
+    command: str
+    arguments: tuple[str, ...]
+    title: str
+
+
+class LaunchRejected(ValueError):
+    pass
+
+
+class HarnessLauncher(Protocol):
+    def prepare(self, request: LaunchRequest) -&gt; HarnessLaunchPlan: ...</code></pre>
+
+<p>Note what <code>prepare</code> does <em>not</em> do: it does not launch anything. It returns a <b>plan</b> — a command and its arguments — and the application runs it. Only the plugin knows how to spell its own command line; only the application knows how to open a terminal tab. Each does the half it knows.</p>
+
+<p>Refusal is an exception rather than a result, because a plan that cannot be made has nothing to return. <code>LaunchRejected</code> is caught by the caller and turned into a <code>LaunchResult(status="rejected")</code>.</p>
+
+<h2 id="catalog">10. Catalog — what the menus offer</h2>
+
+<p>The interface has dropdowns: models, effort levels, accounts, slash commands. Their contents are the tool's business, not the interface's.</p>
+
+<span class="file">contracts/harness.py:509</span>
+<pre><code>class HarnessCatalog(Protocol):
+    sections: frozenset[CatalogSection]
+
+    def read(self, context: QueryContext) -&gt; HarnessCatalogSnapshot: ...</code></pre>
+
+<p>This Protocol has a <b>field</b>, not just methods — <code>sections</code> declares which parts of the catalogue this harness fills in. A harness with no notion of "effort" leaves it out, and the interface hides the control rather than showing an empty menu.</p>
+
+<span class="file">contracts/harness.py:498</span>
+<pre><code>@dataclass(frozen=True)
+class HarnessCatalogSnapshot:
+    models: tuple[ModelOption, ...] = ()
+    efforts: tuple[EffortOption, ...] = ()
+    accounts: tuple[AccountOption, ...] = ()
+    commands: tuple[CommandOption, ...] = ()
+    rewind_modes: tuple[RewindModeOption, ...] = ()
+    speech_terms: tuple[str, ...] = ()</code></pre>
+
+<p>Every field defaults to empty, so a plugin fills in only what it has. One option type is worth a look:</p>
+
+<span class="file">contracts/harness.py:482</span>
+<pre><code>@dataclass(frozen=True)
+class CommandOption:
+    command: str
+    description: str
+    minimum_prompt_count: int</code></pre>
+
+<p><code>minimum_prompt_count</code> encodes a real refusal: some tools will not compress a conversation that has barely started. Rather than the interface guessing, the harness states the floor and the button greys out below it.</p>
+
+<p><code>QueryContext</code> is the question's scope — a session and a directory, both optional, because some answers are global and some depend on where you are.</p>
+
+<h2 id="usage">11. Usage — limits and billing</h2>
+
+<span class="file">contracts/harness.py:513</span>
+<pre><code>class HarnessUsage(Protocol):
+    def read(self) -&gt; tuple[UsageRow, ...]: ...</code></pre>
+
+<p>One row per account:</p>
+
+<span class="file">contracts/harness.py:465</span>
+<pre><code>@dataclass(frozen=True)
+class UsageRow:
+    harness: str
+    account_id: str | None
+    display_name: str
+    switchable: bool                       # can we move a session to it?
+    plan: str | None
+    windows: tuple[UsageWindow, ...]       # the rolling limits
+    scheduling_score: Decimal | None       # how good a target it is right now
+    scheduling_allowed: bool
+    limit: UsageBlock | None               # set when currently blocked
+    authentication_error: str | None       # set when we could not even ask</code></pre>
+
+<p><code>authentication_error</code> is a good habit to notice: "we could not find out" is recorded as its own state rather than reported as zero usage. A silent zero would look like plenty of quota.</p>
+
+<span class="file">contracts/harness.py:444</span>
+<pre><code>@dataclass(frozen=True)
+class UsageWindow:
+    key: str
+    label: str
+    used_percent: Decimal                  # Decimal, not float
+    resets_at: float | None
+    duration_minutes: int | None
+    scope: Literal["account", "model"]     # per-account or per-model limit
+    model_id: str | None</code></pre>
+
+<div class="new">
+<b><code>Decimal</code> instead of <code>float</code>.</b> Floating-point numbers cannot represent most decimal fractions exactly — <code>0.1 + 0.2</code> is famously not <code>0.3</code>. For percentages and money, small errors accumulate into visibly wrong totals. <code>Decimal</code> is exact, and this codebase serialises it as a <em>string</em> so JSON cannot quietly turn it back into a float.
+</div>
+
+<h2 id="memory">12. Memory</h2>
+
+<span class="file">contracts/harness.py:572</span>
+<pre><code>class HarnessMemory(Protocol):
+    def enabled(self, working_directory: str) -&gt; bool: ...
+    def item_count(self, session_id: SessionId) -&gt; int: ...
+    def snapshot(self, session_id: SessionId) -&gt; HarnessMemorySnapshot: ...
+    def document(self, path: str | None, stem: str | None) -&gt; MemoryDocument: ...</code></pre>
+
+<p>Some setups keep a notes vault the agent reads from and writes to. This exposes which notes a session touched.</p>
+
+<p>The four methods are graded by cost, deliberately. <code>enabled()</code> is a cheap yes/no that decides whether to show the feature at all. <code>item_count()</code> is cheap enough for a badge. <code>snapshot()</code> is the full list. <code>document()</code> reads one note. A caller pays only for what it displays.</p>
+
+<p>A snapshot has two halves, and the distinction is a real one:</p>
+
+<span class="file">contracts/harness.py:558</span>
+<pre><code>@dataclass(frozen=True)
+class HarnessMemorySnapshot:
+    notes: tuple[MemoryNoteRecord, ...]      # notes the session OPENED
+    searches: tuple[MemorySearchRecord, ...] # questions it ASKED of the vault</code></pre>
+
+<p>A search names notes it never opened. Recording only the opened notes would lose the moment the session asked memory a question and got nothing useful back.</p>
+
+<p>A search record carries its hits, and a hit is a note the search <em>named</em>:</p>
+
+<span class="file">contracts/harness.py:534</span>
+<pre><code>@dataclass(frozen=True)
+class MemorySearchHit:
+    path: str
+    relative_path: str
+    name: str
+    line_number: int | None
+    title: str
+    score: str                  # the ranking, as the tool spelled it
+    snippet: str                # the matching text</code></pre>
+
+<p><code>score</code> is a string rather than a number because it is the search tool's own output, reproduced rather than reinterpreted. Parsing it into a float would mean inventing a scale that the tool never promised.</p>
+
+<h2 id="probe">13. Terminal probe</h2>
+
+<span class="file">contracts/harness.py:588</span>
+<pre><code>@dataclass(frozen=True)
+class TerminalInputState:
+    typed_text: str | None      # what is in the input box
+    suggestion: str | None      # the greyed-out completion the tool is offering
+
+
+@dataclass(frozen=True)
+class TerminalSessionState:
+    window_id: str | None            # None when the session is not on screen
+    input_state: TerminalInputState | None
+
+
+class HarnessTerminalProbe(Protocol):
+    def input_state(self, screen: TerminalScreen, window_id: str) -&gt; TerminalInputState | None: ...</code></pre>
+
+<p>Two nested optionals, each meaning something different. <code>TerminalSessionState.window_id</code> is <code>None</code> when the session has no terminal window at all — it has been parked, or is being watched from another machine. <code>input_state</code> is <code>None</code> when there <em>is</em> a window but the probe could not read it. "Not running" and "running but unreadable" are different situations and the interface reacts differently to each, so they are not collapsed into one absence.</p>
+
+<p>Some things a tool never writes down. Half-typed text in the input box exists only as pixels. This reads them back off the screen, so the web composer can show what is already typed in the terminal instead of overwriting it.</p>
+
+<p>The plugin is handed a <code>TerminalScreen</code> — the ability to read one window's text — and nothing else. It cannot type, cannot close, cannot press keys. The narrowest capability that does the job.</p>
+
+<div class="warn">
+<b>Screen reading is the most fragile thing in the system.</b> Layouts change between versions of a tool with no warning, which is exactly how a model-switch driver broke this week: the tool removed a screen and the driver was still looking for it. Anything screen-derived should be treated as a best effort that can return <code>None</code>.
+</div>
+
+<h2 id="together">14. The whole thing on one page</h2>
+
+<div class="diagram"><span class="c">                      ┌─────────────────┐</span>
+<span class="c">                      │</span>  <span class="a">HarnessPlugin</span>  <span class="c">│</span>   <span class="c">one object per tool</span>
+<span class="c">                      └────────┬────────┘</span>
+<span class="c">     ┌──────────────┬──────────┼──────────┬──────────────┐</span>
+<span class="c">     │              │          │          │              │</span>
+ <span class="g">sessions</span>        <span class="g">events</span>      <span class="v">hook</span>     <span class="v">lifecycle</span>    <span class="v">controller</span> <span class="c">…</span>
+     <span class="c">│</span>              <span class="c">│</span>          <span class="c">│</span>          <span class="c">│</span>              <span class="c">│</span>
+ <span class="c">discover</span>      <span class="c">sources</span>     <span class="c">receive</span>     <span class="c">apply</span>        <span class="c">execute</span>
+ <span class="c">recognize</span>     <span class="c">translate</span>      <span class="c">│</span>          <span class="c">│</span>              <span class="c">│</span>
+     <span class="c">│</span>              <span class="c">│</span>          <span class="c">│</span>          <span class="c">│</span>              <span class="c">│</span>
+     <span class="c">↓</span>              <span class="c">↓</span>          <span class="c">↓</span>          <span class="c">↓</span>              <span class="c">↓</span>
+ <span class="a">Recognized</span>     <span class="a">RawEvent</span>   <span class="a">HookIntake</span>  <span class="c">panes open</span>   <span class="a">ControlOutcome</span>
+  <span class="a">Session</span>       <span class="a">Translation</span>   <span class="c">+ output</span>   <span class="c">/ close</span>       <span class="c">200 / 409 / 202</span>
+                 <span class="a">Result</span>
+</div>
+
+<p>Reading the columns left to right is roughly the life of a session: it is <b>recognised</b>, then <b>watched</b>, it <b>pushes</b> events at us, its <b>start and end</b> move panes, and meanwhile we <b>drive</b> it.</p>
+
+<h3>The four ideas that recur</h3>
+
+<ol>
+<li><b>Separate collecting from understanding.</b> <code>sources</code> and <code>translate</code> are two methods for this reason. Bytes we cannot interpret are still kept, and can be re-interpreted when the interpreter improves.</li>
+<li><b>Hand in capabilities; do not let components reach.</b> <code>RawEventDelivery</code>, <code>CheckpointStore</code>, <code>SessionLifecycleContext</code>, <code>TerminalControl</code>, <code>TerminalScreen</code> are all passed in. A plugin can do exactly what it was handed the means to do — which makes it testable, and bounds what a bug in it can reach.</li>
+<li><b>Closed lists over free strings.</b> Fourteen control names, three statuses, four verdicts, two lifecycle actions. Every one is a <code>Literal</code>, so "did we handle them all?" is a question a tool can answer.</li>
+<li><b>Make the impossible unconstructible.</b> <code>TranslationResult.__post_init__</code> refuses a contradictory verdict at the moment of creation, rather than letting it travel and fail somewhere far away.</li>
+</ol>
+
+<h3>What is deliberately absent</h3>
+
+<p>Reading a contract for what it <em>omits</em> is as informative as reading what it contains.</p>
+
+<ul>
+<li><b>No presentation.</b> Nothing returns HTML, colours or glyphs. A separate check refuses payload fields named <code>html</code>, <code>css</code>, <code>glyph</code>, <code>ansi</code> and six others at startup.</li>
+<li><b>No storage.</b> No plugin is handed a database. It receives a <code>deliver</code> and a checkpoint store, and knows nothing about SQL.</li>
+<li><b>No scheduling.</b> <code>drain</code> does one pass. No plugin owns a loop, a thread, or a timer.</li>
+<li><b>No harness names anywhere below this file.</b> A test forbids the words <code>claude</code>, <code>codex</code>, <code>transcript</code> and <code>rollout</code> from appearing in the eight shared directories. This contract is the exact line where those words stop.</li>
+</ul>
+
+<hr style="border:0;border-top:1px solid var(--line);margin:30px 0">
+<p class="small">Written from <code>contracts/harness.py</code> as it stands. Companion document: <a href="flow.html" style="color:var(--accent)">flow.html</a>, which traces one real gesture through the whole pipeline.</p>
+
+</div>
+</body>
+</html>
