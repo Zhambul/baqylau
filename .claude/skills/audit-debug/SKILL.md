@@ -211,10 +211,12 @@ of a WAL database yields `database disk image is malformed` and wastes a triage 
 
 ### A session never appears at all, though the harness is clearly running
 
-Registration is a LAUNCH-TIME act: only the wrapper (`plugins/claude_code/command.py`,
-`plugins/codex/command.py`) writes `session_harness`. Hooks record evidence but never
-register. So a harness launched WITHOUT its wrapper produces raw events that wait,
-untranslated, for a registration that never comes:
+Sessions register two ways: the wrapper at launch, or the interpreter from the
+session's own orphan evidence (`HarnessSessionEvidence` — a hook payload announces
+its session). So a lingering invisible session means the evidence cannot name one:
+its harness has no `session_evidence`, the payload lacks a usable source reference
+(a Codex hook pointing at a non-lead rollout), or `errors` rows with `func` =
+`interpreter (session evidence)` name a bug. Find the waiting evidence:
 
 ```sql
 SELECT session_id, count(*), datetime(max(observed_at),'unixepoch','localtime')
@@ -223,9 +225,10 @@ WHERE session_id NOT IN (SELECT session_id FROM session_harness)
 GROUP BY 1 ORDER BY 3 DESC;
 ```
 
-Rows here are recorded-but-invisible sessions. The fix is launching through the wrapper
-(the shell aliases and the dashboard launcher both do); registering the session
-afterwards makes the waiting evidence interpret on the next tick — nothing was lost.
+Rows here are recorded-but-invisible sessions. Registration from any side makes the
+waiting evidence interpret on the next tick — nothing is ever lost. Note an
+evidence-registered session has no pid: no process-exit backstop, and no
+deterministic pane anchor (panes anchor by focus only within seconds of start).
 
 ### The dashboard is unreachable, or needed several refreshes to load
 

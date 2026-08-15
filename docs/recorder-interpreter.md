@@ -29,6 +29,9 @@ WRITERS — observation only; append-only; never see session_harness
               raw_events: append-only, byte-conflict-checked
 ──────────────────────────────────────────────────────────────────────
 INTERPRETER — one process; heartbeat 0.25s ─▶ Interpreter.tick()  (app/interpreter.py)
+  0 register   orphan raw events (no session row) are offered to their harness's
+               `session_evidence` — a hook payload announces its own session, so
+               launches that skipped the wrapper become visible one tick later
   1 pull       for session in SessionRegistry.watchable():           # all unfinished
                  for source in session.plugin.sources.for_session(session)
                               + WatchRegistry.for_session(session_id):
@@ -80,13 +83,21 @@ class initializes through it.
   glob-and-parse in both plugins, ambiguity errors) and *registered by hooks* with
   upsert-and-merge semantics (`INSERT OR IGNORE` + ownership conflicts + a pid
   fill-once). All of it fell to one observation: **registration is a launch-time
-  act.** The wrapper that starts the harness knows the full identity — Claude Code
+  act** — the wrapper that starts the harness knows the full identity (Claude Code
   even accepts `--session-id`, so the row exists before the process does; Codex's
-  wrapper registers when the rollout appears. The row is immutable; everything
-  that changes during a session (cwd, title, model) is a canonical fact. Hook
-  evidence that beats registration (the ≤50ms Codex race, or an unwrapped
-  session) waits in the backlog, auditable, and interprets the moment
-  registration lands.
+  wrapper registers when the rollout appears). The row is immutable; everything
+  that changes during a session (cwd, title, model) is a canonical fact.
+  Wrapper-only registration then met reality: sessions launched by any OTHER path
+  (a plain alias in a kitty tab) recorded evidence forever while staying
+  invisible. Filesystem polling (the v1 answer) was rejected again — it registers
+  sessions there is no evidence for and re-walks history — in favour of
+  **evidence-driven registration**: the orphan evidence itself announces the
+  session (`HarnessSessionEvidence.from_raw_event`; a hook payload carries the
+  identity and the source reference, Codex reuses its lead-rollout filter), and
+  the interpreter registers it. Hook evidence that beats any registration waits
+  in the backlog, auditable, and interprets the moment registration lands.
+  Evidence-registered sessions simply lack a pid, so they have no process
+  backstop — the wrapper stays the better path, not the required one.
 - **`source_checkpoints` was a second encoding of progress** and its drift from
   the evidence was the single most diagnostic bug shape in triage. Deleted: a
   source resumes from the `source_position` of the last raw event carrying its
@@ -143,9 +154,15 @@ contract is: `info` · `sources` · `translator` · optional `reactor` /
   beat; pane open/close shifts by the same amount.
 - The session row's `working_directory` is only "where the session began"; live
   cwd is the projection's (`session.working_directory_changed`).
-- A session launched without its wrapper (bare `claude` in a random terminal) is
-  recorded but stays invisible until registered. The aliases and the dashboard
-  launcher are the wrapper, so in practice everything is wrapped.
+- A session launched without its wrapper becomes visible one tick after its
+  first hook, but carries no pid (no process-exit backstop) and gets no
+  deterministic pane anchor.
+- The kitty mirror panes anchor deterministically only for wrapper launches
+  (the wrapper opens PENDING panes from inside the session's own window and
+  adopts them on registration, as Codex always did). The interpreter's react
+  runs in the server, where "current window" is wherever the user happens to
+  be — so its focus-anchored fallback is allowed only within seconds of the
+  observed session start, and never for a backlog replay.
 - The store schema changed incompatibly (schema version 14); old `events.db`
   files are refused, not migrated — by decision, the database was dropped at the
   cutover.

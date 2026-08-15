@@ -76,6 +76,33 @@ class CanonicalEventStore:
             ).fetchall()
         return tuple(self._raw_event(row) for row in rows)
 
+    def unregistered_raw_events(self, limit: int) -> tuple[RawEvent, ...]:
+        """Evidence whose session has no row yet, in arrival order.
+
+        This is how sessions launched outside a wrapper become visible: the
+        interpreter asks the owning harness to derive the session from this
+        evidence and registers it.
+        """
+        if limit <= 0:
+            raise ValueError("orphan limit must be positive")
+        with connect(self.database_path) as connection:
+            rows = connection.execute(
+                "SELECT raw_events.* FROM raw_events "
+                "LEFT JOIN session_harness USING(session_id) "
+                "WHERE session_harness.session_id IS NULL "
+                "ORDER BY raw_events.id LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return tuple(self._raw_event(row) for row in rows)
+
+    def raw_event_observed_at(self, raw_event_id: RawEventId) -> float | None:
+        with connect(self.database_path) as connection:
+            row = connection.execute(
+                "SELECT observed_at FROM raw_events WHERE raw_event_id=?",
+                (str(raw_event_id),),
+            ).fetchone()
+        return row["observed_at"] if row is not None else None
+
     def store_translation(
         self,
         raw_event: RawEvent,

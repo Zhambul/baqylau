@@ -22,9 +22,10 @@ recorders (hooks, otel, wrappers) ──append──▶ raw_events ◀──appe
               interpreter: translate → translation_records → canonical_events + canonical_provenance
 ```
 
-- **`session_harness`** — written ONCE per session, at launch, by the harness's
-  wrapper (`plugins/*/command.py`), never by hooks and never updated. Everything
-  that changes during a session is a canonical fact.
+- **`session_harness`** — written ONCE per session and never updated: by the
+  harness's wrapper (`plugins/*/command.py`) at launch, or by the interpreter
+  from the session's own orphan evidence (`HarnessSessionEvidence`) — never by
+  hooks. Everything that changes during a session is a canonical fact.
 - **`raw_events`** — immutable evidence: the exact bytes a source produced. Reusing a
   `raw_event_id` with different bytes raises (corruption). A pulled source resumes from
   the `source_position` of its last recorded raw event (`source_identity` column) —
@@ -84,7 +85,9 @@ Audit: `$BAQYLAU_AUDIT_DIRECTORY`, `BAQYLAU_AUDIT=0` disables.
 Hooks are wired (in `~/.claude/settings.json`, outside this repo) to
 `plugins/claude_code/canonical_hook.py`. Harnesses are launched through their
 wrappers (`plugins/claude_code/command.py`, `plugins/codex/command.py`) — the
-wrapper is the ONLY thing that registers a session. `bin/baqylau-*.py` holds the
+wrapper registers the session at launch (and anchors its kitty panes); launches
+that skip it are registered by the interpreter from their own evidence, one
+tick after their first hook, without a pid or a deterministic pane anchor. `bin/baqylau-*.py` holds the
 shared executable entries; put implementation in the packages.
 
 ## Commands

@@ -96,6 +96,7 @@ from plugins.codex.canonical import (
     CodexProcessRawEventSource,
     CodexRawEventSources,
     CodexRolloutRawEventSource,
+    CodexSessionEvidence,
     process_event,
 )
 from plugins.codex import command as codex_command
@@ -214,8 +215,8 @@ class InterpreterTerminal:
     def close_session_panes(self, session_id):
         return None
 
-    def hosting_session(self, excluding_session_id):
-        return SessionId("already-hosting")
+    def session_panes_are_open(self, session_id):
+        return True
 
     def current_window(self):
         return None
@@ -819,6 +820,38 @@ def test_codex_source_factory_rotates_native_subagent_rollouts(tmp_path, monkeyp
     assert actors == [ActorId("child-one"), ActorId("child-two"), ActorId("child-one")]
 
 
+def test_codex_session_evidence_registers_only_a_lead_rollout(tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    lead_path = tmp_path / "sessions" / "2026" / "08" / "15" / "rollout-2026-08-15T10-00-00-lead-one.jsonl"
+    lead_path.parent.mkdir(parents=True)
+    lead_path.write_text(json.dumps({
+        "type": "session_meta",
+        "payload": {"id": "lead-one", "cwd": "/work", "thread_source": "user"},
+    }) + "\n")
+    child_path = lead_path.with_name("rollout-2026-08-15T10-00-01-child-one.jsonl")
+    child_path.write_text(json.dumps({
+        "type": "session_meta",
+        "payload": {"thread_source": "subagent", "parent_thread_id": "lead-one"},
+    }) + "\n")
+
+    def hook_raw(session_id, path):
+        return raw_event(
+            {"session_id": session_id, "transcript_path": str(path), "hook_event_name": "SessionStart"},
+            harness="codex",
+            source_type="hook",
+            raw_event_id=f"hook-{session_id}",
+        )
+
+    evidence = CodexSessionEvidence()
+    lead = evidence.from_raw_event(replace(hook_raw("lead-one", lead_path), session_id=SessionId("lead-one")))
+    child = evidence.from_raw_event(replace(hook_raw("child-one", child_path), session_id=SessionId("child-one")))
+
+    assert lead is not None
+    assert lead.session_id == SessionId("lead-one")
+    assert lead.source_reference == str(lead_path.resolve())
+    assert child is None
+
+
 def test_codex_source_factory_waits_for_native_child_boundary(tmp_path, monkeypatch):
     child_path = tmp_path / "sessions" / "2026" / "08" / "14" / "rollout-2026-08-14T10-00-00-child-one.jsonl"
     child_path.parent.mkdir(parents=True)
@@ -886,12 +919,16 @@ def test_hooks_record_exact_raw_bytes_and_the_interpreter_translates_them(monkey
     codex_canonical_hook.record_hook(codex_payload)
 
     runtime, interpreter = interpreting_runtime(tmp_path / "events.db")
-    # hooks never register; the wrappers do, and the evidence waits until then
+    # hooks never register — but a Claude hook payload announces its session,
+    # so the interpreter registers it from the evidence on its next tick. The
+    # Codex payload points at a path that is not a real rollout, so its
+    # evidence stays waiting until a wrapper registers it.
     assert runtime.store.untranslated_raw_events(10) == ()
-    runtime.register("claude_code", Session(
-        SessionId("claude-session"), ActorId("claude-session:lead"),
-        "claude-session", "/work/claude.jsonl", "/work",
-    ))
+    interpreter.tick()
+    claude_session = runtime.sessions.find(SessionId("claude-session"))
+    assert claude_session is not None
+    assert claude_session.source_reference == "/work/claude.jsonl"
+    assert runtime.sessions.find(SessionId("codex-session")) is None
     runtime.register("codex", Session(
         SessionId("codex-session"), ActorId("codex-session:lead"),
         "codex-session", "/work/codex.jsonl", "/work",
@@ -1139,6 +1176,31 @@ def test_claude_foreground_output_is_canonical_append_progress():
     assert progress.ordinal == 3
     assert progress.mode == "append"
     assert progress.content.text == content.decode()
+
+
+def test_claude_background_launch_stub_is_not_progress(tmp_path):
+    """The 'Command running in background with ID …' tool_result is boilerplate,
+    and its REPLACE mode wiped watch chunks that committed first. The finish
+    fact still converges from the hook evidence."""
+    stub = (
+        "Command running in background with ID: btk9y72c9. Output is being "
+        "written to: /tmp/task.output. You will be notified when it completes."
+    )
+    translation = ClaudeCanonicalTranslator().translate(raw_event(
+        {
+            "type": "user",
+            "uuid": "background-result",
+            "message": {
+                "content": [{"type": "tool_result", "tool_use_id": "background-op", "content": stub}]
+            },
+        },
+        harness="claude_code",
+        source_type="transcript",
+        raw_event_id="background-stub",
+    ))
+
+    assert not payloads(translation, OperationProgressed)
+    assert translation.decision == "ignored_nonsemantic"
 
 
 def test_claude_foreground_prepare_rewrites_the_command_into_a_watch(monkeypatch, tmp_path):

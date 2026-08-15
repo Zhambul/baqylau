@@ -8,7 +8,11 @@ from contracts.harness import (
     RewindModeOption,
 )
 from domain.codec import SCHEMA_VERSION
-from plugins.claude_code.canonical import ClaudeCanonicalTranslator, ClaudeRawEventSources
+from plugins.claude_code.canonical import (
+    ClaudeCanonicalTranslator,
+    ClaudeRawEventSources,
+    ClaudeSessionEvidence,
+)
 from plugins.claude_code.catalog import ClaudeCodeCatalog
 from plugins.claude_code.controller import controller
 from plugins.claude_code.launcher import ClaudeCodeLauncher
@@ -54,6 +58,7 @@ plugin = HarnessPlugin(
     ),
     sources=ClaudeRawEventSources(),
     translator=ClaudeCanonicalTranslator(),
+    session_evidence=ClaudeSessionEvidence(),
     reactor=reactor,
     controller=controller,
     catalog=ClaudeCodeCatalog(),

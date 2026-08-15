@@ -16,6 +16,7 @@ from contracts.harness import (
     HarnessCanonicalTranslator,
     HarnessRawEventSource,
     HarnessRawEventSources,
+    HarnessSessionEvidence,
     RawEvent,
     RawEventSourceContext,
     Session,
@@ -130,6 +131,27 @@ def rollout_session(path: str, working_directory: str | None = None) -> Session 
         source_reference=path,
         working_directory=(metadata.get("cwd") or working_directory or None),
     )
+
+
+class CodexSessionEvidence(HarnessSessionEvidence):
+    """A Codex hook payload points at a rollout; only a LEAD rollout is a session."""
+
+    def from_raw_event(self, raw_event: RawEvent) -> Session | None:
+        if raw_event.source_type != "hook":
+            return None
+        try:
+            document = json.loads(raw_event.payload)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return None
+        if not isinstance(document, dict):
+            return None
+        path = str(document.get("transcript_path") or "")
+        if not path:
+            return None
+        session = rollout_session(path, document.get("cwd") or None)
+        if session is None or session.session_id != raw_event.session_id:
+            return None
+        return session
 
 
 class CodexRolloutRawEventSource(HarnessRawEventSource):

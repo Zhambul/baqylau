@@ -16,6 +16,7 @@ from contracts.harness import (
     HarnessCanonicalTranslator,
     HarnessRawEventSource,
     HarnessRawEventSources,
+    HarnessSessionEvidence,
     RawEvent,
     RawEventSourceContext,
     Session,
@@ -74,6 +75,12 @@ from domain.values import (
     TokenUsage,
 )
 from plugins.claude_code import model, transcript
+
+
+# The tool_result boilerplate Claude Code emits when a Bash command is launched
+# in the background. Its operation.finished still converges from the hook
+# evidence; only this text is suppressed.
+BACKGROUND_LAUNCH_STUB = "Command running in background with ID:"
 
 
 def _model_reference(native_id: str) -> ModelReference:
@@ -386,6 +393,31 @@ def _plan_resolution(native: dict, failed: bool) -> tuple[str, str | None, bool]
     if marker_position >= 0:
         return "changes_requested", text[marker_position + len(marker):].strip(), False
     return "rejected", None, False
+
+
+class ClaudeSessionEvidence(HarnessSessionEvidence):
+    """A Claude Code hook payload names its session outright."""
+
+    def from_raw_event(self, raw_event: RawEvent) -> Session | None:
+        if raw_event.source_type not in ("hook", "teammate_hook"):
+            return None
+        try:
+            document = json.loads(raw_event.payload)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return None
+        if not isinstance(document, dict):
+            return None
+        source_reference = str(document.get("transcript_path") or "")
+        if not source_reference:
+            return None
+        session_id = raw_event.session_id
+        return Session(
+            session_id=session_id,
+            lead_actor_id=_lead_actor(session_id),
+            native_session_id=str(session_id),
+            source_reference=os.path.realpath(source_reference),
+            working_directory=document.get("cwd") or None,
+        )
 
 
 class ClaudeRawEventSources(HarnessRawEventSources):
@@ -718,11 +750,18 @@ class ClaudeCanonicalTranslator(HarnessCanonicalTranslator):
                 if str(operation_id) in self._task_tool_ids:
                     continue
                 result_content = block.get("content")
+                result_text = transcript.result_text(result_content)
+                # A background launch's tool_result is boilerplate ("Command
+                # running in background with ID … Output is being written to …"),
+                # and its REPLACE mode would wipe any watch chunk that committed
+                # first. The real output arrives through the file watch.
+                if result_text.startswith(BACKGROUND_LAUNCH_STUB):
+                    continue
                 progress = OperationProgressed(
                     operation_id,
                     0,
                     "output",
-                    _content(transcript.result_text(result_content)),
+                    _content(result_text),
                     "replace",
                 )
                 events.append(

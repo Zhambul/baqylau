@@ -2,7 +2,11 @@
 
 from contracts.harness import EffortOption, HarnessInfo, HarnessPlugin, ModelOption
 from domain.codec import SCHEMA_VERSION
-from plugins.codex.canonical import CodexCanonicalTranslator, CodexRawEventSources
+from plugins.codex.canonical import (
+    CodexCanonicalTranslator,
+    CodexRawEventSources,
+    CodexSessionEvidence,
+)
 from plugins.codex.catalog import CodexCatalog
 from plugins.codex.controller import controller
 from plugins.codex.launcher import CodexLauncher
@@ -42,6 +46,7 @@ plugin = HarnessPlugin(
     ),
     sources=CodexRawEventSources(),
     translator=CodexCanonicalTranslator(),
+    session_evidence=CodexSessionEvidence(),
     controller=controller,
     catalog=CodexCatalog(),
     usage=usage_reader,

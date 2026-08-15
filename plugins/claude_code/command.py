@@ -102,8 +102,12 @@ def process_raw_event(session: Session, state: Literal["started", "finished"]) -
 
 
 def run(arguments: list[str]) -> int:
+    from app import pane_preferences, pending_session
     from app.data import data_directory
     from app.host import ApplicationHost
+    from app.session_terminal import ApplicationTerminal
+    from contracts.terminal import SessionPaneRequest
+
     from runtime.recorder import RawEventRecorder
     from runtime.sessions import SessionRegistry
 
@@ -118,11 +122,33 @@ def run(arguments: list[str]) -> int:
     database_path = os.path.join(data_directory(), "events.db")
     sessions = SessionRegistry(database_path)
     recorder = RawEventRecorder(database_path)
+    terminal = ApplicationTerminal()
     started_at = time.time()
     process = subprocess.Popen(account.launch_argv(arguments, command))
     previous_interrupt_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
     session = None
+    pending_session_id = None
     try:
+        # The wrapper runs INSIDE the session's own kitty window, so this is the
+        # one place the pane anchor is known rather than guessed — the interpreter
+        # reacts later, from the server, where "current window" is wherever the
+        # user happens to be. Panes are cosmetic: they must never fail the launch.
+        try:
+            anchor_window_id = terminal.current_window()
+            if anchor_window_id is not None:
+                pending_session_id = pending_session.identity(process.pid)
+                opened = terminal.open_pending_session_panes(
+                    SessionPaneRequest(
+                        pending_session_id,
+                        anchor_window_id,
+                        pane_preferences.width_percent(os.getcwd()),
+                    )
+                )
+                if not opened.succeeded:
+                    pending_session_id = None
+        except Exception:
+            _audit_wrapper_failure("pending panes")
+            pending_session_id = None
         while process.poll() is None and session is None:
             path = _find_transcript(forced_session_id, started_at)
             if path is None:
@@ -131,13 +157,31 @@ def run(arguments: list[str]) -> int:
             session = _session_for(path, process.pid)
             if sessions.find(session.session_id) is None:
                 sessions.register("claude_code", session)
+            if pending_session_id is not None:
+                try:
+                    terminal.adopt_pending_session_panes(pending_session_id, session.session_id)
+                except Exception:
+                    _audit_wrapper_failure("pane adoption", session.session_id)
             ApplicationHost().ensure_running()
         return_code = process.wait()
     finally:
         signal.signal(signal.SIGINT, previous_interrupt_handler)
         if session is not None:
             recorder.record((process_raw_event(session, "finished"),))
+        elif pending_session_id is not None:
+            terminal.close_session_panes(pending_session_id)
+        if pending_session_id is not None:
+            pending_session.clear(pending_session_id)
     return return_code
+
+
+def _audit_wrapper_failure(where: str, session_id=None) -> None:
+    try:
+        from core import audit
+
+        audit.error(str(session_id or ""), f"claude wrapper ({where})", {})
+    except Exception:
+        pass
 
 
 def main() -> None:

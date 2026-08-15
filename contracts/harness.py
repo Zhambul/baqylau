@@ -140,6 +140,18 @@ class HarnessCanonicalTranslator(Protocol):
     def translate(self, raw_event: RawEvent) -> TranslationResult: ...
 
 
+class HarnessSessionEvidence(Protocol):
+    """Derive a session from its own orphan evidence.
+
+    The wrapper registers a session at launch; for every other launch path the
+    evidence itself announces the session — a hook payload carries the identity
+    and the source reference. The interpreter calls this for raw events whose
+    session has no row yet; None means this particular observation cannot name
+    one (it keeps trying with later evidence)."""
+
+    def from_raw_event(self, raw_event: RawEvent) -> Session | None: ...
+
+
 class HarnessReactorContext(Protocol):
     """What the interpreter lends a reactor: the one control dispatch point."""
 
@@ -682,6 +694,7 @@ class HarnessPlugin:
     info: HarnessInfo
     sources: HarnessRawEventSources
     translator: HarnessCanonicalTranslator
+    session_evidence: HarnessSessionEvidence | None = None
     reactor: HarnessReactor | None = None
     controller: HarnessController | None = None
     launcher: HarnessLauncher | None = None

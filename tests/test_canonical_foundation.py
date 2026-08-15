@@ -93,8 +93,8 @@ class NullTerminal:
     def close_session_panes(self, session_id):
         return None
 
-    def hosting_session(self, excluding_session_id):
-        return SessionId("already-hosting")
+    def session_panes_are_open(self, session_id):
+        return True
 
     def current_window(self):
         return None
@@ -421,6 +421,92 @@ def test_evidence_for_an_unregistered_session_waits_in_the_backlog(tmp_path):
     SessionRegistry(database_path).register("example", example_session())
     backlog = store.untranslated_raw_events(10)
     assert [raw.raw_event_id for raw in backlog] == [RawEventId("raw-early")]
+
+
+class FixedSessionEvidence:
+    def __init__(self, session):
+        self.session = session
+
+    def from_raw_event(self, raw_event):
+        return self.session
+
+
+def test_the_interpreter_registers_a_session_from_its_own_orphan_evidence(tmp_path):
+    """The wrapper registers at launch; every other launch path is announced by
+    the evidence itself and registered by the interpreter."""
+    database_path = str(tmp_path / "events.db")
+    harnesses = HarnessRegistry()
+    plugin = replace(
+        example_plugin(TranslationResult((canonical_message(),), "translated")),
+        session_evidence=FixedSessionEvidence(example_session()),
+    )
+    harnesses.register(plugin)
+    sessions = SessionRegistry(database_path, harnesses)
+    recorder = RawEventRecorder(database_path)
+    store = CanonicalEventStore(database_path)
+    interpreter = Interpreter(
+        sessions, harnesses, recorder, WatchRegistry(database_path),
+        store, NullControls(), NullTerminal(),
+    )
+    recorder.record((raw_observation("raw-orphan"),))
+    assert sessions.find(SessionId("session-one")) is None
+
+    interpreter.tick()
+
+    registered = sessions.find(SessionId("session-one"))
+    assert registered is not None and registered.plugin is plugin
+    # the waiting evidence interpreted in the same tick
+    assert store.untranslated_raw_events(10) == ()
+    assert len(store.after(SessionId("session-one"), 0, 10).events) == 1
+
+
+def test_orphan_evidence_stays_waiting_when_the_harness_cannot_name_a_session(tmp_path):
+    database_path = str(tmp_path / "events.db")
+    harnesses = HarnessRegistry()
+    harnesses.register(example_plugin(TranslationResult((), "ignored_nonsemantic")))
+    sessions = SessionRegistry(database_path, harnesses)
+    recorder = RawEventRecorder(database_path)
+    store = CanonicalEventStore(database_path)
+    interpreter = Interpreter(
+        sessions, harnesses, recorder, WatchRegistry(database_path),
+        store, NullControls(), NullTerminal(),
+    )
+    recorder.record((raw_observation("raw-orphan"),))
+
+    interpreter.tick()
+
+    assert sessions.find(SessionId("session-one")) is None
+    assert store.untranslated_raw_events(10) == ()  # still gated on registration
+    assert [raw.raw_event_id for raw in store.unregistered_raw_events(10)] == [
+        RawEventId("raw-orphan")
+    ]
+
+
+def test_session_evidence_naming_a_different_session_is_refused_and_audited(tmp_path, monkeypatch):
+    audited = []
+    monkeypatch.setattr(
+        "app.interpreter._audit_failure",
+        lambda where, context: audited.append((where, context)),
+    )
+    database_path = str(tmp_path / "events.db")
+    harnesses = HarnessRegistry()
+    harnesses.register(replace(
+        example_plugin(TranslationResult((), "ignored_nonsemantic")),
+        session_evidence=FixedSessionEvidence(example_session("some-other-session")),
+    ))
+    sessions = SessionRegistry(database_path, harnesses)
+    recorder = RawEventRecorder(database_path)
+    interpreter = Interpreter(
+        sessions, harnesses, recorder, WatchRegistry(database_path),
+        CanonicalEventStore(database_path), NullControls(), NullTerminal(),
+    )
+    recorder.record((raw_observation("raw-orphan"),))
+
+    interpreter.tick()
+
+    assert sessions.find(SessionId("some-other-session")) is None
+    assert sessions.find(SessionId("session-one")) is None
+    assert [where for where, _ in audited] == ["session evidence"]
 
 
 def test_interpretation_commits_verdict_canonical_and_provenance_together(tmp_path):
@@ -756,25 +842,28 @@ def test_watchable_is_every_unfinished_session_without_a_count_limit(tmp_path):
     assert sessions.is_finished(SessionId("session-3"))
 
 
-def test_the_interpreter_reacts_to_committed_session_facts_with_panes(tmp_path):
-    calls = []
+class RecordingTerminal:
+    def __init__(self, session_window_id=None):
+        self.session_window_id = session_window_id
+        self.calls = []
 
-    class RecordingTerminal:
-        def close_session_panes(self, session_id):
-            calls.append(("close", session_id))
+    def close_session_panes(self, session_id):
+        self.calls.append(("close", session_id))
 
-        def hosting_session(self, excluding_session_id):
-            return None
+    def session_panes_are_open(self, session_id):
+        return any(call[0] == "open" for call in self.calls)
 
-        def current_window(self):
-            return "window-1"
+    def current_window(self):
+        return "focused-window"
 
-        def window_for_session(self, session_id):
-            return None
+    def window_for_session(self, session_id):
+        return self.session_window_id
 
-        def open_session_panes(self, request):
-            calls.append(("open", request.session_id))
+    def open_session_panes(self, request):
+        self.calls.append(("open", request.session_id, request.anchor_window_id))
 
+
+def _pane_react_interpreter(tmp_path, observed_at, session_window_id=None):
     started = CanonicalEvent(
         CanonicalEventId("session-started"),
         SessionId("session-one"),
@@ -791,6 +880,7 @@ def test_the_interpreter_reacts_to_committed_session_facts_with_panes(tmp_path):
     sessions = SessionRegistry(database_path, harnesses)
     sessions.register("example", example_session())
     recorder = RawEventRecorder(database_path)
+    terminal = RecordingTerminal(session_window_id)
     interpreter = Interpreter(
         sessions,
         harnesses,
@@ -798,16 +888,45 @@ def test_the_interpreter_reacts_to_committed_session_facts_with_panes(tmp_path):
         WatchRegistry(database_path),
         CanonicalEventStore(database_path),
         NullControls(),
-        RecordingTerminal(),
+        terminal,
     )
-    recorder.record((raw_observation("raw-start"),))
+    recorder.record((replace(raw_observation("raw-start"), observed_at=observed_at),))
+    return interpreter, recorder, terminal
+
+
+def test_the_interpreter_opens_panes_by_focus_only_for_a_fresh_session_start(tmp_path):
+    import time as time_module
+
+    interpreter, recorder, terminal = _pane_react_interpreter(
+        tmp_path, observed_at=time_module.time()
+    )
 
     interpreter.tick()
     # A replayed observation deduplicates and must NOT reopen panes.
     recorder.record((replace(raw_observation("raw-start-again"), source_position="1"),))
     interpreter.tick()
 
-    assert calls == [("open", SessionId("session-one"))]
+    assert terminal.calls == [("open", SessionId("session-one"), "focused-window")]
+
+
+def test_the_interpreter_never_anchors_a_stale_session_start_by_focus(tmp_path):
+    """The focus guess runs in the server, where the current window is wherever
+    the user happens to be — a backlog replay must not spawn panes there."""
+    interpreter, _recorder, terminal = _pane_react_interpreter(tmp_path, observed_at=11.0)
+
+    interpreter.tick()
+
+    assert terminal.calls == []
+
+
+def test_the_interpreter_prefers_the_session_own_window_over_focus(tmp_path):
+    interpreter, _recorder, terminal = _pane_react_interpreter(
+        tmp_path, observed_at=11.0, session_window_id="session-tab-window"
+    )
+
+    interpreter.tick()
+
+    assert terminal.calls == [("open", SessionId("session-one"), "session-tab-window")]
 
 
 def test_watch_directives_run_the_whole_foreground_lifecycle(tmp_path):

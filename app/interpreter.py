@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import time
 
 from contracts.harness import (
     HarnessRawEventSource,
@@ -29,6 +30,8 @@ from app.session_terminal import ApplicationTerminal
 
 TICK_INTERVAL_SECONDS = 0.25
 TRANSLATION_BATCH_SIZE = 500
+REGISTRATION_BATCH_SIZE = 200
+PANE_ANCHOR_FRESHNESS_SECONDS = 15.0
 
 
 def _audit_failure(where: str, context: dict) -> None:
@@ -81,8 +84,49 @@ class Interpreter:
             stop_event.wait(TICK_INTERVAL_SECONDS)
 
     def tick(self) -> None:
+        self._register_from_evidence()
         self._pull()
         self._translate()
+
+    # --- register: sessions the evidence itself announces -----------------------
+
+    def _register_from_evidence(self) -> None:
+        """The wrapper registers at launch; every other launch path lands here.
+
+        Orphan evidence (raw events whose session has no row) is offered to its
+        harness, which may derive the session from it — a hook payload carries
+        the identity and the source reference. Evidence that names no session
+        (a child actor's feed, a bare watch directive) simply stays orphaned
+        and is retried with whatever arrives next.
+        """
+        undecided: set = set()
+        for raw_event in self.canonical_store.unregistered_raw_events(REGISTRATION_BATCH_SIZE):
+            if raw_event.session_id in undecided:
+                continue
+            try:
+                plugin = self.harnesses.plugin(raw_event.harness)
+                if plugin.session_evidence is None:
+                    undecided.add(raw_event.session_id)
+                    continue
+                session = plugin.session_evidence.from_raw_event(raw_event)
+                if session is None:
+                    continue
+                if session.session_id != raw_event.session_id:
+                    raise ValueError(
+                        f"session evidence names a different session: {session.session_id}"
+                    )
+                if self.sessions.find(session.session_id) is None:
+                    self.sessions.register(raw_event.harness, session)
+                undecided.add(raw_event.session_id)
+            except Exception:
+                undecided.add(raw_event.session_id)
+                _audit_failure(
+                    "session evidence",
+                    {
+                        "session_id": str(raw_event.session_id),
+                        "raw_event_id": str(raw_event.raw_event_id),
+                    },
+                )
 
     # --- pull: turn the outside world into recorded evidence -------------------
 
@@ -216,12 +260,19 @@ class Interpreter:
                 self._reap_watches(session_id)
                 self.terminal.close_session_panes(session_id)
                 return
-            if self.terminal.hosting_session(session_id) is not None:
+            if self.terminal.session_panes_are_open(session_id):
                 return
-            anchor_window_id = (
-                self.terminal.current_window()
-                or self.terminal.window_for_session(session_id)
-            )
+            # Anchoring by FOCUS is a guess: this runs in the server, where the
+            # current window is wherever the user happens to be, not the session's
+            # tab. Wrapper launches anchor correctly via their own pending panes;
+            # the focus guess is allowed only for a session whose start was
+            # observed moments ago (the launcher's tab is still focused), never
+            # for a backlog replay.
+            anchor_window_id = self.terminal.window_for_session(session_id)
+            if anchor_window_id is None:
+                if not self._observed_moments_ago(stored_event):
+                    return
+                anchor_window_id = self.terminal.current_window()
             if anchor_window_id is None:
                 return
             session = self.sessions.load(session_id)
@@ -234,6 +285,13 @@ class Interpreter:
             )
         except Exception:
             _audit_failure("session panes", {"session_id": str(session_id)})
+
+    def _observed_moments_ago(self, stored_event: StoredCanonicalEvent) -> bool:
+        for raw_event_id in stored_event.raw_event_ids:
+            observed_at = self.canonical_store.raw_event_observed_at(raw_event_id)
+            if observed_at is not None:
+                return time.time() - observed_at <= PANE_ANCHOR_FRESHNESS_SECONDS
+        return False
 
     def _reap_watches(self, session_id) -> None:
         for source in self.watches.for_session(session_id):
