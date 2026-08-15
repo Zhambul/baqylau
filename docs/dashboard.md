@@ -3341,6 +3341,39 @@ longer for the close (which carries the header again) but for the one legitimate
 page can forge neither the header nor an allowlisted Origin, so the Origin
 allow-list remains the CSRF gate.
 
+### Every control gesture's outcome is audited
+
+`app/services.py HarnessControlService.execute` is the ONE dispatch point every
+gesture and every harness passes through, so the outcome row is written there:
+a `control` `state_files` row carrying `{control, request_id, status, reason,
+ms}`, with the session in the row's own `session_id` COLUMN (the `browser-*`
+telemetry rows bury theirs in the JSON, which is what once made a gesture read
+as having left no trace at all).
+
+`status: "indeterminate"` is the value worth knowing. It means the request was
+understood and the gesture was ATTEMPTED, but the harness never confirmed it —
+a screen driver that bailed, a paste the TUI refused — and `reason` carries the
+driver's own step. `rejected` is a guard declining up front, `acknowledged` is
+the happy path, and `raised` is written before an exception propagates so the
+row survives a 500.
+
+It exists because a failed gesture used to leave **nothing**. Measured (session
+`01a0037d`, 2026-08-15 11:36): a web model switch failed inside its harness's
+screen driver, and the only trace anywhere was the browser's own `command.ok`
+row carrying `status: 202`. The reason string went into the HTTP response body
+and nowhere else, so the failing step was unrecoverable and the bug could only
+be named because the stuck dialog happened to still be on screen an hour later.
+A short `ms` is diagnostic in its own right: a screen driver that returned well
+inside its step timeout never waited for anything.
+
+**202 is that failure code**, and it is also why `sessionControl` — not
+`postJSON` — decides the verdict. `indeterminate` is served as HTTP 202, which
+`r.ok` calls success, so every gesture used to resolve happily while nothing had
+changed at the terminal. 202 stays correct at the transport layer and other
+endpoints use it legitimately (a launch), so the check reads the OUTCOME's
+`status`, rejects on `indeterminate`, and logs a `<gesture>.unconfirmed` clog
+row beside the transport's honest `.ok`.
+
 ### Frontend audit (clientlog)
 
 The close saga burned several rounds because the server can only ever see a

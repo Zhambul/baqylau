@@ -10,11 +10,28 @@ function sessionControl(sessionId, controlName, fields, options) {
     control_name: controlName,
     request_id: String(Date.now()) + "-" + String(++canonicalRequestSequence),
   }, fields || {});
+  const tag = (options || {}).audit;
   return postJSON(
     "/api/sessions/" + encodeURIComponent(sessionId) + "/controls",
     body,
     options || {}
-  );
+  ).then(result => {
+    // An `indeterminate` outcome is a FAILURE the transport cannot see: the
+    // request arrived and the gesture was attempted, but the harness never
+    // confirmed it — a screen driver that bailed, a paste the TUI refused. It is
+    // served as HTTP 202, which `r.ok` calls success, so every gesture used to
+    // resolve happily while nothing had changed at the terminal (measured, codex
+    // session 01a0037d: a model switch left the picker open on screen and the
+    // page said it worked). 202 stays correct at the transport layer and is used
+    // by other endpoints, so the verdict is read from the OUTCOME here rather
+    // than from the status code in postJSON.
+    if (result && result.status === "indeterminate") {
+      if (tag) clog(sessionId, tag + ".unconfirmed", { reason: result.reason || "" });
+      return Promise.reject(Object.assign({}, result,
+        { error: result.reason || "the session did not confirm it" }));
+    }
+    return result;
+  });
 }
 
 function canonicalControl(controlName, fields, options) {

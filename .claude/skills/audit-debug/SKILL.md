@@ -107,11 +107,20 @@ So **a mostly-NULL `occurred_at` is not a bug** and is not worth chasing.
 | `spawns` | detached process launch | `ts`, `session_id`, `parent_script`, `child_pid`, `argv`, `purpose` |
 | `streams` | detached tailer/watcher | `session_id`, `kind`, `agent_id`, `task_id`, `src_path`, `pid`, `started_at`, `ended_at`, `end_reason`, `lines_emitted` |
 
-`state_files.action` values in use: `browser-event`, `browser-optimistic-action`,
+`state_files.action` values in use: **`control`** (every control gesture's OUTCOME —
+`{control, request_id, status, reason, ms}`, written at the one dispatch point
+`app/services.py HarnessControlService.execute`; `status` ∈ `acknowledged` /
+`rejected` / `indeterminate` / `raised`, and `reason` carries the harness's own words,
+e.g. a screen driver's failed step), `browser-event`, `browser-optimistic-action`,
 `browser-client-failure` (the frontend telemetry channel — what the browser saw that the
 server cannot), `web-reject` (a control POST bounced by the request guard, `content` names
 the code and why), `web-push`, `notification-route`, `notification-suppressed`,
 `telegram-notify`, plus `observation (...)` failures recorded as `errors`.
+
+**Only `control` and the `web-*`/notification rows carry the session in the `session_id`
+COLUMN.** The `browser-*` telemetry rows leave it empty and bury it in the JSON, so a
+`WHERE session_id='<sid>'` triage query returns nothing for them — match
+`content LIKE '%<sid>%'` as well before concluding a gesture left no trace.
 
 ## Triage order
 
@@ -244,10 +253,22 @@ The server-side trace is `state_files`; the browser-side trace is the same table
 telemetry actions, and you usually need both:
 
 ```sql
-SELECT datetime(ts,'unixepoch','localtime'), action, substr(content,1,300)
-FROM state_files WHERE session_id='<sid>' ORDER BY ts;
+SELECT datetime(ts,'unixepoch','localtime'), action, substr(content,1,400)
+FROM state_files
+WHERE session_id='<sid>' OR content LIKE '%<sid>%' ORDER BY ts;
 ```
 
+- A **`control`** row is the gesture's own verdict and is where to start.
+  **`status: "indeterminate"` is a FAILURE**, and the one most easily missed: the request
+  arrived and the gesture was attempted, but the harness never confirmed it — a screen
+  driver that bailed, a paste the TUI refused. `reason` names the step. It is served as
+  **HTTP 202**, which every `r.ok` check calls success, so the browser's own row for the
+  same gesture reads `command.ok`. Trust the `control` row, not the browser's.
+  `status: "raised"` means the gesture threw; the traceback is in `errors`.
+  A short `ms` against a screen driver is itself diagnostic — a driver that bailed in
+  under its step timeout did not wait for anything, it failed on a screen it had already
+  read (measured, codex session 01a0037d: 440ms against a 2.5s `STEP_TIMEOUT_S`, because
+  codex-cli 0.147.0 had dropped the picker step the driver was looking for).
 - A **`web-reject`** row means the request arrived and the guard bounced it — `content`
   carries the code and reason (missing header, foreign origin, read-only).
 - A **`browser-client-failure`** row is the browser reporting a request that failed on its

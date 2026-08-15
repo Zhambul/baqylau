@@ -797,3 +797,89 @@ def test_browser_telemetry_uses_named_application_resources(tmp_path):
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+
+
+# Every control gesture's outcome must leave a row: an `indeterminate` one is a
+# FAILURE the transport cannot see (served as HTTP 202, which the browser calls
+# success), and before this it left nothing but the driver's reason string in a
+# response body nobody records.
+def _audited_control(monkeypatch, outcome):
+    from app import services
+    from contracts.harness import SelectModel
+
+    rows = []
+    monkeypatch.setattr(
+        services.audit,
+        "state_file",
+        lambda log, path, action, content: rows.append((log, action, content)),
+    )
+    service = object.__new__(services.HarnessControlService)
+    request = SelectModel(SESSION_ID, "request-one", model_id="gpt-5.6-sol")
+
+    def run(_request):
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(service, "_execute", run)
+    raised = None
+    try:
+        service.execute(request)
+    except Exception as error:      # noqa: BLE001 — the raised-path assertion
+        raised = error
+    return rows, raised
+
+
+def test_an_unconfirmed_control_is_audited_with_its_reason(monkeypatch):
+    from contracts.harness import ControlResult
+
+    rows, raised = _audited_control(
+        monkeypatch,
+        ControlResult("request-one", "indeterminate", "row: no 'all models'"),
+    )
+
+    assert raised is None
+    assert len(rows) == 1
+    log, action, content = rows[0]
+    # the session id in its OWN column: browser-event rows bury it in the JSON,
+    # which is what made this gesture read as "no audit at all"
+    assert log == str(SESSION_ID)
+    assert action == "control"
+    assert content["control"] == "select_model"
+    assert content["status"] == "indeterminate"
+    assert content["reason"] == "row: no 'all models'"
+    assert isinstance(content["ms"], int)
+
+
+def test_an_acknowledged_control_is_audited_too(monkeypatch):
+    from contracts.harness import ControlResult
+
+    rows, _ = _audited_control(
+        monkeypatch, ControlResult("request-one", "acknowledged")
+    )
+    assert rows[0][2]["status"] == "acknowledged"
+    assert rows[0][2]["reason"] == ""
+
+
+def test_a_raised_control_is_audited_before_it_propagates(monkeypatch):
+    rows, raised = _audited_control(monkeypatch, RuntimeError("driver exploded"))
+
+    assert isinstance(raised, RuntimeError)
+    assert rows[0][2]["status"] == "raised"
+
+
+def test_a_broken_audit_never_takes_down_the_gesture(monkeypatch):
+    from app import services
+    from contracts.harness import ControlResult, SelectModel
+
+    def explode(*_args, **_kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(services.audit, "state_file", explode)
+    service = object.__new__(services.HarnessControlService)
+    monkeypatch.setattr(
+        service, "_execute", lambda r: ControlResult(r.request_id, "acknowledged")
+    )
+
+    outcome = service.execute(SelectModel(SESSION_ID, "request-one", model_id="x"))
+    assert outcome.status == "acknowledged"

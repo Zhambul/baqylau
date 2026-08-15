@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import time
 from typing import Protocol
+
+from core import audit
 
 from contracts.harness import (
     ControlContext,
@@ -67,6 +70,49 @@ class HarnessHookService:
         return intake.output
 
 
+# Every control gesture's OUTCOME, recorded at the one dispatch point every
+# harness and every gesture passes through (`HarnessControlService.execute`).
+#
+# It exists because a failed gesture used to leave NOTHING in the audit. Measured
+# (session 01a0037d, 2026-08-15 11:36): a web model switch failed inside its
+# harness's screen driver and the only trace anywhere was the browser's own
+# `command.ok` row carrying `status: 202` — and 202 is `indeterminate`, i.e. the
+# FAILURE code. The reason string went into the HTTP response body and nowhere
+# else, so the driver's own step name — which its error type carries expressly
+# "for the audit" — was unrecoverable, and the bug could only be named because
+# the stuck dialog happened to still be on screen an hour later.
+#
+# `status` is the diagnostic column, and `indeterminate` is the interesting
+# value: the request was understood and the gesture was attempted, but the
+# harness never confirmed it — a screen driver that bailed, a paste the TUI
+# refused. `rejected` is a guard declining up front and `acknowledged` is the
+# happy path. A raised gesture records `status: "raised"` before re-raising, so
+# the row exists even when the HTTP layer turns it into a 500.
+# The row carries the SESSION ID in its own column, unlike the browser-event
+# rows, whose session lives inside the JSON — those are invisible to the obvious
+# `WHERE session_id = ?` triage query, which is how this gesture first read as
+# "no audit at all".
+def _audit_control(request: ControlRequest, outcome, elapsed: float) -> None:
+    try:
+        audit.state_file(
+            str(request.session_id),
+            "",
+            "control",
+            {
+                "control": getattr(request, "control_name", ""),
+                "request_id": request.request_id,
+                "status": outcome.status if outcome is not None else "raised",
+                "reason": (outcome.reason if outcome is not None else "") or "",
+                "ms": round(elapsed * 1000),
+            },
+        )
+    except Exception:
+        # The one sanctioned silent swallow: this IS the recording path, so
+        # there is nowhere left to record that it failed, and a locked audit DB
+        # must never take down the gesture it is only observing.
+        pass
+
+
 class HarnessControlService:
     def __init__(
         self,
@@ -79,6 +125,16 @@ class HarnessControlService:
         self.queries = queries
 
     def execute(self, request: ControlRequest) -> ControlOutcome:
+        started = time.monotonic()
+        try:
+            outcome = self._execute(request)
+        except Exception:
+            _audit_control(request, None, time.monotonic() - started)
+            raise
+        _audit_control(request, outcome, time.monotonic() - started)
+        return outcome
+
+    def _execute(self, request: ControlRequest) -> ControlOutcome:
         plugin = self.registry.plugin_for_session(request.session_id)
         if plugin.controller is None:
             return ControlResult(request.request_id, "rejected", "unsupported control")
