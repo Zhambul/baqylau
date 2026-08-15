@@ -23,7 +23,6 @@ from contracts.terminal import (
     TabResult,
     TerminalControl,
     TerminalResult,
-    TerminalScreen,
     TextSubmission,
 )
 from domain.ids import SessionId
