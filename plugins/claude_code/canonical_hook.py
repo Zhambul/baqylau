@@ -115,9 +115,16 @@ def hook_raw_events(payload: bytes) -> tuple[tuple[RawEvent, ...], bytes]:
             raw_events.append(watch_start_raw_event(watch_context, HARNESS, prepared.watch))
     elif hook_name in {"PostToolUse", "PostToolUseFailure"} \
             and document.get("tool_name") == "Bash":
-        operation_id = str(document.get("tool_use_id") or "")
-        if operation_id:
-            raw_events.append(watch_finish_raw_event(watch_context, HARNESS, operation_id))
+        background = foreground.background_watch(document)
+        if background is not None:
+            # A background command STARTS its watch here — its native output file
+            # only becomes known (and nameable) once the task id exists. It shares
+            # the operation id, so no finish directive may accompany it.
+            raw_events.append(watch_start_raw_event(watch_context, HARNESS, background))
+        else:
+            operation_id = str(document.get("tool_use_id") or "")
+            if operation_id:
+                raw_events.append(watch_finish_raw_event(watch_context, HARNESS, operation_id))
     return tuple(raw_events), output
 
 

@@ -43,6 +43,7 @@ from contracts.terminal import (
     TerminalResult,
 )
 from domain.codec import CanonicalEventCodec
+from domain.events import CanonicalEvent
 from domain.events import (
     ActorFinished,
     ActorMessageSent,
@@ -74,7 +75,7 @@ from domain.events import (
     TurnStarted,
     UsageReported,
 )
-from domain.ids import ActorId, AssignmentId, OperationId, RawEventId, SessionId, TaskId, TurnId
+from domain.ids import ActorId, AssignmentId, CanonicalEventId, OperationId, RawEventId, SessionId, TaskId, TurnId
 from domain.values import AccountReference, AttentionPrompt, ModelReference, TextContent
 from plugins.claude_code.canonical import (
     ClaudeCanonicalTranslator,
@@ -1009,6 +1010,114 @@ def test_claude_post_tool_hook_records_the_watch_finish_directive():
     directive = raw_events[-1]
     assert directive.source_type == "watch"
     assert json.loads(directive.payload) == {"action": "finish", "operation_id": "command-one"}
+
+
+def _background_post_tool_document(tmp_path, session_id="claude-session", task_id="btk000001"):
+    output_path = (
+        tmp_path / "claude-503" / "-work-slug" / session_id / "tasks" / f"{task_id}.output"
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(b"1\n2\n")
+    return output_path, {
+        "session_id": session_id,
+        "transcript_path": "/work/claude.jsonl",
+        "cwd": "/work",
+        "hook_event_name": "PostToolUse",
+        "hook_event_id": "post-background-one",
+        "tool_name": "Bash",
+        "tool_use_id": "background-op-one",
+        "tool_input": {"command": "for i in 1 2; do echo $i; done", "run_in_background": True},
+        "tool_response": {"stdout": "", "stderr": "", "backgroundTaskId": task_id},
+    }
+
+
+def test_claude_background_bash_starts_a_watch_on_its_native_output_file(monkeypatch, tmp_path):
+    monkeypatch.setattr(claude_foreground, "BACKGROUND_OUTPUT_ROOT", str(tmp_path))
+    output_path, document = _background_post_tool_document(tmp_path)
+
+    raw_events, output = claude_canonical_hook.hook_raw_events(json.dumps(document).encode())
+
+    assert output == b""
+    directive = raw_events[-1]
+    assert directive.source_type == "watch"
+    body = json.loads(directive.payload)
+    assert body["action"] == "start"
+    assert body["operation_id"] == "background-op-one"
+    assert body["source_path"] == str(output_path.resolve())
+    assert body["delete_source"] is False
+    # the watch shares the operation id, so no finish directive may accompany it
+    assert [json.loads(event.payload)["action"] for event in raw_events if event.source_type == "watch"] == ["start"]
+
+
+def test_claude_background_watch_requires_the_native_task_evidence(monkeypatch, tmp_path):
+    monkeypatch.setattr(claude_foreground, "BACKGROUND_OUTPUT_ROOT", str(tmp_path))
+    _output_path, document = _background_post_tool_document(tmp_path)
+
+    foreground_document = json.loads(json.dumps(document))
+    foreground_document["tool_input"].pop("run_in_background")
+    assert claude_foreground.background_watch(foreground_document) is None
+
+    missing_task = json.loads(json.dumps(document))
+    missing_task["tool_response"].pop("backgroundTaskId")
+    assert claude_foreground.background_watch(missing_task) is None
+
+    no_file_yet = json.loads(json.dumps(document))
+    no_file_yet["tool_response"]["backgroundTaskId"] = "btk-without-a-file"
+    assert claude_foreground.background_watch(no_file_yet) is None
+
+
+def test_claude_background_output_streams_into_the_operation(monkeypatch, tmp_path):
+    monkeypatch.setattr(claude_foreground, "BACKGROUND_OUTPUT_ROOT", str(tmp_path / "native"))
+    monkeypatch.setenv("BAQYLAU_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr("app.host.ApplicationHost.ensure_running", lambda self: None)
+    output_path, document = _background_post_tool_document(tmp_path / "native", session_id="session-one")
+    document["transcript_path"] = str(tmp_path / "session-one.jsonl")
+
+    claude_canonical_hook.record_hook(json.dumps(document).encode())
+
+    runtime, interpreter = interpreting_runtime(tmp_path / "data" / "events.db")
+    runtime.register("claude_code", Session(
+        SessionId("session-one"), ActorId("session-one:lead"),
+        "session-one", str(tmp_path / "session-one.jsonl"), "/work",
+    ))
+    interpreter.tick()  # applies the directive
+    output_path.write_bytes(b"1\n2\n3\n")  # the job keeps writing
+    interpreter.tick()  # pulls chunks
+    interpreter.tick()  # translates them
+
+    cursor = runtime.store.latest_cursor()
+    operation = runtime.queries().operation_activity(
+        SessionId("session-one"),
+        ActorId("session-one:lead"),
+        OperationId("background-op-one"),
+        cursor,
+    )
+    assert "".join(part.text for part in operation.current_progress()) == "1\n2\n3\n"
+
+    # the session's end is the background watch's end: tail captured, row gone,
+    # the NATIVE file untouched
+    output_path.write_bytes(b"1\n2\n3\n4\n")
+    finish = CanonicalEvent(
+        CanonicalEventId("session-finish"),
+        SessionId("session-one"),
+        ActorId("session-one:lead"),
+        None,
+        None,
+        "claude_code",
+        30.0,
+        SessionFinished("succeeded", None),
+    )
+    interpreter._react(SimpleNamespace(event=finish))
+    assert runtime.watches.for_session(SessionId("session-one")) == ()
+    assert output_path.exists()
+    interpreter.tick()
+    tail = runtime.queries().operation_activity(
+        SessionId("session-one"),
+        ActorId("session-one:lead"),
+        OperationId("background-op-one"),
+        runtime.store.latest_cursor(),
+    )
+    assert "".join(part.text for part in tail.current_progress()) == "1\n2\n3\n4\n"
 
 
 def test_claude_foreground_output_is_canonical_append_progress():

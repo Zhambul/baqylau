@@ -1,7 +1,8 @@
-"""Claude Code foreground-command rewriting into a recordable file watch."""
+"""Claude Code command output as recordable file watches: foreground and background."""
 
 from __future__ import annotations
 
+import glob
 import hashlib
 import json
 import os
@@ -11,6 +12,12 @@ from contracts.harness import FileWatch
 from plugins.claude_code import shell
 
 CHUNK_SOURCE_TYPE = "foreground_output"
+
+# Claude Code writes a background command's output to
+# /tmp/claude-<uid>/<cwd-slug>/<session-id>/tasks/<taskId>.output. The slug rule
+# is Claude's own, so the file is FOUND by its unique (session, task) pair
+# rather than derived — a miss simply means nothing to watch.
+BACKGROUND_OUTPUT_ROOT = "/tmp"
 
 
 @dataclass(frozen=True)
@@ -56,6 +63,40 @@ def _updated_input(tool_input: dict, command: str) -> bytes:
         )
         + "\n"
     ).encode("utf-8")
+
+
+def background_watch(document: dict) -> FileWatch | None:
+    """The watch for a background command's native output file, if one started.
+
+    Background commands are not rewritten (Claude Code redirects their output
+    itself), so the watch begins at the PostToolUse that reports the task id.
+    The native file is Claude Code's — never deleted by us — and outlives the
+    watch, which ends with the session (or the lifetime cap).
+    """
+    tool_input = document.get("tool_input") or {}
+    if not tool_input.get("run_in_background"):
+        return None
+    operation_id = str(document.get("tool_use_id") or "")
+    session_id = str(document.get("session_id") or "")
+    response = document.get("tool_response")
+    task_id = str(response.get("backgroundTaskId") or "") if isinstance(response, dict) else ""
+    if not operation_id or not session_id or not task_id:
+        return None
+    pattern = os.path.join(
+        BACKGROUND_OUTPUT_ROOT, "claude-*", "*", session_id, "tasks", f"{task_id}.output"
+    )
+    matches = sorted(glob.glob(pattern))
+    if not matches:
+        return None
+    return FileWatch(
+        operation_id=operation_id,
+        source_path=os.path.realpath(matches[0]),
+        chunk_source_type=CHUNK_SOURCE_TYPE,
+        delete_source=False,
+        initial_size=0,
+        initial_modified_at=0,
+        wait_for_source_change=False,
+    )
 
 
 def prepare(document: dict) -> PreparedForegroundCommand | None:

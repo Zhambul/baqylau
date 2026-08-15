@@ -209,6 +209,11 @@ class Interpreter:
         session_id = stored_event.event.session_id
         try:
             if isinstance(payload, SessionFinished):
+                # A finished session leaves watchable(), so its watches would
+                # never be pulled again: capture their tails and remove them now.
+                # Background watches have no finish directive of their own — the
+                # session's end IS their end.
+                self._reap_watches(session_id)
                 self.terminal.close_session_panes(session_id)
                 return
             if self.terminal.hosting_session(session_id) is not None:
@@ -229,3 +234,12 @@ class Interpreter:
             )
         except Exception:
             _audit_failure("session panes", {"session_id": str(session_id)})
+
+    def _reap_watches(self, session_id) -> None:
+        for source in self.watches.for_session(session_id):
+            raw_events = source.read(self.recorder.position(source.source_identity))
+            if raw_events:
+                self.recorder.record(raw_events)
+            self.watches.remove(
+                session_id, source.operation_id, source.delete_source, source.source_path
+            )

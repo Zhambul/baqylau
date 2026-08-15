@@ -96,6 +96,16 @@ class initializes through it.
   (line-start + skip-one-line for transcripts/rollouts, chunk-end for watches, a
   snapshot digest for task files, a `started`/`finished` latch for process
   sources).
+- **Background commands stream through the same watches.** Claude Code runs a
+  `run_in_background` Bash itself and writes its output to a native file
+  (`/tmp/claude-<uid>/<cwd-slug>/<session>/tasks/<taskId>.output`). The hook can't
+  tee-rewrite those, so the watch starts at PostToolUse instead: the payload's
+  `backgroundTaskId` locates the native file (globbed by the unique
+  session/task pair — the slug rule stays Claude's), and the directive watches it
+  with `delete_source=False`. There is no finish hook for a background job, so
+  the session's committed `session.finished` is the finish: the interpreter's
+  react step drains each remaining watch's tail and removes the rows (a finished
+  session leaves `watchable()`, so they would otherwise never be pulled again).
 - **Foreground manifests were coordination state pretending not to be a table**
   (`<op>.json` / `.done` files under the Claude config dir). Now the PreToolUse
   hook records a `watch` raw event — a directive-as-evidence — and the interpreter
