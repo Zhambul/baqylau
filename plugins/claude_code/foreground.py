@@ -12,6 +12,7 @@ from dataclasses import asdict, dataclass
 from contracts.harness import (
     CheckpointStore,
     HarnessEventSource,
+    HookAction,
     RawEvent,
     RawEventDelivery,
     SourceCheckpoint,
@@ -146,7 +147,7 @@ def prepare(document: dict) -> PreparedForegroundCommand | None:
 
 
 @dataclass(frozen=True)
-class StartForegroundObservation:
+class StartForegroundObservation(HookAction):
     manifest_path: str
     observation: ForegroundObservation
 
@@ -176,7 +177,7 @@ class StartForegroundObservation:
 
 
 @dataclass(frozen=True)
-class FinishForegroundObservation:
+class FinishForegroundObservation(HookAction):
     manifest_path: str
     completion_path: str
 

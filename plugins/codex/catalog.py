@@ -5,6 +5,7 @@ from __future__ import annotations
 from contracts.harness import (
     CommandOption,
     EffortOption,
+    HarnessCatalog,
     HarnessCatalogSnapshot,
     ModelOption,
     QueryContext,
@@ -12,7 +13,7 @@ from contracts.harness import (
 from plugins.codex import commands, modeldialog
 
 
-class CodexCatalog:
+class CodexCatalog(HarnessCatalog):
     sections = frozenset({"models", "efforts", "commands"})
 
     def read(self, context: QueryContext) -> HarnessCatalogSnapshot:

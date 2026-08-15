@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 from contracts.harness import (
     HarnessMemorySnapshot,
+    HookAction,
     MemoryNoteRecord,
     MemorySearchHit,
     MemorySearchRecord,
@@ -68,7 +69,7 @@ def _connect() -> sqlite3.Connection:
 
 
 @dataclass(frozen=True)
-class CaptureMemory:
+class CaptureMemory(HookAction):
     document: dict
 
     def start(self) -> None:

@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from contracts.harness import HarnessLaunchPlan, LaunchRejected, LaunchRequest
+from contracts.harness import HarnessLaunchPlan, HarnessLauncher, LaunchRejected, LaunchRequest
 from plugins.claude_code import account
 
 
-class ClaudeCodeLauncher:
+class ClaudeCodeLauncher(HarnessLauncher):
     def prepare(self, request: LaunchRequest) -> HarnessLaunchPlan:
         account_alias = account.alias_for(request.account_id or "")
         if account_alias is None:

@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import os
 
-from contracts.harness import HarnessMemorySnapshot, MemoryDocument
+from contracts.harness import HarnessMemory, HarnessMemorySnapshot, MemoryDocument
 from domain.ids import SessionId
 from plugins.claude_code import memory
 from plugins.claude_code import memory_state
 
 
-class ClaudeCodeMemory:
+class ClaudeCodeMemory(HarnessMemory):
     def enabled(self, working_directory: str) -> bool:
         return memory.in_scope(working_directory)
 

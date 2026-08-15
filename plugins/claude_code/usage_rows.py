@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from contracts.harness import UsageRow, UsageWindow
+from contracts.harness import HarnessUsage, UsageRow, UsageWindow
 from plugins.claude_code import account, usage_state
 
 WINDOWS = {
@@ -13,7 +13,7 @@ WINDOWS = {
 }
 
 
-class ClaudeCodeUsage:
+class ClaudeCodeUsage(HarnessUsage):
     def read(self) -> tuple[UsageRow, ...]:
         snapshots = usage_state.latest_by_account()
         accounts = account.registry()

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from contracts.harness import SourceCheckpoint
+from contracts.harness import CheckpointStore, SourceCheckpoint
 from runtime.database import connect
 from runtime.event_store import EventStore
 
 
-class SqliteCheckpointStore:
+class SqliteCheckpointStore(CheckpointStore):
     def __init__(self, event_store: EventStore) -> None:
         self.event_store = event_store
 

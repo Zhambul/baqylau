@@ -11,14 +11,19 @@ import frontends
 from app import pending_session
 from contracts.terminal import (
     ACTIVITY_PANE_TAG,
-    ScreenText,
     SCOREBOARD_PANE_TAG,
     SESSION_WINDOW_TAG,
+    ScreenText,
+    SessionPaneControl,
     SessionPaneRequest,
-    TabRequest,
+    SessionTabControl,
+    SessionTerminal,
     TabAppearance,
+    TabRequest,
     TabResult,
+    TerminalControl,
     TerminalResult,
+    TerminalScreen,
     TextSubmission,
 )
 from domain.ids import SessionId
@@ -29,7 +34,11 @@ SCOREBOARD_RESIZE_ATTEMPTS = 3
 SCOREBOARD_RESIZE_SETTLE_SECONDS = 0.08
 
 
-class ApplicationTerminal:
+# TerminalControl already extends TerminalScreen, so naming both here would put a
+# base in front of its own subclass and Python could not order the MRO.
+class ApplicationTerminal(
+    SessionTerminal, SessionPaneControl, SessionTabControl, TerminalControl
+):
     def _frontend(self):
         return frontends.get(resolve=True)
 

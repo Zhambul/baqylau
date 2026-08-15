@@ -26,6 +26,7 @@ from contracts.terminal import SessionTerminal, TabRequest, TerminalControl, Ter
 from domain.ids import SessionId
 from runtime.registry import HarnessRegistry
 from runtime.projections import SessionQueries
+from app.usage import UsageSource
 
 
 class ApplicationHostControl(Protocol):
@@ -204,7 +205,7 @@ class HarnessCatalogService:
             raise ValueError(f"harness {harness!r} has no catalog")
         return catalog.read(context)
 
-class HarnessUsageService:
+class HarnessUsageService(UsageSource):
     def __init__(self, registry: HarnessRegistry) -> None:
         self.registry = registry
 

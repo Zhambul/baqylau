@@ -12,6 +12,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from contracts.harness import (
+    HarnessHook,
     HookIntake,
     MigrateAccount,
     RawEvent,
@@ -25,7 +26,7 @@ from plugins.claude_code import model
 from plugins.claude_code.memory_state import CaptureMemory
 
 
-class ClaudeHook:
+class ClaudeHook(HarnessHook):
     def receive(self, payload: bytes) -> HookIntake:
         document = json.loads(payload)
         if not isinstance(document, dict):

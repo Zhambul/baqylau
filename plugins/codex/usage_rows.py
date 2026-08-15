@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from contracts.harness import UsageRow, UsageWindow
+from contracts.harness import HarnessUsage, UsageRow, UsageWindow
 from plugins.codex import usage
 
 WINDOW_LABELS = {300: "5h", 10080: "7d"}
 
 
-class CodexUsage:
+class CodexUsage(HarnessUsage):
     def read(self) -> tuple[UsageRow, ...]:
         rate_limits = usage.read_rate_limits()
         if rate_limits is None:

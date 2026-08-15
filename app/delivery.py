@@ -5,6 +5,7 @@ from __future__ import annotations
 from contracts.harness import (
     IngestionResult,
     RawEvent,
+    RawEventDelivery,
     SessionLifecycleContext,
     SessionLifecycleRequest,
 )
@@ -44,7 +45,7 @@ class SessionLifecycleService:
         )
 
 
-class ApplicationEventDelivery:
+class ApplicationEventDelivery(RawEventDelivery):
     """Persist one raw observation, then apply its committed lifecycle facts."""
 
     def __init__(

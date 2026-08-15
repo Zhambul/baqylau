@@ -5,10 +5,10 @@ from __future__ import annotations
 import os
 import sys
 
-from contracts.harness import HarnessLaunchPlan, LaunchRejected, LaunchRequest
+from contracts.harness import HarnessLaunchPlan, HarnessLauncher, LaunchRejected, LaunchRequest
 
 
-class CodexLauncher:
+class CodexLauncher(HarnessLauncher):
     def prepare(self, request: LaunchRequest) -> HarnessLaunchPlan:
         if request.account_id:
             raise LaunchRejected("Codex has no account switcher")

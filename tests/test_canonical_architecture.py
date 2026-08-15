@@ -354,3 +354,137 @@ if loaded:
         check=False,
     )
     assert result.returncode == 0, result.stderr
+
+
+# --- Protocol implementations must say so ------------------------------------
+#
+# A Protocol is satisfied structurally, so a class can implement one by accident
+# of method naming and, more importantly, can DRIFT out of one silently. Nothing
+# in Python objects when a parameter is renamed or a method disappears; the break
+# surfaces later, at a call site, in whichever harness happened to be running.
+#
+# So an implementation must name the Protocol it implements. The declaration is
+# what makes the relationship greppable, what makes a type checker verify it, and
+# what makes the divergence below a test failure instead of a bug report.
+#
+# It caught one immediately: CodexLifecycle.apply named its second parameter
+# `recognized_session` where HarnessLifecycle.apply says `session`, so a keyword
+# call would have worked on one harness and raised on the other.
+
+SOURCE_PACKAGES = ("app", "contracts", "core", "dashboard", "domain",
+                   "frontends", "plugins", "runtime", "terminal")
+
+# Structural implementers that must NOT declare their Protocol, with the reason.
+# Both are the same shape: the Protocol is declared in a layer that sits BELOW
+# the implementer, so importing it to declare it would invert the dependency —
+# the dashboard names the shape it needs from the application, and the
+# application must not import the dashboard to say "yes, that is me". Moving
+# these two Protocols into `contracts/` would retire both rows.
+PROTOCOL_DECLARATION_EXEMPTIONS = {
+    ("TerminalInputService", "TerminalSessionReader"):
+        "the Protocol lives in dashboard/, which app/ may not import",
+    ("ApplicationUsageState", "UsageReader"):
+        "the Protocol lives in dashboard/, which app/ may not import",
+}
+
+
+def _method_signatures(node: ast.ClassDef) -> dict[str, tuple[str, ...]]:
+    return {
+        member.name: tuple(argument.arg for argument in member.args.args)
+        for member in node.body
+        if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+
+def _protocols_and_classes():
+    protocols: dict[str, dict[str, tuple[str, ...]]] = {}
+    classes = []
+    for package in SOURCE_PACKAGES:
+        for path in (ROOT / package).rglob("*.py"):
+            if "__pycache__" in path.parts:
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.ClassDef):
+                    continue
+                bases = [ast.unparse(base) for base in node.bases]
+                is_protocol = any(
+                    base == "Protocol" or base.startswith("Protocol[") for base in bases
+                )
+                where = f"{path.relative_to(ROOT)}:{node.lineno}"
+                if is_protocol:
+                    protocols[node.name] = _method_signatures(node)
+                else:
+                    classes.append((where, node.name, bases, _method_signatures(node)))
+    return protocols, classes
+
+
+def _satisfies(members: dict, protocol: dict) -> bool:
+    """Every protocol method is present with the same parameter NAMES.
+
+    Names, not just arity: they are part of the contract because any of these
+    may be called with keywords, and a renamed parameter is exactly the drift
+    this test exists to catch. Matching on names is also what keeps the check
+    precise -- `read(self, context)` and `read(self)` are different protocols,
+    so a class does not accidentally implement one by owning a common verb.
+    """
+    return bool(protocol) and all(members.get(name) == args for name, args in protocol.items())
+
+
+def test_protocol_implementations_declare_the_protocol_they_implement():
+    protocols, classes = _protocols_and_classes()
+    undeclared = []
+    for where, name, bases, members in classes:
+        matched = [p for p, signature in protocols.items() if _satisfies(members, signature)]
+        if not matched or any(protocol in bases for protocol in matched):
+            continue
+        if all((name, protocol) in PROTOCOL_DECLARATION_EXEMPTIONS for protocol in matched):
+            continue
+        undeclared.append(f"{where} {name} implements {'/'.join(sorted(matched))} without saying so")
+    assert undeclared == []
+
+
+def test_a_declared_protocol_implementation_matches_the_protocol_exactly():
+    """Declaring the Protocol must not become a way to inherit an empty method.
+
+    Two failures hide behind an explicit base, and this is the test that catches
+    the drift -- the one above only ever looks at classes that declare NOTHING.
+
+    1. A Protocol's methods have `...` bodies, so subclassing one makes a MISSING
+       implementation return None instead of raising AttributeError. The
+       declaration would hide the very drift it exists to expose.
+    2. A RENAMED parameter still satisfies the base class, silently. This is not
+       hypothetical: CodexLifecycle.apply took `recognized_session` where
+       HarnessLifecycle.apply says `session`, so the same keyword call worked on
+       one harness and raised on the other.
+
+    So a declaring class must define every member, with the same parameter names.
+    """
+    protocols, classes = _protocols_and_classes()
+    divergent = []
+    for where, name, bases, members in classes:
+        for protocol in bases:
+            signature = protocols.get(protocol)
+            if signature is None:
+                continue
+            for member, arguments in sorted(signature.items()):
+                if member not in members:
+                    divergent.append(f"{where} {name} declares {protocol} but never defines {member}()")
+                elif members[member] != arguments:
+                    divergent.append(
+                        f"{where} {name}.{member}{members[member]} does not match "
+                        f"{protocol}.{member}{arguments}"
+                    )
+    assert divergent == []
+
+
+def test_the_protocol_declaration_exemptions_are_all_still_real():
+    """A stale exemption fails too -- the list may not outlive its reason."""
+    protocols, classes = _protocols_and_classes()
+    live = {
+        (name, protocol)
+        for _where, name, _bases, members in classes
+        for protocol, signature in protocols.items()
+        if _satisfies(members, signature)
+    }
+    assert sorted(set(PROTOCOL_DECLARATION_EXEMPTIONS) - live) == []

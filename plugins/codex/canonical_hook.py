@@ -12,7 +12,7 @@ import time
 if __package__ in (None, ""):
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from contracts.harness import HookIntake, RawEvent, RecognizedSession
+from contracts.harness import HarnessHook, HookIntake, RawEvent, RecognizedSession
 from domain.ids import ActorId, RawEventId, SessionId
 
 
@@ -38,7 +38,7 @@ def codex_process_id(starting_process_id: int | None = None) -> int:
     raise RuntimeError("Codex hook has no Codex process ancestor")
 
 
-class CodexHook:
+class CodexHook(HarnessHook):
     def receive(self, payload: bytes) -> HookIntake:
         document = json.loads(payload)
         if not isinstance(document, dict):

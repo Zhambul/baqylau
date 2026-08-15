@@ -16,10 +16,12 @@ from contracts.harness import (
     CheckpointStore,
     EventSourceContext,
     HarnessEventSource,
+    HarnessEvents,
     RawEvent,
     RawEventDelivery,
     RecognizedSession,
     SessionCandidate,
+    SessionRecognizer,
     SourceCheckpoint,
     TranslationError,
     TranslationResult,
@@ -102,7 +104,7 @@ def _session_metadata(path: str) -> dict:
     return {}
 
 
-class ClaudeSessionRecognizer:
+class ClaudeSessionRecognizer(SessionRecognizer):
     def discover(self) -> tuple[RecognizedSession, ...]:
         config_directory = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
         paths = sorted(
@@ -414,7 +416,7 @@ def _plan_resolution(native: dict, failed: bool) -> tuple[str, str | None, bool]
     return "rejected", None, False
 
 
-class ClaudeCanonicalTranslator:
+class ClaudeCanonicalTranslator(HarnessEvents):
     TASK_TOOLS = frozenset({"TaskCreate", "TaskUpdate", "TaskGet", "TaskList"})
 
     def __init__(self) -> None:

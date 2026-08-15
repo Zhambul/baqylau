@@ -1,12 +1,12 @@
 """Claude Code session lifecycle through the shared harness contract."""
 
-from contracts.harness import RecognizedSession, SessionLifecycleContext, SessionLifecycleRequest
+from contracts.harness import HarnessLifecycle, RecognizedSession, SessionLifecycleContext, SessionLifecycleRequest
 from contracts.terminal import SessionPaneRequest
 from plugins.claude_code import pane_settings
 from plugins.claude_code.otel import launch as otel
 
 
-class ClaudeCodeLifecycle:
+class ClaudeCodeLifecycle(HarnessLifecycle):
     def apply(
         self,
         request: SessionLifecycleRequest,

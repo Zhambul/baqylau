@@ -16,10 +16,12 @@ from contracts.harness import (
     CheckpointStore,
     EventSourceContext,
     HarnessEventSource,
+    HarnessEvents,
     RawEvent,
     RawEventDelivery,
     RecognizedSession,
     SessionCandidate,
+    SessionRecognizer,
     SourceCheckpoint,
     TranslationError,
     TranslationResult,
@@ -114,7 +116,7 @@ def _rollout_paths() -> tuple[str, ...]:
     return tuple(sorted(glob.glob(pattern)))
 
 
-class CodexSessionRecognizer:
+class CodexSessionRecognizer(SessionRecognizer):
     def discover(self) -> tuple[RecognizedSession, ...]:
         codex_home = os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex")
         paths = sorted(
@@ -336,7 +338,7 @@ def _codex_tool(native_name: str, arguments) -> tuple[str, str]:
     return mapped
 
 
-class CodexCanonicalTranslator:
+class CodexCanonicalTranslator(HarnessEvents):
     def __init__(self) -> None:
         self._known_rollout_paths: tuple[str, ...] = ()
         self._child_rollouts: dict[str, tuple[str, ...]] = {}

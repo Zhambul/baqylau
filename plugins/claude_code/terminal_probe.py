@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from contracts.harness import TerminalInputState
+from contracts.harness import HarnessTerminalProbe, TerminalInputState
 from contracts.terminal import TerminalScreen
 from plugins.claude_code import suggestion
 
 
-class ClaudeCodeTerminalProbe:
+class ClaudeCodeTerminalProbe(HarnessTerminalProbe):
     def input_state(
         self,
         screen: TerminalScreen,

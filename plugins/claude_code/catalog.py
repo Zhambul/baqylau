@@ -8,6 +8,7 @@ from contracts.harness import (
     AccountOption,
     CommandOption,
     EffortOption,
+    HarnessCatalog,
     HarnessCatalogSnapshot,
     ModelOption,
     QueryContext,
@@ -23,7 +24,7 @@ COMMAND_PROMPT_FLOORS = {"compact": 2, "rename": 1}
 SPEECH_TERMS_FILE = "deepgram-keyterms"
 
 
-class ClaudeCodeCatalog:
+class ClaudeCodeCatalog(HarnessCatalog):
     sections = frozenset(
         {
             "models",
