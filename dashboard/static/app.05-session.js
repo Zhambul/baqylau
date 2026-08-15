@@ -304,8 +304,19 @@ function applyCanonicalCatalog(snapshot, catalog) {
   const host = hostRow(harness);
   const controls = new Set((host && host.controls) || []);
   S.sessionView.meta.host_label = (host && host.label) || harness;
-  S.sessionView.meta.model_choices = (catalog.models || []).map(option => option.model_id);
-  S.sessionView.meta.effort_choices = (catalog.efforts || []).map(option => option.value);
+  const models = catalog.models || [];
+  S.sessionView.meta.model_choices = models.map(option => option.model_id);
+  // Efforts belong to the MODEL, not the harness (ModelOption.efforts): codex's
+  // gpt-5.6-luna has no Ultra while its siblings do, so one flat per-harness
+  // list offered a level the picker would then refuse. Keep the map, and default
+  // the flat list to the default model's for the moment before one is known.
+  S.sessionView.meta.model_efforts = {};
+  for (const option of models)
+    S.sessionView.meta.model_efforts[option.model_id] =
+      (option.efforts || []).map(effort => effort.value);
+  const fallbackModel = models.find(option => option.default) || models[0];
+  S.sessionView.meta.effort_choices =
+    fallbackModel ? (fallbackModel.efforts || []).map(effort => effort.value) : [];
   S.sessionView.meta.rewind_modes = (catalog.rewind_modes || []).map(option => ({
     mode: option.value,
     label: option.display_name,

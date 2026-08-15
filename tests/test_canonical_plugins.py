@@ -1790,33 +1790,63 @@ def test_hook_native_identity_reuse_with_different_bytes_is_a_hard_conflict(monk
         claude_canonical_hook.record_hook(changed)
 
 
-def test_catalogs_expose_each_harness_own_vocabulary(tmp_path):
-    configuration_directory = tmp_path / ".claude"
-    configuration_directory.mkdir()
-    (configuration_directory / "deepgram-keyterms").write_text(
-        "Baqylau\n# ignored\ncanonical model\nBaqylau\n",
-        encoding="utf-8",
-    )
+def test_catalogs_expose_only_what_depends_on_the_directory(tmp_path):
+    """The catalogue is now the per-DIRECTORY half of the menu vocabulary.
+
+    Everything a harness offers unconditionally moved onto HarnessInfo, which is
+    a frozen literal built at import -- so only the slash commands, discovered by
+    walking the session's own directory, still need a QueryContext.
+    """
     application = build_application(str(tmp_path))
     context = QueryContext(session_id=None, working_directory=str(tmp_path))
 
     claude_catalog = application.catalog.read("claude_code", context)
     codex_catalog = application.catalog.read("codex", context)
 
-    assert [model.model_id for model in claude_catalog.models] == [
+    assert {command.command for command in claude_catalog.commands} != {
+        command.command for command in codex_catalog.commands
+    }
+    assert not hasattr(claude_catalog, "models")
+    assert not hasattr(claude_catalog, "accounts")
+
+
+def test_static_menu_vocabulary_lives_on_the_harness_descriptor():
+    from plugins.claude_code.plugin import plugin as claude_plugin
+    from plugins.codex.plugin import plugin as codex_plugin
+
+    assert [model.model_id for model in claude_plugin.info.models] == [
         "fable",
         "opus",
         "sonnet",
         "haiku",
     ]
-    assert all(model.model_id.startswith("gpt-") for model in codex_catalog.models)
-    assert claude_catalog.rewind_modes
-    assert codex_catalog.rewind_modes == ()
-    assert claude_catalog.speech_terms == ("Baqylau", "canonical model")
-    assert codex_catalog.speech_terms == ()
-    assert {command.command for command in claude_catalog.commands} != {
-        command.command for command in codex_catalog.commands
-    }
+    assert all(model.model_id.startswith("gpt-") for model in codex_plugin.info.models)
+    assert claude_plugin.info.rewind_modes
+    assert codex_plugin.info.rewind_modes == ()
+    # only one harness has a subscription switcher behind it
+    assert claude_plugin.info.supports_accounts
+    assert not codex_plugin.info.supports_accounts
+
+
+def test_reasoning_levels_belong_to_the_model_that_offers_them():
+    """A level a model does not have must not be advertised for it.
+
+    Measured on the live picker: one codex model's advanced sub-step holds Max
+    alone, with no Ultra row, while its siblings list both. The old flat
+    per-harness list promised Ultra for every model, so the menu offered a level
+    the picker would then refuse.
+    """
+    from plugins.codex.plugin import plugin as codex_plugin
+
+    by_id = {model.model_id: model for model in codex_plugin.info.models}
+    luna = {effort.value for effort in by_id["gpt-5.6-luna"].efforts}
+    sol = {effort.value for effort in by_id["gpt-5.6-sol"].efforts}
+
+    assert "ultra" not in luna
+    assert "ultra" in sol
+    # every model still names exactly one default
+    for model in codex_plugin.info.models:
+        assert len([effort for effort in model.efforts if effort.default]) == 1
 
 
 def test_claude_memory_capture_stays_inside_the_plugin(monkeypatch, tmp_path):

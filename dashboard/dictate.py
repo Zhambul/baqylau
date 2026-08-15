@@ -66,16 +66,12 @@ def _read(path):
         return f.read().strip()
 
 
-def keyterms(harness_terms=()):
-    """Merge plugin-owned project terms with the user-global vocabulary."""
+def keyterms():
+    """The user-global dictation vocabulary."""
     files = [os.path.expanduser(
         os.environ.get("BAQYLAU_DICTATION_KEYTERMS_FILE")
         or DEFAULT_KEYTERMS_FILE)]
     terms, seen = [], set()
-    for term in harness_terms:
-        if term and term not in seen:
-            seen.add(term)
-            terms.append(term)
     for path in files:
         try:
             raw = _read(path)

@@ -1,40 +1,25 @@
-"""Codex configuration vocabulary exposed through the harness contract."""
+"""Codex menu vocabulary that depends on WHERE the session is."""
 
 from __future__ import annotations
 
 from contracts.harness import (
     CommandOption,
-    EffortOption,
     HarnessCatalog,
     HarnessCatalogSnapshot,
-    ModelOption,
     QueryContext,
 )
-from plugins.codex import commands, modeldialog
+from plugins.codex import commands
 
 
 class CodexCatalog(HarnessCatalog):
-    sections = frozenset({"models", "efforts", "commands"})
-
     def read(self, context: QueryContext) -> HarnessCatalogSnapshot:
-        models = tuple(
-            ModelOption(model_id, model_id, model_id == modeldialog.MODEL_CHOICES[0])
-            for model_id in modeldialog.MODEL_CHOICES
-        )
-        efforts = tuple(
-            EffortOption(effort, effort, effort == "low")
-            for effort in modeldialog.EFFORT_CHOICES
-        )
-        command_options = tuple(
-            CommandOption(
-                command=row["name"],
-                description=row.get("desc") or "",
-                minimum_prompt_count=0,
-            )
-            for row in commands.slash_commands(context.working_directory or "")
-        )
         return HarnessCatalogSnapshot(
-            models=models,
-            efforts=efforts,
-            commands=command_options,
+            commands=tuple(
+                CommandOption(
+                    command=row["name"],
+                    description=row.get("desc") or "",
+                    minimum_prompt_count=0,
+                )
+                for row in commands.slash_commands(context.working_directory or "")
+            ),
         )

@@ -188,8 +188,16 @@ function prefillComposer(restored) {
 // hardcoded fallback pair that used to sit here would have handed it.
 function hostChoices(kind) {
   const meta = S.sessionView && S.sessionView.meta;
-  const list = meta && Array.isArray(meta[kind + "_choices"])
-    ? meta[kind + "_choices"] : null;
+  if (!meta) return [];
+  // The ✧ list is the CURRENT model's, since efforts are a field of ModelOption.
+  // meta.effort_choices is the default model's list, used only until the running
+  // model is known.
+  if (kind === "effort") {
+    const perModel = (meta.model_efforts || {})[curModelFamily()];
+    const list = Array.isArray(perModel) ? perModel : meta.effort_choices;
+    return Array.isArray(list) ? list.map(v => [v, v]) : [];
+  }
+  const list = Array.isArray(meta[kind + "_choices"]) ? meta[kind + "_choices"] : null;
   return list ? list.map(v => [v, v]) : [];
 }
 

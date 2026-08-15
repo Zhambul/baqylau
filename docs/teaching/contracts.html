@@ -167,7 +167,16 @@ class HarnessInfo:
     plugin_version: str             # stamped on every translation verdict
     canonical_version: int          # which event vocabulary this was built against
     supports_attachments: bool = False
-    default_for_launch: bool = False</code></pre>
+    default_for_launch: bool = False
+    supports_accounts: bool = False
+    models: tuple[ModelOption, ...] = ()        # each with ITS reasoning levels
+    rewind_modes: tuple[RewindModeOption, ...] = ()</code></pre>
+
+<p>This is the home of everything static about a harness, and the test for
+admission is not "does it change often" but <b>can it be written as a
+literal</b>. <code>HarnessInfo</code> is constructed at import time, where file
+I/O is forbidden — so a fact that must be read from disk belongs in the
+<a href="#catalog">catalogue</a> instead, however rarely it changes.</p>
 
 <p><code>plugin_version</code> is written into the database next to every interpretation this plugin makes. So when an interpretation turns out to be wrong, you can find every record produced by the version that made the mistake. <code>canonical_version</code> is the event-vocabulary version the plugin was written against, which is how a plugin built for an older vocabulary can be refused rather than silently misread.</p>
 
@@ -655,38 +664,71 @@ class HarnessLauncher(Protocol):
 
 <h2 id="catalog">10. Catalog — what the menus offer</h2>
 
-<p>The interface has dropdowns: models, effort levels, accounts, slash commands. Their contents are the tool's business, not the interface's.</p>
+<p>The interface has dropdowns: models, effort levels, slash commands, rewind
+modes. Their contents are the tool's business, not the interface's — but they
+split on one axis, and the split is the design:</p>
+
+<table>
+<tr><th></th><th>lives on</th><th>because</th></tr>
+<tr><td>models (and their efforts), rewind modes, <code>supports_accounts</code></td><td><code>HarnessInfo</code></td><td>they never change while the process runs</td></tr>
+<tr><td>slash commands</td><td><code>HarnessCatalogSnapshot</code></td><td>they are discovered by walking the session's own directory</td></tr>
+</table>
 
 <span class="file">contracts/harness.py:509</span>
-<pre><code>class HarnessCatalog(Protocol):
-    sections: frozenset[CatalogSection]
-
-    def read(self, context: QueryContext) -&gt; HarnessCatalogSnapshot: ...</code></pre>
-
-<p>This Protocol has a <b>field</b>, not just methods — <code>sections</code> declares which parts of the catalogue this harness fills in. A harness with no notion of "effort" leaves it out, and the interface hides the control rather than showing an empty menu.</p>
-
-<span class="file">contracts/harness.py:498</span>
 <pre><code>@dataclass(frozen=True)
 class HarnessCatalogSnapshot:
-    models: tuple[ModelOption, ...] = ()
-    efforts: tuple[EffortOption, ...] = ()
-    accounts: tuple[AccountOption, ...] = ()
     commands: tuple[CommandOption, ...] = ()
-    rewind_modes: tuple[RewindModeOption, ...] = ()
-    speech_terms: tuple[str, ...] = ()</code></pre>
 
-<p>Every field defaults to empty, so a plugin fills in only what it has. One option type is worth a look:</p>
 
-<span class="file">contracts/harness.py:482</span>
+class HarnessCatalog(Protocol):
+    def read(self, context: QueryContext) -&gt; HarnessCatalogSnapshot: ...</code></pre>
+
+<p>Everything else moved onto <code>HarnessInfo</code>, and the rule that decides
+what may live there is not "does it change often" but <b>can it be written as a
+literal</b>. <code>HarnessInfo</code> is built at import, and import-time purity
+forbids file I/O — so a fact that must be <em>read</em> from disk cannot be a
+field no matter how rarely it changes. That is exactly why the slash commands
+stayed behind: they need a directory walk, and two sessions in different
+projects have different ones.</p>
+
+<h4>Efforts belong to the model</h4>
+<span class="file">contracts/harness.py:424</span>
+<pre><code>@dataclass(frozen=True)
+class ModelOption:
+    model_id: str
+    display_name: str
+    default: bool
+    efforts: tuple[EffortOption, ...] = ()</code></pre>
+
+<p>They were a flat per-harness list until it was measured wrong: one model's
+picker offers <code>Max</code> and no <code>Ultra</code> while its siblings list
+both, so the menu promised a level the picker would then refuse. Nesting them
+makes that expressible. A harness whose levels do not vary simply repeats the
+same tuple on every model, which is honest rather than redundant.</p>
+
+<div class="note">
+<b>An option type worth a look.</b>
 <pre><code>@dataclass(frozen=True)
 class CommandOption:
     command: str
     description: str
     minimum_prompt_count: int</code></pre>
+<code>minimum_prompt_count</code> encodes a real refusal: some tools will not
+compress a conversation that has barely started. Rather than the interface
+guessing, the harness states the floor and the button greys out below it.
+</div>
 
-<p><code>minimum_prompt_count</code> encodes a real refusal: some tools will not compress a conversation that has barely started. Rather than the interface guessing, the harness states the floor and the button greys out below it.</p>
+<p><code>QueryContext</code> is the question's scope — a session and a directory,
+both optional.</p>
 
-<p><code>QueryContext</code> is the question's scope — a session and a directory, both optional, because some answers are global and some depend on where you are.</p>
+<div class="key">
+<b>A thing that was deleted rather than moved.</b> The catalogue also carried an
+<code>accounts</code> list. It turned out to be <em>produced and never read</em>:
+the account picker is built from the usage rows below, which carry the same
+accounts plus their live rate-limit windows. Two lists of one thing, one of them
+dead. The capability survives as the single boolean
+<code>HarnessInfo.supports_accounts</code>.
+</div>
 
 <h2 id="usage">11. Usage — limits and billing</h2>
 

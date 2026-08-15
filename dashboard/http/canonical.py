@@ -316,11 +316,7 @@ class _CanonicalMixin:
                         if plugin.controller
                         else []
                     ),
-                    "catalog_sections": (
-                        sorted(plugin.catalog.sections)
-                        if plugin.catalog
-                        else []
-                    ),
+                    "supports_accounts": plugin.info.supports_accounts,
                     "supports_terminal_input": plugin.terminal_probe is not None,
                     "supports_memory": plugin.memory is not None,
                 }
@@ -333,7 +329,17 @@ class _CanonicalMixin:
             session_id=SessionId(session_text) if session_text else None,
             working_directory=_text(query, "working_directory"),
         )
-        return self._json(to_wire(self._application().catalog.read(harness, context)))
+        # The menu payload is composed here, from the two places its parts
+        # honestly live: the STATIC vocabulary on the plugin's HarnessInfo (built
+        # once, as a literal) and the per-directory part from the catalogue. The
+        # contract keeps them apart; this endpoint is where the browser wants
+        # them together.
+        info = self._application().registry.plugin(harness).info
+        snapshot = self._application().catalog.read(harness, context)
+        payload = to_wire(snapshot)
+        payload["models"] = to_wire(info.models)
+        payload["rewind_modes"] = to_wire(info.rewind_modes)
+        return self._json(payload)
 
     def _content(self, content_reference: str, query: dict[str, list[str]]):
         text = self._application().content.resolve(content_reference)

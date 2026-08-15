@@ -14,7 +14,6 @@ from dashboard import (clipboard, dictate)
 from dashboard import config
 from dashboard.config import (IMAGE_MIMES)
 from dashboard.http.base import valid_session_id
-from contracts.harness import QueryContext
 
 
 
@@ -193,11 +192,9 @@ class _FilesMixin:
                     {"err": ("%s: %s" % (type(error).__name__, error))[:200]})
             A.state_file("", "", "web-dictate", {"ok": False, "why": "grant"})
             return self._json({"error": "token grant failed"}, 502)
-        catalog = self._application().catalog.read(
-            harness,
-            QueryContext(session_id=None, working_directory=working_directory),
-        )
-        terms = dictate.keyterms(catalog.speech_terms)
+        # Project-scoped dictation vocabulary was dropped with the catalogue's
+        # `speech_terms`; the user-global keyterms file is the whole source now.
+        terms = dictate.keyterms()
         url = dictate.ws_url(rate, terms)
         A.state_file("", "", "web-dictate",
                      {"ok": True, "rate": rate, "working_directory": working_directory,

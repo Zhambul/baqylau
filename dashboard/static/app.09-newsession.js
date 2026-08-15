@@ -860,8 +860,9 @@ function canonicalHostRows(harnesses) {
   );
   return Promise.all(reads).then(rows => rows.map(({ harness, catalog }) => {
     const models = catalog.models || [];
-    const efforts = catalog.efforts || [];
     const modelDefault = models.find(option => option.default);
+    // efforts hang off the model now (ModelOption.efforts)
+    const efforts = ((modelDefault || models[0] || {}).efforts) || [];
     const effortDefault = efforts.find(option => option.default);
     return {
       name: harness.name,
@@ -870,9 +871,15 @@ function canonicalHostRows(harnesses) {
       default: !!harness.default_for_launch,
       model_choices: models.map(option => option.model_id),
       effort_choices: efforts.map(option => option.value),
+      model_efforts: Object.fromEntries(
+        models.map(option => [
+          option.model_id,
+          (option.efforts || []).map(effort => effort.value),
+        ])
+      ),
       model_default: modelDefault ? modelDefault.model_id : "",
       effort_default: effortDefault ? effortDefault.value : "",
-      accounts: (harness.catalog_sections || []).includes("accounts"),
+      accounts: !!harness.supports_accounts,
       attach: !!harness.supports_attachments,
       rewind_modes: (catalog.rewind_modes || []).map(option => option.value),
       quick_commands: catalog.commands || [],

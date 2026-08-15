@@ -441,13 +441,6 @@ class HarnessLauncher(Protocol):
 
 
 @dataclass(frozen=True)
-class ModelOption:
-    model_id: str
-    display_name: str
-    default: bool
-
-
-@dataclass(frozen=True)
 class EffortOption:
     value: str
     display_name: str
@@ -455,10 +448,20 @@ class EffortOption:
 
 
 @dataclass(frozen=True)
-class AccountOption:
-    account_id: str
+class ModelOption:
+    """One model a harness offers, with the reasoning levels IT supports.
+
+    The efforts are nested rather than listed once per harness because they are
+    model-DEPENDENT: one harness was measured offering a level on some of its
+    models and not others, while a single flat list advertised it for all of
+    them -- so the picker refused a level the menu had promised. A harness whose
+    levels do not vary simply repeats the same tuple on every model.
+    """
+
+    model_id: str
     display_name: str
-    available: bool
+    default: bool
+    efforts: tuple[EffortOption, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -512,24 +515,21 @@ class QueryContext:
     working_directory: str | None
 
 
-CatalogSection: TypeAlias = Literal[
-    "models", "efforts", "accounts", "commands", "rewind_modes", "speech_terms"
-]
-
-
 @dataclass(frozen=True)
 class HarnessCatalogSnapshot:
-    models: tuple[ModelOption, ...] = ()
-    efforts: tuple[EffortOption, ...] = ()
-    accounts: tuple[AccountOption, ...] = ()
+    """The menu vocabulary that genuinely depends on WHERE the session is.
+
+    Everything a harness offers unconditionally now lives on HarnessInfo, which
+    is a frozen literal built once at import. Only the commands remain here,
+    because they are discovered by walking the session's own directory -- two
+    sessions in different projects have different ones, so no static literal can
+    hold them.
+    """
+
     commands: tuple[CommandOption, ...] = ()
-    rewind_modes: tuple[RewindModeOption, ...] = ()
-    speech_terms: tuple[str, ...] = ()
 
 
 class HarnessCatalog(Protocol):
-    sections: frozenset[CatalogSection]
-
     def read(self, context: QueryContext) -> HarnessCatalogSnapshot: ...
 
 
@@ -612,12 +612,23 @@ class HarnessTerminalProbe(Protocol):
 
 @dataclass(frozen=True)
 class HarnessInfo:
+    """Everything about a harness that does not change while it runs.
+
+    Built once, as a literal, in each plugin's descriptor. That is the whole
+    constraint on what may live here: import-time purity forbids file I/O, so a
+    fact that has to be READ (the account registry, the session's own slash
+    commands) cannot be a field no matter how rarely it changes.
+    """
+
     name: str
     display_name: str
     plugin_version: str
     canonical_version: int
     supports_attachments: bool = False
     default_for_launch: bool = False
+    supports_accounts: bool = False
+    models: tuple[ModelOption, ...] = ()
+    rewind_modes: tuple[RewindModeOption, ...] = ()
 
 
 @dataclass(frozen=True)
