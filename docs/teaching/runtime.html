@@ -1,0 +1,1191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>baqylau — the runtime layer, explained</title>
+<style>
+  :root {
+    --bg:#14161a; --panel:#191c22; --panel2:#1e222a; --line:#2b3038;
+    --text:#d6dae1; --soft:#9aa3b0; --dim:#6b7480;
+    --accent:#7aa2f7; --green:#9ece6a; --amber:#e0af68; --red:#f7768e; --violet:#bb9af7;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}
+  .wrap{max-width:960px;margin:0 auto;padding:48px 26px 120px}
+  h1{font-size:30px;line-height:1.25;margin:0 0 6px;letter-spacing:-.3px}
+  h2{font-size:22px;margin:56px 0 14px;padding-top:20px;border-top:1px solid var(--line)}
+  h3{font-size:18px;margin:34px 0 10px;color:var(--accent)}
+  h4{font-size:15px;margin:24px 0 8px;color:var(--soft);font-weight:600}
+  p{margin:12px 0}
+  .lede{color:var(--soft);font-size:17px}
+  code{font-family:var(--mono);font-size:.88em;background:#232833;padding:1px 5px;
+       border-radius:3px;color:#c8d3e6}
+  pre{background:var(--panel2);border:1px solid var(--line);border-radius:7px;
+      padding:14px 16px;overflow-x:auto;margin:14px 0;font-family:var(--mono);
+      font-size:13px;line-height:1.55;white-space:pre}
+  pre code{background:none;padding:0;font-size:inherit;color:var(--text)}
+  .file{font-family:var(--mono);font-size:12px;color:var(--dim);margin:16px 0 -8px;display:block}
+  table{border-collapse:collapse;width:100%;margin:16px 0;font-size:14px}
+  th,td{border:1px solid var(--line);padding:8px 11px;text-align:left;vertical-align:top}
+  th{background:var(--panel2);color:var(--soft);font-weight:600}
+  ul,ol{padding-left:22px;margin:12px 0}
+  li{margin:7px 0}
+  .note,.warn,.key,.new{border-left:3px solid var(--accent);background:var(--panel);
+       padding:12px 16px;margin:18px 0;border-radius:0 6px 6px 0}
+  .warn{border-left-color:var(--amber)}
+  .key{border-left-color:var(--green)}
+  .new{border-left-color:var(--violet)}
+  .new b{color:var(--violet)}
+  .note b,.warn b,.key b{color:#fff}
+  .toc{background:var(--panel);border:1px solid var(--line);border-radius:7px;padding:14px 20px;margin:26px 0}
+  .toc a{color:var(--accent);text-decoration:none}
+  .toc a:hover{text-decoration:underline}
+  .toc ol{margin:6px 0}
+  .small{font-size:14px;color:var(--soft)}
+  .diagram{font-family:var(--mono);font-size:13px;line-height:1.7;background:var(--panel2);
+     border:1px solid var(--line);border-radius:7px;padding:16px 18px;overflow-x:auto;
+     margin:16px 0;white-space:pre}
+  .diagram .a{color:var(--accent)} .diagram .g{color:var(--green)}
+  .diagram .v{color:var(--violet)} .diagram .c{color:var(--dim)}
+  .tree{font-family:var(--mono);font-size:13px;line-height:1.75;background:var(--panel2);
+     border:1px solid var(--line);border-radius:7px;padding:16px 18px;overflow-x:auto;
+     margin:16px 0;
+     /* the tree is laid out with real newlines and runs of spaces; without this
+        the browser collapses every one of them and it renders as a single line */
+     white-space:pre;tab-size:4}
+  .tree .d{color:var(--accent);font-weight:600}
+  .tree .c{color:var(--dim)}
+  .tree .m{color:var(--text)}
+  .tag{display:inline-block;font-family:var(--mono);font-size:11px;padding:1px 7px;
+     border-radius:10px;border:1px solid var(--line);color:var(--soft);
+     background:var(--panel2);margin-left:6px;vertical-align:2px}
+  .tag.w{color:var(--amber);border-color:#4a3a22}
+  .tag.r{color:var(--green);border-color:#33452e}
+  hr{border:0;border-top:1px solid var(--line);margin:30px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>The runtime layer, explained</h1>
+<p class="lede">Everything in <code>runtime/</code> — seven files, 2,534 lines: how facts are written, how they are protected, and how they are folded back into something a screen can show. Assumes you have not read the code.</p>
+
+<div class="toc">
+  <b>Contents</b>
+  <ol>
+    <li><a href="#job">What this layer is for</a></li>
+    <li><a href="#files">The seven files</a></li>
+    <li><a href="#database">database.py — one connection policy</a></li>
+    <li><a href="#tables">event_store.py — the nine tables</a></li>
+    <li><a href="#open">Opening the store, and the version guard</a></li>
+    <li><a href="#ownership">Ownership: who is allowed to speak for a session</a></li>
+    <li><a href="#record">record() — the write path, line by line</a></li>
+    <li><a href="#invariants">The eight invariants of a canonical write</a></li>
+    <li><a href="#converge">Convergence — the branch that does nothing</a></li>
+    <li><a href="#replay">Replay — what happens the second time</a></li>
+    <li><a href="#read">Reading events back</a></li>
+    <li><a href="#ingest">ingest.py — the pipeline</a></li>
+    <li><a href="#state">state.py — checkpoints</a></li>
+    <li><a href="#evidence">evidence.py — the audit reader</a></li>
+    <li><a href="#registry">registry.py — which plugin owns what</a></li>
+    <li><a href="#projections">projections.py — what a projection is</a></li>
+    <li><a href="#models">The read models — every dataclass</a></li>
+    <li><a href="#queries">SessionQueries and its two caches</a></li>
+    <li><a href="#fold">_activities — the fold in full</a></li>
+    <li><a href="#cursors">Two cursors per activity, and why</a></li>
+    <li><a href="#summaries">The summaries, one by one</a></li>
+    <li><a href="#tabstate">tab_state — one word for a whole session</a></li>
+    <li><a href="#rules">The rules that hold across the layer</a></li>
+    <li><a href="#gap">Where model.changed falls out</a></li>
+  </ol>
+</div>
+
+<h2 id="job">1. What this layer is for</h2>
+
+<p>Baqylau watches coding tools it does not own. <code>plugins/</code> knows how to read one such tool. <code>dashboard/</code> and <code>terminal/</code> know how to draw. <code>runtime/</code> is everything in between: it takes what a plugin observed, stores it so it can never quietly change, and answers questions about it.</p>
+
+<p>Its own docstring says the four jobs:</p>
+
+<span class="file">runtime/__init__.py:1</span>
+<pre><code>"""Harness-neutral ingestion, storage, ownership, and semantic projections."""</code></pre>
+
+<table>
+<tr><th>word</th><th>what it means here</th></tr>
+<tr><td><b>ingestion</b></td><td>Take one observation, ask the right plugin what it means, write both down.</td></tr>
+<tr><td><b>storage</b></td><td>SQLite. Evidence tables that are append-only, and interpretation tables that are idempotent.</td></tr>
+<tr><td><b>ownership</b></td><td>Remember which plugin owns which session and which actor, and refuse writes that contradict it.</td></tr>
+<tr><td><b>projections</b></td><td>Fold thousands of small facts into the handful of objects a screen actually needs.</td></tr>
+</table>
+
+<p><b>Harness-neutral</b> is the first word for a reason. Nothing in this directory may contain the words <code>claude</code>, <code>codex</code>, <code>transcript</code>, or <code>rollout</code> — a test enforces it (<code>tests/test_canonical_architecture.py</code>). The runtime knows that a session <em>has</em> a harness, stored as a plain string, and never which one. That is what lets one storage engine and one read model serve two very different tools.</p>
+
+<div class="key">
+<b>What the layer is allowed to import.</b> <code>domain/</code> (the vocabulary: events, ids, values, codec) and <code>contracts/</code> (the interfaces). Nothing else. It cannot import <code>app/</code>, <code>dashboard/</code>, <code>plugins/</code>, or <code>core/</code>. So it can never call a plugin directly — it is handed one, through the registry.
+</div>
+
+<h2 id="files">2. The seven files</h2>
+
+<div class="tree"><span class="d">runtime/</span>
+├─ <span class="m">database.py</span>       <span class="c">20 lines   — one function: how a connection is opened</span>
+├─ <span class="m">event_store.py</span>    <span class="c">810 lines  — the SQL, identity, ownership, the cursor</span>
+├─ <span class="m">ingest.py</span>         <span class="c">29 lines   — translate, then store, in that order</span>
+├─ <span class="m">state.py</span>          <span class="c">34 lines   — how far each source has been read</span>
+├─ <span class="m">evidence.py</span>       <span class="c">113 lines  — read-only: raw bytes + their interpretations</span>
+├─ <span class="m">registry.py</span>       <span class="c">145 lines  — which plugin owns which session</span>
+└─ <span class="m">projections.py</span>    <span class="c">1,381 lines — events → activities and summaries</span>
+</div>
+
+<p>The size distribution is the point. Over half the layer is <code>projections.py</code>, and every line of it is <em>derived</em> — you could delete the file, rewrite it differently, and lose nothing, because it holds no state of its own. The 810 lines of <code>event_store.py</code> are the opposite: they are the only thing standing between you and a corrupted record.</p>
+
+<div class="diagram"><span class="c">a plugin observed something</span>
+        │
+        ▼
+  <span class="a">EventPipeline.ingest()</span>          <span class="c">ingest.py</span>
+        │  asks the registry which plugin owns this harness
+        │  calls plugin.events.translate(raw_event)
+        ▼
+  <span class="a">EventStore.record()</span>            <span class="c">event_store.py — one transaction</span>
+        │  writes raw_events        <span class="c">(the bytes, verbatim)</span>
+        │  writes translation_records <span class="c">(the verdict)</span>
+        │  writes canonical_events  <span class="c">(the facts, if new)</span>
+        │  writes canonical_provenance <span class="c">(which bytes produced which fact)</span>
+        ▼
+  <span class="g">SessionQueries</span>                <span class="c">projections.py — reads it all back</span>
+        │  folds events into Activity objects and summaries
+        ▼
+  <span class="c">a presenter turns those into blocks</span>
+</div>
+
+<h2 id="database">3. database.py — one connection policy</h2>
+
+<p>Twenty lines, one function, and every SQLite connection in the canonical runtime goes through it.</p>
+
+<span class="file">runtime/database.py:11</span>
+<pre><code>@contextmanager
+def connect(database_path: str) -&gt; Iterator[sqlite3.Connection]:
+    connection = sqlite3.connect(database_path, timeout=10)
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA foreign_keys=ON")
+    connection.execute("PRAGMA busy_timeout=10000")
+    try:
+        with connection:
+            yield connection
+    finally:
+        connection.close()</code></pre>
+
+<p>Four decisions are encoded here, and each of them would be a bug if it were made per-call-site instead.</p>
+
+<div class="new">
+<b>Context manager.</b> <code>@contextmanager</code> turns a function into something usable with <code>with</code>. Everything before <code>yield</code> runs on entry, everything after runs on exit — <em>including when the body raised</em>. That is why <code>close()</code> is in a <code>finally</code>: a connection is released whether the caller succeeded or blew up.
+</div>
+
+<ul>
+<li><b><code>row_factory = sqlite3.Row</code></b> — without it, a row is a plain tuple and you read it by position: <code>row[3]</code>. With it, you read it by name: <code>row["harness"]</code>. Every read in this layer relies on that, which is why it belongs here and not at each call site — one forgotten line and the whole file would fail with a type error.</li>
+<li><b><code>PRAGMA foreign_keys=ON</code></b> — SQLite disables foreign keys <em>by default</em>, and the setting is <b>per connection</b>, not per database. It cannot be turned on once when the file is created. So it has to be set on every connection, forever, which means it has to live in the one place every connection is made. Turn it off and <code>DELETE FROM session_harness</code> stops cascading, leaving raw events pointing at a session that no longer exists.</li>
+<li><b><code>timeout=10</code> and <code>busy_timeout=10000</code></b> — the same ten seconds, expressed twice because the Python driver and the SQLite engine each have their own knob. When another process holds a write lock, this connection waits up to ten seconds instead of failing immediately with <code>database is locked</code>. Several processes write here at once: the dashboard server, each hook invocation, the audit CLI.</li>
+<li><b><code>with connection:</code></b> — this is SQLite's own transaction context. On a clean exit it commits; on an exception it rolls back. That is the safety net under every write in <code>event_store.py</code>: a half-written record cannot survive an exception.</li>
+</ul>
+
+<div class="warn">
+<b>Note what is <em>not</em> here: <code>PRAGMA journal_mode=WAL</code>.</b> Journal mode is a property of the database file, not of the connection — it is set once, in <code>EventStore._initialize</code>, and it persists. Setting it on every connection would be harmless but dishonest: it would suggest it were a per-connection concern.
+</div>
+
+<h2 id="tables">4. event_store.py — the nine tables</h2>
+
+<p>The schema is one string constant, <code>SCHEMA</code>, at <code>runtime/event_store.py:68</code>. Every statement is <code>CREATE TABLE IF NOT EXISTS</code>, so running it against an existing store is a no-op. Here is what each table is for.</p>
+
+<table>
+<tr><th>table</th><th>one row per</th><th>nature</th></tr>
+<tr><td><code>event_store_metadata</code></td><td>store-wide setting</td><td>Holds exactly one thing today: <code>schema_version</code>.</td></tr>
+<tr><td><code>session_harness</code></td><td>recognized session</td><td>Ownership. Who found this session, where its file is, which process runs it.</td></tr>
+<tr><td><code>raw_events</code></td><td>one observation</td><td><b>Evidence. Append-only, never edited.</b></td></tr>
+<tr><td><code>translation_records</code></td><td>one verdict</td><td>What the plugin made of that observation. One row per raw event, always.</td></tr>
+<tr><td><code>canonical_events</code></td><td>one interpreted fact</td><td>The projection. Idempotent — the same fact written twice is one row.</td></tr>
+<tr><td><code>canonical_provenance</code></td><td>(fact, evidence) link</td><td>Many-to-many. Which bytes produced which fact, and whether that write won.</td></tr>
+<tr><td><code>actor_harness</code></td><td>one actor</td><td>Ownership again, one level down: a subagent's harness.</td></tr>
+<tr><td><code>source_checkpoints</code></td><td>one source</td><td>How far it has been read. Not evidence — bookkeeping.</td></tr>
+<tr><td><code>session_application_state</code></td><td>one session</td><td>Draft text, queued messages, dialog answers. Interface state, not history.</td></tr>
+</table>
+
+<h3>The two tables that matter most</h3>
+
+<span class="file">runtime/event_store.py:84</span>
+<pre><code>CREATE TABLE IF NOT EXISTS raw_events(
+    raw_event_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    harness TEXT NOT NULL,
+    source_type TEXT NOT NULL,       -- 'transcript', 'hook', 'otel', 'liveness', …
+    source_name TEXT NOT NULL,
+    source_position TEXT NOT NULL,   -- where in that source: a line number, an offset
+    actor_id TEXT NOT NULL,
+    parent_actor_id TEXT,
+    observed_at REAL NOT NULL,       -- when WE saw it. Never null.
+    encoding TEXT NOT NULL,
+    payload BLOB NOT NULL,           -- the exact bytes
+    FOREIGN KEY(session_id) REFERENCES session_harness(session_id) ON DELETE CASCADE
+);</code></pre>
+
+<p><code>payload</code> is a <code>BLOB</code>, not <code>TEXT</code>, and that is deliberate. A blob is bytes; text would invite the database to think about encoding. Whatever the source produced is what comes back out, byte for byte, however malformed it was. If an interpretation later turns out to be wrong, you can re-derive it from the original — that only works if the original was never cleaned up on the way in.</p>
+
+<span class="file">runtime/event_store.py:110</span>
+<pre><code>CREATE TABLE IF NOT EXISTS canonical_events(
+    cursor INTEGER PRIMARY KEY AUTOINCREMENT,   -- the ordering key
+    event_id TEXT NOT NULL UNIQUE,              -- the identity of the FACT
+    schema_version INTEGER NOT NULL,
+    event_type TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    actor_id TEXT NOT NULL,
+    turn_id TEXT,
+    parent_actor_id TEXT,
+    harness TEXT NOT NULL,
+    occurred_at REAL,                           -- NULLABLE, by design
+    accepted_at REAL NOT NULL,                  -- when we wrote it. Never null.
+    payload TEXT NOT NULL                       -- canonical JSON
+);</code></pre>
+
+<div class="key">
+<b>Two ids, two jobs.</b> <code>event_id</code> answers "which fact is this?" — it is a hash of what the fact <em>is</em> (harness, session, actor, subject, phase), computed by <code>stable_event_id()</code> in <code>domain/ids.py</code>. It contains no timestamp and no payload, which is exactly why two different sources describing the same moment produce the same id. <code>cursor</code> answers "what came before this?" — an integer the database hands out in write order. <b><code>event_id</code> is never an ordering key and <code>cursor</code> is never an identity.</b>
+</div>
+
+<div class="warn">
+<b><code>occurred_at</code> is nullable and that is not an oversight.</b> It means "when the <em>source</em> said this happened". A transcript line carries its own timestamp, so it is populated. A hook payload carries no clock, so it is honestly left unset rather than filled with a lie. Every read path must fall back: <code>COALESCE(occurred_at, accepted_at)</code>. A contract test — <code>test_no_read_path_orders_on_a_bare_occurred_at</code> — fails any query that forgets. So a mostly-NULL column here is normal and is not worth investigating.
+</div>
+
+<h3>The provenance table</h3>
+
+<span class="file">runtime/event_store.py:138</span>
+<pre><code>CREATE TABLE IF NOT EXISTS canonical_provenance(
+    event_id TEXT NOT NULL,
+    raw_event_id TEXT NOT NULL,
+    event_order INTEGER NOT NULL,
+    storage_result TEXT NOT NULL CHECK(storage_result IN ('accepted', 'deduplicated')),
+    PRIMARY KEY(event_id, raw_event_id),
+    UNIQUE(raw_event_id, event_order)
+);</code></pre>
+
+<p>Three things fall out of those constraints:</p>
+<ul>
+<li>One raw event may produce <b>several</b> facts — <code>event_order</code> keeps them in the order the translator emitted them.</li>
+<li>One fact may come from <b>several</b> raw events — that is convergence, and it is why the primary key is the pair.</li>
+<li><code>storage_result</code> records which write <em>created</em> the row (<code>accepted</code>) and which merely re-observed it (<code>deduplicated</code>). When two sources disagree about a fact, this column tells you whose version is the one you are looking at.</li>
+</ul>
+
+<h2 id="open">5. Opening the store, and the version guard</h2>
+
+<span class="file">runtime/event_store.py:207</span>
+<pre><code>def _initialize(self) -&gt; None:
+    with connect(self.database_path) as connection:
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.executescript(SCHEMA)
+        row = connection.execute(
+            "SELECT value FROM event_store_metadata WHERE name='schema_version'"
+        ).fetchone()
+        if row is None:
+            connection.execute(
+                "INSERT INTO event_store_metadata(name, value) VALUES('schema_version', ?)",
+                (str(SCHEMA_VERSION),),
+            )
+        elif row["value"] != str(SCHEMA_VERSION):
+            raise EventStoreError(f"unsupported event-store schema version: {row['value']}")
+    os.chmod(self.database_path, 0o600)</code></pre>
+
+<div class="new">
+<b>WAL — write-ahead logging.</b> SQLite's default mode makes writers block readers. WAL sends writes to a side file, so readers keep reading the last committed state while a write is in flight. This matters because the dashboard reads continuously — four times a second — while hooks write at unpredictable moments. It also has a practical consequence for debugging: <b>a plain <code>cp</code> of a WAL database gives you a corrupt copy</b>, because the data you need is partly in the side file. Use <code>sqlite3 "file:&lt;path&gt;?mode=ro" ".backup '&lt;dest&gt;'"</code>.
+</div>
+
+<p>The version check is a refusal, not a repair. <b>There is no migration code anywhere in the repository.</b> When <code>domain.codec.SCHEMA_VERSION</code> is bumped, a store written by the old version will not open, and the process that tried to open it dies.</p>
+
+<div class="warn">
+<b>What that looks like when it happens.</b> The dashboard crash-loops. The operational audit fills with <code>unsupported event-store schema version: N</code>, and beside it a long run of <code>dashboard serve (lock denied)</code> rows every ten seconds — the supervisor retrying against a port the dying process still holds. Both signatures are in the <code>audit-debug</code> skill. The fix is to get code and store to the same version, never to edit the metadata row.
+</div>
+
+<p><code>os.chmod(0o600)</code> is the last line for a reason: this file contains the full text of every prompt and every file the agent read. Owner-only, always. The directory is created with <code>mode=0o700</code> in the constructor for the same reason.</p>
+
+<h2 id="ownership">6. Ownership: who is allowed to speak for a session</h2>
+
+<p>Before any event can be stored, its session must be <em>registered</em> — a row in <code>session_harness</code> saying which plugin owns it. This is what makes a foreign key on every raw event possible, and it is checked on every write.</p>
+
+<span class="file">runtime/event_store.py:223</span>
+<pre><code>def register_session(self, harness: str, session: RecognizedSession) -&gt; None:
+    ...
+    if row is not None:
+        existing_owner = tuple(row)[:3]
+        if existing_owner != values[:3]:
+            raise HarnessOwnershipConflict(f"conflicting owner for session {session.session_id}")</code></pre>
+
+<p>Registration is <b>idempotent for the identity, updating for the details</b>. Read the slice carefully: the first three values are <code>lead_actor_id</code>, <code>harness</code>, <code>native_session_id</code> — the things that make this session <em>this</em> session. Those may never change; a second registration claiming otherwise raises. The remaining fields — <code>source_reference</code>, <code>working_directory</code>, <code>native_process_id</code> — are updated, because they legitimately do change: a session moves directory, a file is rotated, a process is restarted.</p>
+
+<p>Note the <code>COALESCE</code> on the process id:</p>
+
+<pre><code>"native_process_id=COALESCE(?, native_process_id)"</code></pre>
+
+<p>A registration that does not know the process id passes <code>None</code>, and <code>COALESCE</code> keeps the value already stored. Without it, an observer that happens not to see the process would erase what another observer learned. <em>Not knowing is not the same as knowing it is absent</em>, and this one SQL function is where that distinction is enforced.</p>
+
+<h3>Three exception types, three different meanings</h3>
+
+<table>
+<tr><th>exception</th><th>means</th><th>what to do</th></tr>
+<tr><td><code>EventStoreError</code></td><td>The base. Also raised directly for a version mismatch, an unregistered session, or an event that fails an invariant.</td><td>Read the message; each is specific.</td></tr>
+<tr><td><code>EventIdentityConflict</code></td><td><b>Corruption.</b> The same <code>raw_event_id</code> arrived with different bytes, or a replay produced a different interpretation.</td><td>Investigate. This should never happen.</td></tr>
+<tr><td><code>HarnessOwnershipConflict</code></td><td>Two plugins claim the same session or the same actor.</td><td>A plugin's recognition rule is too greedy.</td></tr>
+</table>
+
+<h2 id="record">7. record() — the write path, line by line</h2>
+
+<p>This is the most important method in the layer. Everything it does happens in <b>one transaction</b>, opened with <code>BEGIN IMMEDIATE</code>.</p>
+
+<div class="new">
+<b><code>BEGIN IMMEDIATE</code>.</b> SQLite's default (<code>BEGIN DEFERRED</code>) takes a read lock first and only upgrades to a write lock at the first write — and that upgrade can fail with <code>database is locked</code> after you have already read and decided. <code>IMMEDIATE</code> takes the write lock up front. So a concurrent writer waits at the door instead of halfway through, and the decisions made inside cannot be invalidated by someone else writing while you think.
+</div>
+
+<h4>Step 1 — has this evidence been seen before?</h4>
+
+<span class="file">runtime/event_store.py:395</span>
+<pre><code>existing_raw = connection.execute(
+    "SELECT session_id, harness, source_type, … , encoding, payload "
+    "FROM raw_events WHERE raw_event_id=?", …
+).fetchone()
+if existing_raw is not None:
+    if tuple(existing_raw) != _raw_identity(raw_event):
+        raise EventIdentityConflict(f"raw event identity reused: {raw_event.raw_event_id}")
+    return self._verify_recorded_translation(…)</code></pre>
+
+<p>Sources are re-read constantly — a transcript file is drained from its checkpoint every 0.25 seconds, and the same lines are often offered again. So arriving at an already-stored raw event is <b>normal</b>. What is compared is every field including the payload bytes (<code>_raw_identity</code>, line 179). Same id and same bytes: fine, this is a re-read. Same id and <em>different</em> bytes: the id is a lie, and that is corruption, not convergence. Note the asymmetry with canonical events, where bodies are deliberately <em>not</em> compared — evidence must be identical, interpretations need not be.</p>
+
+<h4>Step 2 — is the session registered?</h4>
+
+<span class="file">runtime/event_store.py:587</span>
+<pre><code>def _verify_registered_session(self, connection, raw_event) -&gt; None:
+    row = … "SELECT lead_actor_id, harness FROM session_harness WHERE session_id=?" …
+    if row is None:
+        raise EventStoreError(f"unregistered session: {raw_event.session_id}")
+    if str(raw_event.actor_id) == row["lead_actor_id"] and raw_event.harness != row["harness"]:
+        raise HarnessOwnershipConflict(…)
+    actor_owner = … "SELECT harness FROM actor_harness WHERE session_id=? AND actor_id=?" …
+    if actor_owner is not None and actor_owner["harness"] != raw_event.harness:
+        raise HarnessOwnershipConflict(…)
+    connection.execute(
+        "INSERT OR IGNORE INTO actor_harness(session_id, actor_id, harness) VALUES(?, ?, ?)", …)</code></pre>
+
+<p>The last statement is easy to miss and does real work: <b>actors register themselves on first sight</b>. Nobody announces a subagent in advance. The first event carrying a new <code>actor_id</code> creates its ownership row, and every later event from that actor is checked against it. <code>INSERT OR IGNORE</code> makes that safe to run on every single write.</p>
+
+<h4>Step 3 — write the evidence and the verdict</h4>
+
+<p>The raw event goes in. Then exactly one <code>translation_records</code> row, carrying the plugin's version string and its decision:</p>
+
+<table>
+<tr><th>decision</th><th>meaning</th><th>how common</th></tr>
+<tr><td><code>translated</code></td><td>Produced one or more canonical events.</td><td>Common.</td></tr>
+<tr><td><code>ignored_nonsemantic</code></td><td>Plumbing the translator deliberately drops.</td><td>Very common — expected in bulk.</td></tr>
+<tr><td><code>ignored_unknown</code></td><td>A record shape this translator has no rule for.</td><td>Common. Only interesting when a <em>missing</em> thing matches it.</td></tr>
+<tr><td><code>translation_failed</code></td><td>The translator raised. <code>reason</code> says why.</td><td>Rare, and the actionable one.</td></tr>
+</table>
+
+<p>The <code>CHECK</code> constraint in the schema means a fifth value cannot be invented without a schema change. And the verdict is stored even when nothing came of it — that is why "nothing appeared" is always answerable: either there is no raw event (the source never produced it) or there is a verdict saying why it produced nothing.</p>
+
+<h4>Step 4 — write each canonical event, in order</h4>
+
+<span class="file">runtime/event_store.py:427</span>
+<pre><code>for event_order, event in enumerate(translation.events):
+    stored_event, storage_result = self._record_canonical_event(connection, raw_event, event, completed_at)
+    connection.execute("INSERT INTO canonical_provenance(…) VALUES(?, ?, ?, ?)",
+                       (str(event.event_id), str(raw_event.raw_event_id), event_order, storage_result))
+    if storage_result == "accepted":
+        accepted.append(stored_event)
+    else:
+        duplicate_event_ids.append(event.event_id)</code></pre>
+
+<p>The provenance row is written <b>whether or not the event was new</b>. That is the whole mechanism of convergence: a second source describing the same fact adds a link, not a row. The caller gets back an <code>EventRecordResult</code> (line 53) that separates the two:</p>
+
+<pre><code>@dataclass(frozen=True)
+class EventRecordResult:
+    accepted: tuple[StoredEvent, ...]              # genuinely new facts
+    duplicate_event_ids: tuple[CanonicalEventId, ...]  # facts we already knew
+    latest_cursor: int | None</code></pre>
+
+<p>That split is what lets the delivery layer act only on news — a notification should fire when a fact is learned, not every time it is re-observed.</p>
+
+<h2 id="invariants">8. The eight invariants of a canonical write</h2>
+
+<p><code>_record_canonical_event</code> (line 629) checks eight things before writing. Each is a rule the rest of the system is then free to assume, and each raises rather than storing something questionable.</p>
+
+<table>
+<tr><th>#</th><th>rule</th><th>why it exists</th></tr>
+<tr><td>1</td><td>The event's <code>session_id</code> equals its raw event's.</td><td>A fact cannot be filed under a session other than the one whose bytes produced it.</td></tr>
+<tr><td>2</td><td>Its <code>harness</code> equals its raw event's.</td><td>Same reason. A translator cannot attribute its output to another tool.</td></tr>
+<tr><td>3</td><td>Its <code>actor_id</code> equals its raw event's.</td><td>Keeps per-actor filtering trustworthy: an actor's feed is exactly what that actor's evidence produced.</td></tr>
+<tr><td>4</td><td>Its <code>parent_actor_id</code> equals its raw event's.</td><td>The actor tree comes from evidence, not from a translator's guess.</td></tr>
+<tr><td>5</td><td>The session is registered.</td><td>Nothing may be written about a session nobody owns.</td></tr>
+<tr><td>6</td><td>Session-level events use the <b>lead</b> actor.</td><td><code>session.started</code>, <code>.title_changed</code>, <code>.working_directory_changed</code>, <code>.account_changed</code>, <code>.finished</code> describe the whole session; a subagent may not claim to have started it.</td></tr>
+<tr><td>7</td><td><code>ActorStarted.role == "lead"</code> exactly when the actor is the registered lead.</td><td>Two sources of truth about leadership — the recognized session and the event payload — must agree.</td></tr>
+<tr><td>8</td><td>An actor is not its own parent.</td><td>A one-line check that stops an infinite loop in every tree walk downstream.</td></tr>
+</table>
+
+<span class="file">runtime/event_store.py:660</span>
+<pre><code>if is_session_event and str(event.actor_id) != session_owner["lead_actor_id"]:
+    raise EventStoreError("session events must use the lead actor")
+if isinstance(event.payload, ActorStarted):
+    is_lead_actor = str(event.actor_id) == session_owner["lead_actor_id"]
+    if (event.payload.role == "lead") != is_lead_actor:
+        raise EventStoreError("lead actor role does not match recognized session ownership")
+if event.parent_actor_id == event.actor_id:
+    raise EventStoreError("an actor cannot be its own parent")</code></pre>
+
+<p>Rule 7 is the one worth pausing on. <code>(A) != (B)</code> on two booleans is "these disagree" — it catches both directions in one line: a lead actor whose event says it is a subagent, and a subagent whose event claims to be lead.</p>
+
+<h2 id="converge">9. Convergence — the branch that does nothing</h2>
+
+<p>Just before the insert, the store looks for the event id. If it is there, it returns without writing — and the comment explaining that is longer than the code, because the reasoning is not obvious and was learned the hard way.</p>
+
+<span class="file">runtime/event_store.py:680</span>
+<pre><code>if existing is not None:
+    # A canonical event is an IDEMPOTENT projection: the identity names the fact,
+    # so re-observing it is a no-op that only adds provenance. Several independent
+    # sources legitimately converge here and may render one fact differently; the
+    # first writer stays authoritative. Nothing is lost by not comparing the
+    # bodies -- the later rendering is fully recoverable from its own raw event,
+    # which is stored verbatim and linked below. Raising on a disagreement instead
+    # used to abort the whole observation pass and killed the scheduler thread.
+    return self._stored_event(connection, existing), "deduplicated"</code></pre>
+
+<p>Three claims, in order:</p>
+
+<ol>
+<li><b>The identity names the fact, not the observation.</b> <code>stable_event_id()</code> hashes what happened — harness, session, actor, subject, phase — and deliberately excludes the timestamp and the payload. So a hook and a transcript, describing the same message from different angles, compute the same id. That is by design.</li>
+<li><b>The first writer wins, and the bodies are not compared.</b> Two sources may render one fact with different detail. Whichever landed first is what you see.</li>
+<li><b>Nothing is lost.</b> The loser's rendering is still in <code>raw_events</code>, byte for byte, and the provenance row points at it. <code>python3 bin/baqylau-audit.py raw &lt;raw_id&gt;</code> shows exactly what it said.</li>
+</ol>
+
+<div class="warn">
+<b>The last sentence is a scar.</b> An earlier version <em>raised</em> when two observations of one fact disagreed. That exception escaped into the observation pass and killed the scheduler thread — and because pushed sources (hooks, otel) kept flowing, every session still looked alive while its conversation silently stopped. This is the headline failure mode in the <code>audit-debug</code> skill. If the stored rendering is ever the poorer of two, the fix belongs in the ordering or in the identity derivation. <b>Not here.</b>
+</div>
+
+<h2 id="replay">10. Replay — what happens the second time</h2>
+
+<p>When the same raw event arrives again, <code>_verify_recorded_translation</code> (line 714) does not re-write anything. It checks that the interpretation has not <em>changed</em>:</p>
+
+<ol>
+<li>The translation record matches — same version, same decision, same reason.</li>
+<li>The provenance rows list the same event ids, in the same order.</li>
+<li>Each canonical event re-encodes to <b>byte-identical</b> JSON against what is stored.</li>
+</ol>
+
+<pre><code>if canonical_row is None or self._encoded_row(canonical_row) != self.codec.encode(event):
+    raise EventIdentityConflict(f"canonical output changed for raw event {raw_event.raw_event_id}")</code></pre>
+
+<p>This is a <b>determinism check on the translators</b>. The same bytes must always yield the same events. If someone writes a translator that reads the wall clock, or iterates a set, or depends on state accumulated earlier in the run, this is what catches it — on the next re-read, which in practice is a quarter of a second later.</p>
+
+<p>Byte-identity is possible because both sides go through the same canonical encoding: <code>sort_keys=True</code>, <code>separators=(",", ":")</code>, <code>ensure_ascii=False</code>. <code>_encoded_row</code> (line 796) rebuilds the document from columns in sorted key order and encodes it the same way, so a stored row and a freshly translated event are comparable as bytes rather than as objects.</p>
+
+<h3>record_failure</h3>
+
+<p>When a translator raises <code>TranslationError</code>, the evidence is still stored — with a verdict of <code>translation_failed</code> and a reason:</p>
+
+<span class="file">runtime/event_store.py:453</span>
+<pre><code>reason = error.reason if error.context is None else f"{error.reason}: {error.context}"</code></pre>
+
+<p>Real examples from the store: <code>unmapped Codex tool: write_stdin</code>, <code>Codex write_stdin targets finished operation: &lt;call_id&gt;</code>. A missing feature whose reason says "unmapped" is a translator gap, not a data loss — the bytes are safe, and the moment a rule exists the evidence translates. This is why the failure path stores rather than discards.</p>
+
+<h2 id="read">11. Reading events back</h2>
+
+<p>Five read methods, each shaped by a specific caller.</p>
+
+<table>
+<tr><th>method</th><th>returns</th><th>used for</th></tr>
+<tr><td><code>after(session, cursor, limit)</code></td><td><code>EventPage</code></td><td>"What is new since I last looked?" The live-update path.</td></tr>
+<tr><td><code>through(session, cursor)</code></td><td><code>EventPage</code></td><td>Everything up to a point. The full fold.</td></tr>
+<tr><td><code>tail(session, cursor, limit)</code></td><td><code>EventPage</code></td><td>The last N events. Opening a view without reading years of history.</td></tr>
+<tr><td><code>between(session, after, through)</code></td><td>tuple of <code>StoredEvent</code></td><td>A slice. Extending a cached fold.</td></tr>
+<tr><td><code>events_of_types(session, types, cursor)</code></td><td>tuple of <code>StoredEvent</code></td><td>Only certain event types, at any age.</td></tr>
+</table>
+
+<p>All of them return <code>StoredEvent</code>, which is the decoded event plus the two things the database knows that the event itself does not:</p>
+
+<span class="file">runtime/event_store.py:45</span>
+<pre><code>@dataclass(frozen=True)
+class StoredEvent:
+    cursor: int                               # its place in the order
+    accepted_at: float                        # when WE recorded it
+    event: CanonicalEvent[EventPayload]       # the fact itself
+    raw_event_ids: tuple[RawEventId, ...]     # every observation behind it</code></pre>
+
+<p>Two details in these methods repay attention.</p>
+
+<h4>limit + 1</h4>
+
+<pre><code>rows = … "ORDER BY cursor LIMIT ?", (str(session_id), cursor, limit + 1) …
+has_more = len(rows) &gt; limit
+selected = rows[:limit]</code></pre>
+
+<p>Asking for one more row than you intend to return is how <code>has_more</code> is answered without a second <code>COUNT</code> query. Get <code>limit + 1</code> back and there is more; get fewer and you are at the end.</p>
+
+<h4>The provenance batch</h4>
+
+<p><code>_stored_event</code> (line 748) fetches provenance for <em>one</em> event. Calling it in a loop would be one query per event — the classic N+1. <code>_stored_events</code> (line 760) instead runs a single query bounded by the cursor range of the page and groups the result in Python:</p>
+
+<pre><code>provenance_rows = connection.execute(
+    "SELECT canonical_provenance.event_id, canonical_provenance.raw_event_id "
+    "FROM canonical_provenance JOIN canonical_events USING(event_id) "
+    "WHERE canonical_events.session_id=? "
+    "AND canonical_events.cursor&gt;=? AND canonical_events.cursor&lt;=?", …)
+raw_event_ids: dict[str, list[RawEventId]] = {}
+for provenance_row in provenance_rows:
+    raw_event_ids.setdefault(provenance_row["event_id"], []).append(…)</code></pre>
+
+<p>Two queries for a page of any size. It works because the rows are already sorted by cursor, so the page has a contiguous range.</p>
+
+<h4>Ordering, everywhere</h4>
+
+<span class="file">runtime/event_store.py:279</span>
+<pre><code>"SELECT session_id FROM canonical_events WHERE event_type='session.started' "
+"GROUP BY session_id ORDER BY MAX(COALESCE(occurred_at, accepted_at)) DESC"</code></pre>
+
+<p>There is the fallback rule in SQL. And note what defines a session for this query: <b>a session exists when it has a <code>session.started</code> event</b>, not when it has a <code>session_harness</code> row. Registration means "we found a file"; the event means "it really ran". <code>recently_observed_session_ids</code> (line 289) asks the other question — most recent <em>evidence</em>, by <code>MAX(raw.observed_at)</code>, with a <code>LEFT JOIN</code> so a registered session with no events yet still appears last rather than vanishing.</p>
+
+<h2 id="ingest">12. ingest.py — the pipeline</h2>
+
+<p>Twenty-nine lines, and the only place in the system where translation is invoked.</p>
+
+<span class="file">runtime/ingest.py:10</span>
+<pre><code>class EventPipeline:
+    def __init__(self, registry: HarnessRegistry, event_store: EventStore) -&gt; None:
+        self.registry = registry
+        self.event_store = event_store
+
+    def ingest(self, raw_event: RawEvent) -&gt; IngestionResult:
+        plugin = self.registry.plugin(raw_event.harness)
+        try:
+            translation = plugin.events.translate(raw_event)
+        except TranslationError as error:
+            return self.event_store.record_failure(raw_event, plugin.info.plugin_version, error)
+
+        recorded = self.event_store.record(raw_event, plugin.info.plugin_version, translation)
+        return IngestionResult(…)</code></pre>
+
+<p>Read the order: <b>translate first, store second, always</b>. Both outcomes end in a write. There is no path through this function that leaves an observation unrecorded — success writes evidence plus facts, failure writes evidence plus a reason.</p>
+
+<p>Note <code>plugin.info.plugin_version</code> being passed to both. Every verdict is stamped with the version of the code that made it. When an interpretation turns out to be wrong, you can find every row produced by the version that made the mistake.</p>
+
+<p>Note also what this class does <b>not</b> do. It does not decide what to observe, it does not schedule, it does not retry, it does not catch anything except <code>TranslationError</code>. A bug inside a translator that raises something else propagates — and it is the caller's job (<code>ObservationRunner</code> in <code>app/observe.py</code>) to contain it per-source and audit the swallow. The pipeline stays honest about what it saw.</p>
+
+<h2 id="state">13. state.py — checkpoints</h2>
+
+<p>A source has to remember how far it has read, or every pass would re-read a whole file from the beginning.</p>
+
+<span class="file">runtime/state.py:10</span>
+<pre><code>class SqliteCheckpointStore(CheckpointStore):
+    def load(self, source_identity: str) -&gt; SourceCheckpoint | None: …
+    def commit(self, checkpoint: SourceCheckpoint) -&gt; None: …</code></pre>
+
+<p>It implements the <code>CheckpointStore</code> protocol from <code>contracts/harness.py</code> and says so in the class line — this repository requires that declaration and tests for it. <code>position</code> is a <b><code>TEXT</code> column, not an integer</b>, because only the source knows what a position means: a byte offset, a line number, a record id, a composite string. The runtime stores it and never interprets it.</p>
+
+<p>The write is an upsert:</p>
+
+<pre><code>"INSERT INTO source_checkpoints(source_identity, session_id, position) VALUES(?, ?, ?) "
+"ON CONFLICT(source_identity) DO UPDATE SET "
+"session_id=excluded.session_id, position=excluded.position"</code></pre>
+
+<p><code>excluded</code> is SQLite's name for the row you tried to insert. So: insert if new, overwrite if it exists — one statement, no read-then-write race.</p>
+
+<div class="key">
+<b>Why this is in <code>state.py</code> and not in the event store.</b> The file's docstring is the rule: "small runtime coordination state that is not canonical activity". A checkpoint is not something the session <em>did</em>; it is something <em>we</em> did. Delete every checkpoint and no history is lost — every source simply re-reads from the start and the store deduplicates. That is a real recovery procedure, and it only works because checkpoints are not evidence.
+</div>
+
+<div class="warn">
+<b>A stuck checkpoint is the single most diagnostic value in the store.</b> Compare <code>source_checkpoints.position</code> against the real size of <code>session_harness.source_reference</code>. A position far below the file size, frozen, with the file still growing, is conclusive proof that a source stopped draining. A measured instance: position 10,744 of 527,284 bytes — twelve lines of 165 — with exactly two messages recorded for a session that had run for hours.
+</div>
+
+<h2 id="evidence">14. evidence.py — the audit reader</h2>
+
+<p>This module answers one question: <em>what did we actually see, and what did we make of it?</em> It is read-only and it is what <code>bin/baqylau-audit.py</code> is built on.</p>
+
+<span class="file">runtime/evidence.py:22</span>
+<pre><code>@dataclass(frozen=True)
+class TranslationEvidence:
+    raw_event_id: RawEventId
+    session_id: SessionId
+    harness: str
+    source_type: str
+    source_name: str
+    source_position: str
+    actor_id: ActorId
+    parent_actor_id: ActorId | None
+    observed_at: float
+    encoding: str
+    payload: bytes                 # the exact bytes, unmodified
+    translator_version: str
+    decision: str
+    reason: str | None
+    completed_at: float
+    canonical: tuple[CanonicalEvidence, ...]   # what came out</code></pre>
+
+<p>One object holding all three stages: the observation, the verdict, and the resulting facts. Each entry in <code>canonical</code> carries its <code>event_order</code> and its <code>storage_result</code>, so you can see not only which facts an observation produced but whether this observation is the one that created them.</p>
+
+<p>Two methods:</p>
+<ul>
+<li><code>raw_event(raw_event_id)</code> — one observation in full. Behind <code>baqylau-audit.py raw &lt;id&gt;</code>.</li>
+<li><code>session(session_id)</code> — every observation for a session, ordered by <code>observed_at, raw_event_id</code>. Behind <code>baqylau-audit.py session &lt;id&gt;</code>.</li>
+</ul>
+
+<p>The <code>JOIN translation_records USING(raw_event_id)</code> in the first query is an <em>inner</em> join, so an observation with no verdict would be invisible. That is safe only because <code>record</code> writes both in one transaction — the schema and the write path together guarantee the pairing.</p>
+
+<div class="new">
+<b>The walrus operator.</b> <code>if (evidence := self.raw_event(…)) is not None</code> assigns and tests in one expression, inside a comprehension where a separate statement is impossible. Read it as "call it, name it <code>evidence</code>, and keep it if it is not None".
+</div>
+
+<h2 id="registry">15. registry.py — which plugin owns what</h2>
+
+<p>The registry is the only object that holds plugins, and the only bridge from a stored string like <code>"claude_code"</code> back to code that can act.</p>
+
+<h3>register() — five rules checked at wiring time</h3>
+
+<span class="file">runtime/registry.py:36</span>
+<pre><code>if not name: raise …("harness name cannot be empty")
+if name != plugin.info.name: raise …("harness name cannot have surrounding whitespace")
+if name in self._plugins: raise …(f"duplicate harness: {name}")
+if plugin.info.canonical_version != SCHEMA_VERSION: raise …
+if plugin.info.supports_attachments and plugin.launcher is None: raise …
+if plugin.info.default_for_launch and plugin.launcher is None: raise …
+if plugin.info.default_for_launch and any(… already a default …): raise …</code></pre>
+
+<p>These are <b>consistency checks on a plugin's own claims</b>. A harness that advertises attachments but has no launcher is describing a capability it cannot deliver; the interface would offer a control that does nothing. The version check refuses a plugin built against an older event vocabulary rather than letting it write subtly wrong payloads. All of it fails at startup, in one place, with a message naming the plugin.</p>
+
+<p><code>validate()</code> (line 62) runs after every plugin is registered, because one rule cannot be checked earlier: if anything is launchable, exactly one must be the default. That is only knowable once the set is complete.</p>
+
+<h3>discover_sessions() — round-robin, not sequential</h3>
+
+<span class="file">runtime/registry.py:77</span>
+<pre><code>remaining = [(plugin, iter(plugin.sessions.discover())) for plugin in self.plugins()]
+while remaining and (limit is None or len(discovered) &lt; limit):
+    next_round = []
+    for plugin, sessions in remaining:
+        if limit is not None and len(discovered) &gt;= limit:
+            break
+        try:
+            session = next(sessions)
+        except StopIteration:
+            continue
+        …
+        next_round.append((plugin, sessions))
+    remaining = next_round</code></pre>
+
+<p>Every plugin's discovery is turned into an iterator, then they are drained <b>one session at a time, in turn</b>. The obvious implementation — loop over plugins, take everything from each — would let the first plugin fill the whole limit and hide the second entirely. With a limit of 20 and one busy harness, the other would disappear from the interface. This loop guarantees each harness gets a share.</p>
+
+<p>Each discovered session is registered immediately and then <em>read back</em>:</p>
+
+<pre><code>self.event_store.register_session(plugin.info.name, session)
+stored_session = self.event_store.recognized_session(session.session_id)</code></pre>
+
+<p>The plugin's version is discarded; the stored version is what callers receive. This matters because registration merges — the <code>COALESCE</code> on process id, an earlier working directory. Reading back means everyone downstream sees the same reconciled record instead of one observer's partial view.</p>
+
+<p>Two plugins discovering the same session id raises <code>AmbiguousSession</code>, and it names both. So does <code>recognize()</code> (line 111) when more than one plugin claims a file, while none claiming it raises <code>UnsupportedSession</code>. The distinction is worth keeping straight: <em>unsupported</em> means no rule matched, <em>ambiguous</em> means two rules did and one of them is too greedy.</p>
+
+<h3>Lookup by session</h3>
+
+<pre><code>def plugin_for_session(self, session_id) -&gt; HarnessPlugin:
+    harness = self.event_store.session_harness(session_id)
+    if harness is None:
+        raise UnsupportedSession(f"unknown session: {session_id}")
+    return self.plugin(harness)</code></pre>
+
+<p>This is the hinge of the whole harness-agnostic design. A control request arrives carrying nothing but a session id. The registry turns it into a harness name via the database, then into a plugin. The caller never learns which harness it was.</p>
+
+<h2 id="projections">16. projections.py — what a projection is</h2>
+
+<p>The store holds thousands of small facts. A screen needs a few dozen objects. Turning the first into the second is a <b>projection</b>, and the file's docstring names the technique:</p>
+
+<span class="file">runtime/projections.py:1</span>
+<pre><code>"""Harness-neutral semantic read models folded from canonical facts."""</code></pre>
+
+<div class="new">
+<b>Fold.</b> Start with an empty result. Walk a sequence in order. For each item, update the result. Return it. That is all "fold" means, and every function in this file is one — the state is a dictionary, the sequence is events in cursor order, and the update is a chain of <code>isinstance</code> checks.
+</div>
+
+<div class="new">
+<b>Read model.</b> A shape built for reading, thrown away afterwards, never stored. Nothing in this file is persisted. Change how a summary is computed and the next read reflects it immediately, with no migration, because the facts underneath did not change.
+</div>
+
+<p>An example, small enough to hold in your head — the whole of the goal projection:</p>
+
+<span class="file">runtime/projections.py:827</span>
+<pre><code>goal = None
+for stored in self._page(session_id, through_cursor).events:
+    if stored.event.actor_id != session.lead_actor_id:
+        continue                       # subagents do not own the session goal
+    payload = stored.event.payload
+    if not isinstance(payload, GoalChanged):
+        continue                       # ignore everything else
+    if payload.state == "cleared" or payload.objective is None:
+        goal = None                    # last one wins, including a clearing
+    else:
+        goal = GoalState(payload.objective, payload.state, payload.reason)
+return goal</code></pre>
+
+<p>Walk everything, ignore what is irrelevant, let the last relevant event win. Every other projection is this with more branches.</p>
+
+<h2 id="models">17. The read models — every dataclass</h2>
+
+<p>The file defines two families of shape.</p>
+
+<h3>Activities — one thing that happened, for the feed</h3>
+
+<p>Every activity begins with the same context object:</p>
+
+<span class="file">runtime/projections.py:76</span>
+<pre><code>@dataclass(frozen=True)
+class ActivityContext:
+    activity_id: str                                   # stable across updates
+    source_event_ids: tuple[CanonicalEventId, ...]     # every event that shaped it
+    session_id: SessionId
+    actor_id: ActorId
+    actor_name: str | None
+    parent_actor_id: ActorId | None
+    turn_id: TurnId | None
+    started_at: float | None
+    finished_at: float | None</code></pre>
+
+<p><code>source_event_ids</code> is a tuple, not a single id, because an activity is usually built from several events — a shell command is a start, some output, and a finish, all one entry on screen. It is the trail back from a rendered block to the facts behind it.</p>
+
+<table>
+<tr><th>activity</th><th>is</th><th>built from</th></tr>
+<tr><td><code>MessageActivity</code></td><td>One message. Role, phase, content.</td><td><code>message.created</code></td></tr>
+<tr><td><code>ReasoningActivity</code></td><td>Visible thinking.</td><td><code>reasoning.created</code></td></tr>
+<tr><td><code>OperationActivity</code></td><td>A tool call, from start through output to result.</td><td><code>operation.started/.progressed/.finished</code></td></tr>
+<tr><td><code>FileActivity</code></td><td>One file touched, with its diff and outcome.</td><td><code>file.accessed</code> + its operation's events</td></tr>
+<tr><td><code>AttentionActivity</code></td><td>A prompt to the human, or its answer.</td><td><code>attention.requested</code> / <code>.resolved</code></td></tr>
+<tr><td><code>TaskActivity</code></td><td>One todo-list change.</td><td><code>task.changed</code></td></tr>
+<tr><td><code>CompactionActivity</code></td><td>A context compaction, with before/after tokens.</td><td><code>compaction.finished</code></td></tr>
+<tr><td><code>ActorAssignmentActivity</code></td><td>A subagent's brief and its result.</td><td><code>actor.assignment_started/.finished</code></td></tr>
+<tr><td><code>ActorMessageActivity</code></td><td>One actor messaging another.</td><td><code>actor.message_sent</code></td></tr>
+</table>
+
+<span class="file">runtime/projections.py:226</span>
+<pre><code>Activity: TypeAlias = (
+    MessageActivity | ReasoningActivity | OperationActivity | FileActivity
+    | AttentionActivity | TaskActivity | CompactionActivity
+    | ActorAssignmentActivity | ActorMessageActivity
+)</code></pre>
+
+<div class="key">
+<b>Nine types, and the list is closed.</b> Both presenters — <code>dashboard/presenter.py</code> and <code>terminal/presenter.py</code> — dispatch over exactly these and raise <code>TypeError</code> on anything else. That is what keeps the two frontends in step: add a tenth activity and both presenters fail loudly until they handle it. Silence would mean the web view quietly growing a feature the terminal does not have.
+</div>
+
+<p><code>OperationActivity</code> is the only one with behaviour, and it is worth reading:</p>
+
+<span class="file">runtime/projections.py:124</span>
+<pre><code>def current_progress(self) -&gt; tuple[Content, ...]:
+    streams: dict[str, list[Content]] = {}
+    for progress in self.progress:
+        if progress.mode == "replace":
+            streams[progress.stream] = [progress.content]
+        else:
+            streams.setdefault(progress.stream, []).append(progress.content)
+    return tuple(content for stream in streams.values() for content in stream)</code></pre>
+
+<p>Output arrives as a series of chunks, on named streams, in one of two modes. <code>append</code> adds to what came before — ordinary stdout. <code>replace</code> discards it — a progress bar redrawing itself. Without the distinction, a five-minute build would render as ten thousand copies of one line.</p>
+
+<h3>Summaries — the state of something now</h3>
+
+<table>
+<tr><th>summary</th><th>answers</th></tr>
+<tr><td><code>SessionSummary</code></td><td>Title, directory, model, effort, account, prompt count, running or finished.</td></tr>
+<tr><td><code>ActorSummary</code></td><td>One actor: name, role, description, model, state, timing.</td></tr>
+<tr><td><code>UsageSummary</code></td><td>Tokens and cost, in total and broken down by actor and by model.</td></tr>
+<tr><td><code>AttentionState</code></td><td>Which prompts are still waiting for a human.</td></tr>
+<tr><td><code>ContextSummary</code></td><td>Context-window usage per actor, and who is compacting.</td></tr>
+<tr><td><code>TaskSummary</code></td><td>One todo item and its state.</td></tr>
+<tr><td><code>GoalState</code></td><td>The current objective and whether it is blocked.</td></tr>
+<tr><td><code>BackgroundWorkSummary</code></td><td>What is still running in the background.</td></tr>
+<tr><td><code>ActivityStatistics</code></td><td>Counts: commands, failures, files, lines added and removed.</td></tr>
+<tr><td><code>TabState</code></td><td>One word for the whole session: <code>idle</code>, <code>thinking</code>, <code>working</code>, …</td></tr>
+</table>
+
+<p>And three small shapes that describe a request or its answer rather than the session:</p>
+
+<pre><code>@dataclass(frozen=True)
+class ActivityScope:
+    actor_id: ActorId | None = None      # None means "the whole session"
+
+@dataclass(frozen=True)
+class ActivityPage:                      # what changed since a cursor
+    cursor: int
+    latest_cursor: int | None
+    activities: tuple[Activity, ...]
+
+@dataclass(frozen=True)
+class ActivityWindow:                    # a slice of history
+    oldest_cursor: int
+    activities: tuple[Activity, ...]
+    has_more: bool</code></pre>
+
+<p><code>ActivityScope</code> is how one implementation serves both "show me the session" and "show me only this subagent". It is a dataclass rather than a bare optional id so that a second filter can be added later without changing eleven signatures.</p>
+
+<h2 id="queries">18. SessionQueries and its two caches</h2>
+
+<p>Every projection folds from the beginning of the session. A long session has tens of thousands of events, the dashboard polls four times a second, and re-reading everything each time would be untenable. Two caches make it work.</p>
+
+<span class="file">runtime/projections.py:403</span>
+<pre><code>def __init__(self, event_store: EventStore) -&gt; None:
+    self.event_store = event_store
+    self._latest_pages: dict[SessionId, tuple[int | None, tuple[StoredEvent, ...]]] = {}
+    self._tail_pages: dict[tuple[SessionId, int], EventPage] = {}
+    self._latest_pages_lock = RLock()</code></pre>
+
+<h4>_page — the incremental cache</h4>
+
+<span class="file">runtime/projections.py:425</span>
+<pre><code>session_cursor = self.event_store.latest_session_cursor(session_id, selected_cursor)
+with self._latest_pages_lock:
+    cached = self._latest_pages.get(session_id)
+    if cached is not None and cached[0] is not None and session_cursor is not None \
+       and cached[0] &lt; session_cursor:
+        cached = (session_cursor,
+                  cached[1] + self.event_store.between(session_id, cached[0], session_cursor))
+        self._latest_pages[session_id] = cached
+    elif cached is None or cached[0] != session_cursor:
+        page = self.event_store.through(session_id, selected_cursor)
+        cached = (session_cursor, page.events)
+        self._latest_pages[session_id] = cached
+    events = cached[1]</code></pre>
+
+<p>Three cases, and the first is the common one:</p>
+<ol>
+<li><b>The cache is behind.</b> Fetch only the gap with <code>between()</code> and append. A poll that finds three new events reads three rows, not thirty thousand.</li>
+<li><b>Nothing cached, or the cursor moved backwards.</b> Read the whole thing with <code>through()</code>. Backwards happens when a caller asks for a historical <code>through_cursor</code> — time-travel for debugging.</li>
+<li><b>The cursor is unchanged.</b> Return what is cached, touching the database only for the cheap <code>MAX(cursor)</code> that got us here.</li>
+</ol>
+
+<p>The cache is safe because canonical events are <b>append-only</b>. A stored event never changes, so an old page can never be stale — it can only be incomplete, and the cursor says by exactly how much. That property comes straight from the write path, and it is what buys the read path its speed.</p>
+
+<div class="new">
+<b>RLock.</b> A re-entrant lock: the same thread may acquire it more than once without deadlocking itself. It is needed because the dashboard runs the observation scheduler in one thread and serves requests on others, all sharing one <code>SessionQueries</code>. A plain <code>Lock</code> would hang the moment one locked method called another.
+</div>
+
+<h4>_tail_page — the fixed-key cache</h4>
+
+<p>Keyed by <code>(session_id, event_limit)</code> and valid only while the cursor matches exactly. It serves the opening of a view: the last few hundred events, without the full history. No incremental extension here, because a tail's contents shift at both ends as new events arrive.</p>
+
+<h2 id="fold">19. _activities — the fold in full</h2>
+
+<p>One static method, 340 lines, and everything the feed shows comes out of it. Its signature says what it produces:</p>
+
+<span class="file">runtime/projections.py:1043</span>
+<pre><code>@staticmethod
+def _activities(
+    stored_events: tuple[StoredEvent, ...],
+    scope: ActivityScope,
+) -&gt; tuple[list[Activity], dict[str, int], dict[str, int]]:
+    #        activities      position_cursors  revision_cursors</code></pre>
+
+<p>It is <code>@staticmethod</code> deliberately: it touches no instance state, so the same events always give the same activities. Its accumulators are these:</p>
+
+<pre><code>activities: dict[str, Activity] = {}          # activity_id -&gt; current version
+order: list[str] = []                         # first-appearance order
+position_cursors: dict[str, int] = {}         # where it belongs in the feed
+revision_cursors: dict[str, int] = {}         # when it last changed
+file_operation_ids: set[str] = set()          # operations that are really files
+hidden_operation_ids: set[str] = set()        # operations shown another way
+file_activity_ids_by_operation: dict[str, list[str]] = {}
+actor_names: dict[ActorId, str] = {}
+attention_requests: dict[…] = {}              # to pair resolutions with prompts
+actor_assignment_starts: dict[…] = {}         # to pair finishes with briefs</code></pre>
+
+<h3>The activity id</h3>
+
+<span class="file">runtime/projections.py:398</span>
+<pre><code>def _activity_id(event, activity_type, subject_id) -&gt; str:
+    return f"{activity_type}:{event.actor_id}:{subject_id}"</code></pre>
+
+<p>Three events about one shell command produce one id, so they land on one entry that is updated in place. The actor id is in there because two actors may use the same operation id without meaning the same operation.</p>
+
+<p>Where an activity is genuinely a point in time rather than a span, the id uses the event id instead — <code>f"task:{event.event_id}"</code>, <code>f"compaction:{event.event_id}"</code>, <code>f"attention-request:{event.event_id}"</code>. Each is its own entry, which is right: a todo list edited five times should show five changes, not one changing block.</p>
+
+<h3>Operations that never appear as operations</h3>
+
+<span class="file">runtime/projections.py:1093</span>
+<pre><code>if payload.category in ("file_read", "file_write", "file_edit"):
+    file_operation_ids.add(activity_id)
+    hidden_operation_ids.add(activity_id)
+    continue
+if payload.category in ("attention", "task", "message"):
+    hidden_operation_ids.add(activity_id)
+    continue</code></pre>
+
+<p>Some tool calls are better shown as the thing they did than as the call itself. A file edit is interesting as a diff, not as "Edit finished, exit code 0". An approval prompt is interesting as the prompt. So those categories are recorded in a set and skipped — and later events for the same operation check that set and route themselves elsewhere:</p>
+
+<pre><code>if activity_id in file_operation_ids:
+    for file_activity_id in file_activity_ids_by_operation.get(activity_id, ()):
+        …
+        activities[file_activity_id] = replace(file_activity,
+            progress=file_activity.progress + (payload,), …)
+        revision_cursors[file_activity_id] = stored.cursor
+    continue
+if activity_id in hidden_operation_ids:
+    continue</code></pre>
+
+<p>The <code>file_activity_ids_by_operation</code> map is what makes the redirect possible: one edit operation may touch several files, so the operation's output and outcome are attached to <b>every</b> file activity it produced. And each of those gets its revision cursor bumped, so a client watching for changes learns that those entries moved.</p>
+
+<div class="new">
+<b><code>replace()</code>.</b> From <code>dataclasses</code>. Because every activity is frozen, "updating" one means constructing a new one with some fields changed: <code>replace(existing, state="finished")</code>. It is used throughout this fold, often nested — <code>replace(activity, context=replace(activity.context, …))</code> — to reach inside the context object as well.
+</div>
+
+<h3>Events arriving out of order</h3>
+
+<p>Every operation branch handles the case where the event it depends on has not been seen:</p>
+
+<pre><code>existing = activities.get(activity_id)
+if isinstance(existing, OperationActivity):
+    activity = replace(existing, …)          # normal: update in place
+else:
+    activity = OperationActivity(            # a finish with no start
+        _context(stored, activity_id, actor_name, finished=True),
+        payload.operation_id, None, None, None, None, None, None,
+        (), "finished", payload.outcome, payload.result, payload.exit_code, …)</code></pre>
+
+<p>All those <code>None</code>s are honest: the category, the tool name, and the arguments were in the start event, which we do not have. This is not a hypothetical — a tail view begins in the middle of the session by definition, and a session may be observed from a checkpoint after it started. The fold produces a partial entry rather than losing the event or crashing.</p>
+
+<p><code>activity_tail</code> then filters the worst of those out:</p>
+
+<span class="file">runtime/projections.py:688</span>
+<pre><code>complete = [activity for activity in activities
+            if not isinstance(activity, OperationActivity) or activity.native_name is not None]</code></pre>
+
+<p>An operation with no name is one whose start we never saw. Rendering "an unnamed tool finished" is worse than rendering nothing, so the tail drops it — while the full fold, which has the start, keeps it.</p>
+
+<h3>Actor names, and why they are fetched separately</h3>
+
+<p>Names come from <code>actor.started</code> and <code>actor.name_changed</code>, which happen once, at the beginning. A tail of the last 300 events will not contain them, so every subagent block would render nameless. <code>activity_tail</code> solves it explicitly:</p>
+
+<span class="file">runtime/projections.py:669</span>
+<pre><code>actor_events = self.event_store.events_of_types(
+    session_id, ("actor.started", "actor.name_changed"), through_cursor)
+recent_event_ids = {stored.event.event_id for stored in page.events}
+stored_events = tuple(sorted(
+    (*(stored for stored in actor_events if stored.event.event_id not in recent_event_ids),
+     *page.events),
+    key=lambda stored: stored.cursor))</code></pre>
+
+<p>Fetch the naming events at any age, drop the ones already in the page, merge, re-sort by cursor. That is the entire reason <code>events_of_types</code> exists on the event store.</p>
+
+<h3>Assignments belong to the parent</h3>
+
+<span class="file">runtime/projections.py:1059</span>
+<pre><code>assignment_for_parent = (
+    isinstance(event.payload, (ActorAssignmentStarted, ActorAssignmentFinished))
+    and event.parent_actor_id is not None
+)
+activity_actor_id = event.parent_actor_id if assignment_for_parent else event.actor_id</code></pre>
+
+<p>When a subagent starts, the event's actor is the subagent. But the thing a reader wants to see is an entry in the <em>parent's</em> feed saying "I delegated this". So for assignment events only, the activity is attributed to the parent. Everything downstream — the scope filter, the actor name, the feed it lands in — follows <code>activity_actor_id</code> rather than the event's own actor.</p>
+
+<h3>Pairing</h3>
+
+<p>Two dictionaries exist purely so that a later event can recover information from an earlier one:</p>
+
+<ul>
+<li><code>attention_requests</code> — a resolution carries the answer but not the question. The request is stashed when seen and <code>pop</code>ped when resolved, so the resolution can show what was asked. <code>pop</code>, not <code>get</code>: once paired, it is gone, and a second resolution for the same id renders without a prompt rather than reusing a stale one.</li>
+<li><code>actor_assignment_starts</code> — a finish carries the result but not the brief, nor when it started. The start is kept so the finished entry can show the whole assignment with a real duration.</li>
+</ul>
+
+<h2 id="cursors">20. Two cursors per activity, and why</h2>
+
+<p>The fold returns two dictionaries of cursors, and confusing them produces a feed that jumps around.</p>
+
+<span class="file">runtime/projections.py:1371</span>
+<pre><code>activity_id = activity.context.activity_id
+if activity_id not in activities:
+    order.append(activity_id)
+    position_cursors[activity_id] = stored.cursor    # set ONCE, on first sight
+activities[activity_id] = activity
+revision_cursors[activity_id] = stored.cursor        # updated EVERY time</code></pre>
+
+<table>
+<tr><th></th><th>position cursor</th><th>revision cursor</th></tr>
+<tr><td>set</td><td>once, when the activity first appears</td><td>on every event that touches it</td></tr>
+<tr><td>answers</td><td>"where does this belong in the feed?"</td><td>"has this changed since I last looked?"</td></tr>
+<tr><td>used by</td><td><code>activity_before</code> — paging back through history</td><td><code>activity_after</code> — live updates</td></tr>
+</table>
+
+<p>Consider a build that runs for five minutes. It starts, then emits output continuously. Its position cursor is fixed at the start, so it stays where it belongs in the chronology. Its revision cursor advances with every chunk, so a client polling for changes keeps receiving it. Use one for both and the block would either march to the bottom of the feed on every update, or stop updating.</p>
+
+<span class="file">runtime/projections.py:610</span>
+<pre><code>changed = sorted(
+    (activity for activity in activities
+     if revision_cursors[activity.context.activity_id] &gt; cursor),
+    key=lambda activity: revision_cursors[activity.context.activity_id])</code></pre>
+
+<p>That is the whole live-update mechanism: everything whose revision cursor is past what the client has, in revision order. There is no message bus and no subscription — the client sends a number, the server folds and filters. Delivery is a poll every 0.25 seconds over SSE.</p>
+
+<h2 id="summaries">21. The summaries, one by one</h2>
+
+<h3>summary() — the session card</h3>
+
+<p>It begins by finding <code>session.started</code>; without one, the session does not exist as far as this method is concerned and it returns <code>None</code>. Then it walks everything, and the title logic is the interesting part:</p>
+
+<span class="file">runtime/projections.py:527</span>
+<pre><code>title = custom_title or automatic_title or summary_title or prompt_title</code></pre>
+
+<p>Four candidates, tracked independently and resolved by precedence at the end. A name you typed beats one the tool generated, which beats a summary, which beats the first line of your first prompt. Because they are separate variables, a later automatic title cannot overwrite the custom one — the precedence is applied once, at the end, rather than fought over during the walk.</p>
+
+<pre><code>elif isinstance(event.payload, ModelChanged) and event.actor_id == started.event.actor_id:
+    model = event.payload.current
+    automatic_model_change = event.payload if event.payload.reason == "automatic_fallback" else None</code></pre>
+
+<p>Two things happen here. The model is tracked <b>only for the lead actor</b> — a subagent running a cheaper model must not change what the session card says. And an <em>automatic</em> fallback is remembered separately, so the interface can tell you the tool downgraded you without being asked. Setting it to <code>None</code> in the else branch is deliberate: a later deliberate change clears the warning.</p>
+
+<h3>usage() — cumulative versus additive</h3>
+
+<p>Harnesses report token usage in two incompatible ways, and both must be handled in one number.</p>
+
+<span class="file">runtime/projections.py:710</span>
+<pre><code>latest_cumulative: dict[tuple[str, str, str, str], UsageReported] = {}
+additive: list[tuple[CanonicalEvent, UsageReported]] = []
+for event in reports:
+    report = event.payload
+    if report.cumulative:
+        latest_cumulative[(report.scope, report.subject_id, model_id, account_id)] = report
+    else:
+        additive.append((event, report))</code></pre>
+
+<ul>
+<li><b>Additive</b> — "this turn used 400 tokens". Sum them all.</li>
+<li><b>Cumulative</b> — "this session has used 90,000 tokens so far". Keep only the newest, per subject. Summing these would multiply your bill by the number of reports.</li>
+</ul>
+
+<p>The dictionary key is the whole tuple <code>(scope, subject, model, account)</code> because "so far" means something different for each combination. Two models used in one session each have their own running total, and they must not overwrite each other.</p>
+
+<h3>attention() — pending prompts, and how they expire</h3>
+
+<span class="file">runtime/projections.py:782</span>
+<pre><code>elif isinstance(payload, (TurnFinished, TurnAborted, ActorAssignmentFinished,
+                          ActorFinished, SessionFinished)):
+    pending = {key: attention for key, attention in pending.items()
+               if attention.actor_id != event.actor_id}</code></pre>
+
+<p>A prompt is normally removed by its <code>attention.resolved</code> event. But cancellation is different: <b>harnesses fire no hook when you press Escape</b>, so a prompt that was on screen when you interrupted would hang there forever, and the interface would keep reporting that the session needs you.</p>
+
+<p>The rule is evidence-based rather than time-based: when an actor's turn ends by any route, that actor's pending prompts are dropped. Note it clears only <em>that actor's</em> prompts — a subagent finishing must not dismiss a question the lead is still asking. A timeout would have been simpler and is explicitly forbidden by the repository's rules: it false-positives on long thinking.</p>
+
+<h3>tasks() — two ways a task disappears</h3>
+
+<span class="file">runtime/projections.py:804</span>
+<pre><code>if isinstance(payload, TaskListChanged):
+    previous_ids = task_lists.get(payload.list_id, set())
+    current_ids = set(payload.task_ids)
+    task_lists[payload.list_id] = current_ids
+    retained_ids = set().union(*task_lists.values()) if task_lists else set()
+    for task_id in previous_ids - current_ids:
+        if task_id not in retained_ids:
+            tasks.pop(task_id, None)</code></pre>
+
+<p>A task can be deleted outright, or it can simply fall out of a list. The second case is subtle: a task may belong to several lists, so falling out of one is not enough. <code>retained_ids</code> is the union of every remaining list, and only a task in none of them is dropped.</p>
+
+<h3>active_seconds() — how long the session was actually working</h3>
+
+<span class="file">runtime/projections.py:924</span>
+<pre><code>if isinstance(payload, SessionStarted):
+    active_since = event_time
+elif event.actor_id == lead_actor_id and isinstance(payload, MessageCreated):
+    if payload.role == "user" and payload.phase == "prompt" and active_since is None:
+        active_since = event_time
+elif event.actor_id == lead_actor_id and isinstance(payload, (TurnFinished, TurnAborted)):
+    if active_since is not None:
+        active_seconds += max(0.0, event_time - active_since)
+        active_since = None
+…
+if active_since is not None:
+    active_seconds += max(0.0, current_time - active_since)</code></pre>
+
+<p>The clock starts at your prompt and stops when the turn ends, so the hours a session sits idle waiting for you are not counted. Two defensive details: <code>and active_since is None</code> means a second prompt during a running turn does not restart the clock, and <code>max(0.0, …)</code> means a source with a skewed timestamp cannot subtract time. The final block adds the open interval up to <em>now</em>, which is why <code>current_time</code> is a parameter — the method stays deterministic instead of reading the clock itself, and a test can pass a fixed time.</p>
+
+<h2 id="tabstate">22. tab_state — one word for a whole session</h2>
+
+<p>The kitty tab colour and the notification logic both need a single word for what a session is doing. <code>_tab_state</code> (line 987) folds every event into one of seven:</p>
+
+<table>
+<tr><th>state</th><th>means</th></tr>
+<tr><td><code>idle</code></td><td>Started, nothing happening.</td></tr>
+<tr><td><code>thinking</code></td><td>A turn began, or you sent a prompt.</td></tr>
+<tr><td><code>working</code></td><td>Reasoning, or a non-shell tool is running.</td></tr>
+<tr><td><code>executing</code></td><td>A shell command, a subagent, or background work.</td></tr>
+<tr><td><code>awaiting_attention</code></td><td><b>You are being asked something.</b></td></tr>
+<tr><td><code>awaiting_background</code></td><td>The turn ended but background work continues.</td></tr>
+<tr><td><code>awaiting_response</code></td><td>The turn ended. Your move.</td></tr>
+</table>
+
+<p>Two accumulators survive across events, and they are what makes the last two states possible:</p>
+
+<pre><code>elif isinstance(payload, (TurnFinished, TurnAborted)):
+    state = "awaiting_background" if background_operations else "awaiting_response"</code></pre>
+
+<p>A finished turn with a build still running is not the same as a finished turn with nothing left — one wants your attention, the other does not.</p>
+
+<pre><code>elif isinstance(payload, OperationFinished):
+    background_operations.discard(payload.operation_id)
+    state = "awaiting_attention" if pending_attention else "working"</code></pre>
+
+<p>And an operation finishing must not clear a prompt that is still on screen. Without that check, a tool completing behind a permission dialog would turn the tab from "needs you" to "working" while it sat there waiting.</p>
+
+<p>There are two entry points, and their difference is the initial value:</p>
+
+<pre><code>def tab_state(self, session_id, through_cursor=None):
+    return self._tab_state(self._page(session_id, through_cursor).events, None)
+
+def tab_state_tail(self, session_id, event_limit, through_cursor):
+    events = self._tail_page(session_id, event_limit, through_cursor).events
+    return self._tab_state(events, "idle")</code></pre>
+
+<p>The full fold starts at <code>None</code> — no <code>session.started</code> seen means no state, which is how "this is not a session" is expressed. The tail starts at <code>"idle"</code>, because it begins mid-session and will never see the start; assuming idle and letting the recent events correct it is right, while returning <code>None</code> would blank a live tab.</p>
+
+<h2 id="rules">23. The rules that hold across the layer</h2>
+
+<table>
+<tr><th>rule</th><th>enforced by</th></tr>
+<tr><td>No harness vocabulary anywhere in <code>runtime/</code>.</td><td><code>tests/test_canonical_architecture.py</code></td></tr>
+<tr><td>Raw evidence is never edited; the same id with different bytes raises.</td><td><code>_raw_identity</code> + the check in <code>record()</code></td></tr>
+<tr><td>Canonical events are idempotent; the first writer wins and bodies are not compared.</td><td>the <code>deduplicated</code> branch</td></tr>
+<tr><td>Order by <code>cursor</code>, never by <code>event_id</code>; fall back to <code>accepted_at</code> when <code>occurred_at</code> is null.</td><td><code>test_no_read_path_orders_on_a_bare_occurred_at</code></td></tr>
+<tr><td>No file or database work at import time.</td><td><code>docs/styleguide.md</code>, architecture tests</td></tr>
+<tr><td>Every class implementing a Protocol declares it in its class line.</td><td><code>test_protocol_implementations_declare_the_protocol_they_implement</code></td></tr>
+<tr><td>Projections hold no state of their own and can always be rebuilt.</td><td>design; <code>_activities</code> is a <code>@staticmethod</code></td></tr>
+</table>
+
+<h3>How to add a projection</h3>
+
+<ol>
+<li>Add the read-model dataclass, frozen, near its relatives.</li>
+<li>Add a method on <code>SessionQueries</code> taking <code>(session_id, through_cursor=None)</code> and folding <code>self._page(...).events</code>.</li>
+<li>Ignore every payload you do not care about. Never assume ordering beyond cursor order, and never assume the start event is present.</li>
+<li>If it is a new <code>Activity</code> type, add it to the <code>Activity</code> alias and handle it in <b>both</b> presenters — they raise <code>TypeError</code> otherwise, which is the point.</li>
+<li>No migration is needed. The facts are already stored; you are only reading them differently.</li>
+</ol>
+
+<h2 id="gap">24. Where model.changed falls out</h2>
+
+<p>A concrete, current example of how to read this layer — and of a gap that is still open.</p>
+
+<p>When a session's model changes, a <code>model.changed</code> event is stored correctly. Three projections consume it:</p>
+
+<ul>
+<li><code>summary()</code> — updates <code>SessionSummary.model</code>, for the lead actor only (line 513).</li>
+<li><code>actors()</code> — updates that actor's <code>ActorSummary.model</code> (line 604).</li>
+<li><code>context()</code> — remembers the model so a later context report can be attributed to it (line 752).</li>
+</ul>
+
+<p>Now search <code>_activities</code> for <code>ModelChanged</code>. It is not there. The fold has branches for messages, reasoning, operations, files, attention, tasks, compaction, assignments, and actor messages — and no branch for <code>ModelChanged</code> or <code>EffortChanged</code>. So the event reaches the store, updates the cards at the top of the view, and produces <b>no entry in the feed</b>.</p>
+
+<div class="warn">
+<b>Why it looked like it worked for one harness and not the other.</b> Claude Code's translator emits a <code>message.created</code> for the <code>/model opus</code> you typed, alongside the state event. That message has a branch in the fold, so something appeared — but it was the message, not the model change. Codex has no such message, so nothing appeared at all. The difference was never in the rendering; it was in what each harness happened to produce. That is exactly the shape of bug this layout is meant to make visible: <b>if a fact does not have a branch in <code>_activities</code>, it will never reach a feed, no matter how correctly it is stored.</b>
+</div>
+
+<p>The fix is a tenth activity type with a branch in the fold and a case in both presenters, at which point both harnesses render identically because both already emit the event. Nothing in the store needs to change.</p>
+
+<hr>
+<p class="small">Written from <code>runtime/</code> as it stands. Companion documents: <a href="flow.html" style="color:var(--accent)">flow.html</a>, which traces one gesture through the whole pipeline, and <a href="contracts.html" style="color:var(--accent)">contracts.html</a>, which explains the harness contract this layer is handed.</p>
+
+</div>
+</body>
+</html>
