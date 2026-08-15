@@ -39,16 +39,21 @@ def bind(pending_session_id: SessionId, session_id: SessionId) -> None:
     os.replace(temporary_path, path)
 
 
-def wait(pending_session_id: SessionId) -> SessionId:
+def bound(pending_session_id: SessionId) -> SessionId | None:
     path = _binding_path(pending_session_id)
+    try:
+        with open(path, encoding="utf-8") as binding:
+            session_id = binding.read().strip()
+    except FileNotFoundError:
+        session_id = ""
+    return SessionId(session_id) if session_id else None
+
+
+def wait(pending_session_id: SessionId) -> SessionId:
     while True:
-        try:
-            with open(path, encoding="utf-8") as binding:
-                session_id = binding.read().strip()
-        except FileNotFoundError:
-            session_id = ""
-        if session_id:
-            return SessionId(session_id)
+        session_id = bound(pending_session_id)
+        if session_id is not None:
+            return session_id
         time.sleep(POLL_SECONDS)
 
 

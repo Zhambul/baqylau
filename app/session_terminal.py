@@ -47,9 +47,12 @@ class ApplicationTerminal(
     def current_window(self) -> str | None:
         return self._frontend().current_window() or None
 
-    def _current_tab_windows(self):
+    def _tab_windows(self, window_id: str | None):
+        """The windows of one tab: the tab holding `window_id`, or — when no
+        window is named (a caller without a terminal environment) — the focused
+        terminal's active tab."""
         frontend = self._frontend()
-        current_window_id = frontend.current_window()
+        current_window_id = window_id or frontend.current_window()
         terminal_state = frontend.ls()
         for operating_system_window in terminal_state:
             for tab in operating_system_window.get("tabs", ()):
@@ -74,15 +77,25 @@ class ApplicationTerminal(
             return tuple(active_tabs[0].get("windows", ()))
         return ()
 
-    def current_session(self) -> SessionId | None:
-        for window in self._current_tab_windows():
+    def session_for_window(self, window_id: str | None) -> SessionId | None:
+        for window in self._tab_windows(window_id):
             session_id = (window.get("user_vars") or {}).get(SESSION_WINDOW_TAG)
             if session_id:
                 return SessionId(session_id)
         return None
 
+    def current_session(self) -> SessionId | None:
+        return self.session_for_window(None)
+
     def hosting_session(self, excluding_session_id: SessionId) -> SessionId | None:
-        for window in self._current_tab_windows():
+        return self._hosting_session(excluding_session_id, None)
+
+    def _hosting_session(
+        self,
+        excluding_session_id: SessionId,
+        window_id: str | None,
+    ) -> SessionId | None:
+        for window in self._tab_windows(window_id):
             user_variables = window.get("user_vars") or {}
             hosted_session_id = (
                 user_variables.get(ACTIVITY_PANE_TAG)
@@ -99,10 +112,13 @@ class ApplicationTerminal(
         self,
         session_id: SessionId,
         activity_width_percent: int,
+        anchor_window_id: str | None = None,
     ) -> TerminalResult:
         if self.session_panes_are_open(session_id):
             return self._close_session_panes(session_id, clear_tab=False)
-        anchor_window_id = self.current_window() or self.window_for_session(session_id)
+        anchor_window_id = (
+            anchor_window_id or self.current_window() or self.window_for_session(session_id)
+        )
         if anchor_window_id is None:
             return TerminalResult(False, "session has no terminal window")
         request = SessionPaneRequest(session_id, anchor_window_id, activity_width_percent)
@@ -144,7 +160,7 @@ class ApplicationTerminal(
     def open_pending_session_panes(self, request: SessionPaneRequest) -> TerminalResult:
         if not pending_session.is_pending(request.session_id):
             raise ValueError("pending session panes require a pending identity")
-        if self.hosting_session(request.session_id) is not None:
+        if self._hosting_session(request.session_id, request.anchor_window_id) is not None:
             return TerminalResult(True)
         return self._open_session_panes(request, pending=True)
 

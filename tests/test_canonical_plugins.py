@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 import sys
 from decimal import Decimal
 from dataclasses import replace
@@ -14,6 +15,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.bootstrap import build_application
+from app import pane_commands
 from app import terminal_panes
 from app import pending_session
 from app.plugins import installed_plugins
@@ -1507,41 +1509,53 @@ def test_application_terminal_resolves_the_active_tab_without_window_environment
     assert ApplicationTerminal().current_session() == SessionId("session-one")
 
 
-def test_pane_keybinding_uses_the_canonical_terminal_service(monkeypatch):
+def test_pane_keybinding_ships_only_its_environment_to_the_daemon(monkeypatch):
+    monkeypatch.setenv("KITTY_WINDOW_ID", "77")
+    posted = []
+
+    def post_json(path, body):
+        posted.append((path, body))
+        return 200, {"handled": True, "succeeded": True, "reason": None}
+
+    monkeypatch.setattr("app.daemon_client.post_json", post_json)
+
+    assert terminal_panes.main(["toggle"]) == 0
+    assert terminal_panes.main(["grow", "9"]) == 0
+    assert terminal_panes.main(["setpct", "75"]) == 0
+
+    assert [path for path, _body in posted] == ["/api/terminal/panes"] * 3
+    toggle_body, grow_body, setpct_body = (body for _path, body in posted)
+    assert toggle_body == {
+        "command": "toggle",
+        "window_id": "77",
+        "working_directory": os.getcwd(),
+    }
+    assert grow_body["columns"] == 9
+    assert setpct_body["percent"] == 75
+
+
+def test_pane_keybinding_reports_a_daemon_refusal(monkeypatch):
+    monkeypatch.setattr(
+        "app.daemon_client.post_json",
+        lambda path, body: (409, {"handled": True, "succeeded": False, "reason": "no pane"}),
+    )
+    assert terminal_panes.main(["toggle"]) == 1
+
+
+def test_pane_command_service_executes_gestures_for_the_windows_session(monkeypatch):
     class Terminal:
         def __init__(self):
             self.toggles = []
+            self.resizes = []
+            self.widths = []
 
-        def current_session(self):
+        def session_for_window(self, window_id):
+            assert window_id == "77"
             return SessionId("session-one")
 
         def toggle_session_panes(self, session_id, width_percent):
             self.toggles.append((session_id, width_percent))
             return TerminalResult(True)
-
-    terminal = Terminal()
-    monkeypatch.setattr(
-        "app.bootstrap.build_default_application",
-        lambda: SimpleNamespace(terminal=terminal),
-    )
-    monkeypatch.setattr(
-        terminal_panes.pane_preferences,
-        "width_percent",
-        lambda directory: 31,
-    )
-
-    assert terminal_panes.main(["toggle"]) == 0
-    assert terminal.toggles == [(SessionId("session-one"), 31)]
-
-
-def test_pane_resize_keybindings_use_the_canonical_terminal_service(monkeypatch):
-    class Terminal:
-        def __init__(self):
-            self.resizes = []
-            self.widths = []
-
-        def current_session(self):
-            return SessionId("session-one")
 
         def resize_activity_pane(self, session_id, columns):
             self.resizes.append((session_id, columns))
@@ -1556,27 +1570,30 @@ def test_pane_resize_keybindings_use_the_canonical_terminal_service(monkeypatch)
 
     terminal = Terminal()
     remembered = []
+    monkeypatch.setattr(pane_commands.pane_preferences, "width_percent", lambda directory: 31)
+    monkeypatch.setattr(pane_commands.pane_preferences, "resize_columns", lambda: 7)
     monkeypatch.setattr(
-        "app.bootstrap.build_default_application",
-        lambda: SimpleNamespace(terminal=terminal),
-    )
-    monkeypatch.setattr(terminal_panes.pane_preferences, "resize_columns", lambda: 7)
-    monkeypatch.setattr(
-        terminal_panes.pane_preferences,
+        pane_commands.pane_preferences,
         "configured_width_percent",
         lambda: 31,
     )
     monkeypatch.setattr(
-        terminal_panes.pane_preferences,
+        pane_commands.pane_preferences,
         "remember_width",
         lambda directory, width_percent: remembered.append((directory, width_percent)),
     )
+    service = pane_commands.PaneCommandService(terminal)
 
-    assert terminal_panes.main(["grow"]) == 0
-    assert terminal_panes.main(["shrink"]) == 0
-    assert terminal_panes.main(["reset"]) == 0
-    assert terminal_panes.main(["setpct", "75"]) == 0
+    outcomes = [
+        service.execute("toggle", "77", "/project"),
+        service.execute("grow", "77", "/project"),
+        service.execute("shrink", "77", "/project"),
+        service.execute("reset", "77", "/project"),
+        service.execute("setpct", "77", "/project", percent=75),
+    ]
 
+    assert all(outcome.handled and outcome.succeeded for outcome in outcomes)
+    assert terminal.toggles == [(SessionId("session-one"), 31)]
     assert terminal.resizes == [
         (SessionId("session-one"), 7),
         (SessionId("session-one"), -7),
@@ -1586,6 +1603,17 @@ def test_pane_resize_keybindings_use_the_canonical_terminal_service(monkeypatch)
         (SessionId("session-one"), 75),
     ]
     assert [width_percent for _directory, width_percent in remembered] == [25, 25, 31, 75]
+
+
+def test_pane_command_in_a_tab_without_a_session_is_quietly_unhandled():
+    class Terminal:
+        def session_for_window(self, window_id):
+            return None
+
+    outcome = pane_commands.PaneCommandService(Terminal()).execute(
+        "toggle", "", "/project"
+    )
+    assert outcome == pane_commands.PaneCommandOutcome(False, True)
 
 
 def test_claude_hook_and_child_transcript_deduplicate_actor_start():
@@ -3717,3 +3745,25 @@ def test_claude_prompt_quoting_a_command_envelope_stays_a_prompt():
         assert message.role == "user"
         assert message.content.text == content
         assert not payloads(translation, ModelChanged)
+
+
+def test_daemon_client_decodes_sse_frames_and_surfaces_ticks():
+    from app import daemon_client
+
+    response = iter(
+        [
+            b": tick\n",
+            b"event: session\n",
+            b'data: {"session_id": "session-one"}\n',
+            b"\n",
+            b"event: frame\n",
+            b'data: {"ansi": "x"}\n',
+            b"\n",
+        ]
+    )
+
+    assert list(daemon_client.sse_events(response)) == [
+        ("tick", None),
+        ("session", '{"session_id": "session-one"}'),
+        ("frame", '{"ansi": "x"}'),
+    ]

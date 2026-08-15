@@ -125,7 +125,17 @@ e.g. a screen driver's failed step), `browser-event`, `browser-optimistic-action
 `browser-client-failure` (the frontend telemetry channel — what the browser saw that the
 server cannot), `web-reject` (a control POST bounced by the request guard, `content` names
 the code and why), `web-push`, `notification-route`, `notification-suppressed`,
-`telegram-notify`, plus `observation (...)` failures recorded as `errors`.
+`telegram-notify`, **`pane-command`** (every pane keybinding gesture the daemon
+executed — `{command, window_id, session_id, ok, why}`, written by
+`app/pane_commands.py`; `path` is the keypress's working directory),
+**`terminal-view`** (a mirror click-to-view toggle, `path` = the content
+reference), plus `observation (...)` failures recorded as `errors`.
+
+`streams.kind` values include **`pane-mirror`** / **`pane-scoreboard`** — one row
+per pane SSE connection (the pane processes are thin clients of the daemon;
+`end_reason` ∈ `client-gone` (a closed pane, a resize reconnect) / `error`
+(the render loop threw — its traceback is in `errors` under `pane <kind>
+stream`)).
 
 **Only `control` and the `web-*`/notification rows carry the session in the `session_id`
 COLUMN.** The `browser-*` telemetry rows leave it empty and bury it in the JSON, so a
@@ -330,6 +340,34 @@ message still sitting in the box predates that verification.
 Note the tunnel is a distinct failure domain from the bind: reproduce against
 `http://127.0.0.1:8377` before blaming the application. A request that is 200 locally and
 4xx/3xx through `https://baqylau.zhambyl.top` is a proxy concern, not an app bug.
+
+### A kitty pane is frozen, blank, or stuck on its startup banner
+
+The pane processes are thin SSE clients of the daemon — they render nothing
+themselves (`app/pane_streams.py` renders; `app/daemon_client.py` copies bytes).
+So a broken pane is one of three shapes, each with its own rows:
+
+- **The daemon is down or restarting.** No `streams` row with kind
+  `pane-mirror`/`pane-scoreboard` opened recently for the session, and the
+  `dashboard` stream row itself has ended. The pane retries every couple of
+  seconds and recovers on its own the moment `serve()` is back; this is the
+  designed single point of failure, not a pane bug.
+- **The stream keeps dying server-side.** `streams` rows for the session with
+  `end_reason='error'` accumulating at the client's reconnect cadence — read the
+  paired `errors` rows (`func` = `pane mirror stream` / `pane scoreboard
+  stream`). The render loop threw on the same input each retry; the traceback
+  names the projection or presenter at fault.
+- **The stream is open but silent.** A live `pane-*` `streams` row (no
+  `ended_at`) yet a stale pane means frames are flowing but empty — the shared
+  mirror model advances only when the canonical cursor moves, so this is the
+  frozen-feed headline shape above (interpreter dead), seen through a pane.
+  Check the backlog before suspecting the pane plumbing.
+
+A pane stuck on `⬡ starting session…` (scoreboard) or the mirror header under a
+`--pending` identity means the server never resolved the binding: check
+`session_harness` for the registered session and the pending binding file under
+`<data>/pending-sessions/` — the wrapper binds it in
+`adopt_pending_session_panes`; no file means the wrapper never adopted.
 
 ### Usage / cost numbers look wrong
 

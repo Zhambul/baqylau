@@ -15,6 +15,11 @@
   protocol baqylau-view
   action launch --type=background python3 /path/to/repo/bin/baqylau-view.py ${URL}
   ```
+  Both handlers (and the `kitty_mod+m` pane keymap entries, which launch
+  `app/terminal_panes.py` the same way) are thin HTTP clients of the running
+  dashboard daemon — with the daemon down they print its "not reachable"
+  message instead of acting (docs/recorder-interpreter.md › *Panes are rendered
+  in the daemon*).
 - **`~/.claude/settings.json`** — a `hooks` block. Every supported hook event
   points directly at `plugins/claude_code/canonical_hook.py`. Claude-specific
   intake and translation never leave that plugin folder:

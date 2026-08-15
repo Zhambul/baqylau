@@ -1,4 +1,9 @@
-"""Harness-neutral terminal pane commands."""
+"""Harness-neutral terminal pane commands — the keybinding's thin client.
+
+A kitty keymap launches this per keypress. It observes the two facts only this
+process can (the window the keypress landed in, the working directory), ships
+them to the daemon's `/api/terminal/panes`, and prints any refusal. The
+gesture itself runs in the daemon (`app/pane_commands.py`)."""
 
 from __future__ import annotations
 
@@ -8,21 +13,23 @@ import sys
 if __package__ in (None, ""):
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app import pane_preferences
-
 COMMANDS = frozenset({"toggle", "grow", "shrink", "reset", "setpct"})
 
 
-def _remember_current_width(terminal, session_id) -> None:
-    geometry = terminal.activity_pane_geometry(session_id)
-    if geometry is None:
-        return
-    current_columns, total_columns = geometry
-    if total_columns:
-        pane_preferences.remember_width(
-            os.getcwd(),
-            round(100 * current_columns / total_columns),
-        )
+def request_body(arguments: list[str]) -> dict:
+    command = arguments[0]
+    body = {
+        "command": command,
+        "window_id": os.environ.get("KITTY_WINDOW_ID", ""),
+        "working_directory": os.getcwd(),
+    }
+    if command in ("grow", "shrink") and len(arguments) > 1:
+        body["columns"] = int(arguments[1])
+    if command == "setpct":
+        if len(arguments) != 2:
+            raise ValueError("setpct requires one percentage")
+        body["percent"] = int(arguments[1])
+    return body
 
 
 def main(arguments: list[str] | None = None) -> int:
@@ -34,46 +41,15 @@ def main(arguments: list[str] | None = None) -> int:
         )
         return 2
 
-    from app.bootstrap import build_default_application
+    from app import daemon_client
 
-    terminal = build_default_application().terminal
-    session_id = terminal.current_session()
-    if session_id is None:
-        return 0
-
-    command = arguments[0]
-    if command == "toggle":
-        result = terminal.toggle_session_panes(
-            session_id,
-            pane_preferences.width_percent(os.getcwd()),
+    status, payload = daemon_client.post_json("/api/terminal/panes", request_body(arguments))
+    if status != 200:
+        print(
+            payload.get("reason") or payload.get("error") or "terminal pane command failed",
+            file=sys.stderr,
         )
-    elif command in ("grow", "shrink"):
-        columns = (
-            int(arguments[1])
-            if len(arguments) > 1
-            else pane_preferences.resize_columns()
-        )
-        if columns <= 0:
-            raise ValueError("pane resize columns must be positive")
-        result = terminal.resize_activity_pane(
-            session_id,
-            columns if command == "grow" else -columns,
-        )
-        if result.succeeded:
-            _remember_current_width(terminal, session_id)
-    else:
-        if command == "setpct":
-            if len(arguments) != 2:
-                raise ValueError("setpct requires one percentage")
-            width_percent = int(arguments[1])
-        else:
-            width_percent = pane_preferences.configured_width_percent()
-        result = terminal.set_activity_pane_width(session_id, width_percent)
-        if result.succeeded:
-            pane_preferences.remember_width(os.getcwd(), width_percent)
-
-    if not result.succeeded:
-        raise RuntimeError(result.reason or "terminal pane command failed")
+        return 1
     return 0
 
 

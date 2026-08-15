@@ -233,6 +233,33 @@ def test_recorder_entries_never_build_the_application():
     assert violations == []
 
 
+def test_the_application_graph_is_built_only_by_the_daemon():
+    """One process interprets: the dashboard daemon builds the application
+    graph once at startup, and every other process is a recorder or a thin
+    HTTP/SSE client of the daemon. `app/evidence_cli.py` is the ONE sanctioned
+    direct reader outside it — the forensic CLI must work when the daemon is
+    the thing being debugged (it opens the store read-only, it never builds
+    the graph)."""
+    builders = ("build_default_application", "build_application(")
+    allowed = {
+        "app/bootstrap.py",
+        "dashboard/http/handler.py",
+    }
+    violations = []
+    for directory in ("app", "bin", "core", "dashboard", "frontends", "plugins", "runtime", "terminal"):
+        for path in sorted((ROOT / directory).rglob("*.py")):
+            if "__pycache__" in path.parts:
+                continue
+            relative = path.relative_to(ROOT).as_posix()
+            if relative in allowed:
+                continue
+            source = path.read_text(encoding="utf-8")
+            for builder in builders:
+                if builder in source:
+                    violations.append(f"{relative} contains {builder}")
+    assert violations == []
+
+
 def test_claude_foreground_hook_has_no_legacy_drawing_or_state_dependency():
     implementation_files = (
         ROOT / "plugins" / "claude_code" / "cmd_pre.py",

@@ -890,3 +890,240 @@ def test_a_broken_audit_never_takes_down_the_gesture(monkeypatch):
 
     outcome = service.execute(SelectModel(SESSION_ID, "request-one", model_id="x"))
     assert outcome.status == "acknowledged"
+
+
+# --- terminal pane clients ------------------------------------------------------
+#
+# The pane processes, the keybinding and the click handlers are thin HTTP/SSE
+# clients; these routes are the whole surface they stand on.
+
+
+def _read_sse_event(response):
+    """One SSE event as (event, data); server tick comments are skipped."""
+    event = None
+    data = None
+    while True:
+        line = response.readline().decode().rstrip("\n")
+        if line.startswith(":"):
+            continue
+        if not line:
+            if event is not None:
+                return event, data
+            continue
+        if line.startswith("event: "):
+            event = line.removeprefix("event: ")
+        elif line.startswith("data: "):
+            data = json.loads(line.removeprefix("data: "))
+
+
+def _record_agent_message(application):
+    """The mirror hides the lead actor's own messages (the TUI already shows
+    them), so pane assertions need a child agent's message."""
+    event = CanonicalEvent(
+        event_id=CanonicalEventId("agent-message"),
+        session_id=SESSION_ID,
+        actor_id=ActorId("actor-two"),
+        turn_id=None,
+        parent_actor_id=ACTOR_ID,
+        harness="codex",
+        occurred_at=11.0,
+        payload=MessageCreated(
+            MessageId("message-two"),
+            "assistant",
+            TextContent("hello from the agent"),
+            "final",
+            None,
+        ),
+    )
+    _record(
+        application,
+        RawEvent(
+            RawEventId("raw-agent"),
+            "codex",
+            "fixture",
+            "fixture",
+            "9",
+            SESSION_ID,
+            ActorId("actor-two"),
+            ACTOR_ID,
+            110.0,
+            "json",
+            b"{}",
+        ),
+        "1",
+        TranslationResult((event,), "translated"),
+    )
+
+
+def test_pane_mirror_stream_announces_the_session_and_streams_frames(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("BAQYLAU_DATA_DIR", str(tmp_path / "data"))
+    application = _application(tmp_path)
+    _record_agent_message(application)
+    server, thread = _server(application)
+    connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=2)
+    try:
+        connection.request("GET", "/api/sessions/session-one/panes/mirror/stream?width=100")
+        response = connection.getresponse()
+        assert response.status == 200
+        assert _read_sse_event(response) == ("session", {"session_id": "session-one"})
+        event, frame = _read_sse_event(response)
+        assert event == "frame"
+        assert frame["ansi"].startswith("\033[H\033[2J\033[3J")
+        assert "hello from the agent" in frame["ansi"]
+    finally:
+        connection.close()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_pane_scoreboard_stream_renders_the_session_summary(tmp_path, monkeypatch):
+    monkeypatch.setenv("BAQYLAU_DATA_DIR", str(tmp_path / "data"))
+    server, thread = _server(_application(tmp_path))
+    connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=2)
+    try:
+        connection.request(
+            "GET", "/api/sessions/session-one/panes/scoreboard/stream?width=100"
+        )
+        response = connection.getresponse()
+        assert response.status == 200
+        assert _read_sse_event(response) == ("session", {"session_id": "session-one"})
+        event, frame = _read_sse_event(response)
+        assert event == "frame"
+        assert frame["ansi"].startswith("\033[H\033[2J\033[3J")
+    finally:
+        connection.close()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_pane_stream_resolves_a_pending_identity_server_side(tmp_path, monkeypatch):
+    monkeypatch.setenv("BAQYLAU_DATA_DIR", str(tmp_path / "data"))
+    from app import pending_session
+
+    pending_id = pending_session.identity(4242)
+    pending_session.bind(pending_id, SESSION_ID)
+    server, thread = _server(_application(tmp_path))
+    connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=2)
+    try:
+        connection.request(
+            "GET", f"/api/sessions/{pending_id}/panes/mirror/stream?width=80"
+        )
+        response = connection.getresponse()
+        assert _read_sse_event(response) == ("session", {"session_id": "session-one"})
+        event, _frame = _read_sse_event(response)
+        assert event == "frame"
+    finally:
+        connection.close()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_pane_stream_rejects_a_missing_width_before_streaming(tmp_path):
+    server, thread = _server(_application(tmp_path))
+    try:
+        status, _content_type, body = _get(
+            server, "/api/sessions/session-one/panes/mirror/stream"
+        )
+        assert status == 400
+        assert "width" in json.loads(body)["error"]
+        status, _content_type, _body = _get(
+            server, "/api/sessions/session-one/panes/elsewhere/stream?width=80"
+        )
+        assert status == 404
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_pane_command_route_carries_the_keypress_environment(tmp_path):
+    from app.pane_commands import PaneCommandOutcome
+
+    class PaneCommands:
+        def __init__(self):
+            self.calls = []
+            self.outcome = PaneCommandOutcome(True, True)
+
+        def execute(self, command, window_id, working_directory, columns=None, percent=None):
+            self.calls.append((command, window_id, working_directory, columns, percent))
+            return self.outcome
+
+    pane_commands = PaneCommands()
+    application = replace(_application(tmp_path), pane_commands=pane_commands)
+    server, thread = _server(application)
+    try:
+        status, body = _post(
+            server,
+            "/api/terminal/panes",
+            {"command": "setpct", "window_id": "77", "working_directory": "/work", "percent": 40},
+        )
+        assert status == 200
+        assert json.loads(body) == {"handled": True, "succeeded": True, "reason": None}
+        assert pane_commands.calls == [("setpct", "77", "/work", None, 40)]
+
+        pane_commands.outcome = PaneCommandOutcome(True, False, "no pane")
+        status, body = _post(
+            server,
+            "/api/terminal/panes",
+            {"command": "toggle", "working_directory": "/work"},
+        )
+        assert status == 409
+        assert json.loads(body)["reason"] == "no pane"
+
+        pane_commands.outcome = PaneCommandOutcome(False, True)
+        status, body = _post(
+            server,
+            "/api/terminal/panes",
+            {"command": "toggle", "working_directory": "/work"},
+        )
+        assert status == 200
+        assert json.loads(body)["handled"] is False
+
+        status, _body = _post(server, "/api/terminal/panes", {"command": "toggle"})
+        assert status == 400
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_terminal_view_route_owns_the_open_closed_state(tmp_path, monkeypatch):
+    monkeypatch.setenv("BAQYLAU_DATA_DIR", str(tmp_path / "data"))
+    from app import terminal_views
+
+    server, thread = _server(_application(tmp_path))
+    try:
+        status, body = _post(
+            server, "/api/terminal/views", {"content_reference": "event-one:field"}
+        )
+        assert (status, json.loads(body)) == (200, {"opened": True})
+        assert terminal_views.opened() == frozenset({"event-one:field"})
+        status, body = _post(
+            server, "/api/terminal/views", {"content_reference": "event-one:field"}
+        )
+        assert (status, json.loads(body)) == (200, {"opened": False})
+        assert terminal_views.opened() == frozenset()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_mirror_frames_share_one_model_across_client_widths(tmp_path, monkeypatch):
+    monkeypatch.setenv("BAQYLAU_DATA_DIR", str(tmp_path / "data"))
+    application = _application(tmp_path)
+    _record_agent_message(application)
+
+    version, wide = application.pane_streams.mirror_frame(SESSION_ID, 120, None)
+    assert "hello from the agent" in wide
+    assert application.pane_streams.mirror_frame(SESSION_ID, 120, version) is None
+
+    narrow = application.pane_streams.mirror_frame(SESSION_ID, 40, None)
+    assert narrow is not None and narrow[0] == version
+    assert "hello from the agent" in narrow[1]
+    assert len(application.pane_streams._models) == 1

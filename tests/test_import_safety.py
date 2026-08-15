@@ -10,8 +10,10 @@ from conftest import REPOSITORY_ROOT
 
 CANONICAL_MODULES = (
     "app.plugins",
+    "app.daemon_client",
     "app.terminal_process",
     "app.scoreboard_process",
+    "app.terminal_panes",
     "dashboard.server",
     "plugins.claude_code.plugin",
     "plugins.claude_code.canonical_hook",

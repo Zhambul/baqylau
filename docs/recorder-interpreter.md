@@ -48,8 +48,47 @@ INTERPRETER — one process; heartbeat 0.25s ─▶ Interpreter.tick()  (app/int
 
               translation_records · canonical_events · canonical_provenance
 ──────────────────────────────────────────────────────────────────────
-READERS        projections / SSE / dashboard / terminal ◀─ CanonicalEventStore
+READERS        projections / SSE / dashboard ◀─ CanonicalEventStore
+               (all inside the daemon — the ONE application graph)
+──────────────────────────────────────────────────────────────────────
+CLIENTS — every process outside the daemon that is not a recorder is a thin
+HTTP/SSE client of it (app/daemon_client.py); none builds the graph or opens
+the store (test_the_application_graph_is_built_only_by_the_daemon)
+──────────────────────────────────────────────────────────────────────
+ mirror pane      app/terminal_process.py   ◀─ SSE /api/sessions/<id>/panes/mirror/stream
+ scoreboard pane  app/scoreboard_process.py ◀─ SSE /api/sessions/<id>/panes/scoreboard/stream
+ pane keybinding  app/terminal_panes.py     ─▶ POST /api/terminal/panes {command, window_id, cwd}
+ view click       bin/baqylau-view.py        ─▶ POST /api/terminal/views {content_reference}
+ copy click       bin/baqylau-content.py     ◀─ GET  /api/content/<reference>
+ (bin/baqylau-audit.py is the ONE sanctioned direct reader: the forensic CLI
+  must work when the daemon is the thing being debugged)
 ```
+
+## Panes are rendered in the daemon
+
+The pane processes used to each build the whole application graph and poll the
+store directly. That was three more constructions of the graph per session and
+a second family of store readers to keep correct. Now the daemon renders
+(`app/pane_streams.py`) and the pane process copies bytes:
+
+- **One shared block model per session** feeds every mirror connection. The
+  block model is width-independent (wrapping happens at render time), so each
+  client renders at its own width from the same model; whichever connection
+  polls first advances it under the model's lock — a single writer at a time
+  with no feeder thread to manage. Tab painting rides the same advance, so it
+  happens once per state change regardless of how many clients watch.
+- **A pane resize is a reconnect** at the new width; the server re-renders the
+  warm model, so no history is replayed. Idle server ticks (SSE comments,
+  every 0.25s) are the client's resize/liveness clock.
+- **A pending identity is resolved server-side**: the stream holds until the
+  wrapper binds it, then announces the session on a `session` event; the client
+  reconnects under the real identity from then on.
+- **The daemon is a single point of failure for presentation, by decision.**
+  Canonical facts were only ever produced by the daemon's interpreter, so a
+  down daemon always meant a frozen pane; the panes now say "reconnecting"
+  instead of silently showing stale history, and recover on their own
+  (RECONNECT_DELAY_SECONDS). Evidence capture is unaffected — recorders never
+  went through the daemon and still must not.
 
 ## The five storage/flow classes
 
@@ -72,6 +111,14 @@ class initializes through it.
   full bootstrap import, and any bug anywhere in the graph could lose evidence.
   Now a hook imports its own parsing module plus `RawEventRecorder` (~100 lines of
   dependency), and evidence recording cannot be broken by dashboard code.
+- **The presenters built the graph too** — each pane process, the keybinding
+  helper and the click handlers all called `build_default_application` (five
+  more construction sites, one per keypress for the keybinding). Interpreting
+  is one process's job, so they became thin HTTP/SSE clients of the daemon
+  (see *Panes are rendered in the daemon*); the keybinding got FASTER (one
+  localhost round-trip instead of importing the whole graph per keypress) and
+  its refusals became visible (a 4xx body and a `pane-command` audit row where
+  `launch --type=background` used to discard a traceback).
 - **Hooks used to translate** (with whatever code was on disk at that moment)
   while the server translated pulled events with the code it imported at startup —
   two translator versions running concurrently. Now translation happens only in the

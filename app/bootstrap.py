@@ -14,6 +14,8 @@ from app.host import ApplicationHost
 from app.insights import ApplicationInsightsService
 from app.interpreter import Interpreter
 from app.memory import MemoryService
+from app.pane_commands import PaneCommandService
+from app.pane_streams import PaneStreamService
 from app.plugins import installed_plugins
 from app.repository import RepositoryQueries
 from app.resume import ResumableSessionService
@@ -69,6 +71,8 @@ class CanonicalApplication:
     catalog: HarnessCatalogService
     terminal_input: TerminalInputService
     terminal: ApplicationTerminal
+    pane_commands: PaneCommandService
+    pane_streams: PaneStreamService
     interpreter: Interpreter
     diagnostics: OperationalDiagnostics
     insights: ApplicationInsightsService
@@ -110,6 +114,7 @@ def build_application(
         canonical_store, queries, terminal_input, repositories
     )
     dashboard_notification_state = DashboardNotificationState()
+    content = CanonicalContentService(canonical_store, queries)
     memory = MemoryService(sessions, queries)
     host = ApplicationHost()
     from core import audit
@@ -128,7 +133,7 @@ def build_application(
         dashboard_stream=DashboardStreamService(
             canonical_store, queries, terminal_input, repositories
         ),
-        content=CanonicalContentService(canonical_store, queries),
+        content=content,
         dashboard_notification_state=dashboard_notification_state,
         usage_state=usage_state,
         global_application=GlobalApplicationService(
@@ -148,6 +153,14 @@ def build_application(
         catalog=catalog,
         terminal_input=terminal_input,
         terminal=terminal,
+        pane_commands=PaneCommandService(terminal),
+        pane_streams=PaneStreamService(
+            canonical_store,
+            queries,
+            sessions,
+            content,
+            terminal,
+        ),
         interpreter=Interpreter(
             sessions,
             registry,

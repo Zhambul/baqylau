@@ -6,6 +6,8 @@ import json
 import time
 from urllib.parse import parse_qs
 
+from core import audit as A
+from app import pending_session, terminal_views
 from app.bootstrap import CanonicalApplication
 from app.telemetry import (
     BrowserEvent,
@@ -44,6 +46,7 @@ from dashboard.diff import source_html, unified_diff_html
 from domain.ids import ActorId, AttentionId, MessageId, SessionId
 from domain.values import StructuredContent
 from runtime.projections import ActivityScope
+from runtime.sessions import UnknownSession
 
 STREAM_POLL_SECONDS = 0.25
 STREAM_HEARTBEAT_SECONDS = 15.0
@@ -131,6 +134,18 @@ class _CanonicalMixin:
                 return self._catalog(api[1], parse_qs(url.query, keep_blank_values=True))
             if len(api) == 2 and api[0] == "content":
                 return self._content(api[1], parse_qs(url.query, keep_blank_values=True))
+            # the pane streams route BEFORE the generic session resources: a
+            # pane may connect under a still-pending identity, which no session
+            # registry lookup can resolve yet.
+            if (
+                len(api) == 5
+                and api[0] == "sessions"
+                and api[2] == "panes"
+                and api[4] == "stream"
+            ):
+                return self._pane_stream(
+                    api[1], api[3], parse_qs(url.query, keep_blank_values=True)
+                )
             if len(api) >= 2 and api[0] == "sessions":
                 return self._session_get(SessionId(api[1]), api[2:], url.query)
         except (KeyError, ValueError) as error:
@@ -141,6 +156,10 @@ class _CanonicalMixin:
         try:
             if parts == ["api", "sessions"]:
                 return self._launch()
+            if parts == ["api", "terminal", "panes"]:
+                return self._pane_command()
+            if parts == ["api", "terminal", "views"]:
+                return self._toggle_terminal_view()
             if parts == ["api", "application", "notifications"]:
                 return self._set_global_notifications()
             if parts == ["api", "application", "new-session-preferences"]:
@@ -300,6 +319,123 @@ class _CanonicalMixin:
                     return
                 heartbeat_at = now
             time.sleep(STREAM_POLL_SECONDS)
+
+    def _pane_stream(self, session_text: str, kind: str, query: dict[str, list[str]]):
+        """One terminal pane's frame stream. The pane process is a byte-copying
+        client: everything it paints arrives as `frame` events rendered here at
+        the client's width; idle ticks are SSE comments the client uses as its
+        resize/liveness clock (a resize is a reconnect at the new width)."""
+        if kind not in ("mirror", "scoreboard"):
+            return self._json({"error": "not found"}, 404)
+        width = _integer(query, "width")
+        if width is None or width <= 0:
+            raise ValueError("width must be positive")
+        session_id = SessionId(session_text)
+        self._sse_start()
+        stream_id = A.stream_start(str(session_id), f"pane-{kind}", src_path=self.path[:200])
+        try:
+            resolved = self._pane_session(session_id)
+            if resolved is None or not self._wait_for_registration(resolved):
+                A.stream_end(stream_id, "client-gone")
+                return
+            if not self._sse("session", {"session_id": str(resolved)}):
+                A.stream_end(stream_id, "client-gone")
+                return
+            if kind == "mirror":
+                self._mirror_stream(resolved, width)
+            else:
+                self._scoreboard_stream(resolved, width)
+            A.stream_end(stream_id, "client-gone")
+        except Exception:
+            A.error(str(session_id), f"pane {kind} stream", {"path": self.path[:200]})
+            A.stream_end(stream_id, "error")
+            self._sse("error", {"error": "pane stream failed"})
+
+    def _pane_session(self, session_id: SessionId) -> SessionId | None:
+        """Resolve a pending pane identity to the session it becomes; None when
+        the client disconnects while waiting."""
+        while pending_session.is_pending(session_id):
+            bound = pending_session.bound(session_id)
+            if bound is not None:
+                return bound
+            if not self._sse_beat():
+                return None
+            time.sleep(STREAM_POLL_SECONDS)
+        return session_id
+
+    def _wait_for_registration(self, session_id: SessionId) -> bool:
+        """A freshly-bound pending session can beat its own registration by a
+        tick; hold the stream open until the registry knows it. False when the
+        client disconnects while waiting."""
+        while True:
+            try:
+                self._application().sessions.load(session_id)
+                return True
+            except UnknownSession:
+                if not self._sse_beat():
+                    return False
+                time.sleep(STREAM_POLL_SECONDS)
+
+    def _mirror_stream(self, session_id: SessionId, width: int) -> None:
+        application = self._application()
+        rendered_version = None
+        while True:
+            frame = application.pane_streams.mirror_frame(
+                session_id, width, rendered_version
+            )
+            if frame is None:
+                if not self._sse_beat():
+                    return
+            else:
+                rendered_version, ansi = frame
+                if not self._sse("frame", {"ansi": ansi}):
+                    return
+            time.sleep(STREAM_POLL_SECONDS)
+
+    def _scoreboard_stream(self, session_id: SessionId, width: int) -> None:
+        stream = self._application().pane_streams.scoreboard_stream(session_id, width)
+        while True:
+            ansi = stream.frame()
+            if ansi is None:
+                if not self._sse_beat():
+                    return
+            elif not self._sse("frame", {"ansi": ansi}):
+                return
+            time.sleep(STREAM_POLL_SECONDS)
+
+    def _pane_command(self):
+        body = self._post_guard()
+        if body is None:
+            return None
+        command = _required_text(body, "command")
+        working_directory = _required_text(body, "working_directory")
+        window_id = body.get("window_id")
+        if window_id is not None and not isinstance(window_id, str):
+            raise ValueError("window_id must be a string")
+        outcome = self._application().pane_commands.execute(
+            command,
+            window_id,
+            working_directory,
+            columns=self._optional_integer(body, "columns"),
+            percent=self._optional_integer(body, "percent"),
+        )
+        return self._json(
+            {
+                "handled": outcome.handled,
+                "succeeded": outcome.succeeded,
+                "reason": outcome.reason,
+            },
+            409 if outcome.handled and not outcome.succeeded else 200,
+        )
+
+    def _toggle_terminal_view(self):
+        body = self._post_guard()
+        if body is None:
+            return None
+        content_reference = _required_text(body, "content_reference")
+        opened = terminal_views.toggle(content_reference)
+        A.state_file("", content_reference, "terminal-view", {"opened": opened})
+        return self._json({"opened": opened})
 
     def _harnesses(self) -> list[dict]:
         rows = []

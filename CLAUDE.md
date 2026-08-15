@@ -67,7 +67,17 @@ every registered unfinished session's sources, translates the untranslated backl
 Recorder processes (hooks, the otel receiver, the wrappers) only append raw events
 and do not depend on it. That split is load-bearing: when the interpreter stops,
 recorders keep flowing, so a session still *looks* alive while nothing is being
-interpreted. Hence the interpreter contains failures per-session, per-source and
+interpreted.
+
+**The daemon builds the application graph exactly once** (`serve()` in
+`dashboard/http/handler.py`); every other process is a recorder or a thin
+HTTP/SSE client of the daemon (`app/daemon_client.py`) — the pane processes
+stream rendered frames, the keybinding and click handlers POST gestures
+(enforced by `test_the_application_graph_is_built_only_by_the_daemon`;
+`bin/baqylau-audit.py` is the one sanctioned direct reader, so forensics work
+when the daemon is the thing being debugged). Pane rendering itself lives in
+`app/pane_streams.py`: one shared, width-independent block model per session,
+rendered per client width. Hence the interpreter contains failures per-session, per-source and
 per-raw-event and audits every swallow — never let an exception escape it, and
 never leave a raw event without a translation verdict (an unverdicted row wedges
 the ordered backlog).
