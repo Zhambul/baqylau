@@ -557,12 +557,56 @@ class PlanChoicesResult(ControlResult):
 
 <p><code>RewindResult.degraded</code> is worth pausing on. Rewinding a conversation can partly succeed — the messages come back but the files do not. That is neither "done" nor "failed", so it is reported as done <em>with a flag</em>, rather than being rounded to whichever is closer.</p>
 
-<h4>The controller itself is not a Protocol</h4>
-<span class="file">contracts/harness.py:377</span>
-<pre><code>ControlHandler: TypeAlias = Callable[[ControlRequest, ControlContext], ControlOutcome]
+<h4>ControlHandler — why it is a Protocol, and why the handlers are classes</h4>
+<span class="file">contracts/harness.py:372</span>
+<pre><code>class ControlHandler(Protocol):
+    def __call__(
+        self,
+        request: ControlRequest,
+        context: ControlContext,
+    ) -&gt; ControlOutcome: ...</code></pre>
 
+<p>This was written as a <code>Callable[[ControlRequest, ControlContext], ControlOutcome]</code>
+— the ordinary way to say "any function of this shape". It changed for one reason:
+<b>a <code>Callable</code> type carries the parameter TYPES but not their NAMES.</b>
+A handler could be written <code>def compact(req, ctx)</code> and nothing would object,
+which is the same drift that let one harness's lifecycle take <code>recognized_session</code>
+where the contract said <code>session</code>. Spelling it as <code>__call__</code> makes the
+names part of the written contract.</p>
 
-@dataclass(frozen=True)
+<p>The handlers themselves changed too. They were plain functions, and
+<b>a function subclasses nothing</b> — so it can never DECLARE the Protocol it
+implements, and the declaration rule this codebase enforces could not reach them.
+They are now classes:</p>
+
+<span class="file">plugins/codex/controller.py</span>
+<pre><code>class CompactHandler(ControlHandler):
+    def __call__(self, request: ControlRequest, context: ControlContext) -&gt; ControlResult:
+        ...
+
+controller = HarnessController({
+    "compact": CompactHandler(),
+    ...
+})</code></pre>
+
+<p>Twenty-four of them across the two harnesses, and until this change nothing
+checked their shape at all — the largest unguarded surface in the contract.
+Four ways to break it now fail the build: dropping the base, renaming a
+parameter, registering something that is not a handler, and misspelling a
+control name.</p>
+
+<div class="note">
+<b>Where enforcement actually comes from.</b> This repository runs no type checker
+— <code>make lint</code> is ruff only. So writing <code>ControlHandler</code> as a
+Protocol is documentation on its own; the tests are what make it binding. They
+read the expected signature <em>out of</em> <code>ControlHandler.__call__</code>,
+so the Protocol is the single source of truth rather than a comment the tests
+happen to agree with.
+</div>
+
+<h4>HarnessController is not a Protocol either</h4>
+<span class="file">contracts/harness.py:396</span>
+<pre><code>@dataclass(frozen=True)
 class HarnessController:
     handlers: Mapping[ControlName, ControlHandler]
 
@@ -572,9 +616,10 @@ class HarnessController:
             return ControlResult(request.request_id, "rejected", "unsupported control")
         return handler(request, context)</code></pre>
 
-<p>This is the one place the file provides an implementation rather than a shape, and it is worth noticing why. A plugin supplies a <b>dictionary</b> from verb to function. Supporting a gesture means adding a key; not supporting one means leaving it out, and the "unsupported" answer is written once, here, for everybody.</p>
-
-<p><code>Callable[[A, B], C]</code> is the type of a function taking an <code>A</code> and a <code>B</code> and returning a <code>C</code>. The handlers are plain functions, not classes.</p>
+<p>This is the one place the file provides an implementation rather than a shape,
+and it is worth noticing why. A plugin supplies a <b>dictionary</b> from verb to
+handler. Supporting a gesture means adding a key; not supporting one means
+leaving it out, and the "unsupported" answer is written once, here, for everybody.</p>
 
 <h2 id="launch">9. Launching</h2>
 

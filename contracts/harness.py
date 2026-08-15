@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Callable, ClassVar, Literal, Mapping, Protocol, TypeAlias
+from typing import ClassVar, Literal, Mapping, Protocol, TypeAlias
 
 from contracts.terminal import SessionPaneControl, SessionTerminal, TerminalControl, TerminalScreen
 from domain.events import AttentionRequested, CanonicalEvent, EventPayload
@@ -369,10 +369,27 @@ ControlOutcome: TypeAlias = (
     | MigrationResult
     | PlanChoicesResult
 )
-ControlHandler: TypeAlias = Callable[
-    [ControlRequest, ControlContext],
-    ControlOutcome,
-]
+class ControlHandler(Protocol):
+    """One gesture's implementation, registered in `HarnessController.handlers`.
+
+    A Protocol rather than a `Callable[...]` alias because a Callable type carries
+    only the parameter TYPES, not their names -- and a renamed parameter is real
+    drift here, of exactly the kind that let one harness's lifecycle take
+    `recognized_session` where the contract said `session`. Spelling it as
+    `__call__` makes the names part of the written contract, and gives the
+    handler-signature test one place to read the expected shape from instead of
+    repeating it.
+
+    The implementations are plain functions, which satisfy this structurally. They
+    cannot DECLARE it the way a class does -- a function subclasses nothing -- so
+    the test is the whole of the enforcement, not a backstop to it.
+    """
+
+    def __call__(
+        self,
+        request: ControlRequest,
+        context: ControlContext,
+    ) -> ControlOutcome: ...
 
 
 @dataclass(frozen=True)

@@ -488,3 +488,76 @@ def test_the_protocol_declaration_exemptions_are_all_still_real():
         if _satisfies(members, signature)
     }
     assert sorted(set(PROTOCOL_DECLARATION_EXEMPTIONS) - live) == []
+
+
+# --- Control handlers ---------------------------------------------------------
+#
+# The handlers registered in a HarnessController are CLASSES that declare
+# ControlHandler, so the two tests above already hold their signatures to the
+# Protocol. They were plain functions until this change, and a function
+# subclasses nothing -- so nothing checked their shape at all, which made them
+# the largest unguarded surface in the contract.
+#
+# What is left to check is the WIRING, which no type carries: that every
+# registered value really is such a class, and that every key is a real control
+# name. A typo registers a handler nothing will ever call, in silence.
+
+
+def _control_names() -> set[str]:
+    tree = ast.parse((ROOT / "contracts" / "harness.py").read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AnnAssign) and getattr(node.target, "id", None) == "ControlName":
+            return {
+                element.value
+                for element in ast.walk(node.value)
+                if isinstance(element, ast.Constant) and isinstance(element.value, str)
+            }
+    raise AssertionError("ControlName is missing")
+
+
+def _registered_handlers():
+    """(where, control_name, handler_class_name, declared_bases) per registration."""
+    for path in (ROOT / "plugins").rglob("*.py"):
+        if "__pycache__" in path.parts:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        classes = {
+            node.name: [ast.unparse(base) for base in node.bases]
+            for node in tree.body
+            if isinstance(node, ast.ClassDef)
+        }
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call) and getattr(node.func, "id", None) == "HarnessController"):
+                continue
+            for mapping in node.args:
+                if not isinstance(mapping, ast.Dict):
+                    continue
+                for key, value in zip(mapping.keys, mapping.values):
+                    where = f"{path.relative_to(ROOT)}:{key.lineno}"
+                    name = getattr(getattr(value, "func", None), "id", None)
+                    yield where, key.value, name, classes.get(name)
+
+
+def test_every_registered_control_handler_declares_the_protocol():
+    wrong = []
+    registrations = list(_registered_handlers())
+    for where, control_name, name, bases in registrations:
+        if name is None:
+            wrong.append(f"{where} {control_name!r} is not registered as a handler instance")
+        elif bases is None:
+            wrong.append(f"{where} handler {name!r} is not a class in this module")
+        elif "ControlHandler" not in bases:
+            wrong.append(f"{where} {name} does not declare ControlHandler (bases={bases})")
+    assert wrong == []
+    # a controller that registered nothing would satisfy every assertion above
+    assert len(registrations) > 20
+
+
+def test_every_registered_control_name_is_a_real_one():
+    names = _control_names()
+    unknown = [
+        f"{where} registers unknown control {control_name!r}"
+        for where, control_name, _name, _bases in _registered_handlers()
+        if control_name not in names
+    ]
+    assert unknown == []
