@@ -9,11 +9,26 @@
 # HostControl gestures drive it and the layering rule forbids a plugin importing
 # the dashboard.
 #
-# The picker (verified live, codex-cli 0.144.1):
-#   Step 1  "Select Model"           → 'All models' (browse the full list)
-#   Step 2  "Select Model and Effort" → the numbered model list (gpt-5.6-sol …)
-#   Step 3  "Select Reasoning Level for <model>" → Low/Medium/High/Extra high/
-#                                                   Max/Ultra
+# The picker (verified live, codex-cli 0.147.0):
+#   Step 1  "Select Model and Effort"            → the numbered model list
+#                                                   (gpt-5.6-sol … gpt-5.3-codex-spark)
+#   Step 2  "Select Reasoning Level for <model>" → Low/Medium/High/Extra high +
+#                                                   a "More reasoning…" row
+#   Step 2a "Advanced Reasoning"                 → what that row opens (Max)
+#
+# 0.144.1 opened on a THIRD screen in front of these — a "Select Model" step
+# whose 'All models' row browsed the full list — and this driver waited for it.
+# 0.147.0 removed it, and the wait SUCCEEDED anyway: "Select Model" is a
+# substring of "Select Model and Effort", and the step detector tests
+# `needle in screen`. So the driver matched the model list, believed it was one
+# screen earlier, looked for an 'All models' row that no longer exists, and
+# raised in 379ms with the picker left open on screen (measured, session
+# 01a0038a: `control` audit row, status indeterminate, reason "row: no 'all
+# models' under 'Select Model'"). The lesson is the one docs/styleguide.md
+# already states about screen markers: a detector that is a PREFIX of the next
+# step's cannot fail safe, so the step names here must stay mutually disjoint —
+# "Select Model and Effort" and "Select Reasoning Level" are.
+#
 # Every step's footer is "Press enter to confirm or esc to go back". codex
 # couples the two axes: switching MODEL lands on step 3 at that model's DEFAULT
 # effort, so the ✦ button changes model + accepts the default (codex's own
@@ -26,13 +41,11 @@ from plugins.codex.dialog import (STEP_TIMEOUT_S, _cursor_to, _poll, rows)
 # step headers + the shared footer (disjoint from the ask "to submit" / plan
 # "Implement this plan?" detectors)
 FOOT = "to confirm"
-STEP1 = "Select Model"
-STEP2 = "Select Model and Effort"
-STEP3 = "Select Reasoning Level"
-ADVANCED = "Advanced Reasoning"      # the sub-step Max/Ultra live under
-MORE = "more reasoning"              # the step-3 row that opens ADVANCED
-ALL_MODELS = "all models"            # the step-1 row that opens the full list
-CURRENT = "(current)"                # the step-2 marker on the active model
+MODEL_STEP = "Select Model and Effort"
+LEVEL_STEP = "Select Reasoning Level"
+ADVANCED = "Advanced Reasoning"      # the sub-step Max lives under
+MORE = "more reasoning"              # the level row that opens ADVANCED
+CURRENT = "(current)"                # the model-step marker on the active model
 
 # the ✧ effort tokens the dashboard sends → the on-screen reasoning-level LABEL
 # (matched EXACTLY, not as a substring, so 'high' can't hit 'Extra high'). Also
@@ -44,9 +57,10 @@ CURRENT = "(current)"                # the step-2 marker on the active model
 EFFORT_LABEL = {"low": "Low", "medium": "Medium", "high": "High",
                 "xhigh": "Extra high", "extra_high": "Extra high",
                 "extra-high": "Extra high", "max": "Max", "ultra": "Ultra"}
-# the codex models the ✦ menu offers (label == the picker row + the -m arg).
+# the codex models the ✦ menu offers, in the picker's own order (label == the
+# picker row + the -m arg). Read off 0.147.0's model step.
 MODEL_CHOICES = ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
-                 "gpt-5.5", "gpt-5.4", "gpt-5.4-mini")
+                 "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark")
 EFFORT_CHOICES = ("low", "medium", "high", "xhigh", "max", "ultra")
 
 
@@ -106,18 +120,20 @@ def _pick(fe, win, header, want, sleep):
 
 
 def _pick_level(fe, win, want, sleep, strict=True):
-    """Step 3 (Select Reasoning Level), with the Max/Ultra INDIRECTION some models
-    use: gpt-5.6-terra lists Low/Medium/High/Extra high + a `More reasoning…` row
-    that opens an `Advanced Reasoning` sub-step holding Max/Ultra, while others
-    (gpt-5.6-sol) list all six directly. `want` is the on-screen level LABEL
-    (an EFFORT_LABEL value) or "" to accept the pre-selected default.
+    """The level step, with the INDIRECTION the top level sits behind. Measured
+    on 0.147.0/gpt-5.6-luna: Low / Medium (default) / High / Extra high, plus a
+    `More reasoning…` row opening an `Advanced Reasoning` sub-step holding Max
+    alone — no Ultra row anywhere, though only this one model's list was read, so
+    EFFORT_LABEL keeps its Ultra spelling rather than assume the level is gone
+    everywhere. `want` is the on-screen level LABEL (an EFFORT_LABEL value) or ""
+    to accept the pre-selected default.
 
     `strict` governs a level the CURRENT model does NOT offer (reasoning levels
-    are model-dependent — gpt-5.4 has no Ultra, no `More reasoning…` at all):
+    are model-dependent):
     strict=True (an EXPLICIT ✧ effort) raises; strict=False (a ✦ model switch
     PRESERVING the old level) accepts the new model's DEFAULT instead — a preserve
     must never fail the switch just because the target model can't do that level."""
-    _await(fe, win, STEP3, sleep)
+    _await(fe, win, LEVEL_STEP, sleep)
     if not want:
         fe.send_key(win, "enter")            # accept the model's default level
         return
@@ -136,7 +152,7 @@ def _pick_level(fe, win, want, sleep, strict=True):
             fe.send_key(win, "enter")        # best-effort preserve → its default
             return
         raise CodexModelError("row", "no %r (nor a More-reasoning row) under %r"
-                              % (want, STEP3))
+                              % (want, LEVEL_STEP))
     _goto(fe, win, more["num"], sleep)
     fe.send_key(win, "enter")
     _await(fe, win, ADVANCED, sleep)
@@ -152,17 +168,16 @@ def set_model_effort(fe, win, model="", effort="", sleep=time.sleep):
     """Drive the /model picker. `model` = a codex model id (✦ — changes model,
     accepts that model's DEFAULT effort); `effort` = a token in EFFORT_CHOICES
     (✧ — keeps the CURRENT model, changes only the level). Exactly one is set by
-    a given gesture. Opens the picker itself (paste `/model`), then Step1→'All
-    models'→Step2→model→Step3→level, verified. Returns {"set": True}; raises
-    CodexModelError on any unverified step."""
+    a given gesture. Opens the picker itself (paste `/model`), which lands
+    STRAIGHT on the model step, then model→level, verified. Returns
+    {"set": True}; raises CodexModelError on any unverified step."""
     if not fe.paste_text(win, "/model"):
         raise CodexModelError("open", "/model paste refused")
-    _pick(fe, win, STEP1, ALL_MODELS, sleep)
-    # Step 2 — the model: the chosen one (✦), else keep the current (✧).
-    _pick(fe, win, STEP2, model or CURRENT, sleep)
-    # Step 3 — the reasoning level: the chosen one (✧), else the model's default
-    # (✦ accepts the pre-selected row with a bare Enter). Handles the Max/Ultra
-    # `More reasoning…` sub-step some models collapse them into. When a MODEL is
+    # Step 1 — the model: the chosen one (✦), else keep the current (✧).
+    _pick(fe, win, MODEL_STEP, model or CURRENT, sleep)
+    # Step 2 — the reasoning level: the chosen one (✧), else the model's default
+    # (✦ accepts the pre-selected row with a bare Enter). Handles the `More
+    # reasoning…` sub-step the top level sits behind. When a MODEL is
     # being set the effort is a PRESERVE (best-effort — strict=False: a target
     # model that lacks the old level gets its default, never a failed switch);
     # when only the effort is set it is an EXPLICIT ✧ choice (strict).

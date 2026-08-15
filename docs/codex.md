@@ -577,18 +577,33 @@ memo is a bug rather than a cache.
   the above` row, and "chat about this" onto its unanswered-submit confirm — both
   screen-driven, both live-verified; see *Clarifying questions* below.
 - **`model` / `effort`** — codex has NO `/model <arg>` and NO `/effort`: both axes
-  are set through ONE interactive 3-step `/model` picker, driven by
-  **`plugins/codex/modeldialog.py`** (Step 1 `Select Model` → `All models`; Step 2
-  the model list; Step 3 `Select Reasoning Level` — the same `›`-cursor / `enter to
-  confirm` geometry as the plan picker). Step 3 is model-dependent: some models
-  (gpt-5.6-sol) list all six levels directly, others (gpt-5.6-terra) collapse
-  **Max/Ultra** behind a `More reasoning…` row that opens an `Advanced Reasoning`
-  sub-step — the driver (`_pick_level`) picks a level directly when present, else
-  opens that sub-step and picks there (a reported effort→max failure: it only
-  looked for a direct `Max` row). The ✦ **model** button changes the model
+  are set through ONE interactive `/model` picker, driven by
+  **`plugins/codex/modeldialog.py`** (Step 1 `Select Model and Effort` — the model
+  list; Step 2 `Select Reasoning Level` — the same `›`-cursor / `enter to
+  confirm` geometry as the plan picker). Step 2 keeps an indirection: the top
+  level sits behind a `More reasoning…` row opening an `Advanced Reasoning`
+  sub-step, so `_pick_level` picks a level directly when present, else opens that
+  sub-step and picks there (a reported effort→max failure: it only looked for a
+  direct `Max` row).
+
+  **Verified against codex-cli 0.147.0**, which is a step SHORTER than the
+  0.144.1 the driver was first written for: that version opened on a `Select
+  Model` screen whose `All models` row browsed the full list, and the driver
+  waited for it. The wait then SUCCEEDED anyway — `"Select Model"` is a substring
+  of `"Select Model and Effort"` and the detector tests `needle in screen` — so
+  the driver matched the model list, believed it was one screen earlier, hunted a
+  row that no longer existed, and raised in 379ms with the picker left open on
+  screen. This is exactly the failure docs/styleguide.md warns of: **a step
+  detector that is a PREFIX of the next step's cannot fail safe**, so the two
+  names must stay mutually disjoint (pinned by a test). The step-1 removal is a
+  clean cut, not a version fallback: there is no optional branch for 0.144.1.
+  0.147.0's model list also added `gpt-5.3-codex-spark`, and gpt-5.6-luna's
+  `Advanced Reasoning` sub-step holds **Max alone** — no `Ultra` row; only that
+  one model's levels were read, so `EFFORT_LABEL` keeps its `Ultra` spelling
+  rather than assume the level is gone everywhere. The ✦ **model** button changes the model
   and PRESERVES the current reasoning level (the ✦/✧ axes are independent, so a
   switch must not silently reset effort — the gesture reads the current effort from
-  the rollout, `read.codex_effort`, and re-selects it at Step 3, falling back to
+  the rollout, `read.codex_effort`, and re-selects it at the level step, falling back to
   the new model's default only when the effort can't be read); the ✧ **effort**
   button KEEPS the current model (its `(current)` row) and changes only the level. `dashboard/http/post/typing.post_command` routes both through
   `HostControl.model`/`effort` (no `/model <arg>` paste, no Claude
