@@ -321,6 +321,12 @@ WHERE session_id='<sid>' OR content LIKE '%<sid>%' ORDER BY ts;
   standing cause (the server restart bumps its build id but cannot evict the browser's
   cache; the user must hard-reload).
 
+A `send_text` row with `status: "indeterminate"` and reason `terminal message was
+not delivered` means delivery was VERIFIED against the input box and the message
+never left the draft (the post-paste Enter is swallowed intermittently; the
+handler retries it, then reports honestly). An older `acknowledged` row with the
+message still sitting in the box predates that verification.
+
 Note the tunnel is a distinct failure domain from the bind: reproduce against
 `http://127.0.0.1:8377` before blaming the application. A request that is 200 locally and
 4xx/3xx through `https://baqylau.zhambyl.top` is a proxy concern, not an app bug.

@@ -220,6 +220,39 @@ def watch_finish_raw_event(
     return _watch_raw_event(context, harness, operation_id, document, None, None)
 
 
+# --- Terminal anchors --------------------------------------------------------
+#
+# A hook process runs INSIDE the session's terminal window and inherits its
+# identity; the interpreter runs in a server that has none (or worse, a stale
+# inherited one). So the anchor is evidence: hooks record it, and the
+# interpreter reads it when it needs to place panes. One raw event per
+# (session, window) — re-recording the same window deduplicates.
+
+TERMINAL_SOURCE_TYPE = "terminal"
+
+
+def terminal_window_raw_event(
+    context: RawEventSourceContext,
+    harness: str,
+    window_id: str,
+) -> RawEvent:
+    document = {"window_id": str(window_id)}
+    return RawEvent(
+        raw_event_id=RawEventId(f"{harness}:terminal:{context.session_id}:{window_id}"),
+        harness=harness,
+        source_type=TERMINAL_SOURCE_TYPE,
+        source_name="terminal",
+        source_position=str(window_id),
+        session_id=context.session_id,
+        actor_id=context.lead_actor_id,
+        parent_actor_id=None,
+        observed_at=time.time(),
+        encoding="json",
+        payload=json.dumps(document, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8"),
+        source_identity=f"{harness}:terminal:{context.session_id}",
+    )
+
+
 def _watch_raw_event(
     context: RawEventSourceContext,
     harness: str,

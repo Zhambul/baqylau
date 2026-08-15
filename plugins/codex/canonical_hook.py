@@ -16,7 +16,7 @@ import time
 if __package__ in (None, ""):
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from contracts.harness import RawEvent
+from contracts.harness import RawEvent, RawEventSourceContext, terminal_window_raw_event
 from domain.ids import ActorId, RawEventId, SessionId
 
 
@@ -51,12 +51,27 @@ def hook_raw_event(payload: bytes) -> RawEvent:
 
 def record_hook(payload: bytes) -> None:
     raw_event = hook_raw_event(payload)
+    raw_events = [raw_event]
+    terminal_window_id = os.environ.get("KITTY_WINDOW_ID")
+    if terminal_window_id:
+        lead_actor_id = ActorId(f"{raw_event.session_id}:lead")
+        raw_events.append(terminal_window_raw_event(
+            RawEventSourceContext(
+                session_id=raw_event.session_id,
+                lead_actor_id=lead_actor_id,
+                actor_id=lead_actor_id,
+                parent_actor_id=None,
+                source_reference="",
+            ),
+            "codex",
+            terminal_window_id,
+        ))
 
     from app.data import data_directory
     from app.host import ApplicationHost
     from runtime.recorder import RawEventRecorder
 
-    RawEventRecorder(os.path.join(data_directory(), "events.db")).record((raw_event,))
+    RawEventRecorder(os.path.join(data_directory(), "events.db")).record(tuple(raw_events))
     ApplicationHost().ensure_running()
 
 

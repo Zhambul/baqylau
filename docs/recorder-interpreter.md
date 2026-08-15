@@ -157,12 +157,20 @@ contract is: `info` · `sources` · `translator` · optional `reactor` /
 - A session launched without its wrapper becomes visible one tick after its
   first hook, but carries no pid (no process-exit backstop) and gets no
   deterministic pane anchor.
-- The kitty mirror panes anchor deterministically only for wrapper launches
-  (the wrapper opens PENDING panes from inside the session's own window and
-  adopts them on registration, as Codex always did). The interpreter's react
-  runs in the server, where "current window" is wherever the user happens to
-  be — so its focus-anchored fallback is allowed only within seconds of the
-  observed session start, and never for a backlog replay.
+- The kitty mirror panes never anchor by the server's "current window" — that
+  is at best absent and at worst a stale identity inherited from whichever hook
+  spawned the server (measured: it planted one session's panes in another's
+  tab). The anchor is either the session's own tagged window (the wrapper opens
+  PENDING panes from inside the session's window and adopts them on
+  registration, as Codex always did) or the `terminal` raw event a hook records
+  from inside the session's tab (`terminal_window_raw_event`; one row per
+  session-and-window, self-healing on every hook). No anchor evidence → no
+  panes, honestly.
+- Web `send_text` is VERIFIED against the input box itself: the CR after a
+  bracketed paste is swallowed intermittently (a message once sat unsubmitted
+  in the draft while the control audited `acknowledged`), so `tui.type_command`
+  reads the box back, retries the Enter with backoff, and reports a message
+  that never left the draft as a failure instead of a false success.
 - The store schema changed incompatibly (schema version 14); old `events.db`
   files are refused, not migrated — by decision, the database was dropped at the
   cutover.

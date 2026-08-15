@@ -20,6 +20,7 @@ if __package__ in (None, ""):
 from contracts.harness import (
     RawEvent,
     RawEventSourceContext,
+    terminal_window_raw_event,
     watch_finish_raw_event,
     watch_start_raw_event,
 )
@@ -31,7 +32,10 @@ from plugins.claude_code import model
 HARNESS = "claude_code"
 
 
-def hook_raw_events(payload: bytes) -> tuple[tuple[RawEvent, ...], bytes]:
+def hook_raw_events(
+    payload: bytes,
+    terminal_window_id: str | None = None,
+) -> tuple[tuple[RawEvent, ...], bytes]:
     """Everything one hook delivery says, as raw events, plus the stdout reply."""
     document = json.loads(payload)
     if not isinstance(document, dict):
@@ -101,7 +105,7 @@ def hook_raw_events(payload: bytes) -> tuple[tuple[RawEvent, ...], bytes]:
             )
         )
     output = b""
-    watch_context = RawEventSourceContext(
+    context = RawEventSourceContext(
         session_id=session_id,
         lead_actor_id=lead_actor_id,
         actor_id=actor_id,
@@ -112,7 +116,7 @@ def hook_raw_events(payload: bytes) -> tuple[tuple[RawEvent, ...], bytes]:
         prepared = foreground.prepare(document)
         if prepared is not None:
             output = prepared.output
-            raw_events.append(watch_start_raw_event(watch_context, HARNESS, prepared.watch))
+            raw_events.append(watch_start_raw_event(context, HARNESS, prepared.watch))
     elif hook_name in {"PostToolUse", "PostToolUseFailure"} \
             and document.get("tool_name") == "Bash":
         background = foreground.background_watch(document)
@@ -120,16 +124,20 @@ def hook_raw_events(payload: bytes) -> tuple[tuple[RawEvent, ...], bytes]:
             # A background command STARTS its watch here — its native output file
             # only becomes known (and nameable) once the task id exists. It shares
             # the operation id, so no finish directive may accompany it.
-            raw_events.append(watch_start_raw_event(watch_context, HARNESS, background))
+            raw_events.append(watch_start_raw_event(context, HARNESS, background))
         else:
             operation_id = str(document.get("tool_use_id") or "")
             if operation_id:
-                raw_events.append(watch_finish_raw_event(watch_context, HARNESS, operation_id))
+                raw_events.append(watch_finish_raw_event(context, HARNESS, operation_id))
+    if terminal_window_id:
+        # The hook runs INSIDE the session's terminal window — the one process
+        # that can name the pane anchor exactly. One row per (session, window).
+        raw_events.append(terminal_window_raw_event(context, HARNESS, terminal_window_id))
     return tuple(raw_events), output
 
 
 def record_hook(payload: bytes) -> bytes:
-    raw_events, output = hook_raw_events(payload)
+    raw_events, output = hook_raw_events(payload, os.environ.get("KITTY_WINDOW_ID") or None)
 
     from app.data import data_directory
     from app.host import ApplicationHost

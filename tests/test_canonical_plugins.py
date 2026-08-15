@@ -87,6 +87,7 @@ from plugins.claude_code import canonical_hook as claude_canonical_hook
 from plugins.claude_code import foreground as claude_foreground
 from plugins.claude_code import memory_state as claude_memory_state
 from plugins.claude_code import statusline as claude_statusline
+from plugins.claude_code import tui as claude_tui
 from plugins.claude_code import usage_state as claude_usage_state
 from plugins.claude_code.usage_rows import usage_reader as claude_usage_reader
 from plugins.claude_code.reactor import ClaudeReactor
@@ -1026,6 +1027,69 @@ def test_claude_hook_returns_native_pretool_output_and_a_watch_directive(monkeyp
     assert directive.source_type == "watch"
     assert json.loads(directive.payload)["action"] == "start"
     assert json.loads(directive.payload)["source_path"] == "/work/out"
+
+
+def test_hooks_record_their_terminal_window_as_the_pane_anchor():
+    payload = json.dumps({
+        "session_id": "claude-session",
+        "transcript_path": "/work/claude.jsonl",
+        "cwd": "/work",
+        "hook_event_name": "PostToolUse",
+        "hook_event_id": "post-one",
+        "tool_name": "Read",
+    }).encode()
+
+    raw_events, _output = claude_canonical_hook.hook_raw_events(payload, "1114")
+    without_window, _output = claude_canonical_hook.hook_raw_events(payload)
+
+    anchor = raw_events[-1]
+    assert anchor.source_type == "terminal"
+    assert json.loads(anchor.payload) == {"window_id": "1114"}
+    # one row per (session, window): re-recording the same window deduplicates
+    again, _output = claude_canonical_hook.hook_raw_events(payload, "1114")
+    assert again[-1].raw_event_id == anchor.raw_event_id
+    assert all(event.source_type != "terminal" for event in without_window)
+
+
+class SubmitProbeDriver:
+    """A driver whose input box keeps the text for `sticky` Enter presses."""
+
+    def __init__(self, sticky):
+        self.sticky = sticky
+        self.enters = 0
+        self.box = ""
+
+    terminal = None  # the probe is monkeypatched; only the attribute must exist
+
+    def paste_text(self, window_id, text):
+        self.box = text
+        return True
+
+    def send_key(self, window_id, *keys):
+        self.enters += 1
+        if self.enters >= self.sticky:
+            self.box = ""
+        return True
+
+
+def test_type_command_verifies_the_submit_and_retries_the_enter(monkeypatch):
+    monkeypatch.setattr(claude_tui.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(claude_tui.clipboard_image, "clear_image", lambda: False)
+    monkeypatch.setattr(
+        claude_tui,
+        "_submission_pending",
+        lambda fe, win, marker: marker in fe.box,
+    )
+
+    retried = SubmitProbeDriver(sticky=1)
+    ok, _clip = claude_tui.type_command(retried, "window-1", "hello from the dashboard")
+    assert ok is True
+    assert retried.enters == 1
+
+    stuck = SubmitProbeDriver(sticky=99)
+    ok, _clip = claude_tui.type_command(stuck, "window-1", "hello from the dashboard")
+    assert ok is False
+    assert stuck.enters == 2  # every retry spent before giving up honestly
 
 
 def test_claude_post_tool_hook_records_the_watch_finish_directive():

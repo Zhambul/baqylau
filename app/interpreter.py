@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import threading
-import time
 
 from contracts.harness import (
     HarnessRawEventSource,
     RawEvent,
     Session,
+    TERMINAL_SOURCE_TYPE,
     TranslationError,
     TranslationResult,
     WATCH_SOURCE_TYPE,
@@ -31,7 +32,6 @@ from app.session_terminal import ApplicationTerminal
 TICK_INTERVAL_SECONDS = 0.25
 TRANSLATION_BATCH_SIZE = 500
 REGISTRATION_BATCH_SIZE = 200
-PANE_ANCHOR_FRESHNESS_SECONDS = 15.0
 
 
 def _audit_failure(where: str, context: dict) -> None:
@@ -187,6 +187,14 @@ class Interpreter:
                 TranslationResult((), "ignored_nonsemantic", "watch directive applied"),
             )
             return
+        if raw_event.source_type == TERMINAL_SOURCE_TYPE:
+            # A pane-anchor observation: read at react time, never translated.
+            self.canonical_store.store_translation(
+                raw_event,
+                plugin.info.plugin_version,
+                TranslationResult((), "ignored_nonsemantic", "terminal anchor recorded"),
+            )
+            return
         try:
             translation = plugin.translator.translate(raw_event)
         except TranslationError as error:
@@ -262,17 +270,15 @@ class Interpreter:
                 return
             if self.terminal.session_panes_are_open(session_id):
                 return
-            # Anchoring by FOCUS is a guess: this runs in the server, where the
-            # current window is wherever the user happens to be, not the session's
-            # tab. Wrapper launches anchor correctly via their own pending panes;
-            # the focus guess is allowed only for a session whose start was
-            # observed moments ago (the launcher's tab is still focused), never
-            # for a backlog replay.
-            anchor_window_id = self.terminal.window_for_session(session_id)
-            if anchor_window_id is None:
-                if not self._observed_moments_ago(stored_event):
-                    return
-                anchor_window_id = self.terminal.current_window()
+            # NEVER anchor by focus: this runs in the server, whose "current
+            # window" is at best absent and at worst a stale identity inherited
+            # from whichever hook spawned it. The anchor is either the session's
+            # own tagged window (wrapper launches adopt their pending panes) or
+            # the window a hook RECORDED from inside the session's tab.
+            anchor_window_id = (
+                self.terminal.window_for_session(session_id)
+                or self._recorded_window(session_id)
+            )
             if anchor_window_id is None:
                 return
             session = self.sessions.load(session_id)
@@ -286,12 +292,15 @@ class Interpreter:
         except Exception:
             _audit_failure("session panes", {"session_id": str(session_id)})
 
-    def _observed_moments_ago(self, stored_event: StoredCanonicalEvent) -> bool:
-        for raw_event_id in stored_event.raw_event_ids:
-            observed_at = self.canonical_store.raw_event_observed_at(raw_event_id)
-            if observed_at is not None:
-                return time.time() - observed_at <= PANE_ANCHOR_FRESHNESS_SECONDS
-        return False
+    def _recorded_window(self, session_id) -> str | None:
+        anchor = self.canonical_store.latest_raw_event(session_id, TERMINAL_SOURCE_TYPE)
+        if anchor is None:
+            return None
+        try:
+            window_id = str(json.loads(anchor.payload).get("window_id") or "")
+        except (UnicodeDecodeError, json.JSONDecodeError, AttributeError):
+            return None
+        return window_id or None
 
     def _reap_watches(self, session_id) -> None:
         for source in self.watches.for_session(session_id):

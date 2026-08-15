@@ -20,6 +20,7 @@ from contracts.harness import (
     Session,
     TranslationError,
     TranslationResult,
+    terminal_window_raw_event,
     watch_finish_raw_event,
     watch_start_raw_event,
 )
@@ -854,7 +855,7 @@ class RecordingTerminal:
         return any(call[0] == "open" for call in self.calls)
 
     def current_window(self):
-        return "focused-window"
+        raise AssertionError("the server's own window identity must never be used")
 
     def window_for_session(self, session_id):
         return self.session_window_id
@@ -863,7 +864,7 @@ class RecordingTerminal:
         self.calls.append(("open", request.session_id, request.anchor_window_id))
 
 
-def _pane_react_interpreter(tmp_path, observed_at, session_window_id=None):
+def _pane_react_interpreter(tmp_path, session_window_id=None, recorded_window_id=None):
     started = CanonicalEvent(
         CanonicalEventId("session-started"),
         SessionId("session-one"),
@@ -890,15 +891,19 @@ def _pane_react_interpreter(tmp_path, observed_at, session_window_id=None):
         NullControls(),
         terminal,
     )
-    recorder.record((replace(raw_observation("raw-start"), observed_at=observed_at),))
+    if recorded_window_id is not None:
+        recorder.record((terminal_window_raw_event(
+            example_session().source_context, "example", recorded_window_id,
+        ),))
+    recorder.record((raw_observation("raw-start"),))
     return interpreter, recorder, terminal
 
 
-def test_the_interpreter_opens_panes_by_focus_only_for_a_fresh_session_start(tmp_path):
-    import time as time_module
-
+def test_the_interpreter_anchors_panes_at_the_recorded_terminal_window(tmp_path):
+    """Hooks record their own window as evidence; the server anchors there —
+    never at its own inherited 'current window', which is a stale guess."""
     interpreter, recorder, terminal = _pane_react_interpreter(
-        tmp_path, observed_at=time_module.time()
+        tmp_path, recorded_window_id="the-session-tab"
     )
 
     interpreter.tick()
@@ -906,27 +911,27 @@ def test_the_interpreter_opens_panes_by_focus_only_for_a_fresh_session_start(tmp
     recorder.record((replace(raw_observation("raw-start-again"), source_position="1"),))
     interpreter.tick()
 
-    assert terminal.calls == [("open", SessionId("session-one"), "focused-window")]
+    assert terminal.calls == [("open", SessionId("session-one"), "the-session-tab")]
 
 
-def test_the_interpreter_never_anchors_a_stale_session_start_by_focus(tmp_path):
-    """The focus guess runs in the server, where the current window is wherever
-    the user happens to be — a backlog replay must not spawn panes there."""
-    interpreter, _recorder, terminal = _pane_react_interpreter(tmp_path, observed_at=11.0)
+def test_the_interpreter_opens_no_panes_without_an_anchor(tmp_path):
+    interpreter, _recorder, terminal = _pane_react_interpreter(tmp_path)
 
     interpreter.tick()
 
     assert terminal.calls == []
 
 
-def test_the_interpreter_prefers_the_session_own_window_over_focus(tmp_path):
+def test_the_interpreter_prefers_the_session_own_window_over_the_recorded_anchor(tmp_path):
     interpreter, _recorder, terminal = _pane_react_interpreter(
-        tmp_path, observed_at=11.0, session_window_id="session-tab-window"
+        tmp_path,
+        session_window_id="adopted-window",
+        recorded_window_id="older-anchor",
     )
 
     interpreter.tick()
 
-    assert terminal.calls == [("open", SessionId("session-one"), "session-tab-window")]
+    assert terminal.calls == [("open", SessionId("session-one"), "adopted-window")]
 
 
 def test_watch_directives_run_the_whole_foreground_lifecycle(tmp_path):

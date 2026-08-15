@@ -95,13 +95,14 @@ class CanonicalEventStore:
             ).fetchall()
         return tuple(self._raw_event(row) for row in rows)
 
-    def raw_event_observed_at(self, raw_event_id: RawEventId) -> float | None:
+    def latest_raw_event(self, session_id: SessionId, source_type: str) -> RawEvent | None:
         with connect(self.database_path) as connection:
             row = connection.execute(
-                "SELECT observed_at FROM raw_events WHERE raw_event_id=?",
-                (str(raw_event_id),),
+                "SELECT * FROM raw_events WHERE session_id=? AND source_type=? "
+                "ORDER BY id DESC LIMIT 1",
+                (str(session_id), source_type),
             ).fetchone()
-        return row["observed_at"] if row is not None else None
+        return self._raw_event(row) if row is not None else None
 
     def store_translation(
         self,

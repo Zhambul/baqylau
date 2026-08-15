@@ -24,3 +24,6 @@ def isolated_application_files(monkeypatch, tmp_path):
     monkeypatch.setattr(paths, "UPLOADS_DIRECTORY", str(tmp_path / "uploads"))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-config"))
     monkeypatch.setenv("BAQYLAU_FRONTEND", "none")
+    # Hooks record their tab's terminal window as evidence; the suite itself may
+    # run inside a terminal, and that identity must not leak into fixtures.
+    monkeypatch.delenv("KITTY_WINDOW_ID", raising=False)
