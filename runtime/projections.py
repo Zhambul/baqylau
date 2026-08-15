@@ -69,7 +69,8 @@ from domain.values import (
     TextContent,
     TokenUsage,
 )
-from runtime.event_store import EventPage, EventStore, StoredEvent
+from runtime.canonical_store import CanonicalEventPage, CanonicalEventStore, StoredCanonicalEvent
+from runtime.sessions import SessionRegistry
 
 
 @dataclass(frozen=True)
@@ -374,7 +375,7 @@ class ActivityWindow:
 
 
 def _context(
-    stored_event: StoredEvent,
+    stored_event: StoredCanonicalEvent,
     activity_id: str,
     actor_name: str | None,
     *,
@@ -400,10 +401,11 @@ def _activity_id(event: CanonicalEvent, activity_type: str, subject_id: object) 
 
 
 class SessionQueries:
-    def __init__(self, event_store: EventStore) -> None:
-        self.event_store = event_store
-        self._latest_pages: dict[SessionId, tuple[int | None, tuple[StoredEvent, ...]]] = {}
-        self._tail_pages: dict[tuple[SessionId, int], EventPage] = {}
+    def __init__(self, canonical_store: CanonicalEventStore, sessions: SessionRegistry) -> None:
+        self.canonical_store = canonical_store
+        self.session_registry = sessions
+        self._latest_pages: dict[SessionId, tuple[int | None, tuple[StoredCanonicalEvent, ...]]] = {}
+        self._tail_pages: dict[tuple[SessionId, int], CanonicalEventPage] = {}
         self._latest_pages_lock = RLock()
 
     def _tail_page(
@@ -411,13 +413,13 @@ class SessionQueries:
         session_id: SessionId,
         event_limit: int,
         through_cursor: int,
-    ) -> EventPage:
+    ) -> CanonicalEventPage:
         key = (session_id, event_limit)
         with self._latest_pages_lock:
             cached = self._tail_pages.get(key)
             if cached is not None and cached.cursor == through_cursor:
                 return cached
-        page = self.event_store.tail(session_id, through_cursor, event_limit)
+        page = self.canonical_store.tail(session_id, through_cursor, event_limit)
         with self._latest_pages_lock:
             self._tail_pages[key] = page
         return page
@@ -426,13 +428,13 @@ class SessionQueries:
         self,
         session_id: SessionId,
         through_cursor: int | None = None,
-    ) -> EventPage:
+    ) -> CanonicalEventPage:
         selected_cursor = (
-            self.event_store.latest_cursor()
+            self.canonical_store.latest_cursor()
             if through_cursor is None
             else through_cursor
         )
-        session_cursor = self.event_store.latest_session_cursor(session_id, selected_cursor)
+        session_cursor = self.canonical_store.latest_session_cursor(session_id, selected_cursor)
         with self._latest_pages_lock:
             cached = self._latest_pages.get(session_id)
             if (
@@ -443,7 +445,7 @@ class SessionQueries:
             ):
                 cached = (
                     session_cursor,
-                    cached[1] + self.event_store.between(
+                    cached[1] + self.canonical_store.between(
                         session_id,
                         cached[0],
                         session_cursor,
@@ -451,17 +453,17 @@ class SessionQueries:
                 )
                 self._latest_pages[session_id] = cached
             elif cached is None or cached[0] != session_cursor:
-                page = self.event_store.through(session_id, selected_cursor)
+                page = self.canonical_store.through(session_id, selected_cursor)
                 cached = (session_cursor, page.events)
                 self._latest_pages[session_id] = cached
             events = cached[1]
         page_cursor = events[-1].cursor if events else (selected_cursor or 0)
-        return EventPage(events, page_cursor, selected_cursor, False)
+        return CanonicalEventPage(events, page_cursor, selected_cursor, False)
 
     def sessions(self, through_cursor: int | None = None) -> tuple[SessionSummary, ...]:
         summaries = (
             self.summary(session_id, through_cursor)
-            for session_id in self.event_store.session_ids()
+            for session_id in self.canonical_store.session_ids()
         )
         return tuple(
             sorted(
@@ -666,7 +668,7 @@ class SessionQueries:
         through_cursor: int,
     ) -> ActivityWindow:
         page = self._tail_page(session_id, event_limit, through_cursor)
-        actor_events = self.event_store.events_of_types(
+        actor_events = self.canonical_store.events_of_types(
             session_id,
             ("actor.started", "actor.name_changed"),
             through_cursor,
@@ -825,7 +827,7 @@ class SessionQueries:
         return tuple(tasks[task_id] for task_id in sorted(tasks, key=str))
 
     def goal(self, session_id: SessionId, through_cursor: int | None = None) -> GoalState | None:
-        session = self.event_store.recognized_session(session_id)
+        session = self.session_registry.find(session_id)
         if session is None:
             return None
         goal = None
@@ -985,7 +987,7 @@ class SessionQueries:
 
     @staticmethod
     def _tab_state(
-        stored_events: tuple[StoredEvent, ...],
+        stored_events: tuple[StoredCanonicalEvent, ...],
         initial_state: TabState | None,
     ) -> TabState | None:
         state = initial_state
@@ -1041,7 +1043,7 @@ class SessionQueries:
 
     @staticmethod
     def _activities(
-        stored_events: tuple[StoredEvent, ...],
+        stored_events: tuple[StoredCanonicalEvent, ...],
         scope: ActivityScope,
     ) -> tuple[list[Activity], dict[str, int], dict[str, int]]:
         activities: dict[str, Activity] = {}

@@ -13,16 +13,12 @@ from decimal import Decimal
 from typing import Literal
 
 from contracts.harness import (
-    CheckpointStore,
-    EventSourceContext,
-    HarnessEventSource,
-    HarnessEvents,
+    HarnessCanonicalTranslator,
+    HarnessRawEventSource,
+    HarnessRawEventSources,
     RawEvent,
-    RawEventDelivery,
-    RecognizedSession,
-    SessionCandidate,
-    SessionRecognizer,
-    SourceCheckpoint,
+    RawEventSourceContext,
+    Session,
     TranslationError,
     TranslationResult,
 )
@@ -77,7 +73,6 @@ from domain.values import (
     TextContent,
     TokenUsage,
 )
-from plugins.claude_code import foreground
 from plugins.claude_code import model, transcript
 
 
@@ -104,69 +99,46 @@ def _session_metadata(path: str) -> dict:
     return {}
 
 
-class ClaudeSessionRecognizer(SessionRecognizer):
-    def discover(self) -> tuple[RecognizedSession, ...]:
-        config_directory = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
-        paths = sorted(
-            {
-                os.path.realpath(path)
-                for path in glob.glob(
-                    os.path.join(config_directory, "projects", "*", "*.jsonl")
-                )
-            },
-            key=os.path.getmtime,
-            reverse=True,
-        )
-        sessions = []
-        for path in paths:
-            recognized = self.recognize(SessionCandidate(path))
-            if recognized is not None:
-                sessions.append(recognized)
-        return tuple(sessions)
+class ClaudeTranscriptRawEventSource(HarnessRawEventSource):
+    """One transcript file, read as complete lines.
 
-    def recognize(self, candidate: SessionCandidate) -> RecognizedSession | None:
-        path = os.path.realpath(candidate.source_reference)
-        if not transcript.owns(path) or not transcript.renameable(path):
-            return None
-        native_session_id = os.path.basename(path)[:-len(".jsonl")]
-        metadata = _session_metadata(path)
-        return RecognizedSession(
-            session_id=SessionId(native_session_id),
-            lead_actor_id=_lead_actor(SessionId(native_session_id)),
-            native_session_id=native_session_id,
-            source_reference=path,
-            working_directory=metadata.get("cwd") or candidate.working_directory,
-        )
+    Position encoding: the byte offset where the last emitted line STARTS (the
+    translator keys on it — `source_position == "0"` marks a record that opens
+    its transcript). Resuming therefore seeks to it and skips one line.
+    """
 
-
-class ClaudeTranscriptSource(HarnessEventSource):
     EVENT_BATCH_SIZE = 100
 
     def __init__(
         self,
-        context: EventSourceContext,
-        checkpoints: CheckpointStore,
+        context: RawEventSourceContext,
         actor_role: Literal["child", "teammate"] | None = None,
     ) -> None:
         self.context = context
-        self.checkpoints = checkpoints
         self.actor_role = actor_role
         self.source_path = os.path.realpath(context.source_reference)
         source_hash = hashlib.sha256(self.source_path.encode("utf-8")).hexdigest()
         self.source_identity = f"claude_code:transcript:{source_hash}"
 
-    def drain(self, delivery: RawEventDelivery) -> None:
-        checkpoint = self.checkpoints.load(self.source_identity)
-        position = int(checkpoint.position) if checkpoint is not None else 0
-        with open(self.source_path, "rb") as source:
-            source.seek(position)
+    def read(self, after_position: str | None) -> tuple[RawEvent, ...]:
+        raw_events: list[RawEvent] = []
+        try:
+            source = open(self.source_path, "rb")
+        except FileNotFoundError:
+            return ()
+        with source:
+            if after_position is not None:
+                source.seek(int(after_position))
+                skipped = source.readline()
+                if not skipped.endswith(b"\n"):
+                    return ()
             for _ in range(self.EVENT_BATCH_SIZE):
                 line_position = source.tell()
                 line = source.readline()
                 if not line or not line.endswith(b"\n"):
-                    return
+                    break
                 actor_id, parent_actor_id = self._actor_context(line)
-                raw_event = RawEvent(
+                raw_events.append(RawEvent(
                     raw_event_id=RawEventId(f"{self.source_identity}:{line_position}"),
                     harness="claude_code",
                     source_type=(f"{self.actor_role}_transcript" if self.actor_role else "transcript"),
@@ -178,14 +150,9 @@ class ClaudeTranscriptSource(HarnessEventSource):
                     observed_at=time.time(),
                     encoding="jsonl",
                     payload=line,
-                )
-                delivery.deliver(raw_event)
-                position = source.tell()
-                self.checkpoints.commit(SourceCheckpoint(
-                    self.context.session_id,
-                    self.source_identity,
-                    str(position),
+                    source_identity=self.source_identity,
                 ))
+        return tuple(raw_events)
 
     def _actor_context(self, line: bytes) -> tuple[ActorId, ActorId | None]:
         try:
@@ -204,20 +171,24 @@ class ClaudeTranscriptSource(HarnessEventSource):
         return self.context.actor_id, self.context.parent_actor_id
 
 
-class ClaudeTaskSource(HarnessEventSource):
-    """Capture Claude Code's session task files as immutable raw observations."""
+class ClaudeTaskRawEventSource(HarnessRawEventSource):
+    """Capture Claude Code's session task files as immutable raw observations.
 
-    def __init__(self, session: RecognizedSession, checkpoints: CheckpointStore) -> None:
+    Position encoding: `list:<digest of the whole task snapshot>`, carried by the
+    MEMBERSHIP event, which is therefore emitted last. When anything changed,
+    every current task is emitted — unchanged ones carry their previous identity
+    and deduplicate on record. Deletions need no synthetic record: the
+    membership fact names the survivors and the projection prunes the rest.
+    """
+
+    def __init__(self, session: Session) -> None:
         self.session = session
-        self.checkpoints = checkpoints
         config_directory = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
         session_prefix = session.native_session_id.split("-", 1)[0]
         self.task_directory = os.path.join(config_directory, "tasks", f"session-{session_prefix}")
         self.source_identity = f"claude_code:tasks:{session.native_session_id}"
 
-    def drain(self, delivery: RawEventDelivery) -> None:
-        checkpoint = self.checkpoints.load(self.source_identity)
-        previous = json.loads(checkpoint.position) if checkpoint is not None else {}
+    def read(self, after_position: str | None) -> tuple[RawEvent, ...]:
         current = {}
         for path in sorted(glob.glob(os.path.join(self.task_directory, "*.json"))):
             try:
@@ -227,39 +198,18 @@ class ClaudeTaskSource(HarnessEventSource):
                 continue
             if isinstance(task, dict) and task.get("id") is not None:
                 current[str(task["id"])] = task
-
-        changed = [task for task_id, task in current.items() if previous.get(task_id) != task]
-        deleted = [
-            {**task, "status": "deleted"}
-            for task_id, task in previous.items()
-            if task_id not in current
-        ]
-        if changed or deleted:
-            snapshot = json.dumps(current, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
-            snapshot_digest = hashlib.sha256(snapshot.encode("utf-8")).hexdigest()
-            membership = json.dumps(
-                {"list_id": "session", "task_ids": list(current)},
-                ensure_ascii=False,
-                separators=(",", ":"),
-                sort_keys=True,
-            )
-            delivery.deliver(RawEvent(
-                raw_event_id=RawEventId(f"{self.source_identity}:list:{snapshot_digest}"),
-                harness="claude_code",
-                source_type="task_list",
-                source_name=self.task_directory,
-                source_position=f"list:{snapshot_digest}",
-                session_id=self.session.session_id,
-                actor_id=self.session.lead_actor_id,
-                parent_actor_id=None,
-                observed_at=time.time(),
-                encoding="json",
-                payload=membership.encode("utf-8"),
-            ))
-        for task in changed + deleted:
+        if not current and after_position is None:
+            return ()
+        snapshot = json.dumps(current, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+        snapshot_digest = hashlib.sha256(snapshot.encode("utf-8")).hexdigest()
+        position = f"list:{snapshot_digest}"
+        if position == after_position:
+            return ()
+        raw_events = []
+        for task in current.values():
             encoded = json.dumps(task, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
             digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
-            delivery.deliver(RawEvent(
+            raw_events.append(RawEvent(
                 raw_event_id=RawEventId(f"{self.source_identity}:{task['id']}:{digest}"),
                 harness="claude_code",
                 source_type="tasks",
@@ -271,12 +221,34 @@ class ClaudeTaskSource(HarnessEventSource):
                 observed_at=time.time(),
                 encoding="json",
                 payload=encoded.encode("utf-8"),
+                source_identity=self.source_identity,
             ))
-        self.checkpoints.commit(SourceCheckpoint(
-            self.session.session_id,
-            self.source_identity,
-            json.dumps(current, ensure_ascii=False, separators=(",", ":"), sort_keys=True),
+        membership = json.dumps(
+            {"list_id": "session", "task_ids": list(current)},
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        # The raw identity chains from the previous position so that returning to
+        # an EARLIER snapshot still records a new observation (a bare digest would
+        # deduplicate against the old row and the position could never latch);
+        # the canonical fact still converges on the snapshot itself.
+        revision = hashlib.sha256(f"{after_position or ''}::{snapshot_digest}".encode("utf-8")).hexdigest()
+        raw_events.append(RawEvent(
+            raw_event_id=RawEventId(f"{self.source_identity}:list:{revision}"),
+            harness="claude_code",
+            source_type="task_list",
+            source_name=self.task_directory,
+            source_position=position,
+            session_id=self.session.session_id,
+            actor_id=self.session.lead_actor_id,
+            parent_actor_id=None,
+            observed_at=time.time(),
+            encoding="json",
+            payload=membership.encode("utf-8"),
+            source_identity=self.source_identity,
         ))
+        return tuple(raw_events)
 
 
 def _timestamp(value) -> float | None:
@@ -416,24 +388,14 @@ def _plan_resolution(native: dict, failed: bool) -> tuple[str, str | None, bool]
     return "rejected", None, False
 
 
-class ClaudeCanonicalTranslator(HarnessEvents):
-    TASK_TOOLS = frozenset({"TaskCreate", "TaskUpdate", "TaskGet", "TaskList"})
-
-    def __init__(self) -> None:
-        self._task_tool_ids: set[str] = set()
-
-    def sources(
-        self,
-        session: RecognizedSession,
-        checkpoints: CheckpointStore,
-    ) -> tuple[HarnessEventSource, ...]:
-        sources: list[HarnessEventSource] = list(
-            foreground.sources(session.session_id, checkpoints)
-        )
+class ClaudeRawEventSources(HarnessRawEventSources):
+    def for_session(self, session: Session) -> tuple[HarnessRawEventSource, ...]:
         if not transcript.owns(session.source_reference):
-            return tuple(sources)
-        sources.append(ClaudeTranscriptSource(session.event_source_context, checkpoints))
-        sources.append(ClaudeTaskSource(session, checkpoints))
+            return ()
+        sources: list[HarnessRawEventSource] = [
+            ClaudeTranscriptRawEventSource(session.source_context),
+            ClaudeTaskRawEventSource(session),
+        ]
         transcript_base = (
             session.source_reference[:-len(".jsonl")]
             if session.source_reference.endswith(".jsonl")
@@ -446,15 +408,14 @@ class ClaudeCanonicalTranslator(HarnessEvents):
             if not actor_name:
                 continue
             sources.append(
-                ClaudeTranscriptSource(
-                    EventSourceContext(
+                ClaudeTranscriptRawEventSource(
+                    RawEventSourceContext(
                         session_id=session.session_id,
                         lead_actor_id=session.lead_actor_id,
                         actor_id=ActorId(actor_name),
                         parent_actor_id=session.lead_actor_id,
                         source_reference=child_path,
                     ),
-                    checkpoints,
                     (
                         "teammate"
                         if model.agent_meta(session.source_reference, actor_name).get("taskKind")
@@ -465,6 +426,13 @@ class ClaudeCanonicalTranslator(HarnessEvents):
             )
         return tuple(sources)
 
+
+class ClaudeCanonicalTranslator(HarnessCanonicalTranslator):
+    TASK_TOOLS = frozenset({"TaskCreate", "TaskUpdate", "TaskGet", "TaskList"})
+
+    def __init__(self) -> None:
+        self._task_tool_ids: set[str] = set()
+
     def translate(self, raw_event: RawEvent) -> TranslationResult:
         try:
             text = raw_event.payload.decode("utf-8")
@@ -473,6 +441,21 @@ class ClaudeCanonicalTranslator(HarnessEvents):
             raise TranslationError("malformed Claude Code record", context=raw_event.source_position) from error
         if not isinstance(document, dict):
             raise TranslationError("Claude Code record is not an object", context=raw_event.source_position)
+        if raw_event.source_type == "process":
+            # The wrapper's exit observation. Only the FINISH is a fact worth a
+            # canonical event: a started here would converge on the same
+            # session.started identity as the SessionStart hook's rich payload
+            # and could win the race with a poorer body.
+            if document.get("state") == "finished":
+                event = self._event(
+                    raw_event,
+                    "session",
+                    str(raw_event.session_id),
+                    "finished",
+                    SessionFinished("unknown", "process_exited"),
+                )
+                return TranslationResult((event,), "translated")
+            return TranslationResult((), "ignored_nonsemantic", "process start carries no new fact")
         if raw_event.source_type == "otel":
             events = self._translate_otel(raw_event, document)
             if not events:

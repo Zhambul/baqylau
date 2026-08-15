@@ -30,11 +30,15 @@ aggregate, query the DBs directly with `sqlite3` — there is no canned-anomaly 
 Evidence flows one way, and each stage is recorded:
 
 ```
-source (file/stream/hook)  →  raw_events  →  translation_records  →  canonical_events
-                                   │                                        │
-                              source_checkpoints                   canonical_provenance
+wrapper ──register once──▶ session_harness
+recorders (hooks/otel/wrappers) ──append──▶ raw_events ◀──append── interpreter's pulled sources
+                                                │
+        interpreter: translate → translation_records → canonical_events + canonical_provenance
 ```
 
+- **`session_harness`** is written ONCE, at launch, by the harness's wrapper
+  (`plugins/*/command.py`) — hooks never register. Evidence recorded before its
+  session row exists waits, untranslated, until registration lands.
 - **`raw_events`** is *immutable evidence*: the exact bytes a source produced. Reusing a
   `raw_event_id` with a different payload raises `EventIdentityConflict` — that is
   corruption, not convergence.
@@ -42,21 +46,27 @@ source (file/stream/hook)  →  raw_events  →  translation_records  →  canon
   several independent sources may converge on one event; re-observing it is a no-op that
   only appends provenance. The store keeps the **first writer** and does **not** compare
   bodies — a later, differing rendering is not lost, it stays recoverable from its own raw
-  event. (Raising on a disagreement instead used to abort the whole observation pass.)
+  event.
 - **`cursor`** (`INTEGER PRIMARY KEY AUTOINCREMENT`) is the monotonic ordering key
   everything pages by. `event_id` is *not* an ordering key.
-- **`source_checkpoints`** is how far each source has been read. **A stuck checkpoint is
-  the single most diagnostic value in the whole store** — see the first bug shape.
+- **There is no checkpoint table.** A pulled source resumes from the `source_position`
+  of the LAST raw event carrying its `source_identity` — recorded progress and evidence
+  are the same rows and cannot drift. "How far has this source been read?" is:
+  `SELECT source_position FROM raw_events WHERE source_identity=? ORDER BY id DESC LIMIT 1`.
+- **The untranslated backlog IS the queue**: raw events with no `translation_records`
+  row (for registered sessions) await the interpreter, in `raw_events.id` order.
 
-**Who drives what.** `ObservationRunner` (`app/observe.py`) is the ONE scheduler that
-polls every *pulled* source (transcripts, rollouts, foreground output, liveness, process
-state) — it runs as a thread inside the dashboard server process, every
-`OBSERVATION_INTERVAL_SECONDS` (0.25s), over the `RECENT_SESSION_COUNT` most recent
-sessions plus everything already active. **Pushed** sources (`hook`, `otel`, `account`) are
-written by separate short-lived processes and do not depend on it. That split is the key
-asymmetry behind the headline failure mode: when the scheduler stops, a session keeps
-producing hook and otel events and therefore still looks alive, while its conversation
-silently stops.
+**Who drives what.** The `Interpreter` (`app/interpreter.py`) is the ONE
+read-and-interpret loop: it pulls every registered unfinished session's sources
+(transcripts, rollouts, watches, process state), translates the untranslated backlog
+(hook evidence included — hooks do NOT translate), and reacts to committed facts
+(panes, plugin reactors). It runs as a thread inside the dashboard server process,
+every `TICK_INTERVAL_SECONDS` (0.25s), with no session-count cap. **Recorder**
+processes (`hook`, `otel`, `account`, the wrappers' `process` events) only append raw
+events and do not depend on it. That split is the key asymmetry behind the headline
+failure mode: when the interpreter stops, a session keeps accumulating raw evidence
+and therefore still looks partly alive, while NOTHING turns canonical — the
+conversation silently stops for every session at once.
 
 ## Schema
 
@@ -64,21 +74,21 @@ silently stops.
 
 | table | one row per | key columns |
 |---|---|---|
-| `raw_events` | one observation, verbatim | `raw_event_id` (PK), `session_id`, `harness`, **`source_type`**, `source_name`, `source_position`, `actor_id`, `parent_actor_id`, `observed_at`, `encoding`, `payload` |
-| `translation_records` | one translation verdict | `raw_event_id` (PK), `translator_version`, **`decision`** ∈ `translated` / `ignored_nonsemantic` / `ignored_unknown` / `translation_failed`, `reason`, `completed_at` |
+| `raw_events` | one observation, verbatim | **`id`** (arrival order), `raw_event_id` (unique), `session_id`, `harness`, **`source_type`**, **`source_identity`** (the resume key), `source_name`, `source_position`, `actor_id`, `parent_actor_id`, `observed_at`, `encoding`, `payload` |
+| `translation_records` | one translation verdict | `raw_event_id` (PK), `translator_version`, **`decision`** ∈ `translated` / `ignored_nonsemantic` / `ignored_unknown` / `translation_failed`, `reason`, `completed_at` — a raw row with NO verdict is the untranslated backlog |
 | `canonical_events` | one interpreted fact | **`cursor`** (monotonic), `event_id` (unique), `schema_version`, **`event_type`**, `session_id`, `actor_id`, `turn_id`, `parent_actor_id`, `harness`, **`occurred_at`** (NULLABLE), `accepted_at`, `payload` |
 | `canonical_provenance` | one (event, evidence) link | `event_id`, `raw_event_id`, `event_order`, **`storage_result`** ∈ `accepted` / `deduplicated` |
-| `source_checkpoints` | how far one source is read | `source_identity`, `session_id`, **`position`** |
-| `session_harness` | one recognized session | `session_id`, `lead_actor_id`, `harness`, `native_session_id`, **`source_reference`** (the transcript/rollout path), `working_directory`, `native_process_id` |
+| `session_harness` | one registered session (insert-once, at launch, by the wrapper) | `session_id`, `lead_actor_id`, `harness`, `native_session_id`, **`source_reference`** (the transcript/rollout path), `working_directory`, `native_process_id`, `registered_at` |
+| `watches` | one active file watch (applied from a `watch` raw event) | `session_id`, `operation_id`, `source_path`, `chunk_source_type`, **`state`** ∈ `active` / `finishing`, `created_at` — removed once drained |
 | `session_application_state` | one session's UI state | composer text/origin/sequence, queued messages, dialog attention id/answers |
-| `actor_harness` | one actor's owning harness | `session_id`, `actor_id`, `harness` |
 | `event_store_metadata` | store-wide settings | `schema_version` — must equal `domain.codec.SCHEMA_VERSION` or the store refuses to open |
 
-**`source_type` vocabulary** (which observer produced the evidence): pushed —
-`hook`, `otel`, `account`; pulled — `transcript`, `rollout`, `foreground_output`,
-`liveness`, `process`, `repair`, and the child/teammate variants
-`child_transcript`, `teammate_transcript`, `child_rollout`, `child_replay`,
-`sidecar_rollout`.
+**`source_type` vocabulary** (which observer produced the evidence): recorded by
+short-lived processes — `hook`, `teammate_hook`, `otel`, `account`, `process` (the
+wrappers), `watch` (a hook's file-watch directive); pulled by the interpreter —
+`transcript`, `rollout`, `foreground_output` (watch chunks), `tasks`, `task_list`,
+and the child/teammate variants `child_transcript`, `teammate_transcript`,
+`child_rollout`, `child_replay`, `sidecar_rollout`, `sidecar_replay`.
 
 **`event_type` vocabulary** (33, from `domain.events.EVENT_TYPES`):
 `session.started` / `.finished` / `.title_changed` / `.account_changed` /
@@ -124,28 +134,43 @@ COLUMN.** The `browser-*` telemetry rows leave it empty and bury it in the JSON,
 
 ## Triage order
 
-1. **Establish the session exists and which harness owns it.**
-   `SELECT * FROM session_harness WHERE session_id='<sid>'` — `harness` decides whose
-   translator and whose control gestures apply; `source_reference` is the file the pulled
-   sources read.
-2. **Compare each source's checkpoint against its source.** This is the fastest way to
-   find a frozen feed (below).
-3. **Ask whether the scheduler is alive** — the `max(observed_at)` per `source_type`
-   query below. It answers "is this session-specific or machine-wide?" in one row set.
-4. **Read the translation verdicts** for the session: an `ignored_unknown` or
+1. **Establish the session is REGISTERED and which harness owns it.**
+   `SELECT * FROM session_harness WHERE session_id='<sid>'` — no row means the wrapper
+   never registered it (bare launch without the wrapper, or a wrapper failure): its raw
+   evidence exists but stays untranslated and the session is invisible. `harness`
+   decides whose translator and control gestures apply; `source_reference` is the file
+   the pulled sources read.
+2. **Measure the untranslated backlog** — the fastest health check of the interpreter:
+   ```sql
+   SELECT count(*), min(id), max(id) FROM raw_events
+   LEFT JOIN translation_records USING(raw_event_id)
+   JOIN session_harness USING(session_id)
+   WHERE translation_records.raw_event_id IS NULL;
+   ```
+   A growing backlog with a stuck `min(id)` names the wedge (its `raw_event_id`); an
+   empty backlog with a stale feed means recording stopped, not interpreting.
+3. **Compare each pulled source's position against its file.** The position is the last
+   recorded raw event: `SELECT source_position FROM raw_events WHERE source_identity=?
+   ORDER BY id DESC LIMIT 1` against the real size of `source_reference`.
+4. **Ask whether the interpreter is alive** — the `max(observed_at)` per `source_type`
+   query below. Pulled types stale while `hook`/`otel` are current = the interpreter
+   thread stopped, machine-wide.
+5. **Read the translation verdicts** for the session: an `ignored_unknown` or
    `translation_failed` run explains a *specific* thing missing while everything else
    flows.
-5. **`errors` around the symptom's timestamp**, then `state_files` for the gesture.
-6. **Exact bytes**: `bin/baqylau-audit.py session <sid>` when you need to see what a
+6. **`errors` around the symptom's timestamp** (`func` prefixed `interpreter (...)` for
+   pull/translate/react swallows, `claude hook (record)` / `codex hook (record)` for
+   recorder swallows), then `state_files` for the gesture.
+7. **Exact bytes**: `bin/baqylau-audit.py session <sid>` when you need to see what a
    source actually emitted rather than what we made of it.
 
 ## Known bug shapes → what to look for
 
 ### A session looks alive but its conversation stops (messages missing, feed frozen)
 
-**The headline shape, and the first thing to rule out.** The scheduler thread died, so
-every *pulled* source froze while *pushed* sources kept flowing — which is exactly why the
-session still looks alive.
+**The headline shape, and the first thing to rule out.** The interpreter thread died (or
+its backlog wedged), so nothing turns canonical while recorder processes keep appending
+raw evidence — which is exactly why the session still looks partly alive.
 
 One query names it:
 
@@ -154,38 +179,53 @@ SELECT source_type, datetime(max(observed_at),'unixepoch','localtime')
 FROM raw_events GROUP BY 1 ORDER BY 2 DESC;
 ```
 
-If `hook`/`otel` are current but `transcript`/`rollout`/`foreground_output`/`liveness`/
-`process` all stop at the **same instant**, the `ObservationRunner` thread stopped at that
-instant — machine-wide, every session, not just this one. Confirm with the checkpoint:
+If `hook`/`otel`/`process` are current but `transcript`/`rollout`/`foreground_output`
+all stop at the **same instant**, the `Interpreter` thread stopped at that instant —
+machine-wide, every session, not just this one. Distinguish the two sub-shapes with the
+backlog query from the triage order:
 
-```sql
-SELECT source_identity, position FROM source_checkpoints WHERE session_id='<sid>';
-```
+- **backlog growing** → the thread is dead or a raw event has no verdict. The
+  interpreter verdicts even translator BUGS (`translation_failed` with the exception
+  name), so a persistent wedge should be impossible; if `min(id)` is stuck, read that
+  raw event and the matching `errors` rows (`func` = `interpreter (translation)` /
+  `interpreter (canonical consistency)`).
+- **backlog empty, pulled types stale** → pulling stopped: look for `errors` rows with
+  `func` = `interpreter (source read)` / `interpreter (source construction)` /
+  `interpreter (tick)`, and check the position-vs-file-size comparison per source.
 
-against the real size of `session_harness.source_reference`. A `position` far below the
-file size, frozen, with the file still growing, is conclusive. (Measured instance: position
-10,744 of 527,284 — 12 of 165 lines — and exactly two `message.created` events for a
-session that had run for hours.)
+Their *absence*, together with frozen pulled sources, means the thread died some other
+way (or the server is running pre-fix code — it does **not** hot-reload; check
+`bin/baqylau-dashboard.py status` and the process start time against the fix).
 
-`ObservationRunner` now contains failures per source *and* per pass, auditing each swallow
-as an `errors` row with `func` `observation (source drain)` / `observation (observation
-pass)` and a `context` naming the `source_identity`. **So on a current build, look for
-those rows first** — they name the failing source directly. Their *absence*, together with
-frozen pulled sources, means the thread died some other way (or the server is running
-pre-fix code — it does **not** hot-reload; check `bin/baqylau-dashboard.py status` and the
-process start time against the fix).
-
-A restart is not a fix on its own: the source re-drains from its checkpoint and, if the
-underlying record still fails, freezes again within seconds. Reproduce before and after:
+A restart is not a fix on its own: the source re-reads from its last recorded position
+and, if the underlying record still fails, degrades again within seconds. Reproduce before and after:
 
 ```python
 BAQYLAU_DATA_DIR=<a .backup copy>  # never the live store
 from app.bootstrap import build_default_application
-build_default_application().observation_runner.run_once()
+build_default_application().interpreter.tick()
 ```
 
 Take the copy with `sqlite3 "file:<events.db>?mode=ro" ".backup '<dest>'"` — a plain `cp`
 of a WAL database yields `database disk image is malformed` and wastes a triage cycle.
+
+### A session never appears at all, though the harness is clearly running
+
+Registration is a LAUNCH-TIME act: only the wrapper (`plugins/claude_code/command.py`,
+`plugins/codex/command.py`) writes `session_harness`. Hooks record evidence but never
+register. So a harness launched WITHOUT its wrapper produces raw events that wait,
+untranslated, for a registration that never comes:
+
+```sql
+SELECT session_id, count(*), datetime(max(observed_at),'unixepoch','localtime')
+FROM raw_events
+WHERE session_id NOT IN (SELECT session_id FROM session_harness)
+GROUP BY 1 ORDER BY 3 DESC;
+```
+
+Rows here are recorded-but-invisible sessions. The fix is launching through the wrapper
+(the shell aliases and the dashboard launcher both do); registering the session
+afterwards makes the waiting evidence interpret on the next tick — nothing was lost.
 
 ### The dashboard is unreachable, or needed several refreshes to load
 
@@ -297,6 +337,6 @@ code path responsible (file + mechanism), (4) a suggested fix. If the evidence i
 inconclusive, say exactly which signal is missing and what extra instrumentation would
 capture it next time.
 
-Two habits that paid off and are cheap to repeat: **compare a checkpoint against its
-source** before theorising, and **reproduce against a `.backup` copy** so you can prove the
-failure and then prove the fix.
+Two habits that paid off and are cheap to repeat: **compare a source's last recorded
+position against its file** before theorising, and **reproduce against a `.backup` copy**
+so you can prove the failure and then prove the fix.

@@ -88,10 +88,10 @@ def serve():
         httpd.canonical_application = application
         observation_stop = threading.Event()
         observation_thread = threading.Thread(
-            target=application.observation_runner.run,
+            target=application.interpreter.run,
             args=(observation_stop,),
             daemon=True,
-            name="baqylau-observation",
+            name="baqylau-interpreter",
         )
         observation_thread.start()
         usage_stop = threading.Event()

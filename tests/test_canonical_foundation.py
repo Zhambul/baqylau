@@ -1,27 +1,27 @@
-"""Contract tests for the canonical spine in the architecture proposal."""
+"""Contract tests for the canonical spine: record, register, interpret."""
 
 from __future__ import annotations
 
 import json
 import sqlite3
 from dataclasses import replace
-from types import SimpleNamespace
 
 import pytest
 
-from app.delivery import ApplicationEventDelivery, SessionLifecycleService
 from app.host import ApplicationHost
-from app.observe import ObservationRunner
+from app.interpreter import Interpreter
 from app.evidence_cli import main as evidence_main
 from contracts.harness import (
+    FileWatch,
     HarnessInfo,
     HarnessPlugin,
-    IngestionResult,
     RawEvent,
-    RecognizedSession,
-    SourceCheckpoint,
+    RawEventSourceContext,
+    Session,
     TranslationError,
     TranslationResult,
+    watch_finish_raw_event,
+    watch_start_raw_event,
 )
 from domain.codec import SCHEMA_VERSION, CanonicalCodecError, CanonicalEventCodec
 from domain.events import (
@@ -32,6 +32,7 @@ from domain.events import (
     CanonicalEvent,
     MessageCreated,
     OperationInputProvided,
+    SessionFinished,
     SessionStarted,
 )
 from domain.ids import (
@@ -45,39 +46,21 @@ from domain.ids import (
     stable_event_id,
 )
 from domain.values import StructuredContent, TextContent
-from runtime.event_store import EventIdentityConflict, EventStore, EventStoreError
+from runtime.canonical_store import CanonicalEventStore
 from runtime.database import connect
 from runtime.evidence import EvidenceQueries
-from runtime.ingest import EventPipeline
-from runtime.registry import HarnessRegistry, HarnessRegistryError
-from runtime.state import SqliteCheckpointStore
+from runtime.harnesses import HarnessRegistry, HarnessRegistryError
+from runtime.recorder import EventIdentityConflict, RawEventRecorder
+from runtime.sessions import SessionRegistry, SessionRegistryError, UnknownSession
+from runtime.watches import WatchRegistry
 from dashboard.presenter import DashboardPresenter
 from runtime.projections import ActivityScope, SessionQueries
 from terminal.presenter import TerminalPresenter
 
 
-class FixedSessionRecognizer:
-    def __init__(self, session: RecognizedSession) -> None:
-        self.session = session
-
-    def discover(self) -> tuple[RecognizedSession, ...]:
-        return (self.session,)
-
-    def recognize(self, candidate):
-        return self.session if candidate.source_reference == self.session.source_reference else None
-
-
-class FixedEvents:
-    def __init__(
-        self,
-        translation: TranslationResult | TranslationError,
-        sources=(),
-    ) -> None:
+class FixedTranslator:
+    def __init__(self, translation: TranslationResult | TranslationError) -> None:
         self.translation = translation
-        self.event_sources = sources
-
-    def sources(self, session, checkpoints):
-        return self.event_sources
 
     def translate(self, raw_event):
         if isinstance(self.translation, TranslationError):
@@ -85,20 +68,124 @@ class FixedEvents:
         return self.translation
 
 
-class FixedSource:
-    def __init__(self, raw_event: RawEvent) -> None:
-        self.raw_event = raw_event
+class FixedSources:
+    def __init__(self, sources=()) -> None:
+        self.fixed = sources
 
-    def drain(self, delivery) -> None:
-        delivery.deliver(self.raw_event)
+    def for_session(self, session):
+        return self.fixed
 
 
-class PipelineDelivery:
-    def __init__(self, pipeline: EventPipeline) -> None:
-        self.pipeline = pipeline
+class FixedReadSource:
+    """Emits its raw events once; the recorded position latches it shut."""
 
-    def deliver(self, raw_event: RawEvent):
-        return self.pipeline.ingest(raw_event)
+    def __init__(self, raw_events: tuple[RawEvent, ...], identity: str = "fixture:source") -> None:
+        self.raw_events = raw_events
+        self.source_identity = identity
+
+    def read(self, after_position):
+        if after_position is not None:
+            return ()
+        return self.raw_events
+
+
+class NullTerminal:
+    def close_session_panes(self, session_id):
+        return None
+
+    def hosting_session(self, excluding_session_id):
+        return SessionId("already-hosting")
+
+    def current_window(self):
+        return None
+
+    def window_for_session(self, session_id):
+        return None
+
+
+class NullControls:
+    def execute(self, request):
+        raise AssertionError(f"unexpected control: {request}")
+
+
+def example_session(session_id: str = "session-one") -> Session:
+    return Session(
+        session_id=SessionId(session_id),
+        lead_actor_id=ActorId("actor-lead"),
+        native_session_id=f"native-{session_id}",
+        source_reference="fixture.jsonl",
+        working_directory="/work",
+    )
+
+
+def example_plugin(
+    translation: TranslationResult | TranslationError,
+    sources=(),
+    name: str = "example",
+) -> HarnessPlugin:
+    return HarnessPlugin(
+        info=HarnessInfo(name, name.title(), "1.0", SCHEMA_VERSION),
+        sources=FixedSources(sources),
+        translator=FixedTranslator(translation),
+    )
+
+
+def canonical_message(
+    *,
+    event_id: str = "event-message",
+    session_id: str = "session-one",
+    actor_id: str = "actor-lead",
+    harness: str = "example",
+    text: str = "hello",
+) -> CanonicalEvent:
+    return CanonicalEvent(
+        event_id=CanonicalEventId(event_id),
+        session_id=SessionId(session_id),
+        actor_id=ActorId(actor_id),
+        turn_id=None,
+        parent_actor_id=None,
+        harness=harness,
+        occurred_at=10.0,
+        payload=MessageCreated(
+            message_id=MessageId("message-one"),
+            role="user",
+            content=TextContent(text),
+            phase="prompt",
+            reply_to=None,
+        ),
+    )
+
+
+def raw_observation(raw_event_id: str, *, harness: str = "example", payload: bytes = b'{"kind":"message"}'):
+    return RawEvent(
+        raw_event_id=RawEventId(raw_event_id),
+        harness=harness,
+        source_type="pulled",
+        source_name="fixture.jsonl",
+        source_position="0",
+        session_id=SessionId("session-one"),
+        actor_id=ActorId("actor-lead"),
+        parent_actor_id=None,
+        observed_at=11.0,
+        encoding="jsonl",
+        payload=payload,
+        source_identity="fixture:source",
+    )
+
+
+def registered_runtime(tmp_path, translation: TranslationResult | TranslationError, sources=()):
+    database_path = str(tmp_path / "events.db")
+    harnesses = HarnessRegistry()
+    harnesses.register(example_plugin(translation, sources))
+    sessions = SessionRegistry(database_path, harnesses)
+    sessions.register("example", example_session())
+    recorder = RawEventRecorder(database_path)
+    store = CanonicalEventStore(database_path)
+    watches = WatchRegistry(database_path)
+    interpreter = Interpreter(
+        sessions, harnesses, recorder, watches, store, NullControls(), NullTerminal()
+    )
+    return store, recorder, sessions, interpreter
 
 
 @pytest.mark.parametrize(
@@ -184,21 +271,44 @@ def test_runtime_database_connection_is_closed(tmp_path):
         opened_connection.execute("SELECT * FROM example")
 
 
-def test_registered_candidate_is_not_a_canonical_session(tmp_path):
-    event_store = EventStore(str(tmp_path / "events.db"))
-    event_store.register_session(
-        "example",
-        RecognizedSession(
-            SessionId("candidate"),
-            ActorId("lead"),
-            "native-candidate",
-            "/tmp/candidate.jsonl",
-            "/work",
-            None,
-        ),
-    )
+def test_a_registered_session_is_not_yet_a_canonical_session(tmp_path):
+    sessions = SessionRegistry(str(tmp_path / "events.db"))
+    sessions.register("example", example_session("candidate"))
 
-    assert event_store.session_ids() == ()
+    assert CanonicalEventStore(str(tmp_path / "events.db")).session_ids() == ()
+
+
+def test_session_registration_is_insert_once(tmp_path):
+    """The row is the FIRST observation of the session and is immutable.
+
+    Everything that changes over a session's life (working directory, title,
+    model) is a canonical fact; a second registration is a wrapper bug.
+    """
+    sessions = SessionRegistry(str(tmp_path / "events.db"))
+    sessions.register("example", example_session())
+
+    with pytest.raises(SessionRegistryError, match="already registered"):
+        sessions.register("example", replace(example_session(), working_directory="/elsewhere"))
+
+    loaded = sessions.find(SessionId("session-one"))
+    assert loaded is not None and loaded.working_directory == "/work"
+
+
+def test_sessions_carry_their_plugin_only_when_harnesses_are_attached(tmp_path):
+    database_path = str(tmp_path / "events.db")
+    harnesses = HarnessRegistry()
+    plugin = example_plugin(TranslationResult((), "ignored_nonsemantic"))
+    harnesses.register(plugin)
+    SessionRegistry(database_path).register("example", example_session())
+
+    recorder_side = SessionRegistry(database_path).load(SessionId("session-one"))
+    server_side = SessionRegistry(database_path, harnesses).load(SessionId("session-one"))
+
+    assert recorder_side.plugin is None
+    assert server_side.plugin is plugin
+    assert recorder_side == server_side  # attachment, not identity
+    with pytest.raises(UnknownSession):
+        SessionRegistry(database_path).load(SessionId("missing"))
 
 
 def test_application_host_starts_one_silent_singleton(monkeypatch):
@@ -228,106 +338,25 @@ def test_public_dashboard_url_is_an_allowed_post_origin():
     assert config.PUBLIC_URL in config.ALLOWED_ORIGINS
 
 
-def canonical_message(
-    *,
-    event_id: str = "event-message",
-    session_id: str = "session-one",
-    actor_id: str = "actor-lead",
-    harness: str = "example",
-    text: str = "hello",
-) -> CanonicalEvent:
-    return CanonicalEvent(
-        event_id=CanonicalEventId(event_id),
-        session_id=SessionId(session_id),
-        actor_id=ActorId(actor_id),
-        turn_id=None,
-        parent_actor_id=None,
-        harness=harness,
-        occurred_at=10.0,
-        payload=MessageCreated(
-            message_id=MessageId("message-one"),
-            role="user",
-            content=TextContent(text),
-            phase="prompt",
-            reply_to=None,
-        ),
+def test_harness_registry_requires_one_explicit_default_when_launchers_exist():
+    registry = HarnessRegistry()
+    registry.register(
+        replace(
+            example_plugin(TranslationResult((), "ignored_nonsemantic")),
+            launcher=object(),
+        )
     )
-
-
-def raw_observation(raw_event_id: str, *, harness: str = "example", payload: bytes = b'{"kind":"message"}'):
-    return RawEvent(
-        raw_event_id=RawEventId(raw_event_id),
-        harness=harness,
-        source_type="transcript",
-        source_name="fixture.jsonl",
-        source_position="0",
-        session_id=SessionId("session-one"),
-        actor_id=ActorId("actor-lead"),
-        parent_actor_id=None,
-        observed_at=11.0,
-        encoding="jsonl",
-        payload=payload,
-    )
-
-
-def registered_runtime(tmp_path, translation: TranslationResult | TranslationError):
-    store = EventStore(str(tmp_path / "events.db"))
-    session = RecognizedSession(
-        session_id=SessionId("session-one"),
-        lead_actor_id=ActorId("actor-lead"),
-        native_session_id="native-one",
-        source_reference="fixture.jsonl",
-        working_directory="/work",
-    )
-    plugin = HarnessPlugin(
-        info=HarnessInfo("example", "Example", "1.0", SCHEMA_VERSION),
-        sessions=FixedSessionRecognizer(session),
-        events=FixedEvents(translation),
-    )
-    registry = HarnessRegistry(store)
-    registry.register(plugin)
-    store.register_session("example", session)
-    registry.discover_sessions()
-    return store, registry, EventPipeline(registry, store)
-
-
-def test_registry_requires_one_explicit_default_when_launchers_exist(tmp_path):
-    store = EventStore(str(tmp_path / "events.db"))
-    session = RecognizedSession(
-        SessionId("session-one"),
-        ActorId("actor-lead"),
-        "native-one",
-        "fixture.jsonl",
-        "/work",
-    )
-    plugin = HarnessPlugin(
-        HarnessInfo("example", "Example", "1", SCHEMA_VERSION),
-        FixedSessionRecognizer(session),
-        FixedEvents(TranslationResult((), "ignored_nonsemantic")),
-        launcher=object(),
-    )
-    registry = HarnessRegistry(store)
-    registry.register(plugin)
 
     with pytest.raises(HarnessRegistryError, match="no launchable harness"):
         registry.validate()
 
 
-def test_registry_rejects_multiple_launch_defaults(tmp_path):
-    store = EventStore(str(tmp_path / "events.db"))
-    session = RecognizedSession(
-        SessionId("session-one"),
-        ActorId("actor-lead"),
-        "native-one",
-        "fixture.jsonl",
-        "/work",
-    )
-    registry = HarnessRegistry(store)
+def test_harness_registry_rejects_multiple_launch_defaults():
+    registry = HarnessRegistry()
     for name in ("first", "second"):
-        plugin = HarnessPlugin(
-            HarnessInfo(name, name.title(), "1", SCHEMA_VERSION, default_for_launch=True),
-            FixedSessionRecognizer(session),
-            FixedEvents(TranslationResult((), "ignored_nonsemantic")),
+        plugin = replace(
+            example_plugin(TranslationResult((), "ignored_nonsemantic"), name=name),
+            info=HarnessInfo(name, name.title(), "1", SCHEMA_VERSION, default_for_launch=True),
             launcher=object(),
         )
         if name == "first":
@@ -380,151 +409,31 @@ def test_stable_event_id_names_the_same_fact_and_distinguishes_its_phase():
     )
 
 
-def test_application_delivery_applies_lifecycle_only_after_ingestion():
-    event = CanonicalEvent(
-        CanonicalEventId("session-started"),
-        SessionId("session-one"),
-        ActorId("actor-lead"),
-        None,
-        None,
-        "example",
-        10.0,
-        SessionStarted("/work", None, None, None, None, None),
-    )
-    calls = []
+def test_evidence_for_an_unregistered_session_waits_in_the_backlog(tmp_path):
+    """A hook may beat the wrapper's registration; nothing is lost or interpreted early."""
+    database_path = str(tmp_path / "events.db")
+    recorder = RawEventRecorder(database_path)
+    store = CanonicalEventStore(database_path)
+    recorder.record((raw_observation("raw-early"),))
 
-    class Pipeline:
-        def ingest(self, raw_event):
-            calls.append(("ingest", raw_event.raw_event_id))
-            return IngestionResult(
-                raw_event.raw_event_id,
-                "translated",
-                (event.event_id,),
-                (),
-                1,
-            )
+    assert store.untranslated_raw_events(10) == ()
 
-    class Store:
-        def require_event(self, event_id):
-            calls.append(("read", event_id))
-            return SimpleNamespace(event=event)
-
-    class Lifecycle:
-        def apply(self, applied_event):
-            calls.append(("lifecycle", applied_event.event_id))
-
-    ApplicationEventDelivery(Pipeline(), Store(), Lifecycle()).deliver(
-        raw_observation("raw-session-started")
-    )
-
-    assert calls == [
-        ("ingest", RawEventId("raw-session-started")),
-        ("read", event.event_id),
-        ("lifecycle", event.event_id),
-    ]
+    SessionRegistry(database_path).register("example", example_session())
+    backlog = store.untranslated_raw_events(10)
+    assert [raw.raw_event_id for raw in backlog] == [RawEventId("raw-early")]
 
 
-def test_application_delivery_does_not_repeat_lifecycle_for_deduplicated_facts():
-    class Pipeline:
-        def ingest(self, raw_event):
-            return IngestionResult(
-                raw_event.raw_event_id,
-                "translated",
-                (),
-                (CanonicalEventId("already-stored"),),
-                1,
-            )
-
-    class Store:
-        def require_event(self, event_id):
-            raise AssertionError(f"deduplicated event was read: {event_id}")
-
-    class Lifecycle:
-        def apply(self, event):
-            raise AssertionError(f"deduplicated lifecycle was repeated: {event}")
-
-    ApplicationEventDelivery(Pipeline(), Store(), Lifecycle()).deliver(
-        raw_observation("raw-retry")
-    )
-
-
-def test_raw_event_replay_does_not_repeat_committed_lifecycle(tmp_path):
-    event = CanonicalEvent(
-        CanonicalEventId("session-started"),
-        SessionId("session-one"),
-        ActorId("actor-lead"),
-        None,
-        None,
-        "example",
-        10.0,
-        SessionStarted("/work", None, None, None, None, None),
-    )
-    store, _registry, pipeline = registered_runtime(
-        tmp_path,
-        TranslationResult((event,), "translated"),
-    )
-    applied = []
-
-    class Lifecycle:
-        def apply(self, applied_event):
-            applied.append(applied_event.event_id)
-
-    delivery = ApplicationEventDelivery(pipeline, store, Lifecycle())
-    raw_event = raw_observation("raw-session-started")
-    delivery.deliver(raw_event)
-    delivery.deliver(replace(raw_event, observed_at=99.0))
-
-    assert applied == [event.event_id]
-
-
-def test_session_lifecycle_service_routes_only_session_facts():
-    actions = []
-
-    class Lifecycle:
-        def apply(self, request, session, context):
-            actions.append((request.action, session.session_id, context))
-
-    session = RecognizedSession(
-        SessionId("session-one"),
-        ActorId("actor-lead"),
-        "native-one",
-        "fixture.jsonl",
-        "/work",
-    )
-    context = object()
-    registered = SimpleNamespace(
-        plugin=SimpleNamespace(lifecycle=Lifecycle()),
-        session=session,
-    )
-    registry = SimpleNamespace(registered_session=lambda session_id: registered)
-    service = SessionLifecycleService(registry, context)
-    started = CanonicalEvent(
-        CanonicalEventId("session-started"),
-        session.session_id,
-        session.lead_actor_id,
-        None,
-        None,
-        "example",
-        10.0,
-        SessionStarted("/work", None, None, None, None, None),
-    )
-
-    service.apply(started)
-    service.apply(canonical_message())
-
-    assert actions == [("started", session.session_id, context)]
-
-
-def test_ingestion_commits_raw_translation_canonical_and_provenance_together(tmp_path):
+def test_interpretation_commits_verdict_canonical_and_provenance_together(tmp_path):
     event = canonical_message()
-    translation = TranslationResult((event,), "translated")
-    store, _registry, pipeline = registered_runtime(tmp_path, translation)
+    store, recorder, _sessions, interpreter = registered_runtime(
+        tmp_path, TranslationResult((event,), "translated")
+    )
+    recorder.record((raw_observation("raw-one"),))
 
-    result = pipeline.ingest(raw_observation("raw-one"))
-    assert result.accepted_event_ids == (event.event_id,)
-    assert result.deduplicated_event_ids == ()
+    interpreter.tick()
+
+    assert store.untranslated_raw_events(10) == ()
     assert store.after(SessionId("session-one"), 0, 10).events[0].event == event
-
     connection = sqlite3.connect(store.database_path)
     assert connection.execute("SELECT count(*) FROM raw_events").fetchone()[0] == 1
     assert connection.execute("SELECT decision FROM translation_records").fetchone()[0] == "translated"
@@ -535,31 +444,31 @@ def test_ingestion_commits_raw_translation_canonical_and_provenance_together(tmp
 
 def test_replay_is_idempotent_and_a_second_observation_adds_provenance(tmp_path):
     event = canonical_message()
-    translation = TranslationResult((event,), "translated")
-    store, _registry, pipeline = registered_runtime(tmp_path, translation)
+    store, recorder, _sessions, interpreter = registered_runtime(
+        tmp_path, TranslationResult((event,), "translated")
+    )
+    recorder.record((raw_observation("raw-one"),))
+    interpreter.tick()
+    # An identical re-record is a no-op; a second observation converges.
+    recorder.record((replace(raw_observation("raw-one"), observed_at=99.0),))
+    recorder.record((raw_observation("raw-two"),))
+    interpreter.tick()
 
-    first = pipeline.ingest(raw_observation("raw-one"))
-    retried = replace(raw_observation("raw-one"), observed_at=99.0)
-    replay = pipeline.ingest(retried)
-    second = pipeline.ingest(raw_observation("raw-two"))
-
-    assert replay.accepted_event_ids == ()
-    assert replay.deduplicated_event_ids == (event.event_id,)
-    assert replay.latest_cursor == first.latest_cursor
-    assert second.accepted_event_ids == ()
-    assert second.deduplicated_event_ids == (event.event_id,)
     stored = store.after(SessionId("session-one"), 0, 10).events
     assert len(stored) == 1
     assert stored[0].raw_event_ids == (RawEventId("raw-one"), RawEventId("raw-two"))
+    connection = sqlite3.connect(store.database_path)
+    assert connection.execute(
+        "SELECT storage_result FROM canonical_provenance WHERE raw_event_id='raw-two'"
+    ).fetchone()[0] == "deduplicated"
 
 
-def test_reused_raw_identity_rolls_back_the_complete_observation(tmp_path):
-    event = canonical_message()
-    _store, _registry, pipeline = registered_runtime(tmp_path, TranslationResult((event,), "translated"))
-    pipeline.ingest(raw_observation("raw-one"))
+def test_reused_raw_identity_is_corruption_not_convergence(tmp_path):
+    recorder = RawEventRecorder(str(tmp_path / "events.db"))
+    recorder.record((raw_observation("raw-one"),))
 
     with pytest.raises(EventIdentityConflict, match="raw event identity reused"):
-        pipeline.ingest(raw_observation("raw-one", payload=b"different"))
+        recorder.record((raw_observation("raw-one", payload=b"different"),))
 
 
 def test_re_observing_one_fact_is_idempotent_even_when_observers_disagree(tmp_path):
@@ -567,30 +476,21 @@ def test_re_observing_one_fact_is_idempotent_even_when_observers_disagree(tmp_pa
 
     Several sources legitimately converge on one event (a hook, the transcript, the
     foreground tee) and may render it differently. The first writer stays authoritative
-    and the later rendering stays recoverable from its own raw evidence. Raising here
-    instead aborted the whole observation pass and killed the scheduler thread.
+    and the later rendering stays recoverable from its own raw evidence.
     """
-    store = EventStore(str(tmp_path / "events.db"))
-    store.register_session(
-        "example",
-        RecognizedSession(
-            session_id=SessionId("session-one"),
-            lead_actor_id=ActorId("actor-lead"),
-            native_session_id="native-one",
-            source_reference="fixture.jsonl",
-            working_directory="/work",
-        ),
+    store, recorder, _sessions, _interpreter = registered_runtime(
+        tmp_path, TranslationResult((), "ignored_nonsemantic")
     )
-    store.record(raw_observation("raw-one"), "1.0", TranslationResult((canonical_message(),), "translated"))
-
-    result = store.record(
+    recorder.record((raw_observation("raw-one"), raw_observation("raw-two")))
+    store.store_translation(
+        raw_observation("raw-one"), "1.0", TranslationResult((canonical_message(),), "translated")
+    )
+    store.store_translation(
         raw_observation("raw-two"),
         "1.0",
         TranslationResult((canonical_message(text="changed"),), "translated"),
     )
 
-    assert result.accepted == ()
-    assert result.duplicate_event_ids == (CanonicalEventId("event-message"),)
     stored = store.after(SessionId("session-one"), 0, 10).events
     assert len(stored) == 1
     assert stored[0].event.payload.content.text == "hello"
@@ -603,28 +503,32 @@ def test_re_observing_one_fact_is_idempotent_even_when_observers_disagree(tmp_pa
 
 
 def test_translation_cannot_move_raw_evidence_to_another_actor(tmp_path):
+    """A translator that rewrites provenance fields gets a failure verdict, not a wedge."""
     event = canonical_message(actor_id="actor-child")
-    store, _registry, pipeline = registered_runtime(
-        tmp_path,
-        TranslationResult((event,), "translated"),
+    store, recorder, _sessions, interpreter = registered_runtime(
+        tmp_path, TranslationResult((event,), "translated")
     )
+    recorder.record((raw_observation("raw-child"),))
 
-    with pytest.raises(EventStoreError, match="actor does not match"):
-        pipeline.ingest(raw_observation("raw-child"))
+    interpreter.tick()
 
     connection = sqlite3.connect(store.database_path)
-    assert connection.execute(
-        "SELECT count(*) FROM raw_events WHERE raw_event_id='raw-child'"
-    ).fetchone()[0] == 0
+    assert connection.execute("SELECT count(*) FROM canonical_events").fetchone()[0] == 0
+    decision, reason = connection.execute(
+        "SELECT decision, reason FROM translation_records WHERE raw_event_id='raw-child'"
+    ).fetchone()
+    assert decision == "translation_failed"
+    assert "actor does not match" in reason
 
 
 def test_translation_failure_is_a_complete_audited_decision(tmp_path):
-    store, _registry, pipeline = registered_runtime(
-        tmp_path,
-        TranslationError("malformed record", context="line 1"),
+    store, recorder, _sessions, interpreter = registered_runtime(
+        tmp_path, TranslationError("malformed record", context="line 1")
     )
-    result = pipeline.ingest(raw_observation("raw-bad", payload=b"not json"))
-    assert result.translation_decision == "translation_failed"
+    recorder.record((raw_observation("raw-bad", payload=b"not json"),))
+
+    interpreter.tick()
+
     connection = sqlite3.connect(store.database_path)
     assert connection.execute(
         "SELECT decision, reason FROM translation_records WHERE raw_event_id='raw-bad'"
@@ -632,19 +536,51 @@ def test_translation_failure_is_a_complete_audited_decision(tmp_path):
     assert connection.execute("SELECT count(*) FROM canonical_events").fetchone()[0] == 0
 
 
+def test_a_translator_bug_becomes_a_verdict_and_never_wedges_the_backlog(tmp_path):
+    """The backlog is ordered; an unverdicted row would block everything behind it."""
+
+    class BuggyTranslator:
+        def translate(self, raw_event):
+            raise ZeroDivisionError("translator bug")
+
+    database_path = str(tmp_path / "events.db")
+    harnesses = HarnessRegistry()
+    harnesses.register(
+        HarnessPlugin(
+            info=HarnessInfo("example", "Example", "1.0", SCHEMA_VERSION),
+            sources=FixedSources(),
+            translator=BuggyTranslator(),
+        )
+    )
+    sessions = SessionRegistry(database_path, harnesses)
+    sessions.register("example", example_session())
+    recorder = RawEventRecorder(database_path)
+    store = CanonicalEventStore(database_path)
+    interpreter = Interpreter(
+        sessions, harnesses, recorder, WatchRegistry(database_path), store, NullControls(), NullTerminal()
+    )
+    recorder.record((raw_observation("raw-bug"),))
+
+    interpreter.tick()
+
+    connection = sqlite3.connect(store.database_path)
+    decision, reason = connection.execute(
+        "SELECT decision, reason FROM translation_records WHERE raw_event_id='raw-bug'"
+    ).fetchone()
+    assert decision == "translation_failed"
+    assert "ZeroDivisionError" in reason
+    assert store.untranslated_raw_events(10) == ()
+
+
 def test_evidence_cli_prints_exact_raw_and_canonical_correlation(tmp_path, monkeypatch, capsys):
     data_directory = tmp_path / "data"
-    store = EventStore(str(data_directory / "events.db"))
-    session = RecognizedSession(
-        SessionId("session-one"),
-        ActorId("actor-lead"),
-        "native-one",
-        "fixture",
-        "/work",
-    )
-    store.register_session("example", session)
+    database_path = str(data_directory / "events.db")
+    SessionRegistry(database_path).register("example", example_session())
+    recorder = RawEventRecorder(database_path)
+    store = CanonicalEventStore(database_path)
     raw_event = raw_observation("raw-one", payload=b"exact bytes\n")
-    store.record(raw_event, "1", TranslationResult((canonical_message(),), "translated"))
+    recorder.record((raw_event,))
+    store.store_translation(raw_event, "1", TranslationResult((canonical_message(),), "translated"))
     monkeypatch.setenv("BAQYLAU_DATA_DIR", str(data_directory))
 
     assert evidence_main(["raw", "raw-one"]) == 0
@@ -654,104 +590,29 @@ def test_evidence_cli_prints_exact_raw_and_canonical_correlation(tmp_path, monke
     assert document["canonical"][0]["event"]["event_id"] == "event-message"
 
 
-def test_actor_start_persists_mixed_harness_ownership(tmp_path):
-    store = EventStore(str(tmp_path / "events.db"))
-    session = RecognizedSession(
-        SessionId("session-one"),
-        ActorId("actor-lead"),
-        "native-one",
-        "fixture",
-        "/work",
-    )
-    store.register_session("lead_harness", session)
-    event = CanonicalEvent(
-        event_id=CanonicalEventId("actor-start"),
-        session_id=session.session_id,
-        actor_id=ActorId("actor-child"),
-        turn_id=None,
-        parent_actor_id=ActorId("actor-lead"),
-        harness="child_harness",
-        occurred_at=10.0,
-        payload=ActorStarted("worker", "child"),
-    )
-    store.record(
-        replace(
-            raw_observation("raw-actor", harness="child_harness"),
-            actor_id=ActorId("actor-child"),
-            parent_actor_id=ActorId("actor-lead"),
-        ),
-        "1.0",
-        TranslationResult((event,), "translated"),
-    )
-    assert store.actor_harness(session.session_id, ActorId("actor-child")) == "child_harness"
+def test_a_pulled_source_resumes_from_its_last_recorded_raw_event(tmp_path):
+    """Progress is derived from the evidence itself, so it can never drift."""
+    recorder = RawEventRecorder(str(tmp_path / "events.db"))
+    assert recorder.position("fixture:source") is None
 
+    recorder.record((
+        raw_observation("raw-one"),
+        replace(raw_observation("raw-two"), source_position="42"),
+    ))
 
-def test_recognition_registers_lead_actor_ownership_immediately(tmp_path):
-    store = EventStore(str(tmp_path / "events.db"))
-    session = RecognizedSession(
-        SessionId("session-one"),
-        ActorId("actor-lead"),
-        "native-one",
-        "fixture",
-        "/work",
-    )
-
-    store.register_session("lead_harness", session)
-
-    assert store.actor_harness(session.session_id, session.lead_actor_id) == "lead_harness"
-
-
-def test_session_source_metadata_can_move_without_changing_ownership(tmp_path):
-    store = EventStore(str(tmp_path / "events.db"))
-    session = RecognizedSession(
-        SessionId("session-one"),
-        ActorId("actor-lead"),
-        "native-one",
-        "first.jsonl",
-        "/first",
-    )
-    store.register_session("example", session)
-
-    store.register_session(
-        "example",
-        replace(session, source_reference="second.jsonl", working_directory="/second"),
-    )
-
-    connection = sqlite3.connect(store.database_path)
-    assert connection.execute(
-        "SELECT source_reference, working_directory FROM session_harness"
-    ).fetchone() == ("second.jsonl", "/second")
-
-
-def test_source_checkpoints_use_descriptive_opaque_values(tmp_path):
-    store = EventStore(str(tmp_path / "events.db"))
-    session = RecognizedSession(
-        SessionId("session-one"),
-        ActorId("lead-one"),
-        "native-one",
-        "fixture.jsonl",
-        "/work",
-    )
-    store.register_session("example", session)
-    checkpoints = SqliteCheckpointStore(store)
-    assert checkpoints.load("rollout-file") is None
-    checkpoints.commit(SourceCheckpoint(session.session_id, "rollout-file", "byte:42"))
-    assert checkpoints.load("rollout-file") == SourceCheckpoint(
-        session.session_id,
-        "rollout-file",
-        "byte:42",
-    )
-
-    store.delete_session(session.session_id)
-
-    assert checkpoints.load("rollout-file") is None
+    assert recorder.position("fixture:source") == "42"
+    assert recorder.position("someone:else") is None
 
 
 def test_evidence_queries_show_exact_raw_translation_and_canonical_chain(tmp_path):
     event = canonical_message()
-    store, _registry, pipeline = registered_runtime(tmp_path, TranslationResult((event,), "translated"))
+    store, recorder, _sessions, interpreter = registered_runtime(
+        tmp_path, TranslationResult((event,), "translated")
+    )
     raw = raw_observation("raw-one")
-    pipeline.ingest(raw)
+    recorder.record((raw,))
+    interpreter.tick()
+
     evidence = EvidenceQueries(store).raw_event(raw.raw_event_id)
     assert evidence is not None
     assert evidence.payload == raw.payload
@@ -764,54 +625,41 @@ def test_evidence_queries_show_exact_raw_translation_and_canonical_chain(tmp_pat
     assert EvidenceQueries(store).session(SessionId("session-one")) == (evidence,)
 
 
-def test_deleting_a_session_deletes_its_complete_evidence_chain(tmp_path):
-    event = canonical_message()
-    store, _registry, pipeline = registered_runtime(tmp_path, TranslationResult((event,), "translated"))
-    pipeline.ingest(raw_observation("raw-one"))
+def test_evidence_queries_show_the_untranslated_backlog(tmp_path):
+    recorder = RawEventRecorder(str(tmp_path / "events.db"))
+    store = CanonicalEventStore(str(tmp_path / "events.db"))
+    recorder.record((raw_observation("raw-waiting"),))
 
-    store.delete_session(SessionId("session-one"))
+    evidence = EvidenceQueries(store).raw_event(RawEventId("raw-waiting"))
 
-    connection = sqlite3.connect(store.database_path)
-    for table in (
-        "session_harness",
-        "actor_harness",
-        "raw_events",
-        "translation_records",
-        "canonical_events",
-        "canonical_provenance",
-    ):
-        assert connection.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0
+    assert evidence is not None
+    assert evidence.decision == "untranslated"
+    assert evidence.canonical == ()
 
 
-def test_synthetic_harness_uses_existing_observation_and_presentation_abstractions(tmp_path):
+def test_the_interpreter_pulls_translates_and_presents_in_one_tick(tmp_path):
     event = canonical_message()
     raw_event = raw_observation("synthetic-raw")
-    store = EventStore(str(tmp_path / "events.db"))
-    session = RecognizedSession(
-        SessionId("session-one"),
-        ActorId("actor-lead"),
-        "native-one",
-        "fixture.jsonl",
-        "/work",
+    store, _recorder, sessions, _interpreter = registered_runtime(
+        tmp_path, TranslationResult((event,), "translated")
     )
-    plugin = HarnessPlugin(
-        HarnessInfo("example", "Example", "1.0", SCHEMA_VERSION),
-        FixedSessionRecognizer(session),
-        FixedEvents(TranslationResult((event,), "translated"), (FixedSource(raw_event),)),
+    harnesses = HarnessRegistry()
+    harnesses.register(
+        example_plugin(TranslationResult((event,), "translated"), (FixedReadSource((raw_event,)),))
     )
-    registry = HarnessRegistry(store)
-    registry.register(plugin)
-    store.register_session("example", session)
-    pipeline = EventPipeline(registry, store)
-    observer = ObservationRunner(
-        registry,
-        SqliteCheckpointStore(store),
-        PipelineDelivery(pipeline),
+    interpreter = Interpreter(
+        SessionRegistry(store.database_path, harnesses),
+        harnesses,
+        RawEventRecorder(store.database_path),
+        WatchRegistry(store.database_path),
+        store,
+        NullControls(),
+        NullTerminal(),
     )
 
-    observer.run_once()
+    interpreter.tick()
 
-    activity = SessionQueries(store).activity_after(
+    activity = SessionQueries(store, sessions).activity_after(
         SessionId("session-one"),
         0,
         ActivityScope(),
@@ -822,8 +670,8 @@ def test_synthetic_harness_uses_existing_observation_and_presentation_abstractio
     assert terminal_update.updated_blocks[0].block_id == "message:actor-lead:message-one"
 
 
-def test_one_failing_source_neither_stops_its_siblings_nor_the_scheduler(tmp_path, monkeypatch):
-    """The scheduler drives every tailed source and nothing restarts it.
+def test_one_failing_source_neither_stops_its_siblings_nor_the_interpreter(tmp_path, monkeypatch):
+    """The interpreter drives every pulled source and nothing restarts it.
 
     An unguarded exception here once killed observation for EVERY session silently: the
     conversation stopped arriving while hooks (separate processes) kept flowing, so the
@@ -831,155 +679,184 @@ def test_one_failing_source_neither_stops_its_siblings_nor_the_scheduler(tmp_pat
     """
     audited = []
     monkeypatch.setattr(
-        "app.observe._audit_failure",
+        "app.interpreter._audit_failure",
         lambda where, context: audited.append((where, context)),
     )
 
     class BrokenSource:
         source_identity = "broken"
 
-        def drain(self, delivery):
+        def read(self, after_position):
             raise RuntimeError("this source is broken")
 
-    store = EventStore(str(tmp_path / "events.db"))
-    session = RecognizedSession(
-        SessionId("session-one"),
-        ActorId("actor-lead"),
-        "native-one",
-        "fixture.jsonl",
-        "/work",
-    )
     event = canonical_message()
     raw_event = raw_observation("raw-one")
-    plugin = HarnessPlugin(
-        HarnessInfo("example", "Example", "1.0", SCHEMA_VERSION),
-        FixedSessionRecognizer(session),
-        FixedEvents(
-            TranslationResult((event,), "translated"),
-            (BrokenSource(), FixedSource(raw_event)),
-        ),
+    store, _recorder, _sessions, _interpreter = registered_runtime(
+        tmp_path, TranslationResult((event,), "translated")
     )
-    registry = HarnessRegistry(store)
-    registry.register(plugin)
-    store.register_session("example", session)
-    observer = ObservationRunner(
-        registry,
-        SqliteCheckpointStore(store),
-        PipelineDelivery(EventPipeline(registry, store)),
+    harnesses = HarnessRegistry()
+    harnesses.register(
+        example_plugin(
+            TranslationResult((event,), "translated"),
+            (BrokenSource(), FixedReadSource((raw_event,))),
+        )
+    )
+    interpreter = Interpreter(
+        SessionRegistry(store.database_path, harnesses),
+        harnesses,
+        RawEventRecorder(store.database_path),
+        WatchRegistry(store.database_path),
+        store,
+        NullControls(),
+        NullTerminal(),
     )
 
-    observer.run_once()
+    interpreter.tick()
 
     # The healthy sibling still drained, behind the broken one.
     assert len(store.after(SessionId("session-one"), 0, 10).events) == 1
-    assert [where for where, _ in audited] == ["source drain"]
+    assert [where for where, _ in audited] == ["source read"]
     assert audited[0][1]["source_identity"] == "broken"
 
 
-def test_observer_asks_plugins_for_explicitly_related_actor_sources(tmp_path):
-    store = EventStore(str(tmp_path / "events.db"))
-    session = RecognizedSession(
-        SessionId("session-one"),
+def test_watchable_is_every_unfinished_session_without_a_count_limit(tmp_path):
+    database_path = str(tmp_path / "events.db")
+    harnesses = HarnessRegistry()
+    harnesses.register(example_plugin(TranslationResult((), "ignored_nonsemantic")))
+    sessions = SessionRegistry(database_path, harnesses)
+    store = CanonicalEventStore(database_path)
+    for index in range(6):
+        sessions.register("example", example_session(f"session-{index}"))
+
+    assert len(sessions.watchable()) == 6
+    assert all(session.plugin is not None for session in sessions.watchable())
+
+    finish = CanonicalEvent(
+        CanonicalEventId("finish-3"),
+        SessionId("session-3"),
         ActorId("actor-lead"),
-        "native-one",
-        "fixture.jsonl",
-        "/work",
+        None,
+        None,
+        "example",
+        10.0,
+        SessionFinished("succeeded", None),
     )
+    RawEventRecorder(database_path).record((
+        replace(raw_observation("raw-finish"), session_id=SessionId("session-3")),
+    ))
+    store.store_translation(
+        replace(raw_observation("raw-finish"), session_id=SessionId("session-3")),
+        "1.0",
+        TranslationResult((finish,), "translated"),
+    )
+
+    watchable_ids = {str(session.session_id) for session in sessions.watchable()}
+    assert "session-3" not in watchable_ids
+    assert len(watchable_ids) == 5
+    assert sessions.is_finished(SessionId("session-3"))
+
+
+def test_the_interpreter_reacts_to_committed_session_facts_with_panes(tmp_path):
     calls = []
 
-    class EmptyRecognizer:
-        def discover(self):
-            return ()
+    class RecordingTerminal:
+        def close_session_panes(self, session_id):
+            calls.append(("close", session_id))
 
-        def recognize(self, candidate):
+        def hosting_session(self, excluding_session_id):
             return None
 
-    class RecordingEvents(FixedEvents):
-        def __init__(self, owner):
-            super().__init__(TranslationResult((), "ignored_nonsemantic"))
-            self.owner = owner
+        def current_window(self):
+            return "window-1"
 
-        def sources(self, recognized_session, checkpoints):
-            del checkpoints
-            calls.append((self.owner, recognized_session.session_id))
-            return ()
+        def window_for_session(self, session_id):
+            return None
 
-    registry = HarnessRegistry(store)
-    registry.register(
-        HarnessPlugin(
-            HarnessInfo("owner", "Owner", "1", SCHEMA_VERSION),
-            FixedSessionRecognizer(session),
-            RecordingEvents("owner"),
-        )
+        def open_session_panes(self, request):
+            calls.append(("open", request.session_id))
+
+    started = CanonicalEvent(
+        CanonicalEventId("session-started"),
+        SessionId("session-one"),
+        ActorId("actor-lead"),
+        None,
+        None,
+        "example",
+        10.0,
+        SessionStarted("/work", None, None, None, None, None),
     )
-    registry.register(
-        HarnessPlugin(
-            HarnessInfo("other", "Other", "1", SCHEMA_VERSION),
-            EmptyRecognizer(),
-            RecordingEvents("other"),
-        )
+    database_path = str(tmp_path / "events.db")
+    harnesses = HarnessRegistry()
+    harnesses.register(example_plugin(TranslationResult((started,), "translated")))
+    sessions = SessionRegistry(database_path, harnesses)
+    sessions.register("example", example_session())
+    recorder = RawEventRecorder(database_path)
+    interpreter = Interpreter(
+        sessions,
+        harnesses,
+        recorder,
+        WatchRegistry(database_path),
+        CanonicalEventStore(database_path),
+        NullControls(),
+        RecordingTerminal(),
     )
-    store.register_session("owner", session)
+    recorder.record((raw_observation("raw-start"),))
 
-    ObservationRunner(registry, SqliteCheckpointStore(store), object()).run_once()
+    interpreter.tick()
+    # A replayed observation deduplicates and must NOT reopen panes.
+    recorder.record((replace(raw_observation("raw-start-again"), source_position="1"),))
+    interpreter.tick()
 
-    assert calls == [
-        ("other", SessionId("session-one")),
-        ("owner", SessionId("session-one")),
-    ]
-
-
-def test_observation_runner_has_no_consumer_triggered_session_drain():
-    assert not hasattr(ObservationRunner, "drain_session")
+    assert calls == [("open", SessionId("session-one"))]
 
 
-def test_observation_runner_reads_registered_sessions_not_historical_discovery():
-    class Registry:
-        def recently_observed_sessions(self, limit):
-            assert limit == 4
-            return ()
-
-        def session_is_finished(self, session_id):
-            raise AssertionError(f"no session should be scheduled: {session_id}")
-
-        def discover_sessions(self, limit):
-            raise AssertionError("historical discovery must not run in the observer")
-
-    ObservationRunner(Registry(), object(), object()).run_once()
-
-
-def test_observation_runner_retains_an_active_session_between_recent_batches():
-    drain_count = 0
-    session = SimpleNamespace(session_id=SessionId("active-session"))
-
-    class Source:
-        def drain(self, delivery):
-            nonlocal drain_count
-            del delivery
-            drain_count += 1
-
-    plugin = SimpleNamespace(
-        events=SimpleNamespace(sources=lambda recognized, checkpoints: (Source(),))
+def test_watch_directives_run_the_whole_foreground_lifecycle(tmp_path):
+    """start directive → active row → chunks pulled → finish directive → drained away."""
+    database_path = str(tmp_path / "events.db")
+    harnesses = HarnessRegistry()
+    harnesses.register(example_plugin(TranslationResult((), "ignored_nonsemantic")))
+    sessions = SessionRegistry(database_path, harnesses)
+    sessions.register("example", example_session())
+    recorder = RawEventRecorder(database_path)
+    store = CanonicalEventStore(database_path)
+    watches = WatchRegistry(database_path)
+    interpreter = Interpreter(
+        sessions, harnesses, recorder, watches, store, NullControls(), NullTerminal()
     )
-    registered = SimpleNamespace(session=session)
 
-    class Registry:
-        recent_call_count = 0
+    output_path = tmp_path / "operation.out"
+    output_path.write_bytes(b"hello")
+    context = RawEventSourceContext(
+        session_id=SessionId("session-one"),
+        lead_actor_id=ActorId("actor-lead"),
+        actor_id=ActorId("actor-lead"),
+        parent_actor_id=None,
+        source_reference="fixture.jsonl",
+    )
+    watch = FileWatch(
+        operation_id="operation-1",
+        source_path=str(output_path),
+        chunk_source_type="foreground_output",
+        delete_source=True,
+        initial_size=0,
+        initial_modified_at=0,
+        wait_for_source_change=False,
+    )
+    recorder.record((watch_start_raw_event(context, "example", watch),))
+    interpreter.tick()  # applies the directive
+    interpreter.tick()  # pulls the first chunks
 
-        def recently_observed_sessions(self, limit):
-            del limit
-            self.recent_call_count += 1
-            return (registered,) if self.recent_call_count == 1 else ()
+    chunk_types = {
+        raw.source_type
+        for raw in EvidenceQueries(store).session(SessionId("session-one"))
+    }
+    assert "foreground_output" in chunk_types
+    assert len(watches.for_session(SessionId("session-one"))) == 1
 
-        def session_is_finished(self, session_id):
-            assert session_id == SessionId("active-session")
-            return False
+    recorder.record((watch_finish_raw_event(context, "example", "operation-1"),))
+    interpreter.tick()
+    interpreter.tick()
 
-        def plugins(self):
-            return (plugin,)
-
-    observer = ObservationRunner(Registry(), object(), object())
-    observer.run_once()
-    observer.run_once()
-
-    assert drain_count == 2
+    assert watches.for_session(SessionId("session-one")) == ()
+    assert not output_path.exists()
+    assert store.untranslated_raw_events(10) == ()

@@ -13,7 +13,7 @@ from app.repository import RepositoryQueries
 from contracts.harness import TerminalSessionState
 from domain.ids import SessionId
 from domain.values import TokenUsage
-from runtime.event_store import EventStore
+from runtime.canonical_store import CanonicalEventStore
 from runtime.projections import SessionQueries
 
 
@@ -91,7 +91,7 @@ class _SessionInsight:
 class ApplicationInsightsService:
     def __init__(
         self,
-        event_store: EventStore,
+        canonical_store: CanonicalEventStore,
         sessions: SessionQueries,
         terminal: TerminalSessionReader,
         diagnostics: OperationalDiagnostics,
@@ -99,7 +99,7 @@ class ApplicationInsightsService:
         top_project_count: int,
         clock=time.time,
     ) -> None:
-        self.event_store = event_store
+        self.canonical_store = canonical_store
         self.sessions = sessions
         self.terminal = terminal
         self.diagnostics = diagnostics
@@ -109,7 +109,7 @@ class ApplicationInsightsService:
 
     def snapshot(self) -> ApplicationInsights:
         generated_at = self.clock()
-        cursor = self.event_store.latest_cursor()
+        cursor = self.canonical_store.latest_cursor()
         error_counts = self.diagnostics.error_counts()
         rows = []
         for summary in self.sessions.sessions(cursor):

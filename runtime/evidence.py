@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from domain.events import CanonicalEvent, EventPayload
 from domain.ids import ActorId, CanonicalEventId, RawEventId, SessionId
 from runtime.database import connect
-from runtime.event_store import EventStore
+from runtime.canonical_store import CanonicalEventStore
 
 
 @dataclass(frozen=True)
@@ -39,16 +39,16 @@ class TranslationEvidence:
 
 
 class EvidenceQueries:
-    def __init__(self, event_store: EventStore) -> None:
-        self.event_store = event_store
+    def __init__(self, canonical_store: CanonicalEventStore) -> None:
+        self.canonical_store = canonical_store
 
     def raw_event(self, raw_event_id: RawEventId) -> TranslationEvidence | None:
-        with connect(self.event_store.database_path) as connection:
+        with connect(self.canonical_store.database_path) as connection:
             raw = connection.execute(
                 "SELECT raw_events.*, translation_records.translator_version, "
                 "translation_records.decision, translation_records.reason, "
                 "translation_records.completed_at "
-                "FROM raw_events JOIN translation_records USING(raw_event_id) "
+                "FROM raw_events LEFT JOIN translation_records USING(raw_event_id) "
                 "WHERE raw_event_id=?",
                 (str(raw_event_id),),
             ).fetchone()
@@ -78,10 +78,10 @@ class EvidenceQueries:
             observed_at=raw["observed_at"],
             encoding=raw["encoding"],
             payload=raw["payload"],
-            translator_version=raw["translator_version"],
-            decision=raw["decision"],
+            translator_version=raw["translator_version"] or "",
+            decision=raw["decision"] or "untranslated",
             reason=raw["reason"],
-            completed_at=raw["completed_at"],
+            completed_at=raw["completed_at"] or 0.0,
             canonical=tuple(
                 CanonicalEvidence(
                     event=self._stored_event(CanonicalEventId(row["event_id"])).event,
@@ -94,10 +94,10 @@ class EvidenceQueries:
         )
 
     def session(self, session_id: SessionId) -> tuple[TranslationEvidence, ...]:
-        with connect(self.event_store.database_path) as connection:
+        with connect(self.canonical_store.database_path) as connection:
             rows = connection.execute(
                 "SELECT raw_event_id FROM raw_events WHERE session_id=? "
-                "ORDER BY observed_at, raw_event_id",
+                "ORDER BY id",
                 (str(session_id),),
             ).fetchall()
         return tuple(
@@ -107,7 +107,7 @@ class EvidenceQueries:
         )
 
     def _stored_event(self, event_id: CanonicalEventId):
-        stored_event = self.event_store.event(event_id)
+        stored_event = self.canonical_store.event(event_id)
         if stored_event is None:
             raise RuntimeError(f"canonical evidence is missing event {event_id}")
         return stored_event

@@ -18,7 +18,7 @@ from dashboard.highlight import source_ansi
 from dashboard.presenter import DashboardItem, DashboardPresenter
 from domain.ids import ActorId, AttentionId, OperationId, SessionId
 from domain.values import Content, StructuredContent, TextContent
-from runtime.event_store import EventStore
+from runtime.canonical_store import CanonicalEventStore
 from runtime.projections import (
     ActorSummary,
     ActivityStatistics,
@@ -205,12 +205,12 @@ class TerminalSessionReader(Protocol):
 class DashboardSessionService:
     def __init__(
         self,
-        event_store: EventStore,
+        canonical_store: CanonicalEventStore,
         queries: SessionQueries,
         terminal: TerminalSessionReader,
         repositories: RepositoryQueries,
     ) -> None:
-        self.event_store = event_store
+        self.canonical_store = canonical_store
         self.queries = queries
         self.terminal = terminal
         self.repositories = repositories
@@ -240,7 +240,7 @@ class DashboardSessionService:
             with self._sessions_lock:
                 if self._sessions_cache is not None:
                     return self._sessions_cache
-            session_ids = self.event_store.session_ids()
+            session_ids = self.canonical_store.session_ids()
             cold_session_ids = session_ids[:COLD_SESSION_COUNT]
             sessions = self._build_sessions(cold_session_ids)
             with self._sessions_lock:
@@ -252,7 +252,7 @@ class DashboardSessionService:
         try:
             with self._sessions_refresh_lock:
                 sessions = self._build_sessions(
-                    self.event_store.session_ids()[:COLD_SESSION_COUNT]
+                    self.canonical_store.session_ids()[:COLD_SESSION_COUNT]
                 )
             with self._sessions_lock:
                 self._sessions_cache = sessions
@@ -265,7 +265,7 @@ class DashboardSessionService:
         self,
         session_ids: tuple[SessionId, ...] | None = None,
     ) -> tuple[DashboardSessionListItem, ...]:
-        cursor = self.event_store.latest_cursor()
+        cursor = self.canonical_store.latest_cursor()
         if cursor is None:
             return ()
         repository_statuses: dict[str, RepositoryStatus | None] = {}
@@ -279,10 +279,10 @@ class DashboardSessionService:
 
         canonical_sessions = []
         selected_session_ids = (
-            self.event_store.session_ids() if session_ids is None else session_ids
+            self.canonical_store.session_ids() if session_ids is None else session_ids
         )
         for session_id in selected_session_ids:
-            session_cursor = self.event_store.latest_session_cursor(session_id, cursor)
+            session_cursor = self.canonical_store.latest_session_cursor(session_id, cursor)
             if session_cursor is None:
                 continue
             canonical = self._canonical_sessions.get(session_id)
@@ -326,7 +326,7 @@ class DashboardSessionService:
         session_id: SessionId,
         scope: ActivityScope,
     ) -> DashboardSessionSnapshot:
-        cursor = self.event_store.through(session_id).latest_cursor or 0
+        cursor = self.canonical_store.through(session_id).latest_cursor or 0
         return self.snapshot_at(session_id, scope, cursor)
 
     def snapshot_at(
@@ -432,11 +432,11 @@ class DashboardActivityFrame:
 class DashboardActivityService:
     def __init__(
         self,
-        event_store: EventStore,
+        canonical_store: CanonicalEventStore,
         queries: SessionQueries,
         presenter: DashboardPresenter | None = None,
     ) -> None:
-        self.event_store = event_store
+        self.canonical_store = canonical_store
         self.queries = queries
         self.presenter = presenter or DashboardPresenter()
 
@@ -447,7 +447,7 @@ class DashboardActivityService:
         scope: ActivityScope,
         block_count: int,
     ) -> DashboardActivityPage:
-        snapshot_cursor = self.event_store.latest_cursor() or 0
+        snapshot_cursor = self.canonical_store.latest_cursor() or 0
         window = self.queries.activity_before(
             session_id,
             before_cursor,
@@ -466,17 +466,17 @@ class DashboardActivityService:
 class DashboardStreamService:
     def __init__(
         self,
-        event_store: EventStore,
+        canonical_store: CanonicalEventStore,
         queries: SessionQueries,
         terminal: TerminalSessionReader,
         repositories: RepositoryQueries,
         presenter: DashboardPresenter | None = None,
     ) -> None:
-        self.event_store = event_store
+        self.canonical_store = canonical_store
         self.queries = queries
         self.presenter = presenter or DashboardPresenter()
         self.sessions = DashboardSessionService(
-            event_store, queries, terminal, repositories
+            canonical_store, queries, terminal, repositories
         )
 
     def frame(
@@ -486,7 +486,7 @@ class DashboardStreamService:
         scope: ActivityScope,
         limit: int = 200,
     ) -> DashboardActivityFrame | None:
-        examined = self.event_store.after(session_id, cursor, limit)
+        examined = self.canonical_store.after(session_id, cursor, limit)
         if not examined.events:
             return None
         frame_cursor = examined.cursor

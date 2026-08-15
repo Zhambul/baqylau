@@ -23,17 +23,14 @@ from contracts.harness import (
     AttachmentReference,
     ControlContext,
     ControlResult,
-    HookIntake,
+    FileWatch,
     LaunchRequest,
     MigrateAccount,
     QueryContext,
     RawEvent,
-    RecognizedSession,
     RenameSession,
     SelectModel,
-    SessionLifecycleContext,
-    SessionLifecycleRequest,
-    SourceCheckpoint,
+    Session,
     TranslationError,
 )
 from contracts.terminal import (
@@ -79,63 +76,37 @@ from domain.events import (
 )
 from domain.ids import ActorId, AssignmentId, OperationId, RawEventId, SessionId, TaskId, TurnId
 from domain.values import AccountReference, AttentionPrompt, ModelReference, TextContent
-from plugins.claude_code.canonical import ClaudeCanonicalTranslator, ClaudeTaskSource, ClaudeTranscriptSource
-from plugins.claude_code.canonical import ClaudeSessionRecognizer
+from plugins.claude_code.canonical import (
+    ClaudeCanonicalTranslator,
+    ClaudeRawEventSources,
+    ClaudeTaskRawEventSource,
+    ClaudeTranscriptRawEventSource,
+)
 from plugins.claude_code import canonical_hook as claude_canonical_hook
 from plugins.claude_code import foreground as claude_foreground
 from plugins.claude_code import memory_state as claude_memory_state
 from plugins.claude_code import statusline as claude_statusline
 from plugins.claude_code import usage_state as claude_usage_state
 from plugins.claude_code.usage_rows import usage_reader as claude_usage_reader
-from plugins.claude_code.lifecycle import ClaudeCodeLifecycle
+from plugins.claude_code.reactor import ClaudeReactor
 from plugins.claude_code.otel import receiver as claude_otel_receiver
 from plugins.codex.canonical import (
     CodexCanonicalTranslator,
-    CodexProcessSource,
-    CodexRolloutSource,
+    CodexProcessRawEventSource,
+    CodexRawEventSources,
+    CodexRolloutRawEventSource,
     process_event,
 )
 from plugins.codex import command as codex_command
 from plugins.codex import canonical_hook as codex_canonical_hook
 from plugins.codex import rollout as codex_rollout
-from plugins.codex.lifecycle import CodexLifecycle
 from plugins.codex.controller import _rollout_abort_state
-from runtime.event_store import EventIdentityConflict, EventStore
+from runtime.recorder import EventIdentityConflict
+from canonical_runtime import CanonicalRuntime
 from runtime.evidence import EvidenceQueries
+from app.interpreter import Interpreter
 from app.services import HarnessLauncherService
-from app.services import HarnessHookService
-
-
-def test_claude_discovery_deduplicates_symlinked_project_directories(monkeypatch):
-    session = RecognizedSession(
-        SessionId("session-one"),
-        ActorId("actor-lead"),
-        "native-one",
-        "/real/session.jsonl",
-        "/work",
-    )
-    recognized_paths = []
-
-    class RecordingRecognizer(ClaudeSessionRecognizer):
-        def recognize(self, candidate):
-            recognized_paths.append(candidate.source_reference)
-            return session
-
-    monkeypatch.setattr(
-        "plugins.claude_code.canonical.glob.glob",
-        lambda _pattern: ("/link/session.jsonl", "/real/session.jsonl"),
-    )
-    monkeypatch.setattr(
-        "plugins.claude_code.canonical.os.path.realpath",
-        lambda _path: "/real/session.jsonl",
-    )
-    monkeypatch.setattr(
-        "plugins.claude_code.canonical.os.path.getmtime",
-        lambda _path: 1.0,
-    )
-
-    assert RecordingRecognizer().discover() == (session,)
-    assert recognized_paths == ["/real/session.jsonl"]
+from runtime.harnesses import HarnessRegistry
 
 
 def raw_event(
@@ -163,138 +134,120 @@ def raw_event(
 
 
 def payloads(translation, payload_type):
-    return [event for event in translation.events if isinstance(event.payload, payload_type)]
+    return [event for event in translation.canonical_events if isinstance(event.payload, payload_type)]
 
 
-def test_hook_control_rejection_fails_the_synchronous_hook():
-    session = RecognizedSession(
-        SessionId("session-one"),
-        ActorId("session-one:lead"),
-        "native-one",
-        "/tmp/transcript.jsonl",
-        "/tmp",
-    )
-    request = MigrateAccount(session.session_id, "request-one")
+class RecordingControls:
+    def __init__(self):
+        self.executed = []
 
-    class Hook:
-        def receive(self, payload):
-            assert payload == b"payload"
-            return HookIntake(session, (), b"native output", (request,))
-
-    class EventStore:
-        def register_session(self, harness, recognized_session):
-            assert harness == "claude_code"
-            assert recognized_session == session
-
-    class Registry:
-        event_store = EventStore()
-
-        def plugin(self, harness):
-            assert harness == "claude_code"
-            return type("Plugin", (), {"hook": Hook()})()
-
-    class Controls:
-        def execute(self, control_request):
-            assert control_request == request
-            return ControlResult(request.request_id, "rejected", "account unavailable")
-
-    service = HarnessHookService(
-        Registry(),
-        RecordingDelivery(),
-        Controls(),
-        SimpleNamespace(ensure_running=lambda: None),
-    )
-
-    with pytest.raises(RuntimeError, match="account unavailable"):
-        service.receive("claude_code", b"payload")
+    def execute(self, request):
+        self.executed.append(request)
+        return ControlResult(request.request_id, "acknowledged")
 
 
-def test_hook_actions_start_only_after_every_raw_event_is_delivered():
-    session = RecognizedSession(
-        SessionId("session-one"),
-        ActorId("session-one:lead"),
-        "native-one",
-        "/tmp/transcript.jsonl",
-        "/tmp",
-    )
-    raw = raw_event(
-        {"hook_event_name": "PreToolUse"},
+def test_claude_reactor_migrates_the_account_on_a_committed_rate_limit(monkeypatch):
+    monkeypatch.setattr("plugins.claude_code.reactor.otel.start", lambda: None)
+    controls = RecordingControls()
+    rate_limited = raw_event(
+        {"hook_event_name": "StopFailure", "error": "rate_limit"},
         harness="claude_code",
         source_type="hook",
-        raw_event_id="hook-one",
+        raw_event_id="stop-failure",
     )
-    order = []
+    unrelated_failure = raw_event(
+        {"hook_event_name": "StopFailure", "error": "network"},
+        harness="claude_code",
+        source_type="hook",
+        raw_event_id="stop-network",
+    )
+    child_failure = raw_event(
+        {"hook_event_name": "StopFailure", "error": "rate_limit", "agent_id": "child-one"},
+        harness="claude_code",
+        source_type="hook",
+        raw_event_id="stop-child",
+    )
 
-    class Action:
-        def start(self):
-            order.append("action")
+    reactor = ClaudeReactor()
+    reactor.react(rate_limited, controls)
+    reactor.react(unrelated_failure, controls)
+    reactor.react(child_failure, controls)
 
-    class Hook:
-        def receive(self, payload):
-            assert payload == b"payload"
-            return HookIntake(session, (raw,), b"native output", (), (Action(),))
+    assert len(controls.executed) == 1
+    request = controls.executed[0]
+    assert isinstance(request, MigrateAccount)
+    assert request.session_id == SessionId("session-one")
 
-    class EventStore:
-        def register_session(self, harness, recognized_session):
-            assert harness == "claude_code"
-            assert recognized_session == session
 
-    class Registry:
-        event_store = EventStore()
+def test_claude_reactor_starts_telemetry_on_session_start(monkeypatch):
+    telemetry_starts = []
+    monkeypatch.setattr(
+        "plugins.claude_code.reactor.otel.start",
+        lambda: telemetry_starts.append("started"),
+    )
+    session_start = raw_event(
+        {"hook_event_name": "SessionStart", "cwd": "/work"},
+        harness="claude_code",
+        source_type="hook",
+        raw_event_id="session-start",
+    )
+    pulled = raw_event(
+        {"type": "user"},
+        harness="claude_code",
+        source_type="transcript",
+        raw_event_id="pulled-record",
+    )
 
-        def plugin(self, harness):
-            assert harness == "claude_code"
-            return SimpleNamespace(hook=Hook())
+    reactor = ClaudeReactor()
+    reactor.react(session_start, RecordingControls())
+    reactor.react(pulled, RecordingControls())
 
-    class Delivery:
-        def deliver(self, raw_event):
-            assert raw_event == raw
-            order.append("delivery")
-
-    output = HarnessHookService(
-        Registry(),
-        Delivery(),
-        SimpleNamespace(execute=lambda request: None),
-        SimpleNamespace(ensure_running=lambda: order.append("host")),
-    ).receive("claude_code", b"payload")
-
-    assert output == b"native output"
-    assert order == ["delivery", "host", "action"]
+    assert telemetry_starts == ["started"]
 
 
 def test_plugin_folder_descriptors_are_discovered_without_harness_branches():
     assert [plugin.info.name for plugin in installed_plugins()] == ["claude_code", "codex"]
 
 
-class MemoryCheckpoints:
-    def __init__(self):
-        self.checkpoint = None
+class InterpreterTerminal:
+    def close_session_panes(self, session_id):
+        return None
 
-    def load(self, source_identity):
-        return self.checkpoint
+    def hosting_session(self, excluding_session_id):
+        return SessionId("already-hosting")
 
-    def commit(self, checkpoint: SourceCheckpoint):
-        self.checkpoint = checkpoint
+    def current_window(self):
+        return None
 
-
-class RecordingDelivery:
-    def __init__(self):
-        self.raw_events = []
-
-    def deliver(self, raw_event):
-        self.raw_events.append(raw_event)
+    def window_for_session(self, session_id):
+        return None
 
 
-class FailingDelivery:
-    def deliver(self, raw_event):
-        raise RuntimeError(f"failed to store {raw_event.raw_event_id}")
+def interpreting_runtime(database_path):
+    """The real installed plugins wired to one database, with a silent terminal."""
+    harnesses = HarnessRegistry()
+    for plugin in installed_plugins():
+        harnesses.register(plugin)
+    harnesses.validate()
+    runtime = CanonicalRuntime(str(database_path), harnesses=harnesses)
+    controls = RecordingControls()
+    interpreter = Interpreter(
+        runtime.sessions,
+        harnesses,
+        runtime.recorder,
+        runtime.watches,
+        runtime.store,
+        controls,
+        InterpreterTerminal(),
+    )
+    return runtime, interpreter
 
 
 def test_file_sources_preserve_the_exact_complete_line(tmp_path):
     source_path = tmp_path / "source.jsonl"
     exact_line = b'{"type":"example"}\n'
     source_path.write_bytes(exact_line)
-    session = RecognizedSession(
+    session = Session(
         SessionId("session-one"),
         ActorId("session-one:lead"),
         "native",
@@ -302,40 +255,38 @@ def test_file_sources_preserve_the_exact_complete_line(tmp_path):
         "/work",
     )
 
-    for source_type in (ClaudeTranscriptSource, CodexRolloutSource):
-        checkpoints = MemoryCheckpoints()
-        delivery = RecordingDelivery()
-        source = source_type(session.event_source_context, checkpoints)
-        source.drain(delivery)
+    for source_type in (ClaudeTranscriptRawEventSource, CodexRolloutRawEventSource):
+        source = source_type(session.source_context)
+        raw_events = source.read(None)
 
-        assert delivery.raw_events[0].payload == exact_line
-        assert checkpoints.checkpoint.source_identity == source.source_identity
-        assert checkpoints.checkpoint.position == str(len(exact_line))
+        assert raw_events[0].payload == exact_line
+        assert raw_events[0].source_identity == source.source_identity
+        # the position names the last consumed record; resuming after it is empty
+        assert source.read(raw_events[-1].source_position) == ()
 
 
-@pytest.mark.parametrize("source_type", [ClaudeTranscriptSource, CodexRolloutSource])
-def test_file_sources_checkpoint_bounded_batches(tmp_path, source_type):
+@pytest.mark.parametrize(
+    "source_type", [ClaudeTranscriptRawEventSource, CodexRolloutRawEventSource]
+)
+def test_file_sources_read_bounded_batches_and_resume_by_position(tmp_path, source_type):
     source_path = tmp_path / "source.jsonl"
     line = b'{"type":"example"}\n'
     source_path.write_bytes(line * 101)
-    session = RecognizedSession(
+    session = Session(
         SessionId("session-one"),
         ActorId("session-one:lead"),
         "native",
         str(source_path),
         "/work",
     )
-    checkpoints = MemoryCheckpoints()
-    delivery = RecordingDelivery()
-    source = source_type(session.event_source_context, checkpoints)
+    source = source_type(session.source_context)
 
-    source.drain(delivery)
-    assert len(delivery.raw_events) == 100
-    assert checkpoints.checkpoint.position == str(len(line) * 100)
+    first_batch = source.read(None)
+    assert len(first_batch) == 100
 
-    source.drain(delivery)
-    assert len(delivery.raw_events) == 101
-    assert checkpoints.checkpoint.position == str(len(line) * 101)
+    second_batch = source.read(first_batch[-1].source_position)
+    assert len(second_batch) == 1
+    assert source.read(second_batch[-1].source_position) == ()
 
 
 @pytest.mark.parametrize(
@@ -367,24 +318,25 @@ def test_claude_team_messages_preserve_the_native_sender_as_evidence_actor(
         },
     })
     source_path.write_text(session_record + "\n" + team_record + "\n")
-    session = RecognizedSession(
+    session = Session(
         SessionId("session-one"),
         ActorId("session-one:lead"),
         "native",
         str(source_path),
         "/work",
     )
-    application = build_application(str(tmp_path / "data"))
-    application.event_store.register_session("claude_code", session)
+    runtime, interpreter = interpreting_runtime(tmp_path / "data" / "events.db")
+    runtime.register("claude_code", session)
     context = replace(
-        session.event_source_context,
+        session.source_context,
         actor_id=ActorId(source_actor_id),
         parent_actor_id=source_parent_actor_id,
     )
 
-    ClaudeTranscriptSource(context, application.checkpoints).drain(application.delivery)
+    runtime.recorder.record(ClaudeTranscriptRawEventSource(context).read(None))
+    interpreter.tick()
 
-    evidence = application.evidence.session(session.session_id)[-1]
+    evidence = EvidenceQueries(runtime.store).session(session.session_id)[-1]
     assert evidence.actor_id == ActorId(sender)
     assert evidence.parent_actor_id == expected_parent_actor_id
     assert all(item.event.actor_id == ActorId(sender) for item in evidence.canonical)
@@ -397,27 +349,8 @@ def test_claude_team_messages_preserve_the_native_sender_as_evidence_actor(
     assert message.role == "peer"
 
 
-@pytest.mark.parametrize("source_type", [ClaudeTranscriptSource, CodexRolloutSource])
-def test_file_source_does_not_advance_checkpoint_when_delivery_fails(tmp_path, source_type):
-    source_path = tmp_path / "source.jsonl"
-    source_path.write_bytes(b'{"type":"example"}\n')
-    session = RecognizedSession(
-        SessionId("session-one"),
-        ActorId("session-one:lead"),
-        "native",
-        str(source_path),
-        "/work",
-    )
-    checkpoints = MemoryCheckpoints()
-
-    with pytest.raises(RuntimeError, match="failed to store"):
-            source_type(session.event_source_context, checkpoints).drain(FailingDelivery())
-
-    assert checkpoints.checkpoint is None
-
-
 def test_codex_process_source_emits_one_auditable_session_finish(monkeypatch):
-    session = RecognizedSession(
+    session = Session(
         SessionId("session-one"),
         ActorId("session-one:lead"),
         "native",
@@ -425,34 +358,35 @@ def test_codex_process_source_emits_one_auditable_session_finish(monkeypatch):
         "/work",
         native_process_id=4242,
     )
-    checkpoints = MemoryCheckpoints()
-    delivery = RecordingDelivery()
     monkeypatch.setattr("plugins.codex.canonical._codex_process_is_running", lambda process_id: False)
 
-    source = CodexProcessSource(session, checkpoints)
-    source.drain(delivery)
-    source.drain(delivery)
+    source = CodexProcessRawEventSource(session)
+    raw_events = source.read(None)
+    # the wrapper's own `started` observation shares the identity; it is not a latch
+    also_after_start = source.read("started")
 
-    assert len(delivery.raw_events) == 1
-    raw_liveness = delivery.raw_events[0]
+    assert len(raw_events) == 1
+    raw_liveness = raw_events[0]
     assert raw_liveness.source_type == "process"
+    assert raw_liveness.source_identity == source.source_identity
     assert json.loads(raw_liveness.payload) == {
         "process_id": 4242,
         "rollout_path": "/work/rollout.jsonl",
         "state": "finished",
     }
+    assert [event.raw_event_id for event in also_after_start] == [
+        event.raw_event_id for event in raw_events
+    ]
     translation = CodexCanonicalTranslator().translate(raw_liveness)
-    assert isinstance(translation.events[0].payload, SessionFinished)
-    assert translation.events[0].payload.reason == "process_exited"
-    assert checkpoints.checkpoint == SourceCheckpoint(
-        session.session_id,
-        source.source_identity,
-        "finished",
-    )
+    assert isinstance(translation.canonical_events[0].payload, SessionFinished)
+    assert translation.canonical_events[0].payload.reason == "process_exited"
+    # the recorded finish is the latch
+    assert raw_liveness.source_position == "finished"
+    assert source.read("finished") == ()
 
 
 def test_codex_process_boundaries_are_distinct_for_each_resume():
-    first = RecognizedSession(
+    first = Session(
         SessionId("session-one"),
         ActorId("session-one:lead"),
         "session-one",
@@ -463,10 +397,10 @@ def test_codex_process_boundaries_are_distinct_for_each_resume():
     resumed = replace(first, native_process_id=4343)
     translator = CodexCanonicalTranslator()
 
-    first_start = translator.translate(process_event(first, "started")).events[0]
-    first_finish = translator.translate(process_event(first, "finished")).events[0]
-    resumed_start = translator.translate(process_event(resumed, "started")).events[0]
-    resumed_finish = translator.translate(process_event(resumed, "finished")).events[0]
+    first_start = translator.translate(process_event(first, "started")).canonical_events[0]
+    first_finish = translator.translate(process_event(first, "finished")).canonical_events[0]
+    resumed_start = translator.translate(process_event(resumed, "started")).canonical_events[0]
+    resumed_finish = translator.translate(process_event(resumed, "finished")).canonical_events[0]
 
     assert isinstance(first_start.payload, SessionStarted)
     assert isinstance(first_finish.payload, SessionFinished)
@@ -528,7 +462,7 @@ def test_codex_command_selects_the_exact_native_child_process(monkeypatch):
 
 def test_codex_command_opens_pending_panes_then_adopts_the_native_session(monkeypatch):
     calls = []
-    recognized = RecognizedSession(
+    recognized = Session(
         SessionId("session-one"),
         ActorId("session-one:lead"),
         "session-one",
@@ -558,8 +492,8 @@ def test_codex_command_opens_pending_panes_then_adopts_the_native_session(monkey
             calls.append(("adopt", pending_id, session_id))
             return TerminalResult(True)
 
-    application = SimpleNamespace(terminal=Terminal())
-    monkeypatch.setattr("app.bootstrap.build_default_application", lambda: application)
+    context = SimpleNamespace(terminal=Terminal())
+    monkeypatch.setattr(codex_command, "LaunchContext", lambda: context)
     monkeypatch.setattr(codex_command.shutil, "which", lambda executable: "/bin/codex")
     monkeypatch.setattr(codex_command.subprocess, "Popen", lambda arguments: Process())
     monkeypatch.setattr(codex_command, "native_codex_process", lambda process_id: 4242)
@@ -568,7 +502,7 @@ def test_codex_command_opens_pending_panes_then_adopts_the_native_session(monkey
     monkeypatch.setattr(
         codex_command,
         "record_process",
-        lambda _application, session, state: calls.append(
+        lambda _context, session, state: calls.append(
             ("record", session.session_id, session.native_process_id, state)
         ),
     )
@@ -595,7 +529,7 @@ def test_claude_source_factory_includes_child_transcripts(tmp_path):
     child_path.parent.mkdir(parents=True)
     parent_path.write_text('{"type":"user","uuid":"parent"}\n')
     child_path.write_text('{"type":"user","uuid":"child"}\n')
-    session = RecognizedSession(
+    session = Session(
         session_id=SessionId("session-one"),
         lead_actor_id=ActorId("session-one:lead"),
         native_session_id="session-one",
@@ -603,10 +537,10 @@ def test_claude_source_factory_includes_child_transcripts(tmp_path):
         working_directory=str(tmp_path),
     )
 
-    sources = ClaudeCanonicalTranslator().sources(session, MemoryCheckpoints())
+    sources = ClaudeRawEventSources().for_session(session)
 
     assert len(sources) == 3
-    assert isinstance(sources[1], ClaudeTaskSource)
+    assert isinstance(sources[1], ClaudeTaskRawEventSource)
     assert sources[2].context.actor_id == ActorId("child-one")
     assert sources[2].context.parent_actor_id == ActorId("session-one:lead")
 
@@ -627,34 +561,38 @@ def test_claude_task_source_captures_full_updates_and_deletion(tmp_path, monkeyp
         "blockedBy": [],
     }
     task_path.write_text(json.dumps(task), encoding="utf-8")
-    session = RecognizedSession(
+    session = Session(
         SessionId("6165ab88-21b7-4b54-a2dd-c25a8ecb0b59"),
         ActorId("6165ab88-21b7-4b54-a2dd-c25a8ecb0b59:lead"),
         "6165ab88-21b7-4b54-a2dd-c25a8ecb0b59",
         "/work/session.jsonl",
         "/work",
     )
-    checkpoints = MemoryCheckpoints()
-    delivery = RecordingDelivery()
-    source = ClaudeTaskSource(session, checkpoints)
+    source = ClaudeTaskRawEventSource(session)
 
-    source.drain(delivery)
-    assert [event.source_type for event in delivery.raw_events] == ["task_list", "tasks"]
-    created = ClaudeCanonicalTranslator().translate(delivery.raw_events[-1]).events[0].payload
+    raw_events = source.read(None)
+    # the membership fact carries the resume position, so it is emitted last
+    assert [event.source_type for event in raw_events] == ["tasks", "task_list"]
+    position = raw_events[-1].source_position
+    assert source.read(position) == ()
+    created = ClaudeCanonicalTranslator().translate(raw_events[0]).canonical_events[0].payload
     assert created == TaskChanged(
         TaskId("1"), "1", "Run tests", "Run the focused suite", "pending", ActorId("worker-one")
     )
 
     task["status"] = "in_progress"
     task_path.write_text(json.dumps(task), encoding="utf-8")
-    source.drain(delivery)
-    updated = ClaudeCanonicalTranslator().translate(delivery.raw_events[-1]).events[0].payload
+    raw_events = source.read(position)
+    position = raw_events[-1].source_position
+    updated = ClaudeCanonicalTranslator().translate(raw_events[0]).canonical_events[0].payload
     assert updated.state == "in_progress"
 
     task_path.unlink()
-    source.drain(delivery)
-    deleted = ClaudeCanonicalTranslator().translate(delivery.raw_events[-1]).events[0].payload
-    assert deleted.state == "deleted"
+    raw_events = source.read(position)
+    # deletion needs no synthetic record: the membership fact names the survivors
+    assert [event.source_type for event in raw_events] == ["task_list"]
+    membership = ClaudeCanonicalTranslator().translate(raw_events[0]).canonical_events[0].payload
+    assert membership == TaskListChanged("session", ())
 
 
 def test_claude_goal_status_is_canonical_goal_state():
@@ -804,7 +742,7 @@ def test_codex_source_factory_includes_native_subagent_rollouts(tmp_path, monkey
     ]
     child_path.write_text("".join(json.dumps(record) + "\n" for record in records))
     monkeypatch.setenv("CODEX_HOME", str(tmp_path))
-    session = RecognizedSession(
+    session = Session(
         session_id=SessionId("parent-session"),
         lead_actor_id=ActorId("parent-session:lead"),
         native_session_id="parent-native",
@@ -812,21 +750,20 @@ def test_codex_source_factory_includes_native_subagent_rollouts(tmp_path, monkey
         working_directory="/work",
     )
 
-    sources = CodexCanonicalTranslator().sources(session, MemoryCheckpoints())
+    sources = CodexRawEventSources().for_session(session)
 
     assert len(sources) == 1
     assert sources[0].context.actor_id == ActorId("child-one")
     assert sources[0].context.parent_actor_id == ActorId("parent-session:lead")
-    delivery = RecordingDelivery()
-    sources[0].drain(delivery)
+    raw_events = sources[0].read(None)
     translator = CodexCanonicalTranslator()
-    assert translator.translate(delivery.raw_events[0]).events[0].payload.role == "sidecar"
-    assert delivery.raw_events[1].source_type == "sidecar_replay"
-    replay = translator.translate(delivery.raw_events[1])
-    assert replay.events == ()
+    assert translator.translate(raw_events[0]).canonical_events[0].payload.role == "sidecar"
+    assert raw_events[1].source_type == "sidecar_replay"
+    replay = translator.translate(raw_events[1])
+    assert replay.canonical_events == ()
     assert replay.decision == "ignored_nonsemantic"
-    assert delivery.raw_events[3].source_type == "sidecar_rollout"
-    message = payloads(translator.translate(delivery.raw_events[3]), MessageCreated)[0]
+    assert raw_events[3].source_type == "sidecar_rollout"
+    message = payloads(translator.translate(raw_events[3]), MessageCreated)[0]
     assert message.payload.content.text == "child work"
 
 
@@ -864,17 +801,17 @@ def test_codex_source_factory_rotates_native_subagent_rollouts(tmp_path, monkeyp
             + "\n"
         )
     monkeypatch.setenv("CODEX_HOME", str(tmp_path))
-    session = RecognizedSession(
+    session = Session(
         SessionId("parent-session"),
         ActorId("parent-session:lead"),
         "parent-native",
         str(tmp_path / "not-a-codex-session.jsonl"),
         "/work",
     )
-    translator = CodexCanonicalTranslator()
+    factory = CodexRawEventSources()
 
     actors = [
-        translator.sources(session, MemoryCheckpoints())[0].context.actor_id
+        factory.for_session(session)[0].context.actor_id
         for _ in range(3)
     ]
 
@@ -893,7 +830,7 @@ def test_codex_source_factory_waits_for_native_child_boundary(tmp_path, monkeypa
         },
     }) + "\n")
     monkeypatch.setenv("CODEX_HOME", str(tmp_path))
-    session = RecognizedSession(
+    session = Session(
         SessionId("parent-session"),
         ActorId("parent-session:lead"),
         "parent-native",
@@ -901,7 +838,7 @@ def test_codex_source_factory_waits_for_native_child_boundary(tmp_path, monkeypa
         "/work",
     )
 
-    assert CodexCanonicalTranslator().sources(session, MemoryCheckpoints()) == ()
+    assert CodexRawEventSources().for_session(session) == ()
 
 
 def test_codex_source_factory_accepts_string_session_source(tmp_path, monkeypatch):
@@ -920,7 +857,7 @@ def test_codex_source_factory_accepts_string_session_source(tmp_path, monkeypatc
         "payload": {"source": "vscode"},
     }) + "\n")
     monkeypatch.setenv("CODEX_HOME", str(tmp_path))
-    session = RecognizedSession(
+    session = Session(
         SessionId("parent-session"),
         ActorId("parent-session:lead"),
         "parent-native",
@@ -928,18 +865,13 @@ def test_codex_source_factory_accepts_string_session_source(tmp_path, monkeypatc
         "/work",
     )
 
-    assert CodexCanonicalTranslator().sources(session, MemoryCheckpoints()) == ()
+    assert CodexRawEventSources().for_session(session) == ()
     assert codex_rollout.subagent_fork_epoch(str(rollout_path)) is None
 
 
-def test_hook_intake_stores_exact_raw_bytes_before_translation(monkeypatch, tmp_path):
-    application = build_application(str(tmp_path))
-    monkeypatch.setattr(application.host, "ensure_running", lambda: None)
-    monkeypatch.setattr(
-        "app.bootstrap.build_default_application",
-        lambda: application,
-    )
-    monkeypatch.setattr(codex_canonical_hook, "codex_process_id", lambda: 4242)
+def test_hooks_record_exact_raw_bytes_and_the_interpreter_translates_them(monkeypatch, tmp_path):
+    monkeypatch.setenv("BAQYLAU_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr("app.host.ApplicationHost.ensure_running", lambda self: None)
     claude_payload = (
         b'{ "session_id": "claude-session", "transcript_path": "/work/claude.jsonl", '
         b'"cwd": "/work", "hook_event_name": "SessionStart" }'
@@ -952,23 +884,32 @@ def test_hook_intake_stores_exact_raw_bytes_before_translation(monkeypatch, tmp_
     claude_canonical_hook.record_hook(claude_payload)
     codex_canonical_hook.record_hook(codex_payload)
 
-    claude_evidence = EvidenceQueries(application.event_store).session(SessionId("claude-session"))
-    codex_evidence = EvidenceQueries(application.event_store).session(SessionId("codex-session"))
+    runtime, interpreter = interpreting_runtime(tmp_path / "events.db")
+    # hooks never register; the wrappers do, and the evidence waits until then
+    assert runtime.store.untranslated_raw_events(10) == ()
+    runtime.register("claude_code", Session(
+        SessionId("claude-session"), ActorId("claude-session:lead"),
+        "claude-session", "/work/claude.jsonl", "/work",
+    ))
+    runtime.register("codex", Session(
+        SessionId("codex-session"), ActorId("codex-session:lead"),
+        "codex-session", "/work/codex.jsonl", "/work",
+    ))
+    interpreter.tick()
+
+    claude_evidence = EvidenceQueries(runtime.store).session(SessionId("claude-session"))
+    codex_evidence = EvidenceQueries(runtime.store).session(SessionId("codex-session"))
     assert claude_evidence[0].payload == claude_payload
     assert len(claude_evidence[0].canonical) == 2
     assert isinstance(claude_evidence[1].canonical[0].event.payload, SessionAccountChanged)
     assert codex_evidence[0].payload == codex_payload
     assert codex_evidence[0].decision == "translated"
     assert len(codex_evidence[0].canonical) == 2
-    assert application.event_store.recognized_session(
-        SessionId("codex-session")
-    ).native_process_id == 4242
 
 
 def test_hook_without_native_identity_uses_the_exact_payload_identity(monkeypatch, tmp_path):
-    application = build_application(str(tmp_path))
-    monkeypatch.setattr(application.host, "ensure_running", lambda: None)
-    monkeypatch.setattr("app.bootstrap.build_default_application", lambda: application)
+    monkeypatch.setenv("BAQYLAU_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr("app.host.ApplicationHost.ensure_running", lambda self: None)
     payload = (
         b'{"session_id":"claude-session","transcript_path":"/work/claude.jsonl",'
         b'"cwd":"/work","hook_event_name":"SessionStart"}'
@@ -977,16 +918,20 @@ def test_hook_without_native_identity_uses_the_exact_payload_identity(monkeypatc
     claude_canonical_hook.record_hook(payload)
     claude_canonical_hook.record_hook(payload)
 
-    evidence = application.evidence.session(SessionId("claude-session"))
+    runtime = CanonicalRuntime(str(tmp_path / "events.db"))
+    runtime.register("claude_code", Session(
+        SessionId("claude-session"), ActorId("claude-session:lead"),
+        "claude-session", "/work/claude.jsonl", "/work",
+    ))
+    evidence = EvidenceQueries(runtime.store).session(SessionId("claude-session"))
     assert len(evidence) == 2
     assert str(evidence[0].raw_event_id).endswith(hashlib.sha256(payload).hexdigest())
     assert evidence[1].source_type == "account"
 
 
-def test_hook_intake_preserves_native_child_actor_context(monkeypatch, tmp_path):
-    application = build_application(str(tmp_path))
-    monkeypatch.setattr(application.host, "ensure_running", lambda: None)
-    monkeypatch.setattr("app.bootstrap.build_default_application", lambda: application)
+def test_hook_recording_preserves_native_child_actor_context(monkeypatch, tmp_path):
+    monkeypatch.setenv("BAQYLAU_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr("app.host.ApplicationHost.ensure_running", lambda self: None)
     payload = json.dumps({
         "session_id": "claude-session",
         "transcript_path": "/work/claude.jsonl",
@@ -997,13 +942,19 @@ def test_hook_intake_preserves_native_child_actor_context(monkeypatch, tmp_path)
 
     claude_canonical_hook.record_hook(payload)
 
-    evidence = application.evidence.session(SessionId("claude-session"))[0]
+    runtime, interpreter = interpreting_runtime(tmp_path / "events.db")
+    runtime.register("claude_code", Session(
+        SessionId("claude-session"), ActorId("claude-session:lead"),
+        "claude-session", "/work/claude.jsonl", "/work",
+    ))
+    interpreter.tick()
+    evidence = EvidenceQueries(runtime.store).session(SessionId("claude-session"))[0]
     assert evidence.actor_id == ActorId("child-one")
     assert evidence.parent_actor_id == ActorId("claude-session:lead")
     assert evidence.canonical[0].event.actor_id == ActorId("child-one")
 
 
-def test_claude_hook_returns_native_pretool_output_from_its_plugin(monkeypatch):
+def test_claude_hook_returns_native_pretool_output_and_a_watch_directive(monkeypatch):
     document = {
         "session_id": "claude-session",
         "transcript_path": "/work/claude.jsonl",
@@ -1014,18 +965,50 @@ def test_claude_hook_returns_native_pretool_output_from_its_plugin(monkeypatch):
         "tool_input": {"command": "echo hello"},
     }
     expected = b'{"hookSpecificOutput":{"updatedInput":{}}}\n'
-    action = SimpleNamespace(start=lambda: None)
+    watch = FileWatch(
+        operation_id="pretool-one",
+        source_path="/work/out",
+        chunk_source_type="foreground_output",
+        delete_source=True,
+        initial_size=0,
+        initial_modified_at=0,
+        wait_for_source_change=False,
+    )
     monkeypatch.setattr(
-        claude_canonical_hook.cmd_pre,
+        claude_canonical_hook.foreground,
         "prepare",
-        lambda value: SimpleNamespace(output=expected, action=action),
+        lambda value: SimpleNamespace(output=expected, watch=watch),
     )
 
-    intake = claude_canonical_hook.hook.receive(json.dumps(document).encode())
+    raw_events, output = claude_canonical_hook.hook_raw_events(json.dumps(document).encode())
 
-    assert intake.output == expected
-    assert intake.actions == (action,)
-    assert intake.raw_events[0].payload == json.dumps(document).encode()
+    assert output == expected
+    assert raw_events[0].payload == json.dumps(document).encode()
+    directive = raw_events[-1]
+    assert directive.source_type == "watch"
+    assert json.loads(directive.payload)["action"] == "start"
+    assert json.loads(directive.payload)["source_path"] == "/work/out"
+
+
+def test_claude_post_tool_hook_records_the_watch_finish_directive():
+    document = {
+        "session_id": "claude-session",
+        "transcript_path": "/work/claude.jsonl",
+        "cwd": "/work",
+        "hook_event_name": "PostToolUse",
+        "hook_event_id": "posttool-one",
+        "tool_name": "Bash",
+        "tool_use_id": "command-one",
+        "tool_input": {"command": "echo hello"},
+        "tool_response": {"stdout": "hello"},
+    }
+
+    raw_events, output = claude_canonical_hook.hook_raw_events(json.dumps(document).encode())
+
+    assert output == b""
+    directive = raw_events[-1]
+    assert directive.source_type == "watch"
+    assert json.loads(directive.payload) == {"action": "finish", "operation_id": "command-one"}
 
 
 def test_claude_foreground_output_is_canonical_append_progress():
@@ -1049,10 +1032,7 @@ def test_claude_foreground_output_is_canonical_append_progress():
     assert progress.content.text == content.decode()
 
 
-def test_claude_foreground_hook_registers_one_idempotent_plugin_source(
-    monkeypatch,
-    tmp_path,
-):
+def test_claude_foreground_prepare_rewrites_the_command_into_a_watch(monkeypatch, tmp_path):
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
     document = {
         "session_id": "session-one",
@@ -1063,30 +1043,16 @@ def test_claude_foreground_hook_registers_one_idempotent_plugin_source(
     }
 
     prepared = claude_foreground.prepare(document)
+
     assert prepared is not None
     native_output = json.loads(prepared.output)
     updated_command = native_output["hookSpecificOutput"]["updatedInput"]["command"]
     assert native_output["hookSpecificOutput"]["permissionDecision"] == "allow"
     assert "tee -a" in updated_command
-
-    prepared.action.start()
-    prepared.action.start()
-    checkpoints = MemoryCheckpoints()
-    sources = claude_foreground.sources(SessionId("session-one"), checkpoints)
-    assert len(sources) == 1
-    source = sources[0]
-    assert source.observation.actor_id == "child-one"
-    assert source.observation.parent_actor_id == "session-one:lead"
-
-    Path(source.observation.source_path).write_bytes(b"hello")
-    delivery = RecordingDelivery()
-    source.drain(delivery)
-    assert len(delivery.raw_events) == 1
-    assert checkpoints.checkpoint.position == "5"
-
-    claude_foreground.finish_action(document).start()
-    source.drain(delivery)
-    assert claude_foreground.sources(SessionId("session-one"), checkpoints) == ()
+    assert prepared.watch.operation_id == "command-one"
+    assert prepared.watch.delete_source is True
+    assert prepared.watch.chunk_source_type == "foreground_output"
+    assert prepared.watch.source_path in updated_command
 
 
 def test_claude_foreground_bytes_flow_through_raw_audit_into_operation_projection(
@@ -1094,8 +1060,8 @@ def test_claude_foreground_bytes_flow_through_raw_audit_into_operation_projectio
     tmp_path,
 ):
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
-    application = build_application(str(tmp_path / "application"))
-    monkeypatch.setattr(application.host, "ensure_running", lambda: None)
+    monkeypatch.setenv("BAQYLAU_DATA_DIR", str(tmp_path / "application"))
+    monkeypatch.setattr("app.host.ApplicationHost.ensure_running", lambda self: None)
     document = {
         "session_id": "session-one",
         "transcript_path": str(tmp_path / "session-one.jsonl"),
@@ -1107,17 +1073,22 @@ def test_claude_foreground_bytes_flow_through_raw_audit_into_operation_projectio
         "tool_input": {"command": "printf hello"},
     }
 
-    output = application.hooks.receive("claude_code", json.dumps(document).encode())
+    output = claude_canonical_hook.record_hook(json.dumps(document).encode())
     assert b"updatedInput" in output
-    source = claude_foreground.sources(
-        SessionId("session-one"),
-        application.checkpoints,
-    )[0]
-    Path(source.observation.source_path).write_bytes(b"hello\n")
-    source.drain(application.delivery)
 
-    cursor = application.event_store.latest_cursor()
-    operation = application.queries.operation_activity(
+    runtime, interpreter = interpreting_runtime(tmp_path / "application" / "events.db")
+    runtime.register("claude_code", Session(
+        SessionId("session-one"), ActorId("session-one:lead"),
+        "session-one", str(tmp_path / "session-one.jsonl"), str(tmp_path),
+    ))
+    interpreter.tick()  # applies the watch directive
+    watch_sources = runtime.watches.for_session(SessionId("session-one"))
+    assert len(watch_sources) == 1
+    Path(watch_sources[0].source_path).write_bytes(b"hello\n")
+    interpreter.tick()  # pulls the chunk and translates it
+
+    cursor = runtime.store.latest_cursor()
+    operation = runtime.queries().operation_activity(
         SessionId("session-one"),
         ActorId("session-one:lead"),
         OperationId("command-one"),
@@ -1125,175 +1096,12 @@ def test_claude_foreground_bytes_flow_through_raw_audit_into_operation_projectio
     )
     assert operation.state == "running"
     assert operation.current_progress()[0].text == "hello\n"
-    evidence = application.evidence.session(SessionId("session-one"))
+    evidence = EvidenceQueries(runtime.store).session(SessionId("session-one"))
     foreground_evidence = [row for row in evidence if row.source_type == "foreground_output"]
     assert len(foreground_evidence) == 1
     assert base64.b64decode(
         json.loads(foreground_evidence[0].payload)["content_base64"]
     ) == b"hello\n"
-
-
-def test_claude_foreground_source_retains_exact_bytes_and_cleans_transient_files(tmp_path):
-    source_path = tmp_path / "command.out"
-    completion_path = tmp_path / "command.done"
-    manifest_path = tmp_path / "command.json"
-    exact_output = b"hello \xff\n"
-    source_path.write_bytes(exact_output)
-    completion_path.write_bytes(b"")
-    observation = claude_foreground.ForegroundObservation(
-        session_id="session-one",
-        actor_id="session-one:lead",
-        parent_actor_id=None,
-        operation_id="command-one",
-        source_path=str(source_path),
-        completion_path=str(completion_path),
-        delete_source=True,
-        initial_size=0,
-        initial_modified_at=0,
-        wait_for_source_change=False,
-        created_at=10_000_000_000.0,
-    )
-    manifest_path.write_text(json.dumps(observation.__dict__))
-    checkpoints = MemoryCheckpoints()
-    source = claude_foreground.ForegroundOutputSource(
-        str(manifest_path),
-        checkpoints,
-    )
-    delivery = RecordingDelivery()
-
-    source.drain(delivery)
-
-    assert len(delivery.raw_events) == 1
-    raw = delivery.raw_events[0]
-    assert raw.source_type == "foreground_output"
-    document = json.loads(raw.payload)
-    assert base64.b64decode(document["content_base64"]) == exact_output
-    assert not manifest_path.exists()
-    assert not completion_path.exists()
-    assert not source_path.exists()
-
-
-def test_claude_hook_does_not_duplicate_canonical_session_lifecycle():
-    base = {
-        "session_id": "claude-session",
-        "transcript_path": "/work/claude.jsonl",
-        "cwd": "/work",
-        "hook_event_id": "lifecycle-one",
-    }
-
-    started = claude_canonical_hook.hook.receive(
-        json.dumps(base | {"hook_event_name": "SessionStart"}).encode()
-    )
-    finished = claude_canonical_hook.hook.receive(
-        json.dumps(base | {"hook_event_name": "SessionEnd"}).encode()
-    )
-
-    assert not hasattr(started, "lifecycle_requests")
-    assert not hasattr(finished, "lifecycle_requests")
-
-
-class LifecycleTerminal:
-    def __init__(self, current_window_id="window-one", hosting_session_id=None):
-        self.current_window_id = current_window_id
-        self.hosting_session_id = hosting_session_id
-
-    def current_window(self):
-        return self.current_window_id
-
-    def window_for_session(self, session_id):
-        return None
-
-    def hosting_session(self, excluding_session_id):
-        return self.hosting_session_id
-
-
-class LifecyclePanes:
-    def __init__(self):
-        self.opened = []
-        self.closed = []
-
-    def open_session_panes(self, request):
-        self.opened.append(request)
-        return TerminalResult(True)
-
-    def close_session_panes(self, session_id):
-        self.closed.append(session_id)
-        return TerminalResult(True)
-
-
-def test_plugin_lifecycles_use_only_the_injected_generic_pane_contract(monkeypatch):
-    recognized_session = RecognizedSession(
-        SessionId("session-one"),
-        ActorId("session-one:lead"),
-        "native-one",
-        "/work/session.jsonl",
-        "/work",
-    )
-    terminal = LifecycleTerminal()
-    panes = LifecyclePanes()
-    context = SessionLifecycleContext(terminal, panes)
-    telemetry_starts = []
-    monkeypatch.setattr("plugins.claude_code.lifecycle.pane_settings.width_percent", lambda directory: 25)
-    monkeypatch.setattr(
-        "plugins.claude_code.lifecycle.otel.start",
-        lambda: telemetry_starts.append("started"),
-    )
-
-    ClaudeCodeLifecycle().apply(SessionLifecycleRequest("started"), recognized_session, context)
-    ClaudeCodeLifecycle().apply(SessionLifecycleRequest("finished"), recognized_session, context)
-    CodexLifecycle().apply(SessionLifecycleRequest("started"), recognized_session, context)
-    CodexLifecycle().apply(SessionLifecycleRequest("finished"), recognized_session, context)
-
-    assert [request.session_id for request in panes.opened] == [
-        recognized_session.session_id,
-        recognized_session.session_id,
-    ]
-    assert panes.closed == [recognized_session.session_id, recognized_session.session_id]
-    assert telemetry_starts == ["started"]
-
-
-def test_codex_lifecycle_does_not_open_nested_session_panes():
-    recognized_session = RecognizedSession(
-        SessionId("session-one"),
-        ActorId("session-one:lead"),
-        "native-one",
-        "/work/session.jsonl",
-        "/work",
-    )
-    panes = LifecyclePanes()
-    context = SessionLifecycleContext(
-        LifecycleTerminal(hosting_session_id=SessionId("host-session")),
-        panes,
-    )
-
-    CodexLifecycle().apply(SessionLifecycleRequest("started"), recognized_session, context)
-
-    assert panes.opened == []
-
-
-def test_claude_lifecycle_does_not_open_nested_session_panes(monkeypatch):
-    recognized_session = RecognizedSession(
-        SessionId("session-one"),
-        ActorId("session-one:lead"),
-        "native-one",
-        "/work/session.jsonl",
-        "/work",
-    )
-    panes = LifecyclePanes()
-    context = SessionLifecycleContext(
-        LifecycleTerminal(hosting_session_id=SessionId("host-session")),
-        panes,
-    )
-    telemetry_starts = []
-    monkeypatch.setattr(
-        "plugins.claude_code.lifecycle.otel.start",
-        lambda: telemetry_starts.append("started"),
-    )
-
-    ClaudeCodeLifecycle().apply(SessionLifecycleRequest("started"), recognized_session, context)
-
-    assert panes.opened == []
-    assert telemetry_starts == ["started"]
 
 
 class PaneFrontend:
@@ -1575,8 +1383,8 @@ def test_claude_hook_and_child_transcript_deduplicate_actor_start():
         **child_context,
     )
 
-    hook_start = ClaudeCanonicalTranslator().translate(hook).events[0]
-    transcript_start = ClaudeCanonicalTranslator().translate(transcript_record).events[0]
+    hook_start = ClaudeCanonicalTranslator().translate(hook).canonical_events[0]
+    transcript_start = ClaudeCanonicalTranslator().translate(transcript_record).canonical_events[0]
 
     assert CanonicalEventCodec().encode(hook_start) == CanonicalEventCodec().encode(transcript_start)
 
@@ -1603,10 +1411,10 @@ def test_claude_first_teammate_message_starts_the_actor_once():
     result = ClaudeCanonicalTranslator().translate(teammate_message)
 
     actor_starts = [
-        event for event in result.events if isinstance(event.payload, ActorStarted)
+        event for event in result.canonical_events if isinstance(event.payload, ActorStarted)
     ]
     assert len(actor_starts) == 1
-    assert len({event.event_id for event in result.events}) == len(result.events)
+    assert len({event.event_id for event in result.canonical_events}) == len(result.canonical_events)
 
 
 def test_claude_later_teammate_message_reuses_the_canonical_actor_start():
@@ -1641,8 +1449,8 @@ def test_claude_later_teammate_message_reuses_the_canonical_actor_start():
         parent_actor_id=ActorId("session-one:lead"),
     )
 
-    first_start = translator.translate(first_record).events[0]
-    later_start = translator.translate(later_message).events[0]
+    first_start = translator.translate(first_record).canonical_events[0]
+    later_start = translator.translate(later_message).canonical_events[0]
 
     assert CanonicalEventCodec().encode(first_start) == CanonicalEventCodec().encode(later_start)
 
@@ -1678,8 +1486,8 @@ def test_claude_lead_start_uses_the_first_root_record_with_a_working_directory()
 
     assert plumbing.decision == "ignored_nonsemantic"
     codec = CanonicalEventCodec()
-    assert [codec.encode(event) for event in root_record.events[:2]] == [
-        codec.encode(event) for event in hook.events
+    assert [codec.encode(event) for event in root_record.canonical_events[:2]] == [
+        codec.encode(event) for event in hook.canonical_events
     ]
 
 
@@ -1696,8 +1504,8 @@ def test_claude_teammate_hook_and_transcript_share_one_actor_identity(monkeypatc
     child_path.with_name("agent-worker-one.meta.json").write_text(json.dumps({
         "taskKind": "in_process_teammate",
     }))
-    application = build_application(str(tmp_path / "data"))
-    monkeypatch.setattr(application.host, "ensure_running", lambda: None)
+    monkeypatch.setenv("BAQYLAU_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr("app.host.ApplicationHost.ensure_running", lambda self: None)
     hook_payload = json.dumps({
         "session_id": "session-one",
         "transcript_path": str(main_path),
@@ -1707,22 +1515,29 @@ def test_claude_teammate_hook_and_transcript_share_one_actor_identity(monkeypatc
         "agent_type": "reviewer",
     }).encode()
 
-    application.hooks.receive("claude_code", hook_payload)
-    session = application.event_store.recognized_session(SessionId("session-one"))
-    assert session is not None
-    source = ClaudeTranscriptSource(
+    claude_canonical_hook.record_hook(hook_payload)
+    runtime, interpreter = interpreting_runtime(tmp_path / "data" / "events.db")
+    session = Session(
+        SessionId("session-one"),
+        ActorId("session-one:lead"),
+        "session-one",
+        str(main_path),
+        str(tmp_path),
+    )
+    runtime.register("claude_code", session)
+    source = ClaudeTranscriptRawEventSource(
         replace(
-            session.event_source_context,
+            session.source_context,
             actor_id=ActorId("worker-one"),
             parent_actor_id=session.lead_actor_id,
             source_reference=str(child_path),
         ),
-        application.checkpoints,
         "teammate",
     )
-    source.drain(application.delivery)
+    runtime.recorder.record(source.read(None))
+    interpreter.tick()
 
-    actors = application.queries.actors(SessionId("session-one"))
+    actors = runtime.queries().actors(SessionId("session-one"))
     teammate = next(actor for actor in actors if actor.actor_id == ActorId("worker-one"))
     assert teammate.role == "teammate"
 
@@ -1742,8 +1557,8 @@ def test_codex_hook_maps_unique_compaction_lifecycle():
         raw_event_id="compact-after",
     ))
 
-    assert isinstance(before.events[0].payload, CompactionStarted)
-    assert isinstance(after.events[0].payload, CompactionFinished)
+    assert isinstance(before.canonical_events[0].payload, CompactionStarted)
+    assert isinstance(after.canonical_events[0].payload, CompactionFinished)
 
 
 def test_codex_session_start_hook_matches_rollout_metadata():
@@ -1768,15 +1583,14 @@ def test_codex_session_start_hook_matches_rollout_metadata():
 
     codec = CanonicalEventCodec()
     assert hook.decision == "translated"
-    assert [codec.encode(event) for event in hook.events] == [
-        codec.encode(event) for event in rollout.events
+    assert [codec.encode(event) for event in hook.canonical_events] == [
+        codec.encode(event) for event in rollout.canonical_events
     ]
 
 
 def test_hook_native_identity_reuse_with_different_bytes_is_a_hard_conflict(monkeypatch, tmp_path):
-    application = build_application(str(tmp_path))
-    monkeypatch.setattr(application.host, "ensure_running", lambda: None)
-    monkeypatch.setattr("app.bootstrap.build_default_application", lambda: application)
+    monkeypatch.setenv("BAQYLAU_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr("app.host.ApplicationHost.ensure_running", lambda self: None)
     first = (
         b'{"session_id":"session-one","transcript_path":"/work/session.jsonl",'
         b'"cwd":"/work","hook_event_name":"PreToolUse","hook_event_id":"hook-one",'
@@ -1858,7 +1672,7 @@ def test_claude_memory_capture_stays_inside_the_plugin(monkeypatch, tmp_path):
         "rel",
         lambda path: "platform/design.md",
     )
-    claude_memory_state.CaptureMemory(
+    claude_memory_state.capture(
         {
             "session_id": "session-memory",
             "cwd": str(tmp_path),
@@ -1867,7 +1681,7 @@ def test_claude_memory_capture_stays_inside_the_plugin(monkeypatch, tmp_path):
             "tool_input": {"file_path": str(tmp_path / "design.md")},
             "agent_id": "actor-memory",
         }
-    ).start()
+    )
 
     snapshot = claude_memory_state.snapshot(SessionId("session-memory"))
 
@@ -1962,6 +1776,8 @@ def test_launchers_build_native_commands_and_share_terminal_launch_mechanics(tmp
 
     assert claude_result.status == codex_result.status == "started"
     assert terminal.requests[0].command == (
+        sys.executable,
+        str(Path(claude_canonical_hook.__file__).with_name("command.py")),
         "claude",
         "--model",
         "fable",
@@ -2026,7 +1842,7 @@ def test_claude_question_discussion_is_delivered_after_declining(monkeypatch, tm
         lambda _terminal, _window, text: (calls.append(("discussion", text)) or (True, False)),
     )
     application = build_application(str(tmp_path))
-    session = RecognizedSession(
+    session = Session(
         SessionId("session-one"),
         ActorId("session-one:lead"),
         "native-one",
@@ -2063,7 +1879,7 @@ def test_codex_question_discussion_stays_in_the_native_dialog(monkeypatch, tmp_p
         lambda _terminal, _window, _prompts, message: calls.append(message),
     )
     application = build_application(str(tmp_path))
-    session = RecognizedSession(
+    session = Session(
         SessionId("session-one"),
         ActorId("session-one:lead"),
         "native-one",
@@ -2103,7 +1919,7 @@ def test_claude_model_control_resolves_the_native_confirmation(monkeypatch, tmp_
         lambda _terminal, _window: {"dialog": True, "digit": "1"},
     )
     application = build_application(str(tmp_path))
-    session = RecognizedSession(
+    session = Session(
         SessionId("session-one"),
         ActorId("session-one:lead"),
         "native-one",
@@ -2148,7 +1964,7 @@ def test_claude_account_migration_uses_only_projected_context(monkeypatch, tmp_p
 
     terminal = MigrationTerminal()
     application = build_application(str(tmp_path))
-    session = RecognizedSession(
+    session = Session(
         SessionId("session-one"),
         ActorId("session-one:lead"),
         "native-one",
@@ -2173,7 +1989,9 @@ def test_claude_account_migration_uses_only_projected_context(monkeypatch, tmp_p
     assert outcome.target_account_id == "account-two"
     assert terminal.closed == ["window-one"]
     assert terminal.launched[0].command == (
-        "account-two", "--resume", "session-one", "--model", "fable"
+        sys.executable,
+        str(Path(claude_canonical_hook.__file__).with_name("command.py")),
+        "account-two", "--resume", "session-one", "--model", "fable",
     )
 
 
@@ -2193,7 +2011,7 @@ def test_parked_rename_uses_only_the_owning_harness_title_store(
     calls = []
     monkeypatch.setattr(native_writer, lambda path, name: calls.append((path, name)) or True)
     application = build_application(str(tmp_path))
-    session = RecognizedSession(
+    session = Session(
         SessionId("session-one"),
         ActorId("session-one:lead"),
         "native-one",
@@ -2228,10 +2046,10 @@ def test_claude_prompt_and_codex_prompt_share_the_message_model():
             raw_event_id="codex-prompt",
         )
     )
-    assert isinstance(claude.events[0].payload, MessageCreated)
-    assert isinstance(codex.events[0].payload, MessageCreated)
-    assert claude.events[0].payload.role == codex.events[0].payload.role == "user"
-    assert claude.events[0].payload.phase == codex.events[0].payload.phase == "prompt"
+    assert isinstance(claude.canonical_events[0].payload, MessageCreated)
+    assert isinstance(codex.canonical_events[0].payload, MessageCreated)
+    assert claude.canonical_events[0].payload.role == codex.canonical_events[0].payload.role == "user"
+    assert claude.canonical_events[0].payload.phase == codex.canonical_events[0].payload.phase == "prompt"
 
 
 def test_claude_child_prompt_is_authored_by_the_parent_agent():
@@ -2427,8 +2245,8 @@ def test_native_instruction_wrappers_are_canonical_system_messages():
         )
     )
 
-    assert codex.events[0].payload.role == "system"
-    assert claude.events[0].payload.role == "system"
+    assert codex.canonical_events[0].payload.role == "system"
+    assert claude.canonical_events[0].payload.role == "system"
 
 
 def test_claude_title_records_preserve_native_title_origin():
@@ -2446,8 +2264,8 @@ def test_claude_title_records_preserve_native_title_origin():
         raw_event_id="automatic-title",
     ))
 
-    assert custom.events[0].payload == SessionTitleChanged("Chosen name", "custom")
-    assert automatic.events[0].payload == SessionTitleChanged("Generated name", "automatic")
+    assert custom.canonical_events[0].payload == SessionTitleChanged("Chosen name", "custom")
+    assert automatic.canonical_events[0].payload == SessionTitleChanged("Generated name", "automatic")
 
 
 def test_claude_assistant_preserves_reasoning_and_model_without_duplicate_usage():
@@ -2543,15 +2361,15 @@ def test_claude_otel_translates_raw_usage_once_by_model_and_query_source():
 
 
 def test_claude_otel_delivery_records_raw_and_canonical_audit(tmp_path):
-    application = build_application(str(tmp_path))
-    session = RecognizedSession(
+    runtime, interpreter = interpreting_runtime(tmp_path / "events.db")
+    session = Session(
         SessionId("session-one"),
         ActorId("session-one:lead"),
         "session-one",
         "/tmp/session-one.jsonl",
         "/work",
     )
-    application.event_store.register_session("claude_code", session)
+    runtime.register("claude_code", session)
     document = {
         "resourceMetrics": [{
             "scopeMetrics": [{
@@ -2571,14 +2389,16 @@ def test_claude_otel_delivery_records_raw_and_canonical_audit(tmp_path):
     }
     raw_body = json.dumps(document, separators=(",", ":")).encode()
 
-    assert claude_otel_receiver.deliver(application, raw_body) == 1
-    assert claude_otel_receiver.deliver(application, raw_body) == 1
-    evidence = application.evidence.session(SessionId("session-one"))
+    assert claude_otel_receiver.deliver(runtime.recorder, runtime.sessions, raw_body) == 1
+    assert claude_otel_receiver.deliver(runtime.recorder, runtime.sessions, raw_body) == 1
+    interpreter.tick()
+
+    evidence = EvidenceQueries(runtime.store).session(SessionId("session-one"))
     assert len(evidence) == 1
     assert evidence[0].payload == raw_body
     assert evidence[0].decision == "translated"
     assert len(evidence[0].canonical) == 1
-    assert application.queries.usage(SessionId("session-one")).tokens.output_tokens == 9
+    assert runtime.queries().usage(SessionId("session-one")).tokens.output_tokens == 9
 
 
 def test_claude_operation_execution_comes_from_native_tool_semantics():
@@ -2719,7 +2539,7 @@ def test_codex_empty_write_stdin_poll_is_raw_only_and_ctrl_c_is_input():
     }, harness="codex", source_type="rollout", raw_event_id="interrupt", source_position="13"))
 
     assert poll.decision == "ignored_nonsemantic"
-    assert poll.events == ()
+    assert poll.canonical_events == ()
     assert payloads(interrupt, OperationInputProvided)[0].payload.content.text == "\x03"
 
 
@@ -2737,8 +2557,8 @@ def test_codex_write_stdin_requires_a_known_process_session():
 
 
 def test_codex_write_stdin_records_raw_and_canonical_audit(tmp_path):
-    application = build_application(str(tmp_path))
-    application.event_store.register_session("codex", RecognizedSession(
+    runtime, interpreter = interpreting_runtime(tmp_path / "events.db")
+    runtime.register("codex", Session(
         SessionId("session-one"),
         ActorId("session-one:lead"),
         "session-one",
@@ -2782,15 +2602,15 @@ def test_codex_write_stdin_records_raw_and_canonical_audit(tmp_path):
             },
         }, harness="codex", source_type="rollout", raw_event_id="stdin", source_position="43"),
     )
-    for observation in observations:
-        application.delivery.deliver(observation)
+    runtime.recorder.record(observations)
+    interpreter.tick()
 
-    stdin_evidence = application.evidence.raw_event(RawEventId("stdin"))
+    stdin_evidence = EvidenceQueries(runtime.store).raw_event(RawEventId("stdin"))
     assert stdin_evidence is not None
     assert stdin_evidence.payload == observations[-1].payload
     assert stdin_evidence.decision == "translated"
     assert isinstance(stdin_evidence.canonical[0].event.payload, OperationInputProvided)
-    poll_evidence = application.evidence.raw_event(RawEventId("poll"))
+    poll_evidence = EvidenceQueries(runtime.store).raw_event(RawEventId("poll"))
     assert poll_evidence is not None
     assert poll_evidence.payload == observations[-2].payload
     assert poll_evidence.decision == "ignored_nonsemantic"
@@ -2833,7 +2653,7 @@ def test_codex_preliminary_patch_marker_is_nonsemantic():
     ))
 
     assert translation.decision == "ignored_nonsemantic"
-    assert translation.events == ()
+    assert translation.canonical_events == ()
 
 
 def test_codex_current_file_change_emits_the_shared_file_facts():
@@ -2872,7 +2692,7 @@ def test_codex_current_file_change_emits_the_shared_file_facts():
     ]
     assert files[0].unified_diff == "@@ -1 +1 @@\n-old\n+new\n"
     assert files[1].content.text == "print('captured')\n"
-    assert isinstance(translated.events[-1].payload, OperationFinished)
+    assert isinstance(translated.canonical_events[-1].payload, OperationFinished)
 
 
 def test_codex_exec_wrapped_apply_patch_does_not_render_an_empty_tool_block():
@@ -2892,7 +2712,7 @@ def test_codex_exec_wrapped_apply_patch_does_not_render_an_empty_tool_block():
     ))
 
     assert translated.decision.startswith("ignored_")
-    assert translated.events == ()
+    assert translated.canonical_events == ()
 
 
 def test_codex_apply_patch_wrapper_output_is_nonsemantic():
@@ -2914,7 +2734,7 @@ def test_codex_apply_patch_wrapper_output_is_nonsemantic():
     ))
 
     assert translation.decision.startswith("ignored_")
-    assert translation.events == ()
+    assert translation.canonical_events == ()
 
 
 def test_codex_collaboration_lifecycle_uses_child_turn_as_assignment_identity(tmp_path):
@@ -2985,7 +2805,7 @@ def test_codex_collaboration_lifecycle_uses_child_turn_as_assignment_identity(tm
         parent_actor_id=ActorId("lead-one"),
     )
     hook_result = translator.translate(hook_raw)
-    assert hook_result.events == ()
+    assert hook_result.canonical_events == ()
     assert hook_result.decision == "ignored_nonsemantic"
 
 
@@ -3029,7 +2849,7 @@ def test_codex_collaboration_controls_map_only_semantic_actor_facts(tmp_path):
                 "call_id": call_id,
             },
         }, f"{call_id}-call")
-        assert result.events == ()
+        assert result.canonical_events == ()
         assert result.decision == "ignored_nonsemantic"
 
     sent = translate({
@@ -3069,7 +2889,7 @@ def test_codex_collaboration_controls_map_only_semantic_actor_facts(tmp_path):
                 },
             },
         }, f"{call_id}-activity")
-        assert result.events == ()
+        assert result.canonical_events == ()
         assert result.decision == "ignored_nonsemantic"
 
     for call_id, output in (
@@ -3086,7 +2906,7 @@ def test_codex_collaboration_controls_map_only_semantic_actor_facts(tmp_path):
                 "output": output,
             },
         }, f"{call_id}-output")
-        assert result.events == ()
+        assert result.canonical_events == ()
         assert result.decision == "ignored_nonsemantic"
 
 
@@ -3318,10 +3138,10 @@ def test_claude_hook_and_transcript_tool_finish_deduplicate_transactionally(tmp_
     transcript_finished = payloads(transcript, OperationFinished)[0]
     assert CanonicalEventCodec().encode(hook_finished) == CanonicalEventCodec().encode(transcript_finished)
 
-    store = EventStore(str(tmp_path / "events.db"))
-    store.register_session(
+    store = CanonicalRuntime(str(tmp_path / "events.db"))
+    store.register(
         "claude_code",
-        RecognizedSession(
+        Session(
             SessionId("session-one"),
             ActorId("session-one:lead"),
             "native",
@@ -3330,8 +3150,11 @@ def test_claude_hook_and_transcript_tool_finish_deduplicate_transactionally(tmp_
         ),
     )
     store.record(hook_raw, "1", hook)
-    result = store.record(transcript_raw, "1", transcript)
-    assert hook_finished.event_id in result.duplicate_event_ids
+    accepted = store.record(transcript_raw, "1", transcript)
+    assert hook_finished.event_id not in {stored.event.event_id for stored in accepted}
+    stored = store.store.after(SessionId("session-one"), 0, 10).events
+    finished = next(item for item in stored if item.event.event_id == hook_finished.event_id)
+    assert RawEventId("transcript-finish") in finished.raw_event_ids
 
 
 def test_claude_question_preserves_multiple_prompts_and_multiselect():
@@ -3454,10 +3277,10 @@ def test_codex_session_turn_operation_usage_and_context_records():
             raw_event_id="usage",
         )
     )
-    assert isinstance(session.events[0].payload, SessionStarted)
-    assert isinstance(session.events[1].payload, ActorStarted)
-    assert isinstance(turn.events[0].payload, TurnStarted)
-    assert isinstance(operation.events[0].payload, OperationStarted)
+    assert isinstance(session.canonical_events[0].payload, SessionStarted)
+    assert isinstance(session.canonical_events[1].payload, ActorStarted)
+    assert isinstance(turn.canonical_events[0].payload, TurnStarted)
+    assert isinstance(operation.canonical_events[0].payload, OperationStarted)
     assert len(payloads(usage, UsageReported)) == 1
     assert len(payloads(usage, ContextReported)) == 1
 
@@ -3484,7 +3307,7 @@ def test_codex_message_keeps_its_native_turn_identity():
         )
     )
 
-    assert translation.events[0].turn_id == TurnId("turn-one")
+    assert translation.canonical_events[0].turn_id == TurnId("turn-one")
 
 
 def test_codex_source_can_attach_an_actor_to_another_harness_session():
@@ -3503,11 +3326,11 @@ def test_codex_source_can_attach_an_actor_to_another_harness_session():
 
     translation = CodexCanonicalTranslator().translate(nested_raw_event)
 
-    assert len(translation.events) == 1
-    assert isinstance(translation.events[0].payload, ActorStarted)
-    assert translation.events[0].payload.role == "sidecar"
-    assert translation.events[0].actor_id == ActorId("codex-child")
-    assert translation.events[0].parent_actor_id == ActorId("claude-lead")
+    assert len(translation.canonical_events) == 1
+    assert isinstance(translation.canonical_events[0].payload, ActorStarted)
+    assert translation.canonical_events[0].payload.role == "sidecar"
+    assert translation.canonical_events[0].actor_id == ActorId("codex-child")
+    assert translation.canonical_events[0].parent_actor_id == ActorId("claude-lead")
 
 
 def test_codex_native_subagent_keeps_the_child_role():
@@ -3526,8 +3349,8 @@ def test_codex_native_subagent_keeps_the_child_role():
 
     translation = CodexCanonicalTranslator().translate(child_raw_event)
 
-    assert isinstance(translation.events[0].payload, ActorStarted)
-    assert translation.events[0].payload.role == "child"
+    assert isinstance(translation.canonical_events[0].payload, ActorStarted)
+    assert translation.canonical_events[0].payload.role == "child"
 
 
 def test_codex_question_uses_the_same_attention_prompt_model():
@@ -3589,7 +3412,7 @@ def _slash_turn_events():
                     source_type="transcript",
                     raw_event_id="slash-" + uuid,
                 )
-            ).events
+            ).canonical_events
         )
     return events
 

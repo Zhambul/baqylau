@@ -13,16 +13,12 @@ from datetime import datetime
 from typing import Literal
 
 from contracts.harness import (
-    CheckpointStore,
-    EventSourceContext,
-    HarnessEventSource,
-    HarnessEvents,
+    HarnessCanonicalTranslator,
+    HarnessRawEventSource,
+    HarnessRawEventSources,
     RawEvent,
-    RawEventDelivery,
-    RecognizedSession,
-    SessionCandidate,
-    SessionRecognizer,
-    SourceCheckpoint,
+    RawEventSourceContext,
+    Session,
     TranslationError,
     TranslationResult,
 )
@@ -116,67 +112,66 @@ def _rollout_paths() -> tuple[str, ...]:
     return tuple(sorted(glob.glob(pattern)))
 
 
-class CodexSessionRecognizer(SessionRecognizer):
-    def discover(self) -> tuple[RecognizedSession, ...]:
-        codex_home = os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex")
-        paths = sorted(
-            glob.glob(os.path.join(codex_home, "sessions", "*", "*", "*", "rollout-*.jsonl")),
-            key=os.path.getmtime,
-            reverse=True,
-        )
-        sessions = []
-        for path in paths:
-            recognized = self.recognize(SessionCandidate(path))
-            if recognized is not None:
-                sessions.append(recognized)
-        return tuple(sessions)
-
-    def recognize(self, candidate: SessionCandidate) -> RecognizedSession | None:
-        path = os.path.realpath(candidate.source_reference)
-        if not os.path.isfile(path) or not ROLLOUT_NAME.search(os.path.basename(path)):
-            return None
-        metadata = _session_metadata(path)
-        if not metadata:
-            return None
-        if metadata.get("thread_source") == "subagent" or metadata.get("parent_thread_id"):
-            return None
-        native_session_id = _native_session_id(path)
-        return RecognizedSession(
-            session_id=SessionId(native_session_id),
-            lead_actor_id=_lead_actor(SessionId(native_session_id)),
-            native_session_id=native_session_id,
-            source_reference=path,
-            working_directory=(metadata.get("cwd") or candidate.working_directory or None),
-        )
+def rollout_session(path: str, working_directory: str | None = None) -> Session | None:
+    """The session a LEAD rollout names — None for subagent rollouts and non-rollouts."""
+    path = os.path.realpath(path)
+    if not os.path.isfile(path) or not ROLLOUT_NAME.search(os.path.basename(path)):
+        return None
+    metadata = _session_metadata(path)
+    if not metadata:
+        return None
+    if metadata.get("thread_source") == "subagent" or metadata.get("parent_thread_id"):
+        return None
+    native_session_id = _native_session_id(path)
+    return Session(
+        session_id=SessionId(native_session_id),
+        lead_actor_id=_lead_actor(SessionId(native_session_id)),
+        native_session_id=native_session_id,
+        source_reference=path,
+        working_directory=(metadata.get("cwd") or working_directory or None),
+    )
 
 
-class CodexRolloutSource(HarnessEventSource):
+class CodexRolloutRawEventSource(HarnessRawEventSource):
+    """One rollout file, read as complete lines.
+
+    Position encoding: the byte offset where the last emitted line STARTS (the
+    translator keys on it — `source_position == "0"` marks the opening
+    session_meta, and the collaboration backscan reads everything BEFORE it).
+    Resuming therefore seeks to it and skips one line.
+    """
+
     def __init__(
         self,
-        context: EventSourceContext,
-        checkpoints: CheckpointStore,
+        context: RawEventSourceContext,
         child_body_position: int | None = None,
         actor_relation: Literal["child", "sidecar"] | None = None,
     ) -> None:
         self.context = context
-        self.checkpoints = checkpoints
         self.child_body_position = child_body_position
         self.actor_relation = actor_relation
         self.source_path = os.path.realpath(context.source_reference)
         source_hash = hashlib.sha256(self.source_path.encode("utf-8")).hexdigest()
         self.source_identity = f"codex:rollout:{source_hash}"
 
-    def drain(self, delivery: RawEventDelivery) -> None:
-        checkpoint = self.checkpoints.load(self.source_identity)
-        position = int(checkpoint.position) if checkpoint is not None else 0
-        with open(self.source_path, "rb") as source:
-            source.seek(position)
+    def read(self, after_position: str | None) -> tuple[RawEvent, ...]:
+        raw_events: list[RawEvent] = []
+        try:
+            source = open(self.source_path, "rb")
+        except FileNotFoundError:
+            return ()
+        with source:
+            if after_position is not None:
+                source.seek(int(after_position))
+                skipped = source.readline()
+                if not skipped.endswith(b"\n"):
+                    return ()
             for _ in range(EVENT_BATCH_SIZE):
                 line_position = source.tell()
                 line = source.readline()
                 if not line or not line.endswith(b"\n"):
-                    return
-                raw_event = RawEvent(
+                    break
+                raw_events.append(RawEvent(
                     raw_event_id=RawEventId(f"{self.source_identity}:{line_position}"),
                     harness="codex",
                     source_type=self._source_type(line_position),
@@ -188,14 +183,9 @@ class CodexRolloutSource(HarnessEventSource):
                     observed_at=time.time(),
                     encoding="jsonl",
                     payload=line,
-                )
-                delivery.deliver(raw_event)
-                position = source.tell()
-                self.checkpoints.commit(SourceCheckpoint(
-                    self.context.session_id,
-                    self.source_identity,
-                    str(position),
+                    source_identity=self.source_identity,
                 ))
+        return tuple(raw_events)
 
     def _source_type(self, line_position: int) -> str:
         if (
@@ -219,38 +209,33 @@ def _codex_process_is_running(process_id: int) -> bool:
     )
 
 
-class CodexProcessSource(HarnessEventSource):
-    """Emit the one session finish observation when the exact Codex process ends."""
+class CodexProcessRawEventSource(HarnessRawEventSource):
+    """Emit the one session finish observation when the exact Codex process ends.
 
-    def __init__(
-        self,
-        session: RecognizedSession,
-        checkpoints: CheckpointStore,
-    ) -> None:
+    Position encoding: a latch — the wrapper records `started` under the same
+    identity, and `finished` (from the wrapper's exit or from here) means the
+    finish has already been observed.
+    """
+
+    def __init__(self, session: Session) -> None:
         if session.native_process_id is None:
             raise ValueError("Codex process source requires a native process ID")
         self.session = session
-        self.checkpoints = checkpoints
         self.source_identity = (
             f"codex:process:{session.session_id}:{session.native_process_id}"
         )
 
-    def drain(self, delivery: RawEventDelivery) -> None:
-        if self.checkpoints.load(self.source_identity) is not None:
-            return
+    def read(self, after_position: str | None) -> tuple[RawEvent, ...]:
+        if after_position == "finished":
+            return ()
         process_id = self.session.native_process_id
         if process_id is None or _codex_process_is_running(process_id):
-            return
-        delivery.deliver(process_event(self.session, "finished"))
-        self.checkpoints.commit(SourceCheckpoint(
-            self.session.session_id,
-            self.source_identity,
-            "finished",
-        ))
+            return ()
+        return (process_event(self.session, "finished"),)
 
 
 def process_event(
-    session: RecognizedSession,
+    session: Session,
     state: Literal["started", "finished"],
 ) -> RawEvent:
     """Build the exact raw process-boundary observation for a Codex session."""
@@ -278,6 +263,7 @@ def process_event(
         observed_at=time.time(),
         encoding="json",
         payload=json.dumps(document, separators=(",", ":"), sort_keys=True).encode("utf-8"),
+        source_identity=f"codex:process:{session.session_id}:{process_id}",
     )
 
 
@@ -338,11 +324,61 @@ def _codex_tool(native_name: str, arguments) -> tuple[str, str]:
     return mapped
 
 
-class CodexCanonicalTranslator(HarnessEvents):
+class CodexRawEventSources(HarnessRawEventSources):
     def __init__(self) -> None:
         self._known_rollout_paths: tuple[str, ...] = ()
         self._child_rollouts: dict[str, tuple[str, ...]] = {}
         self._next_child: dict[str, int] = {}
+
+    def _next_child_rollout(self, parent_native_session_id: str) -> tuple[str, ...]:
+        rollout_paths = _rollout_paths()
+        if rollout_paths != self._known_rollout_paths:
+            children: dict[str, list[str]] = {}
+            for rollout_path in rollout_paths:
+                parent_id = _parent_thread_id(_session_metadata(rollout_path))
+                if parent_id:
+                    children.setdefault(parent_id, []).append(rollout_path)
+            self._known_rollout_paths = rollout_paths
+            self._child_rollouts = {
+                parent_id: tuple(paths)
+                for parent_id, paths in children.items()
+            }
+        child_rollouts = self._child_rollouts.get(parent_native_session_id, ())
+        if not child_rollouts:
+            return ()
+        position = self._next_child.get(parent_native_session_id, 0) % len(child_rollouts)
+        self._next_child[parent_native_session_id] = position + 1
+        return (child_rollouts[position],)
+
+    def for_session(self, session: Session) -> tuple[HarnessRawEventSource, ...]:
+        sources: list[HarnessRawEventSource] = []
+        owns_lead_session = rollout_session(session.source_reference) is not None
+        if owns_lead_session:
+            sources.append(CodexRolloutRawEventSource(session.source_context))
+            if session.native_process_id is not None:
+                sources.append(CodexProcessRawEventSource(session))
+        for child_path in self._next_child_rollout(session.native_session_id):
+            child_body_position = rollout.subagent_body_offset(child_path)
+            if child_body_position == 0:
+                continue
+            sources.append(
+                CodexRolloutRawEventSource(
+                    RawEventSourceContext(
+                        session_id=session.session_id,
+                        lead_actor_id=session.lead_actor_id,
+                        actor_id=ActorId(_native_session_id(child_path)),
+                        parent_actor_id=session.lead_actor_id,
+                        source_reference=child_path,
+                    ),
+                    child_body_position,
+                    "child" if owns_lead_session else "sidecar",
+                )
+            )
+        return tuple(sources)
+
+
+class CodexCanonicalTranslator(HarnessCanonicalTranslator):
+    def __init__(self) -> None:
         self._collaboration_calls: dict[tuple[str, str], tuple[str, dict]] = {}
         self._process_operations: dict[tuple[str, str], OperationId] = {}
         self._continuation_operations: dict[tuple[str, str], OperationId] = {}
@@ -404,62 +440,6 @@ class CodexCanonicalTranslator(HarnessEvents):
         except (OSError, ValueError):
             return None
         return None
-
-    def _next_child_rollout(self, parent_native_session_id: str) -> tuple[str, ...]:
-        rollout_paths = _rollout_paths()
-        if rollout_paths != self._known_rollout_paths:
-            children: dict[str, list[str]] = {}
-            for rollout_path in rollout_paths:
-                parent_id = _parent_thread_id(_session_metadata(rollout_path))
-                if parent_id:
-                    children.setdefault(parent_id, []).append(rollout_path)
-            self._known_rollout_paths = rollout_paths
-            self._child_rollouts = {
-                parent_id: tuple(paths)
-                for parent_id, paths in children.items()
-            }
-        child_rollouts = self._child_rollouts.get(parent_native_session_id, ())
-        if not child_rollouts:
-            return ()
-        position = self._next_child.get(parent_native_session_id, 0) % len(child_rollouts)
-        self._next_child[parent_native_session_id] = position + 1
-        return (child_rollouts[position],)
-
-    def sources(
-        self,
-        session: RecognizedSession,
-        checkpoints: CheckpointStore,
-    ) -> tuple[HarnessEventSource, ...]:
-        sources: list[HarnessEventSource] = []
-        owns_lead_session = (
-            CodexSessionRecognizer().recognize(
-                SessionCandidate(session.source_reference)
-            )
-            is not None
-        )
-        if owns_lead_session:
-            sources.append(CodexRolloutSource(session.event_source_context, checkpoints))
-            if session.native_process_id is not None:
-                sources.append(CodexProcessSource(session, checkpoints))
-        for child_path in self._next_child_rollout(session.native_session_id):
-            child_body_position = rollout.subagent_body_offset(child_path)
-            if child_body_position == 0:
-                continue
-            sources.append(
-                CodexRolloutSource(
-                    EventSourceContext(
-                        session_id=session.session_id,
-                        lead_actor_id=session.lead_actor_id,
-                        actor_id=ActorId(_native_session_id(child_path)),
-                        parent_actor_id=session.lead_actor_id,
-                        source_reference=child_path,
-                    ),
-                    checkpoints,
-                    child_body_position,
-                    "child" if owns_lead_session else "sidecar",
-                )
-            )
-        return tuple(sources)
 
     def translate(self, raw_event: RawEvent) -> TranslationResult:
         try:

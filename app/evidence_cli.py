@@ -9,11 +9,11 @@ import sys
 
 from app.data import data_directory
 from domain.ids import RawEventId, SessionId
-from runtime.event_store import EventStore
+from runtime.canonical_store import CanonicalEventStore
 from runtime.evidence import EvidenceQueries, TranslationEvidence
 
 
-def _document(store: EventStore, evidence: TranslationEvidence) -> dict:
+def _document(store: CanonicalEventStore, evidence: TranslationEvidence) -> dict:
     return {
         "raw_event_id": str(evidence.raw_event_id),
         "session_id": str(evidence.session_id),
@@ -59,7 +59,7 @@ def main(arguments: list[str] | None = None) -> int:
     if not os.path.isfile(database_path):
         print(f"event database does not exist: {database_path}", file=sys.stderr)
         return 1
-    store = EventStore(database_path)
+    store = CanonicalEventStore(database_path)
     evidence_queries = EvidenceQueries(store)
     command, identity = arguments
     if command == "raw":

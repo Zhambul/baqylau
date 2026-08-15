@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import json
+import time
+from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import ClassVar, Literal, Mapping, Protocol, TypeAlias
 
-from contracts.terminal import SessionPaneControl, SessionTerminal, TerminalControl, TerminalScreen
+from contracts.terminal import TerminalControl, TerminalScreen
 from domain.events import AttentionRequested, CanonicalEvent, EventPayload
 from domain.ids import (
     ActorId,
     AttentionId,
-    CanonicalEventId,
     MessageId,
     RawEventId,
     SessionId,
@@ -40,30 +41,23 @@ class RawEvent:
     observed_at: float
     encoding: str
     payload: bytes
-
-
-@dataclass(frozen=True)
-class SourceCheckpoint:
-    session_id: SessionId
-    source_identity: str
-    position: str
-
-
-class CheckpointStore(Protocol):
-    def load(self, source_identity: str) -> SourceCheckpoint | None: ...
-    def commit(self, checkpoint: SourceCheckpoint) -> None: ...
+    # Which observer produced this. It is the resume key: the recorder stores it,
+    # and a pulled source is resumed from the `source_position` of the LAST
+    # recorded raw event carrying its identity. Pushed observers (hooks) have no
+    # resume and may leave it at their source_type.
+    source_identity: str = ""
 
 
 @dataclass(frozen=True)
 class TranslationResult:
-    events: tuple[CanonicalEvent[EventPayload], ...]
+    canonical_events: tuple[CanonicalEvent[EventPayload], ...]
     decision: TranslationDecision
     reason: str | None = None
 
     def __post_init__(self) -> None:
-        if self.decision == "translated" and not self.events:
-            raise ValueError("translated observations must produce at least one event")
-        if self.decision != "translated" and self.events:
+        if self.decision == "translated" and not self.canonical_events:
+            raise ValueError("translated observations must produce at least one canonical event")
+        if self.decision != "translated" and self.canonical_events:
             raise ValueError("ignored observations cannot produce canonical events")
 
 
@@ -75,20 +69,7 @@ class TranslationError(ValueError):
 
 
 @dataclass(frozen=True)
-class IngestionResult:
-    raw_event_id: RawEventId
-    translation_decision: RecordedTranslationDecision
-    accepted_event_ids: tuple[CanonicalEventId, ...]
-    deduplicated_event_ids: tuple[CanonicalEventId, ...]
-    latest_cursor: int | None
-
-
-class RawEventDelivery(Protocol):
-    def deliver(self, raw_event: RawEvent) -> IngestionResult: ...
-
-
-@dataclass(frozen=True)
-class EventSourceContext:
+class RawEventSourceContext:
     session_id: SessionId
     lead_actor_id: ActorId
     actor_id: ActorId
@@ -97,17 +78,27 @@ class EventSourceContext:
 
 
 @dataclass(frozen=True)
-class RecognizedSession:
+class Session:
+    """One observed harness session.
+
+    The row is written ONCE, at launch, by the wrapper that started the harness
+    (`SessionRegistry.register`); everything that changes over the session's
+    life is a canonical fact, never an update here. `plugin` is attachment, not
+    identity: the server-side `SessionRegistry` hands out sessions with it set,
+    recorder processes leave it None.
+    """
+
     session_id: SessionId
     lead_actor_id: ActorId
     native_session_id: str
     source_reference: str
     working_directory: str | None
     native_process_id: int | None = None
+    plugin: HarnessPlugin | None = field(default=None, compare=False, repr=False)
 
     @property
-    def event_source_context(self) -> EventSourceContext:
-        return EventSourceContext(
+    def source_context(self) -> RawEventSourceContext:
+        return RawEventSourceContext(
             session_id=self.session_id,
             lead_actor_id=self.lead_actor_id,
             actor_id=self.lead_actor_id,
@@ -118,7 +109,7 @@ class RecognizedSession:
 
 @dataclass(frozen=True)
 class ControlContext:
-    session: RecognizedSession
+    session: Session
     terminal: TerminalControl
     current_model: ModelReference | None
     current_effort: str | None
@@ -126,68 +117,123 @@ class ControlContext:
     pending_attention: AttentionRequested | None
 
 
-@dataclass(frozen=True)
-class SessionCandidate:
-    source_reference: str
-    working_directory: str | None = None
+class HarnessRawEventSource(Protocol):
+    """One native feed, read as a pure function of a resume position.
+
+    `after_position` is the `source_position` of the last raw event this source
+    produced that was recorded — or None on first read. Its encoding is the
+    source's own business (a byte offset, a state latch, a snapshot digest); the
+    only contract is that `read` returns everything AFTER it, and that a source
+    advances past input only by emitting it as evidence.
+    """
+
+    source_identity: str
+
+    def read(self, after_position: str | None) -> tuple[RawEvent, ...]: ...
 
 
-class SessionRecognizer(Protocol):
-    def discover(self) -> tuple[RecognizedSession, ...]: ...
-    def recognize(self, candidate: SessionCandidate) -> RecognizedSession | None: ...
+class HarnessRawEventSources(Protocol):
+    def for_session(self, session: Session) -> tuple[HarnessRawEventSource, ...]: ...
 
 
-class HarnessEventSource(Protocol):
-    def drain(self, delivery: RawEventDelivery) -> None: ...
-
-
-class HarnessEvents(Protocol):
-    def sources(
-        self,
-        session: RecognizedSession,
-        checkpoints: CheckpointStore,
-    ) -> tuple[HarnessEventSource, ...]: ...
-
+class HarnessCanonicalTranslator(Protocol):
     def translate(self, raw_event: RawEvent) -> TranslationResult: ...
 
 
-class HookAction(Protocol):
-    """A plugin-owned native action started only after hook facts commit."""
+class HarnessReactorContext(Protocol):
+    """What the interpreter lends a reactor: the one control dispatch point."""
 
-    def start(self) -> None: ...
+    def execute(self, request: ControlRequest) -> ControlOutcome: ...
+
+
+class HarnessReactor(Protocol):
+    """Harness-specific reactions to committed evidence, run by the interpreter.
+
+    Called once per raw event, AFTER its translation committed — never inside a
+    recorder process. This is where a harness starts companion processes or
+    keeps plugin-private bookkeeping that hooks used to do inline.
+    """
+
+    def react(self, raw_event: RawEvent, context: HarnessReactorContext) -> None: ...
+
+
+# --- File watches ----------------------------------------------------------------
+#
+# A hook that makes a command's output observable cannot follow the file itself —
+# it must exit immediately. So it records a `watch` raw event: a directive-as-
+# evidence saying "this path holds operation X's output, read it". The
+# interpreter applies these to its `watches` table and pulls the file with a
+# generic source until a matching finish directive (and EOF) ends it.
+
+WATCH_SOURCE_TYPE = "watch"
 
 
 @dataclass(frozen=True)
-class HookIntake:
-    session: RecognizedSession
-    raw_events: tuple[RawEvent, ...]
-    output: bytes = b""
-    controls: tuple[ControlRequest, ...] = ()
-    actions: tuple[HookAction, ...] = ()
+class FileWatch:
+    operation_id: str
+    source_path: str
+    chunk_source_type: str
+    delete_source: bool
+    initial_size: int
+    initial_modified_at: int
+    wait_for_source_change: bool
 
 
-class HarnessHook(Protocol):
-    def receive(self, payload: bytes) -> HookIntake: ...
+def watch_start_raw_event(
+    context: RawEventSourceContext,
+    harness: str,
+    watch: FileWatch,
+    actor_id: ActorId | None = None,
+    parent_actor_id: ActorId | None = None,
+) -> RawEvent:
+    document = {
+        "action": "start",
+        "operation_id": watch.operation_id,
+        "source_path": watch.source_path,
+        "chunk_source_type": watch.chunk_source_type,
+        "delete_source": watch.delete_source,
+        "initial_size": watch.initial_size,
+        "initial_modified_at": watch.initial_modified_at,
+        "wait_for_source_change": watch.wait_for_source_change,
+    }
+    return _watch_raw_event(context, harness, watch.operation_id, document, actor_id, parent_actor_id)
 
 
-@dataclass(frozen=True)
-class SessionLifecycleRequest:
-    action: Literal["started", "finished"]
+def watch_finish_raw_event(
+    context: RawEventSourceContext,
+    harness: str,
+    operation_id: str,
+) -> RawEvent:
+    document = {"action": "finish", "operation_id": operation_id}
+    return _watch_raw_event(context, harness, operation_id, document, None, None)
 
 
-@dataclass(frozen=True)
-class SessionLifecycleContext:
-    terminal: SessionTerminal
-    panes: SessionPaneControl
-
-
-class HarnessLifecycle(Protocol):
-    def apply(
-        self,
-        request: SessionLifecycleRequest,
-        session: RecognizedSession,
-        context: SessionLifecycleContext,
-    ) -> None: ...
+def _watch_raw_event(
+    context: RawEventSourceContext,
+    harness: str,
+    operation_id: str,
+    document: dict,
+    actor_id: ActorId | None,
+    parent_actor_id: ActorId | None,
+) -> RawEvent:
+    action = document["action"]
+    return RawEvent(
+        raw_event_id=RawEventId(f"{harness}:watch:{context.session_id}:{operation_id}:{action}"),
+        harness=harness,
+        source_type=WATCH_SOURCE_TYPE,
+        source_name=str(document.get("source_path") or operation_id),
+        source_position=action,
+        session_id=context.session_id,
+        actor_id=actor_id or context.actor_id,
+        parent_actor_id=parent_actor_id if actor_id else context.parent_actor_id,
+        observed_at=time.time(),
+        encoding="json",
+        payload=json.dumps(document, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8"),
+        # NOT the chunk source's identity: the interpreter resumes the chunk
+        # reader from the last raw event under `<harness>:watch:<session>:<op>`,
+        # and a directive there would masquerade as a read position.
+        source_identity=f"{harness}:watch:{context.session_id}:{operation_id}:directive",
+    )
 
 
 ControlName: TypeAlias = Literal[
@@ -634,10 +680,9 @@ class HarnessInfo:
 @dataclass(frozen=True)
 class HarnessPlugin:
     info: HarnessInfo
-    sessions: SessionRecognizer
-    events: HarnessEvents
-    hook: HarnessHook | None = None
-    lifecycle: HarnessLifecycle | None = None
+    sources: HarnessRawEventSources
+    translator: HarnessCanonicalTranslator
+    reactor: HarnessReactor | None = None
     controller: HarnessController | None = None
     launcher: HarnessLauncher | None = None
     catalog: HarnessCatalog | None = None

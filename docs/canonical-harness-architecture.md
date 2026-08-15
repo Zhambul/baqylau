@@ -1,6 +1,13 @@
 # Canonical harness architecture
 
-Status: **IMPLEMENTED**
+Status: **IMPLEMENTED**, then partially superseded on 2026-08-15 by
+[recorder-interpreter.md](recorder-interpreter.md): session discovery/recognition,
+hook intake, checkpoints, lifecycle, and the observation scheduler described below
+were replaced (wrappers register sessions at launch; hooks only record; the one
+interpreter translates and reacts; positions derive from the evidence itself).
+The canonical event model — raw evidence, translation verdicts, idempotent
+canonical facts, provenance, the cursor — is unchanged and this document remains
+authoritative for it.
 
 This is a standalone proposal derived from the current implementation and the
 requirements below.

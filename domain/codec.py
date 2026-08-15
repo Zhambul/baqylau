@@ -13,7 +13,7 @@ from typing import Any, Literal, get_args, get_origin, get_type_hints
 from domain.events import CanonicalEvent, EVENT_TYPES, PAYLOAD_TYPES, EventPayload
 from domain.ids import ActorId, CanonicalEventId, SessionId, TurnId
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 FORBIDDEN_PRESENTATION_FIELDS = frozenset({
     "ansi",
     "bubbled",

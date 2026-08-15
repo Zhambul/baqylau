@@ -6,7 +6,7 @@ from decimal import Decimal
 
 import pytest
 
-from contracts.harness import RawEvent, RecognizedSession, TranslationResult
+from contracts.harness import RawEvent, Session, TranslationResult
 from domain.events import (
     ActorFinished,
     ActorStarted,
@@ -49,8 +49,8 @@ from domain.ids import (
     TurnId,
 )
 from domain.values import AttentionPrompt, ModelReference, StructuredContent, TextContent, TokenUsage
-from runtime.event_store import EventStore
-from runtime.projections import ActivityScope, ActorAssignmentActivity, OperationActivity, SessionQueries
+from canonical_runtime import CanonicalRuntime
+from runtime.projections import ActivityScope, ActorAssignmentActivity, OperationActivity
 
 SESSION_ID = SessionId("session-one")
 LEAD_ACTOR_ID = ActorId("actor-lead")
@@ -85,10 +85,10 @@ def store_with_events(tmp_path, events):
         next_accepted_at[0] += 1.0
         return accepted_at
 
-    store = EventStore(str(tmp_path / "events.db"), clock=clock)
-    store.register_session(
+    store = CanonicalRuntime(str(tmp_path / "events.db"), clock=clock)
+    store.register(
         "example",
-        RecognizedSession(SESSION_ID, LEAD_ACTOR_ID, "native", "fixture", "/work"),
+        Session(SESSION_ID, LEAD_ACTOR_ID, "native", "fixture", "/work"),
     )
     for index, event in enumerate(events):
         raw = RawEvent(
@@ -113,7 +113,7 @@ def test_session_page_cache_appends_only_the_new_cursor_range(monkeypatch, tmp_p
         tmp_path,
         [canonical("session-start", SessionStarted("/work", None, None, None, None, None))],
     )
-    queries = SessionQueries(store)
+    queries = store.queries()
     assert queries.summary(SESSION_ID).title is None
 
     title_event = canonical("title", SessionTitleChanged("Incremental", "custom"))
@@ -164,7 +164,7 @@ def test_session_summary_folds_metadata_prompts_model_change_and_finish(tmp_path
         ),
         canonical("session-finish", SessionFinished("succeeded", None), occurred_at=14.0),
     ]
-    summary = SessionQueries(store_with_events(tmp_path, events)).summary(SESSION_ID)
+    summary = store_with_events(tmp_path, events).queries().summary(SESSION_ID)
     assert summary is not None
     assert summary.working_directory == "/work/changed"
     assert summary.initial_working_directory == "/work"
@@ -181,7 +181,7 @@ def test_session_summary_returns_to_running_when_the_session_is_resumed(tmp_path
         canonical("first-finish", SessionFinished("unknown", "process_exited")),
         canonical("resume-start", SessionStarted("/work", None, None, None, None, None)),
     ]
-    queries = SessionQueries(store_with_events(tmp_path, events))
+    queries = store_with_events(tmp_path, events).queries()
 
     summary = queries.summary(SESSION_ID)
 
@@ -197,9 +197,9 @@ def test_session_list_is_a_semantic_query_sorted_by_start_time(tmp_path):
     )
     second_session_id = SessionId("session-two")
     second_actor_id = ActorId("actor-two")
-    store.register_session(
+    store.register(
         "example",
-        RecognizedSession(second_session_id, second_actor_id, "native-two", "fixture-two", "/work"),
+        Session(second_session_id, second_actor_id, "native-two", "fixture-two", "/work"),
     )
     second_start = CanonicalEvent(
         CanonicalEventId("session-two-start"),
@@ -226,7 +226,7 @@ def test_session_list_is_a_semantic_query_sorted_by_start_time(tmp_path):
     )
     store.record(second_raw, "1", TranslationResult((second_start,), "translated"))
 
-    assert [summary.session_id for summary in SessionQueries(store).sessions()] == [
+    assert [summary.session_id for summary in store.queries().sessions()] == [
         second_session_id,
         SESSION_ID,
     ]
@@ -240,7 +240,7 @@ def test_custom_session_title_is_not_overwritten_by_later_automatic_title(tmp_pa
         canonical("automatic-title", SessionTitleChanged("Generated later", "automatic")),
     ]
 
-    summary = SessionQueries(store_with_events(tmp_path, events)).summary(SESSION_ID)
+    summary = store_with_events(tmp_path, events).queries().summary(SESSION_ID)
 
     assert summary is not None
     assert summary.title == "Chosen"
@@ -279,7 +279,7 @@ def test_activity_joins_operation_progress_and_finish_by_identity(tmp_path):
             occurred_at=13.0,
         ),
     ]
-    queries = SessionQueries(store_with_events(tmp_path, events))
+    queries = store_with_events(tmp_path, events).queries()
     page = queries.activity_after(SESSION_ID, 0, ActivityScope(), 10)
     assert len(page.activities) == 1
     operation = page.activities[0]
@@ -323,7 +323,7 @@ def test_activity_uses_accepted_time_when_native_time_is_absent(tmp_path):
         ],
     )
 
-    operation = SessionQueries(store).activity_after(
+    operation = store.queries().activity_after(
         SESSION_ID, 0, ActivityScope(), 10
     ).activities[0]
 
@@ -345,7 +345,7 @@ def test_actor_assignment_finish_without_start_has_one_source_event(tmp_path):
         ),
     ]
 
-    page = SessionQueries(store_with_events(tmp_path, events)).activity_after(
+    page = store_with_events(tmp_path, events).queries().activity_after(
         SESSION_ID,
         0,
         ActivityScope(),
@@ -375,7 +375,7 @@ def test_actor_assignment_start_and_finish_are_distinct_timeline_items(tmp_path)
         ),
     ]
 
-    activities = SessionQueries(store_with_events(tmp_path, events)).activity_after(
+    activities = store_with_events(tmp_path, events).queries().activity_after(
         SESSION_ID, 0, ActivityScope(), 10
     ).activities
 
@@ -417,7 +417,7 @@ def test_actor_owned_completion_finishes_assignment_in_parent_timeline(tmp_path)
         ),
     ]
 
-    queries = SessionQueries(store_with_events(tmp_path, events))
+    queries = store_with_events(tmp_path, events).queries()
     lead_activities = queries.activity_after(
         SESSION_ID, 0, ActivityScope(actor_id=LEAD_ACTOR_ID), 10
     ).activities
@@ -454,7 +454,7 @@ def test_dedicated_actor_assignment_fact_replaces_its_generic_operation_item(tmp
         ),
     ]
 
-    activities = SessionQueries(store_with_events(tmp_path, events)).activity_after(
+    activities = store_with_events(tmp_path, events).queries().activity_after(
         SESSION_ID, 0, ActivityScope(), 10
     ).activities
 
@@ -497,7 +497,7 @@ def test_file_operation_is_presented_once_by_its_file_fact(tmp_path):
         ),
     ]
 
-    page = SessionQueries(store_with_events(tmp_path, events)).activity_after(
+    page = store_with_events(tmp_path, events).queries().activity_after(
         SESSION_ID,
         0,
         ActivityScope(),
@@ -514,7 +514,7 @@ def test_file_operation_is_presented_once_by_its_file_fact(tmp_path):
     assert page.activities[0].content_event_id == CanonicalEventId("operation-progress")
     assert page.activities[0].content_field == "content"
 
-    after_file = SessionQueries(store_with_events(tmp_path, events)).activity_after(
+    after_file = store_with_events(tmp_path, events).queries().activity_after(
         SESSION_ID,
         3,
         ActivityScope(),
@@ -540,7 +540,7 @@ def test_live_activity_pages_advance_by_revision_without_skipping_items(tmp_path
             OperationFinished(operation_id, "succeeded", TextContent("done"), 0),
         ),
     ]
-    queries = SessionQueries(store_with_events(tmp_path, events))
+    queries = store_with_events(tmp_path, events).queries()
 
     first = queries.activity_after(SESSION_ID, 0, ActivityScope(), 1)
     second = queries.activity_after(SESSION_ID, first.cursor, ActivityScope(), 1)
@@ -570,7 +570,7 @@ def test_activity_updates_do_not_move_their_backlog_position(tmp_path):
             OperationFinished(operation_id, "succeeded", TextContent("done"), 0),
         ),
     ]
-    queries = SessionQueries(store_with_events(tmp_path, events))
+    queries = store_with_events(tmp_path, events).queries()
 
     older = queries.activity_before(SESSION_ID, 2, ActivityScope(), 10)
 
@@ -595,7 +595,7 @@ def test_native_subject_ids_are_scoped_by_actor_in_activity_identity(tmp_path):
         ),
     ]
 
-    page = SessionQueries(store_with_events(tmp_path, events)).activity_after(
+    page = store_with_events(tmp_path, events).queries().activity_after(
         SESSION_ID,
         0,
         ActivityScope(),
@@ -635,7 +635,7 @@ def test_actor_remains_running_until_its_finish_fact(tmp_path):
             actor_id=actor_id,
         ),
     ]
-    queries = SessionQueries(store_with_events(tmp_path, events))
+    queries = store_with_events(tmp_path, events).queries()
 
     assert queries.actors(SESSION_ID, through_cursor=2)[0].state == "running"
     assert queries.actors(SESSION_ID, through_cursor=3)[0].state == "finished"
@@ -701,7 +701,7 @@ def test_focused_state_projections_are_exhaustive_and_actor_scoped(tmp_path):
         canonical("child-goal", GoalChanged("Child objective", "active", None), actor_id=child_actor_id),
         canonical("actor-finish", ActorFinished(None), actor_id=child_actor_id),
     ]
-    queries = SessionQueries(store_with_events(tmp_path, events))
+    queries = store_with_events(tmp_path, events).queries()
     usage = queries.usage(SESSION_ID)
     assert usage.tokens.input_tokens == 20
     assert usage.cost_in_usd == Decimal("0.02")
@@ -712,8 +712,12 @@ def test_focused_state_projections_are_exhaustive_and_actor_scoped(tmp_path):
     assert queries.actors(SESSION_ID)[0].state == "finished"
 
 
+def queries_over(store):
+    return store.queries()
+
+
 def test_task_list_membership_removes_tasks_without_translator_memory(tmp_path):
-    queries = SessionQueries(store_with_events(tmp_path, [
+    queries = queries_over(store_with_events(tmp_path, [
         canonical("list-one", TaskListChanged("lead", (TaskId("plan:1"), TaskId("plan:2")))),
         canonical("task-one", TaskChanged(TaskId("plan:1"), "1", "Inspect", None, "completed", None)),
         canonical("task-two", TaskChanged(TaskId("plan:2"), "2", "Implement", None, "pending", None)),
@@ -739,7 +743,7 @@ def test_context_projection_tracks_compaction_by_actor(tmp_path):
         canonical("compact-lead-done", CompactionFinished(100, 20)),
     ]
 
-    context = SessionQueries(store_with_events(tmp_path, events)).context(SESSION_ID)
+    context = store_with_events(tmp_path, events).queries().context(SESSION_ID)
 
     assert context.compacting_actor_ids == (child_actor_id,)
 
@@ -751,7 +755,7 @@ def test_context_projection_uses_the_actors_latest_model(tmp_path):
         canonical("context", ContextReported(50, 100, None)),
     ]
 
-    context = SessionQueries(store_with_events(tmp_path, events)).context(SESSION_ID)
+    context = store_with_events(tmp_path, events).queries().context(SESSION_ID)
 
     assert context.by_actor[LEAD_ACTOR_ID].model == model
 
@@ -767,7 +771,7 @@ def test_active_time_is_rebuilt_from_turn_boundaries(tmp_path):
         ),
     ]
 
-    active_seconds = SessionQueries(store_with_events(tmp_path, events)).active_seconds(
+    active_seconds = store_with_events(tmp_path, events).queries().active_seconds(
         SESSION_ID,
         current_time=35.0,
     )
@@ -798,7 +802,7 @@ def test_tab_state_is_a_canonical_fold_over_semantic_lifecycle(tmp_path):
         canonical("finished", TurnFinished(None, "succeeded")),
         canonical("session-finished", SessionFinished("succeeded", None)),
     ]
-    queries = SessionQueries(store_with_events(tmp_path, events))
+    queries = store_with_events(tmp_path, events).queries()
 
     assert queries.tab_state(SESSION_ID, 1) == "idle"
     assert queries.tab_state(SESSION_ID, 2) == "thinking"

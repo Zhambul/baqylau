@@ -8,12 +8,11 @@ import sys
 import time
 
 from dashboard import cli
-from app.services import ApplicationHostControl
 
 START_TIMEOUT_SECONDS = 2.0
 
 
-class ApplicationHost(ApplicationHostControl):
+class ApplicationHost:
     def ensure_running(self) -> None:
         if cli.holder():
             return

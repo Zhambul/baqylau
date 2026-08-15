@@ -9,7 +9,7 @@ from app.repository import RepositoryQueries
 from contracts.harness import TerminalSessionState
 from domain.ids import SessionId
 from domain.values import AccountReference, ModelReference
-from runtime.event_store import EventStore
+from runtime.canonical_store import CanonicalEventStore
 from runtime.projections import SessionQueries
 
 
@@ -32,13 +32,13 @@ class ResumableSession:
 class ResumableSessionService:
     def __init__(
         self,
-        event_store: EventStore,
+        canonical_store: CanonicalEventStore,
         sessions: SessionQueries,
         terminal: TerminalSessionReader,
         repositories: RepositoryQueries,
         result_limit: int,
     ) -> None:
-        self.event_store = event_store
+        self.canonical_store = canonical_store
         self.sessions = sessions
         self.terminal = terminal
         self.repositories = repositories
@@ -53,7 +53,7 @@ class ResumableSessionService:
         if not requested_directory:
             return ()
         search_text = (search or "").strip().lower()
-        cursor = self.event_store.latest_cursor()
+        cursor = self.canonical_store.latest_cursor()
         rows = []
         for summary in self.sessions.sessions(cursor):
             if (
@@ -67,7 +67,7 @@ class ResumableSessionService:
                 summary.title is None or search_text not in summary.title.lower()
             ):
                 continue
-            stored_events = self.event_store.through(summary.session_id, cursor).events
+            stored_events = self.canonical_store.through(summary.session_id, cursor).events
             last_activity_at = max(
                 (
                     stored.event.occurred_at

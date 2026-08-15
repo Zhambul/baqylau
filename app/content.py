@@ -17,20 +17,20 @@ from domain.events import (
 )
 from domain.ids import CanonicalEventId, OperationId
 from domain.values import StructuredContent, TextContent
-from runtime.event_store import EventStore
+from runtime.canonical_store import CanonicalEventStore
 from runtime.projections import SessionQueries
 
 
 class CanonicalContentService:
-    def __init__(self, event_store: EventStore, queries: SessionQueries) -> None:
-        self.event_store = event_store
+    def __init__(self, canonical_store: CanonicalEventStore, queries: SessionQueries) -> None:
+        self.canonical_store = canonical_store
         self.queries = queries
 
     def resolve(self, content_reference: str) -> str:
         event_id, separator, field_name = content_reference.rpartition(":")
         if not separator or not event_id or not field_name:
             raise ValueError("invalid content reference")
-        stored_event = self.event_store.event(CanonicalEventId(event_id))
+        stored_event = self.canonical_store.event(CanonicalEventId(event_id))
         if stored_event is None:
             raise KeyError(content_reference)
         payload = stored_event.event.payload

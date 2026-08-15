@@ -11,20 +11,30 @@ web dashboard.
 
 ## Architecture
 
-Evidence flows one way, and every stage is recorded:
+**A process either appends evidence or interprets it, never both** — see
+`docs/recorder-interpreter.md` for the full flow and the why. Evidence flows one
+way, and every stage is recorded:
 
 ```
-source (file / stream / hook) → raw_events → translation_records → canonical_events
-                                     │                                    │
-                               source_checkpoints                canonical_provenance
+wrapper ──register once──▶ session_harness
+recorders (hooks, otel, wrappers) ──append──▶ raw_events ◀──append── interpreter's pulled sources
+                                                  │
+              interpreter: translate → translation_records → canonical_events + canonical_provenance
 ```
 
+- **`session_harness`** — written ONCE per session, at launch, by the harness's
+  wrapper (`plugins/*/command.py`), never by hooks and never updated. Everything
+  that changes during a session is a canonical fact.
 - **`raw_events`** — immutable evidence: the exact bytes a source produced. Reusing a
-  `raw_event_id` with different bytes raises (corruption).
+  `raw_event_id` with different bytes raises (corruption). A pulled source resumes from
+  the `source_position` of its last recorded raw event (`source_identity` column) —
+  there is no separate checkpoint table, so progress cannot drift from evidence.
 - **`canonical_events`** — an *idempotent projection*. `event_id` names a **fact**, so
   several sources may converge on one event; re-observing it only appends provenance.
   First writer wins; bodies are **not** compared (the later rendering stays recoverable
   from its own raw event). `cursor` (autoincrement) is the ordering key, not `event_id`.
+- **`watches`** — file-watch coordination rows, applied by the interpreter from
+  `watch` raw events a hook records (never files).
 - **`occurred_at` is nullable by design** — when the *source* said it happened. Sources
   without a clock leave it NULL. Readers must fall back to `accepted_at`; ordering on the
   bare column is forbidden (contract test).
@@ -35,8 +45,8 @@ source (file / stream / hook) → raw_events → translation_records → canonic
 |---|---|---|
 | `domain/` | events, codec, ids, values — the vocabulary | stdlib |
 | `contracts/` | harness + terminal protocols | domain |
-| `runtime/` | event store, ingest, projections, registry, state | domain, contracts |
-| `app/` | bootstrap, observation, delivery, services | all of the above, core |
+| `runtime/` | recorder, sessions, watches, canonical store, projections | domain, contracts |
+| `app/` | bootstrap, interpreter, services | all of the above, core |
 | `plugins/<harness>/` | one harness adapter each (`plugin.py` is the entry) | core, frontends |
 | `terminal/`, `dashboard/` | presenters | domain/runtime/app |
 | `core/`, `frontends/` | audit, process helpers; one terminal each | core only / core |
@@ -46,17 +56,20 @@ shared code and must contain NO concrete harness vocabulary** — no "claude", "
 "transcript", "rollout" (enforced by `tests/test_canonical_architecture.py`). Harness
 specifics live only in `plugins/<harness>/`.
 
-### Observation
+### The interpreter
 
-`app/observe.py ObservationRunner` is the ONE scheduler for **pulled** sources
-(transcripts, rollouts, foreground output, liveness, process state). It runs as a thread
-in the dashboard server, every 0.25s. **Pushed** sources (`hook`, `otel`, `account`) are
-written by separate short-lived processes and do not depend on it.
+`app/interpreter.py Interpreter.tick()` is the ONE read-and-interpret loop: it pulls
+every registered unfinished session's sources, translates the untranslated backlog
+(hook evidence included — hooks never translate), and reacts to committed facts
+(panes, plugin reactors). It runs as a thread in the dashboard server, every 0.25s.
 
-That split is load-bearing: when the scheduler stops, pushed sources keep flowing, so a
-session still *looks* alive while its conversation silently stops. Hence the scheduler
-contains failures per-source and per-pass and audits every swallow — never let an
-exception escape it.
+Recorder processes (hooks, the otel receiver, the wrappers) only append raw events
+and do not depend on it. That split is load-bearing: when the interpreter stops,
+recorders keep flowing, so a session still *looks* alive while nothing is being
+interpreted. Hence the interpreter contains failures per-session, per-source and
+per-raw-event and audits every swallow — never let an exception escape it, and
+never leave a raw event without a translation verdict (an unverdicted row wedges
+the ordered backlog).
 
 ### Data
 
@@ -69,8 +82,10 @@ exception escape it.
 Audit: `$BAQYLAU_AUDIT_DIRECTORY`, `BAQYLAU_AUDIT=0` disables.
 
 Hooks are wired (in `~/.claude/settings.json`, outside this repo) to
-`plugins/claude_code/canonical_hook.py`. `bin/baqylau-*.py` holds every executable entry;
-put implementation in the packages.
+`plugins/claude_code/canonical_hook.py`. Harnesses are launched through their
+wrappers (`plugins/claude_code/command.py`, `plugins/codex/command.py`) — the
+wrapper is the ONLY thing that registers a session. `bin/baqylau-*.py` holds the
+shared executable entries; put implementation in the packages.
 
 ## Commands
 
@@ -93,6 +108,10 @@ To debug a session bug, use the **`audit-debug` skill**
 - **Hooks must never block or fail.** Exit 0, swallow exceptions — but audit before every
   swallow (`core/audit.py`). This applies to any long-lived loop too: nothing that drives
   other work may die silently.
+- **A hook parses stdin, records raw events, prints its reply, and exits.** No session
+  registration, no translation, no terminal, no files, no application graph (enforced by
+  `test_recorder_entries_never_build_the_application`). Anything a hook wants done later
+  is a raw event the interpreter reacts to (watch directives, the plugin reactor).
 - **Harnesses fire no hook on cancel/interrupt.** Every cancellation path needs its own
   evidence-based signal. Never use an idle timeout as a backstop — it false-positives on
   long thinking.
@@ -116,10 +135,12 @@ blind.
 
 `docs/` (indexed by `docs/README.md`) is the design record — *why the alternatives
 failed*. Update the relevant file in the same commit as a behaviour change.
-`docs/canonical-harness-architecture.md` and the `rewrite-design-*` docs describe the
-current model; files describing the pre-rewrite system (`mirror-pane.md`, `tab-colors.md`,
-`scoreboard.md`, `sessionapi.md`, `otel.md`, `streaming.md`, `subagents.md`) are historical
-and should not be trusted as current.
+`docs/recorder-interpreter.md` describes the current session/evidence flow and wins
+over anything that disagrees; `docs/canonical-harness-architecture.md` describes the
+canonical event model but predates the recorder/interpreter split. Files describing
+the pre-rewrite system (`mirror-pane.md`, `tab-colors.md`, `scoreboard.md`,
+`sessionapi.md`, `otel.md`, `streaming.md`, `subagents.md`) are historical and should
+not be trusted as current.
 
 ## Working in this repo
 

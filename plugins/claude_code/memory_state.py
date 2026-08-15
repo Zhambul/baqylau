@@ -7,11 +7,9 @@ import os
 import sqlite3
 import time
 from contextlib import closing
-from dataclasses import dataclass
 
 from contracts.harness import (
     HarnessMemorySnapshot,
-    HookAction,
     MemoryNoteRecord,
     MemorySearchHit,
     MemorySearchRecord,
@@ -68,46 +66,47 @@ def _connect() -> sqlite3.Connection:
     return connection
 
 
-@dataclass(frozen=True)
-class CaptureMemory(HookAction):
-    document: dict
+def capture(document: dict) -> None:
+    """Record memory-relevant tool use into the plugin's own bookkeeping store.
 
-    def start(self) -> None:
-        working_directory = str(self.document.get("cwd") or "")
-        if not memory.in_scope(working_directory):
-            return
-        tool_name = str(self.document.get("tool_name") or "")
-        tool_input = self.document.get("tool_input") or {}
-        if not isinstance(tool_input, dict):
-            return
-        if tool_name in ACTION_NAMES:
-            path = str(
-                tool_input.get("file_path") or tool_input.get("notebook_path") or ""
+    Runs in the INTERPRETER (via the plugin reactor), never in a hook: a hook
+    records raw events and nothing else.
+    """
+    working_directory = str(document.get("cwd") or "")
+    if not memory.in_scope(working_directory):
+        return
+    tool_name = str(document.get("tool_name") or "")
+    tool_input = document.get("tool_input") or {}
+    if not isinstance(tool_input, dict):
+        return
+    if tool_name in ACTION_NAMES:
+        path = str(
+            tool_input.get("file_path") or tool_input.get("notebook_path") or ""
+        )
+        if path and memory.is_memory(path):
+            _record_note(
+                str(document["session_id"]),
+                path,
+                ACTION_NAMES[tool_name],
+                document.get("agent_id"),
             )
-            if path and memory.is_memory(path):
-                _record_note(
-                    str(self.document["session_id"]),
-                    path,
-                    ACTION_NAMES[tool_name],
-                    self.document.get("agent_id"),
-                )
-            return
-        if tool_name == "Bash":
-            command = str(tool_input.get("command") or "")
-            response = self.document.get("tool_response") or {}
-            output = (
-                str(response.get("stdout") or "")
-                + (("\n" + str(response.get("stderr"))) if response.get("stderr") else "")
-                if isinstance(response, dict)
-                else str(response)
-            ).rstrip("\n")
-            _record_command(
-                str(self.document["session_id"]),
-                command,
-                working_directory,
-                output,
-                self.document.get("agent_id"),
-            )
+        return
+    if tool_name == "Bash":
+        command = str(tool_input.get("command") or "")
+        response = document.get("tool_response") or {}
+        output = (
+            str(response.get("stdout") or "")
+            + (("\n" + str(response.get("stderr"))) if response.get("stderr") else "")
+            if isinstance(response, dict)
+            else str(response)
+        ).rstrip("\n")
+        _record_command(
+            str(document["session_id"]),
+            command,
+            working_directory,
+            output,
+            document.get("agent_id"),
+        )
 
 
 def _record_note(session_id: str, path: str, action: str, actor_name) -> None:

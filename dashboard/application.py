@@ -15,7 +15,7 @@ from domain.events import MessageCreated
 from domain.ids import AttentionId, SessionId
 from domain.values import TextContent
 from runtime.database import connect
-from runtime.event_store import EventStore
+from runtime.canonical_store import CanonicalEventStore
 from runtime.projections import SessionQueries
 from dashboard.activity import (
     DashboardSessionListItem,
@@ -317,13 +317,13 @@ class GlobalApplicationService:
 class SessionApplicationService:
     def __init__(
         self,
-        event_store: EventStore,
+        canonical_store: CanonicalEventStore,
         queries: SessionQueries,
         terminal: TerminalSessionReader,
         diagnostics: OperationalDiagnostics,
         memory: MemoryService,
     ) -> None:
-        self.event_store = event_store
+        self.canonical_store = canonical_store
         self.queries = queries
         self.terminal = terminal
         self.diagnostics = diagnostics
@@ -354,7 +354,7 @@ class SessionApplicationService:
         sequence: float,
     ) -> bool:
         """Save the newest browser draft; return False for an older concurrent write."""
-        with connect(self.event_store.database_path) as connection:
+        with connect(self.canonical_store.database_path) as connection:
             connection.execute("BEGIN IMMEDIATE")
             self._ensure_row(connection, session_id)
             current = connection.execute(
@@ -381,7 +381,7 @@ class SessionApplicationService:
             ensure_ascii=False,
             separators=(",", ":"),
         )
-        with connect(self.event_store.database_path) as connection:
+        with connect(self.canonical_store.database_path) as connection:
             connection.execute("BEGIN IMMEDIATE")
             self._ensure_row(connection, session_id)
             connection.execute(
@@ -414,7 +414,7 @@ class SessionApplicationService:
             ensure_ascii=False,
             separators=(",", ":"),
         )
-        with connect(self.event_store.database_path) as connection:
+        with connect(self.canonical_store.database_path) as connection:
             connection.execute("BEGIN IMMEDIATE")
             self._ensure_row(connection, session_id)
             connection.execute(
@@ -444,7 +444,7 @@ class SessionApplicationService:
         )
 
     def _state(self, session_id: SessionId) -> tuple[ComposerState, DialogState]:
-        with connect(self.event_store.database_path) as connection:
+        with connect(self.canonical_store.database_path) as connection:
             row = connection.execute(
                 "SELECT * FROM session_application_state WHERE session_id=?",
                 (str(session_id),),
@@ -487,7 +487,7 @@ class SessionApplicationService:
 
     def _delivered_prompts(self, session_id: SessionId) -> tuple[str, ...]:
         prompts = []
-        for stored in self.event_store.through(session_id).events:
+        for stored in self.canonical_store.through(session_id).events:
             payload = stored.event.payload
             if (
                 isinstance(payload, MessageCreated)

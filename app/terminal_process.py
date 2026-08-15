@@ -50,13 +50,13 @@ def run(session_id: SessionId) -> None:
     sys.stdout.write("\033[H\033[2J\033[3J" + HEADER + "\n")
     sys.stdout.flush()
     application = build_default_application()
-    registered_session = application.registry.registered_session(session_id).session
+    session = application.sessions.load(session_id)
     presenter = TerminalPresenter()
     size = terminal_size()
     renderer = TerminalRenderer(size.columns, HEADER, SCROLLBACK_ROW_LIMIT)
     file_activities = {}
     opened_views = terminal_views.opened()
-    cursor = application.event_store.latest_session_cursor(session_id) or 0
+    cursor = application.canonical_store.latest_session_cursor(session_id) or 0
     history = application.queries.activity_tail(
         session_id,
         ActivityScope(),
@@ -65,7 +65,7 @@ def run(session_id: SessionId) -> None:
         through_cursor=cursor,
     )
     for activity in history.activities:
-        if visible(activity, registered_session.lead_actor_id):
+        if visible(activity, session.lead_actor_id):
             apply_activity(
                 application, presenter, renderer, file_activities, opened_views, activity
             )
@@ -96,7 +96,7 @@ def run(session_id: SessionId) -> None:
                     if content_reference in opened_views else None
                 )
                 renderer.apply(presenter.present(activity, expanded_content))
-        latest_cursor = application.event_store.latest_session_cursor(session_id) or 0
+        latest_cursor = application.canonical_store.latest_session_cursor(session_id) or 0
         if latest_cursor <= cursor:
             if resized or views_changed:
                 sys.stdout.write(renderer.ansi())
@@ -125,7 +125,7 @@ def run(session_id: SessionId) -> None:
                 )
             painted_tab_state = current_tab_state
         for activity in page.activities:
-            if visible(activity, registered_session.lead_actor_id):
+            if visible(activity, session.lead_actor_id):
                 apply_activity(
                     application, presenter, renderer, file_activities, opened_views, activity
                 )

@@ -8,13 +8,12 @@ from contracts.harness import (
     RewindModeOption,
 )
 from domain.codec import SCHEMA_VERSION
-from plugins.claude_code.canonical import ClaudeCanonicalTranslator, ClaudeSessionRecognizer
-from plugins.claude_code.canonical_hook import hook
+from plugins.claude_code.canonical import ClaudeCanonicalTranslator, ClaudeRawEventSources
 from plugins.claude_code.catalog import ClaudeCodeCatalog
 from plugins.claude_code.controller import controller
 from plugins.claude_code.launcher import ClaudeCodeLauncher
-from plugins.claude_code.lifecycle import lifecycle
 from plugins.claude_code.memory_port import memory_reader
+from plugins.claude_code.reactor import reactor
 from plugins.claude_code.terminal_probe import ClaudeCodeTerminalProbe
 from plugins.claude_code.usage_rows import usage_reader
 from plugins.claude_code import rewindmenu
@@ -53,10 +52,9 @@ plugin = HarnessPlugin(
         models=MODELS,
         rewind_modes=REWIND_MODES,
     ),
-    sessions=ClaudeSessionRecognizer(),
-    events=ClaudeCanonicalTranslator(),
-    hook=hook,
-    lifecycle=lifecycle,
+    sources=ClaudeRawEventSources(),
+    translator=ClaudeCanonicalTranslator(),
+    reactor=reactor,
     controller=controller,
     catalog=ClaudeCodeCatalog(),
     usage=usage_reader,

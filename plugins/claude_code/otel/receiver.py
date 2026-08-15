@@ -14,10 +14,12 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 if __package__ in (None, ""):
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
 
-from app.bootstrap import build_default_application
+from app.data import data_directory
 from contracts.harness import RawEvent
 from domain.ids import RawEventId, SessionId
 from plugins.claude_code.otel.config import port
+from runtime.recorder import RawEventRecorder
+from runtime.sessions import SessionRegistry
 
 
 def idle_seconds() -> float:
@@ -39,15 +41,15 @@ def _session_ids(document: dict) -> tuple[SessionId, ...]:
     return tuple(sorted(session_ids, key=str))
 
 
-def deliver(application, raw_body: bytes) -> int:
+def deliver(recorder: RawEventRecorder, sessions: SessionRegistry, raw_body: bytes) -> int:
     document = json.loads(raw_body)
     delivered = 0
     for session_id in _session_ids(document):
-        recognized = application.event_store.recognized_session(session_id)
-        if recognized is None:
+        session = sessions.find(session_id)
+        if session is None:
             continue
         digest = hashlib.sha256(str(session_id).encode() + b"\0" + raw_body).hexdigest()
-        application.delivery.deliver(
+        recorder.record((
             RawEvent(
                 RawEventId(f"claude_code:otel:{digest}"),
                 "claude_code",
@@ -55,13 +57,14 @@ def deliver(application, raw_body: bytes) -> int:
                 "otlp",
                 digest,
                 session_id,
-                recognized.lead_actor_id,
+                session.lead_actor_id,
                 None,
                 time.time(),
                 "json",
                 raw_body,
-            )
-        )
+                f"claude_code:otel:{session_id}",
+            ),
+        ))
         delivered += 1
     return delivered
 
@@ -76,7 +79,7 @@ class ReceiverHandler(BaseHTTPRequestHandler):
         return gzip.decompress(body) if self.headers.get("Content-Encoding") == "gzip" else body
 
     def do_POST(self):
-        delivered = deliver(self.server.application, self._body())
+        delivered = deliver(self.server.recorder, self.server.sessions, self._body())
         if delivered:
             self.server.last_delivery_at = time.time()
         response = b"{}"
@@ -92,16 +95,19 @@ class ReceiverServer(HTTPServer):
         socketserver.TCPServer.server_bind(self)
         self.server_name, self.server_port = self.server_address[:2]
 
-    def __init__(self, address, application):
+    def __init__(self, address, recorder, sessions):
         super().__init__(address, ReceiverHandler)
-        self.application = application
+        self.recorder = recorder
+        self.sessions = sessions
         self.last_delivery_at = time.time()
 
 
 def serve() -> None:
-    application = build_default_application()
+    database_path = os.path.join(data_directory(), "events.db")
+    recorder = RawEventRecorder(database_path)
+    sessions = SessionRegistry(database_path)
     try:
-        server = ReceiverServer(("127.0.0.1", port()), application)
+        server = ReceiverServer(("127.0.0.1", port()), recorder, sessions)
     except OSError:
         return
     maximum_idle = idle_seconds()

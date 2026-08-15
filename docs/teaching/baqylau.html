@@ -99,6 +99,16 @@
 <body>
 <div class="wrap" id="top">
 <h1>baqylau, explained</h1>
+<div class="warn"><b>2026-08-15: partially superseded.</b> The recorder/interpreter
+redesign (<code>docs/recorder-interpreter.md</code>) replaced session discovery, hook
+intake, checkpoints, lifecycle and the observation scheduler described in Parts
+I&ndash;III: sessions are now registered once at launch by the harness wrappers, hooks
+only record raw events, one <code>Interpreter.tick()</code> pulls + translates +
+reacts, resume positions derive from the evidence itself, and foreground manifests
+became <code>watch</code> raw events applied to a <code>watches</code> table. The
+canonical event model, the HTTP surface (Part IV), SSE (Part V) and the audit
+(Part VI) are unchanged. Where this document disagrees with
+<code>docs/recorder-interpreter.md</code>, that file wins.</div>
 <p class="lede">One document, six parts: the pipeline, the harness contract, the runtime layer, the HTTP surface, the live stream, and the audit trail. Written against the repository as it stands, with file and line references you can open. Assumes you have not read the code.</p>
 <div class="toc">
 <h4><a href="#part1">Part I</a> <span>· How a session becomes pixels</span></h4>

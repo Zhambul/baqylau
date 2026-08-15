@@ -10,11 +10,10 @@ from dashboard import config as dashboard_config
 from app.data import data_directory
 from app.content import CanonicalContentService
 from app.diagnostics import OperationalDiagnostics
-from app.delivery import ApplicationEventDelivery, SessionLifecycleService
 from app.host import ApplicationHost
 from app.insights import ApplicationInsightsService
+from app.interpreter import Interpreter
 from app.memory import MemoryService
-from app.observe import ObservationRunner
 from app.plugins import installed_plugins
 from app.repository import RepositoryQueries
 from app.resume import ResumableSessionService
@@ -23,13 +22,11 @@ from app.telemetry import BrowserTelemetryService
 from app.services import (
     HarnessCatalogService,
     HarnessControlService,
-    HarnessHookService,
     HarnessLauncherService,
     HarnessUsageService,
     TerminalInputService,
 )
 from app.usage import ApplicationUsageState
-from contracts.harness import SessionLifecycleContext
 from dashboard.activity import (
     DashboardActivityService,
     DashboardSessionService,
@@ -41,20 +38,22 @@ from dashboard.application import (
     SessionApplicationService,
 )
 from dashboard.memory import DashboardMemoryService
-from runtime.event_store import EventStore
+from runtime.canonical_store import CanonicalEventStore
 from runtime.evidence import EvidenceQueries
-from runtime.ingest import EventPipeline
+from runtime.harnesses import HarnessRegistry
 from runtime.projections import SessionQueries
-from runtime.registry import HarnessRegistry
-from runtime.state import SqliteCheckpointStore
+from runtime.recorder import RawEventRecorder
+from runtime.sessions import SessionRegistry
+from runtime.watches import WatchRegistry
 
 
 @dataclass(frozen=True)
 class CanonicalApplication:
-    event_store: EventStore
+    canonical_store: CanonicalEventStore
     registry: HarnessRegistry
-    delivery: ApplicationEventDelivery
-    checkpoints: SqliteCheckpointStore
+    sessions: SessionRegistry
+    recorder: RawEventRecorder
+    watches: WatchRegistry
     queries: SessionQueries
     evidence: EvidenceQueries
     dashboard_activity: DashboardActivityService
@@ -66,12 +65,11 @@ class CanonicalApplication:
     global_application: GlobalApplicationService
     session_application: SessionApplicationService
     controls: HarnessControlService
-    hooks: HarnessHookService
     launcher: HarnessLauncherService
     catalog: HarnessCatalogService
     terminal_input: TerminalInputService
     terminal: ApplicationTerminal
-    observation_runner: ObservationRunner
+    interpreter: Interpreter
     diagnostics: OperationalDiagnostics
     insights: ApplicationInsightsService
     resumable_sessions: ResumableSessionService
@@ -88,51 +86,49 @@ def build_application(
     data_directory: str,
     diagnostic_database_path: str | None = None,
 ) -> CanonicalApplication:
-    event_store = EventStore(os.path.join(os.path.abspath(data_directory), "events.db"))
+    database_path = os.path.join(os.path.abspath(data_directory), "events.db")
+    canonical_store = CanonicalEventStore(database_path)
+    recorder = RawEventRecorder(database_path)
+    watches = WatchRegistry(database_path)
     diagnostics = OperationalDiagnostics(
         diagnostic_database_path
         or os.path.join(os.path.abspath(data_directory), "diagnostics.db")
     )
     repositories = RepositoryQueries()
-    registry = HarnessRegistry(event_store)
+    registry = HarnessRegistry()
     for plugin in installed_plugins():
         registry.register(plugin)
     registry.validate()
-    pipeline = EventPipeline(registry, event_store)
-    checkpoints = SqliteCheckpointStore(event_store)
+    sessions = SessionRegistry(database_path, registry)
     terminal = ApplicationTerminal()
-    queries = SessionQueries(event_store)
-    controls = HarnessControlService(registry, terminal, queries)
+    queries = SessionQueries(canonical_store, sessions)
+    controls = HarnessControlService(sessions, terminal, queries)
     catalog = HarnessCatalogService(registry)
     usage_state = ApplicationUsageState(HarnessUsageService(registry))
-    terminal_input = TerminalInputService(registry, terminal, terminal)
+    terminal_input = TerminalInputService(sessions, terminal, terminal)
     dashboard_sessions = DashboardSessionService(
-        event_store, queries, terminal_input, repositories
+        canonical_store, queries, terminal_input, repositories
     )
     dashboard_notification_state = DashboardNotificationState()
-    memory = MemoryService(registry, queries)
-    session_lifecycle = SessionLifecycleService(
-        registry,
-        SessionLifecycleContext(terminal, terminal),
-    )
-    delivery = ApplicationEventDelivery(pipeline, event_store, session_lifecycle)
+    memory = MemoryService(sessions, queries)
     host = ApplicationHost()
     from core import audit
 
     browser_telemetry = BrowserTelemetryService(audit)
     return CanonicalApplication(
-        event_store=event_store,
+        canonical_store=canonical_store,
         registry=registry,
-        delivery=delivery,
-        checkpoints=checkpoints,
+        sessions=sessions,
+        recorder=recorder,
+        watches=watches,
         queries=queries,
-        evidence=EvidenceQueries(event_store),
-        dashboard_activity=DashboardActivityService(event_store, queries),
+        evidence=EvidenceQueries(canonical_store),
+        dashboard_activity=DashboardActivityService(canonical_store, queries),
         dashboard_sessions=dashboard_sessions,
         dashboard_stream=DashboardStreamService(
-            event_store, queries, terminal_input, repositories
+            canonical_store, queries, terminal_input, repositories
         ),
-        content=CanonicalContentService(event_store, queries),
+        content=CanonicalContentService(canonical_store, queries),
         dashboard_notification_state=dashboard_notification_state,
         usage_state=usage_state,
         global_application=GlobalApplicationService(
@@ -141,27 +137,29 @@ def build_application(
             dashboard_notification_state,
         ),
         session_application=SessionApplicationService(
-            event_store,
+            canonical_store,
             queries,
             terminal_input,
             diagnostics,
             memory,
         ),
         controls=controls,
-        hooks=HarnessHookService(
-            registry,
-            delivery,
-            controls,
-            host,
-        ),
         launcher=HarnessLauncherService(registry, terminal),
         catalog=catalog,
         terminal_input=terminal_input,
         terminal=terminal,
-        observation_runner=ObservationRunner(registry, checkpoints, delivery),
+        interpreter=Interpreter(
+            sessions,
+            registry,
+            recorder,
+            watches,
+            canonical_store,
+            controls,
+            terminal,
+        ),
         diagnostics=diagnostics,
         insights=ApplicationInsightsService(
-            event_store,
+            canonical_store,
             queries,
             terminal_input,
             diagnostics,
@@ -169,7 +167,7 @@ def build_application(
             top_project_count=dashboard_config.INSIGHTS_PROJECT_LIMIT,
         ),
         resumable_sessions=ResumableSessionService(
-            event_store,
+            canonical_store,
             queries,
             terminal_input,
             repositories,

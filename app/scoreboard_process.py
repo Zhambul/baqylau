@@ -38,7 +38,7 @@ def run(session_id: SessionId) -> None:
     measured_at = time.time()
     active = False
     while True:
-        cursor = application.event_store.latest_session_cursor(session_id) or 0
+        cursor = application.canonical_store.latest_session_cursor(session_id) or 0
         current_time = time.time()
         current_second = int(current_time)
         width = terminal_width()

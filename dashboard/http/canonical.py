@@ -187,7 +187,7 @@ class _CanonicalMixin:
     def _session_get(self, session_id: SessionId, rest: list[str], query_text: str):
         query = parse_qs(query_text, keep_blank_values=True)
         application = self._application()
-        lead_actor_id = application.registry.registered_session(session_id).session.lead_actor_id
+        lead_actor_id = application.sessions.load(session_id).lead_actor_id
         scope = _scope(query, lead_actor_id)
         if not rest:
             return self._json(

@@ -12,7 +12,7 @@ from urllib.parse import quote
 
 from app.bootstrap import build_application
 from app.telemetry import BrowserTelemetryService
-from contracts.harness import RawEvent, RecognizedSession, TranslationResult
+from contracts.harness import RawEvent, Session, TranslationResult
 from dashboard import prefs
 from dashboard.application import (
     DashboardNotificationState,
@@ -66,11 +66,16 @@ def _event(event_id: str, payload):
     )
 
 
+def _record(application, raw_event, translator_version, translation):
+    application.recorder.record((raw_event,))
+    application.canonical_store.store_translation(raw_event, translator_version, translation)
+
+
 def _application(tmp_path):
     application = build_application(str(tmp_path))
-    application.event_store.register_session(
+    application.sessions.register(
         "codex",
-        RecognizedSession(SESSION_ID, ACTOR_ID, "native", "fixture", "/work"),
+        Session(SESSION_ID, ACTOR_ID, "native", "fixture", "/work"),
     )
     events = (
         _event("session", SessionStarted("/work", None, None, None, None, None)),
@@ -86,7 +91,8 @@ def _application(tmp_path):
         ),
     )
     for index, event in enumerate(events):
-        application.event_store.record(
+        _record(
+            application,
             RawEvent(
                 RawEventId(f"raw-{index}"),
                 "codex",
@@ -236,7 +242,8 @@ def test_dashboard_main_scope_shows_only_lead_activity_and_actor_scope_shows_the
             occurred_at=20.0,
             payload=MessageCreated(MessageId(event_id), role, TextContent(text), None, None),
         )
-        application.event_store.record(
+        _record(
+            application,
             RawEvent(
                 RawEventId(f"raw-{event_id}"),
                 "codex",

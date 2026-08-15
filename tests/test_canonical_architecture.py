@@ -206,15 +206,30 @@ def test_dashboard_browser_code_has_no_concrete_harness_or_old_names():
     assert violations == []
 
 
-def test_plugin_lifecycle_implementations_do_not_reenter_legacy_lifecycle_modules():
-    forbidden = {
-        ROOT / "plugins" / "codex" / "lifecycle.py": "plugins.codex.session",
-    }
+def test_session_lifecycle_has_no_per_harness_implementation():
+    """Pane open/close is harness-agnostic and lives in the interpreter's react
+    step; a reappearing per-plugin lifecycle module means the split regressed."""
+    assert not (ROOT / "plugins" / "codex" / "lifecycle.py").exists()
+    assert not (ROOT / "plugins" / "claude_code" / "lifecycle.py").exists()
+
+
+def test_recorder_entries_never_build_the_application():
+    """A hook or wrapper is a RECORDER: it appends evidence and exits. Building
+    the application graph in one made every tool call pay the whole bootstrap
+    and let any bug in it lose evidence."""
+    recorder_entries = (
+        ROOT / "plugins" / "claude_code" / "canonical_hook.py",
+        ROOT / "plugins" / "codex" / "canonical_hook.py",
+        ROOT / "plugins" / "claude_code" / "command.py",
+        ROOT / "plugins" / "codex" / "command.py",
+        ROOT / "plugins" / "claude_code" / "otel" / "receiver.py",
+    )
     violations = []
-    for path, forbidden_import in forbidden.items():
-        for _imported_path, imported in imports_under_path(path):
-            if imported == forbidden_import:
-                violations.append(f"{path.relative_to(ROOT)} imports {imported}")
+    for path in recorder_entries:
+        source = path.read_text(encoding="utf-8")
+        for forbidden in ("build_default_application", "build_application", "app.bootstrap"):
+            if forbidden in source:
+                violations.append(f"{path.relative_to(ROOT)} contains {forbidden}")
     assert violations == []
 
 

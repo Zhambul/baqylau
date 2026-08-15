@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import time
-from typing import Protocol
 
 from core import audit
 
@@ -13,62 +12,21 @@ from contracts.harness import (
     ControlRequest,
     ControlResult,
     HarnessCatalogSnapshot,
+    HarnessReactorContext,
     LaunchRequest,
     LaunchRejected,
     LaunchResult,
     QueryContext,
-    RawEventDelivery,
     TerminalInputState,
     TerminalSessionState,
     UsageRow,
 )
 from contracts.terminal import SessionTerminal, TabRequest, TerminalControl, TerminalScreen
 from domain.ids import SessionId
-from runtime.registry import HarnessRegistry
+from runtime.harnesses import HarnessRegistry
+from runtime.sessions import SessionRegistry
 from runtime.projections import SessionQueries
 from app.usage import UsageSource
-
-
-class ApplicationHostControl(Protocol):
-    def ensure_running(self) -> None: ...
-
-
-class HarnessHookService:
-    def __init__(
-        self,
-        registry: HarnessRegistry,
-        delivery: RawEventDelivery,
-        controls: HarnessControlService,
-        host: ApplicationHostControl,
-    ) -> None:
-        self.registry = registry
-        self.delivery = delivery
-        self.controls = controls
-        self.host = host
-
-    def receive(self, harness: str, payload: bytes) -> bytes:
-        plugin = self.registry.plugin(harness)
-        if plugin.hook is None:
-            raise ValueError(f"harness {harness!r} does not accept hooks")
-        intake = plugin.hook.receive(payload)
-        self.registry.event_store.register_session(harness, intake.session)
-        for raw_event in intake.raw_events:
-            if raw_event.harness != harness:
-                raise ValueError("hook observation harness does not match its plugin")
-            self.delivery.deliver(raw_event)
-        for request in intake.controls:
-            if request.session_id != intake.session.session_id:
-                raise ValueError("hook control does not belong to its session")
-            outcome = self.controls.execute(request)
-            if outcome.status != "acknowledged":
-                reason = outcome.reason or outcome.status
-                raise RuntimeError(
-                    f"hook control {request.control_name!r} did not complete: {reason}"
-                )
-        self.host.ensure_running()
-        for action in intake.actions:
-            action.start()
-        return intake.output
 
 
 # Every control gesture's OUTCOME, recorded at the one dispatch point every
@@ -114,14 +72,14 @@ def _audit_control(request: ControlRequest, outcome, elapsed: float) -> None:
         pass
 
 
-class HarnessControlService:
+class HarnessControlService(HarnessReactorContext):
     def __init__(
         self,
-        registry: HarnessRegistry,
+        sessions: SessionRegistry,
         terminal: TerminalControl,
         queries: SessionQueries,
     ) -> None:
-        self.registry = registry
+        self.sessions = sessions
         self.terminal = terminal
         self.queries = queries
 
@@ -136,11 +94,11 @@ class HarnessControlService:
         return outcome
 
     def _execute(self, request: ControlRequest) -> ControlOutcome:
-        plugin = self.registry.plugin_for_session(request.session_id)
-        if plugin.controller is None:
+        session = self.sessions.load(request.session_id)
+        plugin = session.plugin
+        if plugin is None or plugin.controller is None:
             return ControlResult(request.request_id, "rejected", "unsupported control")
-        session = self.registry.registered_session(request.session_id).session
-        cursor = self.queries.event_store.through(request.session_id).latest_cursor or 0
+        cursor = self.queries.canonical_store.through(request.session_id).latest_cursor or 0
         summary = self.queries.summary(request.session_id, cursor)
         attention_id = getattr(request, "attention_id", None)
         pending_attention = next(
@@ -224,11 +182,11 @@ class HarnessUsageService(UsageSource):
 class TerminalInputService:
     def __init__(
         self,
-        registry: HarnessRegistry,
+        sessions: SessionRegistry,
         terminal: SessionTerminal,
         screen: TerminalScreen,
     ) -> None:
-        self.registry = registry
+        self.sessions = sessions
         self.terminal = terminal
         self.screen = screen
 
@@ -237,10 +195,12 @@ class TerminalInputService:
 
     def state(self, session_id: SessionId) -> TerminalSessionState:
         window_id = self.terminal.window_for_session(session_id)
-        plugin = self.registry.plugin_for_session(session_id)
+        plugin = self.sessions.load(session_id).plugin
         input_state = (
             plugin.terminal_probe.input_state(self.screen, window_id)
-            if window_id is not None and plugin.terminal_probe is not None
+            if window_id is not None
+            and plugin is not None
+            and plugin.terminal_probe is not None
             else None
         )
         return TerminalSessionState(window_id, input_state)

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from contracts.harness import HarnessMemory, HarnessMemorySnapshot, MemoryDocument
 from domain.ids import SessionId
 from runtime.projections import SessionQueries
-from runtime.registry import HarnessRegistry
+from runtime.sessions import SessionRegistry
 
 
 @dataclass(frozen=True)
@@ -17,15 +17,16 @@ class MemoryStatus:
 
 
 class MemoryService:
-    def __init__(self, registry: HarnessRegistry, queries: SessionQueries) -> None:
-        self.registry = registry
+    def __init__(self, sessions: SessionRegistry, queries: SessionQueries) -> None:
+        self.sessions = sessions
         self.queries = queries
 
     def status(self, session_id: SessionId) -> MemoryStatus:
         summary = self.queries.summary(session_id)
         if summary is None:
             raise KeyError(str(session_id))
-        provider = self.registry.plugin_for_session(session_id).memory
+        plugin = self.sessions.load(session_id).plugin
+        provider = plugin.memory if plugin is not None else None
         if provider is None or not provider.enabled(summary.working_directory):
             return MemoryStatus(False, 0)
         return MemoryStatus(True, provider.item_count(session_id))
@@ -46,7 +47,8 @@ class MemoryService:
         summary = self.queries.summary(session_id)
         if summary is None:
             raise KeyError(str(session_id))
-        provider = self.registry.plugin_for_session(session_id).memory
+        plugin = self.sessions.load(session_id).plugin
+        provider = plugin.memory if plugin is not None else None
         if provider is None or not provider.enabled(summary.working_directory):
             raise ValueError("memory is not enabled for this session")
         return provider

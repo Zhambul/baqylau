@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from contracts.harness import RawEvent, RecognizedSession, TerminalSessionState, TranslationResult
+from contracts.harness import RawEvent, Session, TerminalSessionState, TranslationResult
 from app.content import CanonicalContentService
 from app.repository import RepositoryQueries
 from dashboard.activity import (
@@ -45,12 +45,11 @@ from domain.ids import (
     TaskId,
 )
 from domain.values import AttentionAnswer, AttentionPrompt, StructuredContent, TextContent, TokenUsage
-from runtime.event_store import EventStore
+from canonical_runtime import CanonicalRuntime
 from runtime.projections import (
     ActivityScope,
     ActivityStatistics,
     ContextSummary,
-    SessionQueries,
     SessionSummary,
     UsageSummary,
 )
@@ -100,10 +99,10 @@ def event(event_id, payload, *, actor_id=LEAD_ACTOR_ID):
 
 
 def services(tmp_path, events):
-    store = EventStore(str(tmp_path / "events.db"))
-    store.register_session(
+    store = CanonicalRuntime(str(tmp_path / "events.db"))
+    store.register(
         "example",
-        RecognizedSession(SESSION_ID, LEAD_ACTOR_ID, "native", "fixture", "/work"),
+        Session(SESSION_ID, LEAD_ACTOR_ID, "native", "fixture", "/work"),
     )
     for index, canonical_event in enumerate(events):
         raw = RawEvent(
@@ -120,7 +119,7 @@ def services(tmp_path, events):
             f'{{"index":{index}}}'.encode(),
         )
         store.record(raw, "1", TranslationResult((canonical_event,), "translated"))
-    queries = SessionQueries(store)
+    queries = store.queries()
     return (
         store,
         DashboardActivityService(store, queries),
@@ -253,7 +252,7 @@ def test_one_canonical_frame_contains_all_changed_focused_projections(tmp_path):
 def test_session_snapshot_uses_one_fixed_canonical_cursor(tmp_path):
     events = [event("session", SessionStarted("/work", None, None, None, None, None))]
     store, _activity, _stream, _content = services(tmp_path, events)
-    queries = SessionQueries(store)
+    queries = store.queries()
 
     snapshot = DashboardSessionService(
         store, queries, NoTerminal(), RepositoryQueries()
@@ -334,7 +333,7 @@ def test_session_snapshot_projects_background_jobs_and_monitors_without_legacy_r
     ]
     store, _activity, _stream, _content = services(tmp_path, events)
     snapshot = DashboardSessionService(
-        store, SessionQueries(store), NoTerminal(), RepositoryQueries()
+        store, store.queries(), NoTerminal(), RepositoryQueries()
     ).snapshot(
         SESSION_ID,
         ActivityScope(),
