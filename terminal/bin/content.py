@@ -6,12 +6,12 @@ the click handler resolves nothing itself."""
 
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
+from pathlib import Path
 from urllib.parse import quote
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from core import daemon_client
 
@@ -20,7 +20,7 @@ SCHEME = "baqylau-content://"
 
 def main(arguments: list[str]) -> None:
     if len(arguments) != 2 or not arguments[1].startswith(SCHEME):
-        raise SystemExit("usage: baqylau-content.py baqylau-content://CONTENT_REFERENCE")
+        raise SystemExit("usage: terminal/bin/content.py baqylau-content://CONTENT_REFERENCE")
     content_reference = arguments[1][len(SCHEME):]
     try:
         content = daemon_client.get_text("/api/content/" + quote(content_reference, safe=""))

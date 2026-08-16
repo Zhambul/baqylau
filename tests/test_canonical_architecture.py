@@ -251,28 +251,28 @@ def test_the_stable_bin_entries_are_wrappers_and_nothing_else():
     escaped the layer it belongs to.
     """
     wrappers = {
-        "baqylau-hook-claude.py": "harness.impl.claude_code.hooks.entry",
-        "baqylau-hook-codex.py": "harness.impl.codex.hooks.entry",
-        "baqylau-statusline.py": "harness.impl.claude_code.hooks.statusline",
-        "baqylau-panes.py": "terminal.panes.client",
+        "harness/impl/claude_code/bin/hook.py": "harness.impl.claude_code.hooks.entry",
+        "harness/impl/claude_code/bin/statusline.py": "harness.impl.claude_code.hooks.statusline",
+        "harness/impl/codex/bin/hook.py": "harness.impl.codex.hooks.entry",
+        "terminal/bin/panes.py": "terminal.panes.client",
     }
     violations = []
     for name, implementation in wrappers.items():
-        path = ROOT / "bin" / name
+        path = ROOT / name
         if not path.is_file():
-            violations.append(f"bin/{name} is missing")
+            violations.append(f"{name} is missing")
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         imported = [module for _path, module in imports_under_path(path)]
         if implementation not in imported:
-            violations.append(f"bin/{name} does not import {implementation}")
+            violations.append(f"{name} does not import {implementation}")
         defined = [
             node.name
             for node in tree.body
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
         ]
         if defined:
-            violations.append(f"bin/{name} defines {', '.join(defined)}")
+            violations.append(f"{name} defines {', '.join(defined)}")
     assert violations == []
 
 

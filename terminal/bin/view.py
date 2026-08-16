@@ -6,10 +6,10 @@ open/closed state and its mirror models re-render on the change."""
 
 from __future__ import annotations
 
-import os
 import sys
+from pathlib import Path
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from core import daemon_client
 
@@ -18,7 +18,7 @@ SCHEME = "baqylau-view://"
 
 def main(arguments: list[str]) -> None:
     if len(arguments) != 2 or not arguments[1].startswith(SCHEME):
-        raise SystemExit("usage: baqylau-view.py baqylau-view://CONTENT_REFERENCE")
+        raise SystemExit("usage: terminal/bin/view.py baqylau-view://CONTENT_REFERENCE")
     try:
         status, payload = daemon_client.post_json(
             "/api/terminal/views",

@@ -54,15 +54,15 @@ SQLite.
    the Claude Code plugin entry:
    ```json
    "hooks": { "PostToolUse": [ { "hooks": [
-       { "type": "command", "command": "python3 /ABS/PATH/baqylau/bin/baqylau-hook-claude.py" } ] } ],
+       { "type": "command", "command": "python3 /ABS/PATH/baqylau/harness/impl/claude_code/bin/hook.py" } ] } ],
        "…every other event…": [ "… same single entry …" ] }
    ```
 4. Wire the ⧉ copy links (`~/.config/kitty/open-actions.conf`):
    ```
    protocol baqylau-content
-   action launch --type=background python3 /ABS/PATH/baqylau/bin/baqylau-content.py ${URL}
+   action launch --type=background python3 /ABS/PATH/baqylau/terminal/bin/content.py ${URL}
    protocol baqylau-view
-   action launch --type=background python3 /ABS/PATH/baqylau/bin/baqylau-view.py ${URL}
+   action launch --type=background python3 /ABS/PATH/baqylau/terminal/bin/view.py ${URL}
    ```
 5. Using pyenv? Run `./bin/retarget-python.py` once to skip the ~140ms/process
    shim tax.
@@ -74,7 +74,7 @@ Everything activates automatically per session — the mirror opens on
 
 ```sh
 # Mirror pane
-python3 bin/baqylau-panes.py toggle|grow|shrink|reset|setpct <N>
+python3 terminal/bin/panes.py toggle|grow|shrink|reset|setpct <N>
 
 # Smoke-test the tab colors (~3s each)
 for s in idle thinking working executing awaiting-bg awaiting-command awaiting-response; do
@@ -107,7 +107,10 @@ harness/     the harness concern, whole: contract + models, the hook channel,
              the services over one plugin, and harness/impl/<name>/ — one
              directory per agent tool (claude_code · codex), the only place a
              harness's name appears
-bin/         executable entry scripts (baqylau-*.py) — filenames are load-bearing
+bin/         the repository's own CLIs (audit, dashboard). Every entry an
+             EXTERNAL config names lives with its concern instead —
+             harness/impl/<name>/bin/ and terminal/bin/ — so a captured
+             path never crosses a concern boundary
 ```
 
 ## Testing

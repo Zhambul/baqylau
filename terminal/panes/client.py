@@ -49,7 +49,7 @@ def main(arguments: list[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if arguments is None else arguments)
     if not arguments or arguments[0] not in COMMAND_PATHS:
         print(
-            "usage: baqylau-panes.py toggle|grow|shrink|reset|setpct [number]",
+            "usage: terminal/bin/panes.py toggle|grow|shrink|reset|setpct [number]",
             file=sys.stderr,
         )
         return 2
