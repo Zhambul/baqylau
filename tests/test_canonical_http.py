@@ -18,11 +18,8 @@ from app.bootstrap import build_application
 from diagnostics.telemetry import BrowserTelemetryService
 from harness.models import RawEvent, Session, TranslationResult
 from dashboard import prefs
-from dashboard.application import (
-    DashboardNotificationState,
-    GlobalApplicationService,
-    NewSessionPreferences,
-)
+from dashboard.services.notices import DashboardNotificationState
+from dashboard.services.overview import GlobalApplicationService, NewSessionPreferences
 from domain.events import CanonicalEvent, MessageCreated, SessionStarted
 from domain.ids import ActorId, CanonicalEventId, MessageId, RawEventId, SessionId
 from domain.values import TextContent

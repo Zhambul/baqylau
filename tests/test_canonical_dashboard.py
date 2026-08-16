@@ -11,14 +11,12 @@ import pytest
 from harness.models import RawEvent, Session, TerminalSessionState, TranslationResult
 from engine.queries.content import CanonicalContentService
 from core.repository import RepositoryQueries
-from dashboard.activity import (
-    DashboardActivityService,
-    DashboardSessionListItem,
-    DashboardSessionService,
-    DashboardStreamService,
-)
+from dashboard.services.activity import DashboardActivityService
+from dashboard.services.models import DashboardSessionListItem
+from dashboard.services.sessions import DashboardSessionService
+from dashboard.services.streams import DashboardStreamService
 from dashboard import prefs
-from dashboard.application import DashboardNotificationState
+from dashboard.services.notices import DashboardNotificationState
 from notify.notifier import Notifier
 from domain.events import (
     ActorStarted,

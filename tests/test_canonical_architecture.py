@@ -197,7 +197,11 @@ def test_the_diagnostic_write_tier_is_a_floor_and_the_read_tier_is_the_daemons()
         for path, imported in imports_under(package):
             if imported == "diagnostics.read" or imported.startswith("diagnostics.read."):
                 readers.add(path.relative_to(ROOT).as_posix())
-    assert readers == {"app/bootstrap.py", "app/services/insights.py", "dashboard/application.py"}
+    assert readers == {
+        "app/bootstrap.py",
+        "app/services/insights.py",
+        "dashboard/services/workspace.py",
+    }
 
 
 def test_the_terminal_tier_imports_no_concrete_harness():
@@ -318,7 +322,7 @@ def test_canonical_shared_code_imports_no_concrete_harness_package():
         ROOT / "harness" / "models",
         ROOT / "harness" / "hooks",
         ROOT / "harness" / "services",
-        ROOT / "dashboard" / "activity.py",
+        ROOT / "dashboard" / "services",
         ROOT / "dashboard" / "render" / "items",
     ]
     concrete_prefixes = ("harness.impl.claude_code", "harness.impl.codex")
@@ -521,8 +525,7 @@ def test_canonical_consumers_cannot_observe_or_checkpoint_native_sources():
     consumers = [
         ROOT / "terminal" / "panes" / "mirror_process.py",
         ROOT / "terminal" / "panes" / "scoreboard_process.py",
-        ROOT / "dashboard" / "activity.py",
-        ROOT / "dashboard" / "application.py",
+        ROOT / "dashboard" / "services",
         ROOT / "dashboard" / "render" / "items",
         *sorted((ROOT / "api").rglob("*.py")),
         ROOT / "terminal" / "mirror" / "presenter.py",

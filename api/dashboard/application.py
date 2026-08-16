@@ -38,12 +38,8 @@ from api.dashboard.models.application.view_mode_request import ViewModeRequest
 from api.dependencies import ApplicationGraph
 from api.guard import control_plane
 from notify.channels import webpush
-from dashboard.application import (
-    AnswerSelection,
-    BrowserPresence,
-    BrowserPushSubscription,
-    QueuedMessage,
-)
+from dashboard.services.overview import BrowserPresence, BrowserPushSubscription
+from dashboard.services.workspace import AnswerSelection, QueuedMessage
 from domain.ids import AttentionId, SessionId
 
 router = APIRouter()

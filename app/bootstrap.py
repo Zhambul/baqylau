@@ -34,16 +34,12 @@ from harness.services.controls import HarnessControlService
 from harness.services.launcher import HarnessLauncherService
 from harness.services.probe import TerminalInputService
 from harness.services.usage import ApplicationUsageState, HarnessUsageService
-from dashboard.activity import (
-    DashboardActivityService,
-    DashboardSessionService,
-    DashboardStreamService,
-)
-from dashboard.application import (
-    DashboardNotificationState,
-    GlobalApplicationService,
-    SessionApplicationService,
-)
+from dashboard.services.activity import DashboardActivityService
+from dashboard.services.notices import DashboardNotificationState
+from dashboard.services.overview import GlobalApplicationService
+from dashboard.services.sessions import DashboardSessionService
+from dashboard.services.streams import DashboardStreamService
+from dashboard.services.workspace import SessionApplicationService
 from engine.store.canonical import CanonicalEventStore
 from engine.queries.evidence import EvidenceQueries
 from harness.registry import HarnessRegistry

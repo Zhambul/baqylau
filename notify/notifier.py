@@ -9,8 +9,8 @@ from typing import Protocol
 
 from diagnostics import record as AUDIT
 from dashboard import config, prefs
-from dashboard.activity import DashboardSessionService
-from dashboard.application import DashboardNotificationState
+from dashboard.services.sessions import DashboardSessionService
+from dashboard.services.notices import DashboardNotificationState
 from notify import channels, presence
 from domain.ids import SessionId
 from engine.projections import SessionQueries, TabState

@@ -1,188 +1,38 @@
-"""Canonical dashboard pages, content resolution, and one-cursor SSE frames."""
+"""What a session IS, arranged for the browser: the list, and one snapshot.
+
+The list page and the session page both read from here. The list is refreshed
+on a short interval and kept warm, because it folds every session in the store
+and a page that polls it must not pay that each time; a snapshot is built for
+one session at one cursor, so a client can ask for exactly what it already has
+and get back exactly what changed.
+"""
 
 from __future__ import annotations
 
-import json
 import threading
 import time
-from dataclasses import dataclass
 from typing import Protocol
 
-from harness.models import TerminalSessionState
 from core.repository import RepositoryQueries, RepositoryStatus
-from dashboard.render.markdown import md_html
 from dashboard.render.ansi import ansi_html, escape_html
 from dashboard.render.highlight import source_ansi
-from dashboard.render.items import DashboardItem, DashboardPresenter
-from dashboard.render.serialize import json_ready
-from domain.ids import ActorId, AttentionId, OperationId, SessionId
-from domain.values import Content, StructuredContent, TextContent
-from engine.store.canonical import CanonicalEventStore
-from engine.projections import (
-    ActorSummary,
-    ActivityStatistics,
-    ActivityScope,
-    AttentionState,
-    ContextSummary,
-    GoalState,
-    OperationActivity,
-    SessionQueries,
-    SessionSummary,
-    TaskSummary,
-    TabState,
-    UsageSummary,
+from dashboard.services.models import (
+    CanonicalSessionListItem,
+    DashboardBackgroundOperation,
+    DashboardBackgroundWork,
+    DashboardMonitorEvent,
+    DashboardSessionListItem,
+    DashboardSessionSnapshot,
+    attention_state,
+    content_text,
 )
+from domain.ids import SessionId
+from engine.projections import ActivityScope, OperationActivity, SessionQueries
+from engine.store.canonical import CanonicalEventStore
+from harness.models import TerminalSessionState
 
 SESSION_REFRESH_SECONDS = 0.25
 COLD_SESSION_COUNT = 20
-
-
-def _content_text(content: Content | None) -> str:
-    if content is None:
-        return ""
-    if isinstance(content, TextContent):
-        return content.text
-    if isinstance(content, StructuredContent):
-        return json.dumps(json.loads(content.json_text), ensure_ascii=False, indent=2, sort_keys=True)
-    raise TypeError(f"unsupported content type: {type(content).__name__}")
-
-
-@dataclass(frozen=True)
-class DashboardActivityPage:
-    oldest_cursor: int
-    latest_cursor: int | None
-    has_more: bool
-    items: tuple[DashboardItem, ...]
-
-
-@dataclass(frozen=True)
-class DashboardAttentionOption:
-    value: str
-    label: str
-    description: str | None
-
-
-@dataclass(frozen=True)
-class DashboardQuestion:
-    question_id: str
-    title: str | None
-    text: str
-    multiple: bool
-    options: tuple[DashboardAttentionOption, ...]
-
-
-@dataclass(frozen=True)
-class DashboardPendingAttention:
-    actor_id: ActorId
-    attention_id: AttentionId
-    attention_type: str
-    questions: tuple[DashboardQuestion, ...]
-    plan_html: str | None
-
-
-@dataclass(frozen=True)
-class DashboardAttentionState:
-    pending: tuple[DashboardPendingAttention, ...]
-
-
-@dataclass(frozen=True)
-class DashboardMonitorEvent:
-    event: str
-    status: str | None
-    summary: str | None
-    timestamp: float | None
-
-
-@dataclass(frozen=True)
-class DashboardBackgroundOperation:
-    task: str
-    actor_id: ActorId
-    command: str
-    command_html: str
-    description: str | None
-    live: bool
-    started_at: float | None
-    ended_at: float | None
-    end_reason: str | None
-    output: str
-    line_count: int
-    events: tuple[DashboardMonitorEvent, ...]
-
-
-@dataclass(frozen=True)
-class DashboardBackgroundWork:
-    running_operation_ids: tuple[OperationId, ...]
-    monitor_count: int
-    background_job_count: int
-    monitors: tuple[DashboardBackgroundOperation, ...]
-    jobs: tuple[DashboardBackgroundOperation, ...]
-
-
-def _dashboard_attention(state: AttentionState) -> DashboardAttentionState:
-    pending = []
-    for item in state.pending:
-        request = item.request
-        questions = tuple(
-            DashboardQuestion(
-                question_id=prompt.prompt_id,
-                title=prompt.title,
-                text=prompt.prompt,
-                multiple=prompt.multiple,
-                options=tuple(
-                    DashboardAttentionOption(choice.value, choice.label, choice.description)
-                    for choice in prompt.choices
-                ),
-            )
-            for prompt in request.prompts
-        )
-        plan_text = "\n\n".join(prompt.prompt for prompt in request.prompts if prompt.prompt)
-        pending.append(
-            DashboardPendingAttention(
-                actor_id=item.actor_id,
-                attention_id=request.attention_id,
-                attention_type=request.attention_type,
-                questions=questions,
-                plan_html=md_html(plan_text) if request.attention_type == "plan" else None,
-            )
-        )
-    return DashboardAttentionState(tuple(pending))
-
-
-@dataclass(frozen=True)
-class DashboardSessionSnapshot:
-    cursor: int
-    session: SessionSummary | None
-    tab_state: TabState | None
-    actors: tuple[ActorSummary, ...]
-    usage: UsageSummary
-    context: ContextSummary
-    attention: DashboardAttentionState
-    tasks: tuple[TaskSummary, ...]
-    goal: GoalState | None
-    background_work: DashboardBackgroundWork
-    statistics: ActivityStatistics
-
-
-@dataclass(frozen=True)
-class DashboardSessionListItem:
-    session: SessionSummary
-    terminal: TerminalSessionState
-    project_directory: str
-    tab_state: TabState | None
-    statistics: ActivityStatistics
-    usage: UsageSummary
-    context: ContextSummary
-    repository: RepositoryStatus | None
-
-
-@dataclass(frozen=True)
-class CanonicalSessionListItem:
-    cursor: int
-    summary: SessionSummary
-    tab_state: TabState | None
-    statistics: ActivityStatistics
-    usage: UsageSummary
-    context: ContextSummary
 
 
 class TerminalSessionReader(Protocol):
@@ -329,7 +179,7 @@ class DashboardSessionService:
             actors=self.queries.actors(session_id, cursor),
             usage=self.queries.usage(session_id, cursor),
             context=self.queries.context(session_id, cursor),
-            attention=_dashboard_attention(self.queries.attention(session_id, cursor)),
+            attention=attention_state(self.queries.attention(session_id, cursor)),
             tasks=self.queries.tasks(session_id, cursor),
             goal=self.queries.goal(session_id, cursor),
             background_work=self._background_work(session_id, scope, cursor),
@@ -365,13 +215,13 @@ class DashboardSessionService:
 
     @staticmethod
     def _background_operation(operation: OperationActivity) -> DashboardBackgroundOperation:
-        command = _content_text(operation.arguments)
+        command = content_text(operation.arguments)
         output_values = (
             (operation.result,)
             if operation.result is not None
             else operation.current_progress()
         )
-        output = "\n".join(_content_text(value) for value in output_values if value is not None)
+        output = "\n".join(content_text(value) for value in output_values if value is not None)
         highlighted = source_ansi(command, "bash")
         command_html = (
             f'<pre class="oc">{ansi_html(highlighted)}</pre>'
@@ -380,7 +230,7 @@ class DashboardSessionService:
         )
         events = tuple(
             DashboardMonitorEvent(
-                event=_content_text(progress.content),
+                event=content_text(progress.content),
                 status=(progress.stream if progress.stream == "status" else None),
                 summary=None,
                 timestamp=None,
@@ -400,101 +250,4 @@ class DashboardSessionService:
             output=output,
             line_count=len(output.splitlines()),
             events=events,
-        )
-
-
-@dataclass(frozen=True)
-class DashboardActivityFrame:
-    cursor: int
-    items: tuple[DashboardItem, ...]
-    snapshot: DashboardSessionSnapshot
-
-    def json(self) -> str:
-        return json.dumps(json_ready(self), ensure_ascii=False, separators=(",", ":"))
-
-    def sse(self) -> str:
-        return f"id: {self.cursor}\nevent: activity\ndata: {self.json()}\n\n"
-
-
-class DashboardActivityService:
-    def __init__(
-        self,
-        canonical_store: CanonicalEventStore,
-        queries: SessionQueries,
-        presenter: DashboardPresenter | None = None,
-    ) -> None:
-        self.canonical_store = canonical_store
-        self.queries = queries
-        self.presenter = presenter or DashboardPresenter()
-
-    def backlog(
-        self,
-        session_id: SessionId,
-        before_cursor: int | None,
-        scope: ActivityScope,
-        block_count: int,
-    ) -> DashboardActivityPage:
-        snapshot_cursor = self.canonical_store.latest_cursor() or 0
-        window = self.queries.activity_before(
-            session_id,
-            before_cursor,
-            scope,
-            block_count,
-            through_cursor=snapshot_cursor,
-        )
-        return DashboardActivityPage(
-            oldest_cursor=window.oldest_cursor,
-            latest_cursor=snapshot_cursor,
-            has_more=window.has_more,
-            items=tuple(self.presenter.present(activity) for activity in window.activities),
-        )
-
-
-class DashboardStreamService:
-    def __init__(
-        self,
-        canonical_store: CanonicalEventStore,
-        queries: SessionQueries,
-        terminal: TerminalSessionReader,
-        repositories: RepositoryQueries,
-        presenter: DashboardPresenter | None = None,
-    ) -> None:
-        self.canonical_store = canonical_store
-        self.queries = queries
-        self.presenter = presenter or DashboardPresenter()
-        self.sessions = DashboardSessionService(
-            canonical_store, queries, terminal, repositories
-        )
-
-    def frame(
-        self,
-        session_id: SessionId,
-        cursor: int,
-        scope: ActivityScope,
-        limit: int = 200,
-    ) -> DashboardActivityFrame | None:
-        examined = self.canonical_store.after(session_id, cursor, limit)
-        if not examined.events:
-            return None
-        frame_cursor = examined.cursor
-        activity_page = self.queries.activity_after(
-            session_id,
-            cursor,
-            scope,
-            limit,
-            through_cursor=frame_cursor,
-        )
-        changed_event_ids = {
-            str(stored.event.event_id)
-            for stored in examined.events
-        }
-        items = tuple(
-            self.presenter.present(activity)
-            for activity in activity_page.activities
-            if changed_event_ids.intersection(map(str, activity.context.source_event_ids))
-        )
-        return DashboardActivityFrame(
-            cursor=frame_cursor,
-            items=items,
-            snapshot=self.sessions.snapshot_at(session_id, scope, frame_cursor),
         )
