@@ -2726,6 +2726,53 @@ def test_codex_write_stdin_continues_the_original_operation():
     finished_payload = payloads(finished, OperationFinished)[0].payload
     assert finished_payload.operation_id == operation_id
     assert finished_payload.result.text == "waiting\naccepted\n"
+    # zero is a real exit code: a falsy-int coercion once dropped it and marked
+    # the clean exit "failed" (session 01a009e1, 2026-08-16)
+    assert finished_payload.exit_code == 0
+    assert finished_payload.outcome == "succeeded"
+
+
+def test_codex_command_completion_outcome_follows_the_integer_exit_code():
+    translator = CodexCanonicalTranslator()
+    for exit_code, expected_outcome, suffix in ((0, "succeeded", "ok"), (2, "failed", "bad")):
+        translator.translate(raw_event({
+            "type": "response_item",
+            "payload": {
+                "type": "custom_tool_call",
+                "name": "exec",
+                "call_id": f"command-{suffix}",
+                "input": 'tools.exec_command({"cmd":"run"})',
+            },
+        }, harness="codex", source_type="rollout",
+            raw_event_id=f"command-{suffix}", source_position="40"))
+        translator.translate(raw_event({
+            "type": "response_item",
+            "payload": {
+                "type": "custom_tool_call_output",
+                "call_id": f"command-{suffix}",
+                "output": json.dumps({"session_id": suffix, "output": "running\n"}),
+            },
+        }, harness="codex", source_type="rollout",
+            raw_event_id=f"command-output-{suffix}", source_position="41"))
+        finished = translator.translate(raw_event({
+            "type": "event_msg",
+            "payload": {
+                "type": "item_completed",
+                "item": {
+                    "type": "CommandExecution",
+                    "id": f"execution-{suffix}",
+                    "process_id": suffix,
+                    "status": "completed",
+                    "aggregated_output": "done\n",
+                    "exit_code": exit_code,
+                },
+            },
+        }, harness="codex", source_type="rollout",
+            raw_event_id=f"command-finished-{suffix}", source_position="42"))
+
+        finished_payload = payloads(finished, OperationFinished)[0].payload
+        assert finished_payload.exit_code == exit_code
+        assert finished_payload.outcome == expected_outcome
 
 
 def test_codex_empty_write_stdin_poll_is_raw_only_and_ctrl_c_is_input():

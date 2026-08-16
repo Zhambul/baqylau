@@ -200,6 +200,13 @@ def _lead_actor(session_id: SessionId) -> ActorId:
     return ActorId(f"{session_id}:lead")
 
 
+def _exit_code(record: dict) -> int | None:
+    """The record's exit status, honest about zero: `0` is a real exit code
+    (a falsy-int coercion once turned a clean exit into outcome "failed")."""
+    value = record.get("exit")
+    return int(value) if str(value).lstrip("-").isdigit() else None
+
+
 def _content(value, *, markdown: bool = False):
     if isinstance(value, (dict, list)):
         return StructuredContent(json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True))
@@ -777,7 +784,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
             if self._collaboration_call(raw_event, call_id) is not None:
                 return []
             operation_id = OperationId(call_id)
-            exit_code = int(record["exit"]) if str(record.get("exit") or "").lstrip("-").isdigit() else None
+            exit_code = _exit_code(record)
             process_id = str(record.get("process_id") or "")
             if process_id:
                 self._process_operations[(source_key, process_id)] = operation_id
@@ -814,7 +821,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
             operation_id = self._process_operations.get((source_key, process_id))
             if operation_id is None or (source_key, operation_id) in self._finished_operations:
                 return []
-            exit_code = int(record["exit"]) if str(record.get("exit") or "").lstrip("-").isdigit() else None
+            exit_code = _exit_code(record)
             outcome = "succeeded" if exit_code == 0 else "failed"
             self._finished_operations.add((source_key, operation_id))
             payload = OperationFinished(operation_id, outcome, _content(record.get("output")), exit_code)
