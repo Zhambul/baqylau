@@ -9,7 +9,7 @@ import os
 import re
 import time
 
-from core.wire import HOST_ADDRESS, PORT_NUMBER
+from core.daemon.wire import HOST_ADDRESS, PORT_NUMBER
 from dashboard.config import PUBLIC_URL
 
 LOCK_KEY = "dashboard"

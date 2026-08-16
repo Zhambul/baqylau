@@ -54,7 +54,7 @@ def main(arguments: list[str] | None = None) -> int:
         )
         return 2
 
-    from core import daemon_client
+    from core.daemon import client as daemon_client
 
     status, payload = daemon_client.post_json(
         COMMAND_PATHS[arguments[0]], request_body(arguments)

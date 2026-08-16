@@ -25,7 +25,7 @@ from app.reactions import (
     SessionUpsertCanonicalEventReaction,
 )
 from terminal.panes.reaction import PaneCanonicalEventReaction
-from app.repository import RepositoryQueries
+from core.repository import RepositoryQueries
 from app.resume import ResumableSessionService
 from diagnostics.telemetry import BrowserTelemetryService
 from harness.services.catalog import HarnessCatalogService

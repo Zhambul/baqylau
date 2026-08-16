@@ -214,7 +214,12 @@ def test_presenters_do_not_import_plugins_or_each_other():
                 imports.extend(alias.name for alias in node.names)
             elif isinstance(node, ast.ImportFrom) and node.module:
                 imports.append(node.module)
-        assert not [name for name in imports if name.startswith(("harness.impl", "terminal", "core"))]
+        # `core.repository` is the one core module a presenter may name: it is
+        # handed a RepositoryQueries by injection and imports only the TYPE of
+        # what it was given — never a resolver, never a terminal.
+        forbidden = ("harness.impl", "terminal", "core")
+        named = [name for name in imports if name.startswith(forbidden)]
+        assert [name for name in named if name != "core.repository"] == []
 
 
 def test_shared_code_imports_no_concrete_plugin_descriptor():

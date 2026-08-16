@@ -19,7 +19,7 @@ import sys
 import urllib.parse
 
 from core.process import nearest_ancestor_named
-from core import daemon_client
+from core.daemon import client as daemon_client
 from harness.hooks.wire import (
     ACCOUNT_ID_HEADER,
     ACCOUNT_NAME_HEADER,

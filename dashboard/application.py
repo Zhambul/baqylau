@@ -196,7 +196,7 @@ class GlobalApplicationService:
         self.state = state
 
     def snapshot(self) -> GlobalApplicationSnapshot:
-        from core import wire
+        from core.daemon import wire
         from dashboard import config
         from dashboard.notify import presence
 

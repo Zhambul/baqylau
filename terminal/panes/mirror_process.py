@@ -13,7 +13,7 @@ import sys
 if __package__ in (None, ""):
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core import daemon_client
+from core.daemon import client as daemon_client
 from terminal.mirror.renderer import HEADER
 
 

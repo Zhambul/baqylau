@@ -1448,7 +1448,7 @@ def test_pane_keybinding_ships_only_its_environment_to_the_daemon(monkeypatch):
         posted.append((path, body))
         return 200, {"handled": True, "succeeded": True, "reason": None}
 
-    monkeypatch.setattr("core.daemon_client.post_json", post_json)
+    monkeypatch.setattr("core.daemon.client.post_json", post_json)
 
     assert terminal_panes.main(["toggle"]) == 0
     assert terminal_panes.main(["grow", "9"]) == 0
@@ -1472,7 +1472,7 @@ def test_pane_keybinding_ships_only_its_environment_to_the_daemon(monkeypatch):
 
 def test_pane_keybinding_reports_a_daemon_refusal(monkeypatch):
     monkeypatch.setattr(
-        "core.daemon_client.post_json",
+        "core.daemon.client.post_json",
         lambda path, body: (409, {"handled": True, "succeeded": False, "reason": "no pane"}),
     )
     assert terminal_panes.main(["toggle"]) == 1
@@ -1492,7 +1492,7 @@ def test_hook_client_ships_exact_bytes_and_flat_headers(monkeypatch, capsys):
         posted.append((path, body, headers, timeout))
         return 200, b'{"reply":"yes"}'
 
-    monkeypatch.setattr("core.daemon_client.post_bytes", post_bytes)
+    monkeypatch.setattr("core.daemon.client.post_bytes", post_bytes)
 
     hook_client.run(
         "claude_code", "claude", "c2", "Account Two",
@@ -1527,7 +1527,7 @@ def test_hook_client_never_fails_its_harness_and_audits_every_swallow(monkeypatc
     )
 
     monkeypatch.setattr(
-        "core.daemon_client.post_bytes",
+        "core.daemon.client.post_bytes",
         lambda path, body, headers, timeout: (400, b'{"error":"malformed"}'),
     )
     hook_client.run("claude_code", "claude")
@@ -1535,7 +1535,7 @@ def test_hook_client_never_fails_its_harness_and_audits_every_swallow(monkeypatc
     def unreachable(path, body, headers, timeout):
         raise OSError("daemon down")
 
-    monkeypatch.setattr("core.daemon_client.post_bytes", unreachable)
+    monkeypatch.setattr("core.daemon.client.post_bytes", unreachable)
     hook_client.run("codex", "codex")
 
     # a refused delivery prints NOTHING (an error body is not a hook reply)
@@ -3915,7 +3915,7 @@ def test_claude_prompt_quoting_a_command_envelope_stays_a_prompt():
 
 
 def test_daemon_client_decodes_sse_frames_and_surfaces_ticks():
-    from core import daemon_client
+    from core.daemon import client as daemon_client
 
     response = iter(
         [

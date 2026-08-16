@@ -46,7 +46,7 @@ def url():
     # core/wire.py's to own, and a lazy import keeps this module import-pure
     # like _server() does (`serve` must stay the only thing that pulls the
     # server in).
-    from core import wire
+    from core.daemon import wire
     return "http://%s:%d" % (wire.HOST_ADDRESS, wire.PORT_NUMBER)
 
 

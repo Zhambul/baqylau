@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Protocol
 
 from diagnostics.read import OperationalDiagnostics
-from app.repository import RepositoryQueries
+from core.repository import RepositoryQueries
 from harness.models import TerminalSessionState
 from domain.ids import SessionId
 from domain.values import TokenUsage

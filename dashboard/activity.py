@@ -11,7 +11,7 @@ from decimal import Decimal
 from typing import Protocol
 
 from harness.models import TerminalSessionState
-from app.repository import RepositoryQueries, RepositoryStatus
+from core.repository import RepositoryQueries, RepositoryStatus
 from dashboard.markdown import md_html
 from dashboard.ansi import ansi_html, escape_html
 from dashboard.highlight import source_ansi

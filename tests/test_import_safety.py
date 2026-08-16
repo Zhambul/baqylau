@@ -10,7 +10,7 @@ from conftest import REPOSITORY_ROOT
 
 CANONICAL_MODULES = (
     "harness.impl",
-    "core.daemon_client",
+    "core.daemon.client",
     "harness.hooks.client",
     "terminal.panes.mirror_process",
     "terminal.panes.scoreboard_process",

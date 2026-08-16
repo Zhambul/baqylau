@@ -10,7 +10,7 @@ import pytest
 
 from harness.models import RawEvent, Session, TerminalSessionState, TranslationResult
 from app.content import CanonicalContentService
-from app.repository import RepositoryQueries
+from core.repository import RepositoryQueries
 from dashboard.activity import (
     DashboardActivityService,
     DashboardSessionListItem,
@@ -290,7 +290,7 @@ def test_repository_status_is_unavailable_when_git_times_out(monkeypatch):
         raise subprocess.TimeoutExpired("git", 2)
 
     monkeypatch.setattr(
-        "app.repository.subprocess.run",
+        "core.repository.subprocess.run",
         time_out,
     )
 

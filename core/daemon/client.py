@@ -17,7 +17,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from core.wire import HOST_ADDRESS, PORT_NUMBER, POST_HEADER
+from core.daemon.wire import HOST_ADDRESS, PORT_NUMBER, POST_HEADER
 
 BASE_URL = f"http://{HOST_ADDRESS}:{PORT_NUMBER}"
 REQUEST_TIMEOUT_SECONDS = 10.0

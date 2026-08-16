@@ -13,7 +13,7 @@ from urllib.parse import quote
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from core import daemon_client
+from core.daemon import client as daemon_client
 
 SCHEME = "baqylau-content://"
 
