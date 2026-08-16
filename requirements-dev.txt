@@ -12,3 +12,12 @@ wenmode>=0.9
 # vulture-allowlist.py (protocol names) and vulture-baseline.py (the backlog).
 ruff==0.15.21
 vulture==2.16
+# Type checker (make typecheck) — config in mypy.ini. Pinned exactly for the
+# same reason ruff is: a version bump that reports one new error must be a
+# deliberate commit, not a red build on a machine that resolved a newer wheel.
+mypy==2.3.0
+# Stubs for the two typed third-party imports. Without them mypy reports the
+# imports themselves as untyped, which strict mode treats as an error.
+# (AppKit ships neither stubs nor py.typed and is declared in mypy.ini instead.)
+types-PyYAML==6.0.12.20260815
+types-Pygments==2.20.0.20260728

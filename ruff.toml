@@ -20,6 +20,12 @@ select = [
     "E",    # pycodestyle errors (subset via ignores below)
     "PL",   # pylint-equivalent (subset via ignores below)
     "B",    # bugbear (subset via ignores below)
+    "ANN",  # flake8-annotations — every def is annotated. This is the FAST half
+            # of the type gate: it answers "is there an annotation" in under a
+            # second. mypy.ini answers the harder question, "is it true".
+    "PGH",  # blanket `# type: ignore` / `# noqa` are banned (PGH003/PGH004): a
+            # suppression names the code it suppresses, or it is not a
+            # suppression, it is a hole.
 ]
 ignore = [
     # -- house style: compactness ---------------------------------------
@@ -27,15 +33,12 @@ ignore = [
     "E701",     # one-line `if x: y` compound statements are idiomatic here
     "E702",     # ditto semicolon-joined statements
     "E741",     # single-letter names/aliases are allowed (l, A, P, R, ...)
-    # -- house style: import purity / deferred imports -------------------
-    "E402",     # bin/ entries sys.path.insert before imports; modules defer
-                # frontend/DB imports below module setup (styleguide: no
-                # import-time side effects)
-    "PLC0415",  # imports inside functions ARE the import-purity pattern. The
-                # rule this ignore CANNOT check — that a deferred import has one
-                # of four reasons, named at the site — is in the styleguide, and
-                # the cost half is tested directly
-                # (test_per_event_imports_stay_off_the_heavy_renderers)
+    # -- annotations -----------------------------------------------------
+    "ANN401",   # `Any` as a parameter type. The only uses left are
+                # domain/codec.py's generic encode/decode, which walk arbitrary
+                # dataclass trees — Any is the honest type there, and mypy's
+                # warn_return_any / disallow_any_generics still constrain how it
+                # spreads.
     # -- documented mechanisms ruff would misread ------------------------
     "PLW0603",  # `global` — the mirror's documented renderer loop state
     "PLW1510",  # subprocess.run without check= — silenced fire-and-forget
@@ -52,6 +55,27 @@ ignore = [
 ]
 
 [lint.per-file-ignores]
+# --- the annotation ratchet ------------------------------------------------
+# These are the packages whose type migration has not landed. The list MIRRORS
+# mypy.ini's per-module blocks, and tests/test_canonical_typing.py fails if the
+# two drift — one gate exempting a package the other checks would let unannotated
+# code in through the gap between them. Both lists only ever shrink.
+"core/**/*.py" = ["ANN"]
+"engine/**/*.py" = ["ANN"]
+"api/**/*.py" = ["ANN"]
+"terminal/**/*.py" = ["ANN"]
+"notify/**/*.py" = ["ANN"]
+"dashboard/**/*.py" = ["ANN"]
+"harness/**/*.py" = ["ANN"]
+"tests/**/*.py" = [
+    "ANN",
+    # A test imports inside the test body on purpose: the module has to be
+    # loaded AFTER the fixture has monkeypatched its environment, and a
+    # top-level import would bind the unpatched one. Uniform across the suite,
+    # so it is a rule here rather than 17 identical suppressions.
+    "PLC0415",
+]
+
 # markdown(): lambdas capture `codes` late but every sub() runs synchronously
 # within the same loop iteration — no escape, no bug.
 "core/render.py" = ["B023"]

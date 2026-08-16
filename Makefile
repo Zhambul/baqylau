@@ -18,9 +18,22 @@ test-all:
 test-par: test
 
 # Lint (ruff — config in ruff.toml encodes docs/styleguide.md; CI-enforced)
-# plus the cross-module dead-code scan below. Both gates, one command.
-lint: deadcode
+# plus the cross-module dead-code scan below and the type gate. Three gates,
+# one command.
+lint: deadcode typecheck
 	$(PY) -m ruff check .
+
+# Static types (mypy — config in mypy.ini; CI-enforced). The tree is strict:
+# an unannotated function is an error, and mypy.ini's per-package ratchet is
+# the only thing holding that back for packages whose migration has not landed.
+#
+# Ruff's ANN rules in the same gate answer "is there an annotation"; this
+# answers "is it TRUE". Both are needed — an annotation nothing checks is a
+# comment.
+TYPECHECK_PATHS = api app bin core dashboard diagnostics domain engine harness notify terminal tests
+
+typecheck:
+	$(PY) -m mypy $(TYPECHECK_PATHS)
 
 lint-fix:
 	$(PY) -m ruff check . --fix
@@ -53,4 +66,4 @@ deadcode-backlog:
 	@$(PY) -m vulture $(DEADCODE_PATHS) vulture-allowlist.py \
 		--ignore-decorators "$(DEADCODE_DECORATORS)" || true
 
-.PHONY: test test-seq test-all test-par lint lint-fix deadcode deadcode-backlog
+.PHONY: test test-seq test-all test-par lint lint-fix typecheck deadcode deadcode-backlog
