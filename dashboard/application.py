@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from app.diagnostics import ApplicationError, OperationalDiagnostics
-from app.memory import MemoryService, MemoryStatus
 from dashboard import prefs
 from contracts.harness import TerminalSessionState, UsageRow
 from domain.events import MessageCreated
@@ -149,7 +148,6 @@ class SessionApplicationSnapshot:
     dialog: DialogState
     terminal: TerminalSessionState
     errors: tuple[ApplicationError, ...]
-    memory: MemoryStatus
 
 
 class DashboardNotificationState:
@@ -321,13 +319,11 @@ class SessionApplicationService:
         queries: SessionQueries,
         terminal: TerminalSessionReader,
         diagnostics: OperationalDiagnostics,
-        memory: MemoryService,
     ) -> None:
         self.canonical_store = canonical_store
         self.queries = queries
         self.terminal = terminal
         self.diagnostics = diagnostics
-        self.memory = memory
 
     def set_view_mode(self, session_id: SessionId, view_mode: str) -> None:
         if view_mode not in prefs.VIEW_MODES:
@@ -440,7 +436,6 @@ class SessionApplicationService:
             dialog=dialog,
             terminal=self.terminal.state(session_id),
             errors=self.diagnostics.errors(session_id),
-            memory=self.memory.status(session_id),
         )
 
     def _state(self, session_id: SessionId) -> tuple[ComposerState, DialogState]:

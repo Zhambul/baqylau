@@ -1,8 +1,8 @@
 """Codex's hook gateway: one pushed delivery → raw events (no reply channel).
 
-Runs INSIDE the daemon (`HarnessHookGateway`). Registration stays the launch
-wrapper's act (`plugins/codex/command.py`): evidence arriving before the
-wrapper has registered simply waits in the interpreter's backlog.
+Runs INSIDE the daemon (`HarnessHookGateway`). One raw event per delivery, the
+request's flat fields stamped on the row; interpretation stays with the
+interpreter's next tick.
 """
 
 from __future__ import annotations
@@ -10,27 +10,22 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-from collections.abc import Mapping
 
 from contracts.harness import (
     HarnessHookGateway,
+    HarnessHookRequest,
+    HarnessHookResponse,
     RawEvent,
-    RawEventSourceContext,
-    terminal_window_raw_event,
 )
 from domain.ids import ActorId, RawEventId, SessionId
 
 HARNESS = "codex"
-
-# The env subset only the hook process can see. One owner for this fact — the
-# thin client ships exactly these keys and the gateway reads exactly these keys.
-ENVIRONMENT_KEYS = ("KITTY_WINDOW_ID",)
+CLI_PROCESS_NAME = "codex"
 
 
 class CodexHookGateway(HarnessHookGateway):
-    def raw_events(
-        self, payload: bytes, environment: Mapping[str, str]
-    ) -> tuple[tuple[RawEvent, ...], bytes]:
+    def handle(self, request: HarnessHookRequest) -> HarnessHookResponse:
+        payload = request.payload
         document = json.loads(payload)
         if not isinstance(document, dict):
             raise ValueError("Codex hook payload must be an object")
@@ -43,7 +38,7 @@ class CodexHookGateway(HarnessHookGateway):
         hook_name = str(document.get("hook_event_name") or "hook")
         native_event_id_value = document.get("hook_event_id") or document.get("uuid")
         native_event_id = str(native_event_id_value or hashlib.sha256(payload).hexdigest())
-        raw_events = [
+        raw_events = (
             RawEvent(
                 raw_event_id=RawEventId(
                     f"codex:hook:{session_id}:{hook_name}:{native_event_id}"
@@ -59,19 +54,10 @@ class CodexHookGateway(HarnessHookGateway):
                 encoding="json",
                 payload=payload,
                 source_identity=f"codex:hook:{session_id}",
-            )
-        ]
-        terminal_window_id = environment.get("KITTY_WINDOW_ID")
-        if terminal_window_id:
-            raw_events.append(terminal_window_raw_event(
-                RawEventSourceContext(
-                    session_id=session_id,
-                    lead_actor_id=lead_actor_id,
-                    actor_id=lead_actor_id,
-                    parent_actor_id=None,
-                    source_reference="",
-                ),
-                HARNESS,
-                terminal_window_id,
-            ))
-        return tuple(raw_events), b""
+                terminal_window_id=request.terminal_window_id,
+                harness_process_id=request.harness_process_id,
+                account_id=request.account_id,
+                account_display_name=request.account_display_name,
+            ),
+        )
+        return HarnessHookResponse(raw_events, b"")

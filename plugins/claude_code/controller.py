@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
-import sys
 import time
 
 from contracts.harness import (
@@ -256,12 +254,11 @@ class MigrateAccountHandler(ControlHandler):
         arguments = ["--resume", str(session.session_id)]
         if context.current_model is not None:
             arguments.extend(("--model", context.current_model.native_id))
-        # Through the wrapper, like every launch: the resumed session gets a new
-        # native identity, and only the wrapper registers sessions.
-        command_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "command.py")
+        # Launching is just running the CLI under the target account's alias;
+        # the resumed session announces itself through its own hook evidence.
         launched = context.terminal.open_tab(TabRequest(
             working_directory=session.working_directory or "",
-            command=(sys.executable, command_path, target["alias"], *arguments),
+            command=(target["alias"], *arguments),
             title="Claude Code",
         ))
         if not launched.succeeded:

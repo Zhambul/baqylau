@@ -14,13 +14,13 @@ const HISTORY_FETCH = 40;
 /* The session view, optionally SCOPED to one agent (docs/dashboard.md *Agent
    scope*). `agent` re-points the mirror, monitors and jobs at that agent — the
    same tabs, the same components, a different `?agent=` on every read — while
-   memory and errors stay session-wide (they have no agent dimension). Entering
+   errors stay session-wide (they have no agent dimension). Entering
    or leaving scope on the SAME session rebuilds the stream, because the feed's
    cursors and painted blocks belong to whichever scope produced them. */
 function showSession(sessionId, tab, agent) {
   agent = agent || "";
   // Unknown or retired tabs return to the mirror.
-  if (!["mirror", "agents", "monitors", "jobs", "memory", "errors"].includes(tab))
+  if (!["mirror", "agents", "monitors", "jobs", "errors"].includes(tab))
     tab = "mirror";
   if (S.currentSessionId !== sessionId) {
     leaveSession();
@@ -44,7 +44,6 @@ function showSession(sessionId, tab, agent) {
               // expanded, `viewSeq` names items, `viewFill` bounds the auto-load
               view: VIEW_DEFAULT, viewOpen: new Set(), viewSeq: 0,
               viewTimer: null, viewFill: 0 };
-    initializeMemoryState(S.sessionView);
     loadCanonicalSession(sessionId);
   } else if ((S.sessionView.agent || "") !== agent) {
     // SCOPE CHANGE on the same session (into an agent, between agents, or back
@@ -222,8 +221,6 @@ function applySessionApplication(snapshot) {
   const preferences = snapshot.preferences || {};
   const composer = snapshot.composer || {};
   const dialog = snapshot.dialog || {};
-  const memory = snapshot.memory || {};
-  const previousMemoryCount = (S.sessionView.meta || {}).memory_count || 0;
   const errors = snapshot.errors || [];
   S.sessionView.errors = errors;
   updateErrCount(errors.length);
@@ -238,14 +235,10 @@ function applySessionApplication(snapshot) {
     composer_draft: composer.draft || null,
     composer_queue: composer.queue || null,
     ask_draft: dialog.draft || null,
-    memory_scope: !!memory.enabled,
-    memory_count: memory.item_count || 0,
   });
   applyComposerDraft(composer.draft || null);
   applyComposerQueue(composer.queue || null);
   applyAskDraft(dialog.draft || null);
-  if (S.sessionView.tab === "memory" && previousMemoryCount !== (memory.item_count || 0))
-    loadMemory(true);
 }
 
 function applyCanonicalSnapshot(snapshot) {

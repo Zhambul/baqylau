@@ -13,15 +13,15 @@ from decimal import Decimal
 from typing import Literal
 
 from contracts.harness import (
-    HarnessCanonicalTranslator,
     HarnessRawEventSource,
     HarnessRawEventSources,
-    HarnessSessionEvidence,
+    HarnessTranslator,
     RawEvent,
     RawEventSourceContext,
     Session,
     TranslationError,
     TranslationResult,
+    canonical_event,
 )
 from domain.events import (
     ActorNameChanged,
@@ -62,7 +62,6 @@ from domain.ids import (
     RawEventId,
     SessionId,
     TaskId,
-    stable_event_id,
 )
 from domain.values import (
     AccountReference,
@@ -89,21 +88,6 @@ def _model_reference(native_id: str) -> ModelReference:
         display_name=model.short_model(native_id),
         selection_id=model.family(native_id),
     )
-
-
-def _session_metadata(path: str) -> dict:
-    try:
-        with open(path, encoding="utf-8") as source:
-            for _ in range(8):
-                line = source.readline()
-                if not line:
-                    break
-                document = json.loads(line)
-                if isinstance(document, dict):
-                    return document
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return {}
-    return {}
 
 
 class ClaudeTranscriptRawEventSource(HarnessRawEventSource):
@@ -191,9 +175,9 @@ class ClaudeTaskRawEventSource(HarnessRawEventSource):
     def __init__(self, session: Session) -> None:
         self.session = session
         config_directory = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
-        session_prefix = session.native_session_id.split("-", 1)[0]
+        session_prefix = session.harness_session_id.split("-", 1)[0]
         self.task_directory = os.path.join(config_directory, "tasks", f"session-{session_prefix}")
-        self.source_identity = f"claude_code:tasks:{session.native_session_id}"
+        self.source_identity = f"claude_code:tasks:{session.harness_session_id}"
 
     def read(self, after_position: str | None) -> tuple[RawEvent, ...]:
         current = {}
@@ -395,31 +379,6 @@ def _plan_resolution(native: dict, failed: bool) -> tuple[str, str | None, bool]
     return "rejected", None, False
 
 
-class ClaudeSessionEvidence(HarnessSessionEvidence):
-    """A Claude Code hook payload names its session outright."""
-
-    def from_raw_event(self, raw_event: RawEvent) -> Session | None:
-        if raw_event.source_type not in ("hook", "teammate_hook"):
-            return None
-        try:
-            document = json.loads(raw_event.payload)
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            return None
-        if not isinstance(document, dict):
-            return None
-        source_reference = str(document.get("transcript_path") or "")
-        if not source_reference:
-            return None
-        session_id = raw_event.session_id
-        return Session(
-            session_id=session_id,
-            lead_actor_id=_lead_actor(session_id),
-            native_session_id=str(session_id),
-            source_reference=os.path.realpath(source_reference),
-            working_directory=document.get("cwd") or None,
-        )
-
-
 class ClaudeRawEventSources(HarnessRawEventSources):
     def for_session(self, session: Session) -> tuple[HarnessRawEventSource, ...]:
         if not transcript.owns(session.source_reference):
@@ -459,7 +418,7 @@ class ClaudeRawEventSources(HarnessRawEventSources):
         return tuple(sources)
 
 
-class ClaudeCanonicalTranslator(HarnessCanonicalTranslator):
+class ClaudeCanonicalTranslator(HarnessTranslator):
     TASK_TOOLS = frozenset({"TaskCreate", "TaskUpdate", "TaskGet", "TaskList"})
 
     def __init__(self) -> None:
@@ -473,21 +432,6 @@ class ClaudeCanonicalTranslator(HarnessCanonicalTranslator):
             raise TranslationError("malformed Claude Code record", context=raw_event.source_position) from error
         if not isinstance(document, dict):
             raise TranslationError("Claude Code record is not an object", context=raw_event.source_position)
-        if raw_event.source_type == "process":
-            # The wrapper's exit observation. Only the FINISH is a fact worth a
-            # canonical event: a started here would converge on the same
-            # session.started identity as the SessionStart hook's rich payload
-            # and could win the race with a poorer body.
-            if document.get("state") == "finished":
-                event = self._event(
-                    raw_event,
-                    "session",
-                    str(raw_event.session_id),
-                    "finished",
-                    SessionFinished("unknown", "process_exited"),
-                )
-                return TranslationResult((event,), "translated")
-            return TranslationResult((), "ignored_nonsemantic", "process start carries no new fact")
         if raw_event.source_type == "otel":
             events = self._translate_otel(raw_event, document)
             if not events:
@@ -519,17 +463,6 @@ class ClaudeCanonicalTranslator(HarnessCanonicalTranslator):
                 ),),
                 "translated",
             )
-        if raw_event.source_type == "account":
-            account_id = str(document.get("slug") or "")
-            display_name = str(document.get("label") or account_id or "default")
-            event = self._event(
-                raw_event,
-                "session",
-                str(raw_event.session_id),
-                f"account:{raw_event.source_position}",
-                SessionAccountChanged(AccountReference(account_id, display_name)),
-            )
-            return TranslationResult((event,), "translated")
         if raw_event.source_type == "tasks":
             event = self._task_event(raw_event, document)
             return TranslationResult((event,), "translated")
@@ -881,8 +814,20 @@ class ClaudeCanonicalTranslator(HarnessCanonicalTranslator):
             payload = TurnFinished(None, "succeeded")
             return [self._event(raw_event, "turn", native_identity, "finished", payload)]
         if hook_name == "StopFailure":
-            payload = TurnFinished(None, "failed")
-            return [self._event(raw_event, "turn", native_identity, "finished", payload)]
+            events = [
+                self._event(
+                    raw_event, "turn", native_identity, "finished", TurnFinished(None, "failed")
+                )
+            ]
+            if document.get("error") == "rate_limit":
+                events.append(self._event(
+                    raw_event,
+                    "goal",
+                    native_identity,
+                    "changed",
+                    GoalChanged(None, "usage_limited", "rate_limit"),
+                ))
+            return events
         if hook_name == "PreToolUse":
             return self._tool_started(raw_event, document)
         if hook_name in ("PostToolUse", "PostToolUseFailure"):
@@ -1048,15 +993,19 @@ class ClaudeCanonicalTranslator(HarnessCanonicalTranslator):
                     ActorNameChanged(description),
                 ))
             return events
+        transcript_path = str(document.get("transcript_path") or "")
         session_started = SessionStarted(
             working_directory=document.get("cwd") or "",
+            source_reference=(
+                os.path.realpath(transcript_path) if transcript_path else raw_event.source_name
+            ),
             resumed_from=None,
             title=None,
             model=None,
             effort=None,
             account=None,
         )
-        return [
+        events = [
             self._event(
                 raw_event,
                 "session",
@@ -1072,6 +1021,17 @@ class ClaudeCanonicalTranslator(HarnessCanonicalTranslator):
                 ActorStarted("claude", "lead"),
             ),
         ]
+        if raw_event.account_id is not None or raw_event.account_display_name is not None:
+            account_id = raw_event.account_id or ""
+            display_name = raw_event.account_display_name or account_id or "default"
+            events.append(self._event(
+                raw_event,
+                "session",
+                str(raw_event.session_id),
+                f"account:{raw_event.source_position}",
+                SessionAccountChanged(AccountReference(account_id, display_name)),
+            ))
+        return events
 
     def _tool_started(self, raw_event: RawEvent, native: dict) -> list[CanonicalEvent]:
         operation_id = OperationId(str(native.get("tool_use_id") or native.get("id") or raw_event.source_position))
@@ -1269,20 +1229,6 @@ class ClaudeCanonicalTranslator(HarnessCanonicalTranslator):
         *,
         occurred_at: float | None = None,
     ) -> CanonicalEvent:
-        return CanonicalEvent(
-            event_id=stable_event_id(
-                harness="claude_code",
-                session_id=raw_event.session_id,
-                actor_id=raw_event.actor_id,
-                subject_type=subject_type,
-                subject_id=subject_id,
-                phase=phase,
-            ),
-            session_id=raw_event.session_id,
-            actor_id=raw_event.actor_id,
-            turn_id=None,
-            parent_actor_id=raw_event.parent_actor_id,
-            harness="claude_code",
-            occurred_at=occurred_at,
-            payload=payload,
+        return canonical_event(
+            raw_event, subject_type, subject_id, phase, payload, occurred_at=occurred_at
         )

@@ -4,18 +4,25 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from decimal import Decimal
 from typing import ClassVar, Literal, Mapping, Protocol, TypeAlias
 
 from contracts.terminal import TerminalControl, TerminalScreen
-from domain.events import AttentionRequested, CanonicalEvent, EventPayload
+from domain.events import (
+    AttentionRequested,
+    CanonicalEvent,
+    EventPayload,
+    OperationOutputLocated,
+)
 from domain.ids import (
     ActorId,
     AttentionId,
     MessageId,
     RawEventId,
     SessionId,
+    TurnId,
+    stable_event_id,
 )
 from domain.values import (
     AccountReference,
@@ -46,12 +53,19 @@ class RawEvent:
     # recorded raw event carrying its identity. Pushed observers (hooks) have no
     # resume and may leave it at their source_type.
     source_identity: str = ""
+    # Set only on hook evidence, None everywhere else. Flat and typed: a hook
+    # delivery is the one observation made from INSIDE the session's terminal
+    # window and process tree, so what it saw around itself rides its row.
+    terminal_window_id: str | None = None
+    harness_process_id: int | None = None
+    account_id: str | None = None
+    account_display_name: str | None = None
 
 
 @dataclass(frozen=True)
 class TranslationResult:
     canonical_events: tuple[CanonicalEvent[EventPayload], ...]
-    decision: TranslationDecision
+    decision: RecordedTranslationDecision
     reason: str | None = None
 
     def __post_init__(self) -> None:
@@ -59,6 +73,39 @@ class TranslationResult:
             raise ValueError("translated observations must produce at least one canonical event")
         if self.decision != "translated" and self.canonical_events:
             raise ValueError("ignored observations cannot produce canonical events")
+
+
+def canonical_event(
+    raw_event: RawEvent,
+    subject_type: str,
+    subject_id: str,
+    phase: str,
+    payload: EventPayload,
+    *,
+    turn_id: TurnId | None = None,
+    occurred_at: float | None = None,
+) -> CanonicalEvent[EventPayload]:
+    """One fact from one observation: the identity converges across sources and
+    the envelope carries where the observation was made from."""
+    return CanonicalEvent(
+        event_id=stable_event_id(
+            harness=raw_event.harness,
+            session_id=raw_event.session_id,
+            actor_id=raw_event.actor_id,
+            subject_type=subject_type,
+            subject_id=subject_id,
+            phase=phase,
+        ),
+        session_id=raw_event.session_id,
+        actor_id=raw_event.actor_id,
+        turn_id=turn_id,
+        parent_actor_id=raw_event.parent_actor_id,
+        harness=raw_event.harness,
+        occurred_at=occurred_at,
+        terminal_window_id=raw_event.terminal_window_id,
+        harness_process_id=raw_event.harness_process_id,
+        payload=payload,
+    )
 
 
 class TranslationError(ValueError):
@@ -79,21 +126,24 @@ class RawEventSourceContext:
 
 @dataclass(frozen=True)
 class Session:
-    """One observed harness session.
+    """One observed harness session — a read-model derived from committed facts.
 
-    The row is written ONCE, at launch, by the wrapper that started the harness
-    (`SessionRegistry.register`); everything that changes over the session's
-    life is a canonical fact, never an update here. `plugin` is attachment, not
-    identity: the server-side `SessionRegistry` hands out sessions with it set,
-    recorder processes leave it None.
+    The row is born by the reaction to the session's own `session.started` fact;
+    nothing upstream of the store ever requires one. Identity columns are written
+    once; the two LIVE columns (`terminal_window_id`, `harness_process_id`) are
+    kept current from the envelope of every later hook-borne fact, because a
+    resumed session shows up in a new window with a new process. `plugin` is
+    attachment, not identity: the server-side `SessionStore` hands out sessions
+    with it set, recorder processes leave it None.
     """
 
     session_id: SessionId
     lead_actor_id: ActorId
-    native_session_id: str
+    harness_session_id: str
     source_reference: str
     working_directory: str | None
-    native_process_id: int | None = None
+    terminal_window_id: str | None = None
+    harness_process_id: int | None = None
     plugin: HarnessPlugin | None = field(default=None, compare=False, repr=False)
 
     @property
@@ -136,6 +186,23 @@ class HarnessRawEventSources(Protocol):
     def for_session(self, session: Session) -> tuple[HarnessRawEventSource, ...]: ...
 
 
+@dataclass(frozen=True)
+class HarnessHookRequest:
+    """What one hook shipped: the exact stdin bytes plus what it saw around itself."""
+
+    payload: bytes
+    terminal_window_id: str | None
+    harness_process_id: int | None
+    account_id: str | None
+    account_display_name: str | None
+
+
+@dataclass(frozen=True)
+class HarnessHookResponse:
+    raw_events: tuple[RawEvent, ...]
+    reply: bytes
+
+
 class HarnessHookGateway(Protocol):
     """One pushed hook delivery → raw events plus the synchronous reply.
 
@@ -144,161 +211,95 @@ class HarnessHookGateway(Protocol):
     volunteers. Both produce raw events and nothing else — no store access, no
     terminal, no translation (the interpreter does that on its next tick).
 
-    `payload` is the exact bytes the harness wrote to its hook's stdin, and the
-    gateway must embed them unmodified in the raw events it returns.
-    `environment` is the env subset the hook process shipped (only it can see
-    the session's terminal window or account variables — the daemon's own
-    environment is meaningless here). The reply bytes go back to the hook's
-    stdout verbatim; a harness with no synchronous reply channel returns b"".
-    Rejecting a malformed delivery is `raise ValueError`."""
+    The request's `payload` is the exact bytes the harness wrote to its hook's
+    stdin, and the gateway must embed them unmodified in the raw events it
+    returns; the request's flat fields are stamped on the hook raw event. The
+    reply bytes go back to the hook's stdout verbatim; a harness with no
+    synchronous reply channel returns b"". Rejecting a malformed delivery is
+    `raise ValueError`."""
 
-    def raw_events(
-        self, payload: bytes, environment: Mapping[str, str]
-    ) -> tuple[tuple[RawEvent, ...], bytes]: ...
+    def handle(self, request: HarnessHookRequest) -> HarnessHookResponse: ...
 
 
-class HarnessCanonicalTranslator(Protocol):
+class HarnessTranslator(Protocol):
+    """Translates the harness's own evidence: hook payloads and native files."""
+
     def translate(self, raw_event: RawEvent) -> TranslationResult: ...
 
 
-class HarnessSessionEvidence(Protocol):
-    """Derive a session from its own orphan evidence.
+class CoreTranslator(Protocol):
+    """Translates evidence our own machinery produces, identically for every
+    harness. One small class per core source_type."""
 
-    The wrapper registers a session at launch; for every other launch path the
-    evidence itself announces the session — a hook payload carries the identity
-    and the source reference. The interpreter calls this for raw events whose
-    session has no row yet; None means this particular observation cannot name
-    one (it keeps trying with later evidence)."""
+    def translate(self, raw_event: RawEvent) -> TranslationResult: ...
 
-    def from_raw_event(self, raw_event: RawEvent) -> Session | None: ...
+
+class CanonicalEventReaction(Protocol):
+    """One concern of the react phase. Sees every fact that commits, in order.
+
+    A reaction gets everything it needs from the fact itself — raw events never
+    reach this layer."""
+
+    def react(self, canonical_event: CanonicalEvent) -> None: ...
 
 
 class HarnessReactorContext(Protocol):
-    """What the interpreter lends a reactor: the one control dispatch point."""
+    """What the interpreter lends a harness reactor: the one control dispatch point."""
 
     def execute(self, request: ControlRequest) -> ControlOutcome: ...
 
 
-class HarnessReactor(Protocol):
-    """Harness-specific reactions to committed evidence, run by the interpreter.
+class HarnessCanonicalEventReactor(Protocol):
+    """A harness's reaction to committed facts. Runs after the core reaction
+    pipeline, for every fact of its own harness — the interpreter dispatches by
+    the event's harness, so implementations carry no harness check."""
 
-    Called once per raw event, AFTER its translation committed — never inside a
-    recorder process. This is where a harness starts companion processes or
-    keeps plugin-private bookkeeping that hooks used to do inline.
-    """
-
-    def react(self, raw_event: RawEvent, context: HarnessReactorContext) -> None: ...
+    def react(
+        self, canonical_event: CanonicalEvent, controls: HarnessReactorContext
+    ) -> None: ...
 
 
-# --- File watches ----------------------------------------------------------------
+# --- Operation output directives ----------------------------------------------
 #
 # A hook that makes a command's output observable cannot follow the file itself —
-# it must exit immediately. So it records a `watch` raw event: a directive-as-
-# evidence saying "this path holds operation X's output, read it". The
-# interpreter applies these to its `watches` table and pulls the file with a
-# generic source until a matching finish directive (and EOF) ends it.
+# it must exit immediately. So the gateway records an output-location directive:
+# a raw event carrying the typed `OperationOutputLocated` payload. The core
+# translator turns it into the fact, the reaction starts the following, and the
+# collect phase reads the file's chunks as their own evidence.
 
-WATCH_SOURCE_TYPE = "watch"
-
-
-@dataclass(frozen=True)
-class FileWatch:
-    operation_id: str
-    source_path: str
-    chunk_source_type: str
-    delete_source: bool
-    initial_size: int
-    initial_modified_at: int
-    wait_for_source_change: bool
+OUTPUT_LOCATION_SOURCE_TYPE = "output_location"
+LIVENESS_SOURCE_TYPE = "liveness"
 
 
-def watch_start_raw_event(
+def output_location_raw_event(
     context: RawEventSourceContext,
     harness: str,
-    watch: FileWatch,
+    located: OperationOutputLocated,
     actor_id: ActorId | None = None,
     parent_actor_id: ActorId | None = None,
 ) -> RawEvent:
-    document = {
-        "action": "start",
-        "operation_id": watch.operation_id,
-        "source_path": watch.source_path,
-        "chunk_source_type": watch.chunk_source_type,
-        "delete_source": watch.delete_source,
-        "initial_size": watch.initial_size,
-        "initial_modified_at": watch.initial_modified_at,
-        "wait_for_source_change": watch.wait_for_source_change,
-    }
-    return _watch_raw_event(context, harness, watch.operation_id, document, actor_id, parent_actor_id)
-
-
-def watch_finish_raw_event(
-    context: RawEventSourceContext,
-    harness: str,
-    operation_id: str,
-) -> RawEvent:
-    document = {"action": "finish", "operation_id": operation_id}
-    return _watch_raw_event(context, harness, operation_id, document, None, None)
-
-
-# --- Terminal anchors --------------------------------------------------------
-#
-# A hook process runs INSIDE the session's terminal window and inherits its
-# identity; the interpreter runs in a server that has none (or worse, a stale
-# inherited one). So the anchor is evidence: hooks record it, and the
-# interpreter reads it when it needs to place panes. One raw event per
-# (session, window) — re-recording the same window deduplicates.
-
-TERMINAL_SOURCE_TYPE = "terminal"
-
-
-def terminal_window_raw_event(
-    context: RawEventSourceContext,
-    harness: str,
-    window_id: str,
-) -> RawEvent:
-    document = {"window_id": str(window_id)}
+    document = asdict(located)
+    document["operation_id"] = str(located.operation_id)
     return RawEvent(
-        raw_event_id=RawEventId(f"{harness}:terminal:{context.session_id}:{window_id}"),
+        raw_event_id=RawEventId(
+            f"{harness}:output_location:{context.session_id}:{located.operation_id}"
+        ),
         harness=harness,
-        source_type=TERMINAL_SOURCE_TYPE,
-        source_name="terminal",
-        source_position=str(window_id),
-        session_id=context.session_id,
-        actor_id=context.lead_actor_id,
-        parent_actor_id=None,
-        observed_at=time.time(),
-        encoding="json",
-        payload=json.dumps(document, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8"),
-        source_identity=f"{harness}:terminal:{context.session_id}",
-    )
-
-
-def _watch_raw_event(
-    context: RawEventSourceContext,
-    harness: str,
-    operation_id: str,
-    document: dict,
-    actor_id: ActorId | None,
-    parent_actor_id: ActorId | None,
-) -> RawEvent:
-    action = document["action"]
-    return RawEvent(
-        raw_event_id=RawEventId(f"{harness}:watch:{context.session_id}:{operation_id}:{action}"),
-        harness=harness,
-        source_type=WATCH_SOURCE_TYPE,
-        source_name=str(document.get("source_path") or operation_id),
-        source_position=action,
+        source_type=OUTPUT_LOCATION_SOURCE_TYPE,
+        source_name=located.source_path,
+        source_position="located",
         session_id=context.session_id,
         actor_id=actor_id or context.actor_id,
         parent_actor_id=parent_actor_id if actor_id else context.parent_actor_id,
         observed_at=time.time(),
         encoding="json",
         payload=json.dumps(document, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8"),
-        # NOT the chunk source's identity: the interpreter resumes the chunk
-        # reader from the last raw event under `<harness>:watch:<session>:<op>`,
-        # and a directive there would masquerade as a read position.
-        source_identity=f"{harness}:watch:{context.session_id}:{operation_id}:directive",
+        # NOT the chunk source's identity: the chunk reader resumes from the last
+        # raw event under its own identity, and a directive there would
+        # masquerade as a read position.
+        source_identity=(
+            f"{harness}:output_location:{context.session_id}:{located.operation_id}:directive"
+        ),
     )
 
 
@@ -650,63 +651,6 @@ class HarnessUsage(Protocol):
 
 
 @dataclass(frozen=True)
-class MemoryNoteRecord:
-    path: str
-    relative_path: str
-    name: str
-    action: str
-    actor_name: str | None
-    access_count: int
-    accessed_at: float
-
-
-@dataclass(frozen=True)
-class MemorySearchHit:
-    path: str
-    relative_path: str
-    name: str
-    line_number: int | None
-    title: str
-    score: str
-    snippet: str
-
-
-@dataclass(frozen=True)
-class MemorySearchRecord:
-    command_name: str
-    command_action: str
-    query: str
-    command: str
-    expanded_queries: tuple[str, ...]
-    hits: tuple[MemorySearchHit, ...]
-    actor_name: str | None
-    search_count: int
-    searched_at: float
-
-
-@dataclass(frozen=True)
-class HarnessMemorySnapshot:
-    notes: tuple[MemoryNoteRecord, ...]
-    searches: tuple[MemorySearchRecord, ...]
-
-
-@dataclass(frozen=True)
-class MemoryDocument:
-    name: str
-    path: str
-    frontmatter: tuple[tuple[str, str], ...]
-    body: str | None
-    backlinks: tuple[str, ...]
-
-
-class HarnessMemory(Protocol):
-    def enabled(self, working_directory: str) -> bool: ...
-    def item_count(self, session_id: SessionId) -> int: ...
-    def snapshot(self, session_id: SessionId) -> HarnessMemorySnapshot: ...
-    def document(self, path: str | None, stem: str | None) -> MemoryDocument: ...
-
-
-@dataclass(frozen=True)
 class TerminalInputState:
     typed_text: str | None
     suggestion: str | None
@@ -736,6 +680,10 @@ class HarnessInfo:
     display_name: str
     plugin_version: str
     canonical_version: int
+    # The CLI executable's process name — how the hook process finds the CLI in
+    # its own ancestry, and how the liveness check tells the CLI apart from a
+    # reused pid.
+    cli_process_name: str
     supports_attachments: bool = False
     default_for_launch: bool = False
     supports_accounts: bool = False
@@ -747,13 +695,11 @@ class HarnessInfo:
 class HarnessPlugin:
     info: HarnessInfo
     sources: HarnessRawEventSources
-    translator: HarnessCanonicalTranslator
+    translator: HarnessTranslator
     hooks: HarnessHookGateway | None = None
-    session_evidence: HarnessSessionEvidence | None = None
-    reactor: HarnessReactor | None = None
+    reactors: tuple[HarnessCanonicalEventReactor, ...] = ()
     controller: HarnessController | None = None
     launcher: HarnessLauncher | None = None
     catalog: HarnessCatalog | None = None
     usage: HarnessUsage | None = None
-    memory: HarnessMemory | None = None
     terminal_probe: HarnessTerminalProbe | None = None

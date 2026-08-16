@@ -7,7 +7,7 @@ import time
 from urllib.parse import parse_qs
 
 from core import audit as A
-from app import pending_session, terminal_views
+from app import terminal_views
 from app.bootstrap import CanonicalApplication
 from app.hook_gateway import UnknownHookHarness
 from app.telemetry import (
@@ -42,13 +42,20 @@ from dashboard.application import (
     BrowserPushSubscription,
     QueuedMessage,
 )
-from dashboard.config import BOOT_ID, ENVIRONMENT_HEADER, HOOK_MAX
+from contracts.harness import HarnessHookRequest
+from dashboard.config import (
+    ACCOUNT_ID_HEADER,
+    ACCOUNT_NAME_HEADER,
+    BOOT_ID,
+    HARNESS_PROCESS_HEADER,
+    HOOK_MAX,
+    TERMINAL_WINDOW_HEADER,
+)
 from dashboard.diff import source_html, unified_diff_html
 from domain.ids import ActorId, AttentionId, MessageId, SessionId
 from domain.values import StructuredContent
 from runtime.projections import ActivityScope
 from runtime.recorder import RawEventRecorderError
-from runtime.sessions import UnknownSession
 
 STREAM_POLL_SECONDS = 0.25
 STREAM_HEARTBEAT_SECONDS = 15.0
@@ -137,8 +144,8 @@ class _CanonicalMixin:
             if len(api) == 2 and api[0] == "content":
                 return self._content(api[1], parse_qs(url.query, keep_blank_values=True))
             # the pane streams route BEFORE the generic session resources: a
-            # pane may connect under a still-pending identity, which no session
-            # registry lookup can resolve yet.
+            # pane may connect before the session's first fact commits, which
+            # no session lookup can resolve yet.
             if (
                 len(api) == 5
                 and api[0] == "sessions"
@@ -210,7 +217,10 @@ class _CanonicalMixin:
     def _session_get(self, session_id: SessionId, rest: list[str], query_text: str):
         query = parse_qs(query_text, keep_blank_values=True)
         application = self._application()
-        lead_actor_id = application.sessions.load(session_id).lead_actor_id
+        session = application.sessions.find_by_id(session_id)
+        if session is None:
+            raise KeyError(f"unknown session: {session_id}")
+        lead_actor_id = session.lead_actor_id
         scope = _scope(query, lead_actor_id)
         if not rest:
             return self._json(
@@ -242,18 +252,6 @@ class _CanonicalMixin:
                 else (_integer(query, "after_cursor") or 0)
             )
             return self._canonical_stream(session_id, after_cursor, scope)
-        if rest == ["memory"]:
-            return self._json(to_wire(application.memory.snapshot(session_id)))
-        if rest == ["memory", "documents"]:
-            return self._json(
-                to_wire(
-                    application.memory.document(
-                        session_id,
-                        _text(query, "path"),
-                        _text(query, "stem"),
-                    )
-                )
-            )
         return self._json({"error": "not found"}, 404)
 
     def _canonical_stream(
@@ -338,47 +336,32 @@ class _CanonicalMixin:
         self._sse_start()
         stream_id = A.stream_start(str(session_id), f"pane-{kind}", src_path=self.path[:200])
         try:
-            resolved = self._pane_session(session_id)
-            if resolved is None or not self._wait_for_registration(resolved):
+            if not self._wait_for_session(session_id):
                 A.stream_end(stream_id, "client-gone")
                 return
-            if not self._sse("session", {"session_id": str(resolved)}):
+            if not self._sse("session", {"session_id": str(session_id)}):
                 A.stream_end(stream_id, "client-gone")
                 return
             if kind == "mirror":
-                self._mirror_stream(resolved, width)
+                self._mirror_stream(session_id, width)
             else:
-                self._scoreboard_stream(resolved, width)
+                self._scoreboard_stream(session_id, width)
             A.stream_end(stream_id, "client-gone")
         except Exception:
             A.error(str(session_id), f"pane {kind} stream", {"path": self.path[:200]})
             A.stream_end(stream_id, "error")
             self._sse("error", {"error": "pane stream failed"})
 
-    def _pane_session(self, session_id: SessionId) -> SessionId | None:
-        """Resolve a pending pane identity to the session it becomes; None when
-        the client disconnects while waiting."""
-        while pending_session.is_pending(session_id):
-            bound = pending_session.bound(session_id)
-            if bound is not None:
-                return bound
-            if not self._sse_beat():
-                return None
-            time.sleep(STREAM_POLL_SECONDS)
-        return session_id
-
-    def _wait_for_registration(self, session_id: SessionId) -> bool:
-        """A freshly-bound pending session can beat its own registration by a
-        tick; hold the stream open until the registry knows it. False when the
-        client disconnects while waiting."""
+    def _wait_for_session(self, session_id: SessionId) -> bool:
+        """A pane process can connect before the session's row exists; hold the
+        stream open until it does. False when the client disconnects while
+        waiting."""
         while True:
-            try:
-                self._application().sessions.load(session_id)
+            if self._application().sessions.find_by_id(session_id) is not None:
                 return True
-            except UnknownSession:
-                if not self._sse_beat():
-                    return False
-                time.sleep(STREAM_POLL_SECONDS)
+            if not self._sse_beat():
+                return False
+            time.sleep(STREAM_POLL_SECONDS)
 
     def _mirror_stream(self, session_id: SessionId, width: int) -> None:
         application = self._application()
@@ -418,13 +401,15 @@ class _CanonicalMixin:
             return None
         application = self._application()
         try:
-            environment = json.loads(self.headers.get(ENVIRONMENT_HEADER) or "{}")
-            if not isinstance(environment, dict) or not all(
-                isinstance(key, str) and isinstance(value, str)
-                for key, value in environment.items()
-            ):
-                raise ValueError(f"{ENVIRONMENT_HEADER} must be a JSON string map")
-            output = application.hook_gateway.record(harness, payload, environment)
+            process_header = (self.headers.get(HARNESS_PROCESS_HEADER) or "").strip()
+            request = HarnessHookRequest(
+                payload=payload,
+                terminal_window_id=self.headers.get(TERMINAL_WINDOW_HEADER) or None,
+                harness_process_id=int(process_header) if process_header else None,
+                account_id=self.headers.get(ACCOUNT_ID_HEADER) or None,
+                account_display_name=self.headers.get(ACCOUNT_NAME_HEADER) or None,
+            )
+            output = application.hook_gateway.record(harness, request)
         except UnknownHookHarness as error:
             return self._json({"error": str(error)}, 404)
         except (KeyError, TypeError, ValueError) as error:
@@ -490,7 +475,6 @@ class _CanonicalMixin:
                     ),
                     "supports_accounts": plugin.info.supports_accounts,
                     "supports_terminal_input": plugin.terminal_probe is not None,
-                    "supports_memory": plugin.memory is not None,
                 }
             )
         return rows

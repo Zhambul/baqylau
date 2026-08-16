@@ -14,27 +14,28 @@ class RuntimeDatabaseError(RuntimeError):
     pass
 
 
-# The write split is the design: `session_harness` is written once per session by
-# SessionRegistry.register (a launch-time act), `raw_events` and `watches` by any
-# recorder process, and the three interpretation tables only by the interpreter.
-# Positions are not stored anywhere separate: a pulled source resumes from the
-# `source_position` of the last raw event carrying its `source_identity`, so
-# recorded progress can never drift from the evidence itself.
+# The write split is the design: `sessions` is written only by the interpreter's
+# session-upsert reaction (birth and upkeep derive from committed facts),
+# `raw_events` by any recorder process, and the interpretation tables only by
+# the interpreter. Positions are not stored anywhere separate: a pulled source
+# resumes from the `source_position` of the last raw event carrying its
+# `source_identity`, so recorded progress can never drift from the evidence.
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS event_store_metadata(
     name TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS session_harness(
+CREATE TABLE IF NOT EXISTS sessions(
     session_id TEXT PRIMARY KEY,
     lead_actor_id TEXT NOT NULL,
     harness TEXT NOT NULL,
-    native_session_id TEXT NOT NULL,
+    harness_session_id TEXT NOT NULL,
     source_reference TEXT NOT NULL,
     working_directory TEXT,
-    native_process_id INTEGER,
-    registered_at REAL NOT NULL
+    terminal_window_id TEXT,
+    harness_process_id INTEGER,
+    created_at REAL NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS raw_events(
@@ -50,7 +51,11 @@ CREATE TABLE IF NOT EXISTS raw_events(
     parent_actor_id TEXT,
     observed_at REAL NOT NULL,
     encoding TEXT NOT NULL,
-    payload BLOB NOT NULL
+    payload BLOB NOT NULL,
+    terminal_window_id TEXT,
+    harness_process_id INTEGER,
+    account_id TEXT,
+    account_display_name TEXT
 );
 
 CREATE INDEX IF NOT EXISTS index_raw_by_source
@@ -59,7 +64,7 @@ CREATE INDEX IF NOT EXISTS index_raw_by_source
 CREATE INDEX IF NOT EXISTS index_raw_by_session
     ON raw_events(session_id, observed_at);
 
-CREATE TABLE IF NOT EXISTS watches(
+CREATE TABLE IF NOT EXISTS operation_output(
     session_id TEXT NOT NULL,
     harness TEXT NOT NULL,
     operation_id TEXT NOT NULL,
@@ -71,6 +76,7 @@ CREATE TABLE IF NOT EXISTS watches(
     initial_size INTEGER NOT NULL,
     initial_modified_at INTEGER NOT NULL,
     wait_for_source_change INTEGER NOT NULL,
+    until TEXT NOT NULL CHECK(until IN ('operation_finished', 'session_finished')),
     state TEXT NOT NULL CHECK(state IN ('active', 'finishing')),
     created_at REAL NOT NULL,
     PRIMARY KEY(session_id, operation_id)
@@ -98,6 +104,8 @@ CREATE TABLE IF NOT EXISTS canonical_events(
     parent_actor_id TEXT,
     harness TEXT NOT NULL,
     occurred_at REAL,
+    terminal_window_id TEXT,
+    harness_process_id INTEGER,
     accepted_at REAL NOT NULL,
     payload TEXT NOT NULL
 );

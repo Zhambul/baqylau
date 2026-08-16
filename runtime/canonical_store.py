@@ -7,7 +7,7 @@ import sqlite3
 import time
 from dataclasses import dataclass
 
-from contracts.harness import RawEvent, TranslationError, TranslationResult
+from contracts.harness import RawEvent, TranslationResult
 from domain.codec import CanonicalEventCodec
 from domain.events import CanonicalEvent, EventPayload
 from domain.ids import ActorId, CanonicalEventId, RawEventId, SessionId
@@ -38,10 +38,10 @@ class CanonicalEventStore:
     """Writes the three interpretation tables; serves every canonical read.
 
     Raw evidence arrives through `RawEventRecorder`, never here. The backlog IS
-    the queue: `untranslated_raw_events` returns recorded evidence without a
+    the queue: `unverdicted_raw_events` returns recorded evidence without a
     verdict, and `store_translation` writes the verdict, the canonical events,
     and their provenance in one transaction — so every raw event leaves the
-    backlog exactly once, and a crash resumes precisely where it stopped.
+    backlog exactly once.
     """
 
     def __init__(
@@ -56,12 +56,12 @@ class CanonicalEventStore:
 
     # --- the backlog ---------------------------------------------------------
 
-    def untranslated_raw_events(self, limit: int) -> tuple[RawEvent, ...]:
-        """Recorded evidence without a verdict, for REGISTERED sessions only.
+    def unverdicted_raw_events(self, limit: int) -> tuple[RawEvent, ...]:
+        """Every raw event without a verdict, in arrival order.
 
-        Evidence may precede its session row (a hook can beat the wrapper's
-        registration); such rows simply wait here, auditable, and interpret the
-        moment registration lands.
+        There is no registration filter: facts may precede their session — a
+        session's first hook delivery translates into the `session.started`
+        fact that births the row.
         """
         if limit <= 0:
             raise ValueError("backlog limit must be positive")
@@ -69,47 +69,24 @@ class CanonicalEventStore:
             rows = connection.execute(
                 "SELECT raw_events.* FROM raw_events "
                 "LEFT JOIN translation_records USING(raw_event_id) "
-                "JOIN session_harness USING(session_id) "
                 "WHERE translation_records.raw_event_id IS NULL "
                 "ORDER BY raw_events.id LIMIT ?",
                 (limit,),
             ).fetchall()
         return tuple(self._raw_event(row) for row in rows)
 
-    def unregistered_raw_events(self, limit: int) -> tuple[RawEvent, ...]:
-        """Evidence whose session has no row yet, in arrival order.
-
-        This is how sessions launched outside a wrapper become visible: the
-        interpreter asks the owning harness to derive the session from this
-        evidence and registers it.
-        """
-        if limit <= 0:
-            raise ValueError("orphan limit must be positive")
-        with connect(self.database_path) as connection:
-            rows = connection.execute(
-                "SELECT raw_events.* FROM raw_events "
-                "LEFT JOIN session_harness USING(session_id) "
-                "WHERE session_harness.session_id IS NULL "
-                "ORDER BY raw_events.id LIMIT ?",
-                (limit,),
-            ).fetchall()
-        return tuple(self._raw_event(row) for row in rows)
-
-    def latest_raw_event(self, session_id: SessionId, source_type: str) -> RawEvent | None:
-        with connect(self.database_path) as connection:
-            row = connection.execute(
-                "SELECT * FROM raw_events WHERE session_id=? AND source_type=? "
-                "ORDER BY id DESC LIMIT 1",
-                (str(session_id), source_type),
-            ).fetchone()
-        return self._raw_event(row) if row is not None else None
-
     def store_translation(
         self,
         raw_event: RawEvent,
         translator_version: str,
         translation: TranslationResult,
-    ) -> tuple[StoredCanonicalEvent, ...]:
+    ) -> tuple[CanonicalEvent[EventPayload], ...]:
+        """Write the verdict, the events, and their provenance in one transaction.
+
+        Returns the NEWLY committed events only — a re-observation converging on
+        an existing fact adds provenance and is not returned, so reactions run
+        once per fact.
+        """
         completed_at = self.clock()
         with connect(self.database_path) as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -125,9 +102,9 @@ class CanonicalEventStore:
                     completed_at,
                 ),
             )
-            accepted: list[StoredCanonicalEvent] = []
+            accepted: list[CanonicalEvent[EventPayload]] = []
             for event_order, event in enumerate(translation.canonical_events):
-                stored_event, storage_result = self._record_canonical_event(
+                storage_result = self._record_canonical_event(
                     connection,
                     raw_event,
                     event,
@@ -145,24 +122,8 @@ class CanonicalEventStore:
                     ),
                 )
                 if storage_result == "accepted":
-                    accepted.append(stored_event)
+                    accepted.append(event)
             return tuple(accepted)
-
-    def store_translation_failure(
-        self,
-        raw_event: RawEvent,
-        translator_version: str,
-        error: TranslationError,
-    ) -> None:
-        reason = error.reason if error.context is None else f"{error.reason}: {error.context}"
-        with connect(self.database_path) as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            connection.execute(
-                "INSERT INTO translation_records("
-                "raw_event_id, translator_version, decision, reason, completed_at"
-                ") VALUES(?, ?, 'translation_failed', ?, ?)",
-                (str(raw_event.raw_event_id), translator_version, reason, self.clock()),
-            )
 
     # --- reads ----------------------------------------------------------------
 
@@ -323,6 +284,10 @@ class CanonicalEventStore:
             encoding=row["encoding"],
             payload=row["payload"],
             source_identity=row["source_identity"],
+            terminal_window_id=row["terminal_window_id"],
+            harness_process_id=row["harness_process_id"],
+            account_id=row["account_id"],
+            account_display_name=row["account_display_name"],
         )
 
     def _record_canonical_event(
@@ -331,7 +296,7 @@ class CanonicalEventStore:
         raw_event: RawEvent,
         event: CanonicalEvent[EventPayload],
         accepted_at: float,
-    ) -> tuple[StoredCanonicalEvent, str]:
+    ) -> str:
         if event.session_id != raw_event.session_id:
             raise CanonicalEventStoreError("canonical event does not belong to its raw event session")
         if event.harness != raw_event.harness:
@@ -345,7 +310,7 @@ class CanonicalEventStore:
         encoded = self.codec.encode(event)
         document = json.loads(encoded)
         existing = connection.execute(
-            "SELECT * FROM canonical_events WHERE event_id=?",
+            "SELECT 1 FROM canonical_events WHERE event_id=?",
             (str(event.event_id),),
         ).fetchone()
         if existing is not None:
@@ -355,12 +320,12 @@ class CanonicalEventStore:
             # first writer stays authoritative. Nothing is lost by not comparing the
             # bodies -- the later rendering is fully recoverable from its own raw event,
             # which is stored verbatim and linked below.
-            return self._stored_event(connection, existing), "deduplicated"
-        cursor = connection.execute(
+            return "deduplicated"
+        connection.execute(
             "INSERT INTO canonical_events("
             "event_id, schema_version, event_type, session_id, actor_id, turn_id, parent_actor_id, "
-            "harness, occurred_at, accepted_at, payload"
-            ") VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "harness, occurred_at, terminal_window_id, harness_process_id, accepted_at, payload"
+            ") VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 document["event_id"],
                 document["schema_version"],
@@ -371,11 +336,13 @@ class CanonicalEventStore:
                 document["parent_actor_id"],
                 document["harness"],
                 document["occurred_at"],
+                document["terminal_window_id"],
+                document["harness_process_id"],
                 accepted_at,
                 json.dumps(document["payload"], ensure_ascii=False, separators=(",", ":"), sort_keys=True),
             ),
-        ).lastrowid
-        return StoredCanonicalEvent(cursor, accepted_at, event, (raw_event.raw_event_id,)), "accepted"
+        )
+        return "accepted"
 
     def _stored_event(self, connection: sqlite3.Connection, row: sqlite3.Row) -> StoredCanonicalEvent:
         raw_rows = connection.execute(
@@ -432,11 +399,13 @@ class CanonicalEventStore:
             "event_id": row["event_id"],
             "event_type": row["event_type"],
             "harness": row["harness"],
+            "harness_process_id": row["harness_process_id"],
             "occurred_at": row["occurred_at"],
             "parent_actor_id": row["parent_actor_id"],
             "payload": json.loads(row["payload"]),
             "schema_version": row["schema_version"],
             "session_id": row["session_id"],
+            "terminal_window_id": row["terminal_window_id"],
             "turn_id": row["turn_id"],
         }
         return json.dumps(document, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")

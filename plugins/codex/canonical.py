@@ -7,24 +7,22 @@ import hashlib
 import json
 import os
 import re
-import subprocess
 import time
 from datetime import datetime
 from typing import Literal
 
 from contracts.harness import (
-    HarnessCanonicalTranslator,
     HarnessRawEventSource,
     HarnessRawEventSources,
-    HarnessSessionEvidence,
+    HarnessTranslator,
     RawEvent,
     RawEventSourceContext,
     Session,
     TranslationError,
     TranslationResult,
+    canonical_event,
 )
 from domain.events import (
-    ActorNameChanged,
     ActorStarted,
     ActorMessageSent,
     AttentionRequested,
@@ -44,7 +42,6 @@ from domain.events import (
     OperationProgressed,
     OperationStarted,
     ReasoningCreated,
-    SessionFinished,
     SessionStarted,
     TaskChanged,
     TaskListChanged,
@@ -63,7 +60,6 @@ from domain.ids import (
     SessionId,
     TaskId,
     TurnId,
-    stable_event_id,
 )
 from domain.values import AttentionChoice, AttentionPrompt, ModelReference, StructuredContent, TextContent, TokenUsage
 from plugins.codex import rollout
@@ -76,7 +72,7 @@ def _model_reference(native_id: str) -> ModelReference:
     return ModelReference(native_id, native_id, native_id)
 
 
-def _native_session_id(path: str) -> str:
+def _harness_session_id(path: str) -> str:
     match = ROLLOUT_NAME.search(os.path.basename(path))
     return match.group(1) if match else os.path.splitext(os.path.basename(path))[0]
 
@@ -113,45 +109,16 @@ def _rollout_paths() -> tuple[str, ...]:
     return tuple(sorted(glob.glob(pattern)))
 
 
-def rollout_session(path: str, working_directory: str | None = None) -> Session | None:
-    """The session a LEAD rollout names — None for subagent rollouts and non-rollouts."""
+def lead_rollout(path: str) -> bool:
+    """Whether the path names a LEAD rollout — subagent rollouts and
+    non-rollouts announce no session of their own."""
     path = os.path.realpath(path)
     if not os.path.isfile(path) or not ROLLOUT_NAME.search(os.path.basename(path)):
-        return None
+        return False
     metadata = _session_metadata(path)
     if not metadata:
-        return None
-    if metadata.get("thread_source") == "subagent" or metadata.get("parent_thread_id"):
-        return None
-    native_session_id = _native_session_id(path)
-    return Session(
-        session_id=SessionId(native_session_id),
-        lead_actor_id=_lead_actor(SessionId(native_session_id)),
-        native_session_id=native_session_id,
-        source_reference=path,
-        working_directory=(metadata.get("cwd") or working_directory or None),
-    )
-
-
-class CodexSessionEvidence(HarnessSessionEvidence):
-    """A Codex hook payload points at a rollout; only a LEAD rollout is a session."""
-
-    def from_raw_event(self, raw_event: RawEvent) -> Session | None:
-        if raw_event.source_type != "hook":
-            return None
-        try:
-            document = json.loads(raw_event.payload)
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            return None
-        if not isinstance(document, dict):
-            return None
-        path = str(document.get("transcript_path") or "")
-        if not path:
-            return None
-        session = rollout_session(path, document.get("cwd") or None)
-        if session is None or session.session_id != raw_event.session_id:
-            return None
-        return session
+        return False
+    return metadata.get("thread_source") != "subagent" and not metadata.get("parent_thread_id")
 
 
 class CodexRolloutRawEventSource(HarnessRawEventSource):
@@ -218,77 +185,6 @@ class CodexRolloutRawEventSource(HarnessRawEventSource):
         return f"{self.actor_relation}_rollout" if self.actor_relation else "rollout"
 
 
-def _codex_process_is_running(process_id: int) -> bool:
-    completed = subprocess.run(
-        ["ps", "-o", "comm=", "-p", str(process_id)],
-        capture_output=True,
-        text=True,
-        timeout=2,
-    )
-    return (
-        completed.returncode == 0
-        and os.path.basename(completed.stdout.strip()) == "codex"
-    )
-
-
-class CodexProcessRawEventSource(HarnessRawEventSource):
-    """Emit the one session finish observation when the exact Codex process ends.
-
-    Position encoding: a latch — the wrapper records `started` under the same
-    identity, and `finished` (from the wrapper's exit or from here) means the
-    finish has already been observed.
-    """
-
-    def __init__(self, session: Session) -> None:
-        if session.native_process_id is None:
-            raise ValueError("Codex process source requires a native process ID")
-        self.session = session
-        self.source_identity = (
-            f"codex:process:{session.session_id}:{session.native_process_id}"
-        )
-
-    def read(self, after_position: str | None) -> tuple[RawEvent, ...]:
-        if after_position == "finished":
-            return ()
-        process_id = self.session.native_process_id
-        if process_id is None or _codex_process_is_running(process_id):
-            return ()
-        return (process_event(self.session, "finished"),)
-
-
-def process_event(
-    session: Session,
-    state: Literal["started", "finished"],
-) -> RawEvent:
-    """Build the exact raw process-boundary observation for a Codex session."""
-    process_id = session.native_process_id
-    if process_id is None:
-        raise ValueError("Codex process observation requires a native process ID")
-    document = {
-        "process_id": process_id,
-        "rollout_path": session.source_reference,
-        "state": state,
-    }
-    if state == "started":
-        document["working_directory"] = session.working_directory or ""
-    return RawEvent(
-        raw_event_id=RawEventId(
-            f"codex:process:{session.session_id}:{process_id}:{state}"
-        ),
-        harness="codex",
-        source_type="process",
-        source_name=f"process:{process_id}",
-        source_position=state,
-        session_id=session.session_id,
-        actor_id=session.lead_actor_id,
-        parent_actor_id=None,
-        observed_at=time.time(),
-        encoding="json",
-        payload=json.dumps(document, separators=(",", ":"), sort_keys=True).encode("utf-8"),
-        source_identity=f"codex:process:{session.session_id}:{process_id}",
-    )
-
-
 def _timestamp(value) -> float | None:
     if isinstance(value, (int, float)):
         return float(value)
@@ -352,7 +248,7 @@ class CodexRawEventSources(HarnessRawEventSources):
         self._child_rollouts: dict[str, tuple[str, ...]] = {}
         self._next_child: dict[str, int] = {}
 
-    def _next_child_rollout(self, parent_native_session_id: str) -> tuple[str, ...]:
+    def _next_child_rollout(self, parent_harness_session_id: str) -> tuple[str, ...]:
         rollout_paths = _rollout_paths()
         if rollout_paths != self._known_rollout_paths:
             children: dict[str, list[str]] = {}
@@ -365,21 +261,19 @@ class CodexRawEventSources(HarnessRawEventSources):
                 parent_id: tuple(paths)
                 for parent_id, paths in children.items()
             }
-        child_rollouts = self._child_rollouts.get(parent_native_session_id, ())
+        child_rollouts = self._child_rollouts.get(parent_harness_session_id, ())
         if not child_rollouts:
             return ()
-        position = self._next_child.get(parent_native_session_id, 0) % len(child_rollouts)
-        self._next_child[parent_native_session_id] = position + 1
+        position = self._next_child.get(parent_harness_session_id, 0) % len(child_rollouts)
+        self._next_child[parent_harness_session_id] = position + 1
         return (child_rollouts[position],)
 
     def for_session(self, session: Session) -> tuple[HarnessRawEventSource, ...]:
         sources: list[HarnessRawEventSource] = []
-        owns_lead_session = rollout_session(session.source_reference) is not None
+        owns_lead_session = lead_rollout(session.source_reference)
         if owns_lead_session:
             sources.append(CodexRolloutRawEventSource(session.source_context))
-            if session.native_process_id is not None:
-                sources.append(CodexProcessRawEventSource(session))
-        for child_path in self._next_child_rollout(session.native_session_id):
+        for child_path in self._next_child_rollout(session.harness_session_id):
             child_body_position = rollout.subagent_body_offset(child_path)
             if child_body_position == 0:
                 continue
@@ -388,7 +282,7 @@ class CodexRawEventSources(HarnessRawEventSources):
                     RawEventSourceContext(
                         session_id=session.session_id,
                         lead_actor_id=session.lead_actor_id,
-                        actor_id=ActorId(_native_session_id(child_path)),
+                        actor_id=ActorId(_harness_session_id(child_path)),
                         parent_actor_id=session.lead_actor_id,
                         source_reference=child_path,
                     ),
@@ -399,7 +293,7 @@ class CodexRawEventSources(HarnessRawEventSources):
         return tuple(sources)
 
 
-class CodexCanonicalTranslator(HarnessCanonicalTranslator):
+class CodexCanonicalTranslator(HarnessTranslator):
     def __init__(self) -> None:
         self._collaboration_calls: dict[tuple[str, str], tuple[str, dict]] = {}
         self._process_operations: dict[tuple[str, str], OperationId] = {}
@@ -472,32 +366,13 @@ class CodexCanonicalTranslator(HarnessCanonicalTranslator):
         if not isinstance(document, dict):
             raise TranslationError("Codex rollout record is not an object", context=raw_event.source_position)
 
-        if raw_event.source_type == "process":
-            state = document.get("state")
-            if state == "started":
-                return TranslationResult(
-                    tuple(self._session_started_events(
-                        raw_event,
-                        str(document.get("working_directory") or ""),
-                        identity=str(document.get("process_id")),
-                    )),
-                    "translated",
-                )
-            if state == "finished":
-                event = self._event(
-                    raw_event,
-                    "session",
-                    str(document.get("process_id")),
-                    "finished",
-                    SessionFinished("unknown", "process_exited"),
-                )
-                return TranslationResult((event,), "translated")
-            raise TranslationError(
-                "invalid Codex process state",
-                context=raw_event.source_position,
-            )
-
         if raw_event.source_type == "hook":
+            if raw_event.parent_actor_id is not None:
+                return TranslationResult(
+                    (),
+                    "ignored_nonsemantic",
+                    "subagent delivery; its activity arrives through the lead's rollout",
+                )
             events = self._translate_hook(raw_event, document)
             if events:
                 return TranslationResult(tuple(events), "translated")
@@ -533,6 +408,7 @@ class CodexCanonicalTranslator(HarnessCanonicalTranslator):
                 tuple(self._session_started_events(
                     raw_event,
                     metadata.get("cwd") or "",
+                    os.path.realpath(raw_event.source_name),
                 )),
                 "translated",
             )
@@ -556,7 +432,15 @@ class CodexCanonicalTranslator(HarnessCanonicalTranslator):
             or raw_event.source_position
         )
         if hook_name == "SessionStart":
-            return self._session_started_events(raw_event, document.get("cwd") or "")
+            path = str(document.get("transcript_path") or "")
+            if not lead_rollout(path):
+                # A subagent thread announces no session of its own.
+                return []
+            return self._session_started_events(
+                raw_event,
+                document.get("cwd") or "",
+                os.path.realpath(path),
+            )
         if hook_name == "PreCompact":
             before_tokens = document.get("before_tokens")
             payload = CompactionStarted(before_tokens if isinstance(before_tokens, int) else None)
@@ -569,48 +453,25 @@ class CodexCanonicalTranslator(HarnessCanonicalTranslator):
                 after_tokens if isinstance(after_tokens, int) else None,
             )
             return [self._event(raw_event, "compaction", native_identity, "finished", payload)]
-        if hook_name == "SubagentStart" and document.get("agent_id"):
-            events = [
-                self._event(
-                    raw_event,
-                    "actor",
-                    str(raw_event.actor_id),
-                    "started",
-                    ActorStarted("codex", "child"),
-                )
-            ]
-            if document.get("agent_type"):
-                events.append(
-                    self._event(
-                        raw_event,
-                        "actor",
-                        str(raw_event.actor_id),
-                        "name",
-                        ActorNameChanged(str(document["agent_type"])),
-                    )
-                )
-            return events
-        if hook_name == "SubagentStop" and document.get("agent_id"):
-            return []
         return []
 
     def _session_started_events(
         self,
         raw_event: RawEvent,
         working_directory: str,
+        source_reference: str,
         *,
-        identity: str | None = None,
         occurred_at: float | None = None,
     ) -> list[CanonicalEvent]:
-        session_identity = identity or str(raw_event.session_id)
         return [
             self._event(
                 raw_event,
                 "session",
-                session_identity,
+                str(raw_event.session_id),
                 "started",
                 SessionStarted(
                     working_directory=working_directory,
+                    source_reference=source_reference,
                     resumed_from=None,
                     title=None,
                     model=None,
@@ -1175,20 +1036,7 @@ class CodexCanonicalTranslator(HarnessCanonicalTranslator):
         turn_id: TurnId | None = None,
         occurred_at: float | None = None,
     ) -> CanonicalEvent:
-        return CanonicalEvent(
-            event_id=stable_event_id(
-                harness="codex",
-                session_id=raw_event.session_id,
-                actor_id=raw_event.actor_id,
-                subject_type=subject_type,
-                subject_id=subject_id,
-                phase=phase,
-            ),
-            session_id=raw_event.session_id,
-            actor_id=raw_event.actor_id,
-            turn_id=turn_id,
-            parent_actor_id=raw_event.parent_actor_id,
-            harness="codex",
-            occurred_at=occurred_at,
-            payload=payload,
+        return canonical_event(
+            raw_event, subject_type, subject_id, phase, payload,
+            turn_id=turn_id, occurred_at=occurred_at,
         )

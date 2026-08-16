@@ -94,6 +94,8 @@ def event(event_id, payload, *, actor_id=LEAD_ACTOR_ID):
         None,
         "example",
         10.0,
+        None,
+        None,
         payload,
     )
 
@@ -131,7 +133,7 @@ def services(tmp_path, events):
 def test_backlog_and_live_use_the_same_stable_item_identity(tmp_path):
     operation_id = OperationId("operation-one")
     events = [
-        event("session", SessionStarted("/work", None, None, None, None, None)),
+        event("session", SessionStarted("/work", "fixture.jsonl", None, None, None, None, None)),
         event(
             "start",
             OperationStarted(
@@ -155,7 +157,7 @@ def test_backlog_and_live_use_the_same_stable_item_identity(tmp_path):
 
 
 def test_backlog_cursor_cannot_skip_an_event_committed_during_projection(tmp_path, monkeypatch):
-    events = [event("session", SessionStarted("/work", None, None, None, None, None))]
+    events = [event("session", SessionStarted("/work", "fixture.jsonl", None, None, None, None, None))]
     store, activity, stream, _content = services(tmp_path, events)
     original_latest_cursor = store.latest_cursor
 
@@ -195,7 +197,7 @@ def test_backlog_cursor_cannot_skip_an_event_committed_during_projection(tmp_pat
 def test_stream_frame_never_projects_events_after_its_cursor(tmp_path):
     operation_id = OperationId("operation-one")
     events = [
-        event("session", SessionStarted("/work", None, None, None, None, None)),
+        event("session", SessionStarted("/work", "fixture.jsonl", None, None, None, None, None)),
         event(
             "start",
             OperationStarted(
@@ -222,7 +224,7 @@ def test_stream_frame_never_projects_events_after_its_cursor(tmp_path):
 def test_actor_scope_advances_the_cursor_across_invisible_events(tmp_path):
     other_actor = ActorId("other-actor")
     events = [
-        event("session", SessionStarted("/work", None, None, None, None, None)),
+        event("session", SessionStarted("/work", "fixture.jsonl", None, None, None, None, None)),
         event(
             "message",
             MessageCreated(MessageId("message-one"), "assistant", TextContent("hidden"), "final", None),
@@ -238,7 +240,7 @@ def test_actor_scope_advances_the_cursor_across_invisible_events(tmp_path):
 
 
 def test_one_canonical_frame_contains_all_changed_focused_projections(tmp_path):
-    events = [event("session", SessionStarted("/work", None, None, None, None, None))]
+    events = [event("session", SessionStarted("/work", "fixture.jsonl", None, None, None, None, None))]
     _store, _activity, stream, _content = services(tmp_path, events)
     frame = stream.frame(SESSION_ID, 0, ActivityScope())
     assert frame is not None
@@ -250,7 +252,7 @@ def test_one_canonical_frame_contains_all_changed_focused_projections(tmp_path):
 
 
 def test_session_snapshot_uses_one_fixed_canonical_cursor(tmp_path):
-    events = [event("session", SessionStarted("/work", None, None, None, None, None))]
+    events = [event("session", SessionStarted("/work", "fixture.jsonl", None, None, None, None, None))]
     store, _activity, _stream, _content = services(tmp_path, events)
     queries = store.queries()
 
@@ -299,7 +301,7 @@ def test_session_snapshot_projects_background_jobs_and_monitors_without_legacy_r
     job_id = OperationId("job-one")
     monitor_id = OperationId("monitor-one")
     events = [
-        event("session", SessionStarted("/work", None, None, None, None, None)),
+        event("session", SessionStarted("/work", "fixture.jsonl", None, None, None, None, None)),
         event(
             "job-start",
             OperationStarted(
@@ -356,7 +358,7 @@ def test_content_reference_resolves_directly_from_the_canonical_event(tmp_path):
     operation_id = OperationId("operation-one")
     large = TextContent("x" * 5000)
     events = [
-        event("session", SessionStarted("/work", None, None, None, None, None)),
+        event("session", SessionStarted("/work", "fixture.jsonl", None, None, None, None, None)),
         event(
             "start",
             OperationStarted(
@@ -382,7 +384,7 @@ def test_streaming_operation_content_keeps_its_exact_canonical_reference(tmp_pat
     first = TextContent("x" * 3000)
     second = TextContent("y" * 3000)
     events = [
-        event("session", SessionStarted("/work", None, None, None, None, None)),
+        event("session", SessionStarted("/work", "fixture.jsonl", None, None, None, None, None)),
         event(
             "start",
             OperationStarted(
@@ -415,7 +417,7 @@ def test_streaming_operation_content_keeps_its_exact_canonical_reference(tmp_pat
 def test_file_activity_keeps_the_existing_visible_html_and_canonical_content_reference(tmp_path):
     operation_id = OperationId("file-one")
     events = [
-        event("session", SessionStarted("/work", None, None, None, None, None)),
+        event("session", SessionStarted("/work", "fixture.jsonl", None, None, None, None, None)),
         event(
             "operation",
             OperationStarted(operation_id, "file_edit", "edit", "foreground", None, None, None),
@@ -451,7 +453,7 @@ def test_file_activity_keeps_the_existing_visible_html_and_canonical_content_ref
 def test_file_activity_progress_reference_resolves_direct_canonical_content(tmp_path):
     operation_id = OperationId("file-one")
     events = [
-        event("session", SessionStarted("/work", None, None, None, None, None)),
+        event("session", SessionStarted("/work", "fixture.jsonl", None, None, None, None, None)),
         event(
             "operation",
             OperationStarted(operation_id, "file_read", "read", "foreground", None, None, None),
@@ -473,7 +475,7 @@ def test_file_activity_progress_reference_resolves_direct_canonical_content(tmp_
 def test_visible_attention_task_and_compaction_facts_are_dashboard_items(tmp_path):
     attention_id = AttentionId("question-one")
     events = [
-        event("session", SessionStarted("/work", None, None, None, None, None)),
+        event("session", SessionStarted("/work", "fixture.jsonl", None, None, None, None, None)),
         event("actor", ActorStarted("claude", "lead")),
         event(
             "question",

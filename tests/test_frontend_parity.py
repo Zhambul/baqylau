@@ -143,16 +143,11 @@ def test_manifest_request_carries_cloudflare_access_credentials():
         'crossorigin="use-credentials"' in source
 
 
-def test_header_and_memory_interactions_are_unchanged():
+def test_header_interactions_are_unchanged():
     header = run(
         "headeract.js",
         "dashboard/static/app.10-control.js",
         "dashboard/static/app.11-chrome.js",
-    )
-    memory = run(
-        "memtree.js",
-        "dashboard/static/app.11-chrome.js",
-        "dashboard/static/app.11-memory.js",
     )
     assert header["idle"]["⇆ migrate"]["disabled"] is False
     # the ✦ button follows the session's model.changed, not the ctx probe's
@@ -163,10 +158,6 @@ def test_header_and_memory_interactions_are_unchanged():
     assert header["model"]["switched_clears_pending"]["pending"] == ""
     # with no session model yet, the probe is still the fallback
     assert header["model"]["claude"]["label"] == "✦ opus-4.8 ▾"
-    assert memory["opened"] == [
-        {"path": "/w/platform/concepts/architecture.md", "reset": True}
-    ]
-    assert memory["deadHitHasHandler"] is False
 
 
 def test_new_session_sections_task_order_and_density_are_unchanged():
@@ -178,7 +169,6 @@ def test_new_session_sections_task_order_and_density_are_unchanged():
     sections = run(
         "sections.js",
         "dashboard/static/app.11-chrome.js",
-        "dashboard/static/app.11-memory.js",
     )
     task_order = run("taskorder.js", "dashboard/static/app.05-session.js")
     view_mode = run("viewmode.js", "dashboard/static/app.05-session.js")

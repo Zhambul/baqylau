@@ -21,15 +21,10 @@ def run(session_id: str) -> None:
 
 
 def main() -> None:
-    if len(sys.argv) == 3 and sys.argv[1] == "--pending" and sys.argv[2]:
-        sys.stdout.write("\033[H\033[2J\033[3J ⬡ starting session…\033[0m")
-        sys.stdout.flush()
-        run(sys.argv[2])
-        return
     if len(sys.argv) == 2 and sys.argv[1]:
         run(sys.argv[1])
         return
-    raise SystemExit("usage: app/scoreboard_process.py SESSION_ID | --pending PENDING_ID")
+    raise SystemExit("usage: app/scoreboard_process.py SESSION_ID")
 
 
 if __name__ == "__main__":

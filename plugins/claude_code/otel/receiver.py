@@ -19,7 +19,7 @@ from contracts.harness import RawEvent
 from domain.ids import RawEventId, SessionId
 from plugins.claude_code.otel.config import port
 from runtime.recorder import RawEventRecorder
-from runtime.sessions import SessionRegistry
+from runtime.sessions import SessionStore
 
 
 def idle_seconds() -> float:
@@ -41,11 +41,11 @@ def _session_ids(document: dict) -> tuple[SessionId, ...]:
     return tuple(sorted(session_ids, key=str))
 
 
-def deliver(recorder: RawEventRecorder, sessions: SessionRegistry, raw_body: bytes) -> int:
+def deliver(recorder: RawEventRecorder, sessions: SessionStore, raw_body: bytes) -> int:
     document = json.loads(raw_body)
     delivered = 0
     for session_id in _session_ids(document):
-        session = sessions.find(session_id)
+        session = sessions.find_by_id(session_id)
         if session is None:
             continue
         digest = hashlib.sha256(str(session_id).encode() + b"\0" + raw_body).hexdigest()
@@ -105,7 +105,7 @@ class ReceiverServer(HTTPServer):
 def serve() -> None:
     database_path = os.path.join(data_directory(), "events.db")
     recorder = RawEventRecorder(database_path)
-    sessions = SessionRegistry(database_path)
+    sessions = SessionStore(database_path)
     try:
         server = ReceiverServer(("127.0.0.1", port()), recorder, sessions)
     except OSError:

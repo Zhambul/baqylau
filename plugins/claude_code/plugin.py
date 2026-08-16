@@ -11,14 +11,15 @@ from domain.codec import SCHEMA_VERSION
 from plugins.claude_code.canonical import (
     ClaudeCanonicalTranslator,
     ClaudeRawEventSources,
-    ClaudeSessionEvidence,
 )
-from plugins.claude_code.hooks import ClaudeHookGateway
+from plugins.claude_code.hooks import CLI_PROCESS_NAME, ClaudeHookGateway
 from plugins.claude_code.catalog import ClaudeCodeCatalog
 from plugins.claude_code.controller import controller
 from plugins.claude_code.launcher import ClaudeCodeLauncher
-from plugins.claude_code.memory_port import memory_reader
-from plugins.claude_code.reactor import reactor
+from plugins.claude_code.reactors import (
+    ClaudeAccountMigrationCanonicalEventReactor,
+    ClaudeOtelCanonicalEventReactor,
+)
 from plugins.claude_code.terminal_probe import ClaudeCodeTerminalProbe
 from plugins.claude_code.usage_rows import usage_reader
 from plugins.claude_code import rewindmenu
@@ -49,8 +50,9 @@ plugin = HarnessPlugin(
     info=HarnessInfo(
         name="claude_code",
         display_name="Claude Code",
-        plugin_version="2",
+        plugin_version="3",
         canonical_version=SCHEMA_VERSION,
+        cli_process_name=CLI_PROCESS_NAME,
         supports_attachments=True,
         default_for_launch=True,
         supports_accounts=True,
@@ -60,12 +62,13 @@ plugin = HarnessPlugin(
     hooks=ClaudeHookGateway(),
     sources=ClaudeRawEventSources(),
     translator=ClaudeCanonicalTranslator(),
-    session_evidence=ClaudeSessionEvidence(),
-    reactor=reactor,
+    reactors=(
+        ClaudeOtelCanonicalEventReactor(),
+        ClaudeAccountMigrationCanonicalEventReactor(),
+    ),
     controller=controller,
     catalog=ClaudeCodeCatalog(),
     usage=usage_reader,
-    memory=memory_reader,
     launcher=ClaudeCodeLauncher(),
     terminal_probe=ClaudeCodeTerminalProbe(),
 )

@@ -126,8 +126,7 @@ def sse_events(response):
 def pane_frames(session_id: str, kind: str):
     """Yield ANSI frames for one pane stream, forever.
 
-    Owns the whole client loop: connect at the current terminal width,
-    re-resolve a pending identity from the server's `session` event, repaint
+    Owns the whole client loop: connect at the current terminal width, repaint
     from `frame` events, reconnect immediately when the terminal is resized
     (the server re-renders its shared model at the new width) and after
     RECONNECT_DELAY_SECONDS when the daemon is unreachable or restarting."""

@@ -17,10 +17,12 @@ COMMANDS = frozenset({"toggle", "grow", "shrink", "reset", "setpct"})
 
 
 def request_body(arguments: list[str]) -> dict:
+    import frontends
+
     command = arguments[0]
     body = {
         "command": command,
-        "window_id": os.environ.get("KITTY_WINDOW_ID", ""),
+        "window_id": frontends.current_window_id() or "",
         "working_directory": os.getcwd(),
     }
     if command in ("grow", "shrink") and len(arguments) > 1:

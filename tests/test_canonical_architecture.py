@@ -214,12 +214,13 @@ def test_session_lifecycle_has_no_per_harness_implementation():
 
 
 def test_recorder_entries_never_build_the_application():
-    """A wrapper or the otel receiver is a RECORDER: it appends evidence and
-    exits. Building the application graph in one made every launch pay the
-    whole bootstrap and let any bug in it lose evidence."""
+    """A recorder (the otel receiver) appends evidence and exits. Building the
+    application graph in one made every launch pay the whole bootstrap and let
+    any bug in it lose evidence. The launch wrappers are gone entirely:
+    launching is just running the CLI."""
+    assert not (ROOT / "plugins" / "claude_code" / "command.py").exists()
+    assert not (ROOT / "plugins" / "codex" / "command.py").exists()
     recorder_entries = (
-        ROOT / "plugins" / "claude_code" / "command.py",
-        ROOT / "plugins" / "codex" / "command.py",
         ROOT / "plugins" / "claude_code" / "otel" / "receiver.py",
     )
     violations = []

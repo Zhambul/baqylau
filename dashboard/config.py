@@ -57,11 +57,14 @@ CLIENTLOG_STR_MAX = 200
 # formats (docs/dashboard.md, *Web attachments*).
 IMAGE_MIMES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
 POST_HEADER = "X-Baqylau"
-# A hook delivery's body is the exact stdin bytes, so the env subset the hook
-# process ships (its kitty window, its account variables) rides this header as
-# a JSON object. One fact, two consumers: the thin hook client stamps it, the
-# hook-delivery endpoint reads it.
-ENVIRONMENT_HEADER = "X-Baqylau-Environment"
+# A hook delivery's body is the exact stdin bytes, so what the hook process
+# observed around itself rides these four flat headers. One fact, two
+# consumers each: the thin hook client stamps them, the hook-delivery endpoint
+# reads them.
+TERMINAL_WINDOW_HEADER = "X-Baqylau-Terminal-Window"
+HARNESS_PROCESS_HEADER = "X-Baqylau-Harness-Process"
+ACCOUNT_ID_HEADER = "X-Baqylau-Account-Id"
+ACCOUNT_NAME_HEADER = "X-Baqylau-Account-Name"
 # The dashboard's externally reachable origin.  It is one fact with two
 # consumers: browser POST admission and notification deep links.  Keeping
 # those separate allowed a dashboard started outside launchd to generate

@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import os
-import sys
-
 from contracts.harness import HarnessLaunchPlan, HarnessLauncher, LaunchRejected, LaunchRequest
 from plugins.claude_code import account
 
@@ -29,11 +26,11 @@ class ClaudeCodeLauncher(HarnessLauncher):
             arguments.extend(("--effort", request.effort))
         if prompt.strip():
             arguments.append(prompt)
-        # Launch through the wrapper: it registers the session BEFORE the
-        # harness can fire a hook, and records the process-exit observation.
-        command_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "command.py")
+        # Launching is just running the CLI: the tab opens in a login shell, so
+        # the account alias resolves exactly as it does when typed by hand. The
+        # session announces itself through its own hook evidence.
         return HarnessLaunchPlan(
-            command=sys.executable,
-            arguments=(command_path, account_alias or "claude", *arguments),
+            command=account_alias or "claude",
+            arguments=tuple(arguments),
             title="Claude Code",
         )

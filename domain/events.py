@@ -39,6 +39,7 @@ class EventPayload:
 @dataclass(frozen=True)
 class SessionStarted(EventPayload):
     working_directory: str
+    source_reference: str
     resumed_from: SessionId | None
     title: str | None
     model: ModelReference | None
@@ -168,6 +169,22 @@ class OperationFinished(EventPayload):
     outcome: Outcome
     result: Content | None
     exit_code: int | None
+
+
+@dataclass(frozen=True)
+class OperationOutputLocated(EventPayload):
+    """The operation's output can be read from this file — emitted ONCE per
+    operation, when the location becomes known (not per chunk of output; the
+    chunks are separate evidence, read later by the collect phase)."""
+
+    operation_id: OperationId
+    source_path: str
+    chunk_source_type: str
+    delete_source: bool
+    initial_size: int
+    initial_modified_at: int
+    wait_for_source_change: bool
+    until: Literal["operation_finished", "session_finished"]
 
 
 @dataclass(frozen=True)
@@ -303,6 +320,8 @@ class CanonicalEvent(Generic[EventPayloadType]):
     parent_actor_id: ActorId | None
     harness: str
     occurred_at: float | None
+    terminal_window_id: str | None
+    harness_process_id: int | None
     payload: EventPayloadType
 
 
@@ -329,6 +348,7 @@ EVENT_TYPES: dict[type[EventPayload], str] = {
     OperationInputProvided: "operation.input_provided",
     OperationProgressed: "operation.progressed",
     OperationFinished: "operation.finished",
+    OperationOutputLocated: "operation.output_located",
     FileAccessed: "file.accessed",
     TaskChanged: "task.changed",
     TaskListChanged: "task.list_changed",

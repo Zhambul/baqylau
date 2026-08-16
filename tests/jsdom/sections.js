@@ -7,8 +7,7 @@
 // existing cards, order, empty labels, breadcrumbs, and badges. It also proves
 // the browser no longer starts a secondary fetch or polling timer.
 //
-// Usage: node tests/jsdom/sections.js dashboard/static/app.11-chrome.js \
-//                                      dashboard/static/app.11-memory.js
+// Usage: node tests/jsdom/sections.js dashboard/static/app.11-chrome.js
 // SKIPPED when `node` is absent (docs/testing.md) — never a build requirement.
 "use strict";
 const fs = require("fs");
@@ -65,8 +64,6 @@ vm.createContext(sandbox);
 // `const SECTIONS = …` is a LEXICAL top-level binding, so it never becomes a
 // property of the vm global the way a `function` declaration does. Evaluate the
 // source and the export in ONE script so they share that scope.
-// every app part on argv, concatenated into ONE script so lexical top-level
-// bindings (const SECTIONS) are shared across the chrome and memory parts.
 vm.runInContext(process.argv.slice(2).map(p => fs.readFileSync(p, "utf8")).join("\n")
                 + "\n;globalThis.SECTIONS = SECTIONS;",
                 sandbox, { filename: process.argv[2] });
@@ -84,7 +81,6 @@ const FIXTURES = {
     { task: "j-done", command: "npm test", live: false, started_at: 50,
       ended_at: 90, lines: 4, end_reason: "writer gone" },
   ],
-  memory: [{ path: "/w/a.md", name: "a", verb: "Read", count: 1, ts: 5 }],
 };
 
 function freshSes() {
@@ -92,11 +88,10 @@ function freshSes() {
     tab: null, body: new El("div"),
     monitors: null, monitorFocus: null, monPoll: null,
     jobs: null, jobFocus: null, jobPoll: null,
-    memory: null, memTree: null, memShut: null, noteTrail: null, memWrap: null,
     monitorsGrid: null, jobsGrid: null,
     // the REAL setTabBadge runs (the source's own declaration shadows any
     // stub), so give it the meta map and the three tab anchors it patches
-    meta: {}, monTab: new El("a"), jobTab: new El("a"), memoryTab: new El("a"),
+    meta: {}, monTab: new El("a"), jobTab: new El("a"),
   };
   sandbox.S.sessionView = sessionView;
   return sessionView;

@@ -23,7 +23,6 @@ function renderSessionChrome(tab) {
   sessionView.monitorFocus = null;    // …nor monitor-focused (a drill-down sets it again)
   sessionView.jobFocus = null;        // …nor background-job-focused
   const meta = sessionView.meta || {};
-  if (tab === "memory" && !meta.memory_scope) tab = "mirror";
   $view.textContent = "";
 
   const head = el("div", "shead");
@@ -440,14 +439,10 @@ function chromeTabs(sessionView, meta, tab) {
   // Background jobs follow the same snapshot-backed count rule.
   sessionView.jobTab = mk("jobs", "jobs",
                   sessionView.jobs ? sessionView.jobs.length : (meta.job_count || 0));
-  if (meta.memory_scope)
-    sessionView.memoryTab = mk("memory", "memory",
-      sessionView.memory ? sectionCount(SECTIONS.memory, sessionView) : (meta.memory_count || 0));
   sessionView.errTab = mk("errors", "errors", meta.error_count || 0);   // live ⚠ count patches it
-  // errors and the unscoped extension tabs (memory) have no agent dimension (a
-  // note is the team's, an error is a script's), so in agent scope they still
-  // show the SESSION's — said out loud rather than left ambiguous.
-  if (scoped && (tab === "errors" || tab === "memory"))
+  // errors have no agent dimension (an error is a script's), so in agent scope
+  // the tab still shows the SESSION's — said out loud rather than left ambiguous.
+  if (scoped && tab === "errors")
     tabs.append(el("span", "tabnote", "session-wide"));
   return tabs;
 }
@@ -505,8 +500,6 @@ function chromeBody(sessionView, tab, body) {
     if (sessionView[sec.list]) renderSectionGrid(tab);
     else wrap.append(el("div", "empty", "loading " + sec.label + "…"));
     loadSection(tab);
-  } else if (tab === "memory") {
-    showMemoryBody(sessionView);
   } else if (tab === "errors") {
     renderErrorsInto(body);
   }
@@ -695,7 +688,7 @@ function updateErrCount(n) {
 }
 
 /* Patch a tab's count badge AND the cached meta it is rebuilt from, together —
-   the shared body of the monitors / jobs / memory / errors counters. Both halves
+   the shared body of the monitors / jobs / errors counters. Both halves
    are needed: setTabCount paints the badge now, sessionView.meta[field] is what a later
    renderSessionChrome rebuilds it from (drop that and the badge reverts on the
    next rebuild). Returns the session (null when there's none), so a caller can
@@ -862,7 +855,7 @@ function monitorCard(m) {
   return card;
 }
 
-/* Shared snapshot-backed list mechanics for monitors, jobs, and memory. */
+/* Shared snapshot-backed list mechanics for monitors and jobs. */
 function sectionCount(sec, sessionView) {
   if (sec.count) return sec.count(sessionView);
   return (sessionView[sec.list] || []).length;
@@ -897,7 +890,7 @@ const SECTIONS = {
    thing the badge exists to save you from ("the counter for the monitors and the
    background jobs are not getting properly updated when I go to subagents").
    Table-driven, so a future scoped section is covered by its own `scoped` flag;
-   memory is session-wide and its cache survives. */
+   the cache never outlives its scope. */
 function resetScopedSections() {
   const sessionView = S.sessionView;
   if (!sessionView) return;
@@ -947,7 +940,6 @@ function setSectionCount(kind, n) {
 
 function updateSectionCount(kind, n) {
   const sessionView = setSectionCount(kind, n);
-  // a section may say its list is NOT the thing on screen (memory's `showing`
   // is false while a note viewer is open) — don't refresh under it
   const sec = SECTIONS[kind];
   const showing = sec.showing ? sec.showing() : true;
@@ -1185,7 +1177,7 @@ function sectionHref(sessionId, route, task) {
 
    It didn't, and that was the bug: the crumbs were appended once by
    renderSessionChrome, and every painter that later replaced the body wholesale
-   — a monitor/job drill-down, the memory grid, an open note — wiped them and put
+   — a monitor/job drill-down — wiped them and put
    only its OWN crumb back. So opening one of an agent's background jobs left you
    inside that agent with nothing on screen saying so and no way up but the
    browser's Back ("when I click on monitors or jobs on a subagent, I still want

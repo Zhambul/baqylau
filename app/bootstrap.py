@@ -4,20 +4,31 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from typing import Mapping
 
 from dashboard import config as dashboard_config
 
+from contracts.harness import (
+    CanonicalEventReaction,
+    CoreTranslator,
+    LIVENESS_SOURCE_TYPE,
+    OUTPUT_LOCATION_SOURCE_TYPE,
+)
 from app.data import data_directory
 from app.content import CanonicalContentService
+from app.core_translators import LivenessTranslator, OperationOutputTranslator
 from app.diagnostics import OperationalDiagnostics
 from app.hook_gateway import HookGatewayService
-from app.host import ApplicationHost
 from app.insights import ApplicationInsightsService
 from app.interpreter import Interpreter
-from app.memory import MemoryService
 from app.pane_commands import PaneCommandService
 from app.pane_streams import PaneStreamService
 from app.plugins import installed_plugins
+from app.reactions import (
+    OperationOutputCanonicalEventReaction,
+    PaneCanonicalEventReaction,
+    SessionUpsertCanonicalEventReaction,
+)
 from app.repository import RepositoryQueries
 from app.resume import ResumableSessionService
 from app.session_terminal import ApplicationTerminal
@@ -40,24 +51,23 @@ from dashboard.application import (
     GlobalApplicationService,
     SessionApplicationService,
 )
-from dashboard.memory import DashboardMemoryService
 from runtime.canonical_store import CanonicalEventStore
 from runtime.evidence import EvidenceQueries
 from runtime.harnesses import HarnessRegistry
+from runtime.operation_output import OperationOutputStore
 from runtime.projections import SessionQueries
 from runtime.recorder import RawEventRecorder
-from runtime.sessions import SessionRegistry
-from runtime.watches import WatchRegistry
+from runtime.sessions import SessionStore
 
 
 @dataclass(frozen=True)
 class CanonicalApplication:
     canonical_store: CanonicalEventStore
     registry: HarnessRegistry
-    sessions: SessionRegistry
+    sessions: SessionStore
     recorder: RawEventRecorder
     hook_gateway: HookGatewayService
-    watches: WatchRegistry
+    operation_output: OperationOutputStore
     queries: SessionQueries
     evidence: EvidenceQueries
     dashboard_activity: DashboardActivityService
@@ -80,8 +90,6 @@ class CanonicalApplication:
     insights: ApplicationInsightsService
     resumable_sessions: ResumableSessionService
     browser_telemetry: BrowserTelemetryService
-    memory: DashboardMemoryService
-    host: ApplicationHost
 
 
 def default_data_directory() -> str:
@@ -95,7 +103,7 @@ def build_application(
     database_path = os.path.join(os.path.abspath(data_directory), "events.db")
     canonical_store = CanonicalEventStore(database_path)
     recorder = RawEventRecorder(database_path)
-    watches = WatchRegistry(database_path)
+    operation_output = OperationOutputStore(database_path)
     diagnostics = OperationalDiagnostics(
         diagnostic_database_path
         or os.path.join(os.path.abspath(data_directory), "diagnostics.db")
@@ -105,7 +113,7 @@ def build_application(
     for plugin in installed_plugins():
         registry.register(plugin)
     registry.validate()
-    sessions = SessionRegistry(database_path, registry)
+    sessions = SessionStore(database_path, registry)
     terminal = ApplicationTerminal()
     queries = SessionQueries(canonical_store, sessions)
     controls = HarnessControlService(sessions, terminal, queries)
@@ -117,8 +125,16 @@ def build_application(
     )
     dashboard_notification_state = DashboardNotificationState()
     content = CanonicalContentService(canonical_store, queries)
-    memory = MemoryService(sessions, queries)
-    host = ApplicationHost()
+    core_translators: Mapping[str, CoreTranslator] = {
+        OUTPUT_LOCATION_SOURCE_TYPE: OperationOutputTranslator(),
+        LIVENESS_SOURCE_TYPE: LivenessTranslator(),
+    }
+    reactions: tuple[CanonicalEventReaction, ...] = (
+        # The sessions row exists and is current before the panes anchor to it.
+        SessionUpsertCanonicalEventReaction(sessions),
+        OperationOutputCanonicalEventReaction(operation_output, recorder),
+        PaneCanonicalEventReaction(terminal, sessions),
+    )
     from core import audit
 
     browser_telemetry = BrowserTelemetryService(audit)
@@ -128,7 +144,7 @@ def build_application(
         sessions=sessions,
         recorder=recorder,
         hook_gateway=HookGatewayService(registry, recorder),
-        watches=watches,
+        operation_output=operation_output,
         queries=queries,
         evidence=EvidenceQueries(canonical_store),
         dashboard_activity=DashboardActivityService(canonical_store, queries),
@@ -149,7 +165,6 @@ def build_application(
             queries,
             terminal_input,
             diagnostics,
-            memory,
         ),
         controls=controls,
         launcher=HarnessLauncherService(registry, terminal),
@@ -168,10 +183,11 @@ def build_application(
             sessions,
             registry,
             recorder,
-            watches,
+            operation_output,
             canonical_store,
+            core_translators,
+            reactions,
             controls,
-            terminal,
         ),
         diagnostics=diagnostics,
         insights=ApplicationInsightsService(
@@ -190,8 +206,6 @@ def build_application(
             result_limit=dashboard_config.RESUMABLE_SESSION_LIMIT,
         ),
         browser_telemetry=browser_telemetry,
-        memory=DashboardMemoryService(memory),
-        host=host,
     )
 
 

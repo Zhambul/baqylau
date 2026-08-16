@@ -63,8 +63,9 @@ class RawEventRecorder:
                     "INSERT INTO raw_events("
                     "raw_event_id, session_id, harness, source_type, source_identity, "
                     "source_name, source_position, actor_id, parent_actor_id, "
-                    "observed_at, encoding, payload"
-                    ") VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "observed_at, encoding, payload, terminal_window_id, "
+                    "harness_process_id, account_id, account_display_name"
+                    ") VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         str(raw_event.raw_event_id),
                         str(raw_event.session_id),
@@ -80,6 +81,10 @@ class RawEventRecorder:
                         raw_event.observed_at,
                         raw_event.encoding,
                         raw_event.payload,
+                        raw_event.terminal_window_id,
+                        raw_event.harness_process_id,
+                        raw_event.account_id,
+                        raw_event.account_display_name,
                     ),
                 )
 

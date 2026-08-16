@@ -73,6 +73,8 @@ def canonical(
         parent_actor_id=parent_actor_id,
         harness="example",
         occurred_at=occurred_at,
+        terminal_window_id=None,
+        harness_process_id=None,
         payload=payload,
     )
 
@@ -111,7 +113,7 @@ def store_with_events(tmp_path, events):
 def test_session_page_cache_appends_only_the_new_cursor_range(monkeypatch, tmp_path):
     store = store_with_events(
         tmp_path,
-        [canonical("session-start", SessionStarted("/work", None, None, None, None, None))],
+        [canonical("session-start", SessionStarted("/work", "fixture.jsonl", None, None, None, None, None))],
     )
     queries = store.queries()
     assert queries.summary(SESSION_ID).title is None
@@ -145,7 +147,7 @@ def test_session_page_cache_appends_only_the_new_cursor_range(monkeypatch, tmp_p
 
 def test_session_summary_folds_metadata_prompts_model_change_and_finish(tmp_path):
     events = [
-        canonical("session-start", SessionStarted("/work", None, None, None, None, None)),
+        canonical("session-start", SessionStarted("/work", "fixture.jsonl", None, None, None, None, None)),
         canonical("title", SessionTitleChanged("Canonical work", "custom"), occurred_at=11.0),
         canonical(
             "directory",
@@ -177,9 +179,9 @@ def test_session_summary_folds_metadata_prompts_model_change_and_finish(tmp_path
 
 def test_session_summary_returns_to_running_when_the_session_is_resumed(tmp_path):
     events = [
-        canonical("first-start", SessionStarted("/work", None, None, None, None, None)),
+        canonical("first-start", SessionStarted("/work", "fixture.jsonl", None, None, None, None, None)),
         canonical("first-finish", SessionFinished("unknown", "process_exited")),
-        canonical("resume-start", SessionStarted("/work", None, None, None, None, None)),
+        canonical("resume-start", SessionStarted("/work", "fixture.jsonl", None, None, None, None, None)),
     ]
     queries = store_with_events(tmp_path, events).queries()
 
@@ -193,7 +195,7 @@ def test_session_summary_returns_to_running_when_the_session_is_resumed(tmp_path
 def test_session_list_is_a_semantic_query_sorted_by_start_time(tmp_path):
     store = store_with_events(
         tmp_path,
-        [canonical("session-start", SessionStarted("/work", None, None, None, None, None))],
+        [canonical("session-start", SessionStarted("/work", "fixture.jsonl", None, None, None, None, None))],
     )
     second_session_id = SessionId("session-two")
     second_actor_id = ActorId("actor-two")
@@ -209,7 +211,9 @@ def test_session_list_is_a_semantic_query_sorted_by_start_time(tmp_path):
         None,
         "example",
         20.0,
-        SessionStarted("/work", None, None, None, None, None),
+        None,
+        None,
+        SessionStarted("/work", "fixture.jsonl", None, None, None, None, None),
     )
     second_raw = RawEvent(
         RawEventId("session-two-raw"),
@@ -234,7 +238,7 @@ def test_session_list_is_a_semantic_query_sorted_by_start_time(tmp_path):
 
 def test_custom_session_title_is_not_overwritten_by_later_automatic_title(tmp_path):
     events = [
-        canonical("session-start", SessionStarted("/work", None, None, None, None, None)),
+        canonical("session-start", SessionStarted("/work", "fixture.jsonl", None, None, None, None, None)),
         canonical("summary-title", SessionTitleChanged("Summary", "summary")),
         canonical("custom-title", SessionTitleChanged("Chosen", "custom")),
         canonical("automatic-title", SessionTitleChanged("Generated later", "automatic")),
@@ -249,7 +253,7 @@ def test_custom_session_title_is_not_overwritten_by_later_automatic_title(tmp_pa
 def test_activity_joins_operation_progress_and_finish_by_identity(tmp_path):
     operation_id = OperationId("operation-one")
     events = [
-        canonical("session-start", SessionStarted("/work", None, None, None, None, None)),
+        canonical("session-start", SessionStarted("/work", "fixture.jsonl", None, None, None, None, None)),
         canonical(
             "operation-start",
             OperationStarted(
@@ -645,7 +649,7 @@ def test_focused_state_projections_are_exhaustive_and_actor_scoped(tmp_path):
     child_actor_id = ActorId("actor-child")
     attention_id = AttentionId("attention-one")
     events = [
-        canonical("session-start", SessionStarted("/work", None, None, None, None, None)),
+        canonical("session-start", SessionStarted("/work", "fixture.jsonl", None, None, None, None, None)),
         canonical(
             "actor-start",
             ActorStarted("Worker", "child"),
@@ -762,7 +766,11 @@ def test_context_projection_uses_the_actors_latest_model(tmp_path):
 
 def test_active_time_is_rebuilt_from_turn_boundaries(tmp_path):
     events = [
-        canonical("session-start", SessionStarted("/work", None, None, None, None, None), occurred_at=10.0),
+        canonical(
+            "session-start",
+            SessionStarted("/work", "fixture.jsonl", None, None, None, None, None),
+            occurred_at=10.0,
+        ),
         canonical("turn-finished", TurnFinished(None, "succeeded"), occurred_at=20.0),
         canonical(
             "next-prompt",
@@ -783,7 +791,7 @@ def test_tab_state_is_a_canonical_fold_over_semantic_lifecycle(tmp_path):
     operation_id = OperationId("background-one")
     attention_id = AttentionId("attention-one")
     events = [
-        canonical("session", SessionStarted("/work", None, None, None, None, None)),
+        canonical("session", SessionStarted("/work", "fixture.jsonl", None, None, None, None, None)),
         canonical("turn", TurnStarted(None)),
         canonical(
             "operation",

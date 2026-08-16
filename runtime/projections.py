@@ -70,7 +70,7 @@ from domain.values import (
     TokenUsage,
 )
 from runtime.canonical_store import CanonicalEventPage, CanonicalEventStore, StoredCanonicalEvent
-from runtime.sessions import SessionRegistry
+from runtime.sessions import SessionStore
 
 
 @dataclass(frozen=True)
@@ -401,7 +401,7 @@ def _activity_id(event: CanonicalEvent, activity_type: str, subject_id: object) 
 
 
 class SessionQueries:
-    def __init__(self, canonical_store: CanonicalEventStore, sessions: SessionRegistry) -> None:
+    def __init__(self, canonical_store: CanonicalEventStore, sessions: SessionStore) -> None:
         self.canonical_store = canonical_store
         self.session_registry = sessions
         self._latest_pages: dict[SessionId, tuple[int | None, tuple[StoredCanonicalEvent, ...]]] = {}
@@ -827,7 +827,7 @@ class SessionQueries:
         return tuple(tasks[task_id] for task_id in sorted(tasks, key=str))
 
     def goal(self, session_id: SessionId, through_cursor: int | None = None) -> GoalState | None:
-        session = self.session_registry.find(session_id)
+        session = self.session_registry.find_by_id(session_id)
         if session is None:
             return None
         goal = None

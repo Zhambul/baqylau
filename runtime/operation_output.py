@@ -1,4 +1,4 @@
-"""File watches: hook-recorded directives the interpreter pulls to completion."""
+"""Operation output files: located by facts, read to completion by the collect phase."""
 
 from __future__ import annotations
 
@@ -8,11 +8,8 @@ import json
 import os
 import time
 
-from contracts.harness import (
-    HarnessRawEventSource,
-    RawEvent,
-    WATCH_SOURCE_TYPE,
-)
+from contracts.harness import HarnessRawEventSource, RawEvent
+from domain.events import OperationOutputLocated
 from domain.ids import ActorId, RawEventId, SessionId
 from runtime.database import connect, initialize
 
@@ -21,73 +18,73 @@ MAXIMUM_LIFETIME_SECONDS = 2 * 60 * 60
 FINISHED_POSITION = "finished"
 
 
-def watch_source_identity(harness: str, session_id: SessionId, operation_id: str) -> str:
-    return f"{harness}:watch:{session_id}:{operation_id}"
+def operation_output_source_identity(
+    harness: str, session_id: SessionId, operation_id: str
+) -> str:
+    return f"{harness}:operation_output:{session_id}:{operation_id}"
 
 
-class WatchRegistry:
-    """Owns the `watches` table.
-
-    A `watch` raw event is a directive-as-evidence: the interpreter applies it
-    here (start → an active row, finish → the row marked finishing) and pulls
-    each active row's file with the generic source below until it has drained a
-    finishing watch to EOF, at which point the row and its files are removed.
+class OperationOutputStore:
+    """Owns the `operation_output` table: one row = one operation's output file
+    being followed. Rows are written by the reaction to the committed
+    `operation.output_located` fact, marked finishing by the reaction to
+    `operation.finished` (foreground rows only), and drained + removed when the
+    reader reaches the end of a finishing file or the session finishes.
     """
 
     def __init__(self, database_path: str) -> None:
         self.database_path = initialize(database_path)
 
-    def apply(self, raw_event: RawEvent) -> None:
-        if raw_event.source_type != WATCH_SOURCE_TYPE:
-            raise ValueError(f"not a watch directive: {raw_event.raw_event_id}")
-        document = json.loads(raw_event.payload)
-        action = document.get("action")
-        if action == "start":
-            self._start(raw_event, document)
-        elif action == "finish":
-            self._finish(raw_event, str(document.get("operation_id") or ""))
-        else:
-            raise ValueError(f"unknown watch action: {action!r}")
-
-    def _start(self, raw_event: RawEvent, document: dict) -> None:
+    def save(
+        self,
+        session_id: SessionId,
+        harness: str,
+        actor_id: ActorId,
+        parent_actor_id: ActorId | None,
+        located: OperationOutputLocated,
+    ) -> None:
         with connect(self.database_path) as connection:
             connection.execute("BEGIN IMMEDIATE")
             connection.execute(
-                "INSERT OR IGNORE INTO watches("
+                "INSERT OR IGNORE INTO operation_output("
                 "session_id, harness, operation_id, actor_id, parent_actor_id, "
                 "source_path, chunk_source_type, delete_source, initial_size, "
-                "initial_modified_at, wait_for_source_change, state, created_at"
-                ") VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)",
+                "initial_modified_at, wait_for_source_change, until, state, created_at"
+                ") VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)",
                 (
-                    str(raw_event.session_id),
-                    raw_event.harness,
-                    str(document["operation_id"]),
-                    str(raw_event.actor_id),
-                    str(raw_event.parent_actor_id)
-                    if raw_event.parent_actor_id is not None
-                    else None,
-                    str(document["source_path"]),
-                    str(document["chunk_source_type"]),
-                    1 if document.get("delete_source") else 0,
-                    int(document.get("initial_size") or 0),
-                    int(document.get("initial_modified_at") or 0),
-                    1 if document.get("wait_for_source_change") else 0,
-                    raw_event.observed_at,
+                    str(session_id),
+                    harness,
+                    str(located.operation_id),
+                    str(actor_id),
+                    str(parent_actor_id) if parent_actor_id is not None else None,
+                    located.source_path,
+                    located.chunk_source_type,
+                    1 if located.delete_source else 0,
+                    located.initial_size,
+                    located.initial_modified_at,
+                    1 if located.wait_for_source_change else 0,
+                    located.until,
+                    time.time(),
                 ),
             )
 
-    def _finish(self, raw_event: RawEvent, operation_id: str) -> None:
+    def finish(self, session_id: SessionId, operation_id: str) -> None:
+        """Mark a foreground following finished; a background row's launch
+        reports "finished" while output keeps flowing, so it is untouched here
+        — the session's end is its end."""
         with connect(self.database_path) as connection:
             connection.execute("BEGIN IMMEDIATE")
             connection.execute(
-                "UPDATE watches SET state='finishing' WHERE session_id=? AND operation_id=?",
-                (str(raw_event.session_id), operation_id),
+                "UPDATE operation_output SET state='finishing' "
+                "WHERE session_id=? AND operation_id=? AND until='operation_finished'",
+                (str(session_id), operation_id),
             )
 
-    def for_session(self, session_id: SessionId) -> tuple[FileWatchRawEventSource, ...]:
+    def for_session(self, session_id: SessionId) -> tuple[OperationOutputRawEventSource, ...]:
         with connect(self.database_path) as connection:
             rows = connection.execute(
-                "SELECT * FROM watches WHERE session_id=? ORDER BY created_at, operation_id",
+                "SELECT * FROM operation_output WHERE session_id=? "
+                "ORDER BY created_at, operation_id",
                 (str(session_id),),
             ).fetchall()
         sources = []
@@ -95,7 +92,7 @@ class WatchRegistry:
             if time.time() - row["created_at"] >= MAXIMUM_LIFETIME_SECONDS:
                 self.remove(session_id, row["operation_id"], bool(row["delete_source"]), row["source_path"])
                 continue
-            sources.append(FileWatchRawEventSource(self, row))
+            sources.append(OperationOutputRawEventSource(self, row))
         return tuple(sources)
 
     def remove(
@@ -108,7 +105,7 @@ class WatchRegistry:
         with connect(self.database_path) as connection:
             connection.execute("BEGIN IMMEDIATE")
             connection.execute(
-                "DELETE FROM watches WHERE session_id=? AND operation_id=?",
+                "DELETE FROM operation_output WHERE session_id=? AND operation_id=?",
                 (str(session_id), operation_id),
             )
         if delete_source:
@@ -118,18 +115,18 @@ class WatchRegistry:
                 pass
 
 
-class FileWatchRawEventSource(HarnessRawEventSource):
-    """Generic chunk reader over one watched, growing file.
+class OperationOutputRawEventSource(HarnessRawEventSource):
+    """Generic chunk reader over one followed, growing file.
 
     Position encoding: the byte offset AFTER the last emitted chunk, or
-    `finished` once a finishing watch has been drained. Chunk boundaries are
+    `finished` once a finishing row has been drained. Chunk boundaries are
     arbitrary slices of a growing file, so the position must be the chunk's END
     — resuming from a start offset would re-read different bytes under a
     different identity and duplicate evidence.
     """
 
-    def __init__(self, registry: WatchRegistry, row) -> None:
-        self.registry = registry
+    def __init__(self, store: OperationOutputStore, row) -> None:
+        self.store = store
         self.session_id = SessionId(row["session_id"])
         self.harness = row["harness"]
         self.operation_id = row["operation_id"]
@@ -144,7 +141,7 @@ class FileWatchRawEventSource(HarnessRawEventSource):
         self.initial_modified_at = int(row["initial_modified_at"])
         self.wait_for_source_change = bool(row["wait_for_source_change"])
         self.finishing = row["state"] == "finishing"
-        self.source_identity = watch_source_identity(
+        self.source_identity = operation_output_source_identity(
             self.harness, self.session_id, self.operation_id
         )
 
@@ -169,7 +166,7 @@ class FileWatchRawEventSource(HarnessRawEventSource):
                         break
                     raw_events.append(self._chunk(chunk_position, source.tell(), content))
         if self.finishing:
-            self.registry.remove(
+            self.store.remove(
                 self.session_id, self.operation_id, self.delete_source, self.source_path
             )
             if raw_events:

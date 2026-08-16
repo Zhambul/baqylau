@@ -31,6 +31,10 @@ class TranslationEvidence:
     observed_at: float
     encoding: str
     payload: bytes
+    terminal_window_id: str | None
+    harness_process_id: int | None
+    account_id: str | None
+    account_display_name: str | None
     translator_version: str
     decision: str
     reason: str | None
@@ -78,6 +82,10 @@ class EvidenceQueries:
             observed_at=raw["observed_at"],
             encoding=raw["encoding"],
             payload=raw["payload"],
+            terminal_window_id=raw["terminal_window_id"],
+            harness_process_id=raw["harness_process_id"],
+            account_id=raw["account_id"],
+            account_display_name=raw["account_display_name"],
             translator_version=raw["translator_version"] or "",
             decision=raw["decision"] or "untranslated",
             reason=raw["reason"],

@@ -8,7 +8,6 @@ import time
 
 import frontends
 
-from app import pending_session
 from contracts.terminal import (
     ACTIVITY_PANE_TAG,
     SCOREBOARD_PANE_TAG,
@@ -122,8 +121,6 @@ class ApplicationTerminal(
         if anchor_window_id is None:
             return TerminalResult(False, "session has no terminal window")
         request = SessionPaneRequest(session_id, anchor_window_id, activity_width_percent)
-        if pending_session.is_pending(session_id):
-            return self.open_pending_session_panes(request)
         return self.open_session_panes(request)
 
     def resize_activity_pane(self, session_id: SessionId, columns: int) -> TerminalResult:
@@ -155,21 +152,6 @@ class ApplicationTerminal(
         return self.resize_activity_pane(session_id, target_columns - current_columns)
 
     def open_session_panes(self, request: SessionPaneRequest) -> TerminalResult:
-        return self._open_session_panes(request, pending=False)
-
-    def open_pending_session_panes(self, request: SessionPaneRequest) -> TerminalResult:
-        if not pending_session.is_pending(request.session_id):
-            raise ValueError("pending session panes require a pending identity")
-        if self._hosting_session(request.session_id, request.anchor_window_id) is not None:
-            return TerminalResult(True)
-        return self._open_session_panes(request, pending=True)
-
-    def _open_session_panes(
-        self,
-        request: SessionPaneRequest,
-        *,
-        pending: bool,
-    ) -> TerminalResult:
         frontend = self._frontend()
         if not frontend.usable():
             return TerminalResult(False, "no terminal available")
@@ -178,7 +160,7 @@ class ApplicationTerminal(
         results = [frontend.set_user_vars(anchor_window_id, {SESSION_WINDOW_TAG: session_id})]
         frontend.goto_splits_layout(anchor_window_id)
         application_directory = os.path.dirname(os.path.abspath(__file__))
-        process_arguments = ["--pending", session_id] if pending else [session_id]
+        process_arguments = [session_id]
         if frontend.find_window(ACTIVITY_PANE_TAG, session_id) is None:
             results.append(
                 frontend.launch_pane(
@@ -235,42 +217,6 @@ class ApplicationTerminal(
             time.sleep(SCOREBOARD_RESIZE_SETTLE_SECONDS)
         window = frontend.find_window(SCOREBOARD_PANE_TAG, session_id)
         return 0 if window is not None and int(window.get("lines") or 0) == SCOREBOARD_HEIGHT else 1
-
-    def adopt_pending_session_panes(
-        self,
-        pending_session_id: SessionId,
-        session_id: SessionId,
-    ) -> TerminalResult:
-        if not pending_session.is_pending(pending_session_id):
-            raise ValueError("pending session identity is required")
-        frontend = self._frontend()
-        pending_identity = str(pending_session_id)
-        identity = str(session_id)
-        pending_session.bind(pending_session_id, session_id)
-        results = []
-        session_window_id = frontend.window_for_session(pending_identity)
-        if session_window_id is not None:
-            results.append(
-                frontend.set_user_vars(session_window_id, {SESSION_WINDOW_TAG: identity})
-            )
-        activity_window = frontend.find_window(ACTIVITY_PANE_TAG, pending_identity)
-        if activity_window is not None:
-            results.append(
-                frontend.set_user_vars(
-                    str(activity_window["id"]),
-                    {ACTIVITY_PANE_TAG: identity},
-                )
-            )
-        scoreboard_window = frontend.find_window(SCOREBOARD_PANE_TAG, pending_identity)
-        if scoreboard_window is not None:
-            results.append(
-                frontend.set_user_vars(
-                    str(scoreboard_window["id"]),
-                    {SCOREBOARD_PANE_TAG: identity},
-                )
-            )
-        succeeded = all(result == 0 for result in results)
-        return TerminalResult(succeeded, None if succeeded else "pending pane adoption failed")
 
     def close_session_panes(self, session_id: SessionId) -> TerminalResult:
         return self._close_session_panes(session_id, clear_tab=True)

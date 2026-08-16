@@ -99,7 +99,9 @@ class PaneStreamService:
                 del self._models[stale_id]
             model = self._models.get(session_id)
             if model is None:
-                session = self._sessions.load(session_id)
+                session = self._sessions.find_by_id(session_id)
+                if session is None:
+                    raise KeyError(str(session_id))
                 model = _MirrorModel(session.lead_actor_id)
                 self._models[session_id] = model
             return model

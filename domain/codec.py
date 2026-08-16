@@ -13,7 +13,7 @@ from typing import Any, Literal, get_args, get_origin, get_type_hints
 from domain.events import CanonicalEvent, EVENT_TYPES, PAYLOAD_TYPES, EventPayload
 from domain.ids import ActorId, CanonicalEventId, SessionId, TurnId
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 FORBIDDEN_PRESENTATION_FIELDS = frozenset({
     "ansi",
     "bubbled",
@@ -26,9 +26,6 @@ FORBIDDEN_PRESENTATION_FIELDS = frozenset({
     "rgb",
     "web",
     "wrap",
-})
-FORBIDDEN_NATIVE_SOURCE_FIELDS = frozenset({
-    "source_reference",
 })
 
 
@@ -123,12 +120,6 @@ class CanonicalEventCodec:
                     f"presentation fields are forbidden in {payload_type.__name__}: "
                     f"{sorted(forbidden_presentation)!r}"
                 )
-            forbidden_sources = FORBIDDEN_NATIVE_SOURCE_FIELDS.intersection(field_names)
-            if forbidden_sources:
-                raise CanonicalCodecError(
-                    f"native source fields are forbidden in {payload_type.__name__}: "
-                    f"{sorted(forbidden_sources)!r}"
-                )
 
     def encode(self, event: CanonicalEvent[EventPayload]) -> bytes:
         payload_type = type(event.payload)
@@ -143,11 +134,13 @@ class CanonicalEventCodec:
             "event_id": str(event.event_id),
             "event_type": event_type,
             "harness": event.harness,
+            "harness_process_id": event.harness_process_id,
             "occurred_at": event.occurred_at,
             "parent_actor_id": str(event.parent_actor_id) if event.parent_actor_id is not None else None,
             "payload": payload,
             "schema_version": SCHEMA_VERSION,
             "session_id": str(event.session_id),
+            "terminal_window_id": event.terminal_window_id,
             "turn_id": str(event.turn_id) if event.turn_id is not None else None,
         }
         return json.dumps(document, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
@@ -162,11 +155,13 @@ class CanonicalEventCodec:
             "event_id",
             "event_type",
             "harness",
+            "harness_process_id",
             "occurred_at",
             "parent_actor_id",
             "payload",
             "schema_version",
             "session_id",
+            "terminal_window_id",
             "turn_id",
         }
         if not isinstance(document, dict) or set(document) != expected_fields:
@@ -188,6 +183,16 @@ class CanonicalEventCodec:
             occurred_at=(
                 _from_data(float, document["occurred_at"])
                 if document["occurred_at"] is not None
+                else None
+            ),
+            terminal_window_id=(
+                _from_data(str, document["terminal_window_id"])
+                if document["terminal_window_id"] is not None
+                else None
+            ),
+            harness_process_id=(
+                _from_data(int, document["harness_process_id"])
+                if document["harness_process_id"] is not None
                 else None
             ),
             payload=payload,

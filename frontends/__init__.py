@@ -24,3 +24,12 @@ def get(resolve=False):
         from frontends.base import Frontend
         return Frontend()
     raise ValueError(f"unsupported terminal frontend: {name}")
+
+
+def current_window_id():
+    """The terminal window this process runs in, or None.
+
+    The ONE place the terminal's window-identity environment variable is
+    consulted — every other component receives the value as data.
+    """
+    return get().current_window() or None

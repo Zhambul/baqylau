@@ -5,9 +5,8 @@ from domain.codec import SCHEMA_VERSION
 from plugins.codex.canonical import (
     CodexCanonicalTranslator,
     CodexRawEventSources,
-    CodexSessionEvidence,
 )
-from plugins.codex.hooks import CodexHookGateway
+from plugins.codex.hooks import CLI_PROCESS_NAME, CodexHookGateway
 from plugins.codex.catalog import CodexCatalog
 from plugins.codex.controller import controller
 from plugins.codex.launcher import CodexLauncher
@@ -40,15 +39,15 @@ plugin = HarnessPlugin(
     info=HarnessInfo(
         name="codex",
         display_name="Codex",
-        plugin_version="4",
+        plugin_version="5",
         canonical_version=SCHEMA_VERSION,
+        cli_process_name=CLI_PROCESS_NAME,
         supports_attachments=True,
         models=MODELS,
     ),
     hooks=CodexHookGateway(),
     sources=CodexRawEventSources(),
     translator=CodexCanonicalTranslator(),
-    session_evidence=CodexSessionEvidence(),
     controller=controller,
     catalog=CodexCatalog(),
     usage=usage_reader,

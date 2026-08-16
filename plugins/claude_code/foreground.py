@@ -1,4 +1,4 @@
-"""Claude Code command output as recordable file watches: foreground and background."""
+"""Claude Code command output as recordable output-location directives."""
 
 from __future__ import annotations
 
@@ -8,7 +8,8 @@ import json
 import os
 from dataclasses import dataclass
 
-from contracts.harness import FileWatch
+from domain.events import OperationOutputLocated
+from domain.ids import OperationId
 from plugins.claude_code import shell
 
 CHUNK_SOURCE_TYPE = "foreground_output"
@@ -22,8 +23,8 @@ BACKGROUND_OUTPUT_ROOT = "/tmp"
 
 @dataclass(frozen=True)
 class PreparedForegroundCommand:
-    output: bytes
-    watch: FileWatch
+    reply: bytes
+    located: OperationOutputLocated
 
 
 def _safe_identity(value: str) -> str:
@@ -65,13 +66,14 @@ def _updated_input(tool_input: dict, command: str) -> bytes:
     ).encode("utf-8")
 
 
-def background_watch(document: dict) -> FileWatch | None:
-    """The watch for a background command's native output file, if one started.
+def background_output(document: dict) -> OperationOutputLocated | None:
+    """The output location of a background command's native output file.
 
     Background commands are not rewritten (Claude Code redirects their output
-    itself), so the watch begins at the PostToolUse that reports the task id.
-    The native file is Claude Code's — never deleted by us — and outlives the
-    watch, which ends with the session (or the lifetime cap).
+    itself), so the location becomes known at the PostToolUse that reports the
+    task id. The native file is Claude Code's — never deleted by us — and the
+    following ends with the session (or the lifetime cap), never with the
+    operation, whose launch reports "finished" while output keeps flowing.
     """
     tool_input = document.get("tool_input") or {}
     if not tool_input.get("run_in_background"):
@@ -88,23 +90,25 @@ def background_watch(document: dict) -> FileWatch | None:
     matches = sorted(glob.glob(pattern))
     if not matches:
         return None
-    return FileWatch(
-        operation_id=operation_id,
+    return OperationOutputLocated(
+        operation_id=OperationId(operation_id),
         source_path=os.path.realpath(matches[0]),
         chunk_source_type=CHUNK_SOURCE_TYPE,
         delete_source=False,
         initial_size=0,
         initial_modified_at=0,
         wait_for_source_change=False,
+        until="session_finished",
     )
 
 
 def prepare(document: dict) -> PreparedForegroundCommand | None:
-    """Rewrite one Bash command so its output lands in a watchable file.
+    """Rewrite one Bash command so its output lands in a readable file.
 
-    The returned watch is NOT applied here — the hook records it as a `watch`
-    raw event and the interpreter does the following. The hook's only file act
-    is creating the tee target, which the rewritten command itself requires.
+    The returned location is NOT applied here — the gateway records it as an
+    output-location directive and the interpreter does the following. The
+    gateway's only file act is creating the tee target, which the rewritten
+    command itself requires.
     """
     tool_input = document.get("tool_input") or {}
     command = str(tool_input.get("command") or "")
@@ -145,13 +149,14 @@ def prepare(document: dict) -> PreparedForegroundCommand | None:
 
     return PreparedForegroundCommand(
         _updated_input(tool_input, wrapped_command),
-        FileWatch(
-            operation_id=operation_id,
+        OperationOutputLocated(
+            operation_id=OperationId(operation_id),
             source_path=source_path,
             chunk_source_type=CHUNK_SOURCE_TYPE,
             delete_source=delete_source,
             initial_size=initial_size,
             initial_modified_at=initial_modified_at,
             wait_for_source_change=wait_for_source_change,
+            until="operation_finished",
         ),
     )

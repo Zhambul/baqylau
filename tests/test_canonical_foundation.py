@@ -1,28 +1,34 @@
-"""Contract tests for the canonical spine: record, register, interpret."""
+"""Contract tests for the canonical spine: record, interpret, react."""
 
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
+import subprocess
 from dataclasses import replace
 
 import pytest
 
-from app.host import ApplicationHost
-from app.interpreter import Interpreter
+from app.core_translators import LivenessTranslator, OperationOutputTranslator
+from app.interpreter import Interpreter, SessionLivenessSource
 from app.evidence_cli import main as evidence_main
+from app.reactions import (
+    OperationOutputCanonicalEventReaction,
+    PaneCanonicalEventReaction,
+    SessionUpsertCanonicalEventReaction,
+)
 from contracts.harness import (
-    FileWatch,
     HarnessInfo,
     HarnessPlugin,
+    LIVENESS_SOURCE_TYPE,
+    OUTPUT_LOCATION_SOURCE_TYPE,
     RawEvent,
     RawEventSourceContext,
     Session,
     TranslationError,
     TranslationResult,
-    terminal_window_raw_event,
-    watch_finish_raw_event,
-    watch_start_raw_event,
+    output_location_raw_event,
 )
 from domain.codec import SCHEMA_VERSION, CanonicalCodecError, CanonicalEventCodec
 from domain.events import (
@@ -32,7 +38,9 @@ from domain.events import (
     ActorStarted,
     CanonicalEvent,
     MessageCreated,
+    OperationFinished,
     OperationInputProvided,
+    OperationOutputLocated,
     SessionFinished,
     SessionStarted,
 )
@@ -51,12 +59,22 @@ from runtime.canonical_store import CanonicalEventStore
 from runtime.database import connect
 from runtime.evidence import EvidenceQueries
 from runtime.harnesses import HarnessRegistry, HarnessRegistryError
+from runtime.operation_output import OperationOutputStore
 from runtime.recorder import EventIdentityConflict, RawEventRecorder
-from runtime.sessions import SessionRegistry, SessionRegistryError, UnknownSession
-from runtime.watches import WatchRegistry
+from runtime.sessions import SessionStore
 from dashboard.presenter import DashboardPresenter
 from runtime.projections import ActivityScope, SessionQueries
 from terminal.presenter import TerminalPresenter
+
+# The liveness source checks the CLI pid against the CLI's process name; the
+# suite's sessions carry the test process itself, so they read as alive.
+OWN_PROCESS_NAME = os.path.basename(
+    subprocess.run(
+        ["ps", "-o", "comm=", "-p", str(os.getpid())],
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+)
 
 
 class FixedTranslator:
@@ -97,11 +115,8 @@ class NullTerminal:
     def session_panes_are_open(self, session_id):
         return True
 
-    def current_window(self):
-        return None
-
-    def window_for_session(self, session_id):
-        return None
+    def open_session_panes(self, request):
+        raise AssertionError("panes must not open when they are already open")
 
 
 class NullControls:
@@ -113,9 +128,10 @@ def example_session(session_id: str = "session-one") -> Session:
     return Session(
         session_id=SessionId(session_id),
         lead_actor_id=ActorId("actor-lead"),
-        native_session_id=f"native-{session_id}",
+        harness_session_id=f"harness-{session_id}",
         source_reference="fixture.jsonl",
         working_directory="/work",
+        harness_process_id=os.getpid(),
     )
 
 
@@ -125,7 +141,7 @@ def example_plugin(
     name: str = "example",
 ) -> HarnessPlugin:
     return HarnessPlugin(
-        info=HarnessInfo(name, name.title(), "1.0", SCHEMA_VERSION),
+        info=HarnessInfo(name, name.title(), "1.0", SCHEMA_VERSION, OWN_PROCESS_NAME),
         sources=FixedSources(sources),
         translator=FixedTranslator(translation),
     )
@@ -147,6 +163,8 @@ def canonical_message(
         parent_actor_id=None,
         harness=harness,
         occurred_at=10.0,
+        terminal_window_id=None,
+        harness_process_id=None,
         payload=MessageCreated(
             message_id=MessageId("message-one"),
             role="user",
@@ -154,6 +172,26 @@ def canonical_message(
             phase="prompt",
             reply_to=None,
         ),
+    )
+
+
+def session_started_event(
+    *,
+    session_id: str = "session-one",
+    terminal_window_id: str | None = None,
+    harness_process_id: int | None = None,
+) -> CanonicalEvent:
+    return CanonicalEvent(
+        CanonicalEventId(f"session-started:{session_id}"),
+        SessionId(session_id),
+        ActorId("actor-lead"),
+        None,
+        None,
+        "example",
+        10.0,
+        terminal_window_id,
+        harness_process_id,
+        SessionStarted("/work", "fixture.jsonl", None, None, None, None, None),
     )
 
 
@@ -174,18 +212,43 @@ def raw_observation(raw_event_id: str, *, harness: str = "example", payload: byt
     )
 
 
+def build_interpreter(database_path, harnesses, *, terminal=None, controls=None):
+    """The bootstrap wiring, with an injectable terminal for the pane reaction."""
+    sessions = SessionStore(database_path, harnesses)
+    recorder = RawEventRecorder(database_path)
+    store = CanonicalEventStore(database_path)
+    operation_output = OperationOutputStore(database_path)
+    terminal = terminal if terminal is not None else NullTerminal()
+    reactions = (
+        SessionUpsertCanonicalEventReaction(sessions),
+        OperationOutputCanonicalEventReaction(operation_output, recorder),
+        PaneCanonicalEventReaction(terminal, sessions),
+    )
+    core_translators = {
+        OUTPUT_LOCATION_SOURCE_TYPE: OperationOutputTranslator(),
+        LIVENESS_SOURCE_TYPE: LivenessTranslator(),
+    }
+    interpreter = Interpreter(
+        sessions,
+        harnesses,
+        recorder,
+        operation_output,
+        store,
+        core_translators,
+        reactions,
+        controls if controls is not None else NullControls(),
+    )
+    return interpreter, sessions, recorder, store, operation_output
+
+
 def registered_runtime(tmp_path, translation: TranslationResult | TranslationError, sources=()):
     database_path = str(tmp_path / "events.db")
     harnesses = HarnessRegistry()
     harnesses.register(example_plugin(translation, sources))
-    sessions = SessionRegistry(database_path, harnesses)
-    sessions.register("example", example_session())
-    recorder = RawEventRecorder(database_path)
-    store = CanonicalEventStore(database_path)
-    watches = WatchRegistry(database_path)
-    interpreter = Interpreter(
-        sessions, harnesses, recorder, watches, store, NullControls(), NullTerminal()
+    interpreter, sessions, recorder, store, _operation_output = build_interpreter(
+        database_path, harnesses
     )
+    sessions.save("example", example_session())
     return store, recorder, sessions, interpreter
 
 
@@ -252,6 +315,8 @@ def test_actor_lifecycle_wire_contract(payload, event_type, expected_payload):
         parent_actor_id=None,
         harness="example",
         occurred_at=1.0,
+        terminal_window_id=None,
+        harness_process_id=None,
         payload=payload,
     )
 
@@ -272,27 +337,31 @@ def test_runtime_database_connection_is_closed(tmp_path):
         opened_connection.execute("SELECT * FROM example")
 
 
-def test_a_registered_session_is_not_yet_a_canonical_session(tmp_path):
-    sessions = SessionRegistry(str(tmp_path / "events.db"))
-    sessions.register("example", example_session("candidate"))
+def test_a_saved_session_row_is_not_yet_a_canonical_session(tmp_path):
+    sessions = SessionStore(str(tmp_path / "events.db"))
+    sessions.save("example", example_session("candidate"))
 
     assert CanonicalEventStore(str(tmp_path / "events.db")).session_ids() == ()
 
 
-def test_session_registration_is_insert_once(tmp_path):
-    """The row is the FIRST observation of the session and is immutable.
+def test_session_save_writes_identity_once_and_live_columns_always(tmp_path):
+    """Identity columns are the first observation; the two live columns follow
+    the session around — a resume lands in a new window with a new process."""
+    sessions = SessionStore(str(tmp_path / "events.db"))
+    sessions.save("example", replace(example_session(), terminal_window_id="window-1"))
 
-    Everything that changes over a session's life (working directory, title,
-    model) is a canonical fact; a second registration is a wrapper bug.
-    """
-    sessions = SessionRegistry(str(tmp_path / "events.db"))
-    sessions.register("example", example_session())
+    sessions.save("example", replace(
+        example_session(),
+        working_directory="/elsewhere",
+        terminal_window_id="window-2",
+        harness_process_id=4242,
+    ))
 
-    with pytest.raises(SessionRegistryError, match="already registered"):
-        sessions.register("example", replace(example_session(), working_directory="/elsewhere"))
-
-    loaded = sessions.find(SessionId("session-one"))
-    assert loaded is not None and loaded.working_directory == "/work"
+    loaded = sessions.find_by_id(SessionId("session-one"))
+    assert loaded is not None
+    assert loaded.working_directory == "/work"  # identity: first writer wins
+    assert loaded.terminal_window_id == "window-2"  # live: last writer wins
+    assert loaded.harness_process_id == 4242
 
 
 def test_sessions_carry_their_plugin_only_when_harnesses_are_attached(tmp_path):
@@ -300,37 +369,15 @@ def test_sessions_carry_their_plugin_only_when_harnesses_are_attached(tmp_path):
     harnesses = HarnessRegistry()
     plugin = example_plugin(TranslationResult((), "ignored_nonsemantic"))
     harnesses.register(plugin)
-    SessionRegistry(database_path).register("example", example_session())
+    SessionStore(database_path).save("example", example_session())
 
-    recorder_side = SessionRegistry(database_path).load(SessionId("session-one"))
-    server_side = SessionRegistry(database_path, harnesses).load(SessionId("session-one"))
+    recorder_side = SessionStore(database_path).find_by_id(SessionId("session-one"))
+    server_side = SessionStore(database_path, harnesses).find_by_id(SessionId("session-one"))
 
-    assert recorder_side.plugin is None
-    assert server_side.plugin is plugin
+    assert recorder_side is not None and recorder_side.plugin is None
+    assert server_side is not None and server_side.plugin is plugin
     assert recorder_side == server_side  # attachment, not identity
-    with pytest.raises(UnknownSession):
-        SessionRegistry(database_path).load(SessionId("missing"))
-
-
-def test_application_host_starts_one_silent_singleton(monkeypatch):
-    holders = iter((0, 0, 91))
-    monkeypatch.setattr("app.host.cli.holder", lambda: next(holders))
-    processes = []
-    monkeypatch.setattr(
-        "app.host.subprocess.Popen",
-        lambda arguments, **options: processes.append((arguments, options)),
-    )
-    monkeypatch.setattr("app.host.time.sleep", lambda seconds: None)
-
-    ApplicationHost().ensure_running()
-
-    assert len(processes) == 1
-    arguments, options = processes[0]
-    assert arguments[-1] == "serve"
-    assert arguments[-2].endswith("bin/baqylau-dashboard.py")
-    assert options["start_new_session"] is True
-    assert options["stdout"] is not None
-    assert options["stderr"] is not None
+    assert SessionStore(database_path).find_by_id(SessionId("missing")) is None
 
 
 def test_public_dashboard_url_is_an_allowed_post_origin():
@@ -357,7 +404,10 @@ def test_harness_registry_rejects_multiple_launch_defaults():
     for name in ("first", "second"):
         plugin = replace(
             example_plugin(TranslationResult((), "ignored_nonsemantic"), name=name),
-            info=HarnessInfo(name, name.title(), "1", SCHEMA_VERSION, default_for_launch=True),
+            info=HarnessInfo(
+                name, name.title(), "1", SCHEMA_VERSION, OWN_PROCESS_NAME,
+                default_for_launch=True,
+            ),
             launcher=object(),
         )
         if name == "first":
@@ -373,6 +423,16 @@ def test_codec_round_trip_is_deterministic_and_structured_content_is_canonical()
     assert codec.decode(codec.encode(event)) == event
     assert codec.encode(codec.decode(codec.encode(event))) == codec.encode(event)
     assert StructuredContent('{ "z": 1, "a": [true] }').json_text == '{"a":[true],"z":1}'
+
+
+def test_codec_round_trips_the_observation_location_on_the_envelope():
+    codec = CanonicalEventCodec()
+    event = replace(
+        canonical_message(), terminal_window_id="window-9", harness_process_id=1234
+    )
+    decoded = codec.decode(codec.encode(event))
+    assert decoded.terminal_window_id == "window-9"
+    assert decoded.harness_process_id == 1234
 
 
 def test_codec_rejects_unknown_schema_and_envelope_fields():
@@ -410,104 +470,84 @@ def test_stable_event_id_names_the_same_fact_and_distinguishes_its_phase():
     )
 
 
-def test_evidence_for_an_unregistered_session_waits_in_the_backlog(tmp_path):
-    """A hook may beat the wrapper's registration; nothing is lost or interpreted early."""
+def test_evidence_translates_before_any_session_row_exists(tmp_path):
+    """Facts may precede the session: there is no registration gate on the queue."""
     database_path = str(tmp_path / "events.db")
     recorder = RawEventRecorder(database_path)
     store = CanonicalEventStore(database_path)
     recorder.record((raw_observation("raw-early"),))
 
-    assert store.untranslated_raw_events(10) == ()
+    backlog = store.unverdicted_raw_events(10)
 
-    SessionRegistry(database_path).register("example", example_session())
-    backlog = store.untranslated_raw_events(10)
     assert [raw.raw_event_id for raw in backlog] == [RawEventId("raw-early")]
 
 
-class FixedSessionEvidence:
-    def __init__(self, session):
-        self.session = session
-
-    def from_raw_event(self, raw_event):
-        return self.session
-
-
-def test_the_interpreter_registers_a_session_from_its_own_orphan_evidence(tmp_path):
-    """The wrapper registers at launch; every other launch path is announced by
-    the evidence itself and registered by the interpreter."""
+def test_the_session_is_born_by_the_reaction_to_its_own_started_fact(tmp_path):
+    """The whole point: nothing registers a session. Its first delivery
+    translates into `session.started`, and the upsert reaction derives the row
+    — identity from the payload, location from the envelope."""
     database_path = str(tmp_path / "events.db")
     harnesses = HarnessRegistry()
-    plugin = replace(
-        example_plugin(TranslationResult((canonical_message(),), "translated")),
-        session_evidence=FixedSessionEvidence(example_session()),
+    started = session_started_event(
+        terminal_window_id="the-session-tab", harness_process_id=4242
     )
-    harnesses.register(plugin)
-    sessions = SessionRegistry(database_path, harnesses)
-    recorder = RawEventRecorder(database_path)
-    store = CanonicalEventStore(database_path)
-    interpreter = Interpreter(
-        sessions, harnesses, recorder, WatchRegistry(database_path),
-        store, NullControls(), NullTerminal(),
+    harnesses.register(example_plugin(TranslationResult((started,), "translated")))
+    interpreter, sessions, recorder, store, _operation_output = build_interpreter(
+        database_path, harnesses
     )
-    recorder.record((raw_observation("raw-orphan"),))
-    assert sessions.find(SessionId("session-one")) is None
+    recorder.record((raw_observation("raw-announcing"),))
+    assert sessions.find_by_id(SessionId("session-one")) is None
 
     interpreter.tick()
 
-    registered = sessions.find(SessionId("session-one"))
-    assert registered is not None and registered.plugin is plugin
-    # the waiting evidence interpreted in the same tick
-    assert store.untranslated_raw_events(10) == ()
+    born = sessions.find_by_id(SessionId("session-one"))
+    assert born is not None
+    assert born.source_reference == "fixture.jsonl"
+    assert born.working_directory == "/work"
+    assert born.terminal_window_id == "the-session-tab"
+    assert born.harness_process_id == 4242
+    assert born.plugin is harnesses.plugin("example")
+    assert store.unverdicted_raw_events(10) == ()
+
+
+def test_facts_before_the_started_fact_commit_but_birth_no_session(tmp_path):
+    database_path = str(tmp_path / "events.db")
+    harnesses = HarnessRegistry()
+    harnesses.register(example_plugin(TranslationResult((canonical_message(),), "translated")))
+    interpreter, sessions, recorder, store, _operation_output = build_interpreter(
+        database_path, harnesses
+    )
+    recorder.record((raw_observation("raw-early"),))
+
+    interpreter.tick()
+
+    assert sessions.find_by_id(SessionId("session-one")) is None
     assert len(store.after(SessionId("session-one"), 0, 10).events) == 1
 
 
-def test_orphan_evidence_stays_waiting_when_the_harness_cannot_name_a_session(tmp_path):
+def test_a_later_delivery_updates_the_live_columns_of_the_row(tmp_path):
+    """A resumed session shows up in a new window with a new process; the
+    envelope of any later hook-borne fact refreshes the live columns."""
     database_path = str(tmp_path / "events.db")
-    harnesses = HarnessRegistry()
-    harnesses.register(example_plugin(TranslationResult((), "ignored_nonsemantic")))
-    sessions = SessionRegistry(database_path, harnesses)
-    recorder = RawEventRecorder(database_path)
-    store = CanonicalEventStore(database_path)
-    interpreter = Interpreter(
-        sessions, harnesses, recorder, WatchRegistry(database_path),
-        store, NullControls(), NullTerminal(),
-    )
-    recorder.record((raw_observation("raw-orphan"),))
-
-    interpreter.tick()
-
-    assert sessions.find(SessionId("session-one")) is None
-    assert store.untranslated_raw_events(10) == ()  # still gated on registration
-    assert [raw.raw_event_id for raw in store.unregistered_raw_events(10)] == [
-        RawEventId("raw-orphan")
-    ]
-
-
-def test_session_evidence_naming_a_different_session_is_refused_and_audited(tmp_path, monkeypatch):
-    audited = []
-    monkeypatch.setattr(
-        "app.interpreter._audit_failure",
-        lambda where, context: audited.append((where, context)),
-    )
-    database_path = str(tmp_path / "events.db")
-    harnesses = HarnessRegistry()
-    harnesses.register(replace(
-        example_plugin(TranslationResult((), "ignored_nonsemantic")),
-        session_evidence=FixedSessionEvidence(example_session("some-other-session")),
+    sessions = SessionStore(database_path)
+    sessions.save("example", replace(
+        example_session(), terminal_window_id="old-window", harness_process_id=1,
     ))
-    sessions = SessionRegistry(database_path, harnesses)
-    recorder = RawEventRecorder(database_path)
-    interpreter = Interpreter(
-        sessions, harnesses, recorder, WatchRegistry(database_path),
-        CanonicalEventStore(database_path), NullControls(), NullTerminal(),
-    )
-    recorder.record((raw_observation("raw-orphan"),))
+    reaction = SessionUpsertCanonicalEventReaction(sessions)
 
-    interpreter.tick()
+    reaction.react(replace(
+        canonical_message(), terminal_window_id="new-window", harness_process_id=2,
+    ))
 
-    assert sessions.find(SessionId("some-other-session")) is None
-    assert sessions.find(SessionId("session-one")) is None
-    assert [where for where, _ in audited] == ["session evidence"]
+    updated = sessions.find_by_id(SessionId("session-one"))
+    assert updated is not None
+    assert updated.terminal_window_id == "new-window"
+    assert updated.harness_process_id == 2
+
+    # A file-borne fact carries no location and touches nothing.
+    reaction.react(canonical_message())
+    untouched = sessions.find_by_id(SessionId("session-one"))
+    assert untouched is not None and untouched.terminal_window_id == "new-window"
 
 
 def test_interpretation_commits_verdict_canonical_and_provenance_together(tmp_path):
@@ -519,7 +559,7 @@ def test_interpretation_commits_verdict_canonical_and_provenance_together(tmp_pa
 
     interpreter.tick()
 
-    assert store.untranslated_raw_events(10) == ()
+    assert store.unverdicted_raw_events(10) == ()
     assert store.after(SessionId("session-one"), 0, 10).events[0].event == event
     connection = sqlite3.connect(store.database_path)
     assert connection.execute("SELECT count(*) FROM raw_events").fetchone()[0] == 1
@@ -561,9 +601,10 @@ def test_reused_raw_identity_is_corruption_not_convergence(tmp_path):
 def test_re_observing_one_fact_is_idempotent_even_when_observers_disagree(tmp_path):
     """A canonical identity names a FACT, so re-observing it only adds provenance.
 
-    Several sources legitimately converge on one event (a hook, the transcript, the
-    foreground tee) and may render it differently. The first writer stays authoritative
-    and the later rendering stays recoverable from its own raw evidence.
+    Several sources legitimately converge on one event (a hook, the harness's
+    own files, the foreground tee) and may render it differently. The first
+    writer stays authoritative and the later rendering stays recoverable from
+    its own raw evidence.
     """
     store, recorder, _sessions, _interpreter = registered_runtime(
         tmp_path, TranslationResult((), "ignored_nonsemantic")
@@ -572,12 +613,13 @@ def test_re_observing_one_fact_is_idempotent_even_when_observers_disagree(tmp_pa
     store.store_translation(
         raw_observation("raw-one"), "1.0", TranslationResult((canonical_message(),), "translated")
     )
-    store.store_translation(
+    converged = store.store_translation(
         raw_observation("raw-two"),
         "1.0",
         TranslationResult((canonical_message(text="changed"),), "translated"),
     )
 
+    assert converged == ()  # converged re-observations are not returned to reactions
     stored = store.after(SessionId("session-one"), 0, 10).events
     assert len(stored) == 1
     assert stored[0].event.payload.content.text == "hello"
@@ -617,9 +659,11 @@ def test_translation_failure_is_a_complete_audited_decision(tmp_path):
     interpreter.tick()
 
     connection = sqlite3.connect(store.database_path)
-    assert connection.execute(
+    decision, reason = connection.execute(
         "SELECT decision, reason FROM translation_records WHERE raw_event_id='raw-bad'"
-    ).fetchone() == ("translation_failed", "malformed record: line 1")
+    ).fetchone()
+    assert decision == "translation_failed"
+    assert reason == "TranslationError: malformed record"
     assert connection.execute("SELECT count(*) FROM canonical_events").fetchone()[0] == 0
 
 
@@ -634,18 +678,15 @@ def test_a_translator_bug_becomes_a_verdict_and_never_wedges_the_backlog(tmp_pat
     harnesses = HarnessRegistry()
     harnesses.register(
         HarnessPlugin(
-            info=HarnessInfo("example", "Example", "1.0", SCHEMA_VERSION),
+            info=HarnessInfo("example", "Example", "1.0", SCHEMA_VERSION, OWN_PROCESS_NAME),
             sources=FixedSources(),
             translator=BuggyTranslator(),
         )
     )
-    sessions = SessionRegistry(database_path, harnesses)
-    sessions.register("example", example_session())
-    recorder = RawEventRecorder(database_path)
-    store = CanonicalEventStore(database_path)
-    interpreter = Interpreter(
-        sessions, harnesses, recorder, WatchRegistry(database_path), store, NullControls(), NullTerminal()
+    interpreter, sessions, recorder, store, _operation_output = build_interpreter(
+        database_path, harnesses
     )
+    sessions.save("example", example_session())
     recorder.record((raw_observation("raw-bug"),))
 
     interpreter.tick()
@@ -656,13 +697,12 @@ def test_a_translator_bug_becomes_a_verdict_and_never_wedges_the_backlog(tmp_pat
     ).fetchone()
     assert decision == "translation_failed"
     assert "ZeroDivisionError" in reason
-    assert store.untranslated_raw_events(10) == ()
+    assert store.unverdicted_raw_events(10) == ()
 
 
 def test_evidence_cli_prints_exact_raw_and_canonical_correlation(tmp_path, monkeypatch, capsys):
     data_directory = tmp_path / "data"
     database_path = str(data_directory / "events.db")
-    SessionRegistry(database_path).register("example", example_session())
     recorder = RawEventRecorder(database_path)
     store = CanonicalEventStore(database_path)
     raw_event = raw_observation("raw-one", payload=b"exact bytes\n")
@@ -712,7 +752,7 @@ def test_evidence_queries_show_exact_raw_translation_and_canonical_chain(tmp_pat
     assert EvidenceQueries(store).session(SessionId("session-one")) == (evidence,)
 
 
-def test_evidence_queries_show_the_untranslated_backlog(tmp_path):
+def test_evidence_queries_show_the_unverdicted_backlog(tmp_path):
     recorder = RawEventRecorder(str(tmp_path / "events.db"))
     store = CanonicalEventStore(str(tmp_path / "events.db"))
     recorder.record((raw_observation("raw-waiting"),))
@@ -727,22 +767,15 @@ def test_evidence_queries_show_the_untranslated_backlog(tmp_path):
 def test_the_interpreter_pulls_translates_and_presents_in_one_tick(tmp_path):
     event = canonical_message()
     raw_event = raw_observation("synthetic-raw")
-    store, _recorder, sessions, _interpreter = registered_runtime(
-        tmp_path, TranslationResult((event,), "translated")
-    )
+    database_path = str(tmp_path / "events.db")
     harnesses = HarnessRegistry()
     harnesses.register(
         example_plugin(TranslationResult((event,), "translated"), (FixedReadSource((raw_event,)),))
     )
-    interpreter = Interpreter(
-        SessionRegistry(store.database_path, harnesses),
-        harnesses,
-        RawEventRecorder(store.database_path),
-        WatchRegistry(store.database_path),
-        store,
-        NullControls(),
-        NullTerminal(),
+    interpreter, sessions, _recorder, store, _operation_output = build_interpreter(
+        database_path, harnesses
     )
+    sessions.save("example", example_session())
 
     interpreter.tick()
 
@@ -778,9 +811,7 @@ def test_one_failing_source_neither_stops_its_siblings_nor_the_interpreter(tmp_p
 
     event = canonical_message()
     raw_event = raw_observation("raw-one")
-    store, _recorder, _sessions, _interpreter = registered_runtime(
-        tmp_path, TranslationResult((event,), "translated")
-    )
+    database_path = str(tmp_path / "events.db")
     harnesses = HarnessRegistry()
     harnesses.register(
         example_plugin(
@@ -788,15 +819,10 @@ def test_one_failing_source_neither_stops_its_siblings_nor_the_interpreter(tmp_p
             (BrokenSource(), FixedReadSource((raw_event,))),
         )
     )
-    interpreter = Interpreter(
-        SessionRegistry(store.database_path, harnesses),
-        harnesses,
-        RawEventRecorder(store.database_path),
-        WatchRegistry(store.database_path),
-        store,
-        NullControls(),
-        NullTerminal(),
+    interpreter, sessions, _recorder, store, _operation_output = build_interpreter(
+        database_path, harnesses
     )
+    sessions.save("example", example_session())
 
     interpreter.tick()
 
@@ -810,10 +836,10 @@ def test_watchable_is_every_unfinished_session_without_a_count_limit(tmp_path):
     database_path = str(tmp_path / "events.db")
     harnesses = HarnessRegistry()
     harnesses.register(example_plugin(TranslationResult((), "ignored_nonsemantic")))
-    sessions = SessionRegistry(database_path, harnesses)
+    sessions = SessionStore(database_path, harnesses)
     store = CanonicalEventStore(database_path)
     for index in range(6):
-        sessions.register("example", example_session(f"session-{index}"))
+        sessions.save("example", example_session(f"session-{index}"))
 
     assert len(sessions.watchable()) == 6
     assert all(session.plugin is not None for session in sessions.watchable())
@@ -826,6 +852,8 @@ def test_watchable_is_every_unfinished_session_without_a_count_limit(tmp_path):
         None,
         "example",
         10.0,
+        None,
+        None,
         SessionFinished("succeeded", None),
     )
     RawEventRecorder(database_path).record((
@@ -840,12 +868,89 @@ def test_watchable_is_every_unfinished_session_without_a_count_limit(tmp_path):
     watchable_ids = {str(session.session_id) for session in sessions.watchable()}
     assert "session-3" not in watchable_ids
     assert len(watchable_ids) == 5
-    assert sessions.is_finished(SessionId("session-3"))
+
+
+# --- liveness ------------------------------------------------------------------
+
+
+def test_a_pid_less_session_is_a_loud_audited_error_every_tick(tmp_path, monkeypatch):
+    """Never a silent skip: a session without a harness process id cannot be
+    watched for liveness, and the failure lands in the audit until it can."""
+    audited = []
+    monkeypatch.setattr(
+        "app.interpreter._audit_failure",
+        lambda where, context: audited.append((where, context)),
+    )
+    database_path = str(tmp_path / "events.db")
+    harnesses = HarnessRegistry()
+    harnesses.register(example_plugin(TranslationResult((), "ignored_nonsemantic")))
+    interpreter, sessions, _recorder, _store, _operation_output = build_interpreter(
+        database_path, harnesses
+    )
+    sessions.save("example", replace(example_session(), harness_process_id=None))
+
+    interpreter.tick()
+
+    assert [where for where, _ in audited] == ["source construction"]
+
+
+def test_a_dead_cli_process_becomes_one_session_finished_fact(tmp_path):
+    """The liveness source is the one finish signal every session has."""
+    database_path = str(tmp_path / "events.db")
+    harnesses = HarnessRegistry()
+    harnesses.register(example_plugin(TranslationResult((), "ignored_nonsemantic")))
+    interpreter, sessions, _recorder, store, _operation_output = build_interpreter(
+        database_path, harnesses
+    )
+    # A pid that is certainly not a live process with our name.
+    sessions.save("example", replace(example_session(), harness_process_id=2**22 + 1))
+
+    interpreter.tick()
+
+    events = store.after(SessionId("session-one"), 0, 10).events
+    assert [type(stored.event.payload) for stored in events] == [SessionFinished]
+    assert stored_reason(events[0]) == "process_exited"
+    assert sessions.watchable() == ()
+
+    # The latch: a later tick re-records nothing.
+    interpreter.tick()
+    connection = sqlite3.connect(store.database_path)
+    assert connection.execute(
+        "SELECT count(*) FROM raw_events WHERE source_type='liveness'"
+    ).fetchone()[0] == 1
+
+
+def stored_reason(stored) -> str | None:
+    return stored.event.payload.reason
+
+
+def test_the_liveness_source_verifies_the_process_is_still_the_cli():
+    """Pids get reused by the OS; alive is not enough."""
+    session = replace(example_session(), plugin=example_plugin(
+        TranslationResult((), "ignored_nonsemantic")
+    ))
+    alive = SessionLivenessSource(session)
+    assert alive.read(None) == ()  # our own pid, our own process name: alive
+
+    imposter = replace(
+        session,
+        plugin=replace(
+            session.plugin,
+            info=HarnessInfo("example", "Example", "1.0", SCHEMA_VERSION, "definitely-not-us"),
+        ),
+    )
+    raw_events = SessionLivenessSource(imposter).read(None)
+    assert [raw.source_type for raw in raw_events] == [LIVENESS_SOURCE_TYPE]
+
+    with pytest.raises(ValueError, match="no harness process id"):
+        SessionLivenessSource(replace(session, harness_process_id=None))
+
+
+# --- panes ----------------------------------------------------------------------
 
 
 class RecordingTerminal:
-    def __init__(self, session_window_id=None):
-        self.session_window_id = session_window_id
+    def __init__(self):
         self.calls = []
 
     def close_session_panes(self, session_id):
@@ -854,56 +959,30 @@ class RecordingTerminal:
     def session_panes_are_open(self, session_id):
         return any(call[0] == "open" for call in self.calls)
 
-    def current_window(self):
-        raise AssertionError("the server's own window identity must never be used")
-
-    def window_for_session(self, session_id):
-        return self.session_window_id
-
     def open_session_panes(self, request):
         self.calls.append(("open", request.session_id, request.anchor_window_id))
 
 
-def _pane_react_interpreter(tmp_path, session_window_id=None, recorded_window_id=None):
-    started = CanonicalEvent(
-        CanonicalEventId("session-started"),
-        SessionId("session-one"),
-        ActorId("actor-lead"),
-        None,
-        None,
-        "example",
-        10.0,
-        SessionStarted("/work", None, None, None, None, None),
+def _pane_react_interpreter(tmp_path, *, window_id=None):
+    started = session_started_event(
+        terminal_window_id=window_id, harness_process_id=os.getpid()
     )
     database_path = str(tmp_path / "events.db")
     harnesses = HarnessRegistry()
     harnesses.register(example_plugin(TranslationResult((started,), "translated")))
-    sessions = SessionRegistry(database_path, harnesses)
-    sessions.register("example", example_session())
-    recorder = RawEventRecorder(database_path)
-    terminal = RecordingTerminal(session_window_id)
-    interpreter = Interpreter(
-        sessions,
-        harnesses,
-        recorder,
-        WatchRegistry(database_path),
-        CanonicalEventStore(database_path),
-        NullControls(),
-        terminal,
+    terminal = RecordingTerminal()
+    interpreter, _sessions, recorder, _store, _operation_output = build_interpreter(
+        database_path, harnesses, terminal=terminal
     )
-    if recorded_window_id is not None:
-        recorder.record((terminal_window_raw_event(
-            example_session().source_context, "example", recorded_window_id,
-        ),))
     recorder.record((raw_observation("raw-start"),))
     return interpreter, recorder, terminal
 
 
-def test_the_interpreter_anchors_panes_at_the_recorded_terminal_window(tmp_path):
-    """Hooks record their own window as evidence; the server anchors there —
-    never at its own inherited 'current window', which is a stale guess."""
+def test_panes_open_at_the_window_the_announcing_delivery_recorded(tmp_path):
+    """The envelope of the session.started fact carries the window the hook ran
+    in; the row is written first (reaction order), then the panes anchor to it."""
     interpreter, recorder, terminal = _pane_react_interpreter(
-        tmp_path, recorded_window_id="the-session-tab"
+        tmp_path, window_id="the-session-tab"
     )
 
     interpreter.tick()
@@ -914,7 +993,7 @@ def test_the_interpreter_anchors_panes_at_the_recorded_terminal_window(tmp_path)
     assert terminal.calls == [("open", SessionId("session-one"), "the-session-tab")]
 
 
-def test_the_interpreter_opens_no_panes_without_an_anchor(tmp_path):
+def test_a_headless_session_gets_no_panes(tmp_path):
     interpreter, _recorder, terminal = _pane_react_interpreter(tmp_path)
 
     interpreter.tick()
@@ -922,31 +1001,30 @@ def test_the_interpreter_opens_no_panes_without_an_anchor(tmp_path):
     assert terminal.calls == []
 
 
-def test_the_interpreter_prefers_the_session_own_window_over_the_recorded_anchor(tmp_path):
-    interpreter, _recorder, terminal = _pane_react_interpreter(
-        tmp_path,
-        session_window_id="adopted-window",
-        recorded_window_id="older-anchor",
-    )
-
-    interpreter.tick()
-
-    assert terminal.calls == [("open", SessionId("session-one"), "adopted-window")]
+# --- operation output -------------------------------------------------------------
 
 
-def test_watch_directives_run_the_whole_foreground_lifecycle(tmp_path):
-    """start directive → active row → chunks pulled → finish directive → drained away."""
+def test_output_location_directives_run_the_whole_foreground_lifecycle(tmp_path):
+    """directive → fact → active row → chunks pulled → operation.finished → drained away."""
     database_path = str(tmp_path / "events.db")
     harnesses = HarnessRegistry()
-    harnesses.register(example_plugin(TranslationResult((), "ignored_nonsemantic")))
-    sessions = SessionRegistry(database_path, harnesses)
-    sessions.register("example", example_session())
-    recorder = RawEventRecorder(database_path)
-    store = CanonicalEventStore(database_path)
-    watches = WatchRegistry(database_path)
-    interpreter = Interpreter(
-        sessions, harnesses, recorder, watches, store, NullControls(), NullTerminal()
+    finished = CanonicalEvent(
+        CanonicalEventId("operation-finished"),
+        SessionId("session-one"),
+        ActorId("actor-lead"),
+        None,
+        None,
+        "example",
+        10.0,
+        None,
+        None,
+        OperationFinished(OperationId("operation-1"), "succeeded", None, None),
     )
+    harnesses.register(example_plugin(TranslationResult((finished,), "translated")))
+    interpreter, sessions, recorder, store, operation_output = build_interpreter(
+        database_path, harnesses
+    )
+    sessions.save("example", example_session())
 
     output_path = tmp_path / "operation.out"
     output_path.write_bytes(b"hello")
@@ -957,30 +1035,73 @@ def test_watch_directives_run_the_whole_foreground_lifecycle(tmp_path):
         parent_actor_id=None,
         source_reference="fixture.jsonl",
     )
-    watch = FileWatch(
-        operation_id="operation-1",
+    located = OperationOutputLocated(
+        operation_id=OperationId("operation-1"),
         source_path=str(output_path),
-        chunk_source_type="foreground_output",
+        chunk_source_type="tool_output",
         delete_source=True,
         initial_size=0,
         initial_modified_at=0,
         wait_for_source_change=False,
+        until="operation_finished",
     )
-    recorder.record((watch_start_raw_event(context, "example", watch),))
-    interpreter.tick()  # applies the directive
+    recorder.record((output_location_raw_event(context, "example", located),))
+    interpreter.tick()  # translates the directive; the reaction starts the following
     interpreter.tick()  # pulls the first chunks
 
     chunk_types = {
         raw.source_type
         for raw in EvidenceQueries(store).session(SessionId("session-one"))
     }
-    assert "foreground_output" in chunk_types
-    assert len(watches.for_session(SessionId("session-one"))) == 1
+    assert "tool_output" in chunk_types
+    assert len(operation_output.for_session(SessionId("session-one"))) == 1
+    committed_types = {
+        type(stored.event.payload)
+        for stored in store.after(SessionId("session-one"), 0, 100).events
+    }
+    assert OperationOutputLocated in committed_types
 
-    recorder.record((watch_finish_raw_event(context, "example", "operation-1"),))
+    # The operation.finished fact (from the plugin translator) ends the following.
+    recorder.record((raw_observation("raw-finish"),))
     interpreter.tick()
     interpreter.tick()
 
-    assert watches.for_session(SessionId("session-one")) == ()
+    assert operation_output.for_session(SessionId("session-one")) == ()
     assert not output_path.exists()
-    assert store.untranslated_raw_events(10) == ()
+    assert store.unverdicted_raw_events(10) == ()
+
+
+def test_a_background_following_survives_operation_finished_until_the_session_ends(tmp_path):
+    database_path = str(tmp_path / "events.db")
+    sessions = SessionStore(database_path)
+    recorder = RawEventRecorder(database_path)
+    operation_output = OperationOutputStore(database_path)
+    reaction = OperationOutputCanonicalEventReaction(operation_output, recorder)
+    output_path = tmp_path / "task.output"
+    output_path.write_bytes(b"background bytes")
+    located = OperationOutputLocated(
+        operation_id=OperationId("operation-bg"),
+        source_path=str(output_path),
+        chunk_source_type="tool_output",
+        delete_source=False,
+        initial_size=0,
+        initial_modified_at=0,
+        wait_for_source_change=False,
+        until="session_finished",
+    )
+    reaction.react(replace(canonical_message(), payload=located))
+    reaction.react(replace(
+        canonical_message(),
+        payload=OperationFinished(OperationId("operation-bg"), "succeeded", None, None),
+    ))
+    assert len(operation_output.for_session(SessionId("session-one"))) == 1
+
+    sessions.save("example", example_session())
+    reaction.react(replace(canonical_message(), payload=SessionFinished("succeeded", None)))
+
+    assert operation_output.for_session(SessionId("session-one")) == ()
+    assert output_path.exists()  # the harness's own file is never deleted by us
+    connection = sqlite3.connect(database_path)
+    assert connection.execute(
+        "SELECT count(*) FROM raw_events WHERE source_type='tool_output'"
+    ).fetchone()[0] == 1  # the tail was drained before the row was removed

@@ -62,6 +62,8 @@ def _event(event_id: str, payload):
         parent_actor_id=None,
         harness="codex",
         occurred_at=10.0,
+        terminal_window_id=None,
+        harness_process_id=None,
         payload=payload,
     )
 
@@ -73,12 +75,12 @@ def _record(application, raw_event, translator_version, translation):
 
 def _application(tmp_path):
     application = build_application(str(tmp_path))
-    application.sessions.register(
+    application.sessions.save(
         "codex",
         Session(SESSION_ID, ACTOR_ID, "native", "fixture", "/work"),
     )
     events = (
-        _event("session", SessionStarted("/work", None, None, None, None, None)),
+        _event("session", SessionStarted("/work", "fixture.jsonl", None, None, None, None, None)),
         _event(
             "message",
             MessageCreated(
@@ -169,10 +171,7 @@ def test_plural_session_resources_use_the_canonical_snapshot_and_activity(tmp_pa
         assert page_snapshot["canonical"]["cursor"] == 2
         assert page_snapshot["canonical"]["session"]["working_directory"] == "/work"
         assert "window_id" in page_snapshot["application"]["terminal"]
-        assert page_snapshot["application"]["memory"] == {
-            "enabled": False,
-            "item_count": 0,
-        }
+        assert "memory" not in page_snapshot["application"]
         assert page_snapshot["application"]["errors"] == [
             {
                 "error_id": 1,
@@ -187,14 +186,13 @@ def test_plural_session_resources_use_the_canonical_snapshot_and_activity(tmp_pa
         status, _content_type, body = _get(server, "/api/harnesses")
         harnesses = {row["name"]: row for row in json.loads(body)}
         assert status == 200
-        assert harnesses["claude_code"]["supports_memory"] is True
-        assert harnesses["codex"]["supports_memory"] is False
+        assert "supports_memory" not in harnesses["claude_code"]
 
         status, _content_type, body = _get(
             server, "/api/sessions/session-one/memory"
         )
-        assert status == 400
-        assert json.loads(body)["error"] == "memory is not enabled for this session"
+        assert status == 404
+        assert json.loads(body)["error"] == "not found"
 
         for legacy_path in (
             "/api/session/session-one",
@@ -240,6 +238,8 @@ def test_dashboard_main_scope_shows_only_lead_activity_and_actor_scope_shows_the
             parent_actor_id=parent_actor_id,
             harness="codex",
             occurred_at=20.0,
+            terminal_window_id=None,
+            harness_process_id=None,
             payload=MessageCreated(MessageId(event_id), role, TextContent(text), None, None),
         )
         _record(
@@ -927,6 +927,8 @@ def _record_agent_message(application):
         parent_actor_id=ACTOR_ID,
         harness="codex",
         occurred_at=11.0,
+        terminal_window_id=None,
+        harness_process_id=None,
         payload=MessageCreated(
             MessageId("message-two"),
             "assistant",
@@ -993,29 +995,6 @@ def test_pane_scoreboard_stream_renders_the_session_summary(tmp_path, monkeypatc
         event, frame = _read_sse_event(response)
         assert event == "frame"
         assert frame["ansi"].startswith("\033[H\033[2J\033[3J")
-    finally:
-        connection.close()
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=2)
-
-
-def test_pane_stream_resolves_a_pending_identity_server_side(tmp_path, monkeypatch):
-    monkeypatch.setenv("BAQYLAU_DATA_DIR", str(tmp_path / "data"))
-    from app import pending_session
-
-    pending_id = pending_session.identity(4242)
-    pending_session.bind(pending_id, SESSION_ID)
-    server, thread = _server(_application(tmp_path))
-    connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=2)
-    try:
-        connection.request(
-            "GET", f"/api/sessions/{pending_id}/panes/mirror/stream?width=80"
-        )
-        response = connection.getresponse()
-        assert _read_sse_event(response) == ("session", {"session_id": "session-one"})
-        event, _frame = _read_sse_event(response)
-        assert event == "frame"
     finally:
         connection.close()
         server.shutdown()
@@ -1129,11 +1108,10 @@ def test_mirror_frames_share_one_model_across_client_widths(tmp_path, monkeypatc
     assert len(application.pane_streams._models) == 1
 
 
-def _post_hook(server, harness: str, payload: bytes, environment: dict | None = None):
+def _post_hook(server, harness: str, payload: bytes, observed: dict | None = None):
     connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=2)
     headers = {"Content-Type": "application/json", "X-Baqylau": "1"}
-    if environment is not None:
-        headers["X-Baqylau-Environment"] = json.dumps(environment)
+    headers.update(observed or {})
     connection.request("POST", f"/api/harnesses/{quote(harness)}/hooks", body=payload, headers=headers)
     response = connection.getresponse()
     response_body = response.read()
@@ -1156,22 +1134,22 @@ def test_hook_delivery_records_exact_evidence_and_returns_the_reply(tmp_path):
     }).encode()
     try:
         status, body = _post_hook(
-            server, "claude_code", payload, {"KITTY_WINDOW_ID": "1114"}
+            server, "claude_code", payload,
+            {"X-Baqylau-Terminal-Window": "1114", "X-Baqylau-Harness-Process": "4242"},
         )
         assert status == 200
         assert b"updatedInput" in body
 
         evidence = application.evidence.session(SessionId("hook-session"))
-        assert [raw.source_type for raw in evidence] == ["hook", "watch", "terminal"]
+        assert [raw.source_type for raw in evidence] == ["hook", "output_location"]
         assert evidence[0].payload == payload
-        assert json.loads(evidence[2].payload) == {"window_id": "1114"}
     finally:
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
 
 
-def test_hook_delivery_ships_the_hooks_environment_not_the_daemons(tmp_path, monkeypatch):
+def test_hook_delivery_ships_the_hooks_observations_not_the_daemons(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDE_SUBSCRIPTION_SLUG", "daemon-account")
     application = _application(tmp_path)
     server, thread = _server(application)
@@ -1183,14 +1161,11 @@ def test_hook_delivery_ships_the_hooks_environment_not_the_daemons(tmp_path, mon
     }).encode()
     try:
         status, _body = _post_hook(
-            server, "claude_code", payload, {"CLAUDE_SUBSCRIPTION_SLUG": "c2"}
+            server, "claude_code", payload, {"X-Baqylau-Account-Id": "c2"}
         )
         assert status == 200
-        account = [
-            raw for raw in application.evidence.session(SessionId("hook-session"))
-            if raw.source_type == "account"
-        ][0]
-        assert json.loads(account.payload)["slug"] == "c2"
+        hook_row = application.evidence.session(SessionId("hook-session"))[0]
+        assert hook_row.account_id == "c2"
     finally:
         server.shutdown()
         server.server_close()

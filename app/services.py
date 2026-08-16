@@ -24,7 +24,7 @@ from contracts.harness import (
 from contracts.terminal import SessionTerminal, TabRequest, TerminalControl, TerminalScreen
 from domain.ids import SessionId
 from runtime.harnesses import HarnessRegistry
-from runtime.sessions import SessionRegistry
+from runtime.sessions import SessionStore
 from runtime.projections import SessionQueries
 from app.usage import UsageSource
 
@@ -75,7 +75,7 @@ def _audit_control(request: ControlRequest, outcome, elapsed: float) -> None:
 class HarnessControlService(HarnessReactorContext):
     def __init__(
         self,
-        sessions: SessionRegistry,
+        sessions: SessionStore,
         terminal: TerminalControl,
         queries: SessionQueries,
     ) -> None:
@@ -94,7 +94,9 @@ class HarnessControlService(HarnessReactorContext):
         return outcome
 
     def _execute(self, request: ControlRequest) -> ControlOutcome:
-        session = self.sessions.load(request.session_id)
+        session = self.sessions.find_by_id(request.session_id)
+        if session is None:
+            return ControlResult(request.request_id, "rejected", "unknown session")
         plugin = session.plugin
         if plugin is None or plugin.controller is None:
             return ControlResult(request.request_id, "rejected", "unsupported control")
@@ -182,7 +184,7 @@ class HarnessUsageService(UsageSource):
 class TerminalInputService:
     def __init__(
         self,
-        sessions: SessionRegistry,
+        sessions: SessionStore,
         terminal: SessionTerminal,
         screen: TerminalScreen,
     ) -> None:
@@ -195,7 +197,8 @@ class TerminalInputService:
 
     def state(self, session_id: SessionId) -> TerminalSessionState:
         window_id = self.terminal.window_for_session(session_id)
-        plugin = self.sessions.load(session_id).plugin
+        session = self.sessions.find_by_id(session_id)
+        plugin = session.plugin if session is not None else None
         input_state = (
             plugin.terminal_probe.input_state(self.screen, window_id)
             if window_id is not None

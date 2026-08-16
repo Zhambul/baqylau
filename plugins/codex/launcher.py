@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import os
-import sys
-
 from contracts.harness import HarnessLaunchPlan, HarnessLauncher, LaunchRejected, LaunchRequest
 
 
@@ -29,9 +26,10 @@ class CodexLauncher(HarnessLauncher):
             arguments.extend(("-c", f"model_reasoning_effort={request.effort}"))
         if prompt.strip():
             arguments.append(prompt)
-        command_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "command.py")
+        # Launching is just running the CLI; the session announces itself
+        # through its own hook evidence.
         return HarnessLaunchPlan(
-            command=sys.executable,
-            arguments=(command_path, *arguments),
+            command="codex",
+            arguments=tuple(arguments),
             title="Codex",
         )
