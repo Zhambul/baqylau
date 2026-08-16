@@ -1030,10 +1030,10 @@ def parse_line(s):
 # boundary (verified on cli 0.146): a parent's replayed `task_started` carries a
 # `started_at` from BEFORE the fork, while the CHILD's OWN bootstrap `task_started`
 # carries `started_at >= the fork` (the child `session_meta`'s own timestamp).
-# Everything after that bootstrap task_started is the child's turn. Two callers
-# apply it in the shape their context needs (they share this predicate): the
-# stream tails LIVE so it GATES per-record (race-safe — `feed_rollout`); the web
-# `conversation` reads a COMPLETE file so it seeks a byte OFFSET.
+# The bootstrap task_started ITSELF is the child's first own record — it is the
+# child's turn/assignment start, and classifying it as replay eats the canonical
+# `actor.assignment_started` (measured, session 01a00a31-3a90: the started card
+# never painted). Everything before it is the replayed prefix.
 
 def subagent_fork_epoch(path):
     """int(the child `session_meta` timestamp) for a SUBAGENT rollout, else None
@@ -1061,7 +1061,8 @@ def subagent_fork_epoch(path):
 
 def is_child_bootstrap(rec, fork_epoch):
     """True for the child's OWN bootstrap `task_started` (`at >= fork_epoch`) —
-    the last record of the replayed-parent prefix. `fork_epoch` None => never."""
+    the FIRST child-own record; the replayed-parent prefix is everything before
+    it. `fork_epoch` None => never."""
     return (fork_epoch is not None and bool(rec)
             and rec.get("kind") == "task_started"
             and (rec.get("at") or 0) >= fork_epoch)
@@ -1131,11 +1132,10 @@ def subagent_brief(path):
 
 
 def subagent_body_offset(path):
-    """Byte offset of the first CHILD-OWN record in a subagent rollout — just past
-    the child's bootstrap task_started, skipping the replayed-parent prefix. 0 for
-    a normal rollout OR when the boundary isn't found (fail-open: show everything,
-    never an empty scope). For a random-access reader (the web conversation); the
-    live stream uses is_child_bootstrap as a forward gate instead."""
+    """Byte offset of the first CHILD-OWN record in a subagent rollout — the
+    child's bootstrap task_started itself (its turn/assignment start), skipping
+    the replayed-parent prefix before it. 0 for a normal rollout OR when the
+    boundary isn't found (fail-open: show everything, never an empty scope)."""
     fork_epoch = subagent_fork_epoch(path)
     if fork_epoch is None:
         return 0
@@ -1143,13 +1143,14 @@ def subagent_body_offset(path):
         off = 0
         with open(path, "rb") as fh:
             for raw in fh:
-                off += len(raw)
                 try:
                     rec = parse(json.loads(raw.decode("utf-8", "replace")))
                 except Exception:
+                    off += len(raw)
                     continue
                 if is_child_bootstrap(rec, fork_epoch):
-                    return off          # the child's turns begin on the NEXT line
+                    return off          # the child's turns begin HERE
+                off += len(raw)
     except Exception:
         pass
     return 0

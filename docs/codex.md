@@ -1341,7 +1341,11 @@ scope: its intermediate messages/reasoning/commands all visible. Four parts:
    the boundary: the parent's replayed `task_started` carries a `started_at` from
    BEFORE the fork, while the child's OWN bootstrap `task_started` carries
    `started_at >= the fork` (`subagent_fork_epoch` = the child `session_meta`'s
-   timestamp). Everything after that bootstrap task_started is the child's turn.
+   timestamp). The bootstrap task_started ITSELF is the child's first own record —
+   `subagent_body_offset` returns ITS offset, not the line after. Cutting it into
+   the prefix ate the child's canonical `turn.started`/`actor.assignment_started`
+   (the translator ignores every `*_replay` record), so no "Agent started" card
+   ever painted for a codex subagent (session 01a00a31-3a90, cli 0.147).
    TWO callers share the predicate `is_child_bootstrap`, applied in the shape their
    context needs (a deliberately-different pair): the live op stream GATES
    per-record (`stream.py` `Renderer.feed_rollout`, race-safe — each record

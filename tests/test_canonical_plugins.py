@@ -628,6 +628,10 @@ def test_codex_source_factory_includes_native_subagent_rollouts(tmp_path, monkey
         },
         {
             "type": "event_msg",
+            "payload": {"type": "task_started", "started_at": 1786701599},
+        },
+        {
+            "type": "event_msg",
             "payload": {"type": "task_started", "started_at": 1786701600},
         },
         {
@@ -657,8 +661,15 @@ def test_codex_source_factory_includes_native_subagent_rollouts(tmp_path, monkey
     replay = translator.translate(raw_events[1])
     assert replay.canonical_events == ()
     assert replay.decision == "ignored_nonsemantic"
+    # The parent's replayed task_started (started_at BEFORE the fork) is prefix;
+    # the child's OWN bootstrap task_started (started_at >= the fork) is the
+    # first child-own record — classified as replay it eats the child's
+    # turn/assignment start (session 01a00a31-3a90 painted no started card).
+    assert raw_events[2].source_type == "sidecar_replay"
     assert raw_events[3].source_type == "sidecar_rollout"
-    message = payloads(translator.translate(raw_events[3]), MessageCreated)[0]
+    assert payloads(translator.translate(raw_events[3]), TurnStarted)
+    assert raw_events[4].source_type == "sidecar_rollout"
+    message = payloads(translator.translate(raw_events[4]), MessageCreated)[0]
     assert message.payload.content.text == "child work"
 
 
