@@ -1,4 +1,5 @@
-# dashboard/telegram.py — the Telegram transport (docs/dashboard.md, *Alert
+# notify/channels/telegram.py — the Telegram channel, whole: the transport
+# and the alert it carries (docs/dashboard.md, *Alert
 # retraction*).
 #
 # The OFF-DEVICE sibling of webpush.py, and it exists for one reason the reused
@@ -29,6 +30,10 @@ import os
 import urllib.error
 import urllib.parse
 import urllib.request
+import threading
+
+from diagnostics import record as A
+from notify.channels.alert import FAILED, GONE, NOTHING, OK, PENDING, alert_text
 
 DEFAULT_CRED_DIR = "~/.config/telegram"
 TOKEN_NAME = "bot-token"
@@ -141,7 +146,7 @@ def _call(method, params):
     return body.get("result") or {}, None
 
 
-def send(text):
+def send_message(text):
     """Send `text` to the configured chat. On success the Result carries the
     `message_id` + `chat` that `delete()` needs — the whole point of this module
     existing beside the fire-and-forget script. Synchronous network I/O, so
@@ -156,7 +161,7 @@ def send(text):
                   chat=(res.get("chat") or {}).get("id", chat))
 
 
-def delete(chat, message_id):
+def delete_message(chat, message_id):
     """Delete a message this bot sent (the retraction). `gone` counts as done —
     a message someone already cleared is a message that no longer needs you.
     Synchronous; callers run it off the watcher thread."""
@@ -167,3 +172,90 @@ def delete(chat, message_id):
     if err is not None:
         return err
     return Result(ok=True, status=200, message_id=message_id, chat=chat)
+
+
+# ------------------------------------------------ the alert this channel carries
+
+def send_alert(entry, reason=None):
+    """Send the deferred alert to Telegram. `reason` (in the audit row) says WHY
+    it fired: `escalation` (the nudge after an on-device push you ignored),
+    `no-device` (nobody was push-subscribed — the immediate fallback), or
+    `always` (_ALWAYS forced both) — so a Telegram alert is never an unexplained
+    duplicate.
+
+    The Bot API call runs on a daemon thread and its `message_id` lands in the
+    returned retractable handle. An unconfigured channel returns None."""
+    head, title, url = alert_text(entry)
+    msg = "%s — %s\n%s" % (head, title, url)
+    if not enabled():
+        return None
+    # The handle is created NOW and filled by the sender thread, because the
+    # watcher must not block on a round-trip and a retraction can beat the send
+    # home. `msg_id` None + `done` False is exactly the PENDING state retract()
+    # reads. Single assignments of small immutables, read by the one watcher
+    # thread — the same "atomic enough" bargain presence.py's maps make.
+    h = {"ch": "telegram", "session_id": entry.get("session_id"), "kind": entry.get("kind"),
+         "chat": None, "msg_id": None, "done": False}
+    threading.Thread(target=_telegram_send_body, args=(h, msg, reason),
+                     daemon=True).start()
+    return h
+
+
+def _telegram_send_body(h, msg, reason):
+    """The off-watcher send body: call the Bot API, record the id in the handle,
+    audit. `done` is set LAST and unconditionally — it is what releases retract()
+    from PENDING, so an exception path that skipped it would pin the record until
+    its TTL."""
+    try:
+        res = send_message(msg)
+    except Exception:
+        A.error("", "dashboard telegram notify", {"session_id": h.get("session_id")})
+        h["done"] = True
+        return
+    if res.ok:
+        h["chat"], h["msg_id"] = res.chat, res.message_id
+    A.state_file("", "", "telegram-notify",
+                 {"session_id": h.get("session_id"), "kind": h.get("kind"), "reason": reason,
+                  "ok": res.ok, "status": res.status, "error": res.error,
+                  # the retraction contract, recorded at the send: an alert with
+                  # retractable=False can never be taken back, and this row is
+                  # the only place that says so.
+                  "retractable": bool(res.ok and res.message_id),
+                  "message_id": res.message_id})
+    h["done"] = True
+
+
+def retract_alert(h, reason, badge=0):
+    """Delete the message — OFF the watcher thread, for the same reason the send
+    is: `delete_message` is a synchronous HTTPS round-trip with a 10 s timeout,
+    and the 1 s scan loop cannot wear that. So the outcome is not known
+    synchronously either, and this settles over two ticks: the first spawns the
+    delete and answers PENDING, a later one reads what the thread left. The
+    caller already retries PENDING (it must, for the in-flight send), so this
+    needs no new machinery — and the `notify-retract` row it eventually writes
+    still reports what actually happened on the wire, rather than an optimistic
+    guess made before the call returned."""
+    if not h.get("done"):
+        return PENDING                     # the SEND hasn't landed yet
+    if h.get("outcome"):
+        return h["outcome"]                # the delete thread finished
+    if not (h.get("chat") and h.get("msg_id")):
+        return NOTHING                     # the send failed — nothing is out there
+    if not h.get("deleting"):              # spawn once, however often we're asked
+        h["deleting"] = True
+        threading.Thread(target=_telegram_delete_body, args=(h,),
+                         daemon=True).start()
+    return PENDING
+
+
+def _telegram_delete_body(h):
+    """The off-watcher delete body: `outcome` is set on every path (it is what
+    releases the retraction from PENDING), and a `gone` message counts as done —
+    someone clearing the chat first is the outcome we wanted, not a failure."""
+    try:
+        res = delete_message(h["chat"], h["msg_id"])
+    except Exception:
+        A.error("", "dashboard telegram retract", {"session_id": h.get("session_id")})
+        h["outcome"] = FAILED
+        return
+    h["outcome"] = OK if res.ok else (GONE if res.gone else FAILED)

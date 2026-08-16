@@ -11,7 +11,7 @@ from diagnostics import record as AUDIT
 from dashboard import config, prefs
 from dashboard.activity import DashboardSessionService
 from dashboard.application import DashboardNotificationState
-from dashboard.notify import channels, presence
+from notify import channels, presence
 from domain.ids import SessionId
 from engine.projections import SessionQueries, TabState
 
@@ -158,13 +158,13 @@ class Notifier:
             )
             handle = None
             if subscriptions and config.NOTIFY_WEBPUSH:
-                handle = channels.send_webpush(
+                handle = channels.webpush.send_alert(
                     payload,
                     subscriptions,
                     self._attention_count(current_states),
                 )
             elif config.NOTIFY_TELEGRAM:
-                handle = channels.send_telegram(payload, "no-browser")
+                handle = channels.telegram.send_alert(payload, "no-browser")
             if handle is not None:
                 self.delivered[session_id] = DeliveredNotification(
                     session_id,

@@ -37,7 +37,7 @@ from api.dashboard.models.application.tasks_hidden_request import TasksHiddenReq
 from api.dashboard.models.application.view_mode_request import ViewModeRequest
 from api.dependencies import ApplicationGraph
 from api.guard import control_plane
-from dashboard import webpush
+from notify.channels import webpush
 from dashboard.application import (
     AnswerSelection,
     BrowserPresence,

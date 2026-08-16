@@ -198,7 +198,7 @@ class GlobalApplicationService:
     def snapshot(self) -> GlobalApplicationSnapshot:
         from core.daemon import contract as daemon_contract
         from dashboard import config
-        from dashboard.notify import presence
+        from notify import presence
 
         new_session = prefs.get("new-session", {})
         drafts = prefs.new_session_drafts()
@@ -302,7 +302,7 @@ class GlobalApplicationService:
 
     @staticmethod
     def report_presence(report: BrowserPresence) -> None:
-        from dashboard.notify import presence
+        from notify import presence
 
         session_id = str(report.session_id) if report.session_id is not None else None
         if report.away:

@@ -19,7 +19,7 @@ from dashboard.activity import (
 )
 from dashboard import prefs
 from dashboard.application import DashboardNotificationState
-from dashboard.notify.notifier import Notifier
+from notify.notifier import Notifier
 from domain.events import (
     ActorStarted,
     AttentionRequested,
@@ -570,25 +570,25 @@ def test_notifier_uses_canonical_tab_transitions(monkeypatch):
     )
     notifier = Notifier(application)
     retractions = []
-    monkeypatch.setattr("dashboard.notify.notifier.prefs.notify_enabled", lambda: True)
-    monkeypatch.setattr("dashboard.notify.notifier.prefs.notify_muted", lambda session_id: False)
-    monkeypatch.setattr("dashboard.notify.notifier.config.NOTIFICATION_DELAY_SECONDS", 0)
-    monkeypatch.setattr("dashboard.notify.notifier.config.NOTIFICATION_SETTLE_SECONDS", 0)
-    monkeypatch.setattr("dashboard.notify.notifier.config.NOTIFY_WEBPUSH", False)
-    monkeypatch.setattr("dashboard.notify.notifier.config.NOTIFY_TELEGRAM", True)
-    monkeypatch.setattr("dashboard.notify.notifier.presence.web_viewing", lambda session_id: False)
-    monkeypatch.setattr("dashboard.notify.notifier.presence.device_active", lambda: False)
-    monkeypatch.setattr("dashboard.notify.notifier.presence.route", lambda: ("terminal", (), {}))
+    monkeypatch.setattr("notify.notifier.prefs.notify_enabled", lambda: True)
+    monkeypatch.setattr("notify.notifier.prefs.notify_muted", lambda session_id: False)
+    monkeypatch.setattr("notify.notifier.config.NOTIFICATION_DELAY_SECONDS", 0)
+    monkeypatch.setattr("notify.notifier.config.NOTIFICATION_SETTLE_SECONDS", 0)
+    monkeypatch.setattr("notify.notifier.config.NOTIFY_WEBPUSH", False)
+    monkeypatch.setattr("notify.notifier.config.NOTIFY_TELEGRAM", True)
+    monkeypatch.setattr("notify.notifier.presence.web_viewing", lambda session_id: False)
+    monkeypatch.setattr("notify.notifier.presence.device_active", lambda: False)
+    monkeypatch.setattr("notify.notifier.presence.route", lambda: ("terminal", (), {}))
     monkeypatch.setattr(
-        "dashboard.notify.notifier.channels.send_telegram",
+        "notify.channels.telegram.send_alert",
         lambda payload, reason: {"payload": payload, "reason": reason},
     )
     monkeypatch.setattr(
-        "dashboard.notify.notifier.channels.retract",
+        "notify.notifier.channels.retract",
         lambda handle, reason: retractions.append((handle, reason)) or "retracted",
     )
     monkeypatch.setattr(
-        "dashboard.notify.notifier.AUDIT.state_file",
+        "notify.notifier.AUDIT.state_file",
         lambda *arguments, **keywords: None,
     )
 
@@ -618,7 +618,7 @@ def test_notifier_ignores_sessions_without_a_terminal_window(monkeypatch):
         dashboard_notification_state=notification_state,
     )
     notifier = Notifier(application)
-    monkeypatch.setattr("dashboard.notify.notifier.prefs.notify_enabled", lambda: True)
+    monkeypatch.setattr("notify.notifier.prefs.notify_enabled", lambda: True)
 
     notifier.scan()
     queries.state = "awaiting_attention"

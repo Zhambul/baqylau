@@ -552,7 +552,7 @@ def test_global_stream_sends_complete_current_application_snapshots(tmp_path):
 def test_global_application_routes_replace_field_specific_preferences_routes(
     tmp_path, monkeypatch
 ):
-    from dashboard.notify import presence
+    from notify import presence
 
     presence_calls = []
     monkeypatch.setattr(

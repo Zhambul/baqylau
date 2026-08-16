@@ -1,0 +1,57 @@
+# notify/channels/ — HOW an alert is delivered, and un-delivered.
+#
+# The split this package exists for: notifier.py decides WHEN an alert should
+# happen (the tab diff, the grace window, the arm/cancel/escalate state
+# machine); a channel knows what that means for one destination. Before
+# retraction existed the two were one file, and it read fine — a send was a
+# leaf call. A retraction is not a leaf: it is a SECOND round-trip that has to
+# reach the exact thing the first one produced, so "what was delivered, and
+# what does it take back" became a fact needing an owner. That fact is the
+# HANDLE each channel returns.
+#
+#     alert.py     what an alert says, and the outcome vocabulary below
+#     telegram.py  the off-device channel: the Bot API and its message id
+#     webpush.py   the on-device channel: VAPID, encryption, and the tag
+#
+# Every send returns a handle or None. None means nothing retractable was
+# delivered — either the channel was off/unconfigured, or nobody was
+# subscribed. A handle is an opaque dict to the caller: it carries `ch`, and
+# the notifier's only business with it is storing it and later passing it back
+# to `retract()`.
+#
+# Both directions are BEST-EFFORT and audited inside the channel rather than at
+# the call site, because the audit row's shape is per-channel (a Telegram
+# message id vs a push endpoint + device) and the watcher shouldn't have to
+# know either. Nothing here raises into the 1 s watcher loop.
+from diagnostics import record as A
+from notify.channels import telegram, webpush
+from notify.channels.alert import FAILED, GONE, NOTHING, OK, PENDING, alert_text, push_tag
+
+__all__ = [
+    "FAILED", "GONE", "NOTHING", "OK", "PENDING",
+    "alert_text", "push_tag", "retract", "telegram", "webpush",
+]
+
+# Registry, not an if/elif ladder (docs/styleguide.md): a new channel adds a
+# module with `send_alert`/`retract_alert` and one row here, and nothing in
+# notifier.py changes.
+_RETRACT = {"telegram": telegram.retract_alert, "webpush": webpush.retract_alert}
+
+
+def retract(handle, reason, badge=0):
+    """Take back one delivered alert. Returns an outcome from the vocabulary in
+    alert.py; PENDING is the only one the caller must retry.
+
+    Deliberately does NOT write the `notify-retract` row: the notifier owns that
+    action so the lifecycle has ONE writer and one row shape (it also files the
+    expiries, which never reach a channel at all). What each channel audits is
+    its own delivery detail — the resolve push's per-device result — which the
+    notifier could not describe."""
+    fn = _RETRACT.get((handle or {}).get("ch"))
+    if fn is None:
+        return NOTHING
+    try:
+        return fn(handle, reason, badge)
+    except Exception:
+        A.error("", "notify retract", {"session_id": (handle or {}).get("session_id")})
+        return FAILED

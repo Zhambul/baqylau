@@ -104,7 +104,7 @@ def serve():
         )
         usage_thread.start()
         _prune_uploads()
-        from dashboard.notify.notifier import Notifier
+        from notify.notifier import Notifier
 
         notifier = Notifier(application)
         threading.Thread(target=notifier.run, daemon=True).start()

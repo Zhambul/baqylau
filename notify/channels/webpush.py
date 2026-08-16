@@ -1,4 +1,5 @@
-# dashboard/webpush.py — the Web Push transport (docs/dashboard.md, *Web push*).
+# notify/channels/webpush.py — the Web Push channel, whole: the transport
+# and the alert it carries (docs/dashboard.md, *Web push*).
 #
 # The ON-DEVICE analog of the deferred Telegram alert: an installed iOS
 # home-screen web app (or a desktop Chrome/Firefox page) can receive a real
@@ -26,9 +27,11 @@ import urllib.error
 import urllib.request
 from urllib.parse import urlparse
 
-from diagnostics import record as A
+import threading
 
-from . import prefs
+from diagnostics import record as A
+from dashboard import config, prefs
+from notify.channels.alert import NOTHING, OK, alert_text, push_tag
 
 
 try:                                   # cryptography is the ONE hard dependency;
@@ -180,7 +183,7 @@ class Result:
         self.ok, self.gone, self.status, self.error = ok, gone, status, error
 
 
-def send(subscription, payload, ttl=DELIVERY_LIFETIME_SECONDS):
+def deliver(subscription, payload, ttl=DELIVERY_LIFETIME_SECONDS):
     """Deliver `payload` (a dict, JSON-encoded) to one `subscription` (its wire
     JSON: {endpoint, keys:{p256dh, auth}}). Never raises — returns a Result.
     Synchronous network I/O, so callers run it OFF the watcher thread."""
@@ -209,3 +212,88 @@ def send(subscription, payload, ttl=DELIVERY_LIFETIME_SECONDS):
         return Result(gone=e.code in (404, 410), status=e.code, error=str(e))
     except Exception as e:
         return Result(error=str(e))
+
+
+# ------------------------------------------------ the alert this channel carries
+
+def send_alert(entry, subs, badge=0):
+    """Send the on-device alert as a Web Push to `subs` — the subscriptions of
+    the ONE device the caller routed to (`presence.route`), NOT every
+    subscription, so a session going done/asking buzzes the device you're
+    working on, not your iPad and Mac at once (docs/dashboard.md, *Web push* /
+    *Presence routing*). Dispatched on a detached daemon thread: the crypto +
+    network round-trips must never stall the 1 s watcher. Best-effort + audited;
+    a subscription the push service reports GONE (404/410) is pruned. No-op when
+    the crypto backend is missing or `subs` is empty.
+
+    The ROUTING is deliberately not decided here — a transport that picked its
+    own destination could not be reused by the retraction, which must reach the
+    devices the alert ACTUALLY went to rather than whichever is most-recently-
+    used by then. The caller passes the targets and audits `notify-route`.
+
+    Returns a handle (the alert is out on these subscriptions, and a resolve
+    push can close it) or None — which the caller reads as "no device to push
+    to", the signal that holds Telegram back to the escalation nudge."""
+    if not (enabled() and subs):
+        return None
+    session_id = entry.get("session_id") or ""
+    title, body, url = alert_text(entry)
+    payload = {"title": title, "body": body, "session_id": session_id,
+               "kind": entry.get("kind"), "url": url, "badge": badge}
+    threading.Thread(target=_webpush_fanout, args=(subs, payload, "send"),
+                     daemon=True).start()
+    # The subscriptions are the handle: a resolve push has to reach the devices
+    # the alert actually went to, NOT whichever device is most-recently-used by
+    # then — the banner is on the former.
+    return {"ch": "webpush", "session_id": session_id, "kind": entry.get("kind"),
+            "subs": subs, "tag": push_tag(session_id)}
+
+
+def _webpush_fanout(subs, payload, action):
+    """The detached fan-out body, shared by the alert and its retraction:
+    deliver `payload` to each subscription, audit the outcome (with the target
+    `device` — the on-device analog of the route decision), and prune the dead
+    ones. Runs off the watcher thread; never raises."""
+    for sub in subs:
+        try:
+            res = deliver(sub, payload)
+        except Exception:
+            A.error("", "dashboard webpush %s" % action,
+                    {"session_id": payload.get("session_id")})
+            continue
+        ep = sub.get("endpoint", "") if isinstance(sub, dict) else ""
+        dev = sub.get("device") if isinstance(sub, dict) else None
+        if res.gone:
+            prefs.remove_push_subscription(ep)
+        A.state_file("", "", "web-push",
+                     {"session_id": payload.get("session_id"), "kind": payload.get("kind"),
+                      "action": action, "status": res.status,
+                      "ok": res.ok, "gone": res.gone,
+                      "badge": payload.get("badge"),
+                      "device": dev, "endpoint": ep[:80]})
+
+
+def retract_alert(h, reason, badge=0):
+    """Close the delivered banner by pushing a RESOLVE message to the same
+    subscriptions; sw.js closes everything under the tag and shows nothing.
+
+    That "shows nothing" is the load-bearing risk of this whole path: an iOS
+    subscription is `userVisibleOnly`, and WebKit may answer a push that raises
+    no notification with a generic placeholder banner — or, if it keeps
+    happening, revoke the subscription. What keeps that survivable is the
+    BUDGET: exactly one resolve per delivered alert (the notifier forgets the
+    record either way), so the silent:visible ratio is bounded at 1:1 rather
+    than being a background chatter channel. BAQYLAU_DASHBOARD_RESOLVE_PUSH=0 turns it
+    off, and the page's own foreground sweep (app.01-attention.js) still clears
+    stale banners on open — so a refused or dropped resolve degrades to "cleared
+    a bit later", never to a wrong badge."""
+    if not config.RESOLVE_PUSH:
+        return NOTHING
+    subs = h.get("subs") or []
+    if not subs:
+        return NOTHING
+    payload = {"type": "resolve", "session_id": h.get("session_id") or "",
+               "kind": h.get("kind"), "tag": h.get("tag"), "badge": badge}
+    threading.Thread(target=_webpush_fanout, args=(subs, payload, "resolve"),
+                     daemon=True).start()
+    return OK                              # dispatched; the thread audits the wire
