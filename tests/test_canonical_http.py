@@ -1127,3 +1127,120 @@ def test_mirror_frames_share_one_model_across_client_widths(tmp_path, monkeypatc
     assert narrow is not None and narrow[0] == version
     assert "hello from the agent" in narrow[1]
     assert len(application.pane_streams._models) == 1
+
+
+def _post_hook(server, harness: str, payload: bytes, environment: dict | None = None):
+    connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=2)
+    headers = {"Content-Type": "application/json", "X-Baqylau": "1"}
+    if environment is not None:
+        headers["X-Baqylau-Environment"] = json.dumps(environment)
+    connection.request("POST", f"/api/harnesses/{quote(harness)}/hooks", body=payload, headers=headers)
+    response = connection.getresponse()
+    response_body = response.read()
+    connection.close()
+    return response.status, response_body
+
+
+def test_hook_delivery_records_exact_evidence_and_returns_the_reply(tmp_path):
+    application = _application(tmp_path)
+    server, thread = _server(application)
+    payload = json.dumps({
+        "session_id": "hook-session",
+        "transcript_path": str(tmp_path / "hook-session.jsonl"),
+        "cwd": str(tmp_path),
+        "hook_event_name": "PreToolUse",
+        "hook_event_id": "pre-one",
+        "tool_name": "Bash",
+        "tool_use_id": "tool-one",
+        "tool_input": {"command": "printf hello"},
+    }).encode()
+    try:
+        status, body = _post_hook(
+            server, "claude_code", payload, {"KITTY_WINDOW_ID": "1114"}
+        )
+        assert status == 200
+        assert b"updatedInput" in body
+
+        evidence = application.evidence.session(SessionId("hook-session"))
+        assert [raw.source_type for raw in evidence] == ["hook", "watch", "terminal"]
+        assert evidence[0].payload == payload
+        assert json.loads(evidence[2].payload) == {"window_id": "1114"}
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_hook_delivery_ships_the_hooks_environment_not_the_daemons(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_SUBSCRIPTION_SLUG", "daemon-account")
+    application = _application(tmp_path)
+    server, thread = _server(application)
+    payload = json.dumps({
+        "session_id": "hook-session",
+        "transcript_path": str(tmp_path / "hook-session.jsonl"),
+        "hook_event_name": "SessionStart",
+        "hook_event_id": "start-one",
+    }).encode()
+    try:
+        status, _body = _post_hook(
+            server, "claude_code", payload, {"CLAUDE_SUBSCRIPTION_SLUG": "c2"}
+        )
+        assert status == 200
+        account = [
+            raw for raw in application.evidence.session(SessionId("hook-session"))
+            if raw.source_type == "account"
+        ][0]
+        assert json.loads(account.payload)["slug"] == "c2"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_hook_delivery_rejections_leave_no_evidence(tmp_path):
+    application = _application(tmp_path)
+    server, thread = _server(application)
+    try:
+        status, body = _post_hook(server, "mystery", b"{}")
+        assert status == 404
+
+        status, body = _post_hook(server, "claude_code", b"not json")
+        assert status == 400
+        assert "error" in json.loads(body)
+
+        # no transcript path: the gateway refuses, so nothing was recorded
+        status, _body = _post_hook(
+            server, "claude_code", json.dumps({"session_id": "hook-session"}).encode()
+        )
+        assert status == 400
+        assert application.evidence.session(SessionId("hook-session")) == ()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_hook_identity_reuse_with_different_bytes_is_a_conflict_not_a_rewrite(tmp_path):
+    application = _application(tmp_path)
+    server, thread = _server(application)
+    document = {
+        "session_id": "hook-session",
+        "transcript_path": str(tmp_path / "hook-session.jsonl"),
+        "hook_event_name": "PostToolUse",
+        "hook_event_id": "post-one",
+        "tool_name": "Read",
+    }
+    try:
+        first = json.dumps(document).encode()
+        assert _post_hook(server, "claude_code", first)[0] == 200
+        # an identical re-delivery is idempotent
+        assert _post_hook(server, "claude_code", first)[0] == 200
+
+        changed = json.dumps({**document, "tool_name": "Write"}).encode()
+        status, body = _post_hook(server, "claude_code", changed)
+        assert status == 409
+        assert application.evidence.session(SessionId("hook-session"))[0].payload == first
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)

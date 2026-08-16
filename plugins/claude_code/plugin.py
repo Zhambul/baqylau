@@ -13,6 +13,7 @@ from plugins.claude_code.canonical import (
     ClaudeRawEventSources,
     ClaudeSessionEvidence,
 )
+from plugins.claude_code.hooks import ClaudeHookGateway
 from plugins.claude_code.catalog import ClaudeCodeCatalog
 from plugins.claude_code.controller import controller
 from plugins.claude_code.launcher import ClaudeCodeLauncher
@@ -56,6 +57,7 @@ plugin = HarnessPlugin(
         models=MODELS,
         rewind_modes=REWIND_MODES,
     ),
+    hooks=ClaudeHookGateway(),
     sources=ClaudeRawEventSources(),
     translator=ClaudeCanonicalTranslator(),
     session_evidence=ClaudeSessionEvidence(),

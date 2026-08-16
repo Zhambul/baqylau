@@ -21,8 +21,11 @@
   message instead of acting (docs/recorder-interpreter.md › *Panes are rendered
   in the daemon*).
 - **`~/.claude/settings.json`** — a `hooks` block. Every supported hook event
-  points directly at `plugins/claude_code/canonical_hook.py`. Claude-specific
-  intake and translation never leave that plugin folder:
+  points directly at `plugins/claude_code/canonical_hook.py` — itself a thin
+  client that ships the exact hook stdin to the daemon's
+  `POST /api/harnesses/claude_code/hooks` and prints the reply
+  (docs/recorder-interpreter.md › *Hooks deliver through the daemon*).
+  Claude-specific intake and translation never leave that plugin folder:
 
   ```json
   "hooks": { "PostToolUse": [ { "hooks": [

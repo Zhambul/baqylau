@@ -9,6 +9,7 @@ from urllib.parse import parse_qs
 from core import audit as A
 from app import pending_session, terminal_views
 from app.bootstrap import CanonicalApplication
+from app.hook_gateway import UnknownHookHarness
 from app.telemetry import (
     BrowserEvent,
     BrowserEventBatch,
@@ -41,11 +42,12 @@ from dashboard.application import (
     BrowserPushSubscription,
     QueuedMessage,
 )
-from dashboard.config import BOOT_ID
+from dashboard.config import BOOT_ID, ENVIRONMENT_HEADER, HOOK_MAX
 from dashboard.diff import source_html, unified_diff_html
 from domain.ids import ActorId, AttentionId, MessageId, SessionId
 from domain.values import StructuredContent
 from runtime.projections import ActivityScope
+from runtime.recorder import RawEventRecorderError
 from runtime.sessions import UnknownSession
 
 STREAM_POLL_SECONDS = 0.25
@@ -156,6 +158,8 @@ class _CanonicalMixin:
         try:
             if parts == ["api", "sessions"]:
                 return self._launch()
+            if len(parts) == 4 and parts[:2] == ["api", "harnesses"] and parts[3] == "hooks":
+                return self._record_hook_delivery(parts[2])
             if parts == ["api", "terminal", "panes"]:
                 return self._pane_command()
             if parts == ["api", "terminal", "views"]:
@@ -402,6 +406,38 @@ class _CanonicalMixin:
             elif not self._sse("frame", {"ansi": ansi}):
                 return
             time.sleep(STREAM_POLL_SECONDS)
+
+    def _record_hook_delivery(self, harness: str):
+        """One pushed hook delivery: exact stdin bytes in, the reply bytes out.
+
+        The one write endpoint of the evidence plane. Errors are audited HERE —
+        the hook client swallows everything (a hook must never fail its
+        harness), so a delivery the daemon refused would otherwise vanish."""
+        payload = self._post_guard_bytes(HOOK_MAX)
+        if payload is None:
+            return None
+        application = self._application()
+        try:
+            environment = json.loads(self.headers.get(ENVIRONMENT_HEADER) or "{}")
+            if not isinstance(environment, dict) or not all(
+                isinstance(key, str) and isinstance(value, str)
+                for key, value in environment.items()
+            ):
+                raise ValueError(f"{ENVIRONMENT_HEADER} must be a JSON string map")
+            output = application.hook_gateway.record(harness, payload, environment)
+        except UnknownHookHarness as error:
+            return self._json({"error": str(error)}, 404)
+        except (KeyError, TypeError, ValueError) as error:
+            A.error("", "hook delivery", {
+                "harness": harness,
+                "error": repr(error),
+                "payload_bytes": len(payload),
+            })
+            return self._json({"error": str(error)}, 400)
+        except RawEventRecorderError as error:
+            A.error("", "hook delivery", {"harness": harness, "error": repr(error)})
+            return self._json({"error": str(error)}, 409)
+        return self._send(200, output)
 
     def _pane_command(self):
         body = self._post_guard()

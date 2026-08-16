@@ -68,6 +68,29 @@ def post_json(path: str, body: dict) -> tuple[int, dict]:
         raise DaemonUnreachable() from error
 
 
+def post_bytes(
+    path: str,
+    body: bytes,
+    headers: dict[str, str],
+    timeout: float = REQUEST_TIMEOUT_SECONDS,
+) -> tuple[int, bytes]:
+    """POST exact bytes (a hook delivery, not a JSON envelope) and return the
+    response verbatim — the caller owns both encodings."""
+    request = urllib.request.Request(
+        BASE_URL + path,
+        data=body,
+        headers={**headers, POST_HEADER: "1"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.status, response.read()
+    except urllib.error.HTTPError as error:
+        return error.code, error.read()
+    except urllib.error.URLError as error:
+        raise DaemonUnreachable() from error
+
+
 def _error_message(payload: bytes) -> str:
     try:
         return json.loads(payload or b"{}").get("error") or "request failed"

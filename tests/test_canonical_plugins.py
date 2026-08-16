@@ -15,8 +15,10 @@ from types import SimpleNamespace
 import pytest
 
 from app.bootstrap import build_application
+from app import hook_client
 from app import pane_commands
 from app import terminal_panes
+from app.hook_gateway import HookGatewayService, UnknownHookHarness
 from app import pending_session
 from app.plugins import installed_plugins
 from app.session_terminal import ApplicationTerminal
@@ -86,6 +88,7 @@ from plugins.claude_code.canonical import (
     ClaudeTranscriptRawEventSource,
 )
 from plugins.claude_code import canonical_hook as claude_canonical_hook
+from plugins.claude_code import hooks as claude_hooks
 from plugins.claude_code import foreground as claude_foreground
 from plugins.claude_code import memory_state as claude_memory_state
 from plugins.claude_code import statusline as claude_statusline
@@ -103,15 +106,25 @@ from plugins.codex.canonical import (
     process_event,
 )
 from plugins.codex import command as codex_command
-from plugins.codex import canonical_hook as codex_canonical_hook
+from plugins.codex import hooks as codex_hooks
 from plugins.codex import rollout as codex_rollout
 from plugins.codex.controller import _rollout_abort_state
-from runtime.recorder import EventIdentityConflict
+from runtime.recorder import EventIdentityConflict, RawEventRecorder
 from canonical_runtime import CanonicalRuntime
 from runtime.evidence import EvidenceQueries
 from app.interpreter import Interpreter
 from app.services import HarnessLauncherService
 from runtime.harnesses import HarnessRegistry
+
+
+def _deliver_hook(gateway, payload: bytes, environment: dict | None = None) -> bytes:
+    """The daemon-side hook path minus HTTP: gateway → recorder.
+
+    Mirrors HookGatewayService.record against the test's BAQYLAU_DATA_DIR."""
+    raw_events, output = gateway.raw_events(payload, environment or {})
+    database_path = os.path.join(os.environ["BAQYLAU_DATA_DIR"], "events.db")
+    RawEventRecorder(database_path).record(raw_events)
+    return output
 
 
 def raw_event(
@@ -908,7 +921,6 @@ def test_codex_source_factory_accepts_string_session_source(tmp_path, monkeypatc
 
 def test_hooks_record_exact_raw_bytes_and_the_interpreter_translates_them(monkeypatch, tmp_path):
     monkeypatch.setenv("BAQYLAU_DATA_DIR", str(tmp_path))
-    monkeypatch.setattr("app.host.ApplicationHost.ensure_running", lambda self: None)
     claude_payload = (
         b'{ "session_id": "claude-session", "transcript_path": "/work/claude.jsonl", '
         b'"cwd": "/work", "hook_event_name": "SessionStart" }'
@@ -918,8 +930,8 @@ def test_hooks_record_exact_raw_bytes_and_the_interpreter_translates_them(monkey
         b'"cwd": "/work", "hook_event_name": "SessionStart" }'
     )
 
-    claude_canonical_hook.record_hook(claude_payload)
-    codex_canonical_hook.record_hook(codex_payload)
+    _deliver_hook(claude_hooks.ClaudeHookGateway(), claude_payload)
+    _deliver_hook(codex_hooks.CodexHookGateway(), codex_payload)
 
     runtime, interpreter = interpreting_runtime(tmp_path / "events.db")
     # hooks never register — but a Claude hook payload announces its session,
@@ -950,14 +962,13 @@ def test_hooks_record_exact_raw_bytes_and_the_interpreter_translates_them(monkey
 
 def test_hook_without_native_identity_uses_the_exact_payload_identity(monkeypatch, tmp_path):
     monkeypatch.setenv("BAQYLAU_DATA_DIR", str(tmp_path))
-    monkeypatch.setattr("app.host.ApplicationHost.ensure_running", lambda self: None)
     payload = (
         b'{"session_id":"claude-session","transcript_path":"/work/claude.jsonl",'
         b'"cwd":"/work","hook_event_name":"SessionStart"}'
     )
 
-    claude_canonical_hook.record_hook(payload)
-    claude_canonical_hook.record_hook(payload)
+    _deliver_hook(claude_hooks.ClaudeHookGateway(), payload)
+    _deliver_hook(claude_hooks.ClaudeHookGateway(), payload)
 
     runtime = CanonicalRuntime(str(tmp_path / "events.db"))
     runtime.register("claude_code", Session(
@@ -972,7 +983,6 @@ def test_hook_without_native_identity_uses_the_exact_payload_identity(monkeypatc
 
 def test_hook_recording_preserves_native_child_actor_context(monkeypatch, tmp_path):
     monkeypatch.setenv("BAQYLAU_DATA_DIR", str(tmp_path))
-    monkeypatch.setattr("app.host.ApplicationHost.ensure_running", lambda self: None)
     payload = json.dumps({
         "session_id": "claude-session",
         "transcript_path": "/work/claude.jsonl",
@@ -981,7 +991,7 @@ def test_hook_recording_preserves_native_child_actor_context(monkeypatch, tmp_pa
         "agent_id": "child-one",
     }).encode()
 
-    claude_canonical_hook.record_hook(payload)
+    _deliver_hook(claude_hooks.ClaudeHookGateway(), payload)
 
     runtime, interpreter = interpreting_runtime(tmp_path / "events.db")
     runtime.register("claude_code", Session(
@@ -1016,12 +1026,12 @@ def test_claude_hook_returns_native_pretool_output_and_a_watch_directive(monkeyp
         wait_for_source_change=False,
     )
     monkeypatch.setattr(
-        claude_canonical_hook.foreground,
+        claude_hooks.foreground,
         "prepare",
         lambda value: SimpleNamespace(output=expected, watch=watch),
     )
 
-    raw_events, output = claude_canonical_hook.hook_raw_events(json.dumps(document).encode())
+    raw_events, output = claude_hooks.ClaudeHookGateway().raw_events(json.dumps(document).encode(), {})
 
     assert output == expected
     assert raw_events[0].payload == json.dumps(document).encode()
@@ -1041,14 +1051,14 @@ def test_hooks_record_their_terminal_window_as_the_pane_anchor():
         "tool_name": "Read",
     }).encode()
 
-    raw_events, _output = claude_canonical_hook.hook_raw_events(payload, "1114")
-    without_window, _output = claude_canonical_hook.hook_raw_events(payload)
+    raw_events, _output = claude_hooks.ClaudeHookGateway().raw_events(payload, {"KITTY_WINDOW_ID": "1114"})
+    without_window, _output = claude_hooks.ClaudeHookGateway().raw_events(payload, {})
 
     anchor = raw_events[-1]
     assert anchor.source_type == "terminal"
     assert json.loads(anchor.payload) == {"window_id": "1114"}
     # one row per (session, window): re-recording the same window deduplicates
-    again, _output = claude_canonical_hook.hook_raw_events(payload, "1114")
+    again, _output = claude_hooks.ClaudeHookGateway().raw_events(payload, {"KITTY_WINDOW_ID": "1114"})
     assert again[-1].raw_event_id == anchor.raw_event_id
     assert all(event.source_type != "terminal" for event in without_window)
 
@@ -1107,7 +1117,7 @@ def test_claude_post_tool_hook_records_the_watch_finish_directive():
         "tool_response": {"stdout": "hello"},
     }
 
-    raw_events, output = claude_canonical_hook.hook_raw_events(json.dumps(document).encode())
+    raw_events, output = claude_hooks.ClaudeHookGateway().raw_events(json.dumps(document).encode(), {})
 
     assert output == b""
     directive = raw_events[-1]
@@ -1138,7 +1148,7 @@ def test_claude_background_bash_starts_a_watch_on_its_native_output_file(monkeyp
     monkeypatch.setattr(claude_foreground, "BACKGROUND_OUTPUT_ROOT", str(tmp_path))
     output_path, document = _background_post_tool_document(tmp_path)
 
-    raw_events, output = claude_canonical_hook.hook_raw_events(json.dumps(document).encode())
+    raw_events, output = claude_hooks.ClaudeHookGateway().raw_events(json.dumps(document).encode(), {})
 
     assert output == b""
     directive = raw_events[-1]
@@ -1172,11 +1182,10 @@ def test_claude_background_watch_requires_the_native_task_evidence(monkeypatch, 
 def test_claude_background_output_streams_into_the_operation(monkeypatch, tmp_path):
     monkeypatch.setattr(claude_foreground, "BACKGROUND_OUTPUT_ROOT", str(tmp_path / "native"))
     monkeypatch.setenv("BAQYLAU_DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.setattr("app.host.ApplicationHost.ensure_running", lambda self: None)
     output_path, document = _background_post_tool_document(tmp_path / "native", session_id="session-one")
     document["transcript_path"] = str(tmp_path / "session-one.jsonl")
 
-    claude_canonical_hook.record_hook(json.dumps(document).encode())
+    _deliver_hook(claude_hooks.ClaudeHookGateway(), json.dumps(document).encode())
 
     runtime, interpreter = interpreting_runtime(tmp_path / "data" / "events.db")
     runtime.register("claude_code", Session(
@@ -1298,7 +1307,6 @@ def test_claude_foreground_bytes_flow_through_raw_audit_into_operation_projectio
 ):
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
     monkeypatch.setenv("BAQYLAU_DATA_DIR", str(tmp_path / "application"))
-    monkeypatch.setattr("app.host.ApplicationHost.ensure_running", lambda self: None)
     document = {
         "session_id": "session-one",
         "transcript_path": str(tmp_path / "session-one.jsonl"),
@@ -1310,7 +1318,7 @@ def test_claude_foreground_bytes_flow_through_raw_audit_into_operation_projectio
         "tool_input": {"command": "printf hello"},
     }
 
-    output = claude_canonical_hook.record_hook(json.dumps(document).encode())
+    output = _deliver_hook(claude_hooks.ClaudeHookGateway(), json.dumps(document).encode())
     assert b"updatedInput" in output
 
     runtime, interpreter = interpreting_runtime(tmp_path / "application" / "events.db")
@@ -1542,6 +1550,92 @@ def test_pane_keybinding_reports_a_daemon_refusal(monkeypatch):
     assert terminal_panes.main(["toggle"]) == 1
 
 
+def test_hook_client_ships_exact_bytes_and_only_its_environment(monkeypatch):
+    monkeypatch.setenv("KITTY_WINDOW_ID", "77")
+    monkeypatch.setenv("CLAUDE_SUBSCRIPTION_SLUG", "c2")
+    monkeypatch.delenv("CLAUDE_SUBSCRIPTION_LABEL", raising=False)
+    ensured = []
+    monkeypatch.setattr(
+        "app.host.ApplicationHost.ensure_running", lambda self: ensured.append(True)
+    )
+    posted = []
+
+    def post_bytes(path, body, headers, timeout):
+        posted.append((path, body, headers, timeout))
+        return 200, b'{"reply":"yes"}'
+
+    monkeypatch.setattr("app.daemon_client.post_bytes", post_bytes)
+    payload = b'{ "session_id": "session-one" }'
+
+    reply = hook_client.deliver("claude_code", claude_hooks.ENVIRONMENT_KEYS, payload)
+
+    assert reply == b'{"reply":"yes"}'
+    assert ensured == [True]
+    path, body, headers, timeout = posted[0]
+    assert path == "/api/harnesses/claude_code/hooks"
+    assert body is payload
+    assert headers["Content-Type"] == "application/json"
+    # only the keys actually present in this process's environment ship
+    assert json.loads(headers["X-Baqylau-Environment"]) == {
+        "KITTY_WINDOW_ID": "77",
+        "CLAUDE_SUBSCRIPTION_SLUG": "c2",
+    }
+    assert timeout == hook_client.DELIVERY_TIMEOUT_SECONDS
+
+
+def test_hook_client_never_fails_its_harness_and_audits_every_swallow(monkeypatch, capsys):
+    monkeypatch.setattr("app.host.ApplicationHost.ensure_running", lambda self: None)
+    audited = []
+    monkeypatch.setattr(
+        "core.audit.error",
+        lambda log, func, context=None: audited.append(func),
+    )
+    monkeypatch.setattr(
+        "sys.stdin", SimpleNamespace(buffer=SimpleNamespace(read=lambda: b"{}"))
+    )
+
+    monkeypatch.setattr(
+        "app.daemon_client.post_bytes",
+        lambda path, body, headers, timeout: (400, b'{"error":"malformed"}'),
+    )
+    hook_client.run("claude_code", ())
+
+    def unreachable(path, body, headers, timeout):
+        raise OSError("daemon down")
+
+    monkeypatch.setattr("app.daemon_client.post_bytes", unreachable)
+    hook_client.run("codex", ())
+
+    # a refused delivery prints NOTHING (an error body is not a hook reply)
+    assert capsys.readouterr().out == ""
+    assert audited == ["claude_code hook (deliver)", "codex hook (deliver)"]
+
+
+def test_hook_gateway_service_records_only_for_harnesses_that_accept_deliveries(tmp_path):
+    registry = HarnessRegistry()
+    for plugin in installed_plugins():
+        registry.register(plugin if plugin.info.name != "codex" else replace(plugin, hooks=None))
+    service = HookGatewayService(registry, RawEventRecorder(str(tmp_path / "events.db")))
+    payload = json.dumps({
+        "session_id": "session-one",
+        "transcript_path": "/work/session.jsonl",
+        "hook_event_name": "PostToolUse",
+        "hook_event_id": "post-one",
+        "tool_name": "Read",
+    }).encode()
+
+    assert service.record("claude_code", payload, {"KITTY_WINDOW_ID": "9"}) == b""
+    evidence = EvidenceQueries(
+        CanonicalRuntime(str(tmp_path / "events.db")).store
+    ).session(SessionId("session-one"))
+    assert [raw.source_type for raw in evidence] == ["hook", "terminal"]
+
+    with pytest.raises(UnknownHookHarness, match="unregistered harness"):
+        service.record("mystery", payload, {})
+    with pytest.raises(UnknownHookHarness, match="accepts no hook deliveries"):
+        service.record("codex", payload, {})
+
+
 def test_pane_command_service_executes_gestures_for_the_windows_session(monkeypatch):
     class Terminal:
         def __init__(self):
@@ -1768,7 +1862,6 @@ def test_claude_teammate_hook_and_transcript_share_one_actor_identity(monkeypatc
         "taskKind": "in_process_teammate",
     }))
     monkeypatch.setenv("BAQYLAU_DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.setattr("app.host.ApplicationHost.ensure_running", lambda self: None)
     hook_payload = json.dumps({
         "session_id": "session-one",
         "transcript_path": str(main_path),
@@ -1778,7 +1871,7 @@ def test_claude_teammate_hook_and_transcript_share_one_actor_identity(monkeypatc
         "agent_type": "reviewer",
     }).encode()
 
-    claude_canonical_hook.record_hook(hook_payload)
+    _deliver_hook(claude_hooks.ClaudeHookGateway(), hook_payload)
     runtime, interpreter = interpreting_runtime(tmp_path / "data" / "events.db")
     session = Session(
         SessionId("session-one"),
@@ -1853,7 +1946,6 @@ def test_codex_session_start_hook_matches_rollout_metadata():
 
 def test_hook_native_identity_reuse_with_different_bytes_is_a_hard_conflict(monkeypatch, tmp_path):
     monkeypatch.setenv("BAQYLAU_DATA_DIR", str(tmp_path))
-    monkeypatch.setattr("app.host.ApplicationHost.ensure_running", lambda self: None)
     first = (
         b'{"session_id":"session-one","transcript_path":"/work/session.jsonl",'
         b'"cwd":"/work","hook_event_name":"PreToolUse","hook_event_id":"hook-one",'
@@ -1861,10 +1953,10 @@ def test_hook_native_identity_reuse_with_different_bytes_is_a_hard_conflict(monk
         b'"tool_name":"Bash","tool_input":{"command":"first"}}'
     )
     changed = first.replace(b'"first"', b'"changed"')
-    claude_canonical_hook.record_hook(first)
+    _deliver_hook(claude_hooks.ClaudeHookGateway(), first)
 
     with pytest.raises(EventIdentityConflict, match="raw event identity reused"):
-        claude_canonical_hook.record_hook(changed)
+        _deliver_hook(claude_hooks.ClaudeHookGateway(), changed)
 
 
 def test_catalogs_expose_only_what_depends_on_the_directory(tmp_path):
@@ -1965,7 +2057,7 @@ def test_claude_statusline_writes_plugin_owned_typed_usage(monkeypatch, tmp_path
     monkeypatch.setattr(
         claude_statusline.ACC,
         "current",
-        lambda: {"slug": "work", "label": "Work"},
+        lambda environment: {"slug": "work", "label": "Work"},
     )
     monkeypatch.setattr(
         "plugins.claude_code.usage_rows.account.registry",

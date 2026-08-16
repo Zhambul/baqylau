@@ -40,6 +40,9 @@ POST_MAX = 64 * 1024               # request-body cap for the control-plane POST
 # image (harness's per-image ceiling) with headroom for the JSON envelope. Every
 # other POST stays at the tiny POST_MAX default.
 UPLOAD_MAX = 14 * 1024 * 1024
+# A hook delivery carries the harness's exact hook stdin — a PostToolUse
+# payload embeds the whole tool response, so it gets its own generous cap.
+HOOK_MAX = 4 * 1024 * 1024
 # The frontend-audit (clientlog) batch cap: most events per POST we'll persist as
 # `web-client` rows (a page can't flood the audit with an oversized batch — the
 # rest is silently dropped, the ring on the client already bounds normal volume).
@@ -54,6 +57,11 @@ CLIENTLOG_STR_MAX = 200
 # formats (docs/dashboard.md, *Web attachments*).
 IMAGE_MIMES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
 POST_HEADER = "X-Baqylau"
+# A hook delivery's body is the exact stdin bytes, so the env subset the hook
+# process ships (its kitty window, its account variables) rides this header as
+# a JSON object. One fact, two consumers: the thin hook client stamps it, the
+# hook-delivery endpoint reads it.
+ENVIRONMENT_HEADER = "X-Baqylau-Environment"
 # The dashboard's externally reachable origin.  It is one fact with two
 # consumers: browser POST admission and notification deep links.  Keeping
 # those separate allowed a dashboard started outside launchd to generate

@@ -214,12 +214,10 @@ def test_session_lifecycle_has_no_per_harness_implementation():
 
 
 def test_recorder_entries_never_build_the_application():
-    """A hook or wrapper is a RECORDER: it appends evidence and exits. Building
-    the application graph in one made every tool call pay the whole bootstrap
-    and let any bug in it lose evidence."""
+    """A wrapper or the otel receiver is a RECORDER: it appends evidence and
+    exits. Building the application graph in one made every launch pay the
+    whole bootstrap and let any bug in it lose evidence."""
     recorder_entries = (
-        ROOT / "plugins" / "claude_code" / "canonical_hook.py",
-        ROOT / "plugins" / "codex" / "canonical_hook.py",
         ROOT / "plugins" / "claude_code" / "command.py",
         ROOT / "plugins" / "codex" / "command.py",
         ROOT / "plugins" / "claude_code" / "otel" / "receiver.py",
@@ -228,6 +226,33 @@ def test_recorder_entries_never_build_the_application():
     for path in recorder_entries:
         source = path.read_text(encoding="utf-8")
         for forbidden in ("build_default_application", "build_application", "app.bootstrap"):
+            if forbidden in source:
+                violations.append(f"{path.relative_to(ROOT)} contains {forbidden}")
+    assert violations == []
+
+
+def test_hook_entries_are_thin_clients_of_the_daemon():
+    """A hook ships its exact stdin to POST /api/harnesses/<name>/hooks and
+    prints the reply — it neither builds the application graph nor writes the
+    event store itself. Recording lives daemon-side (`HarnessHookGateway` +
+    `HookGatewayService`), so hook evidence has ONE recorder and the hook
+    process stays a few imports thin."""
+    hook_entries = (
+        ROOT / "plugins" / "claude_code" / "canonical_hook.py",
+        ROOT / "plugins" / "codex" / "canonical_hook.py",
+    )
+    forbidden_markers = (
+        "build_default_application",
+        "build_application",
+        "app.bootstrap",
+        "RawEventRecorder",
+        "runtime.recorder",
+        "events.db",
+    )
+    violations = []
+    for path in hook_entries:
+        source = path.read_text(encoding="utf-8")
+        for forbidden in forbidden_markers:
             if forbidden in source:
                 violations.append(f"{path.relative_to(ROOT)} contains {forbidden}")
     assert violations == []

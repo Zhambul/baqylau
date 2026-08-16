@@ -135,6 +135,21 @@ class _Base(BaseHTTPRequestHandler):
             the CSRF gate here; the header was only ever defence-in-depth. A
             non-allowlisted Origin is still the attack signal and is always
             rejected."""
+        raw = self._post_guard_bytes(max_bytes)
+        if raw is None:
+            return None
+        try:
+            body = json.loads(raw or b"{}")
+        except ValueError:
+            return self._reject(400, "invalid JSON")
+        if not isinstance(body, dict):
+            return self._reject(400, "invalid JSON")
+        return body
+
+    def _post_guard_bytes(self, max_bytes=POST_MAX):
+        """The same control-plane guard, returning the EXACT body bytes — for
+        the one endpoint whose body is evidence (a hook delivery) rather than a
+        JSON envelope. Or send a 4xx and return None (the caller just returns)."""
         if config.READONLY:
             return self._reject(403, "control plane disabled (read-only)")
         ctype = self.headers.get("Content-Type", "").split(";")[0].strip()
@@ -155,13 +170,9 @@ class _Base(BaseHTTPRequestHandler):
         if n < 0 or n > max_bytes:
             return self._reject(413, "body too large")
         try:
-            raw = self.rfile.read(n) if n else b""
-            body = json.loads(raw or b"{}")
-        except (ValueError, OSError):
-            return self._reject(400, "invalid JSON")
-        if not isinstance(body, dict):
-            return self._reject(400, "invalid JSON")
-        return body
+            return self.rfile.read(n) if n else b""
+        except OSError:
+            return self._reject(400, "unreadable body")
 
     def _reject_input(
         self,

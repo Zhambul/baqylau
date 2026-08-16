@@ -11,13 +11,14 @@ web dashboard.
 
 ## Architecture
 
-**A process either appends evidence or interprets it, never both** — see
+**A component either appends evidence or interprets it, never both** — see
 `docs/recorder-interpreter.md` for the full flow and the why. Evidence flows one
 way, and every stage is recorded:
 
 ```
 wrapper ──register once──▶ session_harness
-recorders (hooks, otel, wrappers) ──append──▶ raw_events ◀──append── interpreter's pulled sources
+recorders (otel, wrappers) ──append──▶ raw_events ◀──append── daemon: hook gateway + interpreter's pulled sources
+hooks ──POST exact stdin──▶ /api/harnesses/<name>/hooks ──▶ hook gateway  (reply rides the response)
                                                   │
               interpreter: translate → translation_records → canonical_events + canonical_provenance
 ```
@@ -64,10 +65,14 @@ every registered unfinished session's sources, translates the untranslated backl
 (hook evidence included — hooks never translate), and reacts to committed facts
 (panes, plugin reactors). It runs as a thread in the dashboard server, every 0.25s.
 
-Recorder processes (hooks, the otel receiver, the wrappers) only append raw events
-and do not depend on it. That split is load-bearing: when the interpreter stops,
-recorders keep flowing, so a session still *looks* alive while nothing is being
-interpreted.
+Recorder processes (the otel receiver, the wrappers) only append raw events and
+do not depend on it. Hooks are thin clients: they POST their exact stdin to the
+daemon's hook gateway (`app/hook_gateway.py` → `plugins/<harness>/hooks.py`,
+the `HarnessHookGateway` protocol), which records on the HTTP threads — so a
+wedged interpreter tick does not stop hook capture, but a DEAD daemon loses
+hook deliveries (audited client-side; accepted, no fallback). The
+component split is load-bearing: the gateway records and returns, only `tick()`
+interprets.
 
 **The daemon builds the application graph exactly once** (`serve()` in
 `dashboard/http/handler.py`); every other process is a recorder or a thin
@@ -121,10 +126,12 @@ To debug a session bug, use the **`audit-debug` skill**
 - **Hooks must never block or fail.** Exit 0, swallow exceptions — but audit before every
   swallow (`core/audit.py`). This applies to any long-lived loop too: nothing that drives
   other work may die silently.
-- **A hook parses stdin, records raw events, prints its reply, and exits.** No session
-  registration, no translation, no terminal, no files, no application graph (enforced by
-  `test_recorder_entries_never_build_the_application`). Anything a hook wants done later
-  is a raw event the interpreter reacts to (watch directives, the plugin reactor).
+- **A hook ships its exact stdin to the daemon and prints the reply.** It parses
+  nothing and writes nothing itself (enforced by
+  `test_hook_entries_are_thin_clients_of_the_daemon`); parsing and recording live in the
+  harness's `HarnessHookGateway` (`plugins/<harness>/hooks.py`), daemon-side. Anything a
+  hook wants done later is a raw event the interpreter reacts to (watch directives, the
+  plugin reactor).
 - **Harnesses fire no hook on cancel/interrupt.** Every cancellation path needs its own
   evidence-based signal. Never use an idle timeout as a backstop — it false-positives on
   long thinking.

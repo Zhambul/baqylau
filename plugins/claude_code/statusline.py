@@ -104,7 +104,7 @@ def capture(raw):
         sid = (data.get("session_id") or "").strip()
         if not sid:
             return
-        acc = ACC.current()
+        acc = ACC.current(os.environ)
         usage = parse_usage(data)
         if usage is not None:
             usage_state.record(

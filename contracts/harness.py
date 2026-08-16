@@ -136,6 +136,27 @@ class HarnessRawEventSources(Protocol):
     def for_session(self, session: Session) -> tuple[HarnessRawEventSource, ...]: ...
 
 
+class HarnessHookGateway(Protocol):
+    """One pushed hook delivery → raw events plus the synchronous reply.
+
+    The push twin of `HarnessRawEventSources`: a pull source reads the
+    harness's files after a position, a hook gateway receives what the harness
+    volunteers. Both produce raw events and nothing else — no store access, no
+    terminal, no translation (the interpreter does that on its next tick).
+
+    `payload` is the exact bytes the harness wrote to its hook's stdin, and the
+    gateway must embed them unmodified in the raw events it returns.
+    `environment` is the env subset the hook process shipped (only it can see
+    the session's terminal window or account variables — the daemon's own
+    environment is meaningless here). The reply bytes go back to the hook's
+    stdout verbatim; a harness with no synchronous reply channel returns b"".
+    Rejecting a malformed delivery is `raise ValueError`."""
+
+    def raw_events(
+        self, payload: bytes, environment: Mapping[str, str]
+    ) -> tuple[tuple[RawEvent, ...], bytes]: ...
+
+
 class HarnessCanonicalTranslator(Protocol):
     def translate(self, raw_event: RawEvent) -> TranslationResult: ...
 
@@ -727,6 +748,7 @@ class HarnessPlugin:
     info: HarnessInfo
     sources: HarnessRawEventSources
     translator: HarnessCanonicalTranslator
+    hooks: HarnessHookGateway | None = None
     session_evidence: HarnessSessionEvidence | None = None
     reactor: HarnessReactor | None = None
     controller: HarnessController | None = None

@@ -6,8 +6,11 @@ teaching document disagree with this file, this file wins.
 
 ## The rule
 
-**A process either appends evidence or interprets it, never both — and only the
-interpreter has plugins, a terminal, or a thread.**
+**A component either appends evidence or interprets it, never both — and only
+the interpreter has a terminal or a thread.** The split used to be per-process;
+since hooks became thin clients it holds per-component inside the daemon too:
+the hook gateway records and returns, the interpreter interprets on its next
+tick, and nothing does both.
 
 ```
 LAUNCH — the wrapper is the sole registrar; it acts BEFORE hooks can exist
@@ -21,10 +24,15 @@ LAUNCH — the wrapper is the sole registrar; it acts BEFORE hooks can exist
 ──────────────────────────────────────────────────────────────────────
 WRITERS — observation only; append-only; never see session_harness
 ──────────────────────────────────────────────────────────────────────
- claude hook │ codex hook │ otel receiver │ wrappers (process raw events)
-      └──────────┴─▶ RawEventRecorder.record(raw_events)
-      hook stdout ◀─ plugin-computed reply (the Bash tee rewrite)
-      hook may also record WATCH DIRECTIVES (see below) — never files
+ otel receiver │ wrappers (process raw events)
+      └──▶ RawEventRecorder.record(raw_events)          # direct, daemon-independent
+
+ hook (thin client) ─▶ POST /api/harnesses/<name>/hooks   body = EXACT stdin bytes
+   plugins/*/canonical_hook.py = app/hook_client.run(HARNESS, ENVIRONMENT_KEYS)
+   X-Baqylau-Environment header = the env subset only the hook process can see
+   daemon: HookGatewayService ─▶ plugin.hooks.raw_events() ─▶ RawEventRecorder
+   hook stdout ◀─ response body = the gateway-computed reply (the Bash tee rewrite)
+   the gateway may also emit WATCH DIRECTIVES (see below) — never files
 
               raw_events: append-only, byte-conflict-checked
 ──────────────────────────────────────────────────────────────────────
@@ -57,12 +65,45 @@ the store (test_the_application_graph_is_built_only_by_the_daemon)
 ──────────────────────────────────────────────────────────────────────
  mirror pane      app/terminal_process.py   ◀─ SSE /api/sessions/<id>/panes/mirror/stream
  scoreboard pane  app/scoreboard_process.py ◀─ SSE /api/sessions/<id>/panes/scoreboard/stream
+ hook delivery    plugins/*/canonical_hook.py ─▶ POST /api/harnesses/<name>/hooks (exact stdin)
  pane keybinding  app/terminal_panes.py     ─▶ POST /api/terminal/panes {command, window_id, cwd}
  view click       bin/baqylau-view.py        ─▶ POST /api/terminal/views {content_reference}
  copy click       bin/baqylau-content.py     ◀─ GET  /api/content/<reference>
  (bin/baqylau-audit.py is the ONE sanctioned direct reader: the forensic CLI
   must work when the daemon is the thing being debugged)
 ```
+
+## Hooks deliver through the daemon
+
+A hook process does four things: read stdin, `ensure_running()`, POST the exact
+bytes plus its env subset, print whatever body comes back
+(`app/hook_client.py`; one shared body, per-harness stubs). Everything it used
+to compute — parsing, watch directives, the account snapshot, the terminal
+window anchor, the synchronous reply — moved daemon-side behind the
+`HarnessHookGateway` protocol (`plugins/<name>/hooks.py`), invoked by
+`HookGatewayService` (`app/hook_gateway.py`), the ONE recorder of pushed hook
+evidence.
+
+- **The body is evidence**: the exact hook stdin, never decoded and re-encoded
+  in transit (`_post_guard_bytes`); the gateway embeds it unmodified in its raw
+  events. The env vars only the hook process can see ride the
+  `X-Baqylau-Environment` header (each plugin's `ENVIRONMENT_KEYS` is the one
+  owner of which keys ship).
+- **A hook still never blocks or fails its harness**: every client failure path
+  audits and exits 0 with empty output, and the delivery timeout is short
+  (`DELIVERY_TIMEOUT_SECONDS`) — a wedged daemon costs each hook that pause,
+  never more.
+- **Recording rides the HTTP threads**, not the interpreter thread — a wedged
+  `tick()` does not stop evidence capture, and a hook fact still turns
+  canonical on the next tick like any other raw event.
+- **The daemon is now a single point of failure for hook evidence, by
+  decision** (it already was for presentation). `ensure_running()` in the
+  client keeps the window small — the first hook of a session boots the daemon
+  exactly as it used to — but a delivery the daemon never accepted is LOST, not
+  spooled: there is deliberately no client-side fallback write, because two
+  writers of hook evidence was the bug this design removes. The loss is always
+  visible: a client-side `errors` row (`<harness> hook (deliver)`) per dropped
+  delivery, a daemon-side one (`hook delivery`) per refused delivery.
 
 ## Panes are rendered in the daemon
 
@@ -87,8 +128,10 @@ a second family of store readers to keep correct. Now the daemon renders
   Canonical facts were only ever produced by the daemon's interpreter, so a
   down daemon always meant a frozen pane; the panes now say "reconnecting"
   instead of silently showing stale history, and recover on their own
-  (RECONNECT_DELAY_SECONDS). Evidence capture is unaffected — recorders never
-  went through the daemon and still must not.
+  (RECONNECT_DELAY_SECONDS). Hook evidence later joined presentation behind the
+  daemon (see *Hooks deliver through the daemon*); the pull-side recorders (the
+  wrappers, the otel receiver) still write directly and must keep doing so —
+  they run on the launch path, before any daemon is guaranteed.
 
 ## The five storage/flow classes
 
@@ -109,8 +152,13 @@ class initializes through it.
 - **Hooks used to build the entire application graph** (`build_default_application`
   per tool call) to insert one or two rows. Every Claude Code tool call paid the
   full bootstrap import, and any bug anywhere in the graph could lose evidence.
-  Now a hook imports its own parsing module plus `RawEventRecorder` (~100 lines of
-  dependency), and evidence recording cannot be broken by dashboard code.
+  The first fix made each hook its own recorder (parse + `RawEventRecorder`
+  in-process) — which left TWO writers of hook evidence (each hook subprocess
+  and the daemon's pull loop) racing on the same store, and hook parsing running
+  whatever code was on disk mid-upgrade while the daemon ran what it imported at
+  startup. Now the hook is a thin client and the daemon's gateway is the one
+  recorder of pushed evidence; the accepted price is the loss window a dead
+  daemon opens (see *Hooks deliver through the daemon*).
 - **The presenters built the graph too** — each pane process, the keybinding
   helper and the click handlers all called `build_default_application` (five
   more construction sites, one per keypress for the keybinding). Interpreting
@@ -191,14 +239,18 @@ A bare "event" names nothing. Contracts carry the `Harness` prefix
 (`HarnessRawEventSource`, `HarnessRawEventSources`, `HarnessCanonicalTranslator`,
 `HarnessReactor`); implementations carry the harness name
 (`ClaudeTranscriptRawEventSource`, `CodexRolloutRawEventSource`, …). The plugin
-contract is: `info` · `sources` · `translator` · optional `reactor` /
-`controller` / `launcher` / `catalog` / `usage` / `memory` / `terminal_probe`.
+contract is: `info` · `sources` · `translator` · optional `hooks` (the push
+twin of `sources` — `HarnessHookGateway`) / `reactor` / `controller` /
+`launcher` / `catalog` / `usage` / `memory` / `terminal_probe`.
 
 ## Costs accepted deliberately
 
 - Hook facts turn canonical on the next interpreter tick (≤0.25s later than the
   old synchronous ingest). SSE polls at the same cadence, so worst case adds one
   beat; pane open/close shifts by the same amount.
+- A hook delivery the daemon never accepted is lost (no client-side fallback
+  write; every drop leaves an `errors` row). Each hook pays one localhost
+  round-trip, and up to `DELIVERY_TIMEOUT_SECONDS` when the daemon is wedged.
 - The session row's `working_directory` is only "where the session began"; live
   cwd is the projection's (`session.working_directory_changed`).
 - A session launched without its wrapper becomes visible one tick after its

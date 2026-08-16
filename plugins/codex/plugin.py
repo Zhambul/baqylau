@@ -7,6 +7,7 @@ from plugins.codex.canonical import (
     CodexRawEventSources,
     CodexSessionEvidence,
 )
+from plugins.codex.hooks import CodexHookGateway
 from plugins.codex.catalog import CodexCatalog
 from plugins.codex.controller import controller
 from plugins.codex.launcher import CodexLauncher
@@ -44,6 +45,7 @@ plugin = HarnessPlugin(
         supports_attachments=True,
         models=MODELS,
     ),
+    hooks=CodexHookGateway(),
     sources=CodexRawEventSources(),
     translator=CodexCanonicalTranslator(),
     session_evidence=CodexSessionEvidence(),

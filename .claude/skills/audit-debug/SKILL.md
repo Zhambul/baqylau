@@ -31,7 +31,8 @@ Evidence flows one way, and each stage is recorded:
 
 ```
 wrapper ──register once──▶ session_harness
-recorders (hooks/otel/wrappers) ──append──▶ raw_events ◀──append── interpreter's pulled sources
+recorders (otel/wrappers) ──append──▶ raw_events ◀──append── daemon: hook gateway + interpreter's pulled sources
+hooks (thin clients) ──POST exact stdin──▶ /api/harnesses/<name>/hooks ──▶ hook gateway
                                                 │
         interpreter: translate → translation_records → canonical_events + canonical_provenance
 ```
@@ -62,11 +63,16 @@ read-and-interpret loop: it pulls every registered unfinished session's sources
 (hook evidence included — hooks do NOT translate), and reacts to committed facts
 (panes, plugin reactors). It runs as a thread inside the dashboard server process,
 every `TICK_INTERVAL_SECONDS` (0.25s), with no session-count cap. **Recorder**
-processes (`hook`, `otel`, `account`, the wrappers' `process` events) only append raw
-events and do not depend on it. That split is the key asymmetry behind the headline
-failure mode: when the interpreter stops, a session keeps accumulating raw evidence
-and therefore still looks partly alive, while NOTHING turns canonical — the
-conversation silently stops for every session at once.
+processes (`otel`, the wrappers' `process` events) only append raw events and do not
+depend on it. **Hooks are thin clients**: they POST their exact stdin to the daemon's
+hook gateway (`app/hook_gateway.py` → `plugins/<harness>/hooks.py`), which records
+`hook`/`teammate_hook`/`account`/`watch`/`terminal` raw events on the HTTP threads —
+NOT the interpreter thread. That split is the key asymmetry behind the headline
+failure mode: when the interpreter thread stops (but the daemon process lives), a
+session keeps accumulating raw evidence — hooks included, they ride other threads —
+and therefore still looks partly alive, while NOTHING turns canonical. Only a fully
+dead daemon stops hook capture too (each dropped delivery leaves a client-side
+`errors` row, `func` = `<harness> hook (deliver)`).
 
 ## Schema
 
@@ -83,9 +89,11 @@ conversation silently stops for every session at once.
 | `session_application_state` | one session's UI state | composer text/origin/sequence, queued messages, dialog attention id/answers |
 | `event_store_metadata` | store-wide settings | `schema_version` — must equal `domain.codec.SCHEMA_VERSION` or the store refuses to open |
 
-**`source_type` vocabulary** (which observer produced the evidence): recorded by
-short-lived processes — `hook`, `teammate_hook`, `otel`, `account`, `process` (the
-wrappers), `watch` (a hook's file-watch directive); pulled by the interpreter —
+**`source_type` vocabulary** (which observer produced the evidence): pushed —
+`hook`, `teammate_hook`, `account`, `watch` (a hook's file-watch directive) and
+`terminal` arrive as hook deliveries recorded by the daemon's hook gateway; `otel`
+and `process` (the wrappers) are recorded directly by those processes; pulled by the
+interpreter —
 `transcript`, `rollout`, `foreground_output` (watch chunks), `tasks`, `task_list`,
 and the child/teammate variants `child_transcript`, `teammate_transcript`,
 `child_rollout`, `child_replay`, `sidecar_rollout`, `sidecar_replay`.
@@ -169,8 +177,9 @@ COLUMN.** The `browser-*` telemetry rows leave it empty and bury it in the JSON,
    `translation_failed` run explains a *specific* thing missing while everything else
    flows.
 6. **`errors` around the symptom's timestamp** (`func` prefixed `interpreter (...)` for
-   pull/translate/react swallows, `claude hook (record)` / `codex hook (record)` for
-   recorder swallows), then `state_files` for the gesture.
+   pull/translate/react swallows; `claude_code hook (deliver)` / `codex hook (deliver)`
+   for a hook whose POST failed client-side; `hook delivery` for a delivery the daemon
+   refused), then `state_files` for the gesture.
 7. **Exact bytes**: `bin/baqylau-audit.py session <sid>` when you need to see what a
    source actually emitted rather than what we made of it.
 
@@ -239,6 +248,33 @@ Rows here are recorded-but-invisible sessions. Registration from any side makes 
 waiting evidence interpret on the next tick — nothing is ever lost. Note an
 evidence-registered session has no pid: no process-exit backstop, and no
 deterministic pane anchor (panes anchor by focus only within seconds of start).
+
+### A session ran hooks but no hook evidence was recorded at all
+
+Hooks record NOTHING locally — each delivery is a POST to the daemon
+(`app/hook_client.py` → `/api/harnesses/<name>/hooks`), and a delivery the daemon
+never accepted is lost by design (no fallback write). The loss is always audited;
+read both sides:
+
+```sql
+SELECT datetime(ts,'unixepoch','localtime'), func, context
+FROM errors WHERE func LIKE '%hook (deliver)%' OR func = 'hook delivery'
+ORDER BY ts DESC LIMIT 20;
+```
+
+- **`<harness> hook (deliver)` rows** (client-side) — the POST failed: daemon down and
+  `ensure_running` couldn't boot it within its timeout, daemon wedged past
+  `DELIVERY_TIMEOUT_SECONDS`, or the daemon answered non-200. The `traceback` names
+  which. A burst of these during a restart window is normal-ish (a few deliveries);
+  a steady stream means the daemon can't start — check `bin/baqylau-dashboard.py status`
+  and `dashboard%` errors.
+- **`hook delivery` rows** (daemon-side) — the daemon refused it: an unparseable
+  payload (400, gateway `ValueError`) or an `EventIdentityConflict` (409, same
+  `hook_event_id` re-sent with different bytes). The context carries the harness and
+  payload size; the client swallowed the same failure, so both rows describe one event.
+- **Neither, and yet no `hook` raw events** — the harness never fired hooks at all
+  (check `~/.claude/settings.json` wiring points at `plugins/*/canonical_hook.py`),
+  or the hooks ran under an environment where the repo path is wrong.
 
 ### The dashboard is unreachable, or needed several refreshes to load
 

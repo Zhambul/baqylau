@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Mapping
 
 ACCOUNTS_FILE = os.path.expanduser("~/.config/claude-subscriptions/accounts.tsv")
 ACCOUNT_CONFIG_DIRECTORY = os.path.expanduser("~/.config/claude-subscriptions/configs")
@@ -12,9 +13,11 @@ SUPPORTED_SHELLS = ("zsh", "bash")
 VALID_ACCOUNT_ID = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
-def current() -> dict:
-    account_id = (os.environ.get("CLAUDE_SUBSCRIPTION_SLUG") or "").strip()
-    display_name = (os.environ.get("CLAUDE_SUBSCRIPTION_LABEL") or "").strip()
+def current(environment: Mapping[str, str]) -> dict:
+    """The account the given environment selects — the caller says whose
+    environment (a hook ships its own; the daemon's is meaningless here)."""
+    account_id = (environment.get("CLAUDE_SUBSCRIPTION_SLUG") or "").strip()
+    display_name = (environment.get("CLAUDE_SUBSCRIPTION_LABEL") or "").strip()
     if not VALID_ACCOUNT_ID.fullmatch(account_id or "x"):
         account_id = ""
     return {"slug": account_id, "label": display_name or account_id or "default"}

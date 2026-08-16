@@ -10,6 +10,7 @@ from dashboard import config as dashboard_config
 from app.data import data_directory
 from app.content import CanonicalContentService
 from app.diagnostics import OperationalDiagnostics
+from app.hook_gateway import HookGatewayService
 from app.host import ApplicationHost
 from app.insights import ApplicationInsightsService
 from app.interpreter import Interpreter
@@ -55,6 +56,7 @@ class CanonicalApplication:
     registry: HarnessRegistry
     sessions: SessionRegistry
     recorder: RawEventRecorder
+    hook_gateway: HookGatewayService
     watches: WatchRegistry
     queries: SessionQueries
     evidence: EvidenceQueries
@@ -125,6 +127,7 @@ def build_application(
         registry=registry,
         sessions=sessions,
         recorder=recorder,
+        hook_gateway=HookGatewayService(registry, recorder),
         watches=watches,
         queries=queries,
         evidence=EvidenceQueries(canonical_store),
