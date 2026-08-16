@@ -70,7 +70,7 @@ class CanonicalContentService:
             OperationProgressed: frozenset({"content"}),
             OperationInputProvided: frozenset({"content"}),
             FileAccessed: frozenset({"content", "unified_diff"}),
-            ActorAssignmentStarted: frozenset({"brief"}),
+            ActorAssignmentStarted: frozenset({"brief", "prompt"}),
             ActorAssignmentFinished: frozenset({"result"}),
             AttentionResolved: frozenset({"feedback"}),
             ActorMessageSent: frozenset({"content"}),

@@ -518,14 +518,20 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 source = metadata.get("source") or {}
                 spawn = source.get("subagent", {}).get("thread_spawn", {}) if isinstance(source, dict) else {}
                 actor_path = str(spawn.get("agent_path") or "")
-                brief = actor_path.rsplit("/", 1)[-1].replace("_", " ").strip() or "actor assignment"
+                actor_name = actor_path.rsplit("/", 1)[-1].replace("_", " ").strip()
                 assignment_id = AssignmentId(str(turn_id))
+                # No prompt: the task payload is encrypted_content in the child
+                # rollout, unreadable by design (rollout.subagent_brief).
                 events.append(self._event(
                     raw_event,
                     "actor_assignment",
                     str(assignment_id),
                     "started",
-                    ActorAssignmentStarted(assignment_id, _content(brief)),
+                    ActorAssignmentStarted(
+                        assignment_id,
+                        _content(actor_name or "actor assignment"),
+                        actor_name=actor_name or None,
+                    ),
                     turn_id,
                     occurred_at,
                 ))

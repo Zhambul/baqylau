@@ -443,6 +443,39 @@ def test_dashboard_actor_assignment_is_one_complete_note_block():
     assert '<div class="md"><p>done</p>' in item.html
 
 
+def test_dashboard_actor_assignment_launch_card_expands_to_actor_name_and_prompt():
+    # The header carries the short label; the expansion carries WHO was
+    # launched and the verbatim prompt (when the harness exposes one).
+    activity = ActorAssignmentActivity(
+        context=ActivityContext(
+            activity_id="actor_assignment:one",
+            source_event_ids=(CanonicalEventId("child-event"),),
+            session_id=SessionId("session-one"),
+            actor_id=ActorId("actor-one"),
+            actor_name="assistant",
+            parent_actor_id=None,
+            turn_id=None,
+            started_at=1.0,
+            finished_at=None,
+        ),
+        assignment_id=AssignmentId("assignment-one"),
+        brief=TextContent("check the implementation"),
+        state="running",
+        outcome=None,
+        result=None,
+        reason=None,
+        assigned_actor_name="general-purpose",
+        prompt=TextContent("Review runtime/projections.py for merge bugs.", "text/markdown"),
+    )
+
+    item = DashboardPresenter().present(activity)
+
+    assert 'Agent &quot;check the implementation&quot; started' in item.html
+    assert "<strong>agent:</strong> general-purpose" in item.html
+    assert "Review runtime/projections.py for merge bugs." in item.html
+    assert item.plain_text == "Review runtime/projections.py for merge bugs."
+
+
 def test_dashboard_skill_is_one_complete_note_block():
     activity = operation_activity(state="finished", outcome="succeeded")
     activity = OperationActivity(

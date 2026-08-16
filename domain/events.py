@@ -215,6 +215,11 @@ class FileAccessed(EventPayload):
 class ActorAssignmentStarted(EventPayload):
     assignment_id: AssignmentId
     brief: Content
+    # Optional facts a harness may know at launch: the assigned actor's display
+    # name, and the verbatim prompt it was launched with (None when the harness
+    # does not expose it). Defaulted so rows written before these fields decode.
+    actor_name: str | None = None
+    prompt: Content | None = None
 
 
 @dataclass(frozen=True)

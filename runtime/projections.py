@@ -214,6 +214,8 @@ class ActorAssignmentActivity:
     outcome: Outcome | None
     result: Content | None
     reason: str | None
+    assigned_actor_name: str | None = None
+    prompt: Content | None = None
 
 
 @dataclass(frozen=True)
@@ -1333,6 +1335,8 @@ class SessionQueries:
                     None,
                     None,
                     None,
+                    assigned_actor_name=payload.actor_name,
+                    prompt=payload.prompt,
                 )
                 actor_assignment_starts[(activity_actor_id, payload.assignment_id)] = activity
             elif isinstance(payload, ActorAssignmentFinished):
@@ -1359,6 +1363,10 @@ class SessionQueries:
                     payload.outcome,
                     payload.result,
                     payload.reason,
+                    assigned_actor_name=(
+                        started.assigned_actor_name if started is not None else None
+                    ),
+                    prompt=started.prompt if started is not None else None,
                 )
             elif isinstance(payload, ActorMessageSent):
                 activity_id = _activity_id(event, "actor_message", payload.message_id)

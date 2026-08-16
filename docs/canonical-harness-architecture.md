@@ -45,7 +45,11 @@ Completed and enforced by executable tests:
   and catalog selection identity, so browser code never parses harness model
   identifiers;
 - the current canonical schema requires that model shape and rejects older event
-  databases at startup; there is no decoder adapter or migration;
+  databases at startup; there is no decoder adapter or migration. The one
+  sanctioned evolution is ADDITIVE: a payload field with a declared default is
+  optional on decode (rows written before the field existed keep decoding, the
+  default fills in), while extra fields stay rejected — so a new optional fact
+  needs no schema-version bump and no stored-row rewrite;
 - canonical context reports drive both harnesses, including Claude assistant
   usage and generic latest-model association;
 - native `EventSource` reconnection is the only browser reconnect mechanism and

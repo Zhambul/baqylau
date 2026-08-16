@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import types
 import typing
-from dataclasses import fields, is_dataclass
+from dataclasses import MISSING, fields, is_dataclass
 from decimal import Decimal
 from functools import cache
 from typing import Any, Literal, get_args, get_origin, get_type_hints
@@ -84,10 +84,18 @@ def _from_data(expected_type: Any, value: Any) -> Any:
     if is_dataclass(expected_type):
         if not isinstance(value, dict):
             raise CanonicalCodecError(f"{expected_type.__name__} must be encoded as an object")
+        # A field with a declared default is optional on decode: rows encoded
+        # before the field existed keep decoding (additive schema evolution
+        # without rewriting stored events). Extra fields stay rejected.
         expected_fields = {field.name for field in fields(expected_type)}
+        required_fields = {
+            field.name
+            for field in fields(expected_type)
+            if field.default is MISSING and field.default_factory is MISSING
+        }
         actual_fields = set(value)
-        if actual_fields != expected_fields:
-            missing = sorted(expected_fields - actual_fields)
+        if not (required_fields <= actual_fields <= expected_fields):
+            missing = sorted(required_fields - actual_fields)
             extra = sorted(actual_fields - expected_fields)
             raise CanonicalCodecError(
                 f"invalid {expected_type.__name__} fields; missing={missing!r}, extra={extra!r}"

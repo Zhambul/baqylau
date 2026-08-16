@@ -558,7 +558,8 @@ class DashboardPresenter:
                 finished_at=activity.context.finished_at,
             )
         if isinstance(activity, ActorAssignmentActivity):
-            content = activity.result or activity.brief
+            launch_detail = activity.prompt if activity.prompt is not None else activity.brief
+            content = activity.result if activity.result is not None else launch_detail
             text = activity.reason or _plain(content)
             state = "running" if activity.state == "running" else activity.outcome
             item_state = state if state in ("running", "succeeded", "failed", "cancelled") else None
@@ -577,13 +578,24 @@ class DashboardPresenter:
                 '<span class="anmark">⏺</span>'
                 f'<span class="atext">{html.escape(note_text)}</span></div>'
             )
+            launch_field = "prompt" if activity.prompt is not None else "brief"
             content_reference = (
                 _content_reference(activity.context.source_event_ids[-1], "result", text)
                 if activity.result is not None
-                else _content_reference(activity.context.source_event_ids[0], "brief", text)
+                else _content_reference(activity.context.source_event_ids[0], launch_field, text)
                 if activity.reason is None
                 else None
             )
+            body_html = f'<div class="md">{md_html(text)}</div>'
+            if (
+                activity.assigned_actor_name
+                and activity.result is None
+                and activity.reason is None
+            ):
+                body_html = (
+                    '<div class="md"><p><strong>agent:</strong> '
+                    f"{html.escape(activity.assigned_actor_name)}</p></div>{body_html}"
+                )
             return DashboardItem(
                 activity.context.activity_id,
                 "actor_assignment",
@@ -593,7 +605,7 @@ class DashboardPresenter:
                 _dashboard_block(
                     header_html=note_html,
                     summary="",
-                    body_html=f'<div class="md">{md_html(text)}</div>',
+                    body_html=body_html,
                     state=item_state,
                     started_at=activity.context.started_at,
                     finished_at=activity.context.finished_at,

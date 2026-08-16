@@ -2311,6 +2311,8 @@ def test_claude_async_agent_launch_stays_running_until_task_notification():
 
     child_started = payloads(started, ActorAssignmentStarted)[0].payload
     assert child_started.brief.text == "Get current weather in Bali"
+    assert child_started.actor_name == "general-purpose"
+    assert child_started.prompt.text == "Look up current weather and a short forecast."
     assert payloads(launch_ack, OperationFinished)
     assert not payloads(launch_ack, ActorAssignmentFinished)
 
@@ -3077,6 +3079,8 @@ def test_codex_collaboration_lifecycle_uses_child_turn_as_assignment_identity(tm
     finish_payload = payloads(finished, ActorAssignmentFinished)[0].payload
     assert str(start_payload.assignment_id) == "child-turn"
     assert start_payload.brief.text == "bali weather"
+    assert start_payload.actor_name == "bali weather"
+    assert start_payload.prompt is None
     assert str(finish_payload.assignment_id) == "child-turn"
     assert finish_payload.result.text == "Rain, 24°C"
     assert not payloads(finished, ActorFinished)

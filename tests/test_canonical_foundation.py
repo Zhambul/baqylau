@@ -265,11 +265,18 @@ def registered_runtime(tmp_path, translation: TranslationResult | TranslationErr
             ActorAssignmentStarted(
                 AssignmentId("assignment-one"),
                 TextContent("Get Bali weather"),
+                actor_name="researcher",
+                prompt=TextContent("Look up the weather in Bali.", "text/markdown"),
             ),
             "actor.assignment_started",
             {
                 "assignment_id": "assignment-one",
                 "brief": {"media_type": "text/plain", "text": "Get Bali weather"},
+                "actor_name": "researcher",
+                "prompt": {
+                    "media_type": "text/markdown",
+                    "text": "Look up the weather in Bali.",
+                },
             },
         ),
         (
@@ -443,6 +450,43 @@ def test_codec_rejects_unknown_schema_and_envelope_fields():
         codec.decode(document.replace(f'"schema_version":{SCHEMA_VERSION}', '"schema_version":999'))
     with pytest.raises(CanonicalCodecError, match="envelope fields"):
         codec.decode(document[:-1] + ',"glyph":"x"}')
+
+
+def test_codec_decodes_rows_written_before_a_defaulted_field_existed():
+    # Additive schema evolution: a payload field with a declared default is
+    # optional on decode, so stored events survive the field's introduction
+    # without a rewrite. Fields without a default stay required, and extra
+    # payload fields stay rejected.
+    codec = CanonicalEventCodec()
+    event = CanonicalEvent(
+        event_id=CanonicalEventId("event-one"),
+        session_id=SessionId("session-one"),
+        actor_id=ActorId("actor-one"),
+        turn_id=None,
+        parent_actor_id=None,
+        harness="example",
+        occurred_at=1.0,
+        terminal_window_id=None,
+        harness_process_id=None,
+        payload=ActorAssignmentStarted(
+            AssignmentId("assignment-one"), TextContent("Get Bali weather")
+        ),
+    )
+    document = json.loads(codec.encode(event))
+    del document["payload"]["actor_name"]
+    del document["payload"]["prompt"]
+
+    decoded = codec.decode(json.dumps(document))
+
+    assert decoded.payload.actor_name is None
+    assert decoded.payload.prompt is None
+    document["payload"]["glyph"] = "x"
+    with pytest.raises(CanonicalCodecError, match="extra=\\['glyph'\\]"):
+        codec.decode(json.dumps(document))
+    del document["payload"]["glyph"]
+    del document["payload"]["brief"]
+    with pytest.raises(CanonicalCodecError, match="missing=\\['brief'\\]"):
+        codec.decode(json.dumps(document))
 
 
 def test_codec_rejects_an_invalid_payload_before_storage():

@@ -1145,9 +1145,13 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
         events = self._file_facts(raw_event, operation_id, native_name, arguments, None)
         if native_name in ("Task", "Agent"):
             assignment_id = AssignmentId(str(operation_id))
+            actor_name = arguments.get("name") or arguments.get("subagent_type")
+            prompt = arguments.get("prompt")
             payload = ActorAssignmentStarted(
                 assignment_id,
-                _content(arguments.get("description") or arguments.get("prompt") or ""),
+                _content(arguments.get("description") or prompt or ""),
+                actor_name=str(actor_name) if actor_name else None,
+                prompt=_content(prompt, markdown=True) if prompt else None,
             )
             events.append(
                 self._event(
