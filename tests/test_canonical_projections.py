@@ -50,7 +50,7 @@ from domain.ids import (
 )
 from domain.values import AttentionPrompt, ModelReference, StructuredContent, TextContent, TokenUsage
 from canonical_runtime import CanonicalRuntime
-from runtime.projections import ActivityScope, ActorAssignmentActivity, OperationActivity
+from engine.projections import ActivityScope, ActorAssignmentActivity, OperationActivity
 
 SESSION_ID = SessionId("session-one")
 LEAD_ACTOR_ID = ActorId("actor-lead")

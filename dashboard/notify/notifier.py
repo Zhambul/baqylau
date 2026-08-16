@@ -13,7 +13,7 @@ from dashboard.activity import DashboardSessionService
 from dashboard.application import DashboardNotificationState
 from dashboard.notify import channels, presence
 from domain.ids import SessionId
-from runtime.projections import SessionQueries, TabState
+from engine.projections import SessionQueries, TabState
 
 NOTIFICATION_KINDS = {
     "awaiting_attention": "asking",

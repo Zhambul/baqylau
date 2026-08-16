@@ -33,7 +33,7 @@ def assert_imports(package: str, allowed_roots: set[str], allowed_modules: set[s
     bad = []
     for path, imported in imports_under(package):
         root = imported.split(".", 1)[0]
-        if root in {"api", "app", "core", "dashboard", "domain", "harness", "runtime", "terminal"}:
+        if root in {"api", "app", "core", "dashboard", "domain", "harness", "engine", "terminal"}:
             if root in allowed_roots:
                 continue
             if any(imported == module or imported.startswith(module + ".") for module in allowed_modules):
@@ -64,7 +64,7 @@ def test_the_harness_contract_and_models_import_only_domain_and_the_terminal_con
                 continue
             if any(imported == module or imported.startswith(module + ".") for module in allowed_modules):
                 continue
-            if root in {"api", "app", "core", "dashboard", "runtime", "terminal"}:
+            if root in {"api", "app", "core", "dashboard", "engine", "terminal"}:
                 bad.append(f"{path.relative_to(ROOT)} imports {imported}")
     assert bad == []
 
@@ -86,9 +86,9 @@ def test_the_harness_implementations_never_import_the_application():
             "terminal.contract", "terminal.models", "terminal.adapter", "terminal.launch",
             # the hook client and the otel receiver run OUTSIDE the daemon: one
             # observes its own window, both append evidence and exit
-            "terminal.impl", "runtime.recorder",
+            "terminal.impl", "engine.recorder",
             # the stores the services read a session's own facts from
-            "runtime.projections", "runtime.sessions",
+            "engine.projections", "engine.sessions",
         },
     )
 
@@ -121,7 +121,7 @@ def test_only_bootstrap_and_the_self_identifying_clients_resolve_a_terminal():
     """
     allowed = {"app/bootstrap.py", "harness/hooks/client.py", "terminal/panes/client.py"}
     importers = set()
-    for package in ("api", "app", "core", "dashboard", "domain", "harness", "runtime", "terminal"):
+    for package in ("api", "app", "core", "dashboard", "domain", "harness", "engine", "terminal"):
         for path, imported in imports_under(package):
             relative = path.relative_to(ROOT).as_posix()
             if relative.startswith("terminal/impl/"):
@@ -142,7 +142,7 @@ def test_no_terminal_is_named_outside_its_own_implementation():
     concrete_words = ("kitty", "kitten")
     scanned = [
         ROOT / "api", ROOT / "app", ROOT / "core", ROOT / "dashboard",
-        ROOT / "domain", ROOT / "harness", ROOT / "runtime", ROOT / "terminal",
+        ROOT / "domain", ROOT / "harness", ROOT / "engine", ROOT / "terminal",
     ]
     implementation = ROOT / "terminal" / "impl" / "kitty"
     # The detector registry is the one file above the implementation that may
@@ -165,8 +165,8 @@ def test_no_terminal_is_named_outside_its_own_implementation():
 
 def test_runtime_imports_only_domain_and_the_harness_contract():
     assert_imports(
-        "runtime",
-        {"domain", "runtime"},
+        "engine",
+        {"domain", "engine"},
         allowed_modules={"harness.contract", "harness.models", "harness.registry"},
     )
 
@@ -178,7 +178,7 @@ def test_presenters_do_not_import_plugins_or_each_other():
     # CONTRACT — a pane reacts to canonical facts — and nothing concrete.
     assert_imports(
         "terminal",
-        {"core", "domain", "runtime", "terminal"},
+        {"core", "domain", "engine", "terminal"},
         allowed_modules={"harness.contract", "harness.models"},
     )
     presentation_files = {
@@ -286,7 +286,7 @@ def test_canonical_shared_code_imports_no_concrete_harness_package():
         ROOT / "api",
         ROOT / "app",
         ROOT / "domain",
-        ROOT / "runtime",
+        ROOT / "engine",
         ROOT / "terminal",
         ROOT / "harness" / "contract.py",
         ROOT / "harness" / "registry.py",
@@ -328,7 +328,7 @@ def test_canonical_shared_code_contains_no_concrete_harness_vocabulary():
         ROOT / "core",
         ROOT / "dashboard",
         ROOT / "domain",
-        ROOT / "runtime",
+        ROOT / "engine",
         ROOT / "terminal",
         ROOT / "harness" / "contract.py",
         ROOT / "harness" / "registry.py",
@@ -356,7 +356,7 @@ def test_no_read_path_orders_on_a_bare_occurred_at():
     column sorts those events arbitrarily, which silently reorders a conversation.
     """
     violations = []
-    for directory in ("app", "runtime", "dashboard", "terminal", "core", "harness"):
+    for directory in ("app", "engine", "dashboard", "terminal", "core", "harness"):
         for path in sorted((ROOT / directory).rglob("*.py")):
             for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
                 if "occurred_at" not in line:
@@ -427,7 +427,7 @@ def test_hook_entries_are_thin_clients_of_the_daemon():
         "build_application",
         "app.bootstrap",
         "RawEventRecorder",
-        "runtime.recorder",
+        "engine.recorder",
         "events.db",
     )
     violations = []
@@ -452,7 +452,7 @@ def test_the_application_graph_is_built_only_by_the_daemon():
         "api/server.py",
     }
     violations = []
-    for directory in ("api", "app", "bin", "core", "dashboard", "harness", "runtime", "terminal"):
+    for directory in ("api", "app", "bin", "core", "dashboard", "harness", "engine", "terminal"):
         for path in sorted((ROOT / directory).rglob("*.py")):
             if "__pycache__" in path.parts:
                 continue
@@ -471,7 +471,7 @@ def test_claude_foreground_hook_has_no_legacy_drawing_or_state_dependency():
         ROOT / "harness" / "impl" / "claude_code" / "hooks" / "foreground.py",
         ROOT / "harness" / "impl" / "claude_code" / "shell.py",
     )
-    forbidden_roots = {"api", "app", "dashboard", "runtime", "terminal"}
+    forbidden_roots = {"api", "app", "dashboard", "engine", "terminal"}
     violations = []
     for path in implementation_files:
         for _imported_path, imported in imports_under_path(path):
@@ -628,7 +628,7 @@ if loaded:
 # call would have worked on one harness and raised on the other.
 
 SOURCE_PACKAGES = ("app", "core", "dashboard", "domain", "harness",
-                   "runtime", "terminal")
+                   "engine", "terminal")
 
 # Structural implementers that must NOT declare their Protocol, with the reason.
 # Both are the same shape: the Protocol is declared in a layer that sits BELOW

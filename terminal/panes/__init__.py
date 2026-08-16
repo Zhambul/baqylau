@@ -7,7 +7,7 @@ the pane process is a thin byte-copying client (`mirror_process`,
 what only it can observe to `commands`), and `preferences`/`views` hold the
 small pieces of state a pane remembers between frames.
 
-This is the one tier of `terminal/` that reaches for `runtime/` and `harness/`:
+This is the one tier of `terminal/` that reaches for `engine/` and `harness/`:
 a pane shows a SESSION, so it needs the projections behind one. The contract
 below it stays keyed on window ids and knows none of that.
 """

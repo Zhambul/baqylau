@@ -5,7 +5,7 @@ from __future__ import annotations
 from domain.events import CanonicalEvent, SessionFinished, SessionStarted
 from domain.ids import SessionId
 from harness.contract import CanonicalEventReaction
-from runtime.sessions import SessionStore
+from engine.sessions import SessionStore
 from terminal.adapter import SessionPaneRequest, TerminalAdapter
 from terminal.panes import preferences as pane_preferences
 

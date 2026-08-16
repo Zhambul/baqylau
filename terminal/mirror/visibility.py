@@ -1,6 +1,6 @@
 """Terminal-specific visibility for canonical session activity."""
 
-from runtime.projections import Activity, MessageActivity, ReasoningActivity
+from engine.projections import Activity, MessageActivity, ReasoningActivity
 from domain.ids import ActorId
 
 

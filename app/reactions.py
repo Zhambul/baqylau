@@ -15,9 +15,9 @@ from domain.events import (
     SessionStarted,
 )
 from domain.ids import SessionId
-from runtime.operation_output import OperationOutputStore
-from runtime.recorder import RawEventRecorder
-from runtime.sessions import SessionStore
+from engine.operation_output import OperationOutputStore
+from engine.recorder import RawEventRecorder
+from engine.sessions import SessionStore
 
 
 class SessionUpsertCanonicalEventReaction(CanonicalEventReaction):

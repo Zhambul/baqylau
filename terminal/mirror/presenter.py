@@ -6,7 +6,7 @@ import json
 
 from terminal.models import RGB
 from domain.values import Content, StructuredContent, TextContent
-from runtime.projections import (
+from engine.projections import (
     Activity,
     AttentionActivity,
     ActorAssignmentActivity,

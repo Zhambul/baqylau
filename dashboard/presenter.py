@@ -10,7 +10,7 @@ from typing import Literal
 from dashboard.markdown import md_html
 from domain.ids import ActorId, CanonicalEventId
 from domain.values import Content, StructuredContent, TextContent
-from runtime.projections import (
+from engine.projections import (
     Activity,
     AttentionActivity,
     ActorAssignmentActivity,

@@ -56,15 +56,15 @@ from domain.ids import (
     stable_event_id,
 )
 from domain.values import StructuredContent, TextContent
-from runtime.canonical_store import CanonicalEventStore
-from runtime.database import connect
-from runtime.evidence import EvidenceQueries
+from engine.canonical_store import CanonicalEventStore
+from engine.database import connect
+from engine.evidence import EvidenceQueries
 from harness.registry import HarnessRegistry, HarnessRegistryError
-from runtime.operation_output import OperationOutputStore
-from runtime.recorder import EventIdentityConflict, RawEventRecorder
-from runtime.sessions import SessionStore
+from engine.operation_output import OperationOutputStore
+from engine.recorder import EventIdentityConflict, RawEventRecorder
+from engine.sessions import SessionStore
 from dashboard.presenter import DashboardPresenter
-from runtime.projections import ActivityScope, SessionQueries
+from engine.projections import ActivityScope, SessionQueries
 from terminal.mirror.presenter import TerminalPresenter
 
 # The liveness source checks the CLI pid against the CLI's process name; the

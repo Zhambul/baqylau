@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from terminal.models import RGB
-from runtime.projections import ActivityStatistics, SessionSummary, UsageSummary
+from engine.projections import ActivityStatistics, SessionSummary, UsageSummary
 from terminal.mirror.blocks import TerminalBlock, TerminalLine, TerminalStyle, TerminalText, TerminalUpdate
 
 MUTED = RGB(133, 143, 166)

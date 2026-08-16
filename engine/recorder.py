@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from harness.models import RawEvent
-from runtime.database import connect, initialize
+from engine.database import connect, initialize
 
 
 class RawEventRecorderError(RuntimeError):

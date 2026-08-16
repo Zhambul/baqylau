@@ -28,7 +28,7 @@ from api.sse import (
 from core import audit as A
 from dashboard.activity import to_wire
 from domain.ids import SessionId
-from runtime.projections import ActivityScope
+from engine.projections import ActivityScope
 
 router = APIRouter()
 

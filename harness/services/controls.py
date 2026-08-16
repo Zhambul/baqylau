@@ -12,8 +12,8 @@ from harness.models import (
     ControlRequest,
     ControlResult,
 )
-from runtime.projections import SessionQueries
-from runtime.sessions import SessionStore
+from engine.projections import SessionQueries
+from engine.sessions import SessionStore
 from terminal.adapter import TerminalAdapter
 from terminal.contract import TerminalPlugin
 

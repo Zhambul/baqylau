@@ -9,8 +9,8 @@ import sys
 
 from core.data import data_directory
 from domain.ids import RawEventId, SessionId
-from runtime.canonical_store import CanonicalEventStore
-from runtime.evidence import EvidenceQueries, TranslationEvidence
+from engine.canonical_store import CanonicalEventStore
+from engine.evidence import EvidenceQueries, TranslationEvidence
 
 
 def _document(store: CanonicalEventStore, evidence: TranslationEvidence) -> dict:

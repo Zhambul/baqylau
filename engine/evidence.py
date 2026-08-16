@@ -6,8 +6,8 @@ from dataclasses import dataclass
 
 from domain.events import CanonicalEvent, EventPayload
 from domain.ids import ActorId, CanonicalEventId, RawEventId, SessionId
-from runtime.database import connect
-from runtime.canonical_store import CanonicalEventStore
+from engine.database import connect
+from engine.canonical_store import CanonicalEventStore
 
 
 @dataclass(frozen=True)

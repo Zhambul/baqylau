@@ -105,9 +105,9 @@ from harness.impl.codex.canonical.translator import (
 from harness.impl.codex.hooks import gateway as codex_hooks
 from harness.impl.codex.canonical import rollout as codex_rollout
 from harness.impl.codex.controls.controller import _rollout_abort_state
-from runtime.recorder import EventIdentityConflict, RawEventRecorder
+from engine.recorder import EventIdentityConflict, RawEventRecorder
 from canonical_runtime import CanonicalRuntime
-from runtime.evidence import EvidenceQueries
+from engine.evidence import EvidenceQueries
 from app.core_translators import LivenessTranslator, OperationOutputTranslator
 from app.interpreter import Interpreter
 from app.reactions import (

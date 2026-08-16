@@ -11,11 +11,11 @@ from harness.contract import CanonicalEventReaction, CoreTranslator, HarnessRawE
 from harness.models import LIVENESS_SOURCE_TYPE, RawEvent, Session, TranslationResult
 from core.process import process_alive
 from domain.ids import RawEventId
-from runtime.canonical_store import CanonicalEventStore, CanonicalEventStoreError
+from engine.canonical_store import CanonicalEventStore, CanonicalEventStoreError
 from harness.registry import HarnessRegistry
-from runtime.operation_output import OperationOutputStore
-from runtime.recorder import RawEventRecorder
-from runtime.sessions import SessionStore
+from engine.operation_output import OperationOutputStore
+from engine.recorder import RawEventRecorder
+from engine.sessions import SessionStore
 from harness.services.controls import HarnessControlService
 
 TICK_INTERVAL_SECONDS = 0.25

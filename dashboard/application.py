@@ -13,9 +13,9 @@ from harness.models import TerminalSessionState, UsageRow
 from domain.events import MessageCreated
 from domain.ids import AttentionId, SessionId
 from domain.values import TextContent
-from runtime.database import connect
-from runtime.canonical_store import CanonicalEventStore
-from runtime.projections import SessionQueries
+from engine.database import connect
+from engine.canonical_store import CanonicalEventStore
+from engine.projections import SessionQueries
 from dashboard.activity import (
     DashboardSessionListItem,
     DashboardSessionService,

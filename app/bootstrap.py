@@ -43,13 +43,13 @@ from dashboard.application import (
     GlobalApplicationService,
     SessionApplicationService,
 )
-from runtime.canonical_store import CanonicalEventStore
-from runtime.evidence import EvidenceQueries
+from engine.canonical_store import CanonicalEventStore
+from engine.evidence import EvidenceQueries
 from harness.registry import HarnessRegistry
-from runtime.operation_output import OperationOutputStore
-from runtime.projections import SessionQueries
-from runtime.recorder import RawEventRecorder
-from runtime.sessions import SessionStore
+from engine.operation_output import OperationOutputStore
+from engine.projections import SessionQueries
+from engine.recorder import RawEventRecorder
+from engine.sessions import SessionStore
 from terminal.adapter import TerminalAdapter
 from terminal.impl import resolve as resolve_terminal
 from terminal.impl.null import null_plugin

@@ -3,7 +3,7 @@ from dataclasses import replace
 from terminal.panes import views as terminal_views
 from domain.events import FileAccessed
 from domain.ids import ActorId, CanonicalEventId, OperationId, SessionId
-from runtime.projections import ActivityContext, FileActivity
+from engine.projections import ActivityContext, FileActivity
 from terminal.mirror.blocks import TerminalLine
 from terminal.mirror.presenter import TerminalPresenter
 from domain.values import TextContent

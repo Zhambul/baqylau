@@ -13,8 +13,8 @@ from app.repository import RepositoryQueries
 from harness.models import TerminalSessionState
 from domain.ids import SessionId
 from domain.values import TokenUsage
-from runtime.canonical_store import CanonicalEventStore
-from runtime.projections import SessionQueries
+from engine.canonical_store import CanonicalEventStore
+from engine.projections import SessionQueries
 
 
 class TerminalSessionReader(Protocol):

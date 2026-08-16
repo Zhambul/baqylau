@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from api.dependencies import ApplicationGraph
 from dashboard.activity import to_wire
 from domain.ids import ActorId, SessionId
-from runtime.projections import ActivityScope
+from engine.projections import ActivityScope
 
 router = APIRouter()
 

@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 
 from terminal.panes import views as terminal_views
 from domain.ids import SessionId
-from runtime.projections import ActivityScope, FileActivity
+from engine.projections import ActivityScope, FileActivity
 from terminal.mirror.visibility import visible
 from terminal.mirror.presenter import TerminalPresenter
 from terminal.mirror.renderer import HEADER, TerminalRenderer

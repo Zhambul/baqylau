@@ -19,7 +19,7 @@ from domain.ids import (
 )
 from domain.values import AccountReference, StructuredContent, TextContent, TokenUsage
 from dashboard.presenter import DashboardPresenter
-from runtime.projections import (
+from engine.projections import (
     ActivityContext,
     ActivityStatistics,
     ActorAssignmentActivity,
@@ -465,15 +465,15 @@ def test_dashboard_actor_assignment_launch_card_expands_to_actor_name_and_prompt
         result=None,
         reason=None,
         assigned_actor_name="general-purpose",
-        prompt=TextContent("Review runtime/projections.py for merge bugs.", "text/markdown"),
+        prompt=TextContent("Review engine/projections.py for merge bugs.", "text/markdown"),
     )
 
     item = DashboardPresenter().present(activity)
 
     assert 'Agent &quot;check the implementation&quot; started' in item.html
     assert "<strong>agent:</strong> general-purpose" in item.html
-    assert "Review runtime/projections.py for merge bugs." in item.html
-    assert item.plain_text == "Review runtime/projections.py for merge bugs."
+    assert "Review engine/projections.py for merge bugs." in item.html
+    assert item.plain_text == "Review engine/projections.py for merge bugs."
 
 
 def test_dashboard_skill_is_one_complete_note_block():

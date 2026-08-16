@@ -46,7 +46,7 @@ from domain.ids import (
 )
 from domain.values import AttentionAnswer, AttentionPrompt, StructuredContent, TextContent, TokenUsage
 from canonical_runtime import CanonicalRuntime
-from runtime.projections import (
+from engine.projections import (
     ActivityScope,
     ActivityStatistics,
     ContextSummary,

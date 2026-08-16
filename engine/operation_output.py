@@ -12,7 +12,7 @@ from harness.contract import HarnessRawEventSource
 from harness.models import RawEvent
 from domain.events import OperationOutputLocated
 from domain.ids import ActorId, RawEventId, SessionId
-from runtime.database import connect, initialize
+from engine.database import connect, initialize
 
 READ_SIZE = 64 * 1024
 MAXIMUM_LIFETIME_SECONDS = 2 * 60 * 60

@@ -36,7 +36,7 @@ lint-fix:
 # the path list and diff the two runs.)
 #
 # The two .py files are vulture whitelists, not sources — see their headers.
-DEADCODE_PATHS = api app bin core dashboard domain harness runtime terminal
+DEADCODE_PATHS = api app bin core dashboard diagnostics domain engine harness terminal
 DEADCODE_WHITELISTS = vulture-allowlist.py vulture-baseline.py
 # Call sites vulture cannot see: the framework invokes these, never our code.
 # Matched by SHAPE, not by router name — `router`, `web` and `guarded` are three
