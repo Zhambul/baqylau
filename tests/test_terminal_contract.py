@@ -9,6 +9,7 @@ consumers actually call, so "the interface" and "what is used" are one file.
 from __future__ import annotations
 
 import inspect
+from typing import cast
 
 import pytest
 
@@ -24,6 +25,7 @@ from terminal.contract import (
 )
 from terminal.impl import resolve
 from terminal.impl.kitty.plugin import kitty_plugin
+from terminal.impl.kitty.remote import KittyRemote
 from terminal.impl.null import null_plugin
 from terminal.models import (
     ACTIVITY_PANE_TAG,
@@ -92,7 +94,14 @@ def flag_value(arguments, flag):
 
 
 # --- substitutability --------------------------------------------------------
-@pytest.mark.parametrize("plugin", [null_plugin(), kitty_plugin(FakeRemote())], ids=["none", "kitty"])
+# FakeRemote stands in for KittyRemote structurally — that substitutability
+# is the property this module exists to pin — but kitty_plugin names the
+# concrete class. The cast is the claim, made where it is made.
+@pytest.mark.parametrize(
+    "plugin",
+    [null_plugin(), kitty_plugin(cast(KittyRemote, FakeRemote()))],
+    ids=["none", "kitty"],
+)
 def test_every_terminal_implements_the_five_sub_protocols_and_nothing_more(plugin):
     assert isinstance(plugin, TerminalPlugin)
     for field, protocol in SUB_PROTOCOLS.items():

@@ -17,7 +17,15 @@ from domain.ids import (
     OperationId,
     SessionId,
 )
-from domain.values import AccountReference, StructuredContent, TextContent, TokenUsage
+from domain.values import (
+    AccountReference,
+    ExecutionMode,
+    MessageRole,
+    Outcome,
+    StructuredContent,
+    TextContent,
+    TokenUsage,
+)
 from dashboard.render.items import DashboardPresenter
 from engine.projections import (
     ActivityContext,
@@ -43,7 +51,11 @@ GOLDEN_DIRECTORY = Path(__file__).parent / "golden"
 
 def _terminal_cells(frame: str) -> tuple[tuple, ...]:
     """Normalize equivalent SGR ordering and reset boundaries into visible cells."""
-    style = {
+    # Two kinds of value share this dict: the four flags are bools, the two
+    # colours are None or an (r,g,b) / ("indexed", n) tuple. Inferred from the
+    # initialiser alone it reads as bool | None, and every colour written into
+    # it below is then a mismatch.
+    style: dict[str, object] = {
         "foreground": None,
         "background": None,
         "bold": False,
@@ -105,7 +117,7 @@ def _terminal_cells(frame: str) -> tuple[tuple, ...]:
     for character in frame[position:]:
         cell_style = tuple(style.values()) if not character.isspace() else (None,) * 6
         cells.append((character, *cell_style))
-    while cells and cells[-1][0].isspace():
+    while cells and str(cells[-1][0]).isspace():
         cells.pop()
     return tuple(cells)
 
@@ -114,8 +126,8 @@ def _mirror_operation(
     identifier: str,
     command: str,
     result: str,
-    execution: str,
-    outcome: str,
+    execution: ExecutionMode,
+    outcome: Outcome,
     exit_code: int,
     finished_at: float,
 ) -> OperationActivity:
@@ -199,7 +211,7 @@ def test_dashboard_and_terminal_present_the_same_fact_without_sharing_presentati
 def test_terminal_hides_lead_transcript_and_system_messages_but_keeps_subagent_messages():
     lead_actor_id = ActorId("session-one:lead")
 
-    def message(actor_id: ActorId, role: str) -> MessageActivity:
+    def message(actor_id: ActorId, role: MessageRole) -> MessageActivity:
         return MessageActivity(
             ActivityContext(
                 activity_id=f"message:{actor_id}:{role}",

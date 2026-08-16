@@ -32,7 +32,7 @@ def imports_under(package: str):
         yield from imports_under_path(path)
 
 
-def assert_imports(package: str, allowed_roots: set[str], allowed_modules: set[str] = frozenset()):
+def assert_imports(package: str, allowed_roots: set[str], allowed_modules: frozenset[str] = frozenset()):
     """`allowed_modules` admits named MODULES from an otherwise closed package —
     the exception the harness boundary needs: it may name the terminal CONTRACT
     (which imports nothing of ours) without opening the whole package."""
@@ -792,6 +792,9 @@ def _control_names() -> set[str]:
     tree = ast.parse((ROOT / "harness" / "models" / "controls.py").read_text(encoding="utf-8"))
     for node in ast.walk(tree):
         if isinstance(node, ast.AnnAssign) and getattr(node.target, "id", None) == "ControlName":
+            # AnnAssign.value is optional (a bare `x: int` has none); ControlName
+            # is an assignment, so reaching here means it has one.
+            assert node.value is not None
             return {
                 element.value
                 for element in ast.walk(node.value)

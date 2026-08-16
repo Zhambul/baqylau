@@ -20,9 +20,9 @@ from harness.models import RawEvent, Session, TranslationResult
 from dashboard import prefs
 from dashboard.services.notices import DashboardNotificationState
 from dashboard.services.overview import GlobalApplicationService, NewSessionPreferences
-from domain.events import CanonicalEvent, MessageCreated, SessionStarted
+from domain.events import CanonicalEvent, EventPayload, MessageCreated, SessionStarted
 from domain.ids import ActorId, CanonicalEventId, MessageId, RawEventId, SessionId
-from domain.values import TextContent
+from domain.values import MessageRole, TextContent
 
 SESSION_ID = SessionId("session-one")
 ACTOR_ID = ActorId("actor-one")
@@ -231,10 +231,10 @@ def test_dashboard_main_scope_shows_only_lead_activity_and_actor_scope_shows_the
         event_id: str,
         actor_id: ActorId,
         parent_actor_id: ActorId | None,
-        role: str,
+        role: MessageRole,
         text: str,
     ) -> None:
-        event = CanonicalEvent(
+        event: CanonicalEvent[EventPayload] = CanonicalEvent(
             event_id=CanonicalEventId(event_id),
             session_id=SESSION_ID,
             actor_id=actor_id,
