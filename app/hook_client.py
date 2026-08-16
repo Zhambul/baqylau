@@ -21,7 +21,7 @@ import urllib.parse
 import frontends
 from core.process import nearest_ancestor_named
 from app import daemon_client
-from dashboard.config import (
+from core.wire import (
     ACCOUNT_ID_HEADER,
     ACCOUNT_NAME_HEADER,
     HARNESS_PROCESS_HEADER,

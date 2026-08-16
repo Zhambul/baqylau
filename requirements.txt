@@ -1,0 +1,5 @@
+# The api/ layer's runtime dependencies — the repo's ONLY third-party runtime
+# deps; everything else is stdlib. (pydantic arrives as fastapi's own
+# dependency.) docs/http-api.md records the decision.
+fastapi>=0.115
+uvicorn>=0.30

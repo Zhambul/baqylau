@@ -1,6 +1,7 @@
 # Ruff config — the repo's linter (make lint / make lint-fix, CI-enforced).
 # A standalone ruff.toml (not pyproject.toml) keeps the repo's stated
-# no-build-system / no-package-manifest property.
+# no-build-system property (runtime deps are the flat requirements.txt —
+# fastapi/uvicorn for the api/ layer — not a package manifest).
 #
 # The rule set encodes docs/styleguide.md; every ignore below maps to a
 # documented house rule, not a taste call. Interpreter is the retargeted

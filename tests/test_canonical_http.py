@@ -4,12 +4,18 @@ from __future__ import annotations
 
 import http.client
 import json
+import socket
 import sqlite3
 import threading
-from http.server import ThreadingHTTPServer
+import time
 from dataclasses import replace
 from urllib.parse import quote
 
+from pydantic import TypeAdapter
+
+from api.app import build_web_application
+from api.models import ControlBody
+from api.server import build_server
 from app.bootstrap import build_application
 from app.telemetry import BrowserTelemetryService
 from contracts.harness import RawEvent, Session, TranslationResult
@@ -19,8 +25,6 @@ from dashboard.application import (
     GlobalApplicationService,
     NewSessionPreferences,
 )
-from dashboard.http.handler import Handler, Server
-from dashboard.http.canonical import _CanonicalMixin
 from domain.events import CanonicalEvent, MessageCreated, SessionStarted
 from domain.ids import ActorId, CanonicalEventId, MessageId, RawEventId, SessionId
 from domain.values import TextContent
@@ -28,29 +32,7 @@ from domain.values import TextContent
 SESSION_ID = SessionId("session-one")
 ACTOR_ID = ActorId("actor-one")
 
-
-def test_server_ignores_disconnects_and_delegates_other_thread_errors(monkeypatch):
-    server = object.__new__(Server)
-    delegated = []
-    monkeypatch.setattr(
-        ThreadingHTTPServer,
-        "handle_error",
-        lambda _server, request, client_address: delegated.append(
-            (request, client_address)
-        ),
-    )
-
-    try:
-        raise ConnectionResetError("client left")
-    except ConnectionResetError:
-        server.handle_error("request", "client")
-    assert delegated == []
-
-    try:
-        raise RuntimeError("unexpected")
-    except RuntimeError:
-        server.handle_error("request", "client")
-    assert delegated == [("request", "client")]
+SERVER_START_TIMEOUT_SECONDS = 5.0
 
 
 def _event(event_id: str, payload):
@@ -114,12 +96,39 @@ def _application(tmp_path):
     return application
 
 
+class _RunningDaemon:
+    """The daemon's real engine (api.server.build_server) on an ephemeral
+    port, with the shutdown verbs the tests always used."""
+
+    def __init__(self, server, bound_socket):
+        self.server = server
+        self.bound_socket = bound_socket
+        self.server_port = bound_socket.getsockname()[1]
+
+    def shutdown(self):
+        # force: the SSE streams never close on their own, and a test
+        # teardown must not serve the graceful grace period.
+        self.server.force_exit = True
+        self.server.should_exit = True
+
+    def server_close(self):
+        # The engine owns the socket once run() takes it and closes it during
+        # its own shutdown; closing here too races that and trips the loop.
+        pass
+
+
 def _server(application):
-    server = Server(("127.0.0.1", 0), Handler)
-    server.canonical_application = application
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    bound_socket = socket.create_server(("127.0.0.1", 0))
+    server = build_server(build_web_application(application))
+    thread = threading.Thread(
+        target=server.run, kwargs={"sockets": [bound_socket]}, daemon=True
+    )
     thread.start()
-    return server, thread
+    deadline = time.monotonic() + SERVER_START_TIMEOUT_SECONDS
+    while not server.started:
+        assert time.monotonic() < deadline, "server did not start"
+        time.sleep(0.01)
+    return _RunningDaemon(server, bound_socket), thread
 
 
 def _get(server, path: str):
@@ -677,8 +686,8 @@ def test_global_application_routes_replace_field_specific_preferences_routes(
 
 
 def test_control_request_uses_complete_names_and_structured_attachments():
-    request = _CanonicalMixin._control_request(
-        SESSION_ID,
+    control_bodies = TypeAdapter(ControlBody)
+    request = control_bodies.validate_python(
         {
             "control_name": "send_text",
             "request_id": "request-one",
@@ -691,14 +700,13 @@ def test_control_request_uses_complete_names_and_structured_attachments():
                 }
             ],
         },
-    )
+    ).request(SESSION_ID)
 
     assert request.session_id == SESSION_ID
     assert request.attachments[0].local_path == "/tmp/image.png"
     assert request.attachments[0].display_name == "image.png"
 
-    attachment_only = _CanonicalMixin._control_request(
-        SESSION_ID,
+    attachment_only = control_bodies.validate_python(
         {
             "control_name": "send_text",
             "request_id": "request-two",
@@ -707,7 +715,7 @@ def test_control_request_uses_complete_names_and_structured_attachments():
                 {"local_path": "/tmp/image.png", "display_name": "image.png"}
             ],
         },
-    )
+    ).request(SESSION_ID)
     assert attachment_only.text == ""
 
 
@@ -720,7 +728,7 @@ def test_invalid_canonical_post_is_a_client_error_not_an_old_route(tmp_path):
             {"control_name": "send_text", "request_id": "request-one"},
         )
         assert status == 400
-        assert json.loads(body)["error"] == "text must be a string"
+        assert "text" in json.loads(body)["error"]
     finally:
         server.shutdown()
         server.server_close()

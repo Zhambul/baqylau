@@ -15,7 +15,7 @@ CANONICAL_MODULES = (
     "app.terminal_process",
     "app.scoreboard_process",
     "app.terminal_panes",
-    "dashboard.server",
+    "api.server",
     "plugins.claude_code.plugin",
     "plugins.claude_code.canonical_hook",
     "plugins.claude_code.hooks",

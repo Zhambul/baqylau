@@ -152,7 +152,7 @@ def kitten_launch_tab(kitten, listen, cwd, argv):
     plain-config kitty 0.45: plain launch leaves the browser frontmost,
     --keep-focus yanks kitty to the front). The same reasoning gates
     launch_pane's --keep-focus on kitten_app_focused; the dashboard keeps a
-    passive audit-only steal watch (dashboard/server.py steal_watch) as the
+    passive audit-only steal watch (the daemon's steal_watch) as the
     regression evidence — it never touches focus itself."""
     try:
         r = subprocess.run([kitten, "@", "--to", listen, "launch",

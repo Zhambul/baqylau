@@ -182,7 +182,7 @@ class Frontend:
         return 1
 
     # --- control plane (writes) ---------------------------------------------
-    # Slice consumers: dashboard/server.py only (the web control plane —
+    # Slice consumers: the api/ control plane only (the web control plane —
     # docs/dashboard.md). These are the only Frontend methods that TYPE INTO or
     # SPAWN a terminal on someone's behalf, so they live behind the same strict
     # POST guard the dashboard applies; a frontend that can't drive input keeps

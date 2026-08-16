@@ -196,6 +196,7 @@ class GlobalApplicationService:
         self.state = state
 
     def snapshot(self) -> GlobalApplicationSnapshot:
+        from core import wire
         from dashboard import config
         from dashboard.notify import presence
 
@@ -228,7 +229,7 @@ class GlobalApplicationService:
                     for path, hidden_at in prefs.hidden_dirs().items()
                 },
                 limits=DashboardLimits(
-                    upload_bytes=config.UPLOAD_MAX,
+                    upload_bytes=wire.UPLOAD_MAX,
                     rename_characters=config.RENAME_CHARACTER_LIMIT,
                     presence_seconds=presence.VIEW_LIFETIME_SECONDS,
                 ),

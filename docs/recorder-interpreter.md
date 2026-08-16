@@ -28,9 +28,10 @@ WRITERS — observation only; append-only; never see session_harness
       └──▶ RawEventRecorder.record(raw_events)          # direct, daemon-independent
 
  hook (thin client) ─▶ POST /api/harnesses/<name>/hooks   body = EXACT stdin bytes
-   plugins/*/canonical_hook.py = app/hook_client.run(HARNESS, ENVIRONMENT_KEYS)
-   X-Baqylau-Environment header = the env subset only the hook process can see
-   daemon: HookGatewayService ─▶ plugin.hooks.raw_events() ─▶ RawEventRecorder
+   plugins/*/canonical_hook.py = app/hook_client.run(HARNESS, CLI_PROCESS_NAME, account…)
+   four flat headers (core/wire.py) = what only the hook process can observe:
+   its terminal window, the CLI pid in its ancestry, the shell-selected account
+   daemon: HookGatewayService ─▶ plugin.hooks.handle() ─▶ RawEventRecorder
    hook stdout ◀─ response body = the gateway-computed reply (the Bash tee rewrite)
    the gateway may also emit WATCH DIRECTIVES (see below) — never files
 
@@ -75,8 +76,8 @@ the store (test_the_application_graph_is_built_only_by_the_daemon)
 
 ## Hooks deliver through the daemon
 
-A hook process does four things: read stdin, `ensure_running()`, POST the exact
-bytes plus its env subset, print whatever body comes back
+A hook process does three things: read stdin, POST the exact bytes plus four
+flat identity headers, print whatever body comes back
 (`app/hook_client.py`; one shared body, per-harness stubs). Everything it used
 to compute — parsing, watch directives, the account snapshot, the terminal
 window anchor, the synchronous reply — moved daemon-side behind the
@@ -85,10 +86,11 @@ window anchor, the synchronous reply — moved daemon-side behind the
 evidence.
 
 - **The body is evidence**: the exact hook stdin, never decoded and re-encoded
-  in transit (`_post_guard_bytes`); the gateway embeds it unmodified in its raw
-  events. The env vars only the hook process can see ride the
-  `X-Baqylau-Environment` header (each plugin's `ENVIRONMENT_KEYS` is the one
-  owner of which keys ship).
+  in transit (`api/routes/evidence.py` reads the raw body); the gateway embeds
+  it unmodified in its raw events. What only the hook process can observe —
+  its terminal window, the CLI pid in its own ancestry, the shell-selected
+  account, the launch-time selections in its inherited environment — rides
+  flat headers whose one owner is `core/wire.py`.
 - **Launch-time selections travel with the process**: the launcher exports
   `BAQYLAU_LAUNCH_MODEL`/`BAQYLAU_LAUNCH_EFFORT` on the launched CLI, the hook
   entry observes them in its inherited environment and stamps the launch
@@ -105,9 +107,9 @@ evidence.
   `tick()` does not stop evidence capture, and a hook fact still turns
   canonical on the next tick like any other raw event.
 - **The daemon is now a single point of failure for hook evidence, by
-  decision** (it already was for presentation). `ensure_running()` in the
-  client keeps the window small — the first hook of a session boots the daemon
-  exactly as it used to — but a delivery the daemon never accepted is LOST, not
+  decision** (it already was for presentation). The daemon is started by you
+  (there is deliberately no client-side boot), and a delivery it never
+  accepted is LOST, not
   spooled: there is deliberately no client-side fallback write, because two
   writers of hook evidence was the bug this design removes. The loss is always
   visible: a client-side `errors` row (`<harness> hook (deliver)`) per dropped

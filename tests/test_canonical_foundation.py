@@ -389,9 +389,10 @@ def test_sessions_carry_their_plugin_only_when_harnesses_are_attached(tmp_path):
 
 
 def test_public_dashboard_url_is_an_allowed_post_origin():
+    from api import config as api_config
     from dashboard import config
 
-    assert config.PUBLIC_URL in config.ALLOWED_ORIGINS
+    assert config.PUBLIC_URL in api_config.ALLOWED_ORIGINS
 
 
 def test_harness_registry_requires_one_explicit_default_when_launchers_exist():

@@ -1,46 +1,29 @@
-# dashboard/http/handler.py — the concrete HTTP handler + server lifecycle.
+# api/server.py — the daemon's lifecycle: the ONE process that builds the
+# application graph.
 #
-# Handler composes the GET / POST / SSE mixins over the plumbing base; serve()
-# runs the singleton ThreadingHTTPServer (pid-lock + port bind) as one audited
-# stream, and _prune_uploads GCs stale composer attachments at boot.
+# serve() runs the singleton uvicorn server (pid-lock + port bind as the two
+# guards) with the interpreter, usage and notifier threads beside it, as one
+# audited stream (kind 'dashboard') so uptime and the exit path are queryable.
+# Everything else stays a recorder or a thin HTTP/SSE client of this process.
+from __future__ import annotations
+
 import os
 import signal
-import sys
+import socket
 import threading
 import time
-from http.server import ThreadingHTTPServer
 
+import uvicorn
+
+from api import config
+from api.app import build_web_application
 from app.bootstrap import build_default_application
-from core import locks
 from core import audit as A
+from core import locks
+from core.wire import HOST_ADDRESS, PORT_NUMBER
 from dashboard import paths
-from dashboard.config import REQUEST_QUEUE_SIZE, HOST_ADDRESS, LOCK_KEY, PORT_NUMBER
-from dashboard.http.base import _Base
-from dashboard.http.canonical import _CanonicalMixin
-from dashboard.http.get import _GetMixin
-from dashboard.http.post import _PostMixin
-
 
 UPLOAD_LIFETIME_SECONDS = 7 * 24 * 3600
-
-
-class Handler(_CanonicalMixin, _GetMixin, _PostMixin, _Base):
-    protocol_version = "HTTP/1.1"
-    server_version = "baqylau-dashboard"
-
-
-class Server(ThreadingHTTPServer):
-    daemon_threads = True
-    # the stdlib default backlog of 5 RSTs the tunnel's refresh bursts — the
-    # "502 / half-loaded page" failure (config.REQUEST_QUEUE_SIZE). Class attribute, not a
-    # post-construction assignment: listen() runs inside __init__.
-    request_queue_size = REQUEST_QUEUE_SIZE
-
-    def handle_error(self, request, client_address):
-        error = sys.exc_info()[1]
-        if isinstance(error, (BrokenPipeError, ConnectionResetError)):
-            return
-        super().handle_error(request, client_address)
 
 
 def _prune_uploads():
@@ -67,25 +50,43 @@ def _prune_uploads():
             pass
 
 
+def build_server(web_application) -> uvicorn.Server:
+    """One uvicorn server for an already-bound socket (passed to run()).
+    Shared with the HTTP test fixture so the tests exercise the daemon's real
+    engine configuration, not a lookalike."""
+    return uvicorn.Server(
+        uvicorn.Config(
+            web_application,
+            # The graceful path waits for open connections, and the SSE
+            # streams never close on their own — force-close after the grace.
+            timeout_graceful_shutdown=config.GRACEFUL_SHUTDOWN_SECONDS,
+            lifespan="on",
+            access_log=False,
+            log_level="warning",
+        )
+    )
+
+
 def serve():
     """Run the server in THIS process (the `serve` CLI verb — `start` spawns
     it detached). Singleton: the paths.DASH_DB pid-lock first, the port bind
-    as the second guard. The whole run is one audited stream (kind
-    'dashboard') so uptime and the exit path are queryable."""
-    lock_result = locks.lock_acquire(paths.DASHBOARD_LOCK_DATABASE, LOCK_KEY)
+    as the second guard."""
+    lock_result = locks.lock_acquire(paths.DASHBOARD_LOCK_DATABASE, config.LOCK_KEY)
     if lock_result.startswith("claim-denied"):
         A.error("", "dashboard serve (lock denied)", {"result": lock_result})
         return 1
     stream_id = A.stream_start("", "dashboard", src_path=f"http://{HOST_ADDRESS}:{PORT_NUMBER}")
     try:
         try:
-            httpd = Server((HOST_ADDRESS, PORT_NUMBER), Handler)
+            bound_socket = socket.create_server(
+                (HOST_ADDRESS, PORT_NUMBER), backlog=config.REQUEST_QUEUE_SIZE
+            )
         except OSError:
             A.error("", "dashboard serve (port busy)", {"port": PORT_NUMBER})
             A.stream_end(stream_id, "port-busy")
             return 1
         application = build_default_application()
-        httpd.canonical_application = application
+        web_application = build_web_application(application)
         observation_stop = threading.Event()
         observation_thread = threading.Thread(
             target=application.interpreter.run,
@@ -108,13 +109,23 @@ def serve():
         notifier = Notifier(application)
         threading.Thread(target=notifier.run, daemon=True).start()
 
-        def stop_server(_signal_number, _frame):
-            raise SystemExit(0)
+        server = build_server(web_application)
 
-        signal.signal(signal.SIGTERM, stop_server)
+        def absorb_signal(_signal_number, _frame):
+            # uvicorn captures SIGTERM/SIGINT for its graceful shutdown, then
+            # RE-RAISES the captured signal after run() to preserve kill
+            # semantics — which would end the process before the cleanup
+            # below (the audit stream_end, the lock release). Restoring to
+            # this absorber instead of the default lets serve() finish and
+            # exit 0, as it always has.
+            pass
+
+        signal.signal(signal.SIGTERM, absorb_signal)
         try:
-            httpd.serve_forever(poll_interval=0.5)
-        except (KeyboardInterrupt, SystemExit):
+            # uvicorn installs its own SIGTERM/SIGINT handlers (main thread)
+            # and returns from run() after the graceful shutdown.
+            server.run(sockets=[bound_socket])
+        except KeyboardInterrupt:
             pass
         finally:
             observation_stop.set()
@@ -122,8 +133,8 @@ def serve():
             observation_thread.join(timeout=2)
             usage_thread.join(timeout=2)
             try:
-                httpd.server_close()
-            except Exception:
+                bound_socket.close()
+            except OSError:
                 pass
         A.stream_end(stream_id, "stopped")
         return 0
@@ -132,4 +143,4 @@ def serve():
         A.stream_end(stream_id, "crash")
         raise
     finally:
-        locks.lock_release(paths.DASHBOARD_LOCK_DATABASE, LOCK_KEY)
+        locks.lock_release(paths.DASHBOARD_LOCK_DATABASE, config.LOCK_KEY)

@@ -1,107 +1,34 @@
-# dashboard/config.py — the web dashboard's configuration vocabulary.
+# dashboard/config.py — the dashboard presenter tier's configuration vocabulary.
 #
-# The one owner of the server's tunable constants and env-knob reads: ports and
-# cadences, the CORS/origin allow-list, the static-file whitelist, the request
-# caps, and the notification timing/switches. Split out of server.py so the rest
-# of the dashboard tier reads a knob from ONE place (config.X) rather than a
-# module-global re-encoded per file. Import-pure: only env reads + literals, no
-# I/O, no DB, no frontend (docs/architecture.md import-time purity rule).
+# What remains here after the HTTP layer moved to api/: the knobs the
+# dashboard OWNS — its public origin, its static assets, its notification
+# timing and switches, and its projection limits. The HTTP wire contract
+# (host, port, headers, body caps) lives in core/wire.py; server policy
+# (origins, read-only, caching) lives in api/config.py. Import-pure: only env
+# reads + literals, no I/O, no DB, no frontend.
 import os
-import re
-import time
 
 from core import env as EV
-
-HOST_ADDRESS = "127.0.0.1"                 # never a routable interface (see header)
-PORT_NUMBER = EV.env_int("BAQYLAU_DASHBOARD_PORT", 8377)
-LOCK_KEY = "dashboard"
 
 GLOBAL_REFRESH_SECONDS = 1.0
 INSIGHTS_PROJECT_LIMIT = 8
 RESUMABLE_SESSION_LIMIT = 25                 # new-session resume picker: rows shown per dir
 RESUMABLE_SCAN = 2000              # …and how deep it discovers to search history
-GZIP_MIN = 1024                    # compress a _send body only at/above this size
-# The listen(2) backlog. The socketserver default is FIVE, and a page refresh
-# through the cloudflared tunnel is a parallel burst of ~16 origin connections
-# (the 14 app.NN-*.js parts + style.css + the first API calls) — every
-# connection past the queue is reset by the kernel, which cloudflared surfaces
-# as "connection reset by peer" → a 502 for the document, or a half-loaded page
-# throwing one ReferenceError per missing part (docs/dashboard.md
-# *Cache-busting*; found from ~/Library/Logs/dash-tunnel.log, 2026-07-27).
-REQUEST_QUEUE_SIZE = 128
-# Versioned static assets (?v=<BOOT_ID>, see http/base.py static()) are
-# immutable AT THAT URL: the stamp changes on every restart, and static bytes
-# only change via a restart, so
-# a browser may keep them for the max year. Everything else stays no-store.
-CACHE_STATIC = "public, max-age=31536000, immutable"
-POST_MAX = 64 * 1024               # request-body cap for the control-plane POSTs
-# The composer-attachment upload endpoint (post_upload) carries base64-encoded
-# bytes, so it gets its OWN, larger cap — ~14 MiB admits a base64-inflated 10 MB
-# image (harness's per-image ceiling) with headroom for the JSON envelope. Every
-# other POST stays at the tiny POST_MAX default.
-UPLOAD_MAX = 14 * 1024 * 1024
-# A hook delivery carries the harness's exact hook stdin — a PostToolUse
-# payload embeds the whole tool response, so it gets its own generous cap.
-HOOK_MAX = 4 * 1024 * 1024
-# The frontend-audit (clientlog) batch cap: most events per POST we'll persist as
-# `web-client` rows (a page can't flood the audit with an oversized batch — the
-# rest is silently dropped, the ring on the client already bounds normal volume).
-CLIENTLOG_MAX = 64
-# Per-event scalar fields we keep from a clientlog event (keys outside this set are
-# dropped, so the page can't stuff arbitrary bulk into the audit). Strings capped.
-CLIENTLOG_FIELD_MAX = 24
-CLIENTLOG_STR_MAX = 200
-# Image content types the composer treats as inline screenshots (thumbnailed,
-# and always admitted). Non-image files are still allowed as attachments, just
-# size-capped and shown as a filename chip. Kept in sync with harness's vision
-# formats (docs/dashboard.md, *Web attachments*).
-IMAGE_MIMES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
-POST_HEADER = "X-Baqylau"
-# A hook delivery's body is the exact stdin bytes, so what the hook process
-# observed around itself rides these flat headers. One fact, two
-# consumers each: the thin hook client stamps them, the hook-delivery endpoint
-# reads them.
-TERMINAL_WINDOW_HEADER = "X-Baqylau-Terminal-Window"
-HARNESS_PROCESS_HEADER = "X-Baqylau-Harness-Process"
-ACCOUNT_ID_HEADER = "X-Baqylau-Account-Id"
-ACCOUNT_NAME_HEADER = "X-Baqylau-Account-Name"
-# Launch-time selections travel in the launched CLI's environment (the
-# launcher sets them; the hook process inherits and observes them).
-LAUNCH_MODEL_HEADER = "X-Baqylau-Launch-Model"
-LAUNCH_EFFORT_HEADER = "X-Baqylau-Launch-Effort"
+
 # The dashboard's externally reachable origin.  It is one fact with two
-# consumers: browser POST admission and notification deep links.  Keeping
-# those separate allowed a dashboard started outside launchd to generate
-# correct public links while rejecting POSTs from that same public page.
+# consumers: browser POST admission (api/config.py ALLOWED_ORIGINS) and
+# notification deep links.  Keeping those separate allowed a dashboard started
+# outside launchd to generate correct public links while rejecting POSTs from
+# that same public page. A Telegram alert lands on your phone, where
+# http://127.0.0.1 is useless — so the deep links use this, never the bind.
 PUBLIC_URL = (os.environ.get("BAQYLAU_DASHBOARD_PUBLIC_URL")
               or "https://baqylau.zhambyl.top").rstrip("/")
-# The only Origins a legit same-origin browser POST carries (it usually sends
-# none at all for same-origin fetches; when it does, it is one of these).
-# BAQYLAU_DASHBOARD_ORIGINS extends the set for a proxied deployment (cloudflared /
-# tailscale serve — docs/remote.md): comma-separated FULL origins, scheme and
-# all (e.g. "https://dash.zhambyl.top"). The knob adds origins, never replaces
-# the local ones, and is NOT an exposure switch — the bind stays 127.0.0.1;
-# only an outbound connector on this machine can front the port.
-def extra_origins(raw):
-    """BAQYLAU_DASHBOARD_ORIGINS → the set of extra allowed origins (comma-separated,
-    whitespace-tolerant, empty entries dropped)."""
-    return {o.strip() for o in (raw or "").split(",") if o.strip()}
-
-
-ALLOWED_ORIGINS = ({"http://%s:%d" % (HOST_ADDRESS, PORT_NUMBER),
-                    "http://localhost:%d" % PORT_NUMBER,
-                    PUBLIC_URL}
-                   | extra_origins(os.environ.get("BAQYLAU_DASHBOARD_ORIGINS")))
-# BAQYLAU_DASHBOARD_READONLY=1 switches the control plane off entirely (every POST
-# is 403) — remote eyes, no remote hands, whatever the proxy in front allows.
-READONLY = (os.environ.get("BAQYLAU_DASHBOARD_READONLY") or "") == "1"
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 STATIC = {                         # whitelist — no path resolution on user input
     "index.html": "text/html; charset=utf-8",
     # the SPA is served as the ordered app.NN-*.js parts, admitted by shape in
-    # http/base.py (_APP_PART) — no per-part whitelist entry, and no monolithic
-    # app.js anymore.
+    # api/routes/static.py (_APP_PART) — no per-part whitelist entry.
     "style.css": "text/css; charset=utf-8",
     # the Web Push service worker — served from the ROOT path (/sw.js, its own
     # route) so its scope is the whole origin, not just /static/ (a SW controls
@@ -115,7 +42,7 @@ STATIC = {                         # whitelist — no path resolution on user in
     # own route) because that path is what a client AUTO-DISCOVERS when it can
     # make no use of the declared SVG icon — iOS Safari, which supports SVG
     # favicons in no version (macOS Safari only since 26). Deliberately NOT
-    # given a <link rel="icon"> of its own: an declared raster icon would
+    # given a <link rel="icon"> of its own: a declared raster icon would
     # out-rank the data-URI SVG in browsers that handle both, and the SVG is the
     # one that carries the dynamic red asking-you badge (app.01-attention.js
     # FAVICON_ASK). Auto-discovery is exactly fallback-only semantics.
@@ -217,17 +144,5 @@ RESOLVE_PUSH = (os.environ.get("BAQYLAU_DASHBOARD_RESOLVE_PUSH") or "1") != "0"
 # terminal channel, hundreds of sessions) so the watcher's per-tick work and the
 # process's memory can't grow without limit. Oldest are dropped first.
 SENT_CAP = 200
-# The base URL the alert's deep link points at — the PUBLIC (proxied) origin,
-# not the bind: a Telegram alert lands on your phone, where http://127.0.0.1 is
-# useless. Defaults to the cloudflared/tailscale front (docs/remote.md);
-# BAQYLAU_DASHBOARD_PUBLIC_URL overrides (trailing slash tolerated).
-
-SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
-
-# This process's identity, sent as the global SSE `hello` event. A page that
-# reconnects and sees a DIFFERENT boot id knows the server restarted under it
-# and its loaded JS may be stale (the client toasts "refresh").
-BOOT_ID = str(int(time.time() * 1000))
-
 
 RENAME_CHARACTER_LIMIT = 120

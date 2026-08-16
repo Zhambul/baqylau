@@ -16,17 +16,20 @@ web dashboard.
 way, and every stage is recorded:
 
 ```
-wrapper ──register once──▶ session_harness
-recorders (otel, wrappers) ──append──▶ raw_events ◀──append── daemon: hook gateway + interpreter's pulled sources
+recorders (otel receiver) ──append──▶ raw_events ◀──append── daemon: hook gateway + interpreter's pulled sources
 hooks ──POST exact stdin──▶ /api/harnesses/<name>/hooks ──▶ hook gateway  (reply rides the response)
                                                   │
               interpreter: translate → translation_records → canonical_events + canonical_provenance
+                                                  │
+              session rows: registered by the interpreter's reaction to the
+              committed session.started fact (app/reactions.py) — launching is
+              just running the CLI (the wrappers are gone; a test enforces it)
 ```
 
-- **`session_harness`** — written ONCE per session and never updated: by the
-  harness's wrapper (`plugins/*/command.py`) at launch, or by the interpreter
-  from the session's own orphan evidence (`HarnessSessionEvidence`) — never by
-  hooks. Everything that changes during a session is a canonical fact.
+- **Session rows** are written by the interpreter from the session's own
+  evidence (the `session.started` reaction; hook-envelope identity refreshes
+  the live columns) — never by hooks directly, and there is no launch-time
+  wrapper. Everything that changes during a session is a canonical fact.
 - **`raw_events`** — immutable evidence: the exact bytes a source produced. Reusing a
   `raw_event_id` with different bytes raises (corruption). A pulled source resumes from
   the `source_position` of its last recorded raw event (`source_identity` column) —
@@ -51,9 +54,10 @@ hooks ──POST exact stdin──▶ /api/harnesses/<name>/hooks ──▶ hook
 | `app/` | bootstrap, interpreter, services | all of the above, core |
 | `plugins/<harness>/` | one harness adapter each (`plugin.py` is the entry) | core, frontends |
 | `terminal/`, `dashboard/` | presenters | domain/runtime/app |
+| `api/` | the HTTP layer (FastAPI): routers, request models, guard, serve() | all of the above + the presenters |
 | `core/`, `frontends/` | audit, process helpers; one terminal each | core only / core |
 
-**`domain`, `contracts`, `runtime`, `app`, `core`, `dashboard`, `frontends`, `terminal` are
+**`api`, `domain`, `contracts`, `runtime`, `app`, `core`, `dashboard`, `frontends`, `terminal` are
 shared code and must contain NO concrete harness vocabulary** — no "claude", "codex",
 "transcript", "rollout" (enforced by `tests/test_canonical_architecture.py`). Harness
 specifics live only in `plugins/<harness>/`.
@@ -75,7 +79,9 @@ component split is load-bearing: the gateway records and returns, only `tick()`
 interprets.
 
 **The daemon builds the application graph exactly once** (`serve()` in
-`dashboard/http/handler.py`); every other process is a recorder or a thin
+`api/server.py` — the HTTP layer is the top-level `api/` package,
+FastAPI/uvicorn, typed request models in `api/models.py`; see
+`docs/http-api.md`); every other process is a recorder or a thin
 HTTP/SSE client of the daemon (`app/daemon_client.py`) — the pane processes
 stream rendered frames, the keybinding and click handlers POST gestures
 (enforced by `test_the_application_graph_is_built_only_by_the_daemon`;
@@ -98,12 +104,13 @@ the ordered backlog).
 Audit: `$BAQYLAU_AUDIT_DIRECTORY`, `BAQYLAU_AUDIT=0` disables.
 
 Hooks are wired (in `~/.claude/settings.json`, outside this repo) to
-`plugins/claude_code/canonical_hook.py`. Harnesses are launched through their
-wrappers (`plugins/claude_code/command.py`, `plugins/codex/command.py`) — the
-wrapper registers the session at launch (and anchors its kitty panes); launches
-that skip it are registered by the interpreter from their own evidence, one
-tick after their first hook, without a pid or a deterministic pane anchor. `bin/baqylau-*.py` holds the
-shared executable entries; put implementation in the packages.
+`plugins/claude_code/canonical_hook.py`. Launching is just running the CLI —
+directly in a shell, or daemon-side via `POST /api/sessions` (the plugin's
+launcher builds argv and opens the kitty tab). There are no launch wrappers
+(`test_recorder_entries_never_build_the_application` asserts they stay gone);
+every session is registered by the interpreter from its own evidence, one tick
+after its first fact. `bin/baqylau-*.py` holds the shared executable entries;
+put implementation in the packages.
 
 ## Commands
 
@@ -116,6 +123,9 @@ python3 bin/baqylau-dashboard.py serve|start|stop|status
 make test        # full suite
 make lint        # must stay clean (ruff, encodes docs/styleguide.md)
 make lint-fix
+
+pip3 install -r requirements.txt   # fastapi + uvicorn — the api/ layer's
+                                   # runtime dependencies (the rest is stdlib)
 ```
 
 To debug a session bug, use the **`audit-debug` skill**

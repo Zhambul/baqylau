@@ -88,7 +88,7 @@ in a comment at the site and in the commit message.
 - **A leading underscore means "internal to this module's PACKAGE".** Nothing
   outside that directory may import or attribute-reach one. What legitimately
   crosses a MODULE boundary is the inside of one unit: a mixin composed by its
-  own package (`_TypingMixin` → `dashboard/http/post/__init__.py`), an
+  own package (`api/routes/read._scope` → `api/routes/streams.py`), an
   intra-package helper (`opshtml.ansi._esc`, `read/cache._db_cached`),
   `core/locks.py` borrowing `core/state._connect`. Crossing OUT of the package
   means the name is that module's surface — drop the underscore.

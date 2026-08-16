@@ -112,6 +112,7 @@ def test_claude_otel_is_not_a_top_level_plugin():
 
 def test_canonical_shared_code_imports_no_concrete_harness_package():
     canonical_shared_paths = [
+        ROOT / "api",
         ROOT / "app",
         ROOT / "contracts",
         ROOT / "domain",
@@ -147,6 +148,7 @@ def test_harness_plugins_do_not_import_each_other():
 
 def test_canonical_shared_code_contains_no_concrete_harness_vocabulary():
     shared_paths = [
+        ROOT / "api",
         ROOT / "app",
         ROOT / "contracts",
         ROOT / "core",
@@ -269,10 +271,10 @@ def test_the_application_graph_is_built_only_by_the_daemon():
     builders = ("build_default_application", "build_application(")
     allowed = {
         "app/bootstrap.py",
-        "dashboard/http/handler.py",
+        "api/server.py",
     }
     violations = []
-    for directory in ("app", "bin", "core", "dashboard", "frontends", "plugins", "runtime", "terminal"):
+    for directory in ("api", "app", "bin", "core", "dashboard", "frontends", "plugins", "runtime", "terminal"):
         for path in sorted((ROOT / directory).rglob("*.py")):
             if "__pycache__" in path.parts:
                 continue
@@ -320,7 +322,7 @@ def test_canonical_consumers_cannot_observe_or_checkpoint_native_sources():
         ROOT / "dashboard" / "activity.py",
         ROOT / "dashboard" / "application.py",
         ROOT / "dashboard" / "presenter.py",
-        ROOT / "dashboard" / "http" / "canonical.py",
+        *sorted((ROOT / "api").rglob("*.py")),
         ROOT / "terminal" / "presenter.py",
         ROOT / "terminal" / "renderer.py",
         ROOT / "terminal" / "scoreboard.py",
@@ -342,18 +344,18 @@ def test_canonical_consumers_cannot_observe_or_checkpoint_native_sources():
 
 
 def test_canonical_sse_has_no_broker_or_application_event_registry():
-    source = (ROOT / "dashboard" / "http" / "canonical.py").read_text(encoding="utf-8")
+    source = (ROOT / "api" / "routes" / "streams.py").read_text(encoding="utf-8")
     assert "DashboardEventStream" not in source
     assert "subscribe" not in source
     assert "queue.Queue" not in source
     assert not (ROOT / "dashboard" / "events.py").exists()
-    assert not (ROOT / "dashboard" / "http" / "sse.py").exists()
+    assert not (ROOT / "api" / "broker.py").exists()
 
 
 def test_resume_and_sse_have_one_authoritative_path():
     launch_files = (
         ROOT / "contracts" / "harness.py",
-        ROOT / "dashboard" / "http" / "canonical.py",
+        ROOT / "api" / "routes" / "control.py",
         ROOT / "dashboard" / "static" / "app.08-composer.js",
         ROOT / "dashboard" / "static" / "app.09-newsession.js",
         ROOT / "plugins" / "claude_code" / "launcher.py",
@@ -393,10 +395,9 @@ def test_plugin_packages_are_only_inert_package_markers():
 def test_legacy_dashboard_semantic_readers_and_handlers_are_deleted():
     assert not list((ROOT / "dashboard" / "read").glob("*.py"))
     assert not list((ROOT / "dashboard" / "control").glob("*.py"))
-    assert sorted(path.name for path in (ROOT / "dashboard" / "http" / "post").glob("*.py")) == [
-        "__init__.py",
-        "files.py",
-    ]
+    # the HTTP tier itself moved out of the presenter package entirely (api/)
+    assert not (ROOT / "dashboard" / "http").exists()
+    assert not (ROOT / "dashboard" / "server.py").exists()
     assert not (ROOT / "plugins" / "host.py").exists()
     assert not (ROOT / "plugins" / "claude_code" / "hostctl.py").exists()
     assert not (ROOT / "plugins" / "codex" / "hostctl.py").exists()
