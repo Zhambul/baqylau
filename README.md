@@ -20,7 +20,7 @@ SQLite.
   even from another tab: grey idle · magenta busy · blue running/awaiting ·
   red asking-*you* · green your-turn. Handles the hard part: Claude Code fires
   *no hook* on cancel/interrupt, so every cancellation path has its own
-  recovery signal. → [docs/tab-colors.md](docs/tab-colors.md)
+  recovery signal.
 - **🪞 Command mirror pane** — a right-side split showing everything Claude
   does as colored streaming blocks: foreground/background commands (live
   output, syntax-highlighted), monitors, subagents and teammates (full
@@ -28,12 +28,10 @@ SQLite.
   blocks carry clickable ⧉ copy links; file-op one-liners click-to-expand
   their content in place (highlighted code, line-numbered diffs). A 5-row
   scoreboard underneath tracks messages, activity, tokens, and cost.
-  → [docs/mirror-pane.md](docs/mirror-pane.md)
 - **🔍 Audit trail** — every hook event, tab transition, stream lifecycle, and
   swallowed exception recorded to SQLite, so any bug is debuggable after the
   fact — with a live **⚠ warning light** on the scoreboard (and `⚠ audit:`
   one-liners in the mirror) whenever the session swallows an exception.
-  → [docs/audit.md](docs/audit.md)
 
 ## Requirements
 
@@ -68,10 +66,6 @@ SQLite.
    ```
 5. Using pyenv? Run `./bin/retarget-python.py` once to skip the ~140ms/process
    shim tax.
-
-The full hook/routing table, the telemetry env for OTEL-accurate cost
-tracking, the mirror keybindings, and the codex host wiring are in
-**[docs/wiring.md](docs/wiring.md)**.
 
 ## Usage
 
@@ -112,9 +106,6 @@ plugins/     one adapter per agent tool:
 bin/         executable entry scripts (claude-*.py) — filenames are load-bearing
 ```
 
-Details, module map, and the dependency rules:
-[docs/architecture.md](docs/architecture.md).
-
 ## Testing
 
 ```sh
@@ -122,19 +113,3 @@ make test        # hermetic e2e suite (fake kitten, per-test tmp dirs; parallel 
 make test-seq    # same, sequential (debugging / no xdist)
 make test-all    # + opt-in real-kitty smoke tests
 ```
-
-Dev-only deps in `requirements-dev.txt`; see
-[docs/testing.md](docs/testing.md).
-
-## Documentation
-
-The **[docs/](docs/README.md)** directory is the design doc — an exhaustive
-record of how every mechanism works *and why the alternatives failed*:
-
-- [Tab colors](docs/tab-colors.md) · [Architecture](docs/architecture.md) ·
-  [Wiring](docs/wiring.md)
-- [Mirror pane](docs/mirror-pane.md) · [Copy links & click-to-view](docs/click-to-view.md) ·
-  [Command streaming](docs/streaming.md)
-- [Subagents & teams](docs/subagents.md) · [Scoreboard](docs/scoreboard.md) ·
-  [OTEL cost pipeline](docs/otel.md) · [Codex](docs/codex.md)
-- [Audit system](docs/audit.md) · [Testing](docs/testing.md)

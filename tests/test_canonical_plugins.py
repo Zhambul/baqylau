@@ -1464,10 +1464,15 @@ def test_pane_keybinding_ships_only_its_environment_to_the_daemon(monkeypatch):
     assert terminal_panes.main(["grow", "9"]) == 0
     assert terminal_panes.main(["setpct", "75"]) == 0
 
-    assert [path for path, _body in posted] == ["/api/terminal/panes"] * 3
+    # one endpoint per gesture — the URL is the discriminator, so no body
+    # carries a command word
+    assert [path for path, _body in posted] == [
+        "/api/terminal/panes/toggle",
+        "/api/terminal/panes/grow",
+        "/api/terminal/panes/set-percent",
+    ]
     toggle_body, grow_body, setpct_body = (body for _path, body in posted)
     assert toggle_body == {
-        "command": "toggle",
         "window_id": "77",
         "working_directory": os.getcwd(),
     }

@@ -480,9 +480,9 @@ function submitPlan(plan, body, okTitle, okDetail) {
 }
 
 /* ---------- dictation (mic → Deepgram → the textarea, live) ---------- */
-// docs/dashboard.md *Web dictation*. Mic buttons render only when the server
-// reports a configured Deepgram key (GET /api/dictate — probed once, cached).
-// Flow: POST /api/dictate/token → ~30s grant JWT + the fully-assembled listen
+// Mic buttons always render — there is no availability probe; a missing
+// Deepgram key surfaces at the token mint (501), which the page toasts.
+// Flow: POST /api/application/dictation-token → ~30s grant JWT + the listen
 // URL → the BROWSER opens wss straight to Deepgram (the stdlib server can't
 // speak WebSocket and must never see audio) → an AudioWorklet ships
 // Float32→Int16 PCM at the AudioContext's native rate (MediaRecorder is
@@ -492,12 +492,9 @@ function submitPlan(plan, body, okTitle, okDetail) {
 // time, page-wide; view/modal teardown stops it (a mic must never outlive
 // the box it feeds).
 
-let dictProbe = null;              // the one /api/dictate probe (Promise<bool>)
 function dictAvailable() {
-  if (!dictProbe)
-    dictProbe = fetch("/api/application/dictation").then(r => r.json())
-      .then(d => !!(d && d.available)).catch(() => false);
-  return dictProbe;
+  // Always on: the probe endpoint is gone; callers keep the Promise shape.
+  return Promise.resolve(true);
 }
 
 // The audio thread's whole job: mic Float32 at the AudioContext's NATIVE rate

@@ -1,0 +1,74 @@
+# api/dashboard/catalog.py — what the new-session form and the composer menus
+# read: the installed harnesses, one harness's catalogue, the insights page,
+# and the resumable-session picker.
+from __future__ import annotations
+
+from fastapi import APIRouter
+from fastapi.responses import JSONResponse
+
+from api.dashboard.models.harnesses.harness_description_response import (
+    HarnessDescriptionResponse,
+)
+from api.dependencies import ApplicationGraph
+from contracts.harness import QueryContext
+from dashboard.activity import to_wire
+from domain.ids import SessionId
+
+router = APIRouter()
+
+
+@router.get("/api/harnesses")
+def harnesses(application: ApplicationGraph) -> list[HarnessDescriptionResponse]:
+    return [
+        HarnessDescriptionResponse(
+            name=plugin.info.name,
+            display_name=plugin.info.display_name,
+            launchable=plugin.launcher is not None,
+            default_for_launch=plugin.info.default_for_launch,
+            supports_attachments=plugin.info.supports_attachments,
+            control_names=(
+                tuple(sorted(plugin.controller.handlers)) if plugin.controller else ()
+            ),
+            supports_accounts=plugin.info.supports_accounts,
+            supports_terminal_input=plugin.terminal_probe is not None,
+        )
+        for plugin in application.registry.plugins()
+    ]
+
+
+@router.get("/api/harnesses/{harness}/catalog")
+def catalog(
+    harness: str,
+    application: ApplicationGraph,
+    session_id: str | None = None,
+    working_directory: str | None = None,
+) -> JSONResponse:
+    context = QueryContext(
+        session_id=SessionId(session_id) if session_id else None,
+        working_directory=working_directory,
+    )
+    # The menu payload is composed here, from the two places its parts honestly
+    # live: the STATIC vocabulary on the plugin's HarnessInfo (built once, as a
+    # literal) and the per-directory part from the catalogue. The contract
+    # keeps them apart; this endpoint is where the browser wants them together.
+    info = application.registry.plugin(harness).info
+    payload = to_wire(application.catalog.read(harness, context))
+    payload["models"] = to_wire(info.models)
+    payload["rewind_modes"] = to_wire(info.rewind_modes)
+    return JSONResponse(payload)
+
+
+@router.get("/api/insights")
+def insights(application: ApplicationGraph) -> JSONResponse:
+    return JSONResponse(to_wire(application.insights.snapshot()))
+
+
+@router.get("/api/resumable-sessions")
+def resumable_sessions(
+    application: ApplicationGraph,
+    working_directory: str = "",
+    search: str | None = None,
+) -> JSONResponse:
+    return JSONResponse(
+        to_wire(application.resumable_sessions.sessions_for(working_directory, search))
+    )

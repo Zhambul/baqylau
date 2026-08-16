@@ -1,4 +1,4 @@
-# api/routes/static.py — the SPA assets: the whitelist server and the
+# api/dashboard/static.py — the SPA assets: the whitelist server and the
 # BOOT_ID cache-busting stamp.
 #
 # This is policy, not plumbing, so it stays hand-written: no user-path

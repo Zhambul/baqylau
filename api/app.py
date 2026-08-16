@@ -1,23 +1,29 @@
 # api/app.py — the FastAPI application factory.
 #
-# build_web_application(graph) wires the routers, the error contract, and the
-# compression policy around one already-built application graph. It builds no
-# graph itself — that is api/server.py serve()'s job, exactly once — which is
-# what lets tests hand in a fixture graph the same way.
+# build_web_application(graph) wires the routers, the error contract, the
+# compression policy and the OpenAPI documents around one already-built
+# application graph. It builds no graph itself — that is api/server.py
+# serve()'s job, exactly once — which is what lets tests hand in a fixture
+# graph the same way.
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
 import anyio.to_thread
-from fastapi import FastAPI, Request
+import yaml
+from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.gzip import GZipMiddleware
 
 from api import config
-from api.routes import application as application_routes
-from api.routes import control, evidence, files, read, static, streams
+from api.common import content, hooks
+from api.dashboard import application as dashboard_application
+from api.dashboard import catalog, controls, files, sessions, static, telemetry
+from api.dashboard import streams as dashboard_streams
+from api.terminal import panes, views
+from api.terminal import streams as terminal_streams
 from app.bootstrap import CanonicalApplication
 from core import audit as A
 
@@ -56,7 +62,7 @@ async def _validation_error(_request: Request, error: RequestValidationError) ->
 
 async def _application_input_error(_request: Request, error: Exception) -> JSONResponse:
     """Bad application input raised past a route (unknown session, unknown
-    catalogue, a malformed reference) — the read routes' 400 contract."""
+    catalogue, a malformed reference) — the read/control planes' 400 contract."""
     message = error.args[0] if error.args else str(error)
     return _error_body(str(message), 400)
 
@@ -86,16 +92,36 @@ class _SelectiveGZip:
 
 
 def build_web_application(graph: CanonicalApplication) -> FastAPI:
-    web = FastAPI(openapi_url=None, docs_url=None, redoc_url=None, lifespan=_lifespan)
+    web = FastAPI(
+        title="baqylau",
+        openapi_url="/openapi.json",
+        docs_url=None,
+        redoc_url=None,
+        lifespan=_lifespan,
+    )
     web.state.canonical_application = graph
-    web.include_router(evidence.router)
-    web.include_router(streams.router)
-    web.include_router(control.router)
-    web.include_router(application_routes.router)
-    web.include_router(application_routes.guarded)
+    web.include_router(hooks.router)
+    web.include_router(content.router)
+    web.include_router(terminal_streams.router)
+    web.include_router(panes.router)
+    web.include_router(views.router)
+    web.include_router(dashboard_streams.router)
+    web.include_router(controls.router)
+    web.include_router(dashboard_application.router)
+    web.include_router(dashboard_application.guarded)
+    web.include_router(telemetry.router)
     web.include_router(files.router)
-    web.include_router(read.router)
+    web.include_router(catalog.router)
+    web.include_router(sessions.router)
     web.include_router(static.router)
+
+    @web.get("/openapi.yaml", include_in_schema=False)
+    def openapi_yaml() -> Response:
+        return Response(
+            yaml.safe_dump(web.openapi(), sort_keys=False, allow_unicode=True),
+            media_type="application/yaml",
+        )
+
     web.add_exception_handler(StarletteHTTPException, _http_error)
     web.add_exception_handler(RequestValidationError, _validation_error)
     web.add_exception_handler(KeyError, _application_input_error)

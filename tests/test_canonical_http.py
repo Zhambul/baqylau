@@ -11,10 +11,8 @@ import time
 from dataclasses import replace
 from urllib.parse import quote
 
-from pydantic import TypeAdapter
-
 from api.app import build_web_application
-from api.models import ControlBody
+from api.dashboard.models.controls.send_text_request import SendTextRequest
 from api.server import build_server
 from app.bootstrap import build_application
 from app.telemetry import BrowserTelemetryService
@@ -686,10 +684,8 @@ def test_global_application_routes_replace_field_specific_preferences_routes(
 
 
 def test_control_request_uses_complete_names_and_structured_attachments():
-    control_bodies = TypeAdapter(ControlBody)
-    request = control_bodies.validate_python(
+    request = SendTextRequest.model_validate(
         {
-            "control_name": "send_text",
             "request_id": "request-one",
             "text": "inspect",
             "attachments": [
@@ -706,9 +702,8 @@ def test_control_request_uses_complete_names_and_structured_attachments():
     assert request.attachments[0].local_path == "/tmp/image.png"
     assert request.attachments[0].display_name == "image.png"
 
-    attachment_only = control_bodies.validate_python(
+    attachment_only = SendTextRequest.model_validate(
         {
-            "control_name": "send_text",
             "request_id": "request-two",
             "text": "",
             "attachments": [
@@ -724,8 +719,8 @@ def test_invalid_canonical_post_is_a_client_error_not_an_old_route(tmp_path):
     try:
         status, body = _post(
             server,
-            "/api/sessions/session-one/controls",
-            {"control_name": "send_text", "request_id": "request-one"},
+            "/api/sessions/session-one/controls/send-text",
+            {"request_id": "request-one"},
         )
         assert status == 400
         assert "text" in json.loads(body)["error"]
@@ -1046,8 +1041,8 @@ def test_pane_command_route_carries_the_keypress_environment(tmp_path):
     try:
         status, body = _post(
             server,
-            "/api/terminal/panes",
-            {"command": "setpct", "window_id": "77", "working_directory": "/work", "percent": 40},
+            "/api/terminal/panes/set-percent",
+            {"window_id": "77", "working_directory": "/work", "percent": 40},
         )
         assert status == 200
         assert json.loads(body) == {"handled": True, "succeeded": True, "reason": None}
@@ -1056,8 +1051,8 @@ def test_pane_command_route_carries_the_keypress_environment(tmp_path):
         pane_commands.outcome = PaneCommandOutcome(True, False, "no pane")
         status, body = _post(
             server,
-            "/api/terminal/panes",
-            {"command": "toggle", "working_directory": "/work"},
+            "/api/terminal/panes/toggle",
+            {"working_directory": "/work"},
         )
         assert status == 409
         assert json.loads(body)["reason"] == "no pane"
@@ -1065,13 +1060,13 @@ def test_pane_command_route_carries_the_keypress_environment(tmp_path):
         pane_commands.outcome = PaneCommandOutcome(False, True)
         status, body = _post(
             server,
-            "/api/terminal/panes",
-            {"command": "toggle", "working_directory": "/work"},
+            "/api/terminal/panes/toggle",
+            {"working_directory": "/work"},
         )
         assert status == 200
         assert json.loads(body)["handled"] is False
 
-        status, _body = _post(server, "/api/terminal/panes", {"command": "toggle"})
+        status, _body = _post(server, "/api/terminal/panes/toggle", {})
         assert status == 400
     finally:
         server.shutdown()

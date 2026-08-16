@@ -7,12 +7,14 @@ let canonicalRequestSequence = 0;
 function sessionControl(sessionId, controlName, fields, options) {
   if (!sessionId) return Promise.reject({ error: "no session selected" });
   const body = Object.assign({
-    control_name: controlName,
     request_id: String(Date.now()) + "-" + String(++canonicalRequestSequence),
   }, fields || {});
   const tag = (options || {}).audit;
+  // One endpoint per gesture: the control name IS the path (kebab-cased),
+  // not a body field — an unknown gesture is a routing 404, not a 400.
   return postJSON(
-    "/api/sessions/" + encodeURIComponent(sessionId) + "/controls",
+    "/api/sessions/" + encodeURIComponent(sessionId) + "/controls/"
+      + controlName.replace(/_/g, "-"),
     body,
     options || {}
   ).then(result => {

@@ -2,7 +2,7 @@
 
 A kitty keymap launches this per keypress. It observes the two facts only this
 process can (the window the keypress landed in, the working directory), ships
-them to the daemon's `/api/terminal/panes`, and prints any refusal. The
+them to the daemon's per-gesture pane endpoint, and prints any refusal. The
 gesture itself runs in the daemon (`app/pane_commands.py`)."""
 
 from __future__ import annotations
@@ -13,7 +13,15 @@ import sys
 if __package__ in (None, ""):
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-COMMANDS = frozenset({"toggle", "grow", "shrink", "reset", "setpct"})
+# keybinding word → the daemon's per-gesture endpoint (one endpoint per
+# command; the URL is the discriminator, so the body carries no command word)
+COMMAND_PATHS = {
+    "toggle": "/api/terminal/panes/toggle",
+    "grow": "/api/terminal/panes/grow",
+    "shrink": "/api/terminal/panes/shrink",
+    "reset": "/api/terminal/panes/reset",
+    "setpct": "/api/terminal/panes/set-percent",
+}
 
 
 def request_body(arguments: list[str]) -> dict:
@@ -21,7 +29,6 @@ def request_body(arguments: list[str]) -> dict:
 
     command = arguments[0]
     body = {
-        "command": command,
         "window_id": frontends.current_window_id() or "",
         "working_directory": os.getcwd(),
     }
@@ -36,7 +43,7 @@ def request_body(arguments: list[str]) -> dict:
 
 def main(arguments: list[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if arguments is None else arguments)
-    if not arguments or arguments[0] not in COMMANDS:
+    if not arguments or arguments[0] not in COMMAND_PATHS:
         print(
             "usage: terminal_panes.py toggle|grow|shrink|reset|setpct [number]",
             file=sys.stderr,
@@ -45,7 +52,9 @@ def main(arguments: list[str] | None = None) -> int:
 
     from app import daemon_client
 
-    status, payload = daemon_client.post_json("/api/terminal/panes", request_body(arguments))
+    status, payload = daemon_client.post_json(
+        COMMAND_PATHS[arguments[0]], request_body(arguments)
+    )
     if status != 200:
         print(
             payload.get("reason") or payload.get("error") or "terminal pane command failed",

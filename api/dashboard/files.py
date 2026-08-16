@@ -1,7 +1,7 @@
-# api/routes/files.py — bytes and paths: staging a composer ATTACHMENT on disk
-# and handing back the `@path` mention that delivers it, resolving the full
-# paths of files pasted as zero-byte promises off the host pasteboard, and
-# minting the short-lived Deepgram grant the browser dictates through.
+# api/dashboard/files.py — bytes and paths: staging a composer ATTACHMENT on
+# disk and handing back the `@path` mention that delivers it, resolving the
+# full paths of files pasted as zero-byte promises off the host pasteboard,
+# and minting the short-lived Deepgram grant the browser dictates through.
 from __future__ import annotations
 
 import base64
@@ -13,16 +13,16 @@ import uuid
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
-from api.guard import control_plane, reject_input, valid_session_id
 from api.config import IMAGE_MIMES
-from api.models import (
-    ClipboardFilesBody,
-    ClipboardMatches,
-    DictationGrant,
-    DictationTokenBody,
-    UploadBody,
-    UploadReply,
+from api.dashboard.models.files.clipboard_files_request import ClipboardFilesRequest
+from api.dashboard.models.files.clipboard_matches_response import (
+    ClipboardMatchesResponse,
 )
+from api.dashboard.models.files.dictation_grant_response import DictationGrantResponse
+from api.dashboard.models.files.dictation_token_request import DictationTokenRequest
+from api.dashboard.models.files.upload_request import UploadRequest
+from api.dashboard.models.files.upload_response import UploadResponse
+from api.guard import control_plane, reject_input, valid_session_id
 from core import audit as A
 from core.wire import UPLOAD_MAX
 from dashboard import clipboard, dictate, paths
@@ -38,7 +38,7 @@ def _claimed_session_id(value: str | None) -> str:
 
 
 @router.post("/api/application/uploads", dependencies=[Depends(control_plane(UPLOAD_MAX))])
-def upload(body: UploadBody) -> UploadReply:
+def upload(body: UploadRequest) -> UploadResponse:
     """Stage a composer ATTACHMENT (an image/screenshot the browser pasted,
     dropped, or picked, or any other file) on disk, and hand back the ABSOLUTE
     path the composer will inject as an `@path` mention.
@@ -47,7 +47,7 @@ def upload(body: UploadBody) -> UploadReply:
     defense (same-origin + custom header + read-only switch) with no boundary
     parser; the price is a base64 envelope, which UPLOAD_MAX budgets for. The
     bytes land under the application data directory, outside any repository
-    working tree, in a per-session subdir (docs/dashboard.md *Web attachments*)."""
+    working tree, in a per-session subdir."""
     session_id = _claimed_session_id(body.session_id)
     # basename only — strip any path component a hostile name carries, and
     # fall back to a neutral stem so an empty/dotfile name can't produce a
@@ -80,22 +80,20 @@ def upload(body: UploadBody) -> UploadReply:
     A.state_file("", "", "web-upload",
                  {"session_id": session_id, "name": safe_name,
                   "bytes": len(file_bytes), "mime": body.mime, "ok": True})
-    return UploadReply(path=path, name=safe_name, mime=body.mime,
-                       is_image=body.mime in IMAGE_MIMES)
+    return UploadResponse(path=path, name=safe_name, mime=body.mime,
+                          is_image=body.mime in IMAGE_MIMES)
 
 
 @router.post("/api/application/clipboard-files", dependencies=[Depends(control_plane())])
-def clipboard_files(body: ClipboardFilesBody) -> ClipboardMatches:
+def clipboard_files(body: ClipboardFilesRequest) -> ClipboardMatchesResponse:
     """Resolve the FULL PATHS of files the browser just pasted as zero-byte
-    promises (docs/dashboard.md *Web attachments* → *Promise-only files*).
-
-    The page cannot answer this itself: a pasted `File` carries a BASENAME and
-    nothing else, while the pasteboard's path-bearing flavors are hidden from
-    script. The server shares the pasteboard with the terminal, so it reads
-    what the terminal reads. `clipboard.match` returns paths ONLY when their
-    basenames are exactly what the caller reported, so a remote device can
-    never be handed an unrelated host path. A miss is a 200 with `paths: []` —
-    "the clipboard moved on" is an ordinary outcome."""
+    promises. The page cannot answer this itself: a pasted `File` carries a
+    BASENAME and nothing else, while the pasteboard's path-bearing flavors are
+    hidden from script. The server shares the pasteboard with the terminal, so
+    it reads what the terminal reads. `clipboard.match` returns paths ONLY
+    when their basenames are exactly what the caller reported, so a remote
+    device can never be handed an unrelated host path. A miss is a 200 with
+    `paths: []` — "the clipboard moved on" is an ordinary outcome."""
     session_id = _claimed_session_id(body.session_id)
     names = [os.path.basename(name) for name in body.names[:clipboard.FILES_MAX]]
     matched = clipboard.match(names)
@@ -105,24 +103,23 @@ def clipboard_files(body: ClipboardFilesBody) -> ClipboardMatches:
     A.state_file("", "", "web-clipboard",
                  {"session_id": session_id, "names": names, "matched": len(matched),
                   "paths": matched})
-    return ClipboardMatches(paths=tuple(matched))
+    return ClipboardMatchesResponse(paths=tuple(matched))
 
 
 @router.post("/api/application/dictation-token", dependencies=[Depends(control_plane())])
-def dictation_token(body: DictationTokenBody):
+def dictation_token(body: DictationTokenRequest):
     """Mint a short-lived Deepgram grant for the browser's DIRECT wss
-    connection (docs/dashboard.md *Web dictation* — this server never sees
-    audio; its whole role is this trade: on-disk API key → ~30s single-purpose
-    JWT). Every attempt is a `web-dictate` state_files row (no session id —
-    the new-session form dictates too); the API key never appears in a
-    response or an audit row."""
+    connection (this server never sees audio; its whole role is this trade:
+    on-disk API key → ~30s single-purpose JWT). The mic is always offered —
+    there is no availability probe — so a missing key surfaces HERE, as the
+    501 the page toasts. Every attempt is a `web-dictate` state_files row (no
+    session id — the new-session form dictates too); the API key never
+    appears in a response or an audit row."""
     if not (dictate.SAMPLE_RATE_MIN <= body.sample_rate <= dictate.SAMPLE_RATE_MAX):
         A.state_file("", "", "web-dictate",
                      {"ok": False, "why": "bad-rate", "rate": repr(body.sample_rate)[:40]})
         return JSONResponse({"error": "bad sample_rate"}, 400)
     if not dictate.available():
-        # a race fallback only — the page hides the mic button when the
-        # dictation probe says unavailable
         A.state_file("", "", "web-dictate", {"ok": False, "why": "no-key"})
         return JSONResponse({"error": "no deepgram key configured"}, 501)
     # An omitted directory requests global terms. A supplied directory is
@@ -140,6 +137,6 @@ def dictation_token(body: DictationTokenBody):
     A.state_file("", "", "web-dictate",
                  {"ok": True, "rate": body.sample_rate,
                   "working_directory": body.working_directory, "keyterms": len(terms)})
-    return DictationGrant(token=grant["access_token"],
-                          expires_in=grant.get("expires_in"),
-                          ws_url=dictate.ws_url(body.sample_rate, terms))
+    return DictationGrantResponse(token=grant["access_token"],
+                                  expires_in=grant.get("expires_in"),
+                                  ws_url=dictate.ws_url(body.sample_rate, terms))

@@ -344,7 +344,10 @@ def test_canonical_consumers_cannot_observe_or_checkpoint_native_sources():
 
 
 def test_canonical_sse_has_no_broker_or_application_event_registry():
-    source = (ROOT / "api" / "routes" / "streams.py").read_text(encoding="utf-8")
+    source = (
+        (ROOT / "api" / "dashboard" / "streams.py").read_text(encoding="utf-8")
+        + (ROOT / "api" / "terminal" / "streams.py").read_text(encoding="utf-8")
+    )
     assert "DashboardEventStream" not in source
     assert "subscribe" not in source
     assert "queue.Queue" not in source
@@ -355,7 +358,7 @@ def test_canonical_sse_has_no_broker_or_application_event_registry():
 def test_resume_and_sse_have_one_authoritative_path():
     launch_files = (
         ROOT / "contracts" / "harness.py",
-        ROOT / "api" / "routes" / "control.py",
+        ROOT / "api" / "dashboard" / "controls.py",
         ROOT / "dashboard" / "static" / "app.08-composer.js",
         ROOT / "dashboard" / "static" / "app.09-newsession.js",
         ROOT / "plugins" / "claude_code" / "launcher.py",
