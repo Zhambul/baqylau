@@ -1,8 +1,8 @@
-# core/wire.py — the HTTP wire contract shared by the daemon and its clients.
+# core/daemon/wire.py — the HTTP wire contract shared by the daemon and its clients.
 #
 # The one owner of every constant BOTH sides of the daemon's HTTP door read:
 # where the daemon listens, the header a control-plane caller stamps, and the
-# request-body caps. Clients (core/daemon_client.py) and the server (api/)
+# request-body caps. Clients (core/daemon/client.py) and the server (api/)
 # import these from here so neither side re-encodes the other's vocabulary —
 # and so the terminal-side clients depend on no server or presenter package.
 #

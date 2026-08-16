@@ -99,7 +99,14 @@ reflows on resize. The code is layered so agent tools and terminals are both
 pluggable:
 
 ```
-core/        tool- and terminal-agnostic runtime   (imports only core)
+core/        the floor: what knows the OS, not the domain — env, processes,
+             locks, git, and core/daemon/ (the daemon's door, both sides)
+domain/      the facts themselves: the closed canonical event vocabulary
+diagnostics/ the operational database, whole: what the MACHINERY did — its
+             writers (reached from every process), its reads, its telemetry
+engine/      the neutral middle: engine/store/ (one owner per table),
+             engine/interpret/ (the one thread that pulls, translates, reacts),
+             engine/projections/ (a fold per question), engine/queries/
 terminal/    the terminal concern, whole: contract + models, the panes it
              paints, and terminal/impl/<name>/ — one directory per terminal
              (kitty today), the only place a terminal's name appears
@@ -107,6 +114,9 @@ harness/     the harness concern, whole: contract + models, the hook channel,
              the services over one plugin, and harness/impl/<name>/ — one
              directory per agent tool (claude_code · codex), the only place a
              harness's name appears
+app/         the composition root: the only package that knows WHICH harnesses
+             and which terminal are installed, plus the services that compose
+             concerns the engine keeps apart
 bin/         the repository's own CLIs (audit, dashboard). Every entry an
              EXTERNAL config names lives with its concern instead —
              harness/impl/<name>/bin/ and terminal/bin/ — so a captured

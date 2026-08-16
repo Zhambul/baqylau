@@ -18,7 +18,7 @@ so triage can never mutate the evidence.
 | store | path | what it answers |
 |---|---|---|
 | **event store** | `<data>/events.db` | What the session *did*. The product's own record: every observation and its interpretation. This is the primary evidence. |
-| **operational audit** | `<data>/audit/audit.db` | What the *machinery* did and where it degraded: swallowed exceptions, detached processes, control-plane gestures, browser telemetry. Env: `$BAQYLAU_AUDIT_DIRECTORY`, `BAQYLAU_AUDIT=0` disables (`core/audit.py`). |
+| **operational audit** | `<data>/audit/audit.db` | What the *machinery* did and where it degraded: swallowed exceptions, detached processes, control-plane gestures, browser telemetry. Env: `$BAQYLAU_AUDIT_DIRECTORY`, `BAQYLAU_AUDIT=0` disables (`diagnostics/record.py`). |
 
 CLI: `python3 bin/baqylau-audit.py session <session_id>` dumps every raw observation for a
 session with its translation and the canonical events it produced; `... raw <raw_event_id>`
@@ -57,7 +57,7 @@ hooks (thin clients) ──POST exact stdin──▶ /api/harnesses/<name>/hooks
 - **The untranslated backlog IS the queue**: raw events with no `translation_records`
   row (for registered sessions) await the interpreter, in `raw_events.id` order.
 
-**Who drives what.** The `Interpreter` (`app/interpreter.py`) is the ONE
+**Who drives what.** The `Interpreter` (`engine/interpret/loop.py`) is the ONE
 read-and-interpret loop: it pulls every registered unfinished session's sources
 (transcripts, rollouts, watches, process state), translates the untranslated backlog
 (hook evidence included — hooks do NOT translate), and reacts to committed facts
@@ -118,7 +118,7 @@ is the sanctioned form, and a contract test
 (`test_no_read_path_orders_on_a_bare_occurred_at`) forbids ordering on the bare column.
 So **a mostly-NULL `occurred_at` is not a bug** and is not worth chasing.
 
-### `audit.db` (`core/audit.py`)
+### `audit.db` (`diagnostics/record.py`)
 
 | table | one row per | key columns |
 |---|---|---|
@@ -400,7 +400,7 @@ Note the tunnel is a distinct failure domain from the bind: reproduce against
 ### A kitty pane is frozen, blank, or stuck on its startup banner
 
 The pane processes are thin SSE clients of the daemon — they render nothing
-themselves (`terminal/panes/streams.py` renders; `core/daemon_client.py` copies bytes).
+themselves (`terminal/panes/streams.py` renders; `core/daemon/client.py` copies bytes).
 So a broken pane is one of three shapes, each with its own rows:
 
 - **The daemon is down or restarting.** No `streams` row with kind

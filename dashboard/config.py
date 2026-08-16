@@ -3,7 +3,7 @@
 # What remains here after the HTTP layer moved to api/: the knobs the
 # dashboard OWNS — its public origin, its static assets, its notification
 # timing and switches, and its projection limits. The HTTP wire contract
-# (host, port, headers, body caps) lives in core/wire.py; server policy
+# (host, port, headers, body caps) lives in core/daemon/wire.py; server policy
 # (origins, read-only, caching) lives in api/config.py. Import-pure: only env
 # reads + literals, no I/O, no DB, no frontend.
 import os

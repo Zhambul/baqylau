@@ -13,6 +13,7 @@ from harness.models import LIVENESS_SOURCE_TYPE, OUTPUT_LOCATION_SOURCE_TYPE
 from core.data import data_directory
 from engine.queries.content import CanonicalContentService
 from engine.interpret.translators import LivenessTranslator, OperationOutputTranslator
+from diagnostics import record as diagnostic_record
 from diagnostics.read import OperationalDiagnostics
 from harness.hooks.gateway import HookGatewayService
 from app.services.insights import ApplicationInsightsService
@@ -136,9 +137,6 @@ def build_application(
         OperationOutputCanonicalEventReaction(operation_output, recorder),
         PaneCanonicalEventReaction(terminal, sessions),
     )
-    from diagnostics import record
-
-    browser_telemetry = BrowserTelemetryService(record)
     return CanonicalApplication(
         canonical_store=canonical_store,
         registry=registry,
@@ -206,7 +204,7 @@ def build_application(
             repositories,
             result_limit=dashboard_config.RESUMABLE_SESSION_LIMIT,
         ),
-        browser_telemetry=browser_telemetry,
+        browser_telemetry=BrowserTelemetryService(diagnostic_record),
     )
 
 

@@ -43,7 +43,7 @@ def holder():
 
 def url():
     # the wire contract, not the server facade: the bind address is
-    # core/wire.py's to own, and a lazy import keeps this module import-pure
+    # core/daemon/wire.py's to own, and a lazy import keeps this module import-pure
     # like _server() does (`serve` must stay the only thing that pulls the
     # server in).
     from core.daemon import wire

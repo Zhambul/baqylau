@@ -6,10 +6,10 @@
 # thin hook client stamps them (harness/hooks/client.py), the hook-delivery
 # endpoint reads them (api/common/hooks.py).
 #
-# They live here rather than in core/wire.py because they are HARNESS
+# They live here rather than in core/daemon/wire.py because they are HARNESS
 # vocabulary — an account, a CLI process, a launch selection — not general
 # daemon plumbing. The generic half (host, port, the control-plane guard
-# header, the ordinary body caps) stays in core/wire.py.
+# header, the ordinary body caps) stays in core/daemon/wire.py.
 # Import-pure: literals only.
 
 TERMINAL_WINDOW_HEADER = "X-Baqylau-Terminal-Window"
