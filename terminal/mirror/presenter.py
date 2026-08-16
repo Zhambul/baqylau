@@ -20,6 +20,7 @@ from engine.projections import (
 )
 from terminal.mirror.highlight import highlighted_lines
 from terminal.mirror.highlight import highlighted_source
+from domain.unified_diff import diff_rows
 from terminal.mirror.blocks import (
     TerminalBlank,
     TerminalBlock,
@@ -130,9 +131,12 @@ def _operation_rows(activity: OperationActivity) -> tuple:
         ))
     rows.append(rule)
     output = _operation_text(activity)
-    for line in output.splitlines():
+    # A distinct name from the `line` above: that one is a tuple of styled
+    # atoms, this one is a plain str, and reusing the binding made the two
+    # loops read as if they iterated the same thing.
+    for output_line in output.splitlines():
         rows.append(TerminalLine(
-            (TerminalText(line.rstrip()),),
+            (TerminalText(output_line.rstrip()),),
             prefix=(TerminalText("│ ", TerminalStyle(running_color)),),
             continuation_prefix=(TerminalText("│ ", TerminalStyle(running_color)),),
             layout="word_wrap",
@@ -214,7 +218,6 @@ def _diff_code(row, path: str, row_background: RGB | None) -> tuple[TerminalText
 
 
 def _file_diff_rows(activity: FileActivity, unified_diff: str) -> tuple[TerminalLine, ...]:
-    from domain.unified_diff import diff_rows
 
     parsed = diff_rows(unified_diff)
     number_width = max((len(str(row.number)) for row in parsed if row.number is not None), default=1)

@@ -69,7 +69,7 @@ def state_file(log: str, path: str, action: str, content: object = "") -> None:
         )
 
 
-def spawn(log: str, child_pid: int, argv: list, purpose: str = "") -> None:
+def spawn(log: str, child_pid: int, argv: list[str], purpose: str = "") -> None:
     if not enabled():
         return
     with closing(connect()) as connection, connection:
@@ -102,7 +102,11 @@ def stream_start(
             "VALUES(?,?,?,?,?,?,?)",
             (_session_id(log), kind, agent_id, task_id, src_path, os.getpid(), time.time()),
         )
-        return int(cursor.lastrowid)
+        # lastrowid is Optional in the DB-API: it is set after this INSERT, but
+        # int() on the None branch would raise TypeError rather than degrade,
+        # and this function is already declared to return None when the audit
+        # is off. Hand the value back as-is.
+        return cursor.lastrowid
 
 
 def stream_end(stream_id: int | None, end_reason: str, lines_emitted: int | None = None) -> None:

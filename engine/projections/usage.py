@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 from types import MappingProxyType
+from typing import Any
 
 from domain.events import (
     CanonicalEvent,
@@ -25,19 +26,23 @@ from engine.store.canonical import StoredCanonicalEvent
 
 
 def usage(stored_events: tuple[StoredCanonicalEvent, ...]) -> UsageSummary:
-    reports = [
-        stored.event
-        for stored in stored_events
-        if isinstance(stored.event.payload, UsageReported)
-    ]
     session_tokens = TokenUsage()
     session_cost: Decimal | None = None
     by_actor: dict[ActorId, TokenUsage] = {}
     by_model: dict[str, TokenUsage] = {}
     latest_cumulative: dict[tuple[str, str, str, str], UsageReported] = {}
-    additive: list[tuple[CanonicalEvent, UsageReported]] = []
-    for event in reports:
+    additive: list[tuple[CanonicalEvent[Any], UsageReported]] = []
+    # The usage reports are selected HERE rather than into an intermediate list
+    # of events: a filter on `stored.event.payload` that collects
+    # `stored.event` throws away the one fact it just established — which
+    # payload this event carries — and every field read below then has to be
+    # taken on faith. Keeping the narrowed payload in hand is the same loop,
+    # one list shorter.
+    for stored in stored_events:
+        event = stored.event
         report = event.payload
+        if not isinstance(report, UsageReported):
+            continue
         model_id = report.model.native_id if report.model else ""
         account_id = report.account.account_id if report.account else ""
         if report.cumulative:

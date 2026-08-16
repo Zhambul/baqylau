@@ -50,6 +50,7 @@ from engine.store.sessions import SessionStore
 from terminal.adapter import TerminalAdapter
 from terminal.impl import resolve as resolve_terminal
 from terminal.impl.null import null_plugin
+from diagnostics.database import db_path as diagnostic_database_path
 
 
 @dataclass(frozen=True)
@@ -205,6 +206,4 @@ def build_application(
 
 
 def build_default_application() -> CanonicalApplication:
-    from diagnostics.database import db_path as diagnostic_database_path
-
     return build_application(default_data_directory(), diagnostic_database_path())

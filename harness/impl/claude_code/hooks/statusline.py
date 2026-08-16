@@ -29,6 +29,7 @@ if __package__ in (None, ""):
 from diagnostics import record as A
 from harness.impl.claude_code import account as ACC
 from harness.impl.claude_code.usage import state
+import time
 
 
 
@@ -122,8 +123,7 @@ def capture(raw):
             pass
 
 
-def _now():
-    import time
+def _now() -> float:
     return time.time()
 
 

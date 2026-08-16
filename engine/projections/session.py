@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from typing import Literal
 
 from domain.events import (
     ActorDescriptionChanged,
@@ -34,6 +35,12 @@ def summary(
     if started is None:
         return None
     payload = started.event.payload
+    # The search above selected `started` BY this payload's type, but it
+    # collected the stored event, so the fact does not travel with it. Restated
+    # here because every field read below depends on it — and because the
+    # alternative, reading them off a bare EventPayload, is how a renamed field
+    # gets found at runtime instead of now.
+    assert isinstance(payload, SessionStarted)
     custom_title = None
     automatic_title = payload.title
     summary_title = None
@@ -45,7 +52,7 @@ def summary(
     account = payload.account
     prompt_count = 0
     automatic_model_change = None
-    state = "running"
+    state: Literal["running", "finished"] = "running"
     for stored in stored_events:
         event = stored.event
         if isinstance(event.payload, SessionStarted):

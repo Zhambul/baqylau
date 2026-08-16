@@ -30,7 +30,7 @@ def _audit_failure(where: str, context: dict) -> None:
     broken auditor can never take down the interpreter it exists to explain.
     """
     try:
-        from diagnostics import record
+        from diagnostics import record  # noqa: PLC0415 — guarded: a broken auditor must not take down the interpreter
 
         record.error(str(context.get("session_id", "")), f"interpreter ({where})", context)
     except Exception:
@@ -83,6 +83,13 @@ class Interpreter:
     def _pull(self) -> None:
         for session in self.sessions.watchable():
             try:
+                if session.plugin is None:
+                    # Same contract as the pid check inside
+                    # SessionLivenessSource: a detached session cannot be
+                    # watched, and saying so here sends it to the audit below
+                    # named, instead of as an AttributeError from the next
+                    # line.
+                    raise ValueError(f"session has no attached harness plugin: {session.session_id}")
                 sources = (
                     *session.plugin.sources.for_session(session),
                     *self.operation_output.for_session(session.session_id),

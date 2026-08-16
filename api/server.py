@@ -22,6 +22,7 @@ from diagnostics import record as A
 from core import locks
 from core.daemon.contract import HOST_ADDRESS, PORT_NUMBER
 from dashboard import paths
+from notify.notifier import Notifier
 
 UPLOAD_LIFETIME_SECONDS = 7 * 24 * 3600
 
@@ -104,8 +105,6 @@ def serve():
         )
         usage_thread.start()
         _prune_uploads()
-        from notify.notifier import Notifier
-
         notifier = Notifier(application)
         threading.Thread(target=notifier.run, daemon=True).start()
 

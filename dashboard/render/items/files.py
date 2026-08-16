@@ -6,6 +6,7 @@ import html
 
 from dashboard.render.items.item import (
     DashboardItem,
+    SummaryKind,
 )
 from engine.projections import FileActivity
 
@@ -43,19 +44,25 @@ def file_presentation(activity: FileActivity) -> tuple[str, str]:
     return text, f'<pre class="opl">{markup}</pre>'
 
 
+# Which of the three file summary kinds each recorded action draws as. Hoisted
+# out of the call below and typed, so that a new action in the canonical event
+# has to be given a kind here rather than reaching the item as a bare str.
+_FILE_SUMMARY_KINDS: dict[str, SummaryKind] = {
+    "read": "file_read",
+    "created": "file_write",
+    "updated": "file_edit",
+    "deleted": "file_edit",
+    "renamed": "file_edit",
+}
+
+
 def present_file(activity: FileActivity) -> DashboardItem:
     actor_id = activity.context.actor_id
     text, markup = file_presentation(activity)
     return DashboardItem(
         activity.context.activity_id,
         "file",
-        {
-            "read": "file_read",
-            "created": "file_write",
-            "updated": "file_edit",
-            "deleted": "file_edit",
-            "renamed": "file_edit",
-        }[activity.file.action],
+        _FILE_SUMMARY_KINDS[activity.file.action],
         actor_id,
         (
             activity.outcome

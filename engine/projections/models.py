@@ -64,7 +64,11 @@ class ActivityContext:
 class MessageActivity:
     context: ActivityContext
     message_id: MessageId
-    role: Literal["user", "assistant", "system", "peer"]
+    # Copied verbatim from MessageCreated.role, so it carries the SAME five
+    # roles the domain event does. "parent" was missing here while every
+    # renderer downstream already branched on it — those branches typed as
+    # unreachable even though a parent-agent message reaches them at runtime.
+    role: Literal["user", "assistant", "system", "peer", "parent"]
     phase: Literal["prompt", "intermediate", "final", "synthetic", "recap"] | None
     reply_to: MessageId | None
     content: Content

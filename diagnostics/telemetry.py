@@ -17,7 +17,7 @@ class OperationalAudit(Protocol):
         log: str,
         path: str,
         action: str,
-        content: dict,
+        content: Mapping[str, object],
     ) -> None: ...
 
 
@@ -64,7 +64,7 @@ class BrowserTelemetryService:
         self.audit = audit
 
     def record_optimistic_action(self, report: OptimisticActionReport) -> None:
-        content = {
+        content: dict[str, object] = {
             "session_id": str(report.session_id),
             "action": report.action,
             "phase": report.phase,
@@ -78,7 +78,7 @@ class BrowserTelemetryService:
         self.audit.state_file("", "", "browser-optimistic-action", content)
 
     def record_client_failure(self, report: ClientFailureReport) -> None:
-        content = {
+        content: dict[str, object] = {
             "session_id": str(report.session_id),
             "gesture": report.gesture,
             "failure_kind": report.failure_kind,
@@ -93,7 +93,7 @@ class BrowserTelemetryService:
 
     def record_events(self, batch: BrowserEventBatch) -> None:
         for event in batch.events:
-            content = {
+            content: dict[str, object] = {
                 "client_id": batch.client_id,
                 "device_id": batch.device_id,
                 "session_id": str(event.session_id) if event.session_id else "",

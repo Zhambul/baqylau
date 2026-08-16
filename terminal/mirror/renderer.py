@@ -98,13 +98,13 @@ def _render_line(line: TerminalLine, width: int) -> list[str]:
         visible, _remaining = _take((*first_prefix, *content), width)
         return [_render_parts(visible, width, line.background)]
     if line.layout == "word_wrap":
-        atoms = []
+        atoms: list[TerminalText] = []
         for part in content:
             atoms.extend(
                 replace(part, text=atom)
                 for atom in re.findall(r"[ \t]+|[^ \t]+", part.text)
             )
-        rendered = []
+        rendered: list[str] = []
         prefix = first_prefix
         current: list[TerminalText] = []
         current_width = 0

@@ -14,6 +14,8 @@ An activity with no row is a bug, not a default — it raises.
 
 from __future__ import annotations
 
+from typing import Any, Callable
+
 from dashboard.render.items import attention, files, messages, operations, work
 from dashboard.render.items.item import DashboardItem
 from engine.projections import (
@@ -29,7 +31,22 @@ from engine.projections import (
     TaskActivity,
 )
 
-_PRESENTERS = {
+
+# This package's public surface. DashboardItem is defined in item.py and named
+# here because consumers take it from the package, not the submodule — without
+# __all__ that is an incidental import rather than a re-export, and the two
+# read identically at the call site.
+__all__ = ["DashboardItem", "DashboardPresenter"]
+
+# The value type is deliberately loose in its parameter. Each presenter takes
+# the ONE activity class it is keyed by — present_message takes a
+# MessageActivity, not an Activity — and that correlation between a dict's key
+# and its value's parameter is not something Python's type system can state.
+# Narrowing to Callable[[Activity], ...] would be wrong in the other direction
+# (a presenter that accepted any Activity is exactly what these are not), so
+# the table declares what it can and `present` below re-establishes the rest by
+# construction: a value is only ever reached through its own key.
+_PRESENTERS: dict[type[Activity], Callable[[Any], DashboardItem]] = {
     MessageActivity: messages.present_message,
     ReasoningActivity: messages.present_reasoning,
     ActorMessageActivity: messages.present_actor_message,

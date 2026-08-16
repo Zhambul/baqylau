@@ -97,13 +97,20 @@ def activities_of(
     actor_assignment_starts: dict[tuple[ActorId, AssignmentId], ActorAssignmentActivity] = {}
     for stored in stored_events:
         event = stored.event
-        assignment_for_parent = (
+        # An assignment is attributed to the PARENT actor when there is one —
+        # written as one test that both sets the flag and picks the id, because
+        # the flag is exactly "we used the parent". Splitting it across two
+        # expressions left `parent_actor_id is not None` proven in the first
+        # and unavailable in the second, so the id it chose was optional
+        # everywhere it was used afterwards.
+        activity_actor_id = event.actor_id
+        assignment_for_parent = False
+        if (
             isinstance(event.payload, (ActorAssignmentStarted, ActorAssignmentFinished))
             and event.parent_actor_id is not None
-        )
-        activity_actor_id = (
-            event.parent_actor_id if assignment_for_parent else event.actor_id
-        )
+        ):
+            activity_actor_id = event.parent_actor_id
+            assignment_for_parent = True
         if isinstance(event.payload, ActorStarted):
             actor_names[event.actor_id] = event.payload.name
         elif isinstance(event.payload, ActorNameChanged):

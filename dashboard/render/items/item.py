@@ -12,10 +12,49 @@ from __future__ import annotations
 import html
 import json
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, TypeAlias
 
 from domain.ids import ActorId, CanonicalEventId
 from domain.values import Content, StructuredContent, TextContent
+
+
+# The kinds an item can be SUMMARISED as — the icon/label vocabulary the browser
+# draws. A superset of domain.values.OperationCategory: every category maps to
+# one of these, plus the two execution modes that displace a category
+# ("background", "monitor"), "message_delivery" for a delivered message, and the
+# non-operation activities that also reach a summary row.
+#
+# Named rather than spelled inline because the presenters BUILD one of these and
+# must be checked against the same list the field accepts — an inline Literal
+# here made operation_summary_kind() a plain `-> str`, and nothing verified that
+# what it returned was drawable.
+# How far along an item is, when it is the kind of thing that runs. Named
+# alongside SummaryKind and for the same reason: the presenters BUILD one of
+# these out of an activity's state and outcome, and an inline Literal on the
+# field alone left those construction sites typed as bare str.
+ItemState: TypeAlias = Literal["running", "succeeded", "failed", "cancelled"]
+
+
+SummaryKind: TypeAlias = Literal[
+    "message",
+    "shell",
+    "background",
+    "monitor",
+    "file_read",
+    "file_write",
+    "file_edit",
+    "search",
+    "network",
+    "workspace",
+    "media",
+    "skill",
+    "task",
+    "message_delivery",
+    "attention",
+    "compaction",
+    "actor_assignment",
+    "actor_message",
+]
 
 
 @dataclass(frozen=True)
@@ -32,28 +71,9 @@ class DashboardItem:
         "actor_assignment",
         "actor_message",
     ]
-    summary_kind: Literal[
-        "message",
-        "shell",
-        "background",
-        "monitor",
-        "file_read",
-        "file_write",
-        "file_edit",
-        "search",
-        "network",
-        "workspace",
-        "media",
-        "skill",
-        "task",
-        "message_delivery",
-        "attention",
-        "compaction",
-        "actor_assignment",
-        "actor_message",
-    ]
+    summary_kind: SummaryKind
     actor_id: ActorId
-    state: Literal["running", "succeeded", "failed", "cancelled"] | None
+    state: ItemState | None
     html: str
     plain_text: str
     content_reference: str | None

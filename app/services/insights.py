@@ -6,7 +6,7 @@ import os
 import time
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Protocol
+from typing import Callable, Protocol
 
 from diagnostics.read import OperationalDiagnostics
 from core.repository import RepositoryQueries
@@ -97,7 +97,7 @@ class ApplicationInsightsService:
         diagnostics: OperationalDiagnostics,
         repositories: RepositoryQueries,
         top_project_count: int,
-        clock=time.time,
+        clock: Callable[[], float] = time.time,
     ) -> None:
         self.canonical_store = canonical_store
         self.sessions = sessions

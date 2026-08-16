@@ -34,14 +34,16 @@ def attention(stored_events: tuple[StoredCanonicalEvent, ...]) -> AttentionState
     for stored in stored_events:
         event = stored.event
         payload = event.payload
-        key = (event.actor_id, str(payload.attention_id)) if isinstance(
-            payload,
-            (AttentionRequested, AttentionResolved),
-        ) else None
+        # The key is built inside each branch rather than once above them: it
+        # is only defined for the two payloads that HAVE an attention_id, and
+        # hoisting it meant repeating that same isinstance pair in a
+        # conditional whose None case was unreachable by construction.
         if isinstance(payload, AttentionRequested):
-            pending[key] = PendingAttention(event.actor_id, payload)
+            pending[(event.actor_id, str(payload.attention_id))] = PendingAttention(
+                event.actor_id, payload
+            )
         elif isinstance(payload, AttentionResolved):
-            pending.pop(key, None)
+            pending.pop((event.actor_id, str(payload.attention_id)), None)
         elif isinstance(
             payload,
             (
@@ -73,19 +75,26 @@ def tasks(stored_events: tuple[StoredCanonicalEvent, ...]) -> tuple[TaskSummary,
             for task_id in previous_ids - current_ids:
                 if task_id not in retained_ids:
                     tasks.pop(task_id, None)
-        elif isinstance(payload, TaskChanged) and payload.state == "deleted":
-            tasks.pop(payload.task_id, None)
-            for task_ids in task_lists.values():
-                task_ids.discard(payload.task_id)
         elif isinstance(payload, TaskChanged):
-            tasks[payload.task_id] = TaskSummary(
-                payload.task_id,
-                payload.label,
-                payload.subject,
-                payload.description,
-                payload.state,
-                payload.owner_actor_id,
-            )
+            # One TaskChanged branch that splits on the state, rather than two
+            # elifs testing the same payload type. A deleted task is a removal;
+            # every other state is a row — and only this shape makes the state
+            # reaching TaskSummary provably not "deleted", which is the one
+            # value it does not accept.
+            state = payload.state
+            if state == "deleted":
+                tasks.pop(payload.task_id, None)
+                for task_ids in task_lists.values():
+                    task_ids.discard(payload.task_id)
+            else:
+                tasks[payload.task_id] = TaskSummary(
+                    payload.task_id,
+                    payload.label,
+                    payload.subject,
+                    payload.description,
+                    state,
+                    payload.owner_actor_id,
+                )
     return tuple(tasks[task_id] for task_id in sorted(tasks, key=str))
 
 

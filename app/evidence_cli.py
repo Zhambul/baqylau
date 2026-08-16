@@ -13,7 +13,7 @@ from engine.store.canonical import CanonicalEventStore
 from engine.queries.evidence import EvidenceQueries, TranslationEvidence
 
 
-def _document(store: CanonicalEventStore, evidence: TranslationEvidence) -> dict:
+def _document(store: CanonicalEventStore, evidence: TranslationEvidence) -> dict[str, object]:
     return {
         "raw_event_id": str(evidence.raw_event_id),
         "session_id": str(evidence.session_id),

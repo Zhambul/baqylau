@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 from collections.abc import Mapping
+from harness.impl.claude_code.usage import state
 
 ACCOUNTS_FILE = os.path.expanduser("~/.config/claude-subscriptions/accounts.tsv")
 ACCOUNT_CONFIG_DIRECTORY = os.path.expanduser("~/.config/claude-subscriptions/configs")
@@ -52,7 +53,6 @@ def alias_for(account_id: str) -> str | None:
 
 def migration_target(current_account_id: str) -> dict | None:
     """Choose the least-used launchable account other than the current one."""
-    from harness.impl.claude_code.usage import state
 
     snapshots = state.latest_by_account()
     candidates = []

@@ -25,7 +25,7 @@ class HarnessUsageService(UsageSource):
         self.registry = registry
 
     def read(self) -> tuple[UsageRow, ...]:
-        rows = []
+        rows: list[UsageRow] = []
         for plugin in self.registry.plugins():
             if plugin.usage is None:
                 continue

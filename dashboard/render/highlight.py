@@ -2,6 +2,17 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+
+if TYPE_CHECKING:
+    # pygments is an OPTIONAL runtime dependency — the two functions below
+    # import it inside their own try/except so that a machine without it simply
+    # renders unhighlighted. The checker still needs the Lexer type to know
+    # what the cache holds, and this is the one import form that gives it that
+    # without making the package required at runtime.
+    from pygments.lexer import Lexer
+
 
 COLORS = {
     "keyword": "\033[38;2;198;120;221m",
@@ -15,7 +26,7 @@ COLORS = {
     "text": "\033[38;2;171;178;191m",
 }
 RESET = "\033[0m"
-_lexers = {}
+_lexers: dict[str, Lexer] = {}   # language name or file path -> lexer (cached)
 
 
 def _color(token_type) -> str:
@@ -45,7 +56,7 @@ def source_ansi(text: str, language: str) -> str | None:
     if not body.strip():
         return None
     try:
-        from pygments.lexers import get_lexer_by_name
+        from pygments.lexers import get_lexer_by_name  # noqa: PLC0415 — optional dep, inside its own try/except
 
         lexer = _lexers.get(language)
         if lexer is None:
@@ -62,7 +73,7 @@ def source_ansi_for_path(text: str, path: str) -> str | None:
     if not body:
         return ""
     try:
-        from pygments.lexers import get_lexer_for_filename
+        from pygments.lexers import get_lexer_for_filename  # noqa: PLC0415 — optional dep, inside its own try/except
 
         lexer = _lexers.get(path)
         if lexer is None:

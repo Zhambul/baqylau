@@ -28,11 +28,11 @@ def request_body(arguments: list[str]) -> dict:
     # Deferred, and one of the two sanctioned direct resolutions: this process
     # runs inside the window the keypress landed in and is the only thing that
     # can observe which one that is.
-    from terminal.impl import resolve
+    from terminal.impl import resolve  # noqa: PLC0415 — one of the two sanctioned direct resolutions; see above
 
     terminal = resolve()
     command = arguments[0]
-    body = {
+    body: dict[str, object] = {
         "window_id": (terminal.metadata.current_window_id() if terminal is not None else None) or "",
         "working_directory": os.getcwd(),
     }
@@ -54,7 +54,7 @@ def main(arguments: list[str] | None = None) -> int:
         )
         return 2
 
-    from core.daemon import client as daemon_client
+    from core.daemon import client as daemon_client  # noqa: PLC0415 — keeps this keypress entry import-thin
 
     status, payload = daemon_client.post_json(
         COMMAND_PATHS[arguments[0]], request_body(arguments)

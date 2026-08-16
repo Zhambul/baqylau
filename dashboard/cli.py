@@ -29,7 +29,7 @@ from dashboard import paths
 
 
 def _server():
-    from api import server
+    from api import server  # noqa: PLC0415 — import purity: serve() is the only thing that pulls the server in
 
     return server
 
@@ -46,7 +46,7 @@ def url():
     # core/daemon/contract.py's to own, and a lazy import keeps this module import-pure
     # like _server() does (`serve` must stay the only thing that pulls the
     # server in).
-    from core.daemon import contract as daemon_contract
+    from core.daemon import contract as daemon_contract  # noqa: PLC0415 — same import purity as _server()
     return "http://%s:%d" % (daemon_contract.HOST_ADDRESS, daemon_contract.PORT_NUMBER)
 
 
@@ -110,7 +110,7 @@ def open_browser():
     return 0
 
 
-def main(argv):
+def main(argv: list[str]) -> int:
     cmd = argv[1] if len(argv) > 1 else "open"
     if cmd == "serve":
         return _server().serve()

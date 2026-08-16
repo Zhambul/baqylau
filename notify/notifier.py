@@ -88,6 +88,13 @@ class Notifier:
             if previous == current:
                 continue
             self._resolve(session_id, current)
+            # A session that dropped out of current_states has nothing left to
+            # notify ABOUT — it was only here so _resolve above could retract a
+            # standing alert. The kind lookup below already returned None for
+            # it (None is not a key), so this only says out loud what the
+            # sequence was doing.
+            if current is None:
+                continue
             kind = NOTIFICATION_KINDS.get(current)
             item = items_by_session.get(session_id)
             if kind is not None and item is not None:

@@ -35,7 +35,7 @@ ENV_SHEBANG = "#!/usr/bin/env python3"
 _CMD_PY = re.compile(r'("command":\s*")(python3|\S*/bin/python3(?:\.\d+)?)(\s)')
 
 
-def real_interpreter():
+def real_interpreter() -> str:
     """The concrete interpreter to bake in — never the shim.
 
     Under the pyenv shim, sys.executable is already the selected version's real
@@ -51,11 +51,11 @@ def real_interpreter():
     raise SystemExit("could not resolve a concrete python3 (only found the shim)")
 
 
-def _is_py_shebang(first_line):
+def _is_py_shebang(first_line: str) -> bool:
     return first_line.startswith("#!") and "python" in first_line
 
 
-def retarget_shebangs(interp, revert):
+def retarget_shebangs(interp: str, revert: bool) -> list[str]:
     new_line = ENV_SHEBANG if revert else "#!" + interp
     changed = []
     for name in sorted(os.listdir(HERE)):
@@ -80,7 +80,7 @@ def retarget_shebangs(interp, revert):
     return changed
 
 
-def retarget_settings(interp, revert):
+def retarget_settings(interp: str, revert: bool) -> int | None:
     if not os.path.exists(SETTINGS):
         return None
     with open(SETTINGS, "r", encoding="utf-8") as f:   # same read-modify-write
@@ -97,7 +97,7 @@ def retarget_settings(interp, revert):
 USAGE = "usage: retarget-python.py [--revert]"
 
 
-def main():
+def main() -> None:
     # An UNRECOGNISED argument must not be read as "retarget" — this tool rewrites
     # files in place, and the old `"--revert" in argv` test meant every other argv,
     # `--help` included, silently performed the rewrite (it rewrote a shebang out

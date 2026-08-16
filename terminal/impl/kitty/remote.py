@@ -222,8 +222,9 @@ class KittyRemote:
         path = listen[5:] if listen.startswith("unix:") else listen
         if not path:
             return None
-        import socket           # deferred: this is the only site, and every hook
-                                # process imports this module (json is at the top)
+        # Deferred: this is the only site, and every hook process imports this
+        # module — a top-level socket import would be paid by all of them.
+        import socket  # noqa: PLC0415
         obj = {"cmd": cmd, "version": KITTY_RC_VERSION,
                "no_response": not want_response, "payload": payload}
         try:

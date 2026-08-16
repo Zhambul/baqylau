@@ -16,7 +16,7 @@ class CodexLauncher(HarnessLauncher):
         )
         initial_text = request.initial_text or ""
         prompt = attachment_text + ("\n" + initial_text if attachment_text and initial_text else initial_text)
-        arguments = []
+        arguments: list[str] = []
         if request.resume_session_id is not None:
             arguments.extend(("resume", str(request.resume_session_id)))
         if request.working_directory:

@@ -19,6 +19,7 @@ import os
 import sys
 import time
 from dataclasses import dataclass
+from typing import Protocol
 
 from domain.ids import SessionId
 from terminal.contract import TerminalPlugin
@@ -50,6 +51,26 @@ SCOREBOARD_RESIZE_SETTLE_SECONDS = 0.08
 
 MIRROR_PANE_TITLE = "◧ cmd mirror"
 SCOREBOARD_PANE_TITLE = "▪ session"
+
+
+class TerminalOutcome(Protocol):
+    """What every per-window response below has in common: it worked, or it
+    didn't.
+
+    The gestures in this file are COMPOSITES — opening a session's panes tags a
+    window, opens two panes and restores focus, each answering with its own
+    response type. They are collected in one list and folded by `_combined`,
+    which only ever reads `.succeeded`, so that single field is the whole
+    contract between them and this module. Structural, deliberately: the
+    response types live in terminal/models/ and are not going to grow a shared
+    base class for one bool.
+    """
+
+    # A read-only property, not a bare `succeeded: bool` attribute: the
+    # responses are all frozen dataclasses, and a plain annotation here would
+    # demand a SETTABLE field none of them has.
+    @property
+    def succeeded(self) -> bool: ...
 
 
 @dataclass(frozen=True)
@@ -114,7 +135,7 @@ class TerminalAdapter:
         """
         session_id = str(request.session_id)
         anchor_window_id = request.anchor_window_id
-        outcomes = [self._plugin.metadata.tag_window(
+        outcomes: list[TerminalOutcome] = [self._plugin.metadata.tag_window(
             WindowTagRequest(anchor_window_id, {SESSION_WINDOW_TAG: session_id})
         )]
         if self._tagged(ACTIVITY_PANE_TAG, request.session_id) is None:
@@ -238,7 +259,7 @@ class TerminalAdapter:
         *,
         clear_tab: bool,
     ) -> SessionTerminalResult:
-        outcomes = []
+        outcomes: list[TerminalOutcome] = []
         for tag in (SCOREBOARD_PANE_TAG, ACTIVITY_PANE_TAG):
             pane = self._tagged(tag, session_id)
             if pane is not None:
@@ -300,6 +321,6 @@ class TerminalAdapter:
         return ()
 
     @staticmethod
-    def _combined(outcomes, reason: str) -> SessionTerminalResult:
+    def _combined(outcomes: list[TerminalOutcome], reason: str) -> SessionTerminalResult:
         succeeded = all(outcome.succeeded for outcome in outcomes)
         return SessionTerminalResult(succeeded, None if succeeded else reason)

@@ -52,6 +52,7 @@ class CanonicalContentService:
                 return activity.command_text()
             if field_name == "operation_output":
                 return activity.output_text()
+            content_values: tuple[TextContent | StructuredContent, ...]
             if activity.result is not None:
                 content_values = (activity.result,)
             elif activity.progress:

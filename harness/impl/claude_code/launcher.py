@@ -26,8 +26,8 @@ class ClaudeCodeLauncher(HarnessLauncher):
         )
         initial_text = request.initial_text or ""
         prompt = attachment_text + ("\n" + initial_text if attachment_text and initial_text else initial_text)
-        arguments = []
-        environment = []
+        arguments: list[str] = []
+        environment: list[tuple[str, str]] = []   # name/value pairs, not flat argv
         if request.resume_session_id is not None:
             arguments.extend(("--resume", str(request.resume_session_id)))
         if request.model_id:

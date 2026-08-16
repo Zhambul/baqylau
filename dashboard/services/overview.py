@@ -17,6 +17,10 @@ from dashboard.services.notices import DashboardNotificationNotice, DashboardNot
 from dashboard.services.sessions import DashboardSessionService
 from domain.ids import SessionId
 from harness.models import UsageRow
+import time
+from core.daemon import contract as daemon_contract
+from dashboard import config
+from notify import presence
 
 
 @dataclass(frozen=True)
@@ -95,10 +99,6 @@ class GlobalApplicationService:
         self.state = state
 
     def snapshot(self) -> GlobalApplicationSnapshot:
-        from core.daemon import contract as daemon_contract
-        from dashboard import config
-        from notify import presence
-
         new_session = prefs.get("new-session", {})
         drafts = prefs.new_session_drafts()
         return GlobalApplicationSnapshot(
@@ -179,8 +179,6 @@ class GlobalApplicationService:
         ]
         if live:
             raise ValueError("cannot hide a directory with an active session")
-        import time
-
         return prefs.hide_dir(working_directory, time.time())
 
     def register_push_subscription(
@@ -201,8 +199,6 @@ class GlobalApplicationService:
 
     @staticmethod
     def report_presence(report: BrowserPresence) -> None:
-        from notify import presence
-
         session_id = str(report.session_id) if report.session_id is not None else None
         if report.away:
             presence.mark_away(report.device_id, session_id)

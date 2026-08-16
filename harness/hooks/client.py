@@ -43,7 +43,7 @@ def _terminal_window_id() -> str:
 
     Deferred: a hook that never gets this far must not pay for the import.
     """
-    from terminal.impl import resolve
+    from terminal.impl import resolve  # noqa: PLC0415 — a hook that never gets this far must not pay for it
 
     terminal = resolve()
     return (terminal.metadata.current_window_id() if terminal is not None else None) or ""
@@ -79,7 +79,7 @@ def run(
     except Exception:
         # Daemon down or refused: the delivery is lost; the audit row is the trace.
         try:
-            from diagnostics import record
+            from diagnostics import record  # noqa: PLC0415 — audit fallback inside the failure path
 
             record.error("", f"{harness} hook (deliver)", {"payload_bytes": len(payload)})
         except Exception:

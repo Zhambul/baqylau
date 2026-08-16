@@ -28,5 +28,9 @@ def anchor(pane_anchor: PaneAnchor):
     """A `PaneAnchor` as the match expression `--next-to` takes."""
     if pane_anchor.window_id is not None:
         return window(pane_anchor.window_id)
+    # PaneAnchor.__post_init__ rejects an anchor that names neither, so a
+    # window-less anchor always carries a tag. The dataclass is what guarantees
+    # that; this only restates it where the unpacking depends on it.
+    assert pane_anchor.tag is not None
     name, value = pane_anchor.tag
     return tagged(name, value)

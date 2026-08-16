@@ -26,8 +26,8 @@ def _kitty():
     (terminal/impl/kitty/remote.py), and a call with no reachable kitty returns
     its ordinary failure response.
     """
-    from terminal.impl.kitty.plugin import kitty_plugin
-    from terminal.impl.kitty.remote import find_kitten
+    from terminal.impl.kitty.plugin import kitty_plugin  # noqa: PLC0415 — a detector must not import the terminal it may not select
+    from terminal.impl.kitty.remote import find_kitten  # noqa: PLC0415 — a detector must not import the terminal it may not select
     return kitty_plugin() if find_kitten() else None
 
 
@@ -38,7 +38,7 @@ def resolve() -> TerminalPlugin | None:
     """The terminal installed here, or None when there is none to drive."""
     pinned = (os.environ.get("BAQYLAU_TERMINAL") or "").strip().lower()
     if pinned == "none":
-        from terminal.impl.null import null_plugin
+        from terminal.impl.null import null_plugin  # noqa: PLC0415 — only the pinned terminal is imported
         return null_plugin()
     if pinned:
         if pinned not in DETECTORS:

@@ -21,16 +21,17 @@ from harness.models import (
     canonical_event,
 )
 from domain.events import (
-    ActorStarted,
-    ActorMessageSent,
-    AttentionRequested,
-    CanonicalEvent,
     ActorAssignmentFinished,
     ActorAssignmentStarted,
+    ActorMessageSent,
+    ActorStarted,
+    AttentionRequested,
+    CanonicalEvent,
     CompactionFinished,
     CompactionStarted,
     ContextReported,
     EffortChanged,
+    EventPayload,
     FileAccessed,
     GoalChanged,
     MessageCreated,
@@ -58,7 +59,21 @@ from domain.ids import (
     TaskId,
     TurnId,
 )
-from domain.values import AttentionChoice, AttentionPrompt, ModelReference, StructuredContent, TextContent, TokenUsage
+from domain.values import (
+    ActorRole,
+    AttentionChoice,
+    AttentionPrompt,
+    FileAction,
+    GoalState,
+    MessagePhase,
+    MessageRole,
+    ModelReference,
+    OperationCategory,
+    Outcome,
+    StructuredContent,
+    TextContent,
+    TokenUsage,
+)
 from harness.impl.codex.canonical import rollout
 
 ROLLOUT_NAME = re.compile(r"rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-(.+)\.jsonl$")
@@ -196,8 +211,11 @@ def _timestamp(value) -> float | None:
 def _exit_code(record: dict) -> int | None:
     """The record's exit status, honest about zero: `0` is a real exit code
     (a falsy-int coercion once turned a clean exit into outcome "failed")."""
-    value = record.get("exit")
-    return int(value) if str(value).lstrip("-").isdigit() else None
+    # Parsed from the same string the guard tests, rather than from the raw
+    # value: the two were separate expressions, so nothing connected "this
+    # renders as digits" to "this converts to an int".
+    text = str(record.get("exit"))
+    return int(text) if text.lstrip("-").isdigit() else None
 
 
 def _content(value, *, markdown: bool = False):
@@ -206,7 +224,7 @@ def _content(value, *, markdown: bool = False):
     return TextContent(str(value or ""), "text/markdown" if markdown else "text/plain")
 
 
-def _codex_tool(native_name: str, arguments) -> tuple[str, str]:
+def _codex_tool(native_name: str, arguments) -> tuple[OperationCategory, str]:
     """Map Codex transport names onto the canonical operation vocabulary."""
     if native_name == "web__run":
         try:
@@ -228,7 +246,7 @@ def _codex_tool(native_name: str, arguments) -> tuple[str, str]:
         if "time" in fields:
             return "network", "TimeLookup"
         raise TranslationError("unmapped Codex web action")
-    mapping = {
+    mapping: dict[str, tuple[OperationCategory, str]] = {
         "view_image": ("file_read", "ReadImage"),
         "image_gen__imagegen": ("media", "GenerateImage"),
         "update_plan": ("task", "UpdatePlan"),
@@ -390,7 +408,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 return TranslationResult((), "ignored_nonsemantic", "replayed session metadata")
             metadata = document.get("payload") or {}
             if raw_event.parent_actor_id is not None:
-                role = "sidecar" if raw_event.source_type == "sidecar_rollout" else "child"
+                role: ActorRole = "sidecar" if raw_event.source_type == "sidecar_rollout" else "child"
                 source = metadata.get("source") or {}
                 spawn = source.get("subagent", {}).get("thread_spawn", {}) if isinstance(source, dict) else {}
                 actor_name = str(spawn.get("agent_path") or "").rsplit("/", 1)[-1]
@@ -443,7 +461,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
             )
         if hook_name == "PreCompact":
             before_tokens = document.get("before_tokens")
-            payload = CompactionStarted(before_tokens if isinstance(before_tokens, int) else None)
+            payload: EventPayload = CompactionStarted(before_tokens if isinstance(before_tokens, int) else None)
             return [self._event(raw_event, "compaction", native_identity, "started", payload)]
         if hook_name == "PostCompact":
             before_tokens = document.get("before_tokens")
@@ -573,13 +591,18 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 ))
             return events
         if kind in ("prompt", "message", "chat"):
-            role = record.get("role") or ("user" if kind == "prompt" else "assistant")
-            if role not in ("user", "assistant", "system"):
-                role = "system"
+            # Declared, not inferred: both are read off native JSON and land in
+            # a payload that accepts a closed set. The normalisation below
+            # already rejects an unknown role — the annotation is what makes
+            # that rejection checkable instead of incidental.
+            role: MessageRole = "user" if kind == "prompt" else "assistant"
+            native_role = record.get("role")
+            if native_role in ("user", "assistant", "system"):
+                role = native_role
             synthetic = bool(record.get("synthetic"))
             if synthetic:
                 role = "system"
-            phase = "synthetic" if synthetic else None
+            phase: MessagePhase | None = "synthetic" if synthetic else None
             if kind == "prompt" and not synthetic:
                 phase = "prompt"
             elif role == "user" and phase is None:
@@ -590,15 +613,17 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 phase = "intermediate"
             message_id = MessageId(native_identity)
             content = _content(record["text"], markdown=role == "assistant")
-            payload = MessageCreated(message_id, role, content, phase, None)
-            turn_id = TurnId(record["turn"]) if record.get("turn") else None
+            payload: EventPayload = MessageCreated(message_id, role, content, phase, None)
+            # A message need not belong to a turn; the bindings above in this
+            # same function always do, so the name has to admit None here.
+            message_turn_id: TurnId | None = TurnId(record["turn"]) if record.get("turn") else None
             return [self._event(
                 raw_event,
                 "message",
                 native_identity,
                 "created",
                 payload,
-                turn_id,
+                message_turn_id,
                 occurred_at,
             )]
         if kind in ("reasoning", "think"):
@@ -606,9 +631,13 @@ class CodexCanonicalTranslator(HarnessTranslator):
             return [self._event(raw_event, "reasoning", native_identity, "created", payload, occurred_at=occurred_at)]
         if kind == "collaboration_call":
             call_id = str(record.get("call_id") or "")
+            # Fetched once and then tested: the isinstance guard and the value
+            # it guards were two separate .get() calls, so the check proved
+            # nothing about the thing actually stored.
+            call_arguments = record.get("args")
             self._collaboration_calls[(os.path.realpath(raw_event.source_name), call_id)] = (
                 str(record["name"]),
-                record.get("args") if isinstance(record.get("args"), dict) else {},
+                call_arguments if isinstance(call_arguments, dict) else {},
             )
             return []
         if kind == "actor_activity":
@@ -648,7 +677,10 @@ class CodexCanonicalTranslator(HarnessTranslator):
             raise TranslationError(f"unmapped Codex tool: {record.get('name') or '<missing>'}")
         if kind == "goal":
             native_state = str(record.get("status") or "")
-            states = {
+            # Typed so the table itself is checked: every value here has to be
+            # a state GoalChanged accepts, and a typo in one of them used to
+            # travel all the way into a stored fact.
+            states: dict[str, GoalState] = {
                 "active": "active",
                 "paused": "paused",
                 "blocked": "blocked",
@@ -721,7 +753,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
         if kind in ("exec", "tool"):
             operation_id = OperationId(record.get("call_id") or native_identity)
             if kind == "exec":
-                category = "shell"
+                category: OperationCategory = "shell"
                 name = "exec"
             else:
                 category, name = _codex_tool(record.get("name") or "", record.get("args"))
@@ -733,9 +765,14 @@ class CodexCanonicalTranslator(HarnessTranslator):
             if not process_id:
                 raise TranslationError("Codex write_stdin has no process session")
             source_key = self._source_key(raw_event)
-            operation_id = self._process_operations.get((source_key, process_id))
-            if operation_id is None:
+            # A distinct name from the `operation_id` bound elsewhere in this
+            # function: a lookup that can miss is not the same thing as an id
+            # built from the record, and sharing one binding for both made the
+            # non-optional uses depend on which branch ran.
+            known_operation_id = self._process_operations.get((source_key, process_id))
+            if known_operation_id is None:
                 raise TranslationError(f"Codex write_stdin references unknown process session: {process_id}")
+            operation_id = known_operation_id
             call_id = str(record.get("call_id") or native_identity)
             self._continuation_operations[(source_key, call_id)] = operation_id
             text = str(record.get("text") or "")
@@ -801,7 +838,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
                     payload,
                     occurred_at=occurred_at,
                 )]
-            outcome = "succeeded" if exit_code in (None, 0) else "failed"
+            outcome: Outcome = "succeeded" if exit_code in (None, 0) else "failed"
             payload = OperationFinished(operation_id, outcome, _content(record.get("output")), exit_code)
             self._finished_operations.add((source_key, operation_id))
             return [
@@ -817,9 +854,12 @@ class CodexCanonicalTranslator(HarnessTranslator):
         if kind == "command_completed":
             source_key = self._source_key(raw_event)
             process_id = str(record.get("process_id") or "")
-            operation_id = self._process_operations.get((source_key, process_id))
-            if operation_id is None or (source_key, operation_id) in self._finished_operations:
+            # Same reason as the write_stdin branch above: the lookup is
+            # optional, the id every line after it uses is not.
+            completed_operation_id = self._process_operations.get((source_key, process_id))
+            if completed_operation_id is None or (source_key, completed_operation_id) in self._finished_operations:
                 return []
+            operation_id = completed_operation_id
             exit_code = _exit_code(record)
             outcome = "succeeded" if exit_code == 0 else "failed"
             self._finished_operations.add((source_key, operation_id))
@@ -853,7 +893,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 succeeded=record.get("success", False),
             )
             finished_event = events.pop()
-            action_by_change = {
+            action_by_change: dict[str, FileAction] = {
                 "add": "created",
                 "delete": "deleted",
                 "move": "renamed",

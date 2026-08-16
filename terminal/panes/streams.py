@@ -22,7 +22,7 @@ import time
 from dataclasses import dataclass, field
 
 from terminal.panes import views as terminal_views
-from domain.ids import SessionId
+from domain.ids import ActorId, SessionId
 from engine.projections import ActivityScope, FileActivity
 from terminal.mirror.visibility import visible
 from terminal.mirror.presenter import TerminalPresenter
@@ -44,7 +44,7 @@ INITIAL_MODEL_WIDTH = 80
 
 @dataclass
 class _MirrorModel:
-    lead_actor_id: object
+    lead_actor_id: ActorId
     presenter: TerminalPresenter = field(default_factory=TerminalPresenter)
     renderer: TerminalRenderer = field(
         default_factory=lambda: TerminalRenderer(

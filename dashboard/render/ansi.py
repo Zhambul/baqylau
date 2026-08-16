@@ -187,7 +187,9 @@ def ansi_html(value, action_link: AnsiActionLink | None = None):
     first, so unknown escapes never reach the escape step as invisible control
     bytes."""
     value = _neutralize(value or "")
-    output, style_state, active_link = [], {}, None
+    output: list[str] = []
+    style_state: dict[str, object] = {}   # fg/bg -> (r,g,b); bold/dim/... -> bool
+    active_link: str | None = None
     position = 0
 
     def flush(text):
@@ -209,9 +211,11 @@ def ansi_html(value, action_link: AnsiActionLink | None = None):
             output.append("</a>")
             active_link = None
         if url:
-            action_prefix = f"{action_link.scheme}:" if action_link is not None else None
-            if action_prefix is not None and url.startswith(action_prefix):
-                action_value = url[len(action_prefix):].strip("/")
+            # Tested on action_link itself rather than on a derived prefix
+            # string: the two branches below dereference action_link, and only
+            # this form says why that is safe.
+            if action_link is not None and url.startswith(f"{action_link.scheme}:"):
+                action_value = url[len(action_link.scheme) + 1:].strip("/")
                 output.append(
                     "<a class=\"%s\" %s=\"%s\">"
                     % (

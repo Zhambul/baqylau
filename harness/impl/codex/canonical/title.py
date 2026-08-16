@@ -25,6 +25,7 @@ import glob
 import os
 import re
 import sqlite3
+from harness.impl.codex.canonical import rollout as RO
 
 _CODEX_DIR = os.path.join(os.path.expanduser("~"), ".codex")
 _UUID = re.compile(r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
@@ -32,7 +33,7 @@ _UUID = re.compile(r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
 TITLE_HEAD_LINES = 200   # rollout head lines the first-prompt fallback scans
 
 
-_STATE_DB = {}          # _CODEX_DIR -> (deadline, resolved path)
+_STATE_DB: dict[str, tuple[float, str | None]] = {}   # _CODEX_DIR -> (deadline, resolved path)
 STATE_DB_TTL_S = 60.0   # how long a resolved index path is trusted (see below)
 
 
@@ -65,7 +66,6 @@ def renameable(path):
     standalone codex host's window carries the same `claude_session` tag as a
     Claude one, so this is what keeps a Claude `/rename` off it and vice-versa.
     Behind plugins.renameable."""
-    from harness.impl.codex.canonical import rollout as RO
     return bool(RO.owns(path))
 
 

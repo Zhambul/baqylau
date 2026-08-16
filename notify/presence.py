@@ -28,7 +28,7 @@ from dashboard import prefs
 # beat cadence is derived from this, so the knob must reach the browser — a
 # matching literal there silently broke suppression whenever this was lowered.
 VIEW_LIFETIME_SECONDS = EV.env_float("BAQYLAU_DASHBOARD_VIEW_LIFETIME_SECONDS", 20)
-_VIEWING = {}                      # session_id -> monotonic deadline (last beat + TTL)
+_VIEWING: dict[str, float] = {}    # session_id -> monotonic deadline (last beat + TTL)
 
 
 def mark_viewing(session_id):
@@ -107,7 +107,7 @@ _DEVICE_SEEN = RecentDevices()   # device_id -> monotonic last-seen
 # because those two answer different questions: "are you here now"
 # (`device_active`) and "where were you last" (`route`). Going away must end the
 # first without touching the second.
-_AWAY = set()
+_AWAY: set[str] = set()
 
 # The reserved device id the TERMINAL is stamped under. A browser's DEVICE_ID is
 # a random base36 string, so a collision needs a client to CLAIM this name —

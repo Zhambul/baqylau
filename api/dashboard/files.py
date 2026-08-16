@@ -10,7 +10,7 @@ import os
 import re
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 
 from api.config import IMAGE_MIMES
@@ -77,7 +77,11 @@ def upload(body: UploadRequest) -> UploadResponse:
         A.state_file("", "", "web-upload",
                      {"session_id": session_id, "name": safe_name,
                       "bytes": len(file_bytes), "ok": False})
-        return JSONResponse({"error": "could not store upload"}, 500)
+        # Raised, not returned: this route is declared to answer with an
+        # UploadResponse, and every other rejection in it raises. _http_error
+        # renders an HTTPException as the same {"error": ...} body at the same
+        # status, so the wire response is unchanged.
+        raise HTTPException(500, "could not store upload") from error
     A.state_file("", "", "web-upload",
                  {"session_id": session_id, "name": safe_name,
                   "bytes": len(file_bytes), "mime": body.mime, "ok": True})

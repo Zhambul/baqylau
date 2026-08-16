@@ -22,17 +22,19 @@ from harness.models import (
     canonical_event,
 )
 from domain.events import (
+    ActorAssignmentFinished,
+    ActorAssignmentStarted,
+    ActorMessageSent,
     ActorNameChanged,
     ActorStarted,
     AttentionRequested,
     AttentionResolved,
     CanonicalEvent,
-    ActorAssignmentFinished,
-    ActorAssignmentStarted,
     CompactionFinished,
     CompactionStarted,
     ContextReported,
     EffortChanged,
+    EventPayload,
     FileAccessed,
     GoalChanged,
     MessageCreated,
@@ -41,7 +43,6 @@ from domain.events import (
     OperationOutputFinished,
     OperationProgressed,
     OperationStarted,
-    ActorMessageSent,
     ReasoningCreated,
     SessionAccountChanged,
     SessionFinished,
@@ -63,12 +64,23 @@ from domain.ids import (
 )
 from domain.values import (
     AccountReference,
+    ActorRole,
     AttentionAnswer,
     AttentionChoice,
+    AttentionDecision,
     AttentionPrompt,
+    AttentionType,
+    ExecutionMode,
+    FileAction,
+    MessagePhase,
+    MessageRole,
     ModelReference,
+    OperationCategory,
+    Outcome,
+    ProgressStream,
     StructuredContent,
     TextContent,
+    TitleOrigin,
     TokenUsage,
 )
 from harness.impl.claude_code import model
@@ -258,7 +270,7 @@ def _content(value, *, markdown: bool = False):
     return TextContent(str(value or ""), "text/markdown" if markdown else "text/plain")
 
 
-def _tool_category(native_name: str) -> str:
+def _tool_category(native_name: str) -> OperationCategory:
     if native_name in ("Bash", "Monitor", "exec_command", "read_command", "py", "mcp__node_repl__js"):
         return "shell"
     if native_name == "Read":
@@ -361,7 +373,7 @@ def _attention_answers(arguments: dict) -> tuple[AttentionAnswer, ...]:
     return tuple(answers)
 
 
-def _plan_resolution(native: dict, failed: bool) -> tuple[str, str | None, bool]:
+def _plan_resolution(native: dict, failed: bool) -> tuple[AttentionDecision, str | None, bool]:
     response = native.get("tool_response") or native.get("tool_result")
     if not failed:
         edited = bool(isinstance(response, dict) and response.get("planWasEdited"))
@@ -380,7 +392,22 @@ def _plan_resolution(native: dict, failed: bool) -> tuple[str, str | None, bool]
 QUESTION_DISCUSSION_MARKER = "wants to clarify these questions"
 
 
-def _question_resolution(response: object, failed: bool) -> str:
+def _progress_stream(value: object) -> ProgressStream:
+    """The foreground stream name off the wire, as one of the three we record.
+
+    Anything unrecognised reads as output — a progress chunk is evidence, and
+    dropping it because its channel label was unfamiliar would lose the chunk
+    rather than the label.
+    """
+    text = str(value or "output")
+    if text == "error":
+        return "error"
+    if text == "status":
+        return "status"
+    return "output"
+
+
+def _question_resolution(response: object, failed: bool) -> AttentionDecision:
     if not failed:
         return "answered"
     text = response if isinstance(response, str) else json.dumps(response or {}, ensure_ascii=False)
@@ -468,7 +495,7 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
             progress = OperationProgressed(
                 operation_id,
                 ordinal,
-                str(document.get("stream") or "output"),
+                _progress_stream(document.get("stream")),
                 _content(content.decode("utf-8", errors="replace")),
                 "append",
             )
@@ -553,15 +580,17 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
         occurred_at = _timestamp(document.get("timestamp"))
         if kind == "prompt":
             synthetic = bool(record.get("meta"))
-            phase = "synthetic" if synthetic else "prompt"
-            role = (
+            phase: MessagePhase = "synthetic" if synthetic else "prompt"
+            role: MessageRole = (
                 "system"
                 if synthetic
                 else "parent"
                 if raw_event.parent_actor_id is not None
                 else "user"
             )
-            payload = MessageCreated(MessageId(native_identity), role, _content(record["text"]), phase, None)
+            payload: EventPayload = MessageCreated(
+                MessageId(native_identity), role, _content(record["text"]), phase, None
+            )
             return [self._event(raw_event, "message", native_identity, "created", payload, occurred_at=occurred_at)]
         if kind == "slash_command":
             return self._slash_command(raw_event, record, native_identity, occurred_at)
@@ -587,7 +616,7 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
         if kind == "actor_assignment_finished":
             assignment_id = AssignmentId(record["assignment_id"])
             status = record["status"]
-            outcome = "failed" if status == "failed" else "cancelled" if status == "cancelled" else "succeeded"
+            outcome: Outcome = "failed" if status == "failed" else "cancelled" if status == "cancelled" else "succeeded"
             result = record.get("result")
             payload = ActorAssignmentFinished(
                 assignment_id,
@@ -822,7 +851,7 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
         A bare `/model` (no argument) opens the picker and settles nothing, and a
         multi-token argument is not a selection, so neither emits a state event.
         """
-        role = "parent" if raw_event.parent_actor_id is not None else "user"
+        role: MessageRole = "parent" if raw_event.parent_actor_id is not None else "user"
         events = [
             self._event(
                 raw_event,
@@ -838,7 +867,7 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
         if not selection or len(selection.split()) != 1:
             return events
         if name == "model":
-            payload = ModelChanged(None, _model_reference(selection), "selected")
+            payload: EventPayload = ModelChanged(None, _model_reference(selection), "selected")
         elif name == "effort":
             payload = EffortChanged(None, selection, "selected")
         else:
@@ -854,7 +883,7 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
         record_type = document.get("type")
         if record_type == "agent-name":
             title = str(document.get("agentName") or "").strip()
-            origin = "custom"
+            origin: TitleOrigin = "custom"
         elif record_type == "ai-title":
             title = str(document.get("aiTitle") or "").strip()
             origin = "automatic"
@@ -881,7 +910,7 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
         if hook_name == "SessionStart":
             return self._session_events(raw_event, document)
         if hook_name == "SessionEnd":
-            payload = SessionFinished("succeeded", document.get("reason") or None)
+            payload: EventPayload = SessionFinished("succeeded", document.get("reason") or None)
             return [self._event(raw_event, "session", str(raw_event.session_id), "finished", payload)]
         if hook_name == "Stop":
             payload = TurnFinished(None, "succeeded")
@@ -907,7 +936,7 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
             return self._tool_finished(raw_event, document, hook_name == "PostToolUseFailure")
         if hook_name == "SubagentStart":
             actor_id = raw_event.actor_id
-            role = "teammate" if raw_event.source_type == "teammate_hook" else "child"
+            role: ActorRole = "teammate" if raw_event.source_type == "teammate_hook" else "child"
             events = [
                 self._event(
                     raw_event,
@@ -1115,7 +1144,7 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
         arguments = native.get("tool_input") if "tool_input" in native else native.get("input")
         arguments = arguments if isinstance(arguments, dict) else {}
         if native_name == "Monitor":
-            execution = "monitor"
+            execution: ExecutionMode = "monitor"
         elif native_name == "Bash" and arguments.get("run_in_background"):
             execution = "background"
         else:
@@ -1152,7 +1181,7 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
         )
         if native_name in ("Task", "Agent") and not async_launched:
             assignment_id = AssignmentId(str(operation_id))
-            payload = ActorAssignmentFinished(
+            payload: EventPayload = ActorAssignmentFinished(
                 assignment_id,
                 "failed" if failed else "succeeded",
                 None,
@@ -1223,7 +1252,7 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
             assignment_id = AssignmentId(str(operation_id))
             actor_name = arguments.get("name") or arguments.get("subagent_type")
             prompt = arguments.get("prompt")
-            payload = ActorAssignmentStarted(
+            payload: EventPayload = ActorAssignmentStarted(
                 assignment_id,
                 _content(arguments.get("description") or prompt or ""),
                 actor_name=str(actor_name) if actor_name else None,
@@ -1248,7 +1277,7 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
             self._attention_tool_ids[str(operation_id)] = native_name
             attention_id = AttentionId(str(operation_id))
             prompts = self._attention_prompts(native_name, arguments)
-            attention_type = "question" if native_name == "AskUserQuestion" else "plan"
+            attention_type: AttentionType = "question" if native_name == "AskUserQuestion" else "plan"
             payload = AttentionRequested(attention_id, attention_type, prompts, operation_id)
             events.append(self._event(raw_event, "attention", str(attention_id), "requested", payload))
         return events
@@ -1261,7 +1290,7 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
         arguments: dict,
         tool_response: dict | None,
     ) -> list[CanonicalEvent]:
-        action_by_tool = {
+        action_by_tool: dict[str, FileAction] = {
             "Read": "read",
             "Write": "created",
             "Edit": "updated",

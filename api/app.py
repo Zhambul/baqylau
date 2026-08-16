@@ -122,8 +122,13 @@ def build_web_application(graph: CanonicalApplication) -> FastAPI:
             media_type="application/yaml",
         )
 
-    web.add_exception_handler(StarletteHTTPException, _http_error)
-    web.add_exception_handler(RequestValidationError, _validation_error)
+    # Starlette types the handler argument as taking a bare Exception, but it
+    # dispatches on the class registered alongside it — a handler for
+    # StarletteHTTPException is only ever CALLED with one. Narrowing the
+    # parameter is correct and unrepresentable in that signature; the handlers
+    # below take Exception itself and so need no ignore.
+    web.add_exception_handler(StarletteHTTPException, _http_error)  # type: ignore[arg-type]
+    web.add_exception_handler(RequestValidationError, _validation_error)  # type: ignore[arg-type]
     web.add_exception_handler(KeyError, _application_input_error)
     web.add_exception_handler(ValueError, _application_input_error)
     web.add_exception_handler(TypeError, _application_input_error)

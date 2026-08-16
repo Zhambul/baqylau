@@ -90,12 +90,12 @@ def _submission_marker(text) -> str:
 def _submission_pending(fe, win, marker) -> bool:
     """Is the message still sitting in the input box? Unreadable = assume sent."""
     try:
-        from harness.impl.claude_code.probe import ClaudeCodeTerminalProbe
+        from harness.impl.claude_code.probe import ClaudeCodeTerminalProbe  # noqa: PLC0415 — probe is optional; unreadable means assume sent
 
         state = ClaudeCodeTerminalProbe().input_state(fe.terminal, str(win))
     except Exception:
         try:
-            from diagnostics import record
+            from diagnostics import record  # noqa: PLC0415 — audit fallback inside the failure path
 
             record.error("", "type_command (submit verification)", {"window": str(win)})
         except Exception:

@@ -7,6 +7,8 @@ import json
 
 from dashboard.render.items.item import (
     DashboardItem,
+    ItemState,
+    SummaryKind,
     block_html,
     content_reference,
     outcome_attribute,
@@ -21,7 +23,7 @@ def operation_text(activity: OperationActivity) -> str:
     return activity.output_text() or plain_text(activity.arguments)
 
 
-def operation_summary_kind(activity: OperationActivity) -> str:
+def operation_summary_kind(activity: OperationActivity) -> SummaryKind:
     if activity.execution in ("background", "monitor"):
         return activity.execution
     if activity.category == "message":
@@ -54,6 +56,7 @@ def operation_html(activity: OperationActivity, text: str, state: str | None) ->
             finished_at=activity.context.finished_at,
             note=True,
         )
+    argument_summary: str | None
     if isinstance(activity.arguments, StructuredContent):
         argument_summary = json.dumps(
             json.loads(activity.arguments.json_text),
@@ -92,7 +95,7 @@ def operation_html(activity: OperationActivity, text: str, state: str | None) ->
 def present_operation(activity: OperationActivity) -> DashboardItem:
     actor_id = activity.context.actor_id
     text = operation_text(activity)
-    state = None
+    state: ItemState | None = None
     if activity.state == "running":
         state = "running"
     elif activity.outcome in ("succeeded", "failed", "cancelled"):

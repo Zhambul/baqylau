@@ -33,6 +33,7 @@
 import os
 
 from diagnostics import record as A
+from urllib.parse import unquote, urlparse
 
 ENV_FILES = "BAQYLAU_DASHBOARD_CLIPBOARD_FILES"
 FILES_MAX = 20          # a sane multi-select ceiling; a runaway pasteboard
@@ -56,7 +57,7 @@ def _from_pasteboard():
     module on every request path and must not pay (or crash on) an AppKit load
     it may never need. AppKit ships with the system python3 on macOS; anywhere
     else the ImportError is the caller's "no clipboard" answer."""
-    from AppKit import NSPasteboard
+    from AppKit import NSPasteboard  # noqa: PLC0415 — optional macOS-only dep; ImportError IS the answer
     pb = NSPasteboard.generalPasteboard()
     if pb is None:
         return []
@@ -67,7 +68,6 @@ def _from_pasteboard():
         return [str(p) for p in plist]
     url = pb.stringForType_(URL_TYPE)
     if url:
-        from urllib.parse import unquote, urlparse
         u = urlparse(str(url).rstrip("\x00"))
         if u.scheme == "file" and u.path:
             return [unquote(u.path)]

@@ -109,7 +109,10 @@ def _rollout_abort_state(path: str, position: int) -> tuple[bool, bool]:
     except OSError:
         return False, False
     abort_index = None
-    records = []
+    # None marks a line that would not parse. The slot is KEPT rather than
+    # skipped because abort_index is an index into this list, and dropping
+    # unparseable lines would silently shift every position after one.
+    records: list[dict | None] = []
     for line in lines:
         try:
             document = json.loads(line)

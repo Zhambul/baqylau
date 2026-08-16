@@ -137,7 +137,12 @@ def highlighted_lines(command: str) -> tuple[tuple[TerminalText, ...], ...]:
             if value == "\n":
                 continue
             stripped = value.strip()
-            command = False
+            # `is_command`, not `command`: this flag used to reuse the name of
+            # the str parameter above it. It worked only because the outer
+            # loop's iterable — format_command(command) — is evaluated once,
+            # before the first rebind; anything later in the function that
+            # reached for the command TEXT would have found a bool instead.
+            is_command = False
             if stripped:
                 if stripped in SEPARATORS:
                     expects_command = True
@@ -146,11 +151,11 @@ def highlighted_lines(command: str) -> tuple[tuple[TerminalText, ...], ...]:
                 elif expects_command and COMMAND_WORD.fullmatch(stripped):
                     following = "".join(part for _, part in raw_tokens[token_index + 1:]).lstrip()
                     if not following.startswith("="):
-                        command = True
+                        is_command = True
                         expects_command = False
                 else:
                     expects_command = False
-            rendered.append(TerminalText(value, TerminalStyle(_color(token_type, command))))
+            rendered.append(TerminalText(value, TerminalStyle(_color(token_type, is_command))))
         lines.append(tuple(rendered))
     return tuple(lines)
 
