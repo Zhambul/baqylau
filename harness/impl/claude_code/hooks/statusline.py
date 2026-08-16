@@ -26,7 +26,7 @@ from pathlib import Path
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
 
-from core import audit as A
+from diagnostics import record as A
 from harness.impl.claude_code import account as ACC
 from harness.impl.claude_code.usage import state
 

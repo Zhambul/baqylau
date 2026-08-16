@@ -18,7 +18,7 @@ import uvicorn
 from api import config
 from api.app import build_web_application
 from app.bootstrap import build_default_application
-from core import audit as A
+from diagnostics import record as A
 from core import locks
 from core.wire import HOST_ADDRESS, PORT_NUMBER
 from dashboard import paths

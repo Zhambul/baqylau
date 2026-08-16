@@ -12,7 +12,7 @@ from api.dashboard.models.telemetry.optimistic_action_request import (
 )
 from api.dependencies import ApplicationGraph
 from api.guard import control_plane
-from app.telemetry import (
+from diagnostics.telemetry import (
     BrowserEvent,
     BrowserEventBatch,
     ClientFailureReport,

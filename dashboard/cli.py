@@ -23,7 +23,7 @@ import sys
 import time
 
 from core import locks
-from core import audit
+from diagnostics import record
 from core.process import process_is_alive
 from dashboard import paths
 
@@ -64,10 +64,10 @@ def start():
             start_new_session=True,
         )
     except OSError:
-        audit.error("", "spawn web dashboard", {"path": entry})
+        record.error("", "spawn web dashboard", {"path": entry})
         print("dashboard failed to spawn (see audit errors)", file=sys.stderr)
         return 1
-    audit.spawn("", process.pid, [entry, "serve"], purpose="web dashboard")
+    record.spawn("", process.pid, [entry, "serve"], purpose="web dashboard")
     for _ in range(40):                     # ~2s for the lock/port to land
         if holder():
             break

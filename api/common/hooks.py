@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from api.guard import control_plane
 from harness.hooks.gateway import UnknownHookHarness
 from harness.models import HarnessHookRequest
-from core import audit as A
+from diagnostics import record as A
 from harness.hooks.wire import (
     ACCOUNT_ID_HEADER,
     ACCOUNT_NAME_HEADER,

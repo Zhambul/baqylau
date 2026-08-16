@@ -32,7 +32,7 @@
 # testable at all off macOS).
 import os
 
-from core import audit as A
+from diagnostics import record as A
 
 ENV_FILES = "BAQYLAU_DASHBOARD_CLIPBOARD_FILES"
 FILES_MAX = 20          # a sane multi-select ceiling; a runaway pasteboard

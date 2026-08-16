@@ -25,7 +25,7 @@ from api.dashboard import streams as dashboard_streams
 from api.terminal import panes, views
 from api.terminal import streams as terminal_streams
 from app.bootstrap import CanonicalApplication
-from core import audit as A
+from diagnostics import record as A
 
 # Starlette's stock message for an unrouted path; the wire contract has always
 # said {"error": "not found"} in this server's own casing.

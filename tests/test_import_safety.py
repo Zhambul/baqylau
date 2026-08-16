@@ -95,14 +95,22 @@ if loaded:
 
 
 def test_audit_write_path_does_not_import_its_report_tier():
+    """A writer records diagnostics; it never reads them back.
+
+    `diagnostics/read.py` is the daemon's tier — typed queries the dashboard
+    renders. Every writer outside the daemon is a process that lives for
+    milliseconds, so importing the reader buys it a sqlite tier it cannot use.
+    (The daemon itself, `api.server`, legitimately holds both halves.)
+    """
     program = """
 import importlib
 import sys
 importlib.import_module(sys.argv[1])
-if 'core.auditcli' in sys.modules:
-    raise SystemExit('core.auditcli loaded')
+if 'diagnostics.read' in sys.modules:
+    raise SystemExit('diagnostics.read loaded')
 """
-    for module in ("core.audit", *CANONICAL_MODULES):
+    writers = tuple(module for module in CANONICAL_MODULES if module != "api.server")
+    for module in ("diagnostics.record", *writers):
         result = subprocess.run(
             [sys.executable, "-c", program, module],
             cwd=REPOSITORY_ROOT,

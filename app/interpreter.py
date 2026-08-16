@@ -29,9 +29,9 @@ def _audit_failure(where: str, context: dict) -> None:
     broken auditor can never take down the interpreter it exists to explain.
     """
     try:
-        from core import audit
+        from diagnostics import record
 
-        audit.error(str(context.get("session_id", "")), f"interpreter ({where})", context)
+        record.error(str(context.get("session_id", "")), f"interpreter ({where})", context)
     except Exception:
         pass
 

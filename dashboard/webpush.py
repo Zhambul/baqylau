@@ -26,7 +26,7 @@ import urllib.error
 import urllib.request
 from urllib.parse import urlparse
 
-from core import audit as A
+from diagnostics import record as A
 
 from . import prefs
 

@@ -22,7 +22,7 @@
 import threading
 from urllib.parse import quote
 
-from core import audit as A
+from diagnostics import record as A
 from dashboard import config, prefs, telegram, webpush
 
 

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
-from app.diagnostics import OperationalDiagnostics
+from diagnostics.read import OperationalDiagnostics
 from app.repository import RepositoryQueries
 from harness.models import TerminalSessionState
 from domain.ids import SessionId

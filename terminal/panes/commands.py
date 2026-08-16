@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from core import audit
+from diagnostics import record
 from terminal.panes import preferences as pane_preferences
 from terminal.adapter import TerminalAdapter
 
@@ -49,7 +49,7 @@ class PaneCommandService:
             if session_id is None
             else self._execute(command, session_id, working_directory, columns, percent)
         )
-        audit.state_file(
+        record.state_file(
             "",
             working_directory,
             "pane-command",

@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass
 from typing import Protocol
 
-from core import audit as AUDIT
+from diagnostics import record as AUDIT
 from dashboard import config, prefs
 from dashboard.activity import DashboardSessionService
 from dashboard.application import DashboardNotificationState

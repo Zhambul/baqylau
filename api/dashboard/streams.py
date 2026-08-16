@@ -25,7 +25,7 @@ from api.sse import (
     sse_frame,
     stable_snapshot,
 )
-from core import audit as A
+from diagnostics import record as A
 from dashboard.activity import to_wire
 from domain.ids import SessionId
 from engine.projections import ActivityScope

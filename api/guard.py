@@ -16,7 +16,7 @@
 # preflight is part of the defense.
 from fastapi import HTTPException, Request
 
-from core import audit as A
+from diagnostics import record as A
 from core.wire import POST_HEADER, POST_MAX
 from api import config
 

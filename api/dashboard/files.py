@@ -23,7 +23,7 @@ from api.dashboard.models.files.dictation_token_request import DictationTokenReq
 from api.dashboard.models.files.upload_request import UploadRequest
 from api.dashboard.models.files.upload_response import UploadResponse
 from api.guard import control_plane, reject_input, valid_session_id
-from core import audit as A
+from diagnostics import record as A
 from core.wire import UPLOAD_MAX
 from dashboard import clipboard, dictate, paths
 

@@ -1519,7 +1519,7 @@ def test_hook_client_never_fails_its_harness_and_audits_every_swallow(monkeypatc
     monkeypatch.setattr("harness.hooks.client.nearest_ancestor_named", lambda name: None)
     audited = []
     monkeypatch.setattr(
-        "core.audit.error",
+        "diagnostics.record.error",
         lambda log, func, context=None: audited.append(func),
     )
     monkeypatch.setattr(

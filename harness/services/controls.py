@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 
-from core import audit
+from diagnostics import record
 from harness.contract import HarnessReactorContext
 from harness.models import (
     ControlContext,
@@ -42,7 +42,7 @@ from terminal.contract import TerminalPlugin
 # "no audit at all".
 def _audit_control(request: ControlRequest, outcome, elapsed: float) -> None:
     try:
-        audit.state_file(
+        record.state_file(
             str(request.session_id),
             "",
             "control",

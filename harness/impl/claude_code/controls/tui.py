@@ -95,9 +95,9 @@ def _submission_pending(fe, win, marker) -> bool:
         state = ClaudeCodeTerminalProbe().input_state(fe.terminal, str(win))
     except Exception:
         try:
-            from core import audit
+            from diagnostics import record
 
-            audit.error("", "type_command (submit verification)", {"window": str(win)})
+            record.error("", "type_command (submit verification)", {"window": str(win)})
         except Exception:
             pass
         return False

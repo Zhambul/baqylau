@@ -13,7 +13,7 @@ from harness.models import LIVENESS_SOURCE_TYPE, OUTPUT_LOCATION_SOURCE_TYPE
 from core.data import data_directory
 from app.content import CanonicalContentService
 from app.core_translators import LivenessTranslator, OperationOutputTranslator
-from app.diagnostics import OperationalDiagnostics
+from diagnostics.read import OperationalDiagnostics
 from harness.hooks.gateway import HookGatewayService
 from app.insights import ApplicationInsightsService
 from app.interpreter import Interpreter
@@ -27,7 +27,7 @@ from app.reactions import (
 from terminal.panes.reaction import PaneCanonicalEventReaction
 from app.repository import RepositoryQueries
 from app.resume import ResumableSessionService
-from app.telemetry import BrowserTelemetryService
+from diagnostics.telemetry import BrowserTelemetryService
 from harness.services.catalog import HarnessCatalogService
 from harness.services.controls import HarnessControlService
 from harness.services.launcher import HarnessLauncherService
@@ -136,9 +136,9 @@ def build_application(
         OperationOutputCanonicalEventReaction(operation_output, recorder),
         PaneCanonicalEventReaction(terminal, sessions),
     )
-    from core import audit
+    from diagnostics import record
 
-    browser_telemetry = BrowserTelemetryService(audit)
+    browser_telemetry = BrowserTelemetryService(record)
     return CanonicalApplication(
         canonical_store=canonical_store,
         registry=registry,
@@ -211,6 +211,6 @@ def build_application(
 
 
 def build_default_application() -> CanonicalApplication:
-    from core.audit import db_path as diagnostic_database_path
+    from diagnostics.database import db_path as diagnostic_database_path
 
     return build_application(default_data_directory(), diagnostic_database_path())

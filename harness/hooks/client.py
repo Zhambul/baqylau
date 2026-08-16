@@ -79,9 +79,9 @@ def run(
     except Exception:
         # Daemon down or refused: the delivery is lost; the audit row is the trace.
         try:
-            from core import audit
+            from diagnostics import record
 
-            audit.error("", f"{harness} hook (deliver)", {"payload_bytes": len(payload)})
+            record.error("", f"{harness} hook (deliver)", {"payload_bytes": len(payload)})
         except Exception:
             pass
         output = b""

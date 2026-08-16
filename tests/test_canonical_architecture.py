@@ -33,7 +33,7 @@ def assert_imports(package: str, allowed_roots: set[str], allowed_modules: set[s
     bad = []
     for path, imported in imports_under(package):
         root = imported.split(".", 1)[0]
-        if root in {"api", "app", "core", "dashboard", "domain", "harness", "engine", "terminal"}:
+        if root in {"api", "app", "core", "dashboard", "diagnostics", "domain", "harness", "engine", "terminal"}:
             if root in allowed_roots:
                 continue
             if any(imported == module or imported.startswith(module + ".") for module in allowed_modules):
@@ -64,7 +64,7 @@ def test_the_harness_contract_and_models_import_only_domain_and_the_terminal_con
                 continue
             if any(imported == module or imported.startswith(module + ".") for module in allowed_modules):
                 continue
-            if root in {"api", "app", "core", "dashboard", "engine", "terminal"}:
+            if root in {"api", "app", "core", "dashboard", "diagnostics", "engine", "terminal"}:
                 bad.append(f"{path.relative_to(ROOT)} imports {imported}")
     assert bad == []
 
@@ -79,7 +79,7 @@ def test_the_harness_implementations_never_import_the_application():
     """
     assert_imports(
         "harness",
-        {"core", "domain", "harness"},
+        {"core", "diagnostics", "domain", "harness"},
         allowed_modules={
             # the terminal a control context is handed, and the two session-level
             # services the application tier drives it through
@@ -121,7 +121,7 @@ def test_only_bootstrap_and_the_self_identifying_clients_resolve_a_terminal():
     """
     allowed = {"app/bootstrap.py", "harness/hooks/client.py", "terminal/panes/client.py"}
     importers = set()
-    for package in ("api", "app", "core", "dashboard", "domain", "harness", "engine", "terminal"):
+    for package in ("api", "app", "core", "dashboard", "diagnostics", "domain", "harness", "engine", "terminal"):
         for path, imported in imports_under(package):
             relative = path.relative_to(ROOT).as_posix()
             if relative.startswith("terminal/impl/"):
@@ -141,7 +141,7 @@ def test_no_terminal_is_named_outside_its_own_implementation():
     """
     concrete_words = ("kitty", "kitten")
     scanned = [
-        ROOT / "api", ROOT / "app", ROOT / "core", ROOT / "dashboard",
+        ROOT / "api", ROOT / "app", ROOT / "core", ROOT / "dashboard", ROOT / "diagnostics",
         ROOT / "domain", ROOT / "harness", ROOT / "engine", ROOT / "terminal",
     ]
     implementation = ROOT / "terminal" / "impl" / "kitty"
@@ -171,6 +171,22 @@ def test_runtime_imports_only_domain_and_the_harness_contract():
     )
 
 
+def test_the_diagnostic_write_tier_is_a_floor_and_the_read_tier_is_the_daemons():
+    """Everything writes diagnostics; only the daemon reads them back.
+
+    `diagnostics/record.py` is reached from hook processes, pane renderers and
+    the daemon alike — a floor, like `core/`. `diagnostics/read.py` opens the
+    database read-only to answer the dashboard, so a writer that imports it has
+    either grown a reporting job or paid for a tier it never uses.
+    """
+    readers = set()
+    for package in ("api", "app", "core", "dashboard", "domain", "engine", "harness", "terminal"):
+        for path, imported in imports_under(package):
+            if imported == "diagnostics.read" or imported.startswith("diagnostics.read."):
+                readers.add(path.relative_to(ROOT).as_posix())
+    assert readers == {"app/bootstrap.py", "app/insights.py", "dashboard/application.py"}
+
+
 def test_presenters_do_not_import_plugins_or_each_other():
     # No `harness` package root: the dependency runs the other way (the harness
     # contract names the terminal one), and a package-level cycle would be the
@@ -178,7 +194,7 @@ def test_presenters_do_not_import_plugins_or_each_other():
     # CONTRACT — a pane reacts to canonical facts — and nothing concrete.
     assert_imports(
         "terminal",
-        {"core", "domain", "engine", "terminal"},
+        {"core", "diagnostics", "domain", "engine", "terminal"},
         allowed_modules={"harness.contract", "harness.models"},
     )
     presentation_files = {
@@ -356,7 +372,7 @@ def test_no_read_path_orders_on_a_bare_occurred_at():
     column sorts those events arbitrarily, which silently reorders a conversation.
     """
     violations = []
-    for directory in ("app", "engine", "dashboard", "terminal", "core", "harness"):
+    for directory in ("app", "engine", "dashboard", "terminal", "core", "harness", "diagnostics"):
         for path in sorted((ROOT / directory).rglob("*.py")):
             for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
                 if "occurred_at" not in line:
@@ -452,7 +468,7 @@ def test_the_application_graph_is_built_only_by_the_daemon():
         "api/server.py",
     }
     violations = []
-    for directory in ("api", "app", "bin", "core", "dashboard", "harness", "engine", "terminal"):
+    for directory in ("api", "app", "bin", "core", "dashboard", "diagnostics", "harness", "engine", "terminal"):
         for path in sorted((ROOT / directory).rglob("*.py")):
             if "__pycache__" in path.parts:
                 continue
@@ -627,7 +643,7 @@ if loaded:
 # `recognized_session` where HarnessLifecycle.apply says `session`, so a keyword
 # call would have worked on one harness and raised on the other.
 
-SOURCE_PACKAGES = ("app", "core", "dashboard", "domain", "harness",
+SOURCE_PACKAGES = ("app", "core", "dashboard", "diagnostics", "domain", "harness",
                    "engine", "terminal")
 
 # Structural implementers that must NOT declare their Protocol, with the reason.

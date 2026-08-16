@@ -15,7 +15,7 @@ from api.app import build_web_application
 from api.dashboard.models.controls.send_text_request import SendTextRequest
 from api.server import build_server
 from app.bootstrap import build_application
-from app.telemetry import BrowserTelemetryService
+from diagnostics.telemetry import BrowserTelemetryService
 from harness.models import RawEvent, Session, TranslationResult
 from dashboard import prefs
 from dashboard.application import (
@@ -819,7 +819,7 @@ def _audited_control(monkeypatch, outcome):
 
     rows = []
     monkeypatch.setattr(
-        services.audit,
+        services.record,
         "state_file",
         lambda log, path, action, content: rows.append((log, action, content)),
     )
@@ -885,7 +885,7 @@ def test_a_broken_audit_never_takes_down_the_gesture(monkeypatch):
     def explode(*_args, **_kwargs):
         raise sqlite3.OperationalError("database is locked")
 
-    monkeypatch.setattr(services.audit, "state_file", explode)
+    monkeypatch.setattr(services.record, "state_file", explode)
     service = object.__new__(services.HarnessControlService)
     monkeypatch.setattr(
         service, "_execute", lambda r: ControlResult(r.request_id, "acknowledged")

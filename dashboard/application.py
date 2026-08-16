@@ -7,7 +7,7 @@ import threading
 from dataclasses import dataclass
 from typing import Protocol
 
-from app.diagnostics import ApplicationError, OperationalDiagnostics
+from diagnostics.read import ApplicationError, OperationalDiagnostics
 from dashboard import prefs
 from harness.models import TerminalSessionState, UsageRow
 from domain.events import MessageCreated

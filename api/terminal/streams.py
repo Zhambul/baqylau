@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from api.sse import BEAT, EVENT_STREAM, NO_STORE, STREAM_POLL_SECONDS, sse_frame
 from api.dependencies import ApplicationGraph
-from core import audit as A
+from diagnostics import record as A
 from domain.ids import SessionId
 
 router = APIRouter()
