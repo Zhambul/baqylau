@@ -59,6 +59,7 @@ class TabRequest:
     working_directory: str
     command: tuple[str, ...]
     title: str
+    environment: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)

@@ -146,6 +146,7 @@ class HarnessLauncherService:
                 working_directory=request.working_directory,
                 command=(plan.command, *plan.arguments),
                 title=plan.title,
+                environment=plan.environment,
             )
         )
         if not terminal_result.succeeded:

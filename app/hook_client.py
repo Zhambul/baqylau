@@ -1,9 +1,10 @@
 """The hook process body: ship one delivery to the daemon, print its reply.
 
 A hook is a THIN CLIENT of the daemon's hook-delivery endpoint — it reads its
-stdin, POSTs the exact bytes plus four flat header values only it can observe
+stdin, POSTs the exact bytes plus a few flat header values only it can observe
 (its terminal window, the CLI pid in its own ancestry, the shell-selected
-account), and prints whatever reply comes back. There is deliberately NO direct
+account, the launch-time selections in its inherited environment), and prints
+whatever reply comes back. There is deliberately NO direct
 store write and NO daemon boot: the daemon is started by you, and a delivery it
 never accepted is lost — audited, client-side, before the swallow.
 
@@ -24,6 +25,8 @@ from dashboard.config import (
     ACCOUNT_ID_HEADER,
     ACCOUNT_NAME_HEADER,
     HARNESS_PROCESS_HEADER,
+    LAUNCH_EFFORT_HEADER,
+    LAUNCH_MODEL_HEADER,
     TERMINAL_WINDOW_HEADER,
 )
 
@@ -35,6 +38,8 @@ def run(
     cli_process_name: str,
     account_id: str = "",
     account_display_name: str = "",
+    launch_model: str = "",
+    launch_effort: str = "",
 ) -> None:
     payload = sys.stdin.buffer.read()
     try:
@@ -44,6 +49,8 @@ def run(
             HARNESS_PROCESS_HEADER: str(nearest_ancestor_named(cli_process_name) or ""),
             ACCOUNT_ID_HEADER: account_id,
             ACCOUNT_NAME_HEADER: account_display_name,
+            LAUNCH_MODEL_HEADER: launch_model,
+            LAUNCH_EFFORT_HEADER: launch_effort,
         }
         status, output = daemon_client.post_bytes(
             f"/api/harnesses/{urllib.parse.quote(harness)}/hooks",

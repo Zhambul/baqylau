@@ -49,6 +49,8 @@ from dashboard.config import (
     BOOT_ID,
     HARNESS_PROCESS_HEADER,
     HOOK_MAX,
+    LAUNCH_EFFORT_HEADER,
+    LAUNCH_MODEL_HEADER,
     TERMINAL_WINDOW_HEADER,
 )
 from dashboard.diff import source_html, unified_diff_html
@@ -408,6 +410,8 @@ class _CanonicalMixin:
                 harness_process_id=int(process_header) if process_header else None,
                 account_id=self.headers.get(ACCOUNT_ID_HEADER) or None,
                 account_display_name=self.headers.get(ACCOUNT_NAME_HEADER) or None,
+                launch_model=self.headers.get(LAUNCH_MODEL_HEADER) or None,
+                launch_effort=self.headers.get(LAUNCH_EFFORT_HEADER) or None,
             )
             output = application.hook_gateway.record(harness, request)
         except UnknownHookHarness as error:

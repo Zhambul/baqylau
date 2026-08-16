@@ -58,13 +58,17 @@ CLIENTLOG_STR_MAX = 200
 IMAGE_MIMES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
 POST_HEADER = "X-Baqylau"
 # A hook delivery's body is the exact stdin bytes, so what the hook process
-# observed around itself rides these four flat headers. One fact, two
+# observed around itself rides these flat headers. One fact, two
 # consumers each: the thin hook client stamps them, the hook-delivery endpoint
 # reads them.
 TERMINAL_WINDOW_HEADER = "X-Baqylau-Terminal-Window"
 HARNESS_PROCESS_HEADER = "X-Baqylau-Harness-Process"
 ACCOUNT_ID_HEADER = "X-Baqylau-Account-Id"
 ACCOUNT_NAME_HEADER = "X-Baqylau-Account-Name"
+# Launch-time selections travel in the launched CLI's environment (the
+# launcher sets them; the hook process inherits and observes them).
+LAUNCH_MODEL_HEADER = "X-Baqylau-Launch-Model"
+LAUNCH_EFFORT_HEADER = "X-Baqylau-Launch-Effort"
 # The dashboard's externally reachable origin.  It is one fact with two
 # consumers: browser POST admission and notification deep links.  Keeping
 # those separate allowed a dashboard started outside launchd to generate

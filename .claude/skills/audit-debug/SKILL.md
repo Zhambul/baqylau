@@ -90,7 +90,9 @@ dead daemon stops hook capture too (each dropped delivery leaves a client-side
 | `event_store_metadata` | store-wide settings | `schema_version` — must equal `domain.codec.SCHEMA_VERSION` or the store refuses to open |
 
 **`source_type` vocabulary** (which observer produced the evidence): pushed —
-`hook`, `teammate_hook`, `account`, `watch` (a hook's file-watch directive) and
+`hook`, `teammate_hook`, `account`, `launch` (the launch-time model/effort
+selections, from the hook's inherited environment), `watch` (a hook's
+file-watch directive) and
 `terminal` arrive as hook deliveries recorded by the daemon's hook gateway; `otel`
 and `process` (the wrappers) are recorded directly by those processes; pulled by the
 interpreter —
@@ -315,6 +317,24 @@ WHERE r.session_id='<sid>' GROUP BY 1,2 ORDER BY 3 DESC;
   <call_id>`. A tool absent from the dashboard whose reason says "unmapped" is a
   translator gap, not an ingest failure — the evidence is safely in `raw_events` and will
   translate once the rule exists.
+
+### The model/effort selectors sit empty (or on the wrong value) for a fresh session
+
+Launch-time selections have exactly one evidence source: the launcher exports
+`BAQYLAU_LAUNCH_MODEL`/`BAQYLAU_LAUNCH_EFFORT` on the launched CLI, the hook
+entry ships them as launch headers, and the gateway records ONE `launch` raw
+event per SessionStart — translated to `model.changed`/`effort.changed` with
+`reason="selected"` (measured, session 7245e266: before this event existed, a
+dashboard launch showed no model for the first three minutes and no effort
+ever — Claude Code never echoes the effort, and reports the model only on the
+first assistant record). Triage: is the `launch` raw event there (`source_type
+= 'launch'`)? If not, the launch bypassed the dashboard launcher (a hand-typed
+`claude` carries no env), the running daemon predates the feature, or the
+SessionStart delivery itself was lost (see the hook-evidence shape). If it
+exists, read its translation verdict. Interleaved wrong-model values are a
+different shape: subagent actors report their own models; the summary
+projection filters `model.changed`/`effort.changed` to the LEAD actor, so
+check `actor_id` before blaming the projection.
 
 ### An event's content looks wrong / two sources disagree
 

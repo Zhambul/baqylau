@@ -433,6 +433,11 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
             raise TranslationError("malformed Claude Code record", context=raw_event.source_position) from error
         if not isinstance(document, dict):
             raise TranslationError("Claude Code record is not an object", context=raw_event.source_position)
+        if raw_event.source_type == "launch":
+            events = self._launch_selections(raw_event, document)
+            if not events:
+                return TranslationResult((), "ignored_nonsemantic", "launch selects no model or effort")
+            return TranslationResult(tuple(events), "translated")
         if raw_event.source_type == "otel":
             events = self._translate_otel(raw_event, document)
             if not events:
@@ -745,6 +750,42 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
             )
             return [self._event(raw_event, "message", native_identity, "created", payload, occurred_at=occurred_at)]
         return []
+
+    def _launch_selections(
+        self,
+        raw_event: RawEvent,
+        document: dict,
+    ) -> list[CanonicalEvent]:
+        """The launch observation the gateway recorded from the hook's inherited
+        environment: the `--model`/`--effort` the launcher started the CLI with.
+
+        A launch selection is the same fact a typed `/model x` records, with the
+        same alias caveat: it carries a selection alias ("fable"), and the
+        resolved native id arrives only on the first assistant record, as
+        `reported_by_harness`. Without this event the selectors sit empty until
+        then — and for the effort, forever: Claude Code never echoes it in any
+        evidence stream."""
+        subject_id = f"launch:{raw_event.source_position}"
+        events = []
+        model_selection = document.get("model")
+        if isinstance(model_selection, str) and model_selection:
+            events.append(self._event(
+                raw_event,
+                "model",
+                subject_id,
+                "selected",
+                ModelChanged(None, _model_reference(model_selection), "selected"),
+            ))
+        effort_selection = document.get("effort")
+        if isinstance(effort_selection, str) and effort_selection:
+            events.append(self._event(
+                raw_event,
+                "effort",
+                subject_id,
+                "selected",
+                EffortChanged(None, effort_selection, "selected"),
+            ))
+        return events
 
     def _slash_command(
         self,

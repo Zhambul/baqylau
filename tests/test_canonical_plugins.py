@@ -144,6 +144,8 @@ def hook_request(
     harness_process_id: int | None = None,
     account_id: str | None = None,
     account_display_name: str | None = None,
+    launch_model: str | None = None,
+    launch_effort: str | None = None,
 ) -> HarnessHookRequest:
     return HarnessHookRequest(
         payload=payload,
@@ -151,6 +153,8 @@ def hook_request(
         harness_process_id=harness_process_id,
         account_id=account_id,
         account_display_name=account_display_name,
+        launch_model=launch_model,
+        launch_effort=launch_effort,
     )
 
 
@@ -876,6 +880,64 @@ def test_hooks_record_exact_raw_bytes_and_both_sessions_are_born_from_them(monke
     assert len(codex_evidence[0].canonical) == 2
 
 
+def test_claude_launch_selections_reach_the_summary_from_the_hook_environment(monkeypatch, tmp_path):
+    # a dashboard launch exports BAQYLAU_LAUNCH_MODEL/EFFORT on the CLI; the hook
+    # observes them and the gateway records ONE launch raw event on SessionStart —
+    # the only evidence source for them (Claude Code never echoes the effort, and
+    # reports the model only on its first assistant record)
+    monkeypatch.setenv("BAQYLAU_DATA_DIR", str(tmp_path))
+    start_payload = json.dumps({
+        "session_id": "claude-session",
+        "transcript_path": "/work/claude.jsonl",
+        "cwd": "/work",
+        "hook_event_name": "SessionStart",
+        "hook_event_id": "start-1",
+    }).encode()
+    stop_payload = json.dumps({
+        "session_id": "claude-session",
+        "transcript_path": "/work/claude.jsonl",
+        "hook_event_name": "Stop",
+        "hook_event_id": "stop-1",
+    }).encode()
+
+    _deliver_hook(
+        claude_hooks.ClaudeHookGateway(),
+        start_payload,
+        launch_model="fable",
+        launch_effort="high",
+    )
+    # a later delivery still carries the inherited environment but is not a launch
+    _deliver_hook(
+        claude_hooks.ClaudeHookGateway(),
+        stop_payload,
+        launch_model="fable",
+        launch_effort="high",
+    )
+
+    runtime, interpreter = interpreting_runtime(tmp_path / "events.db")
+    interpreter.tick()
+
+    launch_evidence = [
+        item
+        for item in EvidenceQueries(runtime.store).session(SessionId("claude-session"))
+        if item.source_type == "launch"
+    ]
+    assert len(launch_evidence) == 1
+    model_changes = [
+        item.event.payload
+        for item in launch_evidence[0].canonical
+        if isinstance(item.event.payload, ModelChanged)
+    ]
+    # the environment carries the selection ALIAS; the native id arrives later,
+    # on the first assistant record, as `reported_by_harness`
+    assert model_changes[0].reason == "selected"
+    assert model_changes[0].current.selection_id == "fable"
+
+    summary = runtime.queries().summary(SessionId("claude-session"))
+    assert summary.model.selection_id == "fable"
+    assert summary.effort == "high"
+
+
 def test_hook_without_native_identity_uses_the_exact_payload_identity(monkeypatch, tmp_path):
     monkeypatch.setenv("BAQYLAU_DATA_DIR", str(tmp_path))
     payload = (
@@ -1421,7 +1483,7 @@ def test_pane_keybinding_reports_a_daemon_refusal(monkeypatch):
     assert terminal_panes.main(["toggle"]) == 1
 
 
-def test_hook_client_ships_exact_bytes_and_four_flat_headers(monkeypatch, capsys):
+def test_hook_client_ships_exact_bytes_and_flat_headers(monkeypatch, capsys):
     monkeypatch.setenv("BAQYLAU_FRONTEND", "kitty")
     monkeypatch.setenv("KITTY_WINDOW_ID", "77")
     monkeypatch.setattr("app.hook_client.nearest_ancestor_named", lambda name: 4242)
@@ -1437,7 +1499,10 @@ def test_hook_client_ships_exact_bytes_and_four_flat_headers(monkeypatch, capsys
 
     monkeypatch.setattr("app.daemon_client.post_bytes", post_bytes)
 
-    hook_client.run("claude_code", "claude", "c2", "Account Two")
+    hook_client.run(
+        "claude_code", "claude", "c2", "Account Two",
+        launch_model="fable", launch_effort="high",
+    )
 
     assert capsys.readouterr().out == '{"reply":"yes"}'
     path, body, headers, timeout = posted[0]
@@ -1449,6 +1514,8 @@ def test_hook_client_ships_exact_bytes_and_four_flat_headers(monkeypatch, capsys
         "X-Baqylau-Harness-Process": "4242",
         "X-Baqylau-Account-Id": "c2",
         "X-Baqylau-Account-Name": "Account Two",
+        "X-Baqylau-Launch-Model": "fable",
+        "X-Baqylau-Launch-Effort": "high",
     }
     assert timeout == hook_client.DELIVERY_TIMEOUT_SECONDS
 
@@ -2003,6 +2070,28 @@ def test_launchers_build_native_commands_and_share_terminal_launch_mechanics(tmp
         "model_reasoning_effort=high",
         "/work/context.md\nhello",
     )
+    # the selections also ride the CLI's environment, so the hook process can
+    # observe them — Claude Code's launch evidence (codex reports its own)
+    assert terminal.requests[0].environment == (
+        ("BAQYLAU_LAUNCH_MODEL", "fable"),
+        ("BAQYLAU_LAUNCH_EFFORT", "high"),
+    )
+
+
+def test_login_shell_command_carries_environment_before_the_command_word(monkeypatch):
+    from terminal.session import login_shell_command
+
+    monkeypatch.setenv("SHELL", "/bin/zsh")
+    shell, flag, script, *argv = login_shell_command(
+        ("c1", "--model", "fable"),
+        (("BAQYLAU_LAUNCH_MODEL", "fable"), ("BAQYLAU_LAUNCH_EFFORT", "high")),
+    )
+    assert (shell, flag) == ("/bin/zsh", "-lic")
+    # assignments precede the command word so the alias still resolves
+    assert script == 'BAQYLAU_LAUNCH_MODEL=fable BAQYLAU_LAUNCH_EFFORT=high c1 "$@"'
+    assert argv == ["c1", "--model", "fable"]
+    with pytest.raises(ValueError):
+        login_shell_command(("c1",), (("bad name", "x"),))
 
 
 def test_claude_terminal_probe_owns_input_box_grammar(tmp_path):

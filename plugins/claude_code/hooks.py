@@ -77,6 +77,35 @@ class ClaudeHookGateway(HarnessHookGateway):
                 account_display_name=request.account_display_name,
             )
         ]
+        if hook_name == "SessionStart" and (request.launch_model or request.launch_effort):
+            # The launch-time selections, observed from the CLI's environment.
+            # SessionStart is the one delivery that marks a launch; the native
+            # event id keys the observation, so a resume that re-asserts the
+            # same environment converges on the same evidence.
+            selections = {
+                "model": request.launch_model or None,
+                "effort": request.launch_effort or None,
+            }
+            raw_events.append(
+                RawEvent(
+                    raw_event_id=RawEventId(
+                        f"claude_code:launch:{session_id}:{native_event_id}"
+                    ),
+                    harness=HARNESS,
+                    source_type="launch",
+                    source_name=hook_name,
+                    source_position=native_event_id,
+                    session_id=session_id,
+                    actor_id=lead_actor_id,
+                    parent_actor_id=None,
+                    observed_at=time.time(),
+                    encoding="json",
+                    payload=json.dumps(
+                        selections, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+                    ).encode("utf-8"),
+                    source_identity=f"claude_code:launch:{session_id}",
+                )
+            )
         reply = b""
         context = RawEventSourceContext(
             session_id=session_id,

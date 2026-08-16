@@ -333,9 +333,9 @@ function setModelBtn(btn) {
   }
 }
 
-// The effort button's label carries the SAVED effort level (meta/SSE
-// `effort` — the settings' effortLevel, which every applied /effort writes
-// through); bare "effort" when unknown.
+// The effort button's label carries the session's CURRENT effort (meta/SSE
+// `effort` — the summary's last `effort.changed`: a launch-time --effort or
+// an applied /effort); bare "effort" when the session never selected one.
 function setEffortBtn(btn) {
   const meta = (S.sessionView && S.sessionView.meta) || {};
   btn.textContent = "✧ " + (meta.effort || "effort") + " ▾";

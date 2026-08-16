@@ -89,6 +89,14 @@ evidence.
   events. The env vars only the hook process can see ride the
   `X-Baqylau-Environment` header (each plugin's `ENVIRONMENT_KEYS` is the one
   owner of which keys ship).
+- **Launch-time selections travel with the process**: the launcher exports
+  `BAQYLAU_LAUNCH_MODEL`/`BAQYLAU_LAUNCH_EFFORT` on the launched CLI, the hook
+  entry observes them in its inherited environment and stamps the launch
+  headers, and the gateway records a `launch` raw event on SessionStart —
+  translated into `model.changed`/`effort.changed` with `reason="selected"`.
+  This is the ONE evidence source for them: Claude Code never echoes the
+  effort anywhere, and reports the model only on its first assistant record,
+  so without it the dashboard's ✦/✧ selectors sat empty (the effort forever).
 - **A hook still never blocks or fails its harness**: every client failure path
   audits and exits 0 with empty output, and the delivery timeout is short
   (`DELIVERY_TIMEOUT_SECONDS`) — a wedged daemon costs each hook that pause,

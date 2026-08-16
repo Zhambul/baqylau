@@ -195,6 +195,8 @@ class HarnessHookRequest:
     harness_process_id: int | None
     account_id: str | None
     account_display_name: str | None
+    launch_model: str | None = None
+    launch_effort: str | None = None
 
 
 @dataclass(frozen=True)
@@ -543,6 +545,9 @@ class HarnessLaunchPlan:
     command: str
     arguments: tuple[str, ...]
     title: str
+    # Environment the launched CLI (and so its hook processes) must carry —
+    # launch-time facts travel with the process to be observed as evidence.
+    environment: tuple[tuple[str, str], ...] = ()
 
 
 class LaunchRejected(ValueError):

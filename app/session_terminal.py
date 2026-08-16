@@ -282,7 +282,7 @@ class ApplicationTerminal(
             return TabResult(False, None, "no terminal available")
         launched = frontend.launch_tab(
             request.working_directory,
-            list(login_shell_command(request.command)),
+            list(login_shell_command(request.command, request.environment)),
         )
         if not launched:
             return TabResult(False, None, "terminal launch failed")
