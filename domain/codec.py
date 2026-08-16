@@ -81,7 +81,12 @@ def _from_data(expected_type: Any, value: Any) -> Any:
         if not isinstance(value, str):
             raise CanonicalCodecError("decimal must be encoded as a string")
         return Decimal(value)
-    if is_dataclass(expected_type):
+    # `is_dataclass` alone is true for a dataclass INSTANCE as well as for the
+    # class, and every use below — __name__, the lru_cache key, the call that
+    # constructs the payload — needs the class. Decode is only ever handed a
+    # type, so the isinstance check costs nothing and says which of the two
+    # this is.
+    if is_dataclass(expected_type) and isinstance(expected_type, type):
         if not isinstance(value, dict):
             raise CanonicalCodecError(f"{expected_type.__name__} must be encoded as an object")
         # A field with a declared default is optional on decode: rows encoded

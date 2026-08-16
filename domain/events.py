@@ -21,12 +21,20 @@ from domain.values import (
     AccountReference,
     ActorRole,
     AttentionAnswer,
+    AttentionDecision,
     AttentionPrompt,
+    AttentionType,
     Content,
     ExecutionMode,
+    FileAction,
+    GoalState,
+    MessagePhase,
+    MessageRole,
     ModelReference,
     OperationCategory,
     Outcome,
+    ProgressStream,
+    TitleOrigin,
     TokenUsage,
 )
 
@@ -50,7 +58,7 @@ class SessionStarted(EventPayload):
 @dataclass(frozen=True)
 class SessionTitleChanged(EventPayload):
     title: str
-    origin: Literal["custom", "automatic", "summary"]
+    origin: TitleOrigin
 
 
 @dataclass(frozen=True)
@@ -123,9 +131,9 @@ class TurnAborted(EventPayload):
 @dataclass(frozen=True)
 class MessageCreated(EventPayload):
     message_id: MessageId
-    role: Literal["user", "assistant", "system", "peer", "parent"]
+    role: MessageRole
     content: Content
-    phase: Literal["prompt", "intermediate", "final", "synthetic", "recap"] | None
+    phase: MessagePhase | None
     reply_to: MessageId | None
 
 
@@ -151,7 +159,7 @@ class OperationStarted(EventPayload):
 class OperationProgressed(EventPayload):
     operation_id: OperationId
     ordinal: int
-    stream: Literal["output", "error", "status"]
+    stream: ProgressStream
     content: Content
     mode: Literal["append", "replace"]
 
@@ -201,7 +209,7 @@ class OperationOutputFinished(EventPayload):
 class FileAccessed(EventPayload):
     operation_id: OperationId | None
     path: str
-    action: Literal["read", "created", "updated", "deleted", "renamed"]
+    action: FileAction
     previous_path: str | None = None
     line_start: int | None = None
     line_end: int | None = None
@@ -249,15 +257,7 @@ class TaskListChanged(EventPayload):
 @dataclass(frozen=True)
 class GoalChanged(EventPayload):
     objective: str | None
-    state: Literal[
-        "active",
-        "paused",
-        "blocked",
-        "usage_limited",
-        "budget_limited",
-        "completed",
-        "cleared",
-    ]
+    state: GoalState
     reason: str | None
 
 
@@ -271,7 +271,7 @@ class ActorMessageSent(EventPayload):
 @dataclass(frozen=True)
 class AttentionRequested(EventPayload):
     attention_id: AttentionId
-    attention_type: Literal["permission", "question", "plan", "confirmation"]
+    attention_type: AttentionType
     prompts: tuple[AttentionPrompt, ...]
     operation_id: OperationId | None
 
@@ -279,15 +279,7 @@ class AttentionRequested(EventPayload):
 @dataclass(frozen=True)
 class AttentionResolved(EventPayload):
     attention_id: AttentionId
-    decision: Literal[
-        "answered",
-        "approved",
-        "changes_requested",
-        "rejected",
-        "confirmed",
-        "denied",
-        "discussed",
-    ]
+    decision: AttentionDecision
     answers: tuple[AttentionAnswer, ...]
     feedback: str | None
     edited: bool

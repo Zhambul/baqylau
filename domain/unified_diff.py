@@ -62,17 +62,22 @@ def _mark_changed_text(rows: list[DiffRow]) -> tuple[DiffRow, ...]:
 def diff_rows(unified_diff: str) -> tuple[DiffRow, ...]:
     """Return numbered code rows, excluding transport headers and metadata."""
     rows: list[DiffRow] = []
-    old_number = new_number = None
-    seen_hunk = False
+    # None until the first @@ header names the starting line numbers. That one
+    # fact is also "are we inside a hunk yet" — it used to be tracked twice,
+    # with a separate seen_hunk flag, and nothing tied the two together: the
+    # counter bumps below are only reachable once a header has run, but that
+    # was an invariant of the loop rather than anything a reader (or a type
+    # checker) could confirm. One sentinel, checked once, states it.
+    old_number: int | None = None
+    new_number: int | None = None
     for line in unified_diff.splitlines():
         match = _HUNK.match(line)
         if match:
-            if seen_hunk:
+            if old_number is not None:
                 rows.append(DiffRow("separator", None, "⋮"))
             old_number, new_number = map(int, match.groups())
-            seen_hunk = True
             continue
-        if not seen_hunk or line.startswith(("--- ", "+++ ")):
+        if old_number is None or new_number is None or line.startswith(("--- ", "+++ ")):
             continue
         if line == r"\ No newline at end of file":
             continue

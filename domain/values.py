@@ -23,6 +23,40 @@ OperationCategory: TypeAlias = Literal[
 Outcome: TypeAlias = Literal["succeeded", "failed", "cancelled", "rejected", "unknown"]
 ActorRole: TypeAlias = Literal["lead", "child", "teammate", "sidecar"]
 ExecutionMode: TypeAlias = Literal["foreground", "background", "monitor"]
+# Who said it, and where the saying sits in a turn. Named because the harness
+# translators BUILD both out of native JSON and are checked against these same
+# lists; spelled inline on the payload they would only ever be checked at the
+# constructor call.
+MessageRole: TypeAlias = Literal["user", "assistant", "system", "peer", "parent"]
+MessagePhase: TypeAlias = Literal["prompt", "intermediate", "final", "synthetic", "recap"]
+# What a file was done to, and where a goal stands. Same reason as the two
+# above: the translators map a native vocabulary onto these, and the mapping
+# table is the thing that has to be checked.
+FileAction: TypeAlias = Literal["read", "created", "updated", "deleted", "renamed"]
+# The rest of the closed sets a translator has to produce. Every one of these
+# was an inline Literal on its payload, which meant the mapping that built it
+# was typed `str` and checked nowhere.
+AttentionType: TypeAlias = Literal["permission", "question", "plan", "confirmation"]
+AttentionDecision: TypeAlias = Literal[
+    "answered",
+    "approved",
+    "changes_requested",
+    "rejected",
+    "confirmed",
+    "denied",
+    "discussed",
+]
+ProgressStream: TypeAlias = Literal["output", "error", "status"]
+TitleOrigin: TypeAlias = Literal["custom", "automatic", "summary"]
+GoalState: TypeAlias = Literal[
+    "active",
+    "paused",
+    "blocked",
+    "usage_limited",
+    "budget_limited",
+    "completed",
+    "cleared",
+]
 
 
 @dataclass(frozen=True)
