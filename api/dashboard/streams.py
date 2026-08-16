@@ -26,7 +26,7 @@ from api.sse import (
     stable_snapshot,
 )
 from diagnostics import record as A
-from dashboard.activity import json_ready
+from dashboard.render.serialize import json_ready
 from domain.ids import SessionId
 from engine.projections import ActivityScope
 

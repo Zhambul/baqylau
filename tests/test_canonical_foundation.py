@@ -64,7 +64,7 @@ from harness.registry import HarnessRegistry, HarnessRegistryError
 from engine.store.output import OperationOutputStore
 from engine.store.recorder import EventIdentityConflict, RawEventRecorder
 from engine.store.sessions import SessionStore
-from dashboard.presenter import DashboardPresenter
+from dashboard.render.items import DashboardPresenter
 from engine.projections import ActivityScope, SessionQueries
 from terminal.mirror.presenter import TerminalPresenter
 

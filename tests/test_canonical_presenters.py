@@ -18,7 +18,7 @@ from domain.ids import (
     SessionId,
 )
 from domain.values import AccountReference, StructuredContent, TextContent, TokenUsage
-from dashboard.presenter import DashboardPresenter
+from dashboard.render.items import DashboardPresenter
 from engine.projections import (
     ActivityContext,
     ActivityStatistics,

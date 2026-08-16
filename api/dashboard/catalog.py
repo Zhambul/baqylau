@@ -11,7 +11,7 @@ from api.dashboard.models.harnesses.harness_description_response import (
 )
 from api.dependencies import ApplicationGraph
 from harness.models import QueryContext
-from dashboard.activity import json_ready
+from dashboard.render.serialize import json_ready
 from domain.ids import SessionId
 
 router = APIRouter()

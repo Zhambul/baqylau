@@ -10,6 +10,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# Every package this repository owns — the universe each rule below draws from.
+OUR_PACKAGES = (
+    "api", "app", "core", "dashboard", "diagnostics", "domain",
+    "engine", "harness", "notify", "terminal",
+)
+
 
 def imports_under_path(path: Path):
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -33,7 +39,7 @@ def assert_imports(package: str, allowed_roots: set[str], allowed_modules: set[s
     bad = []
     for path, imported in imports_under(package):
         root = imported.split(".", 1)[0]
-        if root in {"api", "app", "core", "dashboard", "diagnostics", "domain", "harness", "engine", "notify", "terminal"}:
+        if root in OUR_PACKAGES:
             if root in allowed_roots:
                 continue
             if any(imported == module or imported.startswith(module + ".") for module in allowed_modules):
@@ -121,7 +127,7 @@ def test_only_bootstrap_and_the_self_identifying_clients_resolve_a_terminal():
     """
     allowed = {"app/bootstrap.py", "harness/hooks/client.py", "terminal/panes/client.py"}
     importers = set()
-    for package in ("api", "app", "core", "dashboard", "diagnostics", "domain", "harness", "engine", "notify", "terminal"):
+    for package in OUR_PACKAGES:
         for path, imported in imports_under(package):
             relative = path.relative_to(ROOT).as_posix()
             if relative.startswith("terminal/impl/"):
@@ -322,7 +328,7 @@ def test_canonical_shared_code_imports_no_concrete_harness_package():
         ROOT / "harness" / "hooks",
         ROOT / "harness" / "services",
         ROOT / "dashboard" / "activity.py",
-        ROOT / "dashboard" / "presenter.py",
+        ROOT / "dashboard" / "render" / "items",
     ]
     concrete_prefixes = ("harness.impl.claude_code", "harness.impl.codex")
     importers = []
@@ -480,7 +486,7 @@ def test_the_application_graph_is_built_only_by_the_daemon():
         "api/server.py",
     }
     violations = []
-    for directory in ("api", "app", "bin", "core", "dashboard", "diagnostics", "harness", "engine", "notify", "terminal"):
+    for directory in ("bin", *OUR_PACKAGES):
         for path in sorted((ROOT / directory).rglob("*.py")):
             if "__pycache__" in path.parts:
                 continue
@@ -526,7 +532,7 @@ def test_canonical_consumers_cannot_observe_or_checkpoint_native_sources():
         ROOT / "terminal" / "panes" / "scoreboard_process.py",
         ROOT / "dashboard" / "activity.py",
         ROOT / "dashboard" / "application.py",
-        ROOT / "dashboard" / "presenter.py",
+        ROOT / "dashboard" / "render" / "items",
         *sorted((ROOT / "api").rglob("*.py")),
         ROOT / "terminal" / "mirror" / "presenter.py",
         ROOT / "terminal" / "mirror" / "renderer.py",
@@ -540,11 +546,12 @@ def test_canonical_consumers_cannot_observe_or_checkpoint_native_sources():
         "SourceCheckpoint",
     )
     violations = []
-    for path in consumers:
-        source = path.read_text(encoding="utf-8")
-        found = [fragment for fragment in forbidden_fragments if fragment in source]
-        if found:
-            violations.append(f"{path.relative_to(ROOT)} contains {', '.join(found)}")
+    for consumer in consumers:
+        for path in (sorted(consumer.rglob("*.py")) if consumer.is_dir() else (consumer,)):
+            source = path.read_text(encoding="utf-8")
+            found = [fragment for fragment in forbidden_fragments if fragment in source]
+            if found:
+                violations.append(f"{path.relative_to(ROOT)} contains {', '.join(found)}")
     assert violations == []
 
 

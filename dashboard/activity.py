@@ -5,17 +5,16 @@ from __future__ import annotations
 import json
 import threading
 import time
-from collections.abc import Mapping
-from dataclasses import dataclass, fields, is_dataclass
-from decimal import Decimal
+from dataclasses import dataclass
 from typing import Protocol
 
 from harness.models import TerminalSessionState
 from core.repository import RepositoryQueries, RepositoryStatus
-from dashboard.markdown import md_html
-from dashboard.ansi import ansi_html, escape_html
-from dashboard.highlight import source_ansi
-from dashboard.presenter import DashboardItem, DashboardPresenter
+from dashboard.render.markdown import md_html
+from dashboard.render.ansi import ansi_html, escape_html
+from dashboard.render.highlight import source_ansi
+from dashboard.render.items import DashboardItem, DashboardPresenter
+from dashboard.render.serialize import json_ready
 from domain.ids import ActorId, AttentionId, OperationId, SessionId
 from domain.values import Content, StructuredContent, TextContent
 from engine.store.canonical import CanonicalEventStore
@@ -46,18 +45,6 @@ def _content_text(content: Content | None) -> str:
     if isinstance(content, StructuredContent):
         return json.dumps(json.loads(content.json_text), ensure_ascii=False, indent=2, sort_keys=True)
     raise TypeError(f"unsupported content type: {type(content).__name__}")
-
-
-def json_ready(value):
-    if is_dataclass(value):
-        return {field.name: json_ready(getattr(value, field.name)) for field in fields(value)}
-    if isinstance(value, Mapping):
-        return {str(key): json_ready(item) for key, item in value.items()}
-    if isinstance(value, tuple):
-        return [json_ready(item) for item in value]
-    if isinstance(value, Decimal):
-        return str(value)
-    return value
 
 
 @dataclass(frozen=True)

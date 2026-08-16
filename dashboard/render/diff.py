@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dashboard.ansi import ansi_html, escape_html
-from dashboard.highlight import source_ansi_for_path
+from dashboard.render.ansi import ansi_html, escape_html
+from dashboard.render.highlight import source_ansi_for_path
 from domain.unified_diff import DiffRow, diff_rows
 
 

@@ -1,4 +1,4 @@
-from dashboard.diff import source_html, unified_diff_html
+from dashboard.render.diff import source_html, unified_diff_html
 
 
 def test_unified_diff_view_has_numbered_colored_code_without_patch_headers():

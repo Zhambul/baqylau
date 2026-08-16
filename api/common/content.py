@@ -7,7 +7,7 @@ from fastapi import APIRouter
 from fastapi.responses import HTMLResponse, PlainTextResponse
 
 from api.dependencies import ApplicationGraph
-from dashboard.diff import source_html, unified_diff_html
+from dashboard.render.diff import source_html, unified_diff_html
 
 router = APIRouter()
 

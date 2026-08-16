@@ -9,7 +9,7 @@ from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
 
 from api.dependencies import ApplicationGraph
-from dashboard.activity import json_ready
+from dashboard.render.serialize import json_ready
 from domain.ids import ActorId, SessionId
 from engine.projections import ActivityScope
 

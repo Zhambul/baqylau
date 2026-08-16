@@ -23,7 +23,7 @@ from api.dashboard.models.controls.send_text_request import SendTextRequest
 from api.dashboard.models.launch.launch_session_request import LaunchSessionRequest
 from api.dependencies import ApplicationGraph
 from api.guard import control_plane
-from dashboard.activity import json_ready
+from dashboard.render.serialize import json_ready
 from domain.ids import SessionId
 
 router = APIRouter(dependencies=[Depends(control_plane())])
