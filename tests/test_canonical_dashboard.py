@@ -57,7 +57,7 @@ def test_preferences_fail_clearly_instead_of_returning_fallback_state(monkeypatc
     def unavailable_database():
         raise sqlite3.OperationalError("database unavailable")
 
-    monkeypatch.setattr(prefs, "_connect", unavailable_database)
+    monkeypatch.setattr(prefs.store, "_connect", unavailable_database)
 
     with pytest.raises(sqlite3.OperationalError, match="database unavailable"):
         prefs.get("missing", {})
