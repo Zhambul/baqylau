@@ -40,6 +40,7 @@ from domain.events import (
     MessageCreated,
     OperationFinished,
     OperationInputProvided,
+    OperationOutputFinished,
     OperationOutputLocated,
     SessionFinished,
     SessionStarted,
@@ -1105,3 +1106,45 @@ def test_a_background_following_survives_operation_finished_until_the_session_en
     assert connection.execute(
         "SELECT count(*) FROM raw_events WHERE source_type='tool_output'"
     ).fetchone()[0] == 1  # the tail was drained before the row was removed
+
+
+def test_the_background_completion_fact_ends_the_following_early(tmp_path):
+    """`operation.output_finished` is the background job's true end: the
+    following stops there instead of stat-ing the file until the session dies."""
+    database_path = str(tmp_path / "events.db")
+    recorder = RawEventRecorder(database_path)
+    operation_output = OperationOutputStore(database_path)
+    reaction = OperationOutputCanonicalEventReaction(operation_output, recorder)
+    output_path = tmp_path / "task.output"
+    output_path.write_bytes(b"background bytes")
+    located = OperationOutputLocated(
+        operation_id=OperationId("operation-bg"),
+        source_path=str(output_path),
+        chunk_source_type="tool_output",
+        delete_source=False,
+        initial_size=0,
+        initial_modified_at=0,
+        wait_for_source_change=False,
+        until="session_finished",
+    )
+    reaction.react(replace(canonical_message(), payload=located))
+    # the launch-time operation.finished must NOT end a background following…
+    reaction.react(replace(
+        canonical_message(),
+        payload=OperationFinished(OperationId("operation-bg"), "succeeded", None, None),
+    ))
+    assert len(operation_output.for_session(SessionId("session-one"))) == 1
+
+    # …but the completion notification's fact does
+    reaction.react(replace(
+        canonical_message(),
+        payload=OperationOutputFinished(OperationId("operation-bg")),
+    ))
+    sources = operation_output.for_session(SessionId("session-one"))
+    assert len(sources) == 1  # one final drain still owed
+    raw_events = sources[0].read(None)
+    recorder.record(raw_events)
+    assert raw_events[-1].source_position == "finished"
+
+    assert operation_output.for_session(SessionId("session-one")) == ()
+    assert output_path.exists()  # the harness's own file is never deleted by us

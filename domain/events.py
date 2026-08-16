@@ -188,6 +188,16 @@ class OperationOutputLocated(EventPayload):
 
 
 @dataclass(frozen=True)
+class OperationOutputFinished(EventPayload):
+    """The operation's output file is complete — the harness announced the
+    background job's true end, which its launch-time `operation.finished`
+    (reported while output still flowed) could not. Ends the following early
+    instead of waiting for the session to finish."""
+
+    operation_id: OperationId
+
+
+@dataclass(frozen=True)
 class FileAccessed(EventPayload):
     operation_id: OperationId | None
     path: str
@@ -349,6 +359,7 @@ EVENT_TYPES: dict[type[EventPayload], str] = {
     OperationProgressed: "operation.progressed",
     OperationFinished: "operation.finished",
     OperationOutputLocated: "operation.output_located",
+    OperationOutputFinished: "operation.output_finished",
     FileAccessed: "file.accessed",
     TaskChanged: "task.changed",
     TaskListChanged: "task.list_changed",

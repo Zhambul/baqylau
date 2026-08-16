@@ -71,12 +71,25 @@ class OperationOutputStore:
     def finish(self, session_id: SessionId, operation_id: str) -> None:
         """Mark a foreground following finished; a background row's launch
         reports "finished" while output keeps flowing, so it is untouched here
-        — the session's end is its end."""
+        — its end is `finish_output` (the harness's completion notification)
+        or the session's."""
         with connect(self.database_path) as connection:
             connection.execute("BEGIN IMMEDIATE")
             connection.execute(
                 "UPDATE operation_output SET state='finishing' "
                 "WHERE session_id=? AND operation_id=? AND until='operation_finished'",
+                (str(session_id), operation_id),
+            )
+
+    def finish_output(self, session_id: SessionId, operation_id: str) -> None:
+        """The output file is complete (`operation.output_finished`): end the
+        following whatever its `until` — the reader drains to EOF and removes
+        the row on its next read."""
+        with connect(self.database_path) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                "UPDATE operation_output SET state='finishing' "
+                "WHERE session_id=? AND operation_id=?",
                 (str(session_id), operation_id),
             )
 

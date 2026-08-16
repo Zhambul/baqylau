@@ -97,6 +97,12 @@ _TM_ID  = re.compile(r'teammate_id="([^"]*)"')
 # blocks are small, fixed-shape, and produced by Claude Code (not user input).
 _TASK_NOTE = re.compile(r'<task-notification>(.*?)</task-notification>', re.S)
 
+# The summary prefix that marks a BACKGROUND-command completion riding the same
+# <task-notification> channel as agent completions and monitor events. One
+# owner: parse_line's notification branch and _monitor_note's filter both mean
+# this exact wording.
+BACKGROUND_SUMMARY_PREFIX = "Background command"
+
 
 def _note_tag(xml, name):
     m = re.search(r'<%s>(.*?)</%s>' % (name, name), xml, re.S)
@@ -106,7 +112,7 @@ def _note_tag(xml, name):
 def _monitor_note(content):
     """A queue-operation's `content` -> a monitor_event record, or None when it
     isn't a MONITOR <task-notification>. The same <task-notification> mechanism
-    also delivers BACKGROUND-job completions (summary 'Background command … completed')
+    also delivers BACKGROUND-job completions (BACKGROUND_SUMMARY_PREFIX summaries)
     and other task acks — those are NOT monitor events (they'd otherwise show as
     phantom monitors on the monitors tab and mislabel the activity timeline). A
     monitor is the one with a per-event `<event>` tag, or a `Monitor …` summary
@@ -332,7 +338,8 @@ def _resumes_turn(text):
 # tests/test_l1e_transcript.py asserts every kind here is either handled or
 # EXPLICITLY skipped by each.
 KINDS = ("bad", "compact", "recap", "prompt", "teammsg", "results",
-         "assistant", "monitor_event", "actor_assignment_finished", "goal")
+         "assistant", "monitor_event", "actor_assignment_finished",
+         "background_command_completed", "goal")
 
 
 def parse_line(s):
@@ -369,12 +376,23 @@ def parse_line(s):
             if (o.get("origin") or {}).get("kind") == "task-notification":
                 match = _TASK_NOTE.search(content)
                 xml = match.group(1) if match else content
+                summary = _note_tag(xml, "summary") or ""
+                if summary.startswith(BACKGROUND_SUMMARY_PREFIX):
+                    # A background Bash completion, NOT an agent's: the same
+                    # channel delivers both, and treating this as an
+                    # assignment finish painted phantom "Agent finished"
+                    # blocks for plain background commands.
+                    return {
+                        "kind": "background_command_completed",
+                        "operation_id": _note_tag(xml, "tool-use-id") or "",
+                        "status": _note_tag(xml, "status") or "completed",
+                    }
                 return {
                     "kind": "actor_assignment_finished",
                     "assignment_id": _note_tag(xml, "tool-use-id") or "",
                     "actor_id": _note_tag(xml, "task-id"),
                     "status": _note_tag(xml, "status") or "completed",
-                    "summary": _note_tag(xml, "summary") or "",
+                    "summary": summary,
                     "result": html.unescape(_note_tag(xml, "result") or "") or None,
                 }
             kind, a, b = classify_user_text(content)

@@ -70,6 +70,7 @@ from domain.events import (
     OperationInputProvided,
     OperationProgressed,
     OperationStarted,
+    OperationOutputFinished,
     ReasoningCreated,
     SessionAccountChanged,
     SessionFinished,
@@ -2330,6 +2331,40 @@ def test_claude_task_notification_finishes_actor_assignment_instead_of_creating_
     assert finished[0].payload.assignment_id == "agent-tool-one"
     assert finished[0].payload.outcome == "succeeded"
     assert finished[0].payload.result.text == "Sunny, 29°C."
+
+
+def test_claude_background_completion_is_an_output_finish_not_an_agent_finish():
+    """Background Bash completions ride the SAME <task-notification> channel as
+    agent completions; treating them as assignment finishes painted phantom
+    "Agent finished" blocks for plain background commands (session 67dfd402,
+    2026-08-16). The summary prefix is the discriminator."""
+    notification = ClaudeCanonicalTranslator().translate(raw_event(
+        {
+            "type": "user",
+            "uuid": "background-completion-one",
+            "origin": {"kind": "task-notification"},
+            "promptSource": "system",
+            "message": {
+                "content": (
+                    "<task-notification><task-id>bkdr7jbeo</task-id>"
+                    "<tool-use-id>background-op-one</tool-use-id>"
+                    "<output-file>/tmp/tasks/bkdr7jbeo.output</output-file>"
+                    "<status>completed</status>"
+                    '<summary>Background command "Count 1 to 10" completed (exit code 0)</summary>'
+                    "</task-notification>"
+                )
+            },
+        },
+        harness="claude_code",
+        source_type="transcript",
+        raw_event_id="background-completion",
+    ))
+
+    assert not payloads(notification, ActorAssignmentFinished)
+    assert not payloads(notification, MessageCreated)
+    finished = payloads(notification, OperationOutputFinished)
+    assert len(finished) == 1
+    assert finished[0].payload.operation_id == OperationId("background-op-one")
 
 
 def test_claude_tool_reference_result_has_a_readable_output():

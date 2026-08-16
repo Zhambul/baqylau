@@ -9,6 +9,7 @@ from contracts.terminal import SessionPaneRequest
 from domain.events import (
     CanonicalEvent,
     OperationFinished,
+    OperationOutputFinished,
     OperationOutputLocated,
     SessionFinished,
     SessionStarted,
@@ -58,8 +59,9 @@ class SessionUpsertCanonicalEventReaction(CanonicalEventReaction):
 
 
 class OperationOutputCanonicalEventReaction(CanonicalEventReaction):
-    """Three one-time moments in an operation's life: its output file becomes
+    """The one-time moments in an operation's life: its output file becomes
     known (start following), the operation finishes (stop a foreground
+    following), the harness announces a background job's true end (stop that
     following), the session finishes (drain everything). Output CHUNKS never
     pass through here — they are evidence, read by the collect phase."""
 
@@ -85,6 +87,12 @@ class OperationOutputCanonicalEventReaction(CanonicalEventReaction):
             # Ends foreground followings only (until='operation_finished');
             # affects zero rows for operations that never had an output file.
             self.operation_output.finish(canonical_event.session_id, str(payload.operation_id))
+        elif isinstance(payload, OperationOutputFinished):
+            # The background job's true end: stop following its file now
+            # instead of stat-ing it for the rest of the session.
+            self.operation_output.finish_output(
+                canonical_event.session_id, str(payload.operation_id)
+            )
         elif isinstance(payload, SessionFinished):
             self._drain_all(canonical_event.session_id)
 

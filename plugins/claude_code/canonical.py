@@ -40,6 +40,7 @@ from domain.events import (
     MessageCreated,
     ModelChanged,
     OperationFinished,
+    OperationOutputFinished,
     OperationProgressed,
     OperationStarted,
     ActorMessageSent,
@@ -549,6 +550,22 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
         if kind == "goal":
             payload = GoalChanged(record.get("objective"), record["state"], record.get("reason"))
             return [self._event(raw_event, "goal", native_identity, "changed", payload, occurred_at=occurred_at)]
+        if kind == "background_command_completed":
+            operation_id = OperationId(str(record.get("operation_id") or ""))
+            if not operation_id:
+                raise TranslationError(
+                    "Claude Code background completion has no operation id",
+                    context=raw_event.source_position,
+                )
+            payload = OperationOutputFinished(operation_id)
+            return [self._event(
+                raw_event,
+                "operation",
+                str(operation_id),
+                "output_finished",
+                payload,
+                occurred_at=occurred_at,
+            )]
         if kind == "actor_assignment_finished":
             assignment_id = AssignmentId(record["assignment_id"])
             status = record["status"]
