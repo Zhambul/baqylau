@@ -1,4 +1,4 @@
-# dashboard/clipboard.py — read the LOCAL machine's pasteboard for copied FILE
+# core/clipboard.py — read the LOCAL machine's pasteboard for copied FILE
 # PATHS (docs/dashboard.md, *Web attachments* → *Promise-only files*). The ONE
 # owner of the "what files are on the clipboard" fact.
 #
@@ -84,7 +84,7 @@ def files():
         if paths is None:
             paths = _from_pasteboard()
     except Exception as e:
-        A.error("", "dashboard clipboard (read failed)",
+        A.error("", "clipboard (read failed)",
                 {"err": ("%s: %s" % (type(e).__name__, e))[:200]})
         return []
     return [p for p in paths if p and os.path.isabs(p)

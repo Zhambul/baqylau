@@ -114,6 +114,12 @@ harness/     the harness concern, whole: contract + models, the hook channel,
              the services over one plugin, and harness/impl/<name>/ — one
              directory per agent tool (claude_code · codex), the only place a
              harness's name appears
+dashboard/   the web surface: static/ (the SPA), render/ (facts -> markup,
+             inert), services/ (one question, one answer), prefs/ (what you
+             chose), and its own config, paths and CLI
+notify/      alerts about sessions: when one is owed you (notifier), whether
+             you need telling (presence), and where it reaches you (channels/)
+api/         the daemon's HTTP layer — one FastAPI app, every request typed
 app/         the composition root: the only package that knows WHICH harnesses
              and which terminal are installed, plus the services that compose
              concerns the engine keeps apart
