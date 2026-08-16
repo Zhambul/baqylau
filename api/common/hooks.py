@@ -11,7 +11,7 @@ from api.guard import control_plane
 from harness.hooks.gateway import UnknownHookHarness
 from harness.models import HarnessHookRequest
 from diagnostics import record as A
-from harness.hooks.wire import (
+from harness.hooks.headers import (
     ACCOUNT_ID_HEADER,
     ACCOUNT_NAME_HEADER,
     HARNESS_PROCESS_HEADER,

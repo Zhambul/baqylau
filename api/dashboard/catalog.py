@@ -11,7 +11,7 @@ from api.dashboard.models.harnesses.harness_description_response import (
 )
 from api.dependencies import ApplicationGraph
 from harness.models import QueryContext
-from dashboard.activity import to_wire
+from dashboard.activity import json_ready
 from domain.ids import SessionId
 
 router = APIRouter()
@@ -52,15 +52,15 @@ def catalog(
     # literal) and the per-directory part from the catalogue. The contract
     # keeps them apart; this endpoint is where the browser wants them together.
     info = application.registry.plugin(harness).info
-    payload = to_wire(application.catalog.read(harness, context))
-    payload["models"] = to_wire(info.models)
-    payload["rewind_modes"] = to_wire(info.rewind_modes)
+    payload = json_ready(application.catalog.read(harness, context))
+    payload["models"] = json_ready(info.models)
+    payload["rewind_modes"] = json_ready(info.rewind_modes)
     return JSONResponse(payload)
 
 
 @router.get("/api/insights")
 def insights(application: ApplicationGraph) -> JSONResponse:
-    return JSONResponse(to_wire(application.insights.snapshot()))
+    return JSONResponse(json_ready(application.insights.snapshot()))
 
 
 @router.get("/api/resumable-sessions")
@@ -70,5 +70,5 @@ def resumable_sessions(
     search: str | None = None,
 ) -> JSONResponse:
     return JSONResponse(
-        to_wire(application.resumable_sessions.sessions_for(working_directory, search))
+        json_ready(application.resumable_sessions.sessions_for(working_directory, search))
     )

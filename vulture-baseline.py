@@ -11,10 +11,10 @@
 #     alive. Each is a real question: is the method the product's, or the
 #     test's? Answering it means deleting the method or using it.
 #
-#   unused variable (89) — wire-model fields (dataclass / pydantic). These are
+#   unused variable (89) — response-model fields (dataclass / pydantic). These are
 #     NOT dead: they are consumed by serialization vulture cannot follow — the
 #     codec's `getattr(value, field.name)` fan-out (domain/codec.py,
-#     dashboard/activity.py) and the JS frontend. Adding a field to a wire
+#     dashboard/services/) and the JS frontend. Adding a field to a response
 #     model trips this gate until its name is listed here.
 #
 # Everything else vulture found was deleted; the source is in

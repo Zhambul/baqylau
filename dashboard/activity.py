@@ -48,13 +48,13 @@ def _content_text(content: Content | None) -> str:
     raise TypeError(f"unsupported content type: {type(content).__name__}")
 
 
-def to_wire(value):
+def json_ready(value):
     if is_dataclass(value):
-        return {field.name: to_wire(getattr(value, field.name)) for field in fields(value)}
+        return {field.name: json_ready(getattr(value, field.name)) for field in fields(value)}
     if isinstance(value, Mapping):
-        return {str(key): to_wire(item) for key, item in value.items()}
+        return {str(key): json_ready(item) for key, item in value.items()}
     if isinstance(value, tuple):
-        return [to_wire(item) for item in value]
+        return [json_ready(item) for item in value]
     if isinstance(value, Decimal):
         return str(value)
     return value
@@ -423,7 +423,7 @@ class DashboardActivityFrame:
     snapshot: DashboardSessionSnapshot
 
     def json(self) -> str:
-        return json.dumps(to_wire(self), ensure_ascii=False, separators=(",", ":"))
+        return json.dumps(json_ready(self), ensure_ascii=False, separators=(",", ":"))
 
     def sse(self) -> str:
         return f"id: {self.cursor}\nevent: activity\ndata: {self.json()}\n\n"

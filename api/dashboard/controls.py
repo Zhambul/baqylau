@@ -23,7 +23,7 @@ from api.dashboard.models.controls.send_text_request import SendTextRequest
 from api.dashboard.models.launch.launch_session_request import LaunchSessionRequest
 from api.dependencies import ApplicationGraph
 from api.guard import control_plane
-from dashboard.activity import to_wire
+from dashboard.activity import json_ready
 from domain.ids import SessionId
 
 router = APIRouter(dependencies=[Depends(control_plane())])
@@ -35,14 +35,14 @@ CONTROL_STATUS = {"acknowledged": 200, "indeterminate": 202, "rejected": 409}
 @router.post("/api/sessions")
 def launch(body: LaunchSessionRequest, application: ApplicationGraph) -> JSONResponse:
     result = application.launcher.launch(body.harness, body.request())
-    return JSONResponse(to_wire(result), LAUNCH_STATUS[result.status])
+    return JSONResponse(json_ready(result), LAUNCH_STATUS[result.status])
 
 
 def _execute(application, session_id: str, body) -> JSONResponse:
     """One gesture: the request model builds its harness dataclass, the
     audited control service executes it, the outcome's status picks the code."""
     outcome = application.controls.execute(body.request(SessionId(session_id)))
-    return JSONResponse(to_wire(outcome), CONTROL_STATUS[outcome.status])
+    return JSONResponse(json_ready(outcome), CONTROL_STATUS[outcome.status])
 
 
 @router.post("/api/sessions/{session_id}/controls/send-text")

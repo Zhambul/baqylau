@@ -2,14 +2,14 @@
 #
 # Server-side only: origin admission, the read-only kill switch, response
 # caching and compression thresholds, and the boot identity. Constants BOTH
-# the daemon and its clients read live in core/daemon/wire.py; knobs the dashboard
+# the daemon and its clients read live in core/daemon/contract.py; knobs the dashboard
 # presenters own (the static whitelist, notification timing, the public URL)
 # stay in dashboard/config.py. Import-pure: env reads + literals only.
 import os
 import re
 import time
 
-from core.daemon.wire import HOST_ADDRESS, PORT_NUMBER
+from core.daemon.contract import HOST_ADDRESS, PORT_NUMBER
 from dashboard.config import PUBLIC_URL
 
 LOCK_KEY = "dashboard"

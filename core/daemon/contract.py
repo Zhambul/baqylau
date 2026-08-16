@@ -1,4 +1,4 @@
-# core/daemon/wire.py — the HTTP wire contract shared by the daemon and its clients.
+# core/daemon/contract.py — the agreement between the daemon and its clients.
 #
 # The one owner of every constant BOTH sides of the daemon's HTTP door read:
 # where the daemon listens, the header a control-plane caller stamps, and the
@@ -8,7 +8,7 @@
 #
 # The HOOK delivery's own vocabulary — the identity headers a hook process
 # stamps and its body cap — is harness vocabulary and lives with the channel it
-# belongs to, in harness/hooks/wire.py.
+# belongs to, in harness/hooks/headers.py.
 # Import-pure: env reads + literals only.
 from core import env as EV
 

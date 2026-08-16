@@ -11,6 +11,6 @@
 # the app factory, serve()) lives at this root.
 #
 # Responses that are projection dataclasses stay dataclasses, serialized by
-# the one owner of that encoding (dashboard.activity.to_wire). The daemon
+# the one owner of that encoding (dashboard.render.serialize.json_ready). The daemon
 # builds the application graph exactly once, in api/server.py serve(). The
 # OpenAPI documents are served at /openapi.json and /openapi.yaml.

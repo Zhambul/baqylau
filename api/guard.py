@@ -17,7 +17,7 @@
 from fastapi import HTTPException, Request
 
 from diagnostics import record as A
-from core.daemon.wire import POST_HEADER, POST_MAX
+from core.daemon.contract import POST_HEADER, POST_MAX
 from api import config
 
 CONTENT_TYPE_JSON = "application/json"

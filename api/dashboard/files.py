@@ -24,7 +24,7 @@ from api.dashboard.models.files.upload_request import UploadRequest
 from api.dashboard.models.files.upload_response import UploadResponse
 from api.guard import control_plane, reject_input, valid_session_id
 from diagnostics import record as A
-from core.daemon.wire import UPLOAD_MAX
+from core.daemon.contract import UPLOAD_MAX
 from dashboard import clipboard, dictate, paths
 
 router = APIRouter()

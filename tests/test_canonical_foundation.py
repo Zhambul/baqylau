@@ -315,7 +315,7 @@ def registered_runtime(tmp_path, translation: TranslationResult | TranslationErr
         ),
     ),
 )
-def test_actor_lifecycle_wire_contract(payload, event_type, expected_payload):
+def test_actor_lifecycle_payload_contract(payload, event_type, expected_payload):
     event = CanonicalEvent(
         event_id=CanonicalEventId("event-one"),
         session_id=SessionId("session-one"),

@@ -1,7 +1,7 @@
 """The read-model vocabulary: what a fold over canonical facts produces.
 
-Every dataclass here is a fact SHAPE the surfaces render — the browser's wire
-models and the pane's blocks are both built from these. Nothing in this file
+Every dataclass here is a fact SHAPE the surfaces render — the browser's
+response models and the pane's blocks are both built from these. Nothing in this file
 reads a store or decides anything; the folds that produce these live beside it,
 one module per concern.
 """
