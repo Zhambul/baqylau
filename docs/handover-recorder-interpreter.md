@@ -6,12 +6,16 @@ fell the way it did, what is deployed, and what is deliberately left open.
 Written for whoever works on this codebase next (human or agent).
 `docs/recorder-interpreter.md` is the normative description of the result; this
 document is the narrative: the road, the rejected turns, and the state of the
-world at the end of the day.
+world at the end of the day. **§8 continues the narrative into 2026-08-16**,
+when two follow-up refactors moved the whole read side, then the hook write
+side, behind the daemon's HTTP door — sections 1–7 are preserved as the
+account of the 15th and are annotated where the 16th superseded them.
 
 Commits, in order: `1dad4f9` (HarnessInfo consolidation, prior work) →
 `ac90b5b` (the redesign) → `8d8ec1a` (background watches) → `b7868ee`
-(evidence-driven registration + pane/stub fixes) → the send-verification +
-terminal-anchor commit that ships with this document.
+(evidence-driven registration + pane/stub fixes) → `3e11cd1` (send
+verification + terminal anchors) → `32a9e94` (one application graph, thin
+clients — §8.1) → `7f610fe` (hooks deliver through the daemon — §8.2).
 
 ---
 
@@ -66,6 +70,9 @@ explicitly rejected and should not be re-proposed:
    two-translator-versions problem at once: translation happens only in the
    interpreter, from the untranslated backlog (`raw_events LEFT JOIN
    translation_records WHERE verdict IS NULL`, ordered by arrival).
+   *(Restated on 2026-08-16 as per-COMPONENT, not per-process: the daemon now
+   records hook deliveries on its HTTP threads and interprets on its tick
+   thread, and nothing does both — §8.2.)*
 3. **Sources became pure readers.** `drain(delivery)` — a source that both
    produced and wrote events — was rejected as a single-responsibility
    violation. The protocol is `read(after_position) -> tuple[RawEvent, ...]`;
@@ -99,6 +106,10 @@ explicitly rejected and should not be re-proposed:
    its reply, and exits* — no registration, no translation, no terminal, no
    files, no application graph (enforced by
    `test_recorder_entries_never_build_the_application`).
+   *(Superseded on 2026-08-16: a hook now parses nothing and writes nothing —
+   it ships its exact stdin to the daemon, which parses and records behind a
+   NEW plugin slot, `hooks: HarnessHookGateway` — §8.2. The intake logic came
+   back into the contract, but daemon-side, as the push twin of `sources`.)*
 7. **Coordination state moved into evidence.** Foreground manifests became
    `watch` raw events — directives-as-evidence the interpreter applies to a
    `watches` table and pulls with a generic `FileWatchRawEventSource`. The
@@ -125,6 +136,10 @@ explicitly rejected and should not be re-proposed:
 
 ## 3. The result (one screen)
 
+*(As shipped on the 15th; §8 revises the RECORDERS and READERS tiers — hooks
+became thin clients of the daemon, and every presenter became one too. The
+diagram in `docs/recorder-interpreter.md` is the current one.)*
+
 ```
 LAUNCH     wrappers register the session and anchor its panes (pending → adopt)
 RECORDERS  claude hook · codex hook · wrappers · otel receiver
@@ -149,7 +164,7 @@ byte-conflict-checked); `WatchRegistry` → `watches`; `CanonicalEventStore` →
 `runtime/database.py` owns the schema; `HarnessRegistry` is the in-memory
 name→plugin map. The plugin contract: `info` · `sources` · `translator` ·
 optional `session_evidence` / `reactor` / `controller` / `launcher` / `catalog`
-/ `usage` / `memory` / `terminal_probe`.
+/ `usage` / `memory` / `terminal_probe` *(2026-08-16 added `hooks` — §8.2)*.
 
 ## 4. What broke in live fire, and what each failure taught
 
@@ -273,3 +288,96 @@ For any misbehavior, start from the **`audit-debug` skill** — its schema table
 and bug shapes were updated with this redesign (backlog queries, position
 derivation, unregistered-session shape, send verification) and must be kept in
 lockstep with future changes, per `CLAUDE.md`'s audit-coverage rule.
+
+---
+
+## 8. The day after (2026-08-16): everything through one door
+
+Two refactors, requested and decided in the same dialogue style as §2. The
+prompt for the first: `build_default_application()` was still called from many
+places — every pane process, the keybinding helper, the click handlers, and
+every hook. The read side moved first, the hook write side followed.
+
+### 8.1 One graph, one process (`32a9e94`)
+
+**The daemon builds the application graph exactly once** (`serve()` in
+`dashboard/http/handler.py`, ratcheted by
+`test_the_application_graph_is_built_only_by_the_daemon`); everything else
+became a thin HTTP/SSE client of it (`app/daemon_client.py`). Decisions, in
+the order they fell:
+
+1. **Thin clients means THIN.** The first plan had the keybinding helper
+   construct `ApplicationTerminal()` directly — rejected in review as shifting
+   one function to another: the keypress ships only what it alone knows
+   (`{command, window_id, cwd}` — `$KITTY_WINDOW_ID` exists only in the
+   keypress process) to `POST /api/terminal/panes`, and the gesture executes
+   daemon-side (`app/pane_commands.py`). Refusals became visible (a 4xx and a
+   `pane-command` audit row where a background launch used to discard a
+   traceback), and each keypress got faster — one localhost round-trip instead
+   of a full bootstrap import.
+2. **One shared block model per session, not one renderer per connection.**
+   "Why not share TerminalPresenter + TerminalRenderer between clients?" held
+   up under checking: `ansi()` is a full repaint and the presenters are
+   stateless, so the daemon keeps a single width-independent block model per
+   session (`app/pane_streams.py`), rendered per client width; whichever SSE
+   connection polls first advances it under the model's lock — a single writer
+   with no feeder thread. A resize is a reconnect against the warm model; a
+   pending identity resolves server-side and arrives as a `session` event.
+3. **No fallbacks, single point of failure accepted** — by explicit decision.
+   A client that cannot reach the daemon says so; it never falls back to a
+   direct store read.
+4. **Kept direct, deliberately:** the recorders (hooks — until §8.2 — the
+   wrappers, the otel receiver), `core/audit`, and `bin/baqylau-audit.py`, the
+   ONE sanctioned direct reader — forensics must work when the daemon is the
+   thing being debugged.
+
+### 8.2 Hooks deliver through the daemon (`7f610fe`)
+
+The request, verbatim in spirit: hooks become thin HTTP clients; each harness
+gets its own endpoint; no fallback, no backward compatibility. This
+deliberately revises §2.2 and §2.6:
+
+1. **The rule became per-component.** The daemon now records hook deliveries
+   on its HTTP threads and interprets on its tick thread — a wedged `tick()`
+   no longer stops hook capture, and nothing records *and* interprets.
+2. **The intake logic returned to the contract, daemon-side.** New plugin slot
+   `hooks: HarnessHookGateway` (`plugins/<name>/hooks.py`) — the push twin of
+   `sources`: `raw_events(payload, environment) -> (raw_events, reply)`, pure
+   of store access. `HookGatewayService` (`app/hook_gateway.py`) is the ONE
+   recorder of pushed evidence, behind `POST /api/harnesses/<name>/hooks`
+   (routed by shape; shared code still never says "claude" or "codex").
+3. **The body is evidence.** The exact hook stdin travels un-decoded
+   (`_post_guard_bytes`); the env subset only the hook process can see — its
+   kitty window, its account variables — rides the `X-Baqylau-Environment`
+   header, with each plugin's `ENVIRONMENT_KEYS` as the one owner of which
+   keys ship. §4's meta-lesson survives intact: what the hook observes from
+   inside the session's window is still the evidence; it just ships it instead
+   of writing it.
+4. **The hook entry is a ~6-line stub** over `app/hook_client.py`: read stdin,
+   `ensure_running()` (the first hook of a session still boots the daemon),
+   POST, print the reply. Every failure path audits and exits 0;
+   `DELIVERY_TIMEOUT_SECONDS` bounds what a wedged daemon can cost a hook.
+   Ratchet: `test_hook_entries_are_thin_clients_of_the_daemon`.
+5. **The loss window is the accepted price.** A delivery the daemon never
+   accepted is LOST — no client-side fallback write, because two writers of
+   hook evidence was the disease. Always audited, both sides: client
+   `<harness> hook (deliver)` per drop, daemon `hook delivery` per refusal.
+   The cutover demonstrated the shape at birth: the few deliveries fired in
+   the merge-to-restart window each left their client-side row.
+6. **The wrappers and the otel receiver stay direct writers** — they run on
+   the launch path, before any daemon is guaranteed.
+
+### Deployment state (end of 2026-08-16)
+
+- Both commits pushed to `main`, history linear; the daemon restarted on the
+  final code and the hook route smoke-tested live (404 unknown harness, 400
+  malformed payload, real hook evidence flowing within seconds).
+- Hooks in `~/.claude/settings.json` still NOT rewired — same entry points,
+  now thin clients.
+- Test suite: 300 passing; `make lint` clean. The conftest now isolates
+  `BAQYLAU_AUDIT_DIRECTORY` (the suite used to leak audit rows into the real
+  database).
+- New gap to know about: a fully dead daemon loses hook evidence (audited, by
+  decision) — `errors` rows with `func LIKE '%hook (deliver)%'` are the
+  signal; the audit-debug skill has the triage recipe under *"A session ran
+  hooks but no hook evidence was recorded at all"*.
