@@ -53,7 +53,8 @@ function renderSessionChrome(tab) {
 function chromeIdentity(sessionView, meta) {
   const l1 = el("div", "l1");
   const projSpan = el("span", "proj",
-                      meta.title || (meta.workingDirectory ? proj(meta) : shortSid(S.currentSessionId)));
+                      meta.title || directoryName(meta.workingDirectory)
+                                 || shortSid(S.currentSessionId));
   sessionView.projEl = projSpan;                // the `title` SSE + inline rename target
   l1.append(projSpan);
   const badge = el("span", "badge");
@@ -1200,7 +1201,7 @@ function resetBody() {
 function agentCrumbs(sessionId, actorId, rec) {
   const nav = el("div", "crumbs");
   const meta = (S.sessionView && S.sessionView.meta) || {};
-  const sesName = meta.title || (meta.workingDirectory ? proj(meta) : shortSid(sessionId));
+  const sesName = meta.title || directoryName(meta.workingDirectory) || shortSid(sessionId);
   const main = el("a", "crumb");
   main.href = "#/s/" + encodeURIComponent(sessionId);       // the mirror = the main agent
   main.title = "back to the main agent";

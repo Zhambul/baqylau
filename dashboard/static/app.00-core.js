@@ -406,11 +406,11 @@ function lastActive(row) {
 }
 function orderKey(row) { return row.session.started_at || lastActive(row); }
 function groupKey(row) { return row.project_directory; }
+function directoryName(path) {
+  return String(path || "").split("/").filter(Boolean).pop() || "";
+}
 function proj(row) {
-  const workingDirectory = sessionWorkingDirectory(row);
-  return workingDirectory
-    ? workingDirectory.split("/").filter(Boolean).pop()
-    : sessionId(row).slice(0, 18);
+  return directoryName(sessionWorkingDirectory(row)) || sessionId(row).slice(0, 18);
 }
 /* The `?agent=<id>` suffix every scoped read carries — "" outside agent scope,
    so an unscoped URL is byte-identical to what it was. `sep` is the separator
