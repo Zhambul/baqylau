@@ -1,6 +1,6 @@
 from dataclasses import replace
 
-from app import terminal_views
+from terminal.panes import views as terminal_views
 from domain.events import FileAccessed
 from domain.ids import ActorId, CanonicalEventId, OperationId, SessionId
 from runtime.projections import ActivityContext, FileActivity

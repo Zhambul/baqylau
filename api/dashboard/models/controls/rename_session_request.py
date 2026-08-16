@@ -1,7 +1,7 @@
 # The rename gesture.
 from api.common.models.fields import RequiredText
 from api.dashboard.models.controls.control_request import ControlRequestBody
-from contracts.harness import ControlRequest, RenameSession
+from harness.models import ControlRequest, RenameSession
 from domain.ids import SessionId
 
 

@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends
 from api.guard import control_plane
 from api.terminal.models.views.opened_response import OpenedResponse
 from api.terminal.models.views.toggle_view_request import ToggleViewRequest
-from app import terminal_views
+from terminal.panes import views as terminal_views
 from core import audit as A
 
 router = APIRouter(dependencies=[Depends(control_plane())])

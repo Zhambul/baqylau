@@ -10,7 +10,7 @@ from dataclasses import dataclass, fields, is_dataclass
 from decimal import Decimal
 from typing import Protocol
 
-from contracts.harness import TerminalSessionState
+from harness.models import TerminalSessionState
 from app.repository import RepositoryQueries, RepositoryStatus
 from dashboard.markdown import md_html
 from dashboard.ansi import ansi_html, escape_html

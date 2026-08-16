@@ -6,7 +6,7 @@ from decimal import Decimal
 
 import pytest
 
-from contracts.harness import RawEvent, Session, TranslationResult
+from harness.models import RawEvent, Session, TranslationResult
 from domain.events import (
     ActorFinished,
     ActorStarted,

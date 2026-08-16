@@ -3,7 +3,7 @@ from pydantic import BaseModel
 
 from api.common.models.fields import RequiredText
 from api.dashboard.models.controls.attachment_reference import AttachmentReferenceBody, references
-from contracts.harness import LaunchRequest
+from harness.models import LaunchRequest
 from domain.ids import SessionId
 
 

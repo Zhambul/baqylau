@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import time
 
-from contracts.harness import RawEvent, TranslationResult
+from harness.models import RawEvent, TranslationResult
 from runtime.canonical_store import CanonicalEventStore
-from runtime.harnesses import HarnessRegistry
+from harness.registry import HarnessRegistry
 from runtime.operation_output import OperationOutputStore
 from runtime.projections import SessionQueries
 from runtime.recorder import RawEventRecorder

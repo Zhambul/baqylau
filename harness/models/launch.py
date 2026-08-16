@@ -1,0 +1,41 @@
+"""Starting a harness CLI: the request, the plan, the outcome."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Literal
+
+from domain.ids import SessionId
+from harness.models.controls import AttachmentReference
+
+
+@dataclass(frozen=True)
+class LaunchRequest:
+    working_directory: str
+    initial_text: str | None
+    model_id: str | None
+    effort: str | None
+    account_id: str | None
+    resume_session_id: SessionId | None
+    attachments: tuple[AttachmentReference, ...] = ()
+
+
+@dataclass(frozen=True)
+class LaunchResult:
+    status: Literal["started", "rejected"]
+    window_id: str | None = None
+    reason: str | None = None
+
+
+@dataclass(frozen=True)
+class HarnessLaunchPlan:
+    command: str
+    arguments: tuple[str, ...]
+    title: str
+    # Environment the launched CLI (and so its hook processes) must carry —
+    # launch-time facts travel with the process to be observed as evidence.
+    environment: tuple[tuple[str, str], ...] = ()
+
+
+class LaunchRejected(ValueError):
+    pass

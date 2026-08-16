@@ -10,7 +10,7 @@ from typing import Protocol
 
 from app.diagnostics import OperationalDiagnostics
 from app.repository import RepositoryQueries
-from contracts.harness import TerminalSessionState
+from harness.models import TerminalSessionState
 from domain.ids import SessionId
 from domain.values import TokenUsage
 from runtime.canonical_store import CanonicalEventStore

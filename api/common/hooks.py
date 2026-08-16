@@ -8,17 +8,17 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 
 from api.guard import control_plane
-from app.hook_gateway import UnknownHookHarness
-from contracts.harness import HarnessHookRequest
+from harness.hooks.gateway import UnknownHookHarness
+from harness.models import HarnessHookRequest
 from core import audit as A
-from core.wire import (
+from harness.hooks.wire import (
     ACCOUNT_ID_HEADER,
     ACCOUNT_NAME_HEADER,
     HARNESS_PROCESS_HEADER,
-    HOOK_MAX,
     LAUNCH_EFFORT_HEADER,
     LAUNCH_MODEL_HEADER,
     TERMINAL_WINDOW_HEADER,
+    HOOK_MAX,
 )
 from runtime.recorder import RawEventRecorderError
 

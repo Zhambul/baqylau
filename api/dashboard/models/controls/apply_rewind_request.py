@@ -1,7 +1,7 @@
 # The apply-rewind gesture.
 from api.common.models.fields import RequiredText
 from api.dashboard.models.controls.control_request import ControlRequestBody
-from contracts.harness import ApplyRewind, ControlRequest
+from harness.models import ApplyRewind, ControlRequest
 from domain.ids import MessageId, SessionId
 
 

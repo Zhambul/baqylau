@@ -15,12 +15,12 @@ from app.interpreter import Interpreter, SessionLivenessSource
 from app.evidence_cli import main as evidence_main
 from app.reactions import (
     OperationOutputCanonicalEventReaction,
-    PaneCanonicalEventReaction,
     SessionUpsertCanonicalEventReaction,
 )
-from contracts.harness import (
+from terminal.panes.reaction import PaneCanonicalEventReaction
+from harness.contract import HarnessPlugin
+from harness.models import (
     HarnessInfo,
-    HarnessPlugin,
     LIVENESS_SOURCE_TYPE,
     OUTPUT_LOCATION_SOURCE_TYPE,
     RawEvent,
@@ -59,7 +59,7 @@ from domain.values import StructuredContent, TextContent
 from runtime.canonical_store import CanonicalEventStore
 from runtime.database import connect
 from runtime.evidence import EvidenceQueries
-from runtime.harnesses import HarnessRegistry, HarnessRegistryError
+from harness.registry import HarnessRegistry, HarnessRegistryError
 from runtime.operation_output import OperationOutputStore
 from runtime.recorder import EventIdentityConflict, RawEventRecorder
 from runtime.sessions import SessionStore

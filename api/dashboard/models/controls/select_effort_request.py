@@ -1,7 +1,7 @@
 # The effort-selection gesture.
 from api.common.models.fields import RequiredText
 from api.dashboard.models.controls.control_request import ControlRequestBody
-from contracts.harness import ControlRequest, SelectEffort
+from harness.models import ControlRequest, SelectEffort
 from domain.ids import SessionId
 
 

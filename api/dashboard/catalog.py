@@ -10,7 +10,7 @@ from api.dashboard.models.harnesses.harness_description_response import (
     HarnessDescriptionResponse,
 )
 from api.dependencies import ApplicationGraph
-from contracts.harness import QueryContext
+from harness.models import QueryContext
 from dashboard.activity import to_wire
 from domain.ids import SessionId
 

@@ -5,10 +5,10 @@ from __future__ import annotations
 import time
 from dataclasses import replace
 
-from contracts.harness import Session
+from harness.models import Session
 from domain.ids import ActorId, SessionId
 from runtime.database import connect, initialize
-from runtime.harnesses import HarnessRegistry
+from harness.registry import HarnessRegistry
 
 
 class SessionStore:

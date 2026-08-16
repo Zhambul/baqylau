@@ -54,7 +54,7 @@ SQLite.
    the Claude Code plugin entry:
    ```json
    "hooks": { "PostToolUse": [ { "hooks": [
-       { "type": "command", "command": "python3 /ABS/PATH/baqylau/plugins/claude_code/canonical_hook.py" } ] } ],
+       { "type": "command", "command": "python3 /ABS/PATH/baqylau/bin/baqylau-hook-claude.py" } ] } ],
        "…every other event…": [ "… same single entry …" ] }
    ```
 4. Wire the ⧉ copy links (`~/.config/kitty/open-actions.conf`):
@@ -74,7 +74,7 @@ Everything activates automatically per session — the mirror opens on
 
 ```sh
 # Mirror pane
-python3 app/terminal_panes.py toggle|grow|shrink|reset|setpct <N>
+python3 bin/baqylau-panes.py toggle|grow|shrink|reset|setpct <N>
 
 # Smoke-test the tab colors (~3s each)
 for s in idle thinking working executing awaiting-bg awaiting-command awaiting-response; do
@@ -103,9 +103,11 @@ core/        tool- and terminal-agnostic runtime   (imports only core)
 terminal/    the terminal concern, whole: contract + models, the panes it
              paints, and terminal/impl/<name>/ — one directory per terminal
              (kitty today), the only place a terminal's name appears
-plugins/     one adapter per agent tool:
-             claude_code · codex · otel            (import core + terminal)
-bin/         executable entry scripts (claude-*.py) — filenames are load-bearing
+harness/     the harness concern, whole: contract + models, the hook channel,
+             the services over one plugin, and harness/impl/<name>/ — one
+             directory per agent tool (claude_code · codex), the only place a
+             harness's name appears
+bin/         executable entry scripts (baqylau-*.py) — filenames are load-bearing
 ```
 
 ## Testing

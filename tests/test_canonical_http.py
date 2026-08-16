@@ -16,7 +16,7 @@ from api.dashboard.models.controls.send_text_request import SendTextRequest
 from api.server import build_server
 from app.bootstrap import build_application
 from app.telemetry import BrowserTelemetryService
-from contracts.harness import RawEvent, Session, TranslationResult
+from harness.models import RawEvent, Session, TranslationResult
 from dashboard import prefs
 from dashboard.application import (
     DashboardNotificationState,
@@ -814,8 +814,8 @@ def test_browser_telemetry_uses_named_application_resources(tmp_path):
 # success), and before this it left nothing but the driver's reason string in a
 # response body nobody records.
 def _audited_control(monkeypatch, outcome):
-    from app import services
-    from contracts.harness import SelectModel
+    from harness.services import controls as services
+    from harness.models import SelectModel
 
     rows = []
     monkeypatch.setattr(
@@ -841,7 +841,7 @@ def _audited_control(monkeypatch, outcome):
 
 
 def test_an_unconfirmed_control_is_audited_with_its_reason(monkeypatch):
-    from contracts.harness import ControlResult
+    from harness.models import ControlResult
 
     rows, raised = _audited_control(
         monkeypatch,
@@ -862,7 +862,7 @@ def test_an_unconfirmed_control_is_audited_with_its_reason(monkeypatch):
 
 
 def test_an_acknowledged_control_is_audited_too(monkeypatch):
-    from contracts.harness import ControlResult
+    from harness.models import ControlResult
 
     rows, _ = _audited_control(
         monkeypatch, ControlResult("request-one", "acknowledged")
@@ -879,8 +879,8 @@ def test_a_raised_control_is_audited_before_it_propagates(monkeypatch):
 
 
 def test_a_broken_audit_never_takes_down_the_gesture(monkeypatch):
-    from app import services
-    from contracts.harness import ControlResult, SelectModel
+    from harness.services import controls as services
+    from harness.models import ControlResult, SelectModel
 
     def explode(*_args, **_kwargs):
         raise sqlite3.OperationalError("database is locked")
@@ -1024,7 +1024,7 @@ def test_pane_stream_rejects_a_missing_width_before_streaming(tmp_path):
 
 
 def test_pane_command_route_carries_the_keypress_environment(tmp_path):
-    from app.pane_commands import PaneCommandOutcome
+    from terminal.panes.commands import PaneCommandOutcome
 
     class PaneCommands:
         def __init__(self):
@@ -1076,7 +1076,7 @@ def test_pane_command_route_carries_the_keypress_environment(tmp_path):
 
 def test_terminal_view_route_owns_the_open_closed_state(tmp_path, monkeypatch):
     monkeypatch.setenv("BAQYLAU_DATA_DIR", str(tmp_path / "data"))
-    from app import terminal_views
+    from terminal.panes import views as terminal_views
 
     server, thread = _server(_application(tmp_path))
     try:

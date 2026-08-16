@@ -3,7 +3,7 @@ from pydantic import model_validator
 
 from api.dashboard.models.controls.attachment_reference import AttachmentReferenceBody, references
 from api.dashboard.models.controls.control_request import ControlRequestBody
-from contracts.harness import ControlRequest, SendText
+from harness.models import ControlRequest, SendText
 from domain.ids import SessionId
 
 

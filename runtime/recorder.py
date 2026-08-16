@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from contracts.harness import RawEvent
+from harness.models import RawEvent
 from runtime.database import connect, initialize
 
 

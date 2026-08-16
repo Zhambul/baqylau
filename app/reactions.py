@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from contracts.harness import CanonicalEventReaction, Session
+from harness.contract import CanonicalEventReaction
+from harness.models import Session
 from domain.events import (
     CanonicalEvent,
     OperationFinished,
@@ -17,8 +18,6 @@ from domain.ids import SessionId
 from runtime.operation_output import OperationOutputStore
 from runtime.recorder import RawEventRecorder
 from runtime.sessions import SessionStore
-from app import pane_preferences
-from terminal.adapter import SessionPaneRequest, TerminalAdapter
 
 
 class SessionUpsertCanonicalEventReaction(CanonicalEventReaction):
@@ -105,34 +104,3 @@ class OperationOutputCanonicalEventReaction(CanonicalEventReaction):
             self.operation_output.remove(
                 session_id, source.operation_id, source.delete_source, source.source_path
             )
-
-
-class PaneCanonicalEventReaction(CanonicalEventReaction):
-    """The terminal display: open the session's panes at the window its own
-    evidence recorded, close them when the session finishes."""
-
-    def __init__(self, terminal: TerminalAdapter, sessions: SessionStore) -> None:
-        self.terminal = terminal
-        self.sessions = sessions
-
-    def react(self, canonical_event: CanonicalEvent) -> None:
-        payload = canonical_event.payload
-        if isinstance(payload, SessionFinished):
-            self.terminal.close_session_panes(canonical_event.session_id)
-        elif isinstance(payload, SessionStarted):
-            self._open(canonical_event.session_id)
-
-    def _open(self, session_id: SessionId) -> None:
-        if self.terminal.session_panes_are_open(session_id):
-            return
-        # The session-upsert reaction already ran for this whole batch
-        # (reaction-outer order), so the row exists and carries the window the
-        # same delivery shipped.
-        session = self.sessions.find_by_id(session_id)
-        if session is None or session.terminal_window_id is None:
-            return  # headless launch: no anchor, no panes
-        self.terminal.open_session_panes(SessionPaneRequest(
-            session_id,
-            session.terminal_window_id,
-            pane_preferences.width_percent(session.working_directory or ""),
-        ))

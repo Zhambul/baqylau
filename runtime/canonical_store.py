@@ -7,7 +7,7 @@ import sqlite3
 import time
 from dataclasses import dataclass
 
-from contracts.harness import RawEvent, TranslationResult
+from harness.models import RawEvent, TranslationResult
 from domain.codec import CanonicalEventCodec
 from domain.events import CanonicalEvent, EventPayload
 from domain.ids import ActorId, CanonicalEventId, RawEventId, SessionId

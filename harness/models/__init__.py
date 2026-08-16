@@ -1,0 +1,125 @@
+"""The harness protocol's messages and values — one module per concern.
+
+Every gesture is one request dataclass in and one result dataclass out, and
+every observation is a `RawEvent` in and a `TranslationResult` out, so a new
+field on one operation never disturbs its neighbours. Nothing here knows a
+concrete harness: these are the words every harness is described in.
+"""
+
+from harness.models.catalog import (
+    CommandOption,
+    EffortOption,
+    HarnessCatalogSnapshot,
+    ModelOption,
+    QueryContext,
+    RewindModeOption,
+)
+from harness.models.controls import (
+    AnswerQuestion,
+    ApplyRewind,
+    AttachmentReference,
+    AutoNameSession,
+    CloseSession,
+    CommandResult,
+    Compact,
+    ControlContext,
+    ControlName,
+    ControlOutcome,
+    ControlRequest,
+    ControlResult,
+    ControlTarget,
+    DecidePlan,
+    DeliveryResult,
+    Interrupt,
+    MigrateAccount,
+    MigrationResult,
+    OpenRewind,
+    PlanChoicesResult,
+    ReadPlanChoices,
+    RenameSession,
+    RewindResult,
+    SelectEffort,
+    SelectModel,
+    SendText,
+)
+from harness.models.evidence import (
+    LIVENESS_SOURCE_TYPE,
+    OUTPUT_LOCATION_SOURCE_TYPE,
+    RawEvent,
+    RawEventSourceContext,
+    RecordedTranslationDecision,
+    TranslationDecision,
+    TranslationError,
+    TranslationResult,
+    canonical_event,
+    output_location_raw_event,
+)
+from harness.models.hooks import HarnessHookRequest, HarnessHookResponse
+from harness.models.info import HarnessInfo
+from harness.models.launch import (
+    HarnessLaunchPlan,
+    LaunchRejected,
+    LaunchRequest,
+    LaunchResult,
+)
+from harness.models.probe import TerminalInputState, TerminalSessionState
+from harness.models.session import Session
+from harness.models.usage import UsageBlock, UsageRow, UsageWindow
+
+__all__ = [
+    "AnswerQuestion",
+    "ApplyRewind",
+    "AttachmentReference",
+    "AutoNameSession",
+    "CloseSession",
+    "CommandOption",
+    "CommandResult",
+    "Compact",
+    "ControlContext",
+    "ControlName",
+    "ControlOutcome",
+    "ControlRequest",
+    "ControlResult",
+    "ControlTarget",
+    "DecidePlan",
+    "DeliveryResult",
+    "EffortOption",
+    "HarnessCatalogSnapshot",
+    "HarnessHookRequest",
+    "HarnessHookResponse",
+    "HarnessInfo",
+    "HarnessLaunchPlan",
+    "Interrupt",
+    "LIVENESS_SOURCE_TYPE",
+    "LaunchRejected",
+    "LaunchRequest",
+    "LaunchResult",
+    "MigrateAccount",
+    "MigrationResult",
+    "ModelOption",
+    "OUTPUT_LOCATION_SOURCE_TYPE",
+    "OpenRewind",
+    "PlanChoicesResult",
+    "QueryContext",
+    "RawEvent",
+    "RawEventSourceContext",
+    "ReadPlanChoices",
+    "RecordedTranslationDecision",
+    "RenameSession",
+    "RewindModeOption",
+    "RewindResult",
+    "SelectEffort",
+    "SelectModel",
+    "SendText",
+    "Session",
+    "TerminalInputState",
+    "TerminalSessionState",
+    "TranslationDecision",
+    "TranslationError",
+    "TranslationResult",
+    "UsageBlock",
+    "UsageRow",
+    "UsageWindow",
+    "canonical_event",
+    "output_location_raw_event",
+]

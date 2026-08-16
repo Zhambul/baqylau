@@ -8,7 +8,8 @@ import json
 import os
 import time
 
-from contracts.harness import HarnessRawEventSource, RawEvent
+from harness.contract import HarnessRawEventSource
+from harness.models import RawEvent
 from domain.events import OperationOutputLocated
 from domain.ids import ActorId, RawEventId, SessionId
 from runtime.database import connect, initialize

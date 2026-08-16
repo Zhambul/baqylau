@@ -11,7 +11,7 @@ never an exception. The caller audits what matters.
 
 This file and `terminal/models/` know nothing about sessions, harnesses, or any
 concrete terminal. They are keyed on window ids and nothing else, which is why
-`contracts/` may import them without inverting a layer.
+the harness contract may import them without inverting a layer.
 """
 
 from __future__ import annotations

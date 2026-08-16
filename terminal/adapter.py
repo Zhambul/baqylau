@@ -119,7 +119,7 @@ class TerminalAdapter:
         )]
         if self._tagged(ACTIVITY_PANE_TAG, request.session_id) is None:
             outcomes.append(self._plugin.panes.open_pane(PaneOpenRequest(
-                command=self._pane_command("terminal_process.py", session_id),
+                command=self._pane_command("mirror_process.py", session_id),
                 working_directory="",
                 title=MIRROR_PANE_TITLE,
                 split="vertical",
@@ -229,10 +229,8 @@ class TerminalAdapter:
     # --- internals -----------------------------------------------------------
     @staticmethod
     def _pane_command(process_file: str, session_id: str) -> tuple[str, ...]:
-        application_directory = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "app"
-        )
-        return (sys.executable, os.path.join(application_directory, process_file), session_id)
+        pane_directory = os.path.join(os.path.dirname(os.path.abspath(__file__)), "panes")
+        return (sys.executable, os.path.join(pane_directory, process_file), session_id)
 
     def _close_session_panes(
         self,

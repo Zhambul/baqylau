@@ -1,36 +1,19 @@
-"""Claude Code hook entry: a thin client of the daemon's hook endpoint.
+#!/usr/bin/env python3
+"""Forwarding shim: pre-refactor hook entry path.
 
-Ships the exact stdin bytes plus a few flat header values (the terminal window,
-the CLI pid from its own ancestry, the shell-selected account, the launch-time
-model/effort selections riding the inherited environment) to
-POST /api/harnesses/claude_code/hooks and prints the reply. All parsing and
-recording happen daemon-side in `plugins/claude_code/hooks.py`.
+Sessions launched before the plugins/ -> harness/impl move captured this old
+path in their hook config and cache it for the process lifetime; deleting the
+file mid-session blocks every hook delivery. This shim forwards to the moved
+entry so those sessions keep working. New sessions use the new path from
+~/.claude/settings.json; this shim can be deleted once old sessions are gone.
 """
 
-from __future__ import annotations
-
-import os
 import sys
+from pathlib import Path
 
-if __package__ in (None, ""):
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from app import hook_client
-from plugins.claude_code import account
-from plugins.claude_code.hooks import CLI_PROCESS_NAME, HARNESS
-from plugins.claude_code.launcher import LAUNCH_EFFORT_VARIABLE, LAUNCH_MODEL_VARIABLE
-
-
-def main() -> None:
-    selected = account.current(os.environ)
-    hook_client.run(
-        HARNESS,
-        CLI_PROCESS_NAME,
-        selected["slug"],
-        selected["label"],
-        launch_model=os.environ.get(LAUNCH_MODEL_VARIABLE) or "",
-        launch_effort=os.environ.get(LAUNCH_EFFORT_VARIABLE) or "",
-    )
+from harness.impl.claude_code.hooks.entry import main  # noqa: E402
 
 
 if __name__ == "__main__":

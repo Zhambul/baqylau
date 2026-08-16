@@ -4,12 +4,8 @@ from __future__ import annotations
 
 import json
 
-from contracts.harness import (
-    CoreTranslator,
-    RawEvent,
-    TranslationResult,
-    canonical_event,
-)
+from harness.contract import CoreTranslator
+from harness.models import RawEvent, TranslationResult, canonical_event
 from domain.events import OperationOutputLocated, SessionFinished
 from domain.ids import OperationId
 

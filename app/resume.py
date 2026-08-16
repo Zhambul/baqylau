@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from app.repository import RepositoryQueries
-from contracts.harness import TerminalSessionState
+from harness.models import TerminalSessionState
 from domain.ids import SessionId
 from domain.values import AccountReference, ModelReference
 from runtime.canonical_store import CanonicalEventStore

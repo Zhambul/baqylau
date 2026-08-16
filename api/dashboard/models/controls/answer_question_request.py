@@ -4,7 +4,7 @@ from typing import Any, Literal
 
 from api.common.models.fields import RequiredText
 from api.dashboard.models.controls.control_request import ControlRequestBody
-from contracts.harness import AnswerQuestion, ControlRequest
+from harness.models import AnswerQuestion, ControlRequest
 from domain.ids import AttentionId, SessionId
 from domain.values import StructuredContent
 

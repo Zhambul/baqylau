@@ -14,13 +14,13 @@ from types import SimpleNamespace
 import pytest
 
 from app.bootstrap import build_application
-from app import hook_client
-from app import pane_commands
-from app import terminal_panes
-from app.hook_gateway import HookGatewayService, UnknownHookHarness
-from app.plugins import installed_plugins
+from harness.hooks import client as hook_client
+from terminal.panes import commands as pane_commands
+from terminal.panes import client as terminal_panes
+from harness.hooks.gateway import HookGatewayService, UnknownHookHarness
+from harness.impl import installed
 from app.reactions import OperationOutputCanonicalEventReaction
-from contracts.harness import (
+from harness.models import (
     AnswerQuestion,
     AttachmentReference,
     ControlContext,
@@ -80,42 +80,42 @@ from domain.events import (
 )
 from domain.ids import ActorId, AssignmentId, CanonicalEventId, OperationId, RawEventId, SessionId, TaskId, TurnId
 from domain.values import AccountReference, AttentionPrompt, ModelReference, TextContent
-from plugins.claude_code.canonical import (
+from harness.impl.claude_code.canonical.translator import (
     ClaudeCanonicalTranslator,
     ClaudeRawEventSources,
     ClaudeTaskRawEventSource,
     ClaudeTranscriptRawEventSource,
 )
-from plugins.claude_code import hooks as claude_hooks
-from plugins.claude_code import foreground as claude_foreground
-from plugins.claude_code import statusline as claude_statusline
-from plugins.claude_code import tui as claude_tui
-from plugins.claude_code import usage_state as claude_usage_state
-from plugins.claude_code.usage_rows import usage_reader as claude_usage_reader
-from plugins.claude_code.reactors import (
+from harness.impl.claude_code.hooks import gateway as claude_hooks
+from harness.impl.claude_code.hooks import foreground as claude_foreground
+from harness.impl.claude_code.hooks import statusline as claude_statusline
+from harness.impl.claude_code.controls import tui as claude_tui
+from harness.impl.claude_code.usage import state as claude_usage_state
+from harness.impl.claude_code.usage.rows import usage_reader as claude_usage_reader
+from harness.impl.claude_code.reactors import (
     ClaudeAccountMigrationCanonicalEventReactor,
     ClaudeOtelCanonicalEventReactor,
 )
-from plugins.claude_code.otel import receiver as claude_otel_receiver
-from plugins.codex.canonical import (
+from harness.impl.claude_code.otel import receiver as claude_otel_receiver
+from harness.impl.codex.canonical.translator import (
     CodexCanonicalTranslator,
     CodexRawEventSources,
     CodexRolloutRawEventSource,
 )
-from plugins.codex import hooks as codex_hooks
-from plugins.codex import rollout as codex_rollout
-from plugins.codex.controller import _rollout_abort_state
+from harness.impl.codex.hooks import gateway as codex_hooks
+from harness.impl.codex.canonical import rollout as codex_rollout
+from harness.impl.codex.controls.controller import _rollout_abort_state
 from runtime.recorder import EventIdentityConflict, RawEventRecorder
 from canonical_runtime import CanonicalRuntime
 from runtime.evidence import EvidenceQueries
 from app.core_translators import LivenessTranslator, OperationOutputTranslator
 from app.interpreter import Interpreter
 from app.reactions import (
-    PaneCanonicalEventReaction,
     SessionUpsertCanonicalEventReaction,
 )
-from app.services import HarnessLauncherService
-from runtime.harnesses import HarnessRegistry
+from terminal.panes.reaction import PaneCanonicalEventReaction
+from harness.services.launcher import HarnessLauncherService
+from harness.registry import HarnessRegistry
 from domain.events import OperationOutputLocated
 
 
@@ -257,7 +257,7 @@ def test_claude_stop_failure_rate_limit_yields_the_usage_limited_goal_fact():
 def test_claude_reactor_starts_telemetry_on_session_start(monkeypatch):
     telemetry_starts = []
     monkeypatch.setattr(
-        "plugins.claude_code.reactors.otel.start",
+        "harness.impl.claude_code.reactors.otel.start",
         lambda: telemetry_starts.append("started"),
     )
     reactor = ClaudeOtelCanonicalEventReactor()
@@ -270,7 +270,7 @@ def test_claude_reactor_starts_telemetry_on_session_start(monkeypatch):
 
 
 def test_plugin_folder_descriptors_are_discovered_without_harness_branches():
-    assert [plugin.info.name for plugin in installed_plugins()] == ["claude_code", "codex"]
+    assert [plugin.info.name for plugin in installed()] == ["claude_code", "codex"]
 
 
 class InterpreterTerminal:
@@ -287,7 +287,7 @@ class InterpreterTerminal:
 def interpreting_runtime(database_path):
     """The real installed plugins wired to one database, with a silent terminal."""
     harnesses = HarnessRegistry()
-    for plugin in installed_plugins():
+    for plugin in installed():
         harnesses.register(plugin)
     harnesses.validate()
     runtime = CanonicalRuntime(str(database_path), harnesses=harnesses)
@@ -1357,8 +1357,8 @@ def test_terminal_adapter_opens_canonical_processes_with_generic_tags():
         {SCOREBOARD_PANE_TAG: "session-one"},
     ]
     assert [request.command[-2:] for request in terminal.opened_panes] == [
-        (str(Path(__file__).parents[1] / "app" / "terminal_process.py"), "session-one"),
-        (str(Path(__file__).parents[1] / "app" / "scoreboard_process.py"), "session-one"),
+        (str(Path(__file__).parents[1] / "terminal" / "panes" / "mirror_process.py"), "session-one"),
+        (str(Path(__file__).parents[1] / "terminal" / "panes" / "scoreboard_process.py"), "session-one"),
     ]
     # the anchor is stated as intent, never as one terminal's match syntax
     assert terminal.opened_panes[0].anchor.window_id == "window-one"
@@ -1448,7 +1448,7 @@ def test_pane_keybinding_ships_only_its_environment_to_the_daemon(monkeypatch):
         posted.append((path, body))
         return 200, {"handled": True, "succeeded": True, "reason": None}
 
-    monkeypatch.setattr("app.daemon_client.post_json", post_json)
+    monkeypatch.setattr("core.daemon_client.post_json", post_json)
 
     assert terminal_panes.main(["toggle"]) == 0
     assert terminal_panes.main(["grow", "9"]) == 0
@@ -1472,7 +1472,7 @@ def test_pane_keybinding_ships_only_its_environment_to_the_daemon(monkeypatch):
 
 def test_pane_keybinding_reports_a_daemon_refusal(monkeypatch):
     monkeypatch.setattr(
-        "app.daemon_client.post_json",
+        "core.daemon_client.post_json",
         lambda path, body: (409, {"handled": True, "succeeded": False, "reason": "no pane"}),
     )
     assert terminal_panes.main(["toggle"]) == 1
@@ -1481,7 +1481,7 @@ def test_pane_keybinding_reports_a_daemon_refusal(monkeypatch):
 def test_hook_client_ships_exact_bytes_and_flat_headers(monkeypatch, capsys):
     monkeypatch.setenv("BAQYLAU_TERMINAL", "kitty")
     monkeypatch.setenv("KITTY_WINDOW_ID", "77")
-    monkeypatch.setattr("app.hook_client.nearest_ancestor_named", lambda name: 4242)
+    monkeypatch.setattr("harness.hooks.client.nearest_ancestor_named", lambda name: 4242)
     payload = b'{ "session_id": "session-one" }'
     monkeypatch.setattr(
         "sys.stdin", SimpleNamespace(buffer=SimpleNamespace(read=lambda: payload))
@@ -1492,7 +1492,7 @@ def test_hook_client_ships_exact_bytes_and_flat_headers(monkeypatch, capsys):
         posted.append((path, body, headers, timeout))
         return 200, b'{"reply":"yes"}'
 
-    monkeypatch.setattr("app.daemon_client.post_bytes", post_bytes)
+    monkeypatch.setattr("core.daemon_client.post_bytes", post_bytes)
 
     hook_client.run(
         "claude_code", "claude", "c2", "Account Two",
@@ -1516,7 +1516,7 @@ def test_hook_client_ships_exact_bytes_and_flat_headers(monkeypatch, capsys):
 
 
 def test_hook_client_never_fails_its_harness_and_audits_every_swallow(monkeypatch, capsys):
-    monkeypatch.setattr("app.hook_client.nearest_ancestor_named", lambda name: None)
+    monkeypatch.setattr("harness.hooks.client.nearest_ancestor_named", lambda name: None)
     audited = []
     monkeypatch.setattr(
         "core.audit.error",
@@ -1527,7 +1527,7 @@ def test_hook_client_never_fails_its_harness_and_audits_every_swallow(monkeypatc
     )
 
     monkeypatch.setattr(
-        "app.daemon_client.post_bytes",
+        "core.daemon_client.post_bytes",
         lambda path, body, headers, timeout: (400, b'{"error":"malformed"}'),
     )
     hook_client.run("claude_code", "claude")
@@ -1535,7 +1535,7 @@ def test_hook_client_never_fails_its_harness_and_audits_every_swallow(monkeypatc
     def unreachable(path, body, headers, timeout):
         raise OSError("daemon down")
 
-    monkeypatch.setattr("app.daemon_client.post_bytes", unreachable)
+    monkeypatch.setattr("core.daemon_client.post_bytes", unreachable)
     hook_client.run("codex", "codex")
 
     # a refused delivery prints NOTHING (an error body is not a hook reply)
@@ -1545,7 +1545,7 @@ def test_hook_client_never_fails_its_harness_and_audits_every_swallow(monkeypatc
 
 def test_hook_gateway_service_records_only_for_harnesses_that_accept_deliveries(tmp_path):
     registry = HarnessRegistry()
-    for plugin in installed_plugins():
+    for plugin in installed():
         registry.register(plugin if plugin.info.name != "codex" else replace(plugin, hooks=None))
     service = HookGatewayService(registry, RawEventRecorder(str(tmp_path / "events.db")))
     payload = json.dumps({
@@ -1930,8 +1930,8 @@ def test_catalogs_expose_only_what_depends_on_the_directory(tmp_path):
 
 
 def test_static_menu_vocabulary_lives_on_the_harness_descriptor():
-    from plugins.claude_code.plugin import plugin as claude_plugin
-    from plugins.codex.plugin import plugin as codex_plugin
+    from harness.impl.claude_code.plugin import plugin as claude_plugin
+    from harness.impl.codex.plugin import plugin as codex_plugin
 
     assert [model.model_id for model in claude_plugin.info.models] == [
         "fable",
@@ -1955,7 +1955,7 @@ def test_reasoning_levels_belong_to_the_model_that_offers_them():
     per-harness list promised Ultra for every model, so the menu offered a level
     the picker would then refuse.
     """
-    from plugins.codex.plugin import plugin as codex_plugin
+    from harness.impl.codex.plugin import plugin as codex_plugin
 
     by_id = {model.model_id: model for model in codex_plugin.info.models}
     luna = {effort.value for effort in by_id["gpt-5.6-luna"].efforts}
@@ -1976,7 +1976,7 @@ def test_claude_statusline_writes_plugin_owned_typed_usage(monkeypatch, tmp_path
         lambda environment: {"slug": "work", "label": "Work"},
     )
     monkeypatch.setattr(
-        "plugins.claude_code.usage_rows.account.registry",
+        "harness.impl.claude_code.usage.rows.account.registry",
         lambda: [{"slug": "work", "label": "Work", "alias": "work"}],
     )
     claude_statusline.capture(
@@ -2106,11 +2106,11 @@ def control_context(session, terminal, pending_attention=None, window_id="window
 def test_claude_question_discussion_is_delivered_after_declining(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(
-        "plugins.claude_code.controller.askdialog.drive",
+        "harness.impl.claude_code.controls.controller.askdialog.drive",
         lambda _terminal, _window, _prompts, _answers, *, chat: calls.append(("dialog", chat)),
     )
     monkeypatch.setattr(
-        "plugins.claude_code.controller.tui.type_command",
+        "harness.impl.claude_code.controls.controller.tui.type_command",
         lambda _terminal, _window, text: (calls.append(("discussion", text)) or (True, False)),
     )
     application = build_application(str(tmp_path))
@@ -2147,7 +2147,7 @@ def test_claude_question_discussion_is_delivered_after_declining(monkeypatch, tm
 def test_codex_question_discussion_stays_in_the_native_dialog(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(
-        "plugins.codex.controller.dialog.decline",
+        "harness.impl.codex.controls.controller.dialog.decline",
         lambda _terminal, _window, _prompts, message: calls.append(message),
     )
     application = build_application(str(tmp_path))
@@ -2183,11 +2183,11 @@ def test_codex_question_discussion_stays_in_the_native_dialog(monkeypatch, tmp_p
 
 def test_claude_model_control_resolves_the_native_confirmation(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        "plugins.claude_code.controller.tui.type_command",
+        "harness.impl.claude_code.controls.controller.tui.type_command",
         lambda _terminal, _window, _text: (True, False),
     )
     monkeypatch.setattr(
-        "plugins.claude_code.controller.confirmdialog.confirm",
+        "harness.impl.claude_code.controls.controller.confirmdialog.confirm",
         lambda _terminal, _window: {"dialog": True, "digit": "1"},
     )
     application = build_application(str(tmp_path))
@@ -2211,7 +2211,7 @@ def test_claude_model_control_resolves_the_native_confirmation(monkeypatch, tmp_
 
 def test_claude_account_migration_uses_only_projected_context(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        "plugins.claude_code.controller.account.migration_target",
+        "harness.impl.claude_code.controls.controller.account.migration_target",
         lambda current_account: {
             "slug": "account-two",
             "alias": "account-two",
@@ -2254,8 +2254,8 @@ def test_claude_account_migration_uses_only_projected_context(monkeypatch, tmp_p
 @pytest.mark.parametrize(
     ("harness", "native_writer"),
     [
-        ("claude_code", "plugins.claude_code.controller.transcript.set_session_title"),
-        ("codex", "plugins.codex.controller.title.set_session_title"),
+        ("claude_code", "harness.impl.claude_code.controls.controller.transcript.set_session_title"),
+        ("codex", "harness.impl.codex.controls.controller.title.set_session_title"),
     ],
 )
 def test_parked_rename_uses_only_the_owning_harness_title_store(
@@ -3565,6 +3565,95 @@ def test_claude_question_resolution_is_canonical_not_a_native_response_object():
     assert not hasattr(resolution, "tool_response")
 
 
+def test_claude_refused_question_resolves_from_the_transcript_not_a_missing_hook():
+    """A refused tool call never runs, so Claude Code fires no PostToolUse for it. The
+    transcript's tool_result is the only evidence the question ended — and it names no
+    tool, so the resolution depends on remembering the id from the request."""
+    translator = ClaudeCanonicalTranslator()
+    translator.translate(raw_event(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_use_id": "question-refused",
+            "tool_name": "AskUserQuestion",
+            "tool_input": {"questions": [{"question": "Which approach?", "options": []}]},
+        },
+        harness="claude_code",
+        source_type="hook",
+        raw_event_id="ask-refused",
+    ))
+
+    refusal = translator.translate(raw_event(
+        {
+            "type": "user",
+            "uuid": "question-refused-result",
+            "message": {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "question-refused",
+                        "is_error": True,
+                        "content": (
+                            "The user doesn't want to proceed with this tool use. "
+                            "The tool use was rejected. To tell you how to proceed, "
+                            "the user said:\nThe user wants to clarify these questions."
+                        ),
+                    }
+                ],
+            },
+        },
+        harness="claude_code",
+        source_type="transcript",
+        raw_event_id="ask-refused-result",
+    ))
+
+    resolution = payloads(refusal, AttentionResolved)[0].payload
+    assert resolution.attention_id == "question-refused"
+    assert resolution.decision == "discussed"
+    assert resolution.outcome == "failed"
+    assert resolution.answers == ()
+
+
+def test_claude_answered_question_leaves_the_transcript_result_to_the_hook():
+    """The hook's resolution carries the ANSWERS; the transcript's tool_result cannot.
+    Both would converge on one event_id where the first writer wins, so the transcript
+    must stay silent on a question that succeeded."""
+    translator = ClaudeCanonicalTranslator()
+    translator.translate(raw_event(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_use_id": "question-answered",
+            "tool_name": "AskUserQuestion",
+            "tool_input": {"questions": [{"question": "Which approach?", "options": []}]},
+        },
+        harness="claude_code",
+        source_type="hook",
+        raw_event_id="ask-answered",
+    ))
+
+    result = translator.translate(raw_event(
+        {
+            "type": "user",
+            "uuid": "question-answered-result",
+            "message": {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "question-answered",
+                        "content": "The user answered: vulture wrapper",
+                    }
+                ],
+            },
+        },
+        harness="claude_code",
+        source_type="transcript",
+        raw_event_id="ask-answered-result",
+    ))
+
+    assert payloads(result, AttentionResolved) == []
+
+
 def test_codex_session_turn_operation_usage_and_context_records():
     translator = CodexCanonicalTranslator()
     session = translator.translate(
@@ -3826,7 +3915,7 @@ def test_claude_prompt_quoting_a_command_envelope_stays_a_prompt():
 
 
 def test_daemon_client_decodes_sse_frames_and_surfaces_ticks():
-    from app import daemon_client
+    from core import daemon_client
 
     response = iter(
         [

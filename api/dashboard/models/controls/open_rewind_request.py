@@ -1,6 +1,6 @@
 # The open-rewind gesture.
 from api.dashboard.models.controls.control_request import ControlRequestBody
-from contracts.harness import ControlRequest, OpenRewind
+from harness.models import ControlRequest, OpenRewind
 from domain.ids import SessionId
 
 

@@ -12,7 +12,7 @@ is most of the skill.
 ## Where the data is
 
 Both live under the application data directory — `~/.local/share/baqylau`, overridable
-with `$BAQYLAU_DATA_DIR` (`app/data.py`). Open them **read-only** (`file:<path>?mode=ro`)
+with `$BAQYLAU_DATA_DIR` (`core/data.py`). Open them **read-only** (`file:<path>?mode=ro`)
 so triage can never mutate the evidence.
 
 | store | path | what it answers |
@@ -38,7 +38,7 @@ hooks (thin clients) ──POST exact stdin──▶ /api/harnesses/<name>/hooks
 ```
 
 - **`session_harness`** is written ONCE, at launch, by the harness's wrapper
-  (`plugins/*/command.py`) — hooks never register. Evidence recorded before its
+  (`harness/impl/*/command.py`) — hooks never register. Evidence recorded before its
   session row exists waits, untranslated, until registration lands.
 - **`raw_events`** is *immutable evidence*: the exact bytes a source produced. Reusing a
   `raw_event_id` with a different payload raises `EventIdentityConflict` — that is
@@ -65,7 +65,7 @@ read-and-interpret loop: it pulls every registered unfinished session's sources
 every `TICK_INTERVAL_SECONDS` (0.25s), with no session-count cap. **Recorder**
 processes (`otel`, the wrappers' `process` events) only append raw events and do not
 depend on it. **Hooks are thin clients**: they POST their exact stdin to the daemon's
-hook gateway (`app/hook_gateway.py` → `plugins/<harness>/hooks.py`), which records
+hook gateway (`harness/hooks/gateway.py` → `harness/impl/<harness>/hooks/gateway.py`), which records
 `hook`/`teammate_hook`/`account`/`watch`/`terminal` raw events on the HTTP threads —
 NOT the interpreter thread. That split is the key asymmetry behind the headline
 failure mode: when the interpreter thread stops (but the daemon process lives), a
@@ -129,7 +129,7 @@ So **a mostly-NULL `occurred_at` is not a bug** and is not worth chasing.
 
 `state_files.action` values in use: **`control`** (every control gesture's OUTCOME —
 `{control, request_id, status, reason, ms}`, written at the one dispatch point
-`app/services.py HarnessControlService.execute`; `status` ∈ `acknowledged` /
+`harness/services/controls.py HarnessControlService.execute`; `status` ∈ `acknowledged` /
 `rejected` / `indeterminate` / `raised`, and `reason` carries the harness's own words,
 e.g. a screen driver's failed step), `browser-event`, `browser-optimistic-action`,
 `browser-client-failure` (the frontend telemetry channel — what the browser saw that the
@@ -137,7 +137,7 @@ server cannot), `web-reject` (a control POST bounced by the request guard, `cont
 the code and why), `web-push`, `notification-route`, `notification-suppressed`,
 `telegram-notify`, **`pane-command`** (every pane keybinding gesture the daemon
 executed — `{command, window_id, session_id, ok, why}`, written by
-`app/pane_commands.py`; `path` is the keypress's working directory),
+`terminal/panes/commands.py`; `path` is the keypress's working directory),
 **`terminal-view`** (a mirror click-to-view toggle, `path` = the content
 reference), plus `observation (...)` failures recorded as `errors`.
 
@@ -254,7 +254,7 @@ deterministic pane anchor (panes anchor by focus only within seconds of start).
 ### A session ran hooks but no hook evidence was recorded at all
 
 Hooks record NOTHING locally — each delivery is a POST to the daemon
-(`app/hook_client.py` → `/api/harnesses/<name>/hooks`), and a delivery the daemon
+(`harness/hooks/client.py` → `/api/harnesses/<name>/hooks`), and a delivery the daemon
 never accepted is lost by design (no fallback write). The loss is always audited;
 read both sides:
 
@@ -275,7 +275,7 @@ ORDER BY ts DESC LIMIT 20;
   `hook_event_id` re-sent with different bytes). The context carries the harness and
   payload size; the client swallowed the same failure, so both rows describe one event.
 - **Neither, and yet no `hook` raw events** — the harness never fired hooks at all
-  (check `~/.claude/settings.json` wiring points at `plugins/*/canonical_hook.py`),
+  (check `~/.claude/settings.json` wiring points at `harness/impl/*/hooks/entry.py`),
   or the hooks ran under an environment where the repo path is wrong.
 
 ### The dashboard is unreachable, or needed several refreshes to load
@@ -400,7 +400,7 @@ Note the tunnel is a distinct failure domain from the bind: reproduce against
 ### A kitty pane is frozen, blank, or stuck on its startup banner
 
 The pane processes are thin SSE clients of the daemon — they render nothing
-themselves (`app/pane_streams.py` renders; `app/daemon_client.py` copies bytes).
+themselves (`terminal/panes/streams.py` renders; `core/daemon_client.py` copies bytes).
 So a broken pane is one of three shapes, each with its own rows:
 
 - **The daemon is down or restarting.** No `streams` row with kind

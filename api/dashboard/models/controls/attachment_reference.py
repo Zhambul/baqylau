@@ -2,7 +2,7 @@
 from pydantic import BaseModel
 
 from api.common.models.fields import RequiredText
-from contracts.harness import AttachmentReference
+from harness.models import AttachmentReference
 
 
 class AttachmentReferenceBody(BaseModel):

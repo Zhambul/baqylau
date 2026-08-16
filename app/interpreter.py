@@ -7,23 +7,16 @@ import threading
 import time
 from typing import Mapping
 
-from contracts.harness import (
-    CanonicalEventReaction,
-    CoreTranslator,
-    HarnessRawEventSource,
-    LIVENESS_SOURCE_TYPE,
-    RawEvent,
-    Session,
-    TranslationResult,
-)
+from harness.contract import CanonicalEventReaction, CoreTranslator, HarnessRawEventSource
+from harness.models import LIVENESS_SOURCE_TYPE, RawEvent, Session, TranslationResult
 from core.process import process_alive
 from domain.ids import RawEventId
 from runtime.canonical_store import CanonicalEventStore, CanonicalEventStoreError
-from runtime.harnesses import HarnessRegistry
+from harness.registry import HarnessRegistry
 from runtime.operation_output import OperationOutputStore
 from runtime.recorder import RawEventRecorder
 from runtime.sessions import SessionStore
-from app.services import HarnessControlService
+from harness.services.controls import HarnessControlService
 
 TICK_INTERVAL_SECONDS = 0.25
 TRANSLATION_BATCH_SIZE = 500

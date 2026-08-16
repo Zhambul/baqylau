@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pytest
 
-from plugins.codex import modeldialog
+from harness.impl.codex.controls import modeldialog
 
 MODEL_ROWS = [
     "gpt-5.6-sol (default)   Latest frontier agentic coding model.",

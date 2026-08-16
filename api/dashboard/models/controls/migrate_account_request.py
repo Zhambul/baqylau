@@ -1,6 +1,6 @@
 # The account-migration gesture.
 from api.dashboard.models.controls.control_request import ControlRequestBody
-from contracts.harness import ControlRequest, MigrateAccount
+from harness.models import ControlRequest, MigrateAccount
 from domain.ids import SessionId
 
 

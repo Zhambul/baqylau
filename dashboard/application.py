@@ -9,7 +9,7 @@ from typing import Protocol
 
 from app.diagnostics import ApplicationError, OperationalDiagnostics
 from dashboard import prefs
-from contracts.harness import TerminalSessionState, UsageRow
+from harness.models import TerminalSessionState, UsageRow
 from domain.events import MessageCreated
 from domain.ids import AttentionId, SessionId
 from domain.values import TextContent

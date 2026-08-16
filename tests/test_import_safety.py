@@ -9,21 +9,21 @@ import sys
 from conftest import REPOSITORY_ROOT
 
 CANONICAL_MODULES = (
-    "app.plugins",
-    "app.daemon_client",
-    "app.hook_client",
-    "app.terminal_process",
-    "app.scoreboard_process",
-    "app.terminal_panes",
+    "harness.impl",
+    "core.daemon_client",
+    "harness.hooks.client",
+    "terminal.panes.mirror_process",
+    "terminal.panes.scoreboard_process",
+    "terminal.panes.client",
     "api.server",
-    "plugins.claude_code.plugin",
-    "plugins.claude_code.canonical_hook",
-    "plugins.claude_code.hooks",
-    "plugins.codex.hooks",
-    "plugins.claude_code.foreground",
-    "plugins.claude_code.statusline",
-    "plugins.codex.plugin",
-    "plugins.codex.canonical_hook",
+    "harness.impl.claude_code.plugin",
+    "harness.impl.claude_code.hooks.entry",
+    "harness.impl.claude_code.hooks.gateway",
+    "harness.impl.codex.hooks.gateway",
+    "harness.impl.claude_code.hooks.foreground",
+    "harness.impl.claude_code.hooks.statusline",
+    "harness.impl.codex.plugin",
+    "harness.impl.codex.hooks.entry",
 )
 
 IMPORT_PROGRAM = """
@@ -78,9 +78,9 @@ if loaded:
     raise SystemExit(','.join(loaded))
 """
     for module in (
-        "plugins.claude_code.canonical_hook",
-        "plugins.claude_code.statusline",
-        "plugins.codex.canonical_hook",
+        "harness.impl.claude_code.hooks.entry",
+        "harness.impl.claude_code.hooks.statusline",
+        "harness.impl.codex.hooks.entry",
     ):
         result = subprocess.run(
             [sys.executable, "-c", program, module],

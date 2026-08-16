@@ -8,38 +8,31 @@ from typing import Mapping
 
 from dashboard import config as dashboard_config
 
-from contracts.harness import (
-    CanonicalEventReaction,
-    CoreTranslator,
-    LIVENESS_SOURCE_TYPE,
-    OUTPUT_LOCATION_SOURCE_TYPE,
-)
-from app.data import data_directory
+from harness.contract import CanonicalEventReaction, CoreTranslator
+from harness.models import LIVENESS_SOURCE_TYPE, OUTPUT_LOCATION_SOURCE_TYPE
+from core.data import data_directory
 from app.content import CanonicalContentService
 from app.core_translators import LivenessTranslator, OperationOutputTranslator
 from app.diagnostics import OperationalDiagnostics
-from app.hook_gateway import HookGatewayService
+from harness.hooks.gateway import HookGatewayService
 from app.insights import ApplicationInsightsService
 from app.interpreter import Interpreter
-from app.pane_commands import PaneCommandService
-from app.pane_streams import PaneStreamService
-from app.plugins import installed_plugins
+from terminal.panes.commands import PaneCommandService
+from terminal.panes.streams import PaneStreamService
+from harness.impl import installed
 from app.reactions import (
     OperationOutputCanonicalEventReaction,
-    PaneCanonicalEventReaction,
     SessionUpsertCanonicalEventReaction,
 )
+from terminal.panes.reaction import PaneCanonicalEventReaction
 from app.repository import RepositoryQueries
 from app.resume import ResumableSessionService
 from app.telemetry import BrowserTelemetryService
-from app.services import (
-    HarnessCatalogService,
-    HarnessControlService,
-    HarnessLauncherService,
-    HarnessUsageService,
-    TerminalInputService,
-)
-from app.usage import ApplicationUsageState
+from harness.services.catalog import HarnessCatalogService
+from harness.services.controls import HarnessControlService
+from harness.services.launcher import HarnessLauncherService
+from harness.services.probe import TerminalInputService
+from harness.services.usage import ApplicationUsageState, HarnessUsageService
 from dashboard.activity import (
     DashboardActivityService,
     DashboardSessionService,
@@ -52,7 +45,7 @@ from dashboard.application import (
 )
 from runtime.canonical_store import CanonicalEventStore
 from runtime.evidence import EvidenceQueries
-from runtime.harnesses import HarnessRegistry
+from harness.registry import HarnessRegistry
 from runtime.operation_output import OperationOutputStore
 from runtime.projections import SessionQueries
 from runtime.recorder import RawEventRecorder
@@ -112,7 +105,7 @@ def build_application(
     )
     repositories = RepositoryQueries()
     registry = HarnessRegistry()
-    for plugin in installed_plugins():
+    for plugin in installed():
         registry.register(plugin)
     registry.validate()
     sessions = SessionStore(database_path, registry)

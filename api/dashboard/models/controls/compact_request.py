@@ -1,6 +1,6 @@
 # The compact gesture.
 from api.dashboard.models.controls.control_request import ControlRequestBody
-from contracts.harness import ControlRequest, Compact
+from harness.models import Compact, ControlRequest
 from domain.ids import SessionId
 
 

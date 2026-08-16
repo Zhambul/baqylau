@@ -7,7 +7,7 @@ import json
 import os
 import sys
 
-from app.data import data_directory
+from core.data import data_directory
 from domain.ids import RawEventId, SessionId
 from runtime.canonical_store import CanonicalEventStore
 from runtime.evidence import EvidenceQueries, TranslationEvidence

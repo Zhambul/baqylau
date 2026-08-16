@@ -39,7 +39,7 @@ def launch(body: LaunchSessionRequest, application: ApplicationGraph) -> JSONRes
 
 
 def _execute(application, session_id: str, body) -> JSONResponse:
-    """One gesture: the request model builds its contracts dataclass, the
+    """One gesture: the request model builds its harness dataclass, the
     audited control service executes it, the outcome's status picks the code."""
     outcome = application.controls.execute(body.request(SessionId(session_id)))
     return JSONResponse(to_wire(outcome), CONTROL_STATUS[outcome.status])

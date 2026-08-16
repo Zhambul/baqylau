@@ -1,25 +1,19 @@
-"""Codex hook entry: a thin client of the daemon's hook endpoint.
+#!/usr/bin/env python3
+"""Forwarding shim: pre-refactor hook entry path.
 
-Ships the exact stdin bytes plus the flat header values it can observe (the
-terminal window, the CLI pid from its own ancestry) to
-POST /api/harnesses/codex/hooks. All parsing and recording happen daemon-side
-in `plugins/codex/hooks.py`.
+Sessions launched before the plugins/ -> harness/impl move captured this old
+path in their hook config and cache it for the process lifetime; deleting the
+file mid-session blocks every hook delivery. This shim forwards to the moved
+entry so those sessions keep working. New sessions use the new path from
+~/.codex/hooks.json; this shim can be deleted once old sessions are gone.
 """
 
-from __future__ import annotations
-
-import os
 import sys
+from pathlib import Path
 
-if __package__ in (None, ""):
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from app import hook_client
-from plugins.codex.hooks import CLI_PROCESS_NAME, HARNESS
-
-
-def main() -> None:
-    hook_client.run(HARNESS, CLI_PROCESS_NAME)
+from harness.impl.codex.hooks.entry import main  # noqa: E402
 
 
 if __name__ == "__main__":
