@@ -103,7 +103,11 @@ def test_operation_content_links_reach_the_shared_copy_handler():
         encoding="utf-8"
     )
 
-    assert 'event.target.closest("a,button") !== actionNode' in source
+    assert 'const interactive = event.target.closest("a,button")' in source
+    assert (
+        'if (actionNode === itemNode && interactive && interactive !== actionNode) return;'
+        in source
+    )
 
 
 def test_second_composer_message_reconciles_its_optimistic_bubble():

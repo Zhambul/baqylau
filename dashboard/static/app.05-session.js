@@ -514,7 +514,10 @@ document.addEventListener("click", event => {
   if (!actionNode) return;
   const itemNode = actionNode.closest("[data-content-reference]");
   if (!itemNode) return;
-  if (actionNode === itemNode && event.target.closest("a,button") !== actionNode) return;
+  // A whole-item action (the node carries data-content-action itself, like a
+  // file line) must yield to a nested link/button the click actually landed on.
+  const interactive = event.target.closest("a,button");
+  if (actionNode === itemNode && interactive && interactive !== actionNode) return;
   event.preventDefault();
   const action = actionNode.dataset.contentAction;
   fetch(action === "view"
