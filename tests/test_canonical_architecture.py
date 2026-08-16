@@ -200,7 +200,7 @@ def test_the_diagnostic_write_tier_is_a_floor_and_the_read_tier_is_the_daemons()
     assert readers == {"app/bootstrap.py", "app/services/insights.py", "dashboard/application.py"}
 
 
-def test_presenters_do_not_import_plugins_or_each_other():
+def test_the_terminal_tier_imports_no_concrete_harness():
     # No `harness` package root: the dependency runs the other way (the harness
     # contract names the terminal one), and a package-level cycle would be the
     # first step back to two interfaces. The panes tier may name the harness
@@ -210,29 +210,20 @@ def test_presenters_do_not_import_plugins_or_each_other():
         {"core", "diagnostics", "domain", "engine", "terminal"},
         allowed_modules={"harness.contract", "harness.models"},
     )
-    presentation_files = {
-        "activity.py",
-        "ansi.py",
-        "highlight.py",
-        "markdown.py",
-        "presenter.py",
-    }
-    for path in (ROOT / "dashboard").glob("*.py"):
-        if path.name not in presentation_files:
-            continue
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        imports = []
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                imports.extend(alias.name for alias in node.names)
-            elif isinstance(node, ast.ImportFrom) and node.module:
-                imports.append(node.module)
-        # `core.repository` is the one core module a presenter may name: it is
-        # handed a RepositoryQueries by injection and imports only the TYPE of
-        # what it was given — never a resolver, never a terminal.
-        forbidden = ("harness.impl", "terminal", "core")
-        named = [name for name in imports if name.startswith(forbidden)]
-        assert [name for name in named if name != "core.repository"] == []
+
+
+def test_the_render_tier_is_inert():
+    """`dashboard/render/` takes facts and returns markup. Nothing else.
+
+    No store, no service, no session, no `core` — which is what lets the file
+    view, the session page and a one-line test all call the same functions. A
+    renderer that grew a query would be a renderer only the daemon could run.
+    """
+    assert_imports(
+        "dashboard/render",
+        {"dashboard", "domain"},
+        allowed_modules={"engine.projections"},
+    )
 
 
 def test_shared_code_imports_no_concrete_plugin_descriptor():
