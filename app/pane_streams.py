@@ -24,11 +24,12 @@ from dataclasses import dataclass, field
 from app import terminal_views
 from domain.ids import SessionId
 from runtime.projections import ActivityScope, FileActivity
-from terminal.activity import visible
-from terminal.presenter import TerminalPresenter
-from terminal.renderer import HEADER, TerminalRenderer
+from terminal.mirror.visibility import visible
+from terminal.mirror.presenter import TerminalPresenter
+from terminal.mirror.renderer import HEADER, TerminalRenderer
 from terminal.scoreboard import ScoreboardPresenter, ScoreboardSnapshot
-from terminal.tab_state import tab_appearance
+from terminal.adapter import TerminalAdapter
+from terminal.theme import tab_appearance
 
 EVENT_LIMIT = 2000
 ACTIVITY_LIMIT = 1000
@@ -60,7 +61,7 @@ class _MirrorModel:
 
 
 class PaneStreamService:
-    def __init__(self, canonical_store, queries, sessions, content, terminal) -> None:
+    def __init__(self, canonical_store, queries, sessions, content, terminal: TerminalAdapter) -> None:
         self._canonical_store = canonical_store
         self._queries = queries
         self._sessions = sessions

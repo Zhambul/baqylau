@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, TypeAlias
 
-from contracts.terminal import RGB
+from terminal.models import RGB
 
 
 @dataclass(frozen=True)

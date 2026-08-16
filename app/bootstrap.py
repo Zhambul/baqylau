@@ -31,7 +31,6 @@ from app.reactions import (
 )
 from app.repository import RepositoryQueries
 from app.resume import ResumableSessionService
-from app.session_terminal import ApplicationTerminal
 from app.telemetry import BrowserTelemetryService
 from app.services import (
     HarnessCatalogService,
@@ -58,6 +57,9 @@ from runtime.operation_output import OperationOutputStore
 from runtime.projections import SessionQueries
 from runtime.recorder import RawEventRecorder
 from runtime.sessions import SessionStore
+from terminal.adapter import TerminalAdapter
+from terminal.impl import resolve as resolve_terminal
+from terminal.impl.null import null_plugin
 
 
 @dataclass(frozen=True)
@@ -82,7 +84,7 @@ class CanonicalApplication:
     launcher: HarnessLauncherService
     catalog: HarnessCatalogService
     terminal_input: TerminalInputService
-    terminal: ApplicationTerminal
+    terminal: TerminalAdapter
     pane_commands: PaneCommandService
     pane_streams: PaneStreamService
     interpreter: Interpreter
@@ -114,12 +116,18 @@ def build_application(
         registry.register(plugin)
     registry.validate()
     sessions = SessionStore(database_path, registry)
-    terminal = ApplicationTerminal()
+    # The terminal is resolved ONCE, here, and passed down as fields: a
+    # consumer holds the sub-protocol it needs, never the resolver. When no
+    # terminal is installed the null plugin takes the seat, so every service
+    # below stays unconditional and "no terminal" reads out of the audit as an
+    # ordinary failure reason.
+    terminal_plugin = resolve_terminal() or null_plugin()
+    terminal = TerminalAdapter(terminal_plugin, sessions)
     queries = SessionQueries(canonical_store, sessions)
-    controls = HarnessControlService(sessions, terminal, queries)
+    controls = HarnessControlService(sessions, terminal, terminal_plugin, queries)
     catalog = HarnessCatalogService(registry)
     usage_state = ApplicationUsageState(HarnessUsageService(registry))
-    terminal_input = TerminalInputService(sessions, terminal, terminal)
+    terminal_input = TerminalInputService(sessions, terminal, terminal_plugin.viewport)
     dashboard_sessions = DashboardSessionService(
         canonical_store, queries, terminal_input, repositories
     )
@@ -167,7 +175,7 @@ def build_application(
             diagnostics,
         ),
         controls=controls,
-        launcher=HarnessLauncherService(registry, terminal),
+        launcher=HarnessLauncherService(registry, terminal, terminal_plugin.tabs),
         catalog=catalog,
         terminal_input=terminal_input,
         terminal=terminal,

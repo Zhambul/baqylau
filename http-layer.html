@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>baqylau — the HTTP layer, as it is today</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1a1a1a; --muted: #666; --line: #e2e2e2;
+    --code-bg: #f6f6f4; --accent: #0b5cad; --warn-bg: #fff7e0; --warn-line: #e6c860;
+    --get: #0b7a3b; --post: #b3541e; --sse: #6b2fb3;
+  }
+  body { font: 15px/1.55 -apple-system, "Segoe UI", sans-serif; color: var(--fg); background: var(--bg);
+         max-width: 1080px; margin: 2rem auto 6rem; padding: 0 1.5rem; }
+  h1 { font-size: 1.7rem; margin-bottom: .2rem; }
+  h2 { font-size: 1.25rem; margin-top: 3rem; border-bottom: 2px solid var(--line); padding-bottom: .3rem; }
+  h3 { font-size: 1.05rem; margin-top: 2rem; }
+  h4 { font-size: .95rem; margin-top: 1.5rem; }
+  .subtitle { color: var(--muted); margin-top: 0; }
+  code, pre { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .86em; }
+  code { background: var(--code-bg); padding: .1em .35em; border-radius: 3px; }
+  pre { background: var(--code-bg); padding: .8rem 1rem; border-radius: 6px; overflow-x: auto; line-height: 1.45; }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: .8rem 0 1.4rem; font-size: .92em; }
+  th, td { border: 1px solid var(--line); padding: .35rem .6rem; text-align: left; vertical-align: top; }
+  th { background: var(--code-bg); }
+  .toc { background: var(--code-bg); border-radius: 6px; padding: 1rem 1.5rem; }
+  .toc ol { margin: .3rem 0; padding-left: 1.3rem; }
+  .method { display: inline-block; font-family: ui-monospace, Menlo, monospace; font-weight: 700;
+            font-size: .78em; padding: .05em .45em; border-radius: 3px; color: #fff; margin-right: .5em; }
+  .m-get  { background: var(--get); }
+  .m-post { background: var(--post); }
+  .m-sse  { background: var(--sse); }
+  .endpoint { border: 1px solid var(--line); border-radius: 6px; padding: .9rem 1.1rem; margin: 1.1rem 0; }
+  .endpoint h4 { margin: 0 0 .5rem; font-size: 1em; }
+  .endpoint .meta { color: var(--muted); font-size: .88em; margin-bottom: .5rem; }
+  .warn { background: var(--warn-bg); border: 1px solid var(--warn-line); border-radius: 6px; padding: .8rem 1.1rem; }
+  .file { color: var(--accent); font-family: ui-monospace, Menlo, monospace; font-size: .86em; }
+  .small { font-size: .88em; color: var(--muted); }
+  ul li, ol li { margin: .25rem 0; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0 2rem; }
+  @media (max-width: 800px) { .cols { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<h1>The baqylau HTTP layer</h1>
+<p class="subtitle">A complete description of the daemon's HTTP surface as of 2026-08-16 (branch <code>main</code>, commit <code>b03e94c</code>), and a refactoring proposal: FastAPI, typed requests and responses, and a home outside the <code>dashboard</code> package.</p>
+
+<div class="toc">
+<strong>Contents</strong>
+<ol>
+  <li><a href="#overview">How it works today</a></li>
+  <li><a href="#plumbing">Plumbing: responses, SSE, the POST guard, static files</a></li>
+  <li><a href="#clients">Every client of the layer</a></li>
+  <li><a href="#endpoints">Endpoint reference — all requests and responses</a>
+    <ol>
+      <li><a href="#ep-static">Static &amp; feature probes</a></li>
+      <li><a href="#ep-read">Read API (JSON GET)</a></li>
+      <li><a href="#ep-sse">Streams (SSE)</a></li>
+      <li><a href="#ep-evidence">Evidence plane (hook deliveries)</a></li>
+      <li><a href="#ep-control">Control plane</a></li>
+      <li><a href="#ep-app">Application state (preferences, drafts, telemetry)</a></li>
+      <li><a href="#ep-files">Files &amp; dictation</a></li>
+    </ol>
+  </li>
+  <li><a href="#types">Wire-type appendix — every response dataclass</a></li>
+  <li><a href="#serialization">Serialization rules and their sharp edges</a></li>
+  <li><a href="#tests">Tests that pin this architecture</a></li>
+  <li><a href="#discrepancies">Discrepancies found while writing this</a></li>
+  <li><a href="#refactor">Refactoring proposal</a></li>
+</ol>
+</div>
+
+<!-- ================================================================ -->
+<h2 id="overview">1. How it works today</h2>
+
+<p>The whole layer is hand-rolled on the Python standard library — <code>http.server.ThreadingHTTPServer</code> plus <code>BaseHTTPRequestHandler</code>. There is no framework, no router, no request/response model objects: routing is <code>if</code>-chains over split path segments, request bodies are hand-validated <code>dict</code>s, and responses are hand-assembled <code>dict</code>s or generic dataclass serialization.</p>
+
+<p>It lives in <span class="file">dashboard/http/</span>, but it is <em>not</em> a dashboard-only concern. It is the daemon's single door: the browser SPA, the harness hooks (Claude Code and Codex), the kitty mirror pane, the kitty scoreboard pane, the pane keybinding handler, and the two click-to-open protocol handlers all speak to the same server. This misplacement is one of the three motivations for the refactor (<a href="#refactor">§10</a>).</p>
+
+<h3>The handler is a mixin stack</h3>
+<pre><code>class Handler(_CanonicalMixin, _GetMixin, _PostMixin, _Base):   # dashboard/http/handler.py:27
+    protocol_version = "HTTP/1.1"</code></pre>
+
+<table>
+<tr><th>class</th><th>file</th><th>responsibility</th></tr>
+<tr><td><code>_Base</code></td><td class="file">dashboard/http/base.py</td><td>gzip-aware <code>_send</code>, <code>_json</code>, SSE framing (<code>_sse_start</code>/<code>_sse</code>/<code>_sse_beat</code>), the POST guard (<code>_post_guard</code>/<code>_post_guard_bytes</code>/<code>_reject</code>), the static whitelist server, query parsers</td></tr>
+<tr><td><code>_GetMixin</code></td><td class="file">dashboard/http/get.py</td><td><code>do_GET</code> entry + fallback router: static files, <code>/sw.js</code>, <code>/favicon.ico</code>, and the two fixed feature probes (dictation, push configuration)</td></tr>
+<tr><td><code>_PostMixin</code></td><td class="file">dashboard/http/post/__init__.py</td><td><code>do_POST</code> entry + fallback router for the three file/dictation routes, implemented in <code>_FilesMixin</code> (<span class="file">dashboard/http/post/files.py</span>)</td></tr>
+<tr><td><code>_CanonicalMixin</code></td><td class="file">dashboard/http/canonical.py</td><td>everything else — all <code>/api/</code> resources, all SSE streams, the hook-delivery endpoint, the control plane (908 lines, by far the bulk)</td></tr>
+</table>
+
+<p>Dispatch rides Python's MRO: <code>do_GET</code> (defined in <code>_GetMixin</code>) calls <code>self.route(...)</code>, which resolves to <code>_CanonicalMixin.route</code> first; it handles <code>/api/…</code> and falls through via <code>super().route(...)</code> to the static/probe router. <code>do_POST</code> works the same way through <code>route_post</code>. So the routing table is <em>implicit in the inheritance order</em> — you cannot read the URL space in any one place.</p>
+
+<h3>Server lifecycle — the daemon builds the graph exactly once</h3>
+<p><code>serve()</code> (<span class="file">dashboard/http/handler.py:70</span>) is the one process that builds the application graph:</p>
+<ol>
+  <li>Acquires the pid-lock (<code>paths.DASHBOARD_LOCK_DATABASE</code>, key <code>dashboard</code>); a denied claim is audited and exits 1.</li>
+  <li>Opens an audited stream (kind <code>dashboard</code>) covering the whole run — uptime and exit path are queryable.</li>
+  <li>Binds <code>127.0.0.1:8377</code> (<code>BAQYLAU_DASHBOARD_PORT</code> overrides the port; the bind address is never configurable). Port busy → audited, exit 1.</li>
+  <li>Builds the graph via <code>app.bootstrap.build_default_application()</code> and hangs it on the server object as <code>httpd.canonical_application</code> — every handler thread reaches it through <code>self.server.canonical_application</code>.</li>
+  <li>Starts three daemon threads: the <strong>interpreter</strong> (<code>application.interpreter.run</code>, the one read-and-interpret loop, 0.25 s tick), the <strong>usage poller</strong> (<code>application.usage_state.run</code>), and the <strong>notifier</strong>.</li>
+  <li>Prunes composer-attachment uploads older than 7 days.</li>
+  <li><code>serve_forever(poll_interval=0.5)</code>; SIGTERM raises <code>SystemExit</code>; shutdown joins the threads and ends the audit stream (<code>stopped</code> / <code>crash</code>).</li>
+</ol>
+<p>The CLI (<span class="file">dashboard/cli.py</span>) wraps this: <code>start</code> spawns <code>serve</code> detached, <code>stop</code> SIGTERMs the lock-holder pid, <code>status</code> reads the lock. The CLI itself never speaks HTTP.</p>
+
+<p>Concurrency model: <code>ThreadingHTTPServer</code> with <code>daemon_threads = True</code> and <code>request_queue_size = 128</code> (the stdlib default backlog of 5 caused kernel resets under the cloudflared tunnel's ~16-connection refresh bursts — the "502 / half-loaded page" failure). Each request gets a thread; each SSE connection <em>occupies its thread for its whole life</em>, polling shared state every 0.25 s. <code>BrokenPipeError</code>/<code>ConnectionResetError</code> are swallowed at every level (a departed client is not an error). Hook recording happens on these HTTP threads, deliberately decoupled from the interpreter tick: a wedged tick cannot stop hook capture.</p>
+
+<!-- ================================================================ -->
+<h2 id="plumbing">2. Plumbing: responses, SSE, the POST guard, static files</h2>
+
+<h3>Response path</h3>
+<ul>
+  <li><code>_send(code, body, ctype, cache)</code> — sets <code>Vary: Accept-Encoding</code> always; gzips when the body is ≥ 1024 bytes (<code>GZIP_MIN</code>) and the client accepts it (honouring an explicit <code>gzip;q=0</code> refusal); <code>Cache-Control</code> defaults to <code>no-store</code> (only versioned statics override it). A write to a departed client is swallowed.</li>
+  <li><code>_json(obj, code)</code> — <code>json.dumps(obj, default=str)</code> through <code>_send</code>. Note <code>default=str</code>: anything non-JSON left in the object is silently stringified.</li>
+  <li>SSE — <code>_sse_start()</code> sends <code>200</code> + <code>text/event-stream</code> + <code>no-store</code> and leaves the response open; <code>_sse(event, obj)</code> writes one <code>event:</code>/<code>data:</code> frame and returns <code>False</code> when the client is gone (ending the loop); <code>_sse_beat()</code> writes the comment <code>: beat</code>. SSE never passes through <code>_send</code>, so streams are never gzipped or buffered.</li>
+</ul>
+
+<h3 id="guard">The control-plane POST guard</h3>
+<p>Every POST goes through <code>_post_guard</code> (parsed-JSON variant) or <code>_post_guard_bytes</code> (exact-bytes variant, used only by the hook endpoint). It is the browser-vector defense, checked in this order:</p>
+<ol>
+  <li><strong>Read-only kill switch</strong> — <code>BAQYLAU_DASHBOARD_READONLY=1</code> makes every POST a <code>403 "control plane disabled (read-only)"</code> (remote eyes, no remote hands).</li>
+  <li><strong>Content type</strong> — must be <code>application/json</code>, else <code>415</code>.</li>
+  <li><strong>Origin allowlist</strong> — a present <code>Origin</code> not in <code>ALLOWED_ORIGINS</code> → <code>403 "cross-origin"</code>. The allowlist is <code>http://127.0.0.1:8377</code>, <code>http://localhost:8377</code>, the public URL (<code>BAQYLAU_DASHBOARD_PUBLIC_URL</code>, default <code>https://baqylau.zhambyl.top</code>), plus <code>BAQYLAU_DASHBOARD_ORIGINS</code> extras.</li>
+  <li><strong>Caller proof</strong> — EITHER the custom header <code>X-Baqylau: 1</code> (a cross-origin simple POST can't set it; a fetch that tries triggers a preflight this no-CORS server never answers) OR a present-and-allowlisted <code>Origin</code> (kept for <code>sendBeacon</code>-style senders that cannot set custom headers). Neither → <code>403</code>.</li>
+  <li><strong>Size cap</strong> — <code>Content-Length</code> over the cap → <code>413</code>. Caps: <code>POST_MAX</code> = 64 KiB default, <code>UPLOAD_MAX</code> = 14 MiB (uploads), <code>HOOK_MAX</code> = 4 MiB (hook deliveries).</li>
+  <li><strong>JSON parse</strong> (guard variant only) — non-JSON or non-object body → <code>400 "invalid JSON"</code>.</li>
+</ol>
+<p>Rejections close the connection (an unread body would desync keep-alive) and are audited as <code>web-reject</code> <code>state_files</code> rows — the one place a control-plane POST could otherwise vanish without a trace. There is no CORS support at all: the server never answers preflights; same-origin is the only sanctioned browser caller.</p>
+
+<h3>Static files</h3>
+<ul>
+  <li>Whitelist only (<code>config.STATIC</code>) — no user-path resolution ever. The 14 SPA parts (<code>app.NN-name.js</code>) are admitted by shape (<code>^app\.[0-9]{2}-[a-z-]+\.js$</code>).</li>
+  <li><code>index.html</code> is rewritten on every serve: all sub-resource URLs (SPA parts, <code>style.css</code>, icons, manifest) get <code>?v=&lt;BOOT_ID&gt;</code> stamped (BOOT_ID = server start ms). A fetch under the current stamp is cached hard (<code>public, max-age=31536000, immutable</code>); everything else is <code>no-store</code>. This is the cache-busting scheme that fixed both the stale-JS-on-mobile bug and the tunnel refresh burst.</li>
+  <li><code>/sw.js</code> and <code>/favicon.ico</code> are served at the root (service-worker scope; favicon auto-discovery) via their own routes.</li>
+</ul>
+
+<h3>Error handling</h3>
+<p>Both <code>do_GET</code> and <code>do_POST</code> wrap routing in a catch-all: client disconnects pass silently; anything else is audited (<code>dashboard request</code> / <code>dashboard POST</code> errors rows) and answered <code>500 {"error":"internal"}</code>. Inside the canonical router, <code>KeyError</code>/<code>TypeError</code>/<code>ValueError</code> from validation become <code>400 {"error": &lt;message&gt;}</code>. Unknown paths are <code>404 {"error":"not found"}</code>. Malformed application input goes through <code>_reject_input</code>, which audits before rejecting.</p>
+
+<!-- ================================================================ -->
+<h2 id="clients">3. Every client of the layer</h2>
+
+<p>All non-browser clients go through <span class="file">app/daemon_client.py</span> (<code>get_text</code>, <code>post_json</code>, <code>post_bytes</code>, <code>sse_events</code>, <code>pane_frames</code>, <code>run_pane</code>), which owns the base URL and stamps <code>X-Baqylau: 1</code> on every POST. There is deliberately <em>no fallback to a direct store read</em> — the daemon is the one interpreter; a client that cannot reach it says so (<code>DaemonUnreachable</code>).</p>
+
+<table>
+<tr><th>client</th><th>entry</th><th>endpoint(s)</th><th>notes</th></tr>
+<tr><td>Browser SPA</td><td class="file">dashboard/static/app.00-core.js … app.13-init.js</td><td>everything under <code>/api/</code> except hooks, terminal panes/views, and content-by-daemon-client</td><td>2 × <code>EventSource</code> (global + session stream); all other calls are <code>fetch</code> via the <code>postJSON</code> helper with <code>keepalive: true</code> (no <code>sendBeacon</code> remains — comments referencing it are historical)</td></tr>
+<tr><td>Claude Code hook</td><td class="file">plugins/claude_code/canonical_hook.py → app/hook_client.py</td><td><span class="method m-post">POST</span><code>/api/harnesses/claude_code/hooks</code></td><td>ships exact stdin + 4 identity headers, 2 s timeout, never fails its harness (audits and exits 0)</td></tr>
+<tr><td>Codex hook</td><td class="file">plugins/codex/canonical_hook.py → app/hook_client.py</td><td><span class="method m-post">POST</span><code>/api/harnesses/codex/hooks</code></td><td>same, without account headers</td></tr>
+<tr><td>Mirror pane process</td><td class="file">app/terminal_process.py</td><td><span class="method m-sse">SSE</span><code>/api/sessions/&lt;id&gt;/panes/mirror/stream?width=N</code></td><td>spawned by the daemon itself (app/session_terminal.py); byte-copies <code>frame</code> events to stdout; reconnects at the new width on terminal resize</td></tr>
+<tr><td>Scoreboard pane process</td><td class="file">app/scoreboard_process.py</td><td><span class="method m-sse">SSE</span><code>/api/sessions/&lt;id&gt;/panes/scoreboard/stream?width=N</code></td><td>same loop, other pane kind</td></tr>
+<tr><td>Pane keybinding handler</td><td class="file">app/terminal_panes.py</td><td><span class="method m-post">POST</span><code>/api/terminal/panes</code></td><td>kitty keymap target; one process per keypress (toggle / grow / shrink / reset / setpct)</td></tr>
+<tr><td>Content click handler</td><td class="file">bin/baqylau-content.py</td><td><span class="method m-get">GET</span><code>/api/content/&lt;reference&gt;</code></td><td>kitty <code>open-actions.conf</code> handler for <code>baqylau-content://</code> links the mirror renderer emits</td></tr>
+<tr><td>View click handler</td><td class="file">bin/baqylau-view.py</td><td><span class="method m-post">POST</span><code>/api/terminal/views</code></td><td>same, for <code>baqylau-view://</code> links</td></tr>
+</table>
+
+<p class="small">Not clients, despite appearances: <code>plugins/claude_code/statusline.py</code> and the otel receiver are recorders that write their own stores directly; <code>dashboard/cli.py</code> manages the process via pid-lock and SIGTERM, not HTTP. The launch wrappers <code>plugins/*/command.py</code> that CLAUDE.md still describes <strong>no longer exist</strong> — <span class="file">tests/test_canonical_architecture.py:216</span> asserts they stay gone; launching happens inside the daemon (<code>POST /api/sessions</code> → the plugin's launcher builds argv).</p>
+
+<!-- ================================================================ -->
+<h2 id="endpoints">4. Endpoint reference — all requests and responses</h2>
+
+<p class="small">Conventions: <code>*</code> marks a required field. All JSON POST endpoints sit behind the <a href="#guard">POST guard</a> and share its 403/413/415/400 rejections; those are not repeated per endpoint. All type names link to the <a href="#types">wire-type appendix</a>. Validation failures in the canonical router are <code>400 {"error": &lt;message&gt;}</code>.</p>
+
+<h3 id="ep-static">4.1 Static &amp; feature probes</h3>
+
+<div class="endpoint"><h4><span class="method m-get">GET</span><code>/</code>, <code>/static/&lt;name&gt;</code>, <code>/sw.js</code>, <code>/favicon.ico</code></h4>
+<div class="meta">consumer: browser · no guard</div>
+<p>Whitelisted static files. <code>index.html</code> is BOOT_ID-stamped (see §2). Responses: <code>200</code> file bytes; <code>404 {"error":"not found"}</code> for a non-whitelisted name; <code>500 {"error":"unreadable"}</code> on read failure.</p></div>
+
+<div class="endpoint"><h4><span class="method m-get">GET</span><code>/api/application/dictation</code></h4>
+<div class="meta">consumer: SPA (mic-button probe)</div>
+<p>Response <code>200</code>: <code>{"available": bool}</code> — true iff a Deepgram key is configured. No key → the feature is invisible, never a dead button.</p></div>
+
+<div class="endpoint"><h4><span class="method m-get">GET</span><code>/api/application/push-configuration</code></h4>
+<div class="meta">consumer: SPA (Web Push opt-in probe)</div>
+<p>Response <code>200</code>: <code>{"enabled": bool, "key": string|null}</code> — the VAPID public application-server key (not a secret); enabled only when the crypto backend and key both exist.</p></div>
+
+<h3 id="ep-read">4.2 Read API (JSON GET)</h3>
+
+<div class="endpoint"><h4><span class="method m-get">GET</span><code>/api/sessions</code></h4>
+<div class="meta">consumer: SPA session list</div>
+<p>Response <code>200</code>: array of <a href="#t-listitem"><code>DashboardSessionListItem</code></a>.</p></div>
+
+<div class="endpoint"><h4><span class="method m-get">GET</span><code>/api/sessions/&lt;session_id&gt;</code></h4>
+<div class="meta">consumer: SPA session page · query: <code>actor_id</code> (scope; defaults to the session's lead actor)</div>
+<p>Response <code>200</code>:</p>
+<pre><code>{ "canonical":   &lt;DashboardSessionSnapshot&gt;,     // §5.2
+  "application": &lt;SessionApplicationSnapshot&gt; }  // §5.3</code></pre>
+<p>Unknown session → <code>400 {"error":"unknown session: …"}</code> (a <code>KeyError</code>, so 400, not 404).</p></div>
+
+<div class="endpoint"><h4><span class="method m-get">GET</span><code>/api/sessions/&lt;session_id&gt;/activity</code></h4>
+<div class="meta">consumer: SPA backlog paging · query: <code>block_count</code> (default 100, must be &gt; 0), <code>before_cursor</code>, <code>actor_id</code></div>
+<p>Response <code>200</code>: <a href="#t-page"><code>DashboardActivityPage</code></a> — <code>{oldest_cursor, latest_cursor, has_more, items: [DashboardItem…]}</code>.</p></div>
+
+<div class="endpoint"><h4><span class="method m-get">GET</span><code>/api/harnesses</code></h4>
+<div class="meta">consumer: SPA new-session form</div>
+<p>Response <code>200</code>: array of hand-built rows (not <code>to_wire</code>):</p>
+<pre><code>[{ "name": str, "display_name": str, "launchable": bool, "default_for_launch": bool,
+   "supports_attachments": bool, "control_names": [str…] (sorted),
+   "supports_accounts": bool, "supports_terminal_input": bool }]</code></pre></div>
+
+<div class="endpoint"><h4><span class="method m-get">GET</span><code>/api/harnesses/&lt;harness&gt;/catalog</code></h4>
+<div class="meta">consumer: SPA composer + new-session form · query: <code>session_id</code>, <code>working_directory</code> (both optional)</div>
+<p>Response <code>200</code> — composed here from the plugin's static vocabulary + the per-directory catalogue:</p>
+<pre><code>{ "commands":     [CommandOption…],      // {command, description, minimum_prompt_count}
+  "models":       [ModelOption…],        // {model_id, display_name, default, efforts:[{value, display_name, default}]}
+  "rewind_modes": [RewindModeOption…] }  // {value, display_name}</code></pre></div>
+
+<div class="endpoint"><h4><span class="method m-get">GET</span><code>/api/insights</code></h4>
+<div class="meta">consumer: SPA stats page</div>
+<p>Response <code>200</code>: <a href="#t-insights"><code>ApplicationInsights</code></a>.</p></div>
+
+<div class="endpoint"><h4><span class="method m-get">GET</span><code>/api/resumable-sessions</code></h4>
+<div class="meta">consumer: SPA new-session resume picker · query: <code>working_directory</code> (default <code>""</code> → empty result), <code>search</code></div>
+<p>Response <code>200</code>: array of <a href="#t-resumable"><code>ResumableSession</code></a>.</p></div>
+
+<div class="endpoint"><h4><span class="method m-get">GET</span><code>/api/content/&lt;content_reference&gt;</code></h4>
+<div class="meta">consumers: SPA (full command output, diffs) and <span class="file">bin/baqylau-content.py</span> (pane click) · query: <code>view</code> = <code>diff</code> | <code>source</code> (optional), <code>path</code> (required with <code>view</code>)</div>
+<p>The one non-JSON read endpoint. Response <code>200</code>: <code>text/plain</code> with the resolved content, or <code>text/html</code> when <code>view</code> asks for the rendered unified diff / highlighted source.</p></div>
+
+<h3 id="ep-sse">4.3 Streams (SSE)</h3>
+<p class="small">All streams: <code>200 text/event-stream</code>, held open forever, 0.25 s poll loop, comment heartbeat (<code>: beat</code>) after 15 s of silence. The connection ends only when the client goes away.</p>
+
+<div class="endpoint"><h4><span class="method m-sse">SSE</span><code>/api/stream</code> — the global stream</h4>
+<div class="meta">consumer: SPA shell (session list, usage, notifications)</div>
+<pre><code>event: ready         data: {"boot_id": "&lt;ms-timestamp&gt;"}     — first frame, always;
+                     a reconnecting page that sees a NEW boot_id knows the server
+                     restarted and its loaded JS may be stale
+event: application   data: &lt;GlobalApplicationSnapshot&gt;        — sent only when the
+                     sorted-compact serialization differs from the previous frame
+: beat                                                        — idle heartbeat</code></pre>
+<p>No <code>id:</code> on any frame — reconnect replays nothing; the snapshot is total, so nothing is lost.</p></div>
+
+<div class="endpoint"><h4><span class="method m-sse">SSE</span><code>/api/sessions/&lt;session_id&gt;/stream</code> — the one-cursor session stream</h4>
+<div class="meta">consumer: SPA session page · query: <code>after_cursor</code>, <code>actor_id</code> · header: <code>Last-Event-ID</code> (wins over <code>after_cursor</code>)</div>
+<pre><code>id: &lt;cursor&gt;
+event: activity      data: {"cursor": int, "items": [DashboardItem…],
+                            "snapshot": &lt;DashboardSessionSnapshot&gt;}
+event: application   data: &lt;SessionApplicationSnapshot&gt;       — change-detected, no id:
+: beat</code></pre>
+<p><code>activity</code> frames carry the canonical cursor as the SSE id, so the browser's native <code>Last-Event-ID</code> reconnect resumes exactly where it stopped. Items are re-presented only for activities whose source events actually changed. The <code>activity</code> payload is the one place encoded with <code>ensure_ascii=False</code> compact separators.</p></div>
+
+<div class="endpoint"><h4><span class="method m-sse">SSE</span><code>/api/sessions/&lt;session_id&gt;/panes/&lt;mirror|scoreboard&gt;/stream</code></h4>
+<div class="meta">consumers: the two kitty pane processes · query: <code>width</code>* (&gt; 0 — the client terminal's columns)</div>
+<pre><code>event: session   data: {"session_id": str}    — sent once the session's row exists
+                 (the stream waits, beating, for a pane that connected before the
+                 session's first fact committed — this route is matched BEFORE the
+                 generic session resources for exactly this reason)
+event: frame     data: {"ansi": str}          — a full repaint rendered server-side
+                 at the client's width from the shared width-independent block model
+event: error     data: {"error": "pane stream failed"}   — after an audited failure
+: beat                                        — the client's resize/liveness clock</code></pre>
+<p>Unknown pane kind → <code>404</code>; bad width → <code>400</code>. Each connection is an audited <code>streams</code> row (<code>pane-mirror</code>/<code>pane-scoreboard</code>, ended <code>client-gone</code>/<code>error</code>). A resize is a reconnect at the new width; the client treats a 10 s read stall as a dead daemon and reconnects.</p></div>
+
+<h3 id="ep-evidence">4.4 Evidence plane</h3>
+
+<div class="endpoint"><h4><span class="method m-post">POST</span><code>/api/harnesses/&lt;harness&gt;/hooks</code></h4>
+<div class="meta">consumers: the two hook clients · guard: <em>bytes variant</em>, cap <code>HOOK_MAX</code> = 4 MiB</div>
+<p><strong>Request body: the hook's exact stdin bytes.</strong> Not parsed here, not a JSON envelope (though the guard still requires <code>Content-Type: application/json</code>, which the harness's stdin is). What the hook process observed around itself rides four flat headers:</p>
+<pre><code>X-Baqylau-Terminal-Window: &lt;kitty window id&gt;        (optional)
+X-Baqylau-Harness-Process: &lt;CLI pid in the hook's ancestry&gt;   (optional, int)
+X-Baqylau-Account-Id:      &lt;shell-selected account&gt; (optional)
+X-Baqylau-Account-Name:    &lt;its display name&gt;       (optional)</code></pre>
+<p>These become a <code>HarnessHookRequest(payload, terminal_window_id, harness_process_id, account_id, account_display_name)</code> handed to the plugin's <code>HarnessHookGateway</code>, which parses, produces raw events, and returns the synchronous reply. Recording happens on this HTTP thread — the interpreter translates later.</p>
+<p><strong>Response <code>200</code>: the gateway's raw reply bytes, verbatim</strong> (possibly empty) — the hook prints them to its harness; this is how a hook decision (e.g. a Claude Code hook JSON reply) rides the HTTP response. Errors — all audited server-side, because the hook client swallows everything: <code>404 {"error"}</code> unknown harness / harness accepts no hooks; <code>400 {"error"}</code> gateway parse failure; <code>409 {"error"}</code> <code>RawEventRecorderError</code> (evidence corruption — same <code>raw_event_id</code>, different bytes).</p></div>
+
+<h3 id="ep-control">4.5 Control plane</h3>
+
+<div class="endpoint"><h4><span class="method m-post">POST</span><code>/api/sessions</code> — launch or resume a harness session</h4>
+<div class="meta">consumer: SPA new-session form + composer resume</div>
+<pre><code>{ "harness"*: str, "working_directory"*: str,
+  "initial_text": str?, "model_id": str?, "effort": str?, "account_id": str?,
+  "resume_session_id": str?,
+  "attachments": [{"local_path"*: str, "display_name"*: str, "media_type": str?}]? }</code></pre>
+<p>Response: <a href="#t-launch"><code>LaunchResult</code></a> <code>{status: "started"|"rejected", window_id: str|null, reason: str|null}</code> — <code>202</code> when started, <code>409</code> when rejected.</p></div>
+
+<div class="endpoint"><h4><span class="method m-post">POST</span><code>/api/sessions/&lt;session_id&gt;/controls</code> — the gesture funnel</h4>
+<div class="meta">consumer: SPA (single funnel, app.10-control.js)</div>
+<p>Envelope: <code>{"control_name"*: str, "request_id"*: str, …control-specific fields}</code>. The body is hand-mapped to one of 14 frozen dataclasses (<span class="file">contracts/harness.py</span>) — a hand-written discriminated union:</p>
+<table>
+<tr><th>control_name</th><th>extra request fields</th><th>result type</th></tr>
+<tr><td><code>send_text</code></td><td><code>text</code>* (may be <code>""</code> if attachments present), <code>attachments?</code>, <code>replace_terminal_draft?: bool</code></td><td><code>DeliveryResult</code> (+<code>queued</code>, <code>restored_text</code>)</td></tr>
+<tr><td><code>interrupt</code></td><td>—</td><td><code>CommandResult</code> (+<code>confirmation</code>)</td></tr>
+<tr><td><code>close_session</code></td><td>—</td><td><code>CommandResult</code></td></tr>
+<tr><td><code>rename_session</code></td><td><code>name</code>*</td><td><code>ControlResult</code></td></tr>
+<tr><td><code>auto_name_session</code></td><td>—</td><td><code>ControlResult</code></td></tr>
+<tr><td><code>open_rewind</code></td><td>—</td><td><code>CommandResult</code></td></tr>
+<tr><td><code>apply_rewind</code></td><td><code>target_message_id</code>*, <code>target_text</code>*, <code>newer_prompt_count?: int</code>, <code>mode</code>*</td><td><code>RewindResult</code> (+<code>restored_text</code>, <code>degraded</code>)</td></tr>
+<tr><td><code>migrate_account</code></td><td>—</td><td><code>MigrationResult</code> (+<code>target_account_id</code>)</td></tr>
+<tr><td><code>compact</code></td><td>—</td><td><code>CommandResult</code></td></tr>
+<tr><td><code>select_model</code></td><td><code>model_id</code>*</td><td><code>ControlResult</code></td></tr>
+<tr><td><code>select_effort</code></td><td><code>effort</code>*</td><td><code>ControlResult</code></td></tr>
+<tr><td><code>answer_question</code></td><td><code>attention_id</code>*, <code>decision</code>* (<code>answer</code>|<code>discuss</code>), <code>answers?</code> (arbitrary JSON, re-encoded as StructuredContent), <code>discussion?: str</code></td><td><code>ControlResult</code></td></tr>
+<tr><td><code>read_plan_choices</code></td><td><code>attention_id</code>*</td><td><code>PlanChoicesResult</code> (+<code>choices: [{value, label, description}]</code>)</td></tr>
+<tr><td><code>decide_plan</code></td><td><code>attention_id</code>*, <code>decision</code>*, <code>feedback?: str</code></td><td><code>ControlResult</code></td></tr>
+</table>
+<p>Every result shares <code>{request_id, status: "acknowledged"|"indeterminate"|"rejected", reason: str|null}</code>; <strong>the wire shape varies by which subclass the harness handler returned</strong>. Status codes: acknowledged → <code>200</code>, indeterminate → <code>202</code>, rejected → <code>409</code>. Unknown control → <code>400</code>.</p></div>
+
+<div class="endpoint"><h4><span class="method m-post">POST</span><code>/api/terminal/panes</code> — pane gestures from kitty keybindings</h4>
+<div class="meta">consumer: <span class="file">app/terminal_panes.py</span></div>
+<pre><code>{ "command"*: str  (toggle|grow|shrink|reset|setpct),
+  "working_directory"*: str, "window_id": str?, "columns": int?, "percent": int? }</code></pre>
+<p>Response: <code>{"handled": bool, "succeeded": bool, "reason": str|null}</code> — hand-built, <code>409</code> when handled-but-failed, else <code>200</code>.</p></div>
+
+<div class="endpoint"><h4><span class="method m-post">POST</span><code>/api/terminal/views</code> — toggle a terminal content view</h4>
+<div class="meta">consumer: <span class="file">bin/baqylau-view.py</span> (pane click)</div>
+<p>Request: <code>{"content_reference"*: str}</code>. Response <code>200</code>: <code>{"opened": bool}</code>. Audited as a <code>terminal-view</code> state_files row.</p></div>
+
+<h3 id="ep-app">4.6 Application state — preferences, drafts, presence, telemetry</h3>
+<p class="small">All SPA-only, all behind the guard, all trivially-shaped. Responses are fixed literals.</p>
+
+<table>
+<tr><th>endpoint</th><th>request body</th><th>response</th></tr>
+<tr><td><span class="method m-post">POST</span><code>/api/application/notifications</code></td><td><code>{enabled*: bool}</code></td><td><code>{"saved": true}</code></td></tr>
+<tr><td><span class="method m-post">POST</span><code>/api/application/new-session-preferences</code></td><td><code>{working_directory?, harness?, model?, effort?}</code> (each str|null)</td><td><code>{"saved": true}</code></td></tr>
+<tr><td><span class="method m-post">POST</span><code>/api/application/new-session-drafts</code></td><td><code>{working_directory: str, text*: str, sequence*: number}</code></td><td><code>{"saved": bool}</code> (false = stale sequence lost the race)</td></tr>
+<tr><td><span class="method m-post">POST</span><code>/api/application/hidden-directories</code></td><td><code>{working_directory*: str}</code></td><td><code>{"hidden": {dir: timestamp…}}</code> — the updated map</td></tr>
+<tr><td><span class="method m-post">POST</span><code>/api/application/push-subscriptions</code></td><td><code>{subscription*: {endpoint*: https-url, keys*: {p256dh*, auth*}}, device_id*: str, device_label?: str}</code></td><td><code>{"saved": true}</code></td></tr>
+<tr><td><span class="method m-post">POST</span><code>/api/application/presence</code></td><td><code>{device_id*: str, session_id?: str, away?: bool}</code></td><td><code>{"saved": true}</code></td></tr>
+<tr><td><span class="method m-post">POST</span><code>/api/application/browser-events</code></td><td><code>{client_id*: str, device_id*: str, connection?: {scalar…}, events*: [{name*: str, session_id?: str, timestamp?: int, details?: {scalar…}}]}</code></td><td><code>{"recorded": true}</code></td></tr>
+<tr><td><span class="method m-post">POST</span><code>/api/sessions/&lt;id&gt;/application/composer-draft</code></td><td><code>{text*: str, origin*: str, sequence*: number}</code></td><td><code>{"saved": bool}</code></td></tr>
+<tr><td><span class="method m-post">POST</span><code>/api/sessions/&lt;id&gt;/application/composer-queue</code></td><td><code>{items*: [{text*: str}], origin*: str}</code> (blank texts dropped)</td><td><code>{"saved": true}</code></td></tr>
+<tr><td><span class="method m-post">POST</span><code>/api/sessions/&lt;id&gt;/application/dialog-draft</code></td><td><code>{attention_id*: str, origin*: str, answers*: [{selected*: [str], other*: str}]}</code></td><td><code>{"saved": true}</code></td></tr>
+<tr><td><span class="method m-post">POST</span><code>/api/sessions/&lt;id&gt;/application/view-mode</code></td><td><code>{view_mode*: str}</code></td><td><code>{"saved": true}</code></td></tr>
+<tr><td><span class="method m-post">POST</span><code>/api/sessions/&lt;id&gt;/application/notifications-muted</code></td><td><code>{muted*: bool}</code></td><td><code>{"saved": true}</code></td></tr>
+<tr><td><span class="method m-post">POST</span><code>/api/sessions/&lt;id&gt;/application/tasks-hidden</code></td><td><code>{hidden*: bool}</code></td><td><code>{"saved": true}</code></td></tr>
+<tr><td><span class="method m-post">POST</span><code>/api/sessions/&lt;id&gt;/application/optimistic-actions</code></td><td><code>{action*: composer|close|answer|plan, phase*: shown|reconciled|dropped|stale, character_count?: int, elapsed_milliseconds?: int, reason?: str}</code></td><td><code>{"recorded": true}</code></td></tr>
+<tr><td><span class="method m-post">POST</span><code>/api/sessions/&lt;id&gt;/application/client-failures</code></td><td><code>{gesture*: str, failure_kind*: transport|http, error?: str, status_code?: int, character_count?: int}</code></td><td><code>{"recorded": true}</code></td></tr>
+</table>
+
+<h3 id="ep-files">4.7 Files &amp; dictation (the <code>_PostMixin</code> fallback routes)</h3>
+
+<div class="endpoint"><h4><span class="method m-post">POST</span><code>/api/application/uploads</code> — stage a composer attachment</h4>
+<div class="meta">consumer: SPA composer · guard cap raised to <code>UPLOAD_MAX</code> = 14 MiB (base64-inflated 10 MB image + envelope)</div>
+<p>Request: <code>{"session_id"?: str, "name"*: str, "mime"?: str, "data"*: base64-str}</code>. Transport is JSON+base64, <em>not multipart</em>, deliberately: it keeps the whole POST-guard defense with no boundary parser. The name is reduced to a sanitized basename; bytes land under the app data dir in a per-session subdir (pruned after 7 days at boot).</p>
+<p>Responses: <code>200 {"ok": true, "path": abs-str, "name": str, "mime": str, "is_image": bool}</code> — the composer injects <code>path</code> as an <code>@path</code> mention; <code>400</code> bad fields / bad base64 / empty; <code>413</code> too large; <code>500</code> write failure. Every attempt is a <code>web-upload</code> audit row.</p></div>
+
+<div class="endpoint"><h4><span class="method m-post">POST</span><code>/api/application/clipboard-files</code> — resolve pasted file promises</h4>
+<div class="meta">consumer: SPA composer</div>
+<p>Request: <code>{"names"*: [basename…], "session_id"?: str}</code>. The server shares the macOS pasteboard with kitty and returns full paths only for exactly-matching basenames — a remote device can never be handed an unrelated host path. Response <code>200 {"paths": [abs-str…]}</code>; a miss is <code>paths: []</code>, not an error. Audited as <code>web-clipboard</code>.</p></div>
+
+<div class="endpoint"><h4><span class="method m-post">POST</span><code>/api/application/dictation-token</code> — mint a Deepgram grant</h4>
+<div class="meta">consumer: SPA composer/dialogs (mic button)</div>
+<p>Request: <code>{"sample_rate"*: int (bounded), "harness"*: str, "working_directory"?: existing-dir-str}</code>. The stdlib server can't speak WebSocket and must never see audio; its whole role is trading the on-disk API key for a ~30 s single-purpose JWT plus the fully-assembled listen URL.</p>
+<p>Responses: <code>200 {"token": str, "expires_in": int?, "ws_url": str}</code>; <code>400</code> bad rate / missing harness / bad directory; <code>501</code> no key configured; <code>502</code> grant failed. Every attempt is a <code>web-dictate</code> audit row; the API key never appears in any response or audit row.</p></div>
+
+<!-- ================================================================ -->
+<h2 id="types">5. Wire-type appendix — every response dataclass</h2>
+<p class="small">Serialized by <code>to_wire</code> (<span class="file">dashboard/activity.py:51</span>): every field, declaration order, exact Python names, <code>null</code> for None, tuples as arrays, <code>Decimal</code> as <em>string</em>. ID types (<code>SessionId</code>, <code>ActorId</code>, …) are <code>NewType</code> strings.</p>
+
+<h3 id="t-listitem">5.1 <code>DashboardSessionListItem</code> <span class="small">(GET /api/sessions; also <code>GlobalApplicationSnapshot.sessions</code>)</span></h3>
+<pre><code>DashboardSessionListItem            dashboard/activity.py:179
+  session: SessionSummary
+  terminal: TerminalSessionState
+  project_directory: str
+  tab_state: TabState | null        // "idle"|"thinking"|"working"|"executing"|
+                                    // "awaiting_background"|"awaiting_attention"|"awaiting_response"
+  statistics: ActivityStatistics
+  usage: UsageSummary
+  context: ContextSummary
+  repository: RepositoryStatus | null
+
+SessionSummary                      runtime/projections.py:240
+  session_id: str            harness: str              title: str | null
+  working_directory: str     initial_working_directory: str
+  started_at: float          finished_at: float | null
+  lead_actor_id: str         model: ModelReference | null
+  effort: str | null         account: AccountReference | null
+  prompt_count: int          automatic_model_change: ModelChanged | null
+  state: "running" | "finished"
+
+ModelReference   { native_id: str, display_name: str|null, selection_id: str|null }
+AccountReference { account_id: str, display_name: str }
+ModelChanged     { previous: ModelReference|null, current: ModelReference,
+                   reason: "selected"|"automatic_fallback"|"account_migration"|"reported_by_harness" }
+TerminalSessionState { window_id: str|null, input_state: {typed_text: str|null, suggestion: str|null} | null }
+ActivityStatistics   { shell_command_count: int, failed_shell_command_count: int, file_count: int,
+                       lines_added: int, lines_removed: int, actor_message_count: int,
+                       operation_counts: {str: int} }
+UsageSummary   { tokens: TokenUsage, cost_in_usd: str|null (Decimal!),
+                 by_actor: {actor_id: TokenUsage}, by_model: {model: TokenUsage} }
+TokenUsage     { input_tokens: int, output_tokens: int, cache_read_tokens: int,
+                 cache_write_tokens: int, one_hour_cache_write_tokens: int }
+ContextSummary { by_actor: {actor_id: ContextWindow}, compacting_actor_ids: [str…] }
+ContextWindow  { used_tokens: int, window_tokens: int, model: ModelReference|null }
+RepositoryStatus { branch: str, worktree: str|null, dirty: bool }</code></pre>
+
+<h3 id="t-snapshot">5.2 <code>DashboardSessionSnapshot</code> <span class="small">(session GET "canonical" half; inside every SSE activity frame)</span></h3>
+<pre><code>DashboardSessionSnapshot            dashboard/activity.py:164
+  cursor: int
+  session: SessionSummary | null
+  tab_state: TabState | null
+  actors: [ActorSummary…]
+  usage: UsageSummary
+  context: ContextSummary
+  attention: { pending: [DashboardPendingAttention…] }
+  tasks: [TaskSummary…]
+  goal: GoalState | null
+  background_work: DashboardBackgroundWork
+  statistics: ActivityStatistics
+
+ActorSummary   { actor_id: str, parent_actor_id: str|null, harness: str,
+                 role: "lead"|"child"|"teammate"|"sidecar", name: str, description: str|null,
+                 model: ModelReference|null, effort: str|null, state: "running"|"finished",
+                 started_at: float|null, finished_at: float|null }
+DashboardPendingAttention { actor_id: str, attention_id: str, attention_type: str,
+                            questions: [DashboardQuestion…], plan_html: str|null }
+DashboardQuestion         { question_id: str, title: str|null, text: str, multiple: bool,
+                            options: [{value: str, label: str, description: str|null}…] }
+TaskSummary    { task_id: str, label: str, subject: str, description: str|null,
+                 state: "pending"|"in_progress"|"completed", owner_actor_id: str|null }
+GoalState      { objective: str, reason: str|null,
+                 state: "active"|"paused"|"blocked"|"usage_limited"|"budget_limited"|"completed" }
+DashboardBackgroundWork   { running_operation_ids: [str…], monitor_count: int,
+                            background_job_count: int,
+                            monitors: [DashboardBackgroundOperation…],
+                            jobs: [DashboardBackgroundOperation…] }
+DashboardBackgroundOperation { task: str, actor_id: str, command: str, command_html: str,
+                               description: str|null, live: bool, started_at: float|null,
+                               ended_at: float|null, end_reason: str|null, output: str,
+                               line_count: int, events: [{event: str, status: str|null,
+                                                          summary: str|null, timestamp: float|null}…] }</code></pre>
+
+<h3 id="t-appsnap">5.3 <code>SessionApplicationSnapshot</code> <span class="small">(session GET "application" half; SSE <code>application</code> event)</span></h3>
+<pre><code>SessionApplicationSnapshot          dashboard/application.py:144
+  preferences: { view_mode: str, notifications_muted: bool, tasks_hidden: bool }
+  composer: { draft: {text: str, origin: str, sequence: float} | null,
+              queue: {items: [{text: str}…], origin: str} | null }
+  dialog:   { draft: {attention_id: str,
+                      answers: [{selected: [str…], other: str}…], origin: str} | null }
+  terminal: TerminalSessionState
+  errors: [{error_id: int, timestamp: float, component: str, action: str,
+            traceback: str, context: str}…]</code></pre>
+
+<h3 id="t-global">5.4 <code>GlobalApplicationSnapshot</code> <span class="small">(global SSE <code>application</code> event)</span></h3>
+<pre><code>GlobalApplicationSnapshot           dashboard/application.py:87
+  sessions: [DashboardSessionListItem…]           // §5.1
+  usage_rows: [UsageRow…]
+  notifications: { enabled: bool,
+                   latest: {revision: int, session_id: str, kind: str,
+                            project: str, title: str} | null }
+  preferences: { new_session: {working_directory: str|null, harness: str|null,
+                               model: str|null, effort: str|null},
+                 new_session_drafts: [{working_directory: str, text: str, sequence: float}…],
+                 hidden_directories: {dir: float…},
+                 limits: {upload_bytes: int, rename_characters: int, presence_seconds: float} }
+
+UsageRow    { harness: str, account_id: str|null, display_name: str, switchable: bool,
+              plan: str|null, windows: [UsageWindow…],
+              scheduling_score: str|null (Decimal!), scheduling_allowed: bool,
+              limit: {model_id: str|null, message: str|null, resets_at: float|null} | null,
+              authentication_error: str|null }
+UsageWindow { key: str, label: str, used_percent: str (Decimal!), resets_at: float|null,
+              duration_minutes: int|null, scope: "account"|"model", model_id: str|null }</code></pre>
+
+<h3 id="t-page">5.5 <code>DashboardActivityPage</code> and <code>DashboardItem</code> <span class="small">(activity GET; items also in SSE frames)</span></h3>
+<pre><code>DashboardActivityPage  { oldest_cursor: int, latest_cursor: int|null,
+                         has_more: bool, items: [DashboardItem…] }
+
+DashboardItem                       dashboard/presenter.py:27 — all 23 keys always present
+  item_id: str
+  item_type: "message"|"reasoning"|"operation"|"file"|"attention"|"task"|
+             "compaction"|"actor_assignment"|"actor_message"
+  summary_kind: "message"|"shell"|"background"|"monitor"|"file_read"|"file_write"|
+                "file_edit"|"search"|"network"|"workspace"|"media"|"skill"|"task"|
+                "message_delivery"|"attention"|"compaction"|"actor_assignment"|"actor_message"
+  actor_id: str
+  state: "running"|"succeeded"|"failed"|"cancelled" | null
+  html: str                         // pre-rendered, neutralized markup — blocks live here
+  plain_text: str
+  content_reference: str | null
+  conversation_kind: "prompt"|"message"|"system"|"question"|"answer"|"plan"|
+                     "plan_decision"|"recap"|"actor_message" | null
+  turn_id: str | null               final: bool
+  actor_assignment_id: str | null   actor_assignment_phase: "started"|"finished" | null
+  lines_added: int | null           lines_removed: int | null
+  message_id: str | null            reply_to_message_id: str | null
+  started_at: float | null          finished_at: float | null
+  command_reference: str | null     output_reference: str | null
+  file_path: str | null</code></pre>
+
+<h3 id="t-insights">5.6 <code>ApplicationInsights</code> <span class="small">(GET /api/insights)</span></h3>
+<pre><code>ApplicationInsights                 app/insights.py:67
+  generated_at: float
+  total_session_count: int
+  daily_sessions:  [{date: "YYYY-MM-DD", session_count: int}…]
+  hourly_sessions: [{day_of_week: int (0-6), hour: int, session_count: int}…]
+  last_seven_days | last_thirty_days | all_time: InsightWindow
+  projects: [ProjectInsights…]
+
+InsightWindow   { session_count: int, active_session_count: int, finished_session_count: int,
+                  token_count: int, cost_in_usd: float (a NUMBER here — float, not Decimal),
+                  error_count: int,
+                  projects: [{working_directory: str, name: str, session_count: int}…] }
+ProjectInsights { working_directory: str, name: str, session_count: int, token_count: int,
+                  cost_in_usd: float, error_count: int, last_session_at: float,
+                  daily_sessions: [{date, session_count}…] }</code></pre>
+
+<h3 id="t-resumable">5.7 <code>ResumableSession</code> <span class="small">(GET /api/resumable-sessions)</span></h3>
+<pre><code>ResumableSession                    app/resume.py:20
+  session_id: str        title: str | null       last_activity_at: float
+  active: bool           harness: str            model: ModelReference | null
+  effort: str | null     account: AccountReference | null</code></pre>
+
+<h3 id="t-launch">5.8 Launch and control results</h3>
+<pre><code>LaunchResult   { status: "started"|"rejected", window_id: str|null, reason: str|null }
+
+ControlResult       { request_id: str, status: "acknowledged"|"rejected"|"indeterminate",
+                      reason: str|null }
+DeliveryResult      = ControlResult + { queued: bool, restored_text: str }
+CommandResult       = ControlResult + { confirmation: "confirmed"|"not_needed"|"failed" | null }
+RewindResult        = ControlResult + { restored_text: str, degraded: bool }
+MigrationResult     = ControlResult + { target_account_id: str|null }
+PlanChoicesResult   = ControlResult + { choices: [{value: str, label: str,
+                                                   description: str|null}…] }</code></pre>
+
+<!-- ================================================================ -->
+<h2 id="serialization">6. Serialization rules and their sharp edges</h2>
+<p><code>to_wire</code> is 10 lines of generic reflection — and every quirk of it is now wire contract:</p>
+<ul>
+  <li><strong>Dataclass → dict</strong> of every declared field, exact Python names, declaration order. <code>None</code> is always emitted as <code>null</code>, never dropped. <code>ClassVar</code>s (the controls' <code>control_name</code>) are invisible.</li>
+  <li><strong>Mapping → dict</strong> with <code>str()</code>-coerced keys; <strong>tuple → array</strong>. <strong><code>list</code> is NOT recursed</strong> — a list-typed field would ship its elements raw. Nothing uses lists today (tuples everywhere); it is a live trap.</li>
+  <li><strong><code>Decimal</code> → string.</strong> <code>UsageSummary.cost_in_usd</code>, <code>UsageWindow.used_percent</code> and <code>UsageRow.scheduling_score</code> arrive as JSON strings — while <code>InsightWindow.cost_in_usd</code> is a float <em>number</em>. The same concept crosses the wire as two different JSON types depending on endpoint.</li>
+  <li><strong>Two encoders.</strong> Normal responses: <code>json.dumps(obj, default=str)</code> — ASCII-escaped, unsorted keys, and a <code>default=str</code> safety net that silently stringifies anything unexpected instead of failing. SSE <code>activity</code> frames alone: <code>ensure_ascii=False</code>, compact separators.</li>
+  <li><strong>No schema exists anywhere.</strong> The union of what the SPA reads is the de-facto contract; nothing machine-checks that the 23 <code>DashboardItem</code> keys or the <code>ControlOutcome</code> variants stay in sync with the JS.</li>
+  <li><strong>Validation is all hand-rolled</strong>: ~30 repetitions of the <code>isinstance</code>-check-then-<code>ValueError</code> pattern (<code>_required_text</code>, <code>_optional_integer</code>, <code>_scalar_values</code>, <code>_attachments</code>, inline checks). Some responses bypass <code>to_wire</code> entirely and are hand-built dicts (<code>/api/harnesses</code>, <code>/api/terminal/panes</code>, all the <code>{"saved": true}</code> family) — three different ways of producing JSON in one module.</li>
+</ul>
+
+<!-- ================================================================ -->
+<h2 id="tests">7. Tests that pin this architecture</h2>
+<p>Any refactor must keep these green (or consciously rewrite them):</p>
+<table>
+<tr><th>test</th><th>enforces</th></tr>
+<tr><td><span class="file">test_canonical_architecture.py::test_the_application_graph_is_built_only_by_the_daemon</span></td><td>only <code>app/bootstrap.py</code> and <code>dashboard/http/handler.py</code> may build the application graph — the new package's server module must take handler.py's place here</td></tr>
+<tr><td><span class="file">…::test_hook_entries_are_thin_clients_of_the_daemon</span></td><td>the two <code>canonical_hook.py</code> files never touch the recorder, bootstrap, or events.db</td></tr>
+<tr><td><span class="file">…::test_recorder_entries_never_build_the_application</span></td><td>recorders build no graph; <code>plugins/*/command.py</code> must not exist</td></tr>
+<tr><td><span class="file">…::test_canonical_consumers_cannot_observe_or_checkpoint_native_sources</span></td><td>pane clients and presenters consume rendered frames only</td></tr>
+<tr><td><span class="file">…::test_canonical_sse_has_no_broker_or_application_event_registry</span> + <span class="file">…::test_resume_and_sse_have_one_authoritative_path</span></td><td>SSE stays one direct poll path — no broker/pubsub layer may creep in with the framework</td></tr>
+<tr><td><span class="file">test_import_safety.py</span></td><td><code>daemon_client</code>, <code>hook_client</code>, pane processes, hook entries import with zero side effects — a framework import in the wrong place breaks this</td></tr>
+<tr><td><span class="file">test_canonical_plugins.py::test_hook_client_ships_exact_bytes_and_four_flat_headers</span></td><td>the hook body object is the stdin bytes <em>identically</em> (no re-encode), the exact four headers, the 2 s timeout</td></tr>
+<tr><td><span class="file">test_canonical_http.py</span></td><td>the server-side contract for every endpoint above, including the hook-delivery and pane-stream behaviours — this is the golden suite for wire compatibility</td></tr>
+</table>
+
+<!-- ================================================================ -->
+<h2 id="discrepancies">8. Discrepancies found while writing this</h2>
+<div class="warn">
+<ul>
+  <li><strong>CLAUDE.md is stale about wrappers.</strong> It says sessions are registered by <code>plugins/*/command.py</code> at launch — those files are deleted and a test asserts they stay gone. Launching happens daemon-side via <code>POST /api/sessions</code>.</li>
+  <li><strong><span class="file">docs/recorder-interpreter.md:79-88</span> describes a hook protocol that no longer exists</strong> (<code>ensure_running()</code>, an <code>X-Baqylau-Environment</code> header, per-plugin <code>ENVIRONMENT_KEYS</code>). The real protocol is exact-bytes + four flat headers.</li>
+  <li><strong><span class="file">app.08-composer.js:626</span></strong> comment names the endpoint <code>/api/clipboard/files</code>; the code posts <code>/api/application/clipboard-files</code>.</li>
+  <li><strong>Unknown session returns 400, not 404</strong> (a <code>KeyError</code> is folded into the generic 400 branch) — worth fixing deliberately in the refactor.</li>
+  <li><strong>Cost crosses the wire as a string on some endpoints and a number on others</strong> (Decimal vs float, §6).</li>
+</ul>
+</div>
+
+<!-- ================================================================ -->
+<h2 id="refactor">9. Refactoring proposal</h2>
+
+<h3>The three problems, restated precisely</h3>
+<ol>
+  <li><strong>Too much custom HTTP.</strong> ~1,600 lines of hand-rolled routing, guard, gzip, SSE framing, cache stamping and validation — all of which a framework provides, tested, with better ergonomics.</li>
+  <li><strong>Nothing is typed on the wire.</strong> Requests are hand-validated dicts (30+ repetitions of the isinstance dance); responses are a mix of reflective <code>to_wire</code>, hand-built dicts, and fixed literals; no schema exists, so client/server drift is caught only by the golden HTTP tests or in production.</li>
+  <li><strong>Wrong home.</strong> <code>dashboard/http/</code> serves the dashboard, the hooks (evidence plane!), both terminal panes, the keybinding handler and two click handlers. The evidence plane's one write endpoint living inside a presenter package inverts the architecture's own layering story.</li>
+</ol>
+
+<h3>Proposal 1 — a new top-level package: <code>api/</code></h3>
+<p>Extract the HTTP layer into its own layer, sitting where it truthfully sits — above <code>app/</code>, beside the presenters, owned by neither:</p>
+<pre><code>api/
+  server.py          # serve(): lock, audit stream, uvicorn, the three threads — the ONE
+                     #   graph-builder (takes dashboard/http/handler.py's place in the
+                     #   architecture test's allowlist)
+  guard.py           # the POST-guard as FastAPI dependencies: readonly, origin allowlist,
+                     #   X-Baqylau header, per-route body caps
+  models/            # every request/response model (see Proposal 2)
+    control.py  application.py  evidence.py  streams.py  wire.py
+  routes/
+    evidence.py      # POST /api/harnesses/{harness}/hooks         — raw bytes in/out
+    sessions.py      # /api/sessions*, controls, activity
+    streams.py       # the three SSE endpoints
+    panes.py         # /api/terminal/panes, /api/terminal/views
+    application.py   # preferences, drafts, presence, telemetry
+    files.py         # uploads, clipboard-files, dictation-token
+    static.py        # index stamping, whitelist, sw.js, favicon
+  http_config.py     # PORT/HOST/caps/headers/origins — moved OUT of dashboard.config</code></pre>
+<ul>
+  <li><code>dashboard/</code> keeps what is genuinely dashboard: the SPA assets, presenters, markdown/diff/ansi rendering, notify. <code>api/</code> imports application services (<code>app/</code>) and presenters (<code>dashboard/</code>), never the reverse.</li>
+  <li><code>app/daemon_client.py</code> stops importing <code>dashboard.config</code> (a terminal-side client importing the web-presenter package today) and reads <code>api/http_config.py</code> — or better, the shared constants move to <code>core/</code> so clients import no server code at all.</li>
+  <li>Layering table addition: <code>api/</code> may import domain/contracts/runtime/app/core + presenters; still no harness vocabulary (the <code>{harness}</code> path segment stays a string resolved through the registry, exactly as today).</li>
+  <li>Update the architecture test's allowlist (<code>build_default_application</code>: <code>app/bootstrap.py</code> + <code>api/server.py</code>) in the same commit — and CLAUDE.md/docs, which this page shows are already drifting.</li>
+</ul>
+
+<h3>Proposal 2 — FastAPI + Pydantic, typed end to end</h3>
+<p><strong>Framework: FastAPI on uvicorn.</strong> This is the repo's first third-party runtime dependency — worth stating plainly, because today the whole system is stdlib-only. What it buys: declarative routing (the URL space readable in one place instead of an MRO), Pydantic validation replacing every hand-rolled check, OpenAPI/JSON-schema for free, native SSE via <code>StreamingResponse</code>, dependency injection replacing <code>self.server.canonical_application</code>, and a real test client. What must be preserved and how:</p>
+
+<table>
+<tr><th>today's mechanism</th><th>FastAPI equivalent</th></tr>
+<tr><td><code>_post_guard</code> (readonly / content-type / origin / header / cap)</td><td>one <code>Depends(control_plane_guard)</code> on every mutating route; per-route body caps as parameters (<code>POST_MAX</code>/<code>UPLOAD_MAX</code>/<code>HOOK_MAX</code>). Keep the <code>web-reject</code> audit row in the dependency — it is load-bearing forensics. Do <em>not</em> add CORSMiddleware: never answering preflights is part of the defense.</td></tr>
+<tr><td>hand routing over path segments</td><td><code>APIRouter</code> per plane; typed path params (<code>session_id: SessionId</code> via a validated str subtype)</td></tr>
+<tr><td>hand-validated dict bodies</td><td>Pydantic request models; the controls envelope becomes a <strong>discriminated union on <code>control_name</code></strong> — the 14 variants get schema-checked for free, and <code>422</code>s carry field-level errors instead of one opaque string</td></tr>
+<tr><td><code>to_wire</code> + <code>json.dumps(default=str)</code></td><td>Pydantic response models (<code>response_model=…</code> per route). Mirror the dataclasses one-for-one initially; pin wire compatibility with golden tests (same field names, <code>null</code>s present, Decimal→str via a field serializer). Retire <code>default=str</code> — an unserializable value should fail loudly.</td></tr>
+<tr><td>hook endpoint's exact bytes</td><td><code>await request.body()</code> — the payload stays evidence, unparsed; the four identity headers become typed <code>Header(...)</code> params; the reply stays a raw <code>Response(content=reply_bytes)</code></td></tr>
+<tr><td>SSE while-loops</td><td>async generators + <code>StreamingResponse</code> (or sse-starlette). <strong>Keep the same one-direct-poll-path design</strong> — the no-broker tests stay meaningful. The big win: today every SSE connection pins an OS thread; async generators make pane/session streams nearly free.</td></tr>
+<tr><td>gzip in <code>_send</code></td><td><code>GZipMiddleware(minimum_size=1024)</code> (skips streaming responses automatically, matching today's SSE-never-gzipped rule)</td></tr>
+<tr><td>static whitelist + BOOT_ID stamping</td><td>keep the custom logic (it is policy, not plumbing) in <code>routes/static.py</code>; only the header/socket mechanics go to the framework</td></tr>
+<tr><td><code>ThreadingHTTPServer</code> in <code>serve()</code></td><td><code>uvicorn.Server</code> run inside the same <code>serve()</code> shell: same pid-lock, same audit stream, same three threads, same SIGTERM path — the process contract is untouched</td></tr>
+</table>
+
+<p><strong>Typing both sides.</strong> With Pydantic models in place, generate the OpenAPI schema at build time and derive a typed TypeScript client for the SPA (e.g. openapi-typescript) — then client/server drift becomes a compile error, closing the loop that <code>to_wire</code>'s reflection left open. The terminal-side <code>daemon_client</code> can import the same request/response models directly, since client and server share the repo.</p>
+
+<h3>Migration plan — four reviewable steps, wire-compatible throughout</h3>
+<ol>
+  <li><strong>Move, don't change.</strong> <code>git mv dashboard/http api/http</code>, split the HTTP knobs out of <code>dashboard.config</code>, update the two architecture-test allowlists. Pure relocation; <code>make test</code> green.</li>
+  <li><strong>Pin the wire.</strong> Add golden contract tests: for each endpoint, a recorded request → the exact JSON (or SSE frame sequence) expected, captured from the current implementation. <span class="file">test_canonical_http.py</span> is most of this already — extend it to cover every literal response and error shape in §4.</li>
+  <li><strong>Swap the engine.</strong> Introduce FastAPI models + routers behind the golden tests, one plane at a time (application-state routes first — trivial shapes; then read API; then controls; SSE and hooks last, they're the load-bearing ones). Restart discipline is unchanged: stop/start the daemon, hard-reload the browser.</li>
+  <li><strong>Reap.</strong> Delete <code>_Base</code>/<code>_GetMixin</code>/<code>_PostMixin</code>/<code>_CanonicalMixin</code> and the hand validators; generate the TS client; fix the deliberate wire changes only now, as their own commits (unknown session → real 404; one JSON type for cost; documented 422 validation errors). Update <code>docs/</code> + CLAUDE.md + the audit-debug skill in the same commits.</li>
+</ol>
+
+<h3>Risks worth naming</h3>
+<ul>
+  <li><strong>Dependency footprint</strong>: fastapi + starlette + pydantic + uvicorn ends the stdlib-only property. If that is unacceptable, the fallback that still fixes problems 2 and 3 is: keep the stdlib server, extract <code>api/</code>, and hand-write the Pydantic-style models over it — but you keep maintaining the plumbing forever.</li>
+  <li><strong>Async vs the graph</strong>: the application services are synchronous and SQLite-backed. Run route handlers as sync (<code>def</code>, thread-pool) initially — semantics identical to today's threading — and move only the SSE generators to async. Do not make the interpreter async.</li>
+  <li><strong>Hook latency</strong>: hooks time out at 2 s client-side and their reply gates the harness. Benchmark the hook route before/after; recording must stay on the request path (never behind the interpreter tick).</li>
+  <li><strong>Pydantic strictness</strong>: default coercion is looser than today's hand checks in places (e.g. <code>"1"</code> → int). Use strict types where today rejects, or the golden tests will pass while behaviour loosens.</li>
+</ul>
+
+<p class="small" style="margin-top:3rem; border-top: 1px solid var(--line); padding-top: .8rem;">
+Generated 2026-08-16 from direct source reading of <code>dashboard/http/</code>, <code>app/daemon_client.py</code>, <code>app/hook_client.py</code>, <code>app/hook_gateway.py</code>, <code>dashboard/config.py</code>, <code>dashboard/activity.py</code>, <code>dashboard/application.py</code>, <code>contracts/harness.py</code>, <code>runtime/projections.py</code>, <code>app/insights.py</code>, <code>app/resume.py</code>, <code>app/telemetry.py</code>, <code>dashboard/static/app.*.js</code> and the test suite, at commit <code>b03e94c</code>.
+</p>
+
+</body>
+</html>

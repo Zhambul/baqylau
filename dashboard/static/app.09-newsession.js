@@ -1217,7 +1217,7 @@ function nsActions(F) {
     };
     // Optimistic clear: the message is on its way — it rides the launch argv, so
     // empty the box NOW rather than leaving it looking un-sent through the
-    // (kitten-slow) launch round-trip. The form tears down on success anyway;
+    // (terminal-slow) launch round-trip. The form tears down on success anyway;
     // this just guarantees the message never LINGERS in the input after you hit
     // launch. Restored verbatim only if the launch actually fails, so a retry
     // keeps your text (the "the draft stayed in the message input" fix).
@@ -1226,7 +1226,7 @@ function nsActions(F) {
     // The pending view mounts on the CLICK, not on the response. The POST is
     // slow in absolute terms — measured `new.ok` p50 ~0.4 s, tail past 5 s: the
     // server runs an osascript clipboard probe (~150 ms), an `lsappinfo` front-app
-    // read, a `kitten @ ls` on a resume and finally the `kitten @ launch` itself,
+    // read, a terminal window enumeration on a resume and finally the launch itself,
     // all before it answers. Gating the waiting room on that reply put a second of
     // DEAD AIR between the click and any feedback — the exact stretch the pending
     // view exists to cover, so it was missing precisely when it was needed

@@ -169,12 +169,6 @@ class CanonicalEventStore:
             ).fetchone()
             return self._stored_event(connection, row) if row is not None else None
 
-    def require_event(self, event_id: CanonicalEventId) -> StoredCanonicalEvent:
-        stored_event = self.event(event_id)
-        if stored_event is None:
-            raise CanonicalEventStoreError(f"unknown canonical event: {event_id}")
-        return stored_event
-
     def after(self, session_id: SessionId, cursor: int, limit: int) -> CanonicalEventPage:
         if limit <= 0:
             raise ValueError("event page limit must be positive")

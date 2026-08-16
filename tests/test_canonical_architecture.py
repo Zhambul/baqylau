@@ -26,13 +26,19 @@ def imports_under(package: str):
         yield from imports_under_path(path)
 
 
-def assert_imports(package: str, allowed_roots: set[str]):
+def assert_imports(package: str, allowed_roots: set[str], allowed_modules: set[str] = frozenset()):
+    """`allowed_modules` admits named MODULES from an otherwise closed package —
+    the exception `contracts` needs, and the only one: it may name the terminal
+    CONTRACT (which imports nothing of ours) without opening the whole package."""
     bad = []
     for path, imported in imports_under(package):
         root = imported.split(".", 1)[0]
-        if root in {"app", "contracts", "core", "dashboard", "domain", "frontends", "plugins", "runtime", "terminal"}:
-            if root not in allowed_roots:
-                bad.append(f"{path.relative_to(ROOT)} imports {imported}")
+        if root in {"app", "contracts", "core", "dashboard", "domain", "plugins", "runtime", "terminal"}:
+            if root in allowed_roots:
+                continue
+            if any(imported == module or imported.startswith(module + ".") for module in allowed_modules):
+                continue
+            bad.append(f"{path.relative_to(ROOT)} imports {imported}")
     assert not bad, "invalid canonical imports:\n  " + "\n  ".join(bad)
 
 
@@ -40,8 +46,82 @@ def test_domain_imports_only_the_standard_library():
     assert_imports("domain", {"domain"})
 
 
-def test_contracts_import_only_domain_and_the_standard_library():
-    assert_imports("contracts", {"contracts", "domain"})
+def test_contracts_import_only_domain_the_terminal_contract_and_the_standard_library():
+    # The terminal contract is the one thing `contracts/` may reach sideways
+    # for: a harness's control context is handed a terminal, and the alternative
+    # is an untyped field. It is safe because the terminal contract and its
+    # models import NOTHING of ours (pinned below), so no cycle can form.
+    assert_imports(
+        "contracts",
+        {"contracts", "domain"},
+        allowed_modules={"terminal.contract", "terminal.models"},
+    )
+
+
+def test_the_terminal_contract_and_models_import_nothing_of_ours():
+    """The floor of the terminal layer: window ids in, typed responses out.
+
+    Keeping it free of `domain`, `contracts`, and the rest is what lets
+    `contracts/` name it, what keeps sessions out of the terminal abstraction,
+    and what makes a second terminal implementable against one small file.
+    """
+    boundary = [ROOT / "terminal" / "contract.py", *sorted((ROOT / "terminal" / "models").rglob("*.py"))]
+    foreign = []
+    for path in boundary:
+        for _path, imported in imports_under_path(path):
+            root = imported.split(".", 1)[0]
+            if root not in {"terminal", "dataclasses", "typing", "__future__"}:
+                foreign.append(f"{path.relative_to(ROOT)} imports {imported}")
+    assert foreign == []
+
+
+def test_only_bootstrap_and_the_self_identifying_clients_resolve_a_terminal():
+    """`terminal/impl/` has one door and three callers.
+
+    Everything else takes a `TerminalPlugin` (or one of its five fields) by
+    injection. The two clients are the hook and the pane keybinding: they run
+    INSIDE a terminal window and are the only things that can observe which
+    window that is.
+    """
+    allowed = {"app/bootstrap.py", "app/hook_client.py", "app/terminal_panes.py"}
+    importers = set()
+    for package in ("api", "app", "contracts", "core", "dashboard", "domain", "plugins", "runtime"):
+        for path, imported in imports_under(package):
+            if imported == "terminal.impl" or imported.startswith("terminal.impl."):
+                importers.add(path.relative_to(ROOT).as_posix())
+    assert importers == allowed
+
+
+def test_no_terminal_is_named_outside_its_own_implementation():
+    """The terminal twin of the harness-vocabulary gate.
+
+    A concrete terminal's name may appear in exactly one directory — its own.
+    The structural leaks this cannot see (a match expression built above the
+    boundary) are what `PaneAnchor` and the contract exist to prevent; this
+    stops the vocabulary growing back.
+    """
+    concrete_words = ("kitty", "kitten")
+    scanned = [
+        ROOT / "api", ROOT / "app", ROOT / "contracts", ROOT / "core", ROOT / "dashboard",
+        ROOT / "domain", ROOT / "plugins", ROOT / "runtime", ROOT / "terminal",
+    ]
+    implementation = ROOT / "terminal" / "impl" / "kitty"
+    # The detector registry is the one file above the implementation that may
+    # name it: routing a name to a directory is exactly what it does.
+    registry = ROOT / "terminal" / "impl" / "__init__.py"
+    violations = []
+    for directory in scanned:
+        for path in sorted(directory.rglob("*.py")):
+            if implementation in path.parents or path == registry:
+                continue
+            lowered = path.read_text(encoding="utf-8").lower()
+            words = [word for word in concrete_words if word in lowered]
+            if words:
+                violations.append(f"{path.relative_to(ROOT)} contains {', '.join(words)}")
+    for path in sorted((ROOT / "dashboard" / "static").glob("*.js")):
+        if "kitty" in path.read_text(encoding="utf-8").lower():
+            violations.append(f"dashboard/static/{path.name} contains kitty")
+    assert violations == []
 
 
 def test_runtime_imports_only_domain_and_contracts():
@@ -49,7 +129,10 @@ def test_runtime_imports_only_domain_and_contracts():
 
 
 def test_presenters_do_not_import_plugins_or_each_other():
-    assert_imports("terminal", {"domain", "contracts", "runtime", "terminal"})
+    # No `contracts`: the dependency runs the other way now (contracts names
+    # the terminal contract), and a package-level cycle would be the first step
+    # back to two interfaces.
+    assert_imports("terminal", {"domain", "runtime", "terminal"})
     presentation_files = {
         "activity.py",
         "ansi.py",
@@ -154,7 +237,6 @@ def test_canonical_shared_code_contains_no_concrete_harness_vocabulary():
         ROOT / "core",
         ROOT / "dashboard",
         ROOT / "domain",
-        ROOT / "frontends",
         ROOT / "runtime",
         ROOT / "terminal",
     ]
@@ -274,7 +356,7 @@ def test_the_application_graph_is_built_only_by_the_daemon():
         "api/server.py",
     }
     violations = []
-    for directory in ("api", "app", "bin", "core", "dashboard", "frontends", "plugins", "runtime", "terminal"):
+    for directory in ("api", "app", "bin", "core", "dashboard", "plugins", "runtime", "terminal"):
         for path in sorted((ROOT / directory).rglob("*.py")):
             if "__pycache__" in path.parts:
                 continue
@@ -294,7 +376,7 @@ def test_claude_foreground_hook_has_no_legacy_drawing_or_state_dependency():
         ROOT / "plugins" / "claude_code" / "foreground.py",
         ROOT / "plugins" / "claude_code" / "shell.py",
     )
-    forbidden_roots = {"app", "core", "dashboard", "frontends", "runtime", "terminal"}
+    forbidden_roots = {"app", "core", "dashboard", "runtime", "terminal"}
     violations = []
     for path in implementation_files:
         for _imported_path, imported in imports_under_path(path):
@@ -323,8 +405,8 @@ def test_canonical_consumers_cannot_observe_or_checkpoint_native_sources():
         ROOT / "dashboard" / "application.py",
         ROOT / "dashboard" / "presenter.py",
         *sorted((ROOT / "api").rglob("*.py")),
-        ROOT / "terminal" / "presenter.py",
-        ROOT / "terminal" / "renderer.py",
+        ROOT / "terminal" / "mirror" / "presenter.py",
+        ROOT / "terminal" / "mirror" / "renderer.py",
         ROOT / "terminal" / "scoreboard.py",
     ]
     forbidden_fragments = (
@@ -444,7 +526,7 @@ if loaded:
 # call would have worked on one harness and raised on the other.
 
 SOURCE_PACKAGES = ("app", "contracts", "core", "dashboard", "domain",
-                   "frontends", "plugins", "runtime", "terminal")
+                   "plugins", "runtime", "terminal")
 
 # Structural implementers that must NOT declare their Protocol, with the reason.
 # Both are the same shape: the Protocol is declared in a layer that sits BELOW

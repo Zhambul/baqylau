@@ -19,7 +19,6 @@
 # `probe()` wraps it with the get-text call + audit-before-swallow.
 import re
 
-from core import audit as A
 
 CONTROL_SEQUENCE = re.compile(
     r"\x1b\[[0-9;:?]*[ -/]*[@-~]"
@@ -129,17 +128,6 @@ def norm(s):
     return re.sub(r"\s+", " ", s).strip()
 
 
-def cmp_key(s):
-    """A box-text COMPARISON key: every whitespace character removed. Stronger
-    than `norm` on purpose — a wrapped box is captured as separate lines that
-    join with NO separator, so a box read and the same text from the transcript
-    agree on their words but not on the spaces between them. Dropping
-    whitespace altogether is what makes post_interrupt's restore check survive
-    a wrap (docs/dashboard.md, *Interrupt*); nothing else may compare box text
-    by hand."""
-    return re.sub(r"\s+", "", s)
-
-
 def parse(screen):
     """The greyish suggested-answer text from an ANSI screen capture, or None.
     None means: no input box, an empty box, or REAL input (any non-whitespace
@@ -173,31 +161,3 @@ def typed(screen):
     return norm(real) or None
 
 
-def probe(fe, win, sid=""):
-    """The audited screen probe: capture the ANSI viewport and parse the ghost
-    suggestion. None on any failure (audited) or when there is no suggestion."""
-    return probe_box(fe, win, sid)[0]
-
-
-def probe_box(fe, win, sid=""):
-    """ONE capture, BOTH readings: (ghost, typed) — the faint suggestion and the
-    user's own real text. Exactly one of them can be non-None (they partition
-    the box's content by intensity), and the two callers want opposite halves:
-    the ghost feeds the composer's placeholder, the typed text feeds the
-    terminal→web draft sync (docs/dashboard.md, *Terminal draft sync*). They run
-    on the same SSE tick, so sharing the capture keeps that one `kitten @
-    get-text` per tick instead of two.
-
-    The typed half distinguishes "" (a box we READ and it is empty) from None
-    (we could not read one — dead window, kitten failure, no box on screen).
-    The sync treats an empty box as a signal and an unreadable one as no news,
-    so collapsing the two would clear a draft every time a session's window
-    goes away. (None, None) on any failure (audited)."""
-    try:
-        screen = fe.get_text(win, ansi=True)
-    except Exception:
-        A.error(sid, "dashboard suggestion probe", {"win": win})
-        return None, None
-    if not screen:
-        return None, None
-    return parse(screen), (typed(screen) or "")

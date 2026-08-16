@@ -348,7 +348,7 @@ function dictation(ta, getCwd, getHarness, sessionId) {
 
 /* ---------- control plane: the message composer ---------- */
 // A textarea above the mirror feed that types a message into the session's
-// kitty window (POST /message). Enter sends, Shift+Enter is a newline — except
+// terminal window (POST /message). Enter sends, Shift+Enter is a newline — except
 // on an iPad (IS_IPAD), where Enter is a newline and only the button sends. Disabled
 // with a hint when the session isn't live or has no window (a headless/daemon
 // session — the /message endpoint would 409). The sent text surfaces in the
@@ -429,7 +429,7 @@ function applyComposerDraft(draft) {
   // Focus normally means "the user is typing here, don't yank it". But a box
   // that still holds EXACTLY the draft we last showed has not been touched —
   // merely clicked into — and refusing the update there left a message sent
-  // from the kitty tab sitting in the composer forever, because the clear
+  // from the terminal tab sitting in the composer forever, because the clear
   // arrived while the box happened to have focus (reported 2026-07-25).
   const untouched = ta.value === ((was && was.text) || "");
   if (ta === document.activeElement && !untouched) return;
@@ -601,10 +601,10 @@ const CLIP_SVG =
   + " 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1"
   + "-2.83-2.83l8.49-8.48'/></svg>";
 
-/* ---------- pasting a copied FILE: its PATH, like kitty ----------
+/* ---------- pasting a copied FILE: its PATH, like the terminal ----------
    Copy a file in Finder or an IDE, paste it here, and the composer used to
    UPLOAD it — the bytes landed in ~/.claude/baqylau-uploads and the message
-   went out as `@/…/baqylau-uploads/064783b1-glab.py`. The kitty TUI does the
+   went out as `@/…/baqylau-uploads/064783b1-glab.py`. The terminal does the
    opposite and it is what you actually want when you copy a file out of a
    project: it pastes the file's PATH, which Claude Code resolves in place, at
    its real location, still attached to its repo.
@@ -622,7 +622,7 @@ const CLIP_SVG =
    The web platform does not hand a filesystem path to script, by design; no
    clipboard API (`getData`, `navigator.clipboard.read`) surfaces those. So the
    browser reports WHICH files it was given (their basenames) and the SERVER —
-   which shares the pasteboard with kitty — answers whether they are real files
+   which shares the pasteboard with the terminal — answers whether they are real files
    and where (`/api/clipboard/files`, dashboard/clipboard.py). Resolved ⇒ paste
    the paths. Not resolved ⇒ there is no file behind these bytes (a screenshot,
    a copied image region) or we are not on the host (a phone over the tunnel),
@@ -885,7 +885,7 @@ function buildComposer() {
   // receive one, so the box is dead rather than a POST the server 409s; for both
   // hosts today the cap is True, so this changes nothing yet. capOk degrades
   // OPEN (an older payload / mid-load is not a denial), same as the header bar.
-  const canSend = !!(meta.live && meta.kitty_window_id && capOk(meta, "send"));
+  const canSend = !!(meta.live && meta.terminal_window_id && capOk(meta, "send"));
   // RESUME MODE (docs/dashboard.md *Resume & send*): a parked session's
   // composer stays fully usable — typing, "/" menu, dictation — and the one
   // send button (relabeled "resume & send") is the single door from parked

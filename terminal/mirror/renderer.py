@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import replace
 
-from terminal.models import (
+from terminal.mirror.blocks import (
     TerminalBlank,
     TerminalBlock,
     TerminalLine,

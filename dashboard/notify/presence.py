@@ -17,8 +17,8 @@ from dashboard import prefs
 # page POSTs /api/session/<session_id>/viewing on a heartbeat, but ONLY while it is
 # visible + focused + showing that session (app.13-init.js presenceBeat). So the
 # mere arrival of a recent beat IS the "you're watching the dashboard" signal
-# the deferred Telegram alert suppresses on — the web analog of the kitty tab
-# being frontmost. In-memory + TTL'd: this is ephemeral live-only presence
+# the deferred Telegram alert suppresses on — the web analog of the terminal
+# tab being frontmost. In-memory + TTL'd: this is ephemeral live-only presence
 # (like the SSE connection, it earns NO per-beat audit row — the SUPPRESS it
 # drives is what lands a notify-suppress row), and the singleton server means
 # one dict is the whole truth. A plain dict get/set is atomic enough for the
@@ -69,9 +69,10 @@ def web_viewing(session_id):
 # use. A BROWSER reports for itself — a stable device id minted in localStorage
 # (app.js DEVICE_ID) POSTed on the /api/presence beat while the page is visible
 # + focused (ANY view, not just a session — so it records "you were on this
-# device" even from the list). The TERMINAL cannot report for itself, so the
-# notifier POLLS it (`mark_terminal`, keyed on the reserved id below) — but once
-# stamped it is just another device here, and that is the whole point: ONE map,
+# device" even from the list). The TERMINAL cannot report for itself, so it
+# would have to be POLLED under the reserved id below — nothing does that today,
+# and the terminal contract offers no such read until this lands. Once stamped
+# it is just another device here, and that is the whole point: ONE map,
 # one most-recently-seen pick, and the alert goes wherever you last were
 # (docs/dashboard.md *Presence routing*). This is how an alert routes to the ONE
 # device you most recently used rather than fanning out to all: `route()` picks
@@ -154,15 +155,6 @@ def mark_away(device, session_id=None):
         _VIEWING.pop(session_id, None)
 
 
-def mark_terminal():
-    """Record that you are AT THE TERMINAL right now — the terminal's analog of
-    a browser's /api/presence beat. It cannot beat for itself (nothing runs in
-    the terminal to POST for it), so the notifier POLLS the frontend's
-    `app_focused` and calls this; the stamp is otherwise an ordinary device
-    presence and competes with the browsers on plain recency."""
-    _DEVICE_SEEN[TERMINAL] = time.monotonic()
-
-
 def device_active():
     """True when a BROWSER reported itself visible + focused within VIEW_LIFETIME_SECONDS —
     "you are on a browser RIGHT NOW", whichever view it shows.
@@ -171,7 +163,7 @@ def device_active():
     the web half of "don't alert me about a device I'm holding": a focused page
     shows the in-page toast for EVERY session, so an off-device push would be a
     second copy of a notification you just got. The terminal is excluded because
-    its analog is NOT symmetric — kitty being frontmost tells you nothing about
+    its analog is NOT symmetric — the terminal being frontmost tells you nothing about
     the tab you're not on, so at the terminal only `tab_focused` (this session's
     tab, in front of you) counts as seeing it.
 

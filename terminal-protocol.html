@@ -1,0 +1,980 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>baqylau — the terminal protocol, and what it does not cover</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1a1a1a; --muted: #666; --line: #e2e2e2;
+    --code-bg: #f6f6f4; --accent: #0b5cad; --warn-bg: #fff7e0; --warn-line: #e6c860;
+    --ok: #0b7a3b; --leak: #b3231e; --leak-bg: #fdf0ef; --leak-line: #e2a29f;
+  }
+  body { font: 15px/1.55 -apple-system, "Segoe UI", sans-serif; color: var(--fg); background: var(--bg);
+         max-width: 1080px; margin: 2rem auto 6rem; padding: 0 1.5rem; }
+  h1 { font-size: 1.7rem; margin-bottom: .2rem; }
+  h2 { font-size: 1.25rem; margin-top: 3rem; border-bottom: 2px solid var(--line); padding-bottom: .3rem; }
+  h3 { font-size: 1.05rem; margin-top: 2rem; }
+  h4 { font-size: .95rem; margin-top: 1.5rem; }
+  .subtitle { color: var(--muted); margin-top: 0; }
+  code, pre { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .86em; }
+  code { background: var(--code-bg); padding: .1em .35em; border-radius: 3px; }
+  pre { background: var(--code-bg); padding: .8rem 1rem; border-radius: 6px; overflow-x: auto; line-height: 1.45; }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: .8rem 0 1.4rem; font-size: .92em; }
+  th, td { border: 1px solid var(--line); padding: .35rem .6rem; text-align: left; vertical-align: top; }
+  th { background: var(--code-bg); }
+  .toc { background: var(--code-bg); border-radius: 6px; padding: 1rem 1.5rem; }
+  .toc ol { margin: .3rem 0; padding-left: 1.3rem; }
+  .badge { display: inline-block; font-family: ui-monospace, Menlo, monospace; font-weight: 700;
+           font-size: .78em; padding: .05em .45em; border-radius: 3px; color: #fff; margin-right: .5em; }
+  .b-ok   { background: var(--ok); }
+  .b-leak { background: var(--leak); }
+  .warn { background: var(--warn-bg); border: 1px solid var(--warn-line); border-radius: 6px; padding: .8rem 1.1rem; }
+  .leakbox { background: var(--leak-bg); border: 1px solid var(--leak-line); border-radius: 6px; padding: .8rem 1.1rem; margin: 1.1rem 0; }
+  .file { color: var(--accent); font-family: ui-monospace, Menlo, monospace; font-size: .86em; }
+  .small { font-size: .88em; color: var(--muted); }
+  ul li, ol li { margin: .25rem 0; }
+  .role { border: 1px solid var(--line); border-radius: 6px; padding: .9rem 1.1rem; margin: 1.1rem 0; }
+  .role h4 { margin: 0 0 .5rem; font-size: 1em; }
+  .role .meta { color: var(--muted); font-size: .88em; margin-bottom: .5rem; }
+</style>
+</head>
+<body>
+
+<h1>The baqylau terminal protocol</h1>
+<p class="subtitle">What <code>contracts/terminal.py</code> covers, how <code>app/session_terminal.py</code> adapts it to the installed frontend, and — in detail — where terminal interaction escapes the contract and kitty internals seep through. As of 2026-08-16 (branch <code>main</code>, commit <code>b03e94c</code>).</p>
+
+<div class="toc">
+<strong>Contents</strong>
+<ol>
+  <li><a href="#place">Where the protocol sits in the architecture</a></li>
+  <li><a href="#contract">The contract — <code>contracts/terminal.py</code>, piece by piece</a>
+    <ol>
+      <li><a href="#c-tags">Tags and value types</a></li>
+      <li><a href="#c-roles">The six protocol roles</a></li>
+    </ol>
+  </li>
+  <li><a href="#adapter">The one implementation: <code>ApplicationTerminal</code></a></li>
+  <li><a href="#gaps">What the contract does NOT cover</a>
+    <ol>
+      <li><a href="#g-second">The second, contract-less interface: <code>frontends/base.py</code></a></li>
+      <li><a href="#g-grammar">Kitty match grammar assembled in <code>app/</code></a></li>
+      <li><a href="#g-shape">Kitty-shaped assumptions inside the contract itself</a></li>
+      <li><a href="#g-bypass">Direct <code>frontends</code> imports that bypass the contract</a></li>
+      <li><a href="#g-js">The browser: <code>kitty_window_id</code></a></li>
+      <li><a href="#g-default">Kitty as the hard-wired default frontend</a></li>
+    </ol>
+  </li>
+  <li><a href="#tests">Why no test catches this</a></li>
+  <li><a href="#matrix">Coverage matrix — every <code>Frontend</code> method vs. the contract</a></li>
+  <li><a href="#fix">What closing the gap would look like</a></li>
+  <li><a href="#layout">The refactor — <code>frontends/</code> removed, one <code>TerminalPlugin</code> (five sub-protocols), complete</a></li>
+  <li><a href="#consumers">Every consumer of the terminal stack — routes, services, plugins</a></li>
+</ol>
+</div>
+
+<!-- ================================================================ -->
+<h2 id="place">1. Where the protocol sits in the architecture</h2>
+
+<p>The layering rule says shared code (<code>domain</code>, <code>contracts</code>, <code>runtime</code>, <code>app</code>, <code>core</code>, <code>dashboard</code>, <code>frontends</code>, <code>terminal</code>) carries no concrete vocabulary; concrete adapters live one-per-implementation. For harnesses this holds and is <em>enforced</em>. For terminals the intended shape is the same:</p>
+
+<pre><code>consumers (app/, dashboard/, plugins/)
+        │  should speak only…
+        ▼
+contracts/terminal.py         ← neutral protocols + value types (imports: domain only)
+        ▲  implemented by…
+        │
+app/session_terminal.py       ← ApplicationTerminal, the ONE adapter
+        │  which delegates to…
+        ▼
+frontends/  (base.py = inert "none" frontend, kitty.py = the real one)</code></pre>
+
+<p>The actual shape has a second edge the diagram hides: the adapter (plus two thin self-identification clients, <a href="#g-bypass">§4.4</a>) talks to the <code>Frontend</code> duck-type in <span class="file">frontends/base.py</span> <em>directly</em>. That interface is broader than the contract, undocumented in <code>contracts/</code>, and shaped by kitty's remote-control verbs. Everything in <a href="#gaps">§4</a> follows from that. Note the duck-type's own slice-consumer comments name modules from the pre-rewrite system (<code>core/hostpane.py</code>, <code>plugins/*/tabstatus.py</code>, <code>plugins/*/split.py</code>) that <strong>no longer exist</strong> — the live consumer map is <a href="#consumers">§9</a>, and it shows the funnel actually holds: the dashboard HTTP layer imports none of this.</p>
+
+<!-- ================================================================ -->
+<h2 id="contract">2. The contract — <code>contracts/terminal.py</code>, piece by piece</h2>
+
+<h3 id="c-tags">2.1 Tags and value types</h3>
+
+<p>Three tag constants name the panes baqylau owns. They read as neutral strings, but in practice they are <strong>kitty user-var names</strong> (applied with <code>set-user-vars</code>, matched with <code>var:</code> match expressions) — a mechanism with no direct analogue in iTerm2 or ghostty:</p>
+
+<pre><code># contracts/terminal.py:11
+SESSION_WINDOW_TAG  = "baqylau_session"     # the harness's own window
+ACTIVITY_PANE_TAG   = "baqylau_activity"    # the mirror pane
+SCOREBOARD_PANE_TAG = "baqylau_scoreboard"  # the 5-row scorebar</code></pre>
+
+<p>The value types are genuinely neutral — validated colours and result records:</p>
+
+<pre><code>@dataclass(frozen=True)
+class RGB:
+    red: int; green: int; blue: int      # each 0–255, validated in __post_init__
+
+@dataclass(frozen=True)
+class TabAppearance:
+    active_background: RGB
+    active_foreground: RGB
+    inactive_background: RGB
+    inactive_foreground: RGB
+
+@dataclass(frozen=True)
+class TerminalResult:
+    succeeded: bool
+    reason: str | None = None            # human-readable, audited by callers</code></pre>
+
+<p>Request/result pairs for spawning things:</p>
+
+<pre><code>@dataclass(frozen=True)
+class PaneRequest:                        # open_pane
+    session_id: SessionId
+    command: tuple[str, ...]
+    working_directory: str
+    title: str
+
+@dataclass(frozen=True)
+class PaneResult:
+    succeeded: bool
+    pane_id: str | None                   # opaque… but only kitty HAS such ids (§4.3)
+    window_id: str | None
+    reason: str | None = None
+
+@dataclass(frozen=True)
+class TabRequest:                         # open_tab
+    working_directory: str
+    command: tuple[str, ...]
+    title: str
+
+@dataclass(frozen=True)
+class SessionPaneRequest:                 # open_session_panes
+    session_id: SessionId
+    anchor_window_id: str                 # the window the splits attach to (§4.3)
+    activity_width_percent: int           # 1–99, validated</code></pre>
+
+<h3 id="c-roles">2.2 The six protocol roles</h3>
+
+<div class="role">
+<h4><code>SessionTerminal</code></h4>
+<p class="meta">Session ⇄ window resolution and tab spawning. Used by services that need "where is this session on screen".</p>
+<pre><code>class SessionTerminal(Protocol):
+    def window_for_session(self, session_id: SessionId) -&gt; str | None: ...
+    def current_window(self) -&gt; str | None: ...
+    def hosting_session(self, excluding_session_id: SessionId) -&gt; SessionId | None: ...
+    def open_tab(self, request: TabRequest) -&gt; TabResult: ...</code></pre>
+</div>
+
+<div class="role">
+<h4><code>SessionPaneControl</code></h4>
+<p class="meta">The mirror + scoreboard pane lifecycle, as one atomic gesture per session.</p>
+<pre><code>class SessionPaneControl(Protocol):
+    def open_session_panes(self, request: SessionPaneRequest) -&gt; TerminalResult: ...
+    def close_session_panes(self, session_id: SessionId) -&gt; TerminalResult: ...</code></pre>
+</div>
+
+<div class="role">
+<h4><code>SessionTabControl</code></h4>
+<p class="meta">Tab colouring keyed by session, not by window — the caller never sees a window id.</p>
+<pre><code>class SessionTabControl(Protocol):
+    def paint_session_tab(self, session_id: SessionId,
+                          appearance: TabAppearance) -&gt; TerminalResult: ...
+    def clear_session_tab(self, session_id: SessionId) -&gt; TerminalResult: ...</code></pre>
+</div>
+
+<div class="role">
+<h4><code>TerminalScreen</code></h4>
+<p class="meta">Read-only capture of what a window shows. <code>ansi=True</code> keeps SGR escapes (the ghost-suggestion probe needs the faint-text formatting).</p>
+<pre><code>class TerminalScreen(Protocol):
+    def read_screen(self, window_id: str, ansi: bool = False) -&gt; ScreenText | None: ...</code></pre>
+</div>
+
+<div class="role">
+<h4><code>TerminalControl(TerminalScreen)</code></h4>
+<p class="meta">The write half of the web control plane: typing into, keying into, titling, and closing windows.</p>
+<pre><code>@dataclass(frozen=True)
+class TextSubmission:
+    text: str
+    mode: Literal["type", "paste"]        # paste = atomic bracketed paste; a TUI
+                                          # mid-state-change drops leading typed bytes
+
+class TerminalControl(TerminalScreen, Protocol):
+    def window_for_session(self, session_id: SessionId) -&gt; str | None: ...
+    def submit_text(self, window_id: str, submission: TextSubmission) -&gt; TerminalResult: ...
+    def send_key(self, window_id: str, key: str) -&gt; TerminalResult: ...
+    def close_tab(self, window_id: str) -&gt; TerminalResult: ...
+    def set_tab_title(self, window_id: str, title: str) -&gt; TerminalResult: ...
+    def open_tab(self, request: TabRequest) -&gt; TabResult: ...</code></pre>
+</div>
+
+<div class="role">
+<h4><code>TerminalFrontend(TerminalControl)</code></h4>
+<p class="meta">The widest role — what a full frontend is supposed to offer. Note it is much <em>narrower</em> than what frontends actually offer (§4.1).</p>
+<pre><code>class TerminalFrontend(TerminalControl, Protocol):
+    def usable(self) -&gt; bool: ...
+    def current_window(self) -&gt; str | None: ...
+    def window_for_session(self, session_id: SessionId) -&gt; str | None: ...
+    def tag_window(self, window_id: str, tags: Mapping[str, str]) -&gt; TerminalResult: ...
+    def set_tab_color(self, window_id: str, color: RGB) -&gt; TerminalResult: ...
+    def clear_tab_color(self, window_id: str) -&gt; TerminalResult: ...
+    def open_pane(self, request: PaneRequest) -&gt; PaneResult: ...
+    def close_pane(self, pane_id: str) -&gt; TerminalResult: ...
+    def resize_pane(self, pane_id: str, request: ResizeRequest) -&gt; TerminalResult: ...</code></pre>
+</div>
+
+<!-- ================================================================ -->
+<h2 id="adapter">3. The one implementation: <code>ApplicationTerminal</code></h2>
+
+<p><span class="file">app/session_terminal.py</span> implements <code>SessionTerminal + SessionPaneControl + SessionTabControl + TerminalControl</code> by resolving the installed frontend per call and translating the contract's typed requests into <code>Frontend</code> calls:</p>
+
+<pre><code>class ApplicationTerminal(SessionTerminal, SessionPaneControl,
+                          SessionTabControl, TerminalControl):
+    def _frontend(self):
+        return frontends.get(resolve=True)   # ← the escape hatch (§4)
+
+    def submit_text(self, window_id, submission):
+        frontend = self._frontend()
+        sender = frontend.paste_text if submission.mode == "paste" else frontend.send_text
+        succeeded = bool(sender(window_id, submission.text))
+        return TerminalResult(succeeded, None if succeeded else "terminal input failed")</code></pre>
+
+<p>Where the translation is faithful — colours, text, tabs — the contract works as designed. The problem is the methods where <em>no contract vocabulary exists</em>, so the adapter (a shared-layer <code>app/</code> module) speaks the frontend's raw dialect. That is the next section.</p>
+
+<!-- ================================================================ -->
+<h2 id="gaps">4. What the contract does NOT cover</h2>
+
+<h3 id="g-second">4.1 <span class="badge b-leak">STRUCTURAL</span> The second, contract-less interface: <code>frontends/base.py</code></h3>
+
+<p><span class="file">frontends/base.py</span> defines <code>class Frontend</code> — a single duck-typed class where every method is an inert no-op and kitty overrides what it supports. It is the interface consumers <em>actually</em> program against, and it is far broader than <code>TerminalFrontend</code>. These <code>Frontend</code> methods have <strong>no counterpart anywhere in <code>contracts/terminal.py</code></strong>:</p>
+
+<table>
+<tr><th>method</th><th>what it does</th><th>kitty flavour</th></tr>
+<tr><td><code>ls()</code> / <code>iter_windows()</code></td><td>the raw OS-window/tab/window tree</td><td>the shape of <code>kitten @ ls</code> JSON</td></tr>
+<tr><td><code>find_window(var, value)</code></td><td>first window whose <code>user_vars[var] == value</code></td><td>user-vars are a kitty mechanism</td></tr>
+<tr><td><code>set_user_vars(win_id, uv)</code></td><td>tag a window</td><td><code>kitten @ set-user-vars</code>, verbatim</td></tr>
+<tr><td><code>goto_splits_layout(win)</code></td><td>switch a tab to a bias-capable layout</td><td>docstring says it: <em>"kitty: goto-layout splits"</em></td></tr>
+<tr><td><code>launch_pane(argv, location, bias, var, next_to, in_tab_of, …)</code></td><td>open a split</td><td>mirrors <code>kitten @ launch --location=vsplit --bias --var --next-to</code> argument-for-argument</td></tr>
+<tr><td><code>focus_first_pane(win_id)</code></td><td>inner-tab focus move without raising the app</td><td>kitty's no-activate focus semantics</td></tr>
+<tr><td><code>scroll_window / _fast / _end</code></td><td>viewport scroll (mirror click-to-view restore)</td><td><code>scroll_window_fast</code> is documented as a raw-socket kitty call</td></tr>
+<tr><td><code>get_text(win_id, extent, ansi)</code></td><td>visible viewport text</td><td><code>kitten @ get-text</code> semantics (viewport, not live screen)</td></tr>
+<tr><td><code>split_geometry(var, exclude_var)</code></td><td>pane's share of its row, in columns</td><td>computed from kitty's private <code>neighbors</code>/<code>groups</code> keys</td></tr>
+<tr><td><code>export_env()</code></td><td>stamp env for detached children</td><td>exists to propagate <code>KITTY_LISTEN_ON</code></td></tr>
+<tr><td><code>app_focused / tab_focused / app_id</code></td><td>presence signals for alert routing — <strong>currently unused</strong>: the documented caller (<code>dashboard/notify/presence.py:157 mark_terminal()</code>) has no production caller itself</td><td>keyed on kitty's <code>is_focused</code> field; <code>app_id</code> example is kitty's bundle id</td></tr>
+<tr><td><code>available()</code></td><td>env-sniff "are we inside this terminal"</td><td>reads <code>KITTY_WINDOW_ID</code></td></tr>
+</table>
+
+<p>So the honest picture is: <code>contracts/terminal.py</code> covers roughly the <em>simple write half</em> of terminal interaction (colour, type, key, title, tab), while enumeration, tagging, split choreography, geometry, scrolling, focus, and presence — most of what makes the pane system work — live only in the frontend duck-type.</p>
+
+<h3 id="g-grammar">4.2 <span class="badge b-leak">STRUCTURAL</span> Kitty match grammar assembled in <code>app/</code></h3>
+
+<p>This is the sharpest single leak. <code>ApplicationTerminal.open_session_panes</code> — a shared-layer method implementing a contract role — builds <strong>raw kitty <code>--match</code> expressions as f-strings</strong> and drives the kitty launch choreography step by step:</p>
+
+<pre><code># app/session_terminal.py:154 — open_session_panes (abridged)
+results = [frontend.set_user_vars(anchor_window_id,          # kitty user-vars
+                                  {SESSION_WINDOW_TAG: session_id})]
+frontend.goto_splits_layout(anchor_window_id)                # kitty goto-layout splits
+
+if frontend.find_window(ACTIVITY_PANE_TAG, session_id) is None:
+    results.append(frontend.launch_pane(
+        [sys.executable, ".../terminal_process.py", session_id],
+        "vsplit",
+        bias=request.activity_width_percent,                 # kitty --bias
+        next_to=f"id:{anchor_window_id}",                    # ← kitty match grammar
+        in_tab_of=anchor_window_id,                          # ← exists only because kitty's
+        var={ACTIVITY_PANE_TAG: session_id},                 #    next_to can't cross tabs
+        title="◧ cmd mirror",
+    ))
+
+if frontend.find_window(SCOREBOARD_PANE_TAG, session_id) is None:
+    results.append(frontend.launch_pane(
+        [...scoreboard_process.py...],
+        "hsplit",
+        bias=5,
+        next_to=f"var:{ACTIVITY_PANE_TAG}={session_id}",     # ← kitty match grammar again
+        in_tab_of=anchor_window_id,
+        var={SCOREBOARD_PANE_TAG: session_id},
+        title="▪ session",
+    ))
+results.append(frontend.focus_first_pane(anchor_window_id))</code></pre>
+
+<div class="leakbox">
+<p><strong>Why this is a protocol failure, not just style.</strong> The strings <code>id:&lt;win&gt;</code> and <code>var:name=value</code> are kitty's match-expression micro-language. A ghostty or tmux frontend cannot interpret them; it would have to <em>parse kitty grammar back apart</em> to recover the caller's intent ("anchor next to this window" / "next to the pane tagged X"). The intent is being destroyed at the layer boundary and re-encoded in kitty's dialect — the exact thing "never re-encode a shared fact" forbids. The fix shape: <code>launch_pane</code> should accept a structured anchor (e.g. <code>next_to_window_id=…</code> or <code>next_to_tag=(name, value)</code>) and <em>each frontend</em> renders its own match syntax.</p>
+</div>
+
+<p>The same method also hand-rolls kitty-specific settle behaviour — retrying <code>resize_pane</code> until the scoreboard reports 5 lines, sleeping 80&nbsp;ms between attempts (<code>_set_scoreboard_height</code>, <span class="file">app/session_terminal.py:201</span>) — timing tuned to kitty's async resize, living in <code>app/</code>.</p>
+
+<p>And <code>_tab_windows</code> (<span class="file">app/session_terminal.py:49</span>) walks the raw <code>ls()</code> tree, depending on kitty's exact JSON shape (<code>tabs</code>, <code>windows</code>, <code>is_focused</code>, <code>is_active</code>, <code>user_vars</code>) from inside <code>app/</code>:</p>
+
+<pre><code>for operating_system_window in terminal_state:
+    for tab in operating_system_window.get("tabs", ()):
+        windows = tuple(tab.get("windows", ()))
+        ...
+    if not operating_system_window.get("is_focused"): continue
+    ...
+    if tab.get("is_active"): ...</code></pre>
+
+<h3 id="g-shape">4.3 <span class="badge b-leak">STRUCTURAL</span> Kitty-shaped assumptions inside the contract itself</h3>
+
+<p>Even the clean file encodes kitty's model, just without the word:</p>
+
+<ul>
+  <li><strong>Stable, first-class window ids.</strong> <code>window_id: str</code> / <code>pane_id: str</code> assume every pane has a durable id you can query, match, and store. kitty has these; a generic emulator has at best a tty. The dashboard persists them and the wrapper anchors panes to them.</li>
+  <li><strong>The anchor + bias split model.</strong> <code>SessionPaneRequest(anchor_window_id, activity_width_percent)</code> is kitty's <code>launch --location=vsplit --bias=N</code> reified as a dataclass. A tmux frontend thinks in <code>split-window -p</code>; an AppleScript-driven terminal can't express it at all.</li>
+  <li><strong>Tags = user-vars.</strong> The three <code>*_TAG</code> constants only work because kitty lets you attach arbitrary key/values to windows and match on them. The contract offers <code>tag_window()</code> but no portable way to <em>find</em> by tag — that lives only in <code>Frontend.find_window</code>.</li>
+  <li><strong><code>send_key</code> assumes key-event injection.</strong> The <code>Frontend.send_key</code> docstring is explicit: encoded for the program's keyboard mode, because <em>"a TUI in the kitty keyboard protocol never sees a bare <code>\x1b</code> as Escape"</em>. The contract method inherits that requirement silently.</li>
+</ul>
+
+<h3 id="g-bypass">4.4 <span class="badge b-leak">STRUCTURAL</span> Direct <code>frontends</code> imports that bypass the contract</h3>
+
+<p><code>ApplicationTerminal</code> is at least <em>trying</em> to be the adapter. These callers skip even that:</p>
+
+<pre><code># app/hook_client.py:43 — the hook needs its own window id for evidence
+import frontends
+window_id = frontends.current_window_id()
+
+# app/terminal_panes.py:25 — the keybinding handler resolving "which pane am I in"
+import frontends
+win = frontends.current_window_id()</code></pre>
+
+<p>And that is the <em>whole</em> list — exactly three modules import <code>frontends</code> raw, and the two above only for <code>current_window_id()</code>, which is justified: a hook subprocess and a keymap client run <em>inside</em> the kitty window and are the only things that can observe their own window id. (An earlier draft of this section listed <span class="file">core/hostpane.py</span>, <span class="file">plugins/*/tabstatus.py</span>, <span class="file">plugins/*/split.py</span>, <span class="file">dashboard/server.py</span> as duck-type consumers — those come from <code>frontends/base.py</code>'s own slice comments, which describe the <strong>pre-rewrite system</strong>; none of those files exist in this tree. The stale comments are themselves a small leak: the interface documents consumers that died.)</p>
+
+<h3 id="g-js">4.5 <span class="badge b-leak">INCIDENTAL</span> The browser: <code>kitty_window_id</code></h3>
+
+<p>The daemon serves a neutral field, and the SPA renames it into kitty vocabulary at the door, then reads that name in seven files:</p>
+
+<pre><code>// dashboard/static/app.05-session.js:229 — the only construction site
+sessionMeta = { ..., kitty_window_id: terminal.window_id || "" };
+
+// then read in app.00-core.js, app.04-list.js, app.08-composer.js,
+// app.10-control.js (×4), app.11-chrome.js (×2), app.13-init.js …
+if (meta.kitty_window_id) { /* enable terminal control buttons, route gestures */ }</code></pre>
+
+<p>One-line fix (rename to <code>terminal_window_id</code>) plus mechanical reader renames. It survives because the JS purity test strips comments and only checks the four <em>harness</em> words (§5).</p>
+
+<h3 id="g-default">4.6 <span class="badge b-leak">INCIDENTAL</span> Kitty as the hard-wired default frontend</h3>
+
+<pre><code># frontends/__init__.py:20
+name = os.environ.get("BAQYLAU_FRONTEND", "kitty")   # kitty unless told otherwise</code></pre>
+
+<p>Not detection — a default. Outside kitty with the env var unset, every consumer gets the kitty frontend whose <code>available()</code> returns False, and degrades through the inert paths. Harmless today, but it means "no terminal" and "kitty not reachable" are indistinguishable, and adding a second real frontend requires every user to set the variable.</p>
+
+<p class="small">Also incidental: ~12 shared-layer Python files mention kitty in comments/docstrings only (<code>app/terminal_panes.py:3</code>, <code>app/pane_commands.py:4</code>, <code>dashboard/clipboard.py</code>, <code>dashboard/ansi.py:123</code>, <code>dashboard/notify/presence.py</code>, <code>plugins/claude_code/{suggestion,transcript,tui,askdialog,rewindmenu}.py</code>…), and the build config uses a <code>kitty</code> pytest marker for the opt-in real-terminal smoke suite.</p>
+
+<!-- ================================================================ -->
+<h2 id="tests">5. Why no test catches this</h2>
+
+<p>The harness side has a purity gate; the terminal side has none:</p>
+
+<pre><code># tests/test_canonical_architecture.py:148
+def test_canonical_shared_code_contains_no_concrete_harness_vocabulary():
+    # scans app/ contracts/ core/ dashboard/ domain/ frontends/ runtime/ terminal/
+    forbidden = ("claude", "codex", "anthropic", "openai", "rollout", "transcript")
+    # … "kitty" and "kitten" are NOT in this tuple</code></pre>
+
+<p>Two structural reasons the symmetric test never appeared:</p>
+<ol>
+  <li><strong>The scan list includes <code>frontends/</code></strong> — correct for harness words, but a terminal-purity scan must <em>exclude</em> <code>frontends/kitty.py</code> (that's where kitty is supposed to live). The test needs its own directory list, not a word added to the existing tuple.</li>
+  <li><strong>The leaks aren't (mostly) the word "kitty".</strong> <code>next_to=f"id:{…}"</code> contains no forbidden string. A vocabulary scan catches the JS field and the comments; the structural leaks need the interface itself to move (§7).</li>
+</ol>
+<p>What <em>is</em> pinned: <span class="file">tests/test_l0_frontends_contract.py</span> guarantees every <code>Frontend</code> method has an inert default and kitty adds no public API beyond the duck-type — substitutability, but of the <em>wrong, wider</em> interface.</p>
+
+<!-- ================================================================ -->
+<h2 id="matrix">6. Coverage matrix — every <code>Frontend</code> method vs. the contract</h2>
+
+<table>
+<tr><th><code>Frontend</code> method</th><th>contract counterpart</th><th>status</th></tr>
+<tr><td><code>usable()</code></td><td><code>TerminalFrontend.usable</code></td><td><span class="badge b-ok">COVERED</span></td></tr>
+<tr><td><code>current_window()</code></td><td><code>SessionTerminal.current_window</code></td><td><span class="badge b-ok">COVERED</span></td></tr>
+<tr><td><code>window_for_session()</code></td><td><code>SessionTerminal.window_for_session</code></td><td><span class="badge b-ok">COVERED</span></td></tr>
+<tr><td><code>set_tab_color / clear_tab_color</code></td><td><code>SessionTabControl.paint/clear_session_tab</code></td><td><span class="badge b-ok">COVERED</span></td></tr>
+<tr><td><code>send_text / paste_text</code></td><td><code>TerminalControl.submit_text</code></td><td><span class="badge b-ok">COVERED</span></td></tr>
+<tr><td><code>send_key</code></td><td><code>TerminalControl.send_key</code></td><td><span class="badge b-ok">COVERED</span> <span class="small">(kitty keyboard-mode assumption rides along)</span></td></tr>
+<tr><td><code>launch_tab / close_tab / set_tab_title</code></td><td><code>TerminalControl.open_tab / close_tab / set_tab_title</code></td><td><span class="badge b-ok">COVERED</span></td></tr>
+<tr><td><code>get_text</code></td><td><code>TerminalScreen.read_screen</code></td><td><span class="badge b-ok">COVERED</span> <span class="small">(but the mirror also calls it raw with <code>extent=</code>)</span></td></tr>
+<tr><td><code>available / app_id / export_env</code></td><td>—</td><td><span class="badge b-leak">UNCOVERED</span></td></tr>
+<tr><td><code>ls / iter_windows / find_window</code></td><td>—</td><td><span class="badge b-leak">UNCOVERED</span></td></tr>
+<tr><td><code>set_user_vars</code></td><td><code>tag_window</code> exists but <code>app/</code> calls <code>set_user_vars</code> directly</td><td><span class="badge b-leak">BYPASSED</span></td></tr>
+<tr><td><code>goto_splits_layout / launch_pane / close_pane / resize_pane / focus_first_pane</code></td><td><code>open/close/resize_pane</code> exist in <code>TerminalFrontend</code> but nothing uses them; <code>app/</code> drives the raw versions with kitty grammar</td><td><span class="badge b-leak">BYPASSED</span></td></tr>
+<tr><td><code>app_focused / tab_focused</code></td><td>—</td><td><span class="badge b-leak">UNCOVERED</span></td></tr>
+<tr><td><code>scroll_window / _fast / _end</code></td><td>—</td><td><span class="badge b-leak">UNCOVERED</span></td></tr>
+<tr><td><code>split_geometry</code></td><td>—</td><td><span class="badge b-leak">UNCOVERED</span></td></tr>
+</table>
+
+<!-- ================================================================ -->
+<h2 id="fix">7. What closing the gap would look like</h2>
+
+<ol>
+  <li><strong>Structured anchors instead of match strings.</strong> Change <code>launch_pane</code> to take <code>next_to_window_id: str | None</code> and <code>next_to_tag: tuple[str, str] | None</code>; each frontend renders its own match syntax (kitty: <code>id:…</code> / <code>var:…=…</code>). Delete both f-strings from <span class="file">app/session_terminal.py</span>. This alone removes the worst leak without moving any code.</li>
+  <li><strong>Promote the used slices into <code>contracts/terminal.py</code>.</strong> Enumeration (<code>windows()</code> yielding a typed <code>WindowInfo(id, tags, columns, lines, tab_focused)</code> instead of raw <code>ls()</code> dicts), presence (<code>app_focused</code>/<code>tab_focused</code>), scroll, geometry, and tag-<em>lookup</em> (<code>window_for_tag(name, value)</code>). Then <code>_tab_windows</code> stops walking kitty JSON.</li>
+  <li><strong>Kill the bypasses.</strong> <code>app/hook_client.py</code> and <code>app/terminal_panes.py</code> get <code>current_window()</code> from the adapter; the pane choreography moves behind <code>open_session_panes</code> so <code>core/hostpane.py</code> and the split plugin speak contract types.</li>
+  <li><strong>Rename <code>kitty_window_id</code> → <code>terminal_window_id</code></strong> in the SPA (one construction site, ~12 readers, no server change).</li>
+  <li><strong>Add the missing purity test</strong>: forbid <code>kitty</code>/<code>kitten</code> in <code>app/ contracts/ core/ dashboard/ domain/ runtime/ terminal/ plugins/</code> and in the JS — everything <em>except</em> <code>frontends/</code> — mirroring the harness test's shape. It won't catch the structural leaks, but it stops regrowth once steps 1–3 land.</li>
+  <li><strong>Detect instead of defaulting</strong>: <code>frontends/__init__.py</code> picks the frontend whose <code>available()</code> is true, keeping <code>BAQYLAU_FRONTEND</code> as an override.</li>
+</ol>
+
+<!-- ================================================================ -->
+<h2 id="layout">8. The refactor — <code>frontends/</code> removed, one <code>TerminalPlugin</code>, complete</h2>
+
+<p>Today the terminal story is split across <em>three</em> top-level packages: the contract in <code>contracts/</code>, the presenters in <code>terminal/</code>, and the implementations in <code>frontends/</code> — with the adapter stranded in <code>app/</code>. The refactor: <strong>delete the <code>frontends/</code> package entirely</strong> (the <code>Frontend</code> duck-type and <code>kitty.py</code> both), and replace the six overlapping contract roles with <strong>one composition class, <code>TerminalPlugin</code>, mirroring <code>HarnessPlugin</code></strong> — five narrow sub-protocols (tabs, panes, metadata, input, viewport) composed as typed fields, with all models in a <code>terminal/models/</code> package. One <code>terminal/</code> package owns the whole terminal concern — contract at its root, concrete terminals under <code>terminal/impl/&lt;name&gt;/</code>, and the presenter grab-bag reorganised into meaningful blocks (§8.4).</p>
+
+<h3 id="l-session">8.1 The unlock: the session already knows its window</h3>
+
+<p>The <code>Session</code> read-model carries terminal facts as <strong>live columns</strong>, refreshed from the envelope of every hook-borne fact — because a resumed session shows up in a new window with a new process:</p>
+
+<pre><code># contracts/harness.py:128 (docstring: "the two LIVE columns … are kept
+# current from the envelope of every later hook-borne fact")
+@dataclass(frozen=True)
+class Session:
+    session_id: SessionId
+    lead_actor_id: ActorId
+    harness_session_id: str
+    source_reference: str
+    working_directory: str | None
+    terminal_window_id: str | None = None     # ← evidence, hook-envelope fresh
+    harness_process_id: int | None = None     # ← evidence
+    plugin: HarnessPlugin | None = ...
+
+# runtime/sessions.py:40 — the upsert keeps it current:
+#   "terminal_window_id = excluded.terminal_window_id"</code></pre>
+
+<p>The hook observes its own window (<code>app/hook_client.py:43</code>, the one legitimate raw read) and ships it in every delivery. So <strong>session → window resolution is an evidence lookup, not a terminal interrogation</strong>: the old <code>window_for_session(session_id)</code> — which walks kitty's <code>ls()</code> tree matching the <code>SESSION_WINDOW_TAG</code> user-var — re-derives a fact the session row already holds. Consequences:</p>
+
+<ul>
+  <li>The session-aware roles (<code>SessionTerminal</code>, <code>SessionPaneControl</code>, <code>SessionTabControl</code>) leave the contract. Services resolve <code>session.terminal_window_id</code> from the store, verify liveness against <code>windows()</code> (the row can outlive the window), and call the terminal by window id.</li>
+  <li><code>terminal/contract.py</code> <strong>drops its <code>domain.ids.SessionId</code> import entirely</strong> — the terminal abstraction no longer knows sessions exist. It is a pure driver keyed on window ids.</li>
+  <li>The tags stay, but demoted to what they really are: generic window metadata. <code>SESSION_WINDOW_TAG</code> becomes a liveness cross-check; the two pane tags still mark the daemon-created mirror/scoreboard (those are not evidence-born, so the terminal must be able to find them after a daemon restart).</li>
+</ul>
+
+<h3 id="l-contract">8.2 The whole contract — <code>TerminalPlugin</code> + five sub-protocols, every method</h3>
+
+<p>One composition class, mirroring <code>HarnessPlugin</code> (<span class="file">contracts/harness.py:700</span> — a frozen dataclass with one typed field per sub-protocol). A terminal is a <em>plugin</em>: five narrow protocols for tabs, panes, metadata, input, and viewport. Models live in <code>terminal/models/</code>, grouped per concern, terminal-agnostic, and uniformly named <strong><code>&lt;Noun&gt;&lt;Verb&gt;Request</code> / <code>&lt;Noun&gt;&lt;Verb&gt;Response</code></strong> — every operation is one request in, one response out (each request carries its target <code>window_id</code>; no bare-argument writes), the same shape discipline as the new <code>api/models.py</code> layer:</p>
+
+<pre><code># terminal/models/values.py -------------------------------------------------
+@dataclass(frozen=True)
+class RGB:                               # unchanged, validated 0–255
+    red: int; green: int; blue: int
+
+@dataclass(frozen=True)
+class TabAppearance:                     # unchanged
+    active_background: RGB; active_foreground: RGB
+    inactive_background: RGB; inactive_foreground: RGB
+
+@dataclass(frozen=True)
+class WindowInfo:
+    """One window, as the terminal reports it — an entity, not a message."""
+    window_id: str
+    tab_id: str
+    tags: Mapping[str, str]              # the window's metadata
+    columns: int
+    lines: int
+    is_first_in_tab: bool                # creation order — the host pane
+    tab_is_active: bool                  # selected inside its OS window
+    tab_is_focused: bool                 # active AND the OS window has focus
+
+# Generic window-metadata keys (kitty renders them as user-vars).
+SESSION_WINDOW_TAG  = "baqylau_session"
+ACTIVITY_PANE_TAG   = "baqylau_activity"
+SCOREBOARD_PANE_TAG = "baqylau_scoreboard"
+
+
+# terminal/models/tabs.py -----------------------------------------------------
+@dataclass(frozen=True)
+class TabOpenRequest:
+    working_directory: str
+    command: tuple[str, ...]
+    title: str
+    environment: tuple[tuple[str, str], ...] = ()   # launch facts ride the env
+
+@dataclass(frozen=True)
+class TabOpenResponse:
+    succeeded: bool
+    window_id: str | None                # when the terminal reports the new id
+    reason: str | None = None
+
+@dataclass(frozen=True)
+class TabCloseRequest:
+    window_id: str                       # closes the whole tab CONTAINING it
+
+@dataclass(frozen=True)
+class TabCloseResponse:
+    succeeded: bool
+    reason: str | None = None
+
+@dataclass(frozen=True)
+class TabRenameRequest:
+    window_id: str
+    title: str                           # sticky explicit title
+
+@dataclass(frozen=True)
+class TabRenameResponse:
+    succeeded: bool
+    reason: str | None = None
+
+@dataclass(frozen=True)
+class TabColorSetRequest:
+    window_id: str
+    appearance: TabAppearance
+
+@dataclass(frozen=True)
+class TabColorSetResponse:
+    succeeded: bool
+    reason: str | None = None
+
+@dataclass(frozen=True)
+class TabColorClearRequest:
+    window_id: str
+
+@dataclass(frozen=True)
+class TabColorClearResponse:
+    succeeded: bool
+    reason: str | None = None
+
+
+# terminal/models/panes.py ----------------------------------------------------
+@dataclass(frozen=True)
+class PaneAnchor:
+    """Structured 'where the split attaches' — the caller states intent,
+    each impl renders its own syntax (kitty: `id:…` / `var:…=…`)."""
+    window_id: str | None = None
+    tag: tuple[str, str] | None = None   # exactly one of the two must be set
+
+@dataclass(frozen=True)
+class PaneOpenRequest:
+    command: tuple[str, ...]
+    working_directory: str
+    title: str
+    split: Literal["vertical", "horizontal"]
+    size_percent: int                    # 1–99 share of the split axis
+    anchor: PaneAnchor
+    same_tab_as: str                     # window id whose TAB the pane opens in
+    tags: Mapping[str, str]              # metadata stamped on the new window
+    keep_focus: bool = True
+
+@dataclass(frozen=True)
+class PaneOpenResponse:
+    succeeded: bool
+    window_id: str | None
+    reason: str | None = None
+
+@dataclass(frozen=True)
+class PaneCloseRequest:
+    window_id: str
+
+@dataclass(frozen=True)
+class PaneCloseResponse:
+    succeeded: bool
+    reason: str | None = None
+
+@dataclass(frozen=True)
+class PaneResizeRequest:
+    window_id: str
+    axis: Literal["horizontal", "vertical"]
+    cells: int                           # grow (+) / shrink (−)
+
+@dataclass(frozen=True)
+class PaneResizeResponse:
+    succeeded: bool
+    reason: str | None = None
+
+@dataclass(frozen=True)
+class WindowFocusRequest:
+    window_id: str                       # inner move — must NOT raise the app
+
+@dataclass(frozen=True)
+class WindowFocusResponse:
+    succeeded: bool
+    reason: str | None = None
+
+
+# terminal/models/metadata.py -------------------------------------------------
+@dataclass(frozen=True)
+class WindowTagRequest:
+    window_id: str
+    tags: Mapping[str, str]              # readable back via windows()
+
+@dataclass(frozen=True)
+class WindowTagResponse:
+    succeeded: bool
+    reason: str | None = None
+
+
+# terminal/models/input.py ----------------------------------------------------
+@dataclass(frozen=True)
+class TextSubmitRequest:
+    window_id: str
+    text: str
+    mode: Literal["type", "paste"]       # paste = atomic bracketed paste
+
+@dataclass(frozen=True)
+class TextSubmitResponse:
+    succeeded: bool
+    reason: str | None = None
+
+@dataclass(frozen=True)
+class KeySendRequest:
+    window_id: str
+    key: str                             # a key EVENT: 'escape', 'ctrl+c'
+
+@dataclass(frozen=True)
+class KeySendResponse:
+    succeeded: bool
+    reason: str | None = None
+
+
+# terminal/models/viewport.py -------------------------------------------------
+@dataclass(frozen=True)
+class ScreenReadRequest:
+    window_id: str
+    ansi: bool = False                   # keep SGR escapes (suggestion probe)
+
+@dataclass(frozen=True)
+class ScreenReadResponse:
+    succeeded: bool
+    text: str | None                     # the VISIBLE viewport text
+    reason: str | None = None
+
+@dataclass(frozen=True)
+class ViewportScrollRequest:
+    window_id: str
+    to_bottom: bool = False              # applied first…
+    up_lines: int = 0                    # …then this — a restore is one call
+
+@dataclass(frozen=True)
+class ViewportScrollResponse:
+    succeeded: bool
+    reason: str | None = None
+</code></pre>
+
+<p>The protocols — <span class="file">terminal/contract.py</span>, complete. Uniform shape: one request in, one response out. Every write is best-effort and silent: a failure is a failure-shaped response, never an exception; the caller audits.</p>
+
+<pre><code>class TerminalTabs(Protocol):
+    def open_tab(self, request: TabOpenRequest) -&gt; TabOpenResponse:
+        """Must NOT steal OS focus when the terminal app is backgrounded."""
+    def close_tab(self, request: TabCloseRequest) -&gt; TabCloseResponse: ...
+    def rename_tab(self, request: TabRenameRequest) -&gt; TabRenameResponse: ...
+    def set_tab_color(self, request: TabColorSetRequest) -&gt; TabColorSetResponse: ...
+    def clear_tab_color(self, request: TabColorClearRequest) -&gt; TabColorClearResponse: ...
+
+
+class TerminalPanes(Protocol):
+    def open_pane(self, request: PaneOpenRequest) -&gt; PaneOpenResponse:
+        """Split next to the anchor. The impl arranges whatever layout it
+        needs (kitty: goto-layout splits) — not the caller's concern."""
+    def close_pane(self, request: PaneCloseRequest) -&gt; PaneCloseResponse: ...
+    def resize_pane(self, request: PaneResizeRequest) -&gt; PaneResizeResponse: ...
+    def focus_window(self, request: WindowFocusRequest) -&gt; WindowFocusResponse:
+        """With WindowInfo.is_first_in_tab this subsumes focus_first_pane."""
+
+
+class TerminalMetadata(Protocol):
+    def windows(self) -&gt; tuple[WindowInfo, ...]:
+        """Every window the terminal reports. () on failure. The daemon's ONE
+        state read — everything else here is a write. Subsumes ls /
+        iter_windows / find_window / window_for_session / tab_focused /
+        split_geometry: liveness (a Session.terminal_window_id can outlive
+        its window), pane rediscovery (toggle idempotence), tab grouping
+        (which session owns the keypress's tab), host detection
+        (is_first_in_tab), and the width-percent arithmetic."""
+    def tag_window(self, request: WindowTagRequest) -&gt; WindowTagResponse:
+        """Store 'this window serves session X' IN the window, so the mapping
+        has exactly the window's lifetime — never stale, survives daemon
+        restarts. The write half of windows()' tag read."""
+    def current_window_id(self) -&gt; str | None:
+        """This process's own window (from the terminal's env), else None.
+        The ORIGIN of all window evidence: the hook client ships it as the
+        X-Baqylau-Terminal-Window header, which is where
+        Session.terminal_window_id comes from."""
+
+
+class TerminalInput(Protocol):
+    def submit_text(self, request: TextSubmitRequest) -&gt; TextSubmitResponse:
+        """Deliver text + Enter (subsumes send_text AND paste_text)."""
+    def send_key(self, request: KeySendRequest) -&gt; KeySendResponse:
+        """Encoded for the program's current keyboard mode."""
+
+
+class TerminalViewport(Protocol):
+    def read_screen(self, request: ScreenReadRequest) -&gt; ScreenReadResponse: ...
+    def scroll(self, request: ViewportScrollRequest) -&gt; ViewportScrollResponse:
+        """The fast raw-socket path is the impl's own optimisation
+        (subsumes scroll_window / scroll_window_fast / scroll_window_end)."""
+
+
+@dataclass(frozen=True)
+class TerminalPlugin:
+    """One terminal, composed — the exact shape of HarnessPlugin."""
+    name: str
+    tabs: TerminalTabs
+    panes: TerminalPanes
+    metadata: TerminalMetadata
+    input: TerminalInput
+    viewport: TerminalViewport
+</code></pre>
+
+<p class="small">The two reads without a request object are deliberate: <code>windows()</code> and <code>current_window_id()</code> take no parameters, so a request dataclass would be an empty envelope; <code>WindowInfo</code>, <code>RGB</code>, <code>TabAppearance</code>, and <code>PaneAnchor</code> are value objects/entities, not messages, so they carry no Request/Response suffix. The generic <code>TerminalResult</code> is gone — every operation owns its response type, so adding an operation-specific field later (as <code>TabOpenResponse.window_id</code> already shows) never disturbs its neighbours.</p>
+
+<p><strong>No <code>usable()</code>, no <code>app_focused()</code>, no <code>pane_geometry()</code>, no <code>launch_environment()</code>:</strong></p>
+<ul>
+  <li><strong><code>usable()</code> is gone</strong> because usability is a <em>resolution</em> concern, not a per-call one: <code>terminal.impl.resolve() -&gt; TerminalPlugin | None</code> returns a plugin only when its control channel is reachable and its client binary resolves. Every <code>TerminalPlugin</code> a consumer ever holds is usable by construction; "no terminal" is <code>None</code> at the injection point (bootstrap), handled once. The old per-call checks (<code>open_session_panes</code>, <code>open_tab</code>) existed only because <code>frontends.get()</code> could hand back a dead frontend.</li>
+  <li><strong><code>app_focused()</code> is gone</strong> — its only documented consumer (presence routing via <code>mark_terminal()</code>, §9.5) has no production caller. Dead vocabulary; reintroduce with the presence feature, on <code>TerminalMetadata</code>, if it ever lands.</li>
+  <li><strong><code>pane_geometry()</code> is gone</strong> — it existed for one gesture (set the activity pane to N% of its row: percent → column delta needs the pane's columns and the row total; <code>exclude_tag</code> kept the scoreboard, which lives <em>inside</em> the activity split group, from double-counting the total). All of that is arithmetic over <code>windows()</code>: the adapter finds the host and activity panes of the tab by tag and computes <code>row_total = host.columns + activity.columns</code>. One derived read replaced by the general one.</li>
+  <li><strong><code>launch_environment()</code> is gone</strong> — its predecessor <code>export_env()</code> has <em>zero</em> production callers (definition + one stale comment; its consumer, <code>tabstatus</code>, died in the rewrite). Nothing needs it: the pane processes are launched <em>by</em> the terminal and inherit its env; the hook processes are spawned by the CLI inside the window and inherit likewise. Same fate as <code>app_focused</code> — dead vocabulary does not get a seat in the new contract.</li>
+</ul>
+
+<h3 id="l-mapping">8.3 Every old method accounted for</h3>
+
+<p>All 30 <code>Frontend</code> methods and all 6 old contract roles, mapped. Nothing is left to a duck-type; what is dropped is dropped for a stated reason:</p>
+
+<table>
+<tr><th>old (<code>frontends/base.py</code> / <code>contracts/terminal.py</code>)</th><th>new</th></tr>
+<tr><td><code>usable()</code> / <code>available()</code></td><td><strong>dropped</strong> — usability became a resolution concern: <code>resolve() → TerminalPlugin | None</code>; every plugin a consumer holds is usable by construction (§8.2)</td></tr>
+<tr><td><code>current_window()</code> / <code>frontends.current_window_id()</code></td><td><code>TerminalMetadata.current_window_id</code></td></tr>
+<tr><td><code>export_env()</code> (stamps <code>os.environ</code>)</td><td><strong>dropped</strong> — zero production callers; its consumer died in the rewrite (§8.2)</td></tr>
+<tr><td><code>app_id()</code></td><td><strong>dropped</strong> — zero production callers (dead presence path, §9.5)</td></tr>
+<tr><td><code>ls()</code> / <code>iter_windows()</code> / <code>find_window(var, value)</code></td><td><code>TerminalMetadata.windows()</code> + caller-side filtering on <code>WindowInfo.tags</code></td></tr>
+<tr><td><code>window_for_session(sid)</code> <span class="small">(both layers)</span></td><td><code>Session.terminal_window_id</code> (evidence, already live) + liveness check against <code>windows()</code></td></tr>
+<tr><td><code>tab_focused(win)</code></td><td><code>WindowInfo.tab_is_focused</code> field</td></tr>
+<tr><td><code>app_focused()</code> / <code>app_id()</code></td><td><strong>dropped</strong> — the presence path is dead (§9.5); reintroduce on <code>TerminalMetadata</code> with the feature, if ever</td></tr>
+<tr><td><code>set_tab_color(win, 4 hex strings)</code> / <code>clear_tab_color</code></td><td><code>TerminalTabs.set_tab_color(TabColorSetRequest)</code> / <code>clear_tab_color(TabColorClearRequest)</code> — typed <code>TabAppearance</code>, hex rendering moves into the impl</td></tr>
+<tr><td><code>goto_splits_layout(win)</code></td><td><strong>absorbed into <code>open_pane</code></strong> — arranging a bias-capable layout is the impl's job</td></tr>
+<tr><td><code>launch_pane(argv, location, bias, var, next_to="id:…", in_tab_of, …)</code></td><td><code>TerminalPanes.open_pane(PaneOpenRequest)</code> — <code>PaneAnchor</code> replaces the match strings; <code>same_tab_as</code> replaces <code>in_tab_of</code>; <code>size_percent</code> replaces <code>bias</code></td></tr>
+<tr><td><code>close_pane(var=…/win_id=…)</code></td><td><code>close_pane(PaneCloseRequest(window_id))</code> — callers resolve tag→id via <code>windows()</code> first</td></tr>
+<tr><td><code>set_user_vars(win_id, uv)</code></td><td><code>TerminalMetadata.tag_window(WindowTagRequest(window_id, tags))</code></td></tr>
+<tr><td><code>resize_pane((var,value), axis, incr)</code></td><td><code>resize_pane(PaneResizeRequest(window_id, axis, cells))</code> — by id, not by tag</td></tr>
+<tr><td><code>focus_first_pane(win_id)</code></td><td><code>focus_window(WindowFocusRequest(window_id))</code> + <code>WindowInfo.is_first_in_tab</code> to find the host</td></tr>
+<tr><td><code>send_text</code> / <code>paste_text</code></td><td><code>TerminalInput.submit_text(TextSubmitRequest(window_id, text, mode="type"|"paste"))</code></td></tr>
+<tr><td><code>send_key(win, *keys)</code></td><td><code>TerminalInput.send_key(KeySendRequest(window_id, key))</code> — callers loop (they already do)</td></tr>
+<tr><td><code>launch_tab(cwd, argv)</code></td><td><code>TerminalTabs.open_tab(TabOpenRequest)</code> — including the new <code>environment</code> field (commit 4b06bc3)</td></tr>
+<tr><td><code>close_tab</code> / <code>set_tab_title</code></td><td><code>close_tab(TabCloseRequest)</code> / <code>rename_tab(TabRenameRequest)</code> — each with its own typed Response</td></tr>
+<tr><td><code>scroll_window</code> / <code>scroll_window_fast</code> / <code>scroll_window_end</code></td><td><code>TerminalViewport.scroll(ViewportScrollRequest(window_id, to_bottom, up_lines))</code> — one call; the raw-socket fast path is the kitty impl's private optimisation</td></tr>
+<tr><td><code>get_text(win_id, extent, ansi)</code></td><td><code>TerminalViewport.read_screen(ScreenReadRequest(window_id, ansi)) → ScreenReadResponse</code> — viewport semantics stated in the docstring</td></tr>
+<tr><td><code>split_geometry(var, exclude_var)</code></td><td><strong>dropped</strong> — arithmetic over <code>windows()</code> in the adapter (§8.2): <code>row_total = host.columns + activity.columns</code>; <code>exclude_var</code> existed only to keep the scoreboard out of that total</td></tr>
+<tr><td>role <code>SessionTerminal</code></td><td>gone — <code>current_window_id</code> + <code>open_tab</code> on the sub-protocols; session lookups from the <code>Session</code> row; <code>hosting_session</code> becomes adapter logic over <code>windows()</code> tags + the session store</td></tr>
+<tr><td>roles <code>SessionPaneControl</code> / <code>SessionTabControl</code></td><td>gone from the contract — they are <em>services</em>: <code>terminal/adapter.py</code> (the moved <code>ApplicationTerminal</code>) keeps <code>open/close_session_panes</code>, <code>toggle_session_panes</code>, <code>paint/clear_session_tab</code> as methods over a <code>TerminalPlugin</code>, zero kitty strings</td></tr>
+<tr><td>roles <code>TerminalScreen</code> / <code>TerminalControl</code> / <code>TerminalFrontend</code></td><td>collapsed into the five sub-protocols</td></tr>
+<tr><td><code>class Frontend</code> (inert no-op base)</td><td><code>terminal/impl/null.py NullTerminal</code> — a concrete <code>TerminalPlugin</code> whose every method returns the failure value; bootstrap wires it when <code>resolve()</code> finds no terminal, so services stay unconditional</td></tr>
+<tr><td><code>frontends/kitty.py</code></td><td><code>terminal/impl/kitty/</code> — implements the five sub-protocols; owns match-string rendering, <code>ls()</code>-tree flattening into <code>WindowInfo</code>, the resize-settle retry, <code>KITTY_LISTEN_ON</code>/<code>KITTY_WINDOW_ID</code></td></tr>
+<tr><td><code>frontends/__init__.py get()</code> (default <code>"kitty"</code>)</td><td><code>terminal/impl/__init__.py resolve() → TerminalPlugin | None</code> — detection, env var as override only</td></tr>
+</table>
+
+<p class="small">Who takes which field: the terminal probe takes <code>viewport</code>; <code>HarnessControlService</code> and the plugin <code>_TerminalDriver</code>s take <code>input</code> + <code>viewport</code> + <code>tabs</code>; the launcher takes <code>tabs</code>; the pane-stream painter takes <code>tabs</code>; <code>terminal/adapter.py</code> and the two self-identification clients (<code>hook_client</code>, <code>terminal_panes</code> → <code>metadata.current_window_id()</code>) take the whole <code>TerminalPlugin</code>. Injection stays exactly like harnesses: bootstrap resolves once and passes fields down.</p>
+
+<h3 id="l-tree">8.4 Package layout — as is vs to be</h3>
+
+<div class="cols" style="display:grid;grid-template-columns:1fr 1fr;gap:0 2rem;">
+<div>
+<h4>As is</h4>
+<pre><code>contracts/
+├── harness.py
+└── terminal.py          # the protocol (§2)
+
+frontends/               # the "other" interface (§4.1)
+├── __init__.py          # get(), current_window_id(),
+│                        #   BAQYLAU_FRONTEND default "kitty"
+├── base.py              # Frontend duck-type, 274 ln
+└── kitty.py             # the ONLY real frontend, 596 ln
+
+terminal/                # presenters only — no protocol,
+├── models.py            #   no implementation
+├── presenter.py
+├── renderer.py
+├── scoreboard.py
+├── highlight.py
+├── activity.py
+├── session.py           # login_shell_command
+└── tab_state.py
+
+app/
+└── session_terminal.py  # ApplicationTerminal — the
+                         #   adapter, stranded in app/,
+                         #   speaking kitty grammar (§4.2)</code></pre>
+</div>
+<div>
+<h4>To be</h4>
+<pre><code>terminal/
+├── contract.py          # §8.2 — the five sub-protocols
+│                        #   (TerminalTabs, TerminalPanes,
+│                        #   TerminalMetadata, TerminalInput,
+│                        #   TerminalViewport) + TerminalPlugin.
+│                        #   No SessionId import.
+├── models/              # §8.2 — terminal-agnostic, one
+│   │                    #   NounVerbRequest/Response pair
+│   │                    #   per operation
+│   ├── values.py        #   RGB, TabAppearance, WindowInfo,
+│   │                    #   the three *_TAG keys
+│   ├── tabs.py          #   TabOpen/TabClose/TabRename/
+│   │                    #   TabColorSet/TabColorClear ×R/R
+│   ├── panes.py         #   PaneAnchor; PaneOpen/PaneClose/
+│   │                    #   PaneResize/WindowFocus ×R/R
+│   ├── metadata.py      #   WindowTagRequest/Response
+│   ├── input.py         #   TextSubmit/KeySend ×R/R
+│   └── viewport.py      #   ScreenRead/ViewportScroll ×R/R
+├── adapter.py           # ← app/session_terminal.py: the
+│                        #   session-level SERVICE (open/close/
+│                        #   toggle_session_panes, paint/clear
+│                        #   _session_tab, width percent math)
+│                        #   over a TerminalPlugin — zero kitty
+│                        #   strings; session→window from
+│                        #   Session.terminal_window_id
+├── impl/
+│   ├── __init__.py      # resolve() → TerminalPlugin | None
+│   │                    #   (detection; env var override only)
+│   ├── null.py          # NullTerminal — every method the
+│   │                    #   failure value; bootstrap wires it
+│   │                    #   when resolve() finds nothing
+│   └── kitty/
+│       ├── __init__.py
+│       ├── remote.py    # kitten @ / raw-socket transport,
+│       │                #   KITTY_LISTEN_ON, KITTY_WINDOW_ID
+│       ├── match.py     # id:… / var:…=… rendered HERE,
+│       │                #   from PaneAnchor
+│       └── plugin.py    # ← frontends/kitty.py: the kitty
+│                        #   TerminalPlugin (five impls),
+│                        #   ls()→WindowInfo flattening,
+│                        #   goto-layout, resize-settle retry
+├── mirror/              # ← the activity-mirror rendering
+│   │                    #   pipeline (was 5 loose modules)
+│   ├── visibility.py    #   ← activity.py: which canonical
+│   │                    #     activity the mirror shows
+│   ├── blocks.py        #   ← models.py: the private drawing
+│   │                    #     model (TerminalStyle, blocks)
+│   ├── presenter.py     #   ← presenter.py: activity → blocks
+│   ├── renderer.py      #   ← renderer.py: stateful block
+│   │                    #     renderer, replacement + reflow
+│   └── highlight.py     #   ← highlight.py: command formatting
+│                        #     + syntax highlighting
+├── scoreboard.py        # ← scoreboard.py: the five-row
+│                        #   session-statistics surface
+├── theme.py             # ← tab_state.py: canonical tab states
+│                        #   → TabAppearance palette
+└── launch.py            # ← session.py: login-shell command
+                         #   construction (not a presenter —
+                         #   consumed by adapter.open_tab)</code></pre>
+</div>
+</div>
+
+<h3 id="l-buys">8.5 What the move buys, concretely</h3>
+<ul>
+  <li><strong>One import boundary to police.</strong> The purity test from §7.5 becomes trivial: forbid <code>kitty</code>/<code>kitten</code> everywhere except <code>terminal/impl/kitty/</code>, and forbid <code>import terminal.impl</code> outside <code>terminal/</code> itself (only <code>terminal/impl/__init__.py</code> resolves an impl; everyone else takes the contract). Today that test can't even be written cleanly because <code>frontends/</code> sits inside the harness-purity scan list.</li>
+  <li><strong>The two-interface problem dissolves.</strong> <code>class Frontend</code> is deleted; the null and kitty plugins both implement the same five sub-protocols, and <code>test_l0_frontends_contract.py</code> is repointed to assert exactly that (every sub-protocol method present, no public API beyond them). "The contract" and "what consumers actually call" are the same file for the first time — and the stale slice comments naming dead pre-rewrite consumers (§4.4) die with <code>frontends/base.py</code>.</li>
+  <li><strong>A second terminal is a directory.</strong> <code>terminal/impl/ghostty/</code> or <code>terminal/impl/tmux/</code> implements <code>terminal/contract.py</code>, renders its own match/anchor syntax in its own <code>match.py</code>-equivalent, and registers with the detector — no shared-layer edits.</li>
+</ul>
+
+<div class="warn">
+<p><strong>Three migration constraints.</strong> (1) <code>terminal/</code> must NOT import <code>app/</code> after the move (the adapter moved <em>out</em> of app, and an <code>app → terminal.adapter → app</code> cycle would form) — the adapter takes the session store as a constructor dependency instead of importing it. (2) <code>tests/test_canonical_architecture.py</code>'s scan lists reference <code>frontends/</code> (harness-purity list, line ~148) and must swap to <code>terminal/</code>-minus-<code>impl/</code> in the same commit, which is also the moment to add the kitty/kitten purity test (§7.5). (3) The daemon does not hot-reload: land the rename, restart with <code>bin/baqylau-dashboard.py stop &amp;&amp; … start</code>, and hard-reload the browser.</p>
+</div>
+
+<!-- ================================================================ -->
+<h2 id="consumers">9. Every consumer of the terminal stack</h2>
+
+<p><strong>Headline: the dashboard HTTP layer imports none of the three entry points.</strong> A grep of <code>dashboard/</code> for <code>frontends</code>, <code>contracts.terminal</code>, or <code>ApplicationTerminal</code> returns zero hits. The funnel holds: browser → HTTP route → service on the daemon's application graph → <code>ApplicationTerminal</code> → frontend. The seepage documented in §4 is a <em>vocabulary</em> problem inside the adapter, not a routing problem in who calls it.</p>
+
+<h3>9.1 Construction — one terminal object per daemon</h3>
+
+<pre><code># app/bootstrap.py:117 — built once, in build_application()
+terminal = ApplicationTerminal()
+controls       = HarnessControlService(sessions, terminal, queries)     # :119
+terminal_input = TerminalInputService(sessions, terminal, terminal)     # :122
+...            = PaneCanonicalEventReaction(terminal, sessions)         # :136
+launcher       = HarnessLauncherService(registry, terminal)             # :170
+pane_commands  = PaneCommandService(terminal)                           # :173
+pane_streams   = PaneStreamService(..., terminal)                       # :174
+
+# dashboard/http/handler.py:87 — the graph attaches to the server;
+# handlers reach it via self._application(), never the types
+application = build_default_application()
+httpd.canonical_application = application</code></pre>
+
+<h3>9.2 HTTP routes that ultimately drive the terminal</h3>
+
+<div class="role">
+<h4>POST <code>/api/sessions</code></h4>
+<p class="meta"><span class="file">dashboard/http/canonical.py:511</span> → <code>HarnessLauncherService</code> · contract: <code>SessionTerminal</code></p>
+<p>Launch/resume a harness session in a new terminal tab from the web UI.</p>
+<pre><code># dashboard/http/canonical.py:526
+result = self._application().launcher.launch(harness, request)
+# app/services.py:144
+terminal_result = self.terminal.open_tab(...)        # → frontend.launch_tab</code></pre>
+</div>
+
+<div class="role">
+<h4>POST <code>/api/sessions/&lt;id&gt;/controls</code></h4>
+<p class="meta"><span class="file">dashboard/http/canonical.py:840</span> → <code>HarnessControlService</code> → plugin controllers · contract: <code>TerminalControl</code></p>
+<p>Every browser control gesture: send text, interrupt, close session, rename, rewind, model/effort selection, account migration.</p>
+<pre><code># plugins/claude_code/controller.py:53
+return all(self.terminal.send_key(str(window_id), str(key)).succeeded for key in keys)
+# plugins/claude_code/controller.py:176
+result = terminal.close_tab(window_id)
+# plugins/codex/controller.py:189
+terminal.set_tab_title(window_id, request.name)</code></pre>
+</div>
+
+<div class="role">
+<h4>POST <code>/api/terminal/panes</code></h4>
+<p class="meta"><span class="file">dashboard/http/canonical.py:426</span> → <code>PaneCommandService</code> · adapter extras beyond the contract</p>
+<p>The kitty keybinding gestures: toggle the mirror+scoreboard panes, grow/shrink/reset/set the activity-pane width.</p>
+<pre><code># app/pane_commands.py:43,74
+session_id = self._terminal.session_for_window(window_id or None)
+result = self._terminal.toggle_session_panes(session_id, width, anchor)</code></pre>
+</div>
+
+<div class="role">
+<h4>GET <code>/api/sessions/&lt;id&gt;/panes/{mirror,scoreboard}/stream</code></h4>
+<p class="meta"><span class="file">dashboard/http/canonical.py:325</span> → <code>PaneStreamService</code> · contract: <code>SessionTabControl</code></p>
+<p>The SSE frame streams the two pane processes copy. The service touches the terminal only to keep the tab colour in sync with session state.</p>
+<pre><code># app/pane_streams.py:132
+self._terminal.paint_session_tab(session_id, appearance)   # and clear_session_tab</code></pre>
+</div>
+
+<div class="role">
+<h4>GET <code>/api/sessions</code>, <code>/api/insights</code>, session snapshot</h4>
+<p class="meta"><span class="file">dashboard/http/canonical.py:125,131,136,229</span> → <code>TerminalInputService</code> · contract: <code>SessionTerminal</code> + <code>TerminalScreen</code></p>
+<p>Read-only: "is this session live on screen" (window lookup) and the composer's live typed-text / ghost-suggestion echo.</p>
+<pre><code># app/services.py:199,203
+window_id = self.terminal.window_for_session(session_id)
+plugin.terminal_probe.input_state(self.screen, window_id)   # read_screen(ansi=True)</code></pre>
+</div>
+
+<p><strong>Routes that look terminal-ish but are not:</strong> <code>POST /api/terminal/views</code> toggles a sqlite flag (<code>app/terminal_views.py</code>) that the mirror renderer reads — no terminal call; <code>POST /api/harnesses/&lt;h&gt;/hooks</code> only <em>stores</em> the <code>X-Baqylau-Terminal-Window</code> header the hook observed client-side; files/dictation endpoints explicitly touch no terminal.</p>
+
+<h3>9.3 The raw <code>frontends</code> importers — exactly three</h3>
+
+<table>
+<tr><th>module</th><th>calls</th><th>why raw is (or isn't) justified</th></tr>
+<tr><td><span class="file">app/session_terminal.py:41</span></td><td><code>frontends.get(resolve=True)</code> + essentially every <code>Frontend</code> method</td><td>Justified in <em>role</em> (it is the adapter) but leaky in <em>vocabulary</em> (§4.2).</td></tr>
+<tr><td><span class="file">app/hook_client.py:43</span></td><td><code>frontends.current_window_id()</code></td><td>Justified: the hook subprocess runs inside the kitty window and is the only thing that can observe its own id; it ships it as the <code>X-Baqylau-Terminal-Window</code> header.</td></tr>
+<tr><td><span class="file">app/terminal_panes.py:25</span></td><td><code>frontends.current_window_id()</code></td><td>Same self-identification, for the keymap client stamping which window the keypress landed in before POSTing <code>/api/terminal/panes</code>.</td></tr>
+</table>
+
+<h3>9.4 Contract-typed consumers</h3>
+
+<table>
+<tr><th>module</th><th>contract role(s)</th><th>use case</th></tr>
+<tr><td><span class="file">app/services.py</span> — <code>HarnessControlService</code>, <code>HarnessLauncherService</code>, <code>TerminalInputService</code></td><td><code>TerminalControl</code> / <code>SessionTerminal</code> / <code>SessionTerminal + TerminalScreen</code></td><td>web controls, tab launching, live-input probing (§9.2)</td></tr>
+<tr><td><span class="file">app/reactions.py:135</span> — <code>PaneCanonicalEventReaction</code></td><td><code>SessionPaneControl</code></td><td>auto-open/close a session's mirror+scoreboard when the session starts/ends, anchored at the window the session's own evidence named: <code>self.terminal.open_session_panes(SessionPaneRequest(...))</code></td></tr>
+<tr><td><span class="file">plugins/claude_code/controller.py:34</span>, <span class="file">plugins/codex/controller.py:29</span></td><td><code>TerminalControl</code>, wrapped in <code>_TerminalDriver</code></td><td>re-expose the contract as the duck-typed <code>fe</code> vocabulary (<code>send_key/send_text/paste_text/get_text</code>) the screen drivers expect</td></tr>
+<tr><td>~13 screen-driver modules receiving that <code>fe</code>: <span class="file">plugins/claude_code/{tui,askdialog,confirmdialog,plandialog,rewindmenu,suggestion,screen_driver}.py</span>, <span class="file">plugins/codex/{dialog,modeldialog,plandialog}.py</span></td><td>duck-typed, no imports</td><td>drive the harness TUI from the web: e.g. <code>fe.paste_text(win, text)</code> (<span class="file">claude_code/tui.py:60</span> — verified paste+Enter submit), <code>fe.paste_text(win, "/model")</code> (<span class="file">codex/modeldialog.py:174</span>)</td></tr>
+<tr><td><span class="file">plugins/claude_code/terminal_probe.py:6</span></td><td><code>TerminalScreen</code></td><td><code>read_screen(window_id, ansi=True)</code> — the composer's ghost-suggestion probe (SGR faint-text detection)</td></tr>
+<tr><td><span class="file">terminal/{highlight,models,presenter,scoreboard,tab_state}.py</span>, <span class="file">contracts/harness.py:11</span></td><td>value types only (<code>RGB</code>, <code>TabAppearance</code>) / re-export</td><td>no terminal calls</td></tr>
+</table>
+
+<h3>9.5 Non-consumers that look like consumers</h3>
+
+<ul>
+  <li><span class="file">app/terminal_process.py</span> / <span class="file">app/scoreboard_process.py</span> — launched <em>by</em> <code>open_session_panes</code>, but are pure HTTP/SSE clients of the daemon's pane streams. No terminal imports.</li>
+  <li><span class="file">dashboard/notify/presence.py:157</span> <code>mark_terminal()</code> — documented as polling <code>app_focused</code>, but has <strong>no production caller</strong>. Dead/aspirational; presence currently tracks browser devices only. Hence the whole <code>app_focused / tab_focused / app_id</code> Frontend slice is unused today (noted in the §4.1 table).</li>
+  <li><span class="file">bin/baqylau-view.py:24</span> — thin client of <code>/api/terminal/views</code> (the sqlite flag). Other <code>bin/</code> entries: no terminal usage.</li>
+  <li><span class="file">core/hostpane.py</span>, <span class="file">plugins/*/tabstatus.py</span>, <span class="file">plugins/*/split.py</span>, <span class="file">plugins/*/adopt*</span> — named by <code>frontends/base.py</code>'s slice comments but do not exist in this tree (pre-rewrite ghosts).</li>
+</ul>
+
+<h3>9.6 Count summary</h3>
+
+<table>
+<tr><th>kind</th><th>count</th><th>who</th></tr>
+<tr><td>raw <code>frontends</code> importers</td><td>3</td><td>the adapter + two <code>current_window_id()</code> self-identification clients</td></tr>
+<tr><td><code>contracts.terminal</code> importers (protocols)</td><td>7</td><td><code>app/services.py</code>, <code>app/reactions.py</code>, <code>app/session_terminal.py</code>, <code>contracts/harness.py</code>, two plugin controllers, one terminal probe</td></tr>
+<tr><td><code>contracts.terminal</code> importers (value types only)</td><td>5</td><td><code>terminal/</code> presenters</td></tr>
+<tr><td>injected / duck-typed consumers (no import)</td><td>~15</td><td><code>app/pane_commands.py</code>, <code>app/pane_streams.py</code>, the <code>fe</code> screen drivers</td></tr>
+<tr><td>terminal imports in <code>dashboard/</code></td><td><strong>0</strong></td><td>all five terminal-driving routes go through the service graph</td></tr>
+</table>
+
+<p class="small">Sources: <span class="file">contracts/terminal.py</span>, <span class="file">frontends/base.py</span>, <span class="file">frontends/__init__.py</span>, <span class="file">app/session_terminal.py</span>, <span class="file">app/hook_client.py:43</span>, <span class="file">app/terminal_panes.py:25</span>, <span class="file">dashboard/static/app.05-session.js:229</span>, <span class="file">tests/test_canonical_architecture.py:148</span>, <span class="file">tests/test_l0_frontends_contract.py</span>.</p>
+
+</body>
+</html>

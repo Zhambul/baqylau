@@ -65,7 +65,7 @@ from runtime.recorder import EventIdentityConflict, RawEventRecorder
 from runtime.sessions import SessionStore
 from dashboard.presenter import DashboardPresenter
 from runtime.projections import ActivityScope, SessionQueries
-from terminal.presenter import TerminalPresenter
+from terminal.mirror.presenter import TerminalPresenter
 
 # The liveness source checks the CLI pid against the CLI's process name; the
 # suite's sessions carry the test process itself, so they read as alive.

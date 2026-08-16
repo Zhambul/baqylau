@@ -1,0 +1,248 @@
+# terminal/impl/kitty/remote.py — the transport to a running kitty.
+#
+# Talking to kitty happens over the socket in $KITTY_LISTEN_ON, either through
+# the `kitten` client or, on the hot paths, as a raw write of the same wire
+# bytes the client sends. Never the TTY: hooks run with no controlling terminal.
+#
+# Everything here is best-effort and silent — a failed call returns rc 1 / [] /
+# None and never raises, because every caller above is a hook or a render loop
+# that must not fail on a terminal that went away.
+import glob
+import json
+import os
+import stat
+import subprocess
+import shutil
+import time
+
+# Timeout for mutating `kitten @` calls (run): kitten has its own client-side
+# response timeout, but a hang on socket CONNECT is unbounded, and every split
+# op (and every tab paint whose raw-socket attempt missed) runs through here
+# from hook processes — which must never block.
+KITTEN_TIMEOUT_SECONDS = 10
+# Tighter timeout for read-only queries (get-text / ls): they run on hot paths
+# (renderer reflow, geometry probes) where a stale answer is useless anyway.
+KITTEN_QUERY_TIMEOUT_SECONDS = 5
+# Timeout for a raw unix-socket remote-control exchange (raw): the whole point
+# of the raw path is sub-millisecond latency, so give up fast and let the
+# caller fall back to the kitten subprocess.
+REMOTE_CONTROL_SOCKET_TIMEOUT_SECONDS = 0.5
+# Gap between a text write and its Enter (CR) write. Delivered in the SAME
+# write, a harness TUI's chunk-based paste detection sometimes read text+CR as
+# one pasted chunk, turning the CR into a draft newline instead of a submit
+# (timing-dependent → intermittent). The gap makes the CR arrive as its own
+# stdin read = an unambiguous Enter keypress.
+SEND_ENTER_DELAY_SECONDS = 0.15
+# The remote-control protocol version stamped into every @kitty-cmd envelope
+# (what a current kitten client sends; kitty accepts any version <= its own).
+KITTY_RC_VERSION = [0, 26, 0]
+# The @kitty-cmd wire framing: ESC P (DCS) + key + {json} + ESC \ (ST). The
+# reply, when requested, is framed the same way — locate its payload by the
+# key, not the DCS introducer (the reply may arrive mid-buffer).
+RC_CMD_KEY = b"@kitty-cmd"
+RC_CMD_DCS = b"\x1bP" + RC_CMD_KEY
+RC_ST = b"\x1b\\"
+# The set-tab-color sentinel that clears a colour back to the theme default —
+# clearing paints all four channels with it.
+TAB_COLOR_NONE = "NONE"
+
+
+def find_kitten():
+    """Locate the kitten binary: $KITTY_KITTEN_BIN override, PATH, then the macOS
+    app bundle. None when kitty isn't installed."""
+    k = os.environ.get("KITTY_KITTEN_BIN")
+    if k:
+        return k
+    k = shutil.which("kitten")
+    if k:
+        return k
+    bundle = "/Applications/kitty.app/Contents/MacOS/kitten"
+    return bundle if os.access(bundle, os.X_OK) else None
+
+
+def _is_socket(p):
+    try:
+        return stat.S_ISSOCK(os.stat(p).st_mode)
+    except OSError:
+        return False
+
+
+def resolve_listen_on():
+    """The controlling kitty instance's socket when $KITTY_LISTEN_ON is absent
+    (a keymap-driven `launch --type=background` child does NOT inherit it):
+    listen_on `unix:/tmp/kitty` yields `/tmp/kitty-<kitty-pid>`, and that kitty
+    pid is an ancestor of this process. Uses the lone socket when exactly one
+    kitty instance exists."""
+    if os.environ.get("KITTY_LISTEN_ON"):
+        return os.environ["KITTY_LISTEN_ON"]
+    pid = os.getppid()
+    while pid and pid > 1:
+        if _is_socket(f"/tmp/kitty-{pid}"):
+            return f"unix:/tmp/kitty-{pid}"
+        try:
+            out = subprocess.run(["ps", "-o", "ppid=", "-p", str(pid)],
+                                 capture_output=True, text=True).stdout.strip()
+            pid = int(out)
+        except (ValueError, OSError):
+            break
+    socks = [s for s in glob.glob("/tmp/kitty-*") if _is_socket(s)]
+    if len(socks) == 1:
+        return "unix:" + socks[0]
+    return ""
+
+
+def current_window_id():
+    """The kitty window this process runs in, or "". The one place
+    $KITTY_WINDOW_ID is read; every other component receives it as data."""
+    return os.environ.get("KITTY_WINDOW_ID", "")
+
+
+class KittyRemote:
+    """One kitty control channel.
+
+    `listen` is resolved PER CALL, not cached: the daemon outlives kitty
+    instances, and the socket path carries kitty's pid — a channel pinned at
+    bootstrap would go permanently dead the first time kitty restarted.
+    """
+
+    def __init__(self, listen=None, kitten=None):
+        self._pinned_listen = listen
+        self.kitten = kitten if kitten is not None else find_kitten()
+
+    @property
+    def listen(self):
+        if self._pinned_listen is not None:
+            return self._pinned_listen
+        return resolve_listen_on()
+
+    # --- the kitten client ---------------------------------------------------
+    def run(self, *args):
+        """A silenced `kitten @ …` call; the exit code (1 on any failure)."""
+        try:
+            return subprocess.run([self.kitten, "@", "--to", self.listen, *args],
+                                  stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.DEVNULL,
+                                  timeout=KITTEN_TIMEOUT_SECONDS).returncode
+        except Exception:
+            return 1
+
+    def capture(self, *args, timeout=KITTEN_TIMEOUT_SECONDS):
+        """A `kitten @ …` call whose stdout is the answer, or None on failure."""
+        try:
+            r = subprocess.run([self.kitten, "@", "--to", self.listen, *args],
+                               capture_output=True, timeout=timeout)
+        except Exception:
+            return None
+        if r.returncode != 0:
+            return None
+        return r.stdout.decode("utf-8", "replace")
+
+    def ls(self):
+        """Parsed `kitten @ ls` (the OS-window/tab/window tree), or [] on failure."""
+        out = self.capture("ls", timeout=KITTEN_QUERY_TIMEOUT_SECONDS)
+        if out is None:
+            return []
+        try:
+            return json.loads(out)
+        except ValueError:
+            return []
+
+    def app_focused(self, tree=None):
+        """True when ANY kitty OS window is focused — i.e. kitty is the frontmost
+        app on this desktop right now. The gate for a pane launch's
+        --keep-focus: kitty's keep-focus "restore the previous window" path
+        calls focus_os_window(raise=True) whenever no kitty OS window is
+        focused, which on macOS ACTIVATES the kitty app over whatever the user
+        is in (the dashboard web-launch steal — the panes opened at
+        SessionStart were the thieves). `tree` reuses an ls() the caller
+        already paid for. False on an ls failure (degrade toward not
+        stealing)."""
+        try:
+            return any(osw.get("is_focused")
+                       for osw in (self.ls() if tree is None else tree or []))
+        except Exception:
+            return False
+
+    def send_text(self, win, text, bracketed=False):
+        """`kitten @ send-text --stdin` to window `win`: the text goes over STDIN
+        precisely so it is never a shell argument NOR a kitten escape vector —
+        `--stdin` sends the bytes verbatim, no `\\n`/`\\x1b` interpretation. The
+        Enter (CR) is a SEPARATE second call after SEND_ENTER_DELAY_SECONDS (see
+        its comment: one write let paste detection swallow the CR into the
+        draft). True only when both writes rc 0.
+
+        `bracketed=True` wraps the text in bracketed-paste escapes so the TUI
+        reads it as ONE atomic paste — needed for the cancel-edit resend, where
+        a raw send into an input whose state just changed drops the leading
+        bytes (measured). The CR stays OUTSIDE the paste, so it still submits."""
+        try:
+            argv = [self.kitten, "@", "--to", self.listen, "send-text",
+                    "--match", f"id:{win}", "--stdin"]
+            text_argv = argv[:-1] + ["--bracketed-paste=enable", "--stdin"] \
+                if bracketed else argv
+            r = subprocess.run(text_argv, input=text.encode("utf-8"),
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               timeout=KITTEN_TIMEOUT_SECONDS)
+            if r.returncode != 0:
+                return False
+            time.sleep(SEND_ENTER_DELAY_SECONDS)
+            r = subprocess.run(argv, input=b"\r",
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               timeout=KITTEN_TIMEOUT_SECONDS)
+            return r.returncode == 0
+        except Exception:
+            return False
+
+    def get_text(self, win_id, extent="screen", ansi=False):
+        """`kitten @ get-text` for a window, or None on failure. extent="screen"
+        is the VISIBLE viewport — verified live: a window scrolled up returns the
+        scrolled-to rows, not the live screen's bottom — which is what lets the
+        mirror renderer restore the exact scroll position across a reflow."""
+        argv = ["get-text", "--match", f"id:{win_id}", "--extent", extent]
+        if ansi:
+            argv.append("--ansi")
+        return self.capture(*argv, timeout=KITTEN_QUERY_TIMEOUT_SECONDS)
+
+    # --- the raw socket ------------------------------------------------------
+    def raw(self, cmd, payload, want_response=False,
+            timeout=REMOTE_CONTROL_SOCKET_TIMEOUT_SECONDS):
+        """A remote-control command over a RAW unix-socket write of the
+        @kitty-cmd DCS — sub-millisecond vs the ~30-100ms kitten subprocess
+        spawn. The wire bytes are exactly what the kitten client sends
+        (captured live): ESC P @kitty-cmd {json} ESC \\, with the reply (when
+        requested) framed the same way. Speed is load-bearing for the mirror
+        renderer AND the hook path: get-text runs on every click-to-view
+        toggle, the tab paint runs on the BLOCKING hook path several times per
+        turn, and the scroll runs INSIDE its DEC 2026 freeze bracket, where a
+        subprocess outlives kitty's render-freeze window and exposes the
+        intermediate frame (the toggle flicker). Returns the parsed response
+        dict, True (fire-and-forget success), or None on any failure — callers
+        fall back to the subprocess path."""
+        listen = self.listen or ""
+        path = listen[5:] if listen.startswith("unix:") else listen
+        if not path:
+            return None
+        import socket           # deferred: this is the only site, and every hook
+                                # process imports this module (json is at the top)
+        obj = {"cmd": cmd, "version": KITTY_RC_VERSION,
+               "no_response": not want_response, "payload": payload}
+        try:
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            try:
+                s.settimeout(timeout)
+                s.connect(path)
+                s.sendall(RC_CMD_DCS + json.dumps(obj).encode("utf-8") + RC_ST)
+                if not want_response:
+                    return True
+                buf = b""
+                while RC_ST not in buf:
+                    b = s.recv(65536)
+                    if not b:
+                        return None
+                    buf += b
+            finally:
+                s.close()
+            return json.loads(buf[buf.index(RC_CMD_KEY) + len(RC_CMD_KEY):
+                                  buf.index(RC_ST)])
+        except Exception:
+            return None

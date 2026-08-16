@@ -55,3 +55,6 @@ ignore = [
 # markdown(): lambdas capture `codes` late but every sub() runs synchronously
 # within the same loop iteration — no escape, no bug.
 "core/render.py" = ["B023"]
+# vulture whitelists (make deadcode): bare names that spell "this IS used".
+# Never imported, never run — only parsed — so undefined-name is the shape.
+"vulture-*.py" = ["F821", "B018"]

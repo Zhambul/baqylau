@@ -226,7 +226,7 @@ function applySessionApplication(snapshot) {
   updateErrCount(errors.length);
   S.sessionView.meta = Object.assign({}, S.sessionView.meta || {}, {
     live: !!terminal.window_id,
-    kitty_window_id: terminal.window_id || "",
+    terminal_window_id: terminal.window_id || "",
     suggestion: input.suggestion || "",
     typed_text: input.typed_text || "",
     view_mode: preferences.view_mode || "default",
@@ -840,7 +840,7 @@ function updateShownCount() {
 /* ---------- view modes: verbose · default · focus ---------- */
 // Claude Code's three transcript densities, over the web mirror (docs/
 // dashboard.md, *View modes*). This changes only what the BROWSER paints — it
-// never touches Claude Code's own `viewMode` setting, and the kitty mirror keeps
+// never touches Claude Code's own `viewMode` setting, and the terminal mirror keeps
 // painting everything.
 //
 //   verbose — every block; nothing is ever hidden

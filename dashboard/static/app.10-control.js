@@ -53,7 +53,7 @@ function migrateSession() {
 // mid round-trip would send Escape to the terminal twice).
 function interruptSession() {
   const meta = (S.sessionView && S.sessionView.meta) || {};
-  if (!S.currentSessionId || !meta.live || !meta.kitty_window_id) return Promise.resolve();
+  if (!S.currentSessionId || !meta.live || !meta.terminal_window_id) return Promise.resolve();
   // a red "asking you" tab means a MODAL DIALOG is open (ask/plan/permission).
   // An Esc there DECLINES the dialog, it doesn't interrupt a turn — sending one
   // once killed the answer the user was giving via the ask card. Respond
@@ -106,7 +106,7 @@ function interruptSession() {
 // Idle only — mid-turn there is nothing to rewind TO yet, and the server 409s.
 function rewindSession() {
   const meta = (S.sessionView && S.sessionView.meta) || {};
-  if (!S.currentSessionId || !meta.live || !meta.kitty_window_id) return;
+  if (!S.currentSessionId || !meta.live || !meta.terminal_window_id) return;
   // red "asking you" tab: a dialog is open — a rewind (/rewind) would land in
   // it and dismiss or corrupt it. Answer via the card instead.
   if (liveTab() === "awaiting_attention") {
@@ -131,7 +131,7 @@ function liveTab() {
 
 // The web side of an interrupt that TOOK THE MESSAGE BACK: the restored text
 // goes into the composer for editing and the discarded prompt bubble leaves the
-// feed. Claude Code un-renders it in kitty the same way, and it is genuinely
+// feed. Claude Code un-renders it in the terminal the same way, and it is genuinely
 // gone from the conversation — it stays in the transcript FILE, but orphaned
 // (re-parented around), which transcript._dead_uuids prunes on the next full
 // read, so this removal is what the server would say anyway, just sooner. The
@@ -349,7 +349,7 @@ function setEffortBtn(btn) {
 // its bubble — a ↶ button each .msg.prompt carries (hover-revealed; pick mode
 // reveals them all). The chosen mode POSTs /rewind-to, where the server
 // drives Claude Code's own rewind menu in the session's window with screen-
-// verified key events (plugins/claude_code/rewindmenu.py) — nothing to do in kitty.
+// verified key events (plugins/claude_code/rewindmenu.py) — nothing to do in the terminal.
 
 // Picking mode: the idle meaning of ↶ rewind / double-Esc. Reveals every
 // bubble's ↶ and waits for a click; Esc or a second toggle leaves.
@@ -411,7 +411,7 @@ function openRewindMenu(bubble) {
 
 function doRewindTo(bubble, mode, menu) {
   const meta = (S.sessionView && S.sessionView.meta) || {};
-  if (!S.currentSessionId || !meta.live || !meta.kitty_window_id) return;
+  if (!S.currentSessionId || !meta.live || !meta.terminal_window_id) return;
   if (BUSY_TABS.includes(liveTab())) {
     toast("ask", "session is busy", "stop the turn first");
     return;
@@ -460,7 +460,7 @@ function doRewindTo(bubble, mode, menu) {
 }
 
 // A conversation restore un-renders everything from the target prompt on —
-// kitty's TUI does the same. Optimistic like applyTakeBack: the transcript
+// the harness TUI does the same. Optimistic like applyTakeBack: the transcript
 // still holds the dead branch (a rewind writes nothing until the next send
 // forks it), so a full reload re-shows it; this view matches the terminal.
 function applyRewind(bubble, restored) {
@@ -505,7 +505,7 @@ let escFired = 0;                    // when the busy fast path last fired
 const BUSY_TABS = ["thinking", "working", "executing", "awaiting_background"];
 function escGesture() {
   const meta = (S.sessionView && S.sessionView.meta) || {};
-  if (!S.currentSessionId || !meta.live || !meta.kitty_window_id) return;
+  if (!S.currentSessionId || !meta.live || !meta.terminal_window_id) return;
   // a modal dialog is open (red asking-you tab) — an Esc here would DECLINE the
   // ask/plan/permission dialog, not interrupt or rewind a turn. Swallow the
   // gesture entirely (no interrupt hold-timer, no rewind) so a stray keypress
@@ -640,7 +640,7 @@ function startRenameHeader() {
   const hostLbl = (sessionView.meta && sessionView.meta.host_label) || "the agent";
   auto.dataset.tip = "let " + hostLbl + " name this session (/rename)";
   const meta = sessionView.meta || {};
-  const windowed = !!(meta.live && meta.kitty_window_id);
+  const windowed = !!(meta.live && meta.terminal_window_id);
   const cap = capOk(meta, "rename") && cmdOffered(meta, "rename");
   const empty = tooThin(meta, "rename");
   gate(auto, cap && windowed && !empty && liveTab() !== "awaiting_attention",

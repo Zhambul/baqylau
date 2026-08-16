@@ -1,5 +1,5 @@
-# api/terminal/streams.py — the pane frame streams the two kitty pane
-# processes copy to their terminals.
+# api/terminal/streams.py — the pane frame streams the two pane processes
+# copy to their terminals.
 from __future__ import annotations
 
 import asyncio

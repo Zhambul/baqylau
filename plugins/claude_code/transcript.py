@@ -160,40 +160,6 @@ def result_text(content):
     return str(content)
 
 
-def mail_send(inp):
-    """A SendMessage tool_use INPUT -> (recipient, message text) — the shape of an
-    OUTGOING piece of team mail as it appears in a transcript.
-
-    One owner because two presenters read it: the substream paints the `✉ to <peer>`
-    block from it, and conversation() surfaces the same call as a `sendmsg` record
-    (the web's message bubble, which is where the UNCAPPED text comes from).
-
-    `message`/`content` may be a plain string OR a structured content block (dict, or
-    a list of them), so it is normalised through result_text — a raw .strip() on a
-    dict is what crashed the streamer mid-run once, dropping the agent's un-bumped
-    token tail. The recipient is what the SENDER typed, which can differ from the
-    recipient's inbox name ("main" vs "team-lead"); mail_fmt.py's note on joining by
-    msg_id applies here too."""
-    if not isinstance(inp, dict):
-        return "?", ""
-    to = inp.get("to") or inp.get("recipient") or "?"
-    text = result_text(inp.get("message") or inp.get("content")
-                       or inp.get("summary") or "")
-    return str(to), text
-
-
-def input_summary(inp):
-    """Compact "key: value" view of a tool's input, so the REQUEST is visible
-    (e.g. a WebSearch query, a WebFetch url)."""
-    if not isinstance(inp, dict) or not inp:
-        return ""
-    lines = []
-    for k, v in inp.items():
-        vs = v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)
-        lines.append(f"{k}: {vs}")
-    return "\n".join(lines)
-
-
 # Claude Code injects `<system-reminder>` blocks INTO the text it hands an agent —
 # the addressable-teammates roster, the CLAUDE.md nudge, and friends. They are
 # machinery, not the brief: a subagent's ⇢ prompt block opened with two nested
@@ -204,14 +170,6 @@ def input_summary(inp):
 # taking the OUTERMOST span non-greedily and then sweeping any stray tag left over.
 _REMINDER = re.compile(r"<system-reminder>.*?</system-reminder>\s*", re.S | re.I)
 _REMINDER_TAG = re.compile(r"</?system-reminder>\s*", re.I)
-
-
-def strip_reminders(text):
-    """`text` with Claude Code's injected <system-reminder> blocks removed. Empty
-    in, empty out; a text that is ONLY reminders becomes ''."""
-    if not text:
-        return text
-    return _REMINDER_TAG.sub("", _REMINDER.sub("", text)).strip()
 
 
 def classify_user_text(text):
@@ -320,13 +278,6 @@ def _injected(o, text=""):
 _RESUMES_TURN = (
     re.compile(r"^\s*Stop hook feedback:"),
 )
-
-
-def _resumes_turn(text):
-    """Whether this INJECTED user turn resumed a turn Claude Code had already
-    ended (see _RESUMES_TURN). Callers must have established `meta` first — the
-    marks are read only on a turn the human did not type."""
-    return any(p.match(text or "") for p in _RESUMES_TURN)
 
 
 # Every `kind` parse_line can return — the record vocabulary of this module,
@@ -494,16 +445,6 @@ AGENT_SUBDIR = "subagents"  # …/<sid>/subagents/agent-<id>.{jsonl,meta.json} �
 #                             the per-agent sidecar dir agent_paths() derives
 
 
-def agent_paths(parent_tpath, agent_id):
-    """(jsonl, meta_json) for a subagent of the session whose PARENT transcript
-    is parent_tpath — the <base>/subagents/agent-<id>.{jsonl,meta.json} layout
-    (the one owner of that derivation; substream._init binds through it)."""
-    base = parent_tpath[:-6] if parent_tpath.endswith(".jsonl") else parent_tpath
-    subdir = os.path.join(base, AGENT_SUBDIR)
-    return (os.path.join(subdir, "agent-%s.jsonl" % agent_id),
-            os.path.join(subdir, "agent-%s.meta.json" % agent_id))
-
-
 # --- session title + the main-thread conversation (dashboard read models) ----------
 
 # The slash-command wrapper Claude Code stores for a `/command` turn (the
@@ -563,42 +504,6 @@ TITLE_TAIL_B = 65536    # tail-window bytes session_title scans for the LAST nam
 #                         in a >64KB transcript is the one accepted gap
 
 
-def tail_lines(path: str, byte_count: int) -> list[bytes] | None:
-    """Read complete records from the bounded tail of a Claude transcript."""
-    try:
-        with open(path, "rb") as transcript_file:
-            transcript_file.seek(0, os.SEEK_END)
-            size = transcript_file.tell()
-            transcript_file.seek(max(0, size - byte_count))
-            lines = transcript_file.read().split(b"\n")
-    except OSError:
-        return None
-    return lines[1:] if size > byte_count else lines
-
-
-def _title_records(path):
-    """(agent_name, ai_title) — the LAST naming record of each kind in the tail
-    window (docs/session-naming-findings.md): `agent-name`/`agentName` is the
-    /rename custom name, `ai-title`/`aiTitle` the auto title Claude Code's OSC
-    tab title mirrors. '' / '' when absent or unreadable."""
-    lines = tail_lines(path, TITLE_TAIL_B)
-    if lines is None:
-        return "", ""
-    named, ai = "", ""
-    for raw in lines:
-        if b'"agent-name"' not in raw and b'"ai-title"' not in raw:
-            continue
-        try:
-            o = json.loads(raw)
-        except Exception:
-            continue
-        if o.get("type") == "agent-name":
-            named = o.get("agentName") or named
-        elif o.get("type") == "ai-title":
-            ai = o.get("aiTitle") or ai
-    return named, ai
-
-
 def _command_parts(s):
     """`(name, args)` of the `<command-name>`/`<command-args>` wrapper in `s` —
     ('', '') when it carries no command name. The ONE owner of that derivation:
@@ -622,21 +527,6 @@ def _command_parts(s):
     return name, (a.group(1).strip() if a else "")
 
 
-def _command_label(s):
-    """The `/slash-command [args]` that STARTED a session, as ONE line — a title
-    can't carry the newlines a multi-line argument has, so the args' whitespace
-    is collapsed (the prompt fallback takes its first line for the same reason).
-    '' when the content carries no command name. session_title's last-resort
-    fallback, below summary/prompt (a slash command is less descriptive than a
-    typed prompt, but beats a bare sid)."""
-    name, args = _command_parts(s)
-    if not name:
-        return ""
-    if not args:
-        return name[:200]
-    return ("%s %s" % (name, " ".join(args.split())))[:200]
-
-
 def _command_text(s):
     """The slash-command turn as the user TYPED it — `/foo` plus its argument
     verbatim, newlines and all — the text of parse_line's `slash_command` record
@@ -647,72 +537,6 @@ def _command_text(s):
     if not name:
         return ""
     return ("%s %s" % (name, args)) if args else name
-
-
-def _title_from_ladder(path, named, ai):
-    """The display title given the tail's (named, ai): the /rename `agent-name`
-    beats everything, then `ai-title`, then the head-window summary / first real
-    prompt / opening `/command` fallbacks. Split out of session_title so
-    title_and_rename() can reuse the SAME ladder without a second _title_records
-    read (styleguide single-owner: the ladder lives here, once)."""
-    if named or ai:
-        return named or ai
-    summary, prompt, cmd = "", "", ""
-    try:
-        with open(path, encoding="utf-8") as fh:
-            for i, raw in enumerate(fh):
-                if i >= TITLE_SCAN or prompt:
-                    break
-                raw = raw.strip()
-                if not raw:
-                    continue
-                try:
-                    o = json.loads(raw)
-                except Exception:
-                    continue
-                t = o.get("type")
-                if t == "summary":
-                    summary = o.get("summary") or summary
-                elif t == "user" and not o.get("isMeta"):
-                    c = (o.get("message") or {}).get("content")
-                    if isinstance(c, str):
-                        s = c.strip()
-                        if s and not s.startswith("<"):
-                            prompt = s.split("\n", 1)[0][:200]
-                        elif s and not cmd:      # the /command that opened it
-                            cmd = _command_label(s)
-    except OSError:
-        return ""
-    return summary or prompt or cmd
-
-
-def session_title(path):
-    """Best-effort display TITLE for a session transcript — what the kitty tab
-    (Claude Code's OSC title) and the `claude --resume` picker show: the last
-    `agent-name` (a /rename custom name — never clobbered by auto titles), else
-    the last `ai-title`, else the LAST `summary` record in the head window,
-    else the first line of the first REAL user prompt (isMeta rows and
-    `<command-*>`/`<local-command-*>` wrappers are plumbing, not prompts), else
-    — for a short slash-command session with none of the above — the `/command`
-    that started it (docs/session-naming-findings.md, *Fallbacks*). '' when
-    unreadable / nothing found."""
-    named, ai = _title_records(path)
-    return _title_from_ladder(path, named, ai)
-
-
-def title_and_rename(path):
-    """(session_title, tail_rename): the display title AND the `agent-name`
-    /rename record STILL PRESENT in the transcript's title tail-window ('' when
-    it has none — never renamed, OR the rename has scrolled out beyond
-    TITLE_TAIL_B in a long session while Claude Code kept re-emitting `ai-title`
-    near EOF). The dashboard reconciles its DURABLE web-rename override against
-    the second value: a rename that fell out of the tail no longer 'rolls back'
-    to the auto ai-title, yet a FRESH in-tail rename (a terminal /rename, a
-    re-rename) still supersedes the stored override (docs/session-naming-findings.md,
-    *Fallbacks*; docs/dashboard.md, *Web rename*). One _title_records read — the
-    ladder is shared with session_title()."""
-    named, ai = _title_records(path)
-    return _title_from_ladder(path, named, ai), named
 
 
 def _jsonl_file(path):

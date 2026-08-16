@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 from types import MappingProxyType
 
-from contracts.terminal import RGB
+from terminal.models import RGB
 from domain.ids import (
     ActorId,
     CanonicalEventId,
@@ -30,12 +30,12 @@ from runtime.projections import (
     SessionSummary,
     UsageSummary,
 )
-from terminal.presenter import TerminalPresenter
-from terminal.activity import visible as terminal_activity_visible
-from terminal.renderer import HEADER, TerminalRenderer
+from terminal.mirror.presenter import TerminalPresenter
+from terminal.mirror.visibility import visible as terminal_activity_visible
+from terminal.mirror.renderer import HEADER, TerminalRenderer
 from terminal.scoreboard import ScoreboardPresenter, ScoreboardSnapshot
-from terminal.tab_state import tab_appearance
-from terminal.models import TerminalBlock, TerminalLine, TerminalText, TerminalUpdate
+from terminal.theme import tab_appearance
+from terminal.mirror.blocks import TerminalBlock, TerminalLine, TerminalText, TerminalUpdate
 
 
 GOLDEN_DIRECTORY = Path(__file__).parent / "golden"

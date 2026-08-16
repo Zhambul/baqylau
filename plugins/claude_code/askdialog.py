@@ -102,7 +102,7 @@ class AskError(screendrive.StepError):
 
 def region(screen):
     """The dialog region: from the LAST header-chip bar (the only ☐/☒ on a
-    kitty screen) to the end. "" when no dialog is on screen.
+    terminal screen) to the end. "" when no dialog is on screen.
 
     FALLBACK: on a NARROW/SHORT window a tall dialog (several options with
     wrapped multi-line descriptions) overflows the visible viewport and the

@@ -4,10 +4,10 @@ from app import terminal_views
 from domain.events import FileAccessed
 from domain.ids import ActorId, CanonicalEventId, OperationId, SessionId
 from runtime.projections import ActivityContext, FileActivity
-from terminal.models import TerminalLine
-from terminal.presenter import TerminalPresenter
+from terminal.mirror.blocks import TerminalLine
+from terminal.mirror.presenter import TerminalPresenter
 from domain.values import TextContent
-from terminal.renderer import TerminalRenderer
+from terminal.mirror.renderer import TerminalRenderer
 
 
 PATCH = """--- /work/example.py

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from contracts.terminal import RGB
+from terminal.models import RGB
 from runtime.projections import ActivityStatistics, SessionSummary, UsageSummary
-from terminal.models import TerminalBlock, TerminalLine, TerminalStyle, TerminalText, TerminalUpdate
+from terminal.mirror.blocks import TerminalBlock, TerminalLine, TerminalStyle, TerminalText, TerminalUpdate
 
 MUTED = RGB(133, 143, 166)
 VALUE = RGB(171, 178, 191)

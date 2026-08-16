@@ -115,7 +115,7 @@ setInterval(() => { if (!S.currentSessionId) renderList(true); }, LIST_REFRESH_M
 // in use right now (its stable DEVICE_ID), so the on-device notification routes
 // to the device you most recently used (docs/dashboard.md *Device routing*),
 // and (b) if you're inside a session, that you're LOOKING at it (S.currentSessionId), so the
-// deferred alert suppresses while you watch — the web analog of the kitty tab
+// deferred alert suppresses while you watch — the web analog of the terminal tab
 // being frontmost (*Telegram alerts*). Both ride ONE beat to /api/presence.
 // Sent from ANY view (device presence must be recorded even from the list, not
 // only a session). hasFocus() rules out a visible-but-unfocused window;

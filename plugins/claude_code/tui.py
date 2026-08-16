@@ -39,7 +39,7 @@ def type_command(fe, win, text):
     keystrokes — and it is already how the quick commands (`/compact`,
     `/model`, `/effort`) reach the TUI, which is why those kept working where
     the typed `/rewind` did not. The Enter rides outside the paste
-    (kitten_send_text), so it still submits.
+    (the terminal's own submit convention), so it still submits.
 
     The clipboard-image guard comes with it: a bracketed paste makes Claude Code
     attach whatever IMAGE is on the board (docs/dashboard.md *Clipboard-image

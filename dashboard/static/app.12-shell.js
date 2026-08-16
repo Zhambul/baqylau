@@ -77,9 +77,9 @@ $notifytoggle.onclick = () => {
   }
 }
 
-/* ---------- readline-style editing keys (kitty-like) ---------- */
+/* ---------- readline-style editing keys (terminal-like) ---------- */
 // ⌃W deletes the word left of the cursor, ⌃A jumps to line start, ⌃E to line
-// end — the kitty/shell editing keys, in every dashboard text box (composer,
+// end — the terminal/shell editing keys, in every dashboard text box (composer,
 // first prompt, directory, filter). One delegated listener: element handlers
 // (slash menu, suggest, filter-Esc) run first and none of them claim ⌃-keys.
 // Safe to preventDefault on macOS — the browser's own accelerators live on
@@ -112,8 +112,8 @@ document.addEventListener("keydown", (e) => {
   e.preventDefault();
 });
 
-/* ---------- ⌃⇧←/→ cycle through live sessions (kitty's tab keys) ---------- */
-// Mirrors kitty's next/previous-tab shortcuts: step through the LIVE sessions
+/* ---------- ⌃⇧←/→ cycle through live sessions (the terminal's tab keys) ---------- */
+// Mirrors the terminal's next/previous-tab shortcuts: step through the LIVE sessions
 // oldest-first (creation order, like the tab bar), wrapping at the ends. From
 // the list view or a parked session — nowhere in the cycle — → enters at the
 // first (oldest) live session and ← at the last. Deliberately not gated on

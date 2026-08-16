@@ -1,6 +1,6 @@
 """Canonical tab states mapped to the established terminal color palette."""
 
-from contracts.terminal import RGB, TabAppearance
+from terminal.models import RGB, TabAppearance
 from runtime.projections import TabState
 
 LIGHT_TEXT = RGB(230, 233, 239)

@@ -18,7 +18,6 @@ from __future__ import annotations
 import sys
 import urllib.parse
 
-import frontends
 from core.process import nearest_ancestor_named
 from app import daemon_client
 from core.wire import (
@@ -33,6 +32,23 @@ from core.wire import (
 DELIVERY_TIMEOUT_SECONDS = 2.0
 
 
+def _terminal_window_id() -> str:
+    """The window this hook is running in.
+
+    The ORIGIN of every window fact in the system: a hook runs INSIDE the
+    session's own window, so it is the only thing that can observe which one
+    that is. Everything downstream receives the answer as evidence — which is
+    why this is one of the two places allowed to resolve a terminal directly
+    instead of taking one by injection.
+
+    Deferred: a hook that never gets this far must not pay for the import.
+    """
+    from terminal.impl import resolve
+
+    terminal = resolve()
+    return (terminal.metadata.current_window_id() if terminal is not None else None) or ""
+
+
 def run(
     harness: str,
     cli_process_name: str,
@@ -45,7 +61,7 @@ def run(
     try:
         headers = {
             "Content-Type": "application/json",
-            TERMINAL_WINDOW_HEADER: frontends.current_window_id() or "",
+            TERMINAL_WINDOW_HEADER: _terminal_window_id(),
             HARNESS_PROCESS_HEADER: str(nearest_ancestor_named(cli_process_name) or ""),
             ACCOUNT_ID_HEADER: account_id,
             ACCOUNT_NAME_HEADER: account_display_name,

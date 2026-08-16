@@ -70,31 +70,6 @@ _COPIED_OUTPUT_SUFFIX = re.compile(
 )
 
 
-def original_command(command: str) -> str:
-    """Remove exactly the foreground copy wrapper produced by this module."""
-    if not command.startswith("{ "):
-        return command
-    match = _COPIED_OUTPUT_SUFFIX.search(command)
-    return command[2:match.start()] if match else command
-
-
-def statement_directories(
-    command: str,
-    initial_directory: str,
-) -> tuple[tuple[str, str | None], ...]:
-    """Return each shell statement with its statically known directory."""
-    statements = _statements(command)
-    rows = []
-    for index, statement in enumerate(statements):
-        directory, known = _working_directory(
-            statements[:index],
-            initial_directory,
-            expand_home=True,
-        )
-        rows.append((statement, directory if known else None))
-    return tuple(rows)
-
-
 def redirected_output(command: str, working_directory: str | None) -> tuple[str, bool] | None:
     """Return the final statement's concrete stdout target and append mode."""
     try:

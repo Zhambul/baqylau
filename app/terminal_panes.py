@@ -1,6 +1,6 @@
 """Harness-neutral terminal pane commands — the keybinding's thin client.
 
-A kitty keymap launches this per keypress. It observes the two facts only this
+A terminal keymap launches this per keypress. It observes the two facts only this
 process can (the window the keypress landed in, the working directory), ships
 them to the daemon's per-gesture pane endpoint, and prints any refusal. The
 gesture itself runs in the daemon (`app/pane_commands.py`)."""
@@ -25,11 +25,15 @@ COMMAND_PATHS = {
 
 
 def request_body(arguments: list[str]) -> dict:
-    import frontends
+    # Deferred, and one of the two sanctioned direct resolutions: this process
+    # runs inside the window the keypress landed in and is the only thing that
+    # can observe which one that is.
+    from terminal.impl import resolve
 
+    terminal = resolve()
     command = arguments[0]
     body = {
-        "window_id": frontends.current_window_id() or "",
+        "window_id": (terminal.metadata.current_window_id() if terminal is not None else None) or "",
         "working_directory": os.getcwd(),
     }
     if command in ("grow", "shrink") and len(arguments) > 1:

@@ -41,13 +41,6 @@ def registry() -> list[dict]:
     return accounts
 
 
-def config_dir_for(account_id: str) -> str | None:
-    if not account_id or not VALID_ACCOUNT_ID.fullmatch(account_id):
-        return None
-    directory = os.path.join(ACCOUNT_CONFIG_DIRECTORY, account_id)
-    return directory if os.path.isdir(directory) else None
-
-
 def alias_for(account_id: str) -> str | None:
     if not account_id or account_id == DEFAULT_COMMAND:
         return DEFAULT_COMMAND
@@ -55,13 +48,6 @@ def alias_for(account_id: str) -> str | None:
         if account_record["slug"] == account_id:
             return account_record["alias"]
     return None
-
-
-def launch_argv(arguments: list[str], command: str = DEFAULT_COMMAND) -> list[str]:
-    shell = os.environ.get("SHELL") or "/bin/zsh"
-    if os.path.basename(shell) not in SUPPORTED_SHELLS:
-        shell = "/bin/zsh"
-    return [shell, "-lic", f'{command} "$@"', command, *arguments]
 
 
 def migration_target(current_account_id: str) -> dict | None:

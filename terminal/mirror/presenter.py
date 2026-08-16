@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from contracts.terminal import RGB
+from terminal.models import RGB
 from domain.values import Content, StructuredContent, TextContent
 from runtime.projections import (
     Activity,
@@ -18,9 +18,9 @@ from runtime.projections import (
     ReasoningActivity,
     TaskActivity,
 )
-from terminal.highlight import highlighted_lines
-from terminal.highlight import highlighted_source
-from terminal.models import (
+from terminal.mirror.highlight import highlighted_lines
+from terminal.mirror.highlight import highlighted_source
+from terminal.mirror.blocks import (
     TerminalBlank,
     TerminalBlock,
     TerminalLine,

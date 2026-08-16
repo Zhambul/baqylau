@@ -31,7 +31,14 @@ from contracts.harness import (
     SelectModel,
     SendText,
 )
-from contracts.terminal import TabRequest, TerminalControl, TextSubmission
+from terminal.contract import TerminalPlugin
+from terminal.launch import launch_tab_request
+from terminal.models import (
+    KeySendRequest,
+    ScreenReadRequest,
+    TabCloseRequest,
+    TextSubmitRequest,
+)
 from domain.events import AttentionRequested
 from domain.values import AttentionChoice
 from plugins.claude_code import account, askdialog, confirmdialog, plandialog, rewindmenu, transcript, tui
@@ -41,26 +48,35 @@ from plugins.claude_code.terminal_probe import ClaudeCodeTerminalProbe
 class _TerminalDriver:
     """Expose the small driver vocabulary used by Claude Code's screen modules."""
 
-    def __init__(self, terminal: TerminalControl) -> None:
+    def __init__(self, terminal: TerminalPlugin) -> None:
         self.terminal = terminal
 
     def get_text(self, window_id, extent="screen", ansi=False):
         del extent
-        screen = self.terminal.read_screen(str(window_id), ansi=ansi)
-        return screen.text if screen is not None else None
+        response = self.terminal.viewport.read_screen(
+            ScreenReadRequest(str(window_id), ansi=ansi)
+        )
+        return response.text
 
     def send_key(self, window_id, *keys):
-        return all(self.terminal.send_key(str(window_id), str(key)).succeeded for key in keys)
+        return all(
+            self.terminal.input.send_key(KeySendRequest(str(window_id), str(key))).succeeded
+            for key in keys
+        )
 
     def send_text(self, window_id, text):
-        return self.terminal.submit_text(str(window_id), TextSubmission(str(text), "type")).succeeded
+        return self.terminal.input.submit_text(
+            TextSubmitRequest(str(window_id), str(text), "type")
+        ).succeeded
 
     def paste_text(self, window_id, text):
-        return self.terminal.submit_text(str(window_id), TextSubmission(str(text), "paste")).succeeded
+        return self.terminal.input.submit_text(
+            TextSubmitRequest(str(window_id), str(text), "paste")
+        ).succeeded
 
 
-def _window(request: ControlRequest, terminal: TerminalControl) -> str | None:
-    return terminal.window_for_session(request.session_id)
+def _screen_text(terminal: TerminalPlugin, window_id: str) -> str | None:
+    return terminal.viewport.read_screen(ScreenReadRequest(window_id)).text
 
 
 def _result(request: ControlRequest, succeeded: bool, reason: str) -> ControlResult:
@@ -73,12 +89,13 @@ def _result(request: ControlRequest, succeeded: bool, reason: str) -> ControlRes
 
 def _command(
     request: ControlRequest,
-    terminal: TerminalControl,
+    context: ControlContext,
     text: str,
     *,
     confirm: bool = False,
 ) -> ControlResult:
-    window_id = _window(request, terminal)
+    terminal = context.terminal
+    window_id = context.terminal_window_id
     if window_id is None:
         return ControlResult(request.request_id, "rejected", "session is not live")
     succeeded, _cleared_image = tui.type_command(_TerminalDriver(terminal), window_id, text)
@@ -111,12 +128,12 @@ class SendTextHandler(ControlHandler):
         terminal = context.terminal
         if not isinstance(request, SendText):
             raise TypeError("send_text handler requires SendText")
-        window_id = _window(request, terminal)
+        window_id = context.terminal_window_id
         if window_id is None:
             return DeliveryResult(request.request_id, "rejected", "session is not live")
         driver = _TerminalDriver(terminal)
         if request.replace_terminal_draft:
-            input_state = ClaudeCodeTerminalProbe().input_state(terminal, window_id)
+            input_state = ClaudeCodeTerminalProbe().input_state(terminal.viewport, window_id)
             tui.clear_input(driver, window_id, input_state.typed_text if input_state else "")
         attachment_text = " ".join(f"@{attachment.local_path}" for attachment in request.attachments)
         message = attachment_text + ("\n" if attachment_text and request.text else "") + request.text
@@ -138,25 +155,25 @@ class InterruptHandler(ControlHandler):
         terminal = context.terminal
         if not isinstance(request, Interrupt):
             raise TypeError("interrupt handler requires Interrupt")
-        window_id = _window(request, terminal)
+        window_id = context.terminal_window_id
         if window_id is None:
             return DeliveryResult(request.request_id, "rejected", "session is not live")
-        previous = terminal.read_screen(window_id)
-        if not terminal.send_key(window_id, "escape").succeeded:
+        previous = _screen_text(terminal, window_id)
+        if not terminal.input.send_key(KeySendRequest(window_id, "escape")).succeeded:
             return DeliveryResult(request.request_id, "indeterminate", "interrupt key was not delivered")
         stopped: bool | None = None
         for _attempt in range(4):
             time.sleep(0.15)
-            current = terminal.read_screen(window_id)
+            current = _screen_text(terminal, window_id)
             if previous is None or current is None:
                 break
-            if current.text == previous.text:
+            if current == previous:
                 stopped = True
                 break
             stopped = False
             previous = current
-            terminal.send_key(window_id, "escape")
-        input_state = ClaudeCodeTerminalProbe().input_state(terminal, window_id)
+            terminal.input.send_key(KeySendRequest(window_id, "escape"))
+        input_state = ClaudeCodeTerminalProbe().input_state(terminal.viewport, window_id)
         return DeliveryResult(
             request.request_id,
             "acknowledged" if stopped is not False else "indeterminate",
@@ -170,20 +187,19 @@ class CloseSessionHandler(ControlHandler):
         terminal = context.terminal
         if not isinstance(request, CloseSession):
             raise TypeError("close_session handler requires CloseSession")
-        window_id = _window(request, terminal)
+        window_id = context.terminal_window_id
         if window_id is None:
             return ControlResult(request.request_id, "rejected", "session is not live")
-        result = terminal.close_tab(window_id)
+        result = terminal.tabs.close_tab(TabCloseRequest(window_id))
         return _result(request, result.succeeded, result.reason or "terminal tab was not closed")
 
 
 class RenameSessionHandler(ControlHandler):
     def __call__(self, request: ControlRequest, context: ControlContext) -> ControlResult:
         session = context.session
-        terminal = context.terminal
         if not isinstance(request, RenameSession):
             raise TypeError("rename_session handler requires RenameSession")
-        if _window(request, terminal) is None:
+        if context.terminal_window_id is None:
             try:
                 renamed = transcript.set_session_title(session.source_reference, request.name)
             except OSError as error:
@@ -191,21 +207,21 @@ class RenameSessionHandler(ControlHandler):
             if renamed is None:
                 return ControlResult(request.request_id, "rejected", "session source is not renameable")
             return ControlResult(request.request_id, "acknowledged")
-        return _command(request, terminal, f"/rename {request.name}")
+        return _command(request, context, f"/rename {request.name}")
 
 
 class AutoNameSessionHandler(ControlHandler):
     def __call__(self, request: ControlRequest, context: ControlContext) -> ControlResult:
         if not isinstance(request, AutoNameSession):
             raise TypeError("auto_name_session handler requires AutoNameSession")
-        return _command(request, context.terminal, "/rename")
+        return _command(request, context, "/rename")
 
 
 class OpenRewindHandler(ControlHandler):
     def __call__(self, request: ControlRequest, context: ControlContext) -> ControlResult:
         if not isinstance(request, OpenRewind):
             raise TypeError("open_rewind handler requires OpenRewind")
-        return _command(request, context.terminal, "/rewind")
+        return _command(request, context, "/rewind")
 
 
 class ApplyRewindHandler(ControlHandler):
@@ -213,7 +229,7 @@ class ApplyRewindHandler(ControlHandler):
         terminal = context.terminal
         if not isinstance(request, ApplyRewind):
             raise TypeError("apply_rewind handler requires ApplyRewind")
-        window_id = _window(request, terminal)
+        window_id = context.terminal_window_id
         if window_id is None:
             return RewindResult(request.request_id, "rejected", "session is not live")
         try:
@@ -245,10 +261,10 @@ class MigrateAccountHandler(ControlHandler):
         if target is None:
             return MigrationResult(request.request_id, "rejected", "no other account is available")
         session = context.session
-        window_id = context.terminal.window_for_session(session.session_id)
+        window_id = context.terminal_window_id
         if window_id is None:
             return MigrationResult(request.request_id, "rejected", "session is not live")
-        closed = context.terminal.close_tab(window_id)
+        closed = context.terminal.tabs.close_tab(TabCloseRequest(window_id))
         if not closed.succeeded:
             return MigrationResult(request.request_id, "indeterminate", closed.reason)
         arguments = ["--resume", str(session.session_id)]
@@ -256,9 +272,9 @@ class MigrateAccountHandler(ControlHandler):
             arguments.extend(("--model", context.current_model.native_id))
         # Launching is just running the CLI under the target account's alias;
         # the resumed session announces itself through its own hook evidence.
-        launched = context.terminal.open_tab(TabRequest(
-            working_directory=session.working_directory or "",
-            command=(target["alias"], *arguments),
+        launched = context.terminal.tabs.open_tab(launch_tab_request(
+            session.working_directory or "",
+            (target["alias"], *arguments),
             title="Claude Code",
         ))
         if not launched.succeeded:
@@ -274,21 +290,21 @@ class CompactHandler(ControlHandler):
     def __call__(self, request: ControlRequest, context: ControlContext) -> ControlResult:
         if not isinstance(request, Compact):
             raise TypeError("compact handler requires Compact")
-        return _command(request, context.terminal, "/compact")
+        return _command(request, context, "/compact")
 
 
 class SelectModelHandler(ControlHandler):
     def __call__(self, request: ControlRequest, context: ControlContext) -> ControlResult:
         if not isinstance(request, SelectModel):
             raise TypeError("select_model handler requires SelectModel")
-        return _command(request, context.terminal, f"/model {request.model_id}", confirm=True)
+        return _command(request, context, f"/model {request.model_id}", confirm=True)
 
 
 class SelectEffortHandler(ControlHandler):
     def __call__(self, request: ControlRequest, context: ControlContext) -> ControlResult:
         if not isinstance(request, SelectEffort):
             raise TypeError("select_effort handler requires SelectEffort")
-        return _command(request, context.terminal, f"/effort {request.effort}", confirm=True)
+        return _command(request, context, f"/effort {request.effort}", confirm=True)
 
 
 def _native_prompts(attention: AttentionRequested) -> list[dict]:
@@ -314,7 +330,7 @@ class AnswerQuestionHandler(ControlHandler):
             raise TypeError("answer_question handler requires AnswerQuestion")
         if context.pending_attention is None:
             return ControlResult(request.request_id, "rejected", "attention request is not pending")
-        window_id = _window(request, terminal)
+        window_id = context.terminal_window_id
         if window_id is None:
             return ControlResult(request.request_id, "rejected", "session is not live")
         answers = json.loads(request.answers.json_text) if request.answers is not None else []
@@ -347,7 +363,7 @@ class ReadPlanChoicesHandler(ControlHandler):
         terminal = context.terminal
         if not isinstance(request, ReadPlanChoices):
             raise TypeError("read_plan_choices handler requires ReadPlanChoices")
-        window_id = _window(request, terminal)
+        window_id = context.terminal_window_id
         if window_id is None:
             return PlanChoicesResult(request.request_id, "rejected", "session is not live")
         try:
@@ -369,7 +385,7 @@ class DecidePlanHandler(ControlHandler):
         terminal = context.terminal
         if not isinstance(request, DecidePlan):
             raise TypeError("decide_plan handler requires DecidePlan")
-        window_id = _window(request, terminal)
+        window_id = context.terminal_window_id
         if window_id is None:
             return ControlResult(request.request_id, "rejected", "session is not live")
         driver = _TerminalDriver(terminal)

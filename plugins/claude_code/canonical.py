@@ -61,7 +61,6 @@ from domain.ids import (
     MessageId,
     OperationId,
     RawEventId,
-    SessionId,
     TaskId,
 )
 from domain.values import (
@@ -254,10 +253,6 @@ def _timestamp(value) -> float | None:
         return None
 
 
-def _lead_actor(session_id: SessionId) -> ActorId:
-    return ActorId(f"{session_id}:lead")
-
-
 def _content(value, *, markdown: bool = False):
     if isinstance(value, (dict, list)):
         return StructuredContent(json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True))
@@ -380,6 +375,19 @@ def _plan_resolution(native: dict, failed: bool) -> tuple[str, str | None, bool]
     return "rejected", None, False
 
 
+# The dashboard's own `discuss` gesture (and the TUI's "let me clarify") comes back
+# as a REJECTED tool call whose result says so in these words. Anything else that
+# rejects a question is a plain decline.
+QUESTION_DISCUSSION_MARKER = "wants to clarify these questions"
+
+
+def _question_resolution(response: object, failed: bool) -> str:
+    if not failed:
+        return "answered"
+    text = response if isinstance(response, str) else json.dumps(response or {}, ensure_ascii=False)
+    return "discussed" if QUESTION_DISCUSSION_MARKER in text else "rejected"
+
+
 class ClaudeRawEventSources(HarnessRawEventSources):
     def for_session(self, session: Session) -> tuple[HarnessRawEventSource, ...]:
         if not transcript.owns(session.source_reference):
@@ -421,9 +429,15 @@ class ClaudeRawEventSources(HarnessRawEventSources):
 
 class ClaudeCanonicalTranslator(HarnessTranslator):
     TASK_TOOLS = frozenset({"TaskCreate", "TaskUpdate", "TaskGet", "TaskList"})
+    ATTENTION_TOOLS = frozenset({"AskUserQuestion", "ExitPlanMode"})
 
     def __init__(self) -> None:
         self._task_tool_ids: set[str] = set()
+        # Which attention tool a tool_use_id was, remembered from the request. A
+        # transcript tool_result names no tool, and a REJECTED attention tool is
+        # only ever seen there — Claude Code fires no PostToolUse for a call that
+        # never ran, so the request would otherwise stay open forever.
+        self._attention_tool_ids: dict[str, str] = {}
 
     def translate(self, raw_event: RawEvent) -> TranslationResult:
         try:
@@ -725,6 +739,8 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
                 outcome = "failed" if block.get("is_error") else "succeeded"
                 finished = OperationFinished(operation_id, outcome, None, None)
                 events.append(self._event(raw_event, "operation", str(operation_id), "finished", finished))
+                if outcome == "failed" and str(operation_id) in self._attention_tool_ids:
+                    events.append(self._attention_declined(raw_event, operation_id, result_text))
             for text_index, result_text in enumerate(record.get("texts") or ()):
                 text_identity = f"{native_identity}:text:{text_index}"
                 payload = MessageCreated(
@@ -1152,10 +1168,10 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
                     payload,
                 )
             )
-        if native_name in ("AskUserQuestion", "ExitPlanMode"):
+        if native_name in self.ATTENTION_TOOLS:
             attention_id = AttentionId(str(operation_id))
             if native_name == "AskUserQuestion":
-                decision = "answered"
+                decision = _question_resolution(tool_response, failed)
                 answers = _attention_answers(arguments)
                 feedback = None
                 edited = False
@@ -1175,6 +1191,26 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
             self._file_facts(raw_event, operation_id, native_name, arguments, tool_response)
         )
         return events
+
+    def _attention_declined(
+        self,
+        raw_event: RawEvent,
+        operation_id: OperationId,
+        result_text: str,
+    ) -> CanonicalEvent:
+        """The resolution of an attention the user REFUSED. A refused tool call never
+        runs, so Claude Code fires no PostToolUse and `_tool_finished` — the only other
+        emitter — never sees it; the transcript's tool_result is the sole evidence the
+        request ended. It names no tool, hence `_attention_tool_ids`. Refusal carries
+        no answers, so nothing is lost if the hook path also reports the same fact:
+        both derive the decision from the same text and converge on one event."""
+        attention_id = AttentionId(str(operation_id))
+        if self._attention_tool_ids[str(operation_id)] == "AskUserQuestion":
+            decision, feedback, edited = _question_resolution(result_text, True), None, False
+        else:
+            decision, feedback, edited = _plan_resolution({"tool_response": result_text}, True)
+        payload = AttentionResolved(attention_id, decision, (), feedback, edited, "failed")
+        return self._event(raw_event, "attention", str(attention_id), "resolved", payload)
 
     def _tool_side_facts(
         self,
@@ -1209,7 +1245,8 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
             content = _content(arguments.get("content") or arguments.get("message"))
             payload = ActorMessageSent(message_id, recipient, content)
             events.append(self._event(raw_event, "actor_message", str(message_id), "sent", payload))
-        if native_name in ("AskUserQuestion", "ExitPlanMode"):
+        if native_name in self.ATTENTION_TOOLS:
+            self._attention_tool_ids[str(operation_id)] = native_name
             attention_id = AttentionId(str(operation_id))
             prompts = self._attention_prompts(native_name, arguments)
             attention_type = "question" if native_name == "AskUserQuestion" else "plan"

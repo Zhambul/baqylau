@@ -339,18 +339,6 @@ def _patch_delta(ch):
     return add, rem
 
 
-def usage_split(u):
-    """The ONE total_token_usage → (fresh_in, out, cached, total_in) mapping:
-    codex's cumulative input_tokens INCLUDES the cached share, so fresh billed
-    input is input - cached. The stream footer's rollup/fold calls this;
-    re-encoding the arithmetic per-site is banned (styleguide single-owner
-    rule)."""
-    tin = int(u.get("input_tokens") or 0)
-    tcache = int(u.get("cached_input_tokens") or 0)
-    tout = int(u.get("output_tokens") or 0)
-    return max(tin - tcache, 0), tout, tcache, tin
-
-
 def is_synthetic(text, role=""):
     """Is this `chat` text codex MACHINERY rather than a conversation turn?
     Structural (see the vocabulary block above), not an allowlist:
@@ -1075,60 +1063,6 @@ def is_child_bootstrap(rec, fork_epoch):
 # pathological file hits one, and hitting one just means no brief.
 BRIEF_MAX_LINES = 500
 BRIEF_MAX_B = 4 << 20
-
-
-def subagent_brief(path):
-    """The BRIEF a codex subagent was spawned with — the text behind its launch
-    card's click — or "" when the file offers none.
-
-    WHERE THE BRIEF ACTUALLY IS, measured on the real cli 0.146 child rollout
-    (019fb363-4028…): NOT in the child's own NEW_TASK record. codex delivers the
-    task as a `response_item/agent_message` whose plaintext is only the envelope
-    (`Message Type: NEW_TASK / Task name: /root/bali_weather / Sender: /root /
-    Payload:`) — the payload itself is an `encrypted_content` part and cannot be
-    read here at all. What IS in plaintext is the fork PREFIX: a subagent rollout
-    opens by replaying the parent thread, and the last REAL HUMAN turn in that
-    replay is the task the parent was working on when it spawned the child ("run
-    a subagent to get a weather in bali"). That is the closest available
-    statement of why the child exists, so that is what this returns.
-
-    The team-scaffolding message ("You are an agent in a team of agents…", 2.1KB
-    of spawn_agent/concurrency-slot instructions) is deliberately NOT it, and
-    needs no preamble-stripping heuristic to exclude: it is role=developer —
-    codex's SYSTEM channel — and contains no task text whatsoever, so the
-    structural `is_synthetic` rule already drops it, along with
-    `<environment_context>` and every other `<tag>` injection. A `<task>…</task>`
-    INPUT wrapper (how codex delivers an UNencrypted task) is kept and reduced to
-    its inner text by the shared strip_input_wrapper, which `_rsp_message` has
-    already applied to these records.
-
-    Reads the `chat` register (response_item), the complete resume-restored one
-    (module header). Bounded by BRIEF_MAX_LINES/BRIEF_MAX_B and fail-open: "" for
-    a non-subagent rollout, an unreadable file, or a prefix whose bootstrap never
-    arrives. The caller CAPS the text (core/agentblocks takes it capped)."""
-    fork_epoch = subagent_fork_epoch(path)
-    if fork_epoch is None:
-        return ""
-    brief = ""
-    try:
-        read = 0
-        with open(path, encoding="utf-8") as fh:
-            for n, ln in enumerate(fh):
-                read += len(ln)
-                if n >= BRIEF_MAX_LINES or read > BRIEF_MAX_B:
-                    break
-                try:
-                    rec = parse(json.loads(ln))
-                except Exception:
-                    continue                    # a torn/foreign line is not a brief
-                if is_child_bootstrap(rec, fork_epoch):
-                    break                       # the prefix ends here
-                if (rec and rec["kind"] == "chat" and rec["role"] == "user"
-                        and not rec["synthetic"]):
-                    brief = rec["text"]         # the LAST one before the bootstrap
-    except Exception:
-        return ""
-    return (brief or "").strip()
 
 
 def subagent_body_offset(path):

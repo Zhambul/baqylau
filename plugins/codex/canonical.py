@@ -57,7 +57,6 @@ from domain.ids import (
     MessageId,
     OperationId,
     RawEventId,
-    SessionId,
     TaskId,
     TurnId,
 )
@@ -194,10 +193,6 @@ def _timestamp(value) -> float | None:
         return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
     except ValueError:
         return None
-
-
-def _lead_actor(session_id: SessionId) -> ActorId:
-    return ActorId(f"{session_id}:lead")
 
 
 def _exit_code(record: dict) -> int | None:

@@ -120,7 +120,7 @@ def _style_css(style_state):
 # was already stripped before this pattern runs.
 # NO EMOJI (docs/dashboard.md, *No emoji*) — the text-presentation pass.
 # Several symbols the terminal producers paint are EMOJI-CAPABLE codepoints:
-# their DEFAULT presentation is text (that is how they render in kitty), but a
+# their DEFAULT presentation is text (that is how they render in a terminal), but a
 # browser whose page fonts lack the glyph falls back to the system COLOUR-emoji
 # font, so the same `⚠ audit:` line the terminal shows in amber monochrome
 # sprouted a colour emoji on the page. U+FE0E (VARIATION SELECTOR-15) is the
@@ -239,9 +239,3 @@ def ansi_html(value, action_link: AnsiActionLink | None = None):
     return "".join(output)
 
 
-def rgb_css(color, fallback=(120, 132, 158)):
-    try:
-        red, green, blue = color
-        return "rgb(%d,%d,%d)" % (int(red), int(green), int(blue))
-    except Exception:
-        return "rgb(%d,%d,%d)" % fallback

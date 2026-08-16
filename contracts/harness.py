@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass, field
 from decimal import Decimal
 from typing import ClassVar, Literal, Mapping, Protocol, TypeAlias
 
-from contracts.terminal import TerminalControl, TerminalScreen
+from terminal.contract import TerminalPlugin, TerminalViewport
 from domain.events import (
     AttentionRequested,
     CanonicalEvent,
@@ -159,8 +159,13 @@ class Session:
 
 @dataclass(frozen=True)
 class ControlContext:
+    # `terminal_window_id` is resolved ONCE, by the service, from the session's
+    # own evidence and checked against what the terminal reports — a controller
+    # never asks a terminal where a session is. None means the session is not
+    # on screen, which most gestures must decline.
     session: Session
-    terminal: TerminalControl
+    terminal: TerminalPlugin
+    terminal_window_id: str | None
     current_model: ModelReference | None
     current_effort: str | None
     current_account: AccountReference | None
@@ -668,7 +673,7 @@ class TerminalSessionState:
 
 
 class HarnessTerminalProbe(Protocol):
-    def input_state(self, screen: TerminalScreen, window_id: str) -> TerminalInputState | None: ...
+    def input_state(self, viewport: TerminalViewport, window_id: str) -> TerminalInputState | None: ...
 
 
 @dataclass(frozen=True)

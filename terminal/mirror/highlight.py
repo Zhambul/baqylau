@@ -7,8 +7,8 @@ import re
 from pygments.lexers import BashLexer
 from pygments.lexers import get_lexer_for_filename
 
-from contracts.terminal import RGB
-from terminal.models import TerminalStyle, TerminalText
+from terminal.models import RGB
+from terminal.mirror.blocks import TerminalStyle, TerminalText
 
 KEYWORD = RGB(198, 120, 221)
 BUILTIN = RGB(86, 182, 194)

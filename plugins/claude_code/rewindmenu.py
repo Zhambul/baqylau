@@ -184,7 +184,7 @@ def drive(fe, win, target, mode, ups=0, sleep=time.sleep):
     (full text), restoring per `mode` (a MODE_LABELS key). `ups` is the
     page's jump hint — the target's `up`-press distance from the cursor's
     "(current)" start (newer prompts + 1) — burst blind before verifying; a
-    stale page (e.g. after a kitty-side rewind the web never saw) just means
+    stale page (e.g. after a terminal-side rewind the web never saw) just means
     the hint lands elsewhere and the verify scan walks the list — up to the
     top, then back down through everything — to find the entry by TEXT. Returns {"steps": .., "digit": ..} on
     success; raises MenuError (menus already closed) on any step that

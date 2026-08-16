@@ -20,7 +20,6 @@ from app import terminal_panes
 from app.hook_gateway import HookGatewayService, UnknownHookHarness
 from app.plugins import installed_plugins
 from app.reactions import OperationOutputCanonicalEventReaction
-from app.session_terminal import ApplicationTerminal
 from contracts.harness import (
     AnswerQuestion,
     AttachmentReference,
@@ -38,14 +37,12 @@ from contracts.harness import (
     Session,
     TranslationError,
 )
-from contracts.terminal import (
+from fake_terminal import FakeSessions, FakeTerminal, window
+from terminal.adapter import SessionPaneRequest, SessionTerminalResult, TerminalAdapter
+from terminal.models import (
     ACTIVITY_PANE_TAG,
     SCOREBOARD_PANE_TAG,
     SESSION_WINDOW_TAG,
-    ScreenText,
-    SessionPaneRequest,
-    TabResult,
-    TerminalResult,
 )
 from domain.codec import CanonicalEventCodec
 from domain.events import CanonicalEvent
@@ -1336,121 +1333,114 @@ def test_claude_foreground_bytes_flow_through_raw_audit_into_operation_projectio
     ) == b"hello\n"
 
 
-class PaneFrontend:
-    def __init__(self):
-        self.launched = []
-        self.tags = []
-        self.closed = []
-        self.scoreboard_lines = None
-
-    def usable(self):
-        return True
-
-    def current_window(self):
-        return "window-one"
-
-    def set_user_vars(self, window_id, tags):
-        self.tags.append((window_id, tags))
-        return 0
-
-    def goto_splits_layout(self, window_id):
-        return 0
-
-    def find_window(self, tag, value, tree=None):
-        if tag == SCOREBOARD_PANE_TAG and self.scoreboard_lines is not None:
-            return {"id": "scoreboard-window", "lines": self.scoreboard_lines}
-        return None
-
-    def launch_pane(self, command, placement, **arguments):
-        self.launched.append((command, placement, arguments))
-        if SCOREBOARD_PANE_TAG in arguments.get("var", {}):
-            self.scoreboard_lines = 3
-        return 0
-
-    def resize_pane(self, tag, axis, amount):
-        assert tag[0] == SCOREBOARD_PANE_TAG
-        assert axis == "vertical"
-        self.scoreboard_lines += amount
-        return 0
-
-    def focus_first_pane(self, window_id):
-        return 0
-
-    def close_pane(self, var=None, win_id=None):
-        self.closed.append(var)
-        return 0
-
-    def window_for_session(self, session_id):
-        return None
-
-    def ls(self):
-        return []
+def pane_terminal():
+    """A terminal showing one session window, and the adapter over it."""
+    terminal = FakeTerminal(
+        windows=[window("window-one", tags={})],
+        current_window="window-one",
+    )
+    sessions = FakeSessions({"session-one": "window-one"})
+    return terminal, TerminalAdapter(terminal.plugin(), sessions)
 
 
-def test_application_terminal_opens_canonical_processes_with_generic_tags(monkeypatch):
-    frontend = PaneFrontend()
-    monkeypatch.setattr("app.session_terminal.frontends.get", lambda resolve=True: frontend)
-    terminal = ApplicationTerminal()
+def test_terminal_adapter_opens_canonical_processes_with_generic_tags():
+    terminal, adapter = pane_terminal()
 
-    result = terminal.open_session_panes(
+    result = adapter.open_session_panes(
         SessionPaneRequest(SessionId("session-one"), "window-one", 25)
     )
 
     assert result.succeeded
-    assert frontend.tags == [("window-one", {SESSION_WINDOW_TAG: "session-one"})]
-    assert [arguments["var"] for _command, _placement, arguments in frontend.launched] == [
+    assert terminal.tagged == [("window-one", {SESSION_WINDOW_TAG: "session-one"})]
+    assert [dict(request.tags) for request in terminal.opened_panes] == [
         {ACTIVITY_PANE_TAG: "session-one"},
         {SCOREBOARD_PANE_TAG: "session-one"},
     ]
-    commands = [command for command, _placement, _arguments in frontend.launched]
-    assert commands[0][-2:] == [
-        str(Path(__file__).parents[1] / "app" / "terminal_process.py"),
-        "session-one",
+    assert [request.command[-2:] for request in terminal.opened_panes] == [
+        (str(Path(__file__).parents[1] / "app" / "terminal_process.py"), "session-one"),
+        (str(Path(__file__).parents[1] / "app" / "scoreboard_process.py"), "session-one"),
     ]
-    assert commands[1][-2:] == [
-        str(Path(__file__).parents[1] / "app" / "scoreboard_process.py"),
-        "session-one",
-    ]
+    # the anchor is stated as intent, never as one terminal's match syntax
+    assert terminal.opened_panes[0].anchor.window_id == "window-one"
+    assert terminal.opened_panes[1].anchor.tag == (ACTIVITY_PANE_TAG, "session-one")
+    assert terminal.focused == ["window-one"]
 
 
-def test_application_terminal_close_removes_the_session_window_tag(monkeypatch):
-    frontend = PaneFrontend()
-    frontend.window_for_session = lambda session_id: "window-one"
-    frontend.clear_tab_color = lambda window_id: 0
-    monkeypatch.setattr("app.session_terminal.frontends.get", lambda resolve=True: frontend)
+def test_terminal_adapter_settles_the_scoreboard_on_its_five_rows():
+    terminal, adapter = pane_terminal()
 
-    result = ApplicationTerminal().close_session_panes(SessionId("session-one"))
+    adapter.open_session_panes(SessionPaneRequest(SessionId("session-one"), "window-one", 25))
+
+    scoreboard = next(found for found in terminal.windows()
+                      if found.tags.get(SCOREBOARD_PANE_TAG))
+    assert scoreboard.lines == 5
+    assert terminal.resized == [(scoreboard.window_id, "vertical", 2)]
+
+
+def test_terminal_adapter_leaves_panes_it_finds_already_open():
+    terminal, adapter = pane_terminal()
+    adapter.open_session_panes(SessionPaneRequest(SessionId("session-one"), "window-one", 25))
+    terminal.opened_panes.clear()
+
+    adapter.open_session_panes(SessionPaneRequest(SessionId("session-one"), "window-one", 25))
+
+    assert terminal.opened_panes == []
+
+
+def test_terminal_adapter_close_removes_the_session_window_tag():
+    terminal, adapter = pane_terminal()
+    adapter.open_session_panes(SessionPaneRequest(SessionId("session-one"), "window-one", 25))
+    terminal.tagged.clear()
+
+    result = adapter.close_session_panes(SessionId("session-one"))
 
     assert result.succeeded
-    assert frontend.tags == [("window-one", {SESSION_WINDOW_TAG: ""})]
+    assert terminal.tagged == [("window-one", {SESSION_WINDOW_TAG: ""})]
+    assert terminal.cleared == ["window-one"]
+    assert not [found for found in terminal.windows() if found.tags.get(ACTIVITY_PANE_TAG)]
 
 
-def test_application_terminal_resolves_the_active_tab_without_window_environment(monkeypatch):
-    frontend = PaneFrontend()
-    frontend.current_window = lambda: ""
-    frontend.ls = lambda: [
-        {
-            "is_focused": True,
-            "tabs": [
-                {
-                    "is_active": True,
-                    "windows": [
-                        {
-                            "id": 41,
-                            "user_vars": {SESSION_WINDOW_TAG: "session-one"},
-                        }
-                    ],
-                }
-            ],
-        }
-    ]
-    monkeypatch.setattr("app.session_terminal.frontends.get", lambda resolve=True: frontend)
+def test_terminal_adapter_resolves_the_active_tab_without_window_environment():
+    terminal = FakeTerminal(
+        windows=[window(41, tags={SESSION_WINDOW_TAG: "session-one"})],
+        current_window=None,
+    )
+    adapter = TerminalAdapter(terminal.plugin(), FakeSessions())
 
-    assert ApplicationTerminal().current_session() == SessionId("session-one")
+    assert adapter.current_session() == SessionId("session-one")
+
+
+def test_terminal_adapter_reads_the_session_window_from_evidence_and_checks_it_lives():
+    terminal = FakeTerminal(windows=[window("window-one")])
+    sessions = FakeSessions({"session-one": "window-one", "session-two": "window-gone"})
+    adapter = TerminalAdapter(terminal.plugin(), sessions)
+
+    assert adapter.window_for_session(SessionId("session-one")) == "window-one"
+    # the row outlived its window: a session id alone is not liveness
+    assert adapter.window_for_session(SessionId("session-two")) is None
+    assert adapter.window_for_session(SessionId("session-missing")) is None
+
+
+def test_terminal_adapter_measures_the_activity_pane_against_its_row():
+    terminal = FakeTerminal(windows=[
+        window("window-one", columns=75),
+        window("window-two", tags={ACTIVITY_PANE_TAG: "session-one"},
+               columns=25, is_first_in_tab=False),
+        # stacked INSIDE the activity pane's column — counting it would count
+        # that column twice
+        window("window-three", tags={SCOREBOARD_PANE_TAG: "session-one"},
+               columns=25, lines=5, is_first_in_tab=False),
+    ])
+    adapter = TerminalAdapter(terminal.plugin(), FakeSessions())
+
+    assert adapter.activity_pane_geometry(SessionId("session-one")) == (25, 100)
+
+    adapter.set_activity_pane_width(SessionId("session-one"), 40)
+    assert terminal.resized == [("window-two", "horizontal", 15)]
 
 
 def test_pane_keybinding_ships_only_its_environment_to_the_daemon(monkeypatch):
-    monkeypatch.setenv("BAQYLAU_FRONTEND", "kitty")
+    monkeypatch.setenv("BAQYLAU_TERMINAL", "kitty")
     monkeypatch.setenv("KITTY_WINDOW_ID", "77")
     posted = []
 
@@ -1489,7 +1479,7 @@ def test_pane_keybinding_reports_a_daemon_refusal(monkeypatch):
 
 
 def test_hook_client_ships_exact_bytes_and_flat_headers(monkeypatch, capsys):
-    monkeypatch.setenv("BAQYLAU_FRONTEND", "kitty")
+    monkeypatch.setenv("BAQYLAU_TERMINAL", "kitty")
     monkeypatch.setenv("KITTY_WINDOW_ID", "77")
     monkeypatch.setattr("app.hook_client.nearest_ancestor_named", lambda name: 4242)
     payload = b'{ "session_id": "session-one" }'
@@ -1591,18 +1581,18 @@ def test_pane_command_service_executes_gestures_for_the_windows_session(monkeypa
 
         def toggle_session_panes(self, session_id, width_percent):
             self.toggles.append((session_id, width_percent))
-            return TerminalResult(True)
+            return SessionTerminalResult(True)
 
         def resize_activity_pane(self, session_id, columns):
             self.resizes.append((session_id, columns))
-            return TerminalResult(True)
+            return SessionTerminalResult(True)
 
         def activity_pane_geometry(self, session_id):
             return (25, 100)
 
         def set_activity_pane_width(self, session_id, width_percent):
             self.widths.append((session_id, width_percent))
-            return TerminalResult(True)
+            return SessionTerminalResult(True)
 
     terminal = Terminal()
     remembered = []
@@ -2010,24 +2000,14 @@ def test_claude_statusline_writes_plugin_owned_typed_usage(monkeypatch, tmp_path
     assert rows[0].scheduling_score == Decimal("75")
 
 
-class RecordingSessionTerminal:
-    def __init__(self):
-        self.requests = []
-        self.live_window_id = None
-
-    def window_for_session(self, session_id):
-        del session_id
-        return self.live_window_id
-
-    def open_tab(self, request):
-        self.requests.append(request)
-        return TabResult(True, "window-one")
-
-
 def test_launchers_build_native_commands_and_share_terminal_launch_mechanics(tmp_path):
     application = build_application(str(tmp_path))
-    terminal = RecordingSessionTerminal()
-    launcher = HarnessLauncherService(application.registry, terminal)
+    terminal = FakeTerminal()
+    launcher = HarnessLauncherService(
+        application.registry,
+        TerminalAdapter(terminal.plugin(), FakeSessions()),
+        terminal,
+    )
     attachment = AttachmentReference("/work/context.md", "context.md", "text/markdown")
 
     claude_result = launcher.launch(
@@ -2056,8 +2036,11 @@ def test_launchers_build_native_commands_and_share_terminal_launch_mechanics(tmp
     )
 
     assert claude_result.status == codex_result.status == "started"
-    # launching is just running the CLI — no wrapper program, no session id invention
-    assert terminal.requests[0].command == (
+    # launching is just running the CLI under a login shell — no wrapper
+    # program, no session id invention. The shell's first three words are the
+    # shared launch convention; everything after them is the harness's plan.
+    assert terminal.opened_tabs[0].command[1] == "-lic"
+    assert terminal.opened_tabs[0].command[3:] == (
         "claude",
         "--model",
         "fable",
@@ -2065,7 +2048,7 @@ def test_launchers_build_native_commands_and_share_terminal_launch_mechanics(tmp
         "high",
         "@/work/context.md\nhello",
     )
-    assert terminal.requests[1].command == (
+    assert terminal.opened_tabs[1].command[3:] == (
         "codex",
         "-C",
         "/work",
@@ -2076,15 +2059,17 @@ def test_launchers_build_native_commands_and_share_terminal_launch_mechanics(tmp
         "/work/context.md\nhello",
     )
     # the selections also ride the CLI's environment, so the hook process can
-    # observe them — Claude Code's launch evidence (codex reports its own)
-    assert terminal.requests[0].environment == (
-        ("BAQYLAU_LAUNCH_MODEL", "fable"),
-        ("BAQYLAU_LAUNCH_EFFORT", "high"),
+    # observe them — Claude Code's launch evidence (codex reports its own).
+    # They precede the command word inside the shell's own -c string, which is
+    # what keeps an aliased CLI resolving.
+    assert terminal.opened_tabs[0].command[2].startswith(
+        'BAQYLAU_LAUNCH_MODEL=fable BAQYLAU_LAUNCH_EFFORT=high claude "$@"'
     )
+    assert "BAQYLAU_LAUNCH_MODEL" not in terminal.opened_tabs[1].command[2]
 
 
 def test_login_shell_command_carries_environment_before_the_command_word(monkeypatch):
-    from terminal.session import login_shell_command
+    from terminal.launch import login_shell_command
 
     monkeypatch.setenv("SHELL", "/bin/zsh")
     shell, flag, script, *argv = login_shell_command(
@@ -2103,33 +2088,19 @@ def test_claude_terminal_probe_owns_input_box_grammar(tmp_path):
     divider = "\x1b[m\x1b[38:2:136:136:136m" + "─" * 20
     screen = divider + "\n\x1b[m❯\xa0\x1b[22;2mapply the fix\n" + divider
 
-    class ScreenFrontend:
-        def read_screen(self, window_id, region=None, ansi=False):
-            assert window_id == "window-one"
-            assert region is None
-            assert ansi is True
-            return ScreenText(screen)
+    terminal = FakeTerminal(screen_text=screen)
 
     plugin = build_application(str(tmp_path)).registry.plugin("claude_code")
-    state = plugin.terminal_probe.input_state(ScreenFrontend(), "window-one")
+    state = plugin.terminal_probe.input_state(terminal, "window-one")
 
     assert state.suggestion == "apply the fix"
     assert state.typed_text == ""
 
 
-class LiveTerminal:
-    def window_for_session(self, session_id):
-        del session_id
-        return "window-one"
-
-
-class ParkedTerminal:
-    def window_for_session(self, session_id):
-        del session_id
-
-
-def control_context(session, terminal, pending_attention=None):
-    return ControlContext(session, terminal, None, None, None, pending_attention)
+def control_context(session, terminal, pending_attention=None, window_id="window-one"):
+    return ControlContext(
+        session, terminal, window_id, None, None, None, pending_attention
+    )
 
 
 def test_claude_question_discussion_is_delivered_after_declining(monkeypatch, tmp_path):
@@ -2166,7 +2137,7 @@ def test_claude_question_discussion_is_delivered_after_declining(monkeypatch, tm
 
     outcome = application.registry.plugin("claude_code").controller.execute(
         request,
-        control_context(session, LiveTerminal(), attention),
+        control_context(session, FakeTerminal().plugin(), attention),
     )
 
     assert outcome.status == "acknowledged"
@@ -2203,7 +2174,7 @@ def test_codex_question_discussion_stays_in_the_native_dialog(monkeypatch, tmp_p
 
     outcome = application.registry.plugin("codex").controller.execute(
         request,
-        control_context(session, LiveTerminal(), attention),
+        control_context(session, FakeTerminal().plugin(), attention),
     )
 
     assert outcome.status == "acknowledged"
@@ -2231,7 +2202,7 @@ def test_claude_model_control_resolves_the_native_confirmation(monkeypatch, tmp_
 
     outcome = application.registry.plugin("claude_code").controller.execute(
         request,
-        control_context(session, LiveTerminal()),
+        control_context(session, FakeTerminal().plugin()),
     )
 
     assert outcome.status == "acknowledged"
@@ -2246,24 +2217,7 @@ def test_claude_account_migration_uses_only_projected_context(monkeypatch, tmp_p
             "alias": "account-two",
         },
     )
-    class MigrationTerminal:
-        def __init__(self):
-            self.closed = []
-            self.launched = []
-
-        def window_for_session(self, session_id):
-            assert session_id == SessionId("session-one")
-            return "window-one"
-
-        def close_tab(self, window_id):
-            self.closed.append(window_id)
-            return TerminalResult(True)
-
-        def open_tab(self, request):
-            self.launched.append(request)
-            return TabResult(True, "window-two")
-
-    terminal = MigrationTerminal()
+    terminal = FakeTerminal()
     application = build_application(str(tmp_path))
     session = Session(
         SessionId("session-one"),
@@ -2274,7 +2228,8 @@ def test_claude_account_migration_uses_only_projected_context(monkeypatch, tmp_p
     )
     context = ControlContext(
         session,
-        terminal,
+        terminal.plugin(),
+        "window-one",
         ModelReference("fable", None, None),
         "high",
         AccountReference("account-one", "Account One"),
@@ -2288,8 +2243,10 @@ def test_claude_account_migration_uses_only_projected_context(monkeypatch, tmp_p
 
     assert outcome.status == "acknowledged"
     assert outcome.target_account_id == "account-two"
-    assert terminal.closed == ["window-one"]
-    assert terminal.launched[0].command == (
+    assert terminal.closed_tabs == ["window-one"]
+    # the relaunch rides a login shell, so an account ALIAS still resolves
+    assert terminal.opened_tabs[0].command[:2] == (os.environ.get("SHELL") or "/bin/zsh", "-lic")
+    assert terminal.opened_tabs[0].command[3:] == (
         "account-two", "--resume", "session-one", "--model", "fable",
     )
 
@@ -2321,7 +2278,7 @@ def test_parked_rename_uses_only_the_owning_harness_title_store(
 
     outcome = application.registry.plugin(harness).controller.execute(
         request,
-        control_context(session, ParkedTerminal()),
+        control_context(session, FakeTerminal().plugin(), window_id=None),
     )
 
     assert outcome.status == "acknowledged"

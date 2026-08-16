@@ -15,11 +15,11 @@
 # deliberately never exposes a filesystem path to script, and no clipboard API
 # (`clipboardData.getData`, `navigator.clipboard.read`) will surface
 # `public.file-url`. The paste event's text flavor is the bare name, which is
-# not what the user copied and not what kitty pastes.
+# not what the user copied and not what the terminal pastes.
 #
 # So the page cannot answer this question and the SERVER must: the dashboard
-# runs on the same Mac as the pasteboard, so it reads the same flavor kitty
-# reads. That is the whole trick — the browser reports WHICH file (basename +
+# runs on the same Mac as the pasteboard, so it reads the same flavor the
+# terminal reads. That is the whole trick — the browser reports WHICH file (basename +
 # zero bytes), the server supplies WHERE it is.
 #
 # Read-only, no caching (a pasteboard is live state — a stale answer is a wrong

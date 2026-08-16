@@ -23,7 +23,6 @@ import os
 import time
 
 from core import env as EV
-from plugins.claude_code.transcript import tail_lines
 
 # How much of a transcript's tail session_model() scans for the last assistant
 # turn: the latest turn is near the end, so a bounded read stays cheap even on
@@ -147,80 +146,6 @@ def context_used(usage):
             + int(usage.get("cache_read_input_tokens") or 0))
 
 
-def fm_field(path, field):
-    """Scalar field from a markdown file's YAML frontmatter (the first
-    --- ... --- block); None when absent/unreadable."""
-    try:
-        with open(path, encoding="utf-8", errors="replace") as fh:
-            if fh.readline().strip() != "---":
-                return None
-            for line in fh:
-                if line.strip() == "---":
-                    break
-                k, sep, v = line.partition(":")
-                if sep and k.strip() == field:
-                    return v.strip().strip('"\'') or None
-    except Exception:
-        return None
-    return None
-
-
-def agent_def_file(atype):
-    """The DEFINITION file for an agent type, if any. Identity is the frontmatter
-    `name:` (docs); fall back to the filename stem. Project defs shadow user defs.
-    Searches agents across ALL ancestor .claude dirs (claude_dirs), not just
-    os.getcwd()/.claude: a teammate/subagent frequently runs in a subdirectory or
-    a git worktree where <cwd>/.claude is absent OR is a stub without agents/
-    (e.g. a task's db/.claude), which would otherwise miss the def and drop
-    `effort:`/`model:` to the session/user default. Nearest-first, ~/.claude last."""
-    roots = [os.path.join(c, "agents") for c in claude_dirs()]
-    stem_hit = None
-    for r in roots:
-        if not os.path.isdir(r):
-            continue
-        for dp, _dirs, files in os.walk(r):
-            for f in files:
-                if not f.endswith(".md"):
-                    continue
-                p = os.path.join(dp, f)
-                if fm_field(p, "name") == atype:
-                    return p
-                if os.path.splitext(f)[0] == atype and stem_hit is None:
-                    stem_hit = p
-    return stem_hit
-
-
-def def_field(def_file, field):
-    """A frontmatter field from an agent definition; "inherit"/unset -> None so
-    resolution falls through to what the agent actually ran / the session default."""
-    v = fm_field(def_file, field) if def_file else None
-    return None if (not v or v == "inherit") else v
-
-
-def settings_field(field, start=None, env_pin=True, config=None):
-    """A field from the merged settings (project overriding global). Layered
-    across ALL ancestor .claude dirs (claude_dirs, nearest-first) for the same
-    subdir/worktree reason as agent_def_file — else a teammate in a subdirectory
-    skips the project settings and falls straight through to ~/.claude. First
-    non-empty wins; settings.local.json shadows settings.json per dir.
-    `start`/`env_pin`/`config` pass through to claude_dirs — an out-of-process
-    reader (the dashboard) resolves for a SESSION's cwd and account config
-    dir, not its own (same reason slashcmds passes start/env_pin)."""
-    paths = []
-    for c in claude_dirs(start=start, env_pin=env_pin, config=config):
-        paths += [os.path.join(c, "settings.local.json"),
-                  os.path.join(c, "settings.json")]
-    for p in paths:
-        try:
-            with open(p, encoding="utf-8") as fh:
-                v = json.load(fh).get(field)
-            if v:
-                return v
-        except Exception:
-            pass
-    return None
-
-
 def settings_env(key, nearest_only=False):
     """The merged value of `key` from the `env` block of the settings files, or "".
     Per .claude dir (claude_dirs, nearest-first — nearest_only limits the walk to the
@@ -245,91 +170,6 @@ def settings_env(key, nearest_only=False):
     return ""
 
 
-def session_model(tpath):
-    """The model VERSION the parent session runs (e.g. "claude-opus-4-8"), from
-    the last assistant turn in its transcript. Gives a precise version for agents
-    that INHERIT, before the agent's own first turn reveals it. Tail-scan only
-    (TAIL_SCAN_BYTES — see its comment)."""
-    lines = tail_lines(tpath, TAIL_SCAN_BYTES)
-    if lines is None:
-        return None
-    last = None
-    for line in lines:
-        if b'"assistant"' in line and b'"model"' in line:
-            try:
-                m = (json.loads(line).get("message") or {}).get("model")
-            except Exception:
-                continue
-            if m:
-                last = m
-    return last
-
-
-def parent_resolved_model(tpath, agent_id):
-    """The authoritative resolved model (carrying [1m]) is recorded in the PARENT
-    transcript on the agent's Task result — but only at completion. Best-effort:
-    scans tpath for the agentId; None if not written yet (callers fall back)."""
-    try:
-        hit = None
-        with open(tpath, encoding="utf-8", errors="replace") as fh:
-            for line in fh:
-                if agent_id not in line or "resolvedModel" not in line:
-                    continue
-                try:
-                    tur = (json.loads(line).get("toolUseResult") or {})
-                except Exception:
-                    continue
-                if tur.get("agentId") == agent_id and tur.get("resolvedModel"):
-                    hit = tur["resolvedModel"]
-        return hit
-    except Exception:
-        return None
-
-
-def parent_tool_result(line, tool_use_id):
-    """Whether this raw PARENT-transcript JSONL line carries the tool_result that
-    resolves `tool_use_id` (the agent's Task/Agent call, from its meta.json
-    `toolUseId`) — and if so, its is_error flag: True == the user REJECTED /
-    cancelled the call ("The user doesn't want to proceed with this tool use").
-    Returns None when the line isn't that result.
-
-    This is the authoritative "the subagent is done" signal for the cases the
-    hooks miss: a rejected or otherwise-abandoned Task fires NO SubagentStop and
-    leaves meta.json WITHOUT `stoppedByUser`, so the substream's usual end signals
-    never come. The parent transcript still records the Task's tool_result the
-    instant the call resolves (completed, rejected, or cancelled) — an EVENT, not
-    an idle timeout, so watching for it recovers the gap without the backstop that
-    false-positived on long thinks.
-
-    EXCEPTION — the async-launch ack: an ASYNC (background) agent's Task resolves
-    IMMEDIATELY with a synthetic "Async agent launched successfully" tool_result
-    (is_error absent) that means "launched", NOT "finished" — the agent then runs
-    for minutes producing its whole transcript. Treating that ack as resolution
-    ended the streamer ~2s in with 0 lines rendered (the agent's work never
-    reached the mirror). So the ack is NOT a resolution: return None for it and
-    let the streamer tail on to the authoritative SubagentStop sentinel."""
-    if not tool_use_id or tool_use_id not in line:
-        return None
-    try:
-        content = (json.loads(line).get("message") or {}).get("content")
-    except Exception:
-        return None
-    if not isinstance(content, list):
-        return None
-    for b in content:
-        if (isinstance(b, dict) and b.get("type") == "tool_result"
-                and b.get("tool_use_id") == tool_use_id):
-            if not b.get("is_error"):
-                txt = b.get("content")
-                if isinstance(txt, list):
-                    txt = " ".join(x.get("text", "") for x in txt
-                                   if isinstance(x, dict))
-                if isinstance(txt, str) and "launched successfully" in txt:
-                    return None   # async launch ack — not a real resolution
-            return bool(b.get("is_error"))
-    return None
-
-
 def agent_meta(tpath, agent_id):
     """The agent's meta.json sidecar (present at SubagentStart for teammates; may
     lag a beat for ordinary subagents, so retry briefly). Carries
@@ -349,28 +189,6 @@ def agent_meta(tpath, agent_id):
         except Exception:
             break
     return {}
-
-
-def effort_config(def_file):
-    """Configured effort in the documented precedence (model-config docs: "The
-    environment variable takes precedence over all other methods … Frontmatter
-    effort … overriding the session level but not the environment variable"):
-    env > agent-def frontmatter `effort` > session `effortLevel`. "" when none —
-    callers fall to model_default_effort on the model actually running."""
-    return ((os.environ.get("CLAUDE_CODE_EFFORT_LEVEL") or "").strip()
-            or def_field(def_file, "effort") or settings_field("effortLevel") or "")
-
-
-def model_default_effort(model):
-    if not model:
-        return ""
-    m = model.lower()
-    if "opus-4-7" in m:
-        return "xhigh"
-    if any(t in m for t in ("opus-5", "opus-4-8", "opus-4-6", "sonnet-5",
-                            "sonnet-4-6", "fable-5")):
-        return "high"
-    return ""                                # models without adaptive reasoning
 
 
 def short_model(model):
@@ -415,9 +233,3 @@ def family(model):
     return None
 
 
-def ladder_from(fam):
-    """The MODEL_LADDER suffix starting at family `fam` — the models to try,
-    best first, once `fam`'s quota is gone (("opus", "sonnet") from "opus"). ()
-    when `fam` is not a ladder rung (haiku / None / unknown): the caller then
-    keeps the current model rather than inventing a downgrade."""
-    return MODEL_LADDER[MODEL_LADDER.index(fam):] if fam in MODEL_LADDER else ()

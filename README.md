@@ -100,9 +100,11 @@ pluggable:
 
 ```
 core/        tool- and terminal-agnostic runtime   (imports only core)
-frontends/   terminal adapters — kitty today       (import core at most)
+terminal/    the terminal concern, whole: contract + models, the panes it
+             paints, and terminal/impl/<name>/ — one directory per terminal
+             (kitty today), the only place a terminal's name appears
 plugins/     one adapter per agent tool:
-             claude_code · codex · otel            (import core + frontends)
+             claude_code · codex · otel            (import core + terminal)
 bin/         executable entry scripts (claude-*.py) — filenames are load-bearing
 ```
 

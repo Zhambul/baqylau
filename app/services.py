@@ -21,11 +21,13 @@ from contracts.harness import (
     TerminalSessionState,
     UsageRow,
 )
-from contracts.terminal import SessionTerminal, TabRequest, TerminalControl, TerminalScreen
 from domain.ids import SessionId
 from runtime.harnesses import HarnessRegistry
 from runtime.sessions import SessionStore
 from runtime.projections import SessionQueries
+from terminal.adapter import TerminalAdapter
+from terminal.contract import TerminalPlugin, TerminalTabs, TerminalViewport
+from terminal.launch import launch_tab_request
 from app.usage import UsageSource
 
 
@@ -76,11 +78,13 @@ class HarnessControlService(HarnessReactorContext):
     def __init__(
         self,
         sessions: SessionStore,
-        terminal: TerminalControl,
+        terminal: TerminalAdapter,
+        plugin: TerminalPlugin,
         queries: SessionQueries,
     ) -> None:
         self.sessions = sessions
         self.terminal = terminal
+        self.plugin = plugin
         self.queries = queries
 
     def execute(self, request: ControlRequest) -> ControlOutcome:
@@ -115,7 +119,8 @@ class HarnessControlService(HarnessReactorContext):
             request,
             ControlContext(
                 session=session,
-                terminal=self.terminal,
+                terminal=self.plugin,
+                terminal_window_id=self.terminal.window_for_session(request.session_id),
                 current_model=summary.model if summary is not None else None,
                 current_effort=summary.effort if summary is not None else None,
                 current_account=summary.account if summary is not None else None,
@@ -125,9 +130,15 @@ class HarnessControlService(HarnessReactorContext):
 
 
 class HarnessLauncherService:
-    def __init__(self, registry: HarnessRegistry, terminal: SessionTerminal) -> None:
+    def __init__(
+        self,
+        registry: HarnessRegistry,
+        terminal: TerminalAdapter,
+        tabs: TerminalTabs,
+    ) -> None:
         self.registry = registry
         self.terminal = terminal
+        self.tabs = tabs
 
     def launch(self, harness: str, request: LaunchRequest) -> LaunchResult:
         plugin = self.registry.plugin(harness)
@@ -141,14 +152,12 @@ class HarnessLauncherService:
             plan = plugin.launcher.prepare(request)
         except LaunchRejected as error:
             return LaunchResult("rejected", reason=str(error))
-        terminal_result = self.terminal.open_tab(
-            TabRequest(
-                working_directory=request.working_directory,
-                command=(plan.command, *plan.arguments),
-                title=plan.title,
-                environment=plan.environment,
-            )
-        )
+        terminal_result = self.tabs.open_tab(launch_tab_request(
+            request.working_directory,
+            (plan.command, *plan.arguments),
+            title=plan.title,
+            environment=plan.environment,
+        ))
         if not terminal_result.succeeded:
             return LaunchResult("rejected", reason=terminal_result.reason)
         if terminal_result.window_id is None:
@@ -186,12 +195,12 @@ class TerminalInputService:
     def __init__(
         self,
         sessions: SessionStore,
-        terminal: SessionTerminal,
-        screen: TerminalScreen,
+        terminal: TerminalAdapter,
+        viewport: TerminalViewport,
     ) -> None:
         self.sessions = sessions
         self.terminal = terminal
-        self.screen = screen
+        self.viewport = viewport
 
     def read(self, session_id: SessionId) -> TerminalInputState | None:
         return self.state(session_id).input_state
@@ -201,7 +210,7 @@ class TerminalInputService:
         session = self.sessions.find_by_id(session_id)
         plugin = session.plugin if session is not None else None
         input_state = (
-            plugin.terminal_probe.input_state(self.screen, window_id)
+            plugin.terminal_probe.input_state(self.viewport, window_id)
             if window_id is not None
             and plugin is not None
             and plugin.terminal_probe is not None

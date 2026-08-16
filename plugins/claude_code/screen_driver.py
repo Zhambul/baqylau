@@ -9,17 +9,6 @@ POLL_SECONDS = 0.15
 SCREEN_LIMIT = 2000
 
 
-def clip_screen(screen: str, limit: int = SCREEN_LIMIT) -> str:
-    if not screen or len(screen) <= limit:
-        return screen
-    half = limit // 2
-    return (
-        screen[:half]
-        + f"\n…[{len(screen) - limit} chars elided]…\n"
-        + screen[-half:]
-    )
-
-
 def poll_until(
     terminal,
     window_id: str,

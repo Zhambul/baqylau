@@ -195,10 +195,10 @@ const NO_WINDOW = "this session is parked — there is no terminal to type into"
    the row on its destructive end, and resume is the parked-only counterpart. */
 function chromeActions(sessionView, meta) {
   const act = el("div", "actrow");
-  const windowed = !!(meta.live && meta.kitty_window_id);
+  const windowed = !!(meta.live && meta.terminal_window_id);
   // rename: deliberately OUTSIDE the live gate — it works for live AND parked
   // sessions (the server appends the agent-name naming record to the
-  // transcript; a live kitty tab also retitles in place — docs/dashboard.md
+  // transcript; a live terminal tab also retitles in place — docs/dashboard.md
   // "Web rename")
   const ren = el("button", "sstop actses", "✎ rename");
   ren.dataset.tip = "rename this session (resume picker + tab)";
@@ -287,7 +287,7 @@ function chromeActions(sessionView, meta) {
   };
   sessionView.stopMode(liveTab());
   act.append(rew, stop);       // rewind before stop — the row ends destructive
-  // close: closes the session's kitty tab — a graceful stop (Claude Code
+  // close: closes the session's terminal tab — a graceful stop (Claude Code
   // exits on the HUP and SessionEnd runs the normal lifecycle).
   // Two-step confirm: first click arms for 4s, second click fires.
   const cls = el("button", "sstop actses", "✕ close");
@@ -345,7 +345,7 @@ function chromeActions(sessionView, meta) {
    parked session they are all greyed rather than absent (see gate()). */
 function chromeQuickCmds(sessionView, meta) {
   const act2 = el("div", "actrow");
-  const windowed = !!(meta.live && meta.kitty_window_id);
+  const windowed = !!(meta.live && meta.terminal_window_id);
   // compact: two-step confirm like close — a misclick summarizes the whole
   // conversation out from under you, so it arms first. Built first, APPENDED
   // last: the two pickers lead the row (see the append order below).

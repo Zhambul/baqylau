@@ -215,7 +215,7 @@ const favData = (extra) =>
 const FAVICON = favData("");
 const FAVICON_ASK = favData("<circle contextWindow='168' cy='32' r='30' fill='#e06c75'/>");
 
-// tab state → pill class (the dot/ring color, mirroring the kitty tab
+// tab state → pill class (the dot/ring color, mirroring the terminal tab
 // palette) + its needs-you-first sort rank. Anything unmapped — idle, or ""
 // for a tabless headless/daemon session — is the grey idle pill.
 const ATTN_CLASS = {

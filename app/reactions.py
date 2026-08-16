@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import replace
 
 from contracts.harness import CanonicalEventReaction, Session
-from contracts.terminal import SessionPaneRequest
 from domain.events import (
     CanonicalEvent,
     OperationFinished,
@@ -19,7 +18,7 @@ from runtime.operation_output import OperationOutputStore
 from runtime.recorder import RawEventRecorder
 from runtime.sessions import SessionStore
 from app import pane_preferences
-from app.session_terminal import ApplicationTerminal
+from terminal.adapter import SessionPaneRequest, TerminalAdapter
 
 
 class SessionUpsertCanonicalEventReaction(CanonicalEventReaction):
@@ -112,7 +111,7 @@ class PaneCanonicalEventReaction(CanonicalEventReaction):
     """The terminal display: open the session's panes at the window its own
     evidence recorded, close them when the session finishes."""
 
-    def __init__(self, terminal: ApplicationTerminal, sessions: SessionStore) -> None:
+    def __init__(self, terminal: TerminalAdapter, sessions: SessionStore) -> None:
         self.terminal = terminal
         self.sessions = sessions
 

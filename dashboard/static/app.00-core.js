@@ -85,8 +85,8 @@ const S = {
 
 const ARCHIVE_S = 3 * 86400;   // sessions older than this fold into "archived"
 const ARM_MS = 4000;   // two-step-confirm window (card ✕ / header ✕ / compact)
-// A just-launched session's kitty pane isn't tagged claude_session=<sessionId> for a
-// moment, so /api/session reports live:true with a blank kitty_window_id — the
+// A just-launched session's terminal pane isn't tagged claude_session=<sessionId> for a
+// moment, so /api/session reports live:true with a blank terminal_window_id — the
 // startup tag-race. showSession re-fetches meta until the window resolves so the
 // composer + ✕ close button don't stay stuck (docs/dashboard.md, *Launch tag-
 // race*). Bounded — a truly headless session never tags a window.

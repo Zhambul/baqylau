@@ -1,8 +1,8 @@
 """Server-side execution of the terminal pane keybinding gestures.
 
 The keybinding process is a thin HTTP client (`app/terminal_panes.py`): it can
-only observe its own environment — the kitty window the keypress landed in and
-the working directory — and ships both here. Everything the gesture *does*
+only observe its own environment — the terminal window the keypress landed in
+and the working directory — and ships both here. Everything the gesture *does*
 (session lookup, pane control, remembered widths) runs in the daemon, on the
 one application graph.
 """
@@ -13,6 +13,7 @@ from dataclasses import dataclass
 
 from core import audit
 from app import pane_preferences
+from terminal.adapter import TerminalAdapter
 
 COMMANDS = frozenset({"toggle", "grow", "shrink", "reset", "setpct"})
 
@@ -25,7 +26,7 @@ class PaneCommandOutcome:
 
 
 class PaneCommandService:
-    def __init__(self, terminal) -> None:
+    def __init__(self, terminal: TerminalAdapter) -> None:
         self._terminal = terminal
 
     def execute(

@@ -25,7 +25,6 @@ import glob
 import os
 import re
 import sqlite3
-import time
 
 _CODEX_DIR = os.path.join(os.path.expanduser("~"), ".codex")
 _UUID = re.compile(r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
@@ -35,54 +34,6 @@ TITLE_HEAD_LINES = 200   # rollout head lines the first-prompt fallback scans
 
 _STATE_DB = {}          # _CODEX_DIR -> (deadline, resolved path)
 STATE_DB_TTL_S = 60.0   # how long a resolved index path is trusted (see below)
-
-
-def _state_db_cached():
-    """`_state_db()` behind a small per-directory TTL memo.
-
-    The RESOLUTION is a glob of ~/.codex plus a regex per candidate, and the
-    only thing that can change its answer is codex shipping a HIGHER-numbered
-    index file — which happens on a codex upgrade, not during a page tick. The
-    plain resolver stays the one that knows HOW (and the tests drive it), this
-    is only about how often. It matters because `title_sig` runs on every title
-    lookup — per codex session card, per slow tick — where the un-memoised glob
-    would be the most expensive thing in a path that exists to be cheap.
-
-    Keyed on `_CODEX_DIR` and read at CALL time, never at import: the tests
-    monkeypatch that global, and a key that captured it would serve one test's
-    directory to the next. A NEGATIVE answer is never cached — "there is no
-    index yet" is the one answer that flips on its own (a first codex run, a
-    fixture that writes the file after the first read), and a miss is a glob of
-    a directory we just found nothing in."""
-    hit = _STATE_DB.get(_CODEX_DIR)
-    now = time.time()
-    if hit and hit[0] > now:
-        return hit[1]
-    db = _state_db()
-    if db:
-        _STATE_DB[_CODEX_DIR] = (now + STATE_DB_TTL_S, db)
-    return db
-
-
-def state_sig():
-    """A freshness stamp for the codex state INDEX — "<mtime>:<size>" of the
-    resolved `state_<N>.sqlite`, or "" when there is none.
-
-    This is what makes a codex rename VISIBLE on the web: the name lives in the
-    index's `threads.title`, so renaming leaves the rollout byte-identical and
-    the read model's (path, size) title memo would serve the old name forever
-    (dashboard/read/cache.size_cached's `sig`). A stat is deliberately the whole
-    test — it is coarse (any thread's rename re-computes every codex session's
-    title) and that is the right trade for a memo whose miss costs one small
-    query, where the alternative is a per-uuid read on every tick."""
-    db = _state_db_cached()
-    if not db:
-        return ""
-    try:
-        st = os.stat(db)
-    except OSError:
-        return ""
-    return "%d:%d" % (st.st_mtime_ns, st.st_size)
 
 
 def _state_db():
@@ -106,69 +57,6 @@ def _thread_uuid(path):
     host), or "" — read out of the `rollout-<ts>-<uuid>.jsonl` filename."""
     m = _UUID.search(os.path.basename(path or ""))
     return m.group(1) if m else ""
-
-
-def _thread_title(uuid):
-    """threads.title for `uuid` from the codex state index, or "" (no index, no
-    row, an unreadable/other-shaped DB — all degrade to "")."""
-    db = _state_db()
-    if not db or not uuid:
-        return ""
-    try:
-        conn = sqlite3.connect("file:%s?mode=ro" % db, uri=True, timeout=1.0)
-        try:
-            row = conn.execute("SELECT title FROM threads WHERE id=?",
-                               (uuid,)).fetchone()
-        finally:
-            conn.close()
-    except Exception:
-        return ""
-    return (row[0] or "").strip() if row and row[0] else ""
-
-
-def _first_prompt(path):
-    """The first real user prompt in a rollout's head, one line, capped — the
-    fallback title when the state index has none. Bounded to TITLE_HEAD_LINES."""
-    from plugins.codex import rollout as RO
-    import json
-    try:
-        with open(path, encoding="utf-8", errors="replace") as fh:
-            for i, raw in enumerate(fh):
-                if i >= TITLE_HEAD_LINES:
-                    break
-                raw = raw.strip()
-                if not raw or ('"user_message"' not in raw and '"message"' not in raw):
-                    continue
-                try:
-                    rec = RO.parse(json.loads(raw))
-                except Exception:
-                    continue
-                if not rec:
-                    continue
-                if rec["kind"] == "prompt" and rec["text"].strip():
-                    return rec["text"].strip().split("\n", 1)[0][:200]
-                if rec["kind"] == "chat" and rec.get("role") == "user" \
-                        and not rec.get("synthetic") and rec["text"].strip():
-                    return rec["text"].strip().split("\n", 1)[0][:200]
-    except OSError:
-        return ""
-    return ""
-
-
-def session_title(path):
-    """Display title for a codex rollout: threads.title from the state index,
-    else the first real user prompt in the rollout head, else "". Behind
-    plugins.session_title."""
-    return _thread_title(_thread_uuid(path)) or _first_prompt(path)
-
-
-def title_and_rename(path):
-    """(title, tail_rename) — the display title plus any rename record still in a
-    reconcilable window. codex keeps the name in its state index, NOT in the
-    rollout, so there is no in-file rename to reconcile: tail_rename is always ""
-    and the dashboard's durable web-rename override stands unchallenged. Behind
-    plugins.title_and_rename."""
-    return session_title(path), ""
 
 
 def renameable(path):

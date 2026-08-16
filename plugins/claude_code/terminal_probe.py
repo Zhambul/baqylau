@@ -3,20 +3,21 @@
 from __future__ import annotations
 
 from contracts.harness import HarnessTerminalProbe, TerminalInputState
-from contracts.terminal import TerminalScreen
 from plugins.claude_code import suggestion
+from terminal.contract import TerminalViewport
+from terminal.models import ScreenReadRequest
 
 
 class ClaudeCodeTerminalProbe(HarnessTerminalProbe):
     def input_state(
         self,
-        screen: TerminalScreen,
+        viewport: TerminalViewport,
         window_id: str,
     ) -> TerminalInputState | None:
-        screen_text = screen.read_screen(window_id, ansi=True)
-        if screen_text is None:
+        screen = viewport.read_screen(ScreenReadRequest(window_id, ansi=True))
+        if screen.text is None:
             return None
         return TerminalInputState(
-            typed_text=suggestion.typed(screen_text.text) or "",
-            suggestion=suggestion.parse(screen_text.text),
+            typed_text=suggestion.typed(screen.text) or "",
+            suggestion=suggestion.parse(screen.text),
         )

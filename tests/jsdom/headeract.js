@@ -129,7 +129,7 @@ const CC_RW = [{ mode: "both", label: "restore code and conversation" },
 const CC_CAPS = { interrupt: true, close: true, rename: true,
                   rewind: true, migrate: true, compact: true,
                   model: true, effort: true, answer: true, plan: true };
-const LIVE = { live: true, kitty_window_id: "7", workingDirectory: "/w", prompts: 9,
+const LIVE = { live: true, terminal_window_id: "7", workingDirectory: "/w", prompts: 9,
                quick_commands: CC_CMDS, rewind_modes: CC_RW,
                caps: CC_CAPS };
 // …and a session owned by a DIFFERENT host: it compacts and switches model or
@@ -149,10 +149,10 @@ const out = {
   fresh: bar({ ...LIVE, prompts: 1 }, ""),
   // no count to be had (a transcript no parser speaks) — never a reason to grey
   unknown: bar({ ...LIVE, prompts: null }, ""),
-  parked: bar({ ...LIVE, live: false, kitty_window_id: "" }, ""),
+  parked: bar({ ...LIVE, live: false, terminal_window_id: "" }, ""),
   // a parked row with no directory recorded: ↻ resume has nowhere to go, so it
   // GREYS with the reason instead of not being built (the bar's own rule)
-  nodir: bar({ ...LIVE, live: false, kitty_window_id: "", workingDirectory: "" }, ""),
+  nodir: bar({ ...LIVE, live: false, terminal_window_id: "", workingDirectory: "" }, ""),
   // the other host, at ONE prompt: its ⊜ compact stays reachable (it declares
   // no floor — Claude Code's 2 was a client constant applied to everyone) while
   // ↶ rewind greys on the cap
@@ -162,7 +162,7 @@ const out = {
   autorename: {
     idle: autoRename(LIVE, ""),
     asking: autoRename(LIVE, "awaiting_attention"),
-    parked: autoRename({ ...LIVE, live: false, kitty_window_id: "" }, ""),
+    parked: autoRename({ ...LIVE, live: false, terminal_window_id: "" }, ""),
     // an EMPTY conversation: bare /rename bounces ("no conversation context
     // yet"), so the button says so; an unknown count never greys (⊜'s rule)
     empty: autoRename({ ...LIVE, prompts: 0 }, ""),

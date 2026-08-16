@@ -7,5 +7,8 @@ pytest-timeout>=2.3
 pytest-xdist>=3.5
 pygments>=2.17
 wenmode>=0.9
-# Linter (make lint) — pinned exactly so CI findings match local runs.
+# Linters (make lint) — pinned exactly so CI findings match local runs. vulture
+# is the cross-module dead-code pass ruff cannot do; its whitelists are
+# vulture-allowlist.py (protocol names) and vulture-baseline.py (the backlog).
 ruff==0.15.21
+vulture==2.16

@@ -29,12 +29,12 @@ CANONICAL_MODULES = (
 IMPORT_PROGRAM = """
 import importlib
 import sys
-import frontends
+import terminal.impl
 module = sys.argv[1]
 sys.argv = ['import-safety-test']
 def fail(*arguments, **keywords):
-    raise AssertionError('frontend resolved at import time')
-frontends.get = fail
+    raise AssertionError('terminal resolved at import time')
+terminal.impl.resolve = fail
 importlib.import_module(module)
 print('OK')
 """
@@ -71,7 +71,7 @@ import sys
 importlib.import_module(sys.argv[1])
 forbidden = {
     'core.ops', 'core.state', 'core.sessionapi', 'core.mdrender',
-    'dashboard.presenter', 'terminal.presenter', 'pygments', 'wenmode',
+    'dashboard.presenter', 'terminal.mirror.presenter', 'pygments', 'wenmode',
 }
 loaded = sorted(forbidden.intersection(sys.modules))
 if loaded:

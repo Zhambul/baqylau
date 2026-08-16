@@ -279,7 +279,7 @@ function sessionCard(row) {
   return a;
 }
 // the list-card ✕ — POST /api/session/<sessionId>/stop, the same graceful tab
-// close as the session header's "✕ close" (kitty HUPs the tab, Claude Code
+// close as the session header's "✕ close" (the terminal HUPs the tab, Claude Code
 // exits, SessionEnd parks the mirror), with the same two-step confirm: first
 // click arms ("close?") for 4 s, second fires. Lives inside the card <a>, so
 // clicks must not bubble into a navigation. No hash change on success — the
@@ -434,7 +434,7 @@ function updateHeadFromList() {
   // Keep the header's live/window state honest against the authoritative global
   // snapshot. `meta` is fetched ONCE at session-open, so a session opened during
   // its startup tag-race — the launch jumps straight to the new sessionId, but its
-  // kitty pane isn't tagged claude_session=<sessionId> yet, so the server momentarily
+  // terminal pane isn't tagged claude_session=<sessionId> yet, so the server momentarily
   // reports it not-live (or live-but-window-not-yet-resolved during the grace) —
   // would otherwise FREEZE on that reading: the parked chip stuck on and every
   // live-gated action (stop/cancel/rewind/close/quick-commands) missing, so the
@@ -444,7 +444,7 @@ function updateHeadFromList() {
   // each second) — and not while drilled into a subagent (renderSessionChrome
   // clears agentFocus; the ← session rebuild picks it up on the way back) or mid
   // inline-rename. The window compare is gated on sessionIsLive(row): for a LIVE row the
-  // list now serves the SAME live-RESOLVED kitty_window_id meta does (aligned in
+  // list now serves the SAME live-RESOLVED terminal_window_id meta does (aligned in
   // sessions_payload — both blank until the pane is tagged, then the same id),
   // so this compare is apples-to-apples and only a REAL window move (or the
   // tag-race resolving blank→id, once) rebuilds the header. It used to serve the
@@ -454,10 +454,10 @@ function updateHeadFromList() {
   // never compared.
   const m = S.sessionView.meta;
   const winMoved = sessionIsLive(row)
-    && (m && m.kitty_window_id || "") !== (sessionWindowId(row) || "");
+    && (m && m.terminal_window_id || "") !== (sessionWindowId(row) || "");
   if (m && (!!m.live !== !!sessionIsLive(row) || winMoved)) {
     m.live = sessionIsLive(row);
-    m.kitty_window_id = sessionWindowId(row);
+    m.terminal_window_id = sessionWindowId(row);
     m.parked = sessionIsParked(row);
     const renaming = S.sessionView.projEl && S.sessionView.projEl.querySelector("input");
     if (!S.sessionView.agentFocus && !S.sessionView.monitorFocus && !S.sessionView.jobFocus && !renaming)

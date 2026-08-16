@@ -1,10 +1,18 @@
-"""Harness-neutral login-shell command construction."""
+"""How a harness CLI is started in a terminal tab.
+
+Not a presenter: this is the launch CONVENTION every caller that opens a tab
+for a CLI shares — the command runs under a login shell, because a harness CLI
+is routinely a shell alias or a function that only exists once the user's own
+shell has been initialised.
+"""
 
 from __future__ import annotations
 
 import os
 import re
 import shlex
+
+from terminal.models import TabOpenRequest
 
 SUPPORTED_LOGIN_SHELLS = frozenset({"bash", "zsh"})
 ENVIRONMENT_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -29,3 +37,18 @@ def login_shell_command(
         f"{name}={shlex.quote(value)} " for name, value in environment
     )
     return (shell, "-lic", f'{assignments}{executable} "$@"', executable, *arguments)
+
+
+def launch_tab_request(
+    working_directory: str,
+    command: tuple[str, ...],
+    title: str = "",
+    environment: tuple[tuple[str, str], ...] = (),
+) -> TabOpenRequest:
+    """The tab request for running a harness CLI — the one construction site of
+    the login-shell convention, shared by every caller that starts one."""
+    return TabOpenRequest(
+        working_directory=working_directory,
+        command=login_shell_command(command, environment),
+        title=title,
+    )
