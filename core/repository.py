@@ -1,4 +1,4 @@
-"""Application-owned repository and worktree queries."""
+"""Git repository and worktree facts about a directory on this machine."""
 
 from __future__ import annotations
 

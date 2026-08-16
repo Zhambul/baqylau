@@ -19,7 +19,7 @@ from terminal.panes import commands as pane_commands
 from terminal.panes import client as terminal_panes
 from harness.hooks.gateway import HookGatewayService, UnknownHookHarness
 from harness.impl import installed
-from app.reactions import OperationOutputCanonicalEventReaction
+from engine.interpret.reactions import OperationOutputCanonicalEventReaction
 from harness.models import (
     AnswerQuestion,
     AttachmentReference,
@@ -105,12 +105,12 @@ from harness.impl.codex.canonical.translator import (
 from harness.impl.codex.hooks import gateway as codex_hooks
 from harness.impl.codex.canonical import rollout as codex_rollout
 from harness.impl.codex.controls.controller import _rollout_abort_state
-from engine.recorder import EventIdentityConflict, RawEventRecorder
+from engine.store.recorder import EventIdentityConflict, RawEventRecorder
 from canonical_runtime import CanonicalRuntime
-from engine.evidence import EvidenceQueries
-from app.core_translators import LivenessTranslator, OperationOutputTranslator
-from app.interpreter import Interpreter
-from app.reactions import (
+from engine.queries.evidence import EvidenceQueries
+from engine.interpret.translators import LivenessTranslator, OperationOutputTranslator
+from engine.interpret.loop import Interpreter
+from engine.interpret.reactions import (
     SessionUpsertCanonicalEventReaction,
 )
 from terminal.panes.reaction import PaneCanonicalEventReaction
@@ -131,7 +131,7 @@ class _QuietLiveness:
 
 @pytest.fixture(autouse=True)
 def quiet_liveness(monkeypatch):
-    monkeypatch.setattr("app.interpreter.SessionLivenessSource", _QuietLiveness)
+    monkeypatch.setattr("engine.interpret.loop.SessionLivenessSource", _QuietLiveness)
 
 
 def hook_request(

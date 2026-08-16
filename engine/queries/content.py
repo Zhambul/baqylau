@@ -17,7 +17,7 @@ from domain.events import (
 )
 from domain.ids import CanonicalEventId, OperationId
 from domain.values import StructuredContent, TextContent
-from engine.canonical_store import CanonicalEventStore
+from engine.store.canonical import CanonicalEventStore
 from engine.projections import SessionQueries
 
 

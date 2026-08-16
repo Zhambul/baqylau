@@ -13,7 +13,7 @@ from core.repository import RepositoryQueries
 from harness.models import TerminalSessionState
 from domain.ids import SessionId
 from domain.values import TokenUsage
-from engine.canonical_store import CanonicalEventStore
+from engine.store.canonical import CanonicalEventStore
 from engine.projections import SessionQueries
 
 

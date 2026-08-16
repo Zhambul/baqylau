@@ -18,7 +18,7 @@ from dashboard.highlight import source_ansi
 from dashboard.presenter import DashboardItem, DashboardPresenter
 from domain.ids import ActorId, AttentionId, OperationId, SessionId
 from domain.values import Content, StructuredContent, TextContent
-from engine.canonical_store import CanonicalEventStore
+from engine.store.canonical import CanonicalEventStore
 from engine.projections import (
     ActorSummary,
     ActivityStatistics,

@@ -69,8 +69,8 @@ from domain.values import (
     TextContent,
     TokenUsage,
 )
-from engine.canonical_store import CanonicalEventPage, CanonicalEventStore, StoredCanonicalEvent
-from engine.sessions import SessionStore
+from engine.store.canonical import CanonicalEventPage, CanonicalEventStore, StoredCanonicalEvent
+from engine.store.sessions import SessionStore
 
 
 @dataclass(frozen=True)

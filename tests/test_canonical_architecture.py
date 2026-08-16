@@ -86,9 +86,9 @@ def test_the_harness_implementations_never_import_the_application():
             "terminal.contract", "terminal.models", "terminal.adapter", "terminal.launch",
             # the hook client and the otel receiver run OUTSIDE the daemon: one
             # observes its own window, both append evidence and exit
-            "terminal.impl", "engine.recorder",
+            "terminal.impl", "engine.store.recorder",
             # the stores the services read a session's own facts from
-            "engine.projections", "engine.sessions",
+            "engine.projections", "engine.store.sessions",
         },
     )
 
@@ -163,10 +163,17 @@ def test_no_terminal_is_named_outside_its_own_implementation():
     assert violations == []
 
 
-def test_runtime_imports_only_domain_and_the_harness_contract():
+def test_the_engine_imports_only_the_domain_and_the_harness_contract():
+    """The engine is the neutral middle: evidence in, facts out.
+
+    It may stand on the floor (`core/`, `diagnostics/`) and name the harness
+    CONTRACT, because it drives plugins it is handed. Reaching UP — for `app/`,
+    `api/`, `dashboard/`, `terminal/` or a concrete harness — would mean the
+    store could only run inside the daemon that composes it.
+    """
     assert_imports(
         "engine",
-        {"domain", "engine"},
+        {"core", "diagnostics", "domain", "engine"},
         allowed_modules={"harness.contract", "harness.models", "harness.registry"},
     )
 
@@ -184,7 +191,7 @@ def test_the_diagnostic_write_tier_is_a_floor_and_the_read_tier_is_the_daemons()
         for path, imported in imports_under(package):
             if imported == "diagnostics.read" or imported.startswith("diagnostics.read."):
                 readers.add(path.relative_to(ROOT).as_posix())
-    assert readers == {"app/bootstrap.py", "app/insights.py", "dashboard/application.py"}
+    assert readers == {"app/bootstrap.py", "app/services/insights.py", "dashboard/application.py"}
 
 
 def test_presenters_do_not_import_plugins_or_each_other():
@@ -448,7 +455,7 @@ def test_hook_entries_are_thin_clients_of_the_daemon():
         "build_application",
         "app.bootstrap",
         "RawEventRecorder",
-        "engine.recorder",
+        "engine.store.recorder",
         "events.db",
     )
     violations = []

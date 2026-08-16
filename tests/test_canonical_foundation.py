@@ -10,10 +10,11 @@ from dataclasses import replace
 
 import pytest
 
-from app.core_translators import LivenessTranslator, OperationOutputTranslator
-from app.interpreter import Interpreter, SessionLivenessSource
+from engine.interpret.translators import LivenessTranslator, OperationOutputTranslator
+from engine.interpret.liveness import SessionLivenessSource
+from engine.interpret.loop import Interpreter
 from app.evidence_cli import main as evidence_main
-from app.reactions import (
+from engine.interpret.reactions import (
     OperationOutputCanonicalEventReaction,
     SessionUpsertCanonicalEventReaction,
 )
@@ -56,13 +57,13 @@ from domain.ids import (
     stable_event_id,
 )
 from domain.values import StructuredContent, TextContent
-from engine.canonical_store import CanonicalEventStore
-from engine.database import connect
-from engine.evidence import EvidenceQueries
+from engine.store.canonical import CanonicalEventStore
+from engine.store.database import connect
+from engine.queries.evidence import EvidenceQueries
 from harness.registry import HarnessRegistry, HarnessRegistryError
-from engine.operation_output import OperationOutputStore
-from engine.recorder import EventIdentityConflict, RawEventRecorder
-from engine.sessions import SessionStore
+from engine.store.output import OperationOutputStore
+from engine.store.recorder import EventIdentityConflict, RawEventRecorder
+from engine.store.sessions import SessionStore
 from dashboard.presenter import DashboardPresenter
 from engine.projections import ActivityScope, SessionQueries
 from terminal.mirror.presenter import TerminalPresenter
@@ -845,7 +846,7 @@ def test_one_failing_source_neither_stops_its_siblings_nor_the_interpreter(tmp_p
     """
     audited = []
     monkeypatch.setattr(
-        "app.interpreter._audit_failure",
+        "engine.interpret.loop._audit_failure",
         lambda where, context: audited.append((where, context)),
     )
 
@@ -924,7 +925,7 @@ def test_a_pid_less_session_is_a_loud_audited_error_every_tick(tmp_path, monkeyp
     watched for liveness, and the failure lands in the audit until it can."""
     audited = []
     monkeypatch.setattr(
-        "app.interpreter._audit_failure",
+        "engine.interpret.loop._audit_failure",
         lambda where, context: audited.append((where, context)),
     )
     database_path = str(tmp_path / "events.db")

@@ -19,8 +19,8 @@ from core.data import data_directory
 from harness.models import RawEvent
 from domain.ids import RawEventId, SessionId
 from harness.impl.claude_code.otel.config import port
-from engine.recorder import RawEventRecorder
-from engine.sessions import SessionStore
+from engine.store.recorder import RawEventRecorder
+from engine.store.sessions import SessionStore
 
 
 def idle_seconds() -> float:

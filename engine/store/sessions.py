@@ -7,7 +7,7 @@ from dataclasses import replace
 
 from harness.models import Session
 from domain.ids import ActorId, SessionId
-from engine.database import connect, initialize
+from engine.store.database import connect, initialize
 from harness.registry import HarnessRegistry
 
 

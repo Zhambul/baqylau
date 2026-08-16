@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from harness.models import RawEvent, Session, TerminalSessionState, TranslationResult
-from app.content import CanonicalContentService
+from engine.queries.content import CanonicalContentService
 from core.repository import RepositoryQueries
 from dashboard.activity import (
     DashboardActivityService,

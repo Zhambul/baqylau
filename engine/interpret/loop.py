@@ -2,21 +2,22 @@
 
 from __future__ import annotations
 
-import json
 import threading
-import time
 from typing import Mapping
 
-from harness.contract import CanonicalEventReaction, CoreTranslator, HarnessRawEventSource
-from harness.models import LIVENESS_SOURCE_TYPE, RawEvent, Session, TranslationResult
-from core.process import process_alive
-from domain.ids import RawEventId
-from engine.canonical_store import CanonicalEventStore, CanonicalEventStoreError
+from harness.contract import (
+    CanonicalEventReaction,
+    CoreTranslator,
+    HarnessRawEventSource,
+    HarnessReactorContext,
+)
+from harness.models import RawEvent, Session, TranslationResult
 from harness.registry import HarnessRegistry
-from engine.operation_output import OperationOutputStore
-from engine.recorder import RawEventRecorder
-from engine.sessions import SessionStore
-from harness.services.controls import HarnessControlService
+from engine.interpret.liveness import SessionLivenessSource
+from engine.store.canonical import CanonicalEventStore, CanonicalEventStoreError
+from engine.store.output import OperationOutputStore
+from engine.store.recorder import RawEventRecorder
+from engine.store.sessions import SessionStore
 
 TICK_INTERVAL_SECONDS = 0.25
 TRANSLATION_BATCH_SIZE = 500
@@ -34,51 +35,6 @@ def _audit_failure(where: str, context: dict) -> None:
         record.error(str(context.get("session_id", "")), f"interpreter ({where})", context)
     except Exception:
         pass
-
-
-class SessionLivenessSource(HarnessRawEventSource):
-    """Built by the interpreter for every unfinished session. Emits ONE raw
-    event when the CLI process is gone — the one finish signal every session
-    has, wrapped or not.
-
-    Position encoding: a latch — `exited` means the exit was already recorded.
-    """
-
-    def __init__(self, session: Session) -> None:
-        if session.harness_process_id is None:
-            # Never swallowed: the failure lands in the source-construction
-            # audit every tick until the pid arrives.
-            raise ValueError(f"session has no harness process id: {session.session_id}")
-        self.session = session
-        self.source_identity = (
-            f"{session.plugin.info.name}:liveness:"
-            f"{session.session_id}:{session.harness_process_id}"
-        )
-
-    def read(self, after_position: str | None) -> tuple[RawEvent, ...]:
-        if after_position == "exited":
-            return ()
-        if process_alive(
-            self.session.harness_process_id,
-            self.session.plugin.info.cli_process_name,
-        ):
-            return ()
-        return (RawEvent(
-            raw_event_id=RawEventId(self.source_identity),
-            harness=self.session.plugin.info.name,
-            source_type=LIVENESS_SOURCE_TYPE,
-            source_name=f"process:{self.session.harness_process_id}",
-            source_position="exited",
-            session_id=self.session.session_id,
-            actor_id=self.session.lead_actor_id,
-            parent_actor_id=None,
-            observed_at=time.time(),
-            encoding="json",
-            payload=json.dumps(
-                {"process_id": self.session.harness_process_id, "state": "exited"}
-            ).encode("utf-8"),
-            source_identity=self.source_identity,
-        ),)
 
 
 class Interpreter:
@@ -99,7 +55,7 @@ class Interpreter:
         canonical_store: CanonicalEventStore,
         core_translators: Mapping[str, CoreTranslator],
         reactions: tuple[CanonicalEventReaction, ...],
-        controls: HarnessControlService,
+        controls: HarnessReactorContext,
     ) -> None:
         self.sessions = sessions
         self.harnesses = harnesses

@@ -5,12 +5,12 @@ from __future__ import annotations
 import time
 
 from harness.models import RawEvent, TranslationResult
-from engine.canonical_store import CanonicalEventStore
+from engine.store.canonical import CanonicalEventStore
 from harness.registry import HarnessRegistry
-from engine.operation_output import OperationOutputStore
+from engine.store.output import OperationOutputStore
 from engine.projections import SessionQueries
-from engine.recorder import RawEventRecorder
-from engine.sessions import SessionStore
+from engine.store.recorder import RawEventRecorder
+from engine.store.sessions import SessionStore
 
 
 class CanonicalRuntime:

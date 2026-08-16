@@ -13,8 +13,8 @@ from harness.models import TerminalSessionState, UsageRow
 from domain.events import MessageCreated
 from domain.ids import AttentionId, SessionId
 from domain.values import TextContent
-from engine.database import connect
-from engine.canonical_store import CanonicalEventStore
+from engine.store.database import connect
+from engine.store.canonical import CanonicalEventStore
 from engine.projections import SessionQueries
 from dashboard.activity import (
     DashboardSessionListItem,

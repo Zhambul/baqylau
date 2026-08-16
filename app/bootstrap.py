@@ -11,22 +11,22 @@ from dashboard import config as dashboard_config
 from harness.contract import CanonicalEventReaction, CoreTranslator
 from harness.models import LIVENESS_SOURCE_TYPE, OUTPUT_LOCATION_SOURCE_TYPE
 from core.data import data_directory
-from app.content import CanonicalContentService
-from app.core_translators import LivenessTranslator, OperationOutputTranslator
+from engine.queries.content import CanonicalContentService
+from engine.interpret.translators import LivenessTranslator, OperationOutputTranslator
 from diagnostics.read import OperationalDiagnostics
 from harness.hooks.gateway import HookGatewayService
-from app.insights import ApplicationInsightsService
-from app.interpreter import Interpreter
+from app.services.insights import ApplicationInsightsService
+from engine.interpret.loop import Interpreter
 from terminal.panes.commands import PaneCommandService
 from terminal.panes.streams import PaneStreamService
 from harness.impl import installed
-from app.reactions import (
+from engine.interpret.reactions import (
     OperationOutputCanonicalEventReaction,
     SessionUpsertCanonicalEventReaction,
 )
 from terminal.panes.reaction import PaneCanonicalEventReaction
 from core.repository import RepositoryQueries
-from app.resume import ResumableSessionService
+from app.services.resume import ResumableSessionService
 from diagnostics.telemetry import BrowserTelemetryService
 from harness.services.catalog import HarnessCatalogService
 from harness.services.controls import HarnessControlService
@@ -43,13 +43,13 @@ from dashboard.application import (
     GlobalApplicationService,
     SessionApplicationService,
 )
-from engine.canonical_store import CanonicalEventStore
-from engine.evidence import EvidenceQueries
+from engine.store.canonical import CanonicalEventStore
+from engine.queries.evidence import EvidenceQueries
 from harness.registry import HarnessRegistry
-from engine.operation_output import OperationOutputStore
+from engine.store.output import OperationOutputStore
 from engine.projections import SessionQueries
-from engine.recorder import RawEventRecorder
-from engine.sessions import SessionStore
+from engine.store.recorder import RawEventRecorder
+from engine.store.sessions import SessionStore
 from terminal.adapter import TerminalAdapter
 from terminal.impl import resolve as resolve_terminal
 from terminal.impl.null import null_plugin

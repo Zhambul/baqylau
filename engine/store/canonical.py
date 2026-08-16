@@ -11,7 +11,7 @@ from harness.models import RawEvent, TranslationResult
 from domain.codec import CanonicalEventCodec
 from domain.events import CanonicalEvent, EventPayload
 from domain.ids import ActorId, CanonicalEventId, RawEventId, SessionId
-from engine.database import connect, initialize
+from engine.store.database import connect, initialize
 
 
 class CanonicalEventStoreError(RuntimeError):

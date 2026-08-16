@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from harness.models import HarnessHookRequest
 from harness.registry import HarnessRegistry, HarnessRegistryError
-from engine.recorder import RawEventRecorder
+from engine.store.recorder import RawEventRecorder
 
 
 class UnknownHookHarness(LookupError):

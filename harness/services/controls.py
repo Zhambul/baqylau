@@ -13,7 +13,7 @@ from harness.models import (
     ControlResult,
 )
 from engine.projections import SessionQueries
-from engine.sessions import SessionStore
+from engine.store.sessions import SessionStore
 from terminal.adapter import TerminalAdapter
 from terminal.contract import TerminalPlugin
 

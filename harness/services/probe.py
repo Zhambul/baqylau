@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from domain.ids import SessionId
 from harness.models import TerminalInputState, TerminalSessionState
-from engine.sessions import SessionStore
+from engine.store.sessions import SessionStore
 from terminal.adapter import TerminalAdapter
 from terminal.contract import TerminalViewport
 

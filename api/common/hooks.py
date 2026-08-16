@@ -20,7 +20,7 @@ from harness.hooks.wire import (
     TERMINAL_WINDOW_HEADER,
     HOOK_MAX,
 )
-from engine.recorder import RawEventRecorderError
+from engine.store.recorder import RawEventRecorderError
 
 router = APIRouter()
 
