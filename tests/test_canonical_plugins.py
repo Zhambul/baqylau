@@ -1679,6 +1679,29 @@ def test_claude_hook_and_child_transcript_deduplicate_actor_start():
     assert CanonicalEventCodec().encode(hook_start) == CanonicalEventCodec().encode(transcript_start)
 
 
+def test_claude_subagent_stop_hook_finishes_the_actor():
+    """The one signal that survives even when Claude Code suppresses the
+    parent's `<task-notification>` — e.g. because the subagent left a
+    `run_in_background` command still tracked — is the child's own
+    SubagentStop hook. It must close the actor out on its own."""
+    hook = replace(
+        raw_event(
+            {"hook_event_name": "SubagentStop", "hook_event_id": "child-stop"},
+            harness="claude_code",
+            source_type="hook",
+            raw_event_id="child-stop-hook",
+        ),
+        actor_id=ActorId("child-one"),
+        parent_actor_id=ActorId("session-one:lead"),
+    )
+
+    result = ClaudeCanonicalTranslator().translate(hook)
+
+    finished = payloads(result, ActorFinished)
+    assert len(finished) == 1
+    assert finished[0].actor_id == ActorId("child-one")
+
+
 def test_claude_first_teammate_message_starts_the_actor_once():
     teammate_message = replace(
         raw_event(

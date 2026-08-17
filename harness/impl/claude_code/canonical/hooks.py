@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from domain.events import (
+    ActorFinished,
     ActorNameChanged,
     ActorStarted,
     CanonicalEvent,
@@ -103,7 +104,17 @@ def translate_hook(raw_event: RawEvent, document: dict, toolcalls: ToolCallSeman
             )
         return events
     if hook_name == "SubagentStop":
-        return effort_report(raw_event, document)
+        # The authoritative "this agent's own loop ended" fact. A `<task-notification>`
+        # in the PARENT transcript (messages.py) is the only other source of a
+        # subagent's completion, and Claude Code suppresses it while the agent has
+        # a live background child of its own — which left agents that spawned a
+        # `run_in_background` command stuck "running" forever on the dashboard even
+        # after their own conversation had genuinely stopped. This hook fires
+        # regardless, straight from the child's own process.
+        return [
+            event(raw_event, "actor", str(raw_event.actor_id), "finished", ActorFinished(None)),
+            *effort_report(raw_event, document),
+        ]
     if hook_name in ("TaskCreated", "TaskCompleted"):
         return []
     if hook_name == "PreCompact":
