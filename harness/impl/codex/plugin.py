@@ -44,6 +44,11 @@ plugin = HarnessPlugin(
         canonical_version=SCHEMA_VERSION,
         cli_process_name=CLI_PROCESS_NAME,
         supports_attachments=True,
+        # codex's session_start hook fires with the first prompt, not at startup
+        # (measured: the SessionStart raw event lands in the same second as the
+        # first UserPromptSubmit, and an idle TUI writes no rollout at all), so a
+        # promptless launch is invisible to us. See HarnessInfo.
+        requires_initial_message=True,
         models=MODELS,
     ),
     hooks=CodexHookGateway(),

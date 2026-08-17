@@ -35,6 +35,7 @@ def harnesses(application: ApplicationGraph) -> list[HarnessDescriptionResponse]
             ),
             supports_accounts=plugin.info.supports_accounts,
             supports_terminal_input=plugin.terminal_probe is not None,
+            requires_initial_message=plugin.info.requires_initial_message,
         )
         for plugin in application.registry.plugins()
     ]

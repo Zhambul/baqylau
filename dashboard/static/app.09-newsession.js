@@ -194,6 +194,7 @@ function closeNewSession() {
       saveNsDraft(nsDraftDir, nsPromptBox.value, true);
   }
   nsPromptBox = null;
+  nsPromptLabel = null;      // the label dies with the DOM below
   $modal.hidden = true;
   $modal.textContent = "";
   document.body.classList.remove("modal-open");   // release the scroll lock
@@ -334,6 +335,12 @@ let nsPromptBox = null;
 // nsPromptBox exists) and on every tool switch, so nsPrompt reads this for its
 // FIRST paint and syncTool repaints the live box thereafter.
 let nsToolLabel = NO_HOST_LABEL;
+// whether the PICKED host refuses a promptless launch (hostRow().needsPrompt) and
+// the open form's prompt-field label — the pair behind "first prompt (required)":
+// like nsToolLabel, syncTool keeps them current across a tool switch, and nsPrompt
+// reads the flag for the label's first paint.
+let nsToolNeedsPrompt = false;
+let nsPromptLabel = null;
 let nsDraftDir = "";
 let nsDraftTimer = 0;
 // The form's notion of "the same folder" — and, since the server stores the key
@@ -881,6 +888,10 @@ function canonicalHostRows(harnesses) {
       effort_default: effortDefault ? effortDefault.value : "",
       accounts: !!harness.supports_accounts,
       attach: !!harness.supports_attachments,
+      // this host cannot be launched with an empty prompt — it announces its
+      // session only at the first turn, so a promptless launch would run in the
+      // terminal and never appear here (the launcher rejects it too)
+      needsPrompt: !!harness.requires_initial_message,
       rewind_modes: (catalog.rewind_modes || []).map(option => option.value),
       quick_commands: catalog.commands || [],
       controls: harness.control_names || [],
@@ -1024,7 +1035,9 @@ function nsPickers(F) {
     // it is already open; nsPrompt reads nsToolLabel for its first paint). The
     // server's label or the neutral word — never a guess at which tool it is.
     nsToolLabel = (h && h.label) || NO_HOST_LABEL;
+    nsToolNeedsPrompt = !!(h && h.needsPrompt);
     if (nsPromptBox) nsPromptBox.placeholder = nsPromptPlaceholder();
+    if (nsPromptLabel) nsPromptLabel.textContent = nsPromptLabelText();
     autoAcct();
   };
   tool.onpick = () => { toolPicked = true; syncTool(); };
@@ -1089,11 +1102,19 @@ function nsPromptPlaceholder() {
     : "what should " + nsToolLabel + " start on?  (Enter to launch · Shift+Enter for newline)";
 }
 
+// Whether the first prompt is optional or required is the PICKED HOST's answer
+// (needsPrompt, served as requires_initial_message) — never a tool name spelled
+// here. Repainted by syncTool on every tool switch.
+function nsPromptLabelText() {
+  return nsToolNeedsPrompt ? "first prompt (required)" : "first prompt (optional)";
+}
+
 function nsPrompt(F) {
   const { dir, tool } = F;
 
   const promptRow = el("label", "nsfield");
-  promptRow.append(el("span", "nslabel", "first prompt (optional)"));
+  nsPromptLabel = el("span", "nslabel", nsPromptLabelText());
+  promptRow.append(nsPromptLabel);
   const prompt = el("textarea", "nsinput nsprompt");
   prompt.rows = 3;
   prompt.spellcheck = false;
@@ -1201,6 +1222,17 @@ function nsActions(F) {
     if (!host) {
       submit.disabled = false;
       return toast("ask", "pick a harness", "the harness catalog is not loaded yet");
+    }
+    // A host that announces its session only at the first turn cannot be
+    // launched empty: it would sit at its own input, unobserved, and the waiting
+    // room would wait for a session that cannot arrive. The launcher rejects
+    // this too — asked here so the answer costs no round trip and keeps the
+    // typing (the box, not the rollback path).
+    if (host.needsPrompt && !prompt.value.trim() && !nsTray.paths().length) {
+      submit.disabled = false;
+      prompt.focus();
+      return toast("ask", host.label + " needs a first message",
+                   "it appears here only once one is sent");
     }
     const body = {
       harness: host.name,

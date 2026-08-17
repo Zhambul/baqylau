@@ -2083,6 +2083,45 @@ def test_launchers_build_native_commands_and_share_terminal_launch_mechanics(tmp
     assert "BAQYLAU_LAUNCH_MODEL" not in terminal.opened_tabs[1].command[2]
 
 
+def test_a_harness_that_announces_at_its_first_turn_refuses_an_empty_launch(tmp_path):
+    """codex's session_start hook fires WITH the first prompt, so a promptless
+    launch runs in the terminal and is never observed here — the launcher declines
+    it (HarnessInfo.requires_initial_message) instead of leaving the dashboard
+    waiting for a session that cannot arrive. Claude Code announces itself at
+    startup and so still launches empty."""
+    application = build_application(str(tmp_path))
+    terminal = FakeTerminal()
+    launcher = HarnessLauncherService(
+        application.registry,
+        TerminalAdapter(terminal.plugin(), FakeSessions()),
+        terminal,
+    )
+    empty = LaunchRequest(
+        working_directory="/work",
+        initial_text="   ",
+        model_id=None,
+        effort=None,
+        account_id=None,
+        resume_session_id=None,
+    )
+
+    rejected = launcher.launch("codex", empty)
+    assert rejected.status == "rejected"
+    assert "needs a first message" in (rejected.reason or "")
+    assert terminal.opened_tabs == []
+
+    # attachments ARE a first message: they ride the argv as the prompt, which is
+    # a turn as far as the CLI is concerned — and so an announcement.
+    attached = launcher.launch("codex", replace(
+        empty,
+        initial_text=None,
+        attachments=(AttachmentReference("/work/context.md", "context.md"),),
+    ))
+    assert attached.status == "started"
+
+    assert launcher.launch("claude_code", empty).status == "started"
+
+
 def test_login_shell_command_carries_environment_before_the_command_word(monkeypatch):
     from terminal.launch import login_shell_command
 

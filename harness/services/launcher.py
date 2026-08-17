@@ -24,6 +24,19 @@ class HarnessLauncherService:
         plugin = self.registry.plugin(harness)
         if plugin.launcher is None:
             return LaunchResult("rejected", reason="unsupported launch")
+        # The one door every launch route comes through, so the one place the
+        # "announces itself only at the first turn" harnesses are held to a first
+        # message (HarnessInfo.requires_initial_message). Declined here rather
+        # than in the harness's own launcher: the rule is about what OUR
+        # observation needs, not about the argv the harness builds.
+        if plugin.info.requires_initial_message and not request.carries_first_message:
+            return LaunchResult(
+                "rejected",
+                reason=(
+                    f"{plugin.info.display_name} needs a first message — it appears "
+                    "here only once one is sent"
+                ),
+            )
         if request.resume_session_id is not None:
             window_id = self.terminal.window_for_session(request.resume_session_id)
             if window_id is not None:

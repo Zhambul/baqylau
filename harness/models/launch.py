@@ -19,6 +19,13 @@ class LaunchRequest:
     resume_session_id: SessionId | None
     attachments: tuple[AttachmentReference, ...] = ()
 
+    @property
+    def carries_first_message(self) -> bool:
+        """Whether this launch hands the CLI something to work on at once — text,
+        or attachments alone (every launcher turns those into the prompt's
+        leading mentions, which is a turn as far as the CLI is concerned)."""
+        return bool((self.initial_text or "").strip() or self.attachments)
+
 
 @dataclass(frozen=True)
 class LaunchResult:
