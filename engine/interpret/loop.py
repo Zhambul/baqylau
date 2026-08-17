@@ -7,7 +7,7 @@ import time
 from typing import Callable, Mapping
 
 from domain.events import CanonicalEvent, EventPayload
-from diagnostics.recorder import AuditRecorder
+from audit.recorder import AuditRecorder
 from harness.contract import (
     CanonicalEventReaction,
     CoreTranslator,

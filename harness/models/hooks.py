@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from harness.models.evidence import RawEvent
+from harness.models.raw_events import RawEvent
 
 
 @dataclass(frozen=True)

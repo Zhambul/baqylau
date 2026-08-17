@@ -62,8 +62,8 @@ class SqliteRawEventRepository(RawEventRepository):
         with self.database.read() as connection:
             found = connection.execute(
                 "SELECT raw_events.* FROM raw_events "
-                "LEFT JOIN translation_records USING(raw_event_id) "
-                "WHERE translation_records.raw_event_id IS NULL "
+                "LEFT JOIN interpretations USING(raw_event_id) "
+                "WHERE interpretations.raw_event_id IS NULL "
                 "ORDER BY raw_events.id LIMIT ?",
                 (limit,),
             ).fetchall()

@@ -87,6 +87,31 @@ def test_composer_uses_the_canonical_send_control_capability():
     assert 'send: controls.has("send_text")' in source
 
 
+def test_session_catalog_waits_for_the_harness_capabilities_on_cold_load():
+    source = (Path(REPOSITORY_ROOT) / "dashboard/static/app.05-session.js").read_text(
+        encoding="utf-8"
+    )
+    catalog_load = source.split("function loadCanonicalSessionSnapshot", 1)[1].split(
+        "function connectCanonicalSession", 1
+    )[0]
+
+    host_wait = "return loadCanonicalHosts().then(() => catalog);"
+    assert host_wait in catalog_load
+    assert catalog_load.index(host_wait) < catalog_load.index(
+        "applyCanonicalCatalog(snapshot, catalog);"
+    )
+
+
+def test_webpush_subscription_rotates_with_the_server_signing_key():
+    source = (Path(REPOSITORY_ROOT) / "dashboard/static/app.01-attention.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "subscribedKey !== cfg.key" in source
+    assert "await sub.unsubscribe()" in source
+    assert "localStorage.setItem(PUSH_SERVER_KEY_STORAGE, cfg.key)" in source
+
+
 def test_file_diff_view_requests_dashboard_html_without_changing_raw_copy():
     source = (Path(REPOSITORY_ROOT) / "dashboard/static/app.05-session.js").read_text(
         encoding="utf-8"

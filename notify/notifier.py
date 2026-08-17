@@ -7,7 +7,7 @@ import threading
 import time
 from dataclasses import dataclass
 
-from diagnostics.recorder import AuditRecorder
+from audit.recorder import AuditRecorder
 from dashboard import config
 from dashboard.services.sessions import DashboardSessionService
 from dashboard.services.notices import DashboardNotificationState
@@ -35,6 +35,7 @@ class PendingNotification:
     project: str
     title: str
     due_at: float
+    pushed: bool = False
 
     def payload(self) -> dict:
         return {
@@ -79,7 +80,7 @@ class Notifier:
         self._muted: frozenset[SessionId] = frozenset()
         self.previous_states: dict[SessionId, TabState | None] | None = None
         self.pending: dict[SessionId, PendingNotification] = {}
-        self.delivered: dict[SessionId, DeliveredNotification] = {}
+        self.delivered: dict[SessionId, list[DeliveredNotification]] = {}
 
     def scan(self) -> None:
         items = tuple(
@@ -119,7 +120,7 @@ class Notifier:
             if kind is not None and item is not None:
                 self._schedule(item, current, kind, now)
         for session_id, delivered in list(self.delivered.items()):
-            if current_states.get(session_id) != delivered.state:
+            if delivered and current_states.get(session_id) != delivered[0].state:
                 self._resolve(session_id, current_states.get(session_id))
         self.previous_states = current_states
         self._deliver_due(current_states, now)
@@ -156,6 +157,22 @@ class Notifier:
                 continue
             if now < notification.due_at:
                 continue
+            if notification.pushed:
+                # Stage 2: the routed browser push has had its chance. If the
+                # session still needs attention, Telegram is the nudge on a
+                # different channel. A state transition already removed this
+                # pending record in _resolve.
+                self.pending.pop(session_id, None)
+                if self.presence.web_viewing(str(session_id)):
+                    continue
+                if config.NOTIFY_TELEGRAM:
+                    self._track(
+                        notification,
+                        channels.telegram.send_alert(
+                            notification.payload(), "escalation"
+                        ),
+                    )
+                continue
             if self.presence.web_viewing(str(session_id)) or self.presence.device_active():
                 self.pending.pop(session_id, None)
                 self.audit.state_file(
@@ -169,7 +186,6 @@ class Notifier:
                     },
                 )
                 continue
-            self.pending.pop(session_id, None)
             payload = notification.payload()
             target, subscriptions, decision = self.presence.route(self.push_subscriptions)
             self.audit.state_file(
@@ -182,36 +198,73 @@ class Notifier:
                     kind=notification.kind,
                 ),
             )
-            handle = None
+            push_handle = None
             if subscriptions and config.NOTIFY_WEBPUSH:
-                handle = channels.webpush.send_alert(
+                push_handle = channels.webpush.send_alert(
                     payload,
                     subscriptions,
                     self._attention_count(current_states),
                     keys=self.push_signing_keys,
                     subscriptions=self.push_subscriptions,
                 )
-            elif config.NOTIFY_TELEGRAM:
-                handle = channels.telegram.send_alert(payload, "no-browser")
-            if handle is not None:
-                self.delivered[session_id] = DeliveredNotification(
-                    session_id,
-                    notification.state,
-                    handle,
+            if push_handle is not None:
+                self._track(notification, push_handle)
+                if config.NOTIFY_TELEGRAM_ALWAYS:
+                    self.pending.pop(session_id, None)
+                    if config.NOTIFY_TELEGRAM:
+                        self._track(
+                            notification,
+                            channels.telegram.send_alert(payload, "always"),
+                        )
+                elif config.NOTIFY_TELEGRAM:
+                    notification.pushed = True
+                    notification.due_at = now + config.ESCALATION_DELAY_SECONDS
+                else:
+                    self.pending.pop(session_id, None)
+                continue
+
+            self.pending.pop(session_id, None)
+            if config.NOTIFY_TELEGRAM:
+                if target == "terminal":
+                    reason = "terminal"
+                elif subscriptions:
+                    reason = "push-off"
+                else:
+                    reason = "no-device"
+                self._track(
+                    notification,
+                    channels.telegram.send_alert(payload, reason),
                 )
+
+    def _track(self, notification: PendingNotification, handle: dict | None) -> None:
+        if handle is None:
+            return
+        self.delivered.setdefault(notification.session_id, []).append(
+            DeliveredNotification(
+                notification.session_id,
+                notification.state,
+                handle,
+            )
+        )
 
     def _resolve(self, session_id: SessionId, current: TabState | None) -> None:
         self.pending.pop(session_id, None)
-        delivered = self.delivered.get(session_id)
-        if delivered is None or delivered.state == current:
+        delivered = self.delivered.get(session_id) or []
+        if not delivered or delivered[0].state == current:
             return
-        outcome = channels.retract(
-            delivered.handle,
-            "state-changed",
-            keys=self.push_signing_keys,
-            subscriptions=self.push_subscriptions,
-        )
-        if outcome != channels.PENDING:
+        remaining = []
+        for notification in delivered:
+            outcome = channels.retract(
+                notification.handle,
+                "state-changed",
+                keys=self.push_signing_keys,
+                subscriptions=self.push_subscriptions,
+            )
+            if outcome == channels.PENDING:
+                remaining.append(notification)
+        if remaining:
+            self.delivered[session_id] = remaining
+        else:
             self.delivered.pop(session_id, None)
 
     @staticmethod

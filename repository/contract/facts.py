@@ -3,11 +3,11 @@
 Three protocols, one per aggregate:
 
     RawEventRepository            append-only observations, and the backlog
-    TranslationEvidenceRepository the forensic join across all four tables
+    RawEventAuditRepository the forensic join across all four tables
     CanonicalEventRepository      the interpretations, and every canonical read
 
 `record_translation` is the only multi-table write in the system and it is ONE
-method: verdict, facts and provenance in one transaction, decided inside the
+method: interpretation, facts and interpretation events in one transaction, decided inside the
 repository. No caller ever holds a connection.
 """
 
@@ -19,10 +19,9 @@ from domain.ids import CanonicalEventId, RawEventId, SessionId
 from domain.records import (
     CanonicalEventPage,
     StoredCanonicalEvent,
-    TranslationEvidence,
     TranslationOutcome,
 )
-from harness.models import RawEvent, TranslationResult
+from harness.models import RawEvent, RawEventAudit, TranslationResult
 
 
 class RawEventRepository(Protocol):
@@ -56,19 +55,19 @@ class RawEventRepository(Protocol):
         ...
 
 
-class TranslationEvidenceRepository(Protocol):
+class RawEventAuditRepository(Protocol):
     """Read-only: one observation, its verdict, and the facts it produced."""
 
-    def evidence(self, raw_event_id: RawEventId) -> TranslationEvidence | None: ...
+    def audit(self, raw_event_id: RawEventId) -> RawEventAudit | None: ...
 
-    def evidence_for_session(self, session_id: SessionId) -> tuple[TranslationEvidence, ...]:
+    def audits_for_session(self, session_id: SessionId) -> tuple[RawEventAudit, ...]:
         """Every observation in one session, assembled in a fixed number of
         queries rather than four per event."""
         ...
 
 
 class CanonicalEventRepository(Protocol):
-    """Owns `canonical_events`, `translation_records` and `canonical_provenance`."""
+    """Owns `canonical_events`, `interpretations` and `interpretation_events`."""
 
     def record_translation(
         self,
@@ -77,10 +76,10 @@ class CanonicalEventRepository(Protocol):
         translation: TranslationResult,
         completed_at: float,
     ) -> TranslationOutcome:
-        """Write the verdict, the events and their provenance in one transaction.
+        """Write the interpretation and its events in one transaction.
 
         A canonical event is an IDEMPOTENT projection: the identity names the
-        fact, so re-observing it adds provenance and nothing else. The outcome
+        fact, so re-observing it adds an interpretation event and nothing else. The outcome
         separates what was newly accepted from what converged, so reactions run
         once per fact.
         """

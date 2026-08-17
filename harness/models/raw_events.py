@@ -1,4 +1,4 @@
-"""Raw evidence and what translating it produces.
+"""Raw events and what interpreting them produces.
 
 The floor of the harness contract: one observation as recorded bytes, the
 decision a translator reached about it, and the two constructors that keep
@@ -24,6 +24,7 @@ from domain.ids import (
     TurnId,
     stable_event_id,
 )
+from domain.records import InterpretationAudit
 
 TranslationDecision: TypeAlias = Literal["translated", "ignored_unknown", "ignored_nonsemantic"]
 RecordedTranslationDecision: TypeAlias = TranslationDecision | Literal["translation_failed"]
@@ -54,6 +55,14 @@ class RawEvent:
     harness_process_id: int | None = None
     account_id: str | None = None
     account_display_name: str | None = None
+
+
+@dataclass(frozen=True)
+class RawEventAudit:
+    """One raw event and its optional interpretation audit."""
+
+    raw_event: RawEvent
+    interpretation: InterpretationAudit | None
 
 
 @dataclass(frozen=True)

@@ -593,6 +593,33 @@ def test_dashboard_structured_tool_arguments_have_a_meaningful_one_line_summary(
     assert '<span class="bsum">{</span>' not in item.html
 
 
+def test_dashboard_renders_an_operation_completion_observed_without_its_start():
+    activity = operation_activity(state="finished", outcome="succeeded")
+    activity = OperationActivity(
+        context=activity.context,
+        operation_id=activity.operation_id,
+        category=None,
+        native_name=None,
+        execution=None,
+        arguments=None,
+        description=None,
+        parent_operation_id=None,
+        progress=(),
+        state="finished",
+        outcome="succeeded",
+        result=TextContent("tool result"),
+        exit_code=None,
+        content_event_id=activity.content_event_id,
+        content_field=activity.content_field,
+    )
+
+    item = DashboardPresenter().present(activity)
+
+    assert item.summary_kind == "tool"
+    assert item.plain_text == "tool result"
+    assert "operation" in item.html
+
+
 def test_dashboard_task_tools_use_the_same_dot_language_as_agents():
     activity = operation_activity(state="finished", outcome="succeeded")
     activity = OperationActivity(

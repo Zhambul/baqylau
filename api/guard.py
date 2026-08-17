@@ -20,7 +20,7 @@ from app.providers import Recorder
 from core.daemon.contract import POST_HEADER, POST_MAX
 from api.config import Settings
 from api.dependencies import Policy
-from diagnostics.recorder import AuditRecorder
+from audit.recorder import AuditRecorder
 
 CONTENT_TYPE_JSON = "application/json"
 

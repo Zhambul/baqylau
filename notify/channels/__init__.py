@@ -23,7 +23,7 @@
 # the call site, because the audit row's shape is per-channel (a Telegram
 # message id vs a push endpoint + device) and the watcher shouldn't have to
 # know either. Nothing here raises into the 1 s watcher loop.
-from diagnostics import record as A
+from audit import record as A
 from notify.channels import telegram, webpush
 from notify.channels.alert import FAILED, GONE, NOTHING, OK, PENDING, alert_text, push_tag
 

@@ -1,8 +1,8 @@
-"""Write operational diagnostics without a graph — the floor, and only the floor.
+"""Write operational audit without a graph — the floor, and only the floor.
 
 Five free functions over a lazily-built repository, and the ONE place in the
 application where a repository is reached without being injected. What is left
-here after the daemon learned to inject `AuditRecorder` (diagnostics/recorder.py)
+here after the daemon learned to inject `AuditRecorder` (audit/recorder.py)
 is the set of writers that genuinely cannot take one:
 
   * `dashboard/cli.py`, which audits a spawn before the daemon it spawned exists;
@@ -27,11 +27,11 @@ from __future__ import annotations
 
 from threading import Lock
 
-from diagnostics.models import StreamHandle
-from diagnostics.recorder import AuditRecorder
+from audit.models import StreamHandle
+from audit.recorder import AuditRecorder
 from repository.impl.sqlite.databases import audit_database
-from repository.impl.sqlite.diagnostics import (
-    SqliteDiagnosticWriteRepository,
+from repository.impl.sqlite.audit import (
+    SqliteAuditWriteRepository,
     audit_enabled,
 )
 
@@ -52,7 +52,7 @@ def recorder() -> AuditRecorder:
     with _recorders_lock:
         found = _recorders.get(database.path)
         if found is None:
-            found = AuditRecorder(SqliteDiagnosticWriteRepository(database))
+            found = AuditRecorder(SqliteAuditWriteRepository(database))
             _recorders[database.path] = found
         return found
 

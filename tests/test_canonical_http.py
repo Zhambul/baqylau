@@ -22,9 +22,9 @@ from api.dashboard.models.controls.send_text_request import SendTextRequest
 from api.server import build_server
 from app import providers
 from canonical_runtime import ProviderGraph
-from diagnostics.models import ApplicationErrorRecord
-from diagnostics.recorder import AuditRecorder
-from diagnostics.telemetry import BrowserTelemetryService
+from audit.models import ApplicationErrorRecord
+from audit.recorder import AuditRecorder
+from audit.telemetry import BrowserTelemetryService
 from harness.models import RawEvent, Session, TranslationResult
 from dashboard.services.notices import DashboardNotificationState
 from dashboard.services.overview import GlobalApplicationService, NewSessionPreferences
@@ -32,6 +32,7 @@ from notify.presence import Presence
 from domain.events import CanonicalEvent, EventPayload, MessageCreated, SessionStarted
 from domain.ids import ActorId, CanonicalEventId, MessageId, RawEventId, SessionId
 from domain.values import MessageRole, TextContent
+from repository.impl.sqlite.raw_event_audits import SqliteRawEventAuditRepository
 
 SESSION_ID = SessionId("session-one")
 ACTOR_ID = ActorId("actor-one")
@@ -59,6 +60,10 @@ def _record(application, raw_event, translator_version, translation):
     application.canonical_events.record_translation(
         raw_event, translator_version, translation, 10.0
     )
+
+
+def _raw_event_audits(application):
+    return SqliteRawEventAuditRepository(application.main_db)
 
 
 def _application():
@@ -214,7 +219,7 @@ def test_plural_session_resources_use_the_canonical_snapshot_and_activity(tmp_pa
     application = _application()
     # The reader and the writer address the SAME file now, so the error can be
     # recorded through the graph instead of by hand-making a table beside it.
-    application.audit.record_error(
+    application.audit_writes.record_error(
         ApplicationErrorRecord(str(SESSION_ID), "dashboard", "render", "trace", "{}", 1, 12.5)
     )
     server, thread = _server(application)
@@ -726,6 +731,23 @@ def test_global_application_routes_replace_field_specific_preferences_routes(
 
         status, body = _post(
             server,
+            "/api/application/push-subscriptions",
+            {
+                "subscription": {
+                    "endpoint": "https://push.example/replacement",
+                    "keys": {"p256dh": "new-public", "auth": "new-secret"},
+                },
+                "device_id": "browser-one",
+                "device_label": "Tablet",
+            },
+        )
+        assert status == 200
+        assert [item.endpoint for item in application.push_subscriptions.subscriptions()] == [
+            "https://push.example/replacement"
+        ]
+
+        status, body = _post(
+            server,
             "/api/application/presence",
             {"device_id": "browser-one", "session_id": "session-one"},
         )
@@ -882,7 +904,7 @@ def test_browser_telemetry_uses_named_application_resources(tmp_path):
             "browser-client-failure",
             "browser-event",
         ]
-        # The content is a diagnostic blob by design — recorded, never queried.
+        # The content is a audit blob by design — recorded, never queried.
         assert json.loads(audit.records[0][3])["session_id"] == "session-one"
 
         for legacy_path in (
@@ -1239,9 +1261,9 @@ def test_hook_delivery_records_exact_evidence_and_returns_the_reply(tmp_path):
         assert status == 200
         assert b"updatedInput" in body
 
-        evidence = application.evidence.evidence_for_session(SessionId("hook-session"))
-        assert [raw.source_type for raw in evidence] == ["hook", "output_location"]
-        assert evidence[0].payload == payload
+        audits = _raw_event_audits(application).audits_for_session(SessionId("hook-session"))
+        assert [audit.raw_event.source_type for audit in audits] == ["hook", "output_location"]
+        assert audits[0].raw_event.payload == payload
     finally:
         server.shutdown()
         server.server_close()
@@ -1263,8 +1285,8 @@ def test_hook_delivery_ships_the_hooks_observations_not_the_daemons(tmp_path, mo
             server, "claude_code", payload, {"X-Baqylau-Account-Id": "c2"}
         )
         assert status == 200
-        hook_row = application.evidence.evidence_for_session(SessionId("hook-session"))[0]
-        assert hook_row.account_id == "c2"
+        hook_row = _raw_event_audits(application).audits_for_session(SessionId("hook-session"))[0]
+        assert hook_row.raw_event.account_id == "c2"
     finally:
         server.shutdown()
         server.server_close()
@@ -1287,7 +1309,7 @@ def test_hook_delivery_rejections_leave_no_evidence(tmp_path):
             server, "claude_code", json.dumps({"session_id": "hook-session"}).encode()
         )
         assert status == 400
-        assert application.evidence.evidence_for_session(SessionId("hook-session")) == ()
+        assert _raw_event_audits(application).audits_for_session(SessionId("hook-session")) == ()
     finally:
         server.shutdown()
         server.server_close()
@@ -1313,7 +1335,12 @@ def test_hook_identity_reuse_with_different_bytes_is_a_conflict_not_a_rewrite(tm
         changed = json.dumps({**document, "tool_name": "Write"}).encode()
         status, body = _post_hook(server, "claude_code", changed)
         assert status == 409
-        assert application.evidence.evidence_for_session(SessionId("hook-session"))[0].payload == first
+        assert (
+            _raw_event_audits(application).audits_for_session(SessionId("hook-session"))[
+                0
+            ].raw_event.payload
+            == first
+        )
     finally:
         server.shutdown()
         server.server_close()
@@ -1432,7 +1459,7 @@ def test_an_internal_failure_is_a_500_and_an_audit_row_not_a_400(tmp_path, monke
         # Read back through the graph's own audit reader, not a patched
         # module function: the recorder is a node now, and the row it wrote is
         # the thing the errwatch chip and the audit CLI will read.
-        assert application.diagnostics.errors_for_session(SessionId("")), (
+        assert application.audit_reads.errors_for_session(SessionId("")), (
             "an internal failure must leave an errors row behind"
         )
         # This reply is the one no middleware can wrap (Starlette runs the

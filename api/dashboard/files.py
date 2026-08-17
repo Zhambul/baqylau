@@ -126,7 +126,7 @@ def clipboard_files(
     session_id = _claimed_session_id(policy, body.session_id)
     names = [os.path.basename(name) for name in body.names[:clipboard.FILES_MAX]]
     matched = clipboard.match(names)
-    # The paths ARE the diagnostic here ("it pasted the wrong file" is
+    # The paths ARE the audit here ("it pasted the wrong file" is
     # otherwise unanswerable), and a mismatch records what was asked for so a
     # phone-vs-host clipboard divergence is visible as such.
     audit.state_file("", "", "web-clipboard",

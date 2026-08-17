@@ -15,11 +15,12 @@ from dashboard.services.models import DashboardSessionListItem
 from dashboard.services.sessions import DashboardSessionService
 from dashboard.services.streams import DashboardStreamService
 from dashboard.services.notices import DashboardNotificationState
+from notify.channels import webpush
 from notify.notifier import Notifier
 from notify.presence import Presence
-from diagnostics.recorder import AuditRecorder
+from audit.recorder import AuditRecorder
 from repository.impl.sqlite.databases import audit_database
-from repository.impl.sqlite.diagnostics import SqliteDiagnosticWriteRepository
+from repository.impl.sqlite.audit import SqliteAuditWriteRepository
 from domain.events import (
     ActorStarted,
     AttentionRequested,
@@ -589,6 +590,142 @@ def _alerting_on():
     return _AlertingOn()
 
 
+def test_webpush_deliver_uses_server_signing_keys_after_encrypting(monkeypatch):
+    """A subscription's encryption keys must not replace the VAPID key store."""
+    signing_keys = object()
+    request = {}
+
+    class Response:
+        status = 201
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+    monkeypatch.setattr(webpush, "_HAVE_CRYPTO", True)
+    monkeypatch.setattr(webpush, "_encrypt", lambda payload, p256dh, auth: b"body")
+
+    def vapid_header(endpoint, keys):
+        assert keys is signing_keys
+        return "vapid signature"
+
+    def urlopen(outgoing, timeout):
+        request["outgoing"] = outgoing
+        request["timeout"] = timeout
+        return Response()
+
+    monkeypatch.setattr(webpush, "_vapid_header", vapid_header)
+    monkeypatch.setattr(webpush.urllib.request, "urlopen", urlopen)
+
+    result = webpush.deliver(
+        {
+            "endpoint": "https://push.example/subscription",
+            "keys": {"p256dh": "browser-public-key", "auth": "browser-auth-secret"},
+        },
+        {"title": "Ready"},
+        signing_keys,
+    )
+
+    assert result.ok is True
+    assert result.status == 201
+    assert request["outgoing"].get_header("Authorization") == "vapid signature"
+
+
+def test_webpush_prunes_an_apple_subscription_bound_to_an_old_vapid_key(monkeypatch):
+    import io
+    import urllib.error
+
+    monkeypatch.setattr(webpush, "_HAVE_CRYPTO", True)
+    monkeypatch.setattr(webpush, "_encrypt", lambda payload, p256dh, auth: b"body")
+    monkeypatch.setattr(webpush, "_vapid_header", lambda endpoint, keys: "vapid signature")
+
+    def rejected(outgoing, timeout):
+        del outgoing, timeout
+        raise urllib.error.HTTPError(
+            "https://web.push.apple.com/subscription",
+            400,
+            "Bad Request",
+            {},
+            io.BytesIO(b'{"reason":"VapidPkHashMismatch"}'),
+        )
+
+    monkeypatch.setattr(webpush.urllib.request, "urlopen", rejected)
+
+    result = webpush.deliver(
+        {
+            "endpoint": "https://web.push.apple.com/subscription",
+            "keys": {"p256dh": "browser-public-key", "auth": "browser-auth-secret"},
+        },
+        {"title": "Ready"},
+        object(),
+    )
+
+    assert result.status == 400
+    assert result.error == "VapidPkHashMismatch"
+    assert result.gone is True
+
+
+def test_notifier_escalates_a_routed_browser_push_to_telegram(monkeypatch):
+    queries = MutableNotificationQueries("idle")
+    notifier = Notifier(
+        StaticNotificationSessions(TerminalSessionState("window-one", None)),
+        queries,
+        DashboardNotificationState(),
+        _alerting_on(),
+        object(),
+        object(),
+        Presence(),
+        AuditRecorder(SqliteAuditWriteRepository(audit_database())),
+    )
+    subscription = {
+        "endpoint": "https://push.example/subscription",
+        "device": "browser-one",
+        "keys": {"p256dh": "public", "auth": "secret"},
+    }
+    telegram_reasons = []
+    monkeypatch.setattr("notify.notifier.config.NOTIFICATION_DELAY_SECONDS", 0)
+    monkeypatch.setattr("notify.notifier.config.NOTIFICATION_SETTLE_SECONDS", 0)
+    monkeypatch.setattr("notify.notifier.config.ESCALATION_DELAY_SECONDS", 0)
+    monkeypatch.setattr("notify.notifier.config.NOTIFY_WEBPUSH", True)
+    monkeypatch.setattr("notify.notifier.config.NOTIFY_TELEGRAM", True)
+    monkeypatch.setattr("notify.notifier.config.NOTIFY_TELEGRAM_ALWAYS", False)
+    monkeypatch.setattr(
+        notifier.presence,
+        "route",
+        lambda subscriptions: ("browser-one", (subscription,), {}),
+    )
+    monkeypatch.setattr(
+        "notify.channels.webpush.send_alert",
+        lambda payload, targets, badge, **keywords: {
+            "ch": "webpush",
+            "session_id": payload["session_id"],
+        },
+    )
+    monkeypatch.setattr(
+        "notify.channels.telegram.send_alert",
+        lambda payload, reason: telegram_reasons.append(reason) or {
+            "ch": "telegram",
+            "session_id": payload["session_id"],
+        },
+    )
+    monkeypatch.setattr(notifier.audit, "state_file", lambda *args, **kwargs: None)
+
+    notifier.scan()
+    queries.state = "awaiting_attention"
+    notifier.scan()
+    assert telegram_reasons == []
+
+    notifier.scan()
+
+    assert telegram_reasons == ["escalation"]
+    assert [item.handle["ch"] for item in notifier.delivered[SESSION_ID]] == [
+        "webpush",
+        "telegram",
+    ]
+
+
 def test_notifier_uses_canonical_tab_transitions(monkeypatch):
     queries = MutableNotificationQueries("idle")
     notification_state = DashboardNotificationState()
@@ -600,7 +737,7 @@ def test_notifier_uses_canonical_tab_transitions(monkeypatch):
         None,
         None,
         Presence(),
-        AuditRecorder(SqliteDiagnosticWriteRepository(audit_database())),
+        AuditRecorder(SqliteAuditWriteRepository(audit_database())),
     )
     retractions = []
     monkeypatch.setattr("notify.notifier.config.NOTIFICATION_DELAY_SECONDS", 0)
@@ -650,7 +787,7 @@ def test_notifier_ignores_sessions_without_a_terminal_window(monkeypatch):
         None,
         None,
         Presence(),
-        AuditRecorder(SqliteDiagnosticWriteRepository(audit_database())),
+        AuditRecorder(SqliteAuditWriteRepository(audit_database())),
     )
 
     notifier.scan()

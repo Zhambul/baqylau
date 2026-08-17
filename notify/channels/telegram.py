@@ -32,7 +32,7 @@ import urllib.parse
 import urllib.request
 import threading
 
-from diagnostics import record as A
+from audit import record as A
 from notify.channels.alert import FAILED, GONE, NOTHING, OK, PENDING, alert_text
 
 DEFAULT_CRED_DIR = "~/.config/telegram"

@@ -1,4 +1,4 @@
-"""Canonical facts, their verdicts, and their provenance.
+"""Canonical facts and their interpretation audits.
 
 `record_translation` is the one multi-table write in the system. It is a single
 method so that the transaction is decided here rather than by the caller: three
@@ -17,10 +17,10 @@ from domain.ids import CanonicalEventId, RawEventId, SessionId
 from domain.records import (
     CanonicalEventPage,
     CanonicalStorageResult,
-    ProvenanceEntry,
+    InterpretationEventRecord,
     StoredCanonicalEvent,
     TranslationOutcome,
-    TranslationRecord,
+    InterpretationRecord,
 )
 from harness.models import RawEvent, TranslationResult
 from repository.contract.facts import CanonicalEventRepository
@@ -51,7 +51,7 @@ class SqliteCanonicalEventRepository(CanonicalEventRepository):
     ) -> TranslationOutcome:
         accepted: list[CanonicalEvent[EventPayload]] = []
         deduplicated: list[CanonicalEvent[EventPayload]] = []
-        record = TranslationRecord(
+        record = InterpretationRecord(
             raw_event_id=raw_event.raw_event_id,
             translator_version=translator_version,
             decision=translation.decision,
@@ -60,19 +60,19 @@ class SqliteCanonicalEventRepository(CanonicalEventRepository):
         )
         with self.database.write() as connection:
             connection.execute(
-                "INSERT INTO translation_records("
+                "INSERT INTO interpretations("
                 "raw_event_id, translator_version, decision, reason, completed_at"
                 ") VALUES(?, ?, ?, ?, ?)",
-                mapper.translation_record_values(record),
+                mapper.interpretation_record_values(record),
             )
             for event_order, event in enumerate(translation.canonical_events):
                 storage_result = self._append(connection, event, completed_at)
                 connection.execute(
-                    "INSERT INTO canonical_provenance("
+                    "INSERT INTO interpretation_events("
                     "event_id, raw_event_id, event_order, storage_result"
                     ") VALUES(?, ?, ?, ?)",
-                    mapper.provenance_values(
-                        ProvenanceEntry(
+                    mapper.interpretation_event_values(
+                        InterpretationEventRecord(
                             event.event_id, raw_event.raw_event_id, event_order, storage_result
                         )
                     ),
@@ -91,12 +91,12 @@ class SqliteCanonicalEventRepository(CanonicalEventRepository):
         ).fetchone()
         if existing is not None:
             # A canonical event is an IDEMPOTENT projection: the identity names
-            # the fact, so re-observing it is a no-op that only adds provenance.
+            # the fact, so re-observing it is a no-op that only adds an interpretation event.
             # Several independent sources legitimately converge here and may
             # render one fact differently; the first writer stays authoritative.
             # Nothing is lost by not comparing the bodies — the later rendering
             # is fully recoverable from its own raw event, stored verbatim and
-            # linked by the provenance row written beside this.
+            # linked by the interpretation-event row written beside this.
             return "deduplicated"
         connection.execute(
             f"INSERT INTO canonical_events({_INSERT_COLUMNS}) "
@@ -114,14 +114,14 @@ class SqliteCanonicalEventRepository(CanonicalEventRepository):
             ).fetchone()
             if row is None:
                 return None
-            provenance = connection.execute(
-                "SELECT raw_event_id FROM canonical_provenance WHERE event_id=? "
+            interpretation_events = connection.execute(
+                "SELECT raw_event_id FROM interpretation_events WHERE event_id=? "
                 "ORDER BY raw_event_id",
                 (row["event_id"],),
             ).fetchall()
         return mapper.stored_canonical_event(
             rows.canonical_event(row),
-            tuple(RawEventId(entry["raw_event_id"]) for entry in provenance),
+            tuple(RawEventId(entry["raw_event_id"]) for entry in interpretation_events),
             self.codec,
         )
 
@@ -263,18 +263,18 @@ class SqliteCanonicalEventRepository(CanonicalEventRepository):
     ) -> tuple[StoredCanonicalEvent, ...]:
         if not found:
             return ()
-        # One provenance query for the whole cursor range, not one per event.
-        provenance = connection.execute(
-            "SELECT canonical_provenance.event_id, canonical_provenance.raw_event_id "
-            "FROM canonical_provenance "
-            "JOIN canonical_events ON canonical_events.event_id=canonical_provenance.event_id "
+        # One interpretation-event query for the whole cursor range, not one per event.
+        interpretation_events = connection.execute(
+            "SELECT interpretation_events.event_id, interpretation_events.raw_event_id "
+            "FROM interpretation_events "
+            "JOIN canonical_events ON canonical_events.event_id=interpretation_events.event_id "
             "WHERE canonical_events.session_id=? "
             "AND canonical_events.cursor>=? AND canonical_events.cursor<=? "
-            "ORDER BY canonical_provenance.event_id, canonical_provenance.raw_event_id",
+            "ORDER BY interpretation_events.event_id, interpretation_events.raw_event_id",
             (found[0]["session_id"], found[0]["cursor"], found[-1]["cursor"]),
         ).fetchall()
         raw_event_ids: dict[str, list[RawEventId]] = {}
-        for entry in provenance:
+        for entry in interpretation_events:
             raw_event_ids.setdefault(entry["event_id"], []).append(
                 RawEventId(entry["raw_event_id"])
             )

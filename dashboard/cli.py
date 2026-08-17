@@ -1,7 +1,7 @@
 """baqylau-dashboard.py [serve|start|stop|status|open]
 
 The web dashboard's CLI lifecycle. The implementation behind the thin
-bin/baqylau-dashboard.py entry (that filename is operational diagnostic
+bin/baqylau-dashboard.py entry (that filename is operational audit
 vocabulary — the spawn below re-launches it by name). Lives in the package so
 it is importable/testable in-process, like the rest of the dashboard tier.
 
@@ -24,7 +24,7 @@ import subprocess
 import sys
 import time
 
-from diagnostics import record
+from audit import record
 from core.process import process_is_alive
 from dashboard import paths
 

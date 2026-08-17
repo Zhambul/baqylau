@@ -5,14 +5,14 @@
     mapper/     row DTO <-> model object, pure functions
     impl/       the concrete backend; SQLite today
 
-Three databases and one owner per table. `main.db` holds everything the
+Two databases and one owner per table. `main.db` holds everything the
 application owns and reads back:
 
     sessions                  the interpreter's session-upsert reaction
     raw_events                any recorder process
-    translation_records       the interpreter
+    interpretations           the interpreter
     canonical_events          the interpreter
-    canonical_provenance      the interpreter
+    interpretation_events      the interpreter
     operation_output          the interpreter's output reactions
     session_workspaces + composer_queue_items
       + dialog_answers + dialog_answer_selections
@@ -27,8 +27,8 @@ application owns and reads back:
                               the usage repository
     uploads                   the upload repository
 
-`audit.db` holds what the MACHINERY did, and is separate because every
-short-lived process in the tree writes it and because it is what you read when
+`audit.db` holds what the MACHINERY did, and is separate because audit writes
+must never break application work and because it is what you read when
 `main.db` is the suspect. There is no third file: the daemon's pid claim used
 to live in `locks.db`, and the port it binds answers that question already.
 

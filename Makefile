@@ -33,7 +33,7 @@ lint: deadcode typecheck
 # `client` is in the list: those files are stdlib-only scripts, but they are the
 # programs every harness and the terminal actually run, so they get the same gate
 # as everything else.
-TYPECHECK_PATHS = api app bin client core dashboard diagnostics domain engine harness notify repository terminal tests
+TYPECHECK_PATHS = api app bin client core dashboard audit domain engine harness notify repository terminal tests
 
 typecheck:
 	$(PY) -m mypy $(TYPECHECK_PATHS)
@@ -52,7 +52,7 @@ lint-fix:
 # the path list and diff the two runs.)
 #
 # The two .py files are vulture whitelists, not sources — see their headers.
-DEADCODE_PATHS = api app bin client core dashboard diagnostics domain engine harness notify repository terminal
+DEADCODE_PATHS = api app bin client core dashboard audit domain engine harness notify repository terminal
 DEADCODE_WHITELISTS = vulture-allowlist.py vulture-baseline.py
 # Call sites vulture cannot see: the framework invokes these, never our code.
 # Matched by SHAPE, not by router name — `router`, `web` and `guarded` are three

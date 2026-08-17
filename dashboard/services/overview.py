@@ -213,6 +213,16 @@ class GlobalApplicationService:
         self,
         subscription: BrowserPushSubscription,
     ) -> None:
+        # One browser installation (DEVICE_ID) has one current PushManager
+        # subscription. A VAPID rotation forces a new endpoint; remove the old
+        # endpoint for this same installation so routing does not keep sending
+        # to a subscription Apple has permanently rejected.
+        for existing in self.subscriptions.subscriptions():
+            if (
+                existing.device_id == subscription.device_id
+                and existing.endpoint != subscription.endpoint
+            ):
+                self.subscriptions.remove(existing.endpoint)
         self.subscriptions.upsert(
             PushSubscription(
                 endpoint=subscription.endpoint,

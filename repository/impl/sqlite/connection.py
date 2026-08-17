@@ -16,7 +16,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from threading import Event, Lock
@@ -61,11 +61,13 @@ class SqliteDatabase:
         schema: str,
         schema_version: int,
         pragmas: SqlitePragmas = DEFAULT_PRAGMAS,
+        migrations: Mapping[int, tuple[str, ...]] | None = None,
     ) -> None:
         self.path = os.path.abspath(path)
         self.schema = schema
         self.schema_version = schema_version
         self.pragmas = pragmas
+        self.migrations = migrations or {}
         # An Event, not a bool: the fast path is a read the type checker
         # cannot narrow, which is exactly right — another thread may set it
         # between the two checks below, and that is the point of them.
@@ -109,11 +111,14 @@ class SqliteDatabase:
         os.makedirs(os.path.dirname(self.path), mode=0o700, exist_ok=True)
         connection = self._connect()
         try:
-            with connection:
-                if self.pragmas.journal_mode:
-                    connection.execute(f"PRAGMA journal_mode={self.pragmas.journal_mode}")
-                connection.executescript(self.schema)
-                self._verify_version(connection)
+            if self.pragmas.journal_mode:
+                connection.execute(f"PRAGMA journal_mode={self.pragmas.journal_mode}")
+            stored_version = self._stored_version(connection)
+            if stored_version is not None:
+                self._migrate(connection, stored_version)
+            connection.executescript(self.schema)
+            self._verify_version(connection)
+            connection.commit()
         finally:
             connection.close()
         if self.pragmas.file_mode is not None:
@@ -132,6 +137,37 @@ class SqliteDatabase:
                 f"{os.path.basename(self.path)} was written by schema version "
                 f"{row['version']}, this build expects {self.schema_version}"
             )
+
+    @staticmethod
+    def _stored_version(connection: sqlite3.Connection) -> int | None:
+        table = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_version'"
+        ).fetchone()
+        if table is None:
+            return None
+        row = connection.execute("SELECT version FROM schema_version WHERE id=1").fetchone()
+        return int(row["version"]) if row is not None else None
+
+    def _migrate(self, connection: sqlite3.Connection, stored_version: int) -> None:
+        if stored_version > self.schema_version:
+            raise self._version_mismatch(stored_version)
+        for target_version in range(stored_version + 1, self.schema_version + 1):
+            statements = self.migrations.get(target_version)
+            if statements is None:
+                raise self._version_mismatch(stored_version)
+            with connection:
+                for statement in statements:
+                    connection.execute(statement)
+                connection.execute(
+                    "UPDATE schema_version SET version=?, applied_at=? WHERE id=1",
+                    (target_version, time.time()),
+                )
+
+    def _version_mismatch(self, stored_version: int) -> SchemaVersionMismatch:
+        return SchemaVersionMismatch(
+            f"{os.path.basename(self.path)} was written by schema version "
+            f"{stored_version}, this build expects {self.schema_version}"
+        )
 
     # --- the two transaction shapes ---------------------------------------------
 

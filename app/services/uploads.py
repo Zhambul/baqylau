@@ -12,9 +12,9 @@ import os
 import time
 from typing import Callable
 
-from diagnostics.models import ApplicationErrorRecord
+from audit.models import ApplicationErrorRecord
 from domain.uploads import StoredUpload
-from repository.contract.diagnostics import DiagnosticWriteRepository
+from repository.contract.audit import AuditWriteRepository
 from repository.contract.uploads import UploadRepository
 
 # An attachment is delivered into a composer within minutes of being staged.
@@ -26,7 +26,7 @@ class UploadService:
     def __init__(
         self,
         uploads: UploadRepository,
-        audit: DiagnosticWriteRepository | None = None,
+        audit: AuditWriteRepository | None = None,
         clock: Callable[[], float] = time.time,
     ) -> None:
         self.uploads = uploads

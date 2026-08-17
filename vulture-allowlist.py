@@ -40,4 +40,4 @@ LABEL_VARIABLE
 # baseline: a serialized field is a framework contract, not debt.
 file_path        # dashboard/render/items/item.py
 new_session_drafts  # dashboard/services/overview.py
-error_id         # diagnostics/models.py
+error_id         # audit/models.py

@@ -11,31 +11,32 @@ is most of the skill.
 
 ## Where the data is
 
-Everything lives under the application data directory — `~/.local/share/baqylau`,
-overridable with `$BAQYLAU_DATA_DIR`. `core/data.py` is the one owner of all three
-paths. Open them **read-only** (`file:<path>?mode=ro`) so triage can never mutate
-the evidence.
+Both stores live under `~/.local/share/baqylau`, overridable with
+`$BAQYLAU_DATA_DIR`. `core/data.py` owns both paths. Open them **read-only**
+(`file:<path>?mode=ro`) so triage can never mutate the record being inspected.
 
 | store | path | what it answers |
 |---|---|---|
 | **main** | `<data>/main.db` | Everything the application owns and reads back: evidence and its interpretation, your unsent work, your preferences, terminal state, plan usage, uploads. Schema: `repository/impl/sqlite/schema.py`. |
-| **audit** | `<data>/audit.db` | What the *machinery* did and where it degraded: swallowed exceptions, detached processes, control-plane gestures, browser telemetry. Its own file because every short-lived process in the tree writes it, and because it is what you read when `main.db` is the suspect. `BAQYLAU_AUDIT=0` disables (`diagnostics/record.py`). |
-| **locks** | `<runtime>/locks.db` | Who holds the daemon singleton. In the RUNTIME directory on purpose: a pid claim surviving a reboot would name a pid since reused. |
+| **audit** | `<data>/audit.db` | Debug-only records of what the *machinery* did and where it degraded: swallowed exceptions, detached processes, control-plane gestures, browser telemetry. It remains separate so it is readable when `main.db` is the suspect. `BAQYLAU_AUDIT=0` disables it (`audit/record.py`). |
 
 **Nothing outside `repository/impl/sqlite/` opens a database.** The one module elsewhere
 that does is `harness/impl/codex/canonical/title.py`, which is itself a repository
 implementation and lives there only because a shared package may not contain a harness's
 name. If you find SQL anywhere else, that is the bug.
 
-CLI: `python3 bin/baqylau-audit.py session <session_id>` dumps every raw observation for a
-session with its translation and the canonical events it produced; `... raw <raw_event_id>`
-does one. Both print JSON (payloads base64-encoded, so the bytes are exact) and open the
-store read-only. For anything aggregate, query the DBs directly with `sqlite3` — there is
-no canned-anomaly command.
+CLI: `python3 bin/baqylau-raw-events-audit.py session <session_id>` dumps every
+`RawEventAudit` for a session; `... raw <raw_event_id>` does one. Each contains the exact
+raw event and its optional `InterpretationAudit` with emitted canonical events. The CLI
+prints JSON, base64-encodes payload bytes, and opens `main.db` read-only. Query the two
+stores directly with `sqlite3` for aggregate questions.
 
 ## The model (read this before querying)
 
-Evidence flows one way, and each stage is recorded. **Only the daemon writes.**
+Evidence flows one way, and each stage is recorded. **Only the daemon writes `main.db`.**
+The daemon normally writes `audit.db` through injected `AuditRecorder`; `audit/record.py`
+is the free-function floor for the few boot, guard, clipboard, and notification paths
+without an injection graph. Audit writes are best effort and never raise.
 
 ```
 hooks · statusline · otel receiver  ──POST exact bytes──▶  the daemon
@@ -45,7 +46,7 @@ hooks · statusline · otel receiver  ──POST exact bytes──▶  the daemo
    interpreter: pulled sources (transcripts, rollouts, ────┘
                 output chunks, liveness)
                        │
-   translate ──▶ translation_records + canonical_events + canonical_provenance
+   translate ──▶ interpretations + canonical_events + interpretation_events
                  (ONE transaction: CanonicalEventRepository.record_translation)
                        │
    react ──▶ sessions (upsert) · operation_output · panes · plugin reactors
@@ -63,7 +64,7 @@ hooks · statusline · otel receiver  ──POST exact bytes──▶  the daemo
   no-op (sources re-read their last record on resume).
 - **`canonical_events`** is an *idempotent projection*. `event_id` names a **fact**, so
   several independent sources may converge on one event; re-observing it is a no-op that
-  only appends provenance. The store keeps the **first writer** and does **not** compare
+  only appends an `interpretation_events` row. The store keeps the **first writer** and does **not** compare
   bodies — a later, differing rendering is not lost, it stays recoverable from its own raw
   event.
 - **`cursor`** (`INTEGER PRIMARY KEY AUTOINCREMENT`) is the monotonic ordering key
@@ -72,7 +73,7 @@ hooks · statusline · otel receiver  ──POST exact bytes──▶  the daemo
   of the LAST raw event carrying its `source_identity` — recorded progress and evidence
   are the same rows and cannot drift. "How far has this source been read?" is:
   `SELECT source_position FROM raw_events WHERE source_identity=? ORDER BY id DESC LIMIT 1`.
-- **The untranslated backlog IS the queue**: raw events with no `translation_records`
+- **The untranslated backlog IS the queue**: raw events with no `interpretations`
   row await the interpreter, in `raw_events.id` order. Every raw event leaves the backlog
   exactly once, because the verdict and the facts are written in one transaction.
 - **A translation that disagrees with its evidence is a VERDICT, not a crash.** Five
@@ -108,9 +109,9 @@ row (`func` = `<harness> hook (deliver)`, or `otel delivery (daemon unreachable)
 | table | one row per | key columns |
 |---|---|---|
 | `raw_events` | one observation, verbatim | **`id`** (arrival order), `raw_event_id` (unique), `session_id`, `harness`, **`source_type`**, **`source_identity`** (the resume key), `source_name`, `source_position`, `actor_id`, `parent_actor_id`, `observed_at`, `encoding`, `payload` (BLOB), `terminal_window_id`, `harness_process_id`, `account_id`, `account_display_name` |
-| `translation_records` | one translation verdict | `raw_event_id` (PK), `translator_version`, **`decision`** ∈ `translated` / `ignored_nonsemantic` / `ignored_unknown` / `translation_failed`, `reason`, `completed_at` — a raw row with NO verdict is the untranslated backlog |
+| `interpretations` | one translation verdict | `raw_event_id` (PK), `translator_version`, **`decision`** ∈ `translated` / `ignored_nonsemantic` / `ignored_unknown` / `translation_failed`, `reason`, `completed_at` — a raw row with NO verdict is the untranslated backlog |
 | `canonical_events` | one interpreted fact | **`cursor`** (monotonic), `event_id` (unique), `schema_version`, **`event_type`**, `session_id`, `actor_id`, `turn_id`, `parent_actor_id`, `harness`, **`occurred_at`** (NULLABLE), `terminal_window_id`, `harness_process_id`, `accepted_at`, `payload` (JSON) |
-| `canonical_provenance` | one (fact, evidence) link | `event_id`, `raw_event_id`, `event_order`, **`storage_result`** ∈ `accepted` / `deduplicated` |
+| `interpretation_events` | one canonical event emitted by an interpretation | `event_id`, `raw_event_id`, `event_order`, **`storage_result`** ∈ `accepted` / `deduplicated` |
 | `sessions` | one observed session — a READ-MODEL, born from `session.started` | `session_id`, `lead_actor_id`, `harness`, `harness_session_id`, **`source_reference`** (the transcript/rollout path), `working_directory`, `terminal_window_id`, `harness_process_id`, `created_at` |
 | `operation_output` | one output file being followed | `session_id`, `operation_id`, `harness`, `actor_id`, `source_path`, `chunk_source_type`, `delete_source`, `initial_size`, `initial_modified_at`, `wait_for_source_change`, **`until`** ∈ `operation_finished` / `session_finished`, **`state`** ∈ `active` / `finishing`, `created_at` — removed once drained |
 | `schema_version` | the store itself (singleton, `id=1`) | `version`, `applied_at` — a mismatch refuses to open the file |
@@ -167,7 +168,7 @@ is the sanctioned form, and a contract test
 (`test_no_read_path_orders_on_a_bare_occurred_at`) forbids ordering on the bare column.
 So **a mostly-NULL `occurred_at` is not a bug** and is not worth chasing.
 
-### `audit.db` (`diagnostics/record.py`, stored by `repository/impl/sqlite/diagnostics.py`)
+### `audit.db` (`audit/record.py`, stored by `repository/impl/sqlite/audit.py`)
 
 | table | one row per | key columns |
 |---|---|---|
@@ -220,8 +221,8 @@ COLUMN.** The `browser-*` telemetry rows leave it empty and bury it in the JSON,
 2. **Measure the untranslated backlog** — the fastest health check of the interpreter:
    ```sql
    SELECT count(*), min(id), max(id) FROM raw_events
-   LEFT JOIN translation_records USING(raw_event_id)
-   WHERE translation_records.raw_event_id IS NULL;
+   LEFT JOIN interpretations USING(raw_event_id)
+   WHERE interpretations.raw_event_id IS NULL;
    ```
    No session filter, deliberately: there is no registration gate — facts legitimately
    precede their session, and one of them is what births it.
@@ -240,7 +241,7 @@ COLUMN.** The `browser-*` telemetry rows leave it empty and bury it in the JSON,
    pull/translate/react swallows; `claude_code hook (deliver)` / `codex hook (deliver)`
    for a hook whose POST failed client-side; `hook delivery` for a delivery the daemon
    refused), then `state_files` for the gesture.
-7. **Exact bytes**: `bin/baqylau-audit.py session <sid>` when you need to see what a
+7. **Exact bytes**: `bin/baqylau-raw-events-audit.py session <sid>` when you need to see what a
    source actually emitted rather than what we made of it.
 
 ## Known bug shapes → what to look for
@@ -258,7 +259,7 @@ SELECT source_type, datetime(max(observed_at),'unixepoch','localtime')
 FROM raw_events GROUP BY 1 ORDER BY 2 DESC;
 ```
 
-If `hook`/`otel`/`process` are current but `transcript`/`rollout`/`foreground_output`
+If `hook`/`otel` are current but `transcript`/`rollout`/`foreground_output`
 all stop at the **same instant**, the `Interpreter` thread stopped at that instant —
 machine-wide, every session, not just this one. Distinguish the two sub-shapes with the
 backlog query from the triage order:
@@ -295,7 +296,7 @@ A session appears exactly one way: a source produces evidence, the interpreter
 translates it into a `session.started` fact, and the reaction to that fact writes the
 row. So a lingering invisible session means one of the three stages did not happen —
 the backlog is wedged (step 2 of triage), the translator refused the payload (look for
-its `translation_records.decision` and `reason`), or the payload never carried a usable
+its `interpretations.decision` and `reason`), or the payload never carried a usable
 source reference (a Codex hook pointing at a non-lead rollout). Find the waiting
 evidence:
 
@@ -315,7 +316,7 @@ deterministic pane anchor (panes anchor by focus only within seconds of start).
 ### A session ran hooks but no hook evidence was recorded at all
 
 Hooks record NOTHING locally — each delivery is a POST to the daemon
-(`harness/hooks/client.py` → `/api/harnesses/<name>/hooks`), and a delivery the daemon
+(`client/claude_hook.py` or `client/codex_hook.py` → `/api/harnesses/<name>/hooks`), and a delivery the daemon
 never accepted is lost by design (no fallback write). The loss is always audited;
 read both sides:
 
@@ -367,7 +368,7 @@ Not the scheduler — the **translator**. Read the verdicts:
 
 ```sql
 SELECT t.decision, t.reason, count(*)
-FROM translation_records t JOIN raw_events r USING(raw_event_id)
+FROM interpretations t JOIN raw_events r USING(raw_event_id)
 WHERE r.session_id='<sid>' GROUP BY 1,2 ORDER BY 3 DESC;
 ```
 
@@ -405,7 +406,7 @@ Convergence is by design: several sources may describe one fact. Read the fan-in
 
 ```sql
 SELECT event_id, count(DISTINCT raw_event_id) n
-FROM canonical_provenance GROUP BY 1 HAVING n > 1 ORDER BY n DESC LIMIT 10;
+FROM interpretation_events GROUP BY 1 HAVING n > 1 ORDER BY n DESC LIMIT 10;
 ```
 
 Multi-raw events are **normal** (measured: ~200 events with 2–4 sources, one with 32).
@@ -413,7 +414,7 @@ Multi-raw events are **normal** (measured: ~200 events with 2–4 sources, one w
 and which were `deduplicated`. **The first writer wins, and bodies are not compared** — so
 if the stored rendering is the poorer one, the fix belongs in the *ordering or the identity
 derivation*, not in the store. To see what the losing observer said, pull its raw event:
-`bin/baqylau-audit.py raw <raw_event_id>` — nothing is lost.
+`bin/baqylau-raw-events-audit.py raw <raw_event_id>` — nothing is lost.
 
 An `EventIdentityConflict` naming a **raw** event (`raw event identity reused`) is
 different and is a genuine corruption signal: the same evidence id arrived with different

@@ -32,7 +32,7 @@
 # testable at all off macOS).
 import os
 
-from diagnostics import record as A
+from audit import record as A
 from urllib.parse import unquote, urlparse
 
 ENV_FILES = "BAQYLAU_DASHBOARD_CLIPBOARD_FILES"

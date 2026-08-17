@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable, Protocol
 
-from repository.contract.diagnostics import DiagnosticReadRepository
+from repository.contract.audit import AuditReadRepository
 from core.repository import RepositoryQueries
 from harness.models import TerminalSessionState
 from domain.ids import SessionId
@@ -94,7 +94,7 @@ class ApplicationInsightsService:
         canonical_events: CanonicalEventRepository,
         sessions: SessionQueries,
         terminal: TerminalSessionReader,
-        diagnostics: DiagnosticReadRepository,
+        audit: AuditReadRepository,
         repositories: RepositoryQueries,
         top_project_count: int,
         clock: Callable[[], float] = time.time,
@@ -102,7 +102,7 @@ class ApplicationInsightsService:
         self.canonical_events = canonical_events
         self.sessions = sessions
         self.terminal = terminal
-        self.diagnostics = diagnostics
+        self.audit = audit
         self.repositories = repositories
         self.top_project_count = top_project_count
         self.clock = clock
@@ -110,7 +110,7 @@ class ApplicationInsightsService:
     def snapshot(self) -> ApplicationInsights:
         generated_at = self.clock()
         cursor = self.canonical_events.latest_cursor()
-        error_counts = self.diagnostics.error_counts()
+        error_counts = self.audit.error_counts()
         rows = []
         for summary in self.sessions.sessions(cursor):
             usage = self.sessions.usage(summary.session_id, cursor)

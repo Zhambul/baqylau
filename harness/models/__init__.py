@@ -43,11 +43,12 @@ from harness.models.controls import (
     SendText,
     TitleWriteOutcome,
 )
-from harness.models.evidence import (
+from harness.models.raw_events import (
     INTERRUPT_SOURCE_TYPE,
     LIVENESS_SOURCE_TYPE,
     OUTPUT_LOCATION_SOURCE_TYPE,
     RawEvent,
+    RawEventAudit,
     RawEventSourceContext,
     RecordedTranslationDecision,
     TranslationDecision,
@@ -125,6 +126,7 @@ __all__ = [
     "PlanChoicesResult",
     "QueryContext",
     "RawEvent",
+    "RawEventAudit",
     "RawEventSourceContext",
     "ReadPlanChoices",
     "RecordedTranslationDecision",

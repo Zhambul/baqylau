@@ -6,14 +6,14 @@ connection, a cursor, or a context manager, so no caller above this line
 manages a transaction or holds a handle.
 """
 
-from repository.contract.diagnostics import (
-    DiagnosticReadRepository,
-    DiagnosticWriteRepository,
+from repository.contract.audit import (
+    AuditReadRepository,
+    AuditWriteRepository,
 )
 from repository.contract.facts import (
     CanonicalEventRepository,
     RawEventRepository,
-    TranslationEvidenceRepository,
+    RawEventAuditRepository,
 )
 from repository.contract.operations import OperationOutputRepository
 from repository.contract.preferences import (
@@ -36,8 +36,8 @@ __all__ = [
     "AccountUsageRepository",
     "CanonicalEventRepository",
     "ContentViewRepository",
-    "DiagnosticReadRepository",
-    "DiagnosticWriteRepository",
+    "AuditReadRepository",
+    "AuditWriteRepository",
     "HiddenDirectoryRepository",
     "NativeSessionTitleRepository",
     "NewSessionRepository",
@@ -50,7 +50,7 @@ __all__ = [
     "SessionRepository",
     "SessionWorkspaceRepository",
     "TaskDismissalRepository",
-    "TranslationEvidenceRepository",
+    "RawEventAuditRepository",
     "UploadRepository",
     "ViewModeRepository",
 ]

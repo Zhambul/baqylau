@@ -14,9 +14,9 @@ from types import SimpleNamespace
 import pytest
 
 from canonical_runtime import ProviderGraph
-from diagnostics.recorder import AuditRecorder
+from audit.recorder import AuditRecorder
 from repository.impl.sqlite.databases import audit_database
-from repository.impl.sqlite.diagnostics import SqliteDiagnosticWriteRepository
+from repository.impl.sqlite.audit import SqliteAuditWriteRepository
 from terminal.panes import commands as pane_commands
 from harness.hooks.gateway import HookGatewayService, UnknownHookHarness
 from harness.impl import installed
@@ -294,7 +294,7 @@ class InterpreterTerminal:
 
 def _silent_audit():
     """An audit recorder that writes to this test's own audit database."""
-    return AuditRecorder(SqliteDiagnosticWriteRepository(audit_database()))
+    return AuditRecorder(SqliteAuditWriteRepository(audit_database()))
 
 
 def interpreting_runtime(database_path):
@@ -423,14 +423,21 @@ def test_claude_team_messages_preserve_the_native_sender_as_evidence_actor(
     runtime.recorder.record(ClaudeTranscriptRawEventSource(context).read(None))
     interpreter.tick()
 
-    evidence = runtime.evidence.evidence_for_session(session.session_id)[-1]
-    assert evidence.actor_id == ActorId(sender)
-    assert evidence.parent_actor_id == expected_parent_actor_id
-    assert all(item.event.actor_id == ActorId(sender) for item in evidence.canonical)
-    assert any(isinstance(item.event.payload, ActorStarted) for item in evidence.canonical) is starts_actor
+    audit = runtime.raw_event_audits.audits_for_session(session.session_id)[-1]
+    assert audit.raw_event.actor_id == ActorId(sender)
+    assert audit.raw_event.parent_actor_id == expected_parent_actor_id
+    assert audit.interpretation is not None
+    assert all(item.event.actor_id == ActorId(sender) for item in audit.interpretation.events)
+    assert (
+        any(
+            isinstance(item.event.payload, ActorStarted)
+            for item in audit.interpretation.events
+        )
+        is starts_actor
+    )
     message = next(
         item.event.payload
-        for item in evidence.canonical
+        for item in audit.interpretation.events
         if isinstance(item.event.payload, MessageCreated)
     )
     assert message.role == "peer"
@@ -878,20 +885,22 @@ def test_hooks_record_exact_raw_bytes_and_both_sessions_are_born_from_them(monke
     assert codex_session.source_reference == str(rollout_path.resolve())
     assert codex_session.terminal_window_id == "window-2"
 
-    claude_evidence = runtime.evidence.evidence_for_session(SessionId("claude-session"))
-    codex_evidence = runtime.evidence.evidence_for_session(SessionId("codex-session"))
-    assert claude_evidence[0].payload == claude_payload
+    claude_audits = runtime.raw_event_audits.audits_for_session(SessionId("claude-session"))
+    codex_audits = runtime.raw_event_audits.audits_for_session(SessionId("codex-session"))
+    assert claude_audits[0].raw_event.payload == claude_payload
+    assert claude_audits[0].interpretation is not None
     # session.started + actor.started + session.account_changed (the header)
-    assert len(claude_evidence[0].canonical) == 3
+    assert len(claude_audits[0].interpretation.events) == 3
     account_changed = [
         item.event.payload
-        for item in claude_evidence[0].canonical
+        for item in claude_audits[0].interpretation.events
         if isinstance(item.event.payload, SessionAccountChanged)
     ]
     assert account_changed[0].account == AccountReference("c2", "Account Two")
-    assert codex_evidence[0].payload == codex_payload
-    assert codex_evidence[0].decision == "translated"
-    assert len(codex_evidence[0].canonical) == 2
+    assert codex_audits[0].raw_event.payload == codex_payload
+    assert codex_audits[0].interpretation is not None
+    assert codex_audits[0].interpretation.decision == "translated"
+    assert len(codex_audits[0].interpretation.events) == 2
 
 
 def test_claude_launch_selections_reach_the_summary_from_the_hook_environment(monkeypatch, tmp_path):
@@ -933,13 +942,14 @@ def test_claude_launch_selections_reach_the_summary_from_the_hook_environment(mo
 
     launch_evidence = [
         item
-        for item in runtime.evidence.evidence_for_session(SessionId("claude-session"))
-        if item.source_type == "launch"
+        for item in runtime.raw_event_audits.audits_for_session(SessionId("claude-session"))
+        if item.raw_event.source_type == "launch"
     ]
     assert len(launch_evidence) == 1
+    assert launch_evidence[0].interpretation is not None
     model_changes = [
         item.event.payload
-        for item in launch_evidence[0].canonical
+        for item in launch_evidence[0].interpretation.events
         if isinstance(item.event.payload, ModelChanged)
     ]
     # the environment carries the selection ALIAS; the native id arrives later,
@@ -963,9 +973,9 @@ def test_hook_without_native_identity_uses_the_exact_payload_identity(monkeypatc
     _deliver_hook(claude_hooks.ClaudeHookGateway(), payload)
 
     runtime = CanonicalRuntime(str(tmp_path / "main.db"))
-    evidence = runtime.evidence.evidence_for_session(SessionId("claude-session"))
+    evidence = runtime.raw_event_audits.audits_for_session(SessionId("claude-session"))
     assert len(evidence) == 1
-    assert str(evidence[0].raw_event_id).endswith(hashlib.sha256(payload).hexdigest())
+    assert str(evidence[0].raw_event.raw_event_id).endswith(hashlib.sha256(payload).hexdigest())
 
 
 def test_hook_recording_preserves_native_child_actor_context(monkeypatch, tmp_path):
@@ -982,10 +992,11 @@ def test_hook_recording_preserves_native_child_actor_context(monkeypatch, tmp_pa
 
     runtime, interpreter = interpreting_runtime(tmp_path / "main.db")
     interpreter.tick()
-    evidence = runtime.evidence.evidence_for_session(SessionId("claude-session"))[0]
-    assert evidence.actor_id == ActorId("child-one")
-    assert evidence.parent_actor_id == ActorId("claude-session:lead")
-    assert evidence.canonical[0].event.actor_id == ActorId("child-one")
+    evidence = runtime.raw_event_audits.audits_for_session(SessionId("claude-session"))[0]
+    assert evidence.raw_event.actor_id == ActorId("child-one")
+    assert evidence.raw_event.parent_actor_id == ActorId("claude-session:lead")
+    assert evidence.interpretation is not None
+    assert evidence.interpretation.events[0].event.actor_id == ActorId("child-one")
 
 
 def test_claude_hook_returns_native_pretool_output_and_an_output_location(monkeypatch):
@@ -1342,11 +1353,13 @@ def test_claude_foreground_bytes_flow_through_raw_audit_into_operation_projectio
     )
     assert operation.state == "running"
     assert operation.current_progress()[0].text == "hello\n"
-    evidence = runtime.evidence.evidence_for_session(SessionId("session-one"))
-    foreground_evidence = [row for row in evidence if row.source_type == "foreground_output"]
+    evidence = runtime.raw_event_audits.audits_for_session(SessionId("session-one"))
+    foreground_evidence = [
+        row for row in evidence if row.raw_event.source_type == "foreground_output"
+    ]
     assert len(foreground_evidence) == 1
     assert base64.b64decode(
-        json.loads(foreground_evidence[0].payload)["content_base64"]
+        json.loads(foreground_evidence[0].raw_event.payload)["content_base64"]
     ) == b"hello\n"
 
 
@@ -1504,10 +1517,10 @@ def test_hook_gateway_service_records_only_for_harnesses_that_accept_deliveries(
     }).encode()
 
     assert service.record("claude_code", hook_request(payload, terminal_window_id="9")) == b""
-    evidence = CanonicalRuntime(str(tmp_path / "main.db")).evidence.evidence_for_session(
+    evidence = CanonicalRuntime(str(tmp_path / "main.db")).raw_event_audits.audits_for_session(
         SessionId("session-one")
     )
-    assert [raw.source_type for raw in evidence] == ["hook"]
+    assert [audit.raw_event.source_type for audit in evidence] == ["hook"]
 
     with pytest.raises(UnknownHookHarness, match="unregistered harness"):
         service.record("mystery", hook_request(payload))
@@ -1547,10 +1560,14 @@ def test_the_cli_pid_is_resolved_from_the_pid_its_client_reported(tmp_path, monk
     service.record("claude_code", hook_request(payload, client_process_id=999))
 
     assert walked == [("claude", 999)]
-    evidence = CanonicalRuntime(str(tmp_path / "main.db")).evidence.evidence_for_session(
+    evidence = CanonicalRuntime(str(tmp_path / "main.db")).raw_event_audits.audits_for_session(
         SessionId("session-one")
     )
-    assert [raw.harness_process_id for raw in evidence if raw.source_type == "hook"] == [4242]
+    assert [
+        audit.raw_event.harness_process_id
+        for audit in evidence
+        if audit.raw_event.source_type == "hook"
+    ] == [4242]
 
     # Nothing to walk from: a delivery with no client pid claims no CLI pid.
     walked.clear()
@@ -2799,11 +2816,12 @@ def test_claude_otel_delivery_records_raw_and_canonical_audit(tmp_path):
     assert telemetry.record("claude_code", delivery) == 1
     interpreter.tick()
 
-    evidence = runtime.evidence.evidence_for_session(SessionId("session-one"))
+    evidence = runtime.raw_event_audits.audits_for_session(SessionId("session-one"))
     assert len(evidence) == 1
-    assert evidence[0].payload == raw_body
-    assert evidence[0].decision == "translated"
-    assert len(evidence[0].canonical) == 1
+    assert evidence[0].raw_event.payload == raw_body
+    assert evidence[0].interpretation is not None
+    assert evidence[0].interpretation.decision == "translated"
+    assert len(evidence[0].interpretation.events) == 1
     assert runtime.queries().usage(SessionId("session-one")).tokens.output_tokens == 9
 
 
@@ -3058,16 +3076,20 @@ def test_codex_write_stdin_records_raw_and_canonical_audit(tmp_path):
     runtime.recorder.record(observations)
     interpreter.tick()
 
-    stdin_evidence = runtime.evidence.evidence(RawEventId("stdin"))
+    stdin_evidence = runtime.raw_event_audits.audit(RawEventId("stdin"))
     assert stdin_evidence is not None
-    assert stdin_evidence.payload == observations[-1].payload
-    assert stdin_evidence.decision == "translated"
-    assert isinstance(stdin_evidence.canonical[0].event.payload, OperationInputProvided)
-    poll_evidence = runtime.evidence.evidence(RawEventId("poll"))
+    assert stdin_evidence.raw_event.payload == observations[-1].payload
+    assert stdin_evidence.interpretation is not None
+    assert stdin_evidence.interpretation.decision == "translated"
+    assert isinstance(
+        stdin_evidence.interpretation.events[0].event.payload, OperationInputProvided
+    )
+    poll_evidence = runtime.raw_event_audits.audit(RawEventId("poll"))
     assert poll_evidence is not None
-    assert poll_evidence.payload == observations[-2].payload
-    assert poll_evidence.decision == "ignored_nonsemantic"
-    assert poll_evidence.canonical == ()
+    assert poll_evidence.raw_event.payload == observations[-2].payload
+    assert poll_evidence.interpretation is not None
+    assert poll_evidence.interpretation.decision == "ignored_nonsemantic"
+    assert poll_evidence.interpretation.events == ()
 
 
 def test_codex_plan_has_a_canonical_fact():
@@ -3188,6 +3210,86 @@ def test_codex_apply_patch_wrapper_output_is_nonsemantic():
 
     assert translation.decision.startswith("ignored_")
     assert translation.canonical_events == ()
+
+
+def test_codex_opaque_exec_output_does_not_create_a_finish_without_a_start():
+    translator = CodexCanonicalTranslator()
+    started = translator.translate(raw_event(
+        {
+            "type": "response_item",
+            "payload": {
+                "type": "custom_tool_call",
+                "name": "exec",
+                "call_id": "opaque-one",
+                "input": "const hits = ALL_TOOLS.filter(x => x.name); text(hits);",
+            },
+        },
+        harness="codex",
+        source_type="rollout",
+        raw_event_id="opaque-call",
+        source_position="40",
+    ))
+    finished = translator.translate(raw_event(
+        {
+            "type": "response_item",
+            "payload": {
+                "type": "custom_tool_call_output",
+                "call_id": "opaque-one",
+                "output": "Script completed\nOutput:\n[]",
+            },
+        },
+        harness="codex",
+        source_type="rollout",
+        raw_event_id="opaque-output",
+        source_position="41",
+    ))
+
+    assert started.canonical_events == ()
+    assert finished.canonical_events == ()
+
+
+@pytest.mark.parametrize(
+    ("call_input", "expects_finish"),
+    (
+        ("const hits = ALL_TOOLS.filter(x => x.name); text(hits);", False),
+        ('text(await tools.view_image({path:"/tmp/image.png"}));', True),
+    ),
+)
+def test_codex_output_recovers_its_call_pairing_across_a_restart(
+    tmp_path, call_input, expects_finish
+):
+    call = {
+        "type": "response_item",
+        "payload": {
+            "type": "custom_tool_call",
+            "name": "exec",
+            "call_id": "restart-one",
+            "input": call_input,
+        },
+    }
+    call_line = json.dumps(call) + "\n"
+    rollout_path = tmp_path / "rollout.jsonl"
+    rollout_path.write_text(call_line)
+    output = replace(raw_event(
+        {
+            "type": "response_item",
+            "payload": {
+                "type": "custom_tool_call_output",
+                "call_id": "restart-one",
+                "output": "Script completed\nOutput:\nresult",
+            },
+        },
+        harness="codex",
+        source_type="rollout",
+        raw_event_id="restart-output",
+        source_position=str(len(call_line.encode())),
+    ), source_name=str(rollout_path))
+
+    finished = payloads(
+        CodexCanonicalTranslator().translate(output), OperationFinished
+    )
+
+    assert bool(finished) is expects_finish
 
 
 def test_codex_collaboration_lifecycle_uses_child_turn_as_assignment_identity(tmp_path):

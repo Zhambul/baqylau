@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import Literal, TypeAlias
 
 from domain.events import CanonicalEvent, EventPayload
-from domain.ids import CanonicalEventId, RawEventId, SessionId
+from domain.ids import CanonicalEventId, RawEventId
 
 CanonicalStorageResult: TypeAlias = Literal["accepted", "deduplicated"]
 RecordedTranslationDecision: TypeAlias = Literal[
@@ -40,7 +40,7 @@ class CanonicalEventPage:
 
 
 @dataclass(frozen=True)
-class TranslationRecord:
+class InterpretationRecord:
     """The verdict reached about one raw observation."""
 
     raw_event_id: RawEventId
@@ -51,8 +51,8 @@ class TranslationRecord:
 
 
 @dataclass(frozen=True)
-class ProvenanceEntry:
-    """One (fact, observation) link, and what storing it did."""
+class InterpretationEventRecord:
+    """One canonical event emitted by an interpretation, and what storing it did."""
 
     event_id: CanonicalEventId
     raw_event_id: RawEventId
@@ -65,7 +65,7 @@ class TranslationOutcome:
     """What `record_translation` did, in one value.
 
     `accepted` is the NEWLY committed events only — a re-observation converging
-    on an existing fact adds provenance and is not returned, so reactions run
+    on an existing fact adds an interpretation event and is not returned, so reactions run
     once per fact.
     """
 
@@ -74,7 +74,7 @@ class TranslationOutcome:
 
 
 @dataclass(frozen=True)
-class CanonicalEvidence:
+class InterpretationAuditEvent:
     event: CanonicalEvent[EventPayload]
     accepted_at: float
     event_order: int
@@ -82,26 +82,11 @@ class CanonicalEvidence:
 
 
 @dataclass(frozen=True)
-class TranslationEvidence:
-    """One observation, its verdict, and the facts it produced — the forensic view."""
+class InterpretationAudit:
+    """The verdict for one raw event and every canonical event it emitted."""
 
-    raw_event_id: RawEventId
-    session_id: SessionId
-    harness: str
-    source_type: str
-    source_name: str
-    source_position: str
-    actor_id: str
-    parent_actor_id: str | None
-    observed_at: float
-    encoding: str
-    payload: bytes
-    terminal_window_id: str | None
-    harness_process_id: int | None
-    account_id: str | None
-    account_display_name: str | None
     translator_version: str
-    decision: str
+    decision: RecordedTranslationDecision
     reason: str | None
     completed_at: float
-    canonical: tuple[CanonicalEvidence, ...]
+    events: tuple[InterpretationAuditEvent, ...]

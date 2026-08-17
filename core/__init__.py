@@ -8,6 +8,6 @@
     daemon/        the daemon's HTTP door — the contract and the client
 
 Nothing here knows what a session, a harness, or a terminal is. Operational
-diagnostics used to live here too; they own their own database, so they own
-their own directory (`diagnostics/`).
+audit used to live here too; they own their own database, so they own
+their own directory (`audit/`).
 """

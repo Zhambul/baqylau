@@ -392,6 +392,17 @@ function loadCanonicalSessionSnapshot(sessionId, query) {
       fetch("/api/harnesses/" + encodeURIComponent(session.harness) + "/catalog"
             + catalogQuery)
         .then(response => response.json())
+        // The per-session catalog and the installed-harness list are separate
+        // requests. On a cold page load the snapshot can win that race; without
+        // the harness row, applyCanonicalCatalog truthfully derives every
+        // control capability as false and the composer stays disabled even
+        // after the boot-time host request lands. Share/await that request
+        // before deriving caps so a missing row means unsupported, not merely
+        // "the other request has not finished yet".
+        .then(catalog => {
+          if (hostRow(session.harness)) return catalog;
+          return loadCanonicalHosts().then(() => catalog);
+        })
         .then(catalog => {
           if (S.currentSessionId !== sessionId || !S.sessionView) return;
           applyCanonicalCatalog(snapshot, catalog);
@@ -915,7 +926,7 @@ const VIEW_FOLD = {
   // run of them into "used 3 tools".
   focus: ["shell", "file_read", "background", "monitor", "file_edit",
           "file_write", "actor_assignment", "task", "message_delivery",
-          "actor_message", "skill", "search", "network", "workspace", "media"],
+          "actor_message", "skill", "tool", "search", "network", "workspace", "media"],
 };
 
 // THE SUMMARY VOCABULARY — Claude Code's own, extracted from the 2.1.220 binary

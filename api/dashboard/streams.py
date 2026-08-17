@@ -39,7 +39,7 @@ from app.providers import (
 from dashboard.render.serialize import json_ready
 from dashboard.services.streams import DashboardStreamService
 from dashboard.services.workspace import SessionApplicationService
-from diagnostics.recorder import AuditRecorder
+from audit.recorder import AuditRecorder
 from domain.ids import SessionId
 from engine.projections import ActivityScope
 

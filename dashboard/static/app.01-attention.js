@@ -28,6 +28,7 @@ function initNotifBtn() {
    standalone app, so on a plain Safari tab this all no-ops. docs/dashboard.md
    *Web push*. */
 let swReg = null;
+const PUSH_SERVER_KEY_STORAGE = "baqylau-push-server-key";
 
 function urlB64ToUint8(b64) {
   // a VAPID public key arrives as pad-stripped base64url; PushManager's
@@ -49,12 +50,23 @@ async function ensureSubscribed() {
   if (!cfg || !cfg.enabled || !cfg.key) return;      // feature off / no server key
   try {
     let sub = await swReg.pushManager.getSubscription();
+    // A PushSubscription is cryptographically bound to the application-server
+    // key used at creation. PushManager happily returns that old subscription
+    // after the server rotates/restores its VAPID key, but Apple rejects every
+    // send with VapidPkHashMismatch. A missing remembered key is the one-time
+    // migration for subscriptions created before this guard existed.
+    const subscribedKey = localStorage.getItem(PUSH_SERVER_KEY_STORAGE) || "";
+    if (sub && subscribedKey !== cfg.key) {
+      await sub.unsubscribe();
+      sub = null;
+    }
     if (!sub) {
       sub = await swReg.pushManager.subscribe({
         userVisibleOnly: true,                       // required on iOS/Chrome
         applicationServerKey: urlB64ToUint8(cfg.key),
       });
     }
+    localStorage.setItem(PUSH_SERVER_KEY_STORAGE, cfg.key);
     await postJSON("/api/application/push-subscriptions",
                    { subscription: sub.toJSON(), device_id: DEVICE_ID,
                      device_label: DEVICE_LABEL },

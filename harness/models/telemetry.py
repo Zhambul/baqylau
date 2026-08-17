@@ -16,7 +16,7 @@ from typing import Protocol
 
 from domain.ids import SessionId
 from harness.models.session import Session
-from harness.models.evidence import RawEvent
+from harness.models.raw_events import RawEvent
 from harness.models.usage import AccountUsageSnapshot
 
 # The channel's own header vocabulary, read only by the endpoint and stamped

@@ -19,7 +19,7 @@ from engine.interpret.interrupts import GRACE_SECONDS, PendingInterruptSource
 from engine.interpret.liveness import SessionLivenessSource
 from engine.interpret.output_source import OperationOutputRawEventSource
 from engine.interpret.loop import Interpreter
-from app.evidence_cli import main as evidence_main
+from app.raw_events_audit_cli import main as raw_event_audit_main
 from engine.interpret.reactions import (
     InterruptCanonicalEventReaction,
     OperationOutputCanonicalEventReaction,
@@ -67,12 +67,12 @@ from domain.ids import (
     stable_event_id,
 )
 from domain.values import StructuredContent, TextContent
-from diagnostics.recorder import AuditRecorder
+from audit.recorder import AuditRecorder
 from harness.registry import HarnessRegistry, HarnessRegistryError
 from repository.errors import EventIdentityConflict
 from repository.impl.sqlite.canonical_events import SqliteCanonicalEventRepository
 from repository.impl.sqlite.databases import main_database
-from repository.impl.sqlite.evidence import SqliteTranslationEvidenceRepository
+from repository.impl.sqlite.raw_event_audits import SqliteRawEventAuditRepository
 from repository.impl.sqlite.operation_output import SqliteOperationOutputRepository
 from repository.impl.sqlite.raw_events import SqliteRawEventRepository
 from repository.impl.sqlite.sessions import SqliteSessionRepository
@@ -661,9 +661,9 @@ def test_interpretation_commits_verdict_canonical_and_provenance_together(tmp_pa
     assert store.page_after(SessionId("session-one"), 0, 10).events[0].event == event
     connection = sqlite3.connect(store.database.path)
     assert connection.execute("SELECT count(*) FROM raw_events").fetchone()[0] == 1
-    assert connection.execute("SELECT decision FROM translation_records").fetchone()[0] == "translated"
+    assert connection.execute("SELECT decision FROM interpretations").fetchone()[0] == "translated"
     assert connection.execute(
-        "SELECT event_order, storage_result FROM canonical_provenance"
+        "SELECT event_order, storage_result FROM interpretation_events"
     ).fetchone() == (0, "accepted")
 
 
@@ -684,7 +684,7 @@ def test_replay_is_idempotent_and_a_second_observation_adds_provenance(tmp_path)
     assert stored[0].raw_event_ids == (RawEventId("raw-one"), RawEventId("raw-two"))
     connection = sqlite3.connect(store.database.path)
     assert connection.execute(
-        "SELECT storage_result FROM canonical_provenance WHERE raw_event_id='raw-two'"
+        "SELECT storage_result FROM interpretation_events WHERE raw_event_id='raw-two'"
     ).fetchone()[0] == "deduplicated"
 
 
@@ -697,7 +697,7 @@ def test_reused_raw_identity_is_corruption_not_convergence(tmp_path):
 
 
 def test_re_observing_one_fact_is_idempotent_even_when_observers_disagree(tmp_path):
-    """A canonical identity names a FACT, so re-observing it only adds provenance.
+    """A canonical identity names a FACT, so re-observing it only audits the interpretation.
 
     Several sources legitimately converge on one event (a hook, the harness's
     own files, the foreground tee) and may render it differently. The first
@@ -739,7 +739,7 @@ def test_re_observing_one_fact_is_idempotent_even_when_observers_disagree(tmp_pa
 
 
 def test_translation_cannot_move_raw_evidence_to_another_actor(tmp_path):
-    """A translator that rewrites provenance fields gets a failure verdict, not a wedge."""
+    """A translator that rewrites raw-event envelope fields gets a failure verdict."""
     event = canonical_message(actor_id="actor-child")
     store, recorder, _sessions, interpreter = registered_runtime(
         tmp_path, TranslationResult((event,), "translated")
@@ -751,7 +751,7 @@ def test_translation_cannot_move_raw_evidence_to_another_actor(tmp_path):
     connection = sqlite3.connect(store.database.path)
     assert connection.execute("SELECT count(*) FROM canonical_events").fetchone()[0] == 0
     decision, reason = connection.execute(
-        "SELECT decision, reason FROM translation_records WHERE raw_event_id='raw-child'"
+        "SELECT decision, reason FROM interpretations WHERE raw_event_id='raw-child'"
     ).fetchone()
     assert decision == "translation_failed"
     assert "actor does not match" in reason
@@ -767,7 +767,7 @@ def test_translation_failure_is_a_complete_audited_decision(tmp_path):
 
     connection = sqlite3.connect(store.database.path)
     decision, reason = connection.execute(
-        "SELECT decision, reason FROM translation_records WHERE raw_event_id='raw-bad'"
+        "SELECT decision, reason FROM interpretations WHERE raw_event_id='raw-bad'"
     ).fetchone()
     assert decision == "translation_failed"
     assert reason == "TranslationError: malformed record"
@@ -800,14 +800,16 @@ def test_a_translator_bug_becomes_a_verdict_and_never_wedges_the_backlog(tmp_pat
 
     connection = sqlite3.connect(store.database.path)
     decision, reason = connection.execute(
-        "SELECT decision, reason FROM translation_records WHERE raw_event_id='raw-bug'"
+        "SELECT decision, reason FROM interpretations WHERE raw_event_id='raw-bug'"
     ).fetchone()
     assert decision == "translation_failed"
     assert "ZeroDivisionError" in reason
     assert recorder.unverdicted(10) == ()
 
 
-def test_evidence_cli_prints_exact_raw_and_canonical_correlation(tmp_path, monkeypatch, capsys):
+def test_raw_event_audit_cli_prints_exact_raw_and_canonical_correlation(
+    tmp_path, monkeypatch, capsys
+):
     data_directory = tmp_path / "data"
     database_path = str(data_directory / "main.db")
     recorder = SqliteRawEventRepository(main_database(database_path))
@@ -817,7 +819,7 @@ def test_evidence_cli_prints_exact_raw_and_canonical_correlation(tmp_path, monke
     store.record_translation(raw_event, "1", TranslationResult((canonical_message(),), "translated"), 1.0)
     monkeypatch.setenv("BAQYLAU_DATA_DIR", str(data_directory))
 
-    assert evidence_main(["raw", "raw-one"]) == 0
+    assert raw_event_audit_main(["raw", "raw-one"]) == 0
 
     document = json.loads(capsys.readouterr().out)
     assert document["payload_base64"] == "ZXhhY3QgYnl0ZXMK"
@@ -838,7 +840,7 @@ def test_a_pulled_source_resumes_from_its_last_recorded_raw_event(tmp_path):
     assert recorder.latest_positions(["someone:else"]).get("someone:else") is None
 
 
-def test_evidence_queries_show_exact_raw_translation_and_canonical_chain(tmp_path):
+def test_raw_event_audit_shows_exact_raw_interpretation_and_canonical_chain(tmp_path):
     event = canonical_message()
     store, recorder, _sessions, interpreter = registered_runtime(
         tmp_path, TranslationResult((event,), "translated")
@@ -847,30 +849,30 @@ def test_evidence_queries_show_exact_raw_translation_and_canonical_chain(tmp_pat
     recorder.record((raw,))
     interpreter.tick()
 
-    evidence = SqliteTranslationEvidenceRepository(store.database).evidence(raw.raw_event_id)
-    assert evidence is not None
-    assert evidence.payload == raw.payload
-    assert evidence.decision == "translated"
-    assert evidence.canonical[0].event.event_id == event.event_id
-    assert evidence.canonical[0].event.actor_id == event.actor_id
-    assert evidence.canonical[0].accepted_at > raw.observed_at
-    assert evidence.completed_at == evidence.canonical[0].accepted_at
-    assert evidence.canonical[0].storage_result == "accepted"
-    assert SqliteTranslationEvidenceRepository(
+    audit = SqliteRawEventAuditRepository(store.database).audit(raw.raw_event_id)
+    assert audit is not None
+    assert audit.raw_event.payload == raw.payload
+    assert audit.interpretation is not None
+    assert audit.interpretation.decision == "translated"
+    assert audit.interpretation.events[0].event.event_id == event.event_id
+    assert audit.interpretation.events[0].event.actor_id == event.actor_id
+    assert audit.interpretation.events[0].accepted_at > raw.observed_at
+    assert audit.interpretation.completed_at == audit.interpretation.events[0].accepted_at
+    assert audit.interpretation.events[0].storage_result == "accepted"
+    assert SqliteRawEventAuditRepository(
         store.database
-    ).evidence_for_session(SessionId("session-one")) == (evidence,)
+    ).audits_for_session(SessionId("session-one")) == (audit,)
 
 
-def test_evidence_queries_show_the_unverdicted_backlog(tmp_path):
+def test_raw_event_audit_shows_the_uninterpreted_backlog(tmp_path):
     recorder = SqliteRawEventRepository(main_database(str(tmp_path / "main.db")))
     store = SqliteCanonicalEventRepository(main_database(str(tmp_path / "main.db")))
     recorder.record((raw_observation("raw-waiting"),))
 
-    evidence = SqliteTranslationEvidenceRepository(store.database).evidence(RawEventId("raw-waiting"))
+    audit = SqliteRawEventAuditRepository(store.database).audit(RawEventId("raw-waiting"))
 
-    assert evidence is not None
-    assert evidence.decision == "untranslated"
-    assert evidence.canonical == ()
+    assert audit is not None
+    assert audit.interpretation is None
 
 
 def test_the_interpreter_pulls_translates_and_presents_in_one_tick(tmp_path):
@@ -1210,8 +1212,10 @@ def test_output_location_directives_run_the_whole_foreground_lifecycle(tmp_path)
     interpreter.tick()  # pulls the first chunks
 
     chunk_types = {
-        raw.source_type
-        for raw in SqliteTranslationEvidenceRepository(store.database).evidence_for_session(SessionId("session-one"))
+        audit.raw_event.source_type
+        for audit in SqliteRawEventAuditRepository(store.database).audits_for_session(
+            SessionId("session-one")
+        )
     }
     assert "tool_output" in chunk_types
     assert len(operation_output.find_for_session(SessionId("session-one"))) == 1

@@ -80,10 +80,10 @@ OWN_DIRECTORY = "os.path.dirname(os.path.realpath(__file__))"
 # The two entries a human types in a shell, inside the repository, which have to
 # put the root on sys.path to build the application at all. They fail loudly, at
 # your own terminal, on the first line.
-ROOT_ANCHORS = {"bin/baqylau-dashboard.py", "bin/baqylau-audit.py"}
+ROOT_ANCHORS = {"bin/baqylau-dashboard.py", "bin/baqylau-raw-events-audit.py"}
 
 OUR_PACKAGES = (
-    "api", "app", "core", "dashboard", "diagnostics", "domain",
+    "api", "app", "core", "dashboard", "audit", "domain",
     "engine", "harness", "notify", "repository", "terminal",
 )
 
@@ -177,10 +177,10 @@ def test_no_client_touches_the_store_the_audit_trail_or_the_application():
     Every marker below was in a client at some point. The OTLP receiver opened
     the event store; the status-line shim opened usage.db; all nine wrote an
     audit row from their `except` blocks, which is what made
-    `diagnostics/record.py` — and through it the whole sqlite layer — part of
+    `audit/record.py` — and through it the whole sqlite layer — part of
     nine foreign processes and gave audit.db ten writers.
     """
-    forbidden = ("sqlite3", "repository", "diagnostics", "app.providers",
+    forbidden = ("sqlite3", "repository", "audit", "app.providers",
                  "build_application", "RawEvent", "main.db", "audit.db",
                  "open(", ".write_text(", ".write_bytes(", "os.makedirs")
     violations = [

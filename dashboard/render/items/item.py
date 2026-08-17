@@ -48,6 +48,7 @@ SummaryKind: TypeAlias = Literal[
     "workspace",
     "media",
     "skill",
+    "tool",
     "task",
     "message_delivery",
     "attention",

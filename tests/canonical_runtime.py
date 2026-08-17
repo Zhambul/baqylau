@@ -11,7 +11,7 @@ from harness.registry import HarnessRegistry
 from engine.projections import SessionQueries
 from repository.impl.sqlite.canonical_events import SqliteCanonicalEventRepository
 from repository.impl.sqlite.databases import main_database
-from repository.impl.sqlite.evidence import SqliteTranslationEvidenceRepository
+from repository.impl.sqlite.raw_event_audits import SqliteRawEventAuditRepository
 from repository.impl.sqlite.operation_output import SqliteOperationOutputRepository
 from repository.impl.sqlite.raw_events import SqliteRawEventRepository
 from repository.impl.sqlite.sessions import SqliteSessionRepository
@@ -53,7 +53,7 @@ class CanonicalRuntime:
         self.recorder = SqliteRawEventRepository(self.database)
         self.sessions = SqliteSessionRepository(self.database, harnesses)
         self.operation_output = SqliteOperationOutputRepository(self.database)
-        self.evidence = SqliteTranslationEvidenceRepository(self.database)
+        self.raw_event_audits = SqliteRawEventAuditRepository(self.database)
         self.workspaces = SqliteSessionWorkspaceRepository(self.database)
 
     def register(self, harness: str, session) -> None:

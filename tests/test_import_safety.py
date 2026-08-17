@@ -99,7 +99,7 @@ if loaded:
 
 
 def test_audit_write_path_does_not_import_its_report_tier():
-    """A writer records diagnostics; it never reads them back.
+    """A writer records audit; it never reads them back.
 
     The reader is the daemon's own tier — typed queries the dashboard renders — and
     the write API is reached from paths that run before the graph exists, so
@@ -110,11 +110,11 @@ def test_audit_write_path_does_not_import_its_report_tier():
 import importlib
 import sys
 importlib.import_module(sys.argv[1])
-if 'diagnostics.read' in sys.modules:
-    raise SystemExit('diagnostics.read loaded')
+if 'audit.read' in sys.modules:
+    raise SystemExit('audit.read loaded')
 """
     writers = tuple(module for module in CANONICAL_MODULES if module != "api.server")
-    for module in ("diagnostics.record", *writers):
+    for module in ("audit.record", *writers):
         result = subprocess.run(
             [sys.executable, "-c", program, module],
             cwd=REPOSITORY_ROOT,

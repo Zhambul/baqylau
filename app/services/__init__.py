@@ -1,6 +1,6 @@
 """Services that compose concerns the engine deliberately knows nothing about.
 
-    insights.py  cross-session rollups: canonical facts + git + diagnostics
+    insights.py  cross-session rollups: canonical facts + git + audit
     resume.py    what the resume picker may offer: facts + the repositories
 
 Each one reaches across a boundary the engine keeps closed, which is exactly

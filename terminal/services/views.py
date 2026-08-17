@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import time
 
-from diagnostics.models import StateFileRecord
-from repository.contract.diagnostics import DiagnosticWriteRepository
+from audit.models import StateFileRecord
+from repository.contract.audit import AuditWriteRepository
 from repository.contract.terminal import ContentViewRepository
 
 
@@ -19,7 +19,7 @@ class ContentViewService:
     def __init__(
         self,
         views: ContentViewRepository,
-        audit: DiagnosticWriteRepository,
+        audit: AuditWriteRepository,
         clock=time.time,
     ) -> None:
         self.views = views

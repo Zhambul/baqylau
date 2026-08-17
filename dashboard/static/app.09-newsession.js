@@ -899,10 +899,17 @@ function canonicalHostRows(harnesses) {
   }));
 }
 
+let canonicalHostsRequest = null;
 function loadCanonicalHosts() {
-  return fetch("/api/harnesses").then(response => response.json())
+  // Boot, the new-session form, and a deep-linked session can all ask during
+  // the same cold load. They need one shared ordering barrier, not duplicate
+  // harness + catalog fan-outs racing to replace S.hosts.
+  if (canonicalHostsRequest) return canonicalHostsRequest;
+  canonicalHostsRequest = fetch("/api/harnesses").then(response => response.json())
     .then(canonicalHostRows)
-    .then(rows => { S.hosts = rows; return rows; });
+    .then(rows => { S.hosts = rows; return rows; })
+    .finally(() => { canonicalHostsRequest = null; });
+  return canonicalHostsRequest;
 }
 
 function nsPickers(F) {

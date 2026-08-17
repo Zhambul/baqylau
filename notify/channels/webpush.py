@@ -29,7 +29,7 @@ from urllib.parse import urlparse
 
 import threading
 
-from diagnostics import record as A
+from audit import record as A
 from dashboard import config
 from domain.preferences import PushSigningKeypair
 from notify.channels.alert import NOTHING, OK, alert_text, push_tag
@@ -190,9 +190,9 @@ def deliver(subscription, payload, keys, ttl=DELIVERY_LIFETIME_SECONDS):
         return Result(error="no crypto")
     try:
         endpoint = subscription["endpoint"]
-        keys = subscription.get("keys") or {}
+        subscription_keys = subscription.get("keys") or {}
         body = _encrypt(json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-                        keys["p256dh"], keys["auth"])
+                        subscription_keys["p256dh"], subscription_keys["auth"])
         auth = _vapid_header(endpoint, keys)
         if not auth:
             return Result(error="no vapid")
@@ -207,8 +207,24 @@ def deliver(subscription, payload, keys, ttl=DELIVERY_LIFETIME_SECONDS):
             return Result(ok=True, status=resp.status)
     except urllib.error.HTTPError as e:
         # 404/410 = the browser dropped the subscription (uninstalled, cleared,
-        # rotated) — the canonical prune signal. 413/429/5xx are transient.
-        return Result(gone=e.code in (404, 410), status=e.code, error=str(e))
+        # rotated) — the canonical prune signal. Apple's 400
+        # VapidPkHashMismatch is the same durable condition: this endpoint was
+        # subscribed under a different application-server key and can never
+        # accept a push from the current installation. Keep the response reason
+        # (without subscription/key material) so the audit says more than 400.
+        try:
+            response_body = e.read().decode("utf-8", "replace")
+            response_reason = str(json.loads(response_body).get("reason") or "")
+        except Exception:
+            response_reason = ""
+        gone = e.code in (404, 410) or (
+            e.code == 400 and response_reason == "VapidPkHashMismatch"
+        )
+        return Result(
+            gone=gone,
+            status=e.code,
+            error=response_reason or str(e),
+        )
     except Exception as e:
         return Result(error=str(e))
 
@@ -269,6 +285,7 @@ def _webpush_fanout(subs, payload, action, keys, subscriptions):
                      {"session_id": payload.get("session_id"), "kind": payload.get("kind"),
                       "action": action, "status": res.status,
                       "ok": res.ok, "gone": res.gone,
+                      "error": res.error,
                       "badge": payload.get("badge"),
                       "device": dev, "endpoint": ep[:80]})
 

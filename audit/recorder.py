@@ -1,6 +1,6 @@
 """The five audit writes, as an object over an injected repository.
 
-This is what a daemon-side caller holds. `diagnostics/record.py` beside it is the
+This is what a daemon-side caller holds. `audit/record.py` beside it is the
 same five writes as free functions over a repository nobody injected — the floor
 that a free function deep in the tree, or a process with no graph at all, still
 needs. The two spell the same rows because the floor delegates to this class.
@@ -17,15 +17,15 @@ import sys
 import time
 import traceback
 
-from diagnostics.models import (
+from audit.models import (
     ApplicationErrorRecord,
     SpawnRecord,
     StateFileRecord,
     StreamHandle,
     StreamOpened,
 )
-from repository.contract.diagnostics import DiagnosticWriteRepository
-from repository.mapper import diagnostics as mapper
+from repository.contract.audit import AuditWriteRepository
+from repository.mapper import audit as mapper
 
 
 def script_name() -> str:
@@ -35,7 +35,7 @@ def script_name() -> str:
 class AuditRecorder:
     """What the machinery did, written where the daemon can read it back."""
 
-    def __init__(self, writes: DiagnosticWriteRepository) -> None:
+    def __init__(self, writes: AuditWriteRepository) -> None:
         self.writes = writes
 
     def error(self, session_or_log: str = "", func: str = "", context: object = None) -> None:

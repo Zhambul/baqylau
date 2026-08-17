@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from domain.ids import ActorId, SessionId
-from harness.models.evidence import RawEventSourceContext
+from harness.models.raw_events import RawEventSourceContext
 
 if TYPE_CHECKING:  # the plugin is the composition root above these messages
     from harness.contract import HarnessPlugin

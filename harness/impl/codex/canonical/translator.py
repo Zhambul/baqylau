@@ -114,6 +114,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
         self._continuation_operations: dict[tuple[str, str], OperationId] = {}
         self._finished_operations: set[tuple[str, OperationId]] = set()
         self._semantic_tool_calls: set[tuple[str, str]] = set()
+        self._operation_calls: dict[tuple[str, str], bool] = {}
         self._plan_tasks: dict[tuple[str, str], dict[TaskId, TaskChanged]] = {}
 
     @staticmethod
@@ -170,6 +171,57 @@ class CodexCanonicalTranslator(HarnessTranslator):
         except (OSError, ValueError):
             return None
         return None
+
+    @staticmethod
+    def _operation_call_from_document(document: dict, call_id: str) -> bool | None:
+        """Whether the matching response call opens a canonical operation.
+
+        None means this is not the call being sought; False means it is the
+        call, but its grammar is deliberately nonsemantic/unsupported.
+        """
+        payload = document.get("payload") or {}
+        if not (
+            document.get("type") == "response_item"
+            and payload.get("type") in ("function_call", "custom_tool_call")
+            and payload.get("call_id") == call_id
+        ):
+            return None
+        record = rollout.parse(document)
+        return record is not None and record.get("kind") in ("exec", "tool")
+
+    def _operation_call(self, raw_event: RawEvent, call_id: str) -> bool:
+        """Pair an output with the call that actually opened its operation.
+
+        The in-memory answer handles the normal adjacent call/output pair. The
+        bounded backwards scan handles a daemon restart between those records,
+        when the canonical start is durable but translator memory is fresh.
+        """
+        source_path = self._source_key(raw_event)
+        key = (source_path, call_id)
+        remembered = self._operation_calls.get(key)
+        if remembered is not None:
+            return remembered
+        try:
+            end_position = int(raw_event.source_position)
+            with open(source_path, "rb") as source:
+                while end_position > 0:
+                    start_position = max(0, end_position - 65_536)
+                    source.seek(start_position)
+                    chunk = source.read(end_position - start_position)
+                    for line in reversed(chunk.splitlines()):
+                        try:
+                            document = json.loads(line)
+                        except (UnicodeDecodeError, json.JSONDecodeError):
+                            continue
+                        opened = self._operation_call_from_document(document, call_id)
+                        if opened is not None:
+                            self._operation_calls[key] = opened
+                            return opened
+                    end_position = start_position
+        except (OSError, ValueError):
+            pass
+        self._operation_calls[key] = False
+        return False
 
     def translate(self, raw_event: RawEvent) -> TranslationResult:
         try:
@@ -554,6 +606,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
             else:
                 category, name = _codex_tool(record.get("name") or "", record.get("args"))
             arguments = record.get("cmd") or record.get("args")
+            self._operation_calls[(self._source_key(raw_event), str(operation_id))] = True
             payload = OperationStarted(operation_id, category, name, "foreground", content(arguments), None, None)
             return [event(raw_event, "operation", str(operation_id), "started", payload, occurred_at=occurred_at)]
         if kind == "stdin":
@@ -614,6 +667,8 @@ class CodexCanonicalTranslator(HarnessTranslator):
                     occurred_at=occurred_at,
                 )]
             if self._collaboration_call(raw_event, call_id) is not None:
+                return []
+            if not self._operation_call(raw_event, call_id):
                 return []
             operation_id = OperationId(call_id)
             process_exit_code = exit_code(record)

@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Baqylau terminology: evidence, provenance, audit, diagnostics</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b0d10;
+      --panel: #12161b;
+      --panel-2: #181e25;
+      --ink: #edf2f7;
+      --muted: #98a5b3;
+      --line: #2a333d;
+      --cyan: #62d7e8;
+      --amber: #f4bd63;
+      --green: #7bdb9b;
+      --red: #ff7f79;
+      --radius: 16px;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background:
+        radial-gradient(circle at 85% 0%, rgba(98, 215, 232, .10), transparent 28rem),
+        radial-gradient(circle at 8% 28%, rgba(244, 189, 99, .07), transparent 26rem),
+        var(--bg);
+      color: var(--ink);
+      font: 16px/1.62 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    main { width: min(1120px, calc(100% - 36px)); margin: 0 auto; padding: 58px 0 90px; }
+    header { max-width: 900px; margin-bottom: 42px; }
+    .eyebrow { color: var(--cyan); font: 700 12px/1.2 ui-monospace, monospace; letter-spacing: .13em; text-transform: uppercase; }
+    h1 { max-width: 850px; margin: 12px 0 18px; font-size: clamp(2.35rem, 6vw, 5.4rem); line-height: .98; letter-spacing: -.055em; }
+    h2 { margin: 0 0 18px; font-size: clamp(1.65rem, 3vw, 2.4rem); line-height: 1.1; letter-spacing: -.035em; }
+    h3 { margin: 0 0 8px; font-size: 1.04rem; }
+    p { margin: 0 0 14px; }
+    .lede { max-width: 760px; color: #c9d2dc; font-size: 1.17rem; }
+    .verdict {
+      margin-top: 26px; padding: 20px 22px; border: 1px solid rgba(98,215,232,.35);
+      border-left: 4px solid var(--cyan); border-radius: 0 var(--radius) var(--radius) 0;
+      background: rgba(98,215,232,.055); font-size: 1.08rem;
+    }
+    section { margin-top: 64px; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+    .card { padding: 22px; background: linear-gradient(145deg, var(--panel), var(--panel-2)); border: 1px solid var(--line); border-radius: var(--radius); }
+    .term { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; margin-bottom: 12px; }
+    .term strong { font-size: 1.35rem; letter-spacing: -.02em; }
+    .badge { flex: none; border: 1px solid var(--line); border-radius: 999px; padding: 3px 9px; color: var(--muted); font: 700 11px/1.4 ui-monospace, monospace; text-transform: uppercase; }
+    .cyan { color: var(--cyan); } .amber { color: var(--amber); } .green { color: var(--green); } .red { color: var(--red); }
+    code { color: #dce7f1; background: #080a0c; border: 1px solid #252b32; border-radius: 5px; padding: 1px 5px; font: .88em ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .path { color: var(--muted); font: 12px/1.55 ui-monospace, monospace; overflow-wrap: anywhere; }
+    .flow { display: grid; grid-template-columns: 1fr 42px 1fr 42px 1fr; align-items: stretch; gap: 0; }
+    .flow .node { min-height: 140px; padding: 18px; background: var(--panel); border: 1px solid var(--line); border-radius: 13px; }
+    .arrow { display: grid; place-items: center; color: var(--muted); font-size: 1.5rem; }
+    .split { display: grid; grid-template-columns: 1.35fr .65fr; gap: 16px; }
+    table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+    th, td { padding: 13px 15px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { color: var(--muted); background: #0f1317; font: 700 11px/1.4 ui-monospace, monospace; letter-spacing: .08em; text-transform: uppercase; }
+    tr:last-child td { border-bottom: 0; }
+    td:first-child { white-space: nowrap; }
+    .strike { color: var(--red); text-decoration: line-through; text-decoration-thickness: 1px; }
+    .keep { color: var(--green); }
+    .callout { padding: 22px; border-radius: var(--radius); background: rgba(244,189,99,.065); border: 1px solid rgba(244,189,99,.28); }
+    .callout h3 { color: var(--amber); }
+    ol, ul { margin: 10px 0 0; padding-left: 1.25rem; }
+    li { margin: 7px 0; }
+    .small { color: var(--muted); font-size: .9rem; }
+    .architecture { display: grid; gap: 14px; }
+    .layer { padding: 18px; border: 1px solid var(--line); border-radius: var(--radius); background: rgba(18,22,27,.78); }
+    .layer-title { display: flex; justify-content: space-between; gap: 14px; margin-bottom: 14px; color: var(--muted); font: 700 11px/1.4 ui-monospace, monospace; letter-spacing: .08em; text-transform: uppercase; }
+    .class-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+    .classbox { overflow: hidden; border: 1px solid #34404b; border-radius: 10px; background: #0d1115; }
+    .classbox h3 { margin: 0; padding: 10px 12px; background: #161c22; border-bottom: 1px solid #34404b; color: var(--ink); font: 700 13px/1.35 ui-monospace, monospace; overflow-wrap: anywhere; }
+    .classbox .meta { padding: 7px 12px; border-bottom: 1px solid #252d35; color: var(--muted); font: 11px/1.4 ui-monospace, monospace; }
+    .methods { margin: 0; padding: 8px 12px 10px; list-style: none; }
+    .methods li { margin: 5px 0; color: #cbd5df; font: 11.5px/1.45 ui-monospace, monospace; overflow-wrap: anywhere; }
+    .methods li::before { content: "+ "; color: var(--cyan); }
+    .sequence { overflow-x: auto; padding: 20px; border: 1px solid var(--line); border-radius: var(--radius); background: #080a0d; color: #cbd6e0; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; }
+    .two-flows { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+    .flow-title { margin-bottom: 9px; color: var(--muted); font: 700 11px/1.4 ui-monospace, monospace; letter-spacing: .08em; text-transform: uppercase; }
+    .contract { color: var(--amber); }
+    .database { color: var(--green); }
+    .rename-arrow { color: var(--muted); padding: 0 6px; }
+    .decision { display: inline-block; color: #07100a; background: var(--green); padding: 5px 10px; border-radius: 999px; font: 800 12px/1.2 ui-monospace, monospace; }
+    footer { margin-top: 70px; padding-top: 20px; border-top: 1px solid var(--line); color: var(--muted); font-size: .87rem; }
+    @media (max-width: 760px) {
+      main { width: min(100% - 24px, 1120px); padding-top: 34px; }
+      .grid, .split, .class-grid, .two-flows { grid-template-columns: 1fr; }
+      .flow { grid-template-columns: 1fr; gap: 8px; }
+      .arrow { transform: rotate(90deg); height: 28px; }
+      table { display: block; overflow-x: auto; }
+      h1 { font-size: 3rem; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="eyebrow">Terminology review · 17 August 2026</div>
+    <h1>One audit vocabulary. Two databases.</h1>
+    <p class="lede">The consolidation is naming-only: diagnostics, provenance, and evidence no longer compete as subsystem names. <code>main.db</code> still owns actual operations; <code>audit.db</code> still owns optional debug records.</p>
+    <div class="verdict"><strong>Implemented model:</strong> a <code>RawEventAudit</code> joins one raw event to an optional <code>InterpretationAudit</code>. That interpretation contains its verdict and zero or more <code>InterpretationAuditEvent</code> values. Debug infrastructure is consistently named <span class="amber">audit</span>.</div>
+  </header>
+
+  <section>
+    <h2>What the old words meant</h2>
+    <div class="grid">
+      <article class="card">
+        <div class="term"><strong class="cyan">Evidence</strong><span class="badge">old read-model name</span></div>
+        <p><code>TranslationEvidence</code> was the forensic aggregate returned for a raw event. It mixed the observation, verdict, and interpreted canonical events into one flat object.</p>
+        <p class="path">harness/models/evidence.py · app/evidence_cli.py (before)</p>
+      </article>
+      <article class="card">
+        <div class="term"><strong class="green">Provenance</strong><span class="badge">old relation name</span></div>
+        <p><code>canonical_provenance</code> linked an interpretation attempt to each canonical event it produced or deduplicated. It was part of interpretation audit, not a separate subsystem.</p>
+        <p class="path">canonical_provenance · ProvenanceEntry · provenance_values()</p>
+      </article>
+      <article class="card">
+        <div class="term"><strong class="amber">Audit</strong><span class="badge">chosen umbrella</span></div>
+        <p>The retained name. It describes inspection records: raw-event interpretation audits in <code>main.db</code>, and machinery/debug audit records in <code>audit.db</code>.</p>
+        <p class="path">RawEventAudit · InterpretationAudit · AuditRecorder</p>
+      </article>
+      <article class="card">
+        <div class="term"><strong class="red">Diagnostics</strong><span class="badge">old debug name</span></div>
+        <p>The package and repository names that implemented debug auditing. These were direct synonyms for audit and added no useful distinction.</p>
+        <p class="path">diagnostics/ · DiagnosticWriteRepository · SqliteDiagnosticWriteRepository</p>
+      </article>
+    </div>
+  </section>
+
+  <section>
+    <h2>The consolidated model</h2>
+    <div class="flow" aria-label="Raw event audit model">
+      <div class="node"><h3>Raw event</h3><p>Exact source bytes, source identity, position, session, actor, and harness.</p><p><code>raw_events</code></p></div>
+      <div class="arrow">→</div>
+      <div class="node"><h3>Interpretation audit</h3><p>Translator version, decision, reason, completion time.</p><p><code>interpretations</code></p></div>
+      <div class="arrow">→</div>
+      <div class="node"><h3>Interpretation events</h3><p>Ordered canonical outputs with accepted/deduplicated storage result.</p><p><code>interpretation_events</code> + <code>canonical_events</code></p></div>
+    </div>
+    <div style="height:16px"></div>
+    <div class="card">
+      <h3 class="amber">Separate storage responsibility: debug audit</h3>
+      <p>Errors, state-file actions, spawned processes, and opened streams explain Baqylau itself. They remain best-effort and isolated in <code>audit.db</code>.</p>
+      <p><code>errors</code> · <code>state_files</code> · <code>spawns</code> · <code>streams</code></p>
+    </div>
+  </section>
+
+  <section>
+    <div class="eyebrow">As-is → to-be</div>
+    <h2>Concrete rename map</h2>
+    <table>
+      <thead><tr><th>Before</th><th>After</th><th>Meaning</th></tr></thead>
+      <tbody>
+        <tr><td><code>TranslationEvidence</code></td><td><code>RawEventAudit</code></td><td>Top-level forensic read model for one raw observation.</td></tr>
+        <tr><td>flat verdict fields</td><td><code>InterpretationAudit | None</code></td><td>Groups translator metadata and output events; absent while the raw event is unprocessed.</td></tr>
+        <tr><td><code>CanonicalEvidence</code></td><td><code>InterpretationAuditEvent</code></td><td>Decoded canonical output plus order, acceptance, and storage result.</td></tr>
+        <tr><td><code>TranslationRecord</code></td><td><code>InterpretationRecord</code></td><td>Persistence command for the interpretation header.</td></tr>
+        <tr><td><code>ProvenanceEntry</code></td><td><code>InterpretationEventRecord</code></td><td>Persistence command linking an interpretation to a canonical output.</td></tr>
+        <tr><td><code>translation_records</code></td><td><code>interpretations</code></td><td>One verdict/header row per interpreted raw event.</td></tr>
+        <tr><td><code>canonical_provenance</code></td><td><code>interpretation_events</code></td><td>Zero-to-many ordered output rows per interpretation.</td></tr>
+        <tr><td><code>diagnostics/</code>, <code>Diagnostic*</code></td><td><code>audit/</code>, <code>Audit*</code></td><td>Debug-only contracts and implementations.</td></tr>
+        <tr><td><code>app/evidence_cli.py</code></td><td><code>app/raw_events_audit_cli.py</code></td><td>Raw-event audit inspection command.</td></tr>
+        <tr><td><code>bin/baqylau-audit.py</code></td><td><code>bin/baqylau-raw-events-audit.py</code></td><td>Makes the inspected object explicit.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <div class="eyebrow">Technical architecture</div>
+    <h2>Classes and methods after consolidation</h2>
+    <div class="architecture">
+      <div class="layer">
+        <div class="layer-title"><span>Read models</span><span>no SQLite dependency</span></div>
+        <div class="class-grid">
+          <div class="classbox"><h3>RawEventAudit</h3><div class="meta">harness/models/raw_events.py</div><ul class="methods"><li>raw_event: RawEvent</li><li>interpretation: InterpretationAudit | None</li></ul></div>
+          <div class="classbox"><h3>InterpretationAudit</h3><div class="meta">domain/records.py</div><ul class="methods"><li>translator_version: str</li><li>decision / reason / completed_at</li><li>events: tuple[InterpretationAuditEvent, ...]</li></ul></div>
+          <div class="classbox"><h3>InterpretationAuditEvent</h3><div class="meta">domain/records.py</div><ul class="methods"><li>event: CanonicalEvent</li><li>accepted_at: float</li><li>event_order: int</li><li>storage_result: CanonicalStorageResult</li></ul></div>
+        </div>
+      </div>
+      <div class="layer">
+        <div class="layer-title"><span>Main database contracts</span><span>actual operations</span></div>
+        <div class="class-grid">
+          <div class="classbox"><h3>RawEventRepository</h3><div class="meta database">main.db · raw_events</div><ul class="methods"><li>record(raw_events)</li><li>find(raw_event_id)</li><li>unverdicted(limit)</li><li>latest_positions(source_identities)</li></ul></div>
+          <div class="classbox"><h3>CanonicalEventRepository</h3><div class="meta database">main.db · atomic write</div><ul class="methods"><li>record_translation(raw_event, version, result, at)</li><li>find(event_id)</li><li>page_after / page_through / page_tail</li></ul></div>
+          <div class="classbox"><h3>RawEventAuditRepository</h3><div class="meta database">main.db · read-only assembly</div><ul class="methods"><li>audit(raw_event_id)</li><li>audits_for_session(session_id)</li></ul></div>
+        </div>
+      </div>
+      <div class="layer">
+        <div class="layer-title"><span>Debug audit contracts</span><span>best effort</span></div>
+        <div class="class-grid">
+          <div class="classbox"><h3>AuditWriteRepository</h3><div class="meta database">audit.db</div><ul class="methods"><li>record_error(error)</li><li>record_state_file(state_file)</li><li>record_spawn(spawn)</li><li>open_stream / close_stream</li></ul></div>
+          <div class="classbox"><h3>AuditReadRepository</h3><div class="meta database">audit.db read-only</div><ul class="methods"><li>errors_for_session(session_id)</li><li>error_counts()</li></ul></div>
+          <div class="classbox"><h3>AuditRecorder</h3><div class="meta">facade over AuditWriteRepository</div><ul class="methods"><li>error(...)</li><li>state_file(...)</li><li>spawn(...)</li><li>stream_start / stream_end</li></ul></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="eyebrow">Runtime flows</div>
+    <h2>Writes and forensic reads</h2>
+    <div class="two-flows">
+      <div>
+        <div class="flow-title">A. Actual operation → main.db</div>
+        <div class="sequence">HarnessRawEventSource.read(position)
+  │
+  ▼
+RawEventRepository.record(raw_events)
+  ▼
+<span class="database">main.db.raw_events</span>
+  │ unverdicted(500)
+  ▼
+Interpreter._translate_one(raw_event)
+  │ Translator.translate(raw_event)
+  ▼
+CanonicalEventRepository.record_translation(...)
+  ├─ INSERT interpretations
+  ├─ INSERT/DEDUPE canonical_events
+  └─ INSERT interpretation_events
+       <span class="contract">one transaction; failures propagate</span></div>
+      </div>
+      <div>
+        <div class="flow-title">B. Debug observation → audit.db</div>
+        <div class="sequence">Service / API / interpreter failure
+  │ AuditRecorder.error/state_file/spawn/stream
+  ▼
+AuditWriteRepository
+  ▼
+SqliteAuditWriteRepository
+  │ if BAQYLAU_AUDIT != 0
+  │ storage errors are swallowed
+  ▼
+<span class="database">audit.db</span>
+  ├─ errors
+  ├─ state_files
+  ├─ spawns
+  └─ streams</div>
+      </div>
+    </div>
+    <div style="height:16px"></div>
+    <div class="flow-title">C. Raw event audit read</div>
+    <div class="sequence">bin/baqylau-raw-events-audit.py raw|session &lt;id&gt;
+  ▼
+app.raw_events_audit_cli.main(...)
+  ▼
+SqliteRawEventAuditRepository(read_only(main.db))
+  ├─ audit(raw_event_id)
+  └─ audits_for_session(session_id)
+       ├─ raw_events
+       ├─ interpretations
+       ├─ interpretation_events
+       └─ canonical_events
+  ▼
+harness.models.RawEventAudit
+  └─ interpretation: InterpretationAudit | None
+  ▼
+JSON with raw_event + nested interpretation/events</div>
+  </section>
+
+  <section>
+    <h2>Database ownership and migration</h2>
+    <table>
+      <thead><tr><th>Database</th><th>Contents</th><th>Semantics</th></tr></thead>
+      <tbody>
+        <tr><td><code>main.db</code></td><td><code>raw_events</code>, <code>interpretations</code>, <code>interpretation_events</code>, <code>canonical_events</code>, projections</td><td>Authoritative application operations. Atomic writes; failures propagate.</td></tr>
+        <tr><td><code>audit.db</code></td><td><code>errors</code>, <code>state_files</code>, <code>spawns</code>, <code>streams</code></td><td>Debug-only. Optional, best-effort, and unable to break application behavior.</td></tr>
+      </tbody>
+    </table>
+    <div class="callout" style="margin-top:16px">
+      <h3>Schema migration: version 1 → 2</h3>
+      <p><code>ALTER TABLE translation_records RENAME TO interpretations</code><br><code>ALTER TABLE canonical_provenance RENAME TO interpretation_events</code></p>
+      <p>No columns, keys, foreign keys, or rows change. <code>audit.db</code> is not migrated because its schema and ownership are unchanged.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Claude Code audit skill review</h2>
+    <div class="callout">
+      <h3>The skill keeps its name and follows the new schema</h3>
+      <p><code>.claude/skills/audit-debug/SKILL.md</code> now teaches the two-database boundary and uses <code>interpretations</code>, <code>interpretation_events</code>, and the raw-events audit CLI.</p>
+      <ul>
+        <li><strong>main.db first:</strong> establish the actual operation and its interpretation.</li>
+        <li><strong>audit.db second:</strong> add best-effort machinery context.</li>
+        <li><strong>Writer topology:</strong> the daemon owns main writes; audit writes may also come from short-lived processes.</li>
+        <li><strong>Exactly two stores:</strong> stale <code>locks.db</code> guidance is removed.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <h2>Boundary rule</h2>
+    <div class="grid">
+      <div class="card"><h3 class="green">main.db</h3><p>If the application needs it to ingest, interpret, project, resume, or render truth, it is an actual operation and belongs here.</p></div>
+      <div class="card"><h3 class="amber">audit.db</h3><p>If it exists only to explain Baqylau's behavior or a failure, it is debug audit data and belongs here.</p></div>
+    </div>
+  </section>
+
+  <footer>
+    Implemented in <code>repository/impl/sqlite/schema.py</code>, <code>repository/contract/{facts,audit}.py</code>, <code>repository/impl/sqlite/{raw_event_audits,audit}.py</code>, <code>harness/models/raw_events.py</code>, <code>domain/records.py</code>, <code>app/raw_events_audit_cli.py</code>, and <code>.claude/skills/audit-debug/SKILL.md</code>.
+  </footer>
+</main>
+</body>
+</html>

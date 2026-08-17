@@ -23,12 +23,11 @@ jobs:
       # `#!/usr/bin/env python3` so the few shebang-exec'd paths
       # (hookkit.notify_tab) resolve on the runner.
       - run: python3 bin/retarget-python.py --revert
-      - run: python3 -m pip install -r requirements-dev.txt
-      # The api/ layer's runtime deps are needed to CHECK it, not just to run
-      # it: mypy resolves `fastapi`/`pydantic` for real (strict mode has no
-      # blanket ignore_missing_imports), and an absent fastapi would be
-      # reported as an unfollowable import rather than skipped.
-      - run: python3 -m pip install -r requirements.txt
+      # Install both sets together: the test/import suite exercises the api/
+      # layer, so dev-only dependencies alone leave fastapi/pydantic/uvicorn
+      # absent even though the same checkout passes on a developer machine.
+      - run: python3 -m pip install -r requirements.txt -r requirements-dev.txt
+      - run: python3 -m pip check
       # Lint before test: ruff and mypy are both pinned in requirements-dev.txt,
       # configs in ruff.toml and mypy.ini. `make lint` runs three gates — dead
       # code, static types, then ruff — and the tree must stay finding-free in

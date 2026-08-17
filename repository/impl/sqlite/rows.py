@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import sqlite3
 
-from repository.model.diagnostics import ErrorRow, SpawnRow, StateFileRow, StreamRow
+from repository.model.audit import ErrorRow, SpawnRow, StateFileRow, StreamRow
 from repository.model.facts import (
     CanonicalEventRow,
     OperationOutputRow,

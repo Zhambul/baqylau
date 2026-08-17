@@ -82,12 +82,9 @@ for s in idle thinking working executing awaiting-bg awaiting-command awaiting-r
 done
 ./bin/claude-tab-status.py clear
 
-# Audit CLI — the primary debugging tool
-python3 bin/baqylau-audit.py sessions            # recent sessions
-python3 bin/baqylau-audit.py anomalies <sid>     # canned queries for known bug signatures
-python3 bin/baqylau-audit.py errors    <sid>     # swallowed exceptions, full tracebacks
-python3 bin/baqylau-audit.py timeline  <sid>     # merged chronological story of a session
-python3 bin/baqylau-audit.py sql "<query>"       # free-form read-only SQL (sql-write for fixups)
+# Raw-event audit CLI — exact source bytes and their interpretations
+python3 bin/baqylau-raw-events-audit.py session <sid>
+python3 bin/baqylau-raw-events-audit.py raw <raw_event_id>
 ```
 
 ## Architecture
@@ -100,14 +97,14 @@ pluggable:
 
 ```
 core/        the floor: what knows the OS, not the domain — env, processes,
-             git, where the three databases live, and core/daemon/ (the
+             git, where the two databases live, and the daemon client
              daemon's door, both sides)
 domain/      the words, stdlib-only: the closed canonical event vocabulary,
              and the application's own value types (preferences, workspace)
 repository/  the ONLY thing that opens a database. contract/ (21 Protocols,
              each method one whole transaction), model/ (a row DTO per table),
              mapper/ (row <-> model object, pure), impl/sqlite/
-diagnostics/ what the MACHINERY did — the record types, the free-function
+audit/       what the MACHINERY did — the record types, the free-function
              facade every process calls, and browser-reported telemetry
 engine/      the neutral middle: engine/interpret/ (the one thread that pulls,
              translates, reacts), engine/projections/ (a fold per question),

@@ -16,7 +16,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 
-from diagnostics.models import ApplicationError
+from audit.models import ApplicationError
 from domain.events import MessageCreated
 from domain.ids import AttentionId, SessionId
 from domain.preferences import DEFAULT_VIEW_MODE, ViewMode
@@ -32,7 +32,7 @@ from domain.workspace import (
 )
 from engine.projections import SessionQueries
 from harness.models import TerminalSessionState
-from repository.contract.diagnostics import DiagnosticReadRepository
+from repository.contract.audit import AuditReadRepository
 from repository.contract.facts import CanonicalEventRepository
 from repository.contract.preferences import (
     NotificationSettingRepository,
@@ -69,7 +69,7 @@ class SessionApplicationService:
         canonical_events: CanonicalEventRepository,
         queries: SessionQueries,
         terminal: TerminalSessionReader,
-        diagnostics: DiagnosticReadRepository,
+        audit: AuditReadRepository,
         workspaces: SessionWorkspaceRepository,
         view_modes: ViewModeRepository,
         notifications: NotificationSettingRepository,
@@ -79,7 +79,7 @@ class SessionApplicationService:
         self.canonical_events = canonical_events
         self.queries = queries
         self.terminal = terminal
-        self.diagnostics = diagnostics
+        self.audit = audit
         self.workspaces = workspaces
         self.view_modes = view_modes
         self.notifications = notifications
@@ -178,7 +178,7 @@ class SessionApplicationService:
             composer=composer,
             dialog=dialog,
             terminal=self.terminal.state(session_id),
-            errors=self.diagnostics.errors_for_session(session_id),
+            errors=self.audit.errors_for_session(session_id),
         )
 
     def _state(self, session_id: SessionId) -> tuple[ComposerState, DialogState]:

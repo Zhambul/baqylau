@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 # Every package this repository owns — the universe each rule below draws from.
 OUR_PACKAGES = (
-    "api", "app", "core", "dashboard", "diagnostics", "domain",
+    "api", "app", "core", "dashboard", "audit", "domain",
     "engine", "harness", "notify", "repository", "terminal",
 )
 
@@ -76,7 +76,7 @@ def _code_only(path: Path) -> str:
 def test_the_repository_layer_imports_only_the_model_layers():
     """The new floor: rows in, model objects out, and nothing above it named.
 
-    It may stand on `domain` (the vocabulary), `diagnostics.models` (the
+    It may stand on `domain` (the vocabulary), `audit.models` (the
     operational vocabulary, which imports only `domain.ids`), and `core` (where
     its three file paths live), and it may name the two model packages whose
     types its Protocols speak. Reaching for `engine`, `app`, `api`, `dashboard`
@@ -85,7 +85,7 @@ def test_the_repository_layer_imports_only_the_model_layers():
     """
     assert_imports(
         "repository",
-        {"core", "diagnostics", "domain", "repository"},
+        {"core", "audit", "domain", "repository"},
         # `harness.registry` is the one extra: a session hands out its plugin,
         # exactly as the store it replaced did, and the registry imports only
         # the contract.
@@ -177,7 +177,7 @@ def test_no_key_value_table_exists():
 
     Three opaque columns survive and each is deliberate: the canonical payload
     is a closed vocabulary the codec validates on both encode and decode, the
-    raw payload is the verbatim bytes we observed, and a diagnostic's content is
+    raw payload is the verbatim bytes we observed, and a audit's content is
     free-form by contract — recorded, never queried.
     """
     schema = (ROOT / "repository" / "impl" / "sqlite" / "schema.py").read_text(encoding="utf-8")
@@ -221,7 +221,7 @@ def test_the_harness_contract_and_models_import_only_domain_and_the_terminal_con
                 continue
             if any(imported == module or imported.startswith(module + ".") for module in allowed_modules):
                 continue
-            if root in {"api", "app", "core", "dashboard", "diagnostics", "engine", "notify", "terminal"}:
+            if root in {"api", "app", "core", "dashboard", "audit", "engine", "notify", "terminal"}:
                 bad.append(f"{path.relative_to(ROOT)} imports {imported}")
     assert bad == []
 
@@ -236,7 +236,7 @@ def test_the_harness_implementations_never_import_the_application():
     """
     assert_imports(
         "harness",
-        {"core", "diagnostics", "domain", "harness", "repository"},
+        {"core", "audit", "domain", "harness", "repository"},
         allowed_modules={
             # the terminal a control context is handed, and the two session-level
             # services the application tier drives it through
@@ -299,7 +299,7 @@ def test_no_terminal_is_named_outside_its_own_implementation():
     """
     concrete_words = ("kitty", "kitten")
     scanned = [
-        ROOT / "api", ROOT / "app", ROOT / "core", ROOT / "dashboard", ROOT / "diagnostics",
+        ROOT / "api", ROOT / "app", ROOT / "core", ROOT / "dashboard", ROOT / "audit",
         ROOT / "domain", ROOT / "harness", ROOT / "engine", ROOT / "notify", ROOT / "terminal",
     ]
     implementation = ROOT / "terminal" / "impl" / "kitty"
@@ -324,23 +324,23 @@ def test_no_terminal_is_named_outside_its_own_implementation():
 def test_the_engine_imports_only_the_domain_and_the_harness_contract():
     """The engine is the neutral middle: evidence in, facts out.
 
-    It may stand on the floor (`core/`, `diagnostics/`) and name the harness
+    It may stand on the floor (`core/`, `audit/`) and name the harness
     CONTRACT, because it drives plugins it is handed. Reaching UP — for `app/`,
     `api/`, `dashboard/`, `terminal/` or a concrete harness — would mean the
     store could only run inside the daemon that composes it.
     """
     assert_imports(
         "engine",
-        {"core", "diagnostics", "domain", "engine", "repository"},
+        {"core", "audit", "domain", "engine", "repository"},
         allowed_modules={"harness.contract", "harness.models", "harness.registry"},
     )
 
 
-def test_the_diagnostic_write_tier_is_a_floor_and_the_read_tier_is_the_daemons():
-    """Everything writes diagnostics; only the daemon reads them back.
+def test_the_audit_write_tier_is_a_floor_and_the_read_tier_is_the_daemons():
+    """Everything writes audit; only the daemon reads them back.
 
-    `diagnostics/record.py` is reached from hook processes, pane renderers and
-    the daemon alike — a floor, like `core/`. `diagnostics/read.py` opens the
+    `audit/record.py` is reached from hook processes, pane renderers and
+    the daemon alike — a floor, like `core/`. `audit/read.py` opens the
     database read-only to answer the dashboard, so a writer that imports it has
     either grown a reporting job or paid for a tier it never uses.
     """
@@ -349,7 +349,7 @@ def test_the_diagnostic_write_tier_is_a_floor_and_the_read_tier_is_the_daemons()
         for path, imported in imports_under(package):
             if path.relative_to(ROOT).as_posix().startswith("repository/"):
                 continue  # the layer that DEFINES both tiers
-            if "DiagnosticReadRepository" in path.read_text(encoding="utf-8"):
+            if "AuditReadRepository" in path.read_text(encoding="utf-8"):
                 readers.add(path.relative_to(ROOT).as_posix())
             del imported
     assert readers == {
@@ -366,7 +366,7 @@ def test_the_terminal_tier_imports_no_concrete_harness():
     # CONTRACT — a pane reacts to canonical facts — and nothing concrete.
     assert_imports(
         "terminal",
-        {"core", "diagnostics", "domain", "engine", "repository", "terminal"},
+        {"core", "audit", "domain", "engine", "repository", "terminal"},
         allowed_modules={"harness.contract", "harness.models"},
     )
 
@@ -586,7 +586,7 @@ def test_no_read_path_orders_on_a_bare_occurred_at():
     column sorts those events arbitrarily, which silently reorders a conversation.
     """
     violations = []
-    for directory in ("app", "engine", "dashboard", "terminal", "core", "harness", "diagnostics", "notify"):
+    for directory in ("app", "engine", "dashboard", "terminal", "core", "harness", "audit", "notify"):
         for path in sorted((ROOT / directory).rglob("*.py")):
             for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
                 if "occurred_at" not in line:
@@ -717,8 +717,8 @@ def test_only_the_daemon_and_the_audit_cli_build_repositories():
     HTTP clients of the daemon; they may not import the contract, let alone an
     implementation, and they no longer CAN — they are files in `client/` that
     import nothing of ours (tests/test_canonical_clients.py).
-    `app/evidence_cli.py` is the exception, because it is the tool you run when
-    the daemon is the suspect, and it opens read-only. `diagnostics/record.py` is
+    `app/raw_events_audit_cli.py` is the exception, because it is the tool you run when
+    the daemon is the suspect, and it opens read-only. `audit/record.py` is
     the other, because the daemon's own boot and its request guard record before
     and outside the graph that would inject a repository.
 
@@ -728,8 +728,8 @@ def test_only_the_daemon_and_the_audit_cli_build_repositories():
     """
     allowed_builders = {
         "app/providers.py",
-        "app/evidence_cli.py",
-        "diagnostics/record.py",
+        "app/raw_events_audit_cli.py",
+        "audit/record.py",
     }
     builders = set()
     for package in OUR_PACKAGES:
@@ -742,8 +742,8 @@ def test_only_the_daemon_and_the_audit_cli_build_repositories():
     assert builders == allowed_builders
 
     # The forensic reader may never open the file it inspects for writing.
-    evidence_cli = (ROOT / "app" / "evidence_cli.py").read_text(encoding="utf-8")
-    assert "read_only(" in evidence_cli
+    audit_cli = (ROOT / "app" / "raw_events_audit_cli.py").read_text(encoding="utf-8")
+    assert "read_only(" in audit_cli
 
     # The nine thin clients that used to be named here one by one are a directory
     # now, and the rule about them is the whole of tests/test_canonical_clients.py:
@@ -809,7 +809,7 @@ def test_the_graph_is_declared_in_one_place_and_injected_everywhere():
 def test_the_audit_floor_is_only_for_writers_with_no_graph():
     """Everything with a constructor takes `AuditRecorder`; the floor is the rest.
 
-    `diagnostics/record.py` is the same five writes over a repository nobody
+    `audit/record.py` is the same five writes over a repository nobody
     injected, and it exists for writers that genuinely cannot be handed one: the
     CLI verb that audits a spawn before the daemon exists, and free functions deep
     enough that passing a recorder would mean growing a parameter on every caller
@@ -833,9 +833,9 @@ def test_the_audit_floor_is_only_for_writers_with_no_graph():
             if "__pycache__" in path.parts:
                 continue
             relative = path.relative_to(ROOT).as_posix()
-            if relative == "diagnostics/record.py":
+            if relative == "audit/record.py":
                 continue
-            if "from diagnostics import record" in _code_only(path):
+            if "from audit import record" in _code_only(path):
                 importers.add(relative)
     assert importers == floor
 
@@ -1053,7 +1053,7 @@ if loaded:
 # `recognized_session` where HarnessLifecycle.apply says `session`, so a keyword
 # call would have worked on one harness and raised on the other.
 
-SOURCE_PACKAGES = ("app", "core", "dashboard", "diagnostics", "domain", "harness",
+SOURCE_PACKAGES = ("app", "core", "dashboard", "audit", "domain", "harness",
                    "engine", "notify", "terminal")
 
 # Structural implementers that must NOT declare their Protocol, with the reason.

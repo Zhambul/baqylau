@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 
-from diagnostics.recorder import AuditRecorder
+from audit.recorder import AuditRecorder
 from harness.contract import HarnessReactorContext
 from harness.models import (
     ControlContext,
@@ -33,7 +33,7 @@ from terminal.contract import TerminalPlugin
 # "for the audit" — was unrecoverable, and the bug could only be named because
 # the stuck dialog happened to still be on screen an hour later.
 #
-# `status` is the diagnostic column, and `indeterminate` is the interesting
+# `status` is the audit column, and `indeterminate` is the interesting
 # value: the request was understood and the gesture was attempted, but the
 # harness never confirmed it — a screen driver that bailed, a paste the TUI
 # refused. `rejected` is a guard declining up front and `acknowledged` is the

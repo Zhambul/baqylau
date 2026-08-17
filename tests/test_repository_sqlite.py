@@ -13,7 +13,7 @@ from typing import Literal
 
 import pytest
 
-from diagnostics.models import (
+from audit.models import (
     ApplicationErrorRecord,
     SpawnRecord,
     StateFileRecord,
@@ -49,11 +49,11 @@ from repository.impl.sqlite.databases import (
     main_database,
     read_only,
 )
-from repository.impl.sqlite.diagnostics import (
-    SqliteDiagnosticReadRepository,
-    SqliteDiagnosticWriteRepository,
+from repository.impl.sqlite.audit import (
+    SqliteAuditReadRepository,
+    SqliteAuditWriteRepository,
 )
-from repository.impl.sqlite.evidence import SqliteTranslationEvidenceRepository
+from repository.impl.sqlite.raw_event_audits import SqliteRawEventAuditRepository
 from repository.impl.sqlite.operation_output import SqliteOperationOutputRepository
 from repository.impl.sqlite.preferences import (
     SqliteHiddenDirectoryRepository,
@@ -66,6 +66,7 @@ from repository.impl.sqlite.preferences import (
 )
 from repository.impl.sqlite.raw_events import SqliteRawEventRepository
 from repository.impl.sqlite.sessions import SqliteSessionRepository
+from repository.impl.sqlite.schema import MAIN_SCHEMA
 from repository.impl.sqlite.terminal import (
     SqliteContentViewRepository,
     SqlitePaneWidthRepository,
@@ -147,6 +148,59 @@ def test_a_file_written_by_another_schema_version_refuses_to_open(tmp_path):
     second = SqliteDatabase(first.path, first.schema, first.schema_version + 1)
     with pytest.raises(SchemaVersionMismatch):
         second.initialize()
+
+
+def test_main_schema_v1_migrates_interpretation_audit_tables_without_losing_rows(tmp_path):
+    path = str(tmp_path / "main.db")
+    legacy_schema = MAIN_SCHEMA.replace("interpretations", "translation_records").replace(
+        "interpretation_events", "canonical_provenance"
+    )
+    legacy = SqliteDatabase(path, legacy_schema, 1)
+    legacy.initialize()
+    with legacy.write() as connection:
+        connection.execute(
+            "INSERT INTO raw_events(raw_event_id, session_id, harness, source_type, "
+            "source_identity, source_name, source_position, actor_id, observed_at, "
+            "encoding, payload) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            ("raw-one", "session-one", "example", "hook", "source", "hook", "1", "actor", 1.0, "json", b"{}"),
+        )
+        connection.execute(
+            "INSERT INTO translation_records(raw_event_id, translator_version, decision, "
+            "reason, completed_at) VALUES(?,?,?,?,?)",
+            ("raw-one", "1", "translated", None, 2.0),
+        )
+        connection.execute(
+            "INSERT INTO canonical_events(event_id, schema_version, event_type, session_id, "
+            "actor_id, harness, accepted_at, payload) VALUES(?,?,?,?,?,?,?,?)",
+            ("event-one", 1, "message.created", "session-one", "actor", "example", 2.0, "{}"),
+        )
+        connection.execute(
+            "INSERT INTO canonical_provenance(event_id, raw_event_id, event_order, "
+            "storage_result) VALUES(?,?,?,?)",
+            ("event-one", "raw-one", 0, "accepted"),
+        )
+
+    migrated = main_database(path)
+    migrated.initialize()
+    with migrated.read() as connection:
+        version = connection.execute("SELECT version FROM schema_version WHERE id=1").fetchone()
+        interpretation = connection.execute("SELECT * FROM interpretations").fetchone()
+        event = connection.execute("SELECT * FROM interpretation_events").fetchone()
+        tables = {
+            row["name"]
+            for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+
+    assert version["version"] == 2
+    assert interpretation["raw_event_id"] == "raw-one"
+    assert interpretation["decision"] == "translated"
+    assert (event["event_id"], event["raw_event_id"], event["storage_result"]) == (
+        "event-one",
+        "raw-one",
+        "accepted",
+    )
+    assert "translation_records" not in tables
+    assert "canonical_provenance" not in tables
 
 
 def test_a_read_only_database_never_creates_the_file(tmp_path):
@@ -339,31 +393,34 @@ def test_paging_walks_a_session_forwards_and_backwards(main):
     assert len(of_type) == 3
 
 
-# --- forensic evidence --------------------------------------------------------
+# --- raw-event audit ----------------------------------------------------------
 
 
-def test_evidence_joins_an_observation_to_its_verdict_and_its_facts(main):
+def test_raw_event_audit_joins_an_observation_to_its_interpretation_and_facts(main):
     raw_events = SqliteRawEventRepository(main)
     canonical = SqliteCanonicalEventRepository(main)
-    evidence = SqliteTranslationEvidenceRepository(main)
+    audits = SqliteRawEventAuditRepository(main)
     raw_events.record([a_raw_event()])
     canonical.record_translation(
         a_raw_event(), "3", TranslationResult((a_started_event(),), "translated"), 1000.0
     )
-    one = evidence.evidence(RawEventId("raw-one"))
+    one = audits.audit(RawEventId("raw-one"))
     assert one is not None
-    assert one.decision == "translated"
-    assert one.translator_version == "3"
-    assert [item.event.event_id for item in one.canonical] == [CanonicalEventId("event-one")]
-    assert evidence.evidence_for_session(SESSION) == (one,)
+    assert one.interpretation is not None
+    assert one.interpretation.decision == "translated"
+    assert one.interpretation.translator_version == "3"
+    assert [item.event.event_id for item in one.interpretation.events] == [
+        CanonicalEventId("event-one")
+    ]
+    assert audits.audits_for_session(SESSION) == (one,)
 
 
-def test_untranslated_evidence_reads_back_as_untranslated(main):
+def test_uninterpreted_raw_event_audit_has_no_interpretation(main):
     raw_events = SqliteRawEventRepository(main)
-    evidence = SqliteTranslationEvidenceRepository(main)
+    audits = SqliteRawEventAuditRepository(main)
     raw_events.record([a_raw_event()])
-    one = evidence.evidence(RawEventId("raw-one"))
-    assert one is not None and one.decision == "untranslated"
+    one = audits.audit(RawEventId("raw-one"))
+    assert one is not None and one.interpretation is None
 
 
 # --- operation output ---------------------------------------------------------
@@ -605,13 +662,13 @@ def test_expired_uploads_come_back_so_the_caller_can_unlink(main):
     assert uploads.remove_expired(50.0) == ()
 
 
-# --- diagnostics --------------------------------------------------------------
+# --- audit --------------------------------------------------------------
 
 
 def test_errors_are_written_and_counted_per_session(tmp_path):
     database = audit_database(str(tmp_path / "audit.db"))
-    writes = SqliteDiagnosticWriteRepository(database)
-    reads = SqliteDiagnosticReadRepository(read_only(database))
+    writes = SqliteAuditWriteRepository(database)
+    reads = SqliteAuditReadRepository(read_only(database))
     writes.record_error(
         ApplicationErrorRecord(str(SESSION), "script", "where", "trace", "context", 1, 5.0)
     )
@@ -623,7 +680,7 @@ def test_errors_are_written_and_counted_per_session(tmp_path):
 def test_the_audit_writer_never_raises_when_its_file_is_unusable(tmp_path):
     unusable = audit_database(str(tmp_path / "missing" / "nested" / "audit.db"))
     unusable.path = str(tmp_path)  # a directory: every open will fail
-    writes = SqliteDiagnosticWriteRepository(unusable)
+    writes = SqliteAuditWriteRepository(unusable)
     writes.record_error(ApplicationErrorRecord("", "s", "f", "t", "c", 1, 1.0))
     writes.record_state_file(StateFileRecord("", "p", "a", "c", "s", 1, 1.0))
     writes.record_spawn(SpawnRecord("", "s", 2, "[]", "why", 1.0))
@@ -633,7 +690,7 @@ def test_the_audit_writer_never_raises_when_its_file_is_unusable(tmp_path):
 
 def test_a_stream_row_is_opened_and_closed_through_its_handle(tmp_path):
     database = audit_database(str(tmp_path / "audit.db"))
-    writes = SqliteDiagnosticWriteRepository(database)
+    writes = SqliteAuditWriteRepository(database)
     handle = writes.open_stream(StreamOpened(str(SESSION), "mirror", "", "", "", 1, 1.0))
     assert handle is not None
     writes.close_stream(handle, "finished", 12)
@@ -645,9 +702,9 @@ def test_a_stream_row_is_opened_and_closed_through_its_handle(tmp_path):
 def test_the_audit_is_a_no_op_when_switched_off(tmp_path, monkeypatch):
     monkeypatch.setenv("BAQYLAU_AUDIT", "0")
     database = audit_database(str(tmp_path / "audit.db"))
-    writes = SqliteDiagnosticWriteRepository(database)
+    writes = SqliteAuditWriteRepository(database)
     writes.record_error(ApplicationErrorRecord(str(SESSION), "s", "f", "t", "c", 1, 1.0))
-    reads = SqliteDiagnosticReadRepository(read_only(database))
+    reads = SqliteAuditReadRepository(read_only(database))
     assert reads.errors_for_session(SESSION) == ()
 
 

@@ -6,10 +6,10 @@ import time
 from dataclasses import dataclass
 from typing import Mapping
 
-from diagnostics.models import StateFileRecord
+from audit.models import StateFileRecord
 from domain.ids import SessionId
-from repository.contract.diagnostics import DiagnosticWriteRepository
-from repository.mapper import diagnostics as mapper
+from repository.contract.audit import AuditWriteRepository
+from repository.mapper import audit as mapper
 
 
 Scalar = str | int | float | bool | None
@@ -54,7 +54,7 @@ class BrowserEventBatch:
 class BrowserTelemetryService:
     """Write browser-only observations to the operational audit."""
 
-    def __init__(self, audit: DiagnosticWriteRepository, process_id: int = 0) -> None:
+    def __init__(self, audit: AuditWriteRepository, process_id: int = 0) -> None:
         self.audit = audit
         self.process_id = process_id
 

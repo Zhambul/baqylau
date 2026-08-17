@@ -95,7 +95,7 @@ def _submission_pending(fe, win, marker) -> bool:
         state = ClaudeCodeTerminalProbe().input_state(fe.terminal, str(win))
     except Exception:
         try:
-            from diagnostics import record  # noqa: PLC0415 — audit fallback inside the failure path
+            from audit import record  # noqa: PLC0415 — audit fallback inside the failure path
 
             record.error("", "type_command (submit verification)", {"window": str(win)})
         except Exception:

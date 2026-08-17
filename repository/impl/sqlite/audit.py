@@ -15,7 +15,7 @@ import sqlite3
 import time
 from typing import Mapping
 
-from diagnostics.models import (
+from audit.models import (
     ApplicationError,
     ApplicationErrorRecord,
     SpawnRecord,
@@ -24,20 +24,20 @@ from diagnostics.models import (
     StreamOpened,
 )
 from domain.ids import SessionId
-from repository.contract.diagnostics import (
-    DiagnosticReadRepository,
-    DiagnosticWriteRepository,
+from repository.contract.audit import (
+    AuditReadRepository,
+    AuditWriteRepository,
 )
 from repository.impl.sqlite import rows
 from repository.impl.sqlite.connection import SqliteDatabase
-from repository.mapper import diagnostics as mapper
+from repository.mapper import audit as mapper
 
 
 def audit_enabled() -> bool:
     return os.environ.get("BAQYLAU_AUDIT", "1") != "0"
 
 
-class SqliteDiagnosticWriteRepository(DiagnosticWriteRepository):
+class SqliteAuditWriteRepository(AuditWriteRepository):
     def __init__(self, database: SqliteDatabase) -> None:
         self.database = database
 
@@ -104,7 +104,7 @@ class SqliteDiagnosticWriteRepository(DiagnosticWriteRepository):
             pass
 
 
-class SqliteDiagnosticReadRepository(DiagnosticReadRepository):
+class SqliteAuditReadRepository(AuditReadRepository):
     def __init__(self, database: SqliteDatabase) -> None:
         self.database = database
 

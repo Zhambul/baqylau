@@ -11,7 +11,7 @@ from api.common.models.fields import SessionIdPath
 from api.responses import errors
 from api.sse import BEAT, EVENT_STREAM, NO_STORE, STREAM_POLL_SECONDS, off_loop, sse_frame
 from app.providers import PaneStreams, Recorder, Sessions
-from diagnostics.recorder import AuditRecorder
+from audit.recorder import AuditRecorder
 from domain.ids import SessionId
 from repository.contract.sessions import SessionRepository
 from terminal.panes.streams import WAITING_FRAME, PaneStreamService

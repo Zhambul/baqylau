@@ -1,6 +1,6 @@
 """Every table we own, in one file, with one version per database.
 
-Three databases, and the reason each is its own file is in `core/data.py`.
+Two databases, and the reason each is its own file is in `core/data.py`.
 
 The write split inside `main.db` is the design: `sessions` is written only by
 the interpreter's session-upsert reaction (birth and upkeep derive from
@@ -15,14 +15,21 @@ dialog answers and the usage windows are rows rather than encoded lists. Three
 opaque columns remain and each is deliberate: `canonical_events.payload` is the
 canonical fact body, closed and versioned by `domain/codec.py`;
 `raw_events.payload` is the verbatim bytes we observed, which is the whole point
-of keeping it; `state_files.content` is a free-form diagnostic blob written by a
+of keeping it; `state_files.content` is a free-form audit blob written by a
 facade whose contract is "record anything, never raise".
 """
 
 from __future__ import annotations
 
-MAIN_SCHEMA_VERSION = 1
+MAIN_SCHEMA_VERSION = 2
 AUDIT_SCHEMA_VERSION = 1
+
+MAIN_MIGRATIONS: dict[int, tuple[str, ...]] = {
+    2: (
+        "ALTER TABLE translation_records RENAME TO interpretations",
+        "ALTER TABLE canonical_provenance RENAME TO interpretation_events",
+    ),
+}
 
 
 _SCHEMA_VERSION_TABLE = """
@@ -75,7 +82,7 @@ CREATE INDEX IF NOT EXISTS index_raw_by_source
 CREATE INDEX IF NOT EXISTS index_raw_by_session
     ON raw_events(session_id, observed_at);
 
-CREATE TABLE IF NOT EXISTS translation_records(
+CREATE TABLE IF NOT EXISTS interpretations(
     raw_event_id TEXT PRIMARY KEY,
     translator_version TEXT NOT NULL,
     decision TEXT NOT NULL CHECK(
@@ -112,7 +119,7 @@ CREATE INDEX IF NOT EXISTS index_canonical_session_actor
 CREATE INDEX IF NOT EXISTS index_canonical_session_cursor
     ON canonical_events(session_id, cursor);
 
-CREATE TABLE IF NOT EXISTS canonical_provenance(
+CREATE TABLE IF NOT EXISTS interpretation_events(
     event_id TEXT NOT NULL,
     raw_event_id TEXT NOT NULL,
     event_order INTEGER NOT NULL,
@@ -334,5 +341,3 @@ CREATE TABLE IF NOT EXISTS streams(
     lines_emitted INTEGER
 );
 """
-
-

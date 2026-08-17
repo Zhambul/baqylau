@@ -14,7 +14,7 @@ from api.common.models.fields import SessionIdPath
 from app.providers import BrowserTelemetry
 from api.guard import control_plane
 from api.responses import GUARDED
-from diagnostics.telemetry import (
+from audit.telemetry import (
     BrowserEvent,
     BrowserEventBatch,
     ClientFailureReport,

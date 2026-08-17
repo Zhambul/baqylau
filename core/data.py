@@ -37,7 +37,7 @@ def main_database_path() -> str:
 
 
 def audit_database_path() -> str:
-    """The operational diagnostics: what the MACHINERY did."""
+    """The operational audit: what the MACHINERY did."""
     return os.path.join(data_directory(), AUDIT_DATABASE_NAME)
 
 

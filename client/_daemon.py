@@ -5,7 +5,7 @@
 # 23 ms), and a POST to a fixed local port needs nothing urllib adds.
 #
 # A failure never leaves this module. A client that cannot reach the daemon does
-# NOTHING — no audit row, no fallback store, no retry — because it must never
+# NOTHING — no debug row, no fallback store, no retry — because it must never
 # fail the harness or the terminal that launched it, and because the daemon is
 # the one interpreter: a delivery it never accepted did not happen. The single
 # exception is `lines()`, whose caller reconnects for a living.

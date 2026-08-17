@@ -20,8 +20,8 @@ repository implementation and lives there only because a shared package may not
 contain a harness's name.
 
 ```sh
-python3 bin/baqylau-audit.py session <sid>   # all raw evidence + its interpretations
-python3 bin/baqylau-audit.py raw <raw_id>    # one observation, exact bytes
+python3 bin/baqylau-raw-events-audit.py session <sid>  # every raw event + interpretation
+python3 bin/baqylau-raw-events-audit.py raw <raw_id>   # one raw event, exact bytes
 
 python3 bin/baqylau-dashboard.py serve|start|stop|status
 

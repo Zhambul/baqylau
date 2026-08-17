@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from diagnostics.recorder import AuditRecorder
+from audit.recorder import AuditRecorder
 from terminal.services.panes import PaneWidthService
 from terminal.adapter import TerminalAdapter
 

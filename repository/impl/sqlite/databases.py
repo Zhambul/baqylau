@@ -17,12 +17,18 @@ from repository.impl.sqlite.schema import (
     AUDIT_SCHEMA,
     AUDIT_SCHEMA_VERSION,
     MAIN_SCHEMA,
+    MAIN_MIGRATIONS,
     MAIN_SCHEMA_VERSION,
 )
 
 
 def main_database(path: str | None = None) -> SqliteDatabase:
-    return SqliteDatabase(path or data.main_database_path(), MAIN_SCHEMA, MAIN_SCHEMA_VERSION)
+    return SqliteDatabase(
+        path or data.main_database_path(),
+        MAIN_SCHEMA,
+        MAIN_SCHEMA_VERSION,
+        migrations=MAIN_MIGRATIONS,
+    )
 
 
 def audit_database(path: str | None = None) -> SqliteDatabase:

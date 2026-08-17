@@ -36,8 +36,8 @@ from dashboard.services.overview import GlobalApplicationService
 from dashboard.services.sessions import DashboardSessionService
 from dashboard.services.streams import DashboardStreamService
 from dashboard.services.workspace import SessionApplicationService
-from diagnostics.recorder import AuditRecorder
-from diagnostics.telemetry import BrowserTelemetryService
+from audit.recorder import AuditRecorder
+from audit.telemetry import BrowserTelemetryService
 from engine.interpret.loop import Interpreter
 from engine.interpret.reactions import (
     InterruptCanonicalEventReaction,
@@ -68,14 +68,13 @@ from harness.services.probe import TerminalInputService
 from harness.services.telemetry import TelemetryGatewayService
 from harness.services.usage import ApplicationUsageState, HarnessUsageService
 from notify.presence import Presence
-from repository.contract.diagnostics import (
-    DiagnosticReadRepository,
-    DiagnosticWriteRepository,
+from repository.contract.audit import (
+    AuditReadRepository,
+    AuditWriteRepository,
 )
 from repository.contract.facts import (
     CanonicalEventRepository,
     RawEventRepository,
-    TranslationEvidenceRepository,
 )
 from repository.contract.operations import OperationOutputRepository
 from repository.contract.preferences import (
@@ -95,11 +94,10 @@ from repository.contract.workspace import SessionWorkspaceRepository
 from repository.impl.sqlite.canonical_events import SqliteCanonicalEventRepository
 from repository.impl.sqlite.connection import SqliteDatabase
 from repository.impl.sqlite.databases import audit_database, main_database, read_only
-from repository.impl.sqlite.diagnostics import (
-    SqliteDiagnosticReadRepository,
-    SqliteDiagnosticWriteRepository,
+from repository.impl.sqlite.audit import (
+    SqliteAuditReadRepository,
+    SqliteAuditWriteRepository,
 )
-from repository.impl.sqlite.evidence import SqliteTranslationEvidenceRepository
 from repository.impl.sqlite.operation_output import SqliteOperationOutputRepository
 from repository.impl.sqlite.preferences import (
     SqliteHiddenDirectoryRepository,
@@ -220,11 +218,6 @@ def operation_output(database: MainDb) -> OperationOutputRepository:
 OperationOutput = Annotated[OperationOutputRepository, Depends(operation_output)]
 
 
-@singleton
-def evidence(database: MainDb) -> TranslationEvidenceRepository:
-    return SqliteTranslationEvidenceRepository(database)
-
-
 
 @singleton
 def workspaces(database: MainDb) -> SessionWorkspaceRepository:
@@ -323,17 +316,17 @@ UploadStorage = Annotated[UploadRepository, Depends(upload_storage)]
 
 
 @singleton
-def audit(database: AuditDb) -> DiagnosticWriteRepository:
-    return SqliteDiagnosticWriteRepository(database)
+def audit_writes(database: AuditDb) -> AuditWriteRepository:
+    return SqliteAuditWriteRepository(database)
 
 
-Audit = Annotated[DiagnosticWriteRepository, Depends(audit)]
+AuditWrites = Annotated[AuditWriteRepository, Depends(audit_writes)]
 
 
 @singleton
-def recorder(writes: Audit) -> AuditRecorder:
+def recorder(writes: AuditWrites) -> AuditRecorder:
     """What the machinery did. Everything with a constructor takes this; the
-    floor (diagnostics/record.py) is for the writers that have no graph."""
+    floor (audit/record.py) is for the writers that have no graph."""
     return AuditRecorder(writes)
 
 
@@ -341,11 +334,11 @@ Recorder = Annotated[AuditRecorder, Depends(recorder)]
 
 
 @singleton
-def diagnostics(database: AuditReaderDb) -> DiagnosticReadRepository:
-    return SqliteDiagnosticReadRepository(database)
+def audit_reads(database: AuditReaderDb) -> AuditReadRepository:
+    return SqliteAuditReadRepository(database)
 
 
-Diagnostics = Annotated[DiagnosticReadRepository, Depends(diagnostics)]
+AuditReads = Annotated[AuditReadRepository, Depends(audit_reads)]
 
 
 @singleton
@@ -376,7 +369,7 @@ PaneWidths = Annotated[PaneWidthService, Depends(pane_width_service)]
 
 
 @singleton
-def content_views(storage: ContentViewStorage, recorder: Audit) -> ContentViewService:
+def content_views(storage: ContentViewStorage, recorder: AuditWrites) -> ContentViewService:
     return ContentViewService(storage, recorder)
 
 
@@ -547,7 +540,7 @@ def session_application(
     events: CanonicalEvents,
     session_queries: Queries,
     reader: TerminalInput,
-    audit_reader: Diagnostics,
+    audit_reader: AuditReads,
     workspace_storage: Workspaces,
     modes: ViewModes,
     settings: NotificationSettings,
@@ -669,7 +662,7 @@ def insights(
     events: CanonicalEvents,
     session_queries: Queries,
     reader: TerminalInput,
-    audit_reader: Diagnostics,
+    audit_reader: AuditReads,
     checkouts: Repositories,
 ) -> ApplicationInsightsService:
     return ApplicationInsightsService(
@@ -713,7 +706,7 @@ Uploads = Annotated[UploadService, Depends(uploads)]
 
 
 @singleton
-def browser_telemetry(recorder: Audit) -> BrowserTelemetryService:
+def browser_telemetry(recorder: AuditWrites) -> BrowserTelemetryService:
     return BrowserTelemetryService(recorder, os.getpid())
 
 

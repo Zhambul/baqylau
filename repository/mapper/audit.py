@@ -8,16 +8,16 @@ from __future__ import annotations
 
 import json
 
-from diagnostics.models import (
+from audit.models import (
     ApplicationError,
     ApplicationErrorRecord,
     SpawnRecord,
     StateFileRecord,
     StreamOpened,
 )
-from repository.model.diagnostics import ErrorRow
+from repository.model.audit import ErrorRow
 
-# A diagnostic context is arbitrary caller data. It is recorded, never queried,
+# A audit context is arbitrary caller data. It is recorded, never queried,
 # so it is bounded rather than shaped.
 CONTENT_LIMIT = 2000
 

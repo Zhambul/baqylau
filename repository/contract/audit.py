@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Mapping, Protocol
 
-from diagnostics.models import (
+from audit.models import (
     ApplicationError,
     ApplicationErrorRecord,
     SpawnRecord,
@@ -21,7 +21,7 @@ from diagnostics.models import (
 from domain.ids import SessionId
 
 
-class DiagnosticWriteRepository(Protocol):
+class AuditWriteRepository(Protocol):
     """Every method swallows storage failures: a broken auditor must never take
     down the thing it exists to explain."""
 
@@ -45,7 +45,7 @@ class DiagnosticWriteRepository(Protocol):
         ...
 
 
-class DiagnosticReadRepository(Protocol):
+class AuditReadRepository(Protocol):
     def errors_for_session(self, session_id: SessionId) -> tuple[ApplicationError, ...]: ...
 
     def error_counts(self) -> Mapping[SessionId, int]:

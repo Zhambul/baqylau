@@ -29,7 +29,12 @@ def operation_summary_kind(activity: OperationActivity) -> SummaryKind:
     if activity.category == "message":
         return "message_delivery"
     if activity.category is None:
-        raise ValueError(f"operation {activity.operation_id} has no canonical category")
+        # A completion/progress can be observed without its start (for example,
+        # a nested tool whose host only emits the terminal event). The activity
+        # projection deliberately preserves that partial fact with category
+        # None; render it as the generic tool vocabulary instead of letting one
+        # incomplete operation make the entire session backlog return 500.
+        return "tool"
     return activity.category
 
 

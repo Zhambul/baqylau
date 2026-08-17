@@ -20,9 +20,9 @@ from domain.ids import (
 )
 from domain.operations import OperationOutputFollowing
 from domain.records import (
-    ProvenanceEntry,
+    InterpretationEventRecord,
     StoredCanonicalEvent,
-    TranslationRecord,
+    InterpretationRecord,
 )
 from harness.models import RawEvent, Session
 from repository.model.facts import (
@@ -190,10 +190,10 @@ def _encoded_envelope(row: CanonicalEventRow) -> bytes:
     ).encode("utf-8")
 
 
-# --- verdicts and provenance --------------------------------------------------
+# --- interpretations ----------------------------------------------------------
 
 
-def translation_record_values(record: TranslationRecord) -> tuple[object, ...]:
+def interpretation_record_values(record: InterpretationRecord) -> tuple[object, ...]:
     return (
         str(record.raw_event_id),
         record.translator_version,
@@ -203,7 +203,7 @@ def translation_record_values(record: TranslationRecord) -> tuple[object, ...]:
     )
 
 
-def provenance_values(entry: ProvenanceEntry) -> tuple[object, ...]:
+def interpretation_event_values(entry: InterpretationEventRecord) -> tuple[object, ...]:
     return (
         str(entry.event_id),
         str(entry.raw_event_id),

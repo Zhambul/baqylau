@@ -25,7 +25,7 @@ from harness.models.controls import (
     ControlRequest,
     ControlResult,
 )
-from harness.models.evidence import RawEvent, TranslationResult
+from harness.models.raw_events import RawEvent, TranslationResult
 from harness.models.hooks import HarnessHookRequest, HarnessHookResponse
 from harness.models.info import HarnessInfo
 from harness.models.launch import HarnessLaunchPlan, LaunchRequest
