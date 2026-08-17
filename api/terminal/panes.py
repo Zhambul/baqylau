@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 
 from api.dependencies import ApplicationGraph
 from api.guard import control_plane
+from api.responses import GUARDED, with_body
 from api.terminal.models.panes.grow_request import GrowPaneRequest
 from api.terminal.models.panes.pane_command_response import PaneCommandResponse
 from api.terminal.models.panes.reset_request import ResetPaneRequest
@@ -15,7 +16,14 @@ from api.terminal.models.panes.set_percent_request import SetPanePercentRequest
 from api.terminal.models.panes.shrink_request import ShrinkPaneRequest
 from api.terminal.models.panes.toggle_request import TogglePanesRequest
 
-router = APIRouter(dependencies=[Depends(control_plane())])
+router = APIRouter(dependencies=[Depends(control_plane())], responses=GUARDED)
+
+# Same rule as the control plane: the verdict is the status, the body is
+# unchanged. `handled=False` (no session in this window) is a 200 — nothing was
+# asked of the terminal; a 409 is the terminal refusing.
+PANE_RESPONSES = with_body(PaneCommandResponse, {
+    409: "Handled by this window's session, and the terminal refused it.",
+})
 
 
 def _execute(application, command, body, columns=None, percent=None) -> JSONResponse:
@@ -33,26 +41,31 @@ def _execute(application, command, body, columns=None, percent=None) -> JSONResp
     return JSONResponse(reply.model_dump(), status)
 
 
-@router.post("/api/terminal/panes/toggle", response_model=PaneCommandResponse)
+@router.post("/api/terminal/panes/toggle", response_model=PaneCommandResponse,
+             responses=PANE_RESPONSES)
 def toggle_panes(body: TogglePanesRequest, application: ApplicationGraph) -> JSONResponse:
     return _execute(application, "toggle", body)
 
 
-@router.post("/api/terminal/panes/grow", response_model=PaneCommandResponse)
+@router.post("/api/terminal/panes/grow", response_model=PaneCommandResponse,
+             responses=PANE_RESPONSES)
 def grow_pane(body: GrowPaneRequest, application: ApplicationGraph) -> JSONResponse:
     return _execute(application, "grow", body, columns=body.columns)
 
 
-@router.post("/api/terminal/panes/shrink", response_model=PaneCommandResponse)
+@router.post("/api/terminal/panes/shrink", response_model=PaneCommandResponse,
+             responses=PANE_RESPONSES)
 def shrink_pane(body: ShrinkPaneRequest, application: ApplicationGraph) -> JSONResponse:
     return _execute(application, "shrink", body, columns=body.columns)
 
 
-@router.post("/api/terminal/panes/reset", response_model=PaneCommandResponse)
+@router.post("/api/terminal/panes/reset", response_model=PaneCommandResponse,
+             responses=PANE_RESPONSES)
 def reset_pane(body: ResetPaneRequest, application: ApplicationGraph) -> JSONResponse:
     return _execute(application, "reset", body)
 
 
-@router.post("/api/terminal/panes/set-percent", response_model=PaneCommandResponse)
+@router.post("/api/terminal/panes/set-percent", response_model=PaneCommandResponse,
+             responses=PANE_RESPONSES)
 def set_pane_percent(body: SetPanePercentRequest, application: ApplicationGraph) -> JSONResponse:
     return _execute(application, "setpct", body, percent=body.percent)

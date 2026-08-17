@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import http.client
 import json
 import socket
@@ -10,6 +11,9 @@ import threading
 import time
 from dataclasses import replace
 from urllib.parse import quote
+
+from fastapi.routing import APIRoute
+from pydantic import TypeAdapter
 
 from api.app import build_web_application
 from api.dashboard.models.controls.send_text_request import SendTextRequest
@@ -135,6 +139,38 @@ def _get(server, path: str):
     body = response.read()
     connection.close()
     return response.status, response.getheader("Content-Type"), body
+
+
+def _get_response(server, path: str, read_body: bool = True):
+    """One GET, exposing the response HEADERS as well as its body.
+
+    `read_body=False` is for the event streams, whose body never ends: the
+    headers are already out by then, which is the whole point of a stream.
+    """
+    connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=2)
+    try:
+        connection.request("GET", path)
+        response = connection.getresponse()
+        body = response.read() if read_body else b""
+        # response.headers, not dict(getheaders()): a header name is
+        # case-insensitive and the wire spells these lowercase, so a plain dict
+        # would make every lookup below a lie about what was sent.
+        return response.status, response.headers, body
+    finally:
+        connection.close()
+
+
+def _post_without_a_declared_length(server, path: str, body: bytes) -> int:
+    """A chunked POST, spoken by hand because neither http.client nor fetch will
+    build one for a body it can measure. Returns the status code only."""
+    head = (
+        "POST %s HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+        "Content-Type: application/json\r\nX-Baqylau: 1\r\n"
+        "Transfer-Encoding: chunked\r\n\r\n" % path
+    ).encode()
+    with socket.create_connection(("127.0.0.1", server.server_port), timeout=2) as raw:
+        raw.sendall(head + b"%x\r\n%s\r\n0\r\n\r\n" % (len(body), body))
+        return int(raw.recv(4096).split(b" ")[1])
 
 
 def _post(server, path: str, body: dict):
@@ -1222,6 +1258,334 @@ def test_hook_identity_reuse_with_different_bytes_is_a_conflict_not_a_rewrite(tm
         status, body = _post_hook(server, "claude_code", changed)
         assert status == 409
         assert application.evidence.evidence_for_session(SessionId("hook-session"))[0].payload == first
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+# --- what the HTTP layer owes every caller ------------------------------------
+#
+# The seven properties below are not about any one route. They are the ones a
+# route gets for free and therefore nobody re-checks: that a stream does not
+# stall the server, that a cap actually caps, that a bug is reported as a bug,
+# that the published schema is true, and that a reply is hardened.
+
+
+def test_a_stream_poll_never_runs_on_the_event_loop(tmp_path):
+    """Every frame in every stream comes from a blocking SQLite read, and an SSE
+    generator runs ON the event loop — so a direct call stalls every other
+    connection and every request for the length of that query, once per client
+    per poll interval. Nothing about it fails visibly; the server just gets
+    slower the more of it you watch.
+
+    api/sse.py `off_loop` is what prevents it, and the property is exactly
+    checkable without reaching for a clock: on a worker thread there is no
+    running loop at all.
+    """
+    application = _application(tmp_path)
+    where = []
+
+    def watched(read):
+        def observe(*arguments):
+            try:
+                asyncio.get_running_loop()
+                where.append("event loop")
+            except RuntimeError:
+                where.append("worker thread")
+            return read(*arguments)
+        return observe
+
+    # The three reads the two browser streams poll on.
+    application.global_application.snapshot = watched(
+        application.global_application.snapshot
+    )
+    application.dashboard_stream.frame = watched(application.dashboard_stream.frame)
+    application.session_application.snapshot = watched(
+        application.session_application.snapshot
+    )
+
+    server, thread = _server(application)
+    connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=2)
+    other = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=2)
+    try:
+        connection.request("GET", "/api/stream")
+        connection.getresponse().readline()
+        other.request("GET", "/api/sessions/session-one/stream?after_cursor=0")
+        other.getresponse().readline()
+
+        assert where, "no poll was observed at all"
+        assert set(where) == {"worker thread"}, where
+    finally:
+        connection.close()
+        other.close()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_a_body_whose_length_is_not_declared_is_refused_before_it_is_read(tmp_path):
+    """The cap is checked before the body is parsed, which is what makes it free —
+    and which is why the length has to be declared.
+
+    A chunked POST declared nothing, so `int(header or 0)` read it as a zero and
+    it passed every cap; the handler behind it then buffered the whole stream.
+    h11 imposes no maximum of its own, so the header WAS the limit and an absent
+    header was no limit at all.
+    """
+    server, thread = _server(_application(tmp_path))
+    try:
+        status = _post_without_a_declared_length(
+            server, "/api/terminal/views", b'{"content_reference": "event-one:field"}'
+        )
+        assert status == 411
+
+        # ...and the same request, with its length declared, is served as always.
+        status, body = _post(
+            server, "/api/terminal/views", {"content_reference": "event-one:field"}
+        )
+        assert (status, json.loads(body)) == (200, {"opened": True})
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_an_internal_failure_is_a_500_and_an_audit_row_not_a_400(tmp_path, monkeypatch):
+    """A handler registered for KeyError, ValueError and TypeError answered every
+    one of them with 400 and the exception's own message.
+
+    Those three types are raised all over this tree as invariant checks on code
+    we wrote, so a real bug was reported to the browser as the CALLER's mistake:
+    no `errors` row, no 500, and whatever the internal message happened to say on
+    the wire. Only domain.errors.ApplicationInputError means "your request" now.
+    """
+    application = _application(tmp_path)
+    audited = []
+    monkeypatch.setattr(
+        "diagnostics.record.error",
+        lambda *arguments, **keywords: audited.append(arguments),
+    )
+
+    def explode():
+        raise ValueError("/Users/someone/private/notes is not a directory")
+
+    monkeypatch.setattr(application.dashboard_sessions, "sessions", explode)
+    server, thread = _server(application)
+    try:
+        status, headers, body = _get_response(server, "/api/sessions")
+
+        assert status == 500
+        assert json.loads(body) == {"error": "internal"}
+        assert "private" not in body.decode()
+        assert audited, "an internal failure must leave an errors row behind"
+        # This reply is the one no middleware can wrap (Starlette runs the
+        # Exception handler above the whole user stack), so it is hardened at the
+        # point it is built instead.
+        assert headers["X-Content-Type-Options"] == "nosniff"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_input_the_caller_really_did_get_wrong_is_still_a_400_with_its_reason(tmp_path):
+    """The other half of the change above: the sites that meant "bad request" say
+    so by type, and keep the 400 and the message the browser already reads."""
+    server, thread = _server(_application(tmp_path))
+    try:
+        # UnknownReference — a session id that names nothing.
+        status, _headers, body = _get_response(server, "/api/sessions/nosuchsession")
+        assert status == 400
+        assert "unknown session" in json.loads(body)["error"]
+
+        # MalformedRequest — a content reference that is not <event>:<field>.
+        status, _headers, body = _get_response(server, "/api/content/nocolonhere")
+        assert status == 400
+        assert json.loads(body)["error"] == "invalid content reference"
+
+        # UnknownReference again, from the registry — and this one used to be a
+        # 500, because HarnessRegistryError was a RuntimeError nothing handled.
+        status, _headers, body = _get_response(server, "/api/harnesses/mystery/catalog")
+        assert status == 400
+        assert "mystery" in json.loads(body)["error"]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_a_session_id_that_could_never_be_one_is_refused_at_the_boundary(tmp_path):
+    """A path parameter used to be a bare `str`, so anything at all reached the
+    store, the harness registry, and — truncated to 200 characters, which is not
+    the same thing as validated — the audit rows a stream writes about itself."""
+    server, thread = _server(_application(tmp_path))
+    try:
+        status, _headers, body = _get_response(server, "/api/sessions/not%20a%20session")
+        assert status == 400
+        assert "session_id" in json.loads(body)["error"]
+
+        status, _headers, _body = _get_response(server, "/api/harnesses/NOT-A-NAME/catalog")
+        assert status == 400
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+# The path parameters this fixture can satisfy. A route naming anything else is
+# skipped rather than guessed at — better an honest gap than a fabricated id.
+_FIXTURE_PATH_PARAMETERS = {"session_id": str(SESSION_ID), "harness": "codex"}
+
+
+def _api_routes(web):
+    """Every APIRoute in the application, flattened.
+
+    `web.routes` is not a flat list in this FastAPI: `include_router` leaves an
+    `_IncludedRouter` node that holds the original router rather than splicing its
+    routes in. Both shapes are walked, and the test below asserts the walk really
+    found the read plane — so a FastAPI that changes this again fails loudly here
+    instead of quietly covering nothing.
+    """
+    pending = list(web.routes)
+    while pending:
+        route = pending.pop()
+        if isinstance(route, APIRoute):
+            yield route
+            continue
+        nested = getattr(route, "original_router", None)
+        nested = getattr(nested, "routes", None) or getattr(route, "routes", None)
+        if nested:
+            pending.extend(nested)
+
+
+def test_every_declared_response_model_describes_the_bytes_actually_sent(tmp_path):
+    """`response_model=` is DOCUMENTATION wherever a route answers with a
+    JSONResponse: FastAPI validates nothing it did not serialize itself. That is
+    the deliberate deal in api/dashboard/controls.py — the contract becomes
+    readable, the wire stays put — and the gap it leaves is drift, where
+    `json_ready` renames a field and the published schema keeps describing the
+    old one with nothing to notice.
+
+    So: call the read plane and validate each reply against its OWN declared
+    model. The route table is read from a second application built for the
+    purpose; it is a property of the code, not of the graph.
+    """
+    application = _application(tmp_path)
+    server, thread = _server(application)
+    try:
+        checked = []
+        for route in _api_routes(build_web_application(application)):
+            if "GET" not in route.methods:
+                continue
+            if route.response_model is None:
+                continue
+            try:
+                path = route.path.format(**_FIXTURE_PATH_PARAMETERS)
+            except KeyError:
+                continue
+            status, _headers, body = _get_response(server, path)
+            assert status == 200, (path, body)
+            TypeAdapter(route.response_model).validate_python(json.loads(body))
+            checked.append(route.path)
+
+        # ...and the loop really did cover the read plane, rather than skipping
+        # its way to a pass.
+        assert "/api/sessions" in checked
+        assert "/api/sessions/{session_id}" in checked
+        assert "/api/harnesses/{harness}/catalog" in checked
+        assert len(checked) >= 6, checked
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_the_published_schema_names_every_status_a_caller_must_handle(tmp_path):
+    """/openapi.yaml is a published document — pyyaml is a runtime dependency for
+    it alone — and it described a server that only ever answered 200: no error
+    body anywhere, no 202 or 409 on the plane that returns them, and a 422 this
+    server never sends. A client generated from it was wrong about every failure.
+    """
+    document = build_web_application(_application(tmp_path)).openapi()
+    error_body = {"$ref": "#/components/schemas/ErrorResponse"}
+
+    def answers(path: str, method: str):
+        return document["paths"][path][method]["responses"]
+
+    def schema(entry):
+        return entry["content"]["application/json"]["schema"]
+
+    # Every route carries what the exception handlers can always produce...
+    for path, method in (("/api/sessions", "get"),
+                         ("/api/content/{content_reference}", "get"),
+                         ("/api/terminal/views", "post")):
+        assert {"400", "500"} <= set(answers(path, method)), (path, method)
+        assert schema(answers(path, method)["400"]) == error_body
+
+    # ...and nothing carries the 422 FastAPI adds by default, because
+    # `_validation_error` renders a schema rejection as that same 400.
+    assert not [
+        (path, method)
+        for path, operations in document["paths"].items()
+        for method, operation in operations.items()
+        if isinstance(operation, dict) and "422" in operation.get("responses", {})
+    ]
+
+    # The guard's four refusals, on a route that sits behind it.
+    guarded = answers("/api/terminal/views", "post")
+    assert {"403", "411", "413", "415"} <= set(guarded)
+
+    # A gesture's real outcomes — all three carrying the gesture's OWN body,
+    # because a rejection here is a verdict and not an error.
+    gesture = answers("/api/sessions/{session_id}/controls/send-text", "post")
+    assert {"200", "202", "409"} <= set(gesture)
+    # ...compared on the union itself, since FastAPI titles each status's copy of
+    # it after the status.
+    outcome = schema(gesture["200"])["anyOf"]
+    assert schema(gesture["202"])["anyOf"] == outcome
+    assert schema(gesture["409"])["anyOf"] == outcome
+    assert schema(gesture["400"]) == error_body
+
+    # A launch never answers 200 at all: 202 is its success.
+    launch = answers("/api/sessions", "post")
+    assert "200" not in launch
+    assert {"202", "409"} <= set(launch)
+
+
+def test_every_plane_carries_the_security_headers(tmp_path):
+    """The dashboard is tunneled to real browsers and holds everything a session
+    ever said. There is deliberately no CORS middleware in this tree, which stops
+    a hostile page from READING this origin; these stop a string that reached one
+    of our own pages from ACTING, and they are the other half.
+    """
+    server, thread = _server(_application(tmp_path))
+    try:
+        # The document, a JSON reply, a framework 404 and an event stream: four
+        # different producers, one policy. The stream's body is never read.
+        for path, read_body in (("/", True),
+                                ("/api/sessions", True),
+                                ("/api/nothing-is-here", True),
+                                ("/api/stream", False)):
+            _status, headers, _body = _get_response(server, path, read_body=read_body)
+            assert headers["X-Content-Type-Options"] == "nosniff", path
+            assert headers["X-Frame-Options"] == "DENY", path
+            assert headers["Referrer-Policy"] == "strict-origin-when-cross-origin", path
+
+            policy = headers["Content-Security-Policy"]
+            # No injected string runs as script...
+            assert "script-src 'self' blob:" in policy, path
+            # ...nothing may frame the control plane...
+            assert "frame-ancestors 'none'" in policy, path
+            # ...and the exfiltration barrier names the ONE third party the page
+            # legitimately opens a socket to.
+            assert "connect-src 'self' wss://api.deepgram.com" in policy, path
+
+        # A route that sets its own Cache-Control keeps it: the policy only ever
+        # fills in a header that is absent.
+        _status, headers, _body = _get_response(server, "/static/style.css")
+        assert headers["Cache-Control"] == "no-store"
+        assert headers["X-Content-Type-Options"] == "nosniff"
     finally:
         server.shutdown()
         server.server_close()

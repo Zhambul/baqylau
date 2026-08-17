@@ -24,6 +24,7 @@ from api.dashboard.models.files.upload_request import UploadRequest
 from api.dashboard.models.files.upload_response import UploadResponse
 from api.dependencies import ApplicationGraph
 from api.guard import control_plane, reject_input, valid_session_id
+from api.responses import GUARDED, errors
 from domain.ids import SessionId
 from domain.uploads import StoredUpload
 from diagnostics import record as A
@@ -41,7 +42,12 @@ def _claimed_session_id(value: str | None) -> str:
     return value if isinstance(value, str) and valid_session_id(value) else ""
 
 
-@router.post("/api/application/uploads", dependencies=[Depends(control_plane(UPLOAD_MAX))])
+@router.post("/api/application/uploads",
+             dependencies=[Depends(control_plane(UPLOAD_MAX))],
+             responses={**GUARDED, **errors({
+                 413: "Decoded bytes over UPLOAD_MAX — the base64 envelope passed, the file did not.",
+                 500: "The bytes could not be written; no row was recorded.",
+             })})
 def upload(body: UploadRequest, application: ApplicationGraph) -> UploadResponse:
     """Stage a composer ATTACHMENT (an image/screenshot the browser pasted,
     dropped, or picked, or any other file) on disk, and hand back the ABSOLUTE
@@ -102,7 +108,8 @@ def upload(body: UploadRequest, application: ApplicationGraph) -> UploadResponse
                           is_image=body.mime in IMAGE_MIMES)
 
 
-@router.post("/api/application/clipboard-files", dependencies=[Depends(control_plane())])
+@router.post("/api/application/clipboard-files",
+             dependencies=[Depends(control_plane())], responses=GUARDED)
 def clipboard_files(body: ClipboardFilesRequest) -> ClipboardMatchesResponse:
     """Resolve the FULL PATHS of files the browser just pasted as zero-byte
     promises. The page cannot answer this itself: a pasted `File` carries a
@@ -124,7 +131,12 @@ def clipboard_files(body: ClipboardFilesRequest) -> ClipboardMatchesResponse:
     return ClipboardMatchesResponse(paths=tuple(matched))
 
 
-@router.post("/api/application/dictation-token", dependencies=[Depends(control_plane())])
+@router.post("/api/application/dictation-token",
+             dependencies=[Depends(control_plane())],
+             responses={**GUARDED, **errors({
+                 501: "No Deepgram key is configured on this host — the page toasts this one.",
+                 502: "Deepgram refused to mint the grant.",
+             })})
 def dictation_token(body: DictationTokenRequest) -> DictationGrantResponse:
     """Mint a short-lived Deepgram grant for the browser's DIRECT wss
     connection (this server never sees audio; its whole role is this trade:

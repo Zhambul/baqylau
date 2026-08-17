@@ -35,15 +35,17 @@ from api.dashboard.models.application.push_subscription_request import (
 )
 from api.dashboard.models.application.tasks_hidden_request import TasksHiddenRequest
 from api.dashboard.models.application.view_mode_request import ViewModeRequest
+from api.common.models.fields import SessionIdPath
 from api.dependencies import ApplicationGraph
 from api.guard import control_plane
+from api.responses import GUARDED
 from notify.channels import webpush
 from dashboard.services.overview import BrowserPresence, BrowserPushSubscription
 from domain.workspace import AnswerSelection, QueuedMessage
 from domain.ids import AttentionId, SessionId
 
 router = APIRouter()
-guarded = APIRouter(dependencies=[Depends(control_plane())])
+guarded = APIRouter(dependencies=[Depends(control_plane())], responses=GUARDED)
 
 
 @router.get("/api/application/push-configuration")
@@ -124,7 +126,7 @@ def report_presence(body: PresenceRequest, application: ApplicationGraph) -> Sav
 
 @guarded.post("/api/sessions/{session_id}/application/composer-draft")
 def save_composer_draft(
-    session_id: str, body: ComposerDraftRequest, application: ApplicationGraph
+    session_id: SessionIdPath, body: ComposerDraftRequest, application: ApplicationGraph
 ) -> SavedResponse:
     saved = application.session_application.save_composer_draft(
         SessionId(session_id), body.text, body.origin, body.sequence
@@ -134,7 +136,7 @@ def save_composer_draft(
 
 @guarded.post("/api/sessions/{session_id}/application/composer-queue")
 def save_composer_queue(
-    session_id: str, body: ComposerQueueRequest, application: ApplicationGraph
+    session_id: SessionIdPath, body: ComposerQueueRequest, application: ApplicationGraph
 ) -> SavedResponse:
     messages = tuple(
         QueuedMessage(item.text) for item in body.items if item.text.strip()
@@ -147,7 +149,7 @@ def save_composer_queue(
 
 @guarded.post("/api/sessions/{session_id}/application/dialog-draft")
 def save_dialog_draft(
-    session_id: str, body: DialogDraftRequest, application: ApplicationGraph
+    session_id: SessionIdPath, body: DialogDraftRequest, application: ApplicationGraph
 ) -> SavedResponse:
     selections = tuple(
         AnswerSelection(answer.selected, answer.other) for answer in body.answers
@@ -160,7 +162,7 @@ def save_dialog_draft(
 
 @guarded.post("/api/sessions/{session_id}/application/view-mode")
 def set_view_mode(
-    session_id: str, body: ViewModeRequest, application: ApplicationGraph
+    session_id: SessionIdPath, body: ViewModeRequest, application: ApplicationGraph
 ) -> SavedResponse:
     application.session_application.set_view_mode(SessionId(session_id), body.view_mode)
     return SavedResponse()
@@ -168,7 +170,7 @@ def set_view_mode(
 
 @guarded.post("/api/sessions/{session_id}/application/notifications-muted")
 def set_notifications_muted(
-    session_id: str, body: NotificationsMutedRequest, application: ApplicationGraph
+    session_id: SessionIdPath, body: NotificationsMutedRequest, application: ApplicationGraph
 ) -> SavedResponse:
     application.session_application.set_notifications_muted(SessionId(session_id), body.muted)
     return SavedResponse()
@@ -176,7 +178,7 @@ def set_notifications_muted(
 
 @guarded.post("/api/sessions/{session_id}/application/tasks-hidden")
 def set_tasks_hidden(
-    session_id: str, body: TasksHiddenRequest, application: ApplicationGraph
+    session_id: SessionIdPath, body: TasksHiddenRequest, application: ApplicationGraph
 ) -> SavedResponse:
     application.session_application.set_tasks_hidden(SessionId(session_id), body.hidden)
     return SavedResponse()

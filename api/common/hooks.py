@@ -7,7 +7,9 @@ from fastapi import APIRouter, Depends, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 
+from api.common.models.fields import HarnessNamePath
 from api.guard import control_plane
+from api.responses import GUARDED, errors
 from harness.hooks.gateway import UnknownHookHarness
 from harness.models import HarnessHookRequest
 from diagnostics import record as A
@@ -28,8 +30,15 @@ router = APIRouter()
 @router.post(
     "/api/harnesses/{harness}/hooks",
     dependencies=[Depends(control_plane(HOOK_MAX))],
+    responses={
+        **GUARDED,
+        **errors({
+            404: "No such harness, or one that accepts no hooks.",
+            409: "That raw event id was reused for DIFFERENT bytes.",
+        }),
+    },
 )
-async def record_hook_delivery(harness: str, request: Request) -> Response:
+async def record_hook_delivery(harness: HarnessNamePath, request: Request) -> Response:
     """One pushed hook delivery: exact stdin bytes in, the reply bytes out.
 
     Recording happens on the request, never behind the interpreter tick — a

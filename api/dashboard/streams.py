@@ -3,9 +3,12 @@
 #
 # Deliberately the same design as always: one direct poll path over the
 # canonical store and the application snapshots — no broker, no subscription
-# registry, no event bus. Each stream is an async generator, so an open
-# connection costs no worker thread; a client disconnect cancels the
-# generator.
+# registry, no event bus. Each stream is an async generator, so an idle open
+# connection costs no worker thread; a client disconnect cancels the generator.
+#
+# Every poll goes through `off_loop`, because the store read behind it is
+# blocking SQLite and the generator runs ON the event loop — see api/sse.py for
+# what calling one directly costs.
 from __future__ import annotations
 
 import asyncio
@@ -14,6 +17,7 @@ from fastapi import APIRouter, Header
 from fastapi.responses import StreamingResponse
 
 from api import config
+from api.common.models.fields import SessionIdPath
 from api.dashboard.sessions import _scope
 from api.dependencies import ApplicationGraph
 from api.sse import (
@@ -22,6 +26,7 @@ from api.sse import (
     NO_STORE,
     STREAM_HEARTBEAT_SECONDS,
     STREAM_POLL_SECONDS,
+    off_loop,
     sse_frame,
     stable_snapshot,
 )
@@ -41,7 +46,7 @@ def global_stream(application: ApplicationGraph) -> StreamingResponse:
             previous_snapshot = None
             heartbeat_at = asyncio.get_running_loop().time()
             while True:
-                snapshot = json_ready(application.global_application.snapshot())
+                snapshot = json_ready(await off_loop(application.global_application.snapshot))
                 encoded_snapshot = stable_snapshot(snapshot)
                 now = asyncio.get_running_loop().time()
                 if encoded_snapshot != previous_snapshot:
@@ -66,7 +71,7 @@ def global_stream(application: ApplicationGraph) -> StreamingResponse:
 
 @router.get("/api/sessions/{session_id}/stream")
 def session_stream(
-    session_id: str,
+    session_id: SessionIdPath,
     application: ApplicationGraph,
     after_cursor: int = 0,
     actor_id: str | None = None,
@@ -88,12 +93,14 @@ async def _session_frames(application, session_id: SessionId, cursor: int, scope
         previous_application = None
         while True:
             sent = False
-            frame = application.dashboard_stream.frame(session_id, cursor, scope)
+            frame = await off_loop(application.dashboard_stream.frame, session_id, cursor, scope)
             if frame is not None:
                 yield frame.sse()
                 cursor = frame.cursor
                 sent = True
-            application_snapshot = json_ready(application.session_application.snapshot(session_id))
+            application_snapshot = json_ready(
+                await off_loop(application.session_application.snapshot, session_id)
+            )
             encoded_application = stable_snapshot(application_snapshot)
             if encoded_application != previous_application:
                 yield sse_frame("application", application_snapshot)

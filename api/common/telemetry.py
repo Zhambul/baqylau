@@ -4,9 +4,12 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request
+from fastapi.concurrency import run_in_threadpool
 
+from api.common.models.fields import HarnessNamePath
 from api.common.models.replies.recorded_response import RecordedResponse
 from api.guard import control_plane
+from api.responses import GUARDED
 from diagnostics import record as A
 from harness.models import TELEMETRY_KIND_HEADER, TELEMETRY_MAX, HarnessTelemetryRequest
 from harness.services.telemetry import UnknownTelemetryHarness
@@ -18,8 +21,11 @@ router = APIRouter()
 @router.post(
     "/api/harnesses/{harness}/telemetry",
     dependencies=[Depends(control_plane(TELEMETRY_MAX))],
+    responses=GUARDED,
 )
-async def record_telemetry_delivery(harness: str, request: Request) -> RecordedResponse:
+async def record_telemetry_delivery(
+    harness: HarnessNamePath, request: Request
+) -> RecordedResponse:
     """One pushed telemetry delivery: exact bytes in, a bare acknowledgement out.
 
     Recording happens on the request, never behind the interpreter tick — a
@@ -35,7 +41,11 @@ async def record_telemetry_delivery(harness: str, request: Request) -> RecordedR
         payload=payload,
     )
     try:
-        application.telemetry_gateway.record(harness, delivery)
+        # On a worker thread, like the hook endpoint beside it: `record` writes
+        # to the store, and this handler is `async` (it awaits the raw body), so
+        # a direct call would do that write on the event loop and stall every
+        # open stream with it.
+        await run_in_threadpool(application.telemetry_gateway.record, harness, delivery)
     except UnknownTelemetryHarness as error:
         A.error("", "telemetry delivery", {"harness": harness, "error": str(error)})
         return RecordedResponse(recorded=False)

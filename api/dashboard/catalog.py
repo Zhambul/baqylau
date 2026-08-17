@@ -10,6 +10,7 @@ from api.dashboard.models.harnesses.harness_description_response import (
     HarnessDescriptionResponse,
 )
 from api.dashboard.models.harnesses.harness_catalog_response import HarnessCatalogResponse
+from api.common.models.fields import HarnessNamePath
 from api.dependencies import ApplicationGraph
 from app.services.insights import ApplicationInsights
 from app.services.resume import ResumableSession
@@ -41,7 +42,7 @@ def harnesses(application: ApplicationGraph) -> list[HarnessDescriptionResponse]
 
 @router.get("/api/harnesses/{harness}/catalog", response_model=HarnessCatalogResponse)
 def catalog(
-    harness: str,
+    harness: HarnessNamePath,
     application: ApplicationGraph,
     session_id: str | None = None,
     working_directory: str | None = None,

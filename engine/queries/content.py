@@ -15,6 +15,7 @@ from domain.events import (
     ActorMessageSent,
     ReasoningCreated,
 )
+from domain.errors import MalformedRequest, UnknownReference, UnsupportedRequest
 from domain.ids import CanonicalEventId, OperationId
 from domain.values import StructuredContent, TextContent
 from engine.projections import SessionQueries
@@ -33,10 +34,10 @@ class CanonicalContentService:
     def resolve(self, content_reference: str) -> str:
         event_id, separator, field_name = content_reference.rpartition(":")
         if not separator or not event_id or not field_name:
-            raise ValueError("invalid content reference")
+            raise MalformedRequest("invalid content reference")
         stored_event = self.canonical_events.find(CanonicalEventId(event_id))
         if stored_event is None:
-            raise KeyError(content_reference)
+            raise UnknownReference(content_reference)
         payload = stored_event.event.payload
         if field_name in {
             "operation_command",
@@ -81,7 +82,7 @@ class CanonicalContentService:
             ActorMessageSent: frozenset({"content"}),
         }.get(type(payload), frozenset())
         if field_name not in allowed_fields:
-            raise KeyError(content_reference)
+            raise UnknownReference(content_reference)
         value = getattr(payload, field_name)
         if value is None:
             return ""
@@ -90,5 +91,5 @@ class CanonicalContentService:
         if isinstance(value, StructuredContent):
             return value.json_text
         if not isinstance(value, str):
-            raise TypeError("referenced content is not textual")
+            raise UnsupportedRequest("referenced content is not textual")
         return value

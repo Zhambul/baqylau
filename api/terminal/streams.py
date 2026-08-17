@@ -7,7 +7,9 @@ import asyncio
 from fastapi import APIRouter, Query, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from api.sse import BEAT, EVENT_STREAM, NO_STORE, STREAM_POLL_SECONDS, sse_frame
+from api.common.models.fields import SessionIdPath
+from api.responses import errors
+from api.sse import BEAT, EVENT_STREAM, NO_STORE, STREAM_POLL_SECONDS, off_loop, sse_frame
 from api.dependencies import ApplicationGraph
 from diagnostics import record as A
 from domain.ids import SessionId
@@ -16,9 +18,10 @@ from terminal.panes.streams import WAITING_FRAME
 router = APIRouter()
 
 
-@router.get("/api/sessions/{session_id}/panes/{kind}/stream")
+@router.get("/api/sessions/{session_id}/panes/{kind}/stream",
+            responses=errors({404: "No pane of that kind."}))
 def pane_stream(
-    session_id: str,
+    session_id: SessionIdPath,
     kind: str,
     request: Request,
     application: ApplicationGraph,
@@ -42,11 +45,11 @@ def pane_stream(
 async def _pane_frames(application, session_id: SessionId, kind: str, width: int, request_path: str):
     stream_identifier = A.stream_start(str(session_id), f"pane-{kind}", src_path=request_path)
     try:
-        if kind == "mirror" and application.sessions.find(session_id) is None:
+        if kind == "mirror" and await off_loop(application.sessions.find, session_id) is None:
             # The pane's own banner, as a frame: the client paints nothing of its
             # own, so the "waiting for commands" state has to be sent to it.
             yield sse_frame("frame", {"ansi": WAITING_FRAME})
-        while application.sessions.find(session_id) is None:
+        while await off_loop(application.sessions.find, session_id) is None:
             # A pane process can connect before the session's row exists; hold
             # the stream open, beating, until it does.
             yield BEAT
@@ -55,7 +58,9 @@ async def _pane_frames(application, session_id: SessionId, kind: str, width: int
         if kind == "mirror":
             rendered_version = None
             while True:
-                frame = application.pane_streams.mirror_frame(session_id, width, rendered_version)
+                frame = await off_loop(
+                    application.pane_streams.mirror_frame, session_id, width, rendered_version
+                )
                 if frame is None:
                     yield BEAT
                 else:
@@ -63,9 +68,9 @@ async def _pane_frames(application, session_id: SessionId, kind: str, width: int
                     yield sse_frame("frame", {"ansi": ansi})
                 await asyncio.sleep(STREAM_POLL_SECONDS)
         else:
-            stream = application.pane_streams.scoreboard_stream(session_id, width)
+            stream = await off_loop(application.pane_streams.scoreboard_stream, session_id, width)
             while True:
-                ansi = stream.frame()
+                ansi = await off_loop(stream.frame)
                 yield BEAT if ansi is None else sse_frame("frame", {"ansi": ansi})
                 await asyncio.sleep(STREAM_POLL_SECONDS)
     except (asyncio.CancelledError, GeneratorExit):

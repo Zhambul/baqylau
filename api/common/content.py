@@ -8,6 +8,7 @@ from fastapi.responses import HTMLResponse, PlainTextResponse
 
 from api.dependencies import ApplicationGraph
 from dashboard.render.diff import source_html, unified_diff_html
+from domain.errors import MalformedRequest
 
 router = APIRouter()
 
@@ -22,7 +23,7 @@ def content(
     text = application.content.resolve(content_reference)
     if view in ("diff", "source"):
         if not path:
-            raise ValueError("path is required for file view")
+            raise MalformedRequest("path is required for file view")
         rendered = unified_diff_html(text, path) if view == "diff" else source_html(text, path)
         return HTMLResponse(rendered)
     return PlainTextResponse(text)

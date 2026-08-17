@@ -9,10 +9,11 @@ from fastapi import APIRouter, Depends
 
 from api.dependencies import ApplicationGraph
 from api.guard import control_plane
+from api.responses import GUARDED
 from api.terminal.models.views.opened_response import OpenedResponse
 from api.terminal.models.views.toggle_view_request import ToggleViewRequest
 
-router = APIRouter(dependencies=[Depends(control_plane())])
+router = APIRouter(dependencies=[Depends(control_plane())], responses=GUARDED)
 
 
 @router.post("/api/terminal/views")

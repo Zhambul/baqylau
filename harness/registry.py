@@ -4,10 +4,16 @@ from __future__ import annotations
 
 from harness.contract import HarnessPlugin
 from domain.codec import SCHEMA_VERSION
+from domain.errors import UnknownReference
 
 
-class HarnessRegistryError(RuntimeError):
-    pass
+class HarnessRegistryError(UnknownReference):
+    """Raised for a bad REGISTRATION (a duplicate name, a version mismatch) and
+    for a bad LOOKUP — and the lookup is the one a request can cause, by naming
+    a harness in a URL. As a RuntimeError that reached no handler, an unknown
+    harness in `/api/harnesses/{harness}/catalog` was answered as a 500; it is
+    the caller's mistake and now says so. A registration failure happens at boot,
+    where nothing is serving and the type is irrelevant."""
 
 
 class HarnessRegistry:

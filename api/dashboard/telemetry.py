@@ -10,8 +10,10 @@ from api.dashboard.models.telemetry.client_failure_request import ClientFailureR
 from api.dashboard.models.telemetry.optimistic_action_request import (
     OptimisticActionRequest,
 )
+from api.common.models.fields import SessionIdPath
 from api.dependencies import ApplicationGraph
 from api.guard import control_plane
+from api.responses import GUARDED
 from diagnostics.telemetry import (
     BrowserEvent,
     BrowserEventBatch,
@@ -20,7 +22,7 @@ from diagnostics.telemetry import (
 )
 from domain.ids import SessionId
 
-router = APIRouter(dependencies=[Depends(control_plane())])
+router = APIRouter(dependencies=[Depends(control_plane())], responses=GUARDED)
 
 
 @router.post("/api/application/browser-events")
@@ -48,7 +50,7 @@ def record_browser_events(
 
 @router.post("/api/sessions/{session_id}/application/optimistic-actions")
 def record_optimistic_action(
-    session_id: str, body: OptimisticActionRequest, application: ApplicationGraph
+    session_id: SessionIdPath, body: OptimisticActionRequest, application: ApplicationGraph
 ) -> RecordedResponse:
     application.browser_telemetry.record_optimistic_action(
         OptimisticActionReport(
@@ -65,7 +67,7 @@ def record_optimistic_action(
 
 @router.post("/api/sessions/{session_id}/application/client-failures")
 def record_client_failure(
-    session_id: str, body: ClientFailureRequest, application: ApplicationGraph
+    session_id: SessionIdPath, body: ClientFailureRequest, application: ApplicationGraph
 ) -> RecordedResponse:
     application.browser_telemetry.record_client_failure(
         ClientFailureReport(

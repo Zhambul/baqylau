@@ -29,6 +29,8 @@ import sys
 import tempfile
 import tomllib
 
+import pytest
+
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
@@ -75,6 +77,11 @@ def test_the_two_type_gates_exempt_exactly_the_same_packages():
     assert _mypy_exempt_packages() == _ruff_exempt_packages()
 
 
+# pytest.ini's 30s default is meant for the hermetic e2e tests. This one spawns a
+# full `mypy --no-incremental` PER exempt package — about 25s of subprocess on a
+# warm machine, and more under `-n auto` contention — so it was passing on a
+# margin of under a second and failing as a timeout whenever the tree grew.
+@pytest.mark.timeout(180)
 def test_no_type_exemption_outlives_its_migration():
     """An exemption that is no longer load-bearing must be deleted, not left.
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from domain.errors import UnsupportedRequest
 from harness.models import HarnessCatalogSnapshot, QueryContext
 from harness.registry import HarnessRegistry
 
@@ -13,5 +14,7 @@ class HarnessCatalogService:
     def read(self, harness: str, context: QueryContext) -> HarnessCatalogSnapshot:
         catalog = self.registry.plugin(harness).catalog
         if catalog is None:
-            raise ValueError(f"harness {harness!r} has no catalog")
+            # Installed, but it offers no menu — the request is the caller's to
+            # fix, so it is typed rather than a bare ValueError.
+            raise UnsupportedRequest(f"harness {harness!r} has no catalog")
         return catalog.read(context)

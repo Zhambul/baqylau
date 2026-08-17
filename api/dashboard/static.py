@@ -15,9 +15,13 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse, Response
 
 from api.config import BOOT_ID, CACHE_STATIC
+from api.responses import errors
 from dashboard.config import STATIC, STATIC_DIR
 
-router = APIRouter()
+router = APIRouter(responses=errors({
+    404: "Not on the content-type whitelist, and not shaped like an app part.",
+    500: "On the whitelist, but unreadable on disk.",
+}))
 
 # The SPA parts (app.NN-name.js) are admitted by SHAPE, not a per-file
 # whitelist entry — still no user-path resolution (a strict basename pattern),

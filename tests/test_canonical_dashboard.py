@@ -31,6 +31,7 @@ from domain.events import (
     SessionStarted,
     TaskChanged,
 )
+from domain.errors import UnknownReference
 from domain.ids import (
     ActorId,
     AttentionId,
@@ -419,7 +420,9 @@ def test_streaming_operation_content_keeps_its_exact_canonical_reference(tmp_pat
     assert content.resolve(item.command_reference) == "printf hello"
     assert item.output_reference == "progress-two:operation_output"
     assert content.resolve(item.output_reference) == first.text + "\n" + second.text
-    with pytest.raises(KeyError):
+    # UnknownReference, not a bare KeyError: the api/ layer answers 400 for this
+    # type alone, so "a field nothing carries" has to be raised as one.
+    with pytest.raises(UnknownReference):
         content.resolve("progress-two:stream")
 
 

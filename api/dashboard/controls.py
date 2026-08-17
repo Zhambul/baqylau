@@ -21,13 +21,15 @@ from api.dashboard.models.controls.select_effort_request import SelectEffortRequ
 from api.dashboard.models.controls.select_model_request import SelectModelRequest
 from api.dashboard.models.controls.send_text_request import SendTextRequest
 from api.dashboard.models.launch.launch_session_request import LaunchSessionRequest
+from api.common.models.fields import SessionIdPath
 from api.dependencies import ApplicationGraph
 from api.guard import control_plane
+from api.responses import GUARDED, with_body
 from dashboard.render.serialize import json_ready
 from domain.ids import SessionId
 from harness.models import ControlOutcome, LaunchResult
 
-router = APIRouter(dependencies=[Depends(control_plane())])
+router = APIRouter(dependencies=[Depends(control_plane())], responses=GUARDED)
 
 # The BODY is `json_ready`'s, not pydantic's: these replies are frozen
 # dataclasses whose encoding the browser already depends on (a cost is a string,
@@ -36,8 +38,20 @@ router = APIRouter(dependencies=[Depends(control_plane())])
 LAUNCH_STATUS = {"started": 202, "rejected": 409}
 CONTROL_STATUS = {"acknowledged": 200, "indeterminate": 202, "rejected": 409}
 
+# ...and the STATUS is the outcome's, so the schema has to name all three or it
+# describes a plane that always succeeds. Every one of them carries the SAME body
+# as the default: a rejection here is a verdict, not an error.
+LAUNCH_RESPONSES = with_body(LaunchResult, {
+    409: "Rejected — nothing was launched.",
+})
+CONTROL_RESPONSES = with_body(ControlOutcome, {
+    202: "Sent, but the effect is unconfirmed — the browser reconciles from the stream.",
+    409: "Rejected — the session cannot take this gesture now.",
+})
 
-@router.post("/api/sessions", response_model=LaunchResult)
+
+@router.post("/api/sessions", status_code=202,
+             response_model=LaunchResult, responses=LAUNCH_RESPONSES)
 def launch(body: LaunchSessionRequest, application: ApplicationGraph) -> JSONResponse:
     result = application.launcher.launch(body.harness, body.request())
     return JSONResponse(json_ready(result), LAUNCH_STATUS[result.status])
@@ -50,71 +64,113 @@ def _execute(application, session_id: str, body) -> JSONResponse:
     return JSONResponse(json_ready(outcome), CONTROL_STATUS[outcome.status])
 
 
-@router.post("/api/sessions/{session_id}/controls/send-text", response_model=ControlOutcome)
-def send_text(session_id: str, body: SendTextRequest, application: ApplicationGraph) -> JSONResponse:
+@router.post("/api/sessions/{session_id}/controls/send-text",
+             response_model=ControlOutcome, responses=CONTROL_RESPONSES)
+def send_text(
+    session_id: SessionIdPath, body: SendTextRequest, application: ApplicationGraph
+) -> JSONResponse:
     return _execute(application, session_id, body)
 
 
-@router.post("/api/sessions/{session_id}/controls/interrupt", response_model=ControlOutcome)
-def interrupt(session_id: str, body: InterruptRequest, application: ApplicationGraph) -> JSONResponse:
+@router.post("/api/sessions/{session_id}/controls/interrupt",
+             response_model=ControlOutcome, responses=CONTROL_RESPONSES)
+def interrupt(
+    session_id: SessionIdPath, body: InterruptRequest, application: ApplicationGraph
+) -> JSONResponse:
     return _execute(application, session_id, body)
 
 
-@router.post("/api/sessions/{session_id}/controls/close-session", response_model=ControlOutcome)
-def close_session(session_id: str, body: CloseSessionRequest, application: ApplicationGraph) -> JSONResponse:
+@router.post("/api/sessions/{session_id}/controls/close-session",
+             response_model=ControlOutcome, responses=CONTROL_RESPONSES)
+def close_session(
+    session_id: SessionIdPath, body: CloseSessionRequest, application: ApplicationGraph
+) -> JSONResponse:
     return _execute(application, session_id, body)
 
 
-@router.post("/api/sessions/{session_id}/controls/rename-session", response_model=ControlOutcome)
-def rename_session(session_id: str, body: RenameSessionRequest, application: ApplicationGraph) -> JSONResponse:
+@router.post("/api/sessions/{session_id}/controls/rename-session",
+             response_model=ControlOutcome, responses=CONTROL_RESPONSES)
+def rename_session(
+    session_id: SessionIdPath, body: RenameSessionRequest, application: ApplicationGraph
+) -> JSONResponse:
     return _execute(application, session_id, body)
 
 
-@router.post("/api/sessions/{session_id}/controls/auto-name-session", response_model=ControlOutcome)
-def auto_name_session(session_id: str, body: AutoNameSessionRequest, application: ApplicationGraph) -> JSONResponse:
+@router.post("/api/sessions/{session_id}/controls/auto-name-session",
+             response_model=ControlOutcome, responses=CONTROL_RESPONSES)
+def auto_name_session(
+    session_id: SessionIdPath, body: AutoNameSessionRequest, application: ApplicationGraph
+) -> JSONResponse:
     return _execute(application, session_id, body)
 
 
-@router.post("/api/sessions/{session_id}/controls/open-rewind", response_model=ControlOutcome)
-def open_rewind(session_id: str, body: OpenRewindRequest, application: ApplicationGraph) -> JSONResponse:
+@router.post("/api/sessions/{session_id}/controls/open-rewind",
+             response_model=ControlOutcome, responses=CONTROL_RESPONSES)
+def open_rewind(
+    session_id: SessionIdPath, body: OpenRewindRequest, application: ApplicationGraph
+) -> JSONResponse:
     return _execute(application, session_id, body)
 
 
-@router.post("/api/sessions/{session_id}/controls/apply-rewind", response_model=ControlOutcome)
-def apply_rewind(session_id: str, body: ApplyRewindRequest, application: ApplicationGraph) -> JSONResponse:
+@router.post("/api/sessions/{session_id}/controls/apply-rewind",
+             response_model=ControlOutcome, responses=CONTROL_RESPONSES)
+def apply_rewind(
+    session_id: SessionIdPath, body: ApplyRewindRequest, application: ApplicationGraph
+) -> JSONResponse:
     return _execute(application, session_id, body)
 
 
-@router.post("/api/sessions/{session_id}/controls/migrate-account", response_model=ControlOutcome)
-def migrate_account(session_id: str, body: MigrateAccountRequest, application: ApplicationGraph) -> JSONResponse:
+@router.post("/api/sessions/{session_id}/controls/migrate-account",
+             response_model=ControlOutcome, responses=CONTROL_RESPONSES)
+def migrate_account(
+    session_id: SessionIdPath, body: MigrateAccountRequest, application: ApplicationGraph
+) -> JSONResponse:
     return _execute(application, session_id, body)
 
 
-@router.post("/api/sessions/{session_id}/controls/compact", response_model=ControlOutcome)
-def compact(session_id: str, body: CompactRequest, application: ApplicationGraph) -> JSONResponse:
+@router.post("/api/sessions/{session_id}/controls/compact",
+             response_model=ControlOutcome, responses=CONTROL_RESPONSES)
+def compact(
+    session_id: SessionIdPath, body: CompactRequest, application: ApplicationGraph
+) -> JSONResponse:
     return _execute(application, session_id, body)
 
 
-@router.post("/api/sessions/{session_id}/controls/select-model", response_model=ControlOutcome)
-def select_model(session_id: str, body: SelectModelRequest, application: ApplicationGraph) -> JSONResponse:
+@router.post("/api/sessions/{session_id}/controls/select-model",
+             response_model=ControlOutcome, responses=CONTROL_RESPONSES)
+def select_model(
+    session_id: SessionIdPath, body: SelectModelRequest, application: ApplicationGraph
+) -> JSONResponse:
     return _execute(application, session_id, body)
 
 
-@router.post("/api/sessions/{session_id}/controls/select-effort", response_model=ControlOutcome)
-def select_effort(session_id: str, body: SelectEffortRequest, application: ApplicationGraph) -> JSONResponse:
+@router.post("/api/sessions/{session_id}/controls/select-effort",
+             response_model=ControlOutcome, responses=CONTROL_RESPONSES)
+def select_effort(
+    session_id: SessionIdPath, body: SelectEffortRequest, application: ApplicationGraph
+) -> JSONResponse:
     return _execute(application, session_id, body)
 
 
-@router.post("/api/sessions/{session_id}/controls/answer-question", response_model=ControlOutcome)
-def answer_question(session_id: str, body: AnswerQuestionRequest, application: ApplicationGraph) -> JSONResponse:
+@router.post("/api/sessions/{session_id}/controls/answer-question",
+             response_model=ControlOutcome, responses=CONTROL_RESPONSES)
+def answer_question(
+    session_id: SessionIdPath, body: AnswerQuestionRequest, application: ApplicationGraph
+) -> JSONResponse:
     return _execute(application, session_id, body)
 
 
-@router.post("/api/sessions/{session_id}/controls/read-plan-choices", response_model=ControlOutcome)
-def read_plan_choices(session_id: str, body: ReadPlanChoicesRequest, application: ApplicationGraph) -> JSONResponse:
+@router.post("/api/sessions/{session_id}/controls/read-plan-choices",
+             response_model=ControlOutcome, responses=CONTROL_RESPONSES)
+def read_plan_choices(
+    session_id: SessionIdPath, body: ReadPlanChoicesRequest, application: ApplicationGraph
+) -> JSONResponse:
     return _execute(application, session_id, body)
 
 
-@router.post("/api/sessions/{session_id}/controls/decide-plan", response_model=ControlOutcome)
-def decide_plan(session_id: str, body: DecidePlanRequest, application: ApplicationGraph) -> JSONResponse:
+@router.post("/api/sessions/{session_id}/controls/decide-plan",
+             response_model=ControlOutcome, responses=CONTROL_RESPONSES)
+def decide_plan(
+    session_id: SessionIdPath, body: DecidePlanRequest, application: ApplicationGraph
+) -> JSONResponse:
     return _execute(application, session_id, body)

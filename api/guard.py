@@ -50,11 +50,23 @@ def control_plane(maximum_bytes: int = POST_MAX):
             raise reject(request, 403, "cross-origin")
         if request.headers.get(POST_HEADER) != "1" and origin not in config.ALLOWED_ORIGINS:
             raise reject(request, 403, "missing %s header" % POST_HEADER)
+        # The cap is checked BEFORE the body is read, which is what makes it
+        # free — and which is why the declared length has to exist. A request
+        # that omits Content-Length (a chunked upload) once declared zero and
+        # passed every cap, and the handler behind it then buffered the whole
+        # stream: h11 imposes no maximum of its own, so the header WAS the limit
+        # and an absent header was no limit at all. With one required, h11
+        # delivers at most the length checked here, so the cap binds the bytes.
+        # Every client of this server sends it (http.client and fetch both do,
+        # for any body they are given).
+        declared = request.headers.get("Content-Length")
+        if declared is None:
+            raise reject(request, 411, "content-length is required")
         try:
-            declared = int(request.headers.get("Content-Length") or 0)
+            length = int(declared)
         except ValueError:
-            declared = -1
-        if declared < 0 or declared > maximum_bytes:
+            raise reject(request, 411, "content-length is not a number") from None
+        if length < 0 or length > maximum_bytes:
             raise reject(request, 413, "body too large")
 
     return guard
