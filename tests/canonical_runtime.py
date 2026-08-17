@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import time
 
+from app import providers
+from app.injection import Instances, registry, resolve
 from harness.models import RawEvent, TranslationResult
 from harness.registry import HarnessRegistry
 from engine.projections import SessionQueries
@@ -14,6 +16,25 @@ from repository.impl.sqlite.operation_output import SqliteOperationOutputReposit
 from repository.impl.sqlite.raw_events import SqliteRawEventRepository
 from repository.impl.sqlite.sessions import SqliteSessionRepository
 from repository.impl.sqlite.workspace import SqliteSessionWorkspaceRepository
+
+
+class ProviderGraph:
+    """The provider graph as attribute access — the tests' door into it.
+
+    `graph.dashboard_sessions` is `resolve(instances, providers.dashboard_sessions)`,
+    so a test names the node it seeds or asserts on and gets the SAME instance the
+    routes get. The application under test is handed the registry, not this: the
+    daemon has no object like this one, and that is the point.
+    """
+
+    def __init__(self, instances: Instances | None = None) -> None:
+        self.instances: Instances = registry() if instances is None else instances
+
+    def __getattr__(self, name):
+        provider = getattr(providers, name, None)
+        if provider is None:
+            raise AttributeError("no provider named %r" % name)
+        return resolve(self.instances, provider)
 
 
 class CanonicalRuntime:

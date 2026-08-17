@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import os
+import threading
 import time
 from dataclasses import dataclass
-from typing import Protocol
 
-from diagnostics import record as AUDIT
+from diagnostics.recorder import AuditRecorder
 from dashboard import config
 from dashboard.services.sessions import DashboardSessionService
 from dashboard.services.notices import DashboardNotificationState
-from notify import channels, presence
+from notify import channels
+from notify.presence import Presence
 from domain.ids import SessionId
 from engine.projections import SessionQueries, TabState
 from repository.contract.preferences import (
@@ -24,15 +25,6 @@ NOTIFICATION_KINDS = {
     "awaiting_attention": "asking",
     "awaiting_response": "done",
 }
-
-
-class NotificationApplication(Protocol):
-    queries: SessionQueries
-    dashboard_sessions: DashboardSessionService
-    dashboard_notification_state: DashboardNotificationState
-    notification_settings: NotificationSettingRepository
-    push_subscriptions: PushSubscriptionRepository
-    push_signing_keys: PushSigningKeyRepository
 
 
 @dataclass
@@ -64,12 +56,25 @@ class DeliveredNotification:
 class Notifier:
     """Publish and deliver transitions into canonical attention states."""
 
-    def __init__(self, application: NotificationApplication) -> None:
-        self.application = application
-        self.notification_state = application.dashboard_notification_state
-        self.notification_settings = application.notification_settings
-        self.push_subscriptions = application.push_subscriptions
-        self.push_signing_keys = application.push_signing_keys
+    def __init__(
+        self,
+        sessions: DashboardSessionService,
+        queries: SessionQueries,
+        notification_state: DashboardNotificationState,
+        notification_settings: NotificationSettingRepository,
+        push_subscriptions: PushSubscriptionRepository,
+        push_signing_keys: PushSigningKeyRepository,
+        presence: Presence,
+        audit: AuditRecorder,
+    ) -> None:
+        self.sessions = sessions
+        self.queries = queries
+        self.notification_state = notification_state
+        self.notification_settings = notification_settings
+        self.push_subscriptions = push_subscriptions
+        self.push_signing_keys = push_signing_keys
+        self.presence = presence
+        self.audit = audit
         # One query per pass, not one per armed session.
         self._muted: frozenset[SessionId] = frozenset()
         self.previous_states: dict[SessionId, TabState | None] | None = None
@@ -79,11 +84,11 @@ class Notifier:
     def scan(self) -> None:
         items = tuple(
             item
-            for item in self.application.dashboard_sessions.sessions()
+            for item in self.sessions.sessions()
             if item.terminal.window_id is not None
         )
         current_states = {
-            item.session.session_id: self.application.queries.tab_state(
+            item.session.session_id: self.queries.tab_state(
                 item.session.session_id
             )
             for item in items
@@ -151,9 +156,9 @@ class Notifier:
                 continue
             if now < notification.due_at:
                 continue
-            if presence.web_viewing(str(session_id)) or presence.device_active():
+            if self.presence.web_viewing(str(session_id)) or self.presence.device_active():
                 self.pending.pop(session_id, None)
-                AUDIT.state_file(
+                self.audit.state_file(
                     "",
                     "",
                     "notification-suppressed",
@@ -166,8 +171,8 @@ class Notifier:
                 continue
             self.pending.pop(session_id, None)
             payload = notification.payload()
-            target, subscriptions, decision = presence.route(self.push_subscriptions)
-            AUDIT.state_file(
+            target, subscriptions, decision = self.presence.route(self.push_subscriptions)
+            self.audit.state_file(
                 "",
                 "",
                 "notification-route",
@@ -213,10 +218,12 @@ class Notifier:
     def _attention_count(states: dict[SessionId, TabState | None]) -> int:
         return sum(state in NOTIFICATION_KINDS for state in states.values())
 
-    def run(self) -> None:
-        while True:
+    def run(self, stop: threading.Event) -> None:
+        """One pass per refresh interval until asked to stop. The wait IS the
+        sleep, so a shutdown does not have to outlast one."""
+        while not stop.is_set():
             try:
                 self.scan()
             except Exception:
-                AUDIT.error("", "dashboard notifier", {})
-            time.sleep(config.GLOBAL_REFRESH_SECONDS)
+                self.audit.error("", "dashboard notifier", {})
+            stop.wait(config.GLOBAL_REFRESH_SECONDS)

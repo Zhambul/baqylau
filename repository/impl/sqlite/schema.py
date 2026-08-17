@@ -23,7 +23,6 @@ from __future__ import annotations
 
 MAIN_SCHEMA_VERSION = 1
 AUDIT_SCHEMA_VERSION = 1
-LOCK_SCHEMA_VERSION = 1
 
 
 _SCHEMA_VERSION_TABLE = """
@@ -337,10 +336,3 @@ CREATE TABLE IF NOT EXISTS streams(
 """
 
 
-LOCK_SCHEMA = _SCHEMA_VERSION_TABLE + """
-CREATE TABLE IF NOT EXISTS claims(
-    key TEXT PRIMARY KEY,
-    pid INTEGER NOT NULL,
-    claimed_at REAL NOT NULL
-);
-"""

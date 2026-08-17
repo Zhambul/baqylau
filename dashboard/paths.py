@@ -5,8 +5,11 @@ our files live, and now of the three database paths too. What is left here is
 the uploads directory: the one place the dashboard writes bytes rather than
 rows, because an attachment reaches the harness as an `@path`.
 
-Resolved once, at import: the test suite substitutes these attributes to keep a
-run out of your real data directory.
+Answered at CALL time, not at import. `UPLOADS_DIRECTORY` used to be a module
+constant computed when this file was first imported, which made it a global with
+one owner and many patchers: the test suite had to substitute the attribute to
+keep a run out of your real data directory. It hangs off `core/data.py`'s answer
+now, so the environment is the only knob and there is nothing to rebind.
 """
 
 from __future__ import annotations
@@ -23,7 +26,9 @@ from core.data import data_directory
 # every pane process on startup.
 BIN_DIRECTORY = os.path.join(str(REPOSITORY_ROOT), "bin")
 
-UPLOADS_DIRECTORY = os.path.join(data_directory(), "uploads")
+def uploads_directory() -> str:
+    """The one place the dashboard writes bytes rather than rows."""
+    return os.path.join(data_directory(), "uploads")
 
 
 def safe_session_name(session_id: str) -> str:
@@ -32,4 +37,4 @@ def safe_session_name(session_id: str) -> str:
 
 def session_uploads_directory(session_id: str) -> str:
     name = safe_session_name(session_id.strip()) or "staging"
-    return os.path.join(UPLOADS_DIRECTORY, name)
+    return os.path.join(uploads_directory(), name)

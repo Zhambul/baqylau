@@ -10,7 +10,7 @@ from api.common.models.fields import HarnessNamePath
 from api.common.models.replies.recorded_response import RecordedResponse
 from api.guard import control_plane
 from api.responses import GUARDED
-from diagnostics import record as A
+from app.providers import TelemetryGateway, Recorder
 from harness.models import TELEMETRY_KIND_HEADER, TELEMETRY_MAX, HarnessTelemetryRequest
 from harness.services.telemetry import UnknownTelemetryHarness
 from repository.errors import RepositoryError
@@ -24,7 +24,7 @@ router = APIRouter()
     responses=GUARDED,
 )
 async def record_telemetry_delivery(
-    harness: HarnessNamePath, request: Request
+    harness: HarnessNamePath, request: Request, gateway: TelemetryGateway, audit: Recorder
 ) -> RecordedResponse:
     """One pushed telemetry delivery: exact bytes in, a bare acknowledgement out.
 
@@ -35,7 +35,6 @@ async def record_telemetry_delivery(
     otherwise vanish.
     """
     payload = await request.body()
-    application = request.app.state.canonical_application
     delivery = HarnessTelemetryRequest(
         kind=(request.headers.get(TELEMETRY_KIND_HEADER) or "").strip(),
         payload=payload,
@@ -45,12 +44,12 @@ async def record_telemetry_delivery(
         # to the store, and this handler is `async` (it awaits the raw body), so
         # a direct call would do that write on the event loop and stall every
         # open stream with it.
-        await run_in_threadpool(application.telemetry_gateway.record, harness, delivery)
+        await run_in_threadpool(gateway.record, harness, delivery)
     except UnknownTelemetryHarness as error:
-        A.error("", "telemetry delivery", {"harness": harness, "error": str(error)})
+        audit.error("", "telemetry delivery", {"harness": harness, "error": str(error)})
         return RecordedResponse(recorded=False)
     except (KeyError, TypeError, ValueError, RepositoryError) as error:
-        A.error("", "telemetry delivery", {
+        audit.error("", "telemetry delivery", {
             "harness": harness,
             "kind": delivery.kind,
             "error": repr(error),

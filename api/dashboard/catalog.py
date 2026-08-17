@@ -11,7 +11,7 @@ from api.dashboard.models.harnesses.harness_description_response import (
 )
 from api.dashboard.models.harnesses.harness_catalog_response import HarnessCatalogResponse
 from api.common.models.fields import HarnessNamePath
-from api.dependencies import ApplicationGraph
+from app.providers import Catalog, Insights, Registry, ResumableSessions
 from app.services.insights import ApplicationInsights
 from app.services.resume import ResumableSession
 from harness.models import QueryContext
@@ -22,7 +22,7 @@ router = APIRouter()
 
 
 @router.get("/api/harnesses")
-def harnesses(application: ApplicationGraph) -> list[HarnessDescriptionResponse]:
+def harnesses(registry: Registry) -> list[HarnessDescriptionResponse]:
     return [
         HarnessDescriptionResponse(
             name=plugin.info.name,
@@ -37,14 +37,15 @@ def harnesses(application: ApplicationGraph) -> list[HarnessDescriptionResponse]
             supports_terminal_input=plugin.terminal_probe is not None,
             requires_initial_message=plugin.info.requires_initial_message,
         )
-        for plugin in application.registry.plugins()
+        for plugin in registry.plugins()
     ]
 
 
 @router.get("/api/harnesses/{harness}/catalog", response_model=HarnessCatalogResponse)
 def catalog(
     harness: HarnessNamePath,
-    application: ApplicationGraph,
+    registry: Registry,
+    harnesses_catalog: Catalog,
     session_id: str | None = None,
     working_directory: str | None = None,
 ) -> JSONResponse:
@@ -56,24 +57,22 @@ def catalog(
     # live: the STATIC vocabulary on the plugin's HarnessInfo (built once, as a
     # literal) and the per-directory part from the catalogue. The contract
     # keeps them apart; this endpoint is where the browser wants them together.
-    info = application.registry.plugin(harness).info
-    payload = json_ready(application.catalog.read(harness, context))
+    info = registry.plugin(harness).info
+    payload = json_ready(harnesses_catalog.read(harness, context))
     payload["models"] = json_ready(info.models)
     payload["rewind_modes"] = json_ready(info.rewind_modes)
     return JSONResponse(payload)
 
 
 @router.get("/api/insights", response_model=ApplicationInsights)
-def insights(application: ApplicationGraph) -> JSONResponse:
-    return JSONResponse(json_ready(application.insights.snapshot()))
+def insights(application_insights: Insights) -> JSONResponse:
+    return JSONResponse(json_ready(application_insights.snapshot()))
 
 
 @router.get("/api/resumable-sessions", response_model=list[ResumableSession])
 def resumable_sessions(
-    application: ApplicationGraph,
+    resumable: ResumableSessions,
     working_directory: str = "",
     search: str | None = None,
 ) -> JSONResponse:
-    return JSONResponse(
-        json_ready(application.resumable_sessions.sessions_for(working_directory, search))
-    )
+    return JSONResponse(json_ready(resumable.sessions_for(working_directory, search)))

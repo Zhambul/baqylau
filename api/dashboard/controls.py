@@ -22,12 +22,13 @@ from api.dashboard.models.controls.select_model_request import SelectModelReques
 from api.dashboard.models.controls.send_text_request import SendTextRequest
 from api.dashboard.models.launch.launch_session_request import LaunchSessionRequest
 from api.common.models.fields import SessionIdPath
-from api.dependencies import ApplicationGraph
+from app.providers import Controls, Launcher
 from api.guard import control_plane
 from api.responses import GUARDED, with_body
 from dashboard.render.serialize import json_ready
 from domain.ids import SessionId
 from harness.models import ControlOutcome, LaunchResult
+from harness.services.controls import HarnessControlService
 
 router = APIRouter(dependencies=[Depends(control_plane())], responses=GUARDED)
 
@@ -52,125 +53,125 @@ CONTROL_RESPONSES = with_body(ControlOutcome, {
 
 @router.post("/api/sessions", status_code=202,
              response_model=LaunchResult, responses=LAUNCH_RESPONSES)
-def launch(body: LaunchSessionRequest, application: ApplicationGraph) -> JSONResponse:
-    result = application.launcher.launch(body.harness, body.request())
+def launch(body: LaunchSessionRequest, launcher: Launcher) -> JSONResponse:
+    result = launcher.launch(body.harness, body.request())
     return JSONResponse(json_ready(result), LAUNCH_STATUS[result.status])
 
 
-def _execute(application, session_id: str, body) -> JSONResponse:
+def _execute(controls: HarnessControlService, session_id: str, body) -> JSONResponse:
     """One gesture: the request model builds its harness dataclass, the
     audited control service executes it, the outcome's status picks the code."""
-    outcome = application.controls.execute(body.request(SessionId(session_id)))
+    outcome = controls.execute(body.request(SessionId(session_id)))
     return JSONResponse(json_ready(outcome), CONTROL_STATUS[outcome.status])
 
 
 @router.post("/api/sessions/{session_id}/controls/send-text",
              response_model=ControlOutcome, responses=CONTROL_RESPONSES)
 def send_text(
-    session_id: SessionIdPath, body: SendTextRequest, application: ApplicationGraph
+    session_id: SessionIdPath, body: SendTextRequest, controls: Controls
 ) -> JSONResponse:
-    return _execute(application, session_id, body)
+    return _execute(controls, session_id, body)
 
 
 @router.post("/api/sessions/{session_id}/controls/interrupt",
              response_model=ControlOutcome, responses=CONTROL_RESPONSES)
 def interrupt(
-    session_id: SessionIdPath, body: InterruptRequest, application: ApplicationGraph
+    session_id: SessionIdPath, body: InterruptRequest, controls: Controls
 ) -> JSONResponse:
-    return _execute(application, session_id, body)
+    return _execute(controls, session_id, body)
 
 
 @router.post("/api/sessions/{session_id}/controls/close-session",
              response_model=ControlOutcome, responses=CONTROL_RESPONSES)
 def close_session(
-    session_id: SessionIdPath, body: CloseSessionRequest, application: ApplicationGraph
+    session_id: SessionIdPath, body: CloseSessionRequest, controls: Controls
 ) -> JSONResponse:
-    return _execute(application, session_id, body)
+    return _execute(controls, session_id, body)
 
 
 @router.post("/api/sessions/{session_id}/controls/rename-session",
              response_model=ControlOutcome, responses=CONTROL_RESPONSES)
 def rename_session(
-    session_id: SessionIdPath, body: RenameSessionRequest, application: ApplicationGraph
+    session_id: SessionIdPath, body: RenameSessionRequest, controls: Controls
 ) -> JSONResponse:
-    return _execute(application, session_id, body)
+    return _execute(controls, session_id, body)
 
 
 @router.post("/api/sessions/{session_id}/controls/auto-name-session",
              response_model=ControlOutcome, responses=CONTROL_RESPONSES)
 def auto_name_session(
-    session_id: SessionIdPath, body: AutoNameSessionRequest, application: ApplicationGraph
+    session_id: SessionIdPath, body: AutoNameSessionRequest, controls: Controls
 ) -> JSONResponse:
-    return _execute(application, session_id, body)
+    return _execute(controls, session_id, body)
 
 
 @router.post("/api/sessions/{session_id}/controls/open-rewind",
              response_model=ControlOutcome, responses=CONTROL_RESPONSES)
 def open_rewind(
-    session_id: SessionIdPath, body: OpenRewindRequest, application: ApplicationGraph
+    session_id: SessionIdPath, body: OpenRewindRequest, controls: Controls
 ) -> JSONResponse:
-    return _execute(application, session_id, body)
+    return _execute(controls, session_id, body)
 
 
 @router.post("/api/sessions/{session_id}/controls/apply-rewind",
              response_model=ControlOutcome, responses=CONTROL_RESPONSES)
 def apply_rewind(
-    session_id: SessionIdPath, body: ApplyRewindRequest, application: ApplicationGraph
+    session_id: SessionIdPath, body: ApplyRewindRequest, controls: Controls
 ) -> JSONResponse:
-    return _execute(application, session_id, body)
+    return _execute(controls, session_id, body)
 
 
 @router.post("/api/sessions/{session_id}/controls/migrate-account",
              response_model=ControlOutcome, responses=CONTROL_RESPONSES)
 def migrate_account(
-    session_id: SessionIdPath, body: MigrateAccountRequest, application: ApplicationGraph
+    session_id: SessionIdPath, body: MigrateAccountRequest, controls: Controls
 ) -> JSONResponse:
-    return _execute(application, session_id, body)
+    return _execute(controls, session_id, body)
 
 
 @router.post("/api/sessions/{session_id}/controls/compact",
              response_model=ControlOutcome, responses=CONTROL_RESPONSES)
 def compact(
-    session_id: SessionIdPath, body: CompactRequest, application: ApplicationGraph
+    session_id: SessionIdPath, body: CompactRequest, controls: Controls
 ) -> JSONResponse:
-    return _execute(application, session_id, body)
+    return _execute(controls, session_id, body)
 
 
 @router.post("/api/sessions/{session_id}/controls/select-model",
              response_model=ControlOutcome, responses=CONTROL_RESPONSES)
 def select_model(
-    session_id: SessionIdPath, body: SelectModelRequest, application: ApplicationGraph
+    session_id: SessionIdPath, body: SelectModelRequest, controls: Controls
 ) -> JSONResponse:
-    return _execute(application, session_id, body)
+    return _execute(controls, session_id, body)
 
 
 @router.post("/api/sessions/{session_id}/controls/select-effort",
              response_model=ControlOutcome, responses=CONTROL_RESPONSES)
 def select_effort(
-    session_id: SessionIdPath, body: SelectEffortRequest, application: ApplicationGraph
+    session_id: SessionIdPath, body: SelectEffortRequest, controls: Controls
 ) -> JSONResponse:
-    return _execute(application, session_id, body)
+    return _execute(controls, session_id, body)
 
 
 @router.post("/api/sessions/{session_id}/controls/answer-question",
              response_model=ControlOutcome, responses=CONTROL_RESPONSES)
 def answer_question(
-    session_id: SessionIdPath, body: AnswerQuestionRequest, application: ApplicationGraph
+    session_id: SessionIdPath, body: AnswerQuestionRequest, controls: Controls
 ) -> JSONResponse:
-    return _execute(application, session_id, body)
+    return _execute(controls, session_id, body)
 
 
 @router.post("/api/sessions/{session_id}/controls/read-plan-choices",
              response_model=ControlOutcome, responses=CONTROL_RESPONSES)
 def read_plan_choices(
-    session_id: SessionIdPath, body: ReadPlanChoicesRequest, application: ApplicationGraph
+    session_id: SessionIdPath, body: ReadPlanChoicesRequest, controls: Controls
 ) -> JSONResponse:
-    return _execute(application, session_id, body)
+    return _execute(controls, session_id, body)
 
 
 @router.post("/api/sessions/{session_id}/controls/decide-plan",
              response_model=ControlOutcome, responses=CONTROL_RESPONSES)
 def decide_plan(
-    session_id: SessionIdPath, body: DecidePlanRequest, application: ApplicationGraph
+    session_id: SessionIdPath, body: DecidePlanRequest, controls: Controls
 ) -> JSONResponse:
-    return _execute(application, session_id, body)
+    return _execute(controls, session_id, body)

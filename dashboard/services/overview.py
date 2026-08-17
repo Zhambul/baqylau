@@ -31,6 +31,7 @@ import time
 from core.daemon import contract as daemon_contract
 from dashboard import config
 from notify import presence
+from notify.presence import Presence
 
 # The launch form is opened against a handful of projects in practice; an
 # unbounded table would gain a row per directory ever typed into.
@@ -111,6 +112,7 @@ class GlobalApplicationService:
         notifications: NotificationSettingRepository,
         directories: HiddenDirectoryRepository,
         subscriptions: PushSubscriptionRepository,
+        presence: Presence,
         clock=time.time,
     ) -> None:
         self.sessions = sessions
@@ -120,6 +122,7 @@ class GlobalApplicationService:
         self.notifications = notifications
         self.directories = directories
         self.subscriptions = subscriptions
+        self.presence = presence
         self.clock = clock
 
     def snapshot(self) -> GlobalApplicationSnapshot:
@@ -221,12 +224,11 @@ class GlobalApplicationService:
             )
         )
 
-    @staticmethod
-    def report_presence(report: BrowserPresence) -> None:
+    def report_presence(self, report: BrowserPresence) -> None:
         session_id = str(report.session_id) if report.session_id is not None else None
         if report.away:
-            presence.mark_away(report.device_id, session_id)
+            self.presence.mark_away(report.device_id, session_id)
             return
-        presence.mark_device(report.device_id)
+        self.presence.mark_device(report.device_id)
         if session_id:
-            presence.mark_viewing(session_id)
+            self.presence.mark_viewing(session_id)

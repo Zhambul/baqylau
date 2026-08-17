@@ -10,9 +10,9 @@ from fastapi.responses import JSONResponse
 from api.common.models.fields import HarnessNamePath
 from api.guard import control_plane
 from api.responses import GUARDED, errors
+from app.providers import HookGateway, Recorder
 from harness.hooks.gateway import UnknownHookHarness
 from harness.models import HarnessHookRequest
-from diagnostics import record as A
 from harness.hooks.headers import (
     ACCOUNT_ID_HEADER,
     ACCOUNT_NAME_HEADER,
@@ -38,7 +38,9 @@ router = APIRouter()
         }),
     },
 )
-async def record_hook_delivery(harness: HarnessNamePath, request: Request) -> Response:
+async def record_hook_delivery(
+    harness: HarnessNamePath, request: Request, gateway: HookGateway, audit: Recorder
+) -> Response:
     """One pushed hook delivery: exact stdin bytes in, the reply bytes out.
 
     Recording happens on the request, never behind the interpreter tick — a
@@ -50,7 +52,6 @@ async def record_hook_delivery(harness: HarnessNamePath, request: Request) -> Re
     the interpretation of it (the CLI pid behind a client pid, a valid account
     slug) happens below this, where the vocabulary lives."""
     payload = await request.body()
-    application = request.app.state.canonical_application
     try:
         process_header = (request.headers.get(CLIENT_PROCESS_HEADER) or "").strip()
         delivery = HarnessHookRequest(
@@ -63,17 +64,17 @@ async def record_hook_delivery(harness: HarnessNamePath, request: Request) -> Re
             launch_model=request.headers.get(LAUNCH_MODEL_HEADER) or None,
             launch_effort=request.headers.get(LAUNCH_EFFORT_HEADER) or None,
         )
-        output = await run_in_threadpool(application.hook_gateway.record, harness, delivery)
+        output = await run_in_threadpool(gateway.record, harness, delivery)
     except UnknownHookHarness as error:
         return JSONResponse({"error": str(error)}, 404)
     except (KeyError, TypeError, ValueError) as error:
-        A.error("", "hook delivery", {
+        audit.error("", "hook delivery", {
             "harness": harness,
             "error": repr(error),
             "payload_bytes": len(payload),
         })
         return JSONResponse({"error": str(error)}, 400)
     except RepositoryError as error:
-        A.error("", "hook delivery", {"harness": harness, "error": repr(error)})
+        audit.error("", "hook delivery", {"harness": harness, "error": repr(error)})
         return JSONResponse({"error": str(error)}, 409)
     return Response(content=output, media_type="application/json")

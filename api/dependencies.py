@@ -1,18 +1,25 @@
-# api/dependencies.py — how a route reaches the application graph.
-#
-# The daemon builds the graph once (api/server.py) and hangs it on the FastAPI
-# application's state; every route receives it through this one dependency
-# instead of a module global, so tests inject a fixture graph the same way the
-# daemon injects the real one.
+"""The HTTP layer's own node: the policy this server runs under.
+
+Everything a route needs from the APPLICATION is declared in `app/providers.py`.
+This is the one thing that is not the application's — origin admission, the
+read-only switch, the boot stamp — and it is declared here rather than there
+because `app/` is the composition root and must not import the layer above it.
+
+Same kernel, same scope: one Settings per application, on the application, so a
+test overrides the switch instead of reaching for an import-time constant.
+"""
+
 from typing import Annotated
 
-from fastapi import Depends, Request
+from fastapi import Depends
 
-from app.bootstrap import CanonicalApplication
-
-
-def application(request: Request) -> CanonicalApplication:
-    return request.app.state.canonical_application
+from api.config import Settings, settings
+from app.injection import singleton
 
 
-ApplicationGraph = Annotated[CanonicalApplication, Depends(application)]
+@singleton
+def policy() -> Settings:
+    return settings()
+
+
+Policy = Annotated[Settings, Depends(policy)]

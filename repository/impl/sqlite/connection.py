@@ -45,13 +45,6 @@ DEFAULT_PRAGMAS = SqlitePragmas()
 # reason a hook is slow.
 AUDIT_PRAGMAS = SqlitePragmas(busy_timeout_milliseconds=5_000, timeout_seconds=5.0)
 
-# The lock file lives in the runtime directory. No WAL: its `-wal` and `-shm`
-# siblings would outlive an unclean exit in a directory nothing cleans up per
-# file, and a claim is one row read and written under a lock that should fail
-# fast rather than wait ten seconds while a second daemon decides to start.
-LOCK_PRAGMAS = SqlitePragmas(journal_mode=None, foreign_keys=False,
-                             busy_timeout_milliseconds=2_000, timeout_seconds=5.0)
-
 READ_ONLY_PRAGMAS = SqlitePragmas(read_only=True, file_mode=None)
 
 

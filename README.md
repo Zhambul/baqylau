@@ -125,10 +125,13 @@ dashboard/   the web surface: static/ (the SPA), render/ (facts -> markup,
 notify/      alerts about sessions: when one is owed you (notifier), whether
              you need telling (presence), and where it reaches you (channels/)
 api/         the daemon's HTTP layer — one FastAPI app, every request AND
-             every response typed
-app/         the composition root: the only package that knows WHICH harnesses
-             and which terminal are installed, plus the services that compose
-             concerns the engine keeps apart
+             every response typed, every service it uses named in the handler's
+             own signature
+app/         the composition root: providers.py declares every node of the
+             application (one provider each, wired by its signature and
+             resolved by FastAPI), injection.py is the kernel that scopes them
+             one-per-application, plus the services that compose concerns the
+             engine keeps apart
 bin/         the repository's own CLIs (audit, dashboard). Every entry an
              EXTERNAL config names lives with its concern instead —
              harness/impl/<name>/bin/ and terminal/bin/ — so a captured

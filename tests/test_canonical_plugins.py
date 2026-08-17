@@ -13,7 +13,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.bootstrap import build_application
+from canonical_runtime import ProviderGraph
+from diagnostics.recorder import AuditRecorder
+from repository.impl.sqlite.databases import audit_database
+from repository.impl.sqlite.diagnostics import SqliteDiagnosticWriteRepository
 from terminal.panes import commands as pane_commands
 from harness.hooks.gateway import HookGatewayService, UnknownHookHarness
 from harness.impl import installed
@@ -288,6 +291,11 @@ class InterpreterTerminal:
         raise AssertionError("panes must not open when they are already open")
 
 
+def _silent_audit():
+    """An audit recorder that writes to this test's own audit database."""
+    return AuditRecorder(SqliteDiagnosticWriteRepository(audit_database()))
+
+
 def interpreting_runtime(database_path):
     """The real installed plugins wired to one database, with a silent terminal."""
     harnesses = HarnessRegistry()
@@ -315,6 +323,7 @@ def interpreting_runtime(database_path):
         },
         reactions,
         controls,
+        _silent_audit(),
     )
     return runtime, interpreter
 
@@ -1598,7 +1607,7 @@ def test_pane_command_service_executes_gestures_for_the_windows_session():
 
     terminal = Terminal()
     remembered = []
-    service = pane_commands.PaneCommandService(terminal, _Widths(remembered))
+    service = pane_commands.PaneCommandService(terminal, _Widths(remembered), _silent_audit())
 
     outcomes = [
         service.execute("toggle", "77", "/project"),
@@ -1626,7 +1635,7 @@ def test_pane_command_in_a_tab_without_a_session_is_quietly_unhandled():
         def session_for_window(self, window_id):
             return None
 
-    outcome = pane_commands.PaneCommandService(Terminal(), _Widths([])).execute(
+    outcome = pane_commands.PaneCommandService(Terminal(), _Widths([]), _silent_audit()).execute(
         "toggle", "", "/project"
     )
     assert outcome == pane_commands.PaneCommandOutcome(False, True)
@@ -1906,7 +1915,7 @@ def test_catalogs_expose_only_what_depends_on_the_directory(tmp_path):
     a frozen literal built at import -- so only the slash commands, discovered by
     walking the session's own directory, still need a QueryContext.
     """
-    application = build_application(str(tmp_path))
+    application = ProviderGraph()
     context = QueryContext(session_id=None, working_directory=str(tmp_path))
 
     claude_catalog = application.catalog.read("claude_code", context)
@@ -2016,7 +2025,7 @@ def test_an_account_a_client_reported_is_validated_by_the_daemon():
 
 
 def test_launchers_build_native_commands_and_share_terminal_launch_mechanics(tmp_path):
-    application = build_application(str(tmp_path))
+    application = ProviderGraph()
     terminal = FakeTerminal()
     launcher = HarnessLauncherService(
         application.registry,
@@ -2089,7 +2098,7 @@ def test_a_harness_that_announces_at_its_first_turn_refuses_an_empty_launch(tmp_
     it (HarnessInfo.requires_initial_message) instead of leaving the dashboard
     waiting for a session that cannot arrive. Claude Code announces itself at
     startup and so still launches empty."""
-    application = build_application(str(tmp_path))
+    application = ProviderGraph()
     terminal = FakeTerminal()
     launcher = HarnessLauncherService(
         application.registry,
@@ -2144,7 +2153,7 @@ def test_claude_terminal_probe_owns_input_box_grammar(tmp_path):
 
     terminal = FakeTerminal(screen_text=screen)
 
-    plugin = build_application(str(tmp_path)).registry.plugin("claude_code")
+    plugin = ProviderGraph().registry.plugin("claude_code")
     state = plugin.terminal_probe.input_state(terminal, "window-one")
 
     assert state.suggestion == "apply the fix"
@@ -2167,7 +2176,7 @@ def test_claude_question_discussion_is_delivered_after_declining(monkeypatch, tm
         "harness.impl.claude_code.controls.controller.tui.type_command",
         lambda _terminal, _window, text: (calls.append(("discussion", text)) or (True, False)),
     )
-    application = build_application(str(tmp_path))
+    application = ProviderGraph()
     session = Session(
         SessionId("session-one"),
         ActorId("session-one:lead"),
@@ -2204,7 +2213,7 @@ def test_codex_question_discussion_stays_in_the_native_dialog(monkeypatch, tmp_p
         "harness.impl.codex.controls.controller.dialog.decline",
         lambda _terminal, _window, _prompts, message: calls.append(message),
     )
-    application = build_application(str(tmp_path))
+    application = ProviderGraph()
     session = Session(
         SessionId("session-one"),
         ActorId("session-one:lead"),
@@ -2244,7 +2253,7 @@ def test_claude_model_control_resolves_the_native_confirmation(monkeypatch, tmp_
         "harness.impl.claude_code.controls.controller.confirmdialog.confirm",
         lambda _terminal, _window: {"dialog": True, "digit": "1"},
     )
-    application = build_application(str(tmp_path))
+    application = ProviderGraph()
     session = Session(
         SessionId("session-one"),
         ActorId("session-one:lead"),
@@ -2272,7 +2281,7 @@ def test_claude_account_migration_uses_only_projected_context(monkeypatch, tmp_p
         },
     )
     terminal = FakeTerminal()
-    application = build_application(str(tmp_path))
+    application = ProviderGraph()
     session = Session(
         SessionId("session-one"),
         ActorId("session-one:lead"),
@@ -2336,7 +2345,7 @@ def test_parked_rename_uses_only_the_owning_harness_title_store(
 ):
     calls = []
     monkeypatch.setattr(native_writer, _RecordingTitles(calls))
-    application = build_application(str(tmp_path))
+    application = ProviderGraph()
     session = Session(
         SessionId("session-one"),
         ActorId("session-one:lead"),

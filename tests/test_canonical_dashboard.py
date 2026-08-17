@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import sqlite3
 import subprocess
-from types import SimpleNamespace
 
 import pytest
 
@@ -17,6 +16,10 @@ from dashboard.services.sessions import DashboardSessionService
 from dashboard.services.streams import DashboardStreamService
 from dashboard.services.notices import DashboardNotificationState
 from notify.notifier import Notifier
+from notify.presence import Presence
+from diagnostics.recorder import AuditRecorder
+from repository.impl.sqlite.databases import audit_database
+from repository.impl.sqlite.diagnostics import SqliteDiagnosticWriteRepository
 from domain.events import (
     ActorStarted,
     AttentionRequested,
@@ -589,27 +592,23 @@ def _alerting_on():
 def test_notifier_uses_canonical_tab_transitions(monkeypatch):
     queries = MutableNotificationQueries("idle")
     notification_state = DashboardNotificationState()
-    application = SimpleNamespace(
-        queries=queries,
-        dashboard_sessions=StaticNotificationSessions(
-            TerminalSessionState("window-one", None)
-        ),
-        dashboard_notification_state=notification_state,
-        notification_settings=_alerting_on(),
-        push_subscriptions=None,
-        push_signing_keys=None,
+    notifier = Notifier(
+        StaticNotificationSessions(TerminalSessionState("window-one", None)),
+        queries,
+        notification_state,
+        _alerting_on(),
+        None,
+        None,
+        Presence(),
+        AuditRecorder(SqliteDiagnosticWriteRepository(audit_database())),
     )
-    notifier = Notifier(application)
     retractions = []
     monkeypatch.setattr("notify.notifier.config.NOTIFICATION_DELAY_SECONDS", 0)
     monkeypatch.setattr("notify.notifier.config.NOTIFICATION_SETTLE_SECONDS", 0)
     monkeypatch.setattr("notify.notifier.config.NOTIFY_WEBPUSH", False)
     monkeypatch.setattr("notify.notifier.config.NOTIFY_TELEGRAM", True)
-    monkeypatch.setattr("notify.notifier.presence.web_viewing", lambda session_id: False)
-    monkeypatch.setattr("notify.notifier.presence.device_active", lambda: False)
     monkeypatch.setattr(
-        "notify.notifier.presence.route",
-        lambda subscriptions: ("terminal", (), {}),
+        notifier.presence, "route", lambda subscriptions: ("terminal", (), {})
     )
     monkeypatch.setattr(
         "notify.channels.telegram.send_alert",
@@ -620,8 +619,7 @@ def test_notifier_uses_canonical_tab_transitions(monkeypatch):
         lambda handle, reason, **keywords: retractions.append((handle, reason)) or "retracted",
     )
     monkeypatch.setattr(
-        "notify.notifier.AUDIT.state_file",
-        lambda *arguments, **keywords: None,
+        notifier.audit, "state_file", lambda *arguments, **keywords: None
     )
 
     notifier.scan()
@@ -644,15 +642,16 @@ def test_notifier_uses_canonical_tab_transitions(monkeypatch):
 def test_notifier_ignores_sessions_without_a_terminal_window(monkeypatch):
     queries = MutableNotificationQueries("idle")
     notification_state = DashboardNotificationState()
-    application = SimpleNamespace(
-        queries=queries,
-        dashboard_sessions=StaticNotificationSessions(TerminalSessionState(None, None)),
-        dashboard_notification_state=notification_state,
-        notification_settings=_alerting_on(),
-        push_subscriptions=None,
-        push_signing_keys=None,
+    notifier = Notifier(
+        StaticNotificationSessions(TerminalSessionState(None, None)),
+        queries,
+        notification_state,
+        _alerting_on(),
+        None,
+        None,
+        Presence(),
+        AuditRecorder(SqliteDiagnosticWriteRepository(audit_database())),
     )
-    notifier = Notifier(application)
 
     notifier.scan()
     queries.state = "awaiting_attention"

@@ -36,7 +36,7 @@ from api.dashboard.models.application.push_subscription_request import (
 from api.dashboard.models.application.tasks_hidden_request import TasksHiddenRequest
 from api.dashboard.models.application.view_mode_request import ViewModeRequest
 from api.common.models.fields import SessionIdPath
-from api.dependencies import ApplicationGraph
+from app.providers import GlobalApplication, PushSigningKeys, SessionApplication
 from api.guard import control_plane
 from api.responses import GUARDED
 from notify.channels import webpush
@@ -49,27 +49,27 @@ guarded = APIRouter(dependencies=[Depends(control_plane())], responses=GUARDED)
 
 
 @router.get("/api/application/push-configuration")
-def push_configuration(application: ApplicationGraph) -> PushConfigurationResponse:
+def push_configuration(signing_keys: PushSigningKeys) -> PushConfigurationResponse:
     """The Web Push feature probe: the page offers the notification opt-in +
     subscribes only when push is possible AND has an application-server key.
     The public key is not a secret."""
-    key = webpush.public_key(application.push_signing_keys)
+    key = webpush.public_key(signing_keys)
     return PushConfigurationResponse(enabled=bool(webpush.enabled() and key), key=key)
 
 
 @guarded.post("/api/application/notifications")
 def set_global_notifications(
-    body: GlobalNotificationsRequest, application: ApplicationGraph
+    body: GlobalNotificationsRequest, overview: GlobalApplication
 ) -> SavedResponse:
-    application.global_application.set_notifications_enabled(body.enabled)
+    overview.set_notifications_enabled(body.enabled)
     return SavedResponse()
 
 
 @guarded.post("/api/application/new-session-preferences")
 def save_new_session_preferences(
-    body: NewSessionPreferencesRequest, application: ApplicationGraph
+    body: NewSessionPreferencesRequest, overview: GlobalApplication
 ) -> SavedResponse:
-    application.global_application.save_new_session_preferences(
+    overview.save_new_session_preferences(
         working_directory=body.working_directory or None,
         harness=body.harness or None,
         model=body.model or None,
@@ -80,9 +80,9 @@ def save_new_session_preferences(
 
 @guarded.post("/api/application/new-session-drafts")
 def save_new_session_draft(
-    body: NewSessionDraftRequest, application: ApplicationGraph
+    body: NewSessionDraftRequest, overview: GlobalApplication
 ) -> SavedResponse:
-    saved = application.global_application.save_new_session_draft(
+    saved = overview.save_new_session_draft(
         body.working_directory, body.text, body.sequence
     )
     return SavedResponse(saved=saved)
@@ -90,17 +90,17 @@ def save_new_session_draft(
 
 @guarded.post("/api/application/hidden-directories")
 def hide_directory(
-    body: HideDirectoryRequest, application: ApplicationGraph
+    body: HideDirectoryRequest, overview: GlobalApplication
 ) -> HiddenDirectoriesResponse:
-    hidden = application.global_application.hide_directory(body.working_directory)
+    hidden = overview.hide_directory(body.working_directory)
     return HiddenDirectoriesResponse(hidden=hidden)
 
 
 @guarded.post("/api/application/push-subscriptions")
 def register_push_subscription(
-    body: PushSubscriptionRequest, application: ApplicationGraph
+    body: PushSubscriptionRequest, overview: GlobalApplication
 ) -> SavedResponse:
-    application.global_application.register_push_subscription(
+    overview.register_push_subscription(
         BrowserPushSubscription(
             body.subscription.endpoint,
             body.subscription.keys.p256dh,
@@ -113,8 +113,8 @@ def register_push_subscription(
 
 
 @guarded.post("/api/application/presence")
-def report_presence(body: PresenceRequest, application: ApplicationGraph) -> SavedResponse:
-    application.global_application.report_presence(
+def report_presence(body: PresenceRequest, overview: GlobalApplication) -> SavedResponse:
+    overview.report_presence(
         BrowserPresence(
             body.device_id,
             SessionId(body.session_id) if body.session_id else None,
@@ -126,9 +126,9 @@ def report_presence(body: PresenceRequest, application: ApplicationGraph) -> Sav
 
 @guarded.post("/api/sessions/{session_id}/application/composer-draft")
 def save_composer_draft(
-    session_id: SessionIdPath, body: ComposerDraftRequest, application: ApplicationGraph
+    session_id: SessionIdPath, body: ComposerDraftRequest, workspace: SessionApplication
 ) -> SavedResponse:
-    saved = application.session_application.save_composer_draft(
+    saved = workspace.save_composer_draft(
         SessionId(session_id), body.text, body.origin, body.sequence
     )
     return SavedResponse(saved=saved)
@@ -136,12 +136,12 @@ def save_composer_draft(
 
 @guarded.post("/api/sessions/{session_id}/application/composer-queue")
 def save_composer_queue(
-    session_id: SessionIdPath, body: ComposerQueueRequest, application: ApplicationGraph
+    session_id: SessionIdPath, body: ComposerQueueRequest, workspace: SessionApplication
 ) -> SavedResponse:
     messages = tuple(
         QueuedMessage(item.text) for item in body.items if item.text.strip()
     )
-    application.session_application.save_composer_queue(
+    workspace.save_composer_queue(
         SessionId(session_id), messages, body.origin
     )
     return SavedResponse()
@@ -149,12 +149,12 @@ def save_composer_queue(
 
 @guarded.post("/api/sessions/{session_id}/application/dialog-draft")
 def save_dialog_draft(
-    session_id: SessionIdPath, body: DialogDraftRequest, application: ApplicationGraph
+    session_id: SessionIdPath, body: DialogDraftRequest, workspace: SessionApplication
 ) -> SavedResponse:
     selections = tuple(
         AnswerSelection(answer.selected, answer.other) for answer in body.answers
     )
-    application.session_application.save_dialog_draft(
+    workspace.save_dialog_draft(
         SessionId(session_id), AttentionId(body.attention_id), selections, body.origin
     )
     return SavedResponse()
@@ -162,23 +162,23 @@ def save_dialog_draft(
 
 @guarded.post("/api/sessions/{session_id}/application/view-mode")
 def set_view_mode(
-    session_id: SessionIdPath, body: ViewModeRequest, application: ApplicationGraph
+    session_id: SessionIdPath, body: ViewModeRequest, workspace: SessionApplication
 ) -> SavedResponse:
-    application.session_application.set_view_mode(SessionId(session_id), body.view_mode)
+    workspace.set_view_mode(SessionId(session_id), body.view_mode)
     return SavedResponse()
 
 
 @guarded.post("/api/sessions/{session_id}/application/notifications-muted")
 def set_notifications_muted(
-    session_id: SessionIdPath, body: NotificationsMutedRequest, application: ApplicationGraph
+    session_id: SessionIdPath, body: NotificationsMutedRequest, workspace: SessionApplication
 ) -> SavedResponse:
-    application.session_application.set_notifications_muted(SessionId(session_id), body.muted)
+    workspace.set_notifications_muted(SessionId(session_id), body.muted)
     return SavedResponse()
 
 
 @guarded.post("/api/sessions/{session_id}/application/tasks-hidden")
 def set_tasks_hidden(
-    session_id: SessionIdPath, body: TasksHiddenRequest, application: ApplicationGraph
+    session_id: SessionIdPath, body: TasksHiddenRequest, workspace: SessionApplication
 ) -> SavedResponse:
-    application.session_application.set_tasks_hidden(SessionId(session_id), body.hidden)
+    workspace.set_tasks_hidden(SessionId(session_id), body.hidden)
     return SavedResponse()

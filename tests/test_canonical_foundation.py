@@ -58,6 +58,7 @@ from domain.ids import (
     stable_event_id,
 )
 from domain.values import StructuredContent, TextContent
+from diagnostics.recorder import AuditRecorder
 from harness.registry import HarnessRegistry, HarnessRegistryError
 from repository.errors import EventIdentityConflict
 from repository.impl.sqlite.canonical_events import SqliteCanonicalEventRepository
@@ -225,7 +226,24 @@ class _PaneWidths:
         return 25
 
 
-def build_interpreter(database_path, harnesses, *, terminal=None, controls=None):
+class RecordingAudit(AuditRecorder):
+    """The audit recorder, capturing instead of writing. The interpreter takes
+    one by constructor, so a test that asserts on a swallowed failure holds the
+    object it was handed rather than patching a module function."""
+
+    def __init__(self):
+        self.errors = []
+
+    def error(self, session_or_log="", func="", context=None):
+        self.errors.append((func, context))
+
+    def failures(self):
+        """The `where` of each swallowed interpreter failure."""
+        return [func.removeprefix("interpreter (").removesuffix(")")
+                for func, _context in self.errors]
+
+
+def build_interpreter(database_path, harnesses, *, terminal=None, controls=None, audit=None):
     """The bootstrap wiring, with an injectable terminal for the pane reaction."""
     database = main_database(str(database_path))
     sessions = SqliteSessionRepository(database, harnesses)
@@ -251,6 +269,7 @@ def build_interpreter(database_path, harnesses, *, terminal=None, controls=None)
         core_translators,
         reactions,
         controls if controls is not None else NullControls(),
+        audit if audit is not None else RecordingAudit(),
     )
     return interpreter, sessions, recorder, store, operation_output
 
@@ -872,11 +891,7 @@ def test_one_failing_source_neither_stops_its_siblings_nor_the_interpreter(tmp_p
     conversation stopped arriving while hooks (separate processes) kept flowing, so the
     session still looked alive.
     """
-    audited = []
-    monkeypatch.setattr(
-        "engine.interpret.loop._audit_failure",
-        lambda where, context: audited.append((where, context)),
-    )
+    audited = RecordingAudit()
 
     class BrokenSource:
         source_identity = "broken"
@@ -895,7 +910,7 @@ def test_one_failing_source_neither_stops_its_siblings_nor_the_interpreter(tmp_p
         )
     )
     interpreter, sessions, _recorder, store, _operation_output = build_interpreter(
-        database_path, harnesses
+        database_path, harnesses, audit=audited
     )
     sessions.save("example", example_session())
 
@@ -903,8 +918,8 @@ def test_one_failing_source_neither_stops_its_siblings_nor_the_interpreter(tmp_p
 
     # The healthy sibling still drained, behind the broken one.
     assert len(store.page_after(SessionId("session-one"), 0, 10).events) == 1
-    assert [where for where, _ in audited] == ["source read"]
-    assert audited[0][1]["source_identity"] == "broken"
+    assert audited.failures() == ["source read"]
+    assert audited.errors[0][1]["source_identity"] == "broken"
 
 
 def test_watchable_is_every_unfinished_session_without_a_count_limit(tmp_path):
@@ -952,22 +967,18 @@ def test_watchable_is_every_unfinished_session_without_a_count_limit(tmp_path):
 def test_a_pid_less_session_is_a_loud_audited_error_every_tick(tmp_path, monkeypatch):
     """Never a silent skip: a session without a harness process id cannot be
     watched for liveness, and the failure lands in the audit until it can."""
-    audited = []
-    monkeypatch.setattr(
-        "engine.interpret.loop._audit_failure",
-        lambda where, context: audited.append((where, context)),
-    )
+    audited = RecordingAudit()
     database_path = str(tmp_path / "main.db")
     harnesses = HarnessRegistry()
     harnesses.register(example_plugin(TranslationResult((), "ignored_nonsemantic")))
     interpreter, sessions, _recorder, _store, _operation_output = build_interpreter(
-        database_path, harnesses
+        database_path, harnesses, audit=audited
     )
     sessions.save("example", replace(example_session(), harness_process_id=None))
 
     interpreter.tick()
 
-    assert [where for where, _ in audited] == ["source construction"]
+    assert audited.failures() == ["source construction"]
 
 
 def test_a_dead_cli_process_becomes_one_session_finished_fact(tmp_path):

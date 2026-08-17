@@ -14,7 +14,7 @@ import re
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse, Response
 
-from api.config import BOOT_ID, CACHE_STATIC
+from api.dependencies import Policy
 from api.responses import errors
 from dashboard.config import STATIC, STATIC_DIR
 
@@ -29,7 +29,7 @@ router = APIRouter(responses=errors({
 _APP_PART = re.compile(r"^app\.[0-9]{2}-[a-z-]+\.js$")
 
 
-def _stamped_index(data: bytes) -> bytes:
+def _stamped_index(data: bytes, boot_id: bytes) -> bytes:
     # CACHE-BUST the sub-resource URLs with BOOT_ID (bumped every restart).
     # The origin sends no-store, but that can't evict an already-cached
     # app.js/style.css in a remote browser — so a dashboard update left the
@@ -37,19 +37,19 @@ def _stamped_index(data: bytes) -> bytes:
     # is the main document a reload always refetches, so a fresh ?v=<BOOT_ID>
     # reaches the browser and points at a URL nothing has cached.
     data = re.sub(rb"(/static/app\.[0-9]{2}-[a-z-]+\.js)",
-                  rb"\1?v=" + BOOT_ID.encode(), data)
-    data = data.replace(b"/static/style.css", b"/static/style.css?v=" + BOOT_ID.encode())
+                  rb"\1?v=" + boot_id, data)
+    data = data.replace(b"/static/style.css", b"/static/style.css?v=" + boot_id)
     # ...and the ICONS, for the same reason: a REGENERATED icon is new bytes at
     # an unchanged URL, and mobile browsers keep a persistent favicon cache a
     # hard reload does not evict. The manifest URL is stamped too so a changed
     # icon list is re-read.
     data = re.sub(rb"(/static/(?:apple-touch-icon|icon-[a-z0-9-]+)\.png)",
-                  rb"\1?v=" + BOOT_ID.encode(), data)
+                  rb"\1?v=" + boot_id, data)
     return data.replace(b"/static/manifest.webmanifest",
-                        b"/static/manifest.webmanifest?v=" + BOOT_ID.encode())
+                        b"/static/manifest.webmanifest?v=" + boot_id)
 
 
-def _serve(name: str, version: str) -> Response:
+def _serve(policy, name: str, version: str) -> Response:
     content_type = STATIC.get(name)
     if not content_type and _APP_PART.match(name):
         content_type = "text/javascript; charset=utf-8"
@@ -61,42 +61,42 @@ def _serve(name: str, version: str) -> Response:
     except OSError:
         return JSONResponse({"error": "unreadable"}, 500)
     if name == "index.html":
-        data = _stamped_index(data)
+        data = _stamped_index(data, policy.boot_id.encode())
     if name == "manifest.webmanifest":
         # the manifest's own icon URLs — the installed-app glyph comes from
         # here, not from index.html.
         data = re.sub(rb"(/static/icon-[a-z0-9-]+\.png)",
-                      rb"\1?v=" + BOOT_ID.encode(), data)
+                      rb"\1?v=" + policy.boot_id.encode(), data)
     # A fetch under the CURRENT boot's ?v=<BOOT_ID> stamp may be cached hard:
     # the URL changes on every restart, and the bytes behind it only change
     # via a restart (the "does NOT hot-reload" contract). index.html and
     # sw.js are fetched un-stamped, so they stay no-store.
-    cache = CACHE_STATIC if version == BOOT_ID else "no-store"
+    cache = policy.cache_static if version == policy.boot_id else "no-store"
     return Response(content=data, media_type=content_type,
                     headers={"Cache-Control": cache})
 
 
 @router.get("/")
-def index(v: str = "") -> Response:
-    return _serve("index.html", v)
+def index(policy: Policy, v: str = "") -> Response:
+    return _serve(policy, "index.html", v)
 
 
 @router.get("/static/{name}")
-def static(name: str, v: str = "") -> Response:
-    return _serve(name, v)
+def static(name: str, policy: Policy, v: str = "") -> Response:
+    return _serve(policy, name, v)
 
 
 @router.get("/sw.js")
-def service_worker(v: str = "") -> Response:
+def service_worker(policy: Policy, v: str = "") -> Response:
     # the push service worker, served at the root so its scope is the whole
     # origin (docs/dashboard.md *Web push*) — not under /static/, which would
     # scope it to /static/.
-    return _serve("sw.js", v)
+    return _serve(policy, "sw.js", v)
 
 
 @router.get("/favicon.ico")
-def favicon(v: str = "") -> Response:
+def favicon(policy: Policy, v: str = "") -> Response:
     # the raster fallback favicon, at the root path clients probe on their own
     # when the declared SVG icon is unusable. Undeclared on purpose — see
     # dashboard/config.py STATIC and docs/dashboard.md *Favicon fallback*.
-    return _serve("favicon.ico", v)
+    return _serve(policy, "favicon.ico", v)

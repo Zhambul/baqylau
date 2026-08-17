@@ -15,7 +15,6 @@ from repository.contract.facts import (
     RawEventRepository,
     TranslationEvidenceRepository,
 )
-from repository.contract.locks import ProcessLockRepository
 from repository.contract.operations import OperationOutputRepository
 from repository.contract.preferences import (
     HiddenDirectoryRepository,
@@ -45,7 +44,6 @@ __all__ = [
     "NotificationSettingRepository",
     "OperationOutputRepository",
     "PaneWidthRepository",
-    "ProcessLockRepository",
     "PushSigningKeyRepository",
     "PushSubscriptionRepository",
     "RawEventRepository",

@@ -7,7 +7,6 @@ exercised through the thing that composes it is a store nobody tests.
 
 from __future__ import annotations
 
-import os
 import time
 from decimal import Decimal
 from typing import Literal
@@ -47,7 +46,6 @@ from repository.impl.sqlite.canonical_events import SqliteCanonicalEventReposito
 from repository.impl.sqlite.connection import SqliteDatabase
 from repository.impl.sqlite.databases import (
     audit_database,
-    lock_database,
     main_database,
     read_only,
 )
@@ -56,7 +54,6 @@ from repository.impl.sqlite.diagnostics import (
     SqliteDiagnosticWriteRepository,
 )
 from repository.impl.sqlite.evidence import SqliteTranslationEvidenceRepository
-from repository.impl.sqlite.locks import SqliteProcessLockRepository
 from repository.impl.sqlite.operation_output import SqliteOperationOutputRepository
 from repository.impl.sqlite.preferences import (
     SqliteHiddenDirectoryRepository,
@@ -652,41 +649,6 @@ def test_the_audit_is_a_no_op_when_switched_off(tmp_path, monkeypatch):
     writes.record_error(ApplicationErrorRecord(str(SESSION), "s", "f", "t", "c", 1, 1.0))
     reads = SqliteDiagnosticReadRepository(read_only(database))
     assert reads.errors_for_session(SESSION) == ()
-
-
-# --- locks --------------------------------------------------------------------
-
-
-def test_a_live_holder_denies_and_names_itself(tmp_path):
-    locks = SqliteProcessLockRepository(lock_database(str(tmp_path / "locks.db")))
-    assert locks.acquire("dashboard", os.getpid()).decision == "claimed"
-    outcome = locks.acquire("dashboard", os.getpid() + 1)
-    assert outcome.decision == "denied"
-    assert outcome.holder_process_id == os.getpid()
-    assert not outcome.held
-
-
-def test_a_dead_holder_is_stolen_from(tmp_path):
-    locks = SqliteProcessLockRepository(lock_database(str(tmp_path / "locks.db")))
-    dead = 999_999_998
-    locks.acquire("dashboard", dead)
-    outcome = locks.acquire("dashboard", os.getpid())
-    assert outcome.decision == "stolen_stale"
-    assert outcome.held
-
-
-def test_only_the_holder_releases_a_claim(tmp_path):
-    locks = SqliteProcessLockRepository(lock_database(str(tmp_path / "locks.db")))
-    locks.acquire("dashboard", os.getpid())
-    locks.release("dashboard", os.getpid() + 1)
-    assert locks.holder("dashboard") == os.getpid()
-    locks.release("dashboard", os.getpid())
-    assert locks.holder("dashboard") is None
-
-
-def test_an_absent_lock_database_reports_no_holder(tmp_path):
-    locks = SqliteProcessLockRepository(lock_database(str(tmp_path / "absent.db")))
-    assert locks.holder("dashboard") is None
 
 
 # --- the clock is not the repository's ----------------------------------------

@@ -7,6 +7,7 @@ import time
 from typing import Callable, Mapping
 
 from domain.events import CanonicalEvent, EventPayload
+from diagnostics.recorder import AuditRecorder
 from harness.contract import (
     CanonicalEventReaction,
     CoreTranslator,
@@ -27,20 +28,6 @@ TRANSLATION_BATCH_SIZE = 500
 
 class TranslationConsistencyError(ValueError):
     """A translation does not agree with the evidence it came from."""
-
-
-def _audit_failure(where: str, context: dict) -> None:
-    """Record a swallowed interpreter failure, then carry on.
-
-    Imported lazily so this module keeps its import-time purity, and guarded so a
-    broken auditor can never take down the interpreter it exists to explain.
-    """
-    try:
-        from diagnostics import record  # noqa: PLC0415 — guarded: a broken auditor must not take down the interpreter
-
-        record.error(str(context.get("session_id", "")), f"interpreter ({where})", context)
-    except Exception:
-        pass
 
 
 def checked(raw_event: RawEvent, translation: TranslationResult) -> TranslationResult:
@@ -95,6 +82,7 @@ class Interpreter:
         core_translators: Mapping[str, CoreTranslator],
         reactions: tuple[CanonicalEventReaction, ...],
         controls: HarnessReactorContext,
+        audit: AuditRecorder,
         clock: Callable[[], float] = time.time,
     ) -> None:
         self.sessions = sessions
@@ -105,14 +93,28 @@ class Interpreter:
         self.core_translators = core_translators
         self.reactions = reactions
         self.controls = controls  # handed to harness reactors per call
+        self.audit = audit
         self.clock = clock
+
+    def _audit_failure(self, where: str, context: dict) -> None:
+        """Record a swallowed interpreter failure, then carry on.
+
+        Guarded, so a broken auditor can never take down the interpreter it
+        exists to explain.
+        """
+        try:
+            self.audit.error(
+                str(context.get("session_id", "")), f"interpreter ({where})", context
+            )
+        except Exception:
+            pass
 
     def run(self, stop_event: threading.Event) -> None:
         while not stop_event.is_set():
             try:
                 self.tick()
             except Exception:
-                _audit_failure("tick", {})
+                self._audit_failure("tick", {})
             stop_event.wait(TICK_INTERVAL_SECONDS)
 
     def tick(self) -> None:
@@ -129,7 +131,7 @@ class Interpreter:
         try:
             output_source.expire(self.operation_output, self.clock())
         except Exception:
-            _audit_failure("output expiry", {})
+            self._audit_failure("output expiry", {})
 
     # --- pull: turn the outside world into recorded evidence -------------------
 
@@ -150,7 +152,7 @@ class Interpreter:
                     SessionLivenessSource(session),
                 )
             except Exception:
-                _audit_failure("source construction", {"session_id": str(session.session_id)})
+                self._audit_failure("source construction", {"session_id": str(session.session_id)})
                 continue
             self._pull_sources(session, sources)
 
@@ -165,7 +167,7 @@ class Interpreter:
         try:
             positions = self.raw_events.latest_positions([name for name in identities if name])
         except Exception:
-            _audit_failure("resume positions", {"session_id": str(session.session_id)})
+            self._audit_failure("resume positions", {"session_id": str(session.session_id)})
             return
         for source in sources:
             self._pull_source(session, source, positions.get(source.source_identity))
@@ -182,7 +184,7 @@ class Interpreter:
             if raw_events:
                 self.raw_events.record(raw_events)
         except Exception:
-            _audit_failure(
+            self._audit_failure(
                 "source read",
                 {
                     "session_id": str(session.session_id),
@@ -220,7 +222,7 @@ class Interpreter:
                 try:
                     reaction.react(canonical_event)
                 except Exception:
-                    _audit_failure(
+                    self._audit_failure(
                         type(reaction).__name__,
                         {
                             "session_id": str(canonical_event.session_id),
@@ -234,7 +236,7 @@ class Interpreter:
                 try:
                     reactor.react(canonical_event, self.controls)
                 except Exception:
-                    _audit_failure(
+                    self._audit_failure(
                         type(reactor).__name__,
                         {
                             "session_id": str(canonical_event.session_id),

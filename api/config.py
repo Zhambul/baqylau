@@ -1,4 +1,5 @@
-# api/config.py — the HTTP server's own policy knobs.
+# api/config.py — the HTTP server's own policy knobs, and the value object that
+# carries them to the routes.
 #
 # Server-side only: origin admission, the read-only kill switch, the response
 # headers every reply carries, caching and compression thresholds, and the boot
@@ -6,16 +7,23 @@
 # the daemon and its clients read live in core/daemon/contract.py; knobs the dashboard
 # presenters own (the static whitelist, notification timing, the public URL)
 # stay in dashboard/config.py. Import-pure: env reads + literals only.
+#
+# The literals below are the SOURCE; `settings()` freezes them into one Settings
+# a route receives by injection (api/dependencies.py). Reading a module constant
+# on the request path was the last global in this layer: a test could not turn
+# the read-only switch on, because it was decided at import.
+from __future__ import annotations
+
 import os
 import re
 import time
+from dataclasses import dataclass
+from typing import Mapping
 from urllib.parse import urlsplit
 
 from core.daemon.contract import HOST_ADDRESS, PORT_NUMBER
 from dashboard.config import PUBLIC_URL
 from dashboard.dictate import DEEPGRAM_LISTEN_URL
-
-LOCK_KEY = "dashboard"
 
 # The listen(2) backlog. The socketserver-era default of FIVE reset a tunneled
 # page refresh's parallel burst of ~16 origin connections (docs/dashboard.md
@@ -137,3 +145,37 @@ THREAD_POOL_TOKENS = 100
 # How long a stopping server waits for open connections (the SSE streams never
 # close on their own) before force-closing them.
 GRACEFUL_SHUTDOWN_SECONDS = 3
+
+
+@dataclass(frozen=True)
+class Settings:
+    """This server's policy, as one value. Injected, never imported."""
+
+    readonly: bool
+    allowed_origins: frozenset[str]
+    session_id_pattern: re.Pattern[str]
+    image_mimes: frozenset[str]
+    boot_id: str
+    cache_static: str
+    security_headers: Mapping[str, str]
+    gzip_minimum_bytes: int
+    thread_pool_tokens: int
+    request_queue_size: int
+    graceful_shutdown_seconds: int
+
+
+def settings() -> Settings:
+    """The policy this process runs under, read off the constants above."""
+    return Settings(
+        readonly=READONLY,
+        allowed_origins=frozenset(ALLOWED_ORIGINS),
+        session_id_pattern=SESSION_ID_PATTERN,
+        image_mimes=frozenset(IMAGE_MIMES),
+        boot_id=BOOT_ID,
+        cache_static=CACHE_STATIC,
+        security_headers=SECURITY_HEADERS,
+        gzip_minimum_bytes=GZIP_MIN,
+        thread_pool_tokens=THREAD_POOL_TOKENS,
+        request_queue_size=REQUEST_QUEUE_SIZE,
+        graceful_shutdown_seconds=GRACEFUL_SHUTDOWN_SECONDS,
+    )

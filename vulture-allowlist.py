@@ -17,6 +17,11 @@ _.server_port
 # sqlite3.Connection attribute — set to shape rows, never read by us.
 _.row_factory
 
+# inspect/FastAPI contract: `singleton` rewrites the signature the framework
+# reads off a provider, so the attribute is assigned here and read by
+# `inspect.signature` — never by a caller of ours.
+_.__signature__
+
 # The account pair a launched CLI carries in its environment. Read by a program
 # that CANNOT import this one — `client/_wire.py`, which imports nothing of ours
 # by design — so the only reference inside the import graph is the module that

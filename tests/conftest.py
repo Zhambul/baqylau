@@ -16,16 +16,11 @@ if REPOSITORY_ROOT not in sys.path:
 def isolated_application_files(monkeypatch, tmp_path):
     """Keep current-schema application state out of the user's data directory.
 
-    One environment variable moves all three databases now, because
-    `core/data.py` is the one owner of their paths. The uploads directory is
-    still patched by attribute: it is resolved at import, and it is the only
-    place the application writes bytes rather than rows.
+    One environment variable moves both databases AND the uploads directory,
+    because `core/data.py` is the one owner of where our files live and nothing
+    resolves a path at import any more.
     """
-    from dashboard import paths
-
     monkeypatch.setenv("BAQYLAU_DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.setenv("BAQYLAU_RUNTIME_DIRECTORY", str(tmp_path / "runtime"))
-    monkeypatch.setattr(paths, "UPLOADS_DIRECTORY", str(tmp_path / "uploads"))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-config"))
     monkeypatch.setenv("BAQYLAU_TERMINAL", "none")
     # Hooks record their tab's terminal window as evidence; the suite itself may

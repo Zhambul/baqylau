@@ -45,6 +45,7 @@ from core.daemon import contract
 from harness.hooks import headers
 from harness.impl.claude_code import account, launcher as claude_launcher
 from harness.impl.claude_code.otel import launch as otel_launch
+from harness.impl.claude_code.usage import live as claude_live_usage
 from harness.models import TELEMETRY_KIND_HEADER
 from terminal import adapter as terminal_adapter
 from terminal.impl.kitty import remote as kitty_remote
@@ -179,7 +180,7 @@ def test_no_client_touches_the_store_the_audit_trail_or_the_application():
     `diagnostics/record.py` — and through it the whole sqlite layer — part of
     nine foreign processes and gave audit.db ten writers.
     """
-    forbidden = ("sqlite3", "repository", "diagnostics", "app.bootstrap",
+    forbidden = ("sqlite3", "repository", "diagnostics", "app.providers",
                  "build_application", "RawEvent", "main.db", "audit.db",
                  "open(", ".write_text(", ".write_bytes(", "os.makedirs")
     violations = [
@@ -297,6 +298,7 @@ def test_the_wire_matches_the_daemon():
     assert wire.LAUNCH_EFFORT_VARIABLE == claude_launcher.LAUNCH_EFFORT_VARIABLE
     assert wire.ACCOUNT_SLUG_VARIABLE == account.SLUG_VARIABLE
     assert wire.ACCOUNT_LABEL_VARIABLE == account.LABEL_VARIABLE
+    assert wire.PROBE_VARIABLE == claude_live_usage.PROBE_VARIABLE
     # One line per terminal we can drive: a client cannot import a plugin to ask
     # which variable names the current window, so it carries the union.
     assert set(wire.WINDOW_ID_VARIABLES) == {kitty_remote.WINDOW_ID_VARIABLE}
@@ -464,6 +466,22 @@ def test_the_claude_hook_ships_its_stdin_and_what_it_observed(daemon):
     assert delivery.headers[headers.ACCOUNT_NAME_HEADER] == "Account Two"
     assert delivery.headers[headers.LAUNCH_MODEL_HEADER] == "fable"
     assert delivery.headers[headers.LAUNCH_EFFORT_HEADER] == "high"
+
+
+def test_a_hook_of_the_daemons_own_probe_ships_nothing(daemon):
+    """The daemon spawns the harness to READ its plan windows, and that process
+    fires hooks like any other. Shipping them would put a session in the store
+    that nobody started — a reader manufacturing the thing it reads."""
+    completed = run_client(
+        CLAUDE_HOOK,
+        stdin=b'{"session_id":"probe-session","hook_event_name":"SessionStart"}',
+        port=daemon.port,
+        environment={claude_live_usage.PROBE_VARIABLE: "1"},
+    )
+
+    assert completed.returncode == 0
+    assert completed.stdout == b""
+    assert daemon.deliveries == []
 
 
 def test_the_codex_hook_ships_only_what_codex_has(daemon):

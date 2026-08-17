@@ -29,8 +29,8 @@ application owns and reads back:
 
 `audit.db` holds what the MACHINERY did, and is separate because every
 short-lived process in the tree writes it and because it is what you read when
-`main.db` is the suspect. `locks.db` holds pid claims and lives in the runtime
-directory, because a claim surviving a reboot would name a pid since reused.
+`main.db` is the suspect. There is no third file: the daemon's pid claim used
+to live in `locks.db`, and the port it binds answers that question already.
 
 Every write in the system passes through here; nothing here interprets.
 """

@@ -12,8 +12,8 @@ web dashboard.
 ## Commands
 
 Two databases: `<data_dir>/main.db` holds everything the application owns and
-reads back, `<data_dir>/audit.db` what the machinery did. A third, `locks.db`,
-lives in the runtime directory because a pid claim must not survive a reboot.
+reads back, `<data_dir>/audit.db` what the machinery did. There is no third:
+the daemon is a singleton because it binds a port, not because it holds a lock.
 **Nothing outside `repository/impl/sqlite/` opens a database** — the one
 exception is `harness/impl/codex/canonical/title.py`, which is itself a
 repository implementation and lives there only because a shared package may not

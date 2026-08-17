@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 
-from diagnostics import record
+from diagnostics.recorder import AuditRecorder
 from harness.contract import HarnessReactorContext
 from harness.models import (
     ControlContext,
@@ -41,9 +41,9 @@ from terminal.contract import TerminalPlugin
 # rows, whose session lives inside the JSON — those are invisible to the obvious
 # `WHERE session_id = ?` triage query, which is how this gesture first read as
 # "no audit at all".
-def _audit_control(request: ControlRequest, outcome, elapsed: float) -> None:
+def _audit_control(audit, request: ControlRequest, outcome, elapsed: float) -> None:
     try:
-        record.state_file(
+        audit.state_file(
             str(request.session_id),
             "",
             "control",
@@ -70,21 +70,23 @@ class HarnessControlService(HarnessReactorContext):
         plugin: TerminalPlugin,
         queries: SessionQueries,
         account_usage: AccountUsageRepository,
+        audit: AuditRecorder,
     ) -> None:
         self.sessions = sessions
         self.terminal = terminal
         self.plugin = plugin
         self.queries = queries
         self.account_usage = account_usage
+        self.audit = audit
 
     def execute(self, request: ControlRequest) -> ControlOutcome:
         started = time.monotonic()
         try:
             outcome = self._execute(request)
         except Exception:
-            _audit_control(request, None, time.monotonic() - started)
+            _audit_control(self.audit, request, None, time.monotonic() - started)
             raise
-        _audit_control(request, outcome, time.monotonic() - started)
+        _audit_control(self.audit, request, outcome, time.monotonic() - started)
         return outcome
 
     def _execute(self, request: ControlRequest) -> ControlOutcome:

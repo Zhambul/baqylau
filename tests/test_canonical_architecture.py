@@ -153,13 +153,14 @@ def test_repository_contracts_expose_no_connection_or_transaction():
     assert violations == []
 
 
-def test_exactly_three_database_files_are_named():
-    """Seven files became three, and the count is the point.
+def test_exactly_two_database_files_are_named():
+    """Seven files became two, and the count is the point.
 
     `main.db` is everything the application owns and reads back; `audit.db` is
     separate because every short-lived process writes it and because it is what
-    you read when `main.db` is the suspect; `locks.db` is separate because a pid
-    claim must not survive a reboot. Nothing else may appear.
+    you read when `main.db` is the suspect. There is no third: the daemon's pid
+    claim lived in `locks.db` until the port it binds became the only answer.
+    Nothing else may appear.
     """
     named = set()
     for package in OUR_PACKAGES:
@@ -168,7 +169,7 @@ def test_exactly_three_database_files_are_named():
                 continue  # the foreign index; its name is Codex's, not ours
             named.update(re.findall(r'"([A-Za-z0-9_.-]+\.(?:db|sqlite))"',
                                     path.read_text(encoding="utf-8")))
-    assert named == {"main.db", "audit.db", "locks.db"}
+    assert named == {"main.db", "audit.db"}
 
 
 def test_no_key_value_table_exists():
@@ -266,7 +267,7 @@ def test_the_terminal_contract_and_models_import_nothing_of_ours():
     assert foreign == []
 
 
-def test_only_bootstrap_resolves_a_terminal():
+def test_only_the_provider_graph_resolves_a_terminal():
     """`terminal/impl/` has one door and ONE caller.
 
     Everything else takes a `TerminalPlugin` (or one of its five fields) by
@@ -276,7 +277,7 @@ def test_only_bootstrap_resolves_a_terminal():
     (`client/`) and read the variable that names the window straight out of their
     own environment, so the door has no callers left outside the daemon.
     """
-    allowed = {"app/bootstrap.py"}
+    allowed = {"app/providers.py"}
     importers = set()
     for package in OUR_PACKAGES:
         for path, imported in imports_under(package):
@@ -352,7 +353,7 @@ def test_the_diagnostic_write_tier_is_a_floor_and_the_read_tier_is_the_daemons()
                 readers.add(path.relative_to(ROOT).as_posix())
             del imported
     assert readers == {
-        "app/bootstrap.py",
+        "app/providers.py",
         "app/services/insights.py",
         "dashboard/services/workspace.py",
     }
@@ -716,13 +717,15 @@ def test_only_the_daemon_and_the_audit_cli_build_repositories():
     the daemon is the suspect, and it opens read-only. `diagnostics/record.py` is
     the other, because the daemon's own boot and its request guard record before
     and outside the graph that would inject a repository.
+
+    `api/server.py` and `dashboard/cli.py` used to be named here too, for the pid
+    lock they shared. The daemon is a singleton because it binds a port, so
+    neither one opens anything now: the CLI asks the port who is answering.
     """
     allowed_builders = {
-        "app/bootstrap.py",
+        "app/providers.py",
         "app/evidence_cli.py",
         "diagnostics/record.py",
-        "api/server.py",          # the singleton lock, before the graph exists
-        "dashboard/cli.py",       # asks who holds that lock
     }
     builders = set()
     for package in OUR_PACKAGES:
@@ -774,31 +777,114 @@ def test_terminal_storage_is_reached_through_a_service():
 # adding a fifth file.
 
 
-def test_the_application_graph_is_built_only_by_the_daemon():
-    """One process interprets: the dashboard daemon builds the application
-    graph once at startup, and every other process is a recorder or a thin
-    HTTP/SSE client of the daemon. `app/evidence_cli.py` is the ONE sanctioned
-    direct reader outside it — the forensic CLI must work when the daemon is
-    the thing being debugged (it opens the store read-only, it never builds
-    the graph)."""
-    builders = ("build_default_application", "build_application(")
-    allowed = {
-        "app/bootstrap.py",
-        "api/server.py",
-    }
-    violations = []
+def test_the_graph_is_declared_in_one_place_and_injected_everywhere():
+    """One process interprets, and it does not assemble an object to do it.
+
+    `app/providers.py` is the only module that declares an APPLICATION node:
+    `@singleton` is its decorator, and every consumer — a route, a background
+    thread, a test — asks for the node it uses. `api/dependencies.py` is the
+    second and last, for the one node that is not the application's: the HTTP
+    policy. It lives there because `app/` is the composition root and may not
+    import the layer above it.
+
+    The rule this replaced pinned the strings `build_application(` and
+    `build_default_application` to two files, because the graph was ONE frozen
+    33-field object handed to whoever needed a field of it. There is no such
+    object to build now.
+    """
+    declarers = set()
     for directory in ("bin", *OUR_PACKAGES):
         for path in sorted((ROOT / directory).rglob("*.py")):
+            if "__pycache__" in path.parts:
+                continue
+            if "@singleton" in _code_only(path):
+                declarers.add(path.relative_to(ROOT).as_posix())
+    assert declarers == {"app/providers.py", "api/dependencies.py"}
+
+
+def test_the_audit_floor_is_only_for_writers_with_no_graph():
+    """Everything with a constructor takes `AuditRecorder`; the floor is the rest.
+
+    `diagnostics/record.py` is the same five writes over a repository nobody
+    injected, and it exists for writers that genuinely cannot be handed one: the
+    CLI verb that audits a spawn before the daemon exists, and free functions deep
+    enough that passing a recorder would mean growing a parameter on every caller
+    between here and there. Everything else — the interpreter, the control
+    service, the pane commands, the notifier, every route — takes the node.
+
+    Each entry is a decision, not a leftover. A new importer means either a class
+    that should have taken the recorder, or a reason stated here.
+    """
+    floor = {
+        "dashboard/cli.py",                          # audits the spawn; the daemon is not up yet
+        "core/clipboard.py",                         # a free function on the host pasteboard
+        "harness/impl/claude_code/controls/tui.py",  # a screen driver, below every service
+        "notify/channels/__init__.py",               # channel dispatch: free functions
+        "notify/channels/telegram.py",               # ...and the two channels behind it
+        "notify/channels/webpush.py",
+    }
+    importers = set()
+    for package in OUR_PACKAGES:
+        for path in sorted((ROOT / package).rglob("*.py")):
+            if "__pycache__" in path.parts:
+                continue
+            relative = path.relative_to(ROOT).as_posix()
+            if relative == "diagnostics/record.py":
+                continue
+            if "from diagnostics import record" in _code_only(path):
+                importers.add(relative)
+    assert importers == floor
+
+
+def test_no_route_takes_the_whole_graph():
+    """A route signature is its dependency list, or it is a lie.
+
+    Every handler used to take one `ApplicationGraph` — the entire application —
+    to reach one or two fields of it, and two of them read `app.state` by hand.
+    Both spellings are gone: a handler names the services it uses, and the ONLY
+    module that touches the singleton registry is the kernel that owns it.
+    """
+    banned = ("ApplicationGraph", "canonical_application", "app.state.instances")
+    allowed = {"app/injection.py", "api/app.py"}
+    violations = []
+    for package in OUR_PACKAGES:
+        for path in sorted((ROOT / package).rglob("*.py")):
             if "__pycache__" in path.parts:
                 continue
             relative = path.relative_to(ROOT).as_posix()
             if relative in allowed:
                 continue
-            source = path.read_text(encoding="utf-8")
-            for builder in builders:
-                if builder in source:
-                    violations.append(f"{relative} contains {builder}")
+            source = _code_only(path)
+            for name in banned:
+                if name in source:
+                    violations.append(f"{relative} names {name}")
     assert violations == []
+
+
+def test_every_declared_node_resolves_and_resolves_once():
+    """The declarations are a graph, not a list: it has to close.
+
+    Resolving every provider proves each one's parameters name providers too
+    (`app/injection.py` raises otherwise), and asking twice proves the scope is
+    a singleton — the session list's warm cache and the interpreter are ONE
+    object per application, or the daemon has two of each.
+    """
+    from app import providers as declared
+    from app.injection import registry, resolve
+
+    instances = registry()
+    nodes = [
+        name for name in dir(declared)
+        if not name.startswith("_") and hasattr(getattr(declared, name), "build")
+    ]
+    assert len(nodes) > 40, nodes
+    for name in nodes:
+        provider = getattr(declared, name)
+        assert resolve(instances, provider) is resolve(instances, provider), name
+    # A second registry is a second application: nothing is shared through the
+    # module, which is the whole difference between a singleton and a global.
+    other = registry()
+    assert resolve(other, declared.main_db) is not resolve(instances, declared.main_db)
 
 
 def test_claude_foreground_hook_has_no_legacy_drawing_or_state_dependency():

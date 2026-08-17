@@ -53,6 +53,11 @@ ACCOUNT_SLUG_VARIABLE = "CLAUDE_SUBSCRIPTION_SLUG"
 ACCOUNT_LABEL_VARIABLE = "CLAUDE_SUBSCRIPTION_LABEL"
 LAUNCH_MODEL_VARIABLE = "BAQYLAU_LAUNCH_MODEL"
 LAUNCH_EFFORT_VARIABLE = "BAQYLAU_LAUNCH_EFFORT"
+# The daemon spawns the harness itself to READ something out of it — today, an
+# account's plan windows (harness/impl/claude_code/usage/live.py). That process
+# runs hooks like any other, and a client that shipped them would put a session
+# in the store that nobody started. Seeing this, a client does nothing.
+PROBE_VARIABLE = "BAQYLAU_USAGE_PROBE"
 WINDOW_ID_VARIABLES = ("KITTY_WINDOW_ID",)
 
 

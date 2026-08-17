@@ -56,6 +56,20 @@ def registry() -> list[dict]:
     return accounts
 
 
+def config_directory(account_id: str | None) -> str | None:
+    """The `CLAUDE_CONFIG_DIR` one account runs under, or None for the default.
+
+    The switcher gives each subscription its own configuration directory, and
+    Claude Code keys its stored credentials by that path — so this is also what
+    decides WHICH account answers when the daemon asks the harness a question
+    (`usage/live.py`).
+    """
+    if not account_id or not VALID_ACCOUNT_ID.fullmatch(account_id):
+        return None
+    directory = os.path.join(ACCOUNT_CONFIG_DIRECTORY, account_id)
+    return directory if os.path.isdir(directory) else None
+
+
 def alias_for(account_id: str) -> str | None:
     if not account_id or account_id == DEFAULT_COMMAND:
         return DEFAULT_COMMAND

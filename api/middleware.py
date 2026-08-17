@@ -8,14 +8,18 @@
 # bytes, and the error handlers.
 from __future__ import annotations
 
+from typing import Mapping
+
 from starlette.datastructures import MutableHeaders
 from starlette.middleware.gzip import GZipMiddleware
 
-from api import config
-
 
 class SecurityHeaders:
-    """Stamp api.config.SECURITY_HEADERS onto every response.
+    """Stamp the policy's security headers onto every response.
+
+    The headers arrive by CONSTRUCTOR, not by import: ASGI middleware runs
+    outside the dependency graph — there is no request to resolve against yet —
+    so `add_middleware` is where this layer gets injected.
 
     Applied here, as the outermost thing `add_middleware` can install, so it
     reaches the replies no handler produced — a guard's 403, the framework's 404
@@ -29,8 +33,9 @@ class SecurityHeaders:
     handler's own decision would be a second, invisible owner of it.
     """
 
-    def __init__(self, app) -> None:
+    def __init__(self, app, headers: Mapping[str, str]) -> None:
         self.app = app
+        self.headers = headers
 
     async def __call__(self, scope, receive, send) -> None:
         if scope["type"] != "http":
@@ -40,7 +45,7 @@ class SecurityHeaders:
         async def send_with_headers(message) -> None:
             if message["type"] == "http.response.start":
                 headers = MutableHeaders(scope=message)
-                for name, value in config.SECURITY_HEADERS.items():
+                for name, value in self.headers.items():
                     if name not in headers:
                         headers[name] = value
             await send(message)
@@ -53,9 +58,9 @@ class SelectiveGZip:
     the incremental frames the streams exist to deliver. An EventSource always
     sends `Accept: text/event-stream`, which is the routing fact used here."""
 
-    def __init__(self, app) -> None:
+    def __init__(self, app, minimum_size: int) -> None:
         self.plain = app
-        self.compressing = GZipMiddleware(app, minimum_size=config.GZIP_MIN)
+        self.compressing = GZipMiddleware(app, minimum_size=minimum_size)
 
     async def __call__(self, scope, receive, send) -> None:
         if scope["type"] == "http":

@@ -281,8 +281,9 @@ and, if the underlying record still fails, degrades again within seconds. Reprod
 
 ```python
 BAQYLAU_DATA_DIR=<a .backup copy>  # never the live store
-from app.bootstrap import build_default_application
-build_default_application().interpreter.tick()
+from app import providers
+from app.injection import registry, resolve
+resolve(registry(), providers.interpreter).tick()
 ```
 
 Take the copy with `sqlite3 "file:<main.db>?mode=ro" ".backup '<dest>'"` — a plain `cp`

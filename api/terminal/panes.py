@@ -6,7 +6,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
-from api.dependencies import ApplicationGraph
+from app.providers import PaneCommands
 from api.guard import control_plane
 from api.responses import GUARDED, with_body
 from api.terminal.models.panes.grow_request import GrowPaneRequest
@@ -26,8 +26,8 @@ PANE_RESPONSES = with_body(PaneCommandResponse, {
 })
 
 
-def _execute(application, command, body, columns=None, percent=None) -> JSONResponse:
-    outcome = application.pane_commands.execute(
+def _execute(panes, command, body, columns=None, percent=None) -> JSONResponse:
+    outcome = panes.execute(
         command,
         body.window_id,
         body.working_directory,
@@ -43,29 +43,29 @@ def _execute(application, command, body, columns=None, percent=None) -> JSONResp
 
 @router.post("/api/terminal/panes/toggle", response_model=PaneCommandResponse,
              responses=PANE_RESPONSES)
-def toggle_panes(body: TogglePanesRequest, application: ApplicationGraph) -> JSONResponse:
-    return _execute(application, "toggle", body)
+def toggle_panes(body: TogglePanesRequest, panes: PaneCommands) -> JSONResponse:
+    return _execute(panes, "toggle", body)
 
 
 @router.post("/api/terminal/panes/grow", response_model=PaneCommandResponse,
              responses=PANE_RESPONSES)
-def grow_pane(body: GrowPaneRequest, application: ApplicationGraph) -> JSONResponse:
-    return _execute(application, "grow", body, columns=body.columns)
+def grow_pane(body: GrowPaneRequest, panes: PaneCommands) -> JSONResponse:
+    return _execute(panes, "grow", body, columns=body.columns)
 
 
 @router.post("/api/terminal/panes/shrink", response_model=PaneCommandResponse,
              responses=PANE_RESPONSES)
-def shrink_pane(body: ShrinkPaneRequest, application: ApplicationGraph) -> JSONResponse:
-    return _execute(application, "shrink", body, columns=body.columns)
+def shrink_pane(body: ShrinkPaneRequest, panes: PaneCommands) -> JSONResponse:
+    return _execute(panes, "shrink", body, columns=body.columns)
 
 
 @router.post("/api/terminal/panes/reset", response_model=PaneCommandResponse,
              responses=PANE_RESPONSES)
-def reset_pane(body: ResetPaneRequest, application: ApplicationGraph) -> JSONResponse:
-    return _execute(application, "reset", body)
+def reset_pane(body: ResetPaneRequest, panes: PaneCommands) -> JSONResponse:
+    return _execute(panes, "reset", body)
 
 
 @router.post("/api/terminal/panes/set-percent", response_model=PaneCommandResponse,
              responses=PANE_RESPONSES)
-def set_pane_percent(body: SetPanePercentRequest, application: ApplicationGraph) -> JSONResponse:
-    return _execute(application, "setpct", body, percent=body.percent)
+def set_pane_percent(body: SetPanePercentRequest, panes: PaneCommands) -> JSONResponse:
+    return _execute(panes, "setpct", body, percent=body.percent)

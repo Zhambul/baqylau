@@ -16,20 +16,22 @@
 # preflight is part of the defense.
 from fastapi import HTTPException, Request
 
-from diagnostics import record as A
+from app.providers import Recorder
 from core.daemon.contract import POST_HEADER, POST_MAX
-from api import config
+from api.config import Settings
+from api.dependencies import Policy
+from diagnostics.recorder import AuditRecorder
 
 CONTENT_TYPE_JSON = "application/json"
 
 
-def reject(request: Request, code: int, why: str) -> HTTPException:
+def reject(audit: AuditRecorder, request: Request, code: int, why: str) -> HTTPException:
     """One guard rejection: audited as a `web-reject` state_files row (path =
     the rejected request path, content = code + reason) — the ONE place a
     control-plane POST could vanish without a trace, since the guard rejects
     BEFORE any handler runs. Audit-only telemetry (not an `errors` row — an
     expected 4xx), so it never lights the errwatch chip."""
-    A.state_file("", request.url.path[:200], "web-reject", {"code": code, "why": why})
+    audit.state_file("", request.url.path[:200], "web-reject", {"code": code, "why": why})
     return HTTPException(code, why)
 
 
@@ -37,19 +39,23 @@ def control_plane(maximum_bytes: int = POST_MAX):
     """The guard for one route, parameterized by its body cap. Use as
     `Depends(control_plane())`; the upload and hook-delivery routes pass their
     own caps. Runs before the body is parsed, so a rejected request costs no
-    validation work."""
+    validation work.
 
-    def guard(request: Request) -> None:
-        if config.READONLY:
-            raise reject(request, 403, "control plane disabled (read-only)")
+    The policy arrives by injection — a dependency of a dependency, which FastAPI
+    resolves like any other — so the read-only switch and the origin allowlist
+    are this application's, not this interpreter's."""
+
+    def guard(request: Request, policy: Policy, audit: Recorder) -> None:
+        if policy.readonly:
+            raise reject(audit, request, 403, "control plane disabled (read-only)")
         content_type = (request.headers.get("Content-Type") or "").split(";")[0].strip()
         if content_type != CONTENT_TYPE_JSON:
-            raise reject(request, 415, "content-type must be application/json")
+            raise reject(audit, request, 415, "content-type must be application/json")
         origin = request.headers.get("Origin")
-        if origin and origin not in config.ALLOWED_ORIGINS:
-            raise reject(request, 403, "cross-origin")
-        if request.headers.get(POST_HEADER) != "1" and origin not in config.ALLOWED_ORIGINS:
-            raise reject(request, 403, "missing %s header" % POST_HEADER)
+        if origin and origin not in policy.allowed_origins:
+            raise reject(audit, request, 403, "cross-origin")
+        if request.headers.get(POST_HEADER) != "1" and origin not in policy.allowed_origins:
+            raise reject(audit, request, 403, "missing %s header" % POST_HEADER)
         # The cap is checked BEFORE the body is read, which is what makes it
         # free — and which is why the declared length has to exist. A request
         # that omits Content-Length (a chunked upload) once declared zero and
@@ -61,25 +67,25 @@ def control_plane(maximum_bytes: int = POST_MAX):
         # for any body they are given).
         declared = request.headers.get("Content-Length")
         if declared is None:
-            raise reject(request, 411, "content-length is required")
+            raise reject(audit, request, 411, "content-length is required")
         try:
             length = int(declared)
         except ValueError:
-            raise reject(request, 411, "content-length is not a number") from None
+            raise reject(audit, request, 411, "content-length is not a number") from None
         if length < 0 or length > maximum_bytes:
-            raise reject(request, 413, "body too large")
+            raise reject(audit, request, 413, "body too large")
 
     return guard
 
 
-def reject_input(action, why, message, detail, code=400, log="", path=""):
+def reject_input(audit: AuditRecorder, action, why, message, detail, code=400, log="", path=""):
     """Audit and reject malformed application input (the file routes' audited
     400s — a `state_files` row first, then the HTTP error)."""
-    A.state_file(log, path, action,
+    audit.state_file(log, path, action,
                  dict({"ok": False, "why": why},
                       **{key: repr(value) for key, value in detail.items()}))
     return HTTPException(code, message)
 
 
-def valid_session_id(value):
-    return bool(config.SESSION_ID_PATTERN.match(value or ""))
+def valid_session_id(policy: Settings, value) -> bool:
+    return bool(policy.session_id_pattern.match(value or ""))

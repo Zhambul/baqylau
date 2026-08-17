@@ -9,7 +9,7 @@ from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
 
 from api.common.models.fields import SessionIdPath
-from api.dependencies import ApplicationGraph
+from app.providers import DashboardActivity, DashboardSessions, SessionApplication, Sessions
 from dashboard.render.serialize import json_ready
 from domain.errors import UnknownReference
 from domain.ids import ActorId, SessionId
@@ -22,8 +22,8 @@ router = APIRouter()
 DEFAULT_ACTIVITY_BLOCK_COUNT = 100
 
 
-def _scope(application, session_id: SessionId, actor_id: str | None) -> ActivityScope:
-    session = application.sessions.find(session_id)
+def _scope(sessions: Sessions, session_id: SessionId, actor_id: str | None) -> ActivityScope:
+    session = sessions.find(session_id)
     if session is None:
         # By type, not a bare KeyError: this is the caller naming a session that
         # does not exist, and it is the reason the 400 handler exists at all.
@@ -34,22 +34,24 @@ def _scope(application, session_id: SessionId, actor_id: str | None) -> Activity
 
 
 @router.get("/api/sessions", response_model=list[DashboardSessionListItem])
-def session_list(application: ApplicationGraph) -> JSONResponse:
-    return JSONResponse(json_ready(application.dashboard_sessions.sessions()))
+def session_list(dashboard: DashboardSessions) -> JSONResponse:
+    return JSONResponse(json_ready(dashboard.sessions()))
 
 
 @router.get("/api/sessions/{session_id}", response_model=SessionSnapshotResponse)
 def session_snapshot(
     session_id: SessionIdPath,
-    application: ApplicationGraph,
+    sessions: Sessions,
+    dashboard: DashboardSessions,
+    workspace: SessionApplication,
     actor_id: str | None = None,
 ) -> JSONResponse:
     session = SessionId(session_id)
-    scope = _scope(application, session, actor_id)
+    scope = _scope(sessions, session, actor_id)
     return JSONResponse(
         {
-            "canonical": json_ready(application.dashboard_sessions.snapshot(session, scope)),
-            "application": json_ready(application.session_application.snapshot(session)),
+            "canonical": json_ready(dashboard.snapshot(session, scope)),
+            "application": json_ready(workspace.snapshot(session)),
         }
     )
 
@@ -57,12 +59,13 @@ def session_snapshot(
 @router.get("/api/sessions/{session_id}/activity", response_model=DashboardActivityPage)
 def session_activity(
     session_id: SessionIdPath,
-    application: ApplicationGraph,
+    sessions: Sessions,
+    activity: DashboardActivity,
     block_count: int = Query(DEFAULT_ACTIVITY_BLOCK_COUNT, gt=0),
     before_cursor: int | None = None,
     actor_id: str | None = None,
 ) -> JSONResponse:
     session = SessionId(session_id)
-    scope = _scope(application, session, actor_id)
-    page = application.dashboard_activity.backlog(session, before_cursor, scope, block_count)
+    scope = _scope(sessions, session, actor_id)
+    page = activity.backlog(session, before_cursor, scope, block_count)
     return JSONResponse(json_ready(page))

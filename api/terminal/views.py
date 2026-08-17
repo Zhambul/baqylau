@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from api.dependencies import ApplicationGraph
+from app.providers import ContentViews
 from api.guard import control_plane
 from api.responses import GUARDED
 from api.terminal.models.views.opened_response import OpenedResponse
@@ -19,6 +19,6 @@ router = APIRouter(dependencies=[Depends(control_plane())], responses=GUARDED)
 @router.post("/api/terminal/views")
 def toggle_terminal_view(
     body: ToggleViewRequest,
-    application: ApplicationGraph,
+    views: ContentViews,
 ) -> OpenedResponse:
-    return OpenedResponse(opened=application.content_views.toggle(body.content_reference))
+    return OpenedResponse(opened=views.toggle(body.content_reference))

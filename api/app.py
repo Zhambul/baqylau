@@ -1,10 +1,11 @@
 # api/app.py — the FastAPI application factory.
 #
-# build_web_application(graph) wires the routers, the error contract, the
-# response middleware and the OpenAPI documents around one already-built
-# application graph. It builds no graph itself — that is api/server.py
-# serve()'s job, exactly once — which is what lets tests hand in a fixture
-# graph the same way.
+# build_web_application() wires the routers, the error contract, the response
+# middleware and the OpenAPI documents around one SINGLETON SCOPE: the registry
+# every provider memoises into (app/injection.py). It builds no service itself —
+# a node is built the first time something asks for it, by the framework — which
+# is what lets the daemon and a test share one set of definitions and disagree
+# only about the registry they hand in.
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
@@ -18,17 +19,19 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from api import config
-from api.common import content, hooks
+from api.common import content, health, hooks
 from api.common import telemetry as harness_telemetry
 from api.dashboard import application as dashboard_application
 from api.dashboard import catalog, controls, files, sessions, static, telemetry
 from api.dashboard import streams as dashboard_streams
+from api import dependencies
+from api.lifecycle import background_workers
 from api.middleware import SecurityHeaders, SelectiveGZip
 from api.responses import EVERY_ROUTE
 from api.terminal import panes, views
 from api.terminal import streams as terminal_streams
-from app.bootstrap import CanonicalApplication
-from diagnostics import record as A
+from app import providers
+from app.injection import Instances, registry, resolve
 from domain.errors import ApplicationInputError
 
 # Starlette's stock message for an unrouted path; the daemon contract has always
@@ -37,11 +40,19 @@ _FRAMEWORK_NOT_FOUND = "Not Found"
 
 
 @asynccontextmanager
-async def _lifespan(_application: FastAPI):
+async def _lifespan(web: FastAPI):
     # Sync route handlers share the anyio worker-thread pool; SSE is async and
     # costs no thread, so this cap only has to absorb request bursts.
-    anyio.to_thread.current_default_thread_limiter().total_tokens = config.THREAD_POOL_TOKENS
-    yield
+    policy = resolve(web.state.instances, dependencies.policy)
+    anyio.to_thread.current_default_thread_limiter().total_tokens = policy.thread_pool_tokens
+    if not web.state.run_background_workers:
+        # An app that only serves requests — the test fixture, a schema dump.
+        # The flag is the seam: interpreting and notifying are the DAEMON's
+        # work, and every HTTP test would otherwise run an interpreter loop.
+        yield
+        return
+    with background_workers(web.state.instances):
+        yield
 
 
 def _error_body(message: str, status_code: int) -> JSONResponse:
@@ -91,8 +102,12 @@ async def _application_input_error(_request: Request, error: Exception) -> JSONR
 
 
 async def _internal_error(request: Request, _error: Exception) -> JSONResponse:
-    A.error("", "dashboard %s" % ("POST" if request.method == "POST" else "request"),
-            {"path": request.url.path[:200]})
+    # An exception handler is not a route: it takes no dependencies. It has the
+    # request, though, and the request has the application — so the recorder is
+    # resolved from the same registry a route would have been handed it from.
+    audit = resolve(request.app.state.instances, providers.recorder)
+    audit.error("", "dashboard %s" % ("POST" if request.method == "POST" else "request"),
+                {"path": request.url.path[:200]})
     return _error_body("internal", 500)
 
 
@@ -127,7 +142,9 @@ def _publish_openapi_without_the_422(web: FastAPI) -> None:
     web.openapi = document  # type: ignore[method-assign]
 
 
-def build_web_application(graph: CanonicalApplication) -> FastAPI:
+def build_web_application(
+    instances: Instances | None = None, run_background_workers: bool = False
+) -> FastAPI:
     web = FastAPI(
         title="baqylau",
         openapi_url="/openapi.json",
@@ -138,7 +155,12 @@ def build_web_application(graph: CanonicalApplication) -> FastAPI:
         # statuses the handlers above can produce for any request at all.
         responses=EVERY_ROUTE,
     )
-    web.state.canonical_application = graph
+    # The singleton scope every provider memoises into. Handed in by the daemon
+    # so its background threads share the services the routes hold; a fresh one
+    # per application otherwise, so nothing outlives the app that owns it.
+    web.state.instances = registry() if instances is None else instances
+    web.state.run_background_workers = run_background_workers
+    web.include_router(health.router)
     web.include_router(hooks.router)
     web.include_router(harness_telemetry.router)
     web.include_router(content.router)
@@ -175,6 +197,7 @@ def build_web_application(graph: CanonicalApplication) -> FastAPI:
     web.add_exception_handler(Exception, _internal_error)
     # Added last, so it wraps first: the header policy has to reach the replies
     # the compression layer and the error handlers produce, not just the routes'.
-    web.add_middleware(SelectiveGZip)
-    web.add_middleware(SecurityHeaders)
+    policy = resolve(web.state.instances, dependencies.policy)
+    web.add_middleware(SelectiveGZip, minimum_size=policy.gzip_minimum_bytes)
+    web.add_middleware(SecurityHeaders, headers=policy.security_headers)
     return web

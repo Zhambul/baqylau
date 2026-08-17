@@ -6,7 +6,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Response
 from fastapi.responses import HTMLResponse, PlainTextResponse
 
-from api.dependencies import ApplicationGraph
+from app.providers import Content
 from dashboard.render.diff import source_html, unified_diff_html
 from domain.errors import MalformedRequest
 
@@ -16,11 +16,11 @@ router = APIRouter()
 @router.get("/api/content/{content_reference:path}")
 def content(
     content_reference: str,
-    application: ApplicationGraph,
+    content: Content,
     view: str | None = None,
     path: str | None = None,
 ) -> Response:
-    text = application.content.resolve(content_reference)
+    text = content.resolve(content_reference)
     if view in ("diff", "source"):
         if not path:
             raise MalformedRequest("path is required for file view")

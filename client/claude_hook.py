@@ -29,6 +29,10 @@ HARNESS = "claude_code"
 
 def main() -> None:
     payload = sys.stdin.buffer.read()
+    # The daemon's own read-only probe of this harness: its hooks are not
+    # evidence of anybody's session, so they are read and dropped.
+    if os.environ.get(_wire.PROBE_VARIABLE):
+        return
     reply = _daemon.post(_wire.HOOK_PATH % HARNESS, payload, {
         _wire.TERMINAL_WINDOW_HEADER: _wire.window_id(os.environ),
         # Our OWN pid, not the CLI's: the daemon walks up from here while this

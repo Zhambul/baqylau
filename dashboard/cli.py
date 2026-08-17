@@ -9,24 +9,27 @@ it is importable/testable in-process, like the rest of the dashboard tier.
             debugging mode: crashes are visible instead of DEVNULL'd)
   start   — spawn the server detached (core/spawn.spawn_detached — audited,
             start_new_session) unless one is already running; prints the URL
-  stop    — SIGTERM the lock-holder pid
-  status  — holder pid + URL
+  stop    — SIGTERM whoever answers on the port
+  status  — the answering pid + URL
   open    — start (if needed) and open the browser        [the default]
 
 Import-pure: no argv/I/O/DB/frontend work at import — everything runs inside a
 function (docs/architecture.md import-time purity rule).
 """
+import http.client
+import json
 import os
 import signal
 import subprocess
 import sys
 import time
 
-from repository.impl.sqlite.databases import lock_database
-from repository.impl.sqlite.locks import SqliteProcessLockRepository
 from diagnostics import record
 from core.process import process_is_alive
 from dashboard import paths
+
+HEALTH_PATH = "/api/health"
+HEALTH_TIMEOUT_SECONDS = 1.0
 
 
 def _server():
@@ -36,10 +39,43 @@ def _server():
 
 
 def holder():
-    """The running server's pid, or 0 (dead holders are not 'running' — the
-    next start steals the stale lock)."""
-    pid = SqliteProcessLockRepository(lock_database()).holder("dashboard")
+    """The running server's pid, or 0.
+
+    Asked over the port the daemon binds, because that bind IS the singleton
+    guard — a pid claim in a database was a second answer to the same question,
+    and it could disagree. `_listening_pid` is the fallback for the one case the
+    probe cannot cover: a daemon still holding the port but no longer answering,
+    which is exactly the one you need `stop` for.
+    """
+    from core.daemon import contract as daemon_contract  # noqa: PLC0415 — same import purity as _server()
+
+    connection = http.client.HTTPConnection(
+        daemon_contract.HOST_ADDRESS, daemon_contract.PORT_NUMBER,
+        timeout=HEALTH_TIMEOUT_SECONDS,
+    )
+    try:
+        connection.request("GET", HEALTH_PATH)
+        response = connection.getresponse()
+        pid = int(json.loads(response.read())["process_id"]) if response.status == 200 else 0
+    except (OSError, ValueError, KeyError, TypeError):
+        pid = _listening_pid(daemon_contract.PORT_NUMBER)
+    finally:
+        connection.close()
     return pid if pid and process_is_alive(pid) else 0
+
+
+def _listening_pid(port):
+    """Whoever holds the port, when it no longer answers. Best effort: if lsof
+    is not installed there is nothing to signal and nothing to report."""
+    try:
+        found = subprocess.run(
+            ["lsof", "-nP", "-iTCP:%d" % port, "-sTCP:LISTEN", "-t"],
+            capture_output=True, text=True, check=False, timeout=2,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return 0
+    first = found.stdout.split()
+    return int(first[0]) if first and first[0].isdigit() else 0
 
 
 def url():
@@ -69,7 +105,7 @@ def start():
         print("dashboard failed to spawn (see audit errors)", file=sys.stderr)
         return 1
     record.spawn("", process.pid, [entry, "serve"], purpose="web dashboard")
-    for _ in range(40):                     # ~2s for the lock/port to land
+    for _ in range(40):                     # ~2s for the port to answer
         if holder():
             break
         time.sleep(0.05)

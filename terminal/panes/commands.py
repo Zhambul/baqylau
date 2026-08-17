@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from diagnostics import record
+from diagnostics.recorder import AuditRecorder
 from terminal.services.panes import PaneWidthService
 from terminal.adapter import TerminalAdapter
 
@@ -26,9 +26,12 @@ class PaneCommandOutcome:
 
 
 class PaneCommandService:
-    def __init__(self, terminal: TerminalAdapter, widths: PaneWidthService) -> None:
+    def __init__(
+        self, terminal: TerminalAdapter, widths: PaneWidthService, audit: AuditRecorder
+    ) -> None:
         self._terminal = terminal
         self._widths = widths
+        self._audit = audit
 
     def execute(
         self,
@@ -50,7 +53,7 @@ class PaneCommandService:
             if session_id is None
             else self._execute(command, session_id, working_directory, columns, percent)
         )
-        record.state_file(
+        self._audit.state_file(
             "",
             working_directory,
             "pane-command",

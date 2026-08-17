@@ -3,27 +3,32 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import http.client
 import json
 import socket
 import sqlite3
 import threading
 import time
-from dataclasses import replace
 from urllib.parse import quote
 
 from fastapi.routing import APIRoute
 from pydantic import TypeAdapter
 
+from api import config as api_config
+from api import dependencies
 from api.app import build_web_application
 from api.dashboard.models.controls.send_text_request import SendTextRequest
 from api.server import build_server
-from app.bootstrap import build_application
+from app import providers
+from canonical_runtime import ProviderGraph
 from diagnostics.models import ApplicationErrorRecord
+from diagnostics.recorder import AuditRecorder
 from diagnostics.telemetry import BrowserTelemetryService
 from harness.models import RawEvent, Session, TranslationResult
 from dashboard.services.notices import DashboardNotificationState
 from dashboard.services.overview import GlobalApplicationService, NewSessionPreferences
+from notify.presence import Presence
 from domain.events import CanonicalEvent, EventPayload, MessageCreated, SessionStarted
 from domain.ids import ActorId, CanonicalEventId, MessageId, RawEventId, SessionId
 from domain.values import MessageRole, TextContent
@@ -56,8 +61,11 @@ def _record(application, raw_event, translator_version, translation):
     )
 
 
-def _application(tmp_path):
-    application = build_application(str(tmp_path))
+def _application():
+    """A seeded graph: the registry the app under test is handed, plus attribute
+    access to the nodes this suite asserts on. The databases are the ones
+    conftest's environment points at, per test."""
+    application = ProviderGraph()
     application.sessions.save(
         "codex",
         Session(SESSION_ID, ACTOR_ID, "native", "fixture", "/work"),
@@ -118,9 +126,23 @@ class _RunningDaemon:
         pass
 
 
-def _server(application):
+def _fixed(value):
+    """An override provider that takes NO parameters. A closure with a default
+    argument would make FastAPI read that default as a query parameter."""
+
+    def provider():
+        return value
+
+    return provider
+
+
+def _server(application, overrides=None):
     bound_socket = socket.create_server(("127.0.0.1", 0))
-    server = build_server(build_web_application(application))
+    web = build_web_application(application.instances)
+    for provider, value in (overrides or {}).items():
+        # FastAPI's own seam: one node substituted, the rest of the graph real.
+        web.dependency_overrides[provider] = _fixed(value)
+    server = build_server(web)
     thread = threading.Thread(
         target=server.run, kwargs={"sockets": [bound_socket]}, daemon=True
     )
@@ -189,7 +211,7 @@ def _post(server, path: str, body: dict):
 
 
 def test_plural_session_resources_use_the_canonical_snapshot_and_activity(tmp_path):
-    application = _application(tmp_path)
+    application = _application()
     # The reader and the writer address the SAME file now, so the error can be
     # recorded through the graph instead of by hand-making a table beside it.
     application.audit.record_error(
@@ -259,7 +281,7 @@ def test_plural_session_resources_use_the_canonical_snapshot_and_activity(tmp_pa
 
 
 def test_dashboard_main_scope_shows_only_lead_activity_and_actor_scope_shows_the_actor(tmp_path):
-    application = _application(tmp_path)
+    application = _application()
 
     def record_message(
         event_id: str,
@@ -327,8 +349,42 @@ def test_dashboard_main_scope_shows_only_lead_activity_and_actor_scope_shows_the
         thread.join(timeout=2)
 
 
+def test_read_only_mode_refuses_every_control_plane_post(tmp_path):
+    """BAQYLAU_DASHBOARD_READONLY: remote eyes, no remote hands.
+
+    The switch was untestable while it was an import-time module constant — it
+    was decided before the first test imported anything. It is a field of the
+    injected policy now, so this asserts the thing the deployment actually
+    relies on: reads still answer, every mutation is a 403.
+    """
+    application = _application()
+    read_only = dataclasses.replace(api_config.settings(), readonly=True)
+    server, thread = _server(application, {dependencies.policy: read_only})
+    try:
+        status, _content_type, _body = _get(server, "/api/sessions")
+        assert status == 200
+
+        status, body = _post(
+            server,
+            "/api/sessions/session-one/controls/interrupt",
+            {"reason": "user"},
+        )
+        assert status == 403
+        assert json.loads(body) == {"error": "control plane disabled (read-only)"}
+
+        status, body = _post(
+            server, "/api/terminal/panes/toggle",
+            {"window_id": "1", "working_directory": "/work"},
+        )
+        assert status == 403
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
 def test_content_resource_resolves_a_canonical_field(tmp_path):
-    server, thread = _server(_application(tmp_path))
+    server, thread = _server(_application())
     try:
         reference = quote("message:content", safe="")
         status, content_type, body = _get(server, f"/api/content/{reference}")
@@ -342,7 +398,7 @@ def test_content_resource_resolves_a_canonical_field(tmp_path):
 
 
 def test_insights_use_typed_canonical_application_data(tmp_path):
-    server, thread = _server(_application(tmp_path))
+    server, thread = _server(_application())
     try:
         status, _content_type, body = _get(server, "/api/insights")
         assert status == 200
@@ -367,7 +423,7 @@ def test_insights_use_typed_canonical_application_data(tmp_path):
 
 
 def test_resumable_sessions_come_from_canonical_session_summaries(tmp_path):
-    server, thread = _server(_application(tmp_path))
+    server, thread = _server(_application())
     try:
         status, _content_type, body = _get(
             server,
@@ -403,7 +459,7 @@ def test_resumable_sessions_come_from_canonical_session_summaries(tmp_path):
 
 
 def test_session_stream_uses_the_canonical_cursor_as_the_sse_identity(tmp_path):
-    server, thread = _server(_application(tmp_path))
+    server, thread = _server(_application())
     connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=2)
     try:
         connection.request("GET", "/api/sessions/session-one/stream?after_cursor=0")
@@ -424,7 +480,7 @@ def test_session_stream_uses_the_canonical_cursor_as_the_sse_identity(tmp_path):
 
 
 def test_session_stream_last_event_id_is_authoritative(tmp_path):
-    server, thread = _server(_application(tmp_path))
+    server, thread = _server(_application())
     connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=2)
     try:
         connection.request(
@@ -443,7 +499,7 @@ def test_session_stream_last_event_id_is_authoritative(tmp_path):
 
 
 def test_session_application_stream_updates_view_mode_without_activity(tmp_path):
-    application = _application(tmp_path)
+    application = _application()
     application.session_application.set_view_mode(SESSION_ID, "focus")
     server, thread = _server(application)
     connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=2)
@@ -472,7 +528,7 @@ def test_session_application_stream_updates_view_mode_without_activity(tmp_path)
 
 
 def test_session_application_routes_publish_complete_composer_state(tmp_path):
-    application = _application(tmp_path)
+    application = _application()
     server, thread = _server(application)
     try:
         status, body = _post(
@@ -521,21 +577,19 @@ def test_session_application_routes_publish_complete_composer_state(tmp_path):
 
 
 def test_global_stream_sends_complete_current_application_snapshots(tmp_path):
-    application = _application(tmp_path)
+    application = _application()
     state = DashboardNotificationState()
-    application = replace(
-        application,
-        global_application=GlobalApplicationService(
-            application.dashboard_sessions,
-            application.usage_state,
-            state,
-            application.global_application.new_sessions,
-            application.notification_settings,
-            application.global_application.directories,
-            application.push_subscriptions,
-        ),
+    overview = GlobalApplicationService(
+        application.dashboard_sessions,
+        application.usage_state,
+        state,
+        application.new_sessions,
+        application.notification_settings,
+        application.hidden_directories,
+        application.push_subscriptions,
+        application.presence,
     )
-    server, thread = _server(application)
+    server, thread = _server(application, {providers.global_application: overview})
     connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=2)
     try:
         connection.request("GET", "/api/stream")
@@ -587,28 +641,24 @@ def test_global_stream_sends_complete_current_application_snapshots(tmp_path):
 def test_global_application_routes_replace_field_specific_preferences_routes(
     tmp_path, monkeypatch
 ):
-    from notify import presence
-
     presence_calls = []
-    monkeypatch.setattr(
-        presence,
-        "mark_device",
-        lambda device_id: presence_calls.append(("device", device_id)),
-    )
-    monkeypatch.setattr(
-        presence,
-        "mark_viewing",
-        lambda session_id: presence_calls.append(("viewing", session_id)),
-    )
-    monkeypatch.setattr(
-        presence,
-        "mark_away",
-        lambda device_id, session_id: presence_calls.append(
-            ("away", device_id, session_id)
-        ),
-    )
-    application = _application(tmp_path)
-    server, thread = _server(application)
+
+    class RecordingPresence(Presence):
+        """The presence node, recording what the routes report to it. A subclass
+        rather than three patched module functions: presence is an object now,
+        and overriding the node is how a test substitutes one."""
+
+        def mark_device(self, device):
+            presence_calls.append(("device", device))
+
+        def mark_viewing(self, session_id):
+            presence_calls.append(("viewing", session_id))
+
+        def mark_away(self, device, session_id=None):
+            presence_calls.append(("away", device, session_id))
+
+    application = _application()
+    server, thread = _server(application, {providers.presence: RecordingPresence()})
     try:
         status, body = _post(
             server,
@@ -750,7 +800,7 @@ def test_control_request_uses_complete_names_and_structured_attachments():
 
 
 def test_invalid_canonical_post_is_a_client_error_not_an_old_route(tmp_path):
-    server, thread = _server(_application(tmp_path))
+    server, thread = _server(_application())
     try:
         status, body = _post(
             server,
@@ -778,11 +828,10 @@ def test_browser_telemetry_uses_named_application_resources(tmp_path):
             )
 
     audit = RecordingAudit()
-    application = replace(
-        _application(tmp_path),
-        browser_telemetry=BrowserTelemetryService(audit),
+    application = _application()
+    server, thread = _server(
+        application, {providers.browser_telemetry: BrowserTelemetryService(audit)}
     )
-    server, thread = _server(application)
     try:
         status, body = _post(
             server,
@@ -858,12 +907,16 @@ def _audited_control(monkeypatch, outcome):
     from harness.models import SelectModel
 
     rows = []
-    monkeypatch.setattr(
-        services.record,
-        "state_file",
-        lambda log, path, action, content: rows.append((log, action, content)),
-    )
+
+    class RowRecorder(AuditRecorder):
+        def __init__(self):
+            pass
+
+        def state_file(self, log, path, action, content=""):
+            rows.append((log, action, content))
+
     service = object.__new__(services.HarnessControlService)
+    service.audit = RowRecorder()
     request = SelectModel(SESSION_ID, "request-one", model_id="gpt-5.6-sol")
 
     def run(_request):
@@ -922,11 +975,15 @@ def test_a_broken_audit_never_takes_down_the_gesture(monkeypatch):
     from harness.services import controls as services
     from harness.models import ControlResult, SelectModel
 
-    def explode(*_args, **_kwargs):
-        raise sqlite3.OperationalError("database is locked")
+    class BrokenAudit(AuditRecorder):
+        def __init__(self):
+            pass
 
-    monkeypatch.setattr(services.record, "state_file", explode)
+        def state_file(self, log, path, action, content=""):
+            raise sqlite3.OperationalError("database is locked")
+
     service = object.__new__(services.HarnessControlService)
+    service.audit = BrokenAudit()
     monkeypatch.setattr(
         service, "_execute", lambda r: ControlResult(r.request_id, "acknowledged")
     )
@@ -1004,7 +1061,7 @@ def test_pane_mirror_stream_announces_the_session_and_streams_frames(
     tmp_path, monkeypatch
 ):
     monkeypatch.setenv("BAQYLAU_DATA_DIR", str(tmp_path / "data"))
-    application = _application(tmp_path)
+    application = _application()
     _record_agent_message(application)
     server, thread = _server(application)
     connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=2)
@@ -1026,7 +1083,7 @@ def test_pane_mirror_stream_announces_the_session_and_streams_frames(
 
 def test_pane_scoreboard_stream_renders_the_session_summary(tmp_path, monkeypatch):
     monkeypatch.setenv("BAQYLAU_DATA_DIR", str(tmp_path / "data"))
-    server, thread = _server(_application(tmp_path))
+    server, thread = _server(_application())
     connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=2)
     try:
         connection.request(
@@ -1046,7 +1103,7 @@ def test_pane_scoreboard_stream_renders_the_session_summary(tmp_path, monkeypatc
 
 
 def test_pane_stream_rejects_a_missing_width_before_streaming(tmp_path):
-    server, thread = _server(_application(tmp_path))
+    server, thread = _server(_application())
     try:
         status, _content_type, body = _get(
             server, "/api/sessions/session-one/panes/mirror/stream"
@@ -1076,8 +1133,7 @@ def test_pane_command_route_carries_the_keypress_environment(tmp_path):
             return self.outcome
 
     pane_commands = PaneCommands()
-    application = replace(_application(tmp_path), pane_commands=pane_commands)
-    server, thread = _server(application)
+    server, thread = _server(_application(), {providers.pane_commands: pane_commands})
     try:
         status, body = _post(
             server,
@@ -1115,7 +1171,7 @@ def test_pane_command_route_carries_the_keypress_environment(tmp_path):
 
 
 def test_terminal_view_route_owns_the_open_closed_state(tmp_path):
-    application = _application(tmp_path)
+    application = _application()
     views = application.content_views
 
     server, thread = _server(application)
@@ -1138,7 +1194,7 @@ def test_terminal_view_route_owns_the_open_closed_state(tmp_path):
 
 def test_mirror_frames_share_one_model_across_client_widths(tmp_path, monkeypatch):
     monkeypatch.setenv("BAQYLAU_DATA_DIR", str(tmp_path / "data"))
-    application = _application(tmp_path)
+    application = _application()
     _record_agent_message(application)
 
     version, wide = application.pane_streams.mirror_frame(SESSION_ID, 120, None)
@@ -1163,7 +1219,7 @@ def _post_hook(server, harness: str, payload: bytes, observed: dict | None = Non
 
 
 def test_hook_delivery_records_exact_evidence_and_returns_the_reply(tmp_path):
-    application = _application(tmp_path)
+    application = _application()
     server, thread = _server(application)
     payload = json.dumps({
         "session_id": "hook-session",
@@ -1194,7 +1250,7 @@ def test_hook_delivery_records_exact_evidence_and_returns_the_reply(tmp_path):
 
 def test_hook_delivery_ships_the_hooks_observations_not_the_daemons(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDE_SUBSCRIPTION_SLUG", "daemon-account")
-    application = _application(tmp_path)
+    application = _application()
     server, thread = _server(application)
     payload = json.dumps({
         "session_id": "hook-session",
@@ -1216,7 +1272,7 @@ def test_hook_delivery_ships_the_hooks_observations_not_the_daemons(tmp_path, mo
 
 
 def test_hook_delivery_rejections_leave_no_evidence(tmp_path):
-    application = _application(tmp_path)
+    application = _application()
     server, thread = _server(application)
     try:
         status, body = _post_hook(server, "mystery", b"{}")
@@ -1239,7 +1295,7 @@ def test_hook_delivery_rejections_leave_no_evidence(tmp_path):
 
 
 def test_hook_identity_reuse_with_different_bytes_is_a_conflict_not_a_rewrite(tmp_path):
-    application = _application(tmp_path)
+    application = _application()
     server, thread = _server(application)
     document = {
         "session_id": "hook-session",
@@ -1283,7 +1339,7 @@ def test_a_stream_poll_never_runs_on_the_event_loop(tmp_path):
     checkable without reaching for a clock: on a worker thread there is no
     running loop at all.
     """
-    application = _application(tmp_path)
+    application = _application()
     where = []
 
     def watched(read):
@@ -1333,7 +1389,7 @@ def test_a_body_whose_length_is_not_declared_is_refused_before_it_is_read(tmp_pa
     h11 imposes no maximum of its own, so the header WAS the limit and an absent
     header was no limit at all.
     """
-    server, thread = _server(_application(tmp_path))
+    server, thread = _server(_application())
     try:
         status = _post_without_a_declared_length(
             server, "/api/terminal/views", b'{"content_reference": "event-one:field"}'
@@ -1360,12 +1416,7 @@ def test_an_internal_failure_is_a_500_and_an_audit_row_not_a_400(tmp_path, monke
     no `errors` row, no 500, and whatever the internal message happened to say on
     the wire. Only domain.errors.ApplicationInputError means "your request" now.
     """
-    application = _application(tmp_path)
-    audited = []
-    monkeypatch.setattr(
-        "diagnostics.record.error",
-        lambda *arguments, **keywords: audited.append(arguments),
-    )
+    application = _application()
 
     def explode():
         raise ValueError("/Users/someone/private/notes is not a directory")
@@ -1378,7 +1429,12 @@ def test_an_internal_failure_is_a_500_and_an_audit_row_not_a_400(tmp_path, monke
         assert status == 500
         assert json.loads(body) == {"error": "internal"}
         assert "private" not in body.decode()
-        assert audited, "an internal failure must leave an errors row behind"
+        # Read back through the graph's own audit reader, not a patched
+        # module function: the recorder is a node now, and the row it wrote is
+        # the thing the errwatch chip and the audit CLI will read.
+        assert application.diagnostics.errors_for_session(SessionId("")), (
+            "an internal failure must leave an errors row behind"
+        )
         # This reply is the one no middleware can wrap (Starlette runs the
         # Exception handler above the whole user stack), so it is hardened at the
         # point it is built instead.
@@ -1392,7 +1448,7 @@ def test_an_internal_failure_is_a_500_and_an_audit_row_not_a_400(tmp_path, monke
 def test_input_the_caller_really_did_get_wrong_is_still_a_400_with_its_reason(tmp_path):
     """The other half of the change above: the sites that meant "bad request" say
     so by type, and keep the 400 and the message the browser already reads."""
-    server, thread = _server(_application(tmp_path))
+    server, thread = _server(_application())
     try:
         # UnknownReference — a session id that names nothing.
         status, _headers, body = _get_response(server, "/api/sessions/nosuchsession")
@@ -1419,7 +1475,7 @@ def test_a_session_id_that_could_never_be_one_is_refused_at_the_boundary(tmp_pat
     """A path parameter used to be a bare `str`, so anything at all reached the
     store, the harness registry, and — truncated to 200 characters, which is not
     the same thing as validated — the audit rows a stream writes about itself."""
-    server, thread = _server(_application(tmp_path))
+    server, thread = _server(_application())
     try:
         status, _headers, body = _get_response(server, "/api/sessions/not%20a%20session")
         assert status == 400
@@ -1471,11 +1527,11 @@ def test_every_declared_response_model_describes_the_bytes_actually_sent(tmp_pat
     model. The route table is read from a second application built for the
     purpose; it is a property of the code, not of the graph.
     """
-    application = _application(tmp_path)
+    application = _application()
     server, thread = _server(application)
     try:
         checked = []
-        for route in _api_routes(build_web_application(application)):
+        for route in _api_routes(build_web_application(application.instances)):
             if "GET" not in route.methods:
                 continue
             if route.response_model is None:
@@ -1507,7 +1563,7 @@ def test_the_published_schema_names_every_status_a_caller_must_handle(tmp_path):
     body anywhere, no 202 or 409 on the plane that returns them, and a 422 this
     server never sends. A client generated from it was wrong about every failure.
     """
-    document = build_web_application(_application(tmp_path)).openapi()
+    document = build_web_application(_application().instances).openapi()
     error_body = {"$ref": "#/components/schemas/ErrorResponse"}
 
     def answers(path: str, method: str):
@@ -1559,7 +1615,7 @@ def test_every_plane_carries_the_security_headers(tmp_path):
     a hostile page from READING this origin; these stop a string that reached one
     of our own pages from ACTING, and they are the other half.
     """
-    server, thread = _server(_application(tmp_path))
+    server, thread = _server(_application())
     try:
         # The document, a JSON reply, a framework 404 and an event stream: four
         # different producers, one policy. The stream's body is never read.
