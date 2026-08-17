@@ -52,6 +52,7 @@ class DeliveredNotification:
     session_id: SessionId
     state: TabState
     handle: dict
+    delivered_at: float
 
 
 class Notifier:
@@ -101,13 +102,14 @@ class Notifier:
 
         items_by_session = {item.session.session_id: item for item in items}
         now = time.monotonic()
+        badge = self._attention_count(current_states)
         all_session_ids = set(self.previous_states) | set(current_states)
         for session_id in all_session_ids:
             previous = self.previous_states.get(session_id)
             current = current_states.get(session_id)
             if previous == current:
                 continue
-            self._resolve(session_id, current)
+            self._resolve(session_id, current, now, badge)
             # A session that dropped out of current_states has nothing left to
             # notify ABOUT — it was only here so _resolve above could retract a
             # standing alert. The kind lookup below already returned None for
@@ -120,8 +122,13 @@ class Notifier:
             if kind is not None and item is not None:
                 self._schedule(item, current, kind, now)
         for session_id, delivered in list(self.delivered.items()):
-            if delivered and current_states.get(session_id) != delivered[0].state:
-                self._resolve(session_id, current_states.get(session_id))
+            if any(item.state != current_states.get(session_id) for item in delivered):
+                self._resolve(
+                    session_id,
+                    current_states.get(session_id),
+                    now,
+                    badge,
+                )
         self.previous_states = current_states
         self._deliver_due(current_states, now)
 
@@ -244,28 +251,91 @@ class Notifier:
                 notification.session_id,
                 notification.state,
                 handle,
+                time.monotonic(),
             )
         )
+        self._enforce_sent_cap()
 
-    def _resolve(self, session_id: SessionId, current: TabState | None) -> None:
+    def _resolve(
+        self,
+        session_id: SessionId,
+        current: TabState | None,
+        now: float,
+        badge: int = 0,
+    ) -> None:
         self.pending.pop(session_id, None)
         delivered = self.delivered.get(session_id) or []
-        if not delivered or delivered[0].state == current:
-            return
         remaining = []
         for notification in delivered:
+            if notification.state == current:
+                remaining.append(notification)
+                continue
+            age = now - notification.delivered_at
+            if age >= config.RETRACTION_LIFETIME_SECONDS:
+                self._audit_retraction(notification, "expired", age)
+                continue
             outcome = channels.retract(
                 notification.handle,
                 "state-changed",
+                badge=badge,
                 keys=self.push_signing_keys,
                 subscriptions=self.push_subscriptions,
             )
-            if outcome == channels.PENDING:
+            if outcome in (channels.PENDING, channels.FAILED):
                 remaining.append(notification)
+            else:
+                self._audit_retraction(notification, outcome, age)
         if remaining:
             self.delivered[session_id] = remaining
         else:
             self.delivered.pop(session_id, None)
+
+    def _audit_retraction(
+        self,
+        notification: DeliveredNotification,
+        outcome: str,
+        age: float,
+        reason: str = "state-changed",
+    ) -> None:
+        self.audit.state_file(
+            "",
+            "",
+            "notify-retract",
+            {
+                "session_id": str(notification.session_id),
+                "channel": notification.handle.get("ch"),
+                "kind": notification.handle.get("kind"),
+                "reason": reason,
+                "outcome": outcome,
+                "age_seconds": round(max(0.0, age), 3),
+            },
+        )
+
+    def _enforce_sent_cap(self) -> None:
+        excess = sum(map(len, self.delivered.values())) - config.SENT_CAP
+        if excess <= 0:
+            return
+        oldest = sorted(
+            (
+                (notification.delivered_at, session_id, notification)
+                for session_id, delivered in self.delivered.items()
+                for notification in delivered
+            ),
+            key=lambda item: item[0],
+        )[:excess]
+        for _, session_id, notification in oldest:
+            delivered = self.delivered.get(session_id) or []
+            if notification not in delivered:
+                continue
+            delivered.remove(notification)
+            self._audit_retraction(
+                notification,
+                "capacity-expired",
+                time.monotonic() - notification.delivered_at,
+                "capacity",
+            )
+            if not delivered:
+                self.delivered.pop(session_id, None)
 
     @staticmethod
     def _attention_count(states: dict[SessionId, TabState | None]) -> int:

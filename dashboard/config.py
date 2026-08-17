@@ -124,8 +124,8 @@ NOTIFY_TELEGRAM_ALWAYS = (os.environ.get("BAQYLAU_DASHBOARD_NOTIFY_TELEGRAM_ALWA
 # question than the one that cancels a PENDING alert: a mere glance suppresses
 # an alert not yet sent ("you don't need to be told"), but must NOT delete one
 # already delivered — looking at a red tab and walking away would then destroy
-# your only reminder while the tab is still red. notifier.RETRACT_REASONS is
-# where that distinction is declared.
+# your only reminder while the tab is still red. notifier._resolve enforces
+# that distinction by comparing the delivered state with the current state.
 # BAQYLAU_DASHBOARD_RETRACTION_LIFETIME_SECONDS → how long a delivered alert stays retractable (default
 # 24 h). Must stay under telegram.DELETE_WINDOW_SECONDS (48 h), the Bot API's own
 # ceiling on deleting your own message; past it the alert is simply history and

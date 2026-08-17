@@ -31,6 +31,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import threading
+import time
 
 from audit import record as A
 from notify.channels.alert import FAILED, GONE, NOTHING, OK, PENDING, alert_text
@@ -50,6 +51,7 @@ REQUEST_TIMEOUT_SECONDS = 10.0
 # TTL is what keeps us inside the window — but it is the hard ceiling any such
 # TTL has to stay under, so it is written down where the API call lives.
 DELETE_WINDOW_SECONDS = 48 * 3600
+RETRACTION_RETRY_SECONDS = 30.0
 
 
 def _api_base():
@@ -226,7 +228,6 @@ def _telegram_send_body(h, msg, reason):
 
 
 def retract_alert(h, reason, badge=0, *, keys=None, subscriptions=None):
-    del keys, subscriptions          # a Bot API message needs neither
     """Delete the message — OFF the watcher thread, for the same reason the send
     is: `delete_message` is a synchronous HTTPS round-trip with a 10 s timeout,
     and the 1 s scan loop cannot wear that. So the outcome is not known
@@ -236,10 +237,17 @@ def retract_alert(h, reason, badge=0, *, keys=None, subscriptions=None):
     needs no new machinery — and the `notify-retract` row it eventually writes
     still reports what actually happened on the wire, rather than an optimistic
     guess made before the call returned."""
+    del reason, badge, keys, subscriptions  # a Bot API message needs none
     if not h.get("done"):
         return PENDING                     # the SEND hasn't landed yet
-    if h.get("outcome"):
-        return h["outcome"]                # the delete thread finished
+    outcome = h.get("outcome")
+    if outcome in (OK, GONE):
+        return outcome                     # the delete thread finished
+    if outcome == FAILED:
+        if time.monotonic() < h.get("retry_at", 0):
+            return PENDING
+        h.pop("outcome", None)
+        h.pop("deleting", None)
     if not (h.get("chat") and h.get("msg_id")):
         return NOTHING                     # the send failed — nothing is out there
     if not h.get("deleting"):              # spawn once, however often we're asked
@@ -257,6 +265,36 @@ def _telegram_delete_body(h):
         res = delete_message(h["chat"], h["msg_id"])
     except Exception:
         A.error("", "dashboard telegram retract", {"session_id": h.get("session_id")})
+        h["retry_at"] = time.monotonic() + RETRACTION_RETRY_SECONDS
         h["outcome"] = FAILED
+        A.state_file(
+            "",
+            "",
+            "telegram-retract",
+            {
+                "session_id": h.get("session_id"),
+                "kind": h.get("kind"),
+                "message_id": h.get("msg_id"),
+                "outcome": FAILED,
+                "status": 0,
+                "error": "exception",
+            },
+        )
         return
-    h["outcome"] = OK if res.ok else (GONE if res.gone else FAILED)
+    outcome = OK if res.ok else (GONE if res.gone else FAILED)
+    if outcome == FAILED:
+        h["retry_at"] = time.monotonic() + RETRACTION_RETRY_SECONDS
+    h["outcome"] = outcome
+    A.state_file(
+        "",
+        "",
+        "telegram-retract",
+        {
+            "session_id": h.get("session_id"),
+            "kind": h.get("kind"),
+            "message_id": h.get("msg_id"),
+            "outcome": outcome,
+            "status": res.status,
+            "error": res.error,
+        },
+    )

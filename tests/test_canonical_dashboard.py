@@ -15,8 +15,9 @@ from dashboard.services.models import DashboardSessionListItem
 from dashboard.services.sessions import DashboardSessionService
 from dashboard.services.streams import DashboardStreamService
 from dashboard.services.notices import DashboardNotificationState
-from notify.channels import webpush
-from notify.notifier import Notifier
+from notify import channels
+from notify.channels import telegram, webpush
+from notify.notifier import DeliveredNotification, Notifier
 from notify.presence import Presence
 from audit.recorder import AuditRecorder
 from repository.impl.sqlite.databases import audit_database
@@ -774,6 +775,164 @@ def test_notifier_uses_canonical_tab_transitions(monkeypatch):
 
     assert SESSION_ID not in notifier.delivered
     assert retractions[0][1] == "state-changed"
+
+
+def test_notifier_retries_failed_retractions_and_audits_success(monkeypatch):
+    queries = MutableNotificationQueries("idle")
+    notifier = Notifier(
+        StaticNotificationSessions(TerminalSessionState("window-one", None)),
+        queries,
+        DashboardNotificationState(),
+        _alerting_on(),
+        None,
+        None,
+        Presence(),
+        AuditRecorder(SqliteAuditWriteRepository(audit_database())),
+    )
+    handle = {"ch": "telegram", "kind": "done", "session_id": str(SESSION_ID)}
+    notifier.delivered[SESSION_ID] = [
+        DeliveredNotification(SESSION_ID, "awaiting_response", handle, 10.0)
+    ]
+    outcomes = iter((channels.FAILED, channels.OK))
+    audit_rows = []
+    monkeypatch.setattr(
+        "notify.notifier.channels.retract",
+        lambda *arguments, **keywords: next(outcomes),
+    )
+    monkeypatch.setattr(
+        notifier.audit,
+        "state_file",
+        lambda log, path, action, content: audit_rows.append((action, content)),
+    )
+
+    notifier._resolve(SESSION_ID, "idle", 11.0)
+    assert SESSION_ID in notifier.delivered
+
+    notifier._resolve(SESSION_ID, "idle", 12.0)
+    assert SESSION_ID not in notifier.delivered
+    assert audit_rows == [
+        (
+            "notify-retract",
+            {
+                "session_id": str(SESSION_ID),
+                "channel": "telegram",
+                "kind": "done",
+                "reason": "state-changed",
+                "outcome": channels.OK,
+                "age_seconds": 2.0,
+            },
+        )
+    ]
+
+
+def test_notifier_retracts_only_deliveries_for_stale_states(monkeypatch):
+    queries = MutableNotificationQueries("awaiting_response")
+    notifier = Notifier(
+        StaticNotificationSessions(TerminalSessionState("window-one", None)),
+        queries,
+        DashboardNotificationState(),
+        _alerting_on(),
+        None,
+        None,
+        Presence(),
+        AuditRecorder(SqliteAuditWriteRepository(audit_database())),
+    )
+    stale = {"ch": "telegram", "kind": "asking", "session_id": str(SESSION_ID)}
+    current = {"ch": "telegram", "kind": "done", "session_id": str(SESSION_ID)}
+    notifier.delivered[SESSION_ID] = [
+        DeliveredNotification(SESSION_ID, "awaiting_attention", stale, 10.0),
+        DeliveredNotification(SESSION_ID, "awaiting_response", current, 11.0),
+    ]
+    retracted = []
+    monkeypatch.setattr(
+        "notify.notifier.channels.retract",
+        lambda handle, *arguments, **keywords: retracted.append(handle) or channels.OK,
+    )
+    monkeypatch.setattr(notifier.audit, "state_file", lambda *arguments: None)
+
+    notifier._resolve(SESSION_ID, "awaiting_response", 12.0)
+
+    assert retracted == [stale]
+    assert [item.handle for item in notifier.delivered[SESSION_ID]] == [current]
+
+
+def test_notifier_expires_stale_retractions_at_the_configured_lifetime(monkeypatch):
+    queries = MutableNotificationQueries("idle")
+    notifier = Notifier(
+        StaticNotificationSessions(TerminalSessionState("window-one", None)),
+        queries,
+        DashboardNotificationState(),
+        _alerting_on(),
+        None,
+        None,
+        Presence(),
+        AuditRecorder(SqliteAuditWriteRepository(audit_database())),
+    )
+    handle = {"ch": "telegram", "kind": "done", "session_id": str(SESSION_ID)}
+    notifier.delivered[SESSION_ID] = [
+        DeliveredNotification(SESSION_ID, "awaiting_response", handle, 10.0)
+    ]
+    audit_rows = []
+    monkeypatch.setattr("notify.notifier.config.RETRACTION_LIFETIME_SECONDS", 5)
+    monkeypatch.setattr(
+        "notify.notifier.channels.retract",
+        lambda *arguments, **keywords: pytest.fail("expired alert was retried"),
+    )
+    monkeypatch.setattr(
+        notifier.audit,
+        "state_file",
+        lambda log, path, action, content: audit_rows.append((action, content)),
+    )
+
+    notifier._resolve(SESSION_ID, "idle", 15.0)
+
+    assert SESSION_ID not in notifier.delivered
+    assert audit_rows[0][0] == "notify-retract"
+    assert audit_rows[0][1]["outcome"] == "expired"
+
+
+def test_telegram_retraction_retries_a_bot_api_failure(monkeypatch):
+    responses = iter(
+        (
+            telegram.Result(status=500, error="temporary failure"),
+            telegram.Result(ok=True, status=200),
+        )
+    )
+    audit_rows = []
+
+    class ImmediateThread:
+        def __init__(self, target, args, daemon):
+            del daemon
+            self.target, self.args = target, args
+
+        def start(self):
+            self.target(*self.args)
+
+    monkeypatch.setattr(telegram.threading, "Thread", ImmediateThread)
+    monkeypatch.setattr(telegram, "delete_message", lambda chat, message_id: next(responses))
+    monkeypatch.setattr(
+        telegram.A,
+        "state_file",
+        lambda log, path, action, content: audit_rows.append((action, content)),
+    )
+    handle = {
+        "ch": "telegram",
+        "session_id": str(SESSION_ID),
+        "kind": "done",
+        "chat": "chat-one",
+        "msg_id": 1373,
+        "done": True,
+    }
+
+    assert telegram.retract_alert(handle, "state-changed") == channels.PENDING
+    assert handle["outcome"] == channels.FAILED
+    handle["retry_at"] = 0
+    assert telegram.retract_alert(handle, "state-changed") == channels.PENDING
+    assert telegram.retract_alert(handle, "state-changed") == channels.OK
+    assert [content["outcome"] for _, content in audit_rows] == [
+        channels.FAILED,
+        channels.OK,
+    ]
 
 
 def test_notifier_ignores_sessions_without_a_terminal_window(monkeypatch):
