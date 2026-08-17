@@ -14,9 +14,10 @@ from harness.contract import (
     HarnessRawEventSource,
     HarnessReactorContext,
 )
-from harness.models import RawEvent, Session, TranslationResult
+from harness.models import InterruptRegistry, RawEvent, Session, TranslationResult
 from harness.registry import HarnessRegistry
 from engine.interpret import output_source
+from engine.interpret.interrupts import PendingInterruptSource
 from engine.interpret.liveness import SessionLivenessSource
 from repository.contract.facts import CanonicalEventRepository, RawEventRepository
 from repository.contract.operations import OperationOutputRepository
@@ -83,6 +84,7 @@ class Interpreter:
         reactions: tuple[CanonicalEventReaction, ...],
         controls: HarnessReactorContext,
         audit: AuditRecorder,
+        interrupts: InterruptRegistry,
         clock: Callable[[], float] = time.time,
     ) -> None:
         self.sessions = sessions
@@ -94,6 +96,7 @@ class Interpreter:
         self.reactions = reactions
         self.controls = controls  # handed to harness reactors per call
         self.audit = audit
+        self.interrupts = interrupts
         self.clock = clock
 
     def _audit_failure(self, where: str, context: dict) -> None:
@@ -150,6 +153,7 @@ class Interpreter:
                     # ALWAYS built — no silent skip: a pid-less session raises,
                     # loudly, into the audit below.
                     SessionLivenessSource(session),
+                    PendingInterruptSource(session, self.interrupts),
                 )
             except Exception:
                 self._audit_failure("source construction", {"session_id": str(session.session_id)})

@@ -12,12 +12,14 @@ from domain.events import (
     OperationOutputLocated,
     SessionFinished,
     SessionStarted,
+    TurnAborted,
+    TurnFinished,
 )
 from domain.ids import OperationId, SessionId
 from domain.operations import OperationOutputFollowing
 from engine.interpret import output_source
 from harness.contract import CanonicalEventReaction
-from harness.models import Session
+from harness.models import InterruptRegistry, Session
 from repository.contract.facts import RawEventRepository
 from repository.contract.operations import OperationOutputRepository
 from repository.contract.sessions import SessionRepository
@@ -131,3 +133,19 @@ class OperationOutputCanonicalEventReaction(CanonicalEventReaction):
                 session_id, OperationId(str(following.operation_id))
             )
             output_source.delete_source_file(following)
+
+
+class InterruptCanonicalEventReaction(CanonicalEventReaction):
+    """Clears `InterruptRegistry` the moment ANY turn-ending fact commits for a
+    session — a genuine `Stop` hook that lands inside the grace period, or the
+    registry's own fallback fact once it fires. Without this, a session that
+    settles normally would still carry a stale mark, and a slower second
+    interrupt could see it and think the first one is still pending."""
+
+    def __init__(self, interrupts: InterruptRegistry) -> None:
+        self.interrupts = interrupts
+
+    def react(self, canonical_event: CanonicalEvent) -> None:
+        payload = canonical_event.payload
+        if isinstance(payload, (TurnFinished, TurnAborted)):
+            self.interrupts.clear(canonical_event.session_id)

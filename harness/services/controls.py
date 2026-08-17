@@ -11,6 +11,8 @@ from harness.models import (
     ControlOutcome,
     ControlRequest,
     ControlResult,
+    Interrupt,
+    InterruptRegistry,
 )
 from engine.projections import SessionQueries
 from repository.contract.sessions import SessionRepository
@@ -71,6 +73,7 @@ class HarnessControlService(HarnessReactorContext):
         queries: SessionQueries,
         account_usage: AccountUsageRepository,
         audit: AuditRecorder,
+        interrupts: InterruptRegistry,
     ) -> None:
         self.sessions = sessions
         self.terminal = terminal
@@ -78,6 +81,7 @@ class HarnessControlService(HarnessReactorContext):
         self.queries = queries
         self.account_usage = account_usage
         self.audit = audit
+        self.interrupts = interrupts
 
     def execute(self, request: ControlRequest) -> ControlOutcome:
         started = time.monotonic()
@@ -87,6 +91,17 @@ class HarnessControlService(HarnessReactorContext):
             _audit_control(self.audit, request, None, time.monotonic() - started)
             raise
         _audit_control(self.audit, request, outcome, time.monotonic() - started)
+        # An interrupt the harness acknowledged but did not corroborate in its
+        # own evidence: nothing else will ever tell the interpreter this turn
+        # ended, so mark it for the registry's fallback fact. A harness whose
+        # translator will read a native abort record on its own next pass
+        # sets `corroborated=True` and is never marked.
+        if (
+            isinstance(request, Interrupt)
+            and outcome.status == "acknowledged"
+            and not getattr(outcome, "corroborated", False)
+        ):
+            self.interrupts.mark(request.session_id)
         return outcome
 
     def _execute(self, request: ControlRequest) -> ControlOutcome:

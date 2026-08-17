@@ -27,6 +27,7 @@ from harness.models import (
     ControlContext,
     ControlResult,
     HarnessHookRequest,
+    InterruptRegistry,
     LIVENESS_SOURCE_TYPE,
     LaunchRequest,
     MigrateAccount,
@@ -324,6 +325,7 @@ def interpreting_runtime(database_path):
         reactions,
         controls,
         _silent_audit(),
+        InterruptRegistry(),
     )
     return runtime, interpreter
 
@@ -3970,6 +3972,67 @@ def test_claude_slash_effort_reports_the_selection():
     )
     assert payloads(translation, EffortChanged)[0].payload.current == "high"
     assert payloads(translation, EffortChanged)[0].payload.reason == "selected"
+
+
+def test_claude_subagent_hook_reports_its_own_effort():
+    # launch_selections() and a typed /effort only ever see the LEAD actor; a
+    # hook firing mid-turn inside the subagent's own process is the only place
+    # its effort level is ever observed from.
+    translator = ClaudeCanonicalTranslator()
+    translator.translate(replace(
+        raw_event(
+            {
+                "hook_event_name": "SubagentStart",
+                "hook_event_id": "child-start",
+                "agent_id": "child-one",
+            },
+            harness="claude_code",
+            source_type="hook",
+            raw_event_id="child-start-hook",
+        ),
+        actor_id=ActorId("child-one"),
+        parent_actor_id=ActorId("session-one:lead"),
+    ))
+    pretool = translator.translate(replace(
+        raw_event(
+            {
+                "hook_event_name": "PreToolUse",
+                "hook_event_id": "child-pretool",
+                "tool_use_id": "tool-one",
+                "tool_name": "Read",
+                "tool_input": {"file_path": "/work/a.py"},
+                "effort": {"level": "high"},
+            },
+            harness="claude_code",
+            source_type="hook",
+            raw_event_id="child-pretool-hook",
+        ),
+        actor_id=ActorId("child-one"),
+        parent_actor_id=ActorId("session-one:lead"),
+    ))
+
+    effort_events = payloads(pretool, EffortChanged)
+    assert len(effort_events) == 1
+    assert effort_events[0].actor_id == ActorId("child-one")
+    assert effort_events[0].payload.current == "high"
+    assert effort_events[0].payload.reason == "reported_by_harness"
+
+
+def test_claude_pretool_without_effort_reports_no_effort_change():
+    translation = ClaudeCanonicalTranslator().translate(raw_event(
+        {
+            "hook_event_name": "PreToolUse",
+            "hook_event_id": "no-effort-pretool",
+            "tool_use_id": "tool-two",
+            "tool_name": "Read",
+            "tool_input": {"file_path": "/work/b.py"},
+        },
+        harness="claude_code",
+        source_type="hook",
+        raw_event_id="no-effort-hook",
+    ))
+
+    assert not payloads(translation, EffortChanged)
 
 
 def test_claude_argless_slash_command_settles_no_state():

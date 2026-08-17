@@ -40,16 +40,26 @@ from diagnostics.recorder import AuditRecorder
 from diagnostics.telemetry import BrowserTelemetryService
 from engine.interpret.loop import Interpreter
 from engine.interpret.reactions import (
+    InterruptCanonicalEventReaction,
     OperationOutputCanonicalEventReaction,
     SessionUpsertCanonicalEventReaction,
 )
-from engine.interpret.translators import LivenessTranslator, OperationOutputTranslator
+from engine.interpret.translators import (
+    InterruptTranslator,
+    LivenessTranslator,
+    OperationOutputTranslator,
+)
 from engine.projections import SessionQueries
 from engine.queries.content import CanonicalContentService
 from harness.contract import CanonicalEventReaction, CoreTranslator
 from harness.hooks.gateway import HookGatewayService
 from harness.impl import installed
-from harness.models import LIVENESS_SOURCE_TYPE, OUTPUT_LOCATION_SOURCE_TYPE
+from harness.models import (
+    INTERRUPT_SOURCE_TYPE,
+    LIVENESS_SOURCE_TYPE,
+    OUTPUT_LOCATION_SOURCE_TYPE,
+    InterruptRegistry,
+)
 from harness.registry import HarnessRegistry
 from harness.services.catalog import HarnessCatalogService
 from harness.services.controls import HarnessControlService
@@ -382,6 +392,14 @@ Queries = Annotated[SessionQueries, Depends(queries)]
 
 
 @singleton
+def interrupt_registry() -> InterruptRegistry:
+    return InterruptRegistry()
+
+
+InterruptTracking = Annotated[InterruptRegistry, Depends(interrupt_registry)]
+
+
+@singleton
 def controls(
     session_storage: Sessions,
     adapter: Terminal,
@@ -389,9 +407,10 @@ def controls(
     session_queries: Queries,
     usage: AccountUsage,
     audit: Recorder,
+    interrupts: InterruptTracking,
 ) -> HarnessControlService:
     return HarnessControlService(
-        session_storage, adapter, plugin, session_queries, usage, audit
+        session_storage, adapter, plugin, session_queries, usage, audit, interrupts
     )
 
 
@@ -589,6 +608,7 @@ def core_translators() -> Mapping[str, CoreTranslator]:
     return {
         OUTPUT_LOCATION_SOURCE_TYPE: OperationOutputTranslator(),
         LIVENESS_SOURCE_TYPE: LivenessTranslator(),
+        INTERRUPT_SOURCE_TYPE: InterruptTranslator(),
     }
 
 
@@ -602,12 +622,14 @@ def reactions(
     raw: RawEvents,
     adapter: Terminal,
     widths: PaneWidths,
+    interrupts: InterruptTracking,
 ) -> tuple[CanonicalEventReaction, ...]:
     return (
         # The sessions row exists and is current before the panes anchor to it.
         SessionUpsertCanonicalEventReaction(session_storage),
         OperationOutputCanonicalEventReaction(output, raw),
         PaneCanonicalEventReaction(adapter, session_storage, widths),
+        InterruptCanonicalEventReaction(interrupts),
     )
 
 
@@ -625,6 +647,7 @@ def interpreter(
     event_reactions: Reactions,
     control_service: Controls,
     audit: Recorder,
+    interrupts: InterruptTracking,
 ) -> Interpreter:
     return Interpreter(
         session_storage,
@@ -636,6 +659,7 @@ def interpreter(
         event_reactions,
         control_service,
         audit,
+        interrupts,
     )
 
 

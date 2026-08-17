@@ -159,7 +159,13 @@ class InterruptHandler(ControlHandler):
                 if position >= 0:
                     aborted, queued = _rollout_abort_state(session.source_reference, position)
                     if aborted:
-                        return DeliveryResult(request.request_id, "acknowledged", queued=queued)
+                        # The rollout already carries `turn_aborted`: the
+                        # ordinary pull source will read this same record on
+                        # its next tick and turn it canonical on its own —
+                        # no fallback needed.
+                        return DeliveryResult(
+                            request.request_id, "acknowledged", queued=queued, corroborated=True
+                        )
         return DeliveryResult(
             request.request_id,
             "indeterminate" if delivered else "rejected",

@@ -7,7 +7,7 @@ from typing import Literal
 
 from harness.contract import CoreTranslator
 from harness.models import RawEvent, TranslationResult, canonical_event
-from domain.events import OperationOutputLocated, SessionFinished
+from domain.events import OperationOutputLocated, SessionFinished, TurnAborted
 from domain.ids import OperationId
 
 
@@ -59,5 +59,19 @@ class LivenessTranslator(CoreTranslator):
         finished = SessionFinished("unknown", "process_exited")
         return TranslationResult(
             (canonical_event(raw_event, "session", str(raw_event.session_id), "finished", finished),),
+            "translated",
+        )
+
+
+class InterruptTranslator(CoreTranslator):
+    """Interrupt raw event (an acknowledged interrupt no native evidence
+    corroborated within its grace period, see `engine/interpret/interrupts.py`)
+    → `turn.aborted`. `subject_id` is the mark's own timestamp, so each
+    interrupt occurrence is its own fact rather than colliding with the last."""
+
+    def translate(self, raw_event: RawEvent) -> TranslationResult:
+        aborted = TurnAborted("interrupt acknowledged; no harness evidence confirmed it")
+        return TranslationResult(
+            (canonical_event(raw_event, "turn", raw_event.source_position, "aborted", aborted),),
             "translated",
         )

@@ -197,6 +197,12 @@ class ControlResult:
 class DeliveryResult(ControlResult):
     queued: bool = False
     restored_text: str = ""
+    # An interrupt whose harness confirmed the abort in its OWN evidence (a
+    # native record the ordinary translator will read independently) sets
+    # this. Unset, an "acknowledged" interrupt is only a screen heuristic —
+    # nothing canonical says the turn ended — and the service falls back to
+    # `InterruptRegistry` so the busy state can still clear.
+    corroborated: bool = False
 
 
 @dataclass(frozen=True)

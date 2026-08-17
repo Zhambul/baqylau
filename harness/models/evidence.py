@@ -128,6 +128,7 @@ class RawEventSourceContext:
 
 OUTPUT_LOCATION_SOURCE_TYPE = "output_location"
 LIVENESS_SOURCE_TYPE = "liveness"
+INTERRUPT_SOURCE_TYPE = "interrupt"
 
 
 def output_location_raw_event(

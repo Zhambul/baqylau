@@ -10,12 +10,18 @@ from dataclasses import replace
 
 import pytest
 
-from engine.interpret.translators import LivenessTranslator, OperationOutputTranslator
+from engine.interpret.translators import (
+    InterruptTranslator,
+    LivenessTranslator,
+    OperationOutputTranslator,
+)
+from engine.interpret.interrupts import GRACE_SECONDS, PendingInterruptSource
 from engine.interpret.liveness import SessionLivenessSource
 from engine.interpret.output_source import OperationOutputRawEventSource
 from engine.interpret.loop import Interpreter
 from app.evidence_cli import main as evidence_main
 from engine.interpret.reactions import (
+    InterruptCanonicalEventReaction,
     OperationOutputCanonicalEventReaction,
     SessionUpsertCanonicalEventReaction,
 )
@@ -23,6 +29,8 @@ from terminal.panes.reaction import PaneCanonicalEventReaction
 from harness.contract import HarnessPlugin
 from harness.models import (
     HarnessInfo,
+    INTERRUPT_SOURCE_TYPE,
+    InterruptRegistry,
     LIVENESS_SOURCE_TYPE,
     OUTPUT_LOCATION_SOURCE_TYPE,
     RawEvent,
@@ -46,6 +54,7 @@ from domain.events import (
     OperationOutputLocated,
     SessionFinished,
     SessionStarted,
+    TurnAborted,
 )
 from domain.ids import (
     ActorId,
@@ -243,7 +252,9 @@ class RecordingAudit(AuditRecorder):
                 for func, _context in self.errors]
 
 
-def build_interpreter(database_path, harnesses, *, terminal=None, controls=None, audit=None):
+def build_interpreter(
+    database_path, harnesses, *, terminal=None, controls=None, audit=None, interrupts=None
+):
     """The bootstrap wiring, with an injectable terminal for the pane reaction."""
     database = main_database(str(database_path))
     sessions = SqliteSessionRepository(database, harnesses)
@@ -251,14 +262,17 @@ def build_interpreter(database_path, harnesses, *, terminal=None, controls=None,
     store = SqliteCanonicalEventRepository(database)
     operation_output = SqliteOperationOutputRepository(database)
     terminal = terminal if terminal is not None else NullTerminal()
+    interrupts = interrupts if interrupts is not None else InterruptRegistry()
     reactions = (
         SessionUpsertCanonicalEventReaction(sessions),
         OperationOutputCanonicalEventReaction(operation_output, recorder),
         PaneCanonicalEventReaction(terminal, sessions, _PaneWidths()),
+        InterruptCanonicalEventReaction(interrupts),
     )
     core_translators = {
         OUTPUT_LOCATION_SOURCE_TYPE: OperationOutputTranslator(),
         LIVENESS_SOURCE_TYPE: LivenessTranslator(),
+        INTERRUPT_SOURCE_TYPE: InterruptTranslator(),
     }
     interpreter = Interpreter(
         sessions,
@@ -270,6 +284,7 @@ def build_interpreter(database_path, harnesses, *, terminal=None, controls=None,
         reactions,
         controls if controls is not None else NullControls(),
         audit if audit is not None else RecordingAudit(),
+        interrupts,
     )
     return interpreter, sessions, recorder, store, operation_output
 
@@ -1031,6 +1046,64 @@ def test_the_liveness_source_verifies_the_process_is_still_the_cli():
 
     with pytest.raises(ValueError, match="no harness process id"):
         SessionLivenessSource(replace(session, harness_process_id=None))
+
+
+def test_pending_interrupt_source_waits_out_the_grace_period_then_latches():
+    session = replace(example_session(), plugin=example_plugin(
+        TranslationResult((), "ignored_nonsemantic")
+    ))
+    registry = InterruptRegistry()
+    source = PendingInterruptSource(session, registry)
+
+    # Nothing marked: no fallback fact is ever manufactured for a session
+    # nobody interrupted.
+    assert source.read(None) == ()
+
+    registry.mark(session.session_id)
+    # Still inside the grace period: genuine harness evidence gets first say.
+    assert source.read(None) == ()
+
+    # Fake the passage of the grace period by marking with a past timestamp.
+    registry._marked_at[session.session_id] -= GRACE_SECONDS + 1
+    raw_events = source.read(None)
+    assert [raw.source_type for raw in raw_events] == [INTERRUPT_SOURCE_TYPE]
+
+    # The latch: the position just emitted is not re-emitted.
+    assert source.read(raw_events[0].source_position) == ()
+
+    with pytest.raises(ValueError, match="no attached harness plugin"):
+        PendingInterruptSource(replace(session, plugin=None), registry)
+
+
+def test_an_uncorroborated_interrupt_eventually_clears_the_busy_state(tmp_path):
+    """The bug this whole mechanism exists for: a harness whose Stop-equivalent
+    signal never distinguishes an interrupted turn from a completed one leaves
+    a session looking busy forever unless something else settles the turn."""
+    database_path = tmp_path / "main.db"
+    harnesses = HarnessRegistry()
+    harnesses.register(example_plugin(TranslationResult((), "ignored_nonsemantic")))
+    registry = InterruptRegistry()
+    interpreter, sessions, _recorder, store, _operation_output = build_interpreter(
+        database_path, harnesses, interrupts=registry
+    )
+    sessions.save("example", example_session())
+
+    interpreter.tick()  # sees no evidence yet: nothing to abort
+
+    registry.mark(SessionId("session-one"))
+    registry._marked_at[SessionId("session-one")] -= GRACE_SECONDS + 1
+
+    interpreter.tick()
+
+    events = store.page_after(SessionId("session-one"), 0, 10).events
+    assert [type(stored.event.payload) for stored in events] == [TurnAborted]
+    # The reaction cleared the mark the moment the fact committed.
+    assert registry.pending(SessionId("session-one")) is None
+
+    # The latch: a later tick manufactures nothing further.
+    interpreter.tick()
+    events_after = store.page_after(SessionId("session-one"), 0, 10).events
+    assert len(events_after) == 1
 
 
 # --- panes ----------------------------------------------------------------------

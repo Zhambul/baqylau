@@ -8,6 +8,7 @@ from domain.events import (
     CanonicalEvent,
     CompactionFinished,
     CompactionStarted,
+    EffortChanged,
     EventPayload,
     GoalChanged,
     SessionFinished,
@@ -20,6 +21,28 @@ from harness.impl.claude_code.canonical.toolcalls import ToolCallSemantics
 from harness.models import RawEvent
 
 
+def effort_report(raw_event: RawEvent, document: dict) -> list[CanonicalEvent]:
+    """The active effort level Claude Code reports on hooks that fire mid-turn
+    (PreToolUse, PostToolUse, Stop, SubagentStop), when the current model
+    supports the effort parameter. `launch_selections()` and a typed `/effort`
+    both only ever see the LEAD actor; a subagent gets neither, so this is the
+    only evidence its own effort is ever observed from."""
+    level = document.get("effort")
+    if isinstance(level, dict):
+        level = level.get("level")
+    if not isinstance(level, str) or not level:
+        return []
+    return [
+        event(
+            raw_event,
+            "effort",
+            str(raw_event.actor_id),
+            "reported",
+            EffortChanged(None, level, "reported_by_harness"),
+        )
+    ]
+
+
 def translate_hook(raw_event: RawEvent, document: dict, toolcalls: ToolCallSemantics) -> list[CanonicalEvent]:
     hook_name = document.get("hook_event_name") or ""
     native_identity = str(document.get("hook_event_id") or document.get("uuid") or raw_event.source_position)
@@ -30,7 +53,10 @@ def translate_hook(raw_event: RawEvent, document: dict, toolcalls: ToolCallSeman
         return [event(raw_event, "session", str(raw_event.session_id), "finished", payload)]
     if hook_name == "Stop":
         payload = TurnFinished(None, "succeeded")
-        return [event(raw_event, "turn", native_identity, "finished", payload)]
+        return [
+            event(raw_event, "turn", native_identity, "finished", payload),
+            *effort_report(raw_event, document),
+        ]
     if hook_name == "StopFailure":
         events = [
             event(
@@ -47,9 +73,12 @@ def translate_hook(raw_event: RawEvent, document: dict, toolcalls: ToolCallSeman
             ))
         return events
     if hook_name == "PreToolUse":
-        return toolcalls.tool_started(raw_event, document)
+        return [*toolcalls.tool_started(raw_event, document), *effort_report(raw_event, document)]
     if hook_name in ("PostToolUse", "PostToolUseFailure"):
-        return toolcalls.tool_finished(raw_event, document, hook_name == "PostToolUseFailure")
+        return [
+            *toolcalls.tool_finished(raw_event, document, hook_name == "PostToolUseFailure"),
+            *effort_report(raw_event, document),
+        ]
     if hook_name == "SubagentStart":
         actor_id = raw_event.actor_id
         role: ActorRole = "teammate" if raw_event.source_type == "teammate_hook" else "child"
@@ -74,7 +103,7 @@ def translate_hook(raw_event: RawEvent, document: dict, toolcalls: ToolCallSeman
             )
         return events
     if hook_name == "SubagentStop":
-        return []
+        return effort_report(raw_event, document)
     if hook_name in ("TaskCreated", "TaskCompleted"):
         return []
     if hook_name == "PreCompact":

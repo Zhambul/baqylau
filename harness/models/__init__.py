@@ -44,6 +44,7 @@ from harness.models.controls import (
     TitleWriteOutcome,
 )
 from harness.models.evidence import (
+    INTERRUPT_SOURCE_TYPE,
     LIVENESS_SOURCE_TYPE,
     OUTPUT_LOCATION_SOURCE_TYPE,
     RawEvent,
@@ -64,6 +65,7 @@ from harness.models.telemetry import (
     TelemetryContext,
 )
 from harness.models.info import HarnessInfo
+from harness.models.interrupts import InterruptRegistry
 from harness.models.launch import (
     HarnessLaunchPlan,
     LaunchRejected,
@@ -103,9 +105,11 @@ __all__ = [
     "HarnessHookRequest",
     "HarnessHookResponse",
     "HarnessInfo",
+    "InterruptRegistry",
     "HarnessTelemetryRequest",
     "HarnessTelemetryResponse",
     "HarnessLaunchPlan",
+    "INTERRUPT_SOURCE_TYPE",
     "Interrupt",
     "LIVENESS_SOURCE_TYPE",
     "TELEMETRY_KIND_HEADER",
