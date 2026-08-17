@@ -265,6 +265,80 @@ def test_harness_hook_and_pane_entries_live_only_in_their_plugin_folders():
     assert not [path.name for path in (ROOT / "bin").iterdir() if path.name.startswith("claude-")]
 
 
+def _levels_walked(expression: ast.expr) -> int | None:
+    """How many directory levels an entry's sys.path anchor climbs from its file.
+
+    The two forms in the tree say the same thing differently:
+    `Path(__file__).resolve().parents[N]` climbs N, and N nested `dirname()`
+    calls around `abspath(__file__)` climb N-1 — the innermost is spent turning
+    the file into its own directory. Returns None for anything else, because an
+    anchor nobody can read is one nobody can check.
+    """
+    text = ast.unparse(expression)
+    parents = re.search(r"parents\[(\d+)\]", text)
+    if parents and "__file__" in text:
+        return int(parents.group(1))
+    if "__file__" in text and "dirname" in text:
+        return text.count("dirname(") - 1
+    return None
+
+
+def test_every_script_entry_anchors_sys_path_on_the_REPOSITORY_ROOT():
+    """A file kitty or a hook runs as a SCRIPT must reach the repo root.
+
+    An entry launched by path gets its own directory on sys.path, not ours, so
+    each one walks up to the root itself before importing anything. The walk is
+    a depth count, and moving the file is what invalidates it — silently: the
+    anchor still resolves, just to the wrong directory, and the failure is a
+    ModuleNotFoundError inside a process nobody is watching.
+
+    Measured (session 11b25475, 2026-08-17): the refactor moved the pane
+    processes from a top-level module to terminal/panes/, one level deeper,
+    and left their two-dirname walk alone. It resolved to terminal/ instead of
+    the root, so every mirror and scoreboard pane the terminal launched died on
+    `import core` the instant it started. The terminal reported the launch as a
+    success — it HAD made the window — and the pane vanished a moment later,
+    leaving "terminal pane setup failed" and no pane to look at.
+
+    So: count the directories between the file and the root, and require the
+    anchor to name exactly that many.
+    """
+    violations = []
+    for path in sorted(ROOT.rglob("*.py")):
+        if "__pycache__" in path.parts or ".claude" in path.parts:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        depth = len(path.relative_to(ROOT).parts) - 1
+        # An entry may name its anchor before inserting it (tests/conftest.py
+        # does), so a bare Name has to be resolved back to what it was assigned.
+        bound = {
+            target.id: statement.value
+            for statement in ast.walk(tree)
+            if isinstance(statement, ast.Assign)
+            for target in statement.targets
+            if isinstance(target, ast.Name)
+        }
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or len(node.args) != 2:
+                continue
+            if ast.unparse(node.func) != "sys.path.insert":
+                continue
+            # Read the anchor STRUCTURALLY. A text match would be satisfied by
+            # the prose in a comment explaining the rule — which is exactly what
+            # happened to the first version of this test.
+            anchor_expression = node.args[1]
+            if isinstance(anchor_expression, ast.Name):
+                anchor_expression = bound.get(anchor_expression.id, anchor_expression)
+            walked = _levels_walked(anchor_expression)
+            if walked is None:
+                violations.append(f"{path.relative_to(ROOT)} anchors on an unrecognised expression")
+            elif walked != depth:
+                violations.append(
+                    f"{path.relative_to(ROOT)} is {depth} deep but its anchor walks {walked}"
+                )
+    assert violations == []
+
+
 def test_the_stable_bin_entries_are_wrappers_and_nothing_else():
     """External config names `bin/`, never a package path.
 
