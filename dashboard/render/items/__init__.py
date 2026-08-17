@@ -24,8 +24,10 @@ from engine.projections import (
     ActorMessageActivity,
     AttentionActivity,
     CompactionActivity,
+    EffortChangeActivity,
     FileActivity,
     MessageActivity,
+    ModelChangeActivity,
     OperationActivity,
     ReasoningActivity,
     TaskActivity,
@@ -56,6 +58,8 @@ _PRESENTERS: dict[type[Activity], Callable[[Any], DashboardItem]] = {
     TaskActivity: work.present_task,
     CompactionActivity: work.present_compaction,
     ActorAssignmentActivity: work.present_assignment,
+    ModelChangeActivity: work.present_model_change,
+    EffortChangeActivity: work.present_effort_change,
 }
 
 

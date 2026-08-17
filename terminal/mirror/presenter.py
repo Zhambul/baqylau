@@ -11,8 +11,10 @@ from engine.projections import (
     AttentionActivity,
     ActorAssignmentActivity,
     CompactionActivity,
+    EffortChangeActivity,
     FileActivity,
     MessageActivity,
+    ModelChangeActivity,
     OperationActivity,
     ActorMessageActivity,
     ReasoningActivity,
@@ -329,6 +331,22 @@ class TerminalPresenter:
             )
         elif isinstance(activity, CompactionActivity):
             rows = (_line(TerminalText("⟳ ", TerminalStyle(MODIFIED)), TerminalText("compacted")),)
+        elif isinstance(activity, ModelChangeActivity):
+            previous_label = activity.previous.display_name or activity.previous.native_id
+            current_label = activity.current.display_name or activity.current.native_id
+            rows = (
+                _line(
+                    TerminalText("⟳ ", TerminalStyle(MODIFIED)),
+                    TerminalText(f"model {previous_label} → {current_label}"),
+                ),
+            )
+        elif isinstance(activity, EffortChangeActivity):
+            rows = (
+                _line(
+                    TerminalText("⟳ ", TerminalStyle(MODIFIED)),
+                    TerminalText(f"effort {activity.previous} → {activity.current}"),
+                ),
+            )
         elif isinstance(activity, ActorAssignmentActivity):
             marker = "⇢" if activity.state == "running" else "⇠"
             body = (

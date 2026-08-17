@@ -13,7 +13,18 @@ from dashboard.render.items.item import (
     plain_text,
 )
 from dashboard.render.markdown import md_html
-from engine.projections import ActorAssignmentActivity, CompactionActivity, TaskActivity
+from engine.projections import (
+    ActorAssignmentActivity,
+    CompactionActivity,
+    EffortChangeActivity,
+    ModelChangeActivity,
+    TaskActivity,
+)
+from domain.values import ModelReference
+
+
+def _model_label(model: ModelReference) -> str:
+    return model.display_name or model.native_id
 
 
 def present_task(activity: TaskActivity) -> DashboardItem:
@@ -51,6 +62,46 @@ def present_compaction(activity: CompactionActivity) -> DashboardItem:
         (
             '<div class="anote"><span class="anmark">⏺</span>'
             '<span class="atext">compacted</span></div>'
+        ),
+        text,
+        None,
+        started_at=activity.context.started_at,
+        finished_at=activity.context.finished_at,
+    )
+
+
+def present_model_change(activity: ModelChangeActivity) -> DashboardItem:
+    actor_id = activity.context.actor_id
+    text = f"model {_model_label(activity.previous)} → {_model_label(activity.current)}"
+    return DashboardItem(
+        activity.context.activity_id,
+        "model_changed",
+        "model_changed",
+        actor_id,
+        "succeeded",
+        (
+            '<div class="anote"><span class="anmark">⏺</span>'
+            f'<span class="atext">{html.escape(text)}</span></div>'
+        ),
+        text,
+        None,
+        started_at=activity.context.started_at,
+        finished_at=activity.context.finished_at,
+    )
+
+
+def present_effort_change(activity: EffortChangeActivity) -> DashboardItem:
+    actor_id = activity.context.actor_id
+    text = f"effort {activity.previous} → {activity.current}"
+    return DashboardItem(
+        activity.context.activity_id,
+        "effort_changed",
+        "effort_changed",
+        actor_id,
+        "succeeded",
+        (
+            '<div class="anote"><span class="anmark">⏺</span>'
+            f'<span class="atext">{html.escape(text)}</span></div>'
         ),
         text,
         None,

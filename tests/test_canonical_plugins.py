@@ -3888,13 +3888,17 @@ def _slash_turn_events():
     return events
 
 
-def test_claude_slash_command_turn_is_one_prompt_not_three_blocks():
-    messages = [e.payload for e in _slash_turn_events() if isinstance(e.payload, MessageCreated)]
-    assert len(messages) == 1
-    assert messages[0].role == "user"
-    assert messages[0].phase == "prompt"
-    # what the human typed, not the envelope Claude Code stored it in
-    assert messages[0].content.text == "/model opus"
+def test_claude_slash_model_command_turn_is_the_state_change_not_a_prompt_bubble():
+    # Three raw transcript records (the caveat, the envelope, the echoed
+    # stdout) collapse into ONE canonical fact: the model change itself. No
+    # prompt bubble either — the dashboard's own model-change block shows the
+    # switch, so echoing "/model opus" as a second, redundant message would
+    # just duplicate it (and, with nothing to close the turn, permanently
+    # stick the tab on "thinking" — see tabstate.py).
+    events = _slash_turn_events()
+    assert not [e.payload for e in events if isinstance(e.payload, MessageCreated)]
+    models = [e.payload for e in events if isinstance(e.payload, ModelChanged)]
+    assert len(models) == 1
 
 
 def test_claude_slash_model_reports_the_selection_at_the_moment_it_was_made():

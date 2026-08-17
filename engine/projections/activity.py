@@ -24,8 +24,10 @@ from domain.events import (
     ActorAssignmentFinished,
     ActorAssignmentStarted,
     CompactionFinished,
+    EffortChanged,
     FileAccessed,
     MessageCreated,
+    ModelChanged,
     OperationFinished,
     OperationProgressed,
     OperationStarted,
@@ -38,6 +40,7 @@ from domain.ids import (
     AttentionId,
     AssignmentId,
 )
+from domain.values import ModelReference
 from engine.projections.models import (
     Activity,
     ActivityContext,
@@ -46,13 +49,19 @@ from engine.projections.models import (
     ActorMessageActivity,
     AttentionActivity,
     CompactionActivity,
+    EffortChangeActivity,
     FileActivity,
     MessageActivity,
+    ModelChangeActivity,
     OperationActivity,
     ReasoningActivity,
     TaskActivity,
 )
 from domain.records import StoredCanonicalEvent
+
+
+def _model_key(model: ModelReference) -> str:
+    return model.selection_id or model.native_id
 
 
 def _context(
@@ -95,6 +104,8 @@ def activities_of(
     actor_names: dict[ActorId, str] = {}
     attention_requests: dict[tuple[ActorId, AttentionId], AttentionRequested] = {}
     actor_assignment_starts: dict[tuple[ActorId, AssignmentId], ActorAssignmentActivity] = {}
+    last_model: dict[ActorId, ModelReference] = {}
+    last_effort: dict[ActorId, str] = {}
     for stored in stored_events:
         event = stored.event
         # An assignment is attributed to the PARENT actor when there is one —
@@ -369,6 +380,38 @@ def activities_of(
                 payload.before_tokens,
                 payload.after_tokens,
             )
+        elif isinstance(payload, ModelChanged):
+            # A harness may re-report the model on nearly every turn whether
+            # or not it moved (some echo the full turn config every time;
+            # others echo the resolved model on every reply) — a block per
+            # REPORT would flood the feed, so one lands only when the
+            # selection actually moved. Compared by selection_id (falling back
+            # to native_id), not full equality: a switch can be reported
+            # TWICE — once as the typed alias ("opus", reason=selected) and
+            # again, a beat later, as its resolved native id ("opus-5",
+            # reason=reported_by_harness) — same selection, not a second
+            # change.
+            previous = last_model.get(activity_actor_id)
+            last_model[activity_actor_id] = payload.current
+            if previous is not None and _model_key(previous) != _model_key(payload.current):
+                activity_id = f"model_change:{event.event_id}"
+                activity = ModelChangeActivity(
+                    _context(stored, activity_id, actor_name, finished=True),
+                    previous,
+                    payload.current,
+                    payload.reason,
+                )
+        elif isinstance(payload, EffortChanged):
+            previous_effort = last_effort.get(activity_actor_id)
+            last_effort[activity_actor_id] = payload.current
+            if previous_effort is not None and previous_effort != payload.current:
+                activity_id = f"effort_change:{event.event_id}"
+                activity = EffortChangeActivity(
+                    _context(stored, activity_id, actor_name, finished=True),
+                    previous_effort,
+                    payload.current,
+                    payload.reason,
+                )
         elif isinstance(payload, ActorAssignmentStarted):
             activity_id = f"actor_assignment-start:{event.event_id}"
             activity = ActorAssignmentActivity(

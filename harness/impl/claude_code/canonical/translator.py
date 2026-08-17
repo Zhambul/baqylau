@@ -838,8 +838,17 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
         native_identity: str,
         occurred_at: float | None,
     ) -> list[CanonicalEvent]:
-        """A `/command` turn: ONE prompt bubble holding what the human typed,
-        plus the SESSION-STATE event the command asked for, where there is one.
+        """A `/command` turn: the SESSION-STATE event the command asked for,
+        where there is one, otherwise a prompt bubble holding what the human
+        typed.
+
+        `/model`/`/effort` with a valid selection emit ONLY the state event —
+        the dashboard's own model/effort-change block (engine/projections/
+        activity.py) is what shows the switch, so a second, redundant prompt
+        bubble echoing "/model opus" would just duplicate it. Every other
+        slash command (and a bare `/model`/`/effort`, or one with more than
+        one argument token — not a selection) has no such block, so it still
+        gets the typed-text bubble.
 
         The state event is emitted from the ARGUMENT, which is a selection ALIAS
         ("opus"), not a native model id — Claude Code's transcript never carries
@@ -851,8 +860,21 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
         A bare `/model` (no argument) opens the picker and settles nothing, and a
         multi-token argument is not a selection, so neither emits a state event.
         """
+        name = record["name"].lstrip("/").strip().lower()
+        selection = record["args"].strip()
+        if selection and len(selection.split()) == 1:
+            if name == "model":
+                payload: EventPayload = ModelChanged(None, _model_reference(selection), "selected")
+                return [
+                    self._event(raw_event, name, native_identity, "selected", payload, occurred_at=occurred_at)
+                ]
+            if name == "effort":
+                payload = EffortChanged(None, selection, "selected")
+                return [
+                    self._event(raw_event, name, native_identity, "selected", payload, occurred_at=occurred_at)
+                ]
         role: MessageRole = "parent" if raw_event.parent_actor_id is not None else "user"
-        events = [
+        return [
             self._event(
                 raw_event,
                 "message",
@@ -862,20 +884,6 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
                 occurred_at=occurred_at,
             )
         ]
-        name = record["name"].lstrip("/").strip().lower()
-        selection = record["args"].strip()
-        if not selection or len(selection.split()) != 1:
-            return events
-        if name == "model":
-            payload: EventPayload = ModelChanged(None, _model_reference(selection), "selected")
-        elif name == "effort":
-            payload = EffortChanged(None, selection, "selected")
-        else:
-            return events
-        events.append(
-            self._event(raw_event, name, native_identity, "selected", payload, occurred_at=occurred_at)
-        )
-        return events
 
     def _transcript_metadata(self, raw_event: RawEvent, document: dict) -> list[CanonicalEvent]:
         if raw_event.parent_actor_id is not None:

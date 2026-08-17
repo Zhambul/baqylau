@@ -18,6 +18,7 @@ from domain.events import (
     ActorAssignmentStarted,
     CompactionFinished,
     CompactionStarted,
+    EffortChanged,
     GoalChanged,
     FileAccessed,
     MessageCreated,
@@ -50,7 +51,13 @@ from domain.ids import (
 )
 from domain.values import AttentionPrompt, ModelReference, StructuredContent, TextContent, TokenUsage
 from canonical_runtime import CanonicalRuntime
-from engine.projections import ActivityScope, ActorAssignmentActivity, OperationActivity
+from engine.projections import (
+    ActivityScope,
+    ActorAssignmentActivity,
+    EffortChangeActivity,
+    ModelChangeActivity,
+    OperationActivity,
+)
 
 SESSION_ID = SessionId("session-one")
 LEAD_ACTOR_ID = ActorId("actor-lead")
@@ -333,6 +340,42 @@ def test_activity_uses_accepted_time_when_native_time_is_absent(tmp_path):
 
     assert operation.context.started_at == 100.0
     assert operation.context.finished_at == 101.0
+
+
+def test_model_change_activity_fires_only_on_a_real_switch_not_a_reechoed_alias(tmp_path):
+    # A harness may report the model more than once for the SAME selection —
+    # a typed alias, then its resolved native id a beat later — and may
+    # re-report it again on every later turn whether or not it moved. Only
+    # the actual switch (a different selection_id) should produce a block.
+    opus_alias = ModelReference("opus", "opus", "opus")
+    opus_resolved = ModelReference("claude-opus-5", "opus-5", "opus")
+    sonnet = ModelReference("sonnet", "sonnet", "sonnet")
+    events = [
+        canonical("model-initial", ModelChanged(None, opus_alias, "selected"), occurred_at=10.0),
+        canonical("model-resolved", ModelChanged(None, opus_resolved, "reported_by_harness"), occurred_at=11.0),
+        canonical("model-reecho", ModelChanged(None, opus_resolved, "reported_by_harness"), occurred_at=11.5),
+        canonical("model-switch", ModelChanged(None, sonnet, "selected"), occurred_at=12.0),
+    ]
+    page = store_with_events(tmp_path, events).queries().activity_after(SESSION_ID, 0, ActivityScope(), 10)
+    changes = [activity for activity in page.activities if isinstance(activity, ModelChangeActivity)]
+    assert len(changes) == 1
+    assert changes[0].previous == opus_resolved
+    assert changes[0].current == sonnet
+    assert changes[0].reason == "selected"
+
+
+def test_effort_change_activity_fires_only_on_a_real_switch(tmp_path):
+    events = [
+        canonical("effort-initial", EffortChanged(None, "high", "selected"), occurred_at=10.0),
+        canonical("effort-reecho", EffortChanged(None, "high", "reported_by_harness"), occurred_at=11.0),
+        canonical("effort-switch", EffortChanged(None, "medium", "selected"), occurred_at=12.0),
+    ]
+    page = store_with_events(tmp_path, events).queries().activity_after(SESSION_ID, 0, ActivityScope(), 10)
+    changes = [activity for activity in page.activities if isinstance(activity, EffortChangeActivity)]
+    assert len(changes) == 1
+    assert changes[0].previous == "high"
+    assert changes[0].current == "medium"
+    assert changes[0].reason == "selected"
 
 
 def test_actor_assignment_finish_without_start_has_one_source_event(tmp_path):

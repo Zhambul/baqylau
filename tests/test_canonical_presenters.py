@@ -21,6 +21,7 @@ from domain.values import (
     AccountReference,
     ExecutionMode,
     MessageRole,
+    ModelReference,
     Outcome,
     StructuredContent,
     TextContent,
@@ -31,7 +32,9 @@ from engine.projections import (
     ActivityContext,
     ActivityStatistics,
     ActorAssignmentActivity,
+    EffortChangeActivity,
     MessageActivity,
+    ModelChangeActivity,
     OperationActivity,
     ActorMessageActivity,
     ReasoningActivity,
@@ -206,6 +209,50 @@ def test_dashboard_and_terminal_present_the_same_fact_without_sharing_presentati
     assert "rgb" not in dashboard.html.lower()
     assert dashboard.item_type == "operation" and dashboard.state == "running"
     assert dashboard.summary_kind == "shell"
+
+
+def _config_change_context(activity_id: str) -> ActivityContext:
+    return ActivityContext(
+        activity_id=activity_id,
+        source_event_ids=(CanonicalEventId(activity_id),),
+        session_id=SessionId("session-one"),
+        actor_id=ActorId("session-one:lead"),
+        actor_name=None,
+        parent_actor_id=None,
+        turn_id=None,
+        started_at=None,
+        finished_at=10.0,
+    )
+
+
+def test_model_change_presents_the_switch_with_both_values_on_both_surfaces():
+    activity = ModelChangeActivity(
+        _config_change_context("model_change:one"),
+        ModelReference("opus", "opus-5", "opus"),
+        ModelReference("sonnet", "sonnet-5", "sonnet"),
+        "selected",
+    )
+    dashboard = DashboardPresenter().present(activity)
+    assert dashboard.item_type == "model_changed" and dashboard.summary_kind == "model_changed"
+    assert "opus-5 → sonnet-5" in dashboard.html
+    terminal = TerminalPresenter().present(activity)
+    row_text = "".join(text.text for text in terminal.updated_blocks[0].rows[0].content)
+    assert "model opus-5 → sonnet-5" in row_text
+
+
+def test_effort_change_presents_the_switch_with_both_values_on_both_surfaces():
+    activity = EffortChangeActivity(
+        _config_change_context("effort_change:one"),
+        "high",
+        "medium",
+        "selected",
+    )
+    dashboard = DashboardPresenter().present(activity)
+    assert dashboard.item_type == "effort_changed" and dashboard.summary_kind == "effort_changed"
+    assert "high → medium" in dashboard.html
+    terminal = TerminalPresenter().present(activity)
+    row_text = "".join(text.text for text in terminal.updated_blocks[0].rows[0].content)
+    assert "effort high → medium" in row_text
 
 
 def test_terminal_hides_lead_transcript_and_system_messages_but_keeps_subagent_messages():

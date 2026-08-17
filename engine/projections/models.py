@@ -204,6 +204,25 @@ class ActorMessageActivity:
     content: Content | None
 
 
+@dataclass(frozen=True)
+class ModelChangeActivity:
+    # Unlike the canonical ModelChanged event, `previous` is never absent
+    # here: the fold (engine/projections/activity.py) only builds one of
+    # these for a REAL transition, where the prior value is known.
+    context: ActivityContext
+    previous: ModelReference
+    current: ModelReference
+    reason: Literal["selected", "automatic_fallback", "account_migration", "reported_by_harness"]
+
+
+@dataclass(frozen=True)
+class EffortChangeActivity:
+    context: ActivityContext
+    previous: str
+    current: str
+    reason: Literal["selected", "account_migration", "reported_by_harness"]
+
+
 Activity: TypeAlias = (
     MessageActivity
     | ReasoningActivity
@@ -214,6 +233,8 @@ Activity: TypeAlias = (
     | CompactionActivity
     | ActorAssignmentActivity
     | ActorMessageActivity
+    | ModelChangeActivity
+    | EffortChangeActivity
 )
 
 

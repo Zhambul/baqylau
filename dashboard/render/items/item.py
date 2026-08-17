@@ -54,6 +54,8 @@ SummaryKind: TypeAlias = Literal[
     "compaction",
     "actor_assignment",
     "actor_message",
+    "model_changed",
+    "effort_changed",
 ]
 
 
@@ -70,6 +72,8 @@ class DashboardItem:
         "compaction",
         "actor_assignment",
         "actor_message",
+        "model_changed",
+        "effort_changed",
     ]
     summary_kind: SummaryKind
     actor_id: ActorId
