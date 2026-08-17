@@ -3,10 +3,8 @@
 from harness.contract import HarnessPlugin
 from harness.models import EffortOption, HarnessInfo, ModelOption, RewindModeOption
 from domain.codec import SCHEMA_VERSION
-from harness.impl.claude_code.canonical.translator import (
-    ClaudeCanonicalTranslator,
-    ClaudeRawEventSources,
-)
+from harness.impl.claude_code.canonical.translator import ClaudeCanonicalTranslator
+from harness.impl.claude_code.canonical.sources import ClaudeRawEventSources
 from harness.impl.claude_code.hooks.gateway import CLI_PROCESS_NAME, ClaudeHookGateway
 from harness.impl.claude_code.otel.gateway import ClaudeTelemetryGateway
 from harness.impl.claude_code.catalog import ClaudeCodeCatalog

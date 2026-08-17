@@ -9,24 +9,13 @@
 # semantics (rewind bails by pressing Escape; here Escape DECLINES the whole
 # question set, so a failed step must leave the dialog exactly as it is).
 #
-# Empirical dialog facts this encodes. The KEY MODEL was re-measured live for
-# v2.1.215 (2026-07-19) — Claude Code overhauled the dialog and the old
-# digit-driven model (v2.1.214) broke every web answer with "question N never
-# became current"; the full before/after experiment log is in docs/dashboard.md:
-#   - anatomy: a header-chip bar (`←  ☐ Pets  ☒ Drink  ✔ Submit  →`, one chip
-#     per question keyed off the `header` field; ☒ once answered), the current
-#     question's text, numbered option rows (`❯ 1. Apple`; multiSelect adds a
-#     `[ ]`/`[✔]` checkbox), a numbered "Type something" free-text row,
-#     multiSelect adds an UNNUMBERED advance row labelled "Next" (or "Submit"
-#     on the last/only question), then a "Chat about this" row below a rule,
-#     and a footer containing "Enter to select";
-#   - TWO layouts: with no option `preview`, options carry an indented
-#     description line and "Chat about this" is NUMBERED; when ANY option has a
-#     `preview`, the dialog switches to a side-by-side layout — a box drawn to
-#     the RIGHT of the option rows (its text bleeds onto the option lines, so
-#     `rows()` strips it), a "Notes: press n" hint row, and an UNNUMBERED
-#     "Chat about this". Both keep "Enter to select"; the driver is
-#     layout-agnostic because it navigates by cursor + Enter, never by digit;
+# This module is the half that PRESSES KEYS: walking the ❯ cursor onto a row,
+# and the sequencing above it — which question is current, what to press for it,
+# when the pane has moved on. Reading the dialog back off the screen (its region,
+# rows and current question) is askdialog_screen.py, where the measured anatomy
+# both halves encode is documented.
+#
+# The facts that shape the sequencing:
 #   - SELECTION IS CURSOR + ENTER, NOT digits (digits are inert now): move the
 #     ❯ cursor with up/down onto a row and press Enter. single-select Enter
 #     SELECTS and auto-advances (the sole question of a one-question ask
@@ -35,16 +24,13 @@
 #     cursor onto its "Next"/"Submit" advance row + Enter;
 #   - THE FLOW IS FORWARD-ONLY: `left`/`right`/Tab do NOT switch questions in
 #     this build — they are inert (or, on a focused "Type something"/custom
-#     row, caret movement), verified live 2026-07-22 (session 3fd325d9: a
-#     `left`/`right`/`Tab` from every row left the same question showing). The
+#     row, caret movement), verified live 2026-07-22 (session 3fd325d9). The
 #     ONLY way to a later question is answering the current one (Enter
 #     auto-advance / the "Next" row); there is no back-navigation. So `drive`
 #     answers whatever question is CURRENTLY shown, in order — it does NOT
 #     normalize to question 1 first (the old `left`×len assumed back-nav and
 #     could never recover a dialog stuck on a later question: the 3fd325d9
-#     "question 1 never became current" retry). up/down still move the row
-#     cursor, EXCEPT a filled custom-text row traps upward movement (edit
-#     focus) — `_cursor_to`'s down-walk fallback handles that;
+#     "question 1 never became current" retry);
 #   - free text: cursor ONTO the "Type something" row, then send_text (types
 #     the text + a CR): single-select commits it and auto-advances; multiSelect
 #     commits + checks the custom row (verified, with a fallback Enter);
@@ -53,38 +39,19 @@
 #     single-select question; cursor onto "Submit answers" + Enter submits;
 #   - Esc ANYWHERE (and Enter on an EMPTY "Type something") declines the whole
 #     question set — which is why this driver never presses Escape.
-import re
 import time
 
+from harness.impl.claude_code.controls import askdialog_screen as askscreen
 from harness.impl.claude_code.controls import screen_driver as screendrive
+from harness.impl.claude_code.controls.askdialog_screen import (
+    CHAT_LABEL, SUBMIT_LABEL, current_question, dialog_open, review_open, rows,
+)
 
 POLL_S = 0.15          # screen re-read beat while waiting for a dialog state
 STEP_TIMEOUT_S = 2.5   # a key press → its screen effect visible
 KEY_GAP_S = 0.12       # beat between successive blind key presses
 SUBMIT_TIMEOUT_S = 4.0  # final submit → dialog gone (the tool round-trips)
 NAV_STEPS = 24         # max up/down presses to walk the cursor to a target row
-
-FOOT = "Enter to select"                 # question-pane open detector
-REVIEW = "Review your answers"           # review-pane detector
-CHAT_LABEL = "Chat about this"
-SUBMIT_LABEL = "Submit answers"          # the review pane's submit row
-# NB the free-text row has no label constant on purpose: it is located by its
-# DIGIT (len(options)+1, `type_digit`), because the row's text becomes the user's
-# own typed answer the moment anything is entered — matching "Type something"
-# would stop working exactly when it mattered. A dead TYPE_LABEL constant sat
-# here from the label-matching era; don't re-add one.
-
-# option row: cursor mark? · digit. · multiSelect checkbox? · label. The label
-# capture stops before a preview side-box (2+ spaces then a box-drawing char,
-# U+2500–U+257F) that the side-by-side layout bleeds onto the option line.
-_ROW = re.compile(r"^\s*(?P<cur>❯\s+)?(?P<digit>\d+)\.\s+"
-                  r"(?:\[(?P<check>[ ✔x])\]\s*)?"
-                  r"(?P<label>.+?)"
-                  r"(?:\s{2,}[─-╿].*)?\s*$")
-# an UNNUMBERED action row: the multiSelect "Next"/"Submit" advance row and the
-# side-by-side layout's un-numbered "Chat about this"
-_ACTION_ROW = re.compile(r"^\s*(?P<cur>❯\s+)?"
-                         r"(?P<label>Next|Submit|Chat about this)\s*$")
 
 
 class AskError(screendrive.StepError):
@@ -100,99 +67,7 @@ class AskError(screendrive.StepError):
     Claude Code upgrade vs a blank/partial capture all look identical."""
 
 
-def region(screen):
-    """The dialog region: from the LAST header-chip bar (the only ☐/☒ on a
-    terminal screen) to the end. "" when no dialog is on screen.
-
-    FALLBACK: on a NARROW/SHORT window a tall dialog (several options with
-    wrapped multi-line descriptions) overflows the visible viewport and the
-    ☐/☒ chip bar scrolls off the TOP while the footer survives at the bottom
-    — get_text only returns the visible screen, so the chip bar is simply
-    absent. A chip-bar-only anchor then returns "" and the driver false-bails
-    step:open on a genuinely-open dialog (session 819627e5, 2026-07-23). So
-    when there is no chip bar but a dialog FOOTER is on screen (FOOT/REVIEW),
-    anchor from the screen top instead. The row/question parsers over this
-    wider region tolerate the extra transcript lines above (the numbered-option
-    and action-row patterns rarely match prose), and the chip-bar path stays
-    primary — it cleanly excludes the transcript whenever the bar IS visible."""
-    if not screen:
-        return ""
-    lines = screen.splitlines()
-    at = None
-    for i, ln in enumerate(lines):
-        if "☐" in ln or "☒" in ln:
-            at = i
-    if at is not None:
-        return "\n".join(lines[at:])
-    if FOOT in screen or REVIEW in screen:
-        return screen
-    return ""
-
-
-def dialog_open(screen):
-    return FOOT in region(screen)
-
-
-def review_open(screen):
-    return REVIEW in region(screen)
-
-
-def rows(screen):
-    """Every CURSOR-NAVIGABLE row of the question pane, in screen order:
-    [{digit, label, cursor, check(None|bool)}]. Numbered option/Type/Chat rows
-    (their preview side-box, if any, is stripped from the label) plus the
-    UNNUMBERED action rows — the multiSelect "Next"/"Submit" advance row and the
-    side-by-side layout's un-numbered "Chat about this" — carry digit "".
-    Indented description lines and the "Notes: press n" hint don't match, so
-    they drop out (they are not cursor stops)."""
-    out = []
-    for ln in region(screen).splitlines():
-        m = _ROW.match(ln)
-        if m:
-            out.append({"digit": m.group("digit"),
-                        "label": m.group("label").strip(),
-                        "cursor": bool(m.group("cur")),
-                        "check": (None if m.group("check") is None
-                                  else m.group("check") != " ")})
-            continue
-        m = _ACTION_ROW.match(ln)
-        if m:
-            out.append({"digit": "", "label": m.group("label"),
-                        "cursor": bool(m.group("cur")), "check": None})
-    return out
-
-
-def current_question(screen, questions):
-    """Which of the ask's questions the dialog currently shows, or None.
-    Long question text WRAPS across screen lines (a 555-char question never
-    matched the old exact line-set lookup — the live `question 1 never
-    became current` bail, 2026-07-18), and a wrap can land mid-word (e.g.
-    at a hyphen in a path), so ALL whitespace is stripped from both sides
-    before the substring match. The review pane must answer None
-    explicitly: its answer recap repeats every question's text."""
-    reg = region(screen)
-    if REVIEW in reg:
-        return None
-    flat = "".join(reg.split())
-    # LONGEST match wins, not the first: only ONE question is on screen at a
-    # time, but if question i's stripped text is a substring of question j's
-    # (e.g. "Pickacolor" ⊂ "Pickacolorscheme"), then while j is showing, flat
-    # contains j's text — which contains i's — and a first-match scan would
-    # wrongly return i, so `drive`'s wait for j never resolves. The most
-    # specific (longest) matching question is the one actually displayed.
-    best, best_len = None, -1
-    for i, q in enumerate(questions):
-        text = "".join((q.get("question") or "").split())
-        if text and text in flat and len(text) > best_len:
-            best, best_len = i, len(text)
-    return best
-
-
-def _cursor_row(screen):
-    return next((r for r in rows(screen) if r["cursor"]), None)
-
-
-def _cursor_to(fe, win, pred, sleep, what):
+def cursor_to(fe, win, pred, sleep, what):
     """Move the ❯ cursor onto the row matching `pred(row_dict)`. Normalizes to
     the top (up is a no-op there) then walks DOWN, screen-verified each step.
     Deliberately walk-based, NOT index arithmetic: the v2.1.215 dialog has rows
@@ -201,14 +76,15 @@ def _cursor_to(fe, win, pred, sleep, what):
     row — the walk just steps past it, where index math would desync.
 
     A row is "reached" when ANY cursored row matches `pred`, not just the first
-    (`_cursor_row`). The preview layout bleeds the last option's ❯ onto the
-    "Chat about this" row below it: with the cursor genuinely ON Chat, BOTH the
-    last option AND Chat render ❯ (verified live 2026-07-20 — down from the last
-    option lands on Chat, showing two ❯). `_cursor_row` returned the FIRST mark
-    (the option), so the walk never recognized it reached Chat and dead-looped
-    (`cursor never reached Chat row`). Checking every cursored row fixes it
-    WITHOUT breaking option targeting: the down-from-top walk stops at option N
-    (clean, single ❯) before it ever descends into the ambiguous two-❯ state.
+    (`askscreen.cursor_row`). The preview layout bleeds the last option's ❯ onto
+    the "Chat about this" row below it: with the cursor genuinely ON Chat, BOTH
+    the last option AND Chat render ❯ (verified live 2026-07-20 — down from the
+    last option lands on Chat, showing two ❯). `cursor_row` returned the FIRST
+    mark (the option), so the walk never recognized it reached Chat and
+    dead-looped (`cursor never reached Chat row`). Checking every cursored row
+    fixes it WITHOUT breaking option targeting: the down-from-top walk stops at
+    option N (clean, single ❯) before it ever descends into the ambiguous
+    two-❯ state.
 
     The normalize-up bails early if `up` stops making progress: a FILLED
     "Type something"/custom-answer row TRAPS upward movement (its edit focus
@@ -218,7 +94,7 @@ def _cursor_to(fe, win, pred, sleep, what):
     stuck normalize is harmless — just cut it short."""
     prev = object()
     for _ in range(NAV_STEPS):               # normalize to the first row
-        cur = _cursor_row(fe.get_text(win) or "")
+        cur = askscreen.cursor_row(fe.get_text(win) or "")
         if (cur or {}).get("digit") == "1":
             break
         key = None if cur is None else (cur["digit"], cur["label"])
@@ -270,8 +146,8 @@ def _advance_multi(fe, win, questions, i, sleep):
     the explicit "Next"/"Submit" row leaves the text field first, so it works
     whether or not custom text was typed; then Enter is the dialog's designed
     advance. Screen-verified: the pane must actually leave question `i`."""
-    _cursor_to(fe, win, lambda r: r["label"] in ("Next", "Submit"), sleep,
-               "advance row")
+    cursor_to(fe, win, lambda r: r["label"] in ("Next", "Submit"), sleep,
+              "advance row")
     fe.send_key(win, "enter")
     screen, ok = screendrive.poll_until(fe, win,
                        lambda s: current_question(s, questions) != i
@@ -306,13 +182,13 @@ def _answer_question(fe, win, questions, i, ans, sleep):
             if row is None:
                 raise AskError("options", "row %d not on screen" % (j + 1))
             if bool(row["check"]) != (label in selected):
-                _cursor_to(fe, win, _by_digit(str(j + 1)), sleep,
-                           "option %d" % (j + 1))
+                cursor_to(fe, win, _by_digit(str(j + 1)), sleep,
+                          "option %d" % (j + 1))
                 fe.send_key(win, "enter")        # toggle
                 sleep(KEY_GAP_S)
         if other:
             _require_type_row(fe, win, type_digit)
-            _cursor_to(fe, win, _by_digit(type_digit), sleep, "Type row")
+            cursor_to(fe, win, _by_digit(type_digit), sleep, "Type row")
             if not fe.send_text(win, other):     # types inline + CR
                 raise AskError("type", "other text not delivered")
             sleep(POLL_S)
@@ -332,7 +208,7 @@ def _answer_question(fe, win, questions, i, ans, sleep):
         return
     if other:
         _require_type_row(fe, win, type_digit)
-        _cursor_to(fe, win, _by_digit(type_digit), sleep, "Type row")
+        cursor_to(fe, win, _by_digit(type_digit), sleep, "Type row")
         if not fe.send_text(win, other):         # type + CR selects + advances
             raise AskError("type", "other text not delivered")
         return
@@ -340,7 +216,7 @@ def _answer_question(fe, win, questions, i, ans, sleep):
         raise AskError("options", "no answer for %r"
                        % (q.get("question") or "")[:60])
     tgt = str(1 + labels.index(selected[0]))
-    _cursor_to(fe, win, _by_digit(tgt), sleep, "option " + tgt)
+    cursor_to(fe, win, _by_digit(tgt), sleep, "option " + tgt)
     fe.send_key(win, "enter")                    # select + auto-advance
 
 
@@ -366,8 +242,8 @@ def drive(fe, win, questions, answers, chat=False, sleep=time.sleep):
     if chat:
         if not any(r["label"] == CHAT_LABEL for r in rows(screen)):
             raise AskError("chat", "no 'Chat about this' row on screen")
-        _cursor_to(fe, win, lambda r: r["label"] == CHAT_LABEL, sleep,
-                   "Chat row")
+        cursor_to(fe, win, lambda r: r["label"] == CHAT_LABEL, sleep,
+                  "Chat row")
         fe.send_key(win, "enter")
         _, ok = screendrive.poll_until(fe, win,
                       lambda s: not dialog_open(s) and not review_open(s),
@@ -432,8 +308,8 @@ def drive(fe, win, questions, answers, chat=False, sleep=time.sleep):
         raise AskError("review", "neither review pane nor submit happened",
                        screen=screen)
     if review_open(screen):
-        _cursor_to(fe, win, lambda r: r["label"] == SUBMIT_LABEL, sleep,
-                   "Submit answers")
+        cursor_to(fe, win, lambda r: r["label"] == SUBMIT_LABEL, sleep,
+                  "Submit answers")
         fe.send_key(win, "enter")
         _, ok = screendrive.poll_until(fe, win,
                       lambda s: not dialog_open(s) and not review_open(s),

@@ -3,10 +3,8 @@
 from harness.contract import HarnessPlugin
 from harness.models import EffortOption, HarnessInfo, ModelOption
 from domain.codec import SCHEMA_VERSION
-from harness.impl.codex.canonical.translator import (
-    CodexCanonicalTranslator,
-    CodexRawEventSources,
-)
+from harness.impl.codex.canonical.translator import CodexCanonicalTranslator
+from harness.impl.codex.canonical.sources import CodexRawEventSources
 from harness.impl.codex.hooks.gateway import CLI_PROCESS_NAME, CodexHookGateway
 from harness.impl.codex.catalog import CodexCatalog
 from harness.impl.codex.controls.controller import controller

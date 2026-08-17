@@ -1,25 +1,13 @@
-"""Codex rollout discovery, raw capture, and canonical translation."""
+"""Codex canonical translation: dispatch across the rollout's records and hooks."""
 
 from __future__ import annotations
 
-import glob
-import hashlib
 import json
 import os
 import re
-import time
-from datetime import datetime
-from typing import Literal
 
-from harness.contract import HarnessRawEventSource, HarnessRawEventSources, HarnessTranslator
-from harness.models import (
-    RawEvent,
-    RawEventSourceContext,
-    Session,
-    TranslationError,
-    TranslationResult,
-    canonical_event,
-)
+from harness.contract import HarnessTranslator
+from harness.models import RawEvent, TranslationError, TranslationResult
 from domain.events import (
     ActorAssignmentFinished,
     ActorAssignmentStarted,
@@ -55,7 +43,6 @@ from domain.ids import (
     AssignmentId,
     MessageId,
     OperationId,
-    RawEventId,
     TaskId,
     TurnId,
 )
@@ -67,161 +54,21 @@ from domain.values import (
     GoalState,
     MessagePhase,
     MessageRole,
-    ModelReference,
     OperationCategory,
     Outcome,
-    StructuredContent,
-    TextContent,
     TokenUsage,
 )
 from harness.impl.codex.canonical import rollout
-
-ROLLOUT_NAME = re.compile(r"rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-(.+)\.jsonl$")
-EVENT_BATCH_SIZE = 100
-
-
-def _model_reference(native_id: str) -> ModelReference:
-    return ModelReference(native_id, native_id, native_id)
-
-
-def _harness_session_id(path: str) -> str:
-    match = ROLLOUT_NAME.search(os.path.basename(path))
-    return match.group(1) if match else os.path.splitext(os.path.basename(path))[0]
-
-
-def _session_metadata(path: str) -> dict:
-    try:
-        with open(path, encoding="utf-8") as source:
-            for _ in range(5):
-                line = source.readline()
-                if not line:
-                    break
-                document = json.loads(line)
-                if document.get("type") == "session_meta":
-                    return document.get("payload") or {}
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return {}
-    return {}
-
-
-def _parent_thread_id(metadata: dict) -> str | None:
-    source = metadata.get("source")
-    spawn = (
-        ((source.get("subagent") or {}).get("thread_spawn") or {})
-        if isinstance(source, dict)
-        else {}
-    )
-    parent = spawn.get("parent_thread_id") or metadata.get("parent_thread_id")
-    return str(parent).strip() if parent else None
-
-
-def _rollout_paths() -> tuple[str, ...]:
-    codex_home = os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex")
-    pattern = os.path.join(codex_home, "sessions", "*", "*", "*", "rollout-*.jsonl")
-    return tuple(sorted(glob.glob(pattern)))
-
-
-def lead_rollout(path: str) -> bool:
-    """Whether the path names a LEAD rollout — subagent rollouts and
-    non-rollouts announce no session of their own."""
-    path = os.path.realpath(path)
-    if not os.path.isfile(path) or not ROLLOUT_NAME.search(os.path.basename(path)):
-        return False
-    metadata = _session_metadata(path)
-    if not metadata:
-        return False
-    return metadata.get("thread_source") != "subagent" and not metadata.get("parent_thread_id")
-
-
-class CodexRolloutRawEventSource(HarnessRawEventSource):
-    """One rollout file, read as complete lines.
-
-    Position encoding: the byte offset where the last emitted line STARTS (the
-    translator keys on it — `source_position == "0"` marks the opening
-    session_meta, and the collaboration backscan reads everything BEFORE it).
-    Resuming therefore seeks to it and skips one line.
-    """
-
-    def __init__(
-        self,
-        context: RawEventSourceContext,
-        child_body_position: int | None = None,
-        actor_relation: Literal["child", "sidecar"] | None = None,
-    ) -> None:
-        self.context = context
-        self.child_body_position = child_body_position
-        self.actor_relation = actor_relation
-        self.source_path = os.path.realpath(context.source_reference)
-        source_hash = hashlib.sha256(self.source_path.encode("utf-8")).hexdigest()
-        self.source_identity = f"codex:rollout:{source_hash}"
-
-    def read(self, after_position: str | None) -> tuple[RawEvent, ...]:
-        raw_events: list[RawEvent] = []
-        try:
-            source = open(self.source_path, "rb")
-        except FileNotFoundError:
-            return ()
-        with source:
-            if after_position is not None:
-                source.seek(int(after_position))
-                skipped = source.readline()
-                if not skipped.endswith(b"\n"):
-                    return ()
-            for _ in range(EVENT_BATCH_SIZE):
-                line_position = source.tell()
-                line = source.readline()
-                if not line or not line.endswith(b"\n"):
-                    break
-                raw_events.append(RawEvent(
-                    raw_event_id=RawEventId(f"{self.source_identity}:{line_position}"),
-                    harness="codex",
-                    source_type=self._source_type(line_position),
-                    source_name=self.source_path,
-                    source_position=str(line_position),
-                    session_id=self.context.session_id,
-                    actor_id=self.context.actor_id,
-                    parent_actor_id=self.context.parent_actor_id,
-                    observed_at=time.time(),
-                    encoding="jsonl",
-                    payload=line,
-                    source_identity=self.source_identity,
-                ))
-        return tuple(raw_events)
-
-    def _source_type(self, line_position: int) -> str:
-        if (
-            self.child_body_position is not None
-            and 0 < line_position < self.child_body_position
-        ):
-            return f"{self.actor_relation}_replay"
-        return f"{self.actor_relation}_rollout" if self.actor_relation else "rollout"
-
-
-def _timestamp(value) -> float | None:
-    if isinstance(value, (int, float)):
-        return float(value)
-    if not isinstance(value, str) or not value:
-        return None
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
-    except ValueError:
-        return None
-
-
-def _exit_code(record: dict) -> int | None:
-    """The record's exit status, honest about zero: `0` is a real exit code
-    (a falsy-int coercion once turned a clean exit into outcome "failed")."""
-    # Parsed from the same string the guard tests, rather than from the raw
-    # value: the two were separate expressions, so nothing connected "this
-    # renders as digits" to "this converts to an int".
-    text = str(record.get("exit"))
-    return int(text) if text.lstrip("-").isdigit() else None
-
-
-def _content(value, *, markdown: bool = False):
-    if isinstance(value, (dict, list)):
-        return StructuredContent(json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True))
-    return TextContent(str(value or ""), "text/markdown" if markdown else "text/plain")
+from harness.impl.codex.canonical.events import PHASE_FINAL
+from harness.impl.codex.canonical.sources import lead_rollout, session_metadata
+from harness.impl.codex.canonical.support import (
+    content,
+    event,
+    exit_code,
+    instant_operation,
+    model_reference,
+    timestamp,
+)
 
 
 def _codex_tool(native_name: str, arguments) -> tuple[OperationCategory, str]:
@@ -258,57 +105,6 @@ def _codex_tool(native_name: str, arguments) -> tuple[OperationCategory, str]:
     if mapped is None:
         raise TranslationError(f"unmapped Codex tool: {native_name or '<missing>'}")
     return mapped
-
-
-class CodexRawEventSources(HarnessRawEventSources):
-    def __init__(self) -> None:
-        self._known_rollout_paths: tuple[str, ...] = ()
-        self._child_rollouts: dict[str, tuple[str, ...]] = {}
-        self._next_child: dict[str, int] = {}
-
-    def _next_child_rollout(self, parent_harness_session_id: str) -> tuple[str, ...]:
-        rollout_paths = _rollout_paths()
-        if rollout_paths != self._known_rollout_paths:
-            children: dict[str, list[str]] = {}
-            for rollout_path in rollout_paths:
-                parent_id = _parent_thread_id(_session_metadata(rollout_path))
-                if parent_id:
-                    children.setdefault(parent_id, []).append(rollout_path)
-            self._known_rollout_paths = rollout_paths
-            self._child_rollouts = {
-                parent_id: tuple(paths)
-                for parent_id, paths in children.items()
-            }
-        child_rollouts = self._child_rollouts.get(parent_harness_session_id, ())
-        if not child_rollouts:
-            return ()
-        position = self._next_child.get(parent_harness_session_id, 0) % len(child_rollouts)
-        self._next_child[parent_harness_session_id] = position + 1
-        return (child_rollouts[position],)
-
-    def for_session(self, session: Session) -> tuple[HarnessRawEventSource, ...]:
-        sources: list[HarnessRawEventSource] = []
-        owns_lead_session = lead_rollout(session.source_reference)
-        if owns_lead_session:
-            sources.append(CodexRolloutRawEventSource(session.source_context))
-        for child_path in self._next_child_rollout(session.harness_session_id):
-            child_body_position = rollout.subagent_body_offset(child_path)
-            if child_body_position == 0:
-                continue
-            sources.append(
-                CodexRolloutRawEventSource(
-                    RawEventSourceContext(
-                        session_id=session.session_id,
-                        lead_actor_id=session.lead_actor_id,
-                        actor_id=ActorId(_harness_session_id(child_path)),
-                        parent_actor_id=session.lead_actor_id,
-                        source_reference=child_path,
-                    ),
-                    child_body_position,
-                    "child" if owns_lead_session else "sidecar",
-                )
-            )
-        return tuple(sources)
 
 
 class CodexCanonicalTranslator(HarnessTranslator):
@@ -413,13 +209,13 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 spawn = source.get("subagent", {}).get("thread_spawn", {}) if isinstance(source, dict) else {}
                 actor_name = str(spawn.get("agent_path") or "").rsplit("/", 1)[-1]
                 actor_name = actor_name.replace("_", " ").strip() or "codex"
-                actor_started = self._event(
+                actor_started = event(
                     raw_event,
                     "actor",
                     str(raw_event.actor_id),
                     "started",
                     ActorStarted(actor_name, role),
-                    occurred_at=_timestamp(document.get("timestamp")),
+                    occurred_at=timestamp(document.get("timestamp")),
                 )
                 return TranslationResult((actor_started,), "translated")
             return TranslationResult(
@@ -462,7 +258,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
         if hook_name == "PreCompact":
             before_tokens = document.get("before_tokens")
             payload: EventPayload = CompactionStarted(before_tokens if isinstance(before_tokens, int) else None)
-            return [self._event(raw_event, "compaction", native_identity, "started", payload)]
+            return [event(raw_event, "compaction", native_identity, "started", payload)]
         if hook_name == "PostCompact":
             before_tokens = document.get("before_tokens")
             after_tokens = document.get("after_tokens")
@@ -470,7 +266,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 before_tokens if isinstance(before_tokens, int) else None,
                 after_tokens if isinstance(after_tokens, int) else None,
             )
-            return [self._event(raw_event, "compaction", native_identity, "finished", payload)]
+            return [event(raw_event, "compaction", native_identity, "finished", payload)]
         return []
 
     def _session_started_events(
@@ -482,7 +278,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
         occurred_at: float | None = None,
     ) -> list[CanonicalEvent]:
         return [
-            self._event(
+            event(
                 raw_event,
                 "session",
                 str(raw_event.session_id),
@@ -498,7 +294,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 ),
                 occurred_at=occurred_at,
             ),
-            self._event(
+            event(
                 raw_event,
                 "actor",
                 str(raw_event.actor_id),
@@ -517,15 +313,15 @@ class CodexCanonicalTranslator(HarnessTranslator):
             or native_payload.get("item_id")
             or raw_event.source_position
         )
-        occurred_at = _timestamp(document.get("timestamp"))
+        occurred_at = timestamp(document.get("timestamp"))
         if occurred_at is None:
-            occurred_at = _timestamp(record.get("at"))
+            occurred_at = timestamp(record.get("at"))
 
         if kind == "task_started":
             turn_id = TurnId(record.get("turn") or f"{raw_event.session_id}:{native_identity}")
-            events = [self._event(raw_event, "turn", str(turn_id), "started", TurnStarted(None), turn_id, occurred_at)]
+            events = [event(raw_event, "turn", str(turn_id), "started", TurnStarted(None), turn_id, occurred_at)]
             if raw_event.parent_actor_id is not None and raw_event.source_type == "child_rollout":
-                metadata = _session_metadata(raw_event.source_name)
+                metadata = session_metadata(raw_event.source_name)
                 source = metadata.get("source") or {}
                 spawn = source.get("subagent", {}).get("thread_spawn", {}) if isinstance(source, dict) else {}
                 actor_path = str(spawn.get("agent_path") or "")
@@ -533,14 +329,14 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 assignment_id = AssignmentId(str(turn_id))
                 # No prompt: the task payload is encrypted_content in the child
                 # rollout, unreadable by design (rollout.subagent_brief).
-                events.append(self._event(
+                events.append(event(
                     raw_event,
                     "actor_assignment",
                     str(assignment_id),
                     "started",
                     ActorAssignmentStarted(
                         assignment_id,
-                        _content(actor_name or "actor assignment"),
+                        content(actor_name or "actor assignment"),
                         actor_name=actor_name or None,
                     ),
                     turn_id,
@@ -550,7 +346,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
         if kind == "task_complete":
             turn_id = TurnId(record.get("turn") or f"{raw_event.session_id}:{native_identity}")
             events = [
-                self._event(
+                event(
                     raw_event,
                     "turn",
                     str(turn_id),
@@ -562,9 +358,9 @@ class CodexCanonicalTranslator(HarnessTranslator):
             ]
             if raw_event.parent_actor_id is not None and raw_event.source_type == "child_rollout":
                 assignment_id = AssignmentId(str(turn_id))
-                result = _content(record.get("last"), markdown=True) if record.get("last") else None
+                result = content(record.get("last"), markdown=True) if record.get("last") else None
                 events.append(
-                    self._event(
+                    event(
                         raw_event,
                         "actor_assignment",
                         str(assignment_id),
@@ -577,10 +373,10 @@ class CodexCanonicalTranslator(HarnessTranslator):
             return events
         if kind == "turn_aborted":
             turn_id = TurnId(str(record.get("turn") or native_payload.get("turn_id") or native_identity))
-            events = [self._event(raw_event, "turn", str(turn_id), "aborted", TurnAborted(None), turn_id, occurred_at)]
+            events = [event(raw_event, "turn", str(turn_id), "aborted", TurnAborted(None), turn_id, occurred_at)]
             if raw_event.parent_actor_id is not None and raw_event.source_type == "child_rollout":
                 assignment_id = AssignmentId(str(turn_id))
-                events.append(self._event(
+                events.append(event(
                     raw_event,
                     "actor_assignment",
                     str(assignment_id),
@@ -607,17 +403,17 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 phase = "prompt"
             elif role == "user" and phase is None:
                 phase = "prompt"
-            elif record.get("phase") == rollout.PHASE_FINAL:
+            elif record.get("phase") == PHASE_FINAL:
                 phase = "final"
             elif role == "assistant":
                 phase = "intermediate"
             message_id = MessageId(native_identity)
-            content = _content(record["text"], markdown=role == "assistant")
-            payload: EventPayload = MessageCreated(message_id, role, content, phase, None)
+            message_content = content(record["text"], markdown=role == "assistant")
+            payload: EventPayload = MessageCreated(message_id, role, message_content, phase, None)
             # A message need not belong to a turn; the bindings above in this
             # same function always do, so the name has to admit None here.
             message_turn_id: TurnId | None = TurnId(record["turn"]) if record.get("turn") else None
-            return [self._event(
+            return [event(
                 raw_event,
                 "message",
                 native_identity,
@@ -627,8 +423,8 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 occurred_at,
             )]
         if kind in ("reasoning", "think"):
-            payload = ReasoningCreated(native_identity, _content(record["text"], markdown=True), kind == "think")
-            return [self._event(raw_event, "reasoning", native_identity, "created", payload, occurred_at=occurred_at)]
+            payload = ReasoningCreated(native_identity, content(record["text"], markdown=True), kind == "think")
+            return [event(raw_event, "reasoning", native_identity, "created", payload, occurred_at=occurred_at)]
         if kind == "collaboration_call":
             call_id = str(record.get("call_id") or "")
             # Fetched once and then tested: the isinstance guard and the value
@@ -661,7 +457,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
                     raise TranslationError(f"Codex actor interaction came from {call_name!r}")
                 message_id = MessageId(call_id)
                 payload = ActorMessageSent(message_id, ActorId(str(record["actor_id"])), None)
-                return [self._event(
+                return [event(
                     raw_event,
                     "actor_message",
                     str(message_id),
@@ -696,7 +492,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
             if state != "cleared" and objective is None:
                 raise TranslationError("Codex goal has no objective")
             payload = GoalChanged(objective, state, str(record.get("reason") or "").strip() or None)
-            return [self._event(
+            return [event(
                 raw_event,
                 "goal",
                 native_identity,
@@ -733,7 +529,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
                     state,
                     raw_event.actor_id,
                 )
-            events = [self._event(
+            events = [event(
                 raw_event,
                 "task_list",
                 str(raw_event.actor_id),
@@ -744,7 +540,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
             for task_id, task in current.items():
                 if previous.get(task_id) == task:
                     continue
-                events.append(self._event(
+                events.append(event(
                     raw_event, "task", str(task_id), f"changed:{call_id}", task,
                     occurred_at=occurred_at,
                 ))
@@ -758,8 +554,8 @@ class CodexCanonicalTranslator(HarnessTranslator):
             else:
                 category, name = _codex_tool(record.get("name") or "", record.get("args"))
             arguments = record.get("cmd") or record.get("args")
-            payload = OperationStarted(operation_id, category, name, "foreground", _content(arguments), None, None)
-            return [self._event(raw_event, "operation", str(operation_id), "started", payload, occurred_at=occurred_at)]
+            payload = OperationStarted(operation_id, category, name, "foreground", content(arguments), None, None)
+            return [event(raw_event, "operation", str(operation_id), "started", payload, occurred_at=occurred_at)]
         if kind == "stdin":
             process_id = str(record.get("process_id") or "")
             if not process_id:
@@ -780,8 +576,8 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 return []
             if (source_key, operation_id) in self._finished_operations:
                 raise TranslationError(f"Codex write_stdin targets finished operation: {operation_id}")
-            payload = OperationInputProvided(operation_id, _content(text), False)
-            return [self._event(
+            payload = OperationInputProvided(operation_id, content(text), False)
+            return [event(
                 raw_event,
                 "operation",
                 str(operation_id),
@@ -806,10 +602,10 @@ class CodexCanonicalTranslator(HarnessTranslator):
                     continued_operation,
                     ordinal,
                     "output",
-                    _content(output),
+                    content(output),
                     "append",
                 )
-                return [self._event(
+                return [event(
                     raw_event,
                     "operation",
                     str(continued_operation),
@@ -820,7 +616,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
             if self._collaboration_call(raw_event, call_id) is not None:
                 return []
             operation_id = OperationId(call_id)
-            exit_code = _exit_code(record)
+            process_exit_code = exit_code(record)
             process_id = str(record.get("process_id") or "")
             if process_id:
                 self._process_operations[(source_key, process_id)] = operation_id
@@ -829,8 +625,8 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 if not output:
                     return []
                 ordinal = int(raw_event.source_position)
-                payload = OperationProgressed(operation_id, ordinal, "output", _content(output), "append")
-                return [self._event(
+                payload = OperationProgressed(operation_id, ordinal, "output", content(output), "append")
+                return [event(
                     raw_event,
                     "operation",
                     str(operation_id),
@@ -838,11 +634,11 @@ class CodexCanonicalTranslator(HarnessTranslator):
                     payload,
                     occurred_at=occurred_at,
                 )]
-            outcome: Outcome = "succeeded" if exit_code in (None, 0) else "failed"
-            payload = OperationFinished(operation_id, outcome, _content(record.get("output")), exit_code)
+            outcome: Outcome = "succeeded" if process_exit_code in (None, 0) else "failed"
+            payload = OperationFinished(operation_id, outcome, content(record.get("output")), process_exit_code)
             self._finished_operations.add((source_key, operation_id))
             return [
-                self._event(
+                event(
                     raw_event,
                     "operation",
                     str(operation_id),
@@ -860,11 +656,11 @@ class CodexCanonicalTranslator(HarnessTranslator):
             if completed_operation_id is None or (source_key, completed_operation_id) in self._finished_operations:
                 return []
             operation_id = completed_operation_id
-            exit_code = _exit_code(record)
-            outcome = "succeeded" if exit_code == 0 else "failed"
+            process_exit_code = exit_code(record)
+            outcome = "succeeded" if process_exit_code == 0 else "failed"
             self._finished_operations.add((source_key, operation_id))
-            payload = OperationFinished(operation_id, outcome, _content(record.get("output")), exit_code)
-            return [self._event(
+            payload = OperationFinished(operation_id, outcome, content(record.get("output")), process_exit_code)
+            return [event(
                 raw_event,
                 "operation",
                 str(operation_id),
@@ -873,7 +669,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 occurred_at=occurred_at,
             )]
         if kind == "search":
-            return self._instant_operation(
+            return instant_operation(
                 raw_event,
                 native_identity,
                 "search",
@@ -883,7 +679,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
             )
         if kind == "patch":
             operation_id = OperationId(native_identity)
-            events = self._instant_operation(
+            events = instant_operation(
                 raw_event,
                 native_identity,
                 "file_edit",
@@ -910,13 +706,13 @@ class CodexCanonicalTranslator(HarnessTranslator):
                     lines_removed=file_record.get("removed"),
                     unified_diff=file_record.get("diff"),
                     content=(
-                        _content(file_record["content"])
+                        content(file_record["content"])
                         if file_record.get("content") is not None
                         else None
                     ),
                 )
                 events.append(
-                    self._event(
+                    event(
                         raw_event,
                         "file",
                         f"{native_identity}:{file_order}:{path}",
@@ -935,7 +731,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 cache_read_tokens=int(usage.get("cached_input_tokens") or 0),
             )
             events = [
-                self._event(
+                event(
                     raw_event,
                     "usage",
                     native_identity,
@@ -948,7 +744,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 last = record["last"]
                 used_tokens = int(last.get("total_tokens") or 0)
                 events.append(
-                    self._event(
+                    event(
                         raw_event,
                         "context",
                         native_identity,
@@ -961,9 +757,9 @@ class CodexCanonicalTranslator(HarnessTranslator):
         if kind in ("turn_context", "settings"):
             events = []
             if record.get("model"):
-                model = _model_reference(record["model"])
+                model = model_reference(record["model"])
                 events.append(
-                    self._event(
+                    event(
                         raw_event,
                         "model",
                         native_identity,
@@ -974,7 +770,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 )
             if record.get("effort"):
                 events.append(
-                    self._event(
+                    event(
                         raw_event,
                         "effort",
                         native_identity,
@@ -986,7 +782,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
             return events
         if kind in ("compact", "compact_boundary"):
             return [
-                self._event(
+                event(
                     raw_event,
                     "compaction",
                     native_identity,
@@ -1016,7 +812,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
             attention_id = AttentionId(record.get("call_id") or native_identity)
             payload = AttentionRequested(attention_id, "question", prompts, None)
             return [
-                self._event(
+                event(
                     raw_event,
                     "attention",
                     str(attention_id),
@@ -1042,7 +838,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 None,
             )
             return [
-                self._event(
+                event(
                     raw_event,
                     "attention",
                     str(attention_id),
@@ -1052,37 +848,3 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 )
             ]
         return []
-
-    def _instant_operation(
-        self,
-        raw_event: RawEvent,
-        native_identity: str,
-        category,
-        native_name: str,
-        arguments,
-        occurred_at: float | None,
-        *,
-        succeeded: bool = True,
-    ) -> list[CanonicalEvent]:
-        operation_id = OperationId(native_identity)
-        started = OperationStarted(operation_id, category, native_name, "foreground", _content(arguments), None, None)
-        finished = OperationFinished(operation_id, "succeeded" if succeeded else "failed", None, None)
-        return [
-            self._event(raw_event, "operation", native_identity, "started", started, occurred_at=occurred_at),
-            self._event(raw_event, "operation", native_identity, "finished", finished, occurred_at=occurred_at),
-        ]
-
-    @staticmethod
-    def _event(
-        raw_event: RawEvent,
-        subject_type: str,
-        subject_id: str,
-        phase: str,
-        payload,
-        turn_id: TurnId | None = None,
-        occurred_at: float | None = None,
-    ) -> CanonicalEvent:
-        return canonical_event(
-            raw_event, subject_type, subject_id, phase, payload,
-            turn_id=turn_id, occurred_at=occurred_at,
-        )

@@ -82,8 +82,8 @@ from domain.events import (
 )
 from domain.ids import ActorId, AssignmentId, CanonicalEventId, OperationId, RawEventId, SessionId, TaskId, TurnId
 from domain.values import AccountReference, AttentionPrompt, ModelReference, TextContent
-from harness.impl.claude_code.canonical.translator import (
-    ClaudeCanonicalTranslator,
+from harness.impl.claude_code.canonical.translator import ClaudeCanonicalTranslator
+from harness.impl.claude_code.canonical.sources import (
     ClaudeRawEventSources,
     ClaudeTaskRawEventSource,
     ClaudeTranscriptRawEventSource,
@@ -97,8 +97,8 @@ from harness.impl.claude_code.reactors import (
     ClaudeAccountMigrationCanonicalEventReactor,
     ClaudeOtelCanonicalEventReactor,
 )
-from harness.impl.codex.canonical.translator import (
-    CodexCanonicalTranslator,
+from harness.impl.codex.canonical.translator import CodexCanonicalTranslator
+from harness.impl.codex.canonical.sources import (
     CodexRawEventSources,
     CodexRolloutRawEventSource,
 )

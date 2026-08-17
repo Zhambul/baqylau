@@ -643,13 +643,17 @@ FILE_ACCESS_ALLOWLIST = {
     # --- source files: written by a harness, or authored by you ---------------
     "harness/impl/claude_code/canonical/transcript.py":
         "the transcript — read as evidence, appended to for a parked rename",
-    "harness/impl/claude_code/canonical/translator.py":  "transcripts and task files, read as evidence",
+    "harness/impl/claude_code/canonical/sources.py":     "transcripts and task files, read as evidence",
+    "harness/impl/claude_code/canonical/messages.py":    "a child actor's meta.json sidecar, read as evidence",
     "harness/impl/claude_code/model.py":                 "the agent meta.json sidecar beside a transcript",
     "harness/impl/claude_code/slashcmds.py":             "your .claude/commands and skills",
     "harness/impl/claude_code/hooks/foreground.py":      "creates the tee file a command writes its output into",
     "harness/impl/claude_code/shell.py":                 "the tee file's directory",
-    "harness/impl/codex/canonical/rollout.py":           "rollouts, read as evidence",
-    "harness/impl/codex/canonical/translator.py":        "rollouts, read as evidence",
+    "harness/impl/codex/canonical/rollout.py":
+        "a subagent rollout's replayed-parent prefix, measured on the file",
+    "harness/impl/codex/canonical/sources.py":           "rollouts, read as evidence",
+    "harness/impl/codex/canonical/translator.py":
+        "backscans a rollout for the collaboration call an activity resolves",
     "harness/impl/codex/canonical/title.py":             "globs codex's own state index",
     "harness/impl/codex/commands.py":                    "your $CODEX_HOME/prompts",
     "harness/impl/codex/controls/controller.py":         "reads the rollout tail to confirm an interrupt landed",
