@@ -529,6 +529,7 @@ function statsSig(sessionView) {
     st.added, st.removed, st.tk_in, st.tk_out, st.tk_read, st.tk_create, cost,
     st.msg_delivered, st.msg_read, (sessionView.meta && sessionView.meta.error_count) || 0,
     sessionView.meta && sessionView.meta.model,
+    sessionView.meta && sessionView.meta.effort,
     // compaction is a ctx-ROW state, not a stats number, but it lives on the
     // same signature: without it the row never rebuilds when compaction
     // starts (nothing else about the session changes for those ~2 minutes —
@@ -573,6 +574,13 @@ function updateStatsRow() {
   // the main thread's ctx bar on its own row — live via the `ctx` SSE event
   // the model quick-button's label follows the same ctx probe
   if (sessionView.modelBtn) setModelBtn(sessionView.modelBtn);
+  // the effort quick-button has no probe of its own (see setEffortBtn) but
+  // still needs a live refresh: without one, whatever it showed at the LAST
+  // full renderSessionChrome sticks even after `effort.changed` lands on a
+  // later SSE snapshot — e.g. the launch fact translating a beat after the
+  // page's first render (reported: stuck on the bare "effort" label until a
+  // reload forced a fresh renderSessionChrome).
+  if (sessionView.effortBtn) setEffortBtn(sessionView.effortBtn);
   paintCtxRow(sessionView.contextWindow);
 }
 
