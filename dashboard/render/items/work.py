@@ -72,7 +72,9 @@ def present_compaction(activity: CompactionActivity) -> DashboardItem:
 
 def present_model_change(activity: ModelChangeActivity) -> DashboardItem:
     actor_id = activity.context.actor_id
-    text = f"model {_model_label(activity.previous)} → {_model_label(activity.current)}"
+    previous_label = _model_label(activity.previous)
+    current_label = _model_label(activity.current)
+    text = f"model {previous_label} → {current_label}"
     return DashboardItem(
         activity.context.activity_id,
         "model_changed",
@@ -80,8 +82,9 @@ def present_model_change(activity: ModelChangeActivity) -> DashboardItem:
         actor_id,
         "succeeded",
         (
-            '<div class="anote"><span class="anmark">⏺</span>'
-            f'<span class="atext">{html.escape(text)}</span></div>'
+            '<div class="anote" data-out="ok"><span class="anmark">⏺</span>'
+            f'<span class="atext">model <strong>{html.escape(previous_label)}</strong>'
+            f' → <strong>{html.escape(current_label)}</strong></span></div>'
         ),
         text,
         None,
@@ -100,8 +103,9 @@ def present_effort_change(activity: EffortChangeActivity) -> DashboardItem:
         actor_id,
         "succeeded",
         (
-            '<div class="anote"><span class="anmark">⏺</span>'
-            f'<span class="atext">{html.escape(text)}</span></div>'
+            '<div class="anote" data-out="ok"><span class="anmark">⏺</span>'
+            f'<span class="atext">effort <strong>{html.escape(activity.previous)}</strong>'
+            f' → <strong>{html.escape(activity.current)}</strong></span></div>'
         ),
         text,
         None,

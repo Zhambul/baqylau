@@ -1813,7 +1813,11 @@ body.modal-open { overflow: hidden; }
 .md ul, .md ol { margin: 6px 0; padding-left: 22px; }
 .md li { margin: 2px 0; }
 .md a { color: var(--blue); text-decoration: underline; }
-.md strong { color: var(--text); font-weight: 650; }
+/* the SAME emphasis .md gives a markdown **bold** run — an .anote is dim by
+   design (see .anote above), so a model/effort switch's old and new values
+   (dashboard/render/items/work.py) borrow this rule rather than a new one, to
+   stand out against that quiet register without inventing a second "bright". */
+.md strong, .anote strong { color: var(--text); font-weight: 650; }
 .md em { font-style: italic; }
 .md code {
   font-family: var(--mono); font-size: .9em; padding: 1px 5px;

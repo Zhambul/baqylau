@@ -234,7 +234,8 @@ def test_model_change_presents_the_switch_with_both_values_on_both_surfaces():
     )
     dashboard = DashboardPresenter().present(activity)
     assert dashboard.item_type == "model_changed" and dashboard.summary_kind == "model_changed"
-    assert "opus-5 → sonnet-5" in dashboard.html
+    assert 'data-out="ok"' in dashboard.html
+    assert "<strong>opus-5</strong> → <strong>sonnet-5</strong>" in dashboard.html
     terminal = TerminalPresenter().present(activity)
     row_text = "".join(text.text for text in terminal.updated_blocks[0].rows[0].content)
     assert "model opus-5 → sonnet-5" in row_text
@@ -249,7 +250,8 @@ def test_effort_change_presents_the_switch_with_both_values_on_both_surfaces():
     )
     dashboard = DashboardPresenter().present(activity)
     assert dashboard.item_type == "effort_changed" and dashboard.summary_kind == "effort_changed"
-    assert "high → medium" in dashboard.html
+    assert 'data-out="ok"' in dashboard.html
+    assert "<strong>high</strong> → <strong>medium</strong>" in dashboard.html
     terminal = TerminalPresenter().present(activity)
     row_text = "".join(text.text for text in terminal.updated_blocks[0].rows[0].content)
     assert "effort high → medium" in row_text
