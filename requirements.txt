@@ -4,3 +4,4 @@
 fastapi>=0.115
 uvicorn>=0.30
 pyyaml>=6.0        # the /openapi.yaml document
+cryptography>=43.0 # Web Push VAPID and payload encryption
