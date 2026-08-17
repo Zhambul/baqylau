@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import re
 from collections.abc import Mapping
-from harness.impl.claude_code.usage import state
+from harness.models import AccountUsageSnapshot
 
 ACCOUNTS_FILE = os.path.expanduser("~/.config/claude-subscriptions/accounts.tsv")
 ACCOUNT_CONFIG_DIRECTORY = os.path.expanduser("~/.config/claude-subscriptions/configs")
@@ -51,21 +51,31 @@ def alias_for(account_id: str) -> str | None:
     return None
 
 
-def migration_target(current_account_id: str) -> dict | None:
+def migration_target(
+    current_account_id: str,
+    account_usage: tuple[AccountUsageSnapshot, ...],
+) -> dict | None:
     """Choose the least-used launchable account other than the current one."""
 
-    snapshots = state.latest_by_account()
+    snapshots = {
+        snapshot.account_id: snapshot
+        for snapshot in account_usage
+        if snapshot.harness == "claude_code"
+    }
     candidates = []
     for account_record in registry():
         if account_record["slug"] == current_account_id:
             continue
-        snapshot = snapshots.get(account_record["slug"])
-        windows = snapshot["windows"] if snapshot is not None else {}
-        used_percent = windows.get("five_hour")
-        candidates.append((
-            float(used_percent) if isinstance(used_percent, (int, float)) else 0.0,
-            account_record,
-        ))
+        snapshot = snapshots.get(account_record["slug"] or None)
+        used_percent = next(
+            (
+                float(window.used_percent)
+                for window in (snapshot.windows if snapshot is not None else ())
+                if window.key == "five_hour"
+            ),
+            0.0,
+        )
+        candidates.append((used_percent, account_record))
     if not candidates:
         return None
     return min(candidates, key=lambda candidate: candidate[0])[1]

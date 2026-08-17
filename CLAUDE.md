@@ -11,6 +11,14 @@ web dashboard.
 
 ## Commands
 
+Two databases: `<data_dir>/main.db` holds everything the application owns and
+reads back, `<data_dir>/audit.db` what the machinery did. A third, `locks.db`,
+lives in the runtime directory because a pid claim must not survive a reboot.
+**Nothing outside `repository/impl/sqlite/` opens a database** — the one
+exception is `harness/impl/codex/canonical/title.py`, which is itself a
+repository implementation and lives there only because a shared package may not
+contain a harness's name.
+
 ```sh
 python3 bin/baqylau-audit.py session <sid>   # all raw evidence + its interpretations
 python3 bin/baqylau-audit.py raw <raw_id>    # one observation, exact bytes

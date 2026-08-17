@@ -11,6 +11,8 @@ from fastapi.responses import JSONResponse
 from api.dependencies import ApplicationGraph
 from dashboard.render.serialize import json_ready
 from domain.ids import ActorId, SessionId
+from api.dashboard.models.sessions.session_snapshot_response import SessionSnapshotResponse
+from dashboard.services.models import DashboardActivityPage, DashboardSessionListItem
 from engine.projections import ActivityScope
 
 router = APIRouter()
@@ -19,7 +21,7 @@ DEFAULT_ACTIVITY_BLOCK_COUNT = 100
 
 
 def _scope(application, session_id: SessionId, actor_id: str | None) -> ActivityScope:
-    session = application.sessions.find_by_id(session_id)
+    session = application.sessions.find(session_id)
     if session is None:
         raise KeyError(f"unknown session: {session_id}")
     return ActivityScope(
@@ -27,12 +29,12 @@ def _scope(application, session_id: SessionId, actor_id: str | None) -> Activity
     )
 
 
-@router.get("/api/sessions")
+@router.get("/api/sessions", response_model=list[DashboardSessionListItem])
 def session_list(application: ApplicationGraph) -> JSONResponse:
     return JSONResponse(json_ready(application.dashboard_sessions.sessions()))
 
 
-@router.get("/api/sessions/{session_id}")
+@router.get("/api/sessions/{session_id}", response_model=SessionSnapshotResponse)
 def session_snapshot(
     session_id: str,
     application: ApplicationGraph,
@@ -48,7 +50,7 @@ def session_snapshot(
     )
 
 
-@router.get("/api/sessions/{session_id}/activity")
+@router.get("/api/sessions/{session_id}/activity", response_model=DashboardActivityPage)
 def session_activity(
     session_id: str,
     application: ApplicationGraph,

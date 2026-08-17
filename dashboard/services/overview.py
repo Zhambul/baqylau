@@ -11,16 +11,30 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
-from dashboard import prefs
 from dashboard.services.models import DashboardSessionListItem
 from dashboard.services.notices import DashboardNotificationNotice, DashboardNotificationState
 from dashboard.services.sessions import DashboardSessionService
 from domain.ids import SessionId
+from domain.preferences import (
+    NewSessionDraft as StoredNewSessionDraft,
+    NewSessionPreferences as StoredNewSessionPreferences,
+    PushSubscription,
+)
+from repository.contract.preferences import (
+    HiddenDirectoryRepository,
+    NewSessionRepository,
+    NotificationSettingRepository,
+    PushSubscriptionRepository,
+)
 from harness.models import UsageRow
 import time
 from core.daemon import contract as daemon_contract
 from dashboard import config
 from notify import presence
+
+# The launch form is opened against a handful of projects in practice; an
+# unbounded table would gain a row per directory ever typed into.
+NEW_SESSION_DRAFT_LIMIT = 24
 
 
 @dataclass(frozen=True)
@@ -93,39 +107,49 @@ class GlobalApplicationService:
         sessions: DashboardSessionService,
         usage: UsageReader,
         state: DashboardNotificationState,
+        new_sessions: NewSessionRepository,
+        notifications: NotificationSettingRepository,
+        directories: HiddenDirectoryRepository,
+        subscriptions: PushSubscriptionRepository,
+        clock=time.time,
     ) -> None:
         self.sessions = sessions
         self.usage = usage
         self.state = state
+        self.new_sessions = new_sessions
+        self.notifications = notifications
+        self.directories = directories
+        self.subscriptions = subscriptions
+        self.clock = clock
 
     def snapshot(self) -> GlobalApplicationSnapshot:
-        new_session = prefs.get("new-session", {})
-        drafts = prefs.new_session_drafts()
+        new_session = self.new_sessions.preferences()
+        drafts = self.new_sessions.drafts()
         return GlobalApplicationSnapshot(
             sessions=self.sessions.sessions(),
             usage_rows=self.usage.usage_rows(),
             notifications=GlobalNotificationState(
-                enabled=prefs.notify_enabled(),
+                enabled=self.notifications.alerting_enabled(),
                 latest=self.state.notification(),
             ),
             preferences=GlobalPreferences(
                 new_session=NewSessionPreferences(
-                    working_directory=new_session.get("working_directory") or None,
-                    harness=new_session.get("harness") or None,
-                    model=new_session.get("model") or None,
-                    effort=new_session.get("effort") or None,
+                    working_directory=new_session.working_directory if new_session else None,
+                    harness=new_session.harness if new_session else None,
+                    model=new_session.model if new_session else None,
+                    effort=new_session.effort if new_session else None,
                 ),
                 new_session_drafts=tuple(
                     NewSessionDraft(
-                        working_directory=working_directory,
-                        text=record["text"],
-                        sequence=float(record["sequence"]),
+                        working_directory=draft.working_directory,
+                        text=draft.text,
+                        sequence=draft.sequence,
                     )
-                    for working_directory, record in sorted(drafts.items())
+                    for draft in drafts
                 ),
                 hidden_directories={
-                    str(path): float(hidden_at)
-                    for path, hidden_at in prefs.hidden_dirs().items()
+                    entry.working_directory: entry.hidden_at
+                    for entry in self.directories.hidden()
                 },
                 limits=DashboardLimits(
                     upload_bytes=daemon_contract.UPLOAD_MAX,
@@ -136,7 +160,7 @@ class GlobalApplicationService:
         )
 
     def set_notifications_enabled(self, enabled: bool) -> None:
-        prefs.set_notify_enabled(enabled)
+        self.notifications.set_alerting_enabled(enabled)
 
     def save_new_session_preferences(
         self,
@@ -145,17 +169,14 @@ class GlobalApplicationService:
         model: str | None,
         effort: str | None,
     ) -> None:
-        record = {}
-        if working_directory:
-            record["working_directory"] = working_directory
-        if harness:
-            record["harness"] = harness
-        if model:
-            record["model"] = model
-        if effort:
-            record["effort"] = effort
-        if not prefs.set("new-session", record):
-            raise RuntimeError("new-session preferences were not saved")
+        self.new_sessions.save_preferences(
+            StoredNewSessionPreferences(
+                working_directory=working_directory or None,
+                harness=harness or None,
+                model=model or None,
+                effort=effort or None,
+            )
+        )
 
     def save_new_session_draft(
         self,
@@ -163,12 +184,15 @@ class GlobalApplicationService:
         text: str,
         sequence: float,
     ) -> bool:
-        record = prefs.set_new_session_draft(
-            working_directory,
-            text if text.strip() else "",
-            sequence,
+        written = self.new_sessions.save_draft(
+            StoredNewSessionDraft(
+                working_directory,
+                text if text.strip() else "",
+                sequence,
+            ),
+            NEW_SESSION_DRAFT_LIMIT,
         )
-        return not bool(record.get("stale"))
+        return not written.stale
 
     def hide_directory(self, working_directory: str) -> dict[str, float]:
         live = [
@@ -179,22 +203,22 @@ class GlobalApplicationService:
         ]
         if live:
             raise ValueError("cannot hide a directory with an active session")
-        return prefs.hide_dir(working_directory, time.time())
+        self.directories.hide(working_directory, self.clock())
+        return {entry.working_directory: entry.hidden_at for entry in self.directories.hidden()}
 
     def register_push_subscription(
         self,
         subscription: BrowserPushSubscription,
     ) -> None:
-        prefs.add_push_subscription(
-            {
-                "endpoint": subscription.endpoint,
-                "keys": {
-                    "p256dh": subscription.public_key,
-                    "auth": subscription.authentication_secret,
-                },
-            },
-            device=subscription.device_id,
-            label=subscription.device_label,
+        self.subscriptions.upsert(
+            PushSubscription(
+                endpoint=subscription.endpoint,
+                public_key=subscription.public_key,
+                authentication_secret=subscription.authentication_secret,
+                device_id=subscription.device_id,
+                device_label=subscription.device_label,
+                created_at=self.clock(),
+            )
         )
 
     @staticmethod

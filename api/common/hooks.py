@@ -20,7 +20,7 @@ from harness.hooks.headers import (
     TERMINAL_WINDOW_HEADER,
     HOOK_MAX,
 )
-from engine.store.recorder import RawEventRecorderError
+from repository.errors import RepositoryError
 
 router = APIRouter()
 
@@ -59,7 +59,7 @@ async def record_hook_delivery(harness: str, request: Request) -> Response:
             "payload_bytes": len(payload),
         })
         return JSONResponse({"error": str(error)}, 400)
-    except RawEventRecorderError as error:
+    except RepositoryError as error:
         A.error("", "hook delivery", {"harness": harness, "error": repr(error)})
         return JSONResponse({"error": str(error)}, 409)
     return Response(content=output, media_type="application/json")

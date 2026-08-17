@@ -26,7 +26,7 @@ from engine.projections.models import (
     FileActivity,
     OperationActivity,
 )
-from engine.store.canonical import StoredCanonicalEvent
+from domain.records import StoredCanonicalEvent
 
 
 def background_work(

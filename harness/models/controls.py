@@ -19,7 +19,17 @@ from domain.values import (
     StructuredContent,
 )
 from harness.models.session import Session
+from harness.models.usage import AccountUsageSnapshot
 from terminal.contract import TerminalPlugin
+
+# What writing a session's NATIVE title did — the parked-rename path, which
+# reaches a store the harness owns rather than the terminal. Was a `True /
+# False / None` tri-state whose three meanings were documented only in prose.
+TitleWriteOutcome: TypeAlias = Literal[
+    "renamed",      # the harness's own store now carries the new name
+    "unsupported",  # this source is not one this harness can rename
+    "unavailable",  # the store or the row is missing; the caller reports a failure
+]
 
 ControlName: TypeAlias = Literal[
     "send_text",
@@ -52,6 +62,9 @@ class ControlContext:
     current_effort: str | None
     current_account: AccountReference | None
     pending_attention: AttentionRequested | None
+    # Every account's current plan usage, read ONCE by the service. A value,
+    # not a repository: the harness contract names no storage.
+    account_usage: tuple[AccountUsageSnapshot, ...] = ()
 
 
 @dataclass(frozen=True)

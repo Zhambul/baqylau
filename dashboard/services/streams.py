@@ -8,23 +8,23 @@ from dashboard.services.sessions import DashboardSessionService, TerminalSession
 from core.repository import RepositoryQueries
 from domain.ids import SessionId
 from engine.projections import ActivityScope, SessionQueries
-from engine.store.canonical import CanonicalEventStore
+from repository.contract.facts import CanonicalEventRepository
 
 
 class DashboardStreamService:
     def __init__(
         self,
-        canonical_store: CanonicalEventStore,
+        canonical_events: CanonicalEventRepository,
         queries: SessionQueries,
         terminal: TerminalSessionReader,
         repositories: RepositoryQueries,
         presenter: DashboardPresenter | None = None,
     ) -> None:
-        self.canonical_store = canonical_store
+        self.canonical_events = canonical_events
         self.queries = queries
         self.presenter = presenter or DashboardPresenter()
         self.sessions = DashboardSessionService(
-            canonical_store, queries, terminal, repositories
+            canonical_events, queries, terminal, repositories
         )
 
     def frame(
@@ -34,7 +34,7 @@ class DashboardStreamService:
         scope: ActivityScope,
         limit: int = 200,
     ) -> DashboardActivityFrame | None:
-        examined = self.canonical_store.after(session_id, cursor, limit)
+        examined = self.canonical_events.page_after(session_id, cursor, limit)
         if not examined.events:
             return None
         frame_cursor = examined.cursor

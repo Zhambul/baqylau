@@ -3,7 +3,7 @@
 # (bin/baqylau-content.py).
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Response
 from fastapi.responses import HTMLResponse, PlainTextResponse
 
 from api.dependencies import ApplicationGraph
@@ -18,7 +18,7 @@ def content(
     application: ApplicationGraph,
     view: str | None = None,
     path: str | None = None,
-):
+) -> Response:
     text = application.content.resolve(content_reference)
     if view in ("diff", "source"):
         if not path:

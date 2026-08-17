@@ -8,6 +8,7 @@ from harness.impl.claude_code.canonical.translator import (
     ClaudeRawEventSources,
 )
 from harness.impl.claude_code.hooks.gateway import CLI_PROCESS_NAME, ClaudeHookGateway
+from harness.impl.claude_code.otel.gateway import ClaudeTelemetryGateway
 from harness.impl.claude_code.catalog import ClaudeCodeCatalog
 from harness.impl.claude_code.controls.controller import controller
 from harness.impl.claude_code.launcher import ClaudeCodeLauncher
@@ -55,6 +56,7 @@ plugin = HarnessPlugin(
         rewind_modes=REWIND_MODES,
     ),
     hooks=ClaudeHookGateway(),
+    telemetry=ClaudeTelemetryGateway(),
     sources=ClaudeRawEventSources(),
     translator=ClaudeCanonicalTranslator(),
     reactors=(

@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import replace
 
-from harness.contract import CanonicalEventReaction
-from harness.models import Session
 from domain.events import (
     CanonicalEvent,
     OperationFinished,
@@ -14,10 +13,14 @@ from domain.events import (
     SessionFinished,
     SessionStarted,
 )
-from domain.ids import SessionId
-from engine.store.output import OperationOutputStore
-from engine.store.recorder import RawEventRecorder
-from engine.store.sessions import SessionStore
+from domain.ids import OperationId, SessionId
+from domain.operations import OperationOutputFollowing
+from engine.interpret import output_source
+from harness.contract import CanonicalEventReaction
+from harness.models import Session
+from repository.contract.facts import RawEventRepository
+from repository.contract.operations import OperationOutputRepository
+from repository.contract.sessions import SessionRepository
 
 
 class SessionUpsertCanonicalEventReaction(CanonicalEventReaction):
@@ -29,7 +32,7 @@ class SessionUpsertCanonicalEventReaction(CanonicalEventReaction):
     window updates the row with the first fact its first delivery commits.
     """
 
-    def __init__(self, sessions: SessionStore) -> None:
+    def __init__(self, sessions: SessionRepository) -> None:
         self.sessions = sessions
 
     def react(self, canonical_event: CanonicalEvent) -> None:
@@ -38,7 +41,7 @@ class SessionUpsertCanonicalEventReaction(CanonicalEventReaction):
         if started is None and canonical_event.terminal_window_id is None \
                 and canonical_event.harness_process_id is None:
             return
-        session = self.sessions.find_by_id(canonical_event.session_id)
+        session = self.sessions.find(canonical_event.session_id)
         if session is None:
             if started is None:
                 return
@@ -65,42 +68,66 @@ class OperationOutputCanonicalEventReaction(CanonicalEventReaction):
 
     def __init__(
         self,
-        operation_output: OperationOutputStore,
-        recorder: RawEventRecorder,
+        operation_output: OperationOutputRepository,
+        raw_events: RawEventRepository,
     ) -> None:
         self.operation_output = operation_output
-        self.recorder = recorder
+        self.raw_events = raw_events
 
     def react(self, canonical_event: CanonicalEvent) -> None:
         payload = canonical_event.payload
         if isinstance(payload, OperationOutputLocated):
             self.operation_output.save(
-                canonical_event.session_id,
-                canonical_event.harness,
-                canonical_event.actor_id,
-                canonical_event.parent_actor_id,
-                payload,
+                OperationOutputFollowing(
+                    session_id=canonical_event.session_id,
+                    operation_id=payload.operation_id,
+                    harness=canonical_event.harness,
+                    actor_id=canonical_event.actor_id,
+                    parent_actor_id=canonical_event.parent_actor_id,
+                    source_path=payload.source_path,
+                    chunk_source_type=payload.chunk_source_type,
+                    delete_source=payload.delete_source,
+                    initial_size=payload.initial_size,
+                    initial_modified_at=payload.initial_modified_at,
+                    wait_for_source_change=payload.wait_for_source_change,
+                    until=payload.until,
+                    state="active",
+                    created_at=time.time(),
+                )
             )
         elif isinstance(payload, OperationFinished):
             # Ends foreground followings only (until='operation_finished');
             # affects zero rows for operations that never had an output file.
-            self.operation_output.finish(canonical_event.session_id, str(payload.operation_id))
+            self.operation_output.mark_operation_finished(
+                canonical_event.session_id, payload.operation_id
+            )
         elif isinstance(payload, OperationOutputFinished):
             # The background job's true end: stop following its file now
             # instead of stat-ing it for the rest of the session.
-            self.operation_output.finish_output(
-                canonical_event.session_id, str(payload.operation_id)
+            self.operation_output.mark_finishing(
+                canonical_event.session_id, payload.operation_id
             )
         elif isinstance(payload, SessionFinished):
             self._drain_all(canonical_event.session_id)
 
     def _drain_all(self, session_id: SessionId) -> None:
         # A finished session leaves watchable(): read each remaining file to its
-        # end and remove the row (and the tee file, when we created it).
-        for source in self.operation_output.for_session(session_id):
-            raw_events = source.read(self.recorder.position(source.source_identity))
-            if raw_events:
-                self.recorder.record(raw_events)
-            self.operation_output.remove(
-                session_id, source.operation_id, source.delete_source, source.source_path
+        # end, remove the row, and unlink the tee file when we created it.
+        followings = self.operation_output.find_for_session(session_id)
+        positions = self.raw_events.latest_positions([
+            output_source.operation_output_source_identity(
+                following.harness, following.session_id, str(following.operation_id)
             )
+            for following in followings
+        ])
+        for following in followings:
+            source = output_source.OperationOutputRawEventSource(
+                following, self.operation_output
+            )
+            raw_events = source.read(positions.get(source.source_identity))
+            if raw_events:
+                self.raw_events.record(raw_events)
+            self.operation_output.remove(
+                session_id, OperationId(str(following.operation_id))
+            )
+            output_source.delete_source_file(following)

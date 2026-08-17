@@ -26,7 +26,7 @@ from engine.projections.models import (
     PendingAttention,
     TaskSummary,
 )
-from engine.store.canonical import StoredCanonicalEvent
+from domain.records import StoredCanonicalEvent
 
 
 def attention(stored_events: tuple[StoredCanonicalEvent, ...]) -> AttentionState:

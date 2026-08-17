@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from harness.models import HarnessHookRequest
 from harness.registry import HarnessRegistry, HarnessRegistryError
-from engine.store.recorder import RawEventRecorder
+from repository.contract.facts import RawEventRepository
 
 
 class UnknownHookHarness(LookupError):
@@ -17,9 +17,9 @@ class UnknownHookHarness(LookupError):
 
 
 class HookGatewayService:
-    def __init__(self, registry: HarnessRegistry, recorder: RawEventRecorder) -> None:
+    def __init__(self, registry: HarnessRegistry, raw_events: RawEventRepository) -> None:
         self.registry = registry
-        self.recorder = recorder
+        self.raw_events = raw_events
 
     def record(self, harness: str, request: HarnessHookRequest) -> bytes:
         """One delivery in, its synchronous reply out (b"" when there is none)."""
@@ -30,5 +30,5 @@ class HookGatewayService:
         if plugin.hooks is None:
             raise UnknownHookHarness(f"harness accepts no hook deliveries: {harness}")
         response = plugin.hooks.handle(request)
-        self.recorder.record(response.raw_events)
+        self.raw_events.record(response.raw_events)
         return response.reply

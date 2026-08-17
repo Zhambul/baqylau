@@ -24,7 +24,7 @@ from domain.events import (
 from domain.ids import ActorId, SessionId
 from domain.values import TextContent
 from engine.projections.models import ActorSummary, SessionSummary
-from engine.store.canonical import StoredCanonicalEvent
+from domain.records import StoredCanonicalEvent
 
 
 def summary(

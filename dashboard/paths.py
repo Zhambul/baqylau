@@ -1,9 +1,9 @@
 """Filesystem locations the dashboard owns.
 
 The directories themselves belong to `core/data.py` — the one owner of where
-our files live. What is dashboard-specific is which files hang off them: the
-singleton lock the daemon holds, the preferences database, and the uploads a
-browser attaches to a session.
+our files live, and now of the three database paths too. What is left here is
+the uploads directory: the one place the dashboard writes bytes rather than
+rows, because an attachment reaches the harness as an `@path`.
 
 Resolved once, at import: the test suite substitutes these attributes to keep a
 run out of your real data directory.
@@ -14,13 +14,11 @@ from __future__ import annotations
 import os
 import re
 
-from core.data import data_directory, runtime_directory
+from core.data import data_directory
 
 REPOSITORY_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BIN_DIRECTORY = os.path.join(REPOSITORY_ROOT, "bin")
 
-DASHBOARD_LOCK_DATABASE = os.path.join(runtime_directory(), "baqylau-dashboard.db")
-DASHBOARD_PREFERENCES_DATABASE = os.path.join(data_directory(), "dashboard-preferences.db")
 UPLOADS_DIRECTORY = os.path.join(data_directory(), "uploads")
 
 

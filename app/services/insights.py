@@ -8,12 +8,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable, Protocol
 
-from diagnostics.read import OperationalDiagnostics
+from repository.contract.diagnostics import DiagnosticReadRepository
 from core.repository import RepositoryQueries
 from harness.models import TerminalSessionState
 from domain.ids import SessionId
 from domain.values import TokenUsage
-from engine.store.canonical import CanonicalEventStore
+from repository.contract.facts import CanonicalEventRepository
 from engine.projections import SessionQueries
 
 
@@ -91,15 +91,15 @@ class _SessionInsight:
 class ApplicationInsightsService:
     def __init__(
         self,
-        canonical_store: CanonicalEventStore,
+        canonical_events: CanonicalEventRepository,
         sessions: SessionQueries,
         terminal: TerminalSessionReader,
-        diagnostics: OperationalDiagnostics,
+        diagnostics: DiagnosticReadRepository,
         repositories: RepositoryQueries,
         top_project_count: int,
         clock: Callable[[], float] = time.time,
     ) -> None:
-        self.canonical_store = canonical_store
+        self.canonical_events = canonical_events
         self.sessions = sessions
         self.terminal = terminal
         self.diagnostics = diagnostics
@@ -109,7 +109,7 @@ class ApplicationInsightsService:
 
     def snapshot(self) -> ApplicationInsights:
         generated_at = self.clock()
-        cursor = self.canonical_store.latest_cursor()
+        cursor = self.canonical_events.latest_cursor()
         error_counts = self.diagnostics.error_counts()
         rows = []
         for summary in self.sessions.sessions(cursor):

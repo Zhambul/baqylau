@@ -6,17 +6,17 @@ from dashboard.render.items import DashboardPresenter
 from dashboard.services.models import DashboardActivityPage
 from domain.ids import SessionId
 from engine.projections import ActivityScope, SessionQueries
-from engine.store.canonical import CanonicalEventStore
+from repository.contract.facts import CanonicalEventRepository
 
 
 class DashboardActivityService:
     def __init__(
         self,
-        canonical_store: CanonicalEventStore,
+        canonical_events: CanonicalEventRepository,
         queries: SessionQueries,
         presenter: DashboardPresenter | None = None,
     ) -> None:
-        self.canonical_store = canonical_store
+        self.canonical_events = canonical_events
         self.queries = queries
         self.presenter = presenter or DashboardPresenter()
 
@@ -27,7 +27,7 @@ class DashboardActivityService:
         scope: ActivityScope,
         block_count: int,
     ) -> DashboardActivityPage:
-        snapshot_cursor = self.canonical_store.latest_cursor() or 0
+        snapshot_cursor = self.canonical_events.latest_cursor() or 0
         window = self.queries.activity_before(
             session_id,
             before_cursor,

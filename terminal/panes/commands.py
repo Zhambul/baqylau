@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from diagnostics import record
-from terminal.panes import preferences as pane_preferences
+from terminal.services.panes import PaneWidthService
 from terminal.adapter import TerminalAdapter
 
 COMMANDS = frozenset({"toggle", "grow", "shrink", "reset", "setpct"})
@@ -26,8 +26,9 @@ class PaneCommandOutcome:
 
 
 class PaneCommandService:
-    def __init__(self, terminal: TerminalAdapter) -> None:
+    def __init__(self, terminal: TerminalAdapter, widths: PaneWidthService) -> None:
         self._terminal = terminal
+        self._widths = widths
 
     def execute(
         self,
@@ -74,10 +75,10 @@ class PaneCommandService:
         if command == "toggle":
             result = self._terminal.toggle_session_panes(
                 session_id,
-                pane_preferences.width_percent(working_directory),
+                self._widths.width_percent(working_directory),
             )
         elif command in ("grow", "shrink"):
-            step = pane_preferences.resize_columns() if columns is None else columns
+            step = self._widths.resize_columns() if columns is None else columns
             if step <= 0:
                 raise ValueError("pane resize columns must be positive")
             result = self._terminal.resize_activity_pane(
@@ -92,10 +93,10 @@ class PaneCommandService:
                     raise ValueError("setpct requires a percentage")
                 width_percent = percent
             else:
-                width_percent = pane_preferences.configured_width_percent()
+                width_percent = self._widths.configured_width_percent()
             result = self._terminal.set_activity_pane_width(session_id, width_percent)
             if result.succeeded:
-                pane_preferences.remember_width(working_directory, width_percent)
+                self._widths.remember_width(working_directory, width_percent)
         return PaneCommandOutcome(True, result.succeeded, result.reason)
 
     def _remember_current_width(self, session_id, working_directory: str) -> None:
@@ -104,7 +105,7 @@ class PaneCommandService:
             return
         current_columns, total_columns = geometry
         if total_columns:
-            pane_preferences.remember_width(
+            self._widths.remember_width(
                 working_directory,
                 round(100 * current_columns / total_columns),
             )

@@ -225,7 +225,8 @@ def _telegram_send_body(h, msg, reason):
     h["done"] = True
 
 
-def retract_alert(h, reason, badge=0):
+def retract_alert(h, reason, badge=0, *, keys=None, subscriptions=None):
+    del keys, subscriptions          # a Bot API message needs neither
     """Delete the message — OFF the watcher thread, for the same reason the send
     is: `delete_message` is a synchronous HTTPS round-trip with a 10 s timeout,
     and the 1 s scan loop cannot wear that. So the outcome is not known

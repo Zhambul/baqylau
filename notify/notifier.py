@@ -8,12 +8,17 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from diagnostics import record as AUDIT
-from dashboard import config, prefs
+from dashboard import config
 from dashboard.services.sessions import DashboardSessionService
 from dashboard.services.notices import DashboardNotificationState
 from notify import channels, presence
 from domain.ids import SessionId
 from engine.projections import SessionQueries, TabState
+from repository.contract.preferences import (
+    NotificationSettingRepository,
+    PushSigningKeyRepository,
+    PushSubscriptionRepository,
+)
 
 NOTIFICATION_KINDS = {
     "awaiting_attention": "asking",
@@ -25,6 +30,9 @@ class NotificationApplication(Protocol):
     queries: SessionQueries
     dashboard_sessions: DashboardSessionService
     dashboard_notification_state: DashboardNotificationState
+    notification_settings: NotificationSettingRepository
+    push_subscriptions: PushSubscriptionRepository
+    push_signing_keys: PushSigningKeyRepository
 
 
 @dataclass
@@ -59,6 +67,11 @@ class Notifier:
     def __init__(self, application: NotificationApplication) -> None:
         self.application = application
         self.notification_state = application.dashboard_notification_state
+        self.notification_settings = application.notification_settings
+        self.push_subscriptions = application.push_subscriptions
+        self.push_signing_keys = application.push_signing_keys
+        # One query per pass, not one per armed session.
+        self._muted: frozenset[SessionId] = frozenset()
         self.previous_states: dict[SessionId, TabState | None] | None = None
         self.pending: dict[SessionId, PendingNotification] = {}
         self.delivered: dict[SessionId, DeliveredNotification] = {}
@@ -75,6 +88,7 @@ class Notifier:
             )
             for item in items
         }
+        self._muted = self.notification_settings.muted_session_ids()
         if self.previous_states is None:
             self.previous_states = current_states
             return
@@ -107,7 +121,7 @@ class Notifier:
 
     def _schedule(self, item, state: TabState, kind: str, now: float) -> None:
         session_id = item.session.session_id
-        if not prefs.notify_enabled() or prefs.notify_muted(str(session_id)):
+        if not self.notification_settings.alerting_enabled() or session_id in self._muted:
             return
         project = os.path.basename(item.project_directory) or str(session_id)
         title = item.session.title or ""
@@ -152,7 +166,7 @@ class Notifier:
                 continue
             self.pending.pop(session_id, None)
             payload = notification.payload()
-            target, subscriptions, decision = presence.route()
+            target, subscriptions, decision = presence.route(self.push_subscriptions)
             AUDIT.state_file(
                 "",
                 "",
@@ -169,6 +183,8 @@ class Notifier:
                     payload,
                     subscriptions,
                     self._attention_count(current_states),
+                    keys=self.push_signing_keys,
+                    subscriptions=self.push_subscriptions,
                 )
             elif config.NOTIFY_TELEGRAM:
                 handle = channels.telegram.send_alert(payload, "no-browser")
@@ -184,7 +200,12 @@ class Notifier:
         delivered = self.delivered.get(session_id)
         if delivered is None or delivered.state == current:
             return
-        outcome = channels.retract(delivered.handle, "state-changed")
+        outcome = channels.retract(
+            delivered.handle,
+            "state-changed",
+            keys=self.push_signing_keys,
+            subscriptions=self.push_subscriptions,
+        )
         if outcome != channels.PENDING:
             self.delivered.pop(session_id, None)
 

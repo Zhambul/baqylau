@@ -33,26 +33,26 @@ def _execute(application, command, body, columns=None, percent=None) -> JSONResp
     return JSONResponse(reply.model_dump(), status)
 
 
-@router.post("/api/terminal/panes/toggle")
+@router.post("/api/terminal/panes/toggle", response_model=PaneCommandResponse)
 def toggle_panes(body: TogglePanesRequest, application: ApplicationGraph) -> JSONResponse:
     return _execute(application, "toggle", body)
 
 
-@router.post("/api/terminal/panes/grow")
+@router.post("/api/terminal/panes/grow", response_model=PaneCommandResponse)
 def grow_pane(body: GrowPaneRequest, application: ApplicationGraph) -> JSONResponse:
     return _execute(application, "grow", body, columns=body.columns)
 
 
-@router.post("/api/terminal/panes/shrink")
+@router.post("/api/terminal/panes/shrink", response_model=PaneCommandResponse)
 def shrink_pane(body: ShrinkPaneRequest, application: ApplicationGraph) -> JSONResponse:
     return _execute(application, "shrink", body, columns=body.columns)
 
 
-@router.post("/api/terminal/panes/reset")
+@router.post("/api/terminal/panes/reset", response_model=PaneCommandResponse)
 def reset_pane(body: ResetPaneRequest, application: ApplicationGraph) -> JSONResponse:
     return _execute(application, "reset", body)
 
 
-@router.post("/api/terminal/panes/set-percent")
+@router.post("/api/terminal/panes/set-percent", response_model=PaneCommandResponse)
 def set_pane_percent(body: SetPanePercentRequest, application: ApplicationGraph) -> JSONResponse:
     return _execute(application, "setpct", body, percent=body.percent)

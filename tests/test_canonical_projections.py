@@ -87,7 +87,7 @@ def store_with_events(tmp_path, events):
         next_accepted_at[0] += 1.0
         return accepted_at
 
-    store = CanonicalRuntime(str(tmp_path / "events.db"), clock=clock)
+    store = CanonicalRuntime(str(tmp_path / "main.db"), clock=clock)
     store.register(
         "example",
         Session(SESSION_ID, LEAD_ACTOR_ID, "native", "fixture", "/work"),
@@ -137,8 +137,8 @@ def test_session_page_cache_appends_only_the_new_cursor_range(monkeypatch, tmp_p
         TranslationResult((title_event,), "translated"),
     )
     monkeypatch.setattr(
-        store,
-        "through",
+        store.store,
+        "page_through",
         lambda *_arguments, **_options: pytest.fail("complete session page was reloaded"),
     )
 

@@ -13,7 +13,8 @@ from harness.models import (
     ControlResult,
 )
 from engine.projections import SessionQueries
-from engine.store.sessions import SessionStore
+from repository.contract.sessions import SessionRepository
+from repository.contract.usage import AccountUsageRepository
 from terminal.adapter import TerminalAdapter
 from terminal.contract import TerminalPlugin
 
@@ -64,15 +65,17 @@ def _audit_control(request: ControlRequest, outcome, elapsed: float) -> None:
 class HarnessControlService(HarnessReactorContext):
     def __init__(
         self,
-        sessions: SessionStore,
+        sessions: SessionRepository,
         terminal: TerminalAdapter,
         plugin: TerminalPlugin,
         queries: SessionQueries,
+        account_usage: AccountUsageRepository,
     ) -> None:
         self.sessions = sessions
         self.terminal = terminal
         self.plugin = plugin
         self.queries = queries
+        self.account_usage = account_usage
 
     def execute(self, request: ControlRequest) -> ControlOutcome:
         started = time.monotonic()
@@ -85,13 +88,13 @@ class HarnessControlService(HarnessReactorContext):
         return outcome
 
     def _execute(self, request: ControlRequest) -> ControlOutcome:
-        session = self.sessions.find_by_id(request.session_id)
+        session = self.sessions.find(request.session_id)
         if session is None:
             return ControlResult(request.request_id, "rejected", "unknown session")
         plugin = session.plugin
         if plugin is None or plugin.controller is None:
             return ControlResult(request.request_id, "rejected", "unsupported control")
-        cursor = self.queries.canonical_store.through(request.session_id).latest_cursor or 0
+        cursor = self.queries.canonical_events.latest_cursor() or 0
         summary = self.queries.summary(request.session_id, cursor)
         attention_id = getattr(request, "attention_id", None)
         pending_attention = next(
@@ -112,5 +115,6 @@ class HarnessControlService(HarnessReactorContext):
                 current_effort=summary.effort if summary is not None else None,
                 current_account=summary.account if summary is not None else None,
                 pending_attention=pending_attention,
+                account_usage=self.account_usage.snapshots(),
             ),
         )

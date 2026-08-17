@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from domain.ids import SessionId
 from harness.models import TerminalInputState, TerminalSessionState
-from engine.store.sessions import SessionStore
+from repository.contract.sessions import SessionRepository
 from terminal.adapter import TerminalAdapter
 from terminal.contract import TerminalViewport
 
@@ -17,7 +17,7 @@ from terminal.contract import TerminalViewport
 class TerminalInputService:
     def __init__(
         self,
-        sessions: SessionStore,
+        sessions: SessionRepository,
         terminal: TerminalAdapter,
         viewport: TerminalViewport,
     ) -> None:
@@ -30,7 +30,7 @@ class TerminalInputService:
 
     def state(self, session_id: SessionId) -> TerminalSessionState:
         window_id = self.terminal.window_for_session(session_id)
-        session = self.sessions.find_by_id(session_id)
+        session = self.sessions.find(session_id)
         plugin = session.plugin if session is not None else None
         input_state = (
             plugin.terminal_probe.input_state(self.viewport, window_id)

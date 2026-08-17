@@ -18,7 +18,6 @@
 
 import json
 import os
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -26,96 +25,48 @@ from pathlib import Path
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
 
+from core.daemon import client as daemon_client
 from diagnostics import record as A
+from harness.models import TELEMETRY_KIND_HEADER
 from harness.impl.claude_code import account as ACC
-from harness.impl.claude_code.usage import state
 import time
 
+DELIVERY_PATH = "/api/harnesses/claude_code/telemetry"
+# The shim must NEVER hold up the status line: a wedged daemon costs this pause
+# per render, and no more.
+DELIVERY_TIMEOUT_SECONDS = 1.0
 
-
-def _epoch_s(v):
-    """A rate-limit `resets_at` → epoch SECONDS (float), or None. Claude Code
-    has sent this as either seconds or milliseconds across versions; >1e12 is
-    unambiguously milliseconds (a seconds value that large is year ~33000)."""
-    if not isinstance(v, (int, float)) or v <= 0:
-        return None
-    return v / 1000.0 if v > 1e12 else float(v)
-
-
-def _pct(v):
-    """A used_percentage → an int 0..100, or None (absent/garbage)."""
-    if not isinstance(v, (int, float)):
-        return None
-    return max(0, min(100, int(round(v))))
-
-
-# Window-key hygiene for parse_usage: `rate_limits` is external input riding
-# straight into a kv the dashboard renders — keys must look like window names
-# (never `ts`, the snapshot's own stamp), and a garbage payload must not bloat
-# the kv (MAX_WINDOWS caps it; the account-wide pair is always kept first).
-_KEY_OK = re.compile(r"^[a-z0-9_]{1,40}$")
-KNOWN_WINDOWS = ("five_hour", "seven_day")
-MAX_WINDOWS = 8
-
-
-def parse_usage(data):
-    """The stdin JSON → the `usage` kv shape, or None when no rate-limit
-    window parses (a fresh account before its first API response — leave the
-    last good value in place rather than overwrite it with nulls). GENERIC
-    over windows: every `rate_limits.<key>.{used_percentage, resets_at}`
-    entry becomes `<key>`: pct + `<key>_reset`: epoch — the account-wide
-    five_hour/seven_day pair always first, then any OTHER window sorted by
-    key. As of CLI 2.1.215 only the account-wide pair exists (the /usage
-    screen's per-model weekly bar has NO statusline counterpart — verified
-    against live payloads 2026-07-19); when Claude Code starts reporting a
-    model-scoped window (e.g. `seven_day_fable`), it flows through here, the
-    kv, and the dashboard's per-window bars with no code change. Until it does,
-    the per-model bars are sourced out-of-band from the OAuth /usage endpoint
-    (harness/impl/claude_code/model_usage.py) — the ONE number no tokenless channel
-    carries."""
-    rl = (data or {}).get("rate_limits") or {}
-    known = [k for k in KNOWN_WINDOWS if k in rl]
-    extra = sorted(k for k in rl if isinstance(k, str) and k not in KNOWN_WINDOWS)
-    out, nwin = {}, 0
-    for key in known + extra:
-        if nwin >= MAX_WINDOWS:
-            break
-        w = rl.get(key)
-        if not _KEY_OK.match(key) or key == "ts" or not isinstance(w, dict):
-            continue
-        pct = _pct(w.get("used_percentage"))
-        if pct is None:
-            continue
-        out[key], nwin = pct, nwin + 1
-        reset = _epoch_s(w.get("resets_at"))
-        if reset is not None:
-            out[key + "_reset"] = reset
-    return out or None
 
 
 def capture(raw):
-    """Best-effort: parse the raw stdin bytes and stash account + usage into
-    this session's state DB. Writes ONLY when the DB already exists (the mirror
-    created it at SessionStart) — never creates it, so a probe can't fake the
-    session-alive signal a parked/headless session relies on. Silent on every
-    failure; the caller runs the delegate regardless."""
+    """Best-effort: ship the stdin bytes to the daemon as a telemetry delivery.
+
+    The shim is a THIN CLIENT, like a hook process: it stamps the two facts only
+    it can observe — the account its own environment selects, and the moment it
+    read them — and the daemon decides what the rate-limit windows mean
+    (`harness/impl/claude_code/otel/gateway.py`). It used to open a database and
+    write the snapshot itself, which made the status line a store writer.
+
+    Silent on every failure; the caller runs the delegate regardless."""
     try:
         data = json.loads(raw or b"{}")
         if not isinstance(data, dict):
             return
-        sid = (data.get("session_id") or "").strip()
-        if not sid:
+        if not (data.get("session_id") or "").strip():
             return
         acc = ACC.current(os.environ)
-        usage = parse_usage(data)
-        if usage is not None:
-            state.record(
-                sid,
-                acc.get("slug") or None,
-                acc.get("label") or acc.get("slug") or "default",
-                usage,
-                data.get("_ts") or _now(),
-            )
+        body = dict(
+            data,
+            _account_id=acc.get("slug") or "",
+            _account_name=acc.get("label") or acc.get("slug") or "default",
+            _ts=data.get("_ts") or _now(),
+        )
+        daemon_client.post_bytes(
+            DELIVERY_PATH,
+            json.dumps(body, ensure_ascii=False).encode("utf-8"),
+            {"Content-Type": "application/json", TELEMETRY_KIND_HEADER: "statusline"},
+            timeout=DELIVERY_TIMEOUT_SECONDS,
+        )
     except Exception:
         try:
             A.error("", "statusline capture")

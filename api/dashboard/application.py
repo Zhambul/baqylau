@@ -39,7 +39,7 @@ from api.dependencies import ApplicationGraph
 from api.guard import control_plane
 from notify.channels import webpush
 from dashboard.services.overview import BrowserPresence, BrowserPushSubscription
-from dashboard.services.workspace import AnswerSelection, QueuedMessage
+from domain.workspace import AnswerSelection, QueuedMessage
 from domain.ids import AttentionId, SessionId
 
 router = APIRouter()
@@ -47,11 +47,11 @@ guarded = APIRouter(dependencies=[Depends(control_plane())])
 
 
 @router.get("/api/application/push-configuration")
-def push_configuration() -> PushConfigurationResponse:
+def push_configuration(application: ApplicationGraph) -> PushConfigurationResponse:
     """The Web Push feature probe: the page offers the notification opt-in +
     subscribes only when push is possible AND has an application-server key.
     The public key is not a secret."""
-    key = webpush.public_key()
+    key = webpush.public_key(application.push_signing_keys)
     return PushConfigurationResponse(enabled=bool(webpush.enabled() and key), key=key)
 
 

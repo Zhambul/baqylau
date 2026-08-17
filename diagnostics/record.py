@@ -1,90 +1,110 @@
-"""Write non-domain operational diagnostics — the one write API in the tree.
+"""Write operational diagnostics — the one write API in the tree.
 
-Raw harness observations, translations, canonical events, and provenance live
-in ``events.db``. This module records only application mechanics that are not
-harness facts.
+Five free functions over a lazily-built repository, and the ONE place in the
+application where a repository is reached without being injected. That is
+deliberate: these are called from `except` blocks in short-lived hook and
+statusline processes that must stay a few imports thin and must not build an
+application graph.
+
+Routing them through the daemon instead cannot work — the failure most worth
+recording is "this process could not reach the daemon", and a client that
+swallows its own transport error records nothing.
+
+Daemon-side callers take `DiagnosticWriteRepository` by injection and do not
+come through here.
 """
 
 from __future__ import annotations
 
-import json
 import os
-from contextlib import closing
 import sys
 import time
 import traceback
+from threading import Lock
 
-from diagnostics.database import connect, enabled
+from diagnostics.models import (
+    ApplicationErrorRecord,
+    SpawnRecord,
+    StateFileRecord,
+    StreamHandle,
+    StreamOpened,
+)
+from repository.contract.diagnostics import DiagnosticWriteRepository
+from repository.impl.sqlite.databases import audit_database
+from repository.impl.sqlite.diagnostics import (
+    SqliteDiagnosticWriteRepository,
+    audit_enabled,
+)
+from repository.mapper import diagnostics as mapper
+
+_writers: dict[str, DiagnosticWriteRepository] = {}
+_writers_lock = Lock()
+
+
+def repository() -> DiagnosticWriteRepository:
+    """The writer for the audit file this process's environment names.
+
+    Built on first use, never at import: a hook process that records nothing
+    must not pay for opening a database. Cached BY PATH rather than as one
+    singleton, so a process whose data directory changes gets the right file
+    without a reset — and so `initialize()` still runs once per file.
+    """
+    database = audit_database()
+    with _writers_lock:
+        writer = _writers.get(database.path)
+        if writer is None:
+            writer = SqliteDiagnosticWriteRepository(database)
+            _writers[database.path] = writer
+        return writer
+
+
+def enabled() -> bool:
+    return audit_enabled()
 
 
 def _script() -> str:
     return os.path.basename(sys.argv[0] or "python")
 
 
-def _session_id(session_or_log: str) -> str:
-    return session_or_log
-
-
-def _text(value: object) -> str:
-    if isinstance(value, str):
-        return value
-    return json.dumps(value, ensure_ascii=False, default=str)
-
-
 def error(session_or_log: str = "", func: str = "", context: object = None) -> None:
-    if not enabled():
-        return
-    with closing(connect()) as connection, connection:
-        connection.execute(
-            "INSERT INTO errors(ts, session_id, script, func, traceback, context, pid) "
-            "VALUES(?,?,?,?,?,?,?)",
-            (
-                time.time(),
-                _session_id(session_or_log),
-                _script(),
-                func,
-                traceback.format_exc(),
-                _text(context) if context is not None else "",
-                os.getpid(),
-            ),
+    repository().record_error(
+        ApplicationErrorRecord(
+            session_id=session_or_log,
+            script=_script(),
+            function=func,
+            traceback=traceback.format_exc(),
+            context=mapper.text(context) if context is not None else "",
+            process_id=os.getpid(),
+            timestamp=time.time(),
         )
+    )
 
 
 def state_file(log: str, path: str, action: str, content: object = "") -> None:
-    if not enabled():
-        return
-    with closing(connect()) as connection, connection:
-        connection.execute(
-            "INSERT INTO state_files(ts, session_id, path, action, content, script, pid) "
-            "VALUES(?,?,?,?,?,?,?)",
-            (
-                time.time(),
-                _session_id(log),
-                path,
-                action,
-                _text(content)[:2000],
-                _script(),
-                os.getpid(),
-            ),
+    repository().record_state_file(
+        StateFileRecord(
+            session_id=log,
+            path=path,
+            action=action,
+            content=mapper.truncated(content),
+            script=_script(),
+            process_id=os.getpid(),
+            timestamp=time.time(),
         )
+    )
 
 
 def spawn(log: str, child_pid: int, argv: list[str], purpose: str = "") -> None:
-    if not enabled():
-        return
-    with closing(connect()) as connection, connection:
-        connection.execute(
-            "INSERT INTO spawns(ts, session_id, parent_script, child_pid, argv, purpose) "
-            "VALUES(?,?,?,?,?,?)",
-            (
-                time.time(),
-                _session_id(log),
-                _script(),
-                child_pid,
-                _text([str(argument) for argument in argv]),
-                purpose,
-            ),
+    repository().record_spawn(
+        SpawnRecord(
+            session_id=log,
+            parent_script=_script(),
+            child_process_id=child_pid,
+            argv=mapper.text([str(argument) for argument in argv]),
+            purpose=purpose,
+            timestamp=time.time(),
         )
+    )
 
 
 def stream_start(
@@ -93,27 +113,23 @@ def stream_start(
     agent_id: str = "",
     task_id: str = "",
     src_path: str = "",
-) -> int | None:
-    if not enabled():
-        return None
-    with closing(connect()) as connection, connection:
-        cursor = connection.execute(
-            "INSERT INTO streams(session_id, kind, agent_id, task_id, src_path, pid, started_at) "
-            "VALUES(?,?,?,?,?,?,?)",
-            (_session_id(log), kind, agent_id, task_id, src_path, os.getpid(), time.time()),
+) -> StreamHandle | None:
+    return repository().open_stream(
+        StreamOpened(
+            session_id=log,
+            kind=kind,
+            agent_id=agent_id,
+            task_id=task_id,
+            source_path=src_path,
+            process_id=os.getpid(),
+            started_at=time.time(),
         )
-        # lastrowid is Optional in the DB-API: it is set after this INSERT, but
-        # int() on the None branch would raise TypeError rather than degrade,
-        # and this function is already declared to return None when the audit
-        # is off. Hand the value back as-is.
-        return cursor.lastrowid
+    )
 
 
-def stream_end(stream_id: int | None, end_reason: str, lines_emitted: int | None = None) -> None:
-    if stream_id is None or not enabled():
-        return
-    with closing(connect()) as connection, connection:
-        connection.execute(
-            "UPDATE streams SET ended_at=?, end_reason=?, lines_emitted=? WHERE id=?",
-            (time.time(), end_reason, lines_emitted, stream_id),
-        )
+def stream_end(
+    handle: StreamHandle | None,
+    end_reason: str,
+    lines_emitted: int | None = None,
+) -> None:
+    repository().close_stream(handle, end_reason, lines_emitted)

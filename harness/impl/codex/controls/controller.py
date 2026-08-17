@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import sqlite3
 import time
 
 from harness.contract import ControlHandler, HarnessController
@@ -187,13 +186,10 @@ class RenameSessionHandler(ControlHandler):
         if not isinstance(request, RenameSession):
             raise TypeError("rename_session handler requires RenameSession")
         if context.terminal_window_id is None:
-            try:
-                renamed = title.set_session_title(session.source_reference, request.name)
-            except (OSError, sqlite3.Error) as error:
-                return ControlResult(request.request_id, "indeterminate", str(error))
-            if renamed is None:
+            outcome = title.titles.set_title(session.source_reference, request.name)
+            if outcome == "unsupported":
                 return ControlResult(request.request_id, "rejected", "session source is not renameable")
-            if not renamed:
+            if outcome == "unavailable":
                 return ControlResult(request.request_id, "indeterminate", "native title store is unavailable")
             return ControlResult(request.request_id, "acknowledged")
         result = _submit(request, context, f"/rename {request.name}")

@@ -84,6 +84,9 @@ import json
 import os
 import re
 
+from harness.models import TitleWriteOutcome
+from repository.contract.titles import NativeSessionTitleRepository
+
 
 # A message DELIVERED to a teammate appears in its transcript as a plain user
 # record whose text is wrapped in <teammate-message teammate_id="<sender>" …>BODY
@@ -661,3 +664,27 @@ def set_session_title(path, name):
     with open(path, "a", encoding="utf-8") as fh:
         fh.write(rec + "\n")                # ONE write: atomic O_APPEND line
     return True
+
+
+class TranscriptTitleRepository(NativeSessionTitleRepository):
+    """A `NativeSessionTitleRepository` over the transcript itself.
+
+    The codex twin keeps its titles in a sqlite index; Claude Code keeps them
+    in the transcript, as a naming record it re-reads. Same operation, entirely
+    different store — which is the whole reason this is a Protocol.
+    """
+
+    def renameable(self, source_reference: str) -> bool:
+        return bool(renameable(source_reference))
+
+    def set_title(self, source_reference: str, title: str) -> TitleWriteOutcome:
+        if not self.renameable(source_reference):
+            return "unsupported"
+        try:
+            written = set_session_title(source_reference, title)
+        except OSError:
+            return "unavailable"
+        return "renamed" if written else "unavailable"
+
+
+titles = TranscriptTitleRepository()

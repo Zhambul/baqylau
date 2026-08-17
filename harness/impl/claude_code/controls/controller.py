@@ -201,12 +201,11 @@ class RenameSessionHandler(ControlHandler):
         if not isinstance(request, RenameSession):
             raise TypeError("rename_session handler requires RenameSession")
         if context.terminal_window_id is None:
-            try:
-                renamed = transcript.set_session_title(session.source_reference, request.name)
-            except OSError as error:
-                return ControlResult(request.request_id, "indeterminate", str(error))
-            if renamed is None:
+            outcome = transcript.titles.set_title(session.source_reference, request.name)
+            if outcome == "unsupported":
                 return ControlResult(request.request_id, "rejected", "session source is not renameable")
+            if outcome == "unavailable":
+                return ControlResult(request.request_id, "indeterminate", "native title store is unavailable")
             return ControlResult(request.request_id, "acknowledged")
         return _command(request, context, f"/rename {request.name}")
 
@@ -258,7 +257,9 @@ class MigrateAccountHandler(ControlHandler):
             raise TypeError("migrate_account handler requires MigrateAccount")
         if context.current_account is None:
             return MigrationResult(request.request_id, "rejected", "current account is unknown")
-        target = account.migration_target(context.current_account.account_id)
+        target = account.migration_target(
+            context.current_account.account_id, context.account_usage
+        )
         if target is None:
             return MigrationResult(request.request_id, "rejected", "no other account is available")
         session = context.session

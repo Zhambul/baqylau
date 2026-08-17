@@ -10,7 +10,7 @@ import time
 from collections import OrderedDict
 
 from core import env as EV
-from dashboard import prefs
+from repository.contract.preferences import PushSubscriptionRepository
 
 
 # Per-session "a browser is LOOKING AT this session right now" presence. The
@@ -183,7 +183,7 @@ def device_seen(device):
     return _DEVICE_SEEN.get(device, float("-inf"))
 
 
-def route():
+def route(subscriptions: PushSubscriptionRepository):
     """WHICH DEVICE you are most likely at right now, and what can reach it.
     Returns `(target, targets, decision)`:
 
@@ -204,7 +204,13 @@ def route():
 
     A subscribed device that never beat this run has `age_s:None` and remains
     selectable because it is still the last device the application knew."""
-    subs = prefs.push_subscriptions()
+    subs = [
+        {"endpoint": subscription.endpoint, "device": subscription.device_id,
+         "label": subscription.device_label,
+         "keys": {"p256dh": subscription.public_key,
+                  "auth": subscription.authentication_secret}}
+        for subscription in subscriptions.subscriptions()
+    ]
     now = time.monotonic()
 
     def cand(device_id, label=None):

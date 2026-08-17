@@ -97,14 +97,14 @@ class TerminalAdapter:
         # `sessions` is the session store, untyped on purpose: naming its type
         # here would make `terminal/` import the layer above it, and declaring
         # a Protocol for it would claim the store implements something it has
-        # never heard of. All this needs is `find_by_id`.
+        # never heard of. All this needs is `find`.
         self._plugin = plugin
         self._sessions = sessions
 
     # --- session ⇄ window ---------------------------------------------------
     def window_for_session(self, session_id: SessionId) -> str | None:
         """The session's window, when it is still on screen."""
-        session = self._sessions.find_by_id(session_id)
+        session = self._sessions.find(session_id)
         window_id = session.terminal_window_id if session is not None else None
         if not window_id:
             return None

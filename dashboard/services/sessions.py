@@ -28,7 +28,7 @@ from dashboard.services.models import (
 )
 from domain.ids import SessionId
 from engine.projections import ActivityScope, OperationActivity, SessionQueries
-from engine.store.canonical import CanonicalEventStore
+from repository.contract.facts import CanonicalEventRepository
 from harness.models import TerminalSessionState
 
 SESSION_REFRESH_SECONDS = 0.25
@@ -42,12 +42,12 @@ class TerminalSessionReader(Protocol):
 class DashboardSessionService:
     def __init__(
         self,
-        canonical_store: CanonicalEventStore,
+        canonical_events: CanonicalEventRepository,
         queries: SessionQueries,
         terminal: TerminalSessionReader,
         repositories: RepositoryQueries,
     ) -> None:
-        self.canonical_store = canonical_store
+        self.canonical_events = canonical_events
         self.queries = queries
         self.terminal = terminal
         self.repositories = repositories
@@ -77,7 +77,7 @@ class DashboardSessionService:
             with self._sessions_lock:
                 if self._sessions_cache is not None:
                     return self._sessions_cache
-            session_ids = self.canonical_store.session_ids()
+            session_ids = self.canonical_events.session_ids()
             cold_session_ids = session_ids[:COLD_SESSION_COUNT]
             sessions = self._build_sessions(cold_session_ids)
             with self._sessions_lock:
@@ -89,7 +89,7 @@ class DashboardSessionService:
         try:
             with self._sessions_refresh_lock:
                 sessions = self._build_sessions(
-                    self.canonical_store.session_ids()[:COLD_SESSION_COUNT]
+                    self.canonical_events.session_ids()[:COLD_SESSION_COUNT]
                 )
             with self._sessions_lock:
                 self._sessions_cache = sessions
@@ -102,7 +102,7 @@ class DashboardSessionService:
         self,
         session_ids: tuple[SessionId, ...] | None = None,
     ) -> tuple[DashboardSessionListItem, ...]:
-        cursor = self.canonical_store.latest_cursor()
+        cursor = self.canonical_events.latest_cursor()
         if cursor is None:
             return ()
         repository_statuses: dict[str, RepositoryStatus | None] = {}
@@ -116,10 +116,15 @@ class DashboardSessionService:
 
         canonical_sessions = []
         selected_session_ids = (
-            self.canonical_store.session_ids() if session_ids is None else session_ids
+            self.canonical_events.session_ids() if session_ids is None else session_ids
+        )
+        # One query for every session's newest cursor. This runs on a 250 ms
+        # refresh, and asking per session made it twenty round trips a tick.
+        session_cursors = self.canonical_events.latest_session_cursors(
+            selected_session_ids, cursor
         )
         for session_id in selected_session_ids:
-            session_cursor = self.canonical_store.latest_session_cursor(session_id, cursor)
+            session_cursor = session_cursors.get(session_id)
             if session_cursor is None:
                 continue
             canonical = self._canonical_sessions.get(session_id)
@@ -163,7 +168,7 @@ class DashboardSessionService:
         session_id: SessionId,
         scope: ActivityScope,
     ) -> DashboardSessionSnapshot:
-        cursor = self.canonical_store.through(session_id).latest_cursor or 0
+        cursor = self.canonical_events.latest_cursor() or 0
         return self.snapshot_at(session_id, scope, cursor)
 
     def snapshot_at(

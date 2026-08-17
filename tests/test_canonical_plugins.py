@@ -90,13 +90,11 @@ from harness.impl.claude_code.hooks import gateway as claude_hooks
 from harness.impl.claude_code.hooks import foreground as claude_foreground
 from harness.impl.claude_code.hooks import statusline as claude_statusline
 from harness.impl.claude_code.controls import tui as claude_tui
-from harness.impl.claude_code.usage import state as claude_usage_state
 from harness.impl.claude_code.usage.rows import usage_reader as claude_usage_reader
 from harness.impl.claude_code.reactors import (
     ClaudeAccountMigrationCanonicalEventReactor,
     ClaudeOtelCanonicalEventReactor,
 )
-from harness.impl.claude_code.otel import receiver as claude_otel_receiver
 from harness.impl.codex.canonical.translator import (
     CodexCanonicalTranslator,
     CodexRawEventSources,
@@ -105,9 +103,13 @@ from harness.impl.codex.canonical.translator import (
 from harness.impl.codex.hooks import gateway as codex_hooks
 from harness.impl.codex.canonical import rollout as codex_rollout
 from harness.impl.codex.controls.controller import _rollout_abort_state
-from engine.store.recorder import EventIdentityConflict, RawEventRecorder
+from harness.impl.claude_code.otel import gateway as claude_telemetry
+from harness.models import HarnessTelemetryRequest, TELEMETRY_KIND_HEADER
+from repository.errors import EventIdentityConflict
+from repository.impl.sqlite.databases import main_database
+from repository.impl.sqlite.raw_events import SqliteRawEventRepository
+from repository.impl.sqlite.usage import SqliteAccountUsageRepository
 from canonical_runtime import CanonicalRuntime
-from engine.queries.evidence import EvidenceQueries
 from engine.interpret.translators import LivenessTranslator, OperationOutputTranslator
 from engine.interpret.loop import Interpreter
 from engine.interpret.reactions import (
@@ -115,6 +117,7 @@ from engine.interpret.reactions import (
 )
 from terminal.panes.reaction import PaneCanonicalEventReaction
 from harness.services.launcher import HarnessLauncherService
+from harness.services.telemetry import TelemetryGatewayService
 from harness.registry import HarnessRegistry
 from domain.events import OperationOutputLocated
 
@@ -160,8 +163,8 @@ def _deliver_hook(gateway, payload: bytes, **observed) -> bytes:
 
     Mirrors HookGatewayService.record against the test's BAQYLAU_DATA_DIR."""
     response = gateway.handle(hook_request(payload, **observed))
-    database_path = os.path.join(os.environ["BAQYLAU_DATA_DIR"], "events.db")
-    RawEventRecorder(database_path).record(response.raw_events)
+    database_path = os.path.join(os.environ["BAQYLAU_DATA_DIR"], "main.db")
+    SqliteRawEventRepository(main_database(database_path)).record(response.raw_events)
     return response.reply
 
 
@@ -295,7 +298,9 @@ def interpreting_runtime(database_path):
     reactions = (
         SessionUpsertCanonicalEventReaction(runtime.sessions),
         OperationOutputCanonicalEventReaction(runtime.operation_output, runtime.recorder),
-        PaneCanonicalEventReaction(InterpreterTerminal(), runtime.sessions),
+        PaneCanonicalEventReaction(
+            InterpreterTerminal(), runtime.sessions, _Widths([])
+        ),
     )
     interpreter = Interpreter(
         runtime.sessions,
@@ -395,7 +400,7 @@ def test_claude_team_messages_preserve_the_native_sender_as_evidence_actor(
         str(source_path),
         "/work",
     )
-    runtime, interpreter = interpreting_runtime(tmp_path / "data" / "events.db")
+    runtime, interpreter = interpreting_runtime(tmp_path / "data" / "main.db")
     runtime.register("claude_code", session)
     context = replace(
         session.source_context,
@@ -406,7 +411,7 @@ def test_claude_team_messages_preserve_the_native_sender_as_evidence_actor(
     runtime.recorder.record(ClaudeTranscriptRawEventSource(context).read(None))
     interpreter.tick()
 
-    evidence = EvidenceQueries(runtime.store).session(session.session_id)[-1]
+    evidence = runtime.evidence.evidence_for_session(session.session_id)[-1]
     assert evidence.actor_id == ActorId(sender)
     assert evidence.parent_actor_id == expected_parent_actor_id
     assert all(item.event.actor_id == ActorId(sender) for item in evidence.canonical)
@@ -848,21 +853,21 @@ def test_hooks_record_exact_raw_bytes_and_both_sessions_are_born_from_them(monke
         harness_process_id=4343,
     )
 
-    runtime, interpreter = interpreting_runtime(tmp_path / "events.db")
+    runtime, interpreter = interpreting_runtime(tmp_path / "main.db")
     interpreter.tick()
 
-    claude_session = runtime.sessions.find_by_id(SessionId("claude-session"))
+    claude_session = runtime.sessions.find(SessionId("claude-session"))
     assert claude_session is not None
     assert claude_session.source_reference == str(Path("/work/claude.jsonl").resolve())
     assert claude_session.terminal_window_id == "window-1"
     assert claude_session.harness_process_id == 4242
-    codex_session = runtime.sessions.find_by_id(SessionId("codex-session"))
+    codex_session = runtime.sessions.find(SessionId("codex-session"))
     assert codex_session is not None
     assert codex_session.source_reference == str(rollout_path.resolve())
     assert codex_session.terminal_window_id == "window-2"
 
-    claude_evidence = EvidenceQueries(runtime.store).session(SessionId("claude-session"))
-    codex_evidence = EvidenceQueries(runtime.store).session(SessionId("codex-session"))
+    claude_evidence = runtime.evidence.evidence_for_session(SessionId("claude-session"))
+    codex_evidence = runtime.evidence.evidence_for_session(SessionId("codex-session"))
     assert claude_evidence[0].payload == claude_payload
     # session.started + actor.started + session.account_changed (the header)
     assert len(claude_evidence[0].canonical) == 3
@@ -911,12 +916,12 @@ def test_claude_launch_selections_reach_the_summary_from_the_hook_environment(mo
         launch_effort="high",
     )
 
-    runtime, interpreter = interpreting_runtime(tmp_path / "events.db")
+    runtime, interpreter = interpreting_runtime(tmp_path / "main.db")
     interpreter.tick()
 
     launch_evidence = [
         item
-        for item in EvidenceQueries(runtime.store).session(SessionId("claude-session"))
+        for item in runtime.evidence.evidence_for_session(SessionId("claude-session"))
         if item.source_type == "launch"
     ]
     assert len(launch_evidence) == 1
@@ -945,8 +950,8 @@ def test_hook_without_native_identity_uses_the_exact_payload_identity(monkeypatc
     _deliver_hook(claude_hooks.ClaudeHookGateway(), payload)
     _deliver_hook(claude_hooks.ClaudeHookGateway(), payload)
 
-    runtime = CanonicalRuntime(str(tmp_path / "events.db"))
-    evidence = EvidenceQueries(runtime.store).session(SessionId("claude-session"))
+    runtime = CanonicalRuntime(str(tmp_path / "main.db"))
+    evidence = runtime.evidence.evidence_for_session(SessionId("claude-session"))
     assert len(evidence) == 1
     assert str(evidence[0].raw_event_id).endswith(hashlib.sha256(payload).hexdigest())
 
@@ -963,9 +968,9 @@ def test_hook_recording_preserves_native_child_actor_context(monkeypatch, tmp_pa
 
     _deliver_hook(claude_hooks.ClaudeHookGateway(), payload)
 
-    runtime, interpreter = interpreting_runtime(tmp_path / "events.db")
+    runtime, interpreter = interpreting_runtime(tmp_path / "main.db")
     interpreter.tick()
-    evidence = EvidenceQueries(runtime.store).session(SessionId("claude-session"))[0]
+    evidence = runtime.evidence.evidence_for_session(SessionId("claude-session"))[0]
     assert evidence.actor_id == ActorId("child-one")
     assert evidence.parent_actor_id == ActorId("claude-session:lead")
     assert evidence.canonical[0].event.actor_id == ActorId("child-one")
@@ -1168,7 +1173,7 @@ def test_claude_background_output_streams_into_the_operation(monkeypatch, tmp_pa
 
     _deliver_hook(claude_hooks.ClaudeHookGateway(), json.dumps(document).encode())
 
-    runtime, interpreter = interpreting_runtime(tmp_path / "data" / "events.db")
+    runtime, interpreter = interpreting_runtime(tmp_path / "data" / "main.db")
     runtime.register("claude_code", Session(
         SessionId("session-one"), ActorId("session-one:lead"),
         "session-one", str(tmp_path / "session-one.jsonl"), "/work",
@@ -1203,7 +1208,7 @@ def test_claude_background_output_streams_into_the_operation(monkeypatch, tmp_pa
         SessionFinished("succeeded", None),
     )
     OperationOutputCanonicalEventReaction(runtime.operation_output, runtime.recorder).react(finish)
-    assert runtime.operation_output.for_session(SessionId("session-one")) == ()
+    assert runtime.operation_output.find_for_session(SessionId("session-one")) == ()
     assert output_path.exists()
     interpreter.tick()
     tail = runtime.queries().operation_activity(
@@ -1305,13 +1310,13 @@ def test_claude_foreground_bytes_flow_through_raw_audit_into_operation_projectio
     output = _deliver_hook(claude_hooks.ClaudeHookGateway(), json.dumps(document).encode())
     assert b"updatedInput" in output
 
-    runtime, interpreter = interpreting_runtime(tmp_path / "application" / "events.db")
+    runtime, interpreter = interpreting_runtime(tmp_path / "application" / "main.db")
     runtime.register("claude_code", Session(
         SessionId("session-one"), ActorId("session-one:lead"),
         "session-one", str(tmp_path / "session-one.jsonl"), str(tmp_path),
     ))
     interpreter.tick()  # translates the directive; the reaction starts the following
-    output_sources = runtime.operation_output.for_session(SessionId("session-one"))
+    output_sources = runtime.operation_output.find_for_session(SessionId("session-one"))
     assert len(output_sources) == 1
     Path(output_sources[0].source_path).write_bytes(b"hello\n")
     interpreter.tick()  # pulls the chunk and translates it
@@ -1325,7 +1330,7 @@ def test_claude_foreground_bytes_flow_through_raw_audit_into_operation_projectio
     )
     assert operation.state == "running"
     assert operation.current_progress()[0].text == "hello\n"
-    evidence = EvidenceQueries(runtime.store).session(SessionId("session-one"))
+    evidence = runtime.evidence.evidence_for_session(SessionId("session-one"))
     foreground_evidence = [row for row in evidence if row.source_type == "foreground_output"]
     assert len(foreground_evidence) == 1
     assert base64.b64decode(
@@ -1547,7 +1552,7 @@ def test_hook_gateway_service_records_only_for_harnesses_that_accept_deliveries(
     registry = HarnessRegistry()
     for plugin in installed():
         registry.register(plugin if plugin.info.name != "codex" else replace(plugin, hooks=None))
-    service = HookGatewayService(registry, RawEventRecorder(str(tmp_path / "events.db")))
+    service = HookGatewayService(registry, SqliteRawEventRepository(main_database(str(tmp_path / "main.db"))))
     payload = json.dumps({
         "session_id": "session-one",
         "transcript_path": "/work/session.jsonl",
@@ -1557,9 +1562,9 @@ def test_hook_gateway_service_records_only_for_harnesses_that_accept_deliveries(
     }).encode()
 
     assert service.record("claude_code", hook_request(payload, terminal_window_id="9")) == b""
-    evidence = EvidenceQueries(
-        CanonicalRuntime(str(tmp_path / "events.db")).store
-    ).session(SessionId("session-one"))
+    evidence = CanonicalRuntime(str(tmp_path / "main.db")).evidence.evidence_for_session(
+        SessionId("session-one")
+    )
     assert [raw.source_type for raw in evidence] == ["hook"]
 
     with pytest.raises(UnknownHookHarness, match="unregistered harness"):
@@ -1568,7 +1573,30 @@ def test_hook_gateway_service_records_only_for_harnesses_that_accept_deliveries(
         service.record("codex", hook_request(payload))
 
 
-def test_pane_command_service_executes_gestures_for_the_windows_session(monkeypatch):
+class _Widths:
+    """The width policy a pane gesture consults, with the store left out."""
+
+    def __init__(self, remembered) -> None:
+        self.remembered = remembered
+
+    @staticmethod
+    def width_percent(working_directory) -> int:
+        del working_directory
+        return 31
+
+    @staticmethod
+    def configured_width_percent() -> int:
+        return 31
+
+    @staticmethod
+    def resize_columns() -> int:
+        return 7
+
+    def remember_width(self, working_directory, width_percent) -> None:
+        self.remembered.append((working_directory, width_percent))
+
+
+def test_pane_command_service_executes_gestures_for_the_windows_session():
     class Terminal:
         def __init__(self):
             self.toggles = []
@@ -1596,19 +1624,7 @@ def test_pane_command_service_executes_gestures_for_the_windows_session(monkeypa
 
     terminal = Terminal()
     remembered = []
-    monkeypatch.setattr(pane_commands.pane_preferences, "width_percent", lambda directory: 31)
-    monkeypatch.setattr(pane_commands.pane_preferences, "resize_columns", lambda: 7)
-    monkeypatch.setattr(
-        pane_commands.pane_preferences,
-        "configured_width_percent",
-        lambda: 31,
-    )
-    monkeypatch.setattr(
-        pane_commands.pane_preferences,
-        "remember_width",
-        lambda directory, width_percent: remembered.append((directory, width_percent)),
-    )
-    service = pane_commands.PaneCommandService(terminal)
+    service = pane_commands.PaneCommandService(terminal, _Widths(remembered))
 
     outcomes = [
         service.execute("toggle", "77", "/project"),
@@ -1636,7 +1652,7 @@ def test_pane_command_in_a_tab_without_a_session_is_quietly_unhandled():
         def session_for_window(self, window_id):
             return None
 
-    outcome = pane_commands.PaneCommandService(Terminal()).execute(
+    outcome = pane_commands.PaneCommandService(Terminal(), _Widths([])).execute(
         "toggle", "", "/project"
     )
     assert outcome == pane_commands.PaneCommandOutcome(False, True)
@@ -1804,7 +1820,7 @@ def test_claude_teammate_hook_and_transcript_share_one_actor_identity(monkeypatc
     }).encode()
 
     _deliver_hook(claude_hooks.ClaudeHookGateway(), hook_payload)
-    runtime, interpreter = interpreting_runtime(tmp_path / "data" / "events.db")
+    runtime, interpreter = interpreting_runtime(tmp_path / "data" / "main.db")
     session = Session(
         SessionId("session-one"),
         ActorId("session-one:lead"),
@@ -1968,8 +1984,15 @@ def test_reasoning_levels_belong_to_the_model_that_offers_them():
         assert len([effort for effort in model.efforts if effort.default]) == 1
 
 
-def test_claude_statusline_writes_plugin_owned_typed_usage(monkeypatch, tmp_path):
-    monkeypatch.setenv("BAQYLAU_DATA_DIR", str(tmp_path / "application-data"))
+class _NoSessions:
+    """A telemetry context for a delivery that names no session."""
+
+    @staticmethod
+    def find_session(session_id):
+        del session_id
+
+
+def test_the_statusline_ships_its_bytes_and_the_daemon_stores_the_windows(monkeypatch, tmp_path):
     monkeypatch.setattr(
         claude_statusline.ACC,
         "current",
@@ -1978,6 +2001,12 @@ def test_claude_statusline_writes_plugin_owned_typed_usage(monkeypatch, tmp_path
     monkeypatch.setattr(
         "harness.impl.claude_code.usage.rows.account.registry",
         lambda: [{"slug": "work", "label": "Work", "alias": "work"}],
+    )
+    delivered = []
+    monkeypatch.setattr(
+        "harness.impl.claude_code.hooks.statusline.daemon_client.post_bytes",
+        lambda path, body, headers, timeout=None: delivered.append((path, body, headers))
+        or (200, b"{}"),
     )
     claude_statusline.capture(
         json.dumps(
@@ -1991,10 +2020,22 @@ def test_claude_statusline_writes_plugin_owned_typed_usage(monkeypatch, tmp_path
         ).encode()
     )
 
-    stored = claude_usage_state.latest_by_account()["work"]
-    rows = claude_usage_reader.read()
+    # The shim is a THIN CLIENT: it ships the bytes plus the one fact only it
+    # can observe (which account its environment selects) and writes nothing.
+    path, body, headers = delivered[0]
+    assert path == "/api/harnesses/claude_code/telemetry"
+    assert headers[TELEMETRY_KIND_HEADER] == "statusline"
+    assert json.loads(body)["_account_id"] == "work"
 
-    assert stored["windows"]["five_hour"] == 25
+    # The daemon decides what the windows meant.
+    usage = SqliteAccountUsageRepository(main_database(str(tmp_path / "main.db")))
+    response = claude_telemetry.ClaudeTelemetryGateway().handle(
+        HarnessTelemetryRequest("statusline", body), _NoSessions()
+    )
+    assert response.usage is not None
+    usage.record(response.usage)
+    rows = claude_usage_reader.read(usage)
+
     assert rows[0].account_id == "work"
     assert [window.label for window in rows[0].windows] == ["5h", "7d"]
     assert rows[0].scheduling_score == Decimal("75")
@@ -2212,7 +2253,7 @@ def test_claude_model_control_resolves_the_native_confirmation(monkeypatch, tmp_
 def test_claude_account_migration_uses_only_projected_context(monkeypatch, tmp_path):
     monkeypatch.setattr(
         "harness.impl.claude_code.controls.controller.account.migration_target",
-        lambda current_account: {
+        lambda current_account, account_usage: {
             "slug": "account-two",
             "alias": "account-two",
         },
@@ -2251,11 +2292,27 @@ def test_claude_account_migration_uses_only_projected_context(monkeypatch, tmp_p
     )
 
 
+class _RecordingTitles:
+    """A `NativeSessionTitleRepository` that records rather than writes."""
+
+    def __init__(self, calls) -> None:
+        self.calls = calls
+
+    @staticmethod
+    def renameable(source_reference) -> bool:
+        del source_reference
+        return True
+
+    def set_title(self, source_reference, title):
+        self.calls.append((source_reference, title))
+        return "renamed"
+
+
 @pytest.mark.parametrize(
     ("harness", "native_writer"),
     [
-        ("claude_code", "harness.impl.claude_code.controls.controller.transcript.set_session_title"),
-        ("codex", "harness.impl.codex.controls.controller.title.set_session_title"),
+        ("claude_code", "harness.impl.claude_code.controls.controller.transcript.titles"),
+        ("codex", "harness.impl.codex.controls.controller.title.titles"),
     ],
 )
 def test_parked_rename_uses_only_the_owning_harness_title_store(
@@ -2265,7 +2322,7 @@ def test_parked_rename_uses_only_the_owning_harness_title_store(
     native_writer,
 ):
     calls = []
-    monkeypatch.setattr(native_writer, lambda path, name: calls.append((path, name)) or True)
+    monkeypatch.setattr(native_writer, _RecordingTitles(calls))
     application = build_application(str(tmp_path))
     session = Session(
         SessionId("session-one"),
@@ -2653,7 +2710,7 @@ def test_claude_otel_translates_raw_usage_once_by_model_and_query_source():
 
 
 def test_claude_otel_delivery_records_raw_and_canonical_audit(tmp_path):
-    runtime, interpreter = interpreting_runtime(tmp_path / "events.db")
+    runtime, interpreter = interpreting_runtime(tmp_path / "main.db")
     session = Session(
         SessionId("session-one"),
         ActorId("session-one:lead"),
@@ -2681,11 +2738,21 @@ def test_claude_otel_delivery_records_raw_and_canonical_audit(tmp_path):
     }
     raw_body = json.dumps(document, separators=(",", ":")).encode()
 
-    assert claude_otel_receiver.deliver(runtime.recorder, runtime.sessions, raw_body) == 1
-    assert claude_otel_receiver.deliver(runtime.recorder, runtime.sessions, raw_body) == 1
+    # The receiver is a thin client now: it ships the bytes and the DAEMON
+    # decides what they meant, so the gateway is what this exercises. Two
+    # deliveries of the same export converge on one raw event, as before.
+    telemetry = TelemetryGatewayService(
+        runtime.sessions.harnesses,
+        runtime.recorder,
+        runtime.sessions,
+        SqliteAccountUsageRepository(runtime.database),
+    )
+    delivery = HarnessTelemetryRequest("otlp", raw_body)
+    assert telemetry.record("claude_code", delivery) == 1
+    assert telemetry.record("claude_code", delivery) == 1
     interpreter.tick()
 
-    evidence = EvidenceQueries(runtime.store).session(SessionId("session-one"))
+    evidence = runtime.evidence.evidence_for_session(SessionId("session-one"))
     assert len(evidence) == 1
     assert evidence[0].payload == raw_body
     assert evidence[0].decision == "translated"
@@ -2896,7 +2963,7 @@ def test_codex_write_stdin_requires_a_known_process_session():
 
 
 def test_codex_write_stdin_records_raw_and_canonical_audit(tmp_path):
-    runtime, interpreter = interpreting_runtime(tmp_path / "events.db")
+    runtime, interpreter = interpreting_runtime(tmp_path / "main.db")
     runtime.register("codex", Session(
         SessionId("session-one"),
         ActorId("session-one:lead"),
@@ -2944,12 +3011,12 @@ def test_codex_write_stdin_records_raw_and_canonical_audit(tmp_path):
     runtime.recorder.record(observations)
     interpreter.tick()
 
-    stdin_evidence = EvidenceQueries(runtime.store).raw_event(RawEventId("stdin"))
+    stdin_evidence = runtime.evidence.evidence(RawEventId("stdin"))
     assert stdin_evidence is not None
     assert stdin_evidence.payload == observations[-1].payload
     assert stdin_evidence.decision == "translated"
     assert isinstance(stdin_evidence.canonical[0].event.payload, OperationInputProvided)
-    poll_evidence = EvidenceQueries(runtime.store).raw_event(RawEventId("poll"))
+    poll_evidence = runtime.evidence.evidence(RawEventId("poll"))
     assert poll_evidence is not None
     assert poll_evidence.payload == observations[-2].payload
     assert poll_evidence.decision == "ignored_nonsemantic"
@@ -3479,7 +3546,7 @@ def test_claude_hook_and_transcript_tool_finish_deduplicate_transactionally(tmp_
     transcript_finished = payloads(transcript, OperationFinished)[0]
     assert CanonicalEventCodec().encode(hook_finished) == CanonicalEventCodec().encode(transcript_finished)
 
-    store = CanonicalRuntime(str(tmp_path / "events.db"))
+    store = CanonicalRuntime(str(tmp_path / "main.db"))
     store.register(
         "claude_code",
         Session(
@@ -3493,7 +3560,7 @@ def test_claude_hook_and_transcript_tool_finish_deduplicate_transactionally(tmp_
     store.record(hook_raw, "1", hook)
     accepted = store.record(transcript_raw, "1", transcript)
     assert hook_finished.event_id not in {event.event_id for event in accepted}
-    stored = store.store.after(SessionId("session-one"), 0, 10).events
+    stored = store.store.page_after(SessionId("session-one"), 0, 10).events
     finished = next(item for item in stored if item.event.event_id == hook_finished.event_id)
     assert RawEventId("transcript-finish") in finished.raw_event_ids
 

@@ -8,10 +8,10 @@ import base64
 import binascii
 import os
 import re
+import time
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import JSONResponse
 
 from api.config import IMAGE_MIMES
 from api.dashboard.models.files.clipboard_files_request import ClipboardFilesRequest
@@ -22,7 +22,10 @@ from api.dashboard.models.files.dictation_grant_response import DictationGrantRe
 from api.dashboard.models.files.dictation_token_request import DictationTokenRequest
 from api.dashboard.models.files.upload_request import UploadRequest
 from api.dashboard.models.files.upload_response import UploadResponse
+from api.dependencies import ApplicationGraph
 from api.guard import control_plane, reject_input, valid_session_id
+from domain.ids import SessionId
+from domain.uploads import StoredUpload
 from diagnostics import record as A
 from core.daemon.contract import UPLOAD_MAX
 from core import clipboard
@@ -39,7 +42,7 @@ def _claimed_session_id(value: str | None) -> str:
 
 
 @router.post("/api/application/uploads", dependencies=[Depends(control_plane(UPLOAD_MAX))])
-def upload(body: UploadRequest) -> UploadResponse:
+def upload(body: UploadRequest, application: ApplicationGraph) -> UploadResponse:
     """Stage a composer ATTACHMENT (an image/screenshot the browser pasted,
     dropped, or picked, or any other file) on disk, and hand back the ABSOLUTE
     path the composer will inject as an `@path` mention.
@@ -82,9 +85,19 @@ def upload(body: UploadRequest) -> UploadResponse:
         # renders an HTTPException as the same {"error": ...} body at the same
         # status, so the wire response is unchanged.
         raise HTTPException(500, "could not store upload") from error
-    A.state_file("", "", "web-upload",
-                 {"session_id": session_id, "name": safe_name,
-                  "bytes": len(file_bytes), "mime": body.mime, "ok": True})
+    # The bytes stay on disk because the harness is handed an `@path`; the ROW
+    # is what makes them attributable and prunable.
+    application.uploads.record(
+        StoredUpload(
+            upload_id=os.path.basename(path),
+            session_id=SessionId(session_id) if session_id else None,
+            name=safe_name,
+            media_type=body.mime,
+            byte_size=len(file_bytes),
+            stored_path=path,
+            created_at=time.time(),
+        )
+    )
     return UploadResponse(path=path, name=safe_name, mime=body.mime,
                           is_image=body.mime in IMAGE_MIMES)
 
@@ -112,7 +125,7 @@ def clipboard_files(body: ClipboardFilesRequest) -> ClipboardMatchesResponse:
 
 
 @router.post("/api/application/dictation-token", dependencies=[Depends(control_plane())])
-def dictation_token(body: DictationTokenRequest):
+def dictation_token(body: DictationTokenRequest) -> DictationGrantResponse:
     """Mint a short-lived Deepgram grant for the browser's DIRECT wss
     connection (this server never sees audio; its whole role is this trade:
     on-disk API key → ~30s single-purpose JWT). The mic is always offered —
@@ -123,21 +136,21 @@ def dictation_token(body: DictationTokenRequest):
     if not (dictate.SAMPLE_RATE_MIN <= body.sample_rate <= dictate.SAMPLE_RATE_MAX):
         A.state_file("", "", "web-dictate",
                      {"ok": False, "why": "bad-rate", "rate": repr(body.sample_rate)[:40]})
-        return JSONResponse({"error": "bad sample_rate"}, 400)
+        raise HTTPException(400, "bad sample_rate")
     if not dictate.available():
         A.state_file("", "", "web-dictate", {"ok": False, "why": "no-key"})
-        return JSONResponse({"error": "no deepgram key configured"}, 501)
+        raise HTTPException(501, "no deepgram key configured")
     # An omitted directory requests global terms. A supplied directory is
     # exact application input and must still exist.
     if body.working_directory is not None and not os.path.isdir(body.working_directory):
-        return JSONResponse({"error": "working_directory must be an existing directory"}, 400)
+        raise HTTPException(400, "working_directory must be an existing directory")
     try:
         grant = dictate.grant()
     except Exception as error:
         A.error("", "dashboard dictate (grant failed)",
                 {"err": ("%s: %s" % (type(error).__name__, error))[:200]})
         A.state_file("", "", "web-dictate", {"ok": False, "why": "grant"})
-        return JSONResponse({"error": "token grant failed"}, 502)
+        raise HTTPException(502, "token grant failed") from error
     terms = dictate.keyterms()
     A.state_file("", "", "web-dictate",
                  {"ok": True, "rate": body.sample_rate,

@@ -41,6 +41,7 @@ from harness.models.controls import (
     SelectEffort,
     SelectModel,
     SendText,
+    TitleWriteOutcome,
 )
 from harness.models.evidence import (
     LIVENESS_SOURCE_TYPE,
@@ -55,6 +56,13 @@ from harness.models.evidence import (
     output_location_raw_event,
 )
 from harness.models.hooks import HarnessHookRequest, HarnessHookResponse
+from harness.models.telemetry import (
+    TELEMETRY_KIND_HEADER,
+    TELEMETRY_MAX,
+    HarnessTelemetryRequest,
+    HarnessTelemetryResponse,
+    TelemetryContext,
+)
 from harness.models.info import HarnessInfo
 from harness.models.launch import (
     HarnessLaunchPlan,
@@ -64,9 +72,16 @@ from harness.models.launch import (
 )
 from harness.models.probe import TerminalInputState, TerminalSessionState
 from harness.models.session import Session
-from harness.models.usage import UsageBlock, UsageRow, UsageWindow
+from harness.models.usage import (
+    AccountUsageSnapshot,
+    UsageBlock,
+    UsageRow,
+    UsageWindow,
+    UsageWindowSample,
+)
 
 __all__ = [
+    "AccountUsageSnapshot",
     "AnswerQuestion",
     "ApplyRewind",
     "AttachmentReference",
@@ -88,9 +103,13 @@ __all__ = [
     "HarnessHookRequest",
     "HarnessHookResponse",
     "HarnessInfo",
+    "HarnessTelemetryRequest",
+    "HarnessTelemetryResponse",
     "HarnessLaunchPlan",
     "Interrupt",
     "LIVENESS_SOURCE_TYPE",
+    "TELEMETRY_KIND_HEADER",
+    "TELEMETRY_MAX",
     "LaunchRejected",
     "LaunchRequest",
     "LaunchResult",
@@ -113,13 +132,16 @@ __all__ = [
     "SendText",
     "Session",
     "TerminalInputState",
+    "TelemetryContext",
     "TerminalSessionState",
+    "TitleWriteOutcome",
     "TranslationDecision",
     "TranslationError",
     "TranslationResult",
     "UsageBlock",
     "UsageRow",
     "UsageWindow",
+    "UsageWindowSample",
     "canonical_event",
     "output_location_raw_event",
 ]

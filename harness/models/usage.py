@@ -26,6 +26,30 @@ class UsageBlock:
 
 
 @dataclass(frozen=True)
+class UsageWindowSample:
+    """One plan window as a harness last reported it.
+
+    `resets_at` is a field, not a sibling key with a `_reset` name suffix —
+    which is how it was carried when the whole snapshot was one JSON blob.
+    """
+
+    key: str
+    used_percent: Decimal
+    resets_at: float | None
+
+
+@dataclass(frozen=True)
+class AccountUsageSnapshot:
+    """The current plan-limit picture for one account of one harness."""
+
+    harness: str
+    account_id: str | None
+    display_name: str
+    captured_at: float
+    windows: tuple[UsageWindowSample, ...]
+
+
+@dataclass(frozen=True)
 class UsageRow:
     harness: str
     account_id: str | None

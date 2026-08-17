@@ -31,7 +31,13 @@ from harness.models.info import HarnessInfo
 from harness.models.launch import HarnessLaunchPlan, LaunchRequest
 from harness.models.probe import TerminalInputState
 from harness.models.session import Session
+from harness.models.telemetry import (
+    HarnessTelemetryRequest,
+    HarnessTelemetryResponse,
+    TelemetryContext,
+)
 from harness.models.usage import UsageRow
+from repository.contract.usage import AccountUsageRepository
 from domain.events import CanonicalEvent
 from terminal.contract import TerminalViewport
 
@@ -71,6 +77,21 @@ class HarnessHookGateway(Protocol):
     `raise ValueError`."""
 
     def handle(self, request: HarnessHookRequest) -> HarnessHookResponse: ...
+
+
+class HarnessTelemetryGateway(Protocol):
+    """One pushed telemetry delivery in, what it meant out.
+
+    The twin of `HarnessHookGateway`. It runs DAEMON-SIDE — the receiver that
+    accepted the bytes is a thin HTTP client, exactly like a hook process — so
+    it may resolve sessions through the context it is handed.
+    """
+
+    def handle(
+        self,
+        request: HarnessTelemetryRequest,
+        context: TelemetryContext,
+    ) -> HarnessTelemetryResponse: ...
 
 
 class HarnessTranslator(Protocol):
@@ -158,7 +179,14 @@ class HarnessCatalog(Protocol):
 
 
 class HarnessUsage(Protocol):
-    def read(self) -> tuple[UsageRow, ...]: ...
+    """One harness's plan-limit rows.
+
+    Takes the snapshot repository rather than reaching for one: a harness that
+    caches what it observed reads it back through the same interface everything
+    else does, and a harness that queries live needs nothing from it.
+    """
+
+    def read(self, usage: AccountUsageRepository) -> tuple[UsageRow, ...]: ...
 
 
 class HarnessTerminalProbe(Protocol):
@@ -173,6 +201,7 @@ class HarnessPlugin:
     sources: HarnessRawEventSources
     translator: HarnessTranslator
     hooks: HarnessHookGateway | None = None
+    telemetry: HarnessTelemetryGateway | None = None
     reactors: tuple[HarnessCanonicalEventReactor, ...] = ()
     controller: HarnessController | None = None
     launcher: HarnessLauncher | None = None

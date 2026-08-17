@@ -11,12 +11,13 @@ from __future__ import annotations
 from threading import RLock
 
 from domain.ids import SessionId
-from engine.store.canonical import CanonicalEventPage, CanonicalEventStore, StoredCanonicalEvent
+from domain.records import CanonicalEventPage, StoredCanonicalEvent
+from repository.contract.facts import CanonicalEventRepository
 
 
 class EventPages:
-    def __init__(self, canonical_store: CanonicalEventStore) -> None:
-        self.canonical_store = canonical_store
+    def __init__(self, canonical_events: CanonicalEventRepository) -> None:
+        self.canonical_events = canonical_events
         self._latest_pages: dict[SessionId, tuple[int | None, tuple[StoredCanonicalEvent, ...]]] = {}
         self._tail_pages: dict[tuple[SessionId, int], CanonicalEventPage] = {}
         self._latest_pages_lock = RLock()
@@ -32,7 +33,7 @@ class EventPages:
             cached = self._tail_pages.get(key)
             if cached is not None and cached.cursor == through_cursor:
                 return cached
-        page = self.canonical_store.tail(session_id, through_cursor, event_limit)
+        page = self.canonical_events.page_tail(session_id, through_cursor, event_limit)
         with self._latest_pages_lock:
             self._tail_pages[key] = page
         return page
@@ -43,11 +44,11 @@ class EventPages:
         through_cursor: int | None = None,
     ) -> CanonicalEventPage:
         selected_cursor = (
-            self.canonical_store.latest_cursor()
+            self.canonical_events.latest_cursor()
             if through_cursor is None
             else through_cursor
         )
-        session_cursor = self.canonical_store.latest_session_cursor(session_id, selected_cursor)
+        session_cursor = self.canonical_events.latest_session_cursors((session_id,), selected_cursor).get(session_id)
         with self._latest_pages_lock:
             cached = self._latest_pages.get(session_id)
             if (
@@ -58,7 +59,7 @@ class EventPages:
             ):
                 cached = (
                     session_cursor,
-                    cached[1] + self.canonical_store.between(
+                    cached[1] + self.canonical_events.events_between(
                         session_id,
                         cached[0],
                         session_cursor,
@@ -66,7 +67,7 @@ class EventPages:
                 )
                 self._latest_pages[session_id] = cached
             elif cached is None or cached[0] != session_cursor:
-                page = self.canonical_store.through(session_id, selected_cursor)
+                page = self.canonical_events.page_through(session_id, selected_cursor)
                 cached = (session_cursor, page.events)
                 self._latest_pages[session_id] = cached
             events = cached[1]
@@ -85,7 +86,7 @@ class EventPages:
         usually far behind it — without these the pane would render ids.
         """
         page = self.tail(session_id, event_limit, through_cursor)
-        actor_events = self.canonical_store.events_of_types(
+        actor_events = self.canonical_events.events_of_types(
             session_id,
             ("actor.started", "actor.name_changed"),
             through_cursor,

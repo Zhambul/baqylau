@@ -15,7 +15,7 @@
 # Everything degrades to a no-op if `cryptography` is missing (`enabled()` is
 # False, the server hides the feature), and nothing raises into the Notifier's
 # 1 s watcher loop — a send failure is audited and swallowed like the Telegram
-# path. The VAPID keypair is generated ONCE and persisted in the durable prefs
+# path. The VAPID keypair is generated ONCE and persisted in the durable
 # store (keyed `vapid-keypair`), so every browser stays subscribed to the same
 # application-server key across restarts.
 import base64
@@ -30,7 +30,8 @@ from urllib.parse import urlparse
 import threading
 
 from diagnostics import record as A
-from dashboard import config, prefs
+from dashboard import config
+from domain.preferences import PushSigningKeypair
 from notify.channels.alert import NOTHING, OK, alert_text, push_tag
 
 
@@ -52,7 +53,6 @@ except Exception:                      # pragma: no cover - environment-dependen
 # misbehaves (RFC 8292 §2.1). A mailto/URL; overridable, defaults to the repo
 # owner's address. Not a secret.
 VAPID_SUB = os.environ.get("BAQYLAU_DASHBOARD_VAPID_SUB") or "mailto:e.zhambul@gmail.com"
-VAPID_KEY = "vapid-keypair"            # prefs kv key: {"priv": pkcs8-pem, "pub": b64u-point}
 DELIVERY_LIFETIME_SECONDS = 86400                          # how long the push service holds an undelivered message
 TOKEN_LIFETIME_SECONDS = 12 * 3600                  # VAPID token lifetime (Apple caps aud-JWTs at 24h)
 RECORD_SIZE = 4096                     # aes128gcm record size (rs) — our payloads are tiny
@@ -76,7 +76,7 @@ def _b64u_dec(s):
     return base64.urlsafe_b64decode(s.encode("ascii"))
 
 
-def _load_keypair():
+def _load_keypair(keys):
     """The persisted VAPID keypair as (private_key_obj, public_b64u), generated
     and stored on first use. One P-256 keypair per machine, stable across
     restarts so already-subscribed browsers keep matching — a rotated key would
@@ -84,19 +84,18 @@ def _load_keypair():
     is unavailable / the store is unwritable (feature degrades off)."""
     if not _HAVE_CRYPTO:
         return None, None
-    rec = prefs.get(VAPID_KEY, None)
-    if isinstance(rec, dict) and rec.get("priv") and rec.get("pub"):
+    stored = keys.keypair()
+    if stored is not None:
         try:
-            priv = load_pem_private_key(rec["priv"].encode("ascii"), password=None)
-            return priv, rec["pub"]
+            priv = load_pem_private_key(stored.private_key_pem.encode("ascii"), password=None)
+            return priv, stored.public_key
         except Exception:
             # Corrupt stored record — regenerate below, but NOT silently: the
             # docstring's own warning is that a new key orphans every existing
             # subscription, so every already-subscribed browser goes quiet at
             # once with nothing to point at. This row is the only thing that
             # explains it afterwards.
-            A.error("", "webpush keypair (corrupt record — regenerating)",
-                    {"subs": len(prefs.push_subscriptions())})
+            A.error("", "webpush keypair (corrupt record — regenerating)", {})
     try:
         priv = ec.generate_private_key(ec.SECP256R1())
         pub_point = priv.public_key().public_bytes(
@@ -104,27 +103,27 @@ def _load_keypair():
         pub_b64u = _b64u(pub_point)
         pem = priv.private_bytes(
             Encoding.PEM, PrivateFormat.PKCS8, NoEncryption()).decode("ascii")
-        prefs.set(VAPID_KEY, {"priv": pem, "pub": pub_b64u})
+        keys.save_keypair(PushSigningKeypair(pem, pub_b64u))
         return priv, pub_b64u
     except Exception:
         A.error("", "webpush keygen")
         return None, None
 
 
-def public_key():
+def public_key(keys):
     """The VAPID public key (base64url uncompressed point) the browser passes as
     `applicationServerKey` when it subscribes — '' when the feature is off."""
-    _, pub = _load_keypair()
+    _, pub = _load_keypair(keys)
     return pub or ""
 
 
-def _vapid_header(endpoint):
+def _vapid_header(endpoint, keys):
     """The `Authorization: vapid t=<jwt>, k=<pubkey>` header proving this server
     is the application server the subscription trusts (RFC 8292). The JWT's
     `aud` is the push service ORIGIN (scheme://host of the endpoint), signed
     ES256 with the VAPID private key — JOSE wants the raw r||s signature, so the
     DER the backend returns is unpacked here."""
-    priv, pub = _load_keypair()
+    priv, pub = _load_keypair(keys)
     if not priv:
         return None
     u = urlparse(endpoint)
@@ -183,7 +182,7 @@ class Result:
         self.ok, self.gone, self.status, self.error = ok, gone, status, error
 
 
-def deliver(subscription, payload, ttl=DELIVERY_LIFETIME_SECONDS):
+def deliver(subscription, payload, keys, ttl=DELIVERY_LIFETIME_SECONDS):
     """Deliver `payload` (a dict, JSON-encoded) to one `subscription` (its wire
     JSON: {endpoint, keys:{p256dh, auth}}). Never raises — returns a Result.
     Synchronous network I/O, so callers run it OFF the watcher thread."""
@@ -194,7 +193,7 @@ def deliver(subscription, payload, ttl=DELIVERY_LIFETIME_SECONDS):
         keys = subscription.get("keys") or {}
         body = _encrypt(json.dumps(payload, ensure_ascii=False).encode("utf-8"),
                         keys["p256dh"], keys["auth"])
-        auth = _vapid_header(endpoint)
+        auth = _vapid_header(endpoint, keys)
         if not auth:
             return Result(error="no vapid")
         req = urllib.request.Request(endpoint, data=body, method="POST", headers={
@@ -216,7 +215,7 @@ def deliver(subscription, payload, ttl=DELIVERY_LIFETIME_SECONDS):
 
 # ------------------------------------------------ the alert this channel carries
 
-def send_alert(entry, subs, badge=0):
+def send_alert(entry, subs, badge=0, *, keys=None, subscriptions=None):
     """Send the on-device alert as a Web Push to `subs` — the subscriptions of
     the ONE device the caller routed to (`presence.route`), NOT every
     subscription, so a session going done/asking buzzes the device you're
@@ -240,7 +239,8 @@ def send_alert(entry, subs, badge=0):
     title, body, url = alert_text(entry)
     payload = {"title": title, "body": body, "session_id": session_id,
                "kind": entry.get("kind"), "url": url, "badge": badge}
-    threading.Thread(target=_webpush_fanout, args=(subs, payload, "send"),
+    threading.Thread(target=_webpush_fanout,
+                     args=(subs, payload, "send", keys, subscriptions),
                      daemon=True).start()
     # The subscriptions are the handle: a resolve push has to reach the devices
     # the alert actually went to, NOT whichever device is most-recently-used by
@@ -249,14 +249,14 @@ def send_alert(entry, subs, badge=0):
             "subs": subs, "tag": push_tag(session_id)}
 
 
-def _webpush_fanout(subs, payload, action):
+def _webpush_fanout(subs, payload, action, keys, subscriptions):
     """The detached fan-out body, shared by the alert and its retraction:
     deliver `payload` to each subscription, audit the outcome (with the target
     `device` — the on-device analog of the route decision), and prune the dead
     ones. Runs off the watcher thread; never raises."""
     for sub in subs:
         try:
-            res = deliver(sub, payload)
+            res = deliver(sub, payload, keys)
         except Exception:
             A.error("", "dashboard webpush %s" % action,
                     {"session_id": payload.get("session_id")})
@@ -264,7 +264,7 @@ def _webpush_fanout(subs, payload, action):
         ep = sub.get("endpoint", "") if isinstance(sub, dict) else ""
         dev = sub.get("device") if isinstance(sub, dict) else None
         if res.gone:
-            prefs.remove_push_subscription(ep)
+            subscriptions.remove(ep)
         A.state_file("", "", "web-push",
                      {"session_id": payload.get("session_id"), "kind": payload.get("kind"),
                       "action": action, "status": res.status,
@@ -273,7 +273,7 @@ def _webpush_fanout(subs, payload, action):
                       "device": dev, "endpoint": ep[:80]})
 
 
-def retract_alert(h, reason, badge=0):
+def retract_alert(h, reason, badge=0, *, keys=None, subscriptions=None):
     """Close the delivered banner by pushing a RESOLVE message to the same
     subscriptions; sw.js closes everything under the tag and shows nothing.
 
@@ -294,6 +294,7 @@ def retract_alert(h, reason, badge=0):
         return NOTHING
     payload = {"type": "resolve", "session_id": h.get("session_id") or "",
                "kind": h.get("kind"), "tag": h.get("tag"), "badge": badge}
-    threading.Thread(target=_webpush_fanout, args=(subs, payload, "resolve"),
+    threading.Thread(target=_webpush_fanout,
+                     args=(subs, payload, "resolve", keys, subscriptions),
                      daemon=True).start()
     return OK                              # dispatched; the thread audits the wire

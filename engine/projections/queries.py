@@ -31,16 +31,21 @@ from engine.projections.models import (
     TaskSummary,
     UsageSummary,
 )
+from domain.records import StoredCanonicalEvent
 from engine.projections.pages import EventPages
-from engine.store.canonical import CanonicalEventStore, StoredCanonicalEvent
-from engine.store.sessions import SessionStore
+from repository.contract.facts import CanonicalEventRepository
+from repository.contract.sessions import SessionRepository
 
 
 class SessionQueries:
-    def __init__(self, canonical_store: CanonicalEventStore, sessions: SessionStore) -> None:
-        self.canonical_store = canonical_store
+    def __init__(
+        self,
+        canonical_events: CanonicalEventRepository,
+        sessions: SessionRepository,
+    ) -> None:
+        self.canonical_events = canonical_events
         self.session_registry = sessions
-        self.pages = EventPages(canonical_store)
+        self.pages = EventPages(canonical_events)
 
     def _events(
         self,
@@ -54,7 +59,7 @@ class SessionQueries:
     def sessions(self, through_cursor: int | None = None) -> tuple[SessionSummary, ...]:
         summaries = (
             self.summary(session_id, through_cursor)
-            for session_id in self.canonical_store.session_ids()
+            for session_id in self.canonical_events.session_ids()
         )
         return tuple(
             sorted(
@@ -138,7 +143,7 @@ class SessionQueries:
     ) -> GoalState | None:
         # The lead actor is the session's own voice: a subagent's goal is not
         # the session's, so the registry decides whose facts count here.
-        session = self.session_registry.find_by_id(session_id)
+        session = self.session_registry.find(session_id)
         if session is None:
             return None
         events = self._events(session_id, through_cursor)

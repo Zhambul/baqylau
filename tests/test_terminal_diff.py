@@ -1,6 +1,7 @@
 from dataclasses import replace
 
-from terminal.panes import views as terminal_views
+from repository.impl.sqlite.databases import main_database
+from repository.impl.sqlite.terminal import SqliteContentViewRepository
 from domain.events import FileAccessed
 from domain.ids import ActorId, CanonicalEventId, OperationId, SessionId
 from engine.projections import ActivityContext, FileActivity
@@ -71,11 +72,12 @@ def test_terminal_view_state_toggles_without_touching_canonical_content(tmp_path
     monkeypatch.setenv("BAQYLAU_DATA_DIR", str(tmp_path))
     reference = "historic-file-event:unified_diff"
 
-    assert terminal_views.opened() == frozenset()
-    assert terminal_views.toggle(reference) is True
-    assert terminal_views.opened() == frozenset({reference})
-    assert terminal_views.toggle(reference) is False
-    assert terminal_views.opened() == frozenset()
+    views = SqliteContentViewRepository(main_database(str(tmp_path / "main.db")))
+    assert views.opened() == frozenset()
+    assert views.toggle(reference, 1.0) is True
+    assert views.opened() == frozenset({reference})
+    assert views.toggle(reference, 2.0) is False
+    assert views.opened() == frozenset()
 
 
 def test_terminal_write_view_renders_the_captured_body_not_the_current_file(tmp_path):

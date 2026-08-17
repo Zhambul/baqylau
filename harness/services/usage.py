@@ -12,6 +12,7 @@ from typing import Protocol
 
 from harness.models import UsageRow
 from harness.registry import HarnessRegistry
+from repository.contract.usage import AccountUsageRepository
 
 USAGE_REFRESH_SECONDS = 60.0
 
@@ -21,15 +22,16 @@ class UsageSource(Protocol):
 
 
 class HarnessUsageService(UsageSource):
-    def __init__(self, registry: HarnessRegistry) -> None:
+    def __init__(self, registry: HarnessRegistry, usage: AccountUsageRepository) -> None:
         self.registry = registry
+        self.usage = usage
 
     def read(self) -> tuple[UsageRow, ...]:
         rows: list[UsageRow] = []
         for plugin in self.registry.plugins():
             if plugin.usage is None:
                 continue
-            plugin_rows = plugin.usage.read()
+            plugin_rows = plugin.usage.read(self.usage)
             if any(row.harness != plugin.info.name for row in plugin_rows):
                 raise ValueError("usage row harness does not match its plugin")
             rows.extend(plugin_rows)

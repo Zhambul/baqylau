@@ -21,7 +21,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 
-from terminal.panes import views as terminal_views
+from terminal.services.views import ContentViewService
 from domain.ids import ActorId, SessionId
 from engine.projections import ActivityScope, FileActivity
 from terminal.mirror.visibility import visible
@@ -61,8 +61,17 @@ class _MirrorModel:
 
 
 class PaneStreamService:
-    def __init__(self, canonical_store, queries, sessions, content, terminal: TerminalAdapter) -> None:
-        self._canonical_store = canonical_store
+    def __init__(
+        self,
+        canonical_events,
+        queries,
+        sessions,
+        content,
+        terminal: TerminalAdapter,
+        views: ContentViewService,
+    ) -> None:
+        self._canonical_events = canonical_events
+        self._views = views
         self._queries = queries
         self._sessions = sessions
         self._content = content
@@ -100,7 +109,7 @@ class PaneStreamService:
                 del self._models[stale_id]
             model = self._models.get(session_id)
             if model is None:
-                session = self._sessions.find_by_id(session_id)
+                session = self._sessions.find(session_id)
                 if session is None:
                     raise KeyError(str(session_id))
                 model = _MirrorModel(session.lead_actor_id)
@@ -109,7 +118,9 @@ class PaneStreamService:
 
     def _advance(self, session_id: SessionId, model: _MirrorModel) -> None:
         changed = False
-        latest_cursor = self._canonical_store.latest_session_cursor(session_id) or 0
+        latest_cursor = self._canonical_events.latest_session_cursors((session_id,), None).get(
+            session_id, 0
+        )
         if model.cursor is None or latest_cursor > model.cursor:
             page = self._queries.activity_tail(
                 session_id,
@@ -137,7 +148,7 @@ class PaneStreamService:
                 model.painted_tab_state = current_tab_state
             model.cursor = latest_cursor
             changed = True
-        current_opened_views = terminal_views.opened()
+        current_opened_views = self._views.opened()
         if current_opened_views != model.opened_views:
             model.opened_views = current_opened_views
             for content_reference, activity in model.file_activities.items():
@@ -167,15 +178,15 @@ class PaneStreamService:
     # -- scoreboard ------------------------------------------------------------
 
     def scoreboard_stream(self, session_id: SessionId, width: int) -> "ScoreboardStream":
-        return ScoreboardStream(self._canonical_store, self._queries, session_id, width)
+        return ScoreboardStream(self._canonical_events, self._queries, session_id, width)
 
 
 class ScoreboardStream:
     """Per-connection scoreboard state: a frame per cursor change, per second
     (the active-time clock ticks), and only then."""
 
-    def __init__(self, canonical_store, queries, session_id: SessionId, width: int) -> None:
-        self._canonical_store = canonical_store
+    def __init__(self, canonical_events, queries, session_id: SessionId, width: int) -> None:
+        self._canonical_events = canonical_events
         self._queries = queries
         self._session_id = session_id
         self._presenter = ScoreboardPresenter()
@@ -190,7 +201,9 @@ class ScoreboardStream:
         self._active = False
 
     def frame(self) -> str | None:
-        cursor = self._canonical_store.latest_session_cursor(self._session_id) or 0
+        cursor = self._canonical_events.latest_session_cursors(
+            (self._session_id,), None
+        ).get(self._session_id, 0)
         current_time = time.time()
         current_second = int(current_time)
         if cursor == self._rendered_cursor and current_second == self._rendered_second:

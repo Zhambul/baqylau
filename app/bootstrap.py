@@ -1,4 +1,12 @@
-"""Build the canonical application graph with installed concrete harnesses."""
+"""Build the canonical application graph with installed concrete harnesses.
+
+The one place that knows WHICH harnesses and which terminal are installed — and
+now the one place that opens a database. Three `SqliteDatabase` handles are
+built here and initialised once each; every repository below takes one, and
+every service takes the repositories it needs as constructor parameters.
+Nothing further down resolves a path, opens a connection, or manages a
+transaction.
+"""
 
 from __future__ import annotations
 
@@ -10,16 +18,17 @@ from dashboard import config as dashboard_config
 
 from harness.contract import CanonicalEventReaction, CoreTranslator
 from harness.models import LIVENESS_SOURCE_TYPE, OUTPUT_LOCATION_SOURCE_TYPE
-from core.data import data_directory
+from core import data
 from engine.queries.content import CanonicalContentService
 from engine.interpret.translators import LivenessTranslator, OperationOutputTranslator
-from diagnostics import record as diagnostic_record
-from diagnostics.read import OperationalDiagnostics
 from harness.hooks.gateway import HookGatewayService
+from harness.services.telemetry import TelemetryGatewayService
 from app.services.insights import ApplicationInsightsService
 from engine.interpret.loop import Interpreter
 from terminal.panes.commands import PaneCommandService
 from terminal.panes.streams import PaneStreamService
+from terminal.services.panes import PaneWidthService
+from terminal.services.views import ContentViewService
 from harness.impl import installed
 from engine.interpret.reactions import (
     OperationOutputCanonicalEventReaction,
@@ -28,6 +37,7 @@ from engine.interpret.reactions import (
 from terminal.panes.reaction import PaneCanonicalEventReaction
 from core.repository import RepositoryQueries
 from app.services.resume import ResumableSessionService
+from app.services.uploads import UploadService
 from diagnostics.telemetry import BrowserTelemetryService
 from harness.services.catalog import HarnessCatalogService
 from harness.services.controls import HarnessControlService
@@ -40,29 +50,75 @@ from dashboard.services.overview import GlobalApplicationService
 from dashboard.services.sessions import DashboardSessionService
 from dashboard.services.streams import DashboardStreamService
 from dashboard.services.workspace import SessionApplicationService
-from engine.store.canonical import CanonicalEventStore
-from engine.queries.evidence import EvidenceQueries
 from harness.registry import HarnessRegistry
-from engine.store.output import OperationOutputStore
 from engine.projections import SessionQueries
-from engine.store.recorder import RawEventRecorder
-from engine.store.sessions import SessionStore
 from terminal.adapter import TerminalAdapter
 from terminal.impl import resolve as resolve_terminal
 from terminal.impl.null import null_plugin
-from diagnostics.database import db_path as diagnostic_database_path
+from repository.contract.diagnostics import (
+    DiagnosticReadRepository,
+    DiagnosticWriteRepository,
+)
+from repository.contract.facts import (
+    CanonicalEventRepository,
+    RawEventRepository,
+    TranslationEvidenceRepository,
+)
+from repository.contract.operations import OperationOutputRepository
+from repository.contract.preferences import (
+    NotificationSettingRepository,
+    PushSigningKeyRepository,
+    PushSubscriptionRepository,
+)
+from repository.contract.sessions import SessionRepository
+from repository.contract.usage import AccountUsageRepository
+from repository.impl.sqlite.canonical_events import SqliteCanonicalEventRepository
+from repository.impl.sqlite.databases import audit_database, main_database, read_only
+from repository.impl.sqlite.diagnostics import (
+    SqliteDiagnosticReadRepository,
+    SqliteDiagnosticWriteRepository,
+)
+from repository.impl.sqlite.evidence import SqliteTranslationEvidenceRepository
+from repository.impl.sqlite.operation_output import SqliteOperationOutputRepository
+from repository.impl.sqlite.preferences import (
+    SqliteHiddenDirectoryRepository,
+    SqliteNewSessionRepository,
+    SqliteNotificationSettingRepository,
+    SqlitePushSigningKeyRepository,
+    SqlitePushSubscriptionRepository,
+    SqliteTaskDismissalRepository,
+    SqliteViewModeRepository,
+)
+from repository.impl.sqlite.raw_events import SqliteRawEventRepository
+from repository.impl.sqlite.sessions import SqliteSessionRepository
+from repository.impl.sqlite.terminal import (
+    SqliteContentViewRepository,
+    SqlitePaneWidthRepository,
+)
+from repository.impl.sqlite.uploads import SqliteUploadRepository
+from repository.impl.sqlite.usage import SqliteAccountUsageRepository
+from repository.impl.sqlite.workspace import SqliteSessionWorkspaceRepository
 
 
 @dataclass(frozen=True)
 class CanonicalApplication:
-    canonical_store: CanonicalEventStore
+    # --- storage, as Protocols: no consumer names an implementation ---
+    canonical_events: CanonicalEventRepository
+    raw_events: RawEventRepository
+    sessions: SessionRepository
+    evidence: TranslationEvidenceRepository
+    operation_output: OperationOutputRepository
+    diagnostics: DiagnosticReadRepository
+    audit: DiagnosticWriteRepository
+    account_usage: AccountUsageRepository
+    notification_settings: NotificationSettingRepository
+    push_subscriptions: PushSubscriptionRepository
+    push_signing_keys: PushSigningKeyRepository
+    # --- the rest of the graph ---
     registry: HarnessRegistry
-    sessions: SessionStore
-    recorder: RawEventRecorder
     hook_gateway: HookGatewayService
-    operation_output: OperationOutputStore
+    telemetry_gateway: TelemetryGatewayService
     queries: SessionQueries
-    evidence: EvidenceQueries
     dashboard_activity: DashboardActivityService
     dashboard_sessions: DashboardSessionService
     dashboard_stream: DashboardStreamService
@@ -78,35 +134,59 @@ class CanonicalApplication:
     terminal: TerminalAdapter
     pane_commands: PaneCommandService
     pane_streams: PaneStreamService
+    content_views: ContentViewService
     interpreter: Interpreter
-    diagnostics: OperationalDiagnostics
     insights: ApplicationInsightsService
     resumable_sessions: ResumableSessionService
+    uploads: UploadService
     browser_telemetry: BrowserTelemetryService
 
 
 def default_data_directory() -> str:
-    return data_directory()
+    return data.data_directory()
 
 
 def build_application(
     data_directory: str,
-    diagnostic_database_path: str | None = None,
+    audit_database_path: str | None = None,
 ) -> CanonicalApplication:
-    database_path = os.path.join(os.path.abspath(data_directory), "events.db")
-    canonical_store = CanonicalEventStore(database_path)
-    recorder = RawEventRecorder(database_path)
-    operation_output = OperationOutputStore(database_path)
-    diagnostics = OperationalDiagnostics(
-        diagnostic_database_path
-        or os.path.join(os.path.abspath(data_directory), "diagnostics.db")
+    directory = os.path.abspath(data_directory)
+    # Two files, two handles, one initialize each. Four separate store objects
+    # used to apply the same schema to the same file four times at startup.
+    main = main_database(os.path.join(directory, data.MAIN_DATABASE_NAME))
+    audit = audit_database(
+        audit_database_path or os.path.join(directory, data.AUDIT_DATABASE_NAME)
     )
+
+    canonical_events = SqliteCanonicalEventRepository(main)
+    raw_events = SqliteRawEventRepository(main)
+    operation_output = SqliteOperationOutputRepository(main)
+    evidence = SqliteTranslationEvidenceRepository(main)
+    workspaces = SqliteSessionWorkspaceRepository(main)
+    view_modes = SqliteViewModeRepository(main)
+    notification_settings = SqliteNotificationSettingRepository(main)
+    hidden_directories = SqliteHiddenDirectoryRepository(main)
+    new_sessions = SqliteNewSessionRepository(main)
+    dismissals = SqliteTaskDismissalRepository(main)
+    push_subscriptions = SqlitePushSubscriptionRepository(main)
+    push_signing_keys = SqlitePushSigningKeyRepository(main)
+    pane_widths = SqlitePaneWidthRepository(main)
+    view_repository = SqliteContentViewRepository(main)
+    account_usage = SqliteAccountUsageRepository(main)
+    upload_repository = SqliteUploadRepository(main)
+    # The reader opens the SAME file the writer opens, read-only. They used to
+    # be two independently configured paths, which in the test graph pointed at
+    # two different files.
+    audit_writes = SqliteDiagnosticWriteRepository(audit)
+    diagnostics = SqliteDiagnosticReadRepository(read_only(audit))
+
     repositories = RepositoryQueries()
     registry = HarnessRegistry()
     for plugin in installed():
         registry.register(plugin)
     registry.validate()
-    sessions = SessionStore(database_path, registry)
+    sessions = SqliteSessionRepository(main, registry)
+
     # The terminal is resolved ONCE, here, and passed down as fields: a
     # consumer holds the sub-protocol it needs, never the resolver. When no
     # terminal is installed the null plugin takes the seat, so every service
@@ -114,16 +194,20 @@ def build_application(
     # ordinary failure reason.
     terminal_plugin = resolve_terminal() or null_plugin()
     terminal = TerminalAdapter(terminal_plugin, sessions)
-    queries = SessionQueries(canonical_store, sessions)
-    controls = HarnessControlService(sessions, terminal, terminal_plugin, queries)
+    pane_width_service = PaneWidthService(pane_widths)
+    content_views = ContentViewService(view_repository, audit_writes)
+    queries = SessionQueries(canonical_events, sessions)
+    controls = HarnessControlService(
+        sessions, terminal, terminal_plugin, queries, account_usage
+    )
     catalog = HarnessCatalogService(registry)
-    usage_state = ApplicationUsageState(HarnessUsageService(registry))
+    usage_state = ApplicationUsageState(HarnessUsageService(registry, account_usage))
     terminal_input = TerminalInputService(sessions, terminal, terminal_plugin.viewport)
     dashboard_sessions = DashboardSessionService(
-        canonical_store, queries, terminal_input, repositories
+        canonical_events, queries, terminal_input, repositories
     )
     dashboard_notification_state = DashboardNotificationState()
-    content = CanonicalContentService(canonical_store, queries)
+    content = CanonicalContentService(canonical_events, queries)
     core_translators: Mapping[str, CoreTranslator] = {
         OUTPUT_LOCATION_SOURCE_TYPE: OperationOutputTranslator(),
         LIVENESS_SOURCE_TYPE: LivenessTranslator(),
@@ -131,22 +215,31 @@ def build_application(
     reactions: tuple[CanonicalEventReaction, ...] = (
         # The sessions row exists and is current before the panes anchor to it.
         SessionUpsertCanonicalEventReaction(sessions),
-        OperationOutputCanonicalEventReaction(operation_output, recorder),
-        PaneCanonicalEventReaction(terminal, sessions),
+        OperationOutputCanonicalEventReaction(operation_output, raw_events),
+        PaneCanonicalEventReaction(terminal, sessions, pane_width_service),
     )
     return CanonicalApplication(
-        canonical_store=canonical_store,
-        registry=registry,
+        canonical_events=canonical_events,
+        raw_events=raw_events,
         sessions=sessions,
-        recorder=recorder,
-        hook_gateway=HookGatewayService(registry, recorder),
+        evidence=evidence,
         operation_output=operation_output,
+        diagnostics=diagnostics,
+        audit=audit_writes,
+        account_usage=account_usage,
+        notification_settings=notification_settings,
+        push_subscriptions=push_subscriptions,
+        push_signing_keys=push_signing_keys,
+        registry=registry,
+        hook_gateway=HookGatewayService(registry, raw_events),
+        telemetry_gateway=TelemetryGatewayService(
+            registry, raw_events, sessions, account_usage
+        ),
         queries=queries,
-        evidence=EvidenceQueries(canonical_store),
-        dashboard_activity=DashboardActivityService(canonical_store, queries),
+        dashboard_activity=DashboardActivityService(canonical_events, queries),
         dashboard_sessions=dashboard_sessions,
         dashboard_stream=DashboardStreamService(
-            canonical_store, queries, terminal_input, repositories
+            canonical_events, queries, terminal_input, repositories
         ),
         content=content,
         dashboard_notification_state=dashboard_notification_state,
@@ -155,39 +248,48 @@ def build_application(
             dashboard_sessions,
             usage_state,
             dashboard_notification_state,
+            new_sessions,
+            notification_settings,
+            hidden_directories,
+            push_subscriptions,
         ),
         session_application=SessionApplicationService(
-            canonical_store,
+            canonical_events,
             queries,
             terminal_input,
             diagnostics,
+            workspaces,
+            view_modes,
+            notification_settings,
+            dismissals,
         ),
         controls=controls,
         launcher=HarnessLauncherService(registry, terminal, terminal_plugin.tabs),
         catalog=catalog,
         terminal_input=terminal_input,
         terminal=terminal,
-        pane_commands=PaneCommandService(terminal),
+        pane_commands=PaneCommandService(terminal, pane_width_service),
         pane_streams=PaneStreamService(
-            canonical_store,
+            canonical_events,
             queries,
             sessions,
             content,
             terminal,
+            content_views,
         ),
+        content_views=content_views,
         interpreter=Interpreter(
             sessions,
             registry,
-            recorder,
+            raw_events,
             operation_output,
-            canonical_store,
+            canonical_events,
             core_translators,
             reactions,
             controls,
         ),
-        diagnostics=diagnostics,
         insights=ApplicationInsightsService(
-            canonical_store,
+            canonical_events,
             queries,
             terminal_input,
             diagnostics,
@@ -195,15 +297,19 @@ def build_application(
             top_project_count=dashboard_config.INSIGHTS_PROJECT_LIMIT,
         ),
         resumable_sessions=ResumableSessionService(
-            canonical_store,
+            canonical_events,
             queries,
             terminal_input,
             repositories,
             result_limit=dashboard_config.RESUMABLE_SESSION_LIMIT,
         ),
-        browser_telemetry=BrowserTelemetryService(diagnostic_record),
+        uploads=UploadService(upload_repository),
+        browser_telemetry=BrowserTelemetryService(audit_writes, os.getpid()),
     )
 
 
 def build_default_application() -> CanonicalApplication:
-    return build_application(default_data_directory(), diagnostic_database_path())
+    """The daemon's graph. Its audit writer addresses the same file the
+    out-of-daemon facade does — one path, both directions — but the graph holds
+    its own handle so every daemon-side write is injected."""
+    return build_application(default_data_directory())

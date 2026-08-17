@@ -22,7 +22,8 @@ import subprocess
 import sys
 import time
 
-from core import locks
+from repository.impl.sqlite.databases import lock_database
+from repository.impl.sqlite.locks import SqliteProcessLockRepository
 from diagnostics import record
 from core.process import process_is_alive
 from dashboard import paths
@@ -37,7 +38,7 @@ def _server():
 def holder():
     """The running server's pid, or 0 (dead holders are not 'running' — the
     next start steals the stale lock)."""
-    pid = locks.lock_holder(paths.DASHBOARD_LOCK_DATABASE, "dashboard")
+    pid = SqliteProcessLockRepository(lock_database()).holder("dashboard")
     return pid if pid and process_is_alive(pid) else 0
 
 

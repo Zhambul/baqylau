@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 # Every package this repository owns — the universe each rule below draws from.
 OUR_PACKAGES = (
     "api", "app", "core", "dashboard", "diagnostics", "domain",
-    "engine", "harness", "notify", "terminal",
+    "engine", "harness", "notify", "repository", "terminal",
 )
 
 
@@ -52,6 +52,156 @@ def test_domain_imports_only_the_standard_library():
     assert_imports("domain", {"domain"})
 
 
+def _code_only(path: Path) -> str:
+    """The file with its docstrings and comments removed.
+
+    A rule about what code DOES must not fire on prose describing it — the
+    first version of the database rule below failed on the module that explains
+    why the driver may not be named outside one directory.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            body = node.body
+            if (
+                body
+                and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)
+            ):
+                node.body = body[1:] or [ast.Pass()]
+    return ast.unparse(ast.fix_missing_locations(tree))
+
+
+def test_the_repository_layer_imports_only_the_model_layers():
+    """The new floor: rows in, model objects out, and nothing above it named.
+
+    It may stand on `domain` (the vocabulary), `diagnostics.models` (the
+    operational vocabulary, which imports only `domain.ids`), and `core` (where
+    its three file paths live), and it may name the two model packages whose
+    types its Protocols speak. Reaching for `engine`, `app`, `api`, `dashboard`
+    or `notify` would mean the store could only run inside the daemon that
+    composes it.
+    """
+    assert_imports(
+        "repository",
+        {"core", "diagnostics", "domain", "repository"},
+        # `harness.registry` is the one extra: a session hands out its plugin,
+        # exactly as the store it replaced did, and the registry imports only
+        # the contract.
+        allowed_modules={"harness.models", "harness.registry", "terminal.models"},
+    )
+
+
+def test_only_a_repository_implementation_opens_a_database():
+    """THE rule this whole layer exists to establish, and it has no exceptions.
+
+    `sqlite3`, SQL text, and the driver's row type appear in exactly two
+    directories, and both are repository implementations. The second one lives
+    outside `repository/` only because it names a concrete harness, which the
+    shared-vocabulary rule forbids in a shared package — it declares the same
+    Protocol and speaks the same model objects as every other.
+
+    Not "the daemon may": nothing may. A read-only forensic open is still a
+    repository; an audit write from a hook process is still a repository.
+    """
+    allowed_prefixes = ("repository/impl/sqlite/",)
+    allowed_files = {"harness/impl/codex/canonical/title.py"}
+    markers = ("sqlite3", "SELECT ", "INSERT INTO", "UPDATE ", "DELETE FROM", "CREATE TABLE")
+    violations = []
+    for package in OUR_PACKAGES:
+        for path in sorted((ROOT / package).rglob("*.py")):
+            relative = path.relative_to(ROOT).as_posix()
+            if relative.startswith(allowed_prefixes) or relative in allowed_files:
+                continue
+            # Read the CODE, not the prose: this file's own neighbours explain
+            # the rule in their docstrings, and a comment naming the driver is
+            # not a use of it.
+            code = _code_only(path)
+            found = [marker for marker in markers if marker in code]
+            if found:
+                violations.append(f"{relative} contains {', '.join(found)}")
+    assert violations == []
+
+
+def test_repository_contracts_expose_no_connection_or_transaction():
+    """A repository method is ONE whole transaction, decided inside it.
+
+    An earlier draft of this layer handed callers a unit of work — a context
+    manager over the repositories — so the interpreter could span three tables.
+    That put transaction management back in the caller, which is the thing the
+    layer exists to remove. The multi-table write is one coarse method now, and
+    this is what stops the handle growing back.
+    """
+    forbidden_names = {"connect", "connection", "cursor", "transaction",
+                       "unit_of_work", "begin", "commit", "rollback"}
+    forbidden_returns = ("Connection", "Cursor", "AbstractContextManager",
+                         "Iterator", "Generator")
+    violations = []
+    for path in sorted((ROOT / "repository" / "contract").rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            where = f"{path.relative_to(ROOT)}:{node.lineno}"
+            if node.name in forbidden_names:
+                violations.append(f"{where} exposes {node.name}()")
+            returns = ast.unparse(node.returns) if node.returns else ""
+            for forbidden in forbidden_returns:
+                if forbidden in returns:
+                    violations.append(f"{where} returns {returns}")
+    assert violations == []
+
+
+def test_exactly_three_database_files_are_named():
+    """Seven files became three, and the count is the point.
+
+    `main.db` is everything the application owns and reads back; `audit.db` is
+    separate because every short-lived process writes it and because it is what
+    you read when `main.db` is the suspect; `locks.db` is separate because a pid
+    claim must not survive a reboot. Nothing else may appear.
+    """
+    named = set()
+    for package in OUR_PACKAGES:
+        for path in sorted((ROOT / package).rglob("*.py")):
+            if path.relative_to(ROOT).as_posix() == "harness/impl/codex/canonical/title.py":
+                continue  # the foreign index; its name is Codex's, not ours
+            named.update(re.findall(r'"([A-Za-z0-9_.-]+\.(?:db|sqlite))"',
+                                    path.read_text(encoding="utf-8")))
+    assert named == {"main.db", "audit.db", "locks.db"}
+
+
+def test_no_key_value_table_exists():
+    """Entities have identities. Nine JSON blobs under nine keys became nine tables.
+
+    Three opaque columns survive and each is deliberate: the canonical payload
+    is a closed vocabulary the codec validates on both encode and decode, the
+    raw payload is the verbatim bytes we observed, and a diagnostic's content is
+    free-form by contract — recorded, never queried.
+    """
+    schema = (ROOT / "repository" / "impl" / "sqlite" / "schema.py").read_text(encoding="utf-8")
+    allowed_opaque = {"canonical_events.payload", "raw_events.payload", "state_files.content"}
+    tables = re.findall(r"CREATE TABLE IF NOT EXISTS (\w+)\((.*?)\n\);", schema, re.S)
+    violations = []
+    for table, body in tables:
+        columns = [
+            line.strip().split()[0]
+            for line in body.splitlines()
+            if line.strip() and not line.strip().startswith(("PRIMARY", "FOREIGN", "UNIQUE", "--"))
+        ]
+        for column in columns:
+            if column in ("val", "value", "json", "data", "blob"):
+                violations.append(f"{table}.{column} is a key-value column")
+            if column == "payload" and f"{table}.payload" not in allowed_opaque:
+                violations.append(f"{table}.payload is an undeclared opaque column")
+            if column == "content" and f"{table}.content" not in allowed_opaque:
+                violations.append(f"{table}.content is an undeclared opaque column")
+        if set(columns) in ({"key", "val"}, {"key", "value"}, {"name", "value"}):
+            violations.append(f"{table} is a key-value table")
+    assert violations == []
+    assert len(tables) > 25          # a schema that parsed to nothing would pass vacuously
+
+
 def test_the_harness_contract_and_models_import_only_domain_and_the_terminal_contract():
     """The floor of the harness layer, the twin of the terminal one below it.
 
@@ -85,16 +235,15 @@ def test_the_harness_implementations_never_import_the_application():
     """
     assert_imports(
         "harness",
-        {"core", "diagnostics", "domain", "harness"},
+        {"core", "diagnostics", "domain", "harness", "repository"},
         allowed_modules={
             # the terminal a control context is handed, and the two session-level
             # services the application tier drives it through
             "terminal.contract", "terminal.models", "terminal.adapter", "terminal.launch",
-            # the hook client and the otel receiver run OUTSIDE the daemon: one
-            # observes its own window, both append evidence and exit
-            "terminal.impl", "engine.store.recorder",
-            # the stores the services read a session's own facts from
-            "engine.projections", "engine.store.sessions",
+            # the hook client runs OUTSIDE the daemon and observes its own window
+            "terminal.impl",
+            # the projections a service folds a session's own facts with
+            "engine.projections",
         },
     )
 
@@ -179,7 +328,7 @@ def test_the_engine_imports_only_the_domain_and_the_harness_contract():
     """
     assert_imports(
         "engine",
-        {"core", "diagnostics", "domain", "engine"},
+        {"core", "diagnostics", "domain", "engine", "repository"},
         allowed_modules={"harness.contract", "harness.models", "harness.registry"},
     )
 
@@ -193,10 +342,13 @@ def test_the_diagnostic_write_tier_is_a_floor_and_the_read_tier_is_the_daemons()
     either grown a reporting job or paid for a tier it never uses.
     """
     readers = set()
-    for package in ("api", "app", "core", "dashboard", "domain", "engine", "harness", "terminal"):
+    for package in OUR_PACKAGES:
         for path, imported in imports_under(package):
-            if imported == "diagnostics.read" or imported.startswith("diagnostics.read."):
+            if path.relative_to(ROOT).as_posix().startswith("repository/"):
+                continue  # the layer that DEFINES both tiers
+            if "DiagnosticReadRepository" in path.read_text(encoding="utf-8"):
                 readers.add(path.relative_to(ROOT).as_posix())
+            del imported
     assert readers == {
         "app/bootstrap.py",
         "app/services/insights.py",
@@ -211,7 +363,7 @@ def test_the_terminal_tier_imports_no_concrete_harness():
     # CONTRACT — a pane reacts to canonical facts — and nothing concrete.
     assert_imports(
         "terminal",
-        {"core", "diagnostics", "domain", "engine", "terminal"},
+        {"core", "diagnostics", "domain", "engine", "repository", "terminal"},
         allowed_modules={"harness.contract", "harness.models"},
     )
 
@@ -379,6 +531,47 @@ def test_the_stable_bin_entries_are_wrappers_and_nothing_else():
     assert violations == []
 
 
+def test_every_route_declares_a_response_model():
+    """The browser contract is written down, not inferred from a dataclass.
+
+    26 handlers used to answer with a bare `JSONResponse` built by reflecting
+    over whatever read model the service returned, so renaming an internal field
+    silently changed the JSON and `/openapi.yaml` described none of them.
+
+    A route satisfies this by ANNOTATING its return, or — where the encoding is
+    deliberately `json_ready`'s, because the wire already depends on it — by
+    naming `response_model=` on the decorator. Both put the shape in the schema.
+    """
+    raw_response_routes = {
+        # static assets, two SSE streams, the OpenAPI document itself, and the
+        # two evidence-plane endpoints whose reply is the harness's own bytes
+        "index", "static", "service_worker", "favicon",
+        "openapi_yaml", "global_stream", "session_stream",
+        "record_hook_delivery",
+    }
+    undeclared = []
+    for path in sorted((ROOT / "api").rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            decorators = [ast.unparse(item) for item in node.decorator_list]
+            if not any(
+                item.startswith(("router.", "guarded.", "web."))
+                for item in decorators
+            ):
+                continue
+            if node.name in raw_response_routes:
+                continue
+            declares_model = any("response_model=" in item for item in decorators)
+            returns = ast.unparse(node.returns) if node.returns else ""
+            if not returns:
+                undeclared.append(f"{path.relative_to(ROOT)}:{node.name} has no return type")
+            elif returns == "JSONResponse" and not declares_model:
+                undeclared.append(f"{path.relative_to(ROOT)}:{node.name} answers with a bare JSONResponse")
+    assert undeclared == []
+
+
 def test_claude_otel_is_not_a_top_level_harness():
     assert not (ROOT / "harness" / "impl" / "otel").exists()
     assert (ROOT / "harness" / "impl" / "claude_code" / "otel" / "receiver.py").is_file()
@@ -515,23 +708,175 @@ def test_recorder_entries_never_build_the_application():
     assert violations == []
 
 
+FILE_ACCESS_ALLOWLIST = {
+    # --- credentials: user-installed secrets we trade, never own ---------------
+    "dashboard/dictate.py":                     "the Deepgram API key and keyterms",
+    "notify/channels/telegram.py":              "the bot token and chat id",
+    "harness/impl/claude_code/account.py":      "the subscription registry, which indexes credential directories",
+    # --- source files: written by a harness, or authored by you ---------------
+    "harness/impl/claude_code/canonical/transcript.py":
+        "the transcript — read as evidence, appended to for a parked rename",
+    "harness/impl/claude_code/canonical/translator.py":  "transcripts and task files, read as evidence",
+    "harness/impl/claude_code/model.py":                 "the agent meta.json sidecar beside a transcript",
+    "harness/impl/claude_code/slashcmds.py":             "your .claude/commands and skills",
+    "harness/impl/claude_code/hooks/foreground.py":      "creates the tee file a command writes its output into",
+    "harness/impl/claude_code/shell.py":                 "the tee file's directory",
+    "harness/impl/codex/canonical/rollout.py":           "rollouts, read as evidence",
+    "harness/impl/codex/canonical/translator.py":        "rollouts, read as evidence",
+    "harness/impl/codex/canonical/title.py":             "globs codex's own state index",
+    "harness/impl/codex/commands.py":                    "your $CODEX_HOME/prompts",
+    "harness/impl/codex/controls/controller.py":         "reads the rollout tail to confirm an interrupt landed",
+    "harness/impl/__init__.py":                          "plugin discovery globs its own directory",
+    # --- ours, and the one place we write bytes rather than rows ---------------
+    "api/dashboard/files.py":                   "stages an attachment; the harness is handed an @path",
+    "engine/interpret/output_source.py":        "reads a followed output file, and unlinks the tee we made",
+    "core/clipboard.py":                        "the host pasteboard",
+    "core/repository.py":                       "reads a .git file to resolve a worktree",
+    "core/process.py":                          "/proc-style process inspection",
+    "terminal/impl/kitty/remote.py":            "finds the terminal's control SOCKET, not a file",
+    "dashboard/paths.py":                       "resolves the uploads directory",
+    "api/dashboard/static.py":                  "serves the SPA's own files",
+}
+
+
+def test_no_module_outside_the_allowlist_reads_or_writes_a_file():
+    """Everything we own is a row. The exceptions are named, with their reason.
+
+    Two classes survive: CREDENTIALS the user installs and we only trade, and
+    SOURCE FILES a harness writes or you author — a transcript, a rollout, a
+    slash-command definition. Both are things we do not own. The third entry is
+    the one place we write bytes rather than a row, and even that now has a row
+    beside it: an attachment reaches the harness as an `@path`, so a real file
+    has to exist.
+    """
+    # Word-boundary matched, so `urlopen(` — which is a socket, not a file —
+    # does not read as one.
+    markers = (r"\bopen\(", r"\bos\.makedirs\b", r"\bos\.listdir\b",
+               r"\bos\.scandir\b", r"\bglob\.glob\b",
+               r"\.write_text\(", r"\.write_bytes\(", r"\.read_text\(")
+    violations = []
+    for package in OUR_PACKAGES:
+        for path in sorted((ROOT / package).rglob("*.py")):
+            relative = path.relative_to(ROOT).as_posix()
+            if relative in FILE_ACCESS_ALLOWLIST:
+                continue
+            if relative.startswith("repository/impl/sqlite/"):
+                continue          # makedirs for the database's own directory
+            code = _code_only(path)
+            found = [marker for marker in markers if re.search(marker, code)]
+            if found:
+                violations.append(f"{relative} contains {', '.join(found)}")
+    assert violations == []
+
+
+def test_the_file_access_allowlist_has_no_stale_entries():
+    """An allowlist may not outlive its reason — the same rule the type ratchet has."""
+    stale = [
+        relative
+        for relative in FILE_ACCESS_ALLOWLIST
+        if not (ROOT / relative).is_file()
+    ]
+    assert stale == []
+
+
+def test_only_the_daemon_and_the_audit_cli_build_repositories():
+    """One process writes. Two others link the layer, and both are reasoned.
+
+    The hook entries, the pane processes, the keybinding client and the OTLP
+    receiver are HTTP clients of the daemon — they may not import the contract,
+    let alone an implementation. `app/evidence_cli.py` is the exception, because
+    it is the tool you run when the daemon is the suspect, and it opens
+    read-only. `diagnostics/record.py` is the other, because the failure most
+    worth recording is "this process could not reach the daemon".
+    """
+    allowed_builders = {
+        "app/bootstrap.py",
+        "app/evidence_cli.py",
+        "diagnostics/record.py",
+        "api/server.py",          # the singleton lock, before the graph exists
+        "dashboard/cli.py",       # asks who holds that lock
+    }
+    builders = set()
+    for package in OUR_PACKAGES:
+        for path, imported in imports_under(package):
+            relative = path.relative_to(ROOT).as_posix()
+            if relative.startswith("repository/"):
+                continue
+            if imported.startswith("repository.impl"):
+                builders.add(relative)
+    assert builders == allowed_builders
+
+    # The forensic reader may never open the file it inspects for writing.
+    evidence_cli = (ROOT / "app" / "evidence_cli.py").read_text(encoding="utf-8")
+    assert "read_only(" in evidence_cli
+
+    thin_clients = (
+        "harness/impl/claude_code/hooks/entry.py",
+        "harness/impl/claude_code/hooks/statusline.py",
+        "harness/impl/claude_code/otel/receiver.py",
+        "harness/impl/codex/hooks/entry.py",
+        "terminal/panes/client.py",
+        "terminal/panes/mirror_process.py",
+        "terminal/panes/scoreboard_process.py",
+        "terminal/bin/content.py",
+        "terminal/bin/view.py",
+    )
+    reaching = [
+        name
+        for name in thin_clients
+        if "repository" in (ROOT / name).read_text(encoding="utf-8")
+    ]
+    assert reaching == []
+
+
+def test_terminal_storage_is_reached_through_a_service():
+    """A route is not its own service, and a renderer does not open a database.
+
+    `api/terminal/views.py` used to call the storage module and write its own
+    audit row — the one route in the tree that was both. The pane stream used to
+    read the opened-view set from disk inside its frame loop.
+    """
+    for name in ("api/terminal/views.py", "api/terminal/panes.py",
+                 "terminal/panes/streams.py", "terminal/panes/commands.py",
+                 "terminal/panes/reaction.py"):
+        source = (ROOT / name).read_text(encoding="utf-8")
+        # Not "names no repository": the pane reaction legitimately reads the
+        # SESSION its panes anchor to. What it may not reach is the TERMINAL's
+        # own storage — the widths and the opened views — which is what the two
+        # services above own.
+        assert "repository.contract.terminal" not in source, f"{name} reaches pane storage"
+        assert "repository.impl" not in source, f"{name} names an implementation"
+    for name in ("api/terminal/views.py", "api/terminal/panes.py"):
+        source = (ROOT / name).read_text(encoding="utf-8")
+        assert "repository." not in source, f"{name} is a route, not a service"
+
+
 def test_hook_entries_are_thin_clients_of_the_daemon():
     """A hook ships its exact stdin to POST /api/harnesses/<name>/hooks and
     prints the reply — it neither builds the application graph nor writes the
     event store itself. Recording lives daemon-side (`HarnessHookGateway` +
     `HookGatewayService`), so hook evidence has ONE recorder and the hook
     process stays a few imports thin."""
+    # The OTLP receiver joins them: it used to open the event store and append
+    # raw events itself, which made it the only writer outside the daemon.
     hook_entries = (
         ROOT / "harness" / "impl" / "claude_code" / "hooks" / "entry.py",
+        ROOT / "harness" / "impl" / "claude_code" / "hooks" / "statusline.py",
+        ROOT / "harness" / "impl" / "claude_code" / "otel" / "receiver.py",
         ROOT / "harness" / "impl" / "codex" / "hooks" / "entry.py",
     )
     forbidden_markers = (
         "build_default_application",
         "build_application",
         "app.bootstrap",
+        # the names that WERE the direct-write path, kept so a revert is caught
         "RawEventRecorder",
         "engine.store.recorder",
         "events.db",
+        # and the names that could become one
+        "repository.impl",
+        "SqliteDatabase",
+        "main.db",
     )
     violations = []
     for path in hook_entries:

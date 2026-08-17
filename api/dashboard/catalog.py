@@ -9,7 +9,10 @@ from fastapi.responses import JSONResponse
 from api.dashboard.models.harnesses.harness_description_response import (
     HarnessDescriptionResponse,
 )
+from api.dashboard.models.harnesses.harness_catalog_response import HarnessCatalogResponse
 from api.dependencies import ApplicationGraph
+from app.services.insights import ApplicationInsights
+from app.services.resume import ResumableSession
 from harness.models import QueryContext
 from dashboard.render.serialize import json_ready
 from domain.ids import SessionId
@@ -36,7 +39,7 @@ def harnesses(application: ApplicationGraph) -> list[HarnessDescriptionResponse]
     ]
 
 
-@router.get("/api/harnesses/{harness}/catalog")
+@router.get("/api/harnesses/{harness}/catalog", response_model=HarnessCatalogResponse)
 def catalog(
     harness: str,
     application: ApplicationGraph,
@@ -58,12 +61,12 @@ def catalog(
     return JSONResponse(payload)
 
 
-@router.get("/api/insights")
+@router.get("/api/insights", response_model=ApplicationInsights)
 def insights(application: ApplicationGraph) -> JSONResponse:
     return JSONResponse(json_ready(application.insights.snapshot()))
 
 
-@router.get("/api/resumable-sessions")
+@router.get("/api/resumable-sessions", response_model=list[ResumableSession])
 def resumable_sessions(
     application: ApplicationGraph,
     working_directory: str = "",

@@ -38,7 +38,7 @@ __all__ = [
 _RETRACT = {"telegram": telegram.retract_alert, "webpush": webpush.retract_alert}
 
 
-def retract(handle, reason, badge=0):
+def retract(handle, reason, badge=0, *, keys=None, subscriptions=None):
     """Take back one delivered alert. Returns an outcome from the vocabulary in
     alert.py; PENDING is the only one the caller must retry.
 
@@ -51,7 +51,7 @@ def retract(handle, reason, badge=0):
     if fn is None:
         return NOTHING
     try:
-        return fn(handle, reason, badge)
+        return fn(handle, reason, badge, keys=keys, subscriptions=subscriptions)
     except Exception:
         A.error("", "notify retract", {"session_id": (handle or {}).get("session_id")})
         return FAILED

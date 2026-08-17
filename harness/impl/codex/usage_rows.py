@@ -5,15 +5,17 @@ from __future__ import annotations
 from decimal import Decimal
 
 from harness.contract import HarnessUsage
+from harness.impl.codex import usage as native_usage
+from repository.contract.usage import AccountUsageRepository
 from harness.models import UsageRow, UsageWindow
-from harness.impl.codex import usage
 
 WINDOW_LABELS = {300: "5h", 10080: "7d"}
 
 
 class CodexUsage(HarnessUsage):
-    def read(self) -> tuple[UsageRow, ...]:
-        rate_limits = usage.read_rate_limits()
+    def read(self, usage: AccountUsageRepository) -> tuple[UsageRow, ...]:
+        del usage          # codex asks its own CLI live; nothing is cached
+        rate_limits = native_usage.read_rate_limits()
         if rate_limits is None:
             return ()
         plan = rate_limits["plan"]

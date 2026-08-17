@@ -15,7 +15,6 @@ from dashboard.services.activity import DashboardActivityService
 from dashboard.services.models import DashboardSessionListItem
 from dashboard.services.sessions import DashboardSessionService
 from dashboard.services.streams import DashboardStreamService
-from dashboard import prefs
 from dashboard.services.notices import DashboardNotificationState
 from notify.notifier import Notifier
 from domain.events import (
@@ -44,6 +43,10 @@ from domain.ids import (
 )
 from domain.values import AttentionAnswer, AttentionPrompt, StructuredContent, TextContent, TokenUsage
 from canonical_runtime import CanonicalRuntime
+from repository.impl.sqlite.databases import main_database
+from repository.impl.sqlite.preferences import (
+    SqliteViewModeRepository,
+)
 from engine.projections import (
     ActivityScope,
     ActivityStatistics,
@@ -53,25 +56,33 @@ from engine.projections import (
 )
 
 
-def test_preferences_fail_clearly_instead_of_returning_fallback_state(monkeypatch):
-    def unavailable_database():
-        raise sqlite3.OperationalError("database unavailable")
+def test_a_preference_read_fails_clearly_instead_of_returning_fallback_state(tmp_path):
+    """A store that cannot be opened must raise, not answer with a default.
 
-    monkeypatch.setattr(prefs.store, "_connect", unavailable_database)
+    A silent fallback here reads as "you never set that", and the user's next
+    action overwrites what they did set. The kv store this replaced took the
+    same care; what changed is that there is now a typed table per entity
+    rather than one blob per key.
+    """
+    database = main_database(str(tmp_path / "main.db"))
+    database.path = str(tmp_path)          # a directory: every open fails
+    view_modes = SqliteViewModeRepository(database)
 
-    with pytest.raises(sqlite3.OperationalError, match="database unavailable"):
-        prefs.get("missing", {})
-    with pytest.raises(sqlite3.OperationalError, match="database unavailable"):
-        prefs.set("example", {})
-    with pytest.raises(sqlite3.OperationalError, match="database unavailable"):
-        prefs.mutate_map("example", lambda document: document.update(saved=True))
+    with pytest.raises(sqlite3.Error):
+        view_modes.view_mode(SessionId("session-one"))
 
 
-def test_preferences_reject_invalid_current_schema_values():
-    prefs.set(prefs.HIDDEN_KEY, [])
+def test_a_preference_column_refuses_a_value_outside_its_vocabulary(tmp_path):
+    """The view-mode vocabulary is a CHECK constraint, not a convention.
 
-    with pytest.raises(TypeError, match="must contain an object"):
-        prefs.hidden_dirs()
+    It used to be a tuple compared in Python at every read, which left the
+    store able to hold a fourth mode nothing could render.
+    """
+    view_modes = SqliteViewModeRepository(main_database(str(tmp_path / "main.db")))
+
+    with pytest.raises(sqlite3.IntegrityError):
+        view_modes.set_view_mode(SessionId("session-one"), "enormous")
+
 
 SESSION_ID = SessionId("session-one")
 LEAD_ACTOR_ID = ActorId("actor-lead")
@@ -99,7 +110,7 @@ def event(event_id, payload, *, actor_id=LEAD_ACTOR_ID):
 
 
 def services(tmp_path, events):
-    store = CanonicalRuntime(str(tmp_path / "events.db"))
+    store = CanonicalRuntime(str(tmp_path / "main.db"))
     store.register(
         "example",
         Session(SESSION_ID, LEAD_ACTOR_ID, "native", "fixture", "/work"),
@@ -556,6 +567,22 @@ class StaticNotificationSessions:
         return (self.item,)
 
 
+class _AlertingOn:
+    """Alerting on, nothing muted — the notifier's two questions."""
+
+    @staticmethod
+    def alerting_enabled() -> bool:
+        return True
+
+    @staticmethod
+    def muted_session_ids():
+        return frozenset()
+
+
+def _alerting_on():
+    return _AlertingOn()
+
+
 def test_notifier_uses_canonical_tab_transitions(monkeypatch):
     queries = MutableNotificationQueries("idle")
     notification_state = DashboardNotificationState()
@@ -565,25 +592,29 @@ def test_notifier_uses_canonical_tab_transitions(monkeypatch):
             TerminalSessionState("window-one", None)
         ),
         dashboard_notification_state=notification_state,
+        notification_settings=_alerting_on(),
+        push_subscriptions=None,
+        push_signing_keys=None,
     )
     notifier = Notifier(application)
     retractions = []
-    monkeypatch.setattr("notify.notifier.prefs.notify_enabled", lambda: True)
-    monkeypatch.setattr("notify.notifier.prefs.notify_muted", lambda session_id: False)
     monkeypatch.setattr("notify.notifier.config.NOTIFICATION_DELAY_SECONDS", 0)
     monkeypatch.setattr("notify.notifier.config.NOTIFICATION_SETTLE_SECONDS", 0)
     monkeypatch.setattr("notify.notifier.config.NOTIFY_WEBPUSH", False)
     monkeypatch.setattr("notify.notifier.config.NOTIFY_TELEGRAM", True)
     monkeypatch.setattr("notify.notifier.presence.web_viewing", lambda session_id: False)
     monkeypatch.setattr("notify.notifier.presence.device_active", lambda: False)
-    monkeypatch.setattr("notify.notifier.presence.route", lambda: ("terminal", (), {}))
+    monkeypatch.setattr(
+        "notify.notifier.presence.route",
+        lambda subscriptions: ("terminal", (), {}),
+    )
     monkeypatch.setattr(
         "notify.channels.telegram.send_alert",
         lambda payload, reason: {"payload": payload, "reason": reason},
     )
     monkeypatch.setattr(
         "notify.notifier.channels.retract",
-        lambda handle, reason: retractions.append((handle, reason)) or "retracted",
+        lambda handle, reason, **keywords: retractions.append((handle, reason)) or "retracted",
     )
     monkeypatch.setattr(
         "notify.notifier.AUDIT.state_file",
@@ -614,9 +645,11 @@ def test_notifier_ignores_sessions_without_a_terminal_window(monkeypatch):
         queries=queries,
         dashboard_sessions=StaticNotificationSessions(TerminalSessionState(None, None)),
         dashboard_notification_state=notification_state,
+        notification_settings=_alerting_on(),
+        push_subscriptions=None,
+        push_signing_keys=None,
     )
     notifier = Notifier(application)
-    monkeypatch.setattr("notify.notifier.prefs.notify_enabled", lambda: True)
 
     notifier.scan()
     queries.state = "awaiting_attention"

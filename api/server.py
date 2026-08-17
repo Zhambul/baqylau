@@ -11,45 +11,17 @@ import os
 import signal
 import socket
 import threading
-import time
 
 import uvicorn
 
 from api import config
 from api.app import build_web_application
+from repository.impl.sqlite.databases import lock_database
+from repository.impl.sqlite.locks import SqliteProcessLockRepository
 from app.bootstrap import build_default_application
 from diagnostics import record as A
-from core import locks
 from core.daemon.contract import HOST_ADDRESS, PORT_NUMBER
-from dashboard import paths
 from notify.notifier import Notifier
-
-UPLOAD_LIFETIME_SECONDS = 7 * 24 * 3600
-
-
-def _prune_uploads():
-    """Remove composer attachments older than their delivery lifetime."""
-    root = paths.UPLOADS_DIRECTORY
-    now = time.time()
-    try:
-        session_directories = os.listdir(root)
-    except OSError:
-        return
-    for directory_name in session_directories:
-        directory_path = os.path.join(root, directory_name)
-        try:
-            for file_name in os.listdir(directory_path):
-                file_path = os.path.join(directory_path, file_name)
-                try:
-                    if now - os.path.getmtime(file_path) > UPLOAD_LIFETIME_SECONDS:
-                        os.remove(file_path)
-                except OSError:
-                    pass
-            if not os.listdir(directory_path):
-                os.rmdir(directory_path)
-        except OSError:
-            pass
-
 
 def build_server(web_application) -> uvicorn.Server:
     """One uvicorn server for an already-bound socket (passed to run()).
@@ -72,9 +44,13 @@ def serve():
     """Run the server in THIS process (the `serve` CLI verb — `start` spawns
     it detached). Singleton: the paths.DASH_DB pid-lock first, the port bind
     as the second guard."""
-    lock_result = locks.lock_acquire(paths.DASHBOARD_LOCK_DATABASE, config.LOCK_KEY)
-    if lock_result.startswith("claim-denied"):
-        A.error("", "dashboard serve (lock denied)", {"result": lock_result})
+    locks = SqliteProcessLockRepository(lock_database())
+    lock = locks.acquire(config.LOCK_KEY, os.getpid())
+    if not lock.held:
+        A.error("", "dashboard serve (lock denied)", {
+            "decision": lock.decision,
+            "holder": lock.holder_process_id,
+        })
         return 1
     stream_id = A.stream_start("", "dashboard", src_path=f"http://{HOST_ADDRESS}:{PORT_NUMBER}")
     try:
@@ -104,7 +80,9 @@ def serve():
             name="baqylau-usage",
         )
         usage_thread.start()
-        _prune_uploads()
+        # Attachments are pruned from the ROW, not by walking the directory
+        # and trusting mtimes: what we wrote is what we know about.
+        application.uploads.prune()
         notifier = Notifier(application)
         threading.Thread(target=notifier.run, daemon=True).start()
 
@@ -142,4 +120,4 @@ def serve():
         A.stream_end(stream_id, "crash")
         raise
     finally:
-        locks.lock_release(paths.DASHBOARD_LOCK_DATABASE, config.LOCK_KEY)
+        locks.release(config.LOCK_KEY, os.getpid())

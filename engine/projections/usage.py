@@ -22,7 +22,7 @@ from domain.events import (
 from domain.ids import ActorId
 from domain.values import ModelReference, TokenUsage
 from engine.projections.models import ContextSummary, ContextWindow, UsageSummary
-from engine.store.canonical import StoredCanonicalEvent
+from domain.records import StoredCanonicalEvent
 
 
 def usage(stored_events: tuple[StoredCanonicalEvent, ...]) -> UsageSummary:

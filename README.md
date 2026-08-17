@@ -100,13 +100,18 @@ pluggable:
 
 ```
 core/        the floor: what knows the OS, not the domain — env, processes,
-             locks, git, and core/daemon/ (the daemon's door, both sides)
-domain/      the facts themselves: the closed canonical event vocabulary
-diagnostics/ the operational database, whole: what the MACHINERY did — its
-             writers (reached from every process), its reads, its telemetry
-engine/      the neutral middle: engine/store/ (one owner per table),
-             engine/interpret/ (the one thread that pulls, translates, reacts),
-             engine/projections/ (a fold per question), engine/queries/
+             git, where the three databases live, and core/daemon/ (the
+             daemon's door, both sides)
+domain/      the words, stdlib-only: the closed canonical event vocabulary,
+             and the application's own value types (preferences, workspace)
+repository/  the ONLY thing that opens a database. contract/ (21 Protocols,
+             each method one whole transaction), model/ (a row DTO per table),
+             mapper/ (row <-> model object, pure), impl/sqlite/
+diagnostics/ what the MACHINERY did — the record types, the free-function
+             facade every process calls, and browser-reported telemetry
+engine/      the neutral middle: engine/interpret/ (the one thread that pulls,
+             translates, reacts), engine/projections/ (a fold per question),
+             engine/queries/
 terminal/    the terminal concern, whole: contract + models, the panes it
              paints, and terminal/impl/<name>/ — one directory per terminal
              (kitty today), the only place a terminal's name appears
@@ -115,11 +120,12 @@ harness/     the harness concern, whole: contract + models, the hook channel,
              directory per agent tool (claude_code · codex), the only place a
              harness's name appears
 dashboard/   the web surface: static/ (the SPA), render/ (facts -> markup,
-             inert), services/ (one question, one answer), prefs/ (what you
-             chose), and its own config, paths and CLI
+             inert), services/ (one question, one answer), and its own config,
+             paths and CLI
 notify/      alerts about sessions: when one is owed you (notifier), whether
              you need telling (presence), and where it reaches you (channels/)
-api/         the daemon's HTTP layer — one FastAPI app, every request typed
+api/         the daemon's HTTP layer — one FastAPI app, every request AND
+             every response typed
 app/         the composition root: the only package that knows WHICH harnesses
              and which terminal are installed, plus the services that compose
              concerns the engine keeps apart

@@ -1,0 +1,1431 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>baqylau — data access as-is, and the consolidated repository plan</title>
+<style>
+  :root{
+    --ink:#16181d; --muted:#5b616e; --line:#d9dde5; --bg:#fbfcfd; --panel:#fff;
+    --accent:#1f5fa8; --accent-soft:#eaf1fa; --warn:#a8501f; --warn-soft:#fdf1e8;
+    --bad:#b3261e; --bad-soft:#fdecea; --good:#1d6f42; --good-soft:#e9f5ee;
+    --code:#f4f6f9;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.62 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Helvetica,Arial,sans-serif}
+  .wrap{max-width:1280px;margin:0 auto;padding:40px 28px 120px}
+  header.doc{border-bottom:2px solid var(--ink);padding-bottom:22px;margin-bottom:34px}
+  header.doc h1{font-size:31px;line-height:1.2;margin:0 0 8px;letter-spacing:-.02em}
+  header.doc .sub{color:var(--muted);font-size:15px;margin:0}
+  header.doc .meta{margin-top:14px;font-size:12.5px;color:var(--muted);display:flex;gap:20px;flex-wrap:wrap}
+  h2{font-size:23px;margin:56px 0 6px;letter-spacing:-.015em;padding-top:14px;border-top:1px solid var(--line)}
+  h2 .num{color:var(--accent);font-variant-numeric:tabular-nums;margin-right:10px}
+  h3{font-size:17.5px;margin:34px 0 6px;letter-spacing:-.01em}
+  h4{font-size:15px;margin:24px 0 4px;color:#2b2f38}
+  p{margin:10px 0}
+  code,kbd{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;font-size:12.6px;
+    background:var(--code);padding:1.5px 5px;border-radius:4px;border:1px solid #e6eaf0}
+  pre{background:var(--code);border:1px solid #e2e7ee;border-radius:8px;padding:14px 16px;overflow-x:auto;
+    font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;font-size:12.4px;line-height:1.6;margin:12px 0}
+  pre code{background:none;border:0;padding:0;font-size:inherit}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:13.2px}
+  th,td{border:1px solid var(--line);padding:7px 10px;text-align:left;vertical-align:top}
+  th{background:#eef2f7;font-weight:600;font-size:12.4px;letter-spacing:.01em}
+  tr:nth-child(even) td{background:#fafbfd}
+  td code,th code{font-size:12px;background:#eef1f5}
+  .lead{font-size:16px;color:#2b2f38}
+  .box{border:1px solid var(--line);border-left:4px solid var(--accent);background:var(--panel);
+    border-radius:0 8px 8px 0;padding:12px 16px;margin:16px 0}
+  .box.warn{border-left-color:var(--warn);background:var(--warn-soft)}
+  .box.bad{border-left-color:var(--bad);background:var(--bad-soft)}
+  .box.good{border-left-color:var(--good);background:var(--good-soft)}
+  .box h5{margin:0 0 6px;font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+  .box.bad h5{color:var(--bad)} .box.warn h5{color:var(--warn)} .box.good h5{color:var(--good)}
+  .tag{display:inline-block;font-size:11px;font-weight:600;padding:1.5px 7px;border-radius:20px;
+    border:1px solid;letter-spacing:.02em;white-space:nowrap}
+  .t-add{color:var(--good);border-color:#a9d6bd;background:var(--good-soft)}
+  .t-move{color:var(--accent);border-color:#a9c5e4;background:var(--accent-soft)}
+  .t-mod{color:var(--warn);border-color:#e2bfa2;background:var(--warn-soft)}
+  .t-del{color:var(--bad);border-color:#e7b3ae;background:var(--bad-soft)}
+  .t-keep{color:var(--muted);border-color:var(--line);background:#f1f3f6}
+  figure{margin:22px 0 8px}
+  figure svg{width:100%;height:auto;display:block;background:var(--panel);border:1px solid var(--line);border-radius:10px}
+  figcaption{font-size:12.5px;color:var(--muted);margin-top:8px}
+  ul,ol{margin:10px 0;padding-left:22px}
+  li{margin:4px 0}
+  .toc{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 22px;margin:26px 0 8px}
+  .toc h2{border:0;margin:0 0 8px;font-size:14px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);padding:0}
+  .toc ol{columns:2;column-gap:40px;margin:0;padding-left:20px;font-size:13.4px}
+  .toc a{color:var(--ink);text-decoration:none;border-bottom:1px solid transparent}
+  .toc a:hover{border-bottom-color:var(--accent);color:var(--accent)}
+  .small{font-size:12.5px;color:var(--muted)}
+  @media (max-width:900px){.toc ol{columns:1}}
+  .s-lane{fill:#eef2f7;stroke:#d9dde5}
+  .s-lanetext{font:600 10.5px ui-monospace,Menlo,monospace;fill:#5b616e;letter-spacing:.06em}
+  .s-box{fill:#fff;stroke:#b9c2d0;stroke-width:1.2}
+  .s-box-eng{fill:#f2f6fb;stroke:#9fb6d4}
+  .s-box-store{fill:#fdf6ee;stroke:#dcb894}
+  .s-box-repo{fill:#eaf5ee;stroke:#93c4a8}
+  .s-box-db{fill:#f3f0f8;stroke:#b7a9cf}
+  .s-box-api{fill:#eef4fb;stroke:#a6bedd}
+  .s-daemon{fill:#f7fbf8;stroke:#7fae92;stroke-width:1.6;stroke-dasharray:none}
+  .s-t{font:600 11.5px -apple-system,Segoe UI,sans-serif;fill:#16181d}
+  .s-s{font:10.2px ui-monospace,Menlo,monospace;fill:#5b616e}
+  .s-arrow{stroke:#8a93a3;stroke-width:1.4;fill:none;marker-end:url(#ah)}
+  .s-http{stroke:#1f5fa8;stroke-width:1.8;fill:none;marker-end:url(#ahb)}
+  .s-red{stroke:#b3261e;stroke-width:1.7;fill:none;stroke-dasharray:6 4;marker-end:url(#ahr)}
+  .s-amber{stroke:#a8501f;stroke-width:1.6;fill:none;stroke-dasharray:5 4;marker-end:url(#aha)}
+  .s-redt{font:600 10.5px -apple-system,Segoe UI,sans-serif;fill:#b3261e}
+  .s-ambert{font:600 10.5px -apple-system,Segoe UI,sans-serif;fill:#a8501f}
+  .s-bluet{font:600 10.5px -apple-system,Segoe UI,sans-serif;fill:#1f5fa8}
+  .s-note{font:italic 10.5px -apple-system,Segoe UI,sans-serif;fill:#5b616e}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="doc">
+  <h1>Data access in <span style="font-family:ui-monospace,Menlo,monospace">baqylau</span> — the as-is map, and the consolidated repository plan</h1>
+  <p class="sub">Revision 2. Eight databases collapse to three files; the key–value store becomes twenty-five real tables; two processes move onto HTTP; every repository method is a whole transaction, so no caller ever holds a connection.</p>
+  <div class="meta">
+    <span><strong>Repository</strong> /Users/z.yermagambet/code/personal/baqylau</span>
+    <span><strong>Branch</strong> main @ c1ffdae</span>
+    <span><strong>Status</strong> plan — no code changed</span>
+  </div>
+</header>
+
+<p class="lead"><strong>Part 1</strong> is a factual survey of every persistent-storage access path in the tree today, gathered by reading every module that opens a database or a file. <strong>Part 2</strong> is the target design. <strong>Part 3</strong> is the change plan: phases, a file-by-file table, the gates that must move with the code, and the decisions still open.</p>
+
+<div class="toc">
+  <h2>Contents</h2>
+  <ol>
+    <li><a href="#s0">Requirements → design</a></li>
+    <li><a href="#s1">Storage inventory</a></li>
+    <li><a href="#s2">Table ownership matrix</a></li>
+    <li><a href="#s3">File access inventory</a></li>
+    <li><a href="#s4">Connection and transaction policy</a></li>
+    <li><a href="#s5">Access patterns and processes</a></li>
+    <li><a href="#s6">The model layers as they exist today</a></li>
+    <li><a href="#s7">As-is flow diagram</a></li>
+    <li><a href="#s8">Findings</a></li>
+    <li><a href="#s9">Constraints the refactor must respect</a></li>
+    <li><a href="#s10">Target: two databases</a></li>
+    <li><a href="#s11">The consolidated schema</a></li>
+    <li><a href="#s12">Target package layout</a></li>
+    <li><a href="#s13">To-be flow diagram</a></li>
+    <li><a href="#s14">One connection policy</a></li>
+    <li><a href="#s15">One access pattern</a></li>
+    <li><a href="#s16">Protocol catalogue</a></li>
+    <li><a href="#s17">Row DTOs and mappers</a></li>
+    <li><a href="#s18">Bulk methods: no connections, no handles</a></li>
+    <li><a href="#s19">The three DTO layers</a></li>
+    <li><a href="#s20">Moving otel and terminal onto the daemon</a></li>
+    <li><a href="#s21">Migration of existing data</a></li>
+    <li><a href="#s22">Phases</a></li>
+    <li><a href="#s23">File-by-file change table</a></li>
+    <li><a href="#s24">Enforcement: architecture tests and vulture</a></li>
+    <li><a href="#s25">Risks and open decisions</a></li>
+  </ol>
+</div>
+
+<h2 id="s0"><span class="num">0</span>Requirements → design</h2>
+
+<table>
+<thead><tr><th style="width:4%">#</th><th style="width:26%">Requirement</th><th style="width:40%">How it is met</th><th>Where</th></tr></thead>
+<tbody>
+<tr><td><strong>1</strong></td><td>Consolidate the database files where it makes sense.</td><td><code>main.db</code> (25 tables — everything the application owns and reads back) and <code>audit.db</code> (5 tables). Two documented exceptions: <code>locks.db</code> in the <em>runtime</em> directory, because a pid claim must not survive a reboot; and the Codex CLI's own <code>state_N.sqlite</code>, which is not ours to move.</td><td>§10, §11</td></tr>
+<tr><td><strong>2</strong></td><td>No file access except credentials and source files. Everything else becomes a table.</td><td>An allowlist of nine file-reading modules, each with a stated reason (three credential stores, five source-file readers, one attachment writer). Upload metadata becomes the <code>uploads</code> table; the bytes stay on disk only because the harness consumes an <code>@path</code>, and that is now a tracked row with a prune.</td><td>§3, §11, §24</td></tr>
+<tr><td><strong>3</strong></td><td>One connection and transaction policy, with justified exceptions.</td><td>One <code>SqliteDatabase</code> class, one <code>SqlitePragmas</code> default (WAL · <code>foreign_keys=ON</code> · <code>busy_timeout=10000</code> · 10 s · <code>0600</code>). Four deviations, each named and reasoned, and all of them <em>pragma</em> variants inside the same class rather than second access paths: the never-raising audit writer, the read-only open, the WAL-less runtime lock file, and the foreign database we do not own.</td><td>§14</td></tr>
+<tr><td><strong>4</strong></td><td>One access pattern, with exceptions only where necessary.</td><td>Protocol-typed repository, constructed once by the composition root, injected as a constructor parameter. Six patterns collapse to one. <strong>Raw database access has no exceptions at all</strong> — <code>sqlite3</code> is imported only by a repository implementation. The two named exceptions are weaker: the audit CLI builds its repositories in-process instead of calling the daemon, and <code>diagnostics.record</code> reaches its repository through a module-level default instead of constructor injection.</td><td>§15</td></tr>
+<tr><td><strong>5</strong></td><td>The response half of the wire layer.</td><td>26 new response models, one per reflected route; every route declares one; <code>json_ready()</code> leaves the route bodies. Enforced by a new architecture test, not by convention.</td><td>§19, §24</td></tr>
+<tr><td><strong>6</strong></td><td>The otel receiver uses the same HTTP path as hooks.</td><td>A second harness channel, <code>POST /api/harnesses/{harness}/telemetry</code>, mirroring the hook channel exactly. The OTLP session-id extraction and the session lookup move daemon-side into a <code>HarnessTelemetryGateway</code>. The receiver becomes bind-read-POST-exit.</td><td>§20</td></tr>
+<tr><td><strong>7</strong></td><td>Terminal workflows through the service layer; only the audit CLI reaches the repository layer without the daemon.</td><td>The pane processes and click handlers are already thin HTTP clients — that is now asserted by a test instead of being true by accident. Daemon-side, <code>terminal/services/</code> is introduced so no route and no renderer reaches a storage module. The audit CLI is the one process that links the repository layer in-process rather than calling the daemon, read-only.</td><td>§20, §24</td></tr>
+<tr><td><strong>8</strong></td><td>No key–value access; entities with identities.</td><td>The <code>kv</code> table and its nine JSON blobs become nine tables with real primary keys. Three further JSON columns (<code>queued_messages</code>, <code>dialog_answers</code>, usage <code>windows</code>) normalise into five more. The only opaque column left is <code>canonical_events.payload</code>, which is the canonical fact body and is versioned by the codec.</td><td>§11</td></tr>
+<tr><td><strong>9</strong></td><td>Strict vulture and architecture tests.</td><td>Nine new architecture tests and seven amended ones; vulture gains the new package, and the 85 reflected-field baseline entries move from the shrink-only <em>baseline</em> to the permanent <em>allowlist</em>, generated from the models and checked for rot by a test.</td><td>§24</td></tr>
+<tr><td><strong>10</strong></td><td>Bulk reads and writes; no connection or <code>write()</code> handle above the repository.</td><td>The unit-of-work design from revision 1 is withdrawn. Every repository method is one whole transaction; multi-table writes become one coarse method (<code>record_translation</code>, <code>save_composer_queue</code>, <code>record</code> for a usage snapshot). Six N+1 loops become bulk methods.</td><td>§18</td></tr>
+</tbody>
+</table>
+
+<!-- ============================================================= PART 1 -->
+<h2 id="s1"><span class="num">1</span>Storage inventory</h2>
+
+<p>Eight distinct SQLite files are opened by this tree. Seven are ours; one belongs to the Codex CLI and is written in place.</p>
+
+<table>
+<thead><tr><th style="width:19%">Database</th><th style="width:22%">Path</th><th style="width:17%">Tables</th><th style="width:20%">Schema owner</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><strong>events.db</strong></td><td><code>&lt;data_dir&gt;/events.db</code><br><span class="small"><code>core/data.py:data_directory()</code></span></td><td><code>event_store_metadata</code>, <code>sessions</code>, <code>raw_events</code>, <code>operation_output</code>, <code>translation_records</code>, <code>canonical_events</code>, <code>canonical_provenance</code>, <code>session_application_state</code></td><td><code>engine/store/database.py</code> — <code>SCHEMA</code> + <code>initialize()</code></td><td>The only versioned schema (<code>SCHEMA_VERSION = 15</code>, <code>domain/codec.py:16</code>). WAL, <code>foreign_keys=ON</code>, <code>busy_timeout=10000</code>, file mode <code>0600</code>.</td></tr>
+<tr><td><strong>audit.db</strong></td><td><code>$BAQYLAU_AUDIT_DIRECTORY/audit.db</code><br>default <code>~/.local/share/baqylau/audit/</code></td><td><code>errors</code>, <code>state_files</code>, <code>spawns</code>, <code>streams</code></td><td><code>diagnostics/database.py</code></td><td>Schema re-applied on <em>every</em> connect — by design, because every process in the tree writes here. No version row.</td></tr>
+<tr><td><strong>dashboard-preferences.db</strong></td><td><code>&lt;data_dir&gt;/dashboard-preferences.db</code></td><td><code>kv(key, val)</code></td><td><code>dashboard/prefs/store.py</code></td><td>Nine logical entities live as JSON blobs under nine keys.</td></tr>
+<tr><td><strong>pane-preferences.db</strong></td><td><code>&lt;data_dir&gt;/pane-preferences.db</code></td><td><code>project_widths</code></td><td><code>terminal/panes/preferences.py</code></td><td>Table created only on the <em>write</em> path.</td></tr>
+<tr><td><strong>terminal-views.db</strong></td><td><code>&lt;data_dir&gt;/terminal-views.db</code></td><td><code>opened_views</code></td><td><code>terminal/panes/views.py</code></td><td>Same; the read path additionally swallows <code>sqlite3.OperationalError</code>.</td></tr>
+<tr><td><strong>usage.db</strong></td><td><code>$BAQYLAU_DATA_DIR/claude_code/usage.db</code><br>default <code>~/.claude/baqylau/claude_code/</code></td><td><code>usage_snapshots</code></td><td><code>harness/impl/claude_code/usage/state.py</code></td><td>Plugin-owned; resolves its directory through <code>harness/impl/claude_code/data.py</code>, which reads <code>BAQYLAU_DATA_DIR</code> only — finding F9.</td></tr>
+<tr><td><strong>lock database</strong></td><td><code>&lt;runtime_dir&gt;/baqylau-dashboard.db</code></td><td><code>claims(key, pid)</code></td><td><code>core/locks.py</code></td><td>Generic pid-liveness lock. Two callers: <code>api/server.py:75,145</code>, <code>dashboard/cli.py:40</code>.</td></tr>
+<tr><td><strong>~/.codex/state_&lt;N&gt;.sqlite</strong><br><span class="tag t-mod">foreign</span></td><td><code>~/.codex/</code>, highest <code>N</code> wins</td><td><code>threads(id, title)</code> — updated, not created</td><td>Codex CLI (not ours)</td><td>Written by <code>harness/impl/codex/canonical/title.py:87</code>. Version-fragile filename, resolved by glob.</td></tr>
+</tbody>
+</table>
+
+<h2 id="s2"><span class="num">2</span>Table ownership matrix</h2>
+
+<p>“Owner” is the module the codebase names as the single writer. “Other SQL” is every module that issues statements against the table without going through that owner.</p>
+
+<table>
+<thead><tr><th style="width:16%">Table</th><th style="width:22%">Declared owner / writer</th><th style="width:30%">Other SQL against it</th><th>Assessment</th></tr></thead>
+<tbody>
+<tr><td><code>sessions</code></td><td><code>SessionStore</code> — <code>engine/store/sessions.py</code>; sole writer is <code>SessionUpsertCanonicalEventReaction</code></td><td>—</td><td><span class="tag t-keep">clean</span> — <code>watchable()</code> reads <code>canonical_events</code> and <code>raw_events</code> in correlated subqueries (<code>sessions.py:71-83</code>).</td></tr>
+<tr><td><code>raw_events</code></td><td><code>RawEventRecorder</code></td><td><code>CanonicalEventStore.unverdicted_raw_events</code> (<code>canonical.py:69</code>); <code>EvidenceQueries</code> (<code>queries/evidence.py:51,107</code>); <code>SessionStore.watchable</code></td><td><span class="tag t-mod">split read</span> — three modules build a <code>RawEvent</code> from a row; two mappers exist for one shape.</td></tr>
+<tr><td><code>canonical_events</code></td><td><code>CanonicalEventStore</code></td><td><code>EvidenceQueries</code>; <code>SessionStore.watchable</code></td><td><span class="tag t-mod">split read</span></td></tr>
+<tr><td><code>translation_records</code></td><td><code>CanonicalEventStore.store_translation</code></td><td><code>EvidenceQueries.raw_event</code></td><td><span class="tag t-mod">split read</span></td></tr>
+<tr><td><code>canonical_provenance</code></td><td><code>CanonicalEventStore</code></td><td><code>EvidenceQueries.raw_event</code></td><td><span class="tag t-mod">split read</span></td></tr>
+<tr><td><code>operation_output</code></td><td><code>OperationOutputStore</code></td><td>—</td><td><span class="tag t-mod">leaky</span> — <code>for_session()</code> hands a live <code>sqlite3.Row</code> to a source object (<code>output.py:109,142</code>) and deletes rows and unlinks files as a side effect of a read (<code>:106-108,125-129</code>).</td></tr>
+<tr><td><code>session_application_state</code></td><td><span class="tag t-del">none</span></td><td><code>dashboard/services/workspace.py:125,129,135,152,156,185,189,214,216,278</code></td><td><span class="tag t-del">bypass</span> — F1.</td></tr>
+<tr><td><code>event_store_metadata</code></td><td><code>engine/store/database.py:initialize()</code></td><td>—</td><td><span class="tag t-keep">clean</span></td></tr>
+<tr><td><code>errors</code></td><td><code>diagnostics/record.py:error()</code></td><td><code>diagnostics/read.py</code> (separate read-only connection)</td><td><span class="tag t-mod">two modules, no shared shape</span></td></tr>
+<tr><td><code>state_files</code></td><td><code>diagnostics/record.py:state_file()</code></td><td><span class="tag t-del">never read</span></td><td>Write-only. <code>BrowserTelemetryService</code> funnels three browser event kinds into it as JSON <code>content</code>.</td></tr>
+<tr><td><code>spawns</code></td><td><code>diagnostics/record.py:spawn()</code></td><td><span class="tag t-del">never read</span></td><td>Write-only.</td></tr>
+<tr><td><code>streams</code></td><td><code>diagnostics/record.py:stream_start/end</code></td><td><span class="tag t-del">never read</span></td><td>Write-only; the only place a <code>lastrowid</code> is an application-visible handle.</td></tr>
+<tr><td><code>kv</code></td><td><code>dashboard/prefs/store.py</code></td><td>—</td><td><span class="tag t-mod">untyped</span> — nine entities, free-form JSON. Key owners are the sibling modules; <code>"new-session"</code> has no owner and is named at <code>dashboard/services/overview.py:102,157</code> — F2.</td></tr>
+<tr><td><code>project_widths</code></td><td><code>terminal/panes/preferences.py</code></td><td>—</td><td><span class="tag t-mod">ad-hoc DDL</span></td></tr>
+<tr><td><code>opened_views</code></td><td><code>terminal/panes/views.py</code></td><td>—</td><td><span class="tag t-mod">ad-hoc DDL</span></td></tr>
+<tr><td><code>usage_snapshots</code></td><td><code>harness/impl/claude_code/usage/state.py</code></td><td>—</td><td><span class="tag t-mod">untyped</span> — <code>dict</code> in, <code>dict[str | None, dict]</code> out; window keys carry a <code>_reset</code> string-suffix convention (<code>usage/rows.py:30-47</code>).</td></tr>
+<tr><td><code>claims</code></td><td><code>core/locks.py</code></td><td>—</td><td><span class="tag t-mod">untyped</span> — outcomes are magic strings parsed by prefix.</td></tr>
+<tr><td><code>threads</code> <span class="small">(foreign)</span></td><td>Codex CLI</td><td><code>harness/impl/codex/canonical/title.py:87</code></td><td><span class="tag t-mod">untyped, unguarded</span></td></tr>
+</tbody>
+</table>
+
+<h2 id="s3"><span class="num">3</span>File access inventory</h2>
+
+<p>Requirement 2 needs the full list, so here it is. Every <code>open()</code>, <code>glob</code>, <code>listdir</code> and <code>makedirs</code> in the product packages, classified.</p>
+
+<h4>Credentials — stay on disk</h4>
+<table>
+<thead><tr><th style="width:34%">Path</th><th style="width:30%">Read by</th><th>Why it cannot move</th></tr></thead>
+<tbody>
+<tr><td><code>~/.config/deepgram/api-key</code>, <code>keyterms</code></td><td><code>dashboard/dictate.py</code></td><td>A long-lived third-party API key the user installs. Moving it into our database would mean owning a secret we only ever trade for a 30 s grant.</td></tr>
+<tr><td><code>&lt;telegram dir&gt;/bot-token</code>, <code>chat-id</code></td><td><code>notify/channels/telegram.py:72</code></td><td>Same: user-installed bot credentials, deliberately absent-means-off.</td></tr>
+<tr><td><code>~/.config/claude-subscriptions/accounts.tsv</code> and <code>configs/&lt;slug&gt;/</code></td><td><code>harness/impl/claude_code/account.py:31</code></td><td>The registry <em>indexes credential directories</em> the user maintains outside this application. We do not own the list and must not fork it.</td></tr>
+</tbody>
+</table>
+
+<h4>Source files — stay on disk</h4>
+<table>
+<thead><tr><th style="width:34%">Path</th><th style="width:30%">Read by</th><th>Why it cannot move</th></tr></thead>
+<tbody>
+<tr><td>Transcripts <code>*.jsonl</code>, Codex rollouts</td><td><code>claude_code/canonical/{translator,transcript}.py</code>, <code>codex/canonical/{translator,rollout}.py</code></td><td>The harness writes them; they are the raw evidence the recorder reads <em>from</em>. Already modelled as <code>RawEvent</code>.</td></tr>
+<tr><td><code>agent-&lt;id&gt;.meta.json</code> sidecars</td><td><code>harness/impl/claude_code/model.py:159</code></td><td>Harness-written, beside the transcript. Same class as the transcript.</td></tr>
+<tr><td><code>.claude/commands/**/*.md</code>, <code>.claude/skills/*/SKILL.md</code></td><td><code>harness/impl/claude_code/slashcmds.py:69,127</code></td><td>User-authored command definitions the harness itself executes. We only complete against them.</td></tr>
+<tr><td><code>$CODEX_HOME/prompts/*.md</code></td><td><code>harness/impl/codex/commands.py:28,102</code></td><td>Same, for Codex.</td></tr>
+<tr><td>Operation-output tee files</td><td><code>claude_code/hooks/foreground.py:125</code> creates; <code>engine/store/output.py</code> reads</td><td>The command writes into it while running. It <em>is</em> the evidence stream.</td></tr>
+<tr><td>Transcript naming record (append)</td><td><code>claude_code/canonical/transcript.py:661</code></td><td>The one sanctioned write into a harness file — it is how a parked Claude session is renamed. Becomes a <code>NativeSessionTitleRepository</code> implementation.</td></tr>
+</tbody>
+</table>
+
+<h4>Ours — becomes a table</h4>
+<table>
+<thead><tr><th style="width:34%">What</th><th style="width:30%">Today</th><th>Target</th></tr></thead>
+<tbody>
+<tr><td>Composer attachments</td><td><code>api/dashboard/files.py:71-73</code> writes bytes to <code>&lt;data_dir&gt;/uploads/&lt;session&gt;/</code>; nothing records that it happened except a write-only <code>state_files</code> row.</td><td>An <code>uploads</code> row per attachment. The <strong>bytes stay on disk</strong> — the harness consumes an <code>@path</code> mention, so a file must exist — but the row is what makes them findable and prunable. This is the one file exception that is ours, and §11 gives it a reason to exist: a prune with a real caller.</td></tr>
+<tr><td>Everything under <code>&lt;data_dir&gt;/*.db</code></td><td>Five files</td><td>One <code>main.db</code>. See §10.</td></tr>
+</tbody>
+</table>
+
+<h2 id="s4"><span class="num">4</span>Connection and transaction policy</h2>
+
+<p>Six independent policies exist. Nothing shares them.</p>
+
+<table>
+<thead><tr><th style="width:22%">Opened by</th><th style="width:10%">Journal</th><th style="width:11%">Timeout</th><th style="width:13%">Mode</th><th style="width:13%">Row factory</th><th>Transaction shape</th></tr></thead>
+<tbody>
+<tr><td><code>engine/store/database.py:connect</code></td><td>WAL (set in <code>initialize</code>)</td><td>10 s + <code>busy_timeout=10000</code></td><td>rwc</td><td><code>sqlite3.Row</code></td><td><code>with connection:</code>; writers issue <code>BEGIN IMMEDIATE</code>, some readers <code>BEGIN</code>.</td></tr>
+<tr><td><code>diagnostics/database.py:connect</code></td><td>WAL every connect</td><td>10 s</td><td>rwc</td><td>tuple</td><td>One statement per transaction.</td></tr>
+<tr><td><code>diagnostics/read.py</code></td><td>—</td><td>10 s</td><td><code>file:…?mode=ro</code></td><td>tuple</td><td>None; guarded by <code>os.path.isfile</code>.</td></tr>
+<tr><td><code>dashboard/prefs/store.py</code></td><td>WAL every connect</td><td>5 s</td><td>rwc</td><td>tuple</td><td><code>set()</code> one statement; <code>mutate_map()</code> a real <code>BEGIN IMMEDIATE</code> read-modify-write.</td></tr>
+<tr><td><code>terminal/panes/{preferences,views}.py</code></td><td>—</td><td><strong>0.2 s</strong></td><td>ro-URI read, rw write</td><td>tuple</td><td>DDL and DML in one block.</td></tr>
+<tr><td><code>claude_code/usage/state.py</code></td><td>—</td><td>default 5 s</td><td>rwc</td><td><code>sqlite3.Row</code></td><td><code>INSERT OR REPLACE</code>.</td></tr>
+<tr><td><code>core/locks.py</code></td><td>—</td><td>5 s</td><td>rwc / refuse-create</td><td>tuple</td><td>Hand-rolled <code>BEGIN IMMEDIATE</code>/commit/rollback.</td></tr>
+<tr><td><code>codex/canonical/title.py</code></td><td>—</td><td>2 s</td><td>rw (foreign)</td><td>tuple</td><td><code>UPDATE</code> + commit in <code>try/finally</code>.</td></tr>
+</tbody>
+</table>
+
+<p>One multi-table transaction exists in the whole tree: <code>CanonicalEventStore.store_translation</code> (<code>canonical.py:78-126</code>) writes <code>translation_records</code>, <code>canonical_events</code> and <code>canonical_provenance</code> under one <code>BEGIN IMMEDIATE</code>.</p>
+
+<h2 id="s5"><span class="num">5</span>Access patterns and processes</h2>
+
+<h4>Six patterns</h4>
+<ol>
+<li><strong>Store class holding a path.</strong> <code>CanonicalEventStore</code>, <code>SessionStore</code>, <code>RawEventRecorder</code>, <code>OperationOutputStore</code> — each calls <code>initialize()</code> in its own <code>__init__</code>, so the schema is applied four times per process start.</li>
+<li><strong>Module-level function over a fixed path.</strong> <code>diagnostics/record.py</code>, <code>dashboard/prefs/*</code>, <code>terminal/panes/{preferences,views}.py</code>, <code>claude_code/usage/state.py</code>. No object, no injection; tests substitute an environment variable rather than a collaborator.</li>
+<li><strong>Read-only class holding a path.</strong> <code>OperationalDiagnostics</code>.</li>
+<li><strong>Query object reaching around a store.</strong> <code>EvidenceQueries</code> — holds a store, uses it for <code>.database_path</code>.</li>
+<li><strong>Service reaching around the store layer.</strong> <code>SessionApplicationService</code>.</li>
+<li><strong>Free function over a caller-supplied path.</strong> <code>core/locks.py</code> — the only accidentally-injectable one.</li>
+</ol>
+
+<h4>Which processes touch a database</h4>
+<table>
+<thead><tr><th style="width:26%">Process</th><th style="width:20%">Reaches the daemon by</th><th>Direct database access</th></tr></thead>
+<tbody>
+<tr><td>Hook process<br><span class="small"><code>harness/impl/*/bin/hook.py</code></span></td><td><code>POST /api/harnesses/{h}/hooks</code></td><td><span class="tag t-mod">audit only</span> — <code>harness/hooks/client.py</code> and <code>claude_code/hooks/statusline.py</code> call <code>diagnostics.record</code>, which opens <code>audit.db</code>.</td></tr>
+<tr><td>OTLP receiver<br><span class="small"><code>claude_code/otel/receiver.py</code></span></td><td><span class="tag t-del">nothing</span></td><td><span class="tag t-del">writes the event store</span> — constructs <code>RawEventRecorder</code> and <code>SessionStore</code> on <code>events.db</code> (<code>receiver.py:107-109</code>). The only non-daemon writer of canonical evidence. F16.</td></tr>
+<tr><td>Mirror / scoreboard pane<br><span class="small"><code>terminal/panes/*_process.py</code></span></td><td>SSE <code>/api/sessions/{id}/panes/{kind}/stream</code></td><td><span class="tag t-keep">none</span> — already thin.</td></tr>
+<tr><td>Keybinding and click clients<br><span class="small"><code>terminal/panes/client.py</code>, <code>terminal/bin/{content,view}.py</code></span></td><td><code>POST /api/terminal/…</code>, <code>GET /api/content/…</code></td><td><span class="tag t-keep">none</span> — already thin. Nothing asserts it stays that way.</td></tr>
+<tr><td>Daemon<br><span class="small"><code>api/server.py</code></span></td><td>—</td><td>All seven of ours.</td></tr>
+<tr><td>Audit CLI<br><span class="small"><code>app/evidence_cli.py</code></span></td><td>—</td><td>Reads <code>events.db</code>. Sanctioned by <code>test_the_application_graph_is_built_only_by_the_daemon</code> — but it opens read-write, not read-only.</td></tr>
+</tbody>
+</table>
+
+<h2 id="s6"><span class="num">6</span>The model layers as they exist today</h2>
+
+<p>Five places are called “models”. None is a persistence DTO, and the wire layer covers requests only.</p>
+
+<table>
+<thead><tr><th style="width:24%">Location</th><th style="width:16%">Kind</th><th style="width:26%">Contents</th><th>Role</th></tr></thead>
+<tbody>
+<tr><td><code>domain/</code></td><td>frozen dataclass, stdlib-only</td><td>35 payloads + <code>CanonicalEvent</code>; 18 value types and closed <code>Literal</code> sets; 10 <code>NewType</code> ids; the codec</td><td>The canonical fact vocabulary. Pinned to the standard library by an architecture test.</td></tr>
+<tr><td><code>harness/models/</code></td><td>frozen dataclass</td><td><code>RawEvent</code>, <code>TranslationResult</code>, <code>Session</code>, controls, catalog, launch, usage, hooks, probe</td><td>The harness protocol's messages.</td></tr>
+<tr><td><code>terminal/models/</code></td><td>frozen dataclass</td><td>Pane, tab, viewport, input</td><td>Imports <em>nothing</em> of ours.</td></tr>
+<tr><td><code>engine/projections/models.py</code></td><td>frozen dataclass</td><td>26 read models</td><td>What a fold over canonical facts produces.</td></tr>
+<tr><td><code>dashboard/services/models.py</code></td><td>frozen dataclass</td><td><code>DashboardSessionListItem</code>, <code>DashboardSessionSnapshot</code>, …</td><td>Facts arranged for one page.</td></tr>
+<tr><td><code>api/*/models/**</code></td><td><strong>pydantic</strong></td><td>53 files — 41 requests, 10 responses, 2 shared</td><td>The wire layer. The 10 responses cover acknowledgements; <strong>no read endpoint has one</strong>.</td></tr>
+</tbody>
+</table>
+
+<div class="box bad">
+<h5>The response half of the wire layer is missing</h5>
+<p>Of 57 decorated handlers, <strong>26 declare <code>-&gt; JSONResponse</code></strong> and build their body with <code>json_ready()</code>, which reflects over whatever frozen dataclass the service returned: the 5 pane commands, launch + 14 controls, the session list, the session snapshot, the activity backlog, the harness catalogue, insights, and the resumable-session picker. Three more carry no return annotation at all (<code>api/common/content.py:content</code>, <code>api/dashboard/files.py:dictation_token</code>, <code>api/terminal/streams.py:pane_stream</code>). The remaining 28 are legitimately raw or already typed.</p>
+<p>So the browser contract is <em>whatever field names the internal read models happen to have</em>: renaming <code>SessionSummary.effort</code> silently changes the JSON. It is also why <code>vulture-baseline.py</code> carries 85 “unused variable” entries, and why <code>/openapi.yaml</code> describes none of those 26 routes.</p>
+</div>
+
+<h4>Entities with no model type at all</h4>
+<table>
+<thead><tr><th style="width:26%">Entity</th><th style="width:24%">Stored in</th><th style="width:22%">Current representation</th><th>Consumers</th></tr></thead>
+<tbody>
+<tr><td>Composer draft / queue / dialog draft</td><td><code>session_application_state</code></td><td>Dataclasses inside the service that also writes the SQL — <code>dashboard/services/workspace.py:36-76</code></td><td><code>api/dashboard/application.py</code>, the session snapshot</td></tr>
+<tr><td>Operation-output following</td><td><code>operation_output</code></td><td>A live <code>sqlite3.Row</code></td><td>The interpreter's pull phase</td></tr>
+<tr><td>Nine preference entities</td><td><code>kv</code></td><td>Bare <code>dict</code>/<code>list</code>/<code>bool</code>, validated by hand in nine helpers</td><td><code>dashboard/services/*</code>, <code>notify/*</code></td></tr>
+<tr><td>Pane width, opened view</td><td><code>project_widths</code>, <code>opened_views</code></td><td><code>int</code>, <code>frozenset[str]</code></td><td><code>terminal/panes/*</code>, <code>api/terminal/*</code></td></tr>
+<tr><td>Account usage snapshot</td><td><code>usage_snapshots</code></td><td><code>dict[str | None, dict]</code></td><td><code>claude_code/usage/rows.py</code>, <code>account.py</code></td></tr>
+<tr><td>Diagnostic records</td><td><code>state_files</code>, <code>spawns</code>, <code>streams</code></td><td>Positional arguments</td><td>write-only</td></tr>
+<tr><td>Process-lock claim</td><td><code>claims</code></td><td>Magic strings</td><td><code>api/server.py</code>, <code>dashboard/cli.py</code></td></tr>
+<tr><td>Native session title</td><td><code>threads</code> / transcript append</td><td><code>True</code>/<code>False</code>/<code>None</code> tri-state</td><td>both <code>controls/controller.py</code></td></tr>
+<tr><td>Uploaded attachment</td><td>the filesystem</td><td>a path string in a response</td><td><code>api/dashboard/files.py</code></td></tr>
+</tbody>
+</table>
+
+<h2 id="s7"><span class="num">7</span>As-is flow diagram</h2>
+
+<figure>
+<svg viewBox="0 0 1250 900" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="As-is data access flow">
+<defs>
+  <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0,0 L10,5 L0,10 z" fill="#8a93a3"/></marker>
+  <marker id="ahr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0,0 L10,5 L0,10 z" fill="#b3261e"/></marker>
+</defs>
+
+<text x="14" y="24" class="s-t" style="font-size:13px">AS-IS — every persistent-storage path in the tree</text>
+
+<rect class="s-lane" x="8"  y="44"  width="104" height="56" rx="5"/><text class="s-lanetext" x="20" y="70">PROCESSES</text><text class="s-lanetext" x="20" y="84">(6)</text>
+<rect class="s-lane" x="8"  y="132" width="104" height="48" rx="5"/><text class="s-lanetext" x="20" y="160">HTTP</text>
+<rect class="s-lane" x="8"  y="216" width="104" height="56" rx="5"/><text class="s-lanetext" x="20" y="242">SERVICES</text>
+<rect class="s-lane" x="8"  y="304" width="104" height="52" rx="5"/><text class="s-lanetext" x="20" y="328">ENGINE</text>
+<rect class="s-lane" x="8"  y="392" width="104" height="84" rx="5"/><text class="s-lanetext" x="20" y="424">STORAGE</text><text class="s-lanetext" x="20" y="438">MODULES</text>
+<rect class="s-lane" x="8"  y="512" width="104" height="44" rx="5"/><text class="s-lanetext" x="20" y="538">DRIVER</text>
+<rect class="s-lane" x="8"  y="592" width="104" height="76" rx="5"/><text class="s-lanetext" x="20" y="626">DATABASES</text>
+
+<rect class="s-box" x="124" y="44" width="205" height="56" rx="5"/><text class="s-t" x="134" y="66">hook process</text><text class="s-s" x="134" y="82">HTTP to daemon…</text><text class="s-s" x="134" y="94">…but writes audit.db itself</text>
+<rect class="s-box" x="341" y="44" width="205" height="56" rx="5"/><text class="s-t" x="351" y="66">otel receiver</text><text class="s-s" x="351" y="82">NO http — opens events.db</text><text class="s-s" x="351" y="94">recorder + sessions  ← F16</text>
+<rect class="s-box" x="558" y="44" width="205" height="56" rx="5"/><text class="s-t" x="568" y="66">pane / click clients</text><text class="s-s" x="568" y="82">thin HTTP — nothing</text><text class="s-s" x="568" y="94">asserts it stays thin</text>
+<rect class="s-box" x="775" y="44" width="205" height="56" rx="5"/><text class="s-t" x="785" y="66">daemon</text><text class="s-s" x="785" y="82">api/server.py</text><text class="s-s" x="785" y="94">opens all seven</text>
+<rect class="s-box" x="992" y="44" width="205" height="56" rx="5"/><text class="s-t" x="1002" y="66">audit CLI</text><text class="s-s" x="1002" y="82">app/evidence_cli.py</text><text class="s-s" x="1002" y="94">direct — read/WRITE open</text>
+
+<rect class="s-box-api" x="124" y="132" width="1073" height="48" rx="5"/>
+<text class="s-t" x="134" y="152">api/  — 57 handlers</text>
+<text class="s-s" x="134" y="168">41 pydantic REQUEST models · 10 response models · 26 handlers return json_ready(dataclass) with NO response model · 3 have no return annotation</text>
+
+<rect class="s-box" x="124" y="216" width="205" height="56" rx="5"/><text class="s-t" x="134" y="238">dashboard/services/</text><text class="s-s" x="134" y="254">sessions · streams · activity</text><text class="s-s" x="134" y="266">overview · notices · workspace</text>
+<rect class="s-box" x="341" y="216" width="205" height="56" rx="5"/><text class="s-t" x="351" y="238">app/services/</text><text class="s-s" x="351" y="254">insights · resume</text>
+<rect class="s-box" x="558" y="216" width="205" height="56" rx="5"/><text class="s-t" x="568" y="238">harness/services/</text><text class="s-s" x="568" y="254">controls · catalog · launcher</text><text class="s-s" x="568" y="266">probe · usage</text>
+<rect class="s-box" x="775" y="216" width="205" height="56" rx="5"/><text class="s-t" x="785" y="238">terminal/panes/</text><text class="s-s" x="785" y="254">commands · streams · reaction</text><text class="s-s" x="785" y="266">no service layer  ← F14/F15</text>
+<rect class="s-box" x="992" y="216" width="205" height="56" rx="5"/><text class="s-t" x="1002" y="238">notify/</text><text class="s-s" x="1002" y="254">notifier · presence · channels</text>
+
+<rect class="s-box-eng" x="124" y="304" width="350" height="52" rx="5"/><text class="s-t" x="134" y="324">engine/projections/</text><text class="s-s" x="134" y="340">SessionQueries · EventPages · 6 folds</text>
+<rect class="s-box-eng" x="486" y="304" width="350" height="52" rx="5"/><text class="s-t" x="496" y="324">engine/queries/</text><text class="s-s" x="496" y="340">content · evidence  ← writes its own SQL</text>
+<rect class="s-box-eng" x="848" y="304" width="349" height="52" rx="5"/><text class="s-t" x="858" y="324">engine/interpret/</text><text class="s-s" x="858" y="340">Interpreter · reactions · liveness · translators</text>
+
+<rect class="s-box-store" x="124" y="392" width="145" height="84" rx="5"/><text class="s-t" x="132" y="410">engine/store/</text><text class="s-s" x="132" y="425">database.py</text><text class="s-s" x="132" y="437">recorder.py</text><text class="s-s" x="132" y="449">canonical.py</text><text class="s-s" x="132" y="461">sessions.py</text><text class="s-s" x="132" y="472">output.py</text>
+<rect class="s-box-store" x="279" y="392" width="145" height="84" rx="5"/><text class="s-t" x="287" y="410">diagnostics/</text><text class="s-s" x="287" y="425">database.py</text><text class="s-s" x="287" y="437">record.py (write)</text><text class="s-s" x="287" y="449">read.py (ro-URI)</text><text class="s-s" x="287" y="461">telemetry.py</text>
+<rect class="s-box-store" x="434" y="392" width="145" height="84" rx="5"/><text class="s-t" x="442" y="410">dashboard/prefs/</text><text class="s-s" x="442" y="425">store.py — kv</text><text class="s-s" x="442" y="437">7 key-owner modules</text><text class="s-s" x="442" y="453">9 JSON blobs</text>
+<rect class="s-box-store" x="589" y="392" width="145" height="84" rx="5"/><text class="s-t" x="597" y="410">terminal/panes/</text><text class="s-s" x="597" y="425">preferences.py</text><text class="s-s" x="597" y="437">views.py</text><text class="s-s" x="597" y="453">inline DDL</text>
+<rect class="s-box-store" x="744" y="392" width="145" height="84" rx="5"/><text class="s-t" x="752" y="410">claude_code/</text><text class="s-s" x="752" y="425">usage/state.py</text><text class="s-s" x="752" y="441">dict in, dict out</text>
+<rect class="s-box-store" x="899" y="392" width="145" height="84" rx="5"/><text class="s-t" x="907" y="410">core/locks.py</text><text class="s-s" x="907" y="425">claims table</text><text class="s-s" x="907" y="441">string outcomes</text>
+<rect class="s-box-store" x="1054" y="392" width="143" height="84" rx="5"/><text class="s-t" x="1062" y="410">codex/canonical/</text><text class="s-s" x="1062" y="425">title.py</text><text class="s-s" x="1062" y="441">foreign DB write</text>
+
+<rect class="s-box" x="124" y="512" width="1073" height="44" rx="5"/>
+<text class="s-t" x="134" y="532">sqlite3</text>
+<text class="s-s" x="134" y="548">6 connection policies · WAL vs none · timeout 0.2 s to 10 s · ro-URI vs rw · foreign_keys on/off · schema-on-connect vs schema-on-first-write</text>
+
+<rect class="s-box-db" x="124" y="592" width="127" height="76" rx="5"/><text class="s-t" x="131" y="612">events.db</text><text class="s-s" x="131" y="628">8 tables</text><text class="s-s" x="131" y="641">versioned (15)</text>
+<rect class="s-box-db" x="259" y="592" width="127" height="76" rx="5"/><text class="s-t" x="266" y="612">audit.db</text><text class="s-s" x="266" y="628">4 tables</text><text class="s-s" x="266" y="641">3 write-only</text>
+<rect class="s-box-db" x="394" y="592" width="127" height="76" rx="5"/><text class="s-t" x="401" y="612">dashboard-</text><text class="s-t" x="401" y="626">preferences.db</text><text class="s-s" x="401" y="642">kv · 9 keys</text>
+<rect class="s-box-db" x="529" y="592" width="127" height="76" rx="5"/><text class="s-t" x="536" y="612">pane-</text><text class="s-t" x="536" y="626">preferences.db</text><text class="s-s" x="536" y="642">project_widths</text>
+<rect class="s-box-db" x="664" y="592" width="127" height="76" rx="5"/><text class="s-t" x="671" y="612">terminal-</text><text class="s-t" x="671" y="626">views.db</text><text class="s-s" x="671" y="642">opened_views</text>
+<rect class="s-box-db" x="799" y="592" width="127" height="76" rx="5"/><text class="s-t" x="806" y="612">usage.db</text><text class="s-s" x="806" y="628">usage_snapshots</text><text class="s-s" x="806" y="641">plugin data dir</text>
+<rect class="s-box-db" x="934" y="592" width="127" height="76" rx="5"/><text class="s-t" x="941" y="612">lock db</text><text class="s-s" x="941" y="628">claims</text><text class="s-s" x="941" y="641">runtime dir</text>
+<rect class="s-box-db" x="1069" y="592" width="128" height="76" rx="5"/><text class="s-t" x="1076" y="612">~/.codex/</text><text class="s-t" x="1076" y="626">state_N.sqlite</text><text class="s-s" x="1076" y="642">threads — FOREIGN</text>
+
+<path class="s-arrow" d="M877,100 L877,130"/>
+<path class="s-arrow" d="M660,100 L660,214"/>
+<path class="s-arrow" d="M443,100 L443,390"/>
+<path class="s-arrow" d="M1094,100 L1094,302"/>
+<path class="s-arrow" d="M300,180 L226,214"/>
+<path class="s-arrow" d="M600,180 L660,214"/>
+<path class="s-arrow" d="M880,180 L880,214"/>
+<path class="s-arrow" d="M226,272 L226,302"/>
+<path class="s-arrow" d="M443,272 L340,304"/>
+<path class="s-arrow" d="M660,272 L700,304"/>
+<path class="s-arrow" d="M877,272 L800,390"/>
+<path class="s-arrow" d="M1094,272 L1094,302"/>
+<path class="s-arrow" d="M300,356 L196,390"/>
+<path class="s-arrow" d="M980,356 L196,392" opacity=".45"/>
+<path class="s-arrow" d="M196,476 L196,510"/>
+<path class="s-arrow" d="M351,476 L351,510"/>
+<path class="s-arrow" d="M506,476 L506,510"/>
+<path class="s-arrow" d="M661,476 L661,510"/>
+<path class="s-arrow" d="M816,476 L816,510"/>
+<path class="s-arrow" d="M971,476 L971,510"/>
+<path class="s-arrow" d="M1125,476 L1125,510"/>
+<path class="s-arrow" d="M187,556 L187,590"/>
+<path class="s-arrow" d="M322,556 L322,590"/>
+<path class="s-arrow" d="M457,556 L457,590"/>
+<path class="s-arrow" d="M592,556 L592,590"/>
+<path class="s-arrow" d="M727,556 L727,590"/>
+<path class="s-arrow" d="M862,556 L862,590"/>
+<path class="s-arrow" d="M997,556 L997,590"/>
+<path class="s-arrow" d="M1133,556 L1133,590"/>
+
+<path class="s-red" d="M226,272 L226,286 L1218,286 L1218,528 L1201,528"/>
+<text class="s-redt" x="240" y="282">F1  dashboard/services/workspace.py — 5 raw statements on session_application_state</text>
+<path class="s-red" d="M661,356 L661,370 L1236,370 L1236,544 L1201,544"/>
+<text class="s-redt" x="675" y="366">F3  engine/queries/evidence.py — 2 hand-written joins around the store</text>
+
+<text class="s-note" x="124" y="700">F4  engine/store/output.py hands a live sqlite3.Row upward, and deletes rows + unlinks files inside a read.</text>
+<text class="s-note" x="124" y="718">F2  dashboard/services/overview.py names the raw kv key "new-session" — the one preference key with no owning module.</text>
+<text class="s-note" x="124" y="736">F5  Four stores each call initialize() on events.db; the same schema is applied four times per process start.</text>
+<text class="s-note" x="124" y="754">F7  Diagnostics writes always land in $BAQYLAU_AUDIT_DIRECTORY/audit.db, but the READER is constructed with a path the caller chooses.</text>
+<text class="s-note" x="124" y="772">F17  DashboardSessionService issues one latest_session_cursor query per session, per 250 ms refresh — up to 20 round trips a tick.</text>
+<text class="s-note" x="124" y="790">No repository interface exists anywhere: every consumer depends on a concrete class or a module, so nothing can be substituted without a temp directory.</text>
+
+<rect x="124" y="812" width="1073" height="60" rx="6" fill="#fbfcfd" stroke="#e2e7ee"/>
+<text class="s-t" x="136" y="832">Legend</text>
+<rect class="s-box-eng"   x="200" y="820" width="16" height="12"/><text class="s-s" x="222" y="830">engine</text>
+<rect class="s-box-store" x="280" y="820" width="16" height="12"/><text class="s-s" x="302" y="830">storage module</text>
+<rect class="s-box-db"    x="400" y="820" width="16" height="12"/><text class="s-s" x="422" y="830">database</text>
+<rect class="s-box-api"   x="480" y="820" width="16" height="12"/><text class="s-s" x="502" y="830">http</text>
+<path class="s-arrow" d="M560,826 L600,826"/><text class="s-s" x="606" y="830">layered call</text>
+<path class="s-red"   d="M700,826 L740,826"/><text class="s-s" x="746" y="830">layer bypass — raw SQL from above the storage tier</text>
+<text class="s-s" x="136" y="852">F-numbers refer to §8.  Boxes are modules, not processes; the six processes at the top all reach the same files on disk.</text>
+<text class="s-s" x="136" y="866">File access (credentials, transcripts, prompt directories, uploads) is not drawn — see §3.</text>
+</svg>
+<figcaption><strong>Figure 1.</strong> As-is. Seven storage modules side by side with no shared interface; two call sites above them reach the driver directly; two processes outside the daemon open a database.</figcaption>
+</figure>
+
+<h2 id="s8"><span class="num">8</span>Findings</h2>
+
+<table>
+<thead><tr><th style="width:5%">#</th><th style="width:26%">Finding</th><th style="width:28%">Evidence</th><th>Consequence</th></tr></thead>
+<tbody>
+<tr><td><strong>F1</strong></td><td>A presentation-tier service owns a table in the event store and writes its SQL inline.</td><td><code>dashboard/services/workspace.py:125,152,185,214,278</code>; <code>session_application_state</code> is absent from <code>engine/store/__init__.py</code>'s owner list.</td><td>The stated “one owner per table” rule is false for one of eight tables. The draft-sequence race guard lives outside the store.</td></tr>
+<tr><td><strong>F2</strong></td><td>The <code>"new-session"</code> preference key has no owning module.</td><td><code>dashboard/services/overview.py:102,157</code>, against <code>dashboard/prefs/__init__.py</code>'s “nothing outside them names a key”.</td><td>Its shape is validated nowhere.</td></tr>
+<tr><td><strong>F3</strong></td><td><code>EvidenceQueries</code> holds a store but uses it as a path carrier.</td><td><code>engine/queries/evidence.py:50,105</code>.</td><td>Four tables joined from a module owning none; the row→<code>RawEvent</code> mapping duplicated from <code>canonical.py:265</code>.</td></tr>
+<tr><td><strong>F4</strong></td><td>A raw <code>sqlite3.Row</code> escapes the store, and a read mutates the database and the filesystem.</td><td><code>engine/store/output.py:109,106-108,125-129</code>.</td><td>The source object is untestable without a database, and “list the followings” can unlink a user's file.</td></tr>
+<tr><td><strong>F5</strong></td><td><code>initialize()</code> runs once per store object, not once per database.</td><td>Four stores; <code>app/bootstrap.py:97-109</code>.</td><td>Four schema applications and four version checks per process start.</td></tr>
+<tr><td><strong>F6</strong></td><td>Two tables are created lazily on the write path; their readers each work around the absence differently.</td><td><code>terminal/panes/preferences.py:44-55</code> (<code>isfile</code> guard) vs <code>views.py:16-27</code> (<code>except OperationalError</code>).</td><td>Two spellings of one defence.</td></tr>
+<tr><td><strong>F7</strong></td><td>The diagnostics reader and writer can address different files.</td><td>Writer always <code>audit_dir()/audit.db</code>; reader takes a constructor path defaulting to <code>&lt;data_dir&gt;/diagnostics.db</code> — which is what eight tests get.</td><td>In the test graph the reader points at a file the writer never touches; <code>tests/test_canonical_http.py:155</code> compensates by creating the table itself.</td></tr>
+<tr><td><strong>F8</strong></td><td>Three of the four audit tables are never read by product code.</td><td><code>state_files</code>, <code>spawns</code>, <code>streams</code>.</td><td>Write cost with no reader; the debugging skills reach them with ad-hoc SQL.</td></tr>
+<tr><td><strong>F9</strong></td><td>Two disagreeing answers to “where is the data directory”.</td><td><code>core/data.py:17-21</code> honours both spellings; <code>claude_code/data.py:9</code> honours only <code>BAQYLAU_DATA_DIR</code>.</td><td>Setting the older spelling moves <code>events.db</code> but strands <code>usage.db</code> — the exact failure <code>core/data.py</code>'s docstring says it was written to end.</td></tr>
+<tr><td><strong>F10</strong></td><td><code>core/locks.py</code>'s header describes modules that no longer exist.</td><td>References <code>core/state.py</code>, <code>core.slots.claim</code>, an OTLP singleton lock; none exist, and the only caller is the dashboard daemon.</td><td>The documented reason for <code>create=False</code> has no subject; that parameter is unreachable.</td></tr>
+<tr><td><strong>F11</strong></td><td>26 handlers return a reflected <code>JSONResponse</code>; 3 more have no return annotation.</td><td>§6.</td><td>Internal field names are the public browser contract; no OpenAPI for those routes; 85 baseline entries exist to keep reflected fields from reading as dead.</td></tr>
+<tr><td><strong>F12</strong></td><td>A module is passed where a Protocol is expected.</td><td><code>app/bootstrap.py:204</code> — <code>BrowserTelemetryService(diagnostic_record)</code>, parameter typed <code>OperationalAudit</code>.</td><td>The write tier cannot be swapped, counted, or faked without <code>monkeypatch</code>.</td></tr>
+<tr><td><strong>F13</strong></td><td>The foreign Codex title write has no guard rails.</td><td><code>codex/canonical/title.py:85-91</code> — unversioned <code>UPDATE</code> on another product's database, schema discovered by globbing a version-numbered filename.</td><td>A Codex upgrade that renames the table degrades identically to “no index”.</td></tr>
+<tr><td><strong>F14</strong></td><td>A route reaches a storage module with no service between.</td><td><code>api/terminal/views.py:17</code> — <code>terminal_views.toggle(body.content_reference)</code>.</td><td>The only route in the tree that is its own service; nothing else can reuse or guard the toggle.</td></tr>
+<tr><td><strong>F15</strong></td><td>A pane renderer opens a database mid-render.</td><td><code>terminal/panes/streams.py:140</code> — <code>terminal_views.opened()</code> inside the frame loop.</td><td>A file open per frame, several times a second, per pane.</td></tr>
+<tr><td><strong>F16</strong></td><td>The OTLP receiver is the only non-daemon process that writes canonical evidence.</td><td><code>claude_code/otel/receiver.py:107-109</code> constructs <code>RawEventRecorder</code> and <code>SessionStore</code>.</td><td>Two writers of <code>raw_events</code> in two processes; the hook channel's “one recorder” property does not hold for telemetry.</td></tr>
+<tr><td><strong>F17</strong></td><td>Six N+1 read loops.</td><td><code>dashboard/services/sessions.py:122</code> (one cursor query per session per 250 ms refresh); <code>engine/interpret/loop.py:109</code> (one position query per source per tick); <code>engine/queries/evidence.py:111-115</code> (2 queries per raw event, plus 2 per canonical event); <code>canonical.py:342</code>; <code>usage/state.py:59</code>; <code>prefs</code> per-session lookups.</td><td>The session list alone can issue 20 round trips every 250 ms; the audit CLI issues ~20 000 for a 5 000-event session.</td></tr>
+<tr><td><strong>F18</strong></td><td>The audit CLI opens the event store read-write.</td><td><code>app/evidence_cli.py:62</code> — <code>CanonicalEventStore(database_path)</code>, which calls <code>initialize()</code> and can create and migrate the file.</td><td>The one tool you run when the store is the suspect is also able to alter it.</td></tr>
+</tbody>
+</table>
+
+<h2 id="s9"><span class="num">9</span>Constraints the refactor must respect</h2>
+
+<p>This repository enforces its architecture mechanically. A plan that ignores the following will not merge.</p>
+
+<table>
+<thead><tr><th style="width:34%">Gate</th><th style="width:33%">What it pins</th><th>Impact</th></tr></thead>
+<tbody>
+<tr><td><code>tests/test_canonical_architecture.py</code> — <code>OUR_PACKAGES</code> + 8 <code>assert_imports</code> rules</td><td><code>domain</code> → stdlib only; <code>engine</code> → core/diagnostics/domain/engine + harness.contract/models/registry; <code>terminal</code> → core/diagnostics/domain/engine/terminal; <code>harness/impl</code> → no app/api/dashboard.</td><td>A new top-level package must join <code>OUR_PACKAGES</code>, get its own rule, and every importer's allow-list must widen in the same commit.</td></tr>
+<tr><td><code>test_protocol_implementations_declare_the_protocol_they_implement</code> and <code>…matches_the_protocol_exactly</code></td><td>A structural implementer must name its Protocol as a base and define every member with <em>identical parameter names</em>.</td><td>Free enforcement for the whole repository layer — but names in the implementation must match the contract character for character.</td></tr>
+<tr><td><code>test_no_read_path_orders_on_a_bare_occurred_at</code></td><td>Scans eight packages for <code>ORDER BY … occurred_at</code> without <code>COALESCE</code>.</td><td><strong>Must add the new package.</strong> The one query it protects is moving there.</td></tr>
+<tr><td><code>test_canonical_shared_code_contains_no_concrete_harness_vocabulary</code></td><td>The words <em>claude, codex, anthropic, openai, rollout, transcript</em> may not appear in shared packages.</td><td>The new package joins the scan. Consequence: the Codex title repository stays inside <code>harness/impl/codex/</code>, behind a neutral Protocol.</td></tr>
+<tr><td><code>mypy.ini</code> + <code>ruff.toml</code> ratchet, guarded by <code>tests/test_canonical_typing.py</code></td><td>Per-package annotation exemptions for eight packages; the two lists must match and may only shrink.</td><td><strong>The new package gets no exemption.</strong> Every function moved out of an exempt package must be annotated on arrival, and a package that becomes clean must lose its block in the same commit.</td></tr>
+<tr><td><code>make deadcode</code> (vulture)</td><td>Findings must be deleted or listed in the shrink-only <code>vulture-baseline.py</code>.</td><td><strong>A Protocol method with no caller is a build failure.</strong> The catalogue in §16 is trimmed to methods with live call sites.</td></tr>
+<tr><td><code>test_the_application_graph_is_built_only_by_the_daemon</code></td><td>Only <code>app/bootstrap.py</code> and <code>api/server.py</code> may call <code>build_application</code>; <code>app/evidence_cli.py</code> is the sanctioned direct reader.</td><td>Requirement 7 tightens this rather than relaxing it.</td></tr>
+<tr><td><code>test_hook_entries_are_thin_clients_of_the_daemon</code></td><td>Hook entries may not contain <code>RawEventRecorder</code>, <code>engine.store.recorder</code>, or <code>events.db</code>.</td><td>The marker list must gain the new module names, and the same test shape must be applied to the OTLP receiver (requirement 6).</td></tr>
+<tr><td><code>ruff.toml</code> — PGH003, ANN, line length 120</td><td>No blanket <code># type: ignore</code>; every def annotated.</td><td><code>sqlite3.Row</code> may not appear in an annotation outside the driver module.</td></tr>
+</tbody>
+</table>
+
+<!-- ============================================================= PART 2 -->
+<h2 id="s10"><span class="num">10</span>Target: two databases</h2>
+
+<table>
+<thead><tr><th style="width:15%">File</th><th style="width:20%">Path</th><th style="width:10%">Tables</th><th>Why it is its own file</th></tr></thead>
+<tbody>
+<tr><td><strong>main.db</strong></td><td><code>&lt;data_dir&gt;/main.db</code></td><td>25</td><td>Everything the application owns <em>and reads back</em>: evidence, canonical facts, the workspace, every preference, terminal state, usage, uploads. One schema, one version, one connection policy, one lock.</td></tr>
+<tr><td><strong>audit.db</strong></td><td><code>&lt;data_dir&gt;/audit.db</code></td><td>5</td><td>Written by every short-lived process in the tree — ~20 hook deliveries a minute, plus pane and statusline processes — and it is the file you read <em>when <code>main.db</code> is the suspect</em>. Sharing a write lock with the interpreter would let a wedged tick swallow the evidence explaining it. Its path stops being independently configurable, which is F7's fix.</td></tr>
+</tbody>
+</table>
+
+<h4>The two exceptions</h4>
+<table>
+<thead><tr><th style="width:15%">File</th><th style="width:20%">Path</th><th style="width:10%">Tables</th><th>Why it cannot be consolidated</th></tr></thead>
+<tbody>
+<tr><td><strong>locks.db</strong><br><span class="tag t-mod">EXC-1</span></td><td><code>&lt;runtime_dir&gt;/locks.db</code></td><td>1</td><td>A pid claim <strong>must not survive a reboot</strong>. The runtime directory is cleared; the data directory is not. Put <code>claims</code> in <code>main.db</code> and a stale row naming pid 4242 outlives the machine — and the liveness check <code>process_is_alive(4242)</code> answers <em>true</em> for whatever unrelated process inherited that number, so the daemon refuses to start. Ephemerality is the correctness property here, not a filing decision.</td></tr>
+<tr><td><strong>~/.codex/state_&lt;N&gt;.sqlite</strong><br><span class="tag t-mod">EXC-2</span></td><td>Codex's own</td><td>—</td><td>Not ours. We update one column of one row so a parked Codex session can be renamed from the web. Reached only through <code>NativeSessionTitleRepository</code>, implemented inside <code>harness/impl/codex/</code>.</td></tr>
+</tbody>
+</table>
+
+<p class="small">Net: <strong>7 of our files become 3</strong> (main, audit, locks); <strong>19 tables become 31</strong>, because normalising the key–value store and three JSON columns replaces blobs with rows.</p>
+
+<h2 id="s11"><span class="num">11</span>The consolidated schema</h2>
+
+<h3>main.db — 25 tables</h3>
+
+<h4>Schema identity (1)</h4>
+<pre><code>schema_version(id INTEGER PRIMARY KEY CHECK(id = 1), version INTEGER NOT NULL, applied_at REAL NOT NULL)</code></pre>
+<p class="small">A singleton row, not a name/value pair — requirement 8 applies to our own bookkeeping too. Replaces <code>event_store_metadata</code>.</p>
+
+<h4>Evidence and canonical facts (6) — carried over unchanged</h4>
+<pre><code>sessions(session_id PK, lead_actor_id, harness, harness_session_id, source_reference,
+         working_directory, terminal_window_id, harness_process_id, created_at)
+raw_events(id PK AUTOINCREMENT, raw_event_id UNIQUE, session_id, harness, source_type,
+         source_identity, source_name, source_position, actor_id, parent_actor_id,
+         observed_at, encoding, payload BLOB, terminal_window_id, harness_process_id,
+         account_id, account_display_name)
+translation_records(raw_event_id PK, translator_version, decision, reason, completed_at)
+canonical_events(cursor PK AUTOINCREMENT, event_id UNIQUE, schema_version, event_type,
+         session_id, actor_id, turn_id, parent_actor_id, harness, occurred_at,
+         terminal_window_id, harness_process_id, accepted_at, payload TEXT)
+canonical_provenance(event_id, raw_event_id, event_order, storage_result, PK(event_id, raw_event_id))
+operation_output(session_id, operation_id, harness, actor_id, parent_actor_id, source_path,
+         chunk_source_type, delete_source, initial_size, initial_modified_at,
+         wait_for_source_change, until, state, created_at, PK(session_id, operation_id))</code></pre>
+<div class="box">
+<h5><code>canonical_events.payload</code> is the one opaque column that stays</h5>
+<p>It is the canonical fact body — 35 payload shapes, closed, versioned by <code>domain/codec.py</code> and validated on both encode and decode. That is the opposite of a key–value bag: it has a declared type per <code>event_type</code> and a schema version that refuses to load a mismatch. <code>raw_events.payload</code> stays a BLOB for the same reason it exists at all — it is the verbatim bytes we observed, and re-interpreting them is the whole point of the store.</p>
+</div>
+
+<h4>Session workspace (4) — <code>session_application_state</code>, normalised</h4>
+<pre><code>session_workspaces(session_id PK, composer_text, composer_origin, composer_sequence,
+         queue_origin, dialog_attention_id, dialog_origin)
+composer_queue_items(session_id, position, text, PK(session_id, position))
+dialog_answers(session_id, prompt_index, other_text, PK(session_id, prompt_index))
+dialog_answer_selections(session_id, prompt_index, selection_index, value,
+         PK(session_id, prompt_index, selection_index))</code></pre>
+<p class="small">Kills the <code>queued_messages</code> and <code>dialog_answers</code> JSON columns and the four hand-written encoders around them (<code>dashboard/services/workspace.py:147-151,177-184,228-252</code>).</p>
+
+<h4>Preferences (9) — the <code>kv</code> table, normalised</h4>
+<table>
+<thead><tr><th style="width:32%">Table</th><th style="width:34%">Columns</th><th>Replaces kv key</th></tr></thead>
+<tbody>
+<tr><td><code>notification_settings</code></td><td><code>id CHECK(id=1)</code>, <code>alerting_enabled</code></td><td><code>notify-enabled</code></td></tr>
+<tr><td><code>session_notification_mutes</code></td><td><code>session_id PK</code>, <code>muted_at</code></td><td><code>notify-muted</code></td></tr>
+<tr><td><code>session_view_modes</code></td><td><code>session_id PK</code>, <code>view_mode CHECK(IN(…))</code></td><td><code>view-mode</code></td></tr>
+<tr><td><code>hidden_directories</code></td><td><code>working_directory PK</code>, <code>hidden_at</code></td><td><code>hidden-dirs</code></td></tr>
+<tr><td><code>new_session_preferences</code></td><td><code>id CHECK(id=1)</code>, <code>working_directory</code>, <code>harness</code>, <code>model</code>, <code>effort</code></td><td><code>new-session</code> — the ownerless one, F2</td></tr>
+<tr><td><code>new_session_drafts</code></td><td><code>working_directory PK</code>, <code>text</code>, <code>sequence</code></td><td><code>new-session-draft</code></td></tr>
+<tr><td><code>task_dismissals</code></td><td><code>session_id</code>, <code>task_id</code>, <code>dismissed_at</code>, <code>PK(session_id, task_id)</code></td><td><code>tasks-hidden</code> — the stored id <em>set</em> becomes rows, so “is this dismissal still the current list” is a join instead of a Python set comparison</td></tr>
+<tr><td><code>push_subscriptions</code></td><td><code>endpoint PK</code>, <code>public_key</code>, <code>authentication_secret</code>, <code>device_id</code>, <code>device_label</code>, <code>created_at</code></td><td><code>push-subs</code></td></tr>
+<tr><td><code>push_signing_keys</code></td><td><code>id CHECK(id=1)</code>, <code>private_key_pem</code>, <code>public_key</code></td><td><code>vapid-keypair</code></td></tr>
+</tbody>
+</table>
+<p class="small">The two <em>pruning</em> policies survive as SQL rather than Python: <code>new_session_drafts</code> keeps the newest 24 by <code>sequence</code>, <code>task_dismissals</code> the newest 200 sessions by <code>dismissed_at</code>, both inside the same transaction as the write that triggers them.</p>
+
+<h4>Terminal (2)</h4>
+<pre><code>pane_widths(working_directory PK, width_percent CHECK(width_percent BETWEEN 1 AND 99))
+opened_views(content_reference PK, opened_at)</code></pre>
+
+<h4>Harness usage (2) — the <code>windows</code> JSON, normalised</h4>
+<pre><code>account_usage_snapshots(harness, account_id, display_name, captured_at, PK(harness, account_id))
+account_usage_windows(harness, account_id, window_key, used_percent, resets_at,
+         PK(harness, account_id, window_key))</code></pre>
+<p class="small">Keyed by account rather than by session, so <code>latest_by_account()</code> becomes a plain <code>SELECT</code> instead of a newest-first fold over every session's snapshot. It also retires the <code>"five_hour_reset"</code> string-suffix convention at <code>usage/rows.py:30-47</code>: the reset time is a column.</p>
+
+<h4>Uploads (1)</h4>
+<pre><code>uploads(upload_id PK, session_id, name, media_type, byte_size, stored_path, created_at)</code></pre>
+<div class="box warn">
+<h5>The bytes stay on disk, and the table has to earn its row</h5>
+<p>An attachment is delivered to the harness as an <code>@path</code> mention, so a real file must exist — that is EXC-3, the one file write that is ours. What becomes a table is the <em>record</em>: today nothing knows what was written, so the uploads directory grows without bound and a stray file is unattributable.</p>
+<p>A table nothing reads would fail <code>make deadcode</code>, so this comes with one small new behaviour: the daemon's existing background refresh calls <code>remove_expired(created_before)</code>, which deletes the rows and returns them so the caller unlinks the files. That is the read caller, and it is the reason the table is worth having. If you would rather not add the prune, drop the table and leave uploads as a fourth file exception — noted as decision D4.</p>
+</div>
+
+<h3>audit.db — 5 tables</h3>
+<pre><code>schema_version(id CHECK(id=1), version, applied_at)
+errors(id PK, ts, session_id, script, func, traceback, context, pid)
+state_files(id PK, ts, session_id, path, action, content, script, pid)
+spawns(id PK, ts, session_id, parent_script, child_pid, argv, purpose)
+streams(id PK, session_id, kind, agent_id, task_id, src_path, pid, started_at,
+        ended_at, end_reason, lines_emitted)</code></pre>
+<p class="small">Unchanged in shape, but the file gains a version row and stops being separately configurable. <code>state_files.content</code> stays JSON: it is a free-form diagnostic blob by design, written by a facade whose whole contract is “record anything, never raise”. That is the fourth and last opaque column, and §24's key–value test allowlists it by name.</p>
+
+<h3>locks.db — 1 table</h3>
+<pre><code>claims(key PK, pid, claimed_at)</code></pre>
+
+<h2 id="s12"><span class="num">12</span>Target package layout</h2>
+
+<pre><code>repository/
+  __init__.py              re-exports the Protocols; nothing else is public
+  errors.py                RepositoryError · SchemaVersionMismatch · EventIdentityConflict
+
+  contract/                21 Protocols — the only thing a caller outside this package imports
+    __init__.py
+    evidence.py            RawEventRepository · TranslationEvidenceRepository
+    facts.py               CanonicalEventRepository
+    sessions.py            SessionRepository
+    operations.py          OperationOutputRepository
+    workspace.py           SessionWorkspaceRepository
+    preferences.py         ViewModeRepository · NotificationSettingRepository
+                           HiddenDirectoryRepository · NewSessionRepository
+                           TaskDismissalRepository · PushSubscriptionRepository
+                           PushSigningKeyRepository
+    terminal.py            PaneWidthRepository · ContentViewRepository
+    usage.py               AccountUsageRepository
+    uploads.py             UploadRepository
+    diagnostics.py         DiagnosticWriteRepository · DiagnosticReadRepository
+    locks.py               ProcessLockRepository
+    titles.py              NativeSessionTitleRepository
+
+  model/                   ROW DTOs — one frozen dataclass per table, columns verbatim
+    __init__.py
+    facts.py               SessionRow · RawEventRow · CanonicalEventRow
+                           TranslationRecordRow · CanonicalProvenanceRow · OperationOutputRow
+                           SchemaVersionRow
+    workspace.py           SessionWorkspaceRow · ComposerQueueItemRow
+                           DialogAnswerRow · DialogAnswerSelectionRow
+    preferences.py         NotificationSettingRow · SessionNotificationMuteRow
+                           SessionViewModeRow · HiddenDirectoryRow
+                           NewSessionPreferenceRow · NewSessionDraftRow
+                           TaskDismissalRow · PushSubscriptionRow · PushSigningKeyRow
+    terminal.py            PaneWidthRow · OpenedViewRow
+    usage.py               AccountUsageSnapshotRow · AccountUsageWindowRow
+    uploads.py             UploadRow
+    diagnostics.py         ErrorRow · StateFileRow · SpawnRow · StreamRow
+    locks.py               ClaimRow
+    titles.py              ThreadTitleRow
+
+  mapper/                  row DTO  <->  model object.  Pure functions: no I/O, no SQL, no clock
+    __init__.py
+    facts.py  workspace.py  preferences.py  terminal.py
+    usage.py  uploads.py    diagnostics.py  locks.py  titles.py
+
+  impl/
+    __init__.py
+    sqlite/
+      __init__.py
+      connection.py        SqliteDatabase · SqlitePragmas — the ONE policy
+      schema.py            MAIN_SCHEMA · AUDIT_SCHEMA · LOCK_SCHEMA, and their versions
+      rows.py              sqlite3.Row -> model.*Row  (the only module naming sqlite3.Row)
+      sessions.py  raw_events.py  canonical_events.py  evidence.py  operation_output.py
+      workspace.py  preferences.py  terminal.py  usage.py  uploads.py
+      diagnostics.py  locks.py</code></pre>
+
+<h4>New model modules (layer 2)</h4>
+<table>
+<thead><tr><th style="width:30%">Module</th><th>Types</th></tr></thead>
+<tbody>
+<tr><td><code>domain/records.py</code> <span class="tag t-move">moved</span></td><td><code>StoredCanonicalEvent</code>, <code>CanonicalEventPage</code>, <code>TranslationRecord</code>, <code>ProvenanceEntry</code>, <code>CanonicalStorageResult</code>, <code>TranslationOutcome</code>, <code>TranslationEvidence</code> — lifted out of <code>engine/store/canonical.py</code> and <code>engine/queries/evidence.py</code>.</td></tr>
+<tr><td><code>domain/operations.py</code> <span class="tag t-add">new</span></td><td><code>OperationOutputFollowing</code> — replaces the escaping <code>sqlite3.Row</code>.</td></tr>
+<tr><td><code>domain/workspace.py</code> <span class="tag t-move">moved</span></td><td><code>ComposerDraft</code>, <code>QueuedMessage</code>, <code>ComposerQueue</code>, <code>ComposerState</code>, <code>AnswerSelection</code>, <code>DialogDraft</code>, <code>DialogState</code>, <code>SessionWorkspace</code> — lifted out of <code>dashboard/services/workspace.py</code>.</td></tr>
+<tr><td><code>domain/preferences.py</code> <span class="tag t-add">new</span></td><td><code>ViewMode</code> (Literal), <code>HiddenDirectory</code>, <code>NewSessionPreferences</code>, <code>NewSessionDraft</code>, <code>DraftWrite</code>, <code>TaskDismissal</code>, <code>PushSubscription</code>, <code>PushSigningKeypair</code>.</td></tr>
+<tr><td><code>domain/locks.py</code> <span class="tag t-add">new</span></td><td><code>LockDecision</code> (Literal), <code>LockOutcome</code>.</td></tr>
+<tr><td><code>domain/uploads.py</code> <span class="tag t-add">new</span></td><td><code>StoredUpload</code>.</td></tr>
+<tr><td><code>diagnostics/models.py</code> <span class="tag t-add">new</span></td><td><code>ApplicationError</code> (moved from <code>read.py</code>), <code>ApplicationErrorRecord</code>, <code>StateFileRecord</code>, <code>SpawnRecord</code>, <code>StreamOpened</code>, <code>StreamHandle</code>. <code>diagnostics/</code> already imports only <code>domain.ids</code>, so the repository may import it exactly as <code>engine/</code> does today.</td></tr>
+<tr><td><code>terminal/models/preferences.py</code> <span class="tag t-add">new</span></td><td><code>PaneWidth</code>, <code>OpenedView</code>. <code>terminal/models/</code> imports nothing of ours, so this stays the floor.</td></tr>
+<tr><td><code>harness/models/usage.py</code> <span class="tag t-mod">extended</span></td><td><code>AccountUsageSnapshot</code>, <code>UsageWindowSample</code>.</td></tr>
+<tr><td><code>harness/models/controls.py</code> <span class="tag t-mod">extended</span></td><td><code>TitleWriteOutcome</code> — <code>Literal["renamed", "unsupported", "unavailable"]</code>, replacing the <code>True/False/None</code> tri-state.</td></tr>
+<tr><td><code>harness/models/telemetry.py</code> <span class="tag t-add">new</span></td><td><code>HarnessTelemetryRequest</code>, <code>HarnessTelemetryResponse</code>, <code>TelemetryContext</code> — requirement 6, see §20.</td></tr>
+</tbody>
+</table>
+
+<div class="box warn">
+<h5>Decision D1 — this widens <code>domain/</code></h5>
+<p><code>domain/</code>'s docstring says “the closed canonical event vocabulary”. Adding <code>preferences.py</code>, <code>workspace.py</code>, <code>locks.py</code> and <code>uploads.py</code> widens it to “the application's stdlib-only vocabulary”. It does not break <code>test_domain_imports_only_the_standard_library</code>, but it is a charter change and the module docstring must say so. The alternative — a literal top-level <code>model/</code> package, closer to your phrasing — is D1 in §25.</p>
+</div>
+
+<h4>Allowed imports</h4>
+<pre><code>repository/contract/**    domain · diagnostics.models · harness.models · terminal.models · typing
+repository/model/**       stdlib only
+repository/mapper/**      repository.model + everything contract may import
+repository/impl/sqlite/** all of the above, plus core (paths) and sqlite3</code></pre>
+<p>Nothing in <code>repository/</code> imports <code>engine</code>, <code>app</code>, <code>api</code>, <code>dashboard</code>, <code>notify</code>, <code>harness.impl</code>, or <code>terminal</code> beyond <code>terminal.models</code>.</p>
+
+<h2 id="s13"><span class="num">13</span>To-be flow diagram</h2>
+
+<figure>
+<svg viewBox="0 0 1250 900" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="To-be data access flow">
+<defs>
+  <marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0,0 L10,5 L0,10 z" fill="#8a93a3"/></marker>
+  <marker id="ahb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0,0 L10,5 L0,10 z" fill="#1f5fa8"/></marker>
+  <marker id="aha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0,0 L10,5 L0,10 z" fill="#a8501f"/></marker>
+</defs>
+<style>.a2{stroke:#8a93a3;stroke-width:1.4;fill:none;marker-end:url(#ah2)}</style>
+
+<text x="14" y="24" class="s-t" style="font-size:13px">TO-BE — one process writes, one interface, two databases</text>
+
+<text class="s-lanetext" x="24" y="48">OUTSIDE THE DAEMON</text>
+<rect class="s-box" x="24" y="60" width="280" height="52" rx="5"/><text class="s-t" x="34" y="80">hook process</text><text class="s-s" x="34" y="96">POST /api/harnesses/{h}/hooks</text>
+<rect class="s-box" x="24" y="124" width="280" height="52" rx="5"/><text class="s-t" x="34" y="144">otel receiver</text><text class="s-s" x="34" y="160">POST /api/harnesses/{h}/telemetry</text>
+<text class="s-bluet" x="255" y="140">CHANGED</text>
+<rect class="s-box" x="24" y="188" width="280" height="52" rx="5"/><text class="s-t" x="34" y="208">mirror / scoreboard panes</text><text class="s-s" x="34" y="224">GET SSE /…/panes/{kind}/stream</text>
+<rect class="s-box" x="24" y="252" width="280" height="52" rx="5"/><text class="s-t" x="34" y="272">keybinding + click clients</text><text class="s-s" x="34" y="288">POST /api/terminal/… · GET /api/content/…</text>
+<rect class="s-box" x="24" y="316" width="280" height="52" rx="5"/><text class="s-t" x="34" y="336">audit CLI</text><text class="s-s" x="34" y="352">builds READ-ONLY repositories itself</text>
+<text class="s-ambert" x="243" y="332">EXC-4</text>
+
+<rect class="s-daemon" x="330" y="56" width="900" height="470" rx="10"/>
+<text class="s-t" x="344" y="72" style="fill:#1d6f42">THE DAEMON — the only process that writes</text>
+
+<rect class="s-box-api" x="346" y="80" width="868" height="54" rx="5"/>
+<text class="s-t" x="356" y="100">api/ — every route declares a request model AND a response model</text>
+<text class="s-s" x="356" y="116">41 *_request.py + 36 *_response.py (10 existing + 26 new) · json_ready() leaves the route bodies</text>
+<text class="s-bluet" x="1090" y="100">DTO LAYER 3</text>
+
+<rect class="s-box" x="346" y="150" width="168" height="60" rx="5"/><text class="s-t" x="354" y="168">dashboard/</text><text class="s-t" x="354" y="181">services/</text><text class="s-s" x="354" y="196">6 services</text>
+<rect class="s-box" x="522" y="150" width="168" height="60" rx="5"/><text class="s-t" x="530" y="168">app/services/</text><text class="s-s" x="530" y="184">insights · resume</text>
+<rect class="s-box" x="698" y="150" width="168" height="60" rx="5"/><text class="s-t" x="706" y="168">harness/services/</text><text class="s-s" x="706" y="184">+ telemetry (new)</text>
+<rect class="s-box" x="874" y="150" width="168" height="60" rx="5"/><text class="s-t" x="882" y="168">terminal/services/</text><text class="s-s" x="882" y="184">panes · views</text><text class="s-s" x="882" y="197">NEW — req 7</text>
+<rect class="s-box" x="1050" y="150" width="164" height="60" rx="5"/><text class="s-t" x="1058" y="168">notify/</text><text class="s-s" x="1058" y="184">notifier · presence</text>
+<text class="s-bluet" x="1090" y="224">DTO LAYER 2</text>
+
+<rect class="s-box-eng" x="346" y="226" width="430" height="52" rx="5"/><text class="s-t" x="356" y="246">engine/projections/</text><text class="s-s" x="356" y="262">SessionQueries · EventPages · 6 folds  (unchanged)</text>
+<rect class="s-box-eng" x="784" y="226" width="430" height="52" rx="5"/><text class="s-t" x="794" y="246">engine/interpret/</text><text class="s-s" x="794" y="262">Interpreter · reactions · output_source  ·  engine/queries/evidence.py DELETED</text>
+
+<rect class="s-box-repo" x="346" y="294" width="868" height="58" rx="5"/>
+<text class="s-t" x="356" y="314">repository/contract/  —  21 Protocols, 72 methods</text>
+<text class="s-s" x="356" y="330">every method is ONE whole transaction · none returns a connection, a cursor, or a context manager</text>
+<text class="s-s" x="356" y="344">every method takes and returns MODEL objects — never a row, never a dict, never sqlite3.Row</text>
+
+<rect class="s-box-repo" x="346" y="368" width="428" height="62" rx="5"/>
+<text class="s-t" x="356" y="388">repository/mapper/</text>
+<text class="s-s" x="356" y="404">row DTO to model object and back · pure functions</text>
+<text class="s-s" x="356" y="418">absorbs the 9 hand-written preference validators</text>
+<rect class="s-box-repo" x="786" y="368" width="428" height="62" rx="5"/>
+<text class="s-t" x="796" y="388">repository/model/</text>
+<text class="s-s" x="796" y="404">31 frozen row DTOs, columns verbatim, one per table</text>
+<text class="s-s" x="796" y="418">never leaves this package</text>
+<text class="s-bluet" x="1090" y="444">DTO LAYER 1</text>
+
+<rect class="s-box-store" x="346" y="446" width="868" height="56" rx="5"/>
+<text class="s-t" x="356" y="466">repository/impl/sqlite/  —  2 SqliteDatabase instances, one policy</text>
+<text class="s-s" x="356" y="482">connection.py (WAL · foreign_keys=ON · busy_timeout=10000 · 10 s · 0600 · initialize once)  ·  schema.py  ·  rows.py</text>
+<text class="s-s" x="356" y="495">13 repository classes, each declaring its Protocol — enforced by test_protocol_implementations_declare_the_protocol_they_implement</text>
+
+<rect class="s-box-db" x="330" y="600" width="300" height="92" rx="6"/><text class="s-t" x="342" y="622">main.db</text><text class="s-s" x="342" y="638">25 tables — facts · workspace · preferences</text><text class="s-s" x="342" y="652">terminal · usage · uploads</text><text class="s-s" x="342" y="668">1 schema, 1 version, 1 write lock</text><text class="s-s" x="342" y="683">no key–value table anywhere</text>
+<rect class="s-box-db" x="650" y="600" width="250" height="92" rx="6"/><text class="s-t" x="662" y="622">audit.db</text><text class="s-s" x="662" y="638">5 tables</text><text class="s-s" x="662" y="652">separate write lock so a wedged</text><text class="s-s" x="662" y="666">tick cannot swallow its own evidence</text>
+<rect class="s-box-db" x="920" y="600" width="140" height="92" rx="6"/><text class="s-t" x="930" y="622">locks.db</text><text class="s-s" x="930" y="638">runtime dir</text><text class="s-s" x="930" y="652">EXC-1: must not</text><text class="s-s" x="930" y="665">survive a reboot</text>
+<rect class="s-box-db" x="1080" y="600" width="150" height="92" rx="6"/><text class="s-t" x="1090" y="622">~/.codex/</text><text class="s-t" x="1090" y="636">state_N.sqlite</text><text class="s-s" x="1090" y="652">EXC-2: not ours</text><text class="s-s" x="1090" y="666">plugin-side repo</text>
+
+<path class="s-http" d="M304,86 L326,86"/>
+<path class="s-http" d="M304,150 L326,150"/>
+<path class="s-http" d="M304,214 L326,214"/>
+<path class="s-http" d="M304,278 L326,278"/>
+<text class="s-bluet" x="34" y="386">the four above: HTTP only — no repository, no database, no application graph</text>
+
+<rect class="s-box-repo" x="24" y="404" width="280" height="60" rx="5"/>
+<text class="s-t" x="34" y="424">repository/contract + impl/sqlite</text>
+<text class="s-s" x="34" y="440">linked IN-PROCESS — the same Protocols,</text>
+<text class="s-s" x="34" y="453">mappers and rows the daemon uses</text>
+
+<path class="a2" d="M430,134 L430,148"/><path class="a2" d="M606,134 L606,148"/><path class="a2" d="M782,134 L782,148"/><path class="a2" d="M958,134 L958,148"/><path class="a2" d="M1132,134 L1132,148"/>
+<path class="a2" d="M430,210 L470,224"/><path class="a2" d="M958,210 L900,292"/><path class="a2" d="M1132,210 L1132,292"/>
+<path class="a2" d="M560,278 L560,292"/><path class="a2" d="M1000,278 L1000,292"/>
+<path class="a2" d="M560,352 L560,366"/><path class="a2" d="M1000,352 L1000,366"/>
+<path class="a2" d="M560,430 L560,444"/><path class="a2" d="M1000,430 L1000,444"/>
+<path class="a2" d="M480,502 L480,598"/>
+<path class="a2" d="M775,502 L775,598"/>
+<path class="a2" d="M990,502 L990,598"/>
+<path class="a2" d="M1155,502 L1155,598"/>
+
+<path class="s-amber" d="M164,368 L164,402"/>
+<text class="s-ambert" x="176" y="392">EXC-4</text>
+<path class="s-amber" d="M24,86 L12,86 L12,434 L22,434"/>
+<text class="s-ambert" x="18" y="470">EXC-5</text>
+<path class="s-amber" d="M120,464 L120,646 L326,646"/>
+<text class="s-ambert" x="132" y="642">read-only</text>
+<path class="s-amber" d="M230,464 L230,760 L775,760 L775,696"/>
+<text class="s-ambert" x="242" y="756">diagnostics.record — must still work when the daemon is the thing that failed</text>
+
+<text class="s-note" x="24" y="800">Every arrow crossing the contract line is a Protocol call. Nothing anywhere — inside the daemon or outside it — reaches sqlite3 except a repository implementation.</text>
+<text class="s-note" x="24" y="818">EXC-4 and EXC-5 are NOT exceptions to that. They link the repository layer in-process: EXC-4 skips the daemon, EXC-5 skips constructor injection. Both speak the same Protocols.</text>
+<text class="s-note" x="24" y="836">The Codex title repository is the one implementation outside repository/impl/ — in harness/impl/codex/, because a shared package may not contain the word.</text>
+<text class="s-note" x="24" y="854">Deleted by this change: engine/store/ (6 modules), engine/queries/evidence.py, dashboard/prefs/ (8 modules), diagnostics/{read,database}.py.</text>
+<text class="s-note" x="24" y="872">Terminal pane processes were already thin HTTP clients; requirement 7 makes that a test rather than a coincidence, and adds the missing daemon-side service layer.</text>
+</svg>
+<figcaption><strong>Figure 2.</strong> To-be. Three DTO layers marked on the right. Raw database access exists in exactly one place — a repository implementation — with no exceptions; EXC-4 and EXC-5 are the two processes that link that layer in-process instead of reaching the daemon, and both are reasoned in §15.</figcaption>
+</figure>
+
+<h2 id="s14"><span class="num">14</span>One connection policy</h2>
+
+<pre><code>@dataclass(frozen=True)
+class SqlitePragmas:
+    journal_mode: str | None = "WAL"
+    foreign_keys: bool = True
+    busy_timeout_milliseconds: int = 10_000
+    timeout_seconds: float = 10.0
+    read_only: bool = False
+    file_mode: int | None = 0o600
+
+
+class SqliteDatabase:
+    """One file, one schema, one policy. Initialised once per process."""
+    def __init__(self, path: str, schema: str, schema_version: int,
+                 pragmas: SqlitePragmas = SqlitePragmas()) -&gt; None: ...
+    def initialize(self) -&gt; None: ...                                   # idempotent
+    def read(self) -&gt; AbstractContextManager[sqlite3.Connection]: ...   # deferred transaction
+    def write(self) -&gt; AbstractContextManager[sqlite3.Connection]: ...  # BEGIN IMMEDIATE, commit or roll back</code></pre>
+
+<p><code>read()</code> and <code>write()</code> are <strong>internal to <code>repository/impl/sqlite/</code></strong>. They are not on any Protocol and no caller above the contract line can reach them — requirement 10. §24's test asserts it.</p>
+
+<table>
+<thead><tr><th style="width:8%">Where</th><th style="width:26%">Deviation</th><th>Why</th></tr></thead>
+<tbody>
+<tr><td><strong>default</strong></td><td>WAL · <code>foreign_keys=ON</code> · <code>busy_timeout=10000</code> · <code>timeout=10</code> · <code>0600</code> · <code>row_factory=sqlite3.Row</code></td><td>The event store's existing policy, which is the only one in the tree chosen deliberately. Everything else inherits it — including the 0.2 s timeouts in <code>terminal/panes/*</code>, which were arbitrary and which a busy interpreter tick can plausibly exceed.</td></tr>
+<tr><td><span class="tag t-mod">EXC-A</span></td><td><strong>The audit writer never raises.</strong> Same pragmas; every write wrapped so any <code>sqlite3.Error</code> is swallowed, and the whole repository is a no-op when <code>BAQYLAU_AUDIT=0</code>.</td><td>It is called from <code>except</code> blocks in hook processes. An auditor that can fail takes down the thing it exists to explain — the current <code>diagnostics/record.py</code> already has this property and it must not be lost.</td></tr>
+<tr><td><span class="tag t-mod">EXC-B</span></td><td><strong>Read-only opens.</strong> <code>read_only=True</code> uses a <code>file:…?mode=ro</code> URI, applies no schema, and never creates the file. Still a <code>SqliteDatabase</code>, still driving the same repository classes — a pragma variant, not a second access path.</td><td>Two users: the audit CLI (F18 — the forensic tool must not be able to alter the thing it is inspecting) and the diagnostics reader inside the daemon.</td></tr>
+<tr><td><span class="tag t-mod">EXC-C</span></td><td><strong><code>locks.db</code> runs without WAL</strong> and with <code>timeout=5</code>.</td><td>WAL leaves <code>-wal</code> and <code>-shm</code> siblings in the runtime directory that outlive an unclean exit, and the file is one row read and written under a lock that must fail fast rather than wait ten seconds while a second daemon decides whether it may start.</td></tr>
+<tr><td><span class="tag t-mod">EXC-D</span></td><td><strong>The Codex database gets no pragmas and no schema</strong>, and a 2 s timeout.</td><td>We do not own the file. Setting a journal mode on another product's database is a change to that product's durability behaviour.</td></tr>
+</tbody>
+</table>
+
+<h2 id="s15"><span class="num">15</span>One access pattern</h2>
+
+<div class="box good">
+<h5>The pattern</h5>
+<p>A <strong>Protocol-typed repository</strong>, implemented once over SQLite, constructed once by <code>app/bootstrap.py</code>, and handed to its consumers as a constructor parameter. Consumers name the Protocol, never the implementation. No module-level storage function, no path passed around, no lazily-created connection, no <code>initialize()</code> outside <code>SqliteDatabase</code>.</p>
+</div>
+
+<p>The six patterns of §5 collapse into that one. What replaces each:</p>
+
+<table>
+<thead><tr><th style="width:34%">Was</th><th>Becomes</th></tr></thead>
+<tbody>
+<tr><td>1 — store class holding a path</td><td>Repository class holding a <code>SqliteDatabase</code>. Two instances exist in a daemon (main, audit); a third for locks. <code>initialize()</code> runs once each, fixing F5.</td></tr>
+<tr><td>2 — module-level function over a fixed path</td><td>Injected repository. <code>dashboard/prefs/</code> and <code>terminal/panes/{preferences,views}.py</code> disappear; the surviving <em>policy</em> (env-var defaults, prune limits, the view-mode vocabulary) moves to a service or into SQL.</td></tr>
+<tr><td>3 — read-only class holding a path</td><td><code>DiagnosticReadRepository</code> over a read-only <code>SqliteDatabase</code> (EXC-B).</td></tr>
+<tr><td>4 — query object reaching around a store</td><td><code>TranslationEvidenceRepository</code>. <code>engine/queries/evidence.py</code> is deleted; the audit CLI uses the repository directly.</td></tr>
+<tr><td>5 — service reaching around the store layer</td><td><code>SessionWorkspaceRepository</code>, injected into <code>SessionApplicationService</code>.</td></tr>
+<tr><td>6 — free function over a caller-supplied path</td><td><code>ProcessLockRepository</code>, constructed in <code>app/bootstrap.py</code> and in <code>dashboard/cli.py</code> (which is a separate process and needs its own).</td></tr>
+</tbody>
+</table>
+
+<div class="box bad">
+<h5>The invariant, with no exceptions at all</h5>
+<p><strong>Nothing outside a repository implementation touches a database.</strong> <code>import sqlite3</code> appears in exactly two directories — <code>repository/impl/sqlite/</code>, and <code>harness/impl/codex/canonical/title.py</code>, which is <em>also</em> a repository implementation (<code>CodexThreadTitleRepository</code>, declaring <code>NativeSessionTitleRepository</code>) and lives where it does only because <code>test_canonical_shared_code_contains_no_concrete_harness_vocabulary</code> forbids the word “codex” in a shared package. No connection string, no cursor, no SQL, no schema, no <code>sqlite3.Row</code> exists anywhere else in the tree. There is no read-only escape hatch, no forensic exception, no “just this one query”. That rule has <strong>zero</strong> exceptions and §24's <code>test_only_a_repository_implementation_opens_a_database</code> is what keeps it that way.</p>
+</div>
+
+<h4>The two exceptions — and what they are exceptions to</h4>
+<p>Both of the following go <em>through</em> the contract and its SQLite implementation like everything else. Neither is an exception to the invariant above; they are exceptions to two weaker, separate rules.</p>
+
+<table>
+<thead><tr><th style="width:9%"></th><th style="width:18%">Exception to</th><th style="width:24%">What it is</th><th>Why it is necessary, and the alternative that was rejected</th></tr></thead>
+<tbody>
+<tr><td><span class="tag t-mod">EXC-4</span></td><td><em>“only the daemon builds repositories in-process”</em></td><td>The audit CLI constructs its own read-only <code>SqliteDatabase</code> and the two repositories it needs, instead of being an HTTP client of the daemon.</td><td>It is the tool you run <em>when the daemon is the suspect</em>, so it cannot depend on the daemon answering. It still calls <code>TranslationEvidenceRepository.evidence_for_session(...)</code> and <code>DiagnosticReadRepository.errors_for_session(...)</code> — the same Protocols the daemon calls, returning the same model objects — and it writes no SQL of its own; today's hand-rolled joins in <code>engine/queries/evidence.py</code> disappear with the module. Two constraints tighten around it: <code>read_only=True</code>, so it can no longer create, migrate or write the file it is inspecting (F18); and it may not build the application graph, which <code>test_the_application_graph_is_built_only_by_the_daemon</code> already enforces.</td></tr>
+<tr><td><span class="tag t-mod">EXC-5</span></td><td><em>“a repository is injected as a constructor parameter”</em></td><td><code>diagnostics/record.py</code> stays five module-level functions over a lazily-built default <code>SqliteDiagnosticWriteRepository</code>, rather than a collaborator every caller must hold.</td><td>It is called from <code>except</code> blocks in short-lived hook and statusline processes that must stay a few imports thin and must not build a graph. <strong>Rejected alternative:</strong> POST the error to the daemon — it cannot work, because the failure most worth recording is “this process could not reach the daemon”, and a client that swallows its own transport error records nothing. The façade is thin and typed: it builds <code>ApplicationErrorRecord</code> and calls the Protocol. Every <em>daemon-side</em> caller takes <code>DiagnosticWriteRepository</code> by injection instead, which is F12's fix.</td></tr>
+</tbody>
+</table>
+
+<p class="small">Put together: after this change the set of modules containing SQL is <em>exactly</em> the set of repository implementations; the set of processes that construct one is the daemon, the audit CLI (read-only), and any process that records a diagnostic.</p>
+
+<h2 id="s16"><span class="num">16</span>Protocol catalogue</h2>
+
+<p><strong>21 Protocols, 72 methods.</strong> Every method has a call site in the tree today — that is what keeps <code>make deadcode</code> green. Parameter names are normative: <code>test_a_declared_protocol_implementation_matches_the_protocol_exactly</code> compares them character for character. No method returns a connection, a cursor, or a context manager.</p>
+
+<h3>16.1 Evidence and facts</h3>
+<pre><code># repository/contract/evidence.py
+
+class RawEventRepository(Protocol):
+    def record(self, raw_events: Sequence[RawEvent]) -&gt; None: ...
+    def find(self, raw_event_id: RawEventId) -&gt; RawEvent | None: ...
+    def unverdicted(self, limit: int) -&gt; tuple[RawEvent, ...]: ...
+    def latest_positions(self, source_identities: Sequence[str]) -&gt; Mapping[str, str]: ...
+
+
+class TranslationEvidenceRepository(Protocol):
+    """Raw evidence joined to its verdict and to the facts it produced."""
+    def evidence(self, raw_event_id: RawEventId) -&gt; TranslationEvidence | None: ...
+    def evidence_for_session(self, session_id: SessionId) -&gt; tuple[TranslationEvidence, ...]: ...
+
+
+# repository/contract/facts.py
+
+class CanonicalEventRepository(Protocol):
+    def record_translation(self, raw_event: RawEvent, translator_version: str,
+                           translation: TranslationResult,
+                           completed_at: float) -&gt; TranslationOutcome: ...
+    def find(self, event_id: CanonicalEventId) -&gt; StoredCanonicalEvent | None: ...
+    def session_ids(self) -&gt; tuple[SessionId, ...]: ...
+    def latest_cursor(self) -&gt; int | None: ...
+    def latest_session_cursors(self, session_ids: Sequence[SessionId],
+                               through_cursor: int | None) -&gt; Mapping[SessionId, int]: ...
+    def page_after(self, session_id: SessionId, cursor: int, limit: int) -&gt; CanonicalEventPage: ...
+    def page_through(self, session_id: SessionId, cursor: int | None) -&gt; CanonicalEventPage: ...
+    def page_tail(self, session_id: SessionId, cursor: int, limit: int) -&gt; CanonicalEventPage: ...
+    def events_of_types(self, session_id: SessionId, event_types: tuple[str, ...],
+                        through_cursor: int) -&gt; tuple[StoredCanonicalEvent, ...]: ...
+    def events_between(self, session_id: SessionId, after_cursor: int,
+                       through_cursor: int) -&gt; tuple[StoredCanonicalEvent, ...]: ...
+
+
+# repository/contract/sessions.py
+
+class SessionRepository(Protocol):
+    def save(self, harness: str, session: Session) -&gt; None: ...
+    def find(self, session_id: SessionId) -&gt; Session | None: ...
+    def find_many(self, session_ids: Sequence[SessionId]) -&gt; Mapping[SessionId, Session]: ...
+    def watchable(self) -&gt; tuple[Session, ...]: ...
+
+
+# repository/contract/operations.py
+
+class OperationOutputRepository(Protocol):
+    def save(self, following: OperationOutputFollowing) -&gt; None: ...
+    def find_for_session(self, session_id: SessionId) -&gt; tuple[OperationOutputFollowing, ...]: ...
+    def mark_operation_finished(self, session_id: SessionId, operation_id: OperationId) -&gt; None: ...
+    def mark_finishing(self, session_id: SessionId, operation_id: OperationId) -&gt; None: ...
+    def remove(self, session_id: SessionId, operation_id: OperationId) -&gt; None: ...
+    def remove_expired(self, created_before: float) -&gt; tuple[OperationOutputFollowing, ...]: ...</code></pre>
+
+<table>
+<thead><tr><th style="width:34%">Method</th><th>Derived from — and what changed</th></tr></thead>
+<tbody>
+<tr><td><code>RawEventRepository.record</code></td><td><code>engine/store/recorder.py:44</code>. Already bulk. Callers: <code>harness/hooks/gateway.py:33</code>, <code>loop.py:111</code>, <code>reactions.py:103</code>, and — after §20 — the telemetry gateway instead of the receiver.</td></tr>
+<tr><td><code>…latest_positions</code></td><td><strong>Bulk.</strong> Replaces <code>recorder.position(source_identity)</code>, called once per source per tick at <code>loop.py:109</code>. The interpreter now asks once for every source it is about to read. F17.</td></tr>
+<tr><td><code>…unverdicted</code></td><td><code>canonical.py:59</code>, called at <code>loop.py:125</code>. Moves to the repository that owns <code>raw_events</code>.</td></tr>
+<tr><td><code>TranslationEvidenceRepository.*</code></td><td><strong>Bulk, and it replaces a module.</strong> <code>engine/queries/evidence.py</code> issues 2 queries per raw event plus 2 per canonical event; <code>evidence_for_session</code> is four queries total, joined and grouped in the layer that owns all four tables. F3 and F17.</td></tr>
+<tr><td><code>CanonicalEventRepository.record_translation</code></td><td><strong>The coarse write.</strong> Folds <code>store_translation</code> (<code>canonical.py:78-126</code>) — verdict, N canonical events, N provenance links — into one method and one <code>BEGIN IMMEDIATE</code>. Returns <code>TranslationOutcome(accepted, deduplicated)</code>. This is what removes the need for a unit of work; see §18.</td></tr>
+<tr><td><code>…latest_session_cursors</code></td><td><strong>Bulk.</strong> Replaces the per-session query at <code>dashboard/services/sessions.py:122</code> — up to 20 round trips every 250 ms. F17.</td></tr>
+<tr><td><code>…page_after / page_through / page_tail / events_of_types / events_between</code></td><td><code>canonical.py:172,189,207,230,247</code>, renamed so the three paging shapes read as a family. Callers unchanged: <code>engine/projections/pages.py</code>, <code>dashboard/services/{sessions,streams}.py</code>, <code>app/services/{insights,resume}.py</code>.</td></tr>
+<tr><td><code>SessionRepository.find_many</code></td><td><strong>Bulk.</strong> New; <code>api/dashboard/sessions.py:23</code> and the projections resolve sessions one at a time today.</td></tr>
+<tr><td><code>OperationOutputRepository.remove_expired</code></td><td><strong>Fixes F4.</strong> Expiry stops being a side effect of <code>for_session()</code> (<code>output.py:106-108</code>). It is an explicit call, made by the interpreter's tick, and it <em>returns the rows it removed</em> so the caller unlinks the files. A repository does not touch the filesystem.</td></tr>
+<tr><td><code>…remove</code></td><td>Loses its <code>delete_source</code> and <code>source_path</code> parameters and its <code>os.remove</code> for the same reason.</td></tr>
+</tbody>
+</table>
+
+<h3>16.2 Workspace</h3>
+<pre><code># repository/contract/workspace.py
+
+class SessionWorkspaceRepository(Protocol):
+    def find(self, session_id: SessionId) -&gt; SessionWorkspace | None: ...
+    def save_composer_draft(self, session_id: SessionId, draft: ComposerDraft) -&gt; bool: ...
+    def save_composer_queue(self, session_id: SessionId, queue: ComposerQueue) -&gt; None: ...
+    def save_dialog_draft(self, session_id: SessionId, draft: DialogDraft) -&gt; None: ...</code></pre>
+<p class="small">From <code>dashboard/services/workspace.py:117,141,161,213</code> — F1. <code>find()</code> reads four tables and returns one assembled <code>SessionWorkspace</code>. <code>save_composer_queue</code> and <code>save_dialog_draft</code> each replace all of a session's rows in one transaction. <code>save_composer_draft</code> keeps its <code>bool</code> return: it is the sequence guard's verdict and it must be decided inside the write, not around it.</p>
+
+<h3>16.3 Preferences — nine entities, no key–value</h3>
+<pre><code># repository/contract/preferences.py
+
+class ViewModeRepository(Protocol):
+    def view_mode(self, session_id: SessionId) -&gt; ViewMode | None: ...
+    def set_view_mode(self, session_id: SessionId, view_mode: ViewMode) -&gt; None: ...
+    def clear_view_mode(self, session_id: SessionId) -&gt; None: ...
+
+
+class NotificationSettingRepository(Protocol):
+    def alerting_enabled(self) -&gt; bool: ...
+    def set_alerting_enabled(self, enabled: bool) -&gt; None: ...
+    def muted_session_ids(self) -&gt; frozenset[SessionId]: ...
+    def set_muted(self, session_id: SessionId, muted: bool) -&gt; None: ...
+
+
+class HiddenDirectoryRepository(Protocol):
+    def hidden(self) -&gt; tuple[HiddenDirectory, ...]: ...
+    def hide(self, working_directory: str, hidden_at: float) -&gt; None: ...
+
+
+class NewSessionRepository(Protocol):
+    def preferences(self) -&gt; NewSessionPreferences | None: ...
+    def save_preferences(self, preferences: NewSessionPreferences) -&gt; None: ...
+    def drafts(self) -&gt; tuple[NewSessionDraft, ...]: ...
+    def save_draft(self, draft: NewSessionDraft, keep_newest: int) -&gt; DraftWrite: ...
+
+
+class TaskDismissalRepository(Protocol):
+    def dismissed_task_ids(self, session_id: SessionId) -&gt; frozenset[TaskId]: ...
+    def dismiss(self, session_id: SessionId, task_ids: Sequence[TaskId],
+                dismissed_at: float, keep_newest: int) -&gt; None: ...
+    def restore(self, session_id: SessionId) -&gt; None: ...
+
+
+class PushSubscriptionRepository(Protocol):
+    def subscriptions(self) -&gt; tuple[PushSubscription, ...]: ...
+    def upsert(self, subscription: PushSubscription) -&gt; None: ...
+    def remove(self, endpoint: str) -&gt; None: ...
+
+
+class PushSigningKeyRepository(Protocol):
+    def keypair(self) -&gt; PushSigningKeypair | None: ...
+    def save_keypair(self, keypair: PushSigningKeypair) -&gt; None: ...</code></pre>
+
+<table>
+<thead><tr><th style="width:30%">Protocol</th><th>Replaces, and what it fixes</th></tr></thead>
+<tbody>
+<tr><td><code>ViewModeRepository</code></td><td><code>prefs/viewmode.py</code>. <code>VIEW_MODES</code> becomes <code>ViewMode = Literal["verbose","default","focus"]</code> plus a <code>CHECK</code> constraint, so the runtime <code>ValueError</code> at <code>workspace.py:101</code> becomes a type error at the boundary. Returning <code>None</code> rather than substituting the default keeps the default with the service that owns it.</td></tr>
+<tr><td><code>NotificationSettingRepository</code></td><td><code>prefs/notifications.py</code>. <code>muted_session_ids()</code> is <strong>bulk</strong>: <code>notify/notifier.py:110</code> asks per session today, inside a loop over armed sessions.</td></tr>
+<tr><td><code>HiddenDirectoryRepository</code></td><td><code>prefs/directories.py</code>.</td></tr>
+<tr><td><code>NewSessionRepository</code></td><td><code>prefs/newsession.py</code> <strong>plus the ownerless <code>"new-session"</code> key</strong> — F2. <code>save_draft</code> does the stale-sequence compare, the write and the prune-to-<code>keep_newest</code> in one transaction, and returns <code>DraftWrite(draft, stale)</code>.</td></tr>
+<tr><td><code>TaskDismissalRepository</code></td><td><code>prefs/tasks.py</code>. The stored id set becomes rows, so “is the dismissal still current” stops being a Python set comparison at <code>workspace.py:203</code>. <code>set_tasks_hidden(session, None)</code> splits into <code>dismiss</code>/<code>restore</code> — a <code>None</code> meaning “undo” does not belong on a Protocol.</td></tr>
+<tr><td><code>PushSubscriptionRepository</code>, <code>PushSigningKeyRepository</code></td><td><code>prefs/push.py</code> and the VAPID key at <code>notify/channels/webpush.py:87,107</code>. Two protocols because per-device subscriptions and a signing secret have different lifecycles.</td></tr>
+</tbody>
+</table>
+
+<h3>16.4 Terminal, usage, uploads, diagnostics, locks, titles</h3>
+<pre><code># repository/contract/terminal.py
+
+class PaneWidthRepository(Protocol):
+    def width_percent(self, working_directory: str) -&gt; int | None: ...
+    def remember_width(self, working_directory: str, width_percent: int) -&gt; None: ...
+
+
+class ContentViewRepository(Protocol):
+    def opened(self) -&gt; frozenset[str]: ...
+    def toggle(self, content_reference: str, toggled_at: float) -&gt; bool: ...
+
+
+# repository/contract/usage.py
+
+class AccountUsageRepository(Protocol):
+    def record(self, snapshot: AccountUsageSnapshot) -&gt; None: ...
+    def snapshots(self) -&gt; tuple[AccountUsageSnapshot, ...]: ...
+
+
+# repository/contract/uploads.py
+
+class UploadRepository(Protocol):
+    def record(self, upload: StoredUpload) -&gt; None: ...
+    def remove_expired(self, created_before: float) -&gt; tuple[StoredUpload, ...]: ...
+
+
+# repository/contract/diagnostics.py
+
+class DiagnosticWriteRepository(Protocol):
+    def record_error(self, error: ApplicationErrorRecord) -&gt; None: ...
+    def record_state_file(self, state_file: StateFileRecord) -&gt; None: ...
+    def record_spawn(self, spawn: SpawnRecord) -&gt; None: ...
+    def open_stream(self, stream: StreamOpened) -&gt; StreamHandle | None: ...
+    def close_stream(self, handle: StreamHandle | None, end_reason: str,
+                     lines_emitted: int | None) -&gt; None: ...
+
+
+class DiagnosticReadRepository(Protocol):
+    def errors_for_session(self, session_id: SessionId) -&gt; tuple[ApplicationError, ...]: ...
+    def error_counts(self) -&gt; Mapping[SessionId, int]: ...
+
+
+# repository/contract/locks.py
+
+class ProcessLockRepository(Protocol):
+    def acquire(self, key: str, process_id: int) -&gt; LockOutcome: ...
+    def holder(self, key: str) -&gt; int | None: ...
+    def release(self, key: str, process_id: int) -&gt; None: ...
+
+
+# repository/contract/titles.py
+
+class NativeSessionTitleRepository(Protocol):
+    """The harness's own name for a session, written while nothing is running."""
+    def renameable(self, source_reference: str) -&gt; bool: ...
+    def set_title(self, source_reference: str, title: str) -&gt; TitleWriteOutcome: ...</code></pre>
+
+<table>
+<thead><tr><th style="width:30%">Protocol</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>PaneWidthRepository</code></td><td>From <code>terminal/panes/preferences.py:44,58</code>. Returns <code>None</code> for “not stored”; the env-var default moves up into <code>terminal/services/panes.py</code>, where the two current resolutions (<code>:46</code> and <code>:55</code>) become one.</td></tr>
+<tr><td><code>ContentViewRepository</code></td><td>From <code>terminal/panes/views.py:16,30</code>. The <code>except OperationalError</code> disappears once the schema is applied on initialize — F6.</td></tr>
+<tr><td><code>AccountUsageRepository</code></td><td>From <code>claude_code/usage/state.py:37,57</code>. <code>record()</code> writes the snapshot and its windows in one transaction; <code>snapshots()</code> returns every account with its windows in <strong>two</strong> queries, replacing the newest-first fold over every session. Implemented generically — the plugin supplies nothing but the <code>SqliteDatabase</code>, so no harness name appears in the shared package. F9 dies with the plugin's own data directory.</td></tr>
+<tr><td><code>UploadRepository</code></td><td>New — requirement 2. <code>record</code> called from <code>api/dashboard/files.py:88</code>; <code>remove_expired</code> from the daemon's background refresh, which unlinks the returned paths.</td></tr>
+<tr><td><code>DiagnosticWriteRepository</code></td><td>From <code>diagnostics/record.py:34,53,72,90,112</code>. <code>StreamHandle</code> replaces the bare <code>lastrowid</code>. The three write-only tables get <strong>no</strong> read methods — an uncalled method fails <code>make deadcode</code>; see D6.</td></tr>
+<tr><td><code>DiagnosticReadRepository</code></td><td>From <code>diagnostics/read.py:30,58</code>. <code>error_counts()</code> is already bulk.</td></tr>
+<tr><td><code>ProcessLockRepository</code></td><td>From <code>core/locks.py</code>. <code>LockOutcome(decision, holder_process_id)</code> ends the <code>"claim-denied:1234"</code> string parsing at <code>api/server.py:75</code>. <code>create=False</code> is dropped — F10, no live caller.</td></tr>
+<tr><td><code>NativeSessionTitleRepository</code></td><td><strong>Two implementations, both plugin-side:</strong> <code>codex/canonical/title.py</code> (the foreign <code>threads</code> table, EXC-2) and <code>claude_code/canonical/transcript.py:641</code> (appends a naming record to the JSONL). The clearest payoff of the Protocol split — the same operation against two entirely different stores, today two unrelated functions sharing an undocumented tri-state convention.</td></tr>
+</tbody>
+</table>
+
+<h2 id="s17"><span class="num">17</span>Row DTOs and mappers</h2>
+
+<p><strong>31 row DTOs</strong>, one frozen dataclass per table, fields named and ordered exactly as the columns are, typed as SQLite sees them (<code>bytes</code> for BLOB, <code>int</code> for 0/1 booleans). No methods, no defaults, no validators. They never appear in a signature outside <code>repository/</code>.</p>
+
+<p><strong>Nine mapper modules</strong>, all pure functions. This is where the encoding and validation currently scattered through seven storage modules ends up, and it is unit-testable without a database:</p>
+
+<table>
+<thead><tr><th style="width:20%">Module</th><th>Absorbs</th></tr></thead>
+<tbody>
+<tr><td><code>mapper/facts.py</code></td><td><code>sessions.py:85-97</code>; the two duplicate row→<code>RawEvent</code> mappers (<code>canonical.py:264-285</code> and <code>evidence.py:70-88</code>) become one; <code>recorder.py:19-30</code>'s <code>_raw_identity</code> conflict key; <code>canonical.py:304-338</code>'s encode-and-split and <code>:389-405</code>'s envelope re-assembly; <code>output.py:49-70</code>'s boolean encoding and <code>:144-160</code>'s row unpacking.</td></tr>
+<tr><td><code>mapper/workspace.py</code></td><td><code>dashboard/services/workspace.py:147-151,177-184,228-252</code> — and the two JSON columns disappear entirely, so what is left is row-to-object assembly rather than a codec.</td></tr>
+<tr><td><code>mapper/preferences.py</code></td><td>All nine hand-written validators — <code>_tasks_hide_entry</code>, <code>_new_session_draft</code>, and the <code>isinstance</code> guards in <code>notifications.py</code>, <code>push.py</code>, <code>viewmode.py</code>. With real columns most of them become <code>CHECK</code> constraints and a dataclass, not code.</td></tr>
+<tr><td><code>mapper/usage.py</code></td><td><code>state.py:50-51</code>'s deterministic <code>json.dumps</code> and <code>:62-70</code>'s newest-first fold; <code>usage/rows.py:30-47</code>'s <code>_reset</code> suffix convention becomes <code>AccountUsageWindowRow.resets_at</code>.</td></tr>
+<tr><td><code>mapper/diagnostics.py</code></td><td><code>read.py:46-56</code> and <code>record.py:28-31</code>'s <code>_text()</code> coercion plus the 2000-character truncation at <code>:65</code>.</td></tr>
+<tr><td><code>mapper/terminal.py</code>, <code>uploads.py</code>, <code>locks.py</code>, <code>titles.py</code></td><td>Small. The value in <code>locks.py</code> is that <code>"claim-denied:&lt;pid&gt;"</code> stops existing anywhere.</td></tr>
+</tbody>
+</table>
+
+<div class="box warn">
+<h5>Vulture and row DTOs</h5>
+<p>A dataclass field nothing reads is an “unused variable” finding. Every field above is read by its mapper — but the write-only diagnostics rows are built to become an <code>INSERT</code>, so their mapper must read each field explicitly to construct the parameter tuple. Use an explicit tuple, not <code>astuple()</code>, or the fields read as dead.</p>
+</div>
+
+<h2 id="s18"><span class="num">18</span>Bulk methods: no connections, no handles</h2>
+
+<div class="box">
+<h5>Revision 1's unit of work is withdrawn</h5>
+<p>The previous draft exposed <code>EventStore.write()</code> returning a context manager over eight repositories, so the interpreter could span three tables in one transaction. That put transaction management in the caller — exactly what requirement 10 rules out. It is replaced by <strong>coarse methods that own their own transaction</strong>.</p>
+</div>
+
+<p>The tree has exactly one multi-table write, and one method now covers it:</p>
+
+<pre><code># engine/interpret/loop.py — after
+def _translate_one(self, raw_event: RawEvent) -&gt; None:
+    plugin = self.harnesses.plugin(raw_event.harness)
+    translator = self.core_translators.get(raw_event.source_type, plugin.translator)
+    try:
+        translation = translator.translate(raw_event)
+    except Exception as error:
+        translation = TranslationResult((), "translation_failed", f"{type(error).__name__}: {error}")
+    else:
+        translation = _checked(raw_event, translation)      # envelope checks, moved up from the store
+
+    outcome = self.canonical_events.record_translation(     # ONE call, ONE transaction
+        raw_event, plugin.info.plugin_version, translation, self.clock())
+    self._react(outcome.accepted, plugin)</code></pre>
+
+<table>
+<thead><tr><th style="width:26%">Property</th><th>How it survives</th></tr></thead>
+<tbody>
+<tr><td>Atomicity across three tables</td><td><code>record_translation</code> opens one <code>BEGIN IMMEDIATE</code>, writes the verdict, appends each canonical event, links each provenance row, and commits. The caller never sees a connection.</td></tr>
+<tr><td>Backlog exactly-once</td><td>Unchanged: <code>raw_events LEFT JOIN translation_records</code> is still the queue, and the verdict lands in the same transaction as the events.</td></tr>
+<tr><td>Idempotent append</td><td>Unchanged: the <code>SELECT 1 … WHERE event_id=?</code> pre-check stays inside the method, and <code>TranslationOutcome</code> reports which events were <code>accepted</code> and which <code>deduplicated</code>.</td></tr>
+<tr><td>Consistency checks</td><td><code>canonical.py:294-303</code>'s five checks compare a translation against its evidence — a translation rule, not a storage rule. They move into <code>_checked()</code> in the interpreter and now run <em>before</em> the transaction opens, which simplifies <code>loop.py:142-157</code>'s recovery path: an inconsistent translation becomes an ordinary <code>translation_failed</code> verdict rather than a caught store exception and a second write.</td></tr>
+<tr><td>Composer-draft sequence guard</td><td>Inside <code>save_composer_draft</code>, which runs its own <code>BEGIN IMMEDIATE</code> — the read-compare-write must not straddle connections, which is the reasoning already recorded at <code>dashboard/prefs/store.py:64-72</code>.</td></tr>
+<tr><td>Preference read-modify-write</td><td><code>mutate_map</code> disappears. With real columns, every one of those nine operations is a single <code>INSERT … ON CONFLICT DO UPDATE</code> or a <code>DELETE</code> — atomic without a read-modify-write at all. The two prunes become a <code>DELETE … WHERE rowid NOT IN (SELECT … ORDER BY … LIMIT ?)</code> in the same transaction as the write.</td></tr>
+<tr><td><code>watchable()</code>'s three-table read</td><td>Stays one statement. Composing it from three repositories would be three round trips per interpreter tick, at 4 Hz, for no benefit. Documented in the class docstring as a deliberate cross-table read within one database — which is now trivially legal, because they are one database.</td></tr>
+</tbody>
+</table>
+
+<h4>The bulk methods, and the loops they replace</h4>
+<table>
+<thead><tr><th style="width:34%">Method</th><th style="width:30%">Replaces</th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td><code>CanonicalEventRepository.latest_session_cursors</code></td><td><code>dashboard/services/sessions.py:122</code>, one query per session inside the refresh loop</td><td>Up to 20 round trips every 250 ms become 1.</td></tr>
+<tr><td><code>RawEventRepository.latest_positions</code></td><td><code>engine/interpret/loop.py:109</code>, one query per source per tick</td><td>N sessions × M sources per tick become 1.</td></tr>
+<tr><td><code>TranslationEvidenceRepository.evidence_for_session</code></td><td><code>engine/queries/evidence.py:104-115</code>, 2 queries per raw event + 2 per canonical event</td><td>~20 000 queries become 4 for a 5 000-event session.</td></tr>
+<tr><td><code>SessionRepository.find_many</code></td><td>Per-session <code>find_by_id</code> in the projections and route helpers</td><td>1 query per page.</td></tr>
+<tr><td><code>NotificationSettingRepository.muted_session_ids</code></td><td><code>notify/notifier.py:110</code>, one lookup per armed session</td><td>1 query per notifier pass.</td></tr>
+<tr><td><code>AccountUsageRepository.snapshots</code></td><td><code>usage/state.py:59</code>, read-all-then-fold</td><td>2 queries, no fold.</td></tr>
+<tr><td><code>SessionWorkspaceRepository.save_composer_queue</code> / <code>save_dialog_draft</code></td><td>A JSON re-encode of the whole list</td><td>Delete-and-insert of the changed rows, one transaction.</td></tr>
+<tr><td><code>TaskDismissalRepository.dismiss</code></td><td><code>mutate_map</code> read-modify-write of a whole map</td><td>Bulk insert + prune, one transaction.</td></tr>
+<tr><td><code>OperationOutputRepository.remove_expired</code></td><td>Per-row expiry inside <code>for_session()</code></td><td>One delete; the caller unlinks what it returns.</td></tr>
+<tr><td><code>UploadRepository.remove_expired</code></td><td>nothing — uploads are never cleaned up today</td><td>New.</td></tr>
+</tbody>
+</table>
+
+<h2 id="s19"><span class="num">19</span>The three DTO layers</h2>
+
+<table>
+<thead><tr><th style="width:16%">Entity</th><th style="width:24%">L1 — row (<code>repository/model</code>)</th><th style="width:28%">L2 — model object</th><th>L3 — wire (<code>api/*/models</code>)</th></tr></thead>
+<tbody>
+<tr><td>Session</td><td><code>SessionRow</code></td><td><code>harness.models.Session</code> <span class="tag t-keep">exists</span> · <code>engine.projections.SessionSummary</code></td><td><code>SessionListItemResponse</code>, <code>SessionSnapshotResponse</code> <span class="tag t-add">new</span></td></tr>
+<tr><td>Raw evidence</td><td><code>RawEventRow</code></td><td><code>harness.models.RawEvent</code> <span class="tag t-keep">exists</span></td><td>audit CLI only</td></tr>
+<tr><td>Canonical event</td><td><code>CanonicalEventRow</code></td><td><code>domain.records.StoredCanonicalEvent</code> over <code>domain.events.CanonicalEvent</code> <span class="tag t-move">moved</span></td><td><code>ActivityPageResponse</code>, <code>ActivityFrameResponse</code> <span class="tag t-add">new</span></td></tr>
+<tr><td>Translation + provenance</td><td><code>TranslationRecordRow</code>, <code>CanonicalProvenanceRow</code></td><td><code>domain.records.TranslationRecord</code>, <code>ProvenanceEntry</code>, <code>TranslationEvidence</code> <span class="tag t-add">new</span></td><td>audit CLI only</td></tr>
+<tr><td>Operation-output following</td><td><code>OperationOutputRow</code></td><td><code>domain.operations.OperationOutputFollowing</code> <span class="tag t-add">new</span></td><td>none</td></tr>
+<tr><td>Session workspace</td><td><code>SessionWorkspaceRow</code> + 3 child rows</td><td><code>domain.workspace.*</code> <span class="tag t-move">moved</span></td><td>requests <span class="tag t-keep">exist</span> · <code>SessionApplicationResponse</code> <span class="tag t-add">new</span></td></tr>
+<tr><td>Nine preferences</td><td>9 rows</td><td><code>domain.preferences.*</code> <span class="tag t-add">new</span></td><td>requests <span class="tag t-keep">exist</span> · <code>GlobalPreferencesResponse</code> <span class="tag t-add">new</span></td></tr>
+<tr><td>Pane width / opened view</td><td><code>PaneWidthRow</code>, <code>OpenedViewRow</code></td><td><code>terminal.models.preferences.*</code> <span class="tag t-add">new</span></td><td><code>OpenedResponse</code>, <code>PaneCommandResponse</code> <span class="tag t-keep">exist</span></td></tr>
+<tr><td>Account usage</td><td><code>AccountUsageSnapshotRow</code> + <code>AccountUsageWindowRow</code></td><td><code>harness.models.AccountUsageSnapshot</code> <span class="tag t-add">new</span> → <code>UsageRow</code> <span class="tag t-keep">exists</span></td><td><code>UsageRowResponse</code> <span class="tag t-add">new</span></td></tr>
+<tr><td>Upload</td><td><code>UploadRow</code></td><td><code>domain.uploads.StoredUpload</code> <span class="tag t-add">new</span></td><td><code>UploadResponse</code> <span class="tag t-keep">exists</span></td></tr>
+<tr><td>Diagnostics</td><td>4 rows</td><td><code>diagnostics.models.*</code> <span class="tag t-add">new</span></td><td><code>ApplicationErrorResponse</code> <span class="tag t-add">new</span></td></tr>
+<tr><td>Process lock</td><td><code>ClaimRow</code></td><td><code>domain.locks.LockOutcome</code> <span class="tag t-add">new</span></td><td>none — internal</td></tr>
+<tr><td>Native title</td><td><code>ThreadTitleRow</code></td><td><code>harness.models.TitleWriteOutcome</code> <span class="tag t-add">new</span></td><td><code>ControlResultResponse</code> <span class="tag t-add">new</span></td></tr>
+</tbody>
+</table>
+
+<div class="box">
+<h5>The three rules</h5>
+<ol style="margin:4px 0">
+<li><strong>L1 never leaves <code>repository/</code>.</strong> No row DTO appears in a signature outside the package; <code>repository/__init__.py</code> re-exports contracts only.</li>
+<li><strong>L2 is what Protocols speak.</strong> Every repository method takes and returns L2 objects, which is what makes an in-memory fake possible without touching a mapper.</li>
+<li><strong>L3 never reaches below <code>api/</code>.</strong> A pydantic model may import <code>domain</code> and <code>harness.models</code> to <em>build</em> a request (<code>SendTextRequest.request()</code> already does) or to project a response, but no service takes a pydantic type.</li>
+</ol>
+</div>
+
+<h4>The 26 response models (requirement 5)</h4>
+<table>
+<thead><tr><th style="width:26%">Route group</th><th style="width:8%">Count</th><th>Models</th></tr></thead>
+<tbody>
+<tr><td><code>api/dashboard/controls.py</code></td><td>15</td><td>One <code>ControlResultResponse</code> plus the four specialised results (<code>DeliveryResultResponse</code>, <code>PlanChoicesResponse</code>, <code>RewindResultResponse</code>, <code>MigrationResultResponse</code>) and <code>LaunchResultResponse</code>. The status-code mapping (<code>CONTROL_STATUS</code>) stays; only the body becomes typed.</td></tr>
+<tr><td><code>api/terminal/panes.py</code></td><td>5</td><td>All five already build a <code>PaneCommandResponse</code> and then throw the type away with <code>JSONResponse(reply.model_dump(), status)</code>. They keep the custom status by declaring <code>response_model=PaneCommandResponse</code> and returning the model with a <code>Response</code> status override.</td></tr>
+<tr><td><code>api/dashboard/sessions.py</code></td><td>3</td><td><code>SessionListResponse</code>, <code>SessionSnapshotResponse</code> (the <code>canonical</code>/<code>application</code> pair), <code>ActivityPageResponse</code>.</td></tr>
+<tr><td><code>api/dashboard/catalog.py</code></td><td>3</td><td><code>HarnessCatalogResponse</code> (which also absorbs the two <code>payload[...] =</code> mutations at <code>catalog.py:56-57</code>), <code>InsightsResponse</code>, <code>ResumableSessionsResponse</code>.</td></tr>
+<tr><td>Unannotated handlers</td><td>3</td><td><code>api/common/content.py</code>, <code>api/dashboard/files.py:dictation_token</code>, <code>api/terminal/streams.py:pane_stream</code> — annotate the return type; two are already returning typed models on the happy path.</td></tr>
+</tbody>
+</table>
+<p class="small"><code>json_ready()</code> survives only inside the two SSE frame builders (<code>api/dashboard/streams.py:44,96</code>), where the payload is a hand-assembled envelope rather than a route return value. Its docstring narrows to say so.</p>
+
+<h2 id="s20"><span class="num">20</span>Moving otel and terminal onto the daemon</h2>
+
+<h3>20.1 The OTLP receiver (requirement 6)</h3>
+
+<p>Today the receiver binds a port, parses the OTLP document, extracts session ids, looks each up in <code>SessionStore</code>, and appends to <code>raw_events</code> — a second writer of canonical evidence, in a second process (F16). The hook channel solved this shape already: <em>ship the exact bytes, let the daemon record</em>. Telemetry becomes the second instance of that channel.</p>
+
+<table>
+<thead><tr><th style="width:32%">Piece</th><th style="width:10%"></th><th>Detail</th></tr></thead>
+<tbody>
+<tr><td><code>harness/models/telemetry.py</code></td><td><span class="tag t-add">new</span></td><td><code>HarnessTelemetryRequest(payload: bytes, content_encoding: str | None)</code>, <code>HarnessTelemetryResponse(raw_events, reply)</code>, and <code>TelemetryContext</code> — a Protocol with <code>find_session(session_id) -&gt; Session | None</code>, mirroring <code>ControlContext</code>.</td></tr>
+<tr><td><code>harness/contract.py</code></td><td><span class="tag t-mod">extend</span></td><td><code>class HarnessTelemetryGateway(Protocol): def handle(self, request, context) -&gt; HarnessTelemetryResponse</code>, and <code>HarnessPlugin.telemetry: HarnessTelemetryGateway | None = None</code>.</td></tr>
+<tr><td><code>harness/services/telemetry.py</code></td><td><span class="tag t-add">new</span></td><td><code>TelemetryGatewayService(registry, raw_events, sessions)</code> — the twin of <code>HookGatewayService</code>: resolve the plugin, hand it a context, record what it returns.</td></tr>
+<tr><td><code>api/common/telemetry.py</code></td><td><span class="tag t-add">new</span></td><td><code>POST /api/harnesses/{harness}/telemetry</code>, guarded by <code>control_plane(TELEMETRY_MAX)</code>, gzip handled here. Body is exact bytes; errors audited here, exactly as <code>api/common/hooks.py:56-64</code> does.</td></tr>
+<tr><td><code>claude_code/otel/gateway.py</code></td><td><span class="tag t-add">new</span></td><td>The plugin's <code>HarnessTelemetryGateway</code>. Gets <code>_session_ids()</code> and the <code>RawEvent</code> construction from <code>receiver.py:30-70</code> verbatim; the session lookup becomes <code>context.find_session(...)</code>.</td></tr>
+<tr><td><code>claude_code/otel/receiver.py</code></td><td><span class="tag t-mod">shrink</span></td><td>Bind, read body, <code>daemon_client.post_bytes("/api/harnesses/claude_code/telemetry", body, headers)</code>, count deliveries for the idle timer, exit. Loses <code>core.data</code>, <code>engine.store.*</code>, <code>domain.ids</code>, <code>harness.models</code> — about 45 of its 124 lines.</td></tr>
+</tbody>
+</table>
+
+<div class="box warn">
+<h5>What changes behaviourally, and what does not</h5>
+<p><strong>Does not:</strong> the receiver still owns its port, its gzip handling, and its idle-exit — those are properties of being an OTLP endpoint, not of storage.</p>
+<p><strong>Does:</strong> telemetry now requires a running daemon. Today a delivery lands in the store even if the daemon is down. This is the same trade the hook channel already made deliberately (<code>core/daemon/client.py</code>: “there is deliberately NO fallback to a direct store read”), and OTLP metrics are the least critical evidence in the tree — they are usage counters, re-reported on the next export interval. The receiver should audit an unreachable daemon rather than swallow it.</p>
+</div>
+
+<h3>20.2 Terminal through the service layer (requirement 7)</h3>
+
+<p>The out-of-process half is already right: the mirror and scoreboard panes stream SSE, the keybinding posts a gesture, the click handlers GET content and POST a toggle. None opens a database. What is missing is (a) anything asserting that, and (b) a daemon-side service layer — two call sites reach a storage module directly.</p>
+
+<table>
+<thead><tr><th style="width:32%">Change</th><th style="width:10%"></th><th>Detail</th></tr></thead>
+<tbody>
+<tr><td><code>terminal/services/panes.py</code></td><td><span class="tag t-add">new</span></td><td><code>PaneWidthService(repository)</code> — owns <code>configured_width_percent()</code>, <code>resize_columns()</code> and the “stored, else configured” resolution that <code>terminal/panes/preferences.py:44-55</code> spells twice. Consumers: <code>terminal/panes/commands.py:77,80,95,98,107</code>, <code>terminal/panes/reaction.py:40</code>.</td></tr>
+<tr><td><code>terminal/services/views.py</code></td><td><span class="tag t-add">new</span></td><td><code>ContentViewService(repository, audit)</code> — owns the toggle and the audit row that <code>api/terminal/views.py:18</code> writes inline today. Consumers: the route, and <code>terminal/panes/streams.py:140</code>.</td></tr>
+<tr><td><code>api/terminal/views.py</code></td><td><span class="tag t-mod">fix</span></td><td>F14 — calls <code>application.content_views.toggle(...)</code> instead of the storage module.</td></tr>
+<tr><td><code>terminal/panes/streams.py</code></td><td><span class="tag t-mod">fix</span></td><td>F15 — takes the service; the opened set is read from the service, which the daemon can cache, instead of opening a file per frame.</td></tr>
+<tr><td><code>terminal/panes/{preferences,views}.py</code></td><td><span class="tag t-del">delete</span></td><td>Storage moves to <code>repository/impl/sqlite/terminal.py</code>; policy moves to the two services.</td></tr>
+</tbody>
+</table>
+
+<h2 id="s21"><span class="num">21</span>Step 0 — wipe</h2>
+
+<div class="box good">
+<h5>No migration, no compatibility shim</h5>
+<p>Confirmed in scope: the existing databases are discarded rather than migrated. That deletes an entire workstream — no <code>ATTACH</code>-and-copy module, no dual-read period, no <code>schema_version</code> upgrade path, no legacy-file detection. It also means the schema in §11 can be written as the shape it should be, not as the shape the old rows can be coerced into (which is why <code>account_usage_snapshots</code> is keyed by account rather than by session, and why the workspace normalises into four tables).</p>
+</div>
+
+<h4>What step 0 is</h4>
+<ol>
+<li>Stop the daemon (<code>python3 bin/baqylau-dashboard.py stop</code>) and close any session whose panes are live.</li>
+<li>Delete the data directory's databases and the runtime lock:
+<pre><code>rm -f  ~/.local/share/baqylau/events.db*  \
+       ~/.local/share/baqylau/dashboard-preferences.db*  \
+       ~/.local/share/baqylau/pane-preferences.db*  \
+       ~/.local/share/baqylau/terminal-views.db*  \
+       ~/.local/share/baqylau/audit/audit.db*  \
+       ~/.claude/baqylau/claude_code/usage.db*  \
+       /tmp/baqylau-dashboard.db*</code></pre>
+(Adjust for <code>BAQYLAU_DATA_DIR</code> / <code>BAQYLAU_AUDIT_DIRECTORY</code> if either is set.)</li>
+<li>Optionally clear <code>~/.local/share/baqylau/uploads/</code> — the new <code>uploads</code> table starts empty, so anything already there is unattributable and will never be pruned.</li>
+<li><code>SCHEMA_VERSION</code> resets to <code>1</code> for both <code>main.db</code> and <code>audit.db</code>. <code>domain/codec.py</code>'s canonical <code>SCHEMA_VERSION</code> is a <em>different</em> number — the event payload schema — and stays at 15; the two are now clearly separate and the new <code>schema_version</code> table says which is which.</li>
+</ol>
+
+<h4>What is lost, and whether it matters</h4>
+<table>
+<thead><tr><th style="width:26%">Data</th><th style="width:10%">Impact</th><th>Note</th></tr></thead>
+<tbody>
+<tr><td>Session history, canonical events, raw evidence</td><td>high volume, low value</td><td>Past sessions vanish from the dashboard and the insights page. Live sessions must be restarted — the interpreter births a session row from its <code>session.started</code> fact, so a session already running has no row to be reborn from.</td></tr>
+<tr><td>Web-push subscriptions and the VAPID keypair</td><td><strong>user-visible</strong></td><td>Every subscribed device must opt in again — the keypair is gone, so old subscriptions are unusable. Worth saying out loud before running step 0.</td></tr>
+<tr><td>Preferences: view modes, mutes, hidden directories, task dismissals, new-session drafts</td><td>low</td><td>All re-set in seconds.</td></tr>
+<tr><td>Pane widths, opened views</td><td>low</td><td>Fall back to the env-var defaults.</td></tr>
+<tr><td>Usage snapshots</td><td>none</td><td>Repopulated on the next statusline delivery.</td></tr>
+<tr><td>Audit trail</td><td>low</td><td>By construction a debugging record of past runs.</td></tr>
+</tbody>
+</table>
+<p class="small">The test suite is unaffected: every test already builds its store in a <code>tmp_path</code>, and <code>tests/conftest.py:22,27</code> redirects both data and audit directories per test.</p>
+
+<!-- ============================================================= PART 3 -->
+<h2 id="s22"><span class="num">22</span>Phases</h2>
+
+<p>Ten phases. Each is independently mergeable, each leaves <code>make test</code> and <code>make lint</code> green, and each ends with a working daemon. The order is bottom-up, so no phase depends on one that has not landed.</p>
+
+<table>
+<thead><tr><th style="width:4%">#</th><th style="width:20%">Phase</th><th style="width:40%">Work</th><th>Exit criteria</th></tr></thead>
+<tbody>
+<tr><td><strong>0</strong></td><td>Wipe</td><td>§21. Delete the seven database files. Land the new <code>schema_version</code> convention and the <code>&lt;data_dir&gt;/main.db</code> + <code>&lt;data_dir&gt;/audit.db</code> path constants in <code>core/data.py</code>; retire <code>BAQYLAU_AUDIT_DIRECTORY</code> and make <code>claude_code/data.py</code> defer to <code>core/data.py</code> (F9).</td><td>One owner of every database path. Nothing else changes yet.</td></tr>
+<tr><td><strong>1</strong></td><td>Model homes</td><td>Create <code>domain/{records,operations,workspace,preferences,locks,uploads}.py</code>, <code>diagnostics/models.py</code>, <code>terminal/models/preferences.py</code>. Move <code>StoredCanonicalEvent</code>/<code>CanonicalEventPage</code> out of <code>engine/store/canonical.py</code> and <code>ApplicationError</code> out of <code>diagnostics/read.py</code>, leaving re-export shims. Extend <code>harness/models/{usage,controls}.py</code>. Update <code>domain/__init__.py</code>'s docstring for D1.</td><td>No behaviour change; <code>test_domain_imports_only_the_standard_library</code> still passes; new modules fully annotated.</td></tr>
+<tr><td><strong>2</strong></td><td>Package skeleton</td><td><code>repository/</code> with <code>contract/</code>, <code>model/</code> (31 row DTOs), <code>mapper/</code> (9 modules), and <code>impl/sqlite/{connection,schema,rows}.py</code>. The full <code>MAIN_SCHEMA</code>. No repository implementations, no callers.</td><td><code>tests/test_repository_mapping.py</code> covers every mapper round-trip with no database. The architecture rule for the new package lands (§24).</td></tr>
+<tr><td><strong>3</strong></td><td>Facts and evidence</td><td>Implement <code>SessionRepository</code>, <code>RawEventRepository</code>, <code>CanonicalEventRepository</code>, <code>TranslationEvidenceRepository</code>, <code>OperationOutputRepository</code>, <code>SessionWorkspaceRepository</code> over <code>main.db</code>. Split <code>OperationOutputRawEventSource</code> out to <code>engine/interpret/output_source.py</code> and move the <code>os.remove</code> there (F4). Keep <code>engine/store/*</code> as thin shims so nothing above changes yet.</td><td>The existing suite passes unchanged; <code>tests/canonical_runtime.py</code> builds repositories.</td></tr>
+<tr><td><strong>4</strong></td><td>Facts callers</td><td>Delete the shims and <code>engine/queries/evidence.py</code>. Update <code>app/bootstrap.py</code>, <code>engine/interpret/{loop,reactions}.py</code> (including <code>record_translation</code> and the moved envelope checks), <code>engine/projections/{pages,queries}.py</code>, <code>engine/queries/content.py</code>, <code>harness/{hooks/gateway,services/controls,services/probe}.py</code>, <code>terminal/panes/reaction.py</code>, <code>dashboard/services/*</code>, <code>app/services/*</code>, <code>app/evidence_cli.py</code> (now read-only, F18).</td><td><code>grep -rn "engine.store"</code> returns nothing. The three N+1 loops in this area are gone.</td></tr>
+<tr><td><strong>5</strong></td><td>Workspace</td><td>Strip the five raw statements out of <code>dashboard/services/workspace.py</code> and inject the repository (F1). The service keeps the delivered-prompt filter and the pending-attention filter, which both need canonical facts.</td><td><code>dashboard/services/</code> contains no <code>connect(</code>; the four workspace tables have an owner.</td></tr>
+<tr><td><strong>6</strong></td><td>Diagnostics</td><td>Both diagnostic repositories over one <code>audit.db</code> <code>SqliteDatabase</code>. <code>diagnostics/record.py</code> becomes the EXC-5 façade keeping <code>enabled()</code>; <code>diagnostics/{read,database}.py</code> deleted. Inject the write repository into <code>BrowserTelemetryService</code> (F12).</td><td>F7 gone — one path, both directions. <code>tests/test_canonical_http.py:155</code>'s hand-made table can be deleted.</td></tr>
+<tr><td><strong>7</strong></td><td>Preferences</td><td>Nine tables, seven repositories, no <code>kv</code>. Replace <code>dashboard/prefs/*</code> at <code>dashboard/services/{overview,workspace}.py</code>, <code>notify/{notifier,presence}.py</code>, <code>notify/channels/webpush.py</code>. Give <code>"new-session"</code> an owner (F2). Delete <code>dashboard/prefs/</code>.</td><td>No module outside <code>repository/</code> names a preference key; the key–value test (§24) passes.</td></tr>
+<tr><td><strong>8</strong></td><td>Terminal, usage, uploads, locks, titles</td><td>§20.2's two services and their repositories; the generic usage repository; the <code>uploads</code> table and its prune; <code>core/locks.py</code> as a <code>LockOutcome</code> façade with <code>api/server.py</code> no longer parsing strings; both title implementations declaring <code>NativeSessionTitleRepository</code>.</td><td>No <code>import sqlite3</code> outside <code>repository/impl/sqlite/</code> and the Codex title module.</td></tr>
+<tr><td><strong>9</strong></td><td>OTLP over HTTP</td><td>§20.1 — the telemetry channel, the plugin gateway, the thinned receiver.</td><td>The only processes linking the repository layer are the daemon, the read-only audit CLI, and the diagnostics façade. The two new process tests (§24) pass.</td></tr>
+<tr><td><strong>10</strong></td><td>Wire responses</td><td>§19's 26 response models; annotate the three bare handlers; <code>json_ready()</code> leaves the route bodies; move the reflected-field entries from <code>vulture-baseline.py</code> to a generated <code>vulture-allowlist.py</code> section.</td><td>Every route declares a response model; <code>/openapi.yaml</code> describes the whole API.</td></tr>
+</tbody>
+</table>
+
+<h2 id="s23"><span class="num">23</span>File-by-file change table</h2>
+
+<table>
+<thead><tr><th style="width:5%">Ph.</th><th style="width:30%">File</th><th style="width:9%">Action</th><th>Detail</th></tr></thead>
+<tbody>
+<tr><td>0</td><td><code>core/data.py</code></td><td><span class="tag t-mod">modify</span></td><td><code>main_database_path()</code>, <code>audit_database_path()</code>, <code>lock_database_path()</code>. One owner of all three.</td></tr>
+<tr><td>0</td><td><code>harness/impl/claude_code/data.py</code></td><td><span class="tag t-del">delete</span></td><td>F9 — the plugin's data directory was the second answer to a question <code>core/data.py</code> already owns.</td></tr>
+<tr><td>1</td><td><code>domain/{records,operations,workspace,preferences,locks,uploads}.py</code></td><td><span class="tag t-add">add</span></td><td>§12.</td></tr>
+<tr><td>1</td><td><code>diagnostics/models.py</code>, <code>terminal/models/preferences.py</code></td><td><span class="tag t-add">add</span></td><td>§12.</td></tr>
+<tr><td>1</td><td><code>domain/__init__.py</code>, <code>harness/models/{usage,controls,__init__}.py</code></td><td><span class="tag t-mod">modify</span></td><td>D1 docstring; <code>AccountUsageSnapshot</code>, <code>UsageWindowSample</code>, <code>TitleWriteOutcome</code>, <code>__all__</code>.</td></tr>
+<tr><td>2</td><td><code>repository/**</code> — contract 13, model 9, mapper 10, impl/sqlite 3, plus <code>__init__</code> and <code>errors.py</code></td><td><span class="tag t-add">add</span></td><td>21 Protocols, 31 row DTOs, 9 mapper modules, the connection policy and the full schema.</td></tr>
+<tr><td>3</td><td><code>repository/impl/sqlite/{sessions,raw_events,canonical_events,evidence,operation_output,workspace}.py</code></td><td><span class="tag t-add">add</span></td><td>SQL moves from <code>engine/store/</code> and <code>engine/queries/evidence.py</code>.</td></tr>
+<tr><td>3</td><td><code>engine/interpret/output_source.py</code></td><td><span class="tag t-add">add</span></td><td><code>OperationOutputRawEventSource</code> from <code>engine/store/output.py:132-238</code>, built from an <code>OperationOutputFollowing</code>, with the unlink as its own step.</td></tr>
+<tr><td>4</td><td><code>engine/store/</code> (6 files), <code>engine/queries/evidence.py</code></td><td><span class="tag t-del">delete</span></td><td>The <code>engine/store/__init__.py</code> ownership docstring becomes <code>repository/__init__.py</code>'s, extended to all 25 tables.</td></tr>
+<tr><td>4</td><td><code>engine/interpret/loop.py</code></td><td><span class="tag t-mod">modify</span></td><td>Takes repositories; <code>record_translation</code>; the moved envelope checks; bulk <code>latest_positions</code>; calls <code>remove_expired</code>.</td></tr>
+<tr><td>4</td><td><code>app/bootstrap.py</code></td><td><span class="tag t-mod">modify</span></td><td>Builds 3 <code>SqliteDatabase</code> objects, then 21 repositories, then services. <code>CanonicalApplication</code>'s store fields become Protocol-typed.</td></tr>
+<tr><td>4</td><td><code>engine/{projections/pages,projections/queries,queries/content}.py</code>, <code>harness/{hooks/gateway,services/controls,services/probe}.py</code>, <code>terminal/panes/{reaction,streams}.py</code>, <code>dashboard/services/{sessions,streams,activity}.py</code>, <code>app/services/{insights,resume}.py</code></td><td><span class="tag t-mod">modify</span></td><td>Constructor types change from concrete stores to Protocols.</td></tr>
+<tr><td>4</td><td><code>app/evidence_cli.py</code></td><td><span class="tag t-mod">modify</span></td><td>EXC-4 — builds a read-only <code>SqliteDatabase</code> and calls <code>TranslationEvidenceRepository</code> / <code>DiagnosticReadRepository</code>. It writes no SQL: its joins died with <code>engine/queries/evidence.py</code>. Fixes F18 and the evidence N+1.</td></tr>
+<tr><td>5</td><td><code>dashboard/services/workspace.py</code></td><td><span class="tag t-mod">modify</span></td><td>−90 lines of SQL and dataclasses; +1 injected repository.</td></tr>
+<tr><td>6</td><td><code>diagnostics/{read,database}.py</code></td><td><span class="tag t-del">delete</span></td><td>Schema → <code>repository/impl/sqlite/schema.py</code>; path → <code>core/data.py</code>; <code>enabled()</code> → <code>record.py</code>.</td></tr>
+<tr><td>6</td><td><code>diagnostics/{record,telemetry,__init__}.py</code></td><td><span class="tag t-mod">modify</span></td><td>EXC-5 façade; the <code>OperationalAudit</code> Protocol retires in favour of <code>DiagnosticWriteRepository</code>.</td></tr>
+<tr><td>7</td><td><code>dashboard/prefs/</code> (8 files)</td><td><span class="tag t-del">delete</span></td><td>Their docstrings record measured incidents and design reasoning. <strong>Move the prose onto the repository classes; do not rewrite it.</strong></td></tr>
+<tr><td>7</td><td><code>dashboard/services/{overview,workspace}.py</code>, <code>notify/{notifier,presence}.py</code>, <code>notify/channels/webpush.py</code>, <code>api/dashboard/application.py</code></td><td><span class="tag t-mod">modify</span></td><td>Injected repositories replace <code>prefs.*</code>.</td></tr>
+<tr><td>8</td><td><code>terminal/services/{panes,views}.py</code></td><td><span class="tag t-add">add</span></td><td>§20.2.</td></tr>
+<tr><td>8</td><td><code>terminal/panes/{preferences,views}.py</code></td><td><span class="tag t-del">delete</span></td><td>Storage to the repository; policy to the services.</td></tr>
+<tr><td>8</td><td><code>api/terminal/views.py</code>, <code>terminal/panes/{commands,streams,reaction}.py</code></td><td><span class="tag t-mod">modify</span></td><td>F14, F15.</td></tr>
+<tr><td>8</td><td><code>harness/impl/claude_code/usage/state.py</code></td><td><span class="tag t-del">delete</span></td><td>Replaced by the generic usage repository; <code>usage/rows.py</code> and <code>account.py</code> take typed snapshots.</td></tr>
+<tr><td>8</td><td><code>api/dashboard/files.py</code></td><td><span class="tag t-mod">modify</span></td><td>Records an <code>uploads</code> row; the <code>web-upload</code> <code>state_files</code> row can go.</td></tr>
+<tr><td>8</td><td><code>core/locks.py</code>, <code>api/server.py</code>, <code>dashboard/cli.py</code></td><td><span class="tag t-mod">modify</span></td><td><code>LockOutcome</code>; <code>create=False</code> dropped (F10).</td></tr>
+<tr><td>8</td><td><code>codex/canonical/title.py</code>, <code>claude_code/canonical/transcript.py</code>, both <code>controls/controller.py</code></td><td><span class="tag t-mod">modify</span></td><td>Declare <code>NativeSessionTitleRepository</code>; return <code>TitleWriteOutcome</code>.</td></tr>
+<tr><td>9</td><td><code>harness/models/telemetry.py</code>, <code>harness/services/telemetry.py</code>, <code>api/common/telemetry.py</code>, <code>claude_code/otel/gateway.py</code></td><td><span class="tag t-add">add</span></td><td>§20.1.</td></tr>
+<tr><td>9</td><td><code>harness/contract.py</code>, <code>claude_code/plugin.py</code>, <code>claude_code/otel/receiver.py</code>, <code>api/app.py</code></td><td><span class="tag t-mod">modify</span></td><td>The new gateway field, the descriptor entry, the thinned receiver, the router registration.</td></tr>
+<tr><td>10</td><td><code>api/*/models/**/*_response.py</code> (26 new, joining 10)</td><td><span class="tag t-add">add</span></td><td>One file per response, matching the existing convention.</td></tr>
+<tr><td>10</td><td><code>api/dashboard/{sessions,controls,catalog}.py</code>, <code>api/terminal/panes.py</code>, <code>api/common/content.py</code>, <code>api/dashboard/files.py</code>, <code>api/terminal/streams.py</code></td><td><span class="tag t-mod">modify</span></td><td>Route signatures name the response model.</td></tr>
+<tr><td>10</td><td><code>dashboard/render/serialize.py</code>, <code>vulture-baseline.py</code>, <code>vulture-allowlist.py</code></td><td><span class="tag t-mod">modify</span></td><td>Narrowed docstring; 85 entries move from baseline to a generated allowlist section.</td></tr>
+<tr><td>all</td><td><code>README.md</code>, <code>CLAUDE.md</code>, <code>.claude/skills/audit-debug/SKILL.md</code></td><td><span class="tag t-mod">modify</span></td><td>The README's architecture block gains <code>repository/</code> and loses <code>engine/store/</code>; the audit skill's schema section points at <code>repository/impl/sqlite/schema.py</code> and at <code>main.db</code>.</td></tr>
+</tbody>
+</table>
+
+<h2 id="s24"><span class="num">24</span>Enforcement: architecture tests and vulture</h2>
+
+<h3>24.1 Nine new tests</h3>
+<table>
+<thead><tr><th style="width:5%">Ph.</th><th style="width:34%">Test</th><th>Asserts</th></tr></thead>
+<tbody>
+<tr><td>2</td><td><code>test_the_repository_layer_imports_only_the_model_layers</code></td><td><code>assert_imports("repository", {"core","diagnostics","domain","repository"}, allowed_modules={"harness.models","terminal.models"})</code>.</td></tr>
+<tr><td>8</td><td><code>test_only_a_repository_implementation_opens_a_database</code></td><td><code>import sqlite3</code>, the string <code>"SELECT "</code>/<code>"INSERT "</code>/<code>"UPDATE "</code>/<code>"DELETE "</code>/<code>"CREATE TABLE"</code>, and the name <code>sqlite3.Row</code> appear only under <code>repository/impl/sqlite/**</code> and in <code>harness/impl/codex/canonical/title.py</code> — which is itself a repository implementation, placed there because the harness-vocabulary rule forbids the word “codex” in a shared package. <strong>Zero exceptions. The rule the whole refactor exists to establish.</strong></td></tr>
+<tr><td>8</td><td><code>test_exactly_three_database_files_are_named</code></td><td>The set of <code>*.db</code> / <code>*.sqlite</code> literals in the tree is exactly <code>{main.db, audit.db, locks.db}</code>, plus the Codex glob in its own module. Requirement 1 cannot silently regrow an eighth file.</td></tr>
+<tr><td>8</td><td><code>test_no_module_outside_the_allowlist_reads_or_writes_a_file</code></td><td><code>open(</code>, <code>os.makedirs</code>, <code>Path.write_*</code>, <code>glob</code>, <code>listdir</code> appear only in an explicit allowlist, each entry carrying its §3 classification as a comment: three credential readers, six source-file readers, one attachment writer. Requirement 2.</td></tr>
+<tr><td>7</td><td><code>test_no_key_value_table_exists</code></td><td>Parses <code>repository/impl/sqlite/schema.py</code> and fails any table whose columns are a <code>(key, value)</code>-shaped pair, and any <code>TEXT</code> column named <code>val</code>, <code>value</code>, <code>json</code>, or <code>data</code>. Allowlisted by name: <code>canonical_events.payload</code>, <code>raw_events.payload</code>, <code>state_files.content</code> — each with its reason. Requirement 8.</td></tr>
+<tr><td>4</td><td><code>test_repository_contracts_expose_no_connection_or_transaction</code></td><td>No Protocol method in <code>repository/contract/**</code> is named <code>connect</code>/<code>write</code>/<code>transaction</code>/<code>unit_of_work</code>/<code>session</code>, and no return annotation mentions <code>Connection</code>, <code>Cursor</code>, <code>AbstractContextManager</code>, or <code>Iterator</code>. Requirement 10.</td></tr>
+<tr><td>9</td><td><code>test_only_the_daemon_and_the_audit_cli_build_repositories</code></td><td>Walks every module reachable from the six process entry points. <code>repository.impl</code> may be imported by <code>app/bootstrap.py</code>, by <code>app/evidence_cli.py</code> (which must pass <code>read_only=True</code>), and by <code>diagnostics/record.py</code> (EXC-5). The hook entries, the pane processes, the keybinding client and the OTLP receiver may import neither <code>repository.impl</code> nor <code>repository.contract</code>. Requirements 6 and 7.</td></tr>
+<tr><td>8</td><td><code>test_terminal_storage_is_reached_through_a_service</code></td><td><code>api/terminal/**</code> and <code>terminal/panes/**</code> import <code>terminal.services</code>, never <code>repository.contract</code>. F14, F15, requirement 7.</td></tr>
+<tr><td>10</td><td><code>test_every_route_declares_a_response_model</code></td><td>Every decorated handler in <code>api/**</code> has a return annotation, and it is not a bare <code>JSONResponse</code>. Allowlisted: the 4 static routes, 2 SSE streams, the OpenAPI document, the hook and telemetry replies. Requirement 5.</td></tr>
+</tbody>
+</table>
+
+<h3>24.2 Seven amended tests</h3>
+<table>
+<thead><tr><th style="width:5%">Ph.</th><th style="width:38%">Test</th><th>Change</th></tr></thead>
+<tbody>
+<tr><td>2</td><td><code>OUR_PACKAGES</code></td><td>Gains <code>"repository"</code>. Without this every rule silently ignores imports of the new package.</td></tr>
+<tr><td>2</td><td><code>test_no_read_path_orders_on_a_bare_occurred_at</code></td><td>Add <code>"repository"</code> to the scanned directories. <strong>Load-bearing</strong> — the one query it guards is moving there.</td></tr>
+<tr><td>2</td><td><code>test_canonical_shared_code_contains_no_concrete_harness_vocabulary</code> and <code>…imports_no_concrete_harness_package</code></td><td>Add <code>ROOT / "repository"</code>. This is what forces the Codex title implementation and the usage repository's harness-specific parts to stay plugin-side.</td></tr>
+<tr><td>4</td><td><code>test_the_engine_imports_only_the_domain_and_the_harness_contract</code></td><td>Allowed roots gain <code>"repository"</code>.</td></tr>
+<tr><td>4</td><td><code>test_the_harness_implementations_never_import_the_application</code></td><td><code>allowed_modules</code>: drop <code>engine.store.recorder</code> and <code>engine.store.sessions</code>, add <code>repository.contract</code>. After phase 9 no harness module needs <code>repository.impl</code> at all.</td></tr>
+<tr><td>9</td><td><code>test_hook_entries_are_thin_clients_of_the_daemon</code></td><td>Marker list gains <code>repository.impl</code>, <code>SqliteDatabase</code>, <code>main.db</code>; the old names stay so a revert is caught. <strong>Extend the same test to the OTLP receiver</strong>, which is the point of phase 9.</td></tr>
+<tr><td>4</td><td><code>test_the_diagnostic_write_tier_is_a_floor_and_the_read_tier_is_the_daemons</code></td><td>Rewritten against <code>repository.contract.diagnostics</code>; the module it names is deleted in phase 6.</td></tr>
+<tr><td>3–8</td><td><code>PROTOCOL_DECLARATION_EXEMPTIONS</code></td><td>The two entries can now be retired by moving <code>TerminalSessionReader</code> and <code>UsageReader</code> into <code>harness/models/</code>, which the existing comment already proposes. <code>test_the_protocol_declaration_exemptions_are_all_still_real</code> fails if they are left behind once stale.</td></tr>
+</tbody>
+</table>
+
+<h3>24.3 Vulture</h3>
+<table>
+<thead><tr><th style="width:26%">Change</th><th>Detail</th></tr></thead>
+<tbody>
+<tr><td><code>DEADCODE_PATHS += repository</code></td><td>Phase 2. Without it the largest new package is unscanned.</td></tr>
+<tr><td><strong>The catalogue is already trimmed</strong></td><td>Every one of the 72 methods in §16 has a live call site. Speculative methods — the three write-only audit reads (F8), <code>UploadRepository.find_for_session</code> — are deliberately absent and land only with their caller.</td></tr>
+<tr><td><strong>Response fields move from baseline to allowlist</strong></td><td>Phase 10 adds 26 pydantic models whose fields are read only by pydantic's serializer, which vulture cannot follow. Adding ~150 lines to <code>vulture-baseline.py</code> — a file whose header says “shrink-only … nothing should be added here” — would invert its meaning. They belong in <code>vulture-allowlist.py</code>, whose header already says “names reached by a protocol, never by a caller in this repo. Permanent: every entry below is a framework/stdlib contract” — which is precisely what a pydantic response field is. The 85 existing entries move there too, shrinking the baseline by more than half.</td></tr>
+<tr><td><strong>The allowlist is generated and checked</strong></td><td>A permanent allowlist can rot as quietly as a baseline. So: generate the response-model section mechanically from <code>api/*/models/**</code>, and add <code>test_the_response_model_allowlist_matches_the_models</code> — a deleted field's entry cannot survive its field. That is what makes “permanent” safe rather than lazy.</td></tr>
+</tbody>
+</table>
+
+<h3>24.4 Type gates</h3>
+<ul>
+<li><code>Makefile</code>: <code>TYPECHECK_PATHS</code> and <code>DEADCODE_PATHS</code> gain <code>repository</code>, phase 2.</li>
+<li><code>repository/</code> never gets a <code>mypy.ini</code> block or a <code>ruff.toml</code> per-file ignore. It is strict from the first commit.</li>
+<li>After every phase from 4 onward, re-run <code>test_no_type_exemption_outlives_its_migration</code>: moving untyped code out of <code>engine</code>, <code>dashboard</code>, <code>terminal</code>, <code>core</code> or <code>harness</code> may make one of them pass without its exemption, and the block must then be deleted from <em>both</em> files in that same commit. Add <code>make typecheck-ratchet</code> so this is one command rather than a habit.</li>
+</ul>
+
+<h2 id="s25"><span class="num">25</span>Risks and open decisions</h2>
+
+<h4>Risks</h4>
+<table>
+<thead><tr><th style="width:24%">Risk</th><th style="width:8%">Severity</th><th>Mitigation</th></tr></thead>
+<tbody>
+<tr><td>Silent behaviour change in the nine preference semantics — the stale-write guard, the tombstone-not-delete rule, the id-set dismissal, the default-is-absence rule.</td><td>high</td><td>Phase 7 gets a characterisation test per key written <em>before</em> the table is designed. These are the most reasoned-about and least covered parts of the tree; their docstrings are the specification.</td></tr>
+<tr><td>Loss of documented reasoning. <code>dashboard/prefs/*</code>, <code>core/locks.py</code>, <code>engine/store/*</code> carry long comments recording measured incidents.</td><td>high</td><td>Treat the prose as content to be moved. A reviewer should diff comment text, not just code.</td></tr>
+<tr><td>Merging preferences into <code>main.db</code> puts debounced composer-draft writes behind the interpreter's write lock.</td><td>medium</td><td>Already true — <code>session_application_state</code> lives in <code>events.db</code> today and takes a write per debounced keystroke batch, under the same lock, with no reported contention. WAL keeps readers unblocked and <code>busy_timeout=10000</code> covers the writer. Worth a measurement in phase 7 rather than an assumption.</td></tr>
+<tr><td>Telemetry now needs a live daemon (§20.1).</td><td>medium</td><td>The same trade the hook channel made. The receiver audits an unreachable daemon instead of swallowing it; OTLP counters are re-exported on the next interval.</td></tr>
+<tr><td>Phase 4 is the largest single diff — roughly 20 modules change constructor types at once.</td><td>medium</td><td>Phase 3's shims are what make it a mechanical rename rather than a redesign. Do not merge 3 and 4.</td></tr>
+<tr><td>Type-ratchet whiplash: a phase makes an exempt package clean, the block is not deleted, and CI fails on an unrelated test.</td><td>medium</td><td><code>make typecheck-ratchet</code> in the per-phase checklist.</td></tr>
+<tr><td>The Codex foreign-schema fragility (F13) is named, not fixed.</td><td>low</td><td>Out of scope. The Protocol makes it substitutable, which is the precondition for handling it later.</td></tr>
+</tbody>
+</table>
+
+<h4>Open decisions</h4>
+<table>
+<thead><tr><th style="width:6%">#</th><th style="width:24%">Decision</th><th style="width:34%">Recommendation</th><th>Alternative</th></tr></thead>
+<tbody>
+<tr><td><strong>D1</strong></td><td>Where the layer-2 model objects live.</td><td>Widen <code>domain/</code> (plus <code>diagnostics/models.py</code> and <code>terminal/models/preferences.py</code>). Fewest new concepts; every existing architecture test keeps working unchanged.</td><td>A literal top-level <code>model/</code> package, matching “second layer in model”. Costs a sixth model home in a tree that already has five, and a new architecture rule. <strong>Your call.</strong></td></tr>
+<tr><td><strong>D2</strong></td><td>Should <code>locks.db</code> also be consolidated?</td><td>No — EXC-1. Ephemerality is a correctness property: a claim surviving a reboot names a pid that may have been reused.</td><td>Put <code>claims</code> in <code>main.db</code> and add a boot identifier column so a stale claim is detectable. One table fewer, one more thing to get right; the runtime directory already does this for free.</td></tr>
+<tr><td><strong>D3</strong></td><td>Should <code>audit.db</code> also be consolidated?</td><td>No. Two reasons, either sufficient: it is written by ~20 short-lived processes that must never contend with the interpreter's write lock, and it is what you read <em>when <code>main.db</code> is the suspect</em>.</td><td>One file. Simpler to reason about and to back up; costs the isolation above.</td></tr>
+<tr><td><strong>D4</strong></td><td>The <code>uploads</code> table and its prune.</td><td>Include it. Requirement 2 says our files become tables, and the prune gives the table a reader — without which <code>make deadcode</code> fails and the table is write-only debt.</td><td>Drop the table; leave uploads as a fourth file exception. Smaller diff, no new behaviour, but the uploads directory keeps growing unattributably.</td></tr>
+<tr><td><strong>D5</strong></td><td>Phase 10 (response models) in the same programme?</td><td>Yes, but merged separately. It touches no storage code, and its diff is large and mechanical.</td><td>Ship it first, so the browser contract is pinned before the layers below it move.</td></tr>
+<tr><td><strong>D6</strong></td><td>Read methods for the three write-only audit tables (F8).</td><td>Not now — an uncalled method fails <code>make deadcode</code>. Add them with the audit-CLI commands that use them.</td><td>A phase 11 that extends the CLI and adds the reads together. That would also let <code>state_files</code>' JSON <code>content</code> column be normalised, retiring the last opaque column outside the canonical payload.</td></tr>
+</tbody>
+</table>
+
+<h4>Sizing</h4>
+<table>
+<thead><tr><th style="width:34%">Measure</th><th>Before → after</th></tr></thead>
+<tbody>
+<tr><td>Database files (ours)</td><td>7 → <strong>3</strong> (main, audit, locks)</td></tr>
+<tr><td>Tables</td><td>19 → <strong>31</strong> (25 main + 5 audit + 1 locks) — up, because nine JSON blobs and three JSON columns become rows</td></tr>
+<tr><td>Opaque columns</td><td>13 → <strong>3</strong> (<code>canonical_events.payload</code>, <code>raw_events.payload</code>, <code>state_files.content</code>), all allowlisted by name</td></tr>
+<tr><td>Connection policies</td><td>6 → <strong>1</strong> + 4 named deviations</td></tr>
+<tr><td>Access patterns</td><td>6 → <strong>1</strong> + 2 named exceptions</td></tr>
+<tr><td>Modules containing SQL</td><td>13 → <strong>14, all of them repository implementations</strong> (13 in <code>repository/impl/sqlite/</code>, 1 plugin-side)</td></tr>
+<tr><td>Processes that build repositories</td><td>4 open a database today → <strong>the daemon, the audit CLI (read-only), and any process recording a diagnostic</strong> — none of them writing SQL</td></tr>
+<tr><td>Protocols / methods</td><td>0 → <strong>21 / 72</strong>, none exposing a connection or a transaction</td></tr>
+<tr><td>Row DTOs / mapper modules / new model modules</td><td>0 → <strong>31 / 9 / 8</strong></td></tr>
+<tr><td>N+1 read loops</td><td>6 → <strong>0</strong></td></tr>
+<tr><td>Routes without a response model</td><td>29 → <strong>0</strong></td></tr>
+<tr><td>Modules deleted</td><td><strong>18</strong> — <code>engine/store/</code> (6), <code>engine/queries/evidence.py</code>, <code>dashboard/prefs/</code> (8), <code>diagnostics/{read,database}.py</code>, <code>terminal/panes/{preferences,views}.py</code>, <code>claude_code/{data,usage/state}.py</code> <span class="small">(counts overlap where a package is listed whole)</span></td></tr>
+<tr><td>Architecture tests</td><td><strong>9 added, 8 amended</strong></td></tr>
+<tr><td>Findings resolved</td><td><strong>16 of 18</strong> — F1–F7, F9–F12, F14–F18. F8 deferred by D6; F13 named, out of scope.</td></tr>
+</tbody>
+</table>
+
+<p class="small" style="margin-top:40px;border-top:1px solid var(--line);padding-top:14px">
+Every file path, line number, table name and column list in this document was read from the working tree at <code>c1ffdae</code>. Line numbers refer to that commit and will drift.
+</p>
+
+
+</div>
+</body>
+</html>

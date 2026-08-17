@@ -11,38 +11,56 @@ is most of the skill.
 
 ## Where the data is
 
-Both live under the application data directory — `~/.local/share/baqylau`, overridable
-with `$BAQYLAU_DATA_DIR` (`core/data.py`). Open them **read-only** (`file:<path>?mode=ro`)
-so triage can never mutate the evidence.
+Everything lives under the application data directory — `~/.local/share/baqylau`,
+overridable with `$BAQYLAU_DATA_DIR`. `core/data.py` is the one owner of all three
+paths. Open them **read-only** (`file:<path>?mode=ro`) so triage can never mutate
+the evidence.
 
 | store | path | what it answers |
 |---|---|---|
-| **event store** | `<data>/events.db` | What the session *did*. The product's own record: every observation and its interpretation. This is the primary evidence. |
-| **operational audit** | `<data>/audit/audit.db` | What the *machinery* did and where it degraded: swallowed exceptions, detached processes, control-plane gestures, browser telemetry. Env: `$BAQYLAU_AUDIT_DIRECTORY`, `BAQYLAU_AUDIT=0` disables (`diagnostics/record.py`). |
+| **main** | `<data>/main.db` | Everything the application owns and reads back: evidence and its interpretation, your unsent work, your preferences, terminal state, plan usage, uploads. Schema: `repository/impl/sqlite/schema.py`. |
+| **audit** | `<data>/audit.db` | What the *machinery* did and where it degraded: swallowed exceptions, detached processes, control-plane gestures, browser telemetry. Its own file because every short-lived process in the tree writes it, and because it is what you read when `main.db` is the suspect. `BAQYLAU_AUDIT=0` disables (`diagnostics/record.py`). |
+| **locks** | `<runtime>/locks.db` | Who holds the daemon singleton. In the RUNTIME directory on purpose: a pid claim surviving a reboot would name a pid since reused. |
+
+**Nothing outside `repository/impl/sqlite/` opens a database.** The one module elsewhere
+that does is `harness/impl/codex/canonical/title.py`, which is itself a repository
+implementation and lives there only because a shared package may not contain a harness's
+name. If you find SQL anywhere else, that is the bug.
 
 CLI: `python3 bin/baqylau-audit.py session <session_id>` dumps every raw observation for a
 session with its translation and the canonical events it produced; `... raw <raw_event_id>`
-does one. Both print JSON (payloads base64-encoded, so the bytes are exact). For anything
-aggregate, query the DBs directly with `sqlite3` — there is no canned-anomaly command.
+does one. Both print JSON (payloads base64-encoded, so the bytes are exact) and open the
+store read-only. For anything aggregate, query the DBs directly with `sqlite3` — there is
+no canned-anomaly command.
 
 ## The model (read this before querying)
 
-Evidence flows one way, and each stage is recorded:
+Evidence flows one way, and each stage is recorded. **Only the daemon writes.**
 
 ```
-wrapper ──register once──▶ session_harness
-recorders (otel/wrappers) ──append──▶ raw_events ◀──append── daemon: hook gateway + interpreter's pulled sources
-hooks (thin clients) ──POST exact stdin──▶ /api/harnesses/<name>/hooks ──▶ hook gateway
-                                                │
-        interpreter: translate → translation_records → canonical_events + canonical_provenance
+hooks · statusline · otel receiver  ──POST exact bytes──▶  the daemon
+   /api/harnesses/<name>/hooks      ──▶ hook gateway      ─┐
+   /api/harnesses/<name>/telemetry  ──▶ telemetry gateway ─┤
+                                                           ├──append──▶ raw_events
+   interpreter: pulled sources (transcripts, rollouts, ────┘
+                output chunks, liveness)
+                       │
+   translate ──▶ translation_records + canonical_events + canonical_provenance
+                 (ONE transaction: CanonicalEventRepository.record_translation)
+                       │
+   react ──▶ sessions (upsert) · operation_output · panes · plugin reactors
 ```
 
-- **`session_harness`** is written ONCE, at launch, by the harness's wrapper
-  (`harness/impl/*/command.py`) — hooks never register. Evidence recorded before its
-  session row exists waits, untranslated, until registration lands.
+- **`sessions` is NOT written at launch.** The row is born by the interpreter's
+  session-upsert reaction from the session's own `session.started` FACT, and its two
+  live columns (`terminal_window_id`, `harness_process_id`) are refreshed from the
+  envelope of every later hook-borne fact — which is how a resume into a new window
+  updates it. Nothing upstream of the store ever requires a row to exist: evidence
+  may precede its session, and the first delivery is what births it.
 - **`raw_events`** is *immutable evidence*: the exact bytes a source produced. Reusing a
   `raw_event_id` with a different payload raises `EventIdentityConflict` — that is
-  corruption, not convergence.
+  corruption, not convergence. Re-recording an IDENTICAL observation is a deliberate
+  no-op (sources re-read their last record on resume).
 - **`canonical_events`** is an *idempotent projection*. `event_id` names a **fact**, so
   several independent sources may converge on one event; re-observing it is a no-op that
   only appends provenance. The store keeps the **first writer** and does **not** compare
@@ -55,57 +73,88 @@ hooks (thin clients) ──POST exact stdin──▶ /api/harnesses/<name>/hooks
   are the same rows and cannot drift. "How far has this source been read?" is:
   `SELECT source_position FROM raw_events WHERE source_identity=? ORDER BY id DESC LIMIT 1`.
 - **The untranslated backlog IS the queue**: raw events with no `translation_records`
-  row (for registered sessions) await the interpreter, in `raw_events.id` order.
+  row await the interpreter, in `raw_events.id` order. Every raw event leaves the backlog
+  exactly once, because the verdict and the facts are written in one transaction.
+- **A translation that disagrees with its evidence is a VERDICT, not a crash.** Five
+  envelope checks (`engine/interpret/loop.py:checked`) compare each canonical event
+  against the raw event it came from; a violation lands as `decision='translation_failed'`
+  with the reason in `reason`, and the queue moves on.
 
 **Who drives what.** The `Interpreter` (`engine/interpret/loop.py`) is the ONE
-read-and-interpret loop: it pulls every registered unfinished session's sources
-(transcripts, rollouts, watches, process state), translates the untranslated backlog
-(hook evidence included — hooks do NOT translate), and reacts to committed facts
-(panes, plugin reactors). It runs as a thread inside the dashboard server process,
-every `TICK_INTERVAL_SECONDS` (0.25s), with no session-count cap. **Recorder**
-processes (`otel`, the wrappers' `process` events) only append raw events and do not
-depend on it. **Hooks are thin clients**: they POST their exact stdin to the daemon's
-hook gateway (`harness/hooks/gateway.py` → `harness/impl/<harness>/hooks/gateway.py`), which records
-`hook`/`teammate_hook`/`account`/`watch`/`terminal` raw events on the HTTP threads —
-NOT the interpreter thread. That split is the key asymmetry behind the headline
-failure mode: when the interpreter thread stops (but the daemon process lives), a
-session keeps accumulating raw evidence — hooks included, they ride other threads —
-and therefore still looks partly alive, while NOTHING turns canonical. Only a fully
-dead daemon stops hook capture too (each dropped delivery leaves a client-side
-`errors` row, `func` = `<harness> hook (deliver)`).
+read-and-interpret loop: it expires stale output followings, pulls every unfinished
+session's sources, translates the backlog (hook evidence included — hooks do NOT
+translate), and reacts to committed facts. It runs as a thread inside the dashboard
+server process, every `TICK_INTERVAL_SECONDS` (0.25 s), with no session-count cap.
+
+**Every other process is a thin HTTP client** — hooks, the status-line shim, the OTLP
+receiver, the pane renderers, the keybinding and click handlers. None of them opens a
+database. (The status-line shim and the OTLP receiver used to write one directly; they
+POST to the telemetry endpoint now, which is why a stopped daemon loses rate-limit and
+metric captures rather than silently storing them.)
+
+That leaves the key asymmetry behind the headline failure mode: hook and telemetry
+deliveries are recorded on the **HTTP threads**, not the interpreter thread. So when the
+interpreter thread stops but the daemon process lives, a session keeps accumulating raw
+evidence and still looks partly alive, while NOTHING turns canonical. Only a fully dead
+daemon stops capture too — and then each dropped delivery leaves a client-side `errors`
+row (`func` = `<harness> hook (deliver)`, or `otel delivery (daemon unreachable)`).
 
 ## Schema
 
-### `events.db`
+### `main.db` — 25 tables
+
+**The evidence spine** (what a session did):
 
 | table | one row per | key columns |
 |---|---|---|
-| `raw_events` | one observation, verbatim | **`id`** (arrival order), `raw_event_id` (unique), `session_id`, `harness`, **`source_type`**, **`source_identity`** (the resume key), `source_name`, `source_position`, `actor_id`, `parent_actor_id`, `observed_at`, `encoding`, `payload` |
+| `raw_events` | one observation, verbatim | **`id`** (arrival order), `raw_event_id` (unique), `session_id`, `harness`, **`source_type`**, **`source_identity`** (the resume key), `source_name`, `source_position`, `actor_id`, `parent_actor_id`, `observed_at`, `encoding`, `payload` (BLOB), `terminal_window_id`, `harness_process_id`, `account_id`, `account_display_name` |
 | `translation_records` | one translation verdict | `raw_event_id` (PK), `translator_version`, **`decision`** ∈ `translated` / `ignored_nonsemantic` / `ignored_unknown` / `translation_failed`, `reason`, `completed_at` — a raw row with NO verdict is the untranslated backlog |
-| `canonical_events` | one interpreted fact | **`cursor`** (monotonic), `event_id` (unique), `schema_version`, **`event_type`**, `session_id`, `actor_id`, `turn_id`, `parent_actor_id`, `harness`, **`occurred_at`** (NULLABLE), `accepted_at`, `payload` |
-| `canonical_provenance` | one (event, evidence) link | `event_id`, `raw_event_id`, `event_order`, **`storage_result`** ∈ `accepted` / `deduplicated` |
-| `session_harness` | one registered session (insert-once, at launch, by the wrapper) | `session_id`, `lead_actor_id`, `harness`, `native_session_id`, **`source_reference`** (the transcript/rollout path), `working_directory`, `native_process_id`, `registered_at` |
-| `watches` | one active file watch (applied from a `watch` raw event) | `session_id`, `operation_id`, `source_path`, `chunk_source_type`, **`state`** ∈ `active` / `finishing`, `created_at` — removed once drained |
-| `session_application_state` | one session's UI state | composer text/origin/sequence, queued messages, dialog attention id/answers |
-| `event_store_metadata` | store-wide settings | `schema_version` — must equal `domain.codec.SCHEMA_VERSION` or the store refuses to open |
+| `canonical_events` | one interpreted fact | **`cursor`** (monotonic), `event_id` (unique), `schema_version`, **`event_type`**, `session_id`, `actor_id`, `turn_id`, `parent_actor_id`, `harness`, **`occurred_at`** (NULLABLE), `terminal_window_id`, `harness_process_id`, `accepted_at`, `payload` (JSON) |
+| `canonical_provenance` | one (fact, evidence) link | `event_id`, `raw_event_id`, `event_order`, **`storage_result`** ∈ `accepted` / `deduplicated` |
+| `sessions` | one observed session — a READ-MODEL, born from `session.started` | `session_id`, `lead_actor_id`, `harness`, `harness_session_id`, **`source_reference`** (the transcript/rollout path), `working_directory`, `terminal_window_id`, `harness_process_id`, `created_at` |
+| `operation_output` | one output file being followed | `session_id`, `operation_id`, `harness`, `actor_id`, `source_path`, `chunk_source_type`, `delete_source`, `initial_size`, `initial_modified_at`, `wait_for_source_change`, **`until`** ∈ `operation_finished` / `session_finished`, **`state`** ∈ `active` / `finishing`, `created_at` — removed once drained |
+| `schema_version` | the store itself (singleton, `id=1`) | `version`, `applied_at` — a mismatch refuses to open the file |
 
-**`source_type` vocabulary** (which observer produced the evidence): pushed —
-`hook`, `teammate_hook`, `account`, `launch` (the launch-time model/effort
-selections, from the hook's inherited environment), `watch` (a hook's
-file-watch directive) and
-`terminal` arrive as hook deliveries recorded by the daemon's hook gateway; `otel`
-and `process` (the wrappers) are recorded directly by those processes; pulled by the
-interpreter —
-`transcript`, `rollout`, `foreground_output` (watch chunks), `tasks`, `task_list`,
-and the child/teammate variants `child_transcript`, `teammate_transcript`,
-`child_rollout`, `child_replay`, `sidecar_rollout`, `sidecar_replay`.
+**Your unsent work** (state the session never sees; four tables, one composer):
 
-**`event_type` vocabulary** (33, from `domain.events.EVENT_TYPES`):
+`session_workspaces` (composer text/origin/sequence, queue origin, dialog attention id/origin)
+· `composer_queue_items` (`session_id`, `position`, `text`)
+· `dialog_answers` (`session_id`, `prompt_index`, `other_text`)
+· `dialog_answer_selections` (`session_id`, `prompt_index`, `selection_index`, `selected_value`).
+
+**What you chose** (nine tables that replaced one key–value blob store):
+`notification_settings` (singleton `alerting_enabled`) · `session_notification_mutes`
+· `session_view_modes` (CHECK-constrained to verbose/default/focus) · `hidden_directories`
+· `new_session_preferences` (singleton) · `new_session_drafts` (per directory, with the
+stale-write `sequence`) · `task_dismissals` (`session_id`, `task_id` — the id SET, so the
+card returns when the list moves on) · `push_subscriptions` · `push_signing_keys`.
+
+**The rest**: `pane_widths` · `opened_views` · `account_usage_snapshots` +
+`account_usage_windows` (keyed by harness + account; `used_percent` is TEXT so a
+`Decimal` never round-trips through a float) · `uploads` (the row beside each staged
+attachment — the bytes stay on disk because the harness is handed an `@path`).
+
+**Three opaque columns, and only three**: `canonical_events.payload` (a closed
+vocabulary the codec validates on both encode and decode), `raw_events.payload` (the
+verbatim bytes, which is the point), and `state_files.content` in the audit database.
+Everything else is a typed column — `test_no_key_value_table_exists` enforces it.
+
+**`source_type` vocabulary** (which observer produced the evidence). Pushed to the daemon
+over HTTP: `hook`, `teammate_hook`, `account`, `launch` (launch-time model/effort from the
+hook's inherited environment), `output_location` (a hook's directive naming a command's
+output file), and `otel` (the OTLP receiver's export, recorded by the telemetry gateway).
+Pulled by the interpreter: `transcript`, `rollout`, `tasks`, `task_list`,
+`foreground_output` (output chunks), `liveness` (the CLI process probe), and the
+child/teammate variants `child_transcript`, `teammate_transcript`, `child_rollout`,
+`child_replay`, `sidecar_rollout`, `sidecar_replay`.
+
+**`event_type` vocabulary** (35, from `domain.events.EVENT_TYPES`):
 `session.started` / `.finished` / `.title_changed` / `.account_changed` /
 `.working_directory_changed` · `actor.started` / `.finished` / `.name_changed` /
 `.description_changed` / `.message_sent` / `.assignment_started` / `.assignment_finished` ·
 `turn.started` / `.finished` / `.aborted` · `message.created` · `reasoning.created` ·
-`operation.started` / `.progressed` / `.finished` / `.input_provided` · `file.accessed` ·
+`operation.started` / `.progressed` / `.finished` / `.input_provided` /
+`.output_located` / `.output_finished` · `file.accessed` ·
 `attention.requested` / `.resolved` · `compaction.started` / `.finished` ·
 `usage.reported` · `context.reported` · `model.changed` · `effort.changed` ·
 `goal.changed` · `task.changed` / `.list_changed`.
@@ -118,7 +167,7 @@ is the sanctioned form, and a contract test
 (`test_no_read_path_orders_on_a_bare_occurred_at`) forbids ordering on the bare column.
 So **a mostly-NULL `occurred_at` is not a bug** and is not worth chasing.
 
-### `audit.db` (`diagnostics/record.py`)
+### `audit.db` (`diagnostics/record.py`, stored by `repository/impl/sqlite/diagnostics.py`)
 
 | table | one row per | key columns |
 |---|---|---|
@@ -139,7 +188,14 @@ the code and why), `web-push`, `notification-route`, `notification-suppressed`,
 executed — `{command, window_id, session_id, ok, why}`, written by
 `terminal/panes/commands.py`; `path` is the keypress's working directory),
 **`terminal-view`** (a mirror click-to-view toggle, `path` = the content
-reference), plus `observation (...)` failures recorded as `errors`.
+reference, `content` = `opened` / `closed`, written by
+`terminal/services/views.py`).
+
+`errors.func` values worth knowing: `interpreter (tick)` / `(source read)` /
+`(source construction)` / `(resume positions)` / `(output expiry)` — the interpreter's
+own contained failures, each naming the step; `<harness> hook (deliver)` — a hook that
+could not reach the daemon; `otel delivery (daemon unreachable)` — a metrics export
+with nowhere to go; `statusline capture` — a rate-limit report that never shipped.
 
 `streams.kind` values include **`pane-mirror`** / **`pane-scoreboard`** — one row
 per pane SSE connection (the pane processes are thin clients of the daemon;
@@ -154,19 +210,21 @@ COLUMN.** The `browser-*` telemetry rows leave it empty and bury it in the JSON,
 
 ## Triage order
 
-1. **Establish the session is REGISTERED and which harness owns it.**
-   `SELECT * FROM session_harness WHERE session_id='<sid>'` — no row means the wrapper
-   never registered it (bare launch without the wrapper, or a wrapper failure): its raw
-   evidence exists but stays untranslated and the session is invisible. `harness`
-   decides whose translator and control gestures apply; `source_reference` is the file
-   the pulled sources read.
+1. **Establish the session EXISTS as a row, and which harness owns it.**
+   `SELECT * FROM sessions WHERE session_id='<sid>'` — no row means no `session.started`
+   fact has been translated for it yet. That is NOT a registration failure: the row is a
+   read-model born by a reaction, so its absence means either the evidence has not been
+   interpreted (check the backlog next) or no source ever produced a start fact.
+   `harness` decides whose translator and control gestures apply; `source_reference` is
+   the file the pulled sources read.
 2. **Measure the untranslated backlog** — the fastest health check of the interpreter:
    ```sql
    SELECT count(*), min(id), max(id) FROM raw_events
    LEFT JOIN translation_records USING(raw_event_id)
-   JOIN session_harness USING(session_id)
    WHERE translation_records.raw_event_id IS NULL;
    ```
+   No session filter, deliberately: there is no registration gate — facts legitimately
+   precede their session, and one of them is what births it.
    A growing backlog with a stuck `min(id)` names the wedge (its `raw_event_id`); an
    empty backlog with a stale feed means recording stopped, not interpreting.
 3. **Compare each pulled source's position against its file.** The position is the last
@@ -190,8 +248,8 @@ COLUMN.** The `browser-*` telemetry rows leave it empty and bury it in the JSON,
 ### A session looks alive but its conversation stops (messages missing, feed frozen)
 
 **The headline shape, and the first thing to rule out.** The interpreter thread died (or
-its backlog wedged), so nothing turns canonical while recorder processes keep appending
-raw evidence — which is exactly why the session still looks partly alive.
+its backlog wedged), so nothing turns canonical while hook and telemetry deliveries keep
+landing on the HTTP threads — which is exactly why the session still looks partly alive.
 
 One query names it:
 
@@ -227,28 +285,30 @@ from app.bootstrap import build_default_application
 build_default_application().interpreter.tick()
 ```
 
-Take the copy with `sqlite3 "file:<events.db>?mode=ro" ".backup '<dest>'"` — a plain `cp`
+Take the copy with `sqlite3 "file:<main.db>?mode=ro" ".backup '<dest>'"` — a plain `cp`
 of a WAL database yields `database disk image is malformed` and wastes a triage cycle.
 
 ### A session never appears at all, though the harness is clearly running
 
-Sessions register two ways: the wrapper at launch, or the interpreter from the
-session's own orphan evidence (`HarnessSessionEvidence` — a hook payload announces
-its session). So a lingering invisible session means the evidence cannot name one:
-its harness has no `session_evidence`, the payload lacks a usable source reference
-(a Codex hook pointing at a non-lead rollout), or `errors` rows with `func` =
-`interpreter (session evidence)` name a bug. Find the waiting evidence:
+A session appears exactly one way: a source produces evidence, the interpreter
+translates it into a `session.started` fact, and the reaction to that fact writes the
+row. So a lingering invisible session means one of the three stages did not happen —
+the backlog is wedged (step 2 of triage), the translator refused the payload (look for
+its `translation_records.decision` and `reason`), or the payload never carried a usable
+source reference (a Codex hook pointing at a non-lead rollout). Find the waiting
+evidence:
 
 ```sql
 SELECT session_id, count(*), datetime(max(observed_at),'unixepoch','localtime')
 FROM raw_events
-WHERE session_id NOT IN (SELECT session_id FROM session_harness)
+WHERE session_id NOT IN (SELECT session_id FROM sessions)
 GROUP BY 1 ORDER BY 3 DESC;
 ```
 
-Rows here are recorded-but-invisible sessions. Registration from any side makes the
-waiting evidence interpret on the next tick — nothing is ever lost. Note an
-evidence-registered session has no pid: no process-exit backstop, and no
+Rows here are recorded-but-invisible sessions: evidence exists, but nothing has yet
+produced the `session.started` fact that births the row. Interpreting that fact makes
+them appear on the next tick — nothing is ever lost. Note such a session has no pid: no
+process-exit backstop, and no
 deterministic pane anchor (panes anchor by focus only within seconds of start).
 
 ### A session ran hooks but no hook evidence was recorded at all
@@ -287,16 +347,18 @@ SELECT datetime(ts,'unixepoch','localtime'), func, substr(traceback,-400)
 FROM errors WHERE func LIKE 'dashboard%' ORDER BY ts DESC LIMIT 10;
 ```
 
-- **`unsupported event-store schema version: N`** — `events.db` was migrated by newer code
+- **`… was written by schema version N`** — `main.db` was written by other code
   while this process expects `domain.codec.SCHEMA_VERSION`, or vice versa. The server
   crash-loops. The companion signature is a long run of **`dashboard serve (lock denied)`**
   rows every ~10s (the supervisor retrying against a port/lock the dying process holds) and
   **`CanonicalCodecError: unsupported canonical schema version: N`** from any read path
   decoding older rows. Fix by getting code and store to the same version and restarting
   once; the retry rows stop the moment one server holds the lock.
-- Confirm what the store actually says:
-  `SELECT * FROM event_store_metadata;` vs
-  `python3 -c "from domain.codec import SCHEMA_VERSION; print(SCHEMA_VERSION)"`.
+- Confirm what the store actually says. **Two different version numbers, do not confuse
+  them**: `SELECT * FROM schema_version;` is the FILE's table layout
+  (`repository/impl/sqlite/schema.py`, refused by `SchemaVersionMismatch` at open), while
+  `python3 -c "from domain.codec import SCHEMA_VERSION; print(SCHEMA_VERSION)"` is the
+  canonical PAYLOAD schema, refused per row by `CanonicalCodecError` on decode.
 
 ### One specific thing never appears, but everything else flows
 
@@ -419,11 +481,11 @@ So a broken pane is one of three shapes, each with its own rows:
   frozen-feed headline shape above (interpreter dead), seen through a pane.
   Check the backlog before suspecting the pane plumbing.
 
-A pane stuck on `⬡ starting session…` (scoreboard) or the mirror header under a
-`--pending` identity means the server never resolved the binding: check
-`session_harness` for the registered session and the pending binding file under
-`<data>/pending-sessions/` — the wrapper binds it in
-`adopt_pending_session_panes`; no file means the wrapper never adopted.
+A pane stuck on `⬡ starting session…` means the daemon has no `sessions` row to anchor
+to yet, or the row has no `terminal_window_id`. Both are the same question — has a
+`session.started` fact been translated, and did the hook that carried it report a window?
+Check `SELECT session_id, terminal_window_id, harness_process_id FROM sessions WHERE
+session_id='<sid>'`; a NULL window is a headless launch, which correctly gets no panes.
 
 ### Usage / cost numbers look wrong
 

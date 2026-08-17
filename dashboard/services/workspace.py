@@ -5,25 +5,46 @@ are still typing, the ones you queued behind it, the option you highlighted in
 a dialog, the view density you chose. It lives here so a reload, a second tab
 or another device picks up exactly where the last one left off.
 
-A draft is dropped once its text has actually been DELIVERED as a prompt: that
-comparison against canonical messages is why this reads the event store.
+The STORING is the repository's; what is left here is the filtering, which
+needs canonical facts: a draft is dropped once its text has actually been
+DELIVERED as a prompt, and a dialog draft is dropped once its attention stops
+being pending.
 """
 
 from __future__ import annotations
 
-import json
+import time
 from dataclasses import dataclass
 
-from dashboard import prefs
-from diagnostics.read import ApplicationError, OperationalDiagnostics
+from diagnostics.models import ApplicationError
 from domain.events import MessageCreated
 from domain.ids import AttentionId, SessionId
+from domain.preferences import DEFAULT_VIEW_MODE, ViewMode
 from domain.values import TextContent
+from domain.workspace import (
+    AnswerSelection,
+    ComposerDraft,
+    ComposerQueue,
+    ComposerState,
+    DialogDraft,
+    DialogState,
+    QueuedMessage,
+)
 from engine.projections import SessionQueries
-from engine.store.canonical import CanonicalEventStore
-from engine.store.database import connect
 from harness.models import TerminalSessionState
+from repository.contract.diagnostics import DiagnosticReadRepository
+from repository.contract.facts import CanonicalEventRepository
+from repository.contract.preferences import (
+    NotificationSettingRepository,
+    TaskDismissalRepository,
+    ViewModeRepository,
+)
+from repository.contract.workspace import SessionWorkspaceRepository
 from dashboard.services.sessions import TerminalSessionReader
+
+# A finished task list is dismissed for most sessions eventually, so the table
+# is bounded by session; the prune runs inside the write that triggers it.
+TASK_DISMISSAL_LIMIT = 200
 
 
 @dataclass(frozen=True)
@@ -31,48 +52,6 @@ class SessionPreferences:
     view_mode: str
     notifications_muted: bool
     tasks_hidden: bool
-
-
-@dataclass(frozen=True)
-class ComposerDraft:
-    text: str
-    origin: str
-    sequence: float
-
-
-@dataclass(frozen=True)
-class QueuedMessage:
-    text: str
-
-
-@dataclass(frozen=True)
-class ComposerQueue:
-    items: tuple[QueuedMessage, ...]
-    origin: str
-
-
-@dataclass(frozen=True)
-class ComposerState:
-    draft: ComposerDraft | None
-    queue: ComposerQueue | None
-
-
-@dataclass(frozen=True)
-class AnswerSelection:
-    selected: tuple[str, ...]
-    other: str
-
-
-@dataclass(frozen=True)
-class DialogDraft:
-    attention_id: AttentionId
-    answers: tuple[AnswerSelection, ...]
-    origin: str
-
-
-@dataclass(frozen=True)
-class DialogState:
-    draft: DialogDraft | None
 
 
 @dataclass(frozen=True)
@@ -87,32 +66,57 @@ class SessionApplicationSnapshot:
 class SessionApplicationService:
     def __init__(
         self,
-        canonical_store: CanonicalEventStore,
+        canonical_events: CanonicalEventRepository,
         queries: SessionQueries,
         terminal: TerminalSessionReader,
-        diagnostics: OperationalDiagnostics,
+        diagnostics: DiagnosticReadRepository,
+        workspaces: SessionWorkspaceRepository,
+        view_modes: ViewModeRepository,
+        notifications: NotificationSettingRepository,
+        dismissals: TaskDismissalRepository,
+        clock=None,
     ) -> None:
-        self.canonical_store = canonical_store
+        self.canonical_events = canonical_events
         self.queries = queries
         self.terminal = terminal
         self.diagnostics = diagnostics
+        self.workspaces = workspaces
+        self.view_modes = view_modes
+        self.notifications = notifications
+        self.dismissals = dismissals
+        self.clock = clock or time.time
+
+    # --- what you chose -------------------------------------------------------
 
     def set_view_mode(self, session_id: SessionId, view_mode: str) -> None:
-        if view_mode not in prefs.VIEW_MODES:
+        if view_mode == DEFAULT_VIEW_MODE:
+            # The default is stored as an ABSENCE, so the table stays the small
+            # set of sessions someone actually switched.
+            self.view_modes.clear_view_mode(session_id)
+            return
+        if view_mode not in ("verbose", "focus"):
             raise ValueError(f"unknown view mode: {view_mode}")
-        prefs.set_view_mode(str(session_id), view_mode)
+        mode: ViewMode = view_mode  # type: ignore[assignment]
+        self.view_modes.set_view_mode(session_id, mode)
 
     def set_notifications_muted(self, session_id: SessionId, muted: bool) -> None:
-        prefs.set_notify_muted(str(session_id), muted)
+        self.notifications.set_muted(session_id, muted)
 
     def set_tasks_hidden(self, session_id: SessionId, hidden: bool) -> None:
         tasks = self.queries.tasks(session_id)
         if hidden and (not tasks or any(task.state != "completed" for task in tasks)):
             raise ValueError("every task must be completed before hiding the task card")
-        prefs.set_tasks_hidden(
-            str(session_id),
-            [str(task.task_id) for task in tasks] if hidden else None,
+        if not hidden:
+            self.dismissals.restore(session_id)
+            return
+        self.dismissals.dismiss(
+            session_id,
+            [task.task_id for task in tasks],
+            self.clock(),
+            TASK_DISMISSAL_LIMIT,
         )
+
+    # --- what you have not sent yet -------------------------------------------
 
     def save_composer_draft(
         self,
@@ -122,21 +126,9 @@ class SessionApplicationService:
         sequence: float,
     ) -> bool:
         """Save the newest browser draft; return False for an older concurrent write."""
-        with connect(self.canonical_store.database_path) as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            self._ensure_row(connection, session_id)
-            current = connection.execute(
-                "SELECT composer_sequence FROM session_application_state WHERE session_id=?",
-                (str(session_id),),
-            ).fetchone()
-            if sequence < current["composer_sequence"]:
-                return False
-            connection.execute(
-                "UPDATE session_application_state SET composer_text=?, composer_origin=?, "
-                "composer_sequence=? WHERE session_id=?",
-                (text if text.strip() else "", origin, sequence, str(session_id)),
-            )
-        return True
+        return self.workspaces.save_composer_draft(
+            session_id, ComposerDraft(text, origin, sequence)
+        )
 
     def save_composer_queue(
         self,
@@ -144,19 +136,7 @@ class SessionApplicationService:
         messages: tuple[QueuedMessage, ...],
         origin: str,
     ) -> None:
-        encoded = json.dumps(
-            [{"text": message.text} for message in messages],
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
-        with connect(self.canonical_store.database_path) as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            self._ensure_row(connection, session_id)
-            connection.execute(
-                "UPDATE session_application_state SET queued_messages=?, queue_origin=? "
-                "WHERE session_id=?",
-                (encoded, origin, str(session_id)),
-            )
+        self.workspaces.save_composer_queue(session_id, ComposerQueue(messages, origin))
 
     def save_dialog_draft(
         self,
@@ -174,87 +154,59 @@ class SessionApplicationService:
             raise ValueError("attention is no longer pending")
         if len(answers) != len(request.prompts):
             raise ValueError("answers must match the pending questions")
-        encoded = json.dumps(
-            [
-                {"selected": list(answer.selected), "other": answer.other}
-                for answer in answers
-            ],
-            ensure_ascii=False,
-            separators=(",", ":"),
+        self.workspaces.save_dialog_draft(
+            session_id, DialogDraft(attention_id, answers, origin)
         )
-        with connect(self.canonical_store.database_path) as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            self._ensure_row(connection, session_id)
-            connection.execute(
-                "UPDATE session_application_state SET dialog_attention_id=?, "
-                "dialog_answers=?, dialog_origin=? WHERE session_id=?",
-                (str(attention_id), encoded, origin, str(session_id)),
-            )
+
+    # --- the whole page's state in one answer ---------------------------------
 
     def snapshot(self, session_id: SessionId) -> SessionApplicationSnapshot:
         composer, dialog = self._state(session_id)
         tasks = self.queries.tasks(session_id)
-        hidden_task_ids = set(prefs.tasks_hidden_ids(str(session_id)))
+        dismissed = self.dismissals.dismissed_task_ids(session_id)
         return SessionApplicationSnapshot(
             preferences=SessionPreferences(
-                view_mode=prefs.view_mode(str(session_id)),
-                notifications_muted=prefs.notify_muted(str(session_id)),
+                view_mode=self.view_modes.view_mode(session_id) or DEFAULT_VIEW_MODE,
+                notifications_muted=session_id in self.notifications.muted_session_ids(),
+                # The dismissal covers exactly the list it was made against, so
+                # a new task — or a completed one re-opened — brings the card
+                # back on its own.
                 tasks_hidden=(
-                    bool(tasks)
-                    and hidden_task_ids == {str(task.task_id) for task in tasks}
+                    bool(tasks) and dismissed == {task.task_id for task in tasks}
                 ),
             ),
             composer=composer,
             dialog=dialog,
             terminal=self.terminal.state(session_id),
-            errors=self.diagnostics.errors(session_id),
+            errors=self.diagnostics.errors_for_session(session_id),
         )
 
     def _state(self, session_id: SessionId) -> tuple[ComposerState, DialogState]:
-        with connect(self.canonical_store.database_path) as connection:
-            row = connection.execute(
-                "SELECT * FROM session_application_state WHERE session_id=?",
-                (str(session_id),),
-            ).fetchone()
-        if row is None:
+        workspace = self.workspaces.find(session_id)
+        if workspace is None:
             return ComposerState(None, None), DialogState(None)
 
-        draft = (
-            ComposerDraft(row["composer_text"], row["composer_origin"], row["composer_sequence"])
-            if row["composer_text"].strip()
-            else None
-        )
         delivered = self._delivered_prompts(session_id)
-        messages = tuple(
-            QueuedMessage(str(item["text"]))
-            for item in json.loads(row["queued_messages"])
-            if str(item["text"]).strip() and not self._delivered(str(item["text"]), delivered)
-        )
-        queue = ComposerQueue(messages, row["queue_origin"]) if messages else None
+        queue = None
+        if workspace.queue is not None:
+            messages = tuple(
+                message
+                for message in workspace.queue.items
+                if message.text.strip() and not self._delivered(message.text, delivered)
+            )
+            queue = ComposerQueue(messages, workspace.queue.origin) if messages else None
 
         pending_attention_ids = {
             item.request.attention_id for item in self.queries.attention(session_id).pending
         }
-        attention_id = (
-            AttentionId(row["dialog_attention_id"])
-            if row["dialog_attention_id"] is not None
-            else None
-        )
-        dialog_draft = None
-        if attention_id in pending_attention_ids:
-            dialog_draft = DialogDraft(
-                attention_id,
-                tuple(
-                    AnswerSelection(tuple(answer["selected"]), str(answer["other"]))
-                    for answer in json.loads(row["dialog_answers"])
-                ),
-                row["dialog_origin"],
-            )
-        return ComposerState(draft, queue), DialogState(dialog_draft)
+        dialog_draft = workspace.dialog
+        if dialog_draft is not None and dialog_draft.attention_id not in pending_attention_ids:
+            dialog_draft = None
+        return ComposerState(workspace.draft, queue), DialogState(dialog_draft)
 
     def _delivered_prompts(self, session_id: SessionId) -> tuple[str, ...]:
         prompts = []
-        for stored in self.canonical_store.through(session_id).events:
+        for stored in self.canonical_events.page_through(session_id, None).events:
             payload = stored.event.payload
             if (
                 isinstance(payload, MessageCreated)
@@ -271,10 +223,3 @@ class SessionApplicationService:
     def _delivered(text: str, prompts: tuple[str, ...]) -> bool:
         normalized = text.strip()
         return bool(normalized) and any(prompt.endswith(normalized) for prompt in prompts)
-
-    @staticmethod
-    def _ensure_row(connection, session_id: SessionId) -> None:
-        connection.execute(
-            "INSERT OR IGNORE INTO session_application_state(session_id) VALUES(?)",
-            (str(session_id),),
-        )

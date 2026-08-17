@@ -30,7 +30,7 @@ lint: deadcode typecheck
 # Ruff's ANN rules in the same gate answer "is there an annotation"; this
 # answers "is it TRUE". Both are needed — an annotation nothing checks is a
 # comment.
-TYPECHECK_PATHS = api app bin core dashboard diagnostics domain engine harness notify terminal tests
+TYPECHECK_PATHS = api app bin core dashboard diagnostics domain engine harness notify repository terminal tests
 
 typecheck:
 	$(PY) -m mypy $(TYPECHECK_PATHS)
@@ -49,7 +49,7 @@ lint-fix:
 # the path list and diff the two runs.)
 #
 # The two .py files are vulture whitelists, not sources — see their headers.
-DEADCODE_PATHS = api app bin core dashboard diagnostics domain engine harness notify terminal
+DEADCODE_PATHS = api app bin core dashboard diagnostics domain engine harness notify repository terminal
 DEADCODE_WHITELISTS = vulture-allowlist.py vulture-baseline.py
 # Call sites vulture cannot see: the framework invokes these, never our code.
 # Matched by SHAPE, not by router name — `router`, `web` and `guarded` are three

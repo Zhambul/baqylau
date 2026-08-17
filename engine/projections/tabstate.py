@@ -24,7 +24,7 @@ from domain.events import (
 )
 from domain.ids import ActorId, AttentionId, OperationId
 from engine.projections.models import TabState
-from engine.store.canonical import StoredCanonicalEvent
+from domain.records import StoredCanonicalEvent
 
 
 def tab_state(

@@ -15,9 +15,9 @@ from api.app import build_web_application
 from api.dashboard.models.controls.send_text_request import SendTextRequest
 from api.server import build_server
 from app.bootstrap import build_application
+from diagnostics.models import ApplicationErrorRecord
 from diagnostics.telemetry import BrowserTelemetryService
 from harness.models import RawEvent, Session, TranslationResult
-from dashboard import prefs
 from dashboard.services.notices import DashboardNotificationState
 from dashboard.services.overview import GlobalApplicationService, NewSessionPreferences
 from domain.events import CanonicalEvent, EventPayload, MessageCreated, SessionStarted
@@ -46,8 +46,10 @@ def _event(event_id: str, payload):
 
 
 def _record(application, raw_event, translator_version, translation):
-    application.recorder.record((raw_event,))
-    application.canonical_store.store_translation(raw_event, translator_version, translation)
+    application.raw_events.record((raw_event,))
+    application.canonical_events.record_translation(
+        raw_event, translator_version, translation, 10.0
+    )
 
 
 def _application(tmp_path):
@@ -152,15 +154,11 @@ def _post(server, path: str, body: dict):
 
 def test_plural_session_resources_use_the_canonical_snapshot_and_activity(tmp_path):
     application = _application(tmp_path)
-    with sqlite3.connect(application.diagnostics.database_path) as connection:
-        connection.execute(
-            "CREATE TABLE errors(id INTEGER PRIMARY KEY, ts REAL, session_id TEXT, "
-            "script TEXT, func TEXT, traceback TEXT, context TEXT)"
-        )
-        connection.execute(
-            "INSERT INTO errors VALUES(1, 12.5, ?, 'dashboard', 'render', 'trace', '{}')",
-            (str(SESSION_ID),),
-        )
+    # The reader and the writer address the SAME file now, so the error can be
+    # recorded through the graph instead of by hand-making a table beside it.
+    application.audit.record_error(
+        ApplicationErrorRecord(str(SESSION_ID), "dashboard", "render", "trace", "{}", 1, 12.5)
+    )
     server, thread = _server(application)
     try:
         status, _content_type, body = _get(server, "/api/sessions")
@@ -410,7 +408,7 @@ def test_session_stream_last_event_id_is_authoritative(tmp_path):
 
 def test_session_application_stream_updates_view_mode_without_activity(tmp_path):
     application = _application(tmp_path)
-    prefs.set_view_mode(str(SESSION_ID), "focus")
+    application.session_application.set_view_mode(SESSION_ID, "focus")
     server, thread = _server(application)
     connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=2)
     try:
@@ -423,7 +421,7 @@ def test_session_application_stream_updates_view_mode_without_activity(tmp_path)
             == "focus"
         )
 
-        prefs.set_view_mode(str(SESSION_ID), "verbose")
+        application.session_application.set_view_mode(SESSION_ID, "verbose")
         changed = [response.readline().decode().rstrip("\n") for _ in range(3)]
         assert changed[0] == "event: application"
         assert (
@@ -495,6 +493,10 @@ def test_global_stream_sends_complete_current_application_snapshots(tmp_path):
             application.dashboard_sessions,
             application.usage_state,
             state,
+            application.global_application.new_sessions,
+            application.notification_settings,
+            application.global_application.directories,
+            application.push_subscriptions,
         ),
     )
     server, thread = _server(application)
@@ -627,13 +629,13 @@ def test_global_application_routes_replace_field_specific_preferences_routes(
         )
         assert status == 200
         assert json.loads(body) == {"saved": True}
-        assert prefs.push_subscriptions() == [
-            {
-                "endpoint": "https://push.example/subscription",
-                "keys": {"p256dh": "public", "auth": "secret"},
-                "device": "browser-one",
-                "label": "Tablet",
-            }
+        stored = application.push_subscriptions.subscriptions()
+        assert [
+            (item.endpoint, item.public_key, item.authentication_secret,
+             item.device_id, item.device_label)
+            for item in stored
+        ] == [
+            ("https://push.example/subscription", "public", "secret", "browser-one", "Tablet")
         ]
 
         status, body = _post(
@@ -729,11 +731,15 @@ def test_invalid_canonical_post_is_a_client_error_not_an_old_route(tmp_path):
 
 def test_browser_telemetry_uses_named_application_resources(tmp_path):
     class RecordingAudit:
+        """The write repository, counted rather than stored."""
+
         def __init__(self):
             self.records = []
 
-        def state_file(self, log, path, action, content):
-            self.records.append((log, path, action, content))
+        def record_state_file(self, state_file):
+            self.records.append(
+                (state_file.session_id, state_file.path, state_file.action, state_file.content)
+            )
 
     audit = RecordingAudit()
     application = replace(
@@ -791,7 +797,8 @@ def test_browser_telemetry_uses_named_application_resources(tmp_path):
             "browser-client-failure",
             "browser-event",
         ]
-        assert audit.records[0][3]["session_id"] == "session-one"
+        # The content is a diagnostic blob by design — recorded, never queried.
+        assert json.loads(audit.records[0][3])["session_id"] == "session-one"
 
         for legacy_path in (
             "/api/session/session-one/hint-audit",
@@ -1071,22 +1078,22 @@ def test_pane_command_route_carries_the_keypress_environment(tmp_path):
         thread.join(timeout=2)
 
 
-def test_terminal_view_route_owns_the_open_closed_state(tmp_path, monkeypatch):
-    monkeypatch.setenv("BAQYLAU_DATA_DIR", str(tmp_path / "data"))
-    from terminal.panes import views as terminal_views
+def test_terminal_view_route_owns_the_open_closed_state(tmp_path):
+    application = _application(tmp_path)
+    views = application.content_views
 
-    server, thread = _server(_application(tmp_path))
+    server, thread = _server(application)
     try:
         status, body = _post(
             server, "/api/terminal/views", {"content_reference": "event-one:field"}
         )
         assert (status, json.loads(body)) == (200, {"opened": True})
-        assert terminal_views.opened() == frozenset({"event-one:field"})
+        assert views.opened() == frozenset({"event-one:field"})
         status, body = _post(
             server, "/api/terminal/views", {"content_reference": "event-one:field"}
         )
         assert (status, json.loads(body)) == (200, {"opened": False})
-        assert terminal_views.opened() == frozenset()
+        assert views.opened() == frozenset()
     finally:
         server.shutdown()
         server.server_close()
@@ -1140,7 +1147,7 @@ def test_hook_delivery_records_exact_evidence_and_returns_the_reply(tmp_path):
         assert status == 200
         assert b"updatedInput" in body
 
-        evidence = application.evidence.session(SessionId("hook-session"))
+        evidence = application.evidence.evidence_for_session(SessionId("hook-session"))
         assert [raw.source_type for raw in evidence] == ["hook", "output_location"]
         assert evidence[0].payload == payload
     finally:
@@ -1164,7 +1171,7 @@ def test_hook_delivery_ships_the_hooks_observations_not_the_daemons(tmp_path, mo
             server, "claude_code", payload, {"X-Baqylau-Account-Id": "c2"}
         )
         assert status == 200
-        hook_row = application.evidence.session(SessionId("hook-session"))[0]
+        hook_row = application.evidence.evidence_for_session(SessionId("hook-session"))[0]
         assert hook_row.account_id == "c2"
     finally:
         server.shutdown()
@@ -1188,7 +1195,7 @@ def test_hook_delivery_rejections_leave_no_evidence(tmp_path):
             server, "claude_code", json.dumps({"session_id": "hook-session"}).encode()
         )
         assert status == 400
-        assert application.evidence.session(SessionId("hook-session")) == ()
+        assert application.evidence.evidence_for_session(SessionId("hook-session")) == ()
     finally:
         server.shutdown()
         server.server_close()
@@ -1214,7 +1221,7 @@ def test_hook_identity_reuse_with_different_bytes_is_a_conflict_not_a_rewrite(tm
         changed = json.dumps({**document, "tool_name": "Write"}).encode()
         status, body = _post_hook(server, "claude_code", changed)
         assert status == 409
-        assert application.evidence.session(SessionId("hook-session"))[0].payload == first
+        assert application.evidence.evidence_for_session(SessionId("hook-session"))[0].payload == first
     finally:
         server.shutdown()
         server.server_close()

@@ -52,7 +52,7 @@ from engine.projections.models import (
     ReasoningActivity,
     TaskActivity,
 )
-from engine.store.canonical import StoredCanonicalEvent
+from domain.records import StoredCanonicalEvent
 
 
 def _context(

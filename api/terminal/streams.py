@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Query, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from api.sse import BEAT, EVENT_STREAM, NO_STORE, STREAM_POLL_SECONDS, sse_frame
@@ -22,7 +22,7 @@ def pane_stream(
     request: Request,
     application: ApplicationGraph,
     width: int = Query(..., gt=0),
-):
+) -> Response:
     """One terminal pane's frame stream. The pane process is a byte-copying
     client: everything it paints arrives as `frame` events rendered here at
     the client's width; idle ticks are SSE comments the client uses as its
@@ -41,7 +41,7 @@ def pane_stream(
 async def _pane_frames(application, session_id: SessionId, kind: str, width: int, request_path: str):
     stream_identifier = A.stream_start(str(session_id), f"pane-{kind}", src_path=request_path)
     try:
-        while application.sessions.find_by_id(session_id) is None:
+        while application.sessions.find(session_id) is None:
             # A pane process can connect before the session's row exists; hold
             # the stream open, beating, until it does.
             yield BEAT

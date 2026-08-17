@@ -2,23 +2,17 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
-from typing import Mapping, Protocol
+from typing import Mapping
 
+from diagnostics.models import StateFileRecord
 from domain.ids import SessionId
+from repository.contract.diagnostics import DiagnosticWriteRepository
+from repository.mapper import diagnostics as mapper
 
 
 Scalar = str | int | float | bool | None
-
-
-class OperationalAudit(Protocol):
-    def state_file(
-        self,
-        log: str,
-        path: str,
-        action: str,
-        content: Mapping[str, object],
-    ) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -60,8 +54,22 @@ class BrowserEventBatch:
 class BrowserTelemetryService:
     """Write browser-only observations to the operational audit."""
 
-    def __init__(self, audit: OperationalAudit) -> None:
+    def __init__(self, audit: DiagnosticWriteRepository, process_id: int = 0) -> None:
         self.audit = audit
+        self.process_id = process_id
+
+    def _record(self, action: str, content: Mapping[str, object]) -> None:
+        self.audit.record_state_file(
+            StateFileRecord(
+                session_id="",
+                path="",
+                action=action,
+                content=mapper.truncated(dict(content)),
+                script="dashboard",
+                process_id=self.process_id,
+                timestamp=time.time(),
+            )
+        )
 
     def record_optimistic_action(self, report: OptimisticActionReport) -> None:
         content: dict[str, object] = {
@@ -75,7 +83,7 @@ class BrowserTelemetryService:
             content["elapsed_milliseconds"] = report.elapsed_milliseconds
         if report.reason:
             content["reason"] = report.reason
-        self.audit.state_file("", "", "browser-optimistic-action", content)
+        self._record("browser-optimistic-action", content)
 
     def record_client_failure(self, report: ClientFailureReport) -> None:
         content: dict[str, object] = {
@@ -89,7 +97,7 @@ class BrowserTelemetryService:
             content["status_code"] = report.status_code
         if report.character_count is not None:
             content["character_count"] = report.character_count
-        self.audit.state_file("", "", "browser-client-failure", content)
+        self._record("browser-client-failure", content)
 
     def record_events(self, batch: BrowserEventBatch) -> None:
         for event in batch.events:
@@ -103,4 +111,4 @@ class BrowserTelemetryService:
             }
             if event.timestamp is not None:
                 content["timestamp"] = event.timestamp
-            self.audit.state_file("", "", "browser-event", content)
+            self._record("browser-event", content)

@@ -174,7 +174,7 @@ class FakeSessions:
     def __init__(self, windows_by_session=None):
         self.windows_by_session = dict(windows_by_session or {})
 
-    def find_by_id(self, session_id):
+    def find(self, session_id):
         window_id = self.windows_by_session.get(str(session_id))
         return _SessionRow(window_id) if window_id is not None else None
 

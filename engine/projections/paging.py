@@ -17,7 +17,7 @@ from engine.projections.models import (
     ActivityWindow,
     OperationActivity,
 )
-from engine.store.canonical import StoredCanonicalEvent
+from domain.records import StoredCanonicalEvent
 
 
 def after(

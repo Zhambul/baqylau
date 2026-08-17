@@ -1,10 +1,21 @@
-"""Receive Claude Code OTLP JSON as exact raw and canonical usage evidence."""
+"""Accept Claude Code's OTLP export and ship it to the daemon.
+
+A thin client, exactly like a hook process: bind the port, read the body,
+POST the exact bytes to the daemon's telemetry endpoint, exit when nothing has
+arrived for a while. It owns its port, its gzip and its idle timer — those are
+properties of being an OTLP endpoint — and nothing else.
+
+It used to open the event store and append raw events itself, which made it the
+only writer of canonical evidence outside the daemon. The trade is the same one
+the hook channel already makes deliberately: telemetry needs a running daemon,
+and a delivery it never accepted is lost — audited here, before the swallow.
+OTLP counters are re-exported on the next interval, so this is the cheapest
+evidence in the tree to miss.
+"""
 
 from __future__ import annotations
 
 import gzip
-import hashlib
-import json
 import os
 import socketserver
 import sys
@@ -15,59 +26,39 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
 
-from core.data import data_directory
-from harness.models import RawEvent
-from domain.ids import RawEventId, SessionId
+from core.daemon import client as daemon_client
+from diagnostics import record as A
+from harness.models import TELEMETRY_KIND_HEADER
 from harness.impl.claude_code.otel.config import port
-from engine.store.recorder import RawEventRecorder
-from engine.store.sessions import SessionStore
+
+DELIVERY_PATH = "/api/harnesses/claude_code/telemetry"
+DELIVERY_TIMEOUT_SECONDS = 5.0
 
 
 def idle_seconds() -> float:
     return float(os.environ.get("CLAUDE_OTEL_GRACE_S") or "900")
 
 
-def _session_ids(document: dict) -> tuple[SessionId, ...]:
-    session_ids = set()
-    for resource in document.get("resourceMetrics", []):
-        for scope in resource.get("scopeMetrics", []):
-            for metric in scope.get("metrics", []):
-                for point in (metric.get("sum") or {}).get("dataPoints", []):
-                    for attribute in point.get("attributes", []):
-                        if attribute.get("key") != "session.id":
-                            continue
-                        value = (attribute.get("value") or {}).get("stringValue")
-                        if value:
-                            session_ids.add(SessionId(str(value)))
-    return tuple(sorted(session_ids, key=str))
-
-
-def deliver(recorder: RawEventRecorder, sessions: SessionStore, raw_body: bytes) -> int:
-    document = json.loads(raw_body)
-    delivered = 0
-    for session_id in _session_ids(document):
-        session = sessions.find_by_id(session_id)
-        if session is None:
-            continue
-        digest = hashlib.sha256(str(session_id).encode() + b"\0" + raw_body).hexdigest()
-        recorder.record((
-            RawEvent(
-                RawEventId(f"claude_code:otel:{digest}"),
-                "claude_code",
-                "otel",
-                "otlp",
-                digest,
-                session_id,
-                session.lead_actor_id,
-                None,
-                time.time(),
-                "json",
-                raw_body,
-                f"claude_code:otel:{session_id}",
-            ),
-        ))
-        delivered += 1
-    return delivered
+def deliver(raw_body: bytes) -> bool:
+    """Ship one export. True when the daemon accepted it."""
+    if not raw_body:
+        return False
+    try:
+        status, _reply = daemon_client.post_bytes(
+            DELIVERY_PATH,
+            raw_body,
+            {"Content-Type": "application/json", TELEMETRY_KIND_HEADER: "otlp"},
+            timeout=DELIVERY_TIMEOUT_SECONDS,
+        )
+    except OSError:
+        # The daemon is not running. Audited rather than swallowed: "the export
+        # had nowhere to go" is exactly the thing that is otherwise invisible.
+        A.error("", "otel delivery (daemon unreachable)", {"bytes": len(raw_body)})
+        return False
+    if status != 200:
+        A.error("", "otel delivery", {"status": status, "bytes": len(raw_body)})
+        return False
+    return True
 
 
 class ReceiverHandler(BaseHTTPRequestHandler):
@@ -80,8 +71,7 @@ class ReceiverHandler(BaseHTTPRequestHandler):
         return gzip.decompress(body) if self.headers.get("Content-Encoding") == "gzip" else body
 
     def do_POST(self):
-        delivered = deliver(self.server.recorder, self.server.sessions, self._body())
-        if delivered:
+        if deliver(self._body()):
             self.server.last_delivery_at = time.time()
         response = b"{}"
         self.send_response(200)
@@ -96,19 +86,14 @@ class ReceiverServer(HTTPServer):
         socketserver.TCPServer.server_bind(self)
         self.server_name, self.server_port = self.server_address[:2]
 
-    def __init__(self, address, recorder, sessions):
+    def __init__(self, address):
         super().__init__(address, ReceiverHandler)
-        self.recorder = recorder
-        self.sessions = sessions
         self.last_delivery_at = time.time()
 
 
 def serve() -> None:
-    database_path = os.path.join(data_directory(), "events.db")
-    recorder = RawEventRecorder(database_path)
-    sessions = SessionStore(database_path)
     try:
-        server = ReceiverServer(("127.0.0.1", port()), recorder, sessions)
+        server = ReceiverServer(("127.0.0.1", port()))
     except OSError:
         return
     maximum_idle = idle_seconds()
