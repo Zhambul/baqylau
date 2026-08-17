@@ -47,7 +47,14 @@ def window(window_id, tab_id="tab-one", tags=None, columns=80, lines=24,
 
 
 class FakeTerminal:
-    def __init__(self, windows=(), current_window=None, screen_text=""):
+    def __init__(self, windows=(), current_window=None, screen_text="",
+                 pane_processes_die=False):
+        # `pane_processes_die` reproduces the one failure a terminal reports as a
+        # SUCCESS: it makes the window, hands it the argv, and the process exits
+        # immediately — so the launch succeeded and the window is gone a moment
+        # later. That is exactly how every pane died for a day (session
+        # 11b25475) while `open_pane` kept answering True.
+        self.pane_processes_die = pane_processes_die
         self.windows_on_screen = list(windows)
         self.current_window = current_window
         self.screen_text = screen_text
@@ -95,7 +102,8 @@ class FakeTerminal:
             lines=DEFAULT_PANE_LINES,
             is_first_in_tab=False,
         )
-        self.windows_on_screen.append(opened)
+        if not self.pane_processes_die:
+            self.windows_on_screen.append(opened)
         return PaneOpenResponse(True, opened.window_id)
 
     def close_pane(self, request):

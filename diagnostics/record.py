@@ -1,17 +1,21 @@
 """Write operational diagnostics — the one write API in the tree.
 
 Five free functions over a lazily-built repository, and the ONE place in the
-application where a repository is reached without being injected. That is
-deliberate: these are called from `except` blocks in short-lived hook and
-statusline processes that must stay a few imports thin and must not build an
-application graph.
+application where a repository is reached without being injected: the daemon's
+own boot and shutdown paths record before and after the graph that would inject
+it exists, and `api/guard.py` records a rejection that happens before any
+handler runs.
 
-Routing them through the daemon instead cannot work — the failure most worth
-recording is "this process could not reach the daemon", and a client that
-swallows its own transport error records nothing.
+Every CALLER is inside the daemon. It used to be called from the `except` blocks
+of nine short-lived processes outside it — which is what put
+`repository/impl/sqlite` in the failure path of every hook (measured: +122 ms,
+and nine foreign writers of audit.db). Those processes are clients now
+(`client/`): they import nothing of ours and record nothing at all, and what the
+daemon can see about a delivery it refused is audited by the endpoint that
+refused it.
 
-Daemon-side callers take `DiagnosticWriteRepository` by injection and do not
-come through here.
+Daemon-side callers with a graph take `DiagnosticWriteRepository` by injection
+and do not come through here.
 """
 
 from __future__ import annotations

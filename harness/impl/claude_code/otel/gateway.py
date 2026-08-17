@@ -18,6 +18,7 @@ import time
 
 from domain.ids import RawEventId, SessionId
 from harness.contract import HarnessTelemetryGateway
+from harness.impl.claude_code import account
 from harness.models import (
     AccountUsageSnapshot,
     HarnessTelemetryRequest,
@@ -146,12 +147,15 @@ class ClaudeTelemetryGateway(HarnessTelemetryGateway):
             # A fresh account before its first API response: leave the last good
             # snapshot in place rather than overwrite it with nothing.
             return None
-        account_id = (document.get("_account_id") or "").strip() or None
-        display_name = (document.get("_account_name") or "").strip()
+        # The status-line client stamped its own environment's two account values
+        # on the way past, raw and unvalidated (`client/claude_statusline.py`).
+        account_id, display_name = account.normalize(
+            document.get("_account_id"), document.get("_account_name")
+        )
         return AccountUsageSnapshot(
             harness=HARNESS,
             account_id=account_id,
-            display_name=display_name or account_id or "default",
+            display_name=display_name,
             captured_at=float(document.get("_ts") or time.time()),
             windows=samples,
         )

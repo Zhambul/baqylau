@@ -1,11 +1,14 @@
 """The two panes baqylau paints beside a session, as SERVED things.
 
 `terminal/mirror/` and `terminal/scoreboard.py` build what a pane shows; this
-package is how it reaches one. The presentation runs in the daemon (`streams`),
-the pane process is a thin byte-copying client (`mirror_process`,
-`scoreboard_process`), the keybinding is a thinner one still (`client` ships
-what only it can observe to `commands`), and `preferences`/`views` hold the
-small pieces of state a pane remembers between frames.
+package is how it reaches one. Everything here runs in the DAEMON: `streams`
+renders every frame, `commands` runs a gesture, `reaction` opens and closes the
+panes on a session's own facts.
+
+The processes at the other end of that are not here and are not importable from
+here — a pane and a keybinding are stdlib-only HTTP clients
+(`client/terminal_pane.py`, `client/terminal_keys.py`), so nothing they do can
+be broken by a change under `terminal/`.
 
 This is the one tier of `terminal/` that reaches for `engine/` and `harness/`:
 a pane shows a SESSION, so it needs the projections behind one. The contract

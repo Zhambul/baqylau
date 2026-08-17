@@ -11,6 +11,7 @@ from api.sse import BEAT, EVENT_STREAM, NO_STORE, STREAM_POLL_SECONDS, sse_frame
 from api.dependencies import ApplicationGraph
 from diagnostics import record as A
 from domain.ids import SessionId
+from terminal.panes.streams import WAITING_FRAME
 
 router = APIRouter()
 
@@ -41,6 +42,10 @@ def pane_stream(
 async def _pane_frames(application, session_id: SessionId, kind: str, width: int, request_path: str):
     stream_identifier = A.stream_start(str(session_id), f"pane-{kind}", src_path=request_path)
     try:
+        if kind == "mirror" and application.sessions.find(session_id) is None:
+            # The pane's own banner, as a frame: the client paints nothing of its
+            # own, so the "waiting for commands" state has to be sent to it.
+            yield sse_frame("frame", {"ansi": WAITING_FRAME})
         while application.sessions.find(session_id) is None:
             # A pane process can connect before the session's row exists; hold
             # the stream open, beating, until it does.

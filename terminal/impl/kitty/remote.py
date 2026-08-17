@@ -15,6 +15,12 @@ import subprocess
 import shutil
 import time
 
+# The variable kitty exports into every process it starts in a window. Named
+# rather than inlined because a stdlib-only client observes its own window from
+# INSIDE it and cannot import a plugin to ask: its copy of this name
+# (`client/_wire.py`) is pinned to this one by the suite.
+WINDOW_ID_VARIABLE = "KITTY_WINDOW_ID"
+
 # Timeout for mutating `kitten @` calls (run): kitten has its own client-side
 # response timeout, but a hang on socket CONNECT is unbounded, and every split
 # op (and every tab paint whose raw-socket attempt missed) runs through here
@@ -92,9 +98,11 @@ def resolve_listen_on():
 
 
 def current_window_id():
-    """The kitty window this process runs in, or "". The one place
-    $KITTY_WINDOW_ID is read; every other component receives it as data."""
-    return os.environ.get("KITTY_WINDOW_ID", "")
+    """The kitty window this process runs in, or "".
+
+    The one place $KITTY_WINDOW_ID is read inside the application; every other
+    component receives the answer as data."""
+    return os.environ.get(WINDOW_ID_VARIABLE, "")
 
 
 class KittyRemote:

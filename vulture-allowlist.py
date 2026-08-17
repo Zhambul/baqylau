@@ -17,6 +17,15 @@ _.server_port
 # sqlite3.Connection attribute — set to shape rows, never read by us.
 _.row_factory
 
+# The account pair a launched CLI carries in its environment. Read by a program
+# that CANNOT import this one — `client/_wire.py`, which imports nothing of ours
+# by design — so the only reference inside the import graph is the module that
+# owns the concept and validates what comes back.
+# tests/test_canonical_clients.py::test_the_wire_matches_the_daemon pins the two
+# copies to each other, so this is a contract with a reader, not dead code.
+SLUG_VARIABLE
+LABEL_VARIABLE
+
 # --- response-model fields reached only by serialization ------------------------
 # Each of these is a frozen-dataclass field the browser reads, carried out by
 # `dashboard.render.serialize.json_ready`'s `getattr(value, field.name)` fan-out.

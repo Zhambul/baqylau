@@ -14,7 +14,7 @@ from diagnostics import record as A
 from harness.hooks.headers import (
     ACCOUNT_ID_HEADER,
     ACCOUNT_NAME_HEADER,
-    HARNESS_PROCESS_HEADER,
+    CLIENT_PROCESS_HEADER,
     LAUNCH_EFFORT_HEADER,
     LAUNCH_MODEL_HEADER,
     TERMINAL_WINDOW_HEADER,
@@ -33,17 +33,22 @@ async def record_hook_delivery(harness: str, request: Request) -> Response:
     """One pushed hook delivery: exact stdin bytes in, the reply bytes out.
 
     Recording happens on the request, never behind the interpreter tick — a
-    wedged tick cannot stop hook capture. Errors are audited HERE: the hook
-    client swallows everything (a hook must never fail its harness), so a
-    delivery the daemon refused would otherwise vanish."""
+    wedged tick cannot stop hook capture. Errors are audited HERE, and now
+    exclusively here: a hook client in `client/` records nothing at all, so a
+    delivery the daemon refused would otherwise vanish.
+
+    The headers are read verbatim — every value is what the client OBSERVED, and
+    the interpretation of it (the CLI pid behind a client pid, a valid account
+    slug) happens below this, where the vocabulary lives."""
     payload = await request.body()
     application = request.app.state.canonical_application
     try:
-        process_header = (request.headers.get(HARNESS_PROCESS_HEADER) or "").strip()
+        process_header = (request.headers.get(CLIENT_PROCESS_HEADER) or "").strip()
         delivery = HarnessHookRequest(
             payload=payload,
             terminal_window_id=request.headers.get(TERMINAL_WINDOW_HEADER) or None,
-            harness_process_id=int(process_header) if process_header else None,
+            harness_process_id=None,
+            client_process_id=int(process_header) if process_header else None,
             account_id=request.headers.get(ACCOUNT_ID_HEADER) or None,
             account_display_name=request.headers.get(ACCOUNT_NAME_HEADER) or None,
             launch_model=request.headers.get(LAUNCH_MODEL_HEADER) or None,

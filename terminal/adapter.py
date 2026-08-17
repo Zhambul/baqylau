@@ -15,12 +15,11 @@ would close a cycle.
 
 from __future__ import annotations
 
-import os
-import sys
 import time
 from dataclasses import dataclass
 from typing import Protocol
 
+from core import clients
 from domain.ids import SessionId
 from terminal.contract import TerminalPlugin
 from terminal.models import (
@@ -51,6 +50,11 @@ SCOREBOARD_RESIZE_SETTLE_SECONDS = 0.08
 
 MIRROR_PANE_TITLE = "◧ cmd mirror"
 SCOREBOARD_PANE_TITLE = "▪ session"
+
+# Both panes are one client program, told which stream to open. We launch it, so
+# it is free to move and free to be told things — the name is here, beside the
+# only code that runs it, and `core/clients.py` owns nothing but the path.
+PANE_CLIENT = "terminal_pane.py"
 
 
 class TerminalOutcome(Protocol):
@@ -140,7 +144,7 @@ class TerminalAdapter:
         )]
         if self._tagged(ACTIVITY_PANE_TAG, request.session_id) is None:
             outcomes.append(self._plugin.panes.open_pane(PaneOpenRequest(
-                command=self._pane_command("mirror_process.py", session_id),
+                command=self._pane_command("mirror", session_id),
                 working_directory="",
                 title=MIRROR_PANE_TITLE,
                 split="vertical",
@@ -151,7 +155,7 @@ class TerminalAdapter:
             )))
         if self._tagged(SCOREBOARD_PANE_TAG, request.session_id) is None:
             outcomes.append(self._plugin.panes.open_pane(PaneOpenRequest(
-                command=self._pane_command("scoreboard_process.py", session_id),
+                command=self._pane_command("scoreboard", session_id),
                 working_directory="",
                 title=SCOREBOARD_PANE_TITLE,
                 split="horizontal",
@@ -166,6 +170,12 @@ class TerminalAdapter:
         # Hand inner focus back to the host pane the splits took it from, which
         # restores the host's window title as the visible tab title.
         outcomes.append(self._plugin.panes.focus_window(WindowFocusRequest(anchor_window_id)))
+        # Named before the fold, not inside it: a pane process that died on
+        # startup is the most useful thing we can say, and `_combined` reports
+        # one reason for the whole composite.
+        alive = self._confirm_panes_alive(request.session_id)
+        if not alive.succeeded:
+            return alive
         return self._combined(outcomes, "terminal pane setup failed")
 
     def close_session_panes(self, session_id: SessionId) -> SessionTerminalResult:
@@ -249,9 +259,26 @@ class TerminalAdapter:
 
     # --- internals -----------------------------------------------------------
     @staticmethod
-    def _pane_command(process_file: str, session_id: str) -> tuple[str, ...]:
-        pane_directory = os.path.join(os.path.dirname(os.path.abspath(__file__)), "panes")
-        return (sys.executable, os.path.join(pane_directory, process_file), session_id)
+    def _pane_command(kind: str, session_id: str) -> tuple[str, ...]:
+        """The argv a terminal runs for one pane.
+
+        The daemon's address is PASSED, not shared: a pane imports nothing of
+        ours, which is what makes it a program a refactor here cannot break.
+        """
+        return clients.command(PANE_CLIENT, session_id, kind)
+
+    def _confirm_panes_alive(self, session_id: SessionId) -> SessionTerminalResult:
+        """Both panes, still there a moment after the launch.
+
+        The terminal reports a launch as successful the instant it has made the
+        WINDOW, and a pane process that exits on startup takes its window with
+        it — so without this the composite fails with a reason describing a
+        symptom ("scoreboard pane is not open") instead of the cause.
+        """
+        for tag, what in ((ACTIVITY_PANE_TAG, "mirror"), (SCOREBOARD_PANE_TAG, "scoreboard")):
+            if self._tagged(tag, session_id) is None:
+                return SessionTerminalResult(False, f"{what} pane process exited on startup")
+        return SessionTerminalResult(True)
 
     def _close_session_panes(
         self,

@@ -2,9 +2,11 @@
 #
 # A hook delivery's BODY is the exact stdin bytes the harness wrote, so
 # everything the hook process observed around itself has to ride beside them.
-# These headers are that channel, and they have exactly two readers each: the
-# thin hook client stamps them (harness/hooks/client.py), the hook-delivery
-# endpoint reads them (api/common/hooks.py).
+# These headers are that channel, and they have exactly two readers each: a hook
+# client in `client/` stamps them, the hook-delivery endpoint reads them
+# (api/common/hooks.py). The client's copy of these names lives in
+# client/_wire.py and is pinned to this file by tests/test_canonical_clients.py —
+# a client may not import the application.
 #
 # They live here rather than in core/daemon/contract.py because they are HARNESS
 # vocabulary — an account, a CLI process, a launch selection — not general
@@ -13,11 +15,16 @@
 # Import-pure: literals only.
 
 TERMINAL_WINDOW_HEADER = "X-Baqylau-Terminal-Window"
-HARNESS_PROCESS_HEADER = "X-Baqylau-Harness-Process"
+# The client's OWN pid, not the CLI's. A client observes; the daemon interprets
+# — and the ancestry walk it takes to name the CLI needs the harness's process
+# name, which is plugin vocabulary the client must not import. The chain is
+# provably alive while the daemon walks it: the CLI is blocked on this very
+# delivery's response.
+CLIENT_PROCESS_HEADER = "X-Baqylau-Client-Process"
 ACCOUNT_ID_HEADER = "X-Baqylau-Account-Id"
 ACCOUNT_NAME_HEADER = "X-Baqylau-Account-Name"
 # Launch-time selections travel in the launched CLI's environment (the
-# launcher sets them; the hook process inherits and observes them).
+# launcher sets them; the hook process inherits and forwards them raw).
 LAUNCH_MODEL_HEADER = "X-Baqylau-Launch-Model"
 LAUNCH_EFFORT_HEADER = "X-Baqylau-Launch-Effort"
 

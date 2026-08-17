@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import re
-from collections.abc import Mapping
 from harness.models import AccountUsageSnapshot
 
 ACCOUNTS_FILE = os.path.expanduser("~/.config/claude-subscriptions/accounts.tsv")
@@ -13,15 +12,30 @@ DEFAULT_COMMAND = "claude"
 SUPPORTED_SHELLS = ("zsh", "bash")
 VALID_ACCOUNT_ID = re.compile(r"^[A-Za-z0-9._-]+$")
 
+# The two variables the account switcher exports into a launched CLI's
+# environment. Nothing in the daemon reads them — a CLIENT observes its own
+# environment and forwards both values raw (client/_wire.py) — but they are named
+# here, beside the validation they feed, so the client's copy can be pinned to
+# this one (tests/test_canonical_clients.py).
+SLUG_VARIABLE = "CLAUDE_SUBSCRIPTION_SLUG"
+LABEL_VARIABLE = "CLAUDE_SUBSCRIPTION_LABEL"
 
-def current(environment: Mapping[str, str]) -> dict:
-    """The account the given environment selects — the caller says whose
-    environment (a hook ships its own; the daemon's is meaningless here)."""
-    account_id = (environment.get("CLAUDE_SUBSCRIPTION_SLUG") or "").strip()
-    display_name = (environment.get("CLAUDE_SUBSCRIPTION_LABEL") or "").strip()
+
+def normalize(account_id: str | None, display_name: str | None) -> tuple[str | None, str]:
+    """One account as a client reported it, made trustworthy: (id, label).
+
+    A client forwards what its environment said and validates nothing — the
+    values reach us as external input. The id has to look like an id or it is no
+    id at all, and the label falls back to the id and then to "default", so
+    every account row has a name to render.
+    """
+    # str(): both values arrive as external input — a header, or a JSON field a
+    # status line wrote — so neither is known to be a string yet.
+    account_id = str(account_id or "").strip()
+    display_name = str(display_name or "").strip()
     if not VALID_ACCOUNT_ID.fullmatch(account_id or "x"):
         account_id = ""
-    return {"slug": account_id, "label": display_name or account_id or "default"}
+    return account_id or None, display_name or account_id or "default"
 
 
 def registry() -> list[dict]:

@@ -8,22 +8,20 @@ import sys
 
 from conftest import REPOSITORY_ROOT
 
+# The processes that used to be on this list — the hook entries, the two pane
+# processes, the keybinding, the status-line shim — are stdlib-only clients now
+# (`client/`), and tests/test_canonical_clients.py both forbids them any import of
+# ours and RUNS each one. What is left here is the daemon's own import graph.
 CANONICAL_MODULES = (
     "harness.impl",
-    "core.daemon.client",
-    "harness.hooks.client",
-    "terminal.panes.mirror_process",
-    "terminal.panes.scoreboard_process",
-    "terminal.panes.client",
     "api.server",
     "harness.impl.claude_code.plugin",
-    "harness.impl.claude_code.hooks.entry",
     "harness.impl.claude_code.hooks.gateway",
+    "harness.impl.claude_code.otel.gateway",
+    "harness.impl.claude_code.otel.launch",
     "harness.impl.codex.hooks.gateway",
     "harness.impl.claude_code.hooks.foreground",
-    "harness.impl.claude_code.hooks.statusline",
     "harness.impl.codex.plugin",
-    "harness.impl.codex.hooks.entry",
 )
 
 IMPORT_PROGRAM = """
@@ -64,7 +62,13 @@ def test_canonical_modules_have_no_import_time_terminal_or_argument_work():
         )
 
 
-def test_hook_entries_do_not_load_presentation_or_legacy_semantic_stores():
+def test_hook_gateways_do_not_load_presentation_or_legacy_semantic_stores():
+    """The gateways run on the HTTP thread that records a delivery, so what they
+    drag in is paid per hook — and a presenter is never part of recording one.
+
+    (The hook PROCESSES this used to check are `client/` files now: they import
+    nothing of ours at all, which is checked and MEASURED next door.)
+    """
     program = """
 import importlib
 import sys
@@ -78,9 +82,9 @@ if loaded:
     raise SystemExit(','.join(loaded))
 """
     for module in (
-        "harness.impl.claude_code.hooks.entry",
-        "harness.impl.claude_code.hooks.statusline",
-        "harness.impl.codex.hooks.entry",
+        "harness.impl.claude_code.hooks.gateway",
+        "harness.impl.claude_code.otel.gateway",
+        "harness.impl.codex.hooks.gateway",
     ):
         result = subprocess.run(
             [sys.executable, "-c", program, module],
@@ -97,9 +101,9 @@ if loaded:
 def test_audit_write_path_does_not_import_its_report_tier():
     """A writer records diagnostics; it never reads them back.
 
-    `diagnostics/read.py` is the daemon's tier — typed queries the dashboard
-    renders. Every writer outside the daemon is a process that lives for
-    milliseconds, so importing the reader buys it a sqlite tier it cannot use.
+    The reader is the daemon's own tier — typed queries the dashboard renders — and
+    the write API is reached from paths that run before the graph exists, so
+    importing the reader from there buys a tier that cannot be used.
     (The daemon itself, `api.server`, legitimately holds both halves.)
     """
     program = """

@@ -14,9 +14,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.bootstrap import build_application
-from harness.hooks import client as hook_client
 from terminal.panes import commands as pane_commands
-from terminal.panes import client as terminal_panes
 from harness.hooks.gateway import HookGatewayService, UnknownHookHarness
 from harness.impl import installed
 from engine.interpret.reactions import OperationOutputCanonicalEventReaction
@@ -44,6 +42,7 @@ from terminal.models import (
     SCOREBOARD_PANE_TAG,
     SESSION_WINDOW_TAG,
 )
+from core.daemon.contract import HOST_ADDRESS, PORT_NUMBER
 from domain.codec import CanonicalEventCodec
 from domain.events import CanonicalEvent
 from domain.events import (
@@ -86,9 +85,9 @@ from harness.impl.claude_code.canonical.translator import (
     ClaudeTaskRawEventSource,
     ClaudeTranscriptRawEventSource,
 )
+from harness.impl.claude_code import account
 from harness.impl.claude_code.hooks import gateway as claude_hooks
 from harness.impl.claude_code.hooks import foreground as claude_foreground
-from harness.impl.claude_code.hooks import statusline as claude_statusline
 from harness.impl.claude_code.controls import tui as claude_tui
 from harness.impl.claude_code.usage.rows import usage_reader as claude_usage_reader
 from harness.impl.claude_code.reactors import (
@@ -104,7 +103,7 @@ from harness.impl.codex.hooks import gateway as codex_hooks
 from harness.impl.codex.canonical import rollout as codex_rollout
 from harness.impl.codex.controls.controller import _rollout_abort_state
 from harness.impl.claude_code.otel import gateway as claude_telemetry
-from harness.models import HarnessTelemetryRequest, TELEMETRY_KIND_HEADER
+from harness.models import HarnessTelemetryRequest
 from repository.errors import EventIdentityConflict
 from repository.impl.sqlite.databases import main_database
 from repository.impl.sqlite.raw_events import SqliteRawEventRepository
@@ -146,6 +145,7 @@ def hook_request(
     account_display_name: str | None = None,
     launch_model: str | None = None,
     launch_effort: str | None = None,
+    client_process_id: int | None = None,
 ) -> HarnessHookRequest:
     return HarnessHookRequest(
         payload=payload,
@@ -155,6 +155,7 @@ def hook_request(
         account_display_name=account_display_name,
         launch_model=launch_model,
         launch_effort=launch_effort,
+        client_process_id=client_process_id,
     )
 
 
@@ -1361,14 +1362,41 @@ def test_terminal_adapter_opens_canonical_processes_with_generic_tags():
         {ACTIVITY_PANE_TAG: "session-one"},
         {SCOREBOARD_PANE_TAG: "session-one"},
     ]
-    assert [request.command[-2:] for request in terminal.opened_panes] == [
-        (str(Path(__file__).parents[1] / "terminal" / "panes" / "mirror_process.py"), "session-one"),
-        (str(Path(__file__).parents[1] / "terminal" / "panes" / "scoreboard_process.py"), "session-one"),
+    # One client program, told where the daemon listens and which stream to open:
+    # a pane imports nothing of ours, so everything it cannot observe is argv.
+    pane_client = str(Path(__file__).parents[1] / "client" / "terminal_pane.py")
+    assert [request.command[1:] for request in terminal.opened_panes] == [
+        (pane_client, HOST_ADDRESS, str(PORT_NUMBER), "session-one", "mirror"),
+        (pane_client, HOST_ADDRESS, str(PORT_NUMBER), "session-one", "scoreboard"),
     ]
     # the anchor is stated as intent, never as one terminal's match syntax
     assert terminal.opened_panes[0].anchor.window_id == "window-one"
     assert terminal.opened_panes[1].anchor.tag == (ACTIVITY_PANE_TAG, "session-one")
     assert terminal.focused == ["window-one"]
+
+
+def test_a_pane_process_that_exits_on_startup_is_named_not_guessed_at():
+    """A launch is not a pane until the pane is still there.
+
+    Measured (session 11b25475, 2026-08-17): the pane processes died on their
+    first import, every time. kitty had made the window, so `open_pane` reported
+    success; the window vanished with the process, and the composite failed with
+    "scoreboard pane is not open" — a symptom of the symptom. Now the reason names
+    the thing that happened.
+    """
+    terminal = FakeTerminal(
+        windows=[window("window-one", tags={})],
+        current_window="window-one",
+        pane_processes_die=True,
+    )
+    adapter = TerminalAdapter(terminal.plugin(), FakeSessions({"session-one": "window-one"}))
+
+    result = adapter.open_session_panes(
+        SessionPaneRequest(SessionId("session-one"), "window-one", 25)
+    )
+
+    assert not result.succeeded
+    assert result.reason == "mirror pane process exited on startup"
 
 
 def test_terminal_adapter_settles_the_scoreboard_on_its_five_rows():
@@ -1444,108 +1472,11 @@ def test_terminal_adapter_measures_the_activity_pane_against_its_row():
     assert terminal.resized == [("window-two", "horizontal", 15)]
 
 
-def test_pane_keybinding_ships_only_its_environment_to_the_daemon(monkeypatch):
-    monkeypatch.setenv("BAQYLAU_TERMINAL", "kitty")
-    monkeypatch.setenv("KITTY_WINDOW_ID", "77")
-    posted = []
-
-    def post_json(path, body):
-        posted.append((path, body))
-        return 200, {"handled": True, "succeeded": True, "reason": None}
-
-    monkeypatch.setattr("core.daemon.client.post_json", post_json)
-
-    assert terminal_panes.main(["toggle"]) == 0
-    assert terminal_panes.main(["grow", "9"]) == 0
-    assert terminal_panes.main(["setpct", "75"]) == 0
-
-    # one endpoint per gesture — the URL is the discriminator, so no body
-    # carries a command word
-    assert [path for path, _body in posted] == [
-        "/api/terminal/panes/toggle",
-        "/api/terminal/panes/grow",
-        "/api/terminal/panes/set-percent",
-    ]
-    toggle_body, grow_body, setpct_body = (body for _path, body in posted)
-    assert toggle_body == {
-        "window_id": "77",
-        "working_directory": os.getcwd(),
-    }
-    assert grow_body["columns"] == 9
-    assert setpct_body["percent"] == 75
-
-
-def test_pane_keybinding_reports_a_daemon_refusal(monkeypatch):
-    monkeypatch.setattr(
-        "core.daemon.client.post_json",
-        lambda path, body: (409, {"handled": True, "succeeded": False, "reason": "no pane"}),
-    )
-    assert terminal_panes.main(["toggle"]) == 1
-
-
-def test_hook_client_ships_exact_bytes_and_flat_headers(monkeypatch, capsys):
-    monkeypatch.setenv("BAQYLAU_TERMINAL", "kitty")
-    monkeypatch.setenv("KITTY_WINDOW_ID", "77")
-    monkeypatch.setattr("harness.hooks.client.nearest_ancestor_named", lambda name: 4242)
-    payload = b'{ "session_id": "session-one" }'
-    monkeypatch.setattr(
-        "sys.stdin", SimpleNamespace(buffer=SimpleNamespace(read=lambda: payload))
-    )
-    posted = []
-
-    def post_bytes(path, body, headers, timeout):
-        posted.append((path, body, headers, timeout))
-        return 200, b'{"reply":"yes"}'
-
-    monkeypatch.setattr("core.daemon.client.post_bytes", post_bytes)
-
-    hook_client.run(
-        "claude_code", "claude", "c2", "Account Two",
-        launch_model="fable", launch_effort="high",
-    )
-
-    assert capsys.readouterr().out == '{"reply":"yes"}'
-    path, body, headers, timeout = posted[0]
-    assert path == "/api/harnesses/claude_code/hooks"
-    assert body is payload
-    assert headers == {
-        "Content-Type": "application/json",
-        "X-Baqylau-Terminal-Window": "77",
-        "X-Baqylau-Harness-Process": "4242",
-        "X-Baqylau-Account-Id": "c2",
-        "X-Baqylau-Account-Name": "Account Two",
-        "X-Baqylau-Launch-Model": "fable",
-        "X-Baqylau-Launch-Effort": "high",
-    }
-    assert timeout == hook_client.DELIVERY_TIMEOUT_SECONDS
-
-
-def test_hook_client_never_fails_its_harness_and_audits_every_swallow(monkeypatch, capsys):
-    monkeypatch.setattr("harness.hooks.client.nearest_ancestor_named", lambda name: None)
-    audited = []
-    monkeypatch.setattr(
-        "diagnostics.record.error",
-        lambda log, func, context=None: audited.append(func),
-    )
-    monkeypatch.setattr(
-        "sys.stdin", SimpleNamespace(buffer=SimpleNamespace(read=lambda: b"{}"))
-    )
-
-    monkeypatch.setattr(
-        "core.daemon.client.post_bytes",
-        lambda path, body, headers, timeout: (400, b'{"error":"malformed"}'),
-    )
-    hook_client.run("claude_code", "claude")
-
-    def unreachable(path, body, headers, timeout):
-        raise OSError("daemon down")
-
-    monkeypatch.setattr("core.daemon.client.post_bytes", unreachable)
-    hook_client.run("codex", "codex")
-
-    # a refused delivery prints NOTHING (an error body is not a hook reply)
-    assert capsys.readouterr().out == ""
-    assert audited == ["claude_code hook (deliver)", "codex hook (deliver)"]
+# Four tests lived here: the keybinding's body, its handling of a refusal, and the
+# hook client's headers and swallowing. All four are in
+# tests/test_canonical_clients.py now, where they RUN the process instead of
+# monkeypatching a function inside it — which is the difference between a test that
+# would have caught the pane outage and one that could not.
 
 
 def test_hook_gateway_service_records_only_for_harnesses_that_accept_deliveries(tmp_path):
@@ -1571,6 +1502,49 @@ def test_hook_gateway_service_records_only_for_harnesses_that_accept_deliveries(
         service.record("mystery", hook_request(payload))
     with pytest.raises(UnknownHookHarness, match="accepts no hook deliveries"):
         service.record("codex", hook_request(payload))
+
+
+def test_the_cli_pid_is_resolved_from_the_pid_its_client_reported(tmp_path, monkeypatch):
+    """A client observes; the daemon interprets.
+
+    A hook process used to walk its own ancestry with `ps` — up to 32 forks in a
+    process the harness is waiting on — to name the CLI, which took the harness's
+    own process name and so an import of its plugin. It reports its own pid
+    instead, and the walk happens here, where the process name is already known
+    and where the chain is still alive: the CLI is blocked on this delivery.
+    """
+    walked = []
+
+    def ancestry(process_name, from_process_id=None):
+        walked.append((process_name, from_process_id))
+        return 4242
+
+    monkeypatch.setattr("harness.hooks.gateway.nearest_ancestor_named", ancestry)
+    registry = HarnessRegistry()
+    for plugin in installed():
+        registry.register(plugin)
+    service = HookGatewayService(
+        registry, SqliteRawEventRepository(main_database(str(tmp_path / "main.db")))
+    )
+    payload = json.dumps({
+        "session_id": "session-one",
+        "transcript_path": "/work/session.jsonl",
+        "hook_event_name": "SessionStart",
+        "hook_event_id": "start-one",
+    }).encode()
+
+    service.record("claude_code", hook_request(payload, client_process_id=999))
+
+    assert walked == [("claude", 999)]
+    evidence = CanonicalRuntime(str(tmp_path / "main.db")).evidence.evidence_for_session(
+        SessionId("session-one")
+    )
+    assert [raw.harness_process_id for raw in evidence if raw.source_type == "hook"] == [4242]
+
+    # Nothing to walk from: a delivery with no client pid claims no CLI pid.
+    walked.clear()
+    service.record("claude_code", hook_request(payload))
+    assert walked == []
 
 
 class _Widths:
@@ -1992,42 +1966,29 @@ class _NoSessions:
         del session_id
 
 
-def test_the_statusline_ships_its_bytes_and_the_daemon_stores_the_windows(monkeypatch, tmp_path):
-    monkeypatch.setattr(
-        claude_statusline.ACC,
-        "current",
-        lambda environment: {"slug": "work", "label": "Work"},
-    )
+def test_the_daemon_decides_what_a_statusline_delivery_meant(monkeypatch, tmp_path):
+    """The shim ships bytes; the WINDOWS are read here.
+
+    The client half — that it forwards the stdin verbatim, stamps the two account
+    values its environment selects raw, and still runs the real status line — is
+    tested by running the process in tests/test_canonical_clients.py. What is left
+    here is the half that decides what those bytes meant, including the validation
+    the client no longer does.
+    """
     monkeypatch.setattr(
         "harness.impl.claude_code.usage.rows.account.registry",
         lambda: [{"slug": "work", "label": "Work", "alias": "work"}],
     )
-    delivered = []
-    monkeypatch.setattr(
-        "harness.impl.claude_code.hooks.statusline.daemon_client.post_bytes",
-        lambda path, body, headers, timeout=None: delivered.append((path, body, headers))
-        or (200, b"{}"),
-    )
-    claude_statusline.capture(
-        json.dumps(
-            {
-                "session_id": "session-usage",
-                "rate_limits": {
-                    "five_hour": {"used_percentage": 25, "resets_at": 2_000_000_000},
-                    "seven_day": {"used_percentage": 40, "resets_at": 2_000_100_000},
-                },
-            }
-        ).encode()
-    )
+    body = json.dumps({
+        "session_id": "session-usage",
+        "rate_limits": {
+            "five_hour": {"used_percentage": 25, "resets_at": 2_000_000_000},
+            "seven_day": {"used_percentage": 40, "resets_at": 2_000_100_000},
+        },
+        "_account_id": "work",
+        "_account_name": "Work",
+    }).encode()
 
-    # The shim is a THIN CLIENT: it ships the bytes plus the one fact only it
-    # can observe (which account its environment selects) and writes nothing.
-    path, body, headers = delivered[0]
-    assert path == "/api/harnesses/claude_code/telemetry"
-    assert headers[TELEMETRY_KIND_HEADER] == "statusline"
-    assert json.loads(body)["_account_id"] == "work"
-
-    # The daemon decides what the windows meant.
     usage = SqliteAccountUsageRepository(main_database(str(tmp_path / "main.db")))
     response = claude_telemetry.ClaudeTelemetryGateway().handle(
         HarnessTelemetryRequest("statusline", body), _NoSessions()
@@ -2039,6 +2000,19 @@ def test_the_statusline_ships_its_bytes_and_the_daemon_stores_the_windows(monkey
     assert rows[0].account_id == "work"
     assert [window.label for window in rows[0].windows] == ["5h", "7d"]
     assert rows[0].scheduling_score == Decimal("75")
+
+
+def test_an_account_a_client_reported_is_validated_by_the_daemon():
+    """A client forwards its environment and validates nothing, so both values
+    reach us as external input: the id has to look like an id or it is no id, and
+    a row always has a name to render."""
+    assert account.normalize("work", "Work") == ("work", "Work")
+    assert account.normalize("work", "") == ("work", "work")
+    assert account.normalize("", "") == (None, "default")
+    assert account.normalize("../etc/passwd", "Sneaky") == (None, "Sneaky")
+    assert account.normalize(None, None) == (None, "default")
+    # A status line writes JSON, so the field is not even known to be a string.
+    assert account.normalize(7, 7) == ("7", "7")
 
 
 def test_launchers_build_native_commands_and_share_terminal_launch_mechanics(tmp_path):
@@ -3981,23 +3955,7 @@ def test_claude_prompt_quoting_a_command_envelope_stays_a_prompt():
         assert not payloads(translation, ModelChanged)
 
 
-def test_daemon_client_decodes_sse_frames_and_surfaces_ticks():
-    from core.daemon import client as daemon_client
-
-    response = iter(
-        [
-            b": tick\n",
-            b"event: session\n",
-            b'data: {"session_id": "session-one"}\n',
-            b"\n",
-            b"event: frame\n",
-            b'data: {"ansi": "x"}\n',
-            b"\n",
-        ]
-    )
-
-    assert list(daemon_client.sse_events(response)) == [
-        ("tick", None),
-        ("session", '{"session_id": "session-one"}'),
-        ("frame", '{"ansi": "x"}'),
-    ]
+# The SSE decoder lived here as a unit test of `core/daemon/client.py`. That module
+# is gone: decoding a pane stream is the pane's own loop now
+# (`client/terminal_pane.py`), and it is checked end to end — a stub daemon, a real
+# process, a frame on its stdout — in tests/test_canonical_clients.py.

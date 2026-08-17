@@ -1,8 +1,8 @@
 """Claude Code's hook gateway: one pushed delivery → raw events + the reply.
 
 Runs INSIDE the daemon (`HarnessHookGateway`), invoked by the hook-delivery
-endpoint. The hook process itself is a thin client (`canonical_hook.py`) that
-ships its exact stdin plus four flat header values — everything below is a pure
+endpoint. The hook process itself is a thin client (`client/claude_hook.py`) that
+ships its exact stdin plus a few flat header values — everything below is a pure
 function of that delivery, plus reads of the harness's own transcript files.
 """
 
@@ -22,7 +22,7 @@ from harness.models import (
 )
 from domain.ids import ActorId, RawEventId, SessionId
 from harness.impl.claude_code.hooks import foreground
-from harness.impl.claude_code import model
+from harness.impl.claude_code import account, model
 
 HARNESS = "claude_code"
 CLI_PROCESS_NAME = "claude"
@@ -47,6 +47,11 @@ class ClaudeHookGateway(HarnessHookGateway):
             raise ValueError("Claude Code hook payload has no transcript path")
         native_event_id_value = document.get("hook_event_id") or document.get("uuid")
         native_event_id = str(native_event_id_value or hashlib.sha256(payload).hexdigest())
+        # The client forwarded its environment's two account values raw; what a
+        # valid account id looks like is decided here.
+        account_id, account_display_name = account.normalize(
+            request.account_id, request.account_display_name
+        )
         source_type = "hook"
         if (
             hook_name == "SubagentStart"
@@ -73,8 +78,8 @@ class ClaudeHookGateway(HarnessHookGateway):
                 source_identity=f"claude_code:hook:{session_id}",
                 terminal_window_id=request.terminal_window_id,
                 harness_process_id=request.harness_process_id,
-                account_id=request.account_id,
-                account_display_name=request.account_display_name,
+                account_id=account_id,
+                account_display_name=account_display_name,
             )
         ]
         if hook_name == "SessionStart" and (request.launch_model or request.launch_effort):

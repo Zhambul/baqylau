@@ -40,6 +40,11 @@ MODEL_IDLE_SECONDS = 600.0
 # The block model is width-independent; renders reflow to the client's width,
 # so the width a renderer is constructed with never reaches a client.
 INITIAL_MODEL_WIDTH = 80
+# What a mirror pane shows before its session has a row to render. A pane
+# process is launched at the same moment the session announces itself, so it
+# routinely connects first — and it paints nothing of its own (it imports
+# nothing of ours), so its first frame comes from here like every other.
+WAITING_FRAME = "\033[H\033[2J\033[3J" + HEADER + "\n"
 
 
 @dataclass

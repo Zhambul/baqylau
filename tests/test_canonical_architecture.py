@@ -266,15 +266,17 @@ def test_the_terminal_contract_and_models_import_nothing_of_ours():
     assert foreign == []
 
 
-def test_only_bootstrap_and_the_self_identifying_clients_resolve_a_terminal():
-    """`terminal/impl/` has one door and three callers.
+def test_only_bootstrap_resolves_a_terminal():
+    """`terminal/impl/` has one door and ONE caller.
 
     Everything else takes a `TerminalPlugin` (or one of its five fields) by
-    injection. The two clients are the hook and the pane keybinding: they run
-    INSIDE a terminal window and are the only things that can observe which
-    window that is.
+    injection. It used to have three: a hook process and the pane keybinding
+    resolved a terminal directly, because they run INSIDE a window and are the
+    only things that can observe which one. They are stdlib-only clients now
+    (`client/`) and read the variable that names the window straight out of their
+    own environment, so the door has no callers left outside the daemon.
     """
-    allowed = {"app/bootstrap.py", "harness/hooks/client.py", "terminal/panes/client.py"}
+    allowed = {"app/bootstrap.py"}
     importers = set()
     for package in OUR_PACKAGES:
         for path, imported in imports_under(package):
@@ -393,7 +395,37 @@ def test_shared_code_imports_no_concrete_plugin_descriptor():
     assert importers == []
 
 
-def test_harness_hook_and_pane_entries_live_only_in_their_plugin_folders():
+def test_no_process_outside_the_daemon_lives_inside_the_application():
+    """Every program the daemon does not own is a file in `client/` (R1).
+
+    They used to live in five packages and sixteen files — a published wrapper
+    beside its implementation beside the daemon-side code it POSTs to — which is
+    why "is this file a client?" had no mechanical answer and no rule about one
+    could be enforced. The rules themselves are in
+    tests/test_canonical_clients.py; this is the absence half.
+
+    The `bin/` directories those published paths lived in are gone too: external
+    configuration names `client/` directly now. During the migration they were
+    symlinks into it, which is how sessions that had already captured the old
+    paths kept delivering.
+    """
+    gone = (
+        "harness/impl/claude_code/hooks/entry.py",
+        "harness/impl/claude_code/hooks/statusline.py",
+        "harness/impl/claude_code/otel/receiver.py",
+        "harness/impl/codex/hooks/entry.py",
+        "harness/hooks/client.py",
+        "core/daemon/client.py",
+        "terminal/panes/client.py",
+        "terminal/panes/mirror_process.py",
+        "terminal/panes/scoreboard_process.py",
+    )
+    assert [name for name in gone if (ROOT / name).exists()] == []
+    for directory in ("harness/impl/claude_code/bin", "harness/impl/codex/bin", "terminal/bin"):
+        assert not (ROOT / directory).exists(), f"{directory} is back"
+
+
+def test_harness_hook_and_pane_entries_do_not_come_back_to_bin():
     forbidden_entries = {
         "claude-hook.py",
         "claude-codex-hook.py",
@@ -410,125 +442,19 @@ def test_harness_hook_and_pane_entries_live_only_in_their_plugin_folders():
         "claude-statusline.py",
     }
     assert not forbidden_entries.intersection(path.name for path in (ROOT / "bin").iterdir())
-    assert (ROOT / "harness" / "impl" / "claude_code" / "hooks" / "entry.py").is_file()
-    assert (ROOT / "harness" / "impl" / "codex" / "hooks" / "entry.py").is_file()
-    assert (ROOT / "terminal" / "panes" / "client.py").is_file()
     assert not (ROOT / "harness" / "impl" / "claude_code" / "split.py").exists()
     assert not [path.name for path in (ROOT / "bin").iterdir() if path.name.startswith("claude-")]
 
 
-def _levels_walked(expression: ast.expr) -> int | None:
-    """How many directory levels an entry's sys.path anchor climbs from its file.
-
-    The two forms in the tree say the same thing differently:
-    `Path(__file__).resolve().parents[N]` climbs N, and N nested `dirname()`
-    calls around `abspath(__file__)` climb N-1 — the innermost is spent turning
-    the file into its own directory. Returns None for anything else, because an
-    anchor nobody can read is one nobody can check.
-    """
-    text = ast.unparse(expression)
-    parents = re.search(r"parents\[(\d+)\]", text)
-    if parents and "__file__" in text:
-        return int(parents.group(1))
-    if "__file__" in text and "dirname" in text:
-        return text.count("dirname(") - 1
-    return None
-
-
-def test_every_script_entry_anchors_sys_path_on_the_REPOSITORY_ROOT():
-    """A file kitty or a hook runs as a SCRIPT must reach the repo root.
-
-    An entry launched by path gets its own directory on sys.path, not ours, so
-    each one walks up to the root itself before importing anything. The walk is
-    a depth count, and moving the file is what invalidates it — silently: the
-    anchor still resolves, just to the wrong directory, and the failure is a
-    ModuleNotFoundError inside a process nobody is watching.
-
-    Measured (session 11b25475, 2026-08-17): the refactor moved the pane
-    processes from a top-level module to terminal/panes/, one level deeper,
-    and left their two-dirname walk alone. It resolved to terminal/ instead of
-    the root, so every mirror and scoreboard pane the terminal launched died on
-    `import core` the instant it started. The terminal reported the launch as a
-    success — it HAD made the window — and the pane vanished a moment later,
-    leaving "terminal pane setup failed" and no pane to look at.
-
-    So: count the directories between the file and the root, and require the
-    anchor to name exactly that many.
-    """
-    violations = []
-    for path in sorted(ROOT.rglob("*.py")):
-        if "__pycache__" in path.parts or ".claude" in path.parts:
-            continue
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        depth = len(path.relative_to(ROOT).parts) - 1
-        # An entry may name its anchor before inserting it (tests/conftest.py
-        # does), so a bare Name has to be resolved back to what it was assigned.
-        bound = {
-            target.id: statement.value
-            for statement in ast.walk(tree)
-            if isinstance(statement, ast.Assign)
-            for target in statement.targets
-            if isinstance(target, ast.Name)
-        }
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call) or len(node.args) != 2:
-                continue
-            if ast.unparse(node.func) != "sys.path.insert":
-                continue
-            # Read the anchor STRUCTURALLY. A text match would be satisfied by
-            # the prose in a comment explaining the rule — which is exactly what
-            # happened to the first version of this test.
-            anchor_expression = node.args[1]
-            if isinstance(anchor_expression, ast.Name):
-                anchor_expression = bound.get(anchor_expression.id, anchor_expression)
-            walked = _levels_walked(anchor_expression)
-            if walked is None:
-                violations.append(f"{path.relative_to(ROOT)} anchors on an unrecognised expression")
-            elif walked != depth:
-                violations.append(
-                    f"{path.relative_to(ROOT)} is {depth} deep but its anchor walks {walked}"
-                )
-    assert violations == []
-
-
-def test_the_stable_bin_entries_are_wrappers_and_nothing_else():
-    """External config names `bin/`, never a package path.
-
-    A hook command, a status-line command and a keybinding live in files this
-    repository does not own (~/.claude/settings.json, ~/.codex/hooks.json,
-    kitty.conf), and each captured path is cached by whatever launched the
-    process. Renaming a module under `harness/` or `terminal/` used to mean
-    editing all three by hand — and a moved file mid-session BLOCKS every hook
-    delivery, which is exactly how it was measured.
-
-    So the stable name is the wrapper, and the wrapper carries no behaviour:
-    a sys.path anchor, one import, one call. Anything else here is logic that
-    escaped the layer it belongs to.
-    """
-    wrappers = {
-        "harness/impl/claude_code/bin/hook.py": "harness.impl.claude_code.hooks.entry",
-        "harness/impl/claude_code/bin/statusline.py": "harness.impl.claude_code.hooks.statusline",
-        "harness/impl/codex/bin/hook.py": "harness.impl.codex.hooks.entry",
-        "terminal/bin/panes.py": "terminal.panes.client",
-    }
-    violations = []
-    for name, implementation in wrappers.items():
-        path = ROOT / name
-        if not path.is_file():
-            violations.append(f"{name} is missing")
-            continue
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        imported = [module for _path, module in imports_under_path(path)]
-        if implementation not in imported:
-            violations.append(f"{name} does not import {implementation}")
-        defined = [
-            node.name
-            for node in tree.body
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
-        ]
-        if defined:
-            violations.append(f"{name} defines {', '.join(defined)}")
-    assert violations == []
+# The anchor-depth rule that used to live here is gone, and so is the
+# wrapper rule beside it. Both were the best checks available on a design where
+# sixteen files each counted the directories between themselves and the root, and
+# neither could stop what that design actually did (see the pane outage in
+# tests/test_canonical_clients.py). They are replaced by
+# test_nothing_but_two_dev_entries_walks_up_to_the_repository_root and
+# test_the_published_client_paths_are_an_api, which check that no file names
+# anything but its own directory and that the paths external configuration holds
+# still exist and still RUN.
 
 
 def test_every_route_declares_a_response_model():
@@ -573,8 +499,15 @@ def test_every_route_declares_a_response_model():
 
 
 def test_claude_otel_is_not_a_top_level_harness():
+    """OTLP is one harness's side channel, not a harness.
+
+    What an export MEANS stays under the plugin that reports it; the endpoint that
+    receives one is a client (`client/claude_otel.py`), spawned by the launcher
+    beside that gateway.
+    """
     assert not (ROOT / "harness" / "impl" / "otel").exists()
-    assert (ROOT / "harness" / "impl" / "claude_code" / "otel" / "receiver.py").is_file()
+    assert (ROOT / "harness" / "impl" / "claude_code" / "otel" / "gateway.py").is_file()
+    assert (ROOT / "harness" / "impl" / "claude_code" / "otel" / "launch.py").is_file()
 
 
 def test_canonical_shared_code_imports_no_concrete_harness_package():
@@ -689,23 +622,16 @@ def test_session_lifecycle_has_no_per_harness_implementation():
     assert not (ROOT / "harness" / "impl" / "claude_code" / "lifecycle.py").exists()
 
 
-def test_recorder_entries_never_build_the_application():
-    """A recorder (the otel receiver) appends evidence and exits. Building the
-    application graph in one made every launch pay the whole bootstrap and let
-    any bug in it lose evidence. The launch wrappers are gone entirely:
-    launching is just running the CLI."""
+def test_the_launch_wrappers_are_gone():
+    """Launching is just running the CLI.
+
+    The recorder that used to build the application graph — the OTLP receiver —
+    is a stdlib-only client now, and that it builds nothing is checked where it
+    lives (tests/test_canonical_clients.py). What remains here is the absence of
+    the two wrappers that once wrapped a launch.
+    """
     assert not (ROOT / "harness" / "impl" / "claude_code" / "command.py").exists()
     assert not (ROOT / "harness" / "impl" / "codex" / "command.py").exists()
-    recorder_entries = (
-        ROOT / "harness" / "impl" / "claude_code" / "otel" / "receiver.py",
-    )
-    violations = []
-    for path in recorder_entries:
-        source = path.read_text(encoding="utf-8")
-        for forbidden in ("build_default_application", "build_application", "app.bootstrap"):
-            if forbidden in source:
-                violations.append(f"{path.relative_to(ROOT)} contains {forbidden}")
-    assert violations == []
 
 
 FILE_ACCESS_ALLOWLIST = {
@@ -782,12 +708,14 @@ def test_the_file_access_allowlist_has_no_stale_entries():
 def test_only_the_daemon_and_the_audit_cli_build_repositories():
     """One process writes. Two others link the layer, and both are reasoned.
 
-    The hook entries, the pane processes, the keybinding client and the OTLP
-    receiver are HTTP clients of the daemon — they may not import the contract,
-    let alone an implementation. `app/evidence_cli.py` is the exception, because
-    it is the tool you run when the daemon is the suspect, and it opens
-    read-only. `diagnostics/record.py` is the other, because the failure most
-    worth recording is "this process could not reach the daemon".
+    The hook entries, the pane processes, the keybinding and the OTLP receiver are
+    HTTP clients of the daemon; they may not import the contract, let alone an
+    implementation, and they no longer CAN — they are files in `client/` that
+    import nothing of ours (tests/test_canonical_clients.py).
+    `app/evidence_cli.py` is the exception, because it is the tool you run when
+    the daemon is the suspect, and it opens read-only. `diagnostics/record.py` is
+    the other, because the daemon's own boot and its request guard record before
+    and outside the graph that would inject a repository.
     """
     allowed_builders = {
         "app/bootstrap.py",
@@ -810,23 +738,10 @@ def test_only_the_daemon_and_the_audit_cli_build_repositories():
     evidence_cli = (ROOT / "app" / "evidence_cli.py").read_text(encoding="utf-8")
     assert "read_only(" in evidence_cli
 
-    thin_clients = (
-        "harness/impl/claude_code/hooks/entry.py",
-        "harness/impl/claude_code/hooks/statusline.py",
-        "harness/impl/claude_code/otel/receiver.py",
-        "harness/impl/codex/hooks/entry.py",
-        "terminal/panes/client.py",
-        "terminal/panes/mirror_process.py",
-        "terminal/panes/scoreboard_process.py",
-        "terminal/bin/content.py",
-        "terminal/bin/view.py",
-    )
-    reaching = [
-        name
-        for name in thin_clients
-        if "repository" in (ROOT / name).read_text(encoding="utf-8")
-    ]
-    assert reaching == []
+    # The nine thin clients that used to be named here one by one are a directory
+    # now, and the rule about them is the whole of tests/test_canonical_clients.py:
+    # they import nothing of ours, so "does it name a repository" is not a
+    # question that can be asked of them any more.
 
 
 def test_terminal_storage_is_reached_through_a_service():
@@ -851,40 +766,12 @@ def test_terminal_storage_is_reached_through_a_service():
         assert "repository." not in source, f"{name} is a route, not a service"
 
 
-def test_hook_entries_are_thin_clients_of_the_daemon():
-    """A hook ships its exact stdin to POST /api/harnesses/<name>/hooks and
-    prints the reply — it neither builds the application graph nor writes the
-    event store itself. Recording lives daemon-side (`HarnessHookGateway` +
-    `HookGatewayService`), so hook evidence has ONE recorder and the hook
-    process stays a few imports thin."""
-    # The OTLP receiver joins them: it used to open the event store and append
-    # raw events itself, which made it the only writer outside the daemon.
-    hook_entries = (
-        ROOT / "harness" / "impl" / "claude_code" / "hooks" / "entry.py",
-        ROOT / "harness" / "impl" / "claude_code" / "hooks" / "statusline.py",
-        ROOT / "harness" / "impl" / "claude_code" / "otel" / "receiver.py",
-        ROOT / "harness" / "impl" / "codex" / "hooks" / "entry.py",
-    )
-    forbidden_markers = (
-        "build_default_application",
-        "build_application",
-        "app.bootstrap",
-        # the names that WERE the direct-write path, kept so a revert is caught
-        "RawEventRecorder",
-        "engine.store.recorder",
-        "events.db",
-        # and the names that could become one
-        "repository.impl",
-        "SqliteDatabase",
-        "main.db",
-    )
-    violations = []
-    for path in hook_entries:
-        source = path.read_text(encoding="utf-8")
-        for forbidden in forbidden_markers:
-            if forbidden in source:
-                violations.append(f"{path.relative_to(ROOT)} contains {forbidden}")
-    assert violations == []
+# test_hook_entries_are_thin_clients_of_the_daemon lived here and named four
+# files by hand. Its rule — a hook ships its exact stdin to the daemon and neither
+# builds the graph nor writes the store — is now
+# tests/test_canonical_clients.py::test_clients_import_only_the_standard_library_and_their_siblings,
+# which says the same thing about a whole directory and cannot be escaped by
+# adding a fifth file.
 
 
 def test_the_application_graph_is_built_only_by_the_daemon():
@@ -942,8 +829,9 @@ def test_claude_foreground_hook_has_no_legacy_drawing_or_state_dependency():
 
 def test_canonical_consumers_cannot_observe_or_checkpoint_native_sources():
     consumers = [
-        ROOT / "terminal" / "panes" / "mirror_process.py",
-        ROOT / "terminal" / "panes" / "scoreboard_process.py",
+        # The two pane processes were on this list. They import nothing of ours
+        # at all now, which is a stronger version of the same rule and is checked
+        # in tests/test_canonical_clients.py.
         ROOT / "dashboard" / "services",
         ROOT / "dashboard" / "render" / "items",
         *sorted((ROOT / "api").rglob("*.py")),

@@ -1,10 +1,11 @@
-# core/daemon/contract.py — the agreement between the daemon and its clients.
+# core/daemon/contract.py — where the daemon listens, and what it accepts.
 #
-# The one owner of every constant BOTH sides of the daemon's HTTP door read:
-# where the daemon listens, the header a control-plane caller stamps, and the
-# request-body caps. Clients (core/daemon/client.py) and the server (api/)
-# import these from here so neither side re-encodes the other's vocabulary —
-# and so the terminal-side clients depend on no server or presenter package.
+# The one owner of every constant the SERVER side of the daemon's HTTP door
+# reads: the address, the header a control-plane caller stamps, and the
+# request-body caps. `core/clients.py` reads the address from here when it builds
+# the argv for a client we launch, because a client imports nothing of ours —
+# the copy of this vocabulary on the client side of the door is
+# `client/_wire.py`, pinned to this file by tests/test_canonical_clients.py.
 #
 # The HOOK delivery's own vocabulary — the identity headers a hook process
 # stamps and its body cap — is harness vocabulary and lives with the channel it
