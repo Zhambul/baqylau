@@ -43,12 +43,23 @@ def holder():
 
     Asked over the port the daemon binds, because that bind IS the singleton
     guard — a pid claim in a database was a second answer to the same question,
-    and it could disagree. `_listening_pid` is the fallback for the one case the
-    probe cannot cover: a daemon still holding the port but no longer answering,
-    which is exactly the one you need `stop` for.
+    and it could disagree.
+
+    Anything other than a pid falls through to `_listening_pid`, which asks the
+    kernel who holds the port. That covers the two cases the probe cannot: a
+    daemon wedged past answering, and — measured, the first time this shipped —
+    a daemon still running the code from BEFORE /api/health existed, which
+    answers the probe with a 404. Both are exactly the daemon you need `stop`
+    for, and reporting "not running" at one is how you end up with two.
     """
     from core.daemon import contract as daemon_contract  # noqa: PLC0415 — same import purity as _server()
 
+    pid = _answered_pid(daemon_contract) or _listening_pid(daemon_contract.PORT_NUMBER)
+    return pid if pid and process_is_alive(pid) else 0
+
+
+def _answered_pid(daemon_contract):
+    """The pid the daemon reports for itself, or 0 if it does not report one."""
     connection = http.client.HTTPConnection(
         daemon_contract.HOST_ADDRESS, daemon_contract.PORT_NUMBER,
         timeout=HEALTH_TIMEOUT_SECONDS,
@@ -56,12 +67,13 @@ def holder():
     try:
         connection.request("GET", HEALTH_PATH)
         response = connection.getresponse()
-        pid = int(json.loads(response.read())["process_id"]) if response.status == 200 else 0
+        if response.status != 200:
+            return 0
+        return int(json.loads(response.read())["process_id"])
     except (OSError, ValueError, KeyError, TypeError):
-        pid = _listening_pid(daemon_contract.PORT_NUMBER)
+        return 0
     finally:
         connection.close()
-    return pid if pid and process_is_alive(pid) else 0
 
 
 def _listening_pid(port):
