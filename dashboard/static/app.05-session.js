@@ -246,6 +246,19 @@ function applyCanonicalSnapshot(snapshot) {
   const previous = S.sessionView.meta || {};
   S.sessionView.meta = Object.assign({}, previous, canonicalSessionMeta(snapshot));
   S.sessionView.meta.tab = snapshot.tab_state || "";
+  // A rename Claude Code makes itself (session.title_changed, origin "automatic")
+  // rides this same snapshot rather than a dedicated push — repaint the header
+  // span in place so it doesn't wait for the next full chrome rebuild (a live↔
+  // parked flip or window move). Skipped mid inline-rename (the input owns the
+  // span) and in agent scope (updateAgents' renderAgentScoreboard, called right
+  // after this in the "activity" handler, owns the span there).
+  if (S.sessionView.projEl && !S.sessionView.agentFocus
+      && !S.sessionView.projEl.querySelector("input")
+      && S.sessionView.meta.title !== previous.title) {
+    S.sessionView.projEl.textContent = S.sessionView.meta.title
+      || directoryName(S.sessionView.meta.workingDirectory)
+      || shortSid(S.currentSessionId);
+  }
   applyCanonicalBackgroundWork(snapshot.background_work || {});
   S.sessionView.stats = canonicalActivityStats(snapshot);
   const leadActorId = (snapshot.session || {}).lead_actor_id || "";
@@ -852,6 +865,11 @@ function updateShownCount() {
 //             greyed while the turn is still running (it is provisional) and
 //             full weight once the turn settles (it is the result)
 //
+// Both non-verbose modes also drop SYSTEM messages (`conversation_kind ===
+// "system"` — hook feedback, meta results, and other harness-injected text
+// that isn't a user prompt or an assistant reply). Verbose is the only mode
+// that shows them.
+//
 // Both non-verbose modes also drop INJECTED prompts — user-shaped turns Claude
 // Code wrote itself (a Stop hook's feedback, a loaded skill's body, a resume
 // nudge, the post-/compact summary; `data-injected`, from transcript._injected).
@@ -1142,6 +1160,7 @@ function applyViewMode() {
         inNewestTurn = false;
         return "show";
       }
+      if (mk === "system") return "hide";
       if (mode === "focus" && mk === "message") {
         // Exactly ONE message survives per turn — the newest, which is the one
         // the turn ends on. The rest are the running commentary and stay hidden.
