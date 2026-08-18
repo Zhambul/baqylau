@@ -4,15 +4,27 @@ PY ?= python3
 # Parallel by default (pytest-xdist) — every test is tmpdir-isolated so this is
 # safe; use test-seq for debugging or where xdist is unavailable.
 test:
-	$(PY) -m pytest -q -m "not kitty" -n auto
+	$(PY) -m pytest -q -m "not kitty" -n auto --ignore=tests/e2e
 
 # Sequential run of the same suite.
 test-seq:
-	$(PY) -m pytest -q -m "not kitty"
+	$(PY) -m pytest -q -m "not kitty" --ignore=tests/e2e
 
 # Everything, including the opt-in real-kitty smoke tests (needs kitty installed).
 test-all:
-	CLAUDE_E2E_KITTY=1 $(PY) -m pytest -q
+	CLAUDE_E2E_KITTY=1 $(PY) -m pytest -q --ignore=tests/e2e
+
+# The LIVE-harness suite (tests/e2e): the real daemon on its own port and
+# databases, the real CLI in a pseudo-terminal, a real workspace on disk. Catches
+# a harness release changing its evidence under us — the failure nothing
+# simulated can see. Spends tokens, so it is opt-in and sequential (one daemon,
+# one workspace). See tests/e2e/conftest.py.
+#
+#   make test-drift                                  the Examples tables as written
+#   make test-drift E2E="--e2e-model claude-opus-5"   every scenario, one model
+#   make test-drift E2E="-k codex --e2e-data-dir /tmp/drift"   keep the databases
+test-drift:
+	$(PY) -m pytest tests/e2e -q $(E2E)
 
 # Alias for the (now default-parallel) suite; kept for muscle memory.
 test-par: test

@@ -1,0 +1,622 @@
+<!--doc
+title: The presentation tier: as it is, and as it could be
+eyebrow: Design review
+lede: CanonicalContentService is a symptom. The disease is that "what to show" has no home of its own — every surface re-decides it, and the content-reference vocabulary is written down nowhere.
+meta: Author: Claude, Updated: 2026-08-18, Scope: engine/queries, dashboard/render, terminal/mirror, api/
+toc: yes
+width: normal
+-->
+
+<h2>Summary</h2>
+
+<p>You asked three questions: what <code>CanonicalContentService</code> is, whether the
+terminal/dashboard API split is wrong, and whether presenters are the root of the
+problem. The short answers:</p>
+
+<ul>
+  <li><code>CanonicalContentService</code> (<code>engine/queries/content.py</code>) turns a
+    content reference — the string <code>"{event_id}:{field}"</code> — back into full text
+    when a user clicks <b class="ui">⧉copy</b> or <b class="ui">⧉view</b>. The reference is
+    an untyped <code>str</code>, so the set of legal references exists in two hand-maintained
+    copies — eight minting sites and one resolver allow-table — and the copies have drifted.
+    One drift is a live bug: every file edit whose operation finishes with a result mints a
+    reference the resolver answers with a 400.</li>
+  <li>The two API packages are <strong>not</strong> duplicated. <code>api/terminal</code> is 7
+    routes for the kitty pane processes; <code>api/dashboard</code> is 44 routes for the
+    browser; their paths, verbs, and services are disjoint. What they share — the guard,
+    the error shape, the SSE vocabulary — already lives in <code>api/common</code> and
+    <code>api/sse.py</code>. Unifying them is a naming and packaging change, not a rescue.</li>
+  <li>Your instinct about presenters is right, but the diagnosis needs one refinement. The
+    problem is not that presenters exist — something must turn an activity into pixels.
+    The problem is that each presenter makes <em>two</em> kinds of decision at once:
+    semantic (what to call this, what state it is in, which text is copyable) and formal
+    (which bytes paint it). The semantic half is duplicated between
+    <code>terminal/mirror/presenter.py</code> and <code>dashboard/render/items/</code> —
+    ten near-identical decision tables, counted in this document — and the content-reference
+    mess is one of those ten. Fix the boundary and both complaints resolve together.</li>
+</ul>
+
+<div class="callout key">
+  <div class="callout-icon" aria-hidden="true">◆</div>
+  <div class="callout-body"><span class="callout-label">Key point:</span>
+    The thesis of the TO-BE design: split "what to show" from "how to paint". One function
+    describes an activity as a typed, surface-neutral view; two small renderers turn that
+    view into HTML and into ANSI. The presenters disappear, the duplication disappears,
+    and the content reference becomes a typed value that one module both mints and resolves.</div>
+</div>
+
+<p>This document supersedes <code>docs/html/content-references.html</code>, which covered
+the reference half only. Everything here comes from reading the code at today's working
+tree; the one claim not verified at runtime is marked where it appears.</p>
+
+<h2>The concepts</h2>
+
+<p>Seven things carry a block of text from the event store to a click. Each is named as
+the code names it.</p>
+
+<dl class="defs">
+  <dt>Canonical event</dt>
+  <dd>The immutable stored fact, identified by a <code>CanonicalEventId</code>. Its payload
+    is one of the typed classes in <code>domain/events.py</code> — <code>MessageCreated</code>,
+    <code>OperationFinished</code>, <code>FileAccessed</code>. Some payload fields hold
+    arbitrarily large text.</dd>
+  <dt>Activity</dt>
+  <dd>What the fold in <code>engine/projections/activity.py</code> produces: one thing that
+    happened, built from every event about it. An <code>OperationActivity</code> is the start,
+    all progress chunks, and the finish, collapsed into one frozen dataclass with
+    <code>command_text()</code> and <code>output_text()</code> methods
+    (<code>engine/projections/models.py:85</code>). Eleven activity classes exist; this layer
+    is clean and stays.</dd>
+  <dt>Content reference</dt>
+  <dd>An event id plus a field name, formatted as <code>"{event_id}:{field}"</code> —
+    for example <code>progress-two:operation_output</code>. It has no type; it is a
+    <code>str</code> everywhere it appears, including as a database primary key.</dd>
+  <dt>Presenter</dt>
+  <dd>The code that turns an activity into what a surface draws. Two exist and neither
+    imports the other: <code>DashboardPresenter</code>
+    (<code>dashboard/render/items/__init__.py:66</code>, a registry dict keyed by activity
+    class) produces <code>DashboardItem</code>; <code>TerminalPresenter</code>
+    (<code>terminal/mirror/presenter.py:258</code>, an isinstance ladder) produces
+    <code>TerminalUpdate</code>.</dd>
+  <dt>DashboardItem</dt>
+  <dd><code>dashboard/render/items/item.py:63</code> — one rendered block for the browser:
+    pre-escaped HTML plus 21 metadata fields, three of which are reference strings.
+    Copied field-for-field into the Pydantic <code>ActivityItem</code> by
+    <code>api/dashboard/mapper/activity.py:18</code> and shipped over SSE as JSON.</dd>
+  <dt>TerminalUpdate</dt>
+  <dd><code>terminal/mirror/blocks.py:58</code> — replaced and removed blocks of styled
+    lines. <code>TerminalRenderer</code> (<code>terminal/mirror/renderer.py:156</code>) turns
+    them into an ANSI screen; the pane client (<code>client/terminal_pane.py</code>) copies
+    the bytes to the terminal and draws nothing of its own.</dd>
+  <dt>Opened view</dt>
+  <dd>Terminal-only state: which references the mirror has expanded in place. Stored in the
+    <code>opened_views</code> table, whose primary key <em>is</em> the reference string
+    (<code>repository/impl/sqlite/schema.py:254</code>).</dd>
+</dl>
+
+<h2>AS-IS: the pipeline</h2>
+
+<p>Both surfaces read the same fold through <code>SessionQueries</code>
+(<code>engine/projections/queries.py</code>). The fork happens immediately after: each
+surface has its own presenter, its own item model, its own stream route, and its own
+client.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 840 366" role="img" aria-labelledby="p1-title p1-desc">
+    <title id="p1-title">The AS-IS pipeline forks after the projections</title>
+    <desc id="p1-desc">Canonical events are folded into activities by SessionQueries.
+      From there two independent stacks run in parallel: DashboardPresenter builds
+      DashboardItem with pre-escaped HTML, which the dashboard SSE stream sends to the
+      browser; TerminalPresenter builds terminal blocks, which the renderer paints as an
+      ANSI screen and the pane stream sends to the pane client. Both stacks mint content
+      references that come back to the shared /api/content route.</desc>
+
+    <rect class="n" x="20" y="114" width="160" height="54" rx="8"/>
+    <text class="t" x="100" y="135">Canonical events</text>
+    <text class="t sub" x="100" y="152">main.db</text>
+
+    <rect class="n accent" x="240" y="114" width="160" height="54" rx="8"/>
+    <text class="t" x="320" y="135">SessionQueries</text>
+    <text class="t sub" x="320" y="152">fold → activities</text>
+
+    <rect class="n" x="460" y="20" width="160" height="54" rx="8"/>
+    <text class="t" x="540" y="41">DashboardPresenter</text>
+    <text class="t sub" x="540" y="58">activity → HTML item</text>
+
+    <rect class="n" x="460" y="208" width="160" height="54" rx="8"/>
+    <text class="t" x="540" y="229">TerminalPresenter</text>
+    <text class="t sub" x="540" y="246">activity → blocks</text>
+
+    <rect class="n ok" x="680" y="20" width="140" height="54" rx="8"/>
+    <text class="t" x="750" y="41">Browser</text>
+    <text class="t sub" x="750" y="58">SSE, JSON + HTML</text>
+
+    <rect class="n ok" x="680" y="208" width="140" height="54" rx="8"/>
+    <text class="t" x="750" y="229">Pane client</text>
+    <text class="t sub" x="750" y="246">SSE, ANSI screen</text>
+
+    <rect class="n warn" x="460" y="302" width="160" height="54" rx="8"/>
+    <text class="t" x="540" y="323">/api/content/{ref}</text>
+    <text class="t sub" x="540" y="340">resolve on click</text>
+
+    <path class="e" d="M180,141 H236"/>
+    <path class="e" d="M400,128 H430 V47 H456"/>
+    <path class="e" d="M400,154 H430 V235 H456"/>
+    <path class="e" d="M620,47 H676"/>
+    <path class="e" d="M620,235 H676"/>
+    <path class="e dashed" d="M750,74 V329 H624"/>
+    <path class="e dashed" d="M750,262 V310"/>
+
+    <rect class="el-bg" x="642" y="286" width="104" height="16" rx="4"/>
+    <text class="el" x="694" y="295">click ⧉copy / ⧉view</text>
+  </svg>
+  <figcaption>The fork after <code>SessionQueries</code>: two presenter stacks, two item
+    models, two stream shapes, one shared resolve route both clients call back to.</figcaption>
+</figure>
+
+<p>The stream mechanics differ on purpose and are not the problem. The browser gets a
+cursor-bearing <code>activity</code> stream plus change-detected <code>application</code>
+snapshots on one connection (<code>api/dashboard/streams.py:107</code>); the pane gets fully
+painted screens because the pane client is deliberately a byte-copier — a resize is a
+reconnect at the new width (<code>api/terminal/streams.py:35</code>). Neither uses a broker;
+every stream is an async generator polling SQLite through <code>off_loop</code>.</p>
+
+<h2>AS-IS: the content reference, stage by stage</h2>
+
+<p>A reference is minted on the way out and parsed on the way back in. It is never stored
+in a canonical payload — it is derived on every read, so changing its shape needs no
+backfill. Only the <code>opened_views</code> table persists it.</p>
+
+<div class="pipeline">
+  <div class="stage"><span class="stage-index">1</span><span class="stage-name">Fold</span><span class="stage-note">records event id + field name</span></div>
+  <div class="stage"><span class="stage-index">2</span><span class="stage-name">Mint</span><span class="stage-note">8 sites format the string</span></div>
+  <div class="stage"><span class="stage-index">3</span><span class="stage-name">Ship</span><span class="stage-note">item field, or OSC 8 link</span></div>
+  <div class="stage"><span class="stage-index">4</span><span class="stage-name">Click</span><span class="stage-note">browser fetch, or subprocess</span></div>
+  <div class="stage"><span class="stage-index">5</span><span class="stage-name">Resolve</span><span class="stage-note">split the string, guess its meaning</span></div>
+</div>
+
+<h3>Stage 1: the fold records a loose pair</h3>
+
+<p>Every activity that can carry large text gets two unrelated optional fields. Nothing
+constrains the second to a known set; ten sites in
+<code>engine/projections/activity.py</code> assign it as a bare literal chosen by the
+branch they sit in.</p>
+
+<figure class="code">
+  <figcaption><span class="file">engine/projections/models.py</span><span class="lang">python</span></figcaption>
+  <pre><code>content_event_id: CanonicalEventId | None = None
+content_field: str | None = None   # "content" | "operation_content" | "unified_diff" | "result"</code></pre>
+</figure>
+
+<h3>Stage 2: eight sites mint the string</h3>
+
+<p>The wire format lives in eight places. One is a helper that also applies a size rule;
+the other seven are inline f-strings. The terminal pair and the dashboard pair for
+operations are byte-for-byte identical logic, written twice.</p>
+
+<div class="table-wrap">
+  <table>
+    <caption>Table 1. Every site that builds a content reference</caption>
+    <thead><tr><th>Site</th><th>String it builds</th><th>Size rule</th></tr></thead>
+    <tbody>
+      <tr><td><code>dashboard/render/items/item.py:115</code></td><td><code>{event_id}:{field}</code></td><td>only if text &gt; 4096 chars</td></tr>
+      <tr><td><code>dashboard/render/items/operations.py:112</code></td><td><code>{source_event_ids[0]}:operation_command</code></td><td>none</td></tr>
+      <tr><td><code>dashboard/render/items/operations.py:117</code></td><td><code>{content_event_id}:operation_output</code></td><td>none</td></tr>
+      <tr><td><code>dashboard/render/items/files.py:75</code></td><td><code>{content_event_id}:{content_field}</code></td><td>none</td></tr>
+      <tr><td><code>terminal/mirror/presenter.py:94</code></td><td><code>{source_event_ids[0]}:operation_command</code></td><td>none</td></tr>
+      <tr><td><code>terminal/mirror/presenter.py:99</code></td><td><code>{content_event_id}:operation_output</code></td><td>none</td></tr>
+      <tr><td><code>terminal/mirror/presenter.py:171</code></td><td><code>{content_event_id}:{content_field}</code></td><td>none</td></tr>
+      <tr><td><code>terminal/panes/streams.py:174</code></td><td><code>{content_event_id}:{content_field}</code></td><td>none</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>The 4096-character rule is a presentation decision — offer copy and view links only when
+the text is big enough to want them — and it reaches one site of eight. The other seven
+offer the affordance unconditionally.</p>
+
+<h3>Stages 3 and 4: two rides, one constraint</h3>
+
+<p>In the browser, the reference sits in <code>node.dataset.contentReference</code>; a
+delegated click listener fetches <code>/api/content/{ref}</code> and either writes the
+clipboard or inserts a view block (<code>dashboard/static/app.05-session.js:473-537</code>).
+For file items the client appends <code>?view=diff|source&amp;path=…</code>, re-deriving
+from <code>dataset.summaryKind</code> a choice the server could read off
+<code>FileAccessed.path</code> itself.</p>
+
+<p>In the terminal, the same reference becomes a URI inside an OSC 8 hyperlink under a
+custom scheme — <code>baqylau-content://</code> to copy, <code>baqylau-view://</code> to
+expand (<code>terminal/mirror/renderer.py:43</code>). A click launches
+<code>client/terminal_content.py</code> or <code>client/terminal_view.py</code> with the URI
+as <code>argv[1]</code>. This is the one hard constraint on any redesign: the reference must
+survive as a single URI-safe token, because a hyperlink cannot carry a request body.</p>
+
+<h3>Stage 5: the resolver rediscovers what the minter meant</h3>
+
+<p>The whole of <code>CanonicalContentService</code> is one method. It splits the string
+with <code>rpartition</code>, loads the event, and then guesses: three field names are
+virtual and trigger a re-fold of the operation; everything else is checked against a
+hand-maintained allow-table keyed by payload type.</p>
+
+<figure class="code">
+  <figcaption><span class="file">engine/queries/content.py</span><span class="lang">python</span></figcaption>
+  <pre><code>def resolve(self, content_reference: str) -&gt; str:
+    event_id, separator, field_name = content_reference.rpartition(":")
+    ...
+    if field_name in {"operation_command", "operation_output", "operation_content"} \
+            and isinstance(payload, (OperationStarted, OperationProgressed, OperationFinished)):
+        activity = self.queries.operation_activity(...)   # re-fold, then pick text
+        ...
+    allowed_fields = {
+        MessageCreated: frozenset({"content"}),
+        ...
+        ActorAssignmentFinished: frozenset({"result"}),
+        AttentionResolved: frozenset({"feedback"}),
+    }.get(type(payload), frozenset())
+    if field_name not in allowed_fields:
+        raise UnknownReference(content_reference)
+    value = getattr(payload, field_name)   # reflection on a typed payload</code></pre>
+</figure>
+
+<p>The <code>rpartition</code>, the <code>isinstance</code> guard, the allow-table, and the
+<code>getattr</code> are not four separate messes. They are what a resolver must do when
+the token it receives carries no type: rediscover, at runtime, what the minter meant.
+The vocabulary — which addresses exist — is written down nowhere, so it exists twice,
+and the two copies have drifted in both directions:</p>
+
+<ul>
+  <li>The allow-table's <code>OperationInputProvided: {"content"}</code> row is dead — no
+    presenter ever mints a reference to that payload.</li>
+  <li>The fold mints an address the table refuses. That is the live bug.</li>
+</ul>
+
+<h3>The confirmed bug</h3>
+
+<p>When a file-editing operation finishes with a result, the fold moves the file
+activity's content pointer to the <code>OperationFinished</code> event and names the field
+<code>"result"</code>:</p>
+
+<figure class="code">
+  <figcaption><span class="file">engine/projections/activity.py</span><span class="lang">python — lines 295-299</span></figcaption>
+  <pre><code>content_event_id=(event.event_id if payload.result is not None
+                  else file_activity.content_event_id),
+content_field=("result" if payload.result is not None
+               else file_activity.content_field),</code></pre>
+</figure>
+
+<p><code>dashboard/render/items/files.py:75</code> then mints
+<code>"{finish_event_id}:result"</code>. In the resolver, <code>"result"</code> is not one of
+the three virtual names, and the allow-table has no row for <code>OperationFinished</code> —
+its <code>"result"</code> row belongs to <code>ActorAssignmentFinished</code>, a different
+payload. The lookup yields an empty set and <code>UnknownReference</code> is raised, which
+the API layer answers as a 400. The user sees the file block's <b class="ui">⧉view</b> link,
+clicks it, and gets a <code>view failed</code> toast. The same untyped field misfires a
+second way in the terminal: <code>terminal/mirror/presenter.py:289</code> branches on
+<code>content_field == "unified_diff"</code> versus <code>== "content"</code>, so
+<code>"result"</code> silently falls through both arms.</p>
+
+<div class="callout note">
+  <div class="callout-icon" aria-hidden="true">i</div>
+  <div class="callout-body"><span class="callout-label">Note:</span>
+    Confirmed by reading the mint and resolve paths end to end; not reproduced against a
+    running daemon. No test catches it because minting and resolving are only exercised
+    together for the operation and plain-file shapes
+    (<code>tests/test_canonical_dashboard.py:411-528</code>).</div>
+</div>
+
+<h2>AS-IS: the two API packages, measured</h2>
+
+<p>The route inventory does not support the two-parallel-stacks reading. The packages
+serve different clients with disjoint routes:</p>
+
+<div class="table-wrap">
+  <table>
+    <caption>Table 2. The API surface by package</caption>
+    <thead><tr><th>Package</th><th>Routes</th><th>Client</th><th>What they do</th></tr></thead>
+    <tbody>
+      <tr><td><code>api/dashboard</code></td><td>44</td><td>browser SPA</td><td>session reads, 2 SSE streams, launch + 15 control gestures, preferences and drafts, uploads, telemetry, static files</td></tr>
+      <tr><td><code>api/terminal</code></td><td>7</td><td><code>client/</code> pane processes</td><td>1 pane frame stream, 5 kitty pane commands, 1 view toggle</td></tr>
+      <tr><td><code>api/common</code></td><td>4</td><td>both</td><td>health, hook and telemetry ingest, <code>/api/content/{ref}</code></td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>What the packages share already lives in shared modules: the <code>control_plane()</code>
+guard on every POST (<code>api/guard.py:38</code>), the one error body
+(<code>api/app.py:58</code>), and the SSE vocabulary (<code>api/sse.py</code>). Both follow
+the same idiom — URL-as-gesture, verdicts instead of errors — as convergent design, not
+copied code. Three genuine findings, none structural:</p>
+
+<ul>
+  <li><code>api/common/content.py:10</code> imports the <em>dashboard's</em>
+    <code>unified_diff_html</code>/<code>source_html</code> to serve the <em>terminal's</em>
+    click-through. It is the only place the two display stacks touch, and it means one
+    expanded file exists in three renderings.</li>
+  <li><code>POST /api/sessions/{id}/controls/open-rewind</code>
+    (<code>api/dashboard/controls.py:121</code>) has no caller anywhere — the browser uses
+    only <code>apply-rewind</code>. Wired but unreachable.</li>
+  <li>The client-side split is total: <code>terminal/</code> and <code>bin/</code> make no
+    HTTP calls (the adapter spawns <code>client/terminal_pane.py</code>); the browser calls
+    every dashboard route through two funnels, <code>postJSON</code> and
+    <code>sessionControl</code>.</li>
+</ul>
+
+<p>So "two APIs" is a packaging smell, not an architecture flaw: the names say
+<em>who asks</em> when route names should say <em>what is asked for</em>. The TO-BE section
+proposes the rename. The load-bearing problem is one layer down.</p>
+
+<h2>AS-IS: where the duplication actually lives</h2>
+
+<p>The two presenter stacks re-implement the same semantic decisions independently.
+Ranked by how exactly the code repeats:</p>
+
+<div class="table-wrap">
+  <table>
+    <caption>Table 3. Semantic decisions made twice</caption>
+    <thead><tr><th>Decision</th><th>Terminal site</th><th>Dashboard site</th></tr></thead>
+    <tbody>
+      <tr><td>File verb → label and colour, <code>+added/-removed</code> suffix</td><td><code>presenter.py:160-197</code></td><td><code>files.py:14-43</code> (same RGB values as CSS literals)</td></tr>
+      <tr><td>Syntax highlight token → One-Dark RGB ladder</td><td><code>terminal/mirror/highlight.py:29</code></td><td><code>dashboard/render/highlight.py:32</code></td></tr>
+      <tr><td>Attention prompt → question text, incl. the same <code>ValueError</code> guard</td><td><code>presenter.py:293-309</code></td><td><code>attention.py:15-66</code></td></tr>
+      <tr><td>Diff/source row walk, gutter, <code>⋮</code> separator</td><td><code>presenter.py:216,243</code></td><td><code>dashboard/render/diff.py:24,38</code></td></tr>
+      <tr><td>Operation reference minting and the background/monitor split</td><td><code>presenter.py:86-104</code></td><td><code>operations.py:26-27,112-122</code></td></tr>
+      <tr><td>Task, model-change, effort-change, compaction, message labels</td><td><code>presenter.py:262-342</code></td><td><code>work.py:26-98</code>, <code>messages.py:17-44</code></td></tr>
+      <tr><td>Duration formatting — four variants, all slightly different</td><td><code>presenter.py:68</code>, <code>scoreboard.py:35</code></td><td><code>item.py:119</code>, <code>app.00-core.js:383</code></td></tr>
+      <tr><td>Token counts and cost (<code>Σ</code> chip, k/M, <code>≈ $</code>)</td><td><code>scoreboard.py:27,92-101</code></td><td><code>app.00-core.js:355-375</code></td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>Legitimately different and not counted: markdown (browser only), HTML escaping and the
+<code>http(s)</code>-only link gate (the terminal has no href hazard), and the expansion
+policy (server-held toggle for the pane, fetch-on-demand for the browser).</p>
+
+<h2>The root cause, named</h2>
+
+<p>The projection layer stops at the right place: eleven typed activity classes, pure,
+well-named. But the next layer up answers two questions at once:</p>
+
+<ol>
+  <li><strong>What should this activity show?</strong> A label, a state, a duration, chips,
+    which text is large enough to fetch on demand, whether the body is a diff or plain
+    text. These answers are the same for every surface.</li>
+  <li><strong>What bytes paint it?</strong> Escaped HTML in a JSON field, or SGR sequences
+    and OSC 8 links. These answers are different per surface, and mechanical.</li>
+</ol>
+
+<p>Because no type holds the answers to question 1, each presenter answers both questions
+inline, and every question-1 answer is written twice. The content reference is the
+sharpest instance: "which piece of text can be fetched later" is a question-1 answer,
+spelled as an f-string at eight question-2 sites, and re-guessed by a resolver that was
+never told the vocabulary. <code>DashboardItem</code> shows the same confusion from the
+other side: 22 fields mixing identity (<code>item_id</code>, <code>turn_id</code>), semantics
+(<code>summary_kind</code>, <code>state</code>, three reference strings), and form
+(<code>html</code>) in one bag.</p>
+
+<h2>TO-BE: one description, two renderers</h2>
+
+<p>Move the boundary up one layer. Between the projections and the surfaces, add a single
+surface-neutral description of each activity, and demote both presenters to renderers
+that hold no opinions.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 840 272" role="img" aria-labelledby="p2-title p2-desc">
+    <title id="p2-title">The TO-BE pipeline: describe once, render twice</title>
+    <desc id="p2-desc">SessionQueries folds events into activities as today. One describe
+      function turns an activity into a typed ItemView. Two renderers consume the same
+      view: an HTML renderer for the browser and an ANSI renderer for the pane. Typed
+      content references are minted inside describe and resolved by the same module.</desc>
+
+    <rect class="n" x="20" y="66" width="160" height="54" rx="8"/>
+    <text class="t" x="100" y="87">SessionQueries</text>
+    <text class="t sub" x="100" y="104">unchanged</text>
+
+    <rect class="n accent" x="240" y="66" width="160" height="54" rx="8"/>
+    <text class="t" x="320" y="87">describe()</text>
+    <text class="t sub" x="320" y="104">activity → ItemView</text>
+
+    <rect class="n" x="460" y="20" width="160" height="54" rx="8"/>
+    <text class="t" x="540" y="41">render_html()</text>
+    <text class="t sub" x="540" y="58">view → DashboardItem</text>
+
+    <rect class="n" x="460" y="112" width="160" height="54" rx="8"/>
+    <text class="t" x="540" y="133">render_ansi()</text>
+    <text class="t sub" x="540" y="150">view → TerminalUpdate</text>
+
+    <rect class="n warn" x="240" y="198" width="160" height="54" rx="8"/>
+    <text class="t" x="320" y="219">ContentRef</text>
+    <text class="t sub" x="320" y="236">minted and resolved here</text>
+
+    <rect class="n ok" x="680" y="20" width="140" height="54" rx="8"/>
+    <text class="t" x="750" y="47">Browser</text>
+
+    <rect class="n ok" x="680" y="112" width="140" height="54" rx="8"/>
+    <text class="t" x="750" y="139">Pane client</text>
+
+    <path class="e" d="M180,93 H236"/>
+    <path class="e" d="M400,80 H430 V47 H456"/>
+    <path class="e" d="M400,106 H430 V139 H456"/>
+    <path class="e" d="M620,47 H676"/>
+    <path class="e" d="M620,139 H676"/>
+    <path class="e accent" d="M320,120 V194"/>
+  </svg>
+  <figcaption>The fork moves from "after the projections" to "after the description".
+    Everything above the fork is written once.</figcaption>
+</figure>
+
+<h3>The reference becomes a value</h3>
+
+<p>A new <code>domain/references.py</code> writes the vocabulary down once, as a closed
+enum of <em>what text you want</em> — not payload field names, because <code>content</code>
+means five different things on five payloads and <code>operation_output</code> corresponds
+to no field at all (it is folded from progress chunks).</p>
+
+<figure class="code">
+  <figcaption><span class="file">domain/references.py</span><span class="lang">python — proposed</span></figcaption>
+  <pre><code>class ContentSlot(StrEnum):
+    MESSAGE_TEXT = "message-text"
+    REASONING_TEXT = "reasoning-text"
+    OPERATION_COMMAND = "operation-command"
+    OPERATION_OUTPUT = "operation-output"
+    FILE_SOURCE = "file-source"
+    FILE_DIFF = "file-diff"
+    ASSIGNMENT_BRIEF = "assignment-brief"
+    ASSIGNMENT_RESULT = "assignment-result"
+    ATTENTION_FEEDBACK = "attention-feedback"
+
+@dataclass(frozen=True)
+class ContentRef:
+    slot: ContentSlot
+    event_id: CanonicalEventId
+
+    def token(self) -&gt; str: ...            # "operation-output:evt-7f3a" — the one URI-safe form
+    @classmethod
+    def parse(cls, token: str) -&gt; ContentRef: ...   # the one parser, at the api boundary</code></pre>
+</figure>
+
+<p>Consequences, followed out loud:</p>
+
+<ul>
+  <li>The fold's loose pair <code>content_event_id</code>/<code>content_field</code> becomes
+    one field, <code>content_ref: ContentRef | None</code>. The ten bare-literal
+    assignments in <code>activity.py</code> become constructor calls the type checker reads.
+    The file-edit bug becomes unrepresentable: <code>"result"</code> is not a slot, so the
+    misassignment cannot compile past mypy.</li>
+  <li>The eight f-string mint sites become one: <code>ref.token()</code>.</li>
+  <li>The resolver becomes an exhaustive <code>match ref.slot</code> with
+    <code>assert_never</code>, so adding a slot without a reader fails the build. The
+    allow-table, the <code>rpartition</code>, the <code>isinstance</code> guard, and the
+    <code>getattr</code> all disappear. <code>CanonicalContentService</code> is renamed to
+    what it is: <code>ContentResolver</code>, method <code>text(ref: ContentRef) -&gt; str</code>.</li>
+  <li><code>FILE_SOURCE</code> and <code>FILE_DIFF</code> being distinct slots deletes the
+    <code>?view=</code> and <code>?path=</code> query parameters — the server already knows
+    the path from <code>FileAccessed.path</code>, and the slot says which renderer to use.
+    The browser stops re-deriving that choice from <code>dataset.summaryKind</code>.</li>
+  <li>The <code>opened_views</code> primary key stores <code>ref.token()</code>. Rows are
+    ephemeral UI state; the migration is "drop and recreate", not a backfill.</li>
+</ul>
+
+<h3>The description becomes a type</h3>
+
+<p>One module — a new <code>presentation/</code> package, or <code>engine/describe/</code> —
+holds every question-1 answer. Its output is small and closed:</p>
+
+<figure class="code">
+  <figcaption><span class="file">presentation/view.py</span><span class="lang">python — proposed sketch</span></figcaption>
+  <pre><code>@dataclass(frozen=True)
+class ItemView:
+    identity: ItemIdentity        # item_id, actor, turn, message/assignment ids
+    kind: SummaryKind             # today's vocabulary, kept
+    label: str                    # "Update", "task #3 · rename fields", "model a → b"
+    state: ItemState | None
+    started_at: float | None
+    finished_at: float | None
+    body: tuple[BodySegment, ...] # the closed union below
+    refs: ItemRefs                # content/command/output as ContentRef | None
+    counters: FileCounters | None # lines added/removed
+
+BodySegment: TypeAlias = PlainText | MarkdownText | DiffBody | SourceBody | AnswerList</code></pre>
+</figure>
+
+<p><code>describe(activity) -&gt; ItemView</code> subsumes both presenters' semantic halves:
+the file verb table, the attention text, the labels, the 4096-character rule (applied once,
+for every surface), and all reference minting. The renderers then hold only form:</p>
+
+<ul>
+  <li><code>render_html(view) -&gt; DashboardItem</code> — escaping, markdown, CSS hooks.
+    <code>DashboardItem</code> shrinks to identity + <code>html</code> + <code>plain_text</code>;
+    the semantic fields ride on the view.</li>
+  <li><code>render_ansi(view, width) -&gt; TerminalUpdate</code> — SGR styling, OSC 8 links,
+    line layout. The palette is keyed by semantic role in one table per surface, so
+    "updated is yellow" is stated once each, against the same role name.</li>
+</ul>
+
+<p>Duration, token-count, and cost formatting move next to the view as shared helpers;
+the JavaScript copies remain (the browser formats live tickers), but they become the only
+acknowledged second copy, and the scoreboard/JS drift stops growing.</p>
+
+<h3>The API becomes one package, named by resource</h3>
+
+<p>Dissolve <code>api/dashboard</code>, <code>api/terminal</code>, and <code>api/common</code>
+into one <code>api/</code> package of routers named for what they serve, mounted by
+composition exactly as today's <code>build_web_application</code> already does:</p>
+
+<pre class="tree"><span class="dir">api/</span>
+├── sessions.py      <span class="note"># reads + the two session streams</span>
+├── controls.py      <span class="note"># launch + gestures (drop open-rewind)</span>
+├── content.py       <span class="note"># GET /api/content/{token}, ContentRef.parse at the boundary</span>
+├── panes.py         <span class="note"># kitty pane commands + the ANSI frame stream</span>
+├── views.py         <span class="note"># the expansion toggle</span>
+├── application.py   <span class="note"># preferences, drafts, presence, uploads</span>
+└── ingest.py        <span class="note"># hooks, telemetry, health</span></pre>
+
+<p>No route merges and no client changes; the pane stream keeps shipping painted ANSI
+because the byte-copying client is a good design. "The terminal API" stops existing as a
+concept; the pane routes are one resource among eight, and a future surface composes the
+routers it needs. This is deliberately the smallest part of the redesign.</p>
+
+<h3>What gets deleted</h3>
+
+<ul>
+  <li><code>engine/queries/content.py</code> as written: the allow-table, the virtual field
+    names, the <code>getattr</code>.</li>
+  <li>The semantic halves of <code>terminal/mirror/presenter.py</code> and all five
+    <code>dashboard/render/items/</code> presenter modules — roughly the ten rows of
+    Table 3.</li>
+  <li><code>content_field: str</code> on two activity classes, and the ten literal
+    assignments feeding it.</li>
+  <li>The <code>?view=</code>/<code>?path=</code> parameters on the content route, and the
+    browser code that computes them.</li>
+  <li>The dead <code>OperationInputProvided</code> allow-table row and the dead
+    <code>open-rewind</code> route.</li>
+</ul>
+
+<h2>Rejected alternatives</h2>
+
+<div class="compare">
+  <div class="bad"><span class="compare-title">Share helpers between the two presenters</span>
+    <p>The cheap fix: extract the file-verb table, the attention text, the durations into
+    common functions both presenters call. It removes today's copies but keeps the
+    boundary that produced them — the next feature adds a decision to one presenter and
+    forgets the other, exactly as happened eight times already.</p></div>
+  <div class="good"><span class="compare-title">Move the boundary</span>
+    <p>One <code>describe()</code> means a forgotten surface is impossible: a renderer that
+    ignores a view field is visible in one diff, and mypy's exhaustiveness checks cover
+    the closed unions.</p></div>
+</div>
+
+<p>Also considered and dropped:</p>
+
+<ul>
+  <li><strong>Render client-side in the pane.</strong> Making the pane client interpret a
+    JSON stream would unify the wire format, but the client is a Python process whose whole
+    value is having no logic — resize as reconnect, no state, no version skew. It would
+    also just move the ANSI renderer across a process boundary, not delete it.</li>
+  <li><strong>One merged stream endpoint for both clients.</strong> The browser needs
+    cursors and application snapshots; the pane needs painted frames at a width. Forcing
+    one shape onto both adds a discriminator field and two code paths inside one route —
+    the same fork, hidden.</li>
+  <li><strong>Path-segment references</strong> (<code>/api/content/operation-output/evt-7f3a</code>)
+    instead of a token. Cleaner HTTP, but the reference must still exist as one string for
+    OSC 8 URIs and the <code>opened_views</code> key, so the token form survives anyway;
+    two spellings of one value is the current disease.</li>
+</ul>
+
+<h2>Open questions</h2>
+
+<p>Decisions that are yours, before any edit happens:</p>
+
+<ol>
+  <li><strong>Package and name for the description layer.</strong> <code>presentation/</code>
+    as a top-level package, or <code>engine/describe/</code>? And is <code>ItemView</code> /
+    <code>describe()</code> the human name you want, or do you prefer another pair?</li>
+  <li><strong>Scope of round one.</strong> The <code>ContentRef</code> half is separable and
+    fixes the live bug; the <code>describe()</code> half is the larger refactor. Land them
+    together or reference-first?</li>
+  <li><strong>The API rename.</strong> Dissolving the three packages touches ~60 route
+    declarations' imports and every test that mounts a router. Worth doing in the same
+    change, or as a mechanical follow-up?</li>
+  <li><strong><code>_activity_id</code></strong> (<code>engine/projections/activity.py:91</code>)
+    has the same untyped-format disease and four bypass sites, and its wire form is
+    <code>item_id</code>. Include it, or leave it for its own review?</li>
+</ol>

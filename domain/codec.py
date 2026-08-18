@@ -1,215 +1,239 @@
-"""Deterministic serialization for the closed canonical event schema."""
+"""The canonical event's stored form.
+
+One envelope dataclass, and pydantic. There is a codec at all because the store
+keeps an event as a JSON blob beside its identity columns, so something has to
+turn a `CanonicalEvent` into those bytes and back — and has to REFUSE a payload
+that does not match its declared shape, at the write, which is the last moment
+the bad value is still attributable to whoever produced it.
+
+What used to be here instead was a hand-written reflective serializer: 120 lines
+walking `get_type_hints`, resolving unions, checking Literals, deciding that a
+Decimal is a string and a tuple is an array. Every line of it was a
+reimplementation of what the api layer already gets from pydantic for free, and
+it existed only because `domain/` was allowed no dependency that could do it.
+The rule now admits pydantic — which the daemon already runs — and the walk is
+gone.
+
+Strictness is `domain/stored.py`'s `STORED` config, named on every shape that is
+stored — the payload marker base and the eight value objects a payload can nest.
+An unknown field is schema drift and does not decode. A field WITH a default
+stays optional, so rows written before that field existed keep decoding —
+additive evolution without a rewrite. An int where a float is declared is
+accepted, as it always was; anything else of the wrong type is not.
+"""
 
 from __future__ import annotations
 
-import json
-import types
-import typing
-from dataclasses import MISSING, fields, is_dataclass
-from decimal import Decimal
+from dataclasses import dataclass
 from functools import cache
-from typing import Any, Literal, get_args, get_origin, get_type_hints
+from typing import Any, Generic, TypeVar
 
-from domain.events import CanonicalEvent, EVENT_TYPES, PAYLOAD_TYPES, EventPayload
+from pydantic import ConfigDict, TypeAdapter, ValidationError
+
+from domain.events import (
+    CanonicalEvent,
+    EVENT_TYPES,
+    PAYLOAD_TYPES,
+    EventPayload,
+    EventPayloadType,
+)
 from domain.ids import ActorId, CanonicalEventId, SessionId, TurnId
+from domain.stored import STORED
 
-SCHEMA_VERSION = 15
-FORBIDDEN_PRESENTATION_FIELDS = frozenset({
-    "ansi",
-    "bubbled",
-    "chrome",
-    "css",
-    "glyph",
-    "gutter",
-    "html",
-    "note",
-    "rgb",
-    "web",
-    "wrap",
-})
+SCHEMA_VERSION = 16
 
 
 class CanonicalCodecError(ValueError):
     pass
 
 
+@dataclass(frozen=True)
+class CanonicalEnvelope(Generic[EventPayloadType]):
+    """One canonical event as it is STORED: the identity columns, the schema
+    version that decides how to read them, and the payload.
+
+    Declared once. The same twelve names used to be written out four times — a
+    dict literal on the way out, a set of strings to check on the way in, a
+    column split in the repository mapper, and a re-assembly to hand a stored row
+    back to `decode` — with nothing holding any of the four to the others.
+    """
+
+    actor_id: ActorId
+    event_id: CanonicalEventId
+    event_type: str
+    harness: str
+    harness_process_id: int | None
+    occurred_at: float | None
+    parent_actor_id: ActorId | None
+    payload: EventPayloadType
+    schema_version: int
+    session_id: SessionId
+    terminal_window_id: str | None
+    turn_id: TurnId | None
+
+    __pydantic_config__ = STORED
+
+
+@dataclass(frozen=True)
+class _StoredEventType:
+    """Which payload a stored document holds — the one field that has to be read
+    before the rest can be, since it is what says how to read the rest.
+
+    A declaration with `extra="ignore"`, so reading it is a validation like every
+    other and this module needs no `json` of its own.
+    """
+
+    __pydantic_config__ = ConfigDict(extra="ignore")
+
+    event_type: str
+
+
+_EVENT_TYPE = TypeAdapter(_StoredEventType)
+
+
+def _stored_event_type(encoded: bytes | str) -> str:
+    try:
+        event_type = _EVENT_TYPE.validate_json(encoded).event_type
+    except ValidationError as error:
+        raise CanonicalCodecError("canonical envelope names no event type") from error
+    if event_type not in PAYLOAD_TYPES:
+        raise CanonicalCodecError(f"unknown canonical event type: {event_type!r}")
+    return event_type
+
+
+def _event_type(payload: EventPayload) -> str:
+    """The registered name of a payload's type — the discriminator the stored
+    document carries, and the key everything below is cached on."""
+    try:
+        return EVENT_TYPES[type(payload)]
+    except KeyError as error:
+        raise CanonicalCodecError(
+            f"unregistered canonical payload: {type(payload).__name__}"
+        ) from error
+
+
 @cache
-def _annotations(value_type: type) -> dict[str, Any]:
-    return get_type_hints(value_type)
+def _envelope_adapter(event_type: str) -> TypeAdapter[Any]:
+    """The validator/serializer for one event type's envelope. Cached because
+    building a schema is not free and there are exactly as many of these as
+    there are registered event types.
+
+    Keyed on the event type rather than the class, because the event type is
+    what the stored document actually says.
+    """
+    envelope: Any = CanonicalEnvelope
+    return TypeAdapter(envelope[PAYLOAD_TYPES[event_type]])
 
 
-def _to_data(value: Any) -> Any:
-    if is_dataclass(value):
-        return {field.name: _to_data(getattr(value, field.name)) for field in fields(value)}
-    if isinstance(value, Decimal):
-        return str(value)
-    if isinstance(value, tuple):
-        return [_to_data(item) for item in value]
-    if isinstance(value, frozenset):
-        return sorted((_to_data(item) for item in value), key=repr)
-    if value is None or isinstance(value, (bool, int, float, str)):
-        return value
-    raise CanonicalCodecError(f"unsupported canonical value: {type(value).__name__}")
+@cache
+def _payload_adapter(event_type: str) -> TypeAdapter[Any]:
+    """The same, for the column that holds only the payload."""
+    return TypeAdapter(PAYLOAD_TYPES[event_type])
 
 
-def _from_data(expected_type: Any, value: Any) -> Any:
-    if expected_type is Any:
-        return value
-    if hasattr(expected_type, "__supertype__"):
-        return expected_type(_from_data(expected_type.__supertype__, value))
+DocumentType = TypeVar("DocumentType")
 
-    origin = get_origin(expected_type)
-    arguments = get_args(expected_type)
-    if origin is Literal:
-        if value not in arguments:
-            raise CanonicalCodecError(f"invalid literal {value!r}; expected one of {arguments!r}")
-        return value
-    if origin in (typing.Union, types.UnionType):
-        errors = []
-        for member_type in arguments:
-            try:
-                return _from_data(member_type, value)
-            except (CanonicalCodecError, TypeError, ValueError) as error:
-                errors.append(str(error))
-        raise CanonicalCodecError(f"value does not match canonical union: {'; '.join(errors)}")
-    if origin is tuple:
-        if not isinstance(value, list):
-            raise CanonicalCodecError("canonical tuple must be encoded as an array")
-        item_type = arguments[0]
-        return tuple(_from_data(item_type, item) for item in value)
-    if expected_type is Decimal:
-        if not isinstance(value, str):
-            raise CanonicalCodecError("decimal must be encoded as a string")
-        return Decimal(value)
-    # `is_dataclass` alone is true for a dataclass INSTANCE as well as for the
-    # class, and every use below — __name__, the lru_cache key, the call that
-    # constructs the payload — needs the class. Decode is only ever handed a
-    # type, so the isinstance check costs nothing and says which of the two
-    # this is.
-    if is_dataclass(expected_type) and isinstance(expected_type, type):
-        if not isinstance(value, dict):
-            raise CanonicalCodecError(f"{expected_type.__name__} must be encoded as an object")
-        # A field with a declared default is optional on decode: rows encoded
-        # before the field existed keep decoding (additive schema evolution
-        # without rewriting stored events). Extra fields stay rejected.
-        expected_fields = {field.name for field in fields(expected_type)}
-        required_fields = {
-            field.name
-            for field in fields(expected_type)
-            if field.default is MISSING and field.default_factory is MISSING
-        }
-        actual_fields = set(value)
-        if not (required_fields <= actual_fields <= expected_fields):
-            missing = sorted(required_fields - actual_fields)
-            extra = sorted(actual_fields - expected_fields)
-            raise CanonicalCodecError(
-                f"invalid {expected_type.__name__} fields; missing={missing!r}, extra={extra!r}"
-            )
-        annotations = _annotations(expected_type)
-        return expected_type(**{
-            name: _from_data(annotations[name], field_value)
-            for name, field_value in value.items()
-        })
-    if expected_type is type(None):
-        if value is not None:
-            raise CanonicalCodecError("expected null")
-        return None
-    if expected_type is float and type(value) in (int, float):
-        return float(value)
-    if expected_type in (str, int, bool):
-        if type(value) is not expected_type:
-            raise CanonicalCodecError(f"expected {expected_type.__name__}, got {type(value).__name__}")
-        return value
-    raise CanonicalCodecError(f"unsupported canonical type: {expected_type!r}")
+
+def encode_document(value: object) -> bytes:
+    """Any dataclass of ours as the bytes it is stored or carried as.
+
+    Not only the canonical envelope: the engine's own synthetic evidence — an
+    output chunk, a process exit, an interrupt mark — was a dict literal at the
+    writer and a field-by-field read at the translator, twice per document, with
+    nothing holding the two halves together.
+    """
+    adapter: TypeAdapter[Any] = TypeAdapter(type(value))
+    return adapter.dump_json(value)
+
+
+def decode_document(shape: type[DocumentType], encoded: bytes | str) -> DocumentType:
+    """The inverse, against the shape the caller expects."""
+    adapter: TypeAdapter[DocumentType] = TypeAdapter(shape)
+    try:
+        return adapter.validate_json(encoded)
+    except ValidationError as error:
+        raise CanonicalCodecError(f"not a {shape.__name__}: {error}") from error
 
 
 class CanonicalEventCodec:
-    def __init__(self) -> None:
-        for payload_type in EVENT_TYPES:
-            field_names = {field.name for field in fields(payload_type)}
-            forbidden_presentation = FORBIDDEN_PRESENTATION_FIELDS.intersection(field_names)
-            if forbidden_presentation:
-                raise CanonicalCodecError(
-                    f"presentation fields are forbidden in {payload_type.__name__}: "
-                    f"{sorted(forbidden_presentation)!r}"
-                )
+    """The stored form, in both directions.
 
-    def encode(self, event: CanonicalEvent[EventPayload]) -> bytes:
-        payload_type = type(event.payload)
-        try:
-            event_type = EVENT_TYPES[payload_type]
-        except KeyError as error:
-            raise CanonicalCodecError(f"unregistered canonical payload: {payload_type.__name__}") from error
-        payload = _to_data(event.payload)
-        _from_data(payload_type, payload)
-        document = {
-            "actor_id": str(event.actor_id),
-            "event_id": str(event.event_id),
-            "event_type": event_type,
-            "harness": event.harness,
-            "harness_process_id": event.harness_process_id,
-            "occurred_at": event.occurred_at,
-            "parent_actor_id": str(event.parent_actor_id) if event.parent_actor_id is not None else None,
-            "payload": payload,
-            "schema_version": SCHEMA_VERSION,
-            "session_id": str(event.session_id),
-            "terminal_window_id": event.terminal_window_id,
-            "turn_id": str(event.turn_id) if event.turn_id is not None else None,
-        }
-        return json.dumps(document, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    Four operations, because the store needs two of them WITHOUT bytes: a write
+    splits the envelope across columns, and a read rebuilds one from them. Those
+    used to go through `encode` and a re-parse — every read serialized the event
+    to JSON and immediately parsed it again to reach its own columns.
+    """
 
-    def decode(self, encoded: bytes | str) -> CanonicalEvent[EventPayload]:
+    def envelope(self, event: CanonicalEvent[EventPayload]) -> CanonicalEnvelope[EventPayload]:
+        """The event as it will be stored, VALIDATED."""
+        event_type = _event_type(event.payload)
+        envelope = CanonicalEnvelope(
+            actor_id=event.actor_id,
+            event_id=event.event_id,
+            event_type=event_type,
+            harness=event.harness,
+            harness_process_id=event.harness_process_id,
+            occurred_at=event.occurred_at,
+            parent_actor_id=event.parent_actor_id,
+            payload=event.payload,
+            schema_version=SCHEMA_VERSION,
+            session_id=event.session_id,
+            terminal_window_id=event.terminal_window_id,
+            turn_id=event.turn_id,
+        )
         try:
-            document = json.loads(encoded)
-        except (TypeError, UnicodeDecodeError, json.JSONDecodeError) as error:
-            raise CanonicalCodecError("canonical event is not valid UTF-8 JSON") from error
-        expected_fields = {
-            "actor_id",
-            "event_id",
-            "event_type",
-            "harness",
-            "harness_process_id",
-            "occurred_at",
-            "parent_actor_id",
-            "payload",
-            "schema_version",
-            "session_id",
-            "terminal_window_id",
-            "turn_id",
-        }
-        if not isinstance(document, dict) or set(document) != expected_fields:
-            raise CanonicalCodecError("canonical envelope fields do not match the schema")
-        if document["schema_version"] != SCHEMA_VERSION:
-            raise CanonicalCodecError(f"unsupported canonical schema version: {document['schema_version']!r}")
-        try:
-            payload_type = PAYLOAD_TYPES[document["event_type"]]
-        except KeyError as error:
-            raise CanonicalCodecError(f"unknown canonical event type: {document['event_type']!r}") from error
-        payload = _from_data(payload_type, document["payload"])
+            _envelope_adapter(event_type).validate_python(envelope)
+        except ValidationError as error:
+            raise CanonicalCodecError(f"invalid canonical event: {error}") from error
+        return envelope
+
+    def event(self, envelope: CanonicalEnvelope[EventPayload]) -> CanonicalEvent[EventPayload]:
+        """A stored envelope back into the event it holds."""
+        if envelope.schema_version != SCHEMA_VERSION:
+            raise CanonicalCodecError(
+                f"unsupported canonical schema version: {envelope.schema_version!r}"
+            )
         return CanonicalEvent(
-            event_id=CanonicalEventId(_from_data(str, document["event_id"])),
-            session_id=SessionId(_from_data(str, document["session_id"])),
-            actor_id=ActorId(_from_data(str, document["actor_id"])),
-            turn_id=(TurnId(document["turn_id"]) if document["turn_id"] is not None else None),
-            parent_actor_id=(ActorId(document["parent_actor_id"]) if document["parent_actor_id"] is not None else None),
-            harness=_from_data(str, document["harness"]),
-            occurred_at=(
-                _from_data(float, document["occurred_at"])
-                if document["occurred_at"] is not None
-                else None
-            ),
-            terminal_window_id=(
-                _from_data(str, document["terminal_window_id"])
-                if document["terminal_window_id"] is not None
-                else None
-            ),
-            harness_process_id=(
-                _from_data(int, document["harness_process_id"])
-                if document["harness_process_id"] is not None
-                else None
-            ),
-            payload=payload,
+            event_id=envelope.event_id,
+            session_id=envelope.session_id,
+            actor_id=envelope.actor_id,
+            turn_id=envelope.turn_id,
+            parent_actor_id=envelope.parent_actor_id,
+            harness=envelope.harness,
+            occurred_at=envelope.occurred_at,
+            terminal_window_id=envelope.terminal_window_id,
+            harness_process_id=envelope.harness_process_id,
+            payload=envelope.payload,
         )
 
+    def encode(self, event: CanonicalEvent[EventPayload]) -> bytes:
+        return _envelope_adapter(_event_type(event.payload)).dump_json(self.envelope(event))
+
+    def decode(self, encoded: bytes | str) -> CanonicalEvent[EventPayload]:
+        # The payload's type is what a SIBLING field says it is, so the event
+        # type is read first and the envelope validates already parameterized by
+        # it — the whole document in one pass, against one declaration.
+        event_type = _stored_event_type(encoded)
+        try:
+            envelope: CanonicalEnvelope[EventPayload] = _envelope_adapter(
+                event_type
+            ).validate_json(encoded)
+        except ValidationError as error:
+            raise CanonicalCodecError(f"invalid canonical envelope: {error}") from error
+        return self.event(envelope)
+
     def payload_json(self, event: CanonicalEvent[EventPayload]) -> str:
-        return json.dumps(_to_data(event.payload), ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+        """Just the payload, for the column that holds it beside the identity
+        ones."""
+        adapter = _payload_adapter(_event_type(event.payload))
+        return adapter.dump_json(event.payload).decode("utf-8")
+
+    def payload(self, event_type: str, payload_json: str) -> EventPayload:
+        """A stored payload column back into the object it holds."""
+        if event_type not in PAYLOAD_TYPES:
+            raise CanonicalCodecError(f"unknown canonical event type: {event_type!r}")
+        try:
+            decoded: EventPayload = _payload_adapter(event_type).validate_json(payload_json)
+        except ValidationError as error:
+            raise CanonicalCodecError(f"invalid canonical payload: {error}") from error
+        return decoded

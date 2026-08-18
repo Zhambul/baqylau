@@ -35,3 +35,14 @@ pip3 install -r requirements.txt   # fastapi + uvicorn — the api/ layer's
 
 To debug a session bug, use the **`audit-debug` skill**
 (`.claude/skills/audit-debug/SKILL.md`) — it has the schema and the known bug shapes.
+
+Important!
+We care about design and simplicity
+Simplicity is not about simplest and quickest approach. Simplicity takes effort and redesign and refactoring and thinking about how in the future this code would be simple to read and to extend.
+If you are adding a new feature which does break the simplicity a redesign and refactoring is allowed.
+But it should be always asked from the user.
+Always think about how to make a code better and simpler to read and to extend.
+Do not just focus on the hacky quickest solution. Think about the future and how to make it better.
+Comunicate with the user and ask for feedback. If you are not sure about a design or a solution, ask for help.
+Do not overengineer. Do not add features which are not needed. Do not add features which are not asked for.
+Do not reinvent the wheel. If a library or a package exists which does what you need, use it. Do not write your own implementation unless it is ix explicitly asked for.

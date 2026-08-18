@@ -80,7 +80,13 @@ class ClaudeTranscriptRawEventSource(HarnessRawEventSource):
             sender_text = str(record.get("sender") or "")
             if not sender_text:
                 return self.context.actor_id, self.context.parent_actor_id
-            sender = ActorId(sender_text)
+            # `team-lead` is the LEAD under its teammate-vocabulary alias, not a
+            # participant of its own (transcript.LEAD_TEAMMATE_ID).
+            sender = (
+                self.context.lead_actor_id
+                if sender_text == transcript.LEAD_TEAMMATE_ID
+                else ActorId(sender_text)
+            )
             parent_actor_id = None if sender == self.context.lead_actor_id else self.context.lead_actor_id
             return sender, parent_actor_id
         if record and record.get("kind") == "actor_assignment_finished" and record.get("actor_id"):

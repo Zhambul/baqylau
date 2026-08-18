@@ -6,7 +6,10 @@ import ast
 import re
 import subprocess
 import sys
+from dataclasses import fields
 from pathlib import Path
+
+from domain.events import EVENT_TYPES
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -48,8 +51,29 @@ def assert_imports(package: str, allowed_roots: set[str], allowed_modules: froze
     assert not bad, "invalid canonical imports:\n  " + "\n  ".join(bad)
 
 
-def test_domain_imports_only_the_standard_library():
+# The one third-party name domain/ may say. It used to say none, and the price
+# was domain/codec.py: 120 lines walking `get_type_hints` to resolve unions,
+# check Literals and decide that a Decimal is a string — a hand-written
+# reimplementation of exactly this library, which the daemon already runs and
+# which the api layer already depends on for the same job.
+DOMAIN_DEPENDENCIES = {"pydantic"}
+
+
+def test_domain_imports_only_the_standard_library_and_its_one_dependency():
     assert_imports("domain", {"domain"})
+    outside = sorted(
+        f"{path.relative_to(ROOT)} imports {imported}"
+        for path, imported in imports_under("domain")
+        if imported.split(".", 1)[0] not in OUR_PACKAGES
+        and imported.split(".", 1)[0] not in sys.stdlib_module_names
+        and imported.split(".", 1)[0] not in DOMAIN_DEPENDENCIES
+    )
+    assert outside == []
+    # ...and it is really used, so the allowance cannot outlive the reason for it.
+    assert any(
+        imported.split(".", 1)[0] in DOMAIN_DEPENDENCIES
+        for _path, imported in imports_under("domain")
+    )
 
 
 def _code_only(path: Path) -> str:
@@ -458,45 +482,231 @@ def test_harness_hook_and_pane_entries_do_not_come_back_to_bin():
 # still exist and still RUN.
 
 
-def test_every_route_declares_a_response_model():
-    """The browser contract is written down, not inferred from a dataclass.
+# The routes that answer with BYTES rather than a model, and therefore name a
+# raw Response: static assets, the OpenAPI document, the evidence plane's write
+# endpoint (whose reply is the harness's own bytes), the file-content reader,
+# and the four streams (whose FRAMES are models — see api/sse.py — but whose
+# response is an open connection).
+RAW_RESPONSE_ROUTES = {
+    "index", "static", "service_worker", "favicon", "openapi_yaml",
+    "record_hook_delivery", "content",
+    "global_stream", "session_stream", "pane_stream",
+}
 
-    26 handlers used to answer with a bare `JSONResponse` built by reflecting
-    over whatever read model the service returned, so renaming an internal field
-    silently changed the JSON and `/openapi.yaml` described none of them.
 
-    A route satisfies this by ANNOTATING its return, or — where the encoding is
-    deliberately `json_ready`'s, because the wire already depends on it — by
-    naming `response_model=` on the decorator. Both put the shape in the schema.
-    """
-    raw_response_routes = {
-        # static assets, two SSE streams, the OpenAPI document itself, and the
-        # two evidence-plane endpoints whose reply is the harness's own bytes
-        "index", "static", "service_worker", "favicon",
-        "openapi_yaml", "global_stream", "session_stream",
-        "record_hook_delivery",
-    }
-    undeclared = []
+def _route_handlers():
+    """Every route handler in api/, with its decorators, as (path, node) pairs."""
     for path in sorted((ROOT / "api").rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
             decorators = [ast.unparse(item) for item in node.decorator_list]
-            if not any(
-                item.startswith(("router.", "guarded.", "web."))
-                for item in decorators
-            ):
+            if any(item.startswith(("router.", "guarded.", "web.")) for item in decorators):
+                yield path, node, decorators
+
+
+def _binding_modules(path: Path) -> dict[str, str]:
+    """Which module each name in this file was imported FROM."""
+    bindings = {}
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            for alias in node.names:
+                bindings[alias.asname or alias.name] = node.module
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                bindings[alias.asname or alias.name.split(".")[0]] = alias.name
+    return bindings
+
+
+def test_every_route_answers_with_a_model_the_api_layer_owns():
+    """The browser contract is written down HERE, not inferred from a read model.
+
+    Two failures this replaces. 26 handlers used to answer with a bare
+    `JSONResponse` built by reflecting over whatever a service returned, so
+    renaming an internal field silently changed the JSON and `/openapi.yaml`
+    described none of them. Then the ones that did declare a model declared a
+    DASHBOARD or HARNESS dataclass — `response_model=list[DashboardSessionListItem]`,
+    `response_model=ControlOutcome` — which made a projection's field list the
+    published wire contract by accident: the api layer had no say, and a fold
+    that renamed a field renamed it for every browser.
+
+    So: a route names a return type, and every type it names is defined under
+    api/. The mapping from the service object to the model is the api layer's
+    own code (`SessionListItemResponse.of(...)`), which is where the decision
+    to expose a field belongs.
+    """
+    outside = []
+    for path, node, decorators in _route_handlers():
+        if node.name in RAW_RESPONSE_ROUTES:
+            continue
+        if not node.returns:
+            outside.append(f"{path.relative_to(ROOT)}:{node.name} has no return type")
+            continue
+        bindings = _binding_modules(path)
+        declared = [ast.unparse(node.returns)]
+        declared += [item.split("response_model=", 1)[1].split(",")[0]
+                     for item in decorators if "response_model=" in item]
+        for name in {token for text in declared for token in re.findall(r"[A-Za-z_][A-Za-z_0-9]*", text)}:
+            module = bindings.get(name)
+            if module is None or module.startswith("api."):
                 continue
-            if node.name in raw_response_routes:
-                continue
-            declares_model = any("response_model=" in item for item in decorators)
-            returns = ast.unparse(node.returns) if node.returns else ""
-            if not returns:
-                undeclared.append(f"{path.relative_to(ROOT)}:{node.name} has no return type")
-            elif returns == "JSONResponse" and not declares_model:
-                undeclared.append(f"{path.relative_to(ROOT)}:{node.name} answers with a bare JSONResponse")
-    assert undeclared == []
+            outside.append(
+                f"{path.relative_to(ROOT)}:{node.name} answers with {name}, "
+                f"which is {module}'s and not the api layer's"
+            )
+    assert outside == []
+
+
+def test_no_response_anywhere_is_a_hand_built_document():
+    """One encoder, and it is the models'.
+
+    `JSONResponse` takes any object at all and reflects it onto the wire, which
+    is how a route came to answer with a shape its own `response_model` did not
+    describe — FastAPI validates nothing it did not serialize itself. It is
+    banned outright (ruff's TID251 says so too, so the failure lands at lint
+    time), and so is the `json` module inside api/: an error body, an SSE frame
+    and a route's reply are all a model, serialized by pydantic.
+
+    The dashboard's `json_ready` — a second encoder that walked dataclass trees
+    into dicts — is gone with them.
+    """
+    offenders = []
+    for path in sorted((ROOT / "api").rglob("*.py")):
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import) and any(a.name == "json" for a in node.names):
+                offenders.append(f"{path.relative_to(ROOT)} imports json")
+            if isinstance(node, ast.ImportFrom) and node.module in ("json", "fastapi.responses",
+                                                                   "starlette.responses"):
+                for alias in node.names:
+                    if node.module == "json" or alias.name == "JSONResponse":
+                        offenders.append(f"{path.relative_to(ROOT)} imports {alias.name}")
+    assert offenders == []
+    assert not (ROOT / "dashboard" / "render" / "serialize.py").exists()
+    assert not [
+        path for package in OUR_PACKAGES
+        for path in (ROOT / package).rglob("*.py")
+        if "JSONResponse" in path.read_text(encoding="utf-8")
+    ]
+
+
+# The daemon's composition root. `serve()` is the one function in the tree that
+# builds the HTTP application, and it lives behind an inline import so that
+# importing the CLI does not pull FastAPI in. Every other name below api/ that
+# reached for it would be a layer knowing about its own consumer.
+API_CONSUMERS = {Path("dashboard/cli.py")}
+
+
+def test_nothing_below_the_api_layer_knows_it_exists():
+    """The direction is one-way: api/ maps the services' objects onto the wire,
+    and no service, projection, harness or renderer has ever heard of a request.
+
+    Enforced because the api DTO layer only means anything while it holds: the
+    moment a service imports a response model, the model stops being the api
+    layer's own statement about the wire and becomes shared vocabulary again —
+    which is exactly the coupling the DTOs were introduced to break.
+    """
+    reaching = [
+        f"{path.relative_to(ROOT)} imports {imported}"
+        for package in OUR_PACKAGES if package != "api"
+        for path, imported in imports_under(package)
+        if (imported == "api" or imported.startswith("api."))
+        and path.relative_to(ROOT) not in API_CONSUMERS
+    ]
+    assert reaching == []
+    # ...and the one allowed consumer really is one, so the exemption cannot
+    # quietly cover a file that stopped importing it.
+    assert any(
+        imported == "api" or imported.startswith("api.")
+        for _path, imported in imports_under_path(ROOT / "dashboard" / "cli.py")
+    )
+
+
+def test_the_json_allowlist_is_only_foreign_documents():
+    """`json` is banned tree-wide, and every exemption is still needed.
+
+    A document of OURS is a dataclass or a pydantic model; something else turns
+    it into bytes. Building one as a dict literal is what let the canonical
+    envelope's twelve field names live in four places at once, and what let a
+    route answer with a shape its own `response_model` did not describe.
+
+    ruff's TID251 does the banning (ruff.toml), which puts the failure on the
+    line that did it. This holds the exemption list to files that STILL need
+    one: an entry for a file that no longer touches json is an entry that would
+    silently cover the next hand-built document written there.
+    """
+    configuration = (ROOT / "ruff.toml").read_text(encoding="utf-8")
+    exempt = [
+        line.split('"')[1]
+        for line in configuration.splitlines()
+        if line.startswith('"') and "TID251" in line and "=" in line
+    ]
+    assert exempt, "the allowlist parsed as empty; this test would pass vacuously"
+
+    stale = []
+    for pattern in exempt:
+        if pattern.startswith("tests/"):
+            continue
+        matched = sorted(ROOT.glob(pattern))
+        assert matched, f"{pattern} matches no file"
+        if not any("json." in path.read_text(encoding="utf-8") for path in matched):
+            stale.append(pattern)
+    assert stale == [], f"exempt from the json ban and no longer using it: {stale}"
+
+    # ...and nothing OUTSIDE the list uses it, which is the ban itself. Checked
+    # here as well as by ruff so that a run of the suite alone still catches it.
+    covered = {path for pattern in exempt for path in ROOT.glob(pattern)}
+    offenders = sorted(
+        str(path.relative_to(ROOT))
+        for package in OUR_PACKAGES
+        for path in (ROOT / package).rglob("*.py")
+        if path not in covered and _calls_json(path)
+    )
+    assert offenders == []
+
+
+def _calls_json(path: Path) -> bool:
+    """A real call, not the word in a comment — read off the syntax tree, so
+    that a file EXPLAINING why it no longer encodes by hand does not read as a
+    file that does."""
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"), filename=str(path))):
+        if not isinstance(node, ast.Call):
+            continue
+        function = node.func
+        if (isinstance(function, ast.Attribute)
+                and function.attr in ("dumps", "loads")
+                and isinstance(function.value, ast.Name)
+                and function.value.id == "json"):
+            return True
+    return False
+
+
+def test_no_canonical_payload_carries_a_presentation_field():
+    """A canonical fact says what HAPPENED; how it is drawn is the renderers'.
+
+    A payload that grew an `html` or an `ansi` field would put one surface's
+    styling into the store every other surface reads, permanently — the
+    canonical schema is append-only, so the field could never be taken back out.
+
+    This is a property of twelve dataclass DECLARATIONS, and it used to be
+    checked by a loop in `CanonicalEventCodec.__init__` — reflection over every
+    registered payload, re-run on every codec ever constructed, to answer a
+    question that cannot change while the process is running. It belongs in the
+    suite that reads the tree, and this is that suite.
+    """
+    forbidden = frozenset({
+        "ansi", "bubbled", "chrome", "css", "glyph", "gutter",
+        "html", "note", "rgb", "web", "wrap",
+    })
+    carrying = [
+        f"{payload_type.__name__} carries {sorted(found)!r}"
+        for payload_type in EVENT_TYPES
+        if (found := forbidden.intersection(field.name for field in fields(payload_type)))
+    ]
+    assert carrying == []
 
 
 def test_claude_otel_is_not_a_top_level_harness():

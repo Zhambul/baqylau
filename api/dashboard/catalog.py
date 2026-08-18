@@ -4,18 +4,21 @@
 from __future__ import annotations
 
 from fastapi import APIRouter
-from fastapi.responses import JSONResponse
 
 from api.dashboard.models.harnesses.harness_description_response import (
     HarnessDescriptionResponse,
 )
 from api.dashboard.models.harnesses.harness_catalog_response import HarnessCatalogResponse
 from api.common.models.fields import HarnessNamePath
+from api.dashboard.mapper import catalog as catalog_mapper
+from api.dashboard.mapper import insights as insights_mapper
+from api.dashboard.mapper import resume as resume_mapper
+from api.dashboard.models.insights.application_insights_response import (
+    ApplicationInsightsResponse,
+)
+from api.dashboard.models.resume.resumable_session_response import ResumableSessionResponse
 from app.providers import Catalog, Insights, Registry, ResumableSessions
-from app.services.insights import ApplicationInsights
-from app.services.resume import ResumableSession
 from harness.models import QueryContext
-from dashboard.render.serialize import json_ready
 from domain.ids import SessionId
 
 router = APIRouter()
@@ -41,14 +44,14 @@ def harnesses(registry: Registry) -> list[HarnessDescriptionResponse]:
     ]
 
 
-@router.get("/api/harnesses/{harness}/catalog", response_model=HarnessCatalogResponse)
+@router.get("/api/harnesses/{harness}/catalog")
 def catalog(
     harness: HarnessNamePath,
     registry: Registry,
     harnesses_catalog: Catalog,
     session_id: str | None = None,
     working_directory: str | None = None,
-) -> JSONResponse:
+) -> HarnessCatalogResponse:
     context = QueryContext(
         session_id=SessionId(session_id) if session_id else None,
         working_directory=working_directory,
@@ -58,21 +61,23 @@ def catalog(
     # literal) and the per-directory part from the catalogue. The contract
     # keeps them apart; this endpoint is where the browser wants them together.
     info = registry.plugin(harness).info
-    payload = json_ready(harnesses_catalog.read(harness, context))
-    payload["models"] = json_ready(info.models)
-    payload["rewind_modes"] = json_ready(info.rewind_modes)
-    return JSONResponse(payload)
+    return catalog_mapper.harness_catalog(
+        harnesses_catalog.read(harness, context), info.models, info.rewind_modes
+    )
 
 
-@router.get("/api/insights", response_model=ApplicationInsights)
-def insights(application_insights: Insights) -> JSONResponse:
-    return JSONResponse(json_ready(application_insights.snapshot()))
+@router.get("/api/insights")
+def insights(application_insights: Insights) -> ApplicationInsightsResponse:
+    return insights_mapper.application_insights(application_insights.snapshot())
 
 
-@router.get("/api/resumable-sessions", response_model=list[ResumableSession])
+@router.get("/api/resumable-sessions")
 def resumable_sessions(
     resumable: ResumableSessions,
     working_directory: str = "",
     search: str | None = None,
-) -> JSONResponse:
-    return JSONResponse(json_ready(resumable.sessions_for(working_directory, search)))
+) -> tuple[ResumableSessionResponse, ...]:
+    return tuple(
+        resume_mapper.resumable_session(session)
+        for session in resumable.sessions_for(working_directory, search)
+    )

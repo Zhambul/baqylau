@@ -69,10 +69,13 @@ def present_message(activity: MessageActivity) -> DashboardItem:
             if activity.role in ("assistant", "parent")
             else "system"
         ),
-        turn_id=str(activity.context.turn_id) if activity.context.turn_id else None,
-        final=activity.phase == "final",
-        message_id=str(activity.message_id),
-        reply_to_message_id=str(activity.reply_to) if activity.reply_to else None,
+        turn_id=activity.context.turn_id,
+        # The presenter's own word for it: this bubble is where the model stopped
+        # (canonical `phase == "end_turn"`), which is what the feed draws as a
+        # turn's answer and what assignmentAnchor() places a late agent card under.
+        final=activity.phase == "end_turn",
+        message_id=activity.message_id,
+        reply_to_message_id=activity.reply_to,
         started_at=activity.context.started_at,
         finished_at=activity.context.finished_at,
     )
@@ -96,7 +99,7 @@ def present_reasoning(activity: ReasoningActivity) -> DashboardItem:
         text,
         content_reference(activity.context.source_event_ids[0], "content", text),
         conversation_kind="message",
-        turn_id=str(activity.context.turn_id) if activity.context.turn_id else None,
+        turn_id=activity.context.turn_id,
         started_at=activity.context.started_at,
         finished_at=activity.context.finished_at,
     )
@@ -133,8 +136,8 @@ def present_actor_message(activity: ActorMessageActivity) -> DashboardItem:
         text,
         content_reference(activity.context.source_event_ids[0], "content", text),
         conversation_kind="actor_message",
-        turn_id=str(activity.context.turn_id) if activity.context.turn_id else None,
-        message_id=str(activity.message_id),
+        turn_id=activity.context.turn_id,
+        message_id=activity.message_id,
         started_at=activity.context.started_at,
         finished_at=activity.context.finished_at,
     )

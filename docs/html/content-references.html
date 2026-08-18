@@ -1,0 +1,1233 @@
+<!DOCTYPE html>
+<html lang="en" >
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Content references, as they are and as they could be</title>
+<meta name="description" content="A content reference is the address of one piece of full-size text inside a canonical event. Today that address is an ad-hoc string, and the knowledge of which addresses exist is split between the code that mints them and the code that resolves them — which is why the resolver needs an allow-table, an rpartition, and an isinstance guard, and why one real address in the running system gets a 400.">
+<style>
+/* baqylau html-communication — base stylesheet.
+   Self-contained: no web fonts, no CDN, no network. */
+
+/* ---------- tokens ---------- */
+:root {
+  color-scheme: light dark;
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+  --bg:        #ffffff;
+  --bg-sunk:   #f6f7f9;
+  --bg-raised: #ffffff;
+  --bg-code:   #f6f7f9;
+  --border:    #e2e5ea;
+  --border-strong: #c7cdd6;
+
+  --text:      #1b1f24;
+  --text-soft: #5b6472;
+  --text-faint:#8a93a1;
+
+  --accent:      #4f46e5;
+  --accent-soft: #eef0fe;
+  --accent-text: #3730a3;
+
+  --ok:      #12805c;  --ok-soft:   #e6f5ef;
+  --warn:    #a15c07;  --warn-soft: #fdf3e3;
+  --danger:  #b3261e;  --danger-soft:#fdeceb;
+  --info:    #0b6bcb;  --info-soft: #e8f1fd;
+
+  --radius: 8px;
+  --radius-lg: 12px;
+  --shadow: 0 1px 2px rgba(16,24,40,.05), 0 1px 3px rgba(16,24,40,.06);
+  --content-width: 78ch;
+  --sidebar-width: 250px;
+}
+
+[data-theme="dark"] {
+  --bg:        #14171c;
+  --bg-sunk:   #1a1e24;
+  --bg-raised: #1c2128;
+  --bg-code:   #1a1e24;
+  --border:    #2c333d;
+  --border-strong: #414b58;
+
+  --text:      #e6e9ee;
+  --text-soft: #a8b1be;
+  --text-faint:#79838f;
+
+  --accent:      #8b85ff;
+  --accent-soft: #24243d;
+  --accent-text: #b6b1ff;
+
+  --ok:      #4ec49a;  --ok-soft:   #16302a;
+  --warn:    #e0a44a;  --warn-soft: #33280f;
+  --danger:  #f08b84;  --danger-soft:#3a1e1d;
+  --info:    #6fb3f7;  --info-soft: #14263b;
+
+  --shadow: 0 1px 2px rgba(0,0,0,.4);
+}
+
+/* ---------- reset ---------- */
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.65 var(--font-sans);
+  font-synthesis: none;
+  -webkit-font-smoothing: antialiased;
+}
+img, svg { max-width: 100%; }
+
+/* ---------- page layout ---------- */
+.page {
+  display: grid;
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  gap: 0 48px;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 0 28px 96px;
+}
+.page > .content { min-width: 0; max-width: var(--content-width); padding-top: 40px; }
+.page.no-toc { grid-template-columns: minmax(0, 1fr); }
+.page.no-toc > .content { margin: 0 auto; }
+.page.wide { --content-width: 100%; max-width: 1400px; }
+
+/* sidebar / table of contents */
+.toc {
+  position: sticky; top: 0; align-self: start;
+  max-height: 100vh; overflow-y: auto;
+  padding: 40px 0 40px; font-size: 14px;
+}
+.toc-title {
+  margin: 0 0 10px; font-size: 11px; font-weight: 700;
+  letter-spacing: .09em; text-transform: uppercase; color: var(--text-faint);
+}
+.toc ol { list-style: none; margin: 0; padding: 0; }
+.toc li { margin: 0; }
+.toc a {
+  display: block; padding: 5px 12px; color: var(--text-soft);
+  text-decoration: none; border-left: 2px solid var(--border);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.toc a:hover { color: var(--text); background: var(--bg-sunk); }
+.toc a.is-active { color: var(--accent-text); border-left-color: var(--accent); font-weight: 600; }
+.toc .lvl-3 a { padding-left: 26px; font-size: 13px; }
+
+/* ---------- document header ---------- */
+.doc-header { padding: 8px 0 28px; border-bottom: 1px solid var(--border); margin-bottom: 36px; }
+.doc-eyebrow {
+  font-size: 12px; font-weight: 700; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--accent-text); margin: 0 0 10px;
+}
+.doc-header h1 { margin: 0; font-size: 34px; line-height: 1.2; letter-spacing: -.02em; }
+.doc-lede { margin: 14px 0 0; font-size: 18px; color: var(--text-soft); }
+.doc-meta {
+  display: flex; flex-wrap: wrap; gap: 8px 18px;
+  margin: 18px 0 0; padding: 0; list-style: none;
+  font-size: 13px; color: var(--text-faint);
+}
+.doc-meta b { color: var(--text-soft); font-weight: 600; }
+
+/* ---------- typography ---------- */
+h2, h3, h4 { line-height: 1.3; letter-spacing: -.01em; scroll-margin-top: 24px; }
+h2 { margin: 52px 0 16px; font-size: 25px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+h3 { margin: 34px 0 12px; font-size: 19px; }
+h4 { margin: 26px 0 10px; font-size: 16px; color: var(--text-soft); }
+p { margin: 0 0 16px; }
+a { color: var(--accent-text); text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent); text-underline-offset: 2px; }
+a:hover { text-decoration-color: var(--accent); }
+strong { font-weight: 650; }
+small { font-size: 13px; color: var(--text-soft); }
+hr { border: 0; border-top: 1px solid var(--border); margin: 40px 0; }
+ul, ol { margin: 0 0 16px; padding-left: 24px; }
+li { margin: 6px 0; }
+li > ul, li > ol { margin: 6px 0; }
+blockquote {
+  margin: 0 0 16px; padding: 2px 0 2px 18px;
+  border-left: 3px solid var(--border-strong); color: var(--text-soft);
+}
+.anchor {
+  margin-left: 8px; color: var(--text-faint); text-decoration: none;
+  opacity: 0; font-weight: 400; transition: opacity .12s;
+}
+h2:hover .anchor, h3:hover .anchor { opacity: 1; }
+
+/* description list — for pairs of related data */
+dl.defs { margin: 0 0 20px; }
+dl.defs dt {
+  font-family: var(--font-mono); font-size: 14px; font-weight: 600;
+  color: var(--text); margin-top: 14px;
+}
+dl.defs dd { margin: 4px 0 0 0; padding-left: 16px; border-left: 2px solid var(--border); color: var(--text-soft); }
+
+/* ---------- inline bits ---------- */
+code, kbd, samp { font-family: var(--font-mono); font-size: .88em; }
+:not(pre) > code {
+  background: var(--bg-code); border: 1px solid var(--border);
+  border-radius: 4px; padding: .1em .35em; color: var(--text);
+  overflow-wrap: break-word;
+}
+kbd {
+  background: var(--bg-raised); border: 1px solid var(--border-strong);
+  border-bottom-width: 2px; border-radius: 5px;
+  padding: .1em .4em; font-size: .82em; box-shadow: var(--shadow);
+}
+.ui { font-weight: 650; }            /* UI element: Google style says bold */
+.var { font-family: var(--font-mono); font-style: italic; color: var(--accent-text); }
+.badge {
+  display: inline-block; padding: 2px 9px; border-radius: 999px;
+  font-size: 12px; font-weight: 600; line-height: 1.6;
+  background: var(--bg-sunk); border: 1px solid var(--border); color: var(--text-soft);
+}
+.badge.accent { background: var(--accent-soft); border-color: transparent; color: var(--accent-text); }
+.badge.ok     { background: var(--ok-soft);     border-color: transparent; color: var(--ok); }
+.badge.warn   { background: var(--warn-soft);   border-color: transparent; color: var(--warn); }
+.badge.danger { background: var(--danger-soft); border-color: transparent; color: var(--danger); }
+.badge.info   { background: var(--info-soft);   border-color: transparent; color: var(--info); }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); vertical-align: baseline; }
+.dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.danger { background: var(--danger); } .dot.info { background: var(--info); }
+
+/* ---------- callouts ---------- */
+.callout {
+  display: grid; grid-template-columns: 22px minmax(0,1fr); gap: 0 12px;
+  margin: 22px 0; padding: 14px 16px;
+  border: 1px solid var(--border); border-left: 3px solid var(--text-faint);
+  border-radius: var(--radius); background: var(--bg-sunk);
+}
+.callout > .callout-icon { font-size: 15px; line-height: 1.7; text-align: center; }
+.callout > .callout-body { min-width: 0; }
+.callout > .callout-body > :last-child { margin-bottom: 0; }
+.callout-label { font-weight: 700; }
+.callout.note   { border-left-color: var(--info);   background: var(--info-soft); }
+.callout.note   .callout-label { color: var(--info); }
+.callout.key    { border-left-color: var(--accent); background: var(--accent-soft); }
+.callout.key    .callout-label { color: var(--accent-text); }
+.callout.tip    { border-left-color: var(--ok);     background: var(--ok-soft); }
+.callout.tip    .callout-label { color: var(--ok); }
+.callout.warn   { border-left-color: var(--warn);   background: var(--warn-soft); }
+.callout.warn   .callout-label { color: var(--warn); }
+.callout.danger { border-left-color: var(--danger); background: var(--danger-soft); }
+.callout.danger .callout-label { color: var(--danger); }
+
+/* ---------- code blocks ---------- */
+figure.code {
+  margin: 22px 0; border: 1px solid var(--border);
+  border-radius: var(--radius-lg); background: var(--bg-code); overflow: hidden;
+}
+figure.code > figcaption {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px; border-bottom: 1px solid var(--border);
+  background: var(--bg-raised); font-size: 13px; color: var(--text-soft);
+}
+figure.code > figcaption .file { font-family: var(--font-mono); font-weight: 600; color: var(--text); }
+figure.code > figcaption .lang {
+  margin-left: auto; font-size: 11px; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--text-faint);
+}
+figure.code pre {
+  margin: 0; padding: 14px 16px; overflow-x: auto;
+  font-family: var(--font-mono); font-size: 13.5px; line-height: 1.6; tab-size: 2;
+}
+figure.code pre code { font-size: inherit; background: none; border: 0; padding: 0; }
+.copy-btn {
+  border: 1px solid var(--border); background: var(--bg-sunk); color: var(--text-soft);
+  border-radius: 6px; padding: 2px 8px; font: 600 12px/1.5 var(--font-sans); cursor: pointer;
+}
+.copy-btn:hover { color: var(--text); border-color: var(--border-strong); }
+.copy-btn[data-copied] { color: var(--ok); border-color: var(--ok); }
+
+/* annotated / numbered / diff lines: one <span class="ln"> per line */
+figure.code pre .ln { display: block; padding: 0 4px; border-left: 3px solid transparent; }
+figure.code pre .ln.hl  { background: var(--accent-soft); border-left-color: var(--accent); }
+figure.code pre .ln.add { background: var(--ok-soft);     border-left-color: var(--ok); }
+figure.code pre .ln.del { background: var(--danger-soft); border-left-color: var(--danger); opacity: .85; }
+figure.code.numbered pre { counter-reset: ln; }
+figure.code.numbered pre .ln::before {
+  counter-increment: ln; content: counter(ln);
+  display: inline-block; width: 2.5em; margin-right: 1em;
+  text-align: right; color: var(--text-faint); user-select: none;
+}
+/* terminal flavour */
+figure.code.term pre { background: #12151a; color: #dfe4ec; }
+[data-theme="dark"] figure.code.term pre { background: #0e1116; }
+figure.code.term pre .prompt { color: #6fb3f7; user-select: none; }
+figure.code.term pre .out { color: #9aa4b2; }
+
+/* ---------- tables ---------- */
+.table-wrap { overflow-x: auto; margin: 22px 0; }
+table {
+  width: 100%; border-collapse: collapse; font-size: 14.5px;
+  border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden;
+}
+th, td { text-align: left; padding: 9px 13px; border-bottom: 1px solid var(--border); vertical-align: top; }
+thead th { background: var(--bg-sunk); font-size: 12.5px; letter-spacing: .03em; text-transform: uppercase; color: var(--text-soft); }
+tbody tr:last-child td { border-bottom: 0; }
+tbody tr:hover { background: var(--bg-sunk); }
+td code { white-space: nowrap; }
+
+/* ---------- grids, cards, stats ---------- */
+.grid { display: grid; gap: 16px; margin: 22px 0; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+.grid.cols-2 { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+.grid.cols-3 { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+.card {
+  padding: 16px 18px; border: 1px solid var(--border); border-radius: var(--radius-lg);
+  background: var(--bg-raised); box-shadow: var(--shadow);
+}
+.card > :last-child { margin-bottom: 0; }
+.card h4 { margin: 0 0 8px; color: var(--text); font-size: 15px; }
+.card p { font-size: 14.5px; color: var(--text-soft); }
+.stat { text-align: left; }
+.stat .stat-value { display: block; font-size: 28px; font-weight: 680; letter-spacing: -.02em; line-height: 1.2; }
+.stat .stat-label { display: block; font-size: 13px; color: var(--text-soft); margin-top: 4px; }
+.stat.ok .stat-value { color: var(--ok); } .stat.warn .stat-value { color: var(--warn); }
+.stat.danger .stat-value { color: var(--danger); } .stat.accent .stat-value { color: var(--accent-text); }
+
+/* before / after comparison */
+.compare { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); margin: 22px 0; }
+.compare > * { padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius-lg); }
+.compare > * > :last-child { margin-bottom: 0; }
+.compare .compare-title { display: block; font-size: 12px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; margin-bottom: 8px; }
+.compare .bad  { border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); background: var(--danger-soft); }
+.compare .bad  .compare-title { color: var(--danger); }
+.compare .good { border-color: color-mix(in srgb, var(--ok) 35%, var(--border)); background: var(--ok-soft); }
+.compare .good .compare-title { color: var(--ok); }
+
+/* ---------- procedure (vertical numbered steps) ---------- */
+ol.procedure { list-style: none; margin: 22px 0; padding: 0; counter-reset: step; }
+ol.procedure > li { position: relative; padding: 0 0 22px 44px; }
+ol.procedure > li::before {
+  counter-increment: step; content: counter(step);
+  position: absolute; left: 0; top: 0;
+  width: 28px; height: 28px; border-radius: 50%;
+  background: var(--accent); color: #fff;
+  font: 650 14px/28px var(--font-sans); text-align: center;
+}
+ol.procedure > li::after {
+  content: ""; position: absolute; left: 13.5px; top: 32px; bottom: 4px;
+  border-left: 2px solid var(--border);
+}
+ol.procedure > li:last-child { padding-bottom: 0; }
+ol.procedure > li:last-child::after { display: none; }
+ol.procedure > li > :first-child { margin-top: 3px; }
+ol.procedure > li > :last-child { margin-bottom: 0; }
+.step-title { display: block; font-weight: 650; margin-bottom: 4px; }
+
+/* ---------- flow: horizontal chevron steps ---------- */
+.flow { display: flex; flex-wrap: wrap; align-items: stretch; gap: 8px; margin: 24px 0; }
+.flow > .node {
+  flex: 1 1 150px; min-width: 130px;
+  padding: 11px 14px; border: 1px solid var(--border-strong); border-radius: var(--radius);
+  background: var(--bg-raised); box-shadow: var(--shadow); font-size: 14px;
+}
+.flow > .node .node-title { display: block; font-weight: 650; }
+.flow > .node .node-sub { display: block; color: var(--text-soft); font-size: 13px; margin-top: 2px; }
+.flow > .node.accent { border-color: var(--accent); background: var(--accent-soft); }
+.flow > .node.ok     { border-color: var(--ok);     background: var(--ok-soft); }
+.flow > .node.warn   { border-color: var(--warn);   background: var(--warn-soft); }
+.flow > .node.danger { border-color: var(--danger); background: var(--danger-soft); }
+.flow > .node.ghost  { border-style: dashed; background: transparent; color: var(--text-soft); box-shadow: none; }
+.flow > .arrow {
+  flex: 0 0 auto; align-self: center; color: var(--text-faint);
+  font-size: 18px; line-height: 1; user-select: none;
+}
+.flow > .arrow[data-label]::after {
+  content: attr(data-label); display: block; font-size: 11px; margin-top: 2px; color: var(--text-faint);
+}
+.flow.vertical { flex-direction: column; align-items: stretch; }
+.flow.vertical > .arrow { align-self: center; }
+
+/* ---------- pipeline: labelled stages with connectors ---------- */
+.pipeline { display: flex; flex-wrap: wrap; gap: 0; margin: 24px 0; border-radius: var(--radius); overflow: hidden; border: 1px solid var(--border); }
+.pipeline > .stage {
+  flex: 1 1 130px; min-width: 120px; padding: 12px 14px 12px 26px;
+  background: var(--bg-raised); position: relative; font-size: 14px;
+  border-right: 1px solid var(--border);
+}
+.pipeline > .stage:first-child { padding-left: 14px; }
+.pipeline > .stage:last-child { border-right: 0; }
+.pipeline > .stage::before {
+  content: ""; position: absolute; left: -1px; top: 50%;
+  width: 12px; height: 12px; margin-top: -6px;
+  background: var(--bg-sunk);
+  border-right: 1px solid var(--border); border-top: 1px solid var(--border);
+  transform: rotate(45deg);
+}
+.pipeline > .stage:first-child::before { display: none; }
+.pipeline > .stage .stage-index { display: block; font-size: 11px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--text-faint); }
+.pipeline > .stage .stage-name { display: block; font-weight: 650; margin-top: 2px; }
+.pipeline > .stage .stage-note { display: block; font-size: 13px; color: var(--text-soft); margin-top: 3px; }
+
+/* ---------- branch / decision tree (nested lists, CSS connectors) ---------- */
+.branch, .branch ul { list-style: none; margin: 0; padding: 0; }
+.branch { margin: 24px 0; }
+.branch ul { margin-left: 20px; }
+.branch li { position: relative; padding: 4px 0 4px 26px; }
+.branch li::before {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 50%;
+  width: 18px; border-left: 2px solid var(--border); border-bottom: 2px solid var(--border);
+  border-bottom-left-radius: 6px;
+}
+.branch li::after { content: ""; position: absolute; left: 0; top: 50%; bottom: 0; border-left: 2px solid var(--border); }
+.branch li:last-child::after { display: none; }
+.branch > li:first-child::before, .branch > li:first-child::after { display: none; }
+.branch > li:first-child { padding-left: 0; }
+.branch .test {
+  display: inline-block; padding: 5px 12px; border-radius: 999px;
+  border: 1px solid var(--border-strong); background: var(--bg-raised);
+  font-weight: 650; font-size: 14px;
+}
+.branch .test.q { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-text); }
+.branch .edge { font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--text-faint); margin-right: 6px; }
+.branch .leaf { display: inline-block; padding: 5px 12px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--bg-sunk); font-size: 14px; }
+.branch .leaf.ok { border-color: color-mix(in srgb, var(--ok) 40%, var(--border)); background: var(--ok-soft); }
+.branch .leaf.danger { border-color: color-mix(in srgb, var(--danger) 40%, var(--border)); background: var(--danger-soft); }
+.branch .leaf.warn { border-color: color-mix(in srgb, var(--warn) 40%, var(--border)); background: var(--warn-soft); }
+
+/* ---------- swimlanes (actors x stages) ---------- */
+.swim { margin: 24px 0; overflow-x: auto; }
+.swim table { min-width: 560px; font-size: 13.5px; }
+.swim th.lane { width: 130px; background: var(--bg-sunk); font-weight: 650; text-transform: none; letter-spacing: 0; font-size: 13.5px; color: var(--text); }
+.swim td { background: var(--bg); }
+.swim .act {
+  display: block; padding: 7px 10px; border-radius: 6px;
+  border: 1px solid var(--border-strong); background: var(--bg-raised); box-shadow: var(--shadow);
+}
+.swim .act.accent { border-color: var(--accent); background: var(--accent-soft); }
+.swim .act.ok { border-color: var(--ok); background: var(--ok-soft); }
+.swim .act.danger { border-color: var(--danger); background: var(--danger-soft); }
+.swim td.empty { background: repeating-linear-gradient(45deg, transparent, transparent 6px, var(--bg-sunk) 6px, var(--bg-sunk) 12px); }
+
+/* ---------- timeline ---------- */
+.timeline { list-style: none; margin: 24px 0; padding: 0 0 0 22px; border-left: 2px solid var(--border); }
+.timeline > li { position: relative; padding: 0 0 22px 20px; }
+.timeline > li::before {
+  content: ""; position: absolute; left: -29px; top: 6px;
+  width: 12px; height: 12px; border-radius: 50%;
+  background: var(--bg); border: 2px solid var(--accent);
+}
+.timeline > li.ok::before { border-color: var(--ok); } .timeline > li.warn::before { border-color: var(--warn); }
+.timeline > li.danger::before { border-color: var(--danger); }
+.timeline > li.done::before { background: var(--accent); }
+.timeline .when { display: block; font-family: var(--font-mono); font-size: 12.5px; color: var(--text-faint); }
+.timeline .what { display: block; font-weight: 650; margin: 1px 0 3px; }
+.timeline > li > :last-child { margin-bottom: 0; }
+
+/* ---------- layer / architecture stack ---------- */
+.stack { display: flex; flex-direction: column; gap: 6px; margin: 24px 0; }
+.stack > .layer {
+  padding: 12px 16px; border: 1px solid var(--border-strong); border-radius: var(--radius);
+  background: var(--bg-raised); box-shadow: var(--shadow);
+}
+.stack > .layer .layer-name { font-weight: 650; }
+.stack > .layer .layer-note { color: var(--text-soft); font-size: 13.5px; margin-left: 8px; }
+.stack > .layer.accent { border-color: var(--accent); background: var(--accent-soft); }
+.stack > .layer.muted { background: var(--bg-sunk); border-style: dashed; }
+.stack > .layer .parts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.stack > .layer .parts > span {
+  padding: 3px 9px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--bg); font-family: var(--font-mono); font-size: 12.5px;
+}
+
+/* ---------- file tree ---------- */
+pre.tree {
+  margin: 22px 0; padding: 14px 16px; overflow-x: auto;
+  background: var(--bg-code); border: 1px solid var(--border); border-radius: var(--radius-lg);
+  font-family: var(--font-mono); font-size: 13.5px; line-height: 1.7;
+}
+pre.tree .dir { color: var(--accent-text); font-weight: 650; }
+pre.tree .note { color: var(--text-faint); }
+
+/* ---------- inline SVG diagrams ---------- */
+figure.diagram {
+  margin: 24px 0; padding: 18px 16px 12px;
+  border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-sunk);
+}
+figure.diagram svg { display: block; width: 100%; height: auto; overflow: visible; }
+figure.diagram > figcaption { margin-top: 12px; font-size: 13px; color: var(--text-soft); text-align: center; }
+/* classes used inside SVG */
+svg .n     { fill: var(--bg-raised); stroke: var(--border-strong); stroke-width: 1.5; }
+svg .n.accent { fill: var(--accent-soft); stroke: var(--accent); }
+svg .n.ok     { fill: var(--ok-soft);     stroke: var(--ok); }
+svg .n.warn   { fill: var(--warn-soft);   stroke: var(--warn); }
+svg .n.danger { fill: var(--danger-soft); stroke: var(--danger); }
+svg .n.ghost  { fill: none; stroke: var(--border-strong); stroke-dasharray: 5 4; }
+svg .t  { fill: var(--text); font: 600 13px var(--font-sans); text-anchor: middle; dominant-baseline: middle; }
+svg .t.sub { fill: var(--text-soft); font-weight: 400; font-size: 11.5px; }
+svg .t.mono { font-family: var(--font-mono); font-size: 11.5px; }
+svg .e  { fill: none; stroke: var(--border-strong); stroke-width: 1.75; marker-end: url(#arrow); }
+svg .e.dashed { stroke-dasharray: 5 4; }
+svg .e.accent { stroke: var(--accent); marker-end: url(#arrow-accent); }
+svg .e.danger { stroke: var(--danger); marker-end: url(#arrow-danger); }
+svg .el { fill: var(--text-faint); font: 500 11px var(--font-sans); text-anchor: middle; dominant-baseline: middle; }
+svg .el-bg { fill: var(--bg-sunk); }
+svg .grp { fill: none; stroke: var(--border); stroke-width: 1.25; stroke-dasharray: 4 4; }
+svg .grp-t { fill: var(--text-faint); font: 700 10.5px var(--font-sans); letter-spacing: .07em; text-transform: uppercase; }
+
+/* ---------- details / collapsible ---------- */
+details.fold {
+  margin: 22px 0; padding: 0 16px; border: 1px solid var(--border);
+  border-radius: var(--radius-lg); background: var(--bg-sunk);
+}
+details.fold > summary {
+  padding: 12px 0; cursor: pointer; font-weight: 650; list-style-position: outside;
+}
+details.fold[open] > summary { border-bottom: 1px solid var(--border); margin-bottom: 14px; }
+details.fold > :last-child { margin-bottom: 14px; }
+
+/* ---------- utilities ---------- */
+.muted { color: var(--text-soft); }
+.center { text-align: center; }
+.nowrap { white-space: nowrap; }
+.mt-0 { margin-top: 0; }
+.mb-0 { margin-bottom: 0; }
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap;
+}
+.legend { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 12px 0 22px; font-size: 13px; color: var(--text-soft); }
+.legend > span { display: inline-flex; align-items: center; gap: 6px; }
+.legend .swatch { width: 14px; height: 14px; border-radius: 4px; border: 1px solid var(--border-strong); background: var(--bg-raised); }
+.legend .swatch.accent { border-color: var(--accent); background: var(--accent-soft); }
+.legend .swatch.ok { border-color: var(--ok); background: var(--ok-soft); }
+.legend .swatch.warn { border-color: var(--warn); background: var(--warn-soft); }
+.legend .swatch.danger { border-color: var(--danger); background: var(--danger-soft); }
+
+/* ---------- theme toggle ---------- */
+.theme-toggle {
+  position: fixed; top: 14px; right: 16px; z-index: 20;
+  border: 1px solid var(--border); background: var(--bg-raised); color: var(--text-soft);
+  border-radius: 999px; padding: 5px 12px; font: 600 12.5px var(--font-sans);
+  cursor: pointer; box-shadow: var(--shadow);
+}
+.theme-toggle:hover { color: var(--text); border-color: var(--border-strong); }
+
+/* ---------- responsive ---------- */
+@media (max-width: 900px) {
+  .page { grid-template-columns: minmax(0, 1fr); gap: 0; padding: 0 18px 64px; }
+  .page > .content { max-width: none; padding-top: 24px; }
+  .toc {
+    position: static; max-height: none; padding: 24px 0 0;
+    border-bottom: 1px solid var(--border); margin-bottom: 8px;
+  }
+  .toc ol { columns: 2; column-gap: 20px; }
+  .doc-header h1 { font-size: 27px; }
+  .doc-lede { font-size: 16.5px; }
+}
+
+/* ---------- print ---------- */
+@media print {
+  :root { --bg: #fff; --bg-sunk: #fff; --bg-raised: #fff; --shadow: none; }
+  .toc, .theme-toggle, .copy-btn, .anchor { display: none !important; }
+  .page { display: block; max-width: none; padding: 0; }
+  h2, h3 { page-break-after: avoid; }
+  figure, table, .callout, .flow, .pipeline { page-break-inside: avoid; }
+  a { text-decoration: none; color: inherit; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  * { transition: none !important; animation: none !important; }
+}
+
+</style>
+</head>
+<body>
+<!-- Arrowheads for every inline SVG diagram in this document. Defined once so
+     that ids stay unique; reference them with marker-end="url(#arrow)". -->
+<svg class="visually-hidden" aria-hidden="true" focusable="false"><defs>
+<marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--border-strong)"/></marker>
+<marker id="arrow-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/></marker>
+<marker id="arrow-danger" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--danger)"/></marker>
+</defs></svg>
+<button type="button" class="theme-toggle" aria-label="Switch theme">☾ Dark</button>
+<div class="page wide">
+<nav class="toc" aria-label="On this page"></nav>
+<main class="content">
+<header class="doc-header">
+<p class="doc-eyebrow">Design review</p>
+<h1>Content references, as they are and as they could be</h1>
+<p class="doc-lede">A content reference is the address of one piece of full-size text inside a canonical event. Today that address is an ad-hoc string, and the knowledge of which addresses exist is split between the code that mints them and the code that resolves them — which is why the resolver needs an allow-table, an rpartition, and an isinstance guard, and why one real address in the running system gets a 400.</p>
+<ul class="doc-meta"><li><b>Author:</b> Claude</li><li><b>Updated:</b> 2026-08-18</li><li><b>Scope:</b> engine/queries/content.py and everything that feeds it</li></ul>
+</header>
+<h2>Summary</h2>
+
+<p>The dashboard and the terminal mirror both show blocks of activity. When a
+block's text is large, they don't ship it twice — they attach an
+<b>address</b> the frontend can call back with to fetch the exact full text
+for copy, or a rendered diff for expansion. That address is the content
+reference, and <code>CanonicalContentService.resolve</code> is what turns it
+back into text.</p>
+
+<p>The concept is sound. The implementation has one defect that causes every
+symptom you pointed at: the reference is a formatted string rather than a
+value, so <em>the set of legal addresses is never written down anywhere</em>.
+Instead it exists twice — as field-name literals scattered across the fold and
+eight presenters, and as a hand-maintained table in the resolver. The two
+copies have already drifted apart in both directions.</p>
+
+<div class="callout key">
+  <div class="callout-icon" aria-hidden="true">◆</div>
+  <div class="callout-body"><span class="callout-label">Key point:</span>
+    <code>rpartition</code>, the <code>isinstance</code> guard, and the
+    allow-table are not three separate messes. They are what a resolver has to
+    do when the token it receives carries no type and no shared vocabulary: it
+    must re-discover, at runtime, what the minter meant.</div>
+</div>
+
+<h2>The concepts</h2>
+
+<p>Six things carry the reference from the event store to a click. Each is
+named as the code names it.</p>
+
+<dl class="defs">
+  <dt>Canonical event</dt>
+  <dd>The immutable stored fact, identified by a <code>CanonicalEventId</code>.
+    Its <code>payload</code> is one of the typed classes in
+    <code>domain/events.py</code> — <code>MessageCreated</code>,
+    <code>OperationFinished</code>, <code>FileAccessed</code>. Some payload
+    fields hold arbitrarily large text.</dd>
+
+  <dt>Activity</dt>
+  <dd>What the fold in <code>engine/projections/activity.py</code> produces: a
+    <em>folded</em> view of one thing that happened, built from every event
+    about it. An <code>OperationActivity</code> is the start, all the progress
+    chunks, and the finish, collapsed into one object with
+    <code>command_text()</code> and <code>output_text()</code> methods.</dd>
+
+  <dt>Content slot <span class="badge ghost">no such type today</span></dt>
+  <dd>The idea this document is about: <em>which</em> piece of text you want
+    from an event. "The command an operation ran." "The unified diff of a file
+    edit." Today this idea is spelled as a raw field name — the strings
+    <code>content</code>, <code>operation_content</code>,
+    <code>operation_command</code>, <code>operation_output</code>,
+    <code>unified_diff</code>, <code>result</code>, <code>brief</code>,
+    <code>prompt</code>, <code>feedback</code>.</dd>
+
+  <dt>Content reference</dt>
+  <dd>An event id plus a slot, written as <code>"{event_id}:{field}"</code>.
+    Example: <code>progress-two:operation_output</code>. It has no type; it is
+    a <code>str</code> everywhere it appears.</dd>
+
+  <dt>Dashboard item</dt>
+  <dd>One rendered block for the browser
+    (<code>dashboard/render/items/item.py</code>). It carries three reference
+    fields: <code>content_reference</code>, <code>command_reference</code>,
+    <code>output_reference</code>, each <code>str | None</code>.</dd>
+
+  <dt>Opened view</dt>
+  <dd>Terminal-only state: which references the mirror has expanded in place.
+    Stored in the <code>opened_views</code> table, whose primary key
+    <em>is</em> the reference string.</dd>
+</dl>
+
+<h2>How it works today</h2>
+
+<p>A reference is minted on the way out and parsed on the way back in. These
+are the five stages, and the drift happens between stages 2 and 5.</p>
+
+<div class="pipeline">
+  <div class="stage"><span class="stage-index">1</span><span class="stage-name">Fold</span><span class="stage-note">records event id + field name</span></div>
+  <div class="stage"><span class="stage-index">2</span><span class="stage-name">Mint</span><span class="stage-note">8 presenter sites format the token</span></div>
+  <div class="stage"><span class="stage-index">3</span><span class="stage-name">Ship</span><span class="stage-note">item field, or OSC 8 hyperlink</span></div>
+  <div class="stage"><span class="stage-index">4</span><span class="stage-name">Click</span><span class="stage-note">browser fetch, or client subprocess</span></div>
+  <div class="stage"><span class="stage-index">5</span><span class="stage-name">Resolve</span><span class="stage-note">split the token, guess its meaning</span></div>
+</div>
+
+<h3>Stage 1: the fold records a field name</h3>
+
+<p>Every activity that can carry large text gets two loose fields. There is no
+type relating them, and nothing constrains the second to a known set.</p>
+
+<figure class="code">
+  <figcaption><span class="file">engine/projections/models.py:99</span><span class="lang">python</span></figcaption>
+  <pre><code>content_event_id: CanonicalEventId | None = None
+content_field: str | None = None                  # "content" | "operation_content" | "unified_diff" | "result"</code></pre>
+</figure>
+
+<p>Ten sites in the fold assign <code>content_field</code>, each as a bare
+string literal chosen by the branch it sits in.</p>
+
+<figure class="code">
+  <figcaption><span class="file">engine/projections/activity.py:336</span><span class="lang">python</span></figcaption>
+<pre><code><span class="ln">content_event_id=(</span><span class="ln">    event.event_id if payload.result is not None else existing.content_event_id</span><span class="ln">),</span><span class="ln hl">content_field=(</span><span class="ln hl">    "operation_content" if payload.result is not None else existing.content_field</span><span class="ln hl">),</span></code></pre>
+</figure>
+
+<h3>Stage 2: eight sites mint the token</h3>
+
+<p>The wire format lives in eight places. One of them is a helper that also
+applies a size rule; the other seven are inline f-strings, and they do not all
+agree.</p>
+
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Site</th><th>Token it builds</th><th>Size rule applied?</th></tr></thead>
+    <tbody>
+      <tr><td><code>dashboard/render/items/item.py:116</code></td><td><code>{event_id}:{field}</code></td><td>Yes — only if text &gt; 4096</td></tr>
+      <tr><td><code>dashboard/render/items/operations.py:113</code></td><td><code>{source_event_ids[0]}:operation_command</code></td><td>No</td></tr>
+      <tr><td><code>dashboard/render/items/operations.py:118</code></td><td><code>{content_event_id}:operation_output</code></td><td>No</td></tr>
+      <tr><td><code>dashboard/render/items/files.py:75</code></td><td><code>{content_event_id}:{content_field}</code></td><td>No</td></tr>
+      <tr><td><code>terminal/mirror/presenter.py:95</code></td><td><code>{source_event_ids[0]}:operation_command</code></td><td>No</td></tr>
+      <tr><td><code>terminal/mirror/presenter.py:100</code></td><td><code>{content_event_id}:operation_output</code></td><td>No</td></tr>
+      <tr><td><code>terminal/mirror/presenter.py:172</code></td><td><code>{content_event_id}:{content_field}</code></td><td>No</td></tr>
+      <tr><td><code>terminal/panes/streams.py:174</code></td><td><code>{content_event_id}:{content_field}</code></td><td>No</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="callout note">
+  <div class="callout-icon" aria-hidden="true">i</div>
+  <div class="callout-body"><span class="callout-label">Note:</span>
+    The 4096-character rule is a presentation decision — "only offer copy and
+    view links when the text is big enough to want them" — and it reaches only
+    one of the eight sites. The other seven offer the affordance
+    unconditionally. That inconsistency is invisible today because the rule
+    hides inside the same helper that formats the token.</div>
+</div>
+
+<h3>Stage 3 and 4: two very different rides</h3>
+
+<p>The token travels two ways, and the second one constrains any redesign: in
+the terminal it becomes a URI inside an OSC 8 hyperlink, which the emulator
+hands to a subprocess as <code>argv[1]</code>.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 1180 400" role="img" aria-labelledby="ride-title ride-desc">
+    <title id="ride-title">Two paths a content reference travels from presenter to resolver</title>
+    <desc id="ride-desc">The fold produces an activity. The dashboard presenter
+      puts the reference in an item field, the browser fetches
+      /api/content/{token}, and the resolver answers. The terminal presenter
+      puts the same reference in an OSC 8 hyperlink; a click launches
+      terminal_content.py, which fetches the same content route, or
+      terminal_view.py, which posts a toggle that is stored in the opened_views
+      table keyed by the token. Both paths end at the same resolver.</desc>
+
+    <rect class="n accent" x="20" y="160" width="160" height="54" rx="8"/>
+    <text class="t" x="100" y="181">Fold</text>
+    <text class="t sub" x="100" y="198">activity + field name</text>
+
+    <rect class="n" x="240" y="60" width="160" height="54" rx="8"/>
+    <text class="t" x="320" y="81">Dashboard item</text>
+    <text class="t sub" x="320" y="98">3 token fields</text>
+
+    <rect class="n" x="240" y="260" width="160" height="54" rx="8"/>
+    <text class="t" x="320" y="281">Mirror row</text>
+    <text class="t sub" x="320" y="298">OSC 8 hyperlink</text>
+
+    <rect class="n" x="460" y="60" width="160" height="54" rx="8"/>
+    <text class="t" x="540" y="81">Browser click</text>
+    <text class="t sub mono" x="540" y="98">?view=diff&amp;path=</text>
+
+    <rect class="n" x="460" y="200" width="160" height="54" rx="8"/>
+    <text class="t" x="540" y="221">terminal_content</text>
+    <text class="t sub" x="540" y="238">copy to clipboard</text>
+
+    <rect class="n" x="460" y="320" width="160" height="54" rx="8"/>
+    <text class="t" x="540" y="341">terminal_view</text>
+    <text class="t sub" x="540" y="358">toggle expansion</text>
+
+    <rect class="n" x="680" y="130" width="160" height="54" rx="8"/>
+    <text class="t" x="760" y="151">GET /api/content</text>
+    <text class="t sub mono" x="760" y="168">{token}</text>
+
+    <rect class="n warn" x="680" y="320" width="160" height="54" rx="8"/>
+    <text class="t" x="760" y="341">opened_views</text>
+    <text class="t sub mono" x="760" y="358">token IS the key</text>
+
+    <rect class="n danger" x="920" y="130" width="200" height="54" rx="8"/>
+    <text class="t" x="1020" y="151">resolve(token)</text>
+    <text class="t sub" x="1020" y="168">rpartition + allow-table</text>
+
+    <path class="e accent" d="M180,180 V87 H236"/>
+    <path class="e accent" d="M180,194 V287 H236"/>
+    <path class="e" d="M400,87 H456"/>
+    <path class="e" d="M400,287 V227 H456"/>
+    <path class="e" d="M400,287 V347 H456"/>
+    <path class="e" d="M620,87 V157 H676"/>
+    <path class="e" d="M620,227 V157 H676"/>
+    <path class="e" d="M620,347 H676"/>
+    <path class="e danger" d="M840,157 H916"/>
+    <path class="e dashed" d="M760,320 V270 H860 V200 H916"/>
+
+    <rect class="el-bg" x="866" y="252" width="86" height="16" rx="4"/>
+    <text class="el" x="909" y="261">re-resolved</text>
+  </svg>
+  <figcaption>Both rides end at one resolver, but only the browser ride carries
+    the extra <code>view</code> and <code>path</code> query parameters — and
+    the terminal ride requires the token to be URI-safe and argv-safe.</figcaption>
+</figure>
+
+<h3>Stage 5: the resolver re-discovers what the token meant</h3>
+
+<p>This is the code you objected to, and every line of it is a consequence of
+the token having no type. Read it as three separate acts of guessing.</p>
+
+<figure class="code">
+  <figcaption><span class="file">engine/queries/content.py:34</span><span class="lang">python</span></figcaption>
+<pre><code><span class="ln">def resolve(self, content_reference: str) -&gt; str:</span><span class="ln hl">    event_id, separator, field_name = content_reference.rpartition(":")   # act 1: find the two halves</span><span class="ln">    if not separator or not event_id or not field_name:</span><span class="ln">        raise MalformedRequest("invalid content reference")</span><span class="ln">    stored_event = self.canonical_events.find(CanonicalEventId(event_id))</span><span class="ln">    if stored_event is None:</span><span class="ln">        raise UnknownReference(content_reference)</span><span class="ln">    payload = stored_event.event.payload</span><span class="ln hl">    if field_name in {"operation_command", "operation_output", "operation_content"} and isinstance(</span><span class="ln hl">        payload, (OperationStarted, OperationProgressed, OperationFinished)   # act 2: is this the folded kind?</span><span class="ln hl">    ):</span><span class="ln">        activity = self.queries.operation_activity(...)                   # ... if so, ask the ACTIVITY</span><span class="ln">        ...</span><span class="ln hl">    allowed_fields = {MessageCreated: frozenset({"content"}), ...}.get(type(payload), frozenset())</span><span class="ln hl">    if field_name not in allowed_fields:                                  # act 3: is this field allowed?</span><span class="ln hl">        raise UnknownReference(content_reference)</span><span class="ln hl">    value = getattr(payload, field_name)                                  # ... if so, read it by NAME</span></code></pre>
+</figure>
+
+<p>Note what act 2 admits. Operation output does not <em>live</em> in a field:
+it is folded from every progress chunk. So operations get a second, completely
+different resolution strategy — re-fold the activity and call
+<code>output_text()</code> — while everything else is read off the payload by
+attribute name. One concept, two mechanisms, chosen by a string comparison.</p>
+
+<h2>The problem</h2>
+
+<p>Both halves of the split authority are already wrong, in opposite
+directions. I checked each against the code, and reproduced the first.</p>
+
+<div class="grid cols-3">
+  <div class="card stat danger"><span class="stat-value">1</span><span class="stat-label">address the fold mints that the resolver rejects</span></div>
+  <div class="card stat warn"><span class="stat-value">1</span><span class="stat-label">allow-table row nothing can ever reach</span></div>
+  <div class="card stat accent"><span class="stat-value">8</span><span class="stat-label">places that know the wire format</span></div>
+</div>
+
+<h3>A live bug: the fold mints an address the resolver refuses</h3>
+
+<p>When a file-editing operation finishes with a result, the fold moves the
+file activity's content pointer to the finish event and sets the field to
+<code>"operation_content"</code> — but if the file activity took the other
+branch it can be left holding <code>"result"</code>. The resolver's table has
+no row for <code>OperationFinished</code>, so the token it hands the
+browser comes back as a 400. I reproduced it against the real fold and the real
+resolver:</p>
+
+<figure class="code term">
+  <figcaption><span class="file">shell</span></figcaption>
+  <pre><code><span class="prompt">$ </span>python3 -m pytest /tmp/repro_file_result.py -q -s
+<span class="out">        }.get(type(payload), frozenset())
+        if field_name not in allowed_fields:
+&gt;           raise UnknownReference(content_reference)
+E           domain.errors.UnknownReference: finish:result
+
+engine/queries/content.py:85: UnknownReference
+1 failed in 0.92s</span></code></pre>
+</figure>
+
+<p>The user-visible symptom: the file block shows its <b class="ui">⧉view</b>
+link, the click returns 400, and the browser throws
+<code>content request failed</code>. Nothing in the suite catches it, because
+no test walks a minted reference back through the resolver for that shape.</p>
+
+<h3>Dead permission: a row nothing can reach</h3>
+
+<p>The table allows <code>OperationInputProvided.content</code>. No projection
+and no presenter ever mints a reference to that payload — <code>grep</code>
+finds it only in the codex translator, the event definition, and the resolver
+itself. It is a permission granted to an address that cannot exist.</p>
+
+<h3>The same shape elsewhere</h3>
+
+<p>Once you know the pattern — a composite string standing in for a missing
+value type — it shows up in four more places.</p>
+
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Where</th><th>What it does</th><th>Severity</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>engine/projections/activity.py:91</code></td>
+        <td><code>_activity_id</code> builds <code>f"{kind}:{actor}:{subject}"</code> — but four other sites bypass it with their own formats: <code>f"file:{event_id}"</code>, <code>f"attention-request:{event_id}"</code>, <code>f"task:{event_id}"</code>, and a nested <code>f"{operation_id}:{path}"</code> stuffed into the subject position. Typed <code>str</code>, used as the fold's dict key, shipped to the browser as <code>item_id</code>.</td>
+        <td><span class="badge warn">same disease</span></td>
+      </tr>
+      <tr>
+        <td><code>api/common/content.py:16</code></td>
+        <td><code>view: str | None</code> and <code>path: str | None</code> query parameters. <code>view</code> is an untyped Literal the JS re-derives from <code>summaryKind</code>, and <code>path</code> is a filename the <em>client</em> tells the server for a diff header the server could read off <code>FileAccessed.path</code>.</td>
+        <td><span class="badge warn">duplication</span></td>
+      </tr>
+      <tr>
+        <td><code>terminal/mirror/presenter.py:289</code></td>
+        <td>Branches on <code>content_field == "unified_diff"</code> versus <code>== "content"</code> to pick a renderer — a third independent copy of the magic strings.</td>
+        <td><span class="badge warn">magic strings</span></td>
+      </tr>
+      <tr>
+        <td><code>terminal/services/views.py:33</code></td>
+        <td>Records a UI toggle as a <code>StateFileRecord</code> with <code>session_id=""</code>, <code>path=&lt;token&gt;</code>, <code>script="dashboard"</code>, <code>process_id=0</code> — an audit shape borrowed for something it does not describe.</td>
+        <td><span class="badge ghost">unrelated, noted</span></td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<p>I also checked what is <em>not</em> broken, so the review is honest:
+<code>rpartition</code> and <code>:</code>-splitting appear nowhere else in the
+tree, and the other type-keyed dispatch tables
+(<code>_PRESENTERS</code> in <code>dashboard/render/items/__init__.py</code>,
+<code>_CALL</code> and <code>_TOP</code> in the codex translator) are honest
+registries over <em>foreign</em> vocabularies, which is the right shape for
+parsing someone else's JSON.</p>
+
+<h2>To be: one vocabulary, owned once</h2>
+
+<p>The fix is a value type and a single enum, plus one decision about who does
+the parsing. Everything you objected to disappears as a side effect rather than
+being individually cleaned up.</p>
+
+<h3>The one new idea: a content slot</h3>
+
+<p>Name the thing the strings were standing in for, in the domain, once. Every
+minter and the resolver then share one vocabulary that the type checker
+enforces.</p>
+
+<figure class="code">
+  <figcaption><span class="file">domain/references.py — new</span><span class="lang">python</span></figcaption>
+  <pre><code>class ContentSlot(StrEnum):
+    """WHICH full-size text of an event a reader is asking for."""
+    MESSAGE            = "message"
+    REASONING          = "reasoning"
+    ACTOR_MESSAGE      = "actor-message"
+    OPERATION_COMMAND  = "operation-command"
+    OPERATION_OUTPUT   = "operation-output"
+    FILE_SOURCE        = "file-source"
+    FILE_DIFF          = "file-diff"
+    ASSIGNMENT_BRIEF   = "assignment-brief"
+    ASSIGNMENT_RESULT  = "assignment-result"
+    ATTENTION_FEEDBACK = "attention-feedback"
+
+
+@dataclass(frozen=True)
+class ContentReference:
+    event_id: CanonicalEventId
+    slot: ContentSlot</code></pre>
+</figure>
+
+<div class="callout note">
+  <div class="callout-icon" aria-hidden="true">i</div>
+  <div class="callout-body"><span class="callout-label">Note:</span>
+    A slot is deliberately <em>not</em> a payload field name. <code>content</code>
+    appears on five different payload types meaning five different things, while
+    <code>OPERATION_OUTPUT</code> corresponds to no field at all — it is folded
+    from progress chunks. Naming slots after fields is what forced the resolver
+    to consult the payload type before it could interpret the name.</div>
+</div>
+
+<h3>Who owns what, after</h3>
+
+<p>Each stage keeps exactly one job, and no stage repeats another's knowledge.</p>
+
+<div class="stack">
+  <div class="layer accent">
+    <span class="layer-name">domain/references.py</span>
+    <span class="layer-note">owns the vocabulary: which slots exist. Nothing else declares one.</span>
+  </div>
+  <div class="layer">
+    <span class="layer-name">engine/projections/</span>
+    <span class="layer-note">owns which slot each activity HAS. Replaces the loose pair with typed fields: OperationActivity gets command and output references; FileActivity gets one content reference.</span>
+  </div>
+  <div class="layer">
+    <span class="layer-name">dashboard/render/, terminal/mirror/</span>
+    <span class="layer-note">own presentation only: whether the text is big enough to offer the affordance. They pass a reference through; they never format one.</span>
+  </div>
+  <div class="layer">
+    <span class="layer-name">api/</span>
+    <span class="layer-note">owns the wire form. The single place a ContentReference becomes URL text, and the single place URL text becomes a ContentReference.</span>
+  </div>
+  <div class="layer">
+    <span class="layer-name">engine/queries/content.py</span>
+    <span class="layer-note">owns resolution: reference in, text out. Receives a typed value, so it validates nothing and guesses nothing.</span>
+  </div>
+</div>
+
+<h3>The resolver becomes an exhaustive match</h3>
+
+<p>With a typed reference arriving, resolution is one <code>match</code> over
+the slot. Each case narrows to the activity it needs and asks it for text — the
+strategy operations already used, now used by all of them.</p>
+
+<div class="compare">
+  <div class="bad"><span class="compare-title">Now</span>
+    <p>Split the string. Guess whether the field belongs to the folded family.
+      Look the payload type up in a table of allowed names.
+      <code>getattr</code> by name. Check the result is textual, because
+      nothing guaranteed it.</p>
+    <p class="muted mb-0">Adding a slot means editing the table, and forgetting
+      to means a 400 that only a user finds.</p></div>
+  <div class="good"><span class="compare-title">After</span>
+    <p>One <code>match</code> on <code>reference.slot</code>. Each arm narrows
+      to a typed activity and returns its text. <code>assert_never</code> on
+      the fallthrough.</p>
+    <p class="muted mb-0">Adding a slot means adding an enum member, and mypy
+      fails the build until the arm exists.</p></div>
+</div>
+
+<figure class="code">
+  <figcaption><span class="file">engine/queries/content.py — after</span><span class="lang">python</span></figcaption>
+  <pre><code>def text(self, reference: ContentReference) -&gt; str:
+    activity = self._activity_of(reference.event_id)     # UnknownReference if no such event
+    match reference.slot:
+        case ContentSlot.OPERATION_COMMAND:
+            return _operation(activity).command_text()
+        case ContentSlot.OPERATION_OUTPUT:
+            return _operation(activity).output_text()
+        case ContentSlot.FILE_DIFF:
+            return _file(activity).file.unified_diff or ""
+        case ContentSlot.MESSAGE:
+            return content_text(_message(activity).content)
+        ...
+        case _ as unreachable:
+            assert_never(unreachable)</code></pre>
+</figure>
+
+<p>Three domain errors get simpler too. <code>MalformedRequest</code> for a
+bad reference shape disappears — the shape is now validated before a handler
+runs. <code>UnsupportedRequest</code> ("referenced content is not textual")
+disappears — each arm returns a <code>str</code> by construction.
+<code>UnknownReference</code> survives, and means only what it says: no such
+event.</p>
+
+<h3>The decision I need from you: where the slot goes on the wire</h3>
+
+<p>The two options differ in whether <em>we</em> ever parse a reference again.
+Both are honest; the first is stricter, the second is smaller.</p>
+
+<div class="compare">
+  <div class="good"><span class="compare-title">Option A — path segments</span>
+    <p>The slot is its own URL segment, so FastAPI splits the path and pydantic
+      validates the slot against the enum. An unknown slot is a 422 before any
+      handler runs. <b>No parsing code exists in the tree at all.</b></p>
+    <figure class="code mb-0">
+      <pre><code>GET  /api/content/operation-output/evt-7f3a
+GET  /api/content/file-diff/evt-7f3a/rendered
+POST /api/terminal/views/file-diff/evt-7f3a
+
+baqylau-view://file-diff/evt-7f3a
+
+opened_views(slot TEXT, event_id TEXT,
+             PRIMARY KEY(slot, event_id))</code></pre>
+    </figure>
+    <p class="muted mb-0">Costs: an <code>opened_views</code> schema change,
+      and the JS carries two data attributes instead of one.</p>
+  </div>
+  <div class="bad"><span class="compare-title">Option B — one token, slot first</span>
+    <p>Stays a single opaque string on the wire, in the DOM dataset, and in the
+      database. One parse function survives, in
+      <code>domain/references.py</code>, called once at the api boundary.</p>
+    <figure class="code mb-0">
+      <pre><code>GET  /api/content/operation-output:evt-7f3a
+POST /api/terminal/views  {"reference": "..."}
+
+baqylau-view://file-diff:evt-7f3a
+
+opened_views(reference TEXT PRIMARY KEY)
+
+def parsed_reference(token: str) -&gt; ContentReference: ...</code></pre>
+    </figure>
+    <p class="muted mb-0">Costs: <code>MalformedRequest</code> stays, one
+      <code>partition</code> stays, and the slot is validated by our code
+      rather than by the schema.</p>
+  </div>
+</div>
+
+<p>Under either option the <code>view</code> and <code>path</code> query
+parameters go away: <code>FILE_DIFF</code> versus <code>FILE_SOURCE</code>
+already says which renderer to use, and the file path comes off the
+<code>FileAccessed</code> payload instead of off the client's word.</p>
+
+<h3>What migrates</h3>
+
+<p>Almost nothing, which is the good news about a projection-only concept.</p>
+
+<ul class="timeline">
+  <li class="ok"><span class="when">Stored events</span><span class="what">Untouched</span>
+    <p class="muted mb-0">No canonical payload holds a reference. Slots are
+      derived on every read, so no schema version bump and no backfill.</p></li>
+  <li class="ok"><span class="when">Dashboard items</span><span class="what">Regenerated per request</span>
+    <p class="muted mb-0">Items are rendered fresh from the fold. A browser tab
+      open across the deploy holds stale tokens in its DOM; a refresh fixes it.</p></li>
+  <li class="warn"><span class="when">opened_views</span><span class="what">Recreate the table</span>
+    <p class="muted mb-0">Ephemeral UI state — which blocks are expanded in a
+      terminal pane right now. Dropping it costs a reader nothing but a second
+      click.</p></li>
+  <li><span class="when">Clients</span><span class="what">Two files change</span>
+    <p class="muted mb-0"><code>client/terminal_content.py</code> and
+      <code>client/terminal_view.py</code> strip a scheme and forward the rest.
+      Under option A they forward a path and stop building a JSON body, so
+      <code>_wire.py</code> gains a path template and loses one.</p></li>
+</ul>
+
+<h3>The guard that keeps it fixed</h3>
+
+<p>The reason to prefer a shared enum over two lists is that it makes the
+original bug unrepresentable. Two mechanisms, both cheap:</p>
+
+<ol class="procedure">
+  <li><span class="step-title">Exhaustiveness in the resolver</span>
+    <code>assert_never</code> plus mypy strict means a new slot cannot ship
+    without a reader. That kills the dead-permission half.</li>
+  <li><span class="step-title">A round-trip test over the fold</span>
+    For a fixture session covering every activity kind, take every reference the
+    presenters mint and resolve each one. That kills the
+    <code>finish:result</code> half, which today no test can see because minting
+    and resolving are tested separately.</li>
+</ol>
+
+<h2>What I have not settled</h2>
+
+<div class="callout warn">
+  <div class="callout-icon" aria-hidden="true">▲</div>
+  <div class="callout-body"><span class="callout-label">Caution:</span>
+    Three open questions. I would rather agree on them than guess.</div>
+</div>
+
+<dl class="defs">
+  <dt>Scope of the activity-id cleanup</dt>
+  <dd><code>_activity_id</code> has the same disease and is a bigger job: the
+    fold's 31 branches all key on that string, and <code>item_id</code>'s wire
+    format changes with it. Same change, separately, or not now?</dd>
+
+  <dt>Whether FILE_SOURCE and FILE_DIFF are two slots or one</dt>
+  <dd>Two slots make the renderer choice a type-level fact and delete the
+    <code>view</code> parameter. One slot plus a rendering mode keeps the
+    reference closer to "the content of this file event". I lean two.</dd>
+
+  <dt>The name of the resolver</dt>
+  <dd><code>CanonicalContentService</code> says nothing.
+    <code>ContentQueries.text(reference)</code> matches the neighbouring
+    <code>SessionQueries</code> and reads as what it does at the call site. Open
+    to a better one.</dd>
+</dl>
+</main>
+</div>
+<script>
+/* baqylau html-communication — base script.
+   Progressive enhancement only: the document reads fine with JS disabled.
+   No network, no dependencies. */
+(function () {
+  "use strict";
+
+  /* ---- theme: remember the reader's choice ---- */
+  var KEY = "hc-theme";
+  var root = document.documentElement;
+  var saved = null;
+  try { saved = localStorage.getItem(KEY); } catch (e) { /* private mode */ }
+  if (!root.getAttribute("data-theme")) {
+    /* Resolve the theme once, so the page and the toggle's label agree. */
+    root.setAttribute("data-theme", saved ||
+      (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
+  }
+
+  function currentTheme() {
+    return root.getAttribute("data-theme");
+  }
+
+  var toggle = document.querySelector(".theme-toggle");
+  if (toggle) {
+    var paint = function () {
+      var dark = currentTheme() === "dark";
+      toggle.textContent = dark ? "☀ Light" : "☾ Dark";
+      toggle.setAttribute("aria-label", dark ? "Switch to light theme" : "Switch to dark theme");
+    };
+    paint();
+    toggle.addEventListener("click", function () {
+      var next = currentTheme() === "dark" ? "light" : "dark";
+      root.setAttribute("data-theme", next);
+      try { localStorage.setItem(KEY, next); } catch (e) {}
+      paint();
+    });
+  }
+
+  /* ---- headings: stable ids + click-to-copy anchors ---- */
+  var used = {};
+  function slug(text) {
+    var s = text.toLowerCase().replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "-") || "section";
+    used[s] = (used[s] || 0) + 1;
+    return used[s] > 1 ? s + "-" + used[s] : s;
+  }
+  var headings = [].slice.call(document.querySelectorAll(".content h2, .content h3"));
+  headings.forEach(function (h) {
+    if (!h.id) h.id = slug(h.textContent);
+    if (h.querySelector(".anchor")) return;
+    var a = document.createElement("a");
+    a.className = "anchor";
+    a.href = "#" + h.id;
+    a.textContent = "#";
+    a.setAttribute("aria-label", "Link to this section");
+    h.appendChild(a);
+  });
+
+  /* ---- table of contents: build from the headings, unless hand-written ---- */
+  var toc = document.querySelector(".toc");
+  if (toc && !toc.dataset.manual && headings.length) {
+    var ol = document.createElement("ol");
+    headings.forEach(function (h) {
+      var li = document.createElement("li");
+      li.className = "lvl-" + h.tagName.charAt(1);
+      var a = document.createElement("a");
+      a.href = "#" + h.id;
+      a.textContent = h.textContent.replace(/#$/, "").trim();
+      li.appendChild(a);
+      ol.appendChild(li);
+    });
+    var title = toc.querySelector(".toc-title");
+    if (!title) {
+      title = document.createElement("p");
+      title.className = "toc-title";
+      title.textContent = "On this page";
+      toc.appendChild(title);
+    }
+    toc.appendChild(ol);
+
+    /* highlight the section in view */
+    var links = {};
+    [].slice.call(ol.querySelectorAll("a")).forEach(function (a) {
+      links[a.getAttribute("href").slice(1)] = a;
+    });
+    if (window.IntersectionObserver) {
+      var seen = [];
+      var obs = new IntersectionObserver(function (entries) {
+        entries.forEach(function (en) {
+          var id = en.target.id;
+          var i = seen.indexOf(id);
+          if (en.isIntersecting && i === -1) seen.push(id);
+          if (!en.isIntersecting && i !== -1) seen.splice(i, 1);
+        });
+        var active = seen.length ? seen[0] : null;
+        for (var id in links) links[id].classList.toggle("is-active", id === active);
+      }, { rootMargin: "0px 0px -70% 0px" });
+      headings.forEach(function (h) { obs.observe(h); });
+    }
+  }
+
+  /* ---- code blocks: copy button ---- */
+  document.querySelectorAll("figure.code").forEach(function (fig) {
+    var pre = fig.querySelector("pre");
+    if (!pre) return;
+    var cap = fig.querySelector("figcaption");
+    if (!cap) {
+      cap = document.createElement("figcaption");
+      fig.insertBefore(cap, pre);
+    }
+    if (cap.querySelector(".copy-btn")) return;
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "copy-btn";
+    btn.textContent = "Copy";
+    btn.addEventListener("click", function () {
+      var text = pre.innerText.replace(/^\s*[$#>]\s/gm, "");
+      var done = function () {
+        btn.textContent = "Copied";
+        btn.dataset.copied = "1";
+        setTimeout(function () { btn.textContent = "Copy"; delete btn.dataset.copied; }, 1400);
+      };
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(text).then(done, function () { btn.textContent = "Press ⌘C"; });
+      } else {
+        var sel = window.getSelection();
+        sel.removeAllRanges();
+        var r = document.createRange();
+        r.selectNodeContents(pre);
+        sel.addRange(r);
+        btn.textContent = "Press ⌘C";
+      }
+    });
+    var lang = cap.querySelector(".lang");
+    if (lang) cap.insertBefore(btn, lang); else cap.appendChild(btn);
+  });
+})();
+
+</script>
+</body>
+</html>

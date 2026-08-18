@@ -26,6 +26,7 @@ select = [
     "PGH",  # blanket `# type: ignore` / `# noqa` are banned (PGH003/PGH004): a
             # suppression names the code it suppresses, or it is not a
             # suppression, it is a hole.
+    "TID251",   # banned-api — the list below. One import, one rule, at lint time.
 ]
 ignore = [
     # -- house style: compactness ---------------------------------------
@@ -54,6 +55,29 @@ ignore = [
                 # the styleguide's named-constant rule, not a lint gate
 ]
 
+[lint.flake8-tidy-imports.banned-api]
+# A response is a MODEL, and pydantic is the only thing that encodes one.
+# JSONResponse takes any object at all and reflects it onto the wire, which is
+# how 26 routes came to answer with shapes their own `response_model` did not
+# describe — FastAPI validates nothing it did not serialize itself. The
+# architecture suite says the same thing about api/ as a whole
+# (test_no_response_anywhere_is_a_hand_built_document); this is the half that
+# fails in under a second, on the line that did it.
+"fastapi.responses.JSONResponse".msg = "Return a response MODEL. A route names its type and returns one; an error body is api/app.py's ErrorResponse; an SSE frame is a model too (api/sse.py)."
+"starlette.responses.JSONResponse".msg = "Return a response MODEL — see the note on fastapi.responses.JSONResponse."
+
+# A document of OURS is a dataclass or a pydantic model, and something else
+# encodes it: domain.codec.encode_document for anything stored or carried as
+# evidence, pydantic for anything on the wire. Hand-building one as a dict
+# literal is how the canonical envelope came to have its twelve field names
+# written out in four places, none of them checked against the others.
+#
+# The exemptions are per-file, below, and every one of them is a FOREIGN
+# document — another program's bytes, whose shape is not ours to declare.
+# tests/test_canonical_architecture.py holds that list to exactly that.
+"json.dumps".msg = "Build a dataclass and encode it (domain.codec.encode_document), or a model and let pydantic. A dict literal is not a document."
+"json.loads".msg = "Decode into a declared shape: domain.codec.decode_document for ours, and for a harness's own records, the translator that owns that vocabulary."
+
 [lint.per-file-ignores]
 # --- the annotation ratchet ------------------------------------------------
 # These are the packages whose type migration has not landed. The list MIRRORS
@@ -69,12 +93,39 @@ ignore = [
 "harness/**/*.py" = ["ANN"]
 "tests/**/*.py" = [
     "ANN",
+    # The suite BUILDS the foreign documents the translators read — a Claude
+    # Code transcript line, a Codex rollout record — so the same exemption the
+    # translators have applies to the fixtures that feed them.
+    "TID251",
     # A test imports inside the test body on purpose: the module has to be
     # loaded AFTER the fixture has monkeypatched its environment, and a
     # top-level import would bind the unpatched one. Uniform across the suite,
     # so it is a rule here rather than 17 identical suppressions.
     "PLC0415",
 ]
+
+# --- the JSON allowlist ----------------------------------------------------
+# Every file here touches a document whose SHAPE IS NOT OURS, and the list is
+# held to exactly that by tests/test_canonical_architecture.py
+# (test_the_json_allowlist_is_only_foreign_documents), which fails on an entry
+# that no longer needs one. It only ever shrinks.
+#
+# The one entry that is ours, and it is not a document: StructuredContent HOLDS
+# JSON as a value — a tool's arguments, a tool's answer, shapes belonging to
+# whichever tool it was — and canonicalizes and pretty-prints that text. The
+# canonical envelope used to be here too; it is pydantic's now.
+"domain/values.py" = ["TID251"]          # StructuredContent: a tool's document, held as text
+
+# Foreign IN — another program's records, parsed into our types. This is what a
+# translator IS, and the whole reason the canonical model exists.
+"harness/impl/**/*.py" = ["TID251"]      # each CLI's transcripts, rollouts, hooks, OTEL, usage
+"notify/channels/*.py" = ["TID251"]      # the Telegram and Web Push HTTP APIs
+"terminal/impl/kitty/remote.py" = ["TID251"]   # kitty's remote-control protocol
+"dashboard/dictate.py" = ["TID251"]      # the Deepgram grant API
+"dashboard/cli.py" = ["TID251"]          # the daemon's health reply, read over a socket
+"client/*.py" = ["TID251"]               # stdlib-only programs the harnesses and terminal RUN
+"repository/mapper/audit.py" = ["TID251"]      # a swallowed exception's context, whatever it was
+"app/raw_events_audit_cli.py" = ["TID251"]     # a debugging report, printed for a person
 
 # markdown(): lambdas capture `codes` late but every sub() runs synchronously
 # within the same loop iteration — no escape, no bug.

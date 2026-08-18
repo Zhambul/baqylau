@@ -7,9 +7,8 @@ event identity and envelope stamping in one place.
 
 from __future__ import annotations
 
-import json
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import Literal, TypeAlias
 
 from domain.events import (
@@ -25,6 +24,7 @@ from domain.ids import (
     stable_event_id,
 )
 from domain.records import InterpretationAudit
+from domain.codec import encode_document
 
 TranslationDecision: TypeAlias = Literal["translated", "ignored_unknown", "ignored_nonsemantic"]
 RecordedTranslationDecision: TypeAlias = TranslationDecision | Literal["translation_failed"]
@@ -147,8 +147,6 @@ def output_location_raw_event(
     actor_id: ActorId | None = None,
     parent_actor_id: ActorId | None = None,
 ) -> RawEvent:
-    document = asdict(located)
-    document["operation_id"] = str(located.operation_id)
     return RawEvent(
         raw_event_id=RawEventId(
             f"{harness}:output_location:{context.session_id}:{located.operation_id}"
@@ -162,7 +160,7 @@ def output_location_raw_event(
         parent_actor_id=parent_actor_id if actor_id else context.parent_actor_id,
         observed_at=time.time(),
         encoding="json",
-        payload=json.dumps(document, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8"),
+        payload=encode_document(located),
         # NOT the chunk source's identity: the chunk reader resumes from the last
         # raw event under its own identity, and a directive there would
         # masquerade as a read position.

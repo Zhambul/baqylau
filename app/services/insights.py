@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from typing import Callable, Protocol
 
 from repository.contract.audit import AuditReadRepository
@@ -23,7 +23,7 @@ class TerminalSessionReader(Protocol):
 
 @dataclass(frozen=True)
 class DailySessionCount:
-    date: str
+    date: date
     session_count: int
 
 
@@ -129,12 +129,12 @@ class ApplicationInsightsService:
                 )
             )
 
-        daily_counts: dict[str, int] = {}
+        daily_counts: dict[date, int] = {}
         hourly_counts: dict[tuple[int, int], int] = {}
         for row in rows:
             started = datetime.fromtimestamp(row.started_at)
-            date = started.strftime("%Y-%m-%d")
-            daily_counts[date] = daily_counts.get(date, 0) + 1
+            day = started.date()
+            daily_counts[day] = daily_counts.get(day, 0) + 1
             day_and_hour = (int(started.strftime("%w")), started.hour)
             hourly_counts[day_and_hour] = hourly_counts.get(day_and_hour, 0) + 1
 
@@ -142,8 +142,8 @@ class ApplicationInsightsService:
             generated_at=generated_at,
             total_session_count=len(rows),
             daily_sessions=tuple(
-                DailySessionCount(date, count)
-                for date, count in sorted(daily_counts.items())
+                DailySessionCount(day, count)
+                for day, count in sorted(daily_counts.items())
             ),
             hourly_sessions=tuple(
                 HourlySessionCount(day, hour, count)
@@ -200,10 +200,10 @@ class ApplicationInsightsService:
                 grouped.setdefault(row.working_directory, []).append(row)
         projects = []
         for directory, project_rows in grouped.items():
-            daily_counts: dict[str, int] = {}
+            daily_counts: dict[date, int] = {}
             for row in project_rows:
-                date = datetime.fromtimestamp(row.started_at).strftime("%Y-%m-%d")
-                daily_counts[date] = daily_counts.get(date, 0) + 1
+                day = datetime.fromtimestamp(row.started_at).date()
+                daily_counts[day] = daily_counts.get(day, 0) + 1
             projects.append(
                 ProjectInsights(
                     working_directory=directory,
@@ -214,8 +214,8 @@ class ApplicationInsightsService:
                     error_count=sum(row.error_count for row in project_rows),
                     last_session_at=max(row.started_at for row in project_rows),
                     daily_sessions=tuple(
-                        DailySessionCount(date, count)
-                        for date, count in sorted(daily_counts.items())
+                        DailySessionCount(day, count)
+                        for day, count in sorted(daily_counts.items())
                     ),
                 )
             )

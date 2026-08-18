@@ -8,15 +8,15 @@ canonical store and again in the evidence queries.
 
 from __future__ import annotations
 
-import json
-
-from domain.codec import CanonicalEventCodec
+from domain.codec import CanonicalEnvelope, CanonicalEventCodec
 from domain.events import CanonicalEvent, EventPayload
 from domain.ids import (
     ActorId,
+    CanonicalEventId,
     OperationId,
     RawEventId,
     SessionId,
+    TurnId,
 )
 from domain.operations import OperationOutputFollowing
 from domain.records import (
@@ -31,6 +31,7 @@ from repository.model.facts import (
     RawEventRow,
     SessionRow,
 )
+from repository.model.sql import SqlValues
 
 # --- sessions -----------------------------------------------------------------
 
@@ -47,7 +48,7 @@ def session(row: SessionRow) -> Session:
     )
 
 
-def session_values(harness: str, value: Session, created_at: float) -> tuple[object, ...]:
+def session_values(harness: str, value: Session, created_at: float) -> SqlValues:
     return (
         str(value.session_id),
         str(value.lead_actor_id),
@@ -85,7 +86,7 @@ def raw_event(row: RawEventRow) -> RawEvent:
     )
 
 
-def raw_event_values(value: RawEvent) -> tuple[object, ...]:
+def raw_event_values(value: RawEvent) -> SqlValues:
     return (
         str(value.raw_event_id),
         str(value.session_id),
@@ -106,7 +107,7 @@ def raw_event_values(value: RawEvent) -> tuple[object, ...]:
     )
 
 
-def raw_identity(value: RawEvent) -> tuple[object, ...]:
+def raw_identity(value: RawEvent) -> SqlValues:
     """The columns that decide whether a re-record is the SAME observation.
 
     Re-recording an identical observation is a no-op by design; reusing an id
@@ -133,27 +134,30 @@ def canonical_event_values(
     event: CanonicalEvent[EventPayload],
     accepted_at: float,
     codec: CanonicalEventCodec,
-) -> tuple[object, ...]:
-    """Encode once, then split the document across the columns.
+) -> SqlValues:
+    """The envelope, split across the columns that hold it.
 
-    The codec both serialises and VALIDATES, so encoding here is what refuses a
-    payload that does not match its declared shape.
+    The codec both builds the envelope and VALIDATES it, so asking for one here
+    is what refuses a payload that does not match its declared shape.
+
+    This used to encode the whole event to JSON and parse it straight back to
+    reach its own fields, keying into the resulting dict twelve times.
     """
-    document = json.loads(codec.encode(event))
+    envelope = codec.envelope(event)
     return (
-        document["event_id"],
-        document["schema_version"],
-        document["event_type"],
-        document["session_id"],
-        document["actor_id"],
-        document["turn_id"],
-        document["parent_actor_id"],
-        document["harness"],
-        document["occurred_at"],
-        document["terminal_window_id"],
-        document["harness_process_id"],
+        str(envelope.event_id),
+        envelope.schema_version,
+        envelope.event_type,
+        str(envelope.session_id),
+        str(envelope.actor_id),
+        str(envelope.turn_id) if envelope.turn_id is not None else None,
+        str(envelope.parent_actor_id) if envelope.parent_actor_id is not None else None,
+        envelope.harness,
+        envelope.occurred_at,
+        envelope.terminal_window_id,
+        envelope.harness_process_id,
         accepted_at,
-        json.dumps(document["payload"], ensure_ascii=False, separators=(",", ":"), sort_keys=True),
+        codec.payload_json(event),
     )
 
 
@@ -165,35 +169,39 @@ def stored_canonical_event(
     return StoredCanonicalEvent(
         cursor=row.cursor,
         accepted_at=row.accepted_at,
-        event=codec.decode(_encoded_envelope(row)),
+        event=codec.event(canonical_envelope(row, codec)),
         raw_event_ids=raw_event_ids,
     )
 
 
-def _encoded_envelope(row: CanonicalEventRow) -> bytes:
-    document = {
-        "actor_id": row.actor_id,
-        "event_id": row.event_id,
-        "event_type": row.event_type,
-        "harness": row.harness,
-        "harness_process_id": row.harness_process_id,
-        "occurred_at": row.occurred_at,
-        "parent_actor_id": row.parent_actor_id,
-        "payload": json.loads(row.payload),
-        "schema_version": row.schema_version,
-        "session_id": row.session_id,
-        "terminal_window_id": row.terminal_window_id,
-        "turn_id": row.turn_id,
-    }
-    return json.dumps(
-        document, ensure_ascii=False, separators=(",", ":"), sort_keys=True
-    ).encode("utf-8")
+def canonical_envelope(
+    row: CanonicalEventRow, codec: CanonicalEventCodec
+) -> CanonicalEnvelope[EventPayload]:
+    """A stored row back into the envelope its columns are.
+
+    Straight across, no bytes in between: the read used to re-serialize the row
+    into a JSON document purely so that `decode` could parse it again.
+    """
+    return CanonicalEnvelope(
+        actor_id=ActorId(row.actor_id),
+        event_id=CanonicalEventId(row.event_id),
+        event_type=row.event_type,
+        harness=row.harness,
+        harness_process_id=row.harness_process_id,
+        occurred_at=row.occurred_at,
+        parent_actor_id=ActorId(row.parent_actor_id) if row.parent_actor_id is not None else None,
+        payload=codec.payload(row.event_type, row.payload),
+        schema_version=row.schema_version,
+        session_id=SessionId(row.session_id),
+        terminal_window_id=row.terminal_window_id,
+        turn_id=TurnId(row.turn_id) if row.turn_id is not None else None,
+    )
 
 
 # --- interpretations ----------------------------------------------------------
 
 
-def interpretation_record_values(record: InterpretationRecord) -> tuple[object, ...]:
+def interpretation_record_values(record: InterpretationRecord) -> SqlValues:
     return (
         str(record.raw_event_id),
         record.translator_version,
@@ -203,7 +211,7 @@ def interpretation_record_values(record: InterpretationRecord) -> tuple[object, 
     )
 
 
-def interpretation_event_values(entry: InterpretationEventRecord) -> tuple[object, ...]:
+def interpretation_event_values(entry: InterpretationEventRecord) -> SqlValues:
     return (
         str(entry.event_id),
         str(entry.raw_event_id),
@@ -236,7 +244,7 @@ def operation_output_following(row: OperationOutputRow) -> OperationOutputFollow
     )
 
 
-def operation_output_values(following: OperationOutputFollowing) -> tuple[object, ...]:
+def operation_output_values(following: OperationOutputFollowing) -> SqlValues:
     return (
         str(following.session_id),
         str(following.operation_id),

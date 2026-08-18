@@ -1,0 +1,1072 @@
+<!DOCTYPE html>
+<html lang="en" >
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A resumed session never comes back</title>
+<meta name="description" content="Session 498434ba stopped reading its transcript at 17:43:57 and never resumed, because the first `session.finished` fact is a permanent tombstone and every later `session.started` is discarded as a duplicate.">
+<style>
+/* baqylau html-communication — base stylesheet.
+   Self-contained: no web fonts, no CDN, no network. */
+
+/* ---------- tokens ---------- */
+:root {
+  color-scheme: light dark;
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+  --bg:        #ffffff;
+  --bg-sunk:   #f6f7f9;
+  --bg-raised: #ffffff;
+  --bg-code:   #f6f7f9;
+  --border:    #e2e5ea;
+  --border-strong: #c7cdd6;
+
+  --text:      #1b1f24;
+  --text-soft: #5b6472;
+  --text-faint:#646d7a;   /* 4.9:1 on --bg-sunk */
+
+  --accent:      #4f46e5;
+  --accent-soft: #eef0fe;
+  --accent-text: #3730a3;
+
+  --ok:      #12805c;  --ok-soft:   #e6f5ef;
+  --warn:    #a15c07;  --warn-soft: #fdf3e3;
+  --danger:  #b3261e;  --danger-soft:#fdeceb;
+  --info:    #0b6bcb;  --info-soft: #e8f1fd;
+
+  --radius: 8px;
+  --radius-lg: 12px;
+  --shadow: 0 1px 2px rgba(16,24,40,.05), 0 1px 3px rgba(16,24,40,.06);
+  --content-width: 78ch;
+  --sidebar-width: 250px;
+}
+
+[data-theme="dark"] {
+  --bg:        #14171c;
+  --bg-sunk:   #1a1e24;
+  --bg-raised: #1c2128;
+  --bg-code:   #1a1e24;
+  --border:    #2c333d;
+  --border-strong: #414b58;
+
+  --text:      #e6e9ee;
+  --text-soft: #a8b1be;
+  --text-faint:#8b96a3;   /* 5.6:1 on --bg-sunk */
+
+  --accent:      #8b85ff;
+  --accent-soft: #24243d;
+  --accent-text: #b6b1ff;
+
+  --ok:      #4ec49a;  --ok-soft:   #16302a;
+  --warn:    #e0a44a;  --warn-soft: #33280f;
+  --danger:  #f08b84;  --danger-soft:#3a1e1d;
+  --info:    #6fb3f7;  --info-soft: #14263b;
+
+  --shadow: 0 1px 2px rgba(0,0,0,.4);
+}
+
+/* ---------- reset ---------- */
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.65 var(--font-sans);
+  font-synthesis: none;
+  -webkit-font-smoothing: antialiased;
+}
+img, svg { max-width: 100%; }
+
+/* ---------- page layout ---------- */
+.page {
+  display: grid;
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  gap: 0 48px;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 0 28px 96px;
+}
+.page > .content { min-width: 0; max-width: var(--content-width); padding-top: 40px; }
+.page.no-toc { grid-template-columns: minmax(0, 1fr); }
+.page.no-toc > .content { margin: 0 auto; }
+.page.wide { --content-width: 100%; max-width: 1400px; }
+
+/* sidebar / table of contents */
+.toc {
+  position: sticky; top: 0; align-self: start;
+  max-height: 100vh; overflow-y: auto;
+  padding: 40px 0 40px; font-size: 14px;
+}
+.toc-title {
+  margin: 0 0 10px; font-size: 11px; font-weight: 700;
+  letter-spacing: .09em; text-transform: uppercase; color: var(--text-faint);
+}
+.toc ol { list-style: none; margin: 0; padding: 0; }
+.toc li { margin: 0; }
+.toc a {
+  display: block; padding: 5px 12px; color: var(--text-soft);
+  text-decoration: none; border-left: 2px solid var(--border);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.toc a:hover { color: var(--text); background: var(--bg-sunk); }
+.toc a.is-active { color: var(--accent-text); border-left-color: var(--accent); font-weight: 600; }
+.toc .lvl-3 a { padding-left: 26px; font-size: 13px; }
+
+/* ---------- document header ---------- */
+.doc-header { padding: 8px 0 28px; border-bottom: 1px solid var(--border); margin-bottom: 36px; }
+.doc-eyebrow {
+  font-size: 12px; font-weight: 700; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--accent-text); margin: 0 0 10px;
+}
+.doc-header h1 { margin: 0; font-size: 34px; line-height: 1.2; letter-spacing: -.02em; }
+.doc-lede { margin: 14px 0 0; font-size: 18px; color: var(--text-soft); }
+.doc-meta {
+  display: flex; flex-wrap: wrap; gap: 8px 18px;
+  margin: 18px 0 0; padding: 0; list-style: none;
+  font-size: 13px; color: var(--text-faint);
+}
+.doc-meta b { color: var(--text-soft); font-weight: 600; }
+
+/* ---------- typography ---------- */
+h2, h3, h4 { line-height: 1.3; letter-spacing: -.01em; scroll-margin-top: 24px; }
+h2 { margin: 52px 0 16px; font-size: 25px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+h3 { margin: 34px 0 12px; font-size: 19px; }
+h4 { margin: 26px 0 10px; font-size: 16px; color: var(--text-soft); }
+p { margin: 0 0 16px; }
+a { color: var(--accent-text); text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent); text-underline-offset: 2px; }
+a:hover { text-decoration-color: var(--accent); }
+strong { font-weight: 650; }
+small { font-size: 13px; color: var(--text-soft); }
+hr { border: 0; border-top: 1px solid var(--border); margin: 40px 0; }
+ul, ol { margin: 0 0 16px; padding-left: 24px; }
+li { margin: 6px 0; }
+li > ul, li > ol { margin: 6px 0; }
+blockquote {
+  margin: 0 0 16px; padding: 2px 0 2px 18px;
+  border-left: 3px solid var(--border-strong); color: var(--text-soft);
+}
+.anchor {
+  margin-left: 8px; color: var(--text-faint); text-decoration: none;
+  opacity: 0; font-weight: 400; transition: opacity .12s;
+}
+h2:hover .anchor, h3:hover .anchor { opacity: 1; }
+
+/* description list — for pairs of related data */
+dl.defs { margin: 0 0 20px; }
+dl.defs dt {
+  font-family: var(--font-mono); font-size: 14px; font-weight: 600;
+  color: var(--text); margin-top: 14px;
+}
+dl.defs dd { margin: 4px 0 0 0; padding-left: 16px; border-left: 2px solid var(--border); color: var(--text-soft); }
+
+/* ---------- inline bits ---------- */
+code, kbd, samp { font-family: var(--font-mono); font-size: .88em; }
+:not(pre) > code {
+  background: var(--bg-code); border: 1px solid var(--border);
+  border-radius: 4px; padding: .1em .35em; color: var(--text);
+  overflow-wrap: break-word;
+}
+kbd {
+  background: var(--bg-raised); border: 1px solid var(--border-strong);
+  border-bottom-width: 2px; border-radius: 5px;
+  padding: .1em .4em; font-size: .82em; box-shadow: var(--shadow);
+}
+.ui { font-weight: 650; }            /* UI element: Google style says bold */
+/* Placeholders. Google's markup is <code><var>PROJECT_ID</var></code>, so style
+   the element itself; .var stays as an alias for hand-written spans. */
+var, .var { font-family: var(--font-mono); font-style: italic; color: var(--accent-text); }
+code > var { font-size: 1em; }
+.badge {
+  display: inline-block; padding: 2px 9px; border-radius: 999px;
+  font-size: 12px; font-weight: 600; line-height: 1.6;
+  background: var(--bg-sunk); border: 1px solid var(--border); color: var(--text-soft);
+}
+.badge.accent { background: var(--accent-soft); border-color: transparent; color: var(--accent-text); }
+.badge.ok     { background: var(--ok-soft);     border-color: transparent; color: var(--ok); }
+.badge.warn   { background: var(--warn-soft);   border-color: transparent; color: var(--warn); }
+.badge.danger { background: var(--danger-soft); border-color: transparent; color: var(--danger); }
+.badge.info   { background: var(--info-soft);   border-color: transparent; color: var(--info); }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); vertical-align: baseline; }
+.dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.danger { background: var(--danger); } .dot.info { background: var(--info); }
+
+/* ---------- callouts ---------- */
+.callout {
+  display: grid; grid-template-columns: 22px minmax(0,1fr); gap: 0 12px;
+  margin: 22px 0; padding: 14px 16px;
+  border: 1px solid var(--border); border-left: 3px solid var(--text-faint);
+  border-radius: var(--radius); background: var(--bg-sunk);
+}
+.callout > .callout-icon { font-size: 15px; line-height: 1.7; text-align: center; }
+.callout > .callout-body { min-width: 0; }
+.callout > .callout-body > :last-child { margin-bottom: 0; }
+.callout-label { font-weight: 700; }
+.callout.note   { border-left-color: var(--info);   background: var(--info-soft); }
+.callout.note   .callout-label { color: var(--info); }
+.callout.key    { border-left-color: var(--accent); background: var(--accent-soft); }
+.callout.key    .callout-label { color: var(--accent-text); }
+.callout.tip    { border-left-color: var(--ok);     background: var(--ok-soft); }
+.callout.tip    .callout-label { color: var(--ok); }
+.callout.success { border-left-color: var(--ok);    background: var(--ok-soft); }
+.callout.success .callout-label { color: var(--ok); }
+.callout.warn   { border-left-color: var(--warn);   background: var(--warn-soft); }
+.callout.warn   .callout-label { color: var(--warn); }
+.callout.danger { border-left-color: var(--danger); background: var(--danger-soft); }
+.callout.danger .callout-label { color: var(--danger); }
+
+/* ---------- code blocks ---------- */
+figure.code {
+  margin: 22px 0; border: 1px solid var(--border);
+  border-radius: var(--radius-lg); background: var(--bg-code); overflow: hidden;
+}
+figure.code > figcaption {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px; border-bottom: 1px solid var(--border);
+  background: var(--bg-raised); font-size: 13px; color: var(--text-soft);
+}
+figure.code > figcaption .file { font-family: var(--font-mono); font-weight: 600; color: var(--text); }
+figure.code > figcaption .lang {
+  margin-left: auto; font-size: 11px; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--text-faint);
+}
+figure.code pre {
+  margin: 0; padding: 14px 16px; overflow-x: auto;
+  font-family: var(--font-mono); font-size: 13.5px; line-height: 1.6; tab-size: 2;
+}
+figure.code pre code { font-size: inherit; background: none; border: 0; padding: 0; }
+.copy-btn {
+  border: 1px solid var(--border); background: var(--bg-sunk); color: var(--text-soft);
+  border-radius: 6px; padding: 2px 8px; font: 600 12px/1.5 var(--font-sans); cursor: pointer;
+}
+.copy-btn:hover { color: var(--text); border-color: var(--border-strong); }
+.copy-btn[data-copied] { color: var(--ok); border-color: var(--ok); }
+
+/* annotated / numbered / diff lines: one <span class="ln"> per line */
+figure.code pre .ln { display: block; padding: 0 4px; border-left: 3px solid transparent; }
+figure.code pre .ln.hl  { background: var(--accent-soft); border-left-color: var(--accent); }
+figure.code pre .ln.add { background: var(--ok-soft);     border-left-color: var(--ok); }
+figure.code pre .ln.del { background: var(--danger-soft); border-left-color: var(--danger); opacity: .85; }
+figure.code.numbered pre { counter-reset: ln; }
+figure.code.numbered pre .ln::before {
+  counter-increment: ln; content: counter(ln);
+  display: inline-block; width: 2.5em; margin-right: 1em;
+  text-align: right; color: var(--text-faint); user-select: none;
+}
+/* terminal flavour */
+figure.code.term pre { background: #12151a; color: #dfe4ec; }
+[data-theme="dark"] figure.code.term pre { background: #0e1116; }
+figure.code.term pre .prompt { color: #6fb3f7; user-select: none; }
+figure.code.term pre .out { color: #9aa4b2; }
+
+/* ---------- tables ---------- */
+.table-wrap { overflow-x: auto; margin: 22px 0; }
+table {
+  width: 100%; border-collapse: collapse; font-size: 14.5px;
+  border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden;
+}
+th, td { text-align: left; padding: 9px 13px; border-bottom: 1px solid var(--border); vertical-align: top; }
+caption {
+  caption-side: top; text-align: left; padding: 0 0 8px;
+  font-size: 13px; color: var(--text-soft);
+}
+thead th { background: var(--bg-sunk); font-size: 12.5px; letter-spacing: .03em; text-transform: uppercase; color: var(--text-soft); }
+tbody tr:last-child td { border-bottom: 0; }
+tbody tr:hover { background: var(--bg-sunk); }
+td code { white-space: nowrap; }
+
+/* ---------- grids, cards, stats ---------- */
+.grid { display: grid; gap: 16px; margin: 22px 0; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+.grid.cols-2 { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+.grid.cols-3 { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+.card {
+  padding: 16px 18px; border: 1px solid var(--border); border-radius: var(--radius-lg);
+  background: var(--bg-raised); box-shadow: var(--shadow);
+}
+.card > :last-child { margin-bottom: 0; }
+.card h4 { margin: 0 0 8px; color: var(--text); font-size: 15px; }
+.card p { font-size: 14.5px; color: var(--text-soft); }
+.stat { text-align: left; }
+.stat .stat-value { display: block; font-size: 28px; font-weight: 680; letter-spacing: -.02em; line-height: 1.2; }
+.stat .stat-label { display: block; font-size: 13px; color: var(--text-soft); margin-top: 4px; }
+.stat.ok .stat-value { color: var(--ok); } .stat.warn .stat-value { color: var(--warn); }
+.stat.danger .stat-value { color: var(--danger); } .stat.accent .stat-value { color: var(--accent-text); }
+
+/* before / after comparison */
+.compare { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); margin: 22px 0; }
+.compare > * { padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius-lg); }
+.compare > * > :last-child { margin-bottom: 0; }
+.compare .compare-title { display: block; font-size: 12px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; margin-bottom: 8px; }
+.compare .bad  { border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); background: var(--danger-soft); }
+.compare .bad  .compare-title { color: var(--danger); }
+.compare .good { border-color: color-mix(in srgb, var(--ok) 35%, var(--border)); background: var(--ok-soft); }
+.compare .good .compare-title { color: var(--ok); }
+
+/* ---------- procedure (vertical numbered steps) ---------- */
+ol.procedure { list-style: none; margin: 22px 0; padding: 0; counter-reset: step; }
+ol.procedure > li { position: relative; padding: 0 0 22px 44px; }
+ol.procedure > li::before {
+  counter-increment: step; content: counter(step);
+  position: absolute; left: 0; top: 0;
+  width: 28px; height: 28px; border-radius: 50%;
+  background: var(--accent); color: #fff;
+  font: 650 14px/28px var(--font-sans); text-align: center;
+}
+ol.procedure > li::after {
+  content: ""; position: absolute; left: 13.5px; top: 32px; bottom: 4px;
+  border-left: 2px solid var(--border);
+}
+/* A one-step procedure is a bulleted list, not a numbered list of one. */
+ul.procedure { list-style: none; margin: 22px 0; padding: 0; }
+ul.procedure > li { position: relative; padding: 0 0 22px 44px; }
+ul.procedure > li::before {
+  content: ""; position: absolute; left: 9px; top: 10px;
+  width: 10px; height: 10px; border-radius: 50%; background: var(--accent);
+}
+ul.procedure > li:last-child { padding-bottom: 0; }
+
+/* Nested steps: lowercase letters, then lowercase roman numerals. */
+ol.procedure ol { list-style: lower-alpha; margin: 8px 0; padding-left: 22px; }
+ol.procedure ol ol { list-style: lower-roman; }
+ol.procedure ul { margin: 8px 0; padding-left: 22px; }
+.optional { font-weight: 650; }
+
+ol.procedure > li:last-child { padding-bottom: 0; }
+ol.procedure > li:last-child::after { display: none; }
+ol.procedure > li > :first-child { margin-top: 3px; }
+ol.procedure > li > :last-child { margin-bottom: 0; }
+.step-title { display: block; font-weight: 650; margin-bottom: 4px; }
+
+/* ---------- flow: horizontal chevron steps ---------- */
+.flow { display: flex; flex-wrap: wrap; align-items: stretch; gap: 8px; margin: 24px 0; }
+.flow > .node {
+  flex: 1 1 150px; min-width: 130px;
+  padding: 11px 14px; border: 1px solid var(--border-strong); border-radius: var(--radius);
+  background: var(--bg-raised); box-shadow: var(--shadow); font-size: 14px;
+}
+.flow > .node .node-title { display: block; font-weight: 650; }
+.flow > .node .node-sub { display: block; color: var(--text-soft); font-size: 13px; margin-top: 2px; }
+.flow > .node.accent { border-color: var(--accent); background: var(--accent-soft); }
+.flow > .node.ok     { border-color: var(--ok);     background: var(--ok-soft); }
+.flow > .node.warn   { border-color: var(--warn);   background: var(--warn-soft); }
+.flow > .node.danger { border-color: var(--danger); background: var(--danger-soft); }
+.flow > .node.ghost  { border-style: dashed; background: transparent; color: var(--text-soft); box-shadow: none; }
+.flow > .arrow {
+  flex: 0 0 auto; align-self: center; color: var(--text-faint);
+  font-size: 18px; line-height: 1; user-select: none;
+}
+.flow > .arrow[data-label]::after {
+  content: attr(data-label); display: block; font-size: 11px; margin-top: 2px; color: var(--text-faint);
+}
+.flow.vertical { flex-direction: column; align-items: stretch; }
+.flow.vertical > .arrow { align-self: center; }
+
+/* ---------- pipeline: labelled stages with connectors ---------- */
+.pipeline { display: flex; flex-wrap: wrap; gap: 0; margin: 24px 0; border-radius: var(--radius); overflow: hidden; border: 1px solid var(--border); }
+.pipeline > .stage {
+  flex: 1 1 130px; min-width: 120px; padding: 12px 14px 12px 26px;
+  background: var(--bg-raised); position: relative; font-size: 14px;
+  border-right: 1px solid var(--border);
+}
+.pipeline > .stage:first-child { padding-left: 14px; }
+.pipeline > .stage:last-child { border-right: 0; }
+.pipeline > .stage::before {
+  content: ""; position: absolute; left: -1px; top: 50%;
+  width: 12px; height: 12px; margin-top: -6px;
+  background: var(--bg-sunk);
+  border-right: 1px solid var(--border); border-top: 1px solid var(--border);
+  transform: rotate(45deg);
+}
+.pipeline > .stage:first-child::before { display: none; }
+.pipeline > .stage .stage-index { display: block; font-size: 11px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--text-faint); }
+.pipeline > .stage .stage-name { display: block; font-weight: 650; margin-top: 2px; }
+.pipeline > .stage .stage-note { display: block; font-size: 13px; color: var(--text-soft); margin-top: 3px; }
+
+/* ---------- branch / decision tree (nested lists, CSS connectors) ---------- */
+.branch, .branch ul { list-style: none; margin: 0; padding: 0; }
+.branch { margin: 24px 0; }
+.branch ul { margin-left: 20px; }
+.branch li { position: relative; padding: 4px 0 4px 26px; }
+.branch li::before {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 50%;
+  width: 18px; border-left: 2px solid var(--border); border-bottom: 2px solid var(--border);
+  border-bottom-left-radius: 6px;
+}
+.branch li::after { content: ""; position: absolute; left: 0; top: 50%; bottom: 0; border-left: 2px solid var(--border); }
+.branch li:last-child::after { display: none; }
+.branch > li:first-child::before, .branch > li:first-child::after { display: none; }
+.branch > li:first-child { padding-left: 0; }
+.branch .test {
+  display: inline-block; padding: 5px 12px; border-radius: 999px;
+  border: 1px solid var(--border-strong); background: var(--bg-raised);
+  font-weight: 650; font-size: 14px;
+}
+.branch .test.q { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-text); }
+.branch .edge { font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--text-faint); margin-right: 6px; }
+.branch .leaf { display: inline-block; padding: 5px 12px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--bg-sunk); font-size: 14px; }
+.branch .leaf.ok { border-color: color-mix(in srgb, var(--ok) 40%, var(--border)); background: var(--ok-soft); }
+.branch .leaf.danger { border-color: color-mix(in srgb, var(--danger) 40%, var(--border)); background: var(--danger-soft); }
+.branch .leaf.warn { border-color: color-mix(in srgb, var(--warn) 40%, var(--border)); background: var(--warn-soft); }
+
+/* ---------- swimlanes (actors x stages) ---------- */
+.swim { margin: 24px 0; overflow-x: auto; }
+.swim table { min-width: 560px; font-size: 13.5px; }
+.swim th.lane { width: 130px; background: var(--bg-sunk); font-weight: 650; text-transform: none; letter-spacing: 0; font-size: 13.5px; color: var(--text); }
+.swim td { background: var(--bg); }
+.swim .act {
+  display: block; padding: 7px 10px; border-radius: 6px;
+  border: 1px solid var(--border-strong); background: var(--bg-raised); box-shadow: var(--shadow);
+}
+.swim .act.accent { border-color: var(--accent); background: var(--accent-soft); }
+.swim .act.ok { border-color: var(--ok); background: var(--ok-soft); }
+.swim .act.danger { border-color: var(--danger); background: var(--danger-soft); }
+.swim td.empty { background: repeating-linear-gradient(45deg, transparent, transparent 6px, var(--bg-sunk) 6px, var(--bg-sunk) 12px); }
+
+/* ---------- timeline ---------- */
+.timeline { list-style: none; margin: 24px 0; padding: 0 0 0 22px; border-left: 2px solid var(--border); }
+.timeline > li { position: relative; padding: 0 0 22px 20px; }
+.timeline > li::before {
+  content: ""; position: absolute; left: -29px; top: 6px;
+  width: 12px; height: 12px; border-radius: 50%;
+  background: var(--bg); border: 2px solid var(--accent);
+}
+.timeline > li.ok::before { border-color: var(--ok); } .timeline > li.warn::before { border-color: var(--warn); }
+.timeline > li.danger::before { border-color: var(--danger); }
+.timeline > li.done::before { background: var(--accent); }
+.timeline .when { display: block; font-family: var(--font-mono); font-size: 12.5px; color: var(--text-faint); }
+.timeline .what { display: block; font-weight: 650; margin: 1px 0 3px; }
+.timeline > li > :last-child { margin-bottom: 0; }
+
+/* ---------- layer / architecture stack ---------- */
+.stack { display: flex; flex-direction: column; gap: 6px; margin: 24px 0; }
+.stack > .layer {
+  padding: 12px 16px; border: 1px solid var(--border-strong); border-radius: var(--radius);
+  background: var(--bg-raised); box-shadow: var(--shadow);
+}
+.stack > .layer .layer-name { font-weight: 650; }
+.stack > .layer .layer-note { color: var(--text-soft); font-size: 13.5px; margin-left: 8px; }
+.stack > .layer.accent { border-color: var(--accent); background: var(--accent-soft); }
+.stack > .layer.muted { background: var(--bg-sunk); border-style: dashed; }
+.stack > .layer .parts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.stack > .layer .parts > span {
+  padding: 3px 9px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--bg); font-family: var(--font-mono); font-size: 12.5px;
+}
+
+/* ---------- file tree ---------- */
+pre.tree {
+  margin: 22px 0; padding: 14px 16px; overflow-x: auto;
+  background: var(--bg-code); border: 1px solid var(--border); border-radius: var(--radius-lg);
+  font-family: var(--font-mono); font-size: 13.5px; line-height: 1.7;
+}
+pre.tree .dir { color: var(--accent-text); font-weight: 650; }
+pre.tree .note { color: var(--text-faint); }
+
+/* ---------- inline SVG diagrams ---------- */
+figure.diagram {
+  margin: 24px 0; padding: 18px 16px 12px;
+  border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-sunk);
+}
+figure.diagram svg { display: block; width: 100%; height: auto; overflow: visible; }
+figure.diagram > figcaption { margin-top: 12px; font-size: 13px; color: var(--text-soft); text-align: center; }
+/* classes used inside SVG */
+svg .n     { fill: var(--bg-raised); stroke: var(--border-strong); stroke-width: 1.5; }
+svg .n.accent { fill: var(--accent-soft); stroke: var(--accent); }
+svg .n.ok     { fill: var(--ok-soft);     stroke: var(--ok); }
+svg .n.warn   { fill: var(--warn-soft);   stroke: var(--warn); }
+svg .n.danger { fill: var(--danger-soft); stroke: var(--danger); }
+svg .n.ghost  { fill: none; stroke: var(--border-strong); stroke-dasharray: 5 4; }
+svg .t  { fill: var(--text); font: 600 13px var(--font-sans); text-anchor: middle; dominant-baseline: middle; }
+svg .t.sub { fill: var(--text-soft); font-weight: 400; font-size: 11.5px; }
+svg .t.mono { font-family: var(--font-mono); font-size: 11.5px; }
+svg .e  { fill: none; stroke: var(--border-strong); stroke-width: 1.75; marker-end: url(#arrow); }
+svg .e.dashed { stroke-dasharray: 5 4; }
+svg .e.accent { stroke: var(--accent); marker-end: url(#arrow-accent); }
+svg .e.danger { stroke: var(--danger); marker-end: url(#arrow-danger); }
+svg .el { fill: var(--text-faint); font: 500 11px var(--font-sans); text-anchor: middle; dominant-baseline: middle; }
+svg .el-bg { fill: var(--bg-sunk); }
+svg .grp { fill: none; stroke: var(--border); stroke-width: 1.25; stroke-dasharray: 4 4; }
+svg .grp-t { fill: var(--text-faint); font: 700 10.5px var(--font-sans); letter-spacing: .07em; text-transform: uppercase; }
+
+/* ---------- details / collapsible ---------- */
+details.fold {
+  margin: 22px 0; padding: 0 16px; border: 1px solid var(--border);
+  border-radius: var(--radius-lg); background: var(--bg-sunk);
+}
+details.fold > summary {
+  padding: 12px 0; cursor: pointer; font-weight: 650; list-style-position: outside;
+}
+details.fold[open] > summary { border-bottom: 1px solid var(--border); margin-bottom: 14px; }
+details.fold > :last-child { margin-bottom: 14px; }
+
+/* ---------- utilities ---------- */
+.muted { color: var(--text-soft); }
+.center { text-align: center; }
+.nowrap { white-space: nowrap; }
+.mt-0 { margin-top: 0; }
+.mb-0 { margin-bottom: 0; }
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap;
+}
+.legend { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 12px 0 22px; font-size: 13px; color: var(--text-soft); }
+.legend > span { display: inline-flex; align-items: center; gap: 6px; }
+.legend .swatch { width: 14px; height: 14px; border-radius: 4px; border: 1px solid var(--border-strong); background: var(--bg-raised); }
+.legend .swatch.accent { border-color: var(--accent); background: var(--accent-soft); }
+.legend .swatch.ok { border-color: var(--ok); background: var(--ok-soft); }
+.legend .swatch.warn { border-color: var(--warn); background: var(--warn-soft); }
+.legend .swatch.danger { border-color: var(--danger); background: var(--danger-soft); }
+
+/* ---------- theme toggle ---------- */
+.theme-toggle {
+  position: fixed; top: 14px; right: 16px; z-index: 20;
+  border: 1px solid var(--border); background: var(--bg-raised); color: var(--text-soft);
+  border-radius: 999px; padding: 5px 12px; font: 600 12.5px var(--font-sans);
+  cursor: pointer; box-shadow: var(--shadow);
+}
+.theme-toggle:hover { color: var(--text); border-color: var(--border-strong); }
+
+/* ---------- responsive ---------- */
+@media (max-width: 900px) {
+  .page { grid-template-columns: minmax(0, 1fr); gap: 0; padding: 0 18px 64px; }
+  .page > .content { max-width: none; padding-top: 24px; }
+  .toc {
+    position: static; max-height: none; padding: 24px 0 0;
+    border-bottom: 1px solid var(--border); margin-bottom: 8px;
+  }
+  .toc ol { columns: 2; column-gap: 20px; }
+  .doc-header h1 { font-size: 27px; }
+  .doc-lede { font-size: 16.5px; }
+}
+
+/* ---------- print ---------- */
+@media print {
+  :root { --bg: #fff; --bg-sunk: #fff; --bg-raised: #fff; --shadow: none; }
+  .toc, .theme-toggle, .copy-btn, .anchor { display: none !important; }
+  .page { display: block; max-width: none; padding: 0; }
+  h2, h3 { page-break-after: avoid; }
+  figure, table, .callout, .flow, .pipeline { page-break-inside: avoid; }
+  a { text-decoration: none; color: inherit; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  * { transition: none !important; animation: none !important; }
+}
+
+</style>
+</head>
+<body>
+<!-- Arrowheads for every inline SVG diagram in this document. Defined once so
+     that ids stay unique; reference them with marker-end="url(#arrow)". -->
+<svg class="visually-hidden" aria-hidden="true" focusable="false"><defs>
+<marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--border-strong)"/></marker>
+<marker id="arrow-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/></marker>
+<marker id="arrow-danger" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--danger)"/></marker>
+</defs></svg>
+<button type="button" class="theme-toggle" aria-label="Switch theme">☾ Dark</button>
+<div class="page">
+<nav class="toc" aria-label="On this page"></nav>
+<main class="content">
+<header class="doc-header">
+<p class="doc-eyebrow">Bug report</p>
+<h1>A resumed session never comes back</h1>
+<p class="doc-lede">Session 498434ba stopped reading its transcript at 17:43:57 and never resumed, because the first `session.finished` fact is a permanent tombstone and every later `session.started` is discarded as a duplicate.</p>
+<ul class="doc-meta"><li><b>Author:</b> Claude</li><li><b>Updated:</b> 2026-08-18</li><li><b>Scope:</b> engine/interpret</li><li>repository/impl/sqlite</li><li>harness/impl/claude_code</li></ul>
+</header>
+<h2>The bug in one sentence</h2>
+
+<p>Claude Code restarted three times under one session id when the fable limit
+forced an account switch, and baqylau treats the first <code>session.finished</code>
+as final: the session left <code>watchable()</code> at 17:43:58 and nothing ever
+put it back.</p>
+
+<div class="grid cols-3">
+  <div class="card stat danger"><span class="stat-value">2h 57m</span><span class="stat-label">transcript unread</span></div>
+  <div class="card stat danger"><span class="stat-value">1.39 MB</span><span class="stat-label">conversation never interpreted</span></div>
+  <div class="card stat accent"><span class="stat-value">3</span><span class="stat-label">runs of one session id</span></div>
+</div>
+
+<p>The session still looks half alive. Hook and OTLP deliveries land on the HTTP
+threads and need no watcher, so tool calls and usage keep flowing; messages and
+reasoning come from the transcript, which only the interpreter pulls, so they
+stop dead.</p>
+
+<div class="callout key">
+  <div class="callout-icon" aria-hidden="true">◆</div>
+  <div class="callout-body"><span class="callout-label">Key point:</span>
+    Lifecycle facts are identified by the session id alone, so a session's second
+    run collides with its first. The resume's <code>session.started</code> is
+    deduplicated, and the tombstone from run 1 outlives every later run.</div>
+</div>
+
+<h2>What happened</h2>
+
+<p>One session id, three processes, three kitty windows, two subscription
+configs. The account switcher stops the CLI and re-launches it with
+<code>--resume</code>, which is why the session id survives across all three.</p>
+
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Run</th><th>pid</th><th>Window</th><th>Account</th><th>Span</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td><code>65919</code></td><td><code>1343</code></td><td><code>c2</code></td><td>16:08:17 → SessionEnd 17:43:57</td></tr>
+      <tr><td>2</td><td><code>79100</code></td><td><code>1346</code></td><td><code>c1</code></td><td>17:43:59 → SessionEnd 17:44:45</td></tr>
+      <tr><td>3</td><td><code>81559</code></td><td><code>1347</code></td><td><code>c2</code></td><td>17:45:03 → still running at 20:41</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<ul class="timeline">
+  <li class="done"><span class="when">16:08:17</span><span class="what">Run 1 starts</span>
+    <p class="muted mb-0"><code>SessionStart</code> with <code>source=startup</code>. The
+      fact <code>claude_code:session:bf68929…</code> is accepted, the
+      <code>sessions</code> row is born, the transcript source starts pulling.</p></li>
+  <li class="danger"><span class="when">17:43:57</span><span class="what">Run 1 ends, and the session is tombstoned</span>
+    <p class="muted mb-0"><code>SessionEnd</code> with <code>reason=other</code> →
+      <code>session.finished</code> at cursor 34334. The session leaves
+      <code>watchable()</code>. Last transcript read: position 987,347.</p></li>
+  <li class="warn"><span class="when">17:43:59</span><span class="what">Run 2 resumes — and is discarded</span>
+    <p class="muted mb-0"><code>SessionStart</code> with <code>source=resume</code> under
+      account <code>c1</code>. Its <code>session.started</code> carries the same
+      <code>event_id</code> as 16:08, so <code>interpretation_events</code> records
+      <code>deduplicated</code>. No new fact exists.</p></li>
+  <li class="warn"><span class="when">17:44:45</span><span class="what">Run 2 ends</span>
+    <p class="muted mb-0">A second <code>SessionEnd</code>, also deduplicated against the
+      first. Both runs' endings are one fact.</p></li>
+  <li class="warn"><span class="when">17:45:03</span><span class="what">Run 3 resumes — also discarded</span>
+    <p class="muted mb-0">Back on account <code>c2</code>, pid 81559. Only its
+      <code>launch</code> evidence lands as new facts
+      (<code>model.changed</code>, <code>effort.changed</code>). The start is
+      deduplicated again.</p></li>
+  <li class="danger"><span class="when">17:45 → now</span><span class="what">Alive, mute, and unwatched</span>
+    <p class="muted mb-0">Hooks and OTLP keep producing operations and usage. The
+      transcript grows to 2,373,518 bytes and nobody reads it.</p></li>
+</ul>
+
+<h2>The evidence</h2>
+
+<p>Every row below comes from <code>main.db</code> and <code>audit.db</code>,
+opened read-only.</p>
+
+<h3>Pulled sources froze; pushed sources did not</h3>
+
+<div class="table-wrap">
+  <table>
+    <thead><tr><th><code>source_type</code></th><th>Rows</th><th>Last observed</th><th>How it arrives</th></tr></thead>
+    <tbody>
+      <tr><td><code>otel</code></td><td>500</td><td>20:37:45</td><td>pushed</td></tr>
+      <tr><td><code>hook</code></td><td>1329</td><td>20:37:44</td><td>pushed</td></tr>
+      <tr><td><code>output_location</code></td><td>267</td><td>20:37:44</td><td>pushed</td></tr>
+      <tr><td><code>transcript</code></td><td>556</td><td><b>17:43:57</b></td><td>pulled</td></tr>
+      <tr><td><code>foreground_output</code></td><td>180</td><td><b>17:40:10</b></td><td>pulled</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>The interpreter itself is healthy: machine-wide, <code>transcript</code> reads
+are current to 20:37:34 for other sessions, the untranslated backlog is two rows
+deep, and <code>audit.db</code> holds no <code>interpreter (…)</code> error for
+this session. The freeze is scoped to one session, which rules out the usual
+dead-thread shape.</p>
+
+<h3>The transcript stopped 1.39 MB short</h3>
+
+<figure class="code">
+  <figcaption><span class="lang">sql</span></figcaption>
+  <pre><code>-- last recorded position for the session's transcript source
+SELECT source_position FROM raw_events
+WHERE source_identity = 'claude_code:transcript:48b959ab…'
+ORDER BY id DESC LIMIT 1;
+-- 987347   (recorded 17:43:57)
+
+-- the file on disk
+-- -rw-------  2373518  Aug 18 20:30  498434ba-….jsonl</code></pre>
+</figure>
+
+<h3>The resume left no fact behind</h3>
+
+<p><code>interpretation_events</code> records what each observation did to the
+store. Four raw events converge on one <code>session.started</code>, and only the
+first is <code>accepted</code>:</p>
+
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Time</th><th>Evidence</th><th><code>storage_result</code></th></tr></thead>
+    <tbody>
+      <tr><td>16:08:17</td><td><code>hook</code> — SessionStart, <code>startup</code></td><td><span class="badge ok">accepted</span></td></tr>
+      <tr><td>16:08:29</td><td><code>transcript</code> — first record</td><td><span class="badge">deduplicated</span></td></tr>
+      <tr><td>17:43:59</td><td><code>hook</code> — SessionStart, <code>resume</code></td><td><span class="badge">deduplicated</span></td></tr>
+      <tr><td>17:45:03</td><td><code>hook</code> — SessionStart, <code>resume</code></td><td><span class="badge">deduplicated</span></td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>Deduplication across the sources of one run is the design working: several
+observers describe one fact. Deduplication across two <em>different</em> runs is
+the bug.</p>
+
+<h3>What the feed shows</h3>
+
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Event type</th><th>Count</th><th>Last</th></tr></thead>
+    <tbody>
+      <tr><td><code>message.created</code></td><td>121</td><td class="nowrap">17:43:56 <span class="dot danger" aria-hidden="true"></span></td></tr>
+      <tr><td><code>session.account_changed</code></td><td>3</td><td>17:45:04</td></tr>
+      <tr><td><code>effort.changed</code></td><td>9</td><td>20:30:02</td></tr>
+      <tr><td><code>operation.started</code></td><td>434</td><td>20:41:06</td></tr>
+      <tr><td><code>usage.reported</code></td><td>311</td><td>20:41:08</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<h2>Why it can never recover</h2>
+
+<p>Two mechanisms combine. Either one alone would be survivable.</p>
+
+<h3>1. Watchability tests existence, not the latest fact</h3>
+
+<p><code>Interpreter._pull()</code> in <code>engine/interpret/loop.py:142</code>
+iterates <code>self.sessions.watchable()</code>, and that query excludes a session
+the moment any <code>session.finished</code> row exists for it:</p>
+
+<figure class="code">
+  <figcaption><span class="file">repository/impl/sqlite/sessions.py</span><span class="lang">python</span></figcaption>
+  <pre><code>def watchable(self) -&gt; tuple[Session, ...]:
+    with self.database.read() as connection:
+        found = connection.execute(
+            "SELECT sessions.* FROM sessions "
+            "WHERE NOT EXISTS ("
+            "  SELECT 1 FROM canonical_events "
+            "  WHERE canonical_events.session_id = sessions.session_id "
+            "  AND canonical_events.event_type = 'session.finished'"
+            ") ORDER BY (…) DESC, sessions.created_at DESC",
+        ).fetchall()</code></pre>
+</figure>
+
+<p>Leaving that set stops the transcript source, the subagent transcripts, the
+output followings and the liveness probe for good. Nothing outside this query
+decides what gets pulled.</p>
+
+<h3>2. Lifecycle facts are named after the session, not the run</h3>
+
+<p>The identity a translator builds is
+<code>(subject_type, subject_id, phase)</code>, and for both ends of a session's
+life the subject id is the session id:</p>
+
+<figure class="code">
+  <figcaption><span class="file">harness/impl/claude_code/canonical/hooks.py</span><span class="lang">python</span></figcaption>
+  <pre><code>if hook_name == "SessionEnd":
+    payload: EventPayload = SessionFinished("succeeded", document.get("reason") or None)
+    return [event(raw_event, "session", str(raw_event.session_id), "finished", payload)]</code></pre>
+</figure>
+
+<figure class="code">
+  <figcaption><span class="file">harness/impl/claude_code/canonical/messages.py</span><span class="lang">python</span></figcaption>
+  <pre><code>events = [
+    event(
+        raw_event,
+        "session",
+        str(raw_event.session_id),      # &lt;- every run of this id, one fact
+        "started",
+        session_started,
+    ),
+    …
+]</code></pre>
+</figure>
+
+<p><code>engine/interpret/translators.py:37</code> does the same for the liveness
+probe, deliberately: a clean exit and a kill are meant to converge on one
+<code>session.finished</code>. That convergence is right within a run and wrong
+across runs.</p>
+
+<p>So the resumed start has nowhere to land. <code>canonical_events</code> keeps
+the first writer and does not compare bodies, which is the correct rule for an
+idempotent projection — it just means the second run's start is silently the
+same fact as the first's.</p>
+
+<div class="flow vertical">
+  <div class="node danger"><span class="node-title">session.finished (run 1)</span><span class="node-sub">cursor 34334, accepted</span></div>
+  <div class="arrow" aria-hidden="true">↓</div>
+  <div class="node"><span class="node-title">watchable() excludes the session</span><span class="node-sub">no source is pulled again</span></div>
+  <div class="arrow" data-label="resume" aria-hidden="true">↓</div>
+  <div class="node warn"><span class="node-title">session.started (runs 2 and 3)</span><span class="node-sub">deduplicated — no new cursor</span></div>
+  <div class="arrow" aria-hidden="true">↓</div>
+  <div class="node danger"><span class="node-title">Nothing can undo the exclusion</span><span class="node-sub">the feed stays frozen</span></div>
+</div>
+
+<h3>Everything downstream already handles a resume</h3>
+
+<p>The projections fold their events and let the last one win, so a later
+<code>SessionStarted</code> would flip them back on its own. They never see one:</p>
+
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Consumer</th><th>On <code>SessionStarted</code></th><th>On <code>SessionFinished</code></th></tr></thead>
+    <tbody>
+      <tr><td><code>engine/projections/session.py:58</code></td><td><code>state = "running"</code></td><td><code>state = "finished"</code></td></tr>
+      <tr><td><code>engine/projections/tabstate.py:42</code></td><td><code>state = "idle"</code></td><td><code>state = None</code></td></tr>
+      <tr><td><code>terminal/panes/reaction.py:29</code></td><td>attaches panes</td><td>closes them</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>That is the useful part of the diagnosis: the fix belongs where facts are
+named and where watchability is decided, and no view code needs to change.</p>
+
+<h2>The fix</h2>
+
+<p>Two changes, both small, and they only work together.</p>
+
+<ol class="procedure">
+  <li><span class="step-title">Name the run in the lifecycle fact identity</span>
+    The envelope already carries <code>harness_process_id</code>, and one process
+    is exactly one run — 65919, 79100, 81559 above. Use it as part of
+    <code>subject_id</code> for <code>session.started</code> and
+    <code>session.finished</code> in
+    <code>harness/impl/claude_code/canonical/messages.py</code>,
+    <code>harness/impl/claude_code/canonical/hooks.py</code>,
+    <code>engine/interpret/translators.py</code> and the Codex equivalents. Hook,
+    transcript and liveness within one run still carry the same pid and still
+    converge on one fact. A session with no pid — a headless launch — falls back
+    to the session id, which is today's behaviour.</li>
+  <li><span class="step-title">Make watchability a fold, not an existence test</span>
+    Exclude a session only when its <b>latest</b> lifecycle fact by
+    <code>cursor</code> is <code>session.finished</code>:
+    <figure class="code">
+      <figcaption><span class="file">repository/impl/sqlite/sessions.py</span><span class="lang">sql</span></figcaption>
+      <pre><code>WHERE NOT EXISTS (
+  SELECT 1 FROM canonical_events f
+  WHERE f.session_id = sessions.session_id
+    AND f.event_type = 'session.finished'
+    AND f.cursor &gt; COALESCE((
+      SELECT MAX(s.cursor) FROM canonical_events s
+      WHERE s.session_id = sessions.session_id
+        AND s.event_type = 'session.started'), 0)
+)</code></pre>
+    </figure>
+  </li>
+</ol>
+
+<div class="compare">
+  <div class="bad"><span class="compare-title">Today</span>
+    <p>A session id has one start and one end for all time. The second run of an
+      id is invisible, and the first end is permanent.</p></div>
+  <div class="good"><span class="compare-title">After</span>
+    <p>Each run is its own pair of facts. The last lifecycle fact decides whether
+      the session is watched, and the projections already agree with it.</p></div>
+</div>
+
+<h3>An alternative worth naming, and why not</h3>
+
+<p>Giving every <code>SessionStart</code> hook its own identity (its
+<code>hook_event_id</code>) is a smaller diff. It also breaks the convergence
+between the hook and the transcript record that describe the same start, so one
+run would emit two <code>session.started</code> facts. The projections tolerate
+that; the event store stops meaning what it says. The pid keys the fact to the
+thing that actually differs.</p>
+
+<div class="callout warn">
+  <div class="callout-icon" aria-hidden="true">▲</div>
+  <div class="callout-body"><span class="callout-label">Caution:</span>
+    A pid can be reused by the operating system. Reuse across two runs of the
+    <em>same session id</em> on one machine is unlikely, and the consequence is
+    the behaviour we have today rather than something worse.</div>
+</div>
+
+<h2>Recovering session 498434ba</h2>
+
+<p>The fix cannot resurrect facts that were deduplicated three hours ago. Once it
+ships, restart the CLI once: the new <code>SessionStart</code> carries a pid that
+has never been seen for this session, so it produces a start fact, the session
+re-enters <code>watchable()</code>, and the transcript source resumes from
+position 987,347.</p>
+
+<p>The missing conversation is not lost. It is 1.39 MB of unread file, and the
+next pull backfills all of it into <code>canonical_events</code>.</p>
+
+<h2>One thing left unexamined</h2>
+
+<p><code>audit.db</code> holds 215 <code>dashboard serve (port busy)</code> errors
+between 20:00:10 and 20:38:05 — a supervisor retrying roughly every ten seconds
+against a port something else already holds. It is unrelated to this bug and was
+not investigated.</p>
+</main>
+</div>
+<script>
+/* baqylau html-communication — base script.
+   Progressive enhancement only: the document reads fine with JS disabled.
+   No network, no dependencies. */
+(function () {
+  "use strict";
+
+  /* ---- theme: remember the reader's choice ---- */
+  var KEY = "hc-theme";
+  var root = document.documentElement;
+  var saved = null;
+  try { saved = localStorage.getItem(KEY); } catch (e) { /* private mode */ }
+  if (!root.getAttribute("data-theme")) {
+    /* Resolve the theme once, so the page and the toggle's label agree. */
+    root.setAttribute("data-theme", saved ||
+      (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
+  }
+
+  function currentTheme() {
+    return root.getAttribute("data-theme");
+  }
+
+  var toggle = document.querySelector(".theme-toggle");
+  if (toggle) {
+    var paint = function () {
+      var dark = currentTheme() === "dark";
+      toggle.textContent = dark ? "☀ Light" : "☾ Dark";
+      toggle.setAttribute("aria-label", dark ? "Switch to light theme" : "Switch to dark theme");
+    };
+    paint();
+    toggle.addEventListener("click", function () {
+      var next = currentTheme() === "dark" ? "light" : "dark";
+      root.setAttribute("data-theme", next);
+      try { localStorage.setItem(KEY, next); } catch (e) {}
+      paint();
+    });
+  }
+
+  /* ---- headings: stable ids + click-to-copy anchors ---- */
+  var used = {};
+  function slug(text) {
+    var s = text.toLowerCase().replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "-") || "section";
+    used[s] = (used[s] || 0) + 1;
+    return used[s] > 1 ? s + "-" + used[s] : s;
+  }
+  var headings = [].slice.call(document.querySelectorAll(".content h2, .content h3"));
+  headings.forEach(function (h) {
+    if (!h.id) h.id = slug(h.textContent);
+    if (h.querySelector(".anchor")) return;
+    var a = document.createElement("a");
+    a.className = "anchor";
+    a.href = "#" + h.id;
+    a.textContent = "#";
+    a.setAttribute("aria-label", "Link to this section");
+    h.appendChild(a);
+  });
+
+  /* ---- table of contents: build from the headings, unless hand-written ---- */
+  var toc = document.querySelector(".toc");
+  if (toc && !toc.dataset.manual && headings.length) {
+    var ol = document.createElement("ol");
+    headings.forEach(function (h) {
+      var li = document.createElement("li");
+      li.className = "lvl-" + h.tagName.charAt(1);
+      var a = document.createElement("a");
+      a.href = "#" + h.id;
+      a.textContent = h.textContent.replace(/#$/, "").trim();
+      li.appendChild(a);
+      ol.appendChild(li);
+    });
+    var title = toc.querySelector(".toc-title");
+    if (!title) {
+      title = document.createElement("p");
+      title.className = "toc-title";
+      title.textContent = "On this page";
+      toc.appendChild(title);
+    }
+    toc.appendChild(ol);
+
+    /* highlight the section in view */
+    var links = {};
+    [].slice.call(ol.querySelectorAll("a")).forEach(function (a) {
+      links[a.getAttribute("href").slice(1)] = a;
+    });
+    if (window.IntersectionObserver) {
+      var seen = [];
+      var obs = new IntersectionObserver(function (entries) {
+        entries.forEach(function (en) {
+          var id = en.target.id;
+          var i = seen.indexOf(id);
+          if (en.isIntersecting && i === -1) seen.push(id);
+          if (!en.isIntersecting && i !== -1) seen.splice(i, 1);
+        });
+        var active = seen.length ? seen[0] : null;
+        for (var id in links) links[id].classList.toggle("is-active", id === active);
+      }, { rootMargin: "0px 0px -70% 0px" });
+      headings.forEach(function (h) { obs.observe(h); });
+    }
+  }
+
+  /* ---- tables: scope attributes ----
+     The style guide asks for th elements with a scope, on the first row and the
+     first column only. Setting it here means no author has to remember. */
+  document.querySelectorAll(".content table").forEach(function (table) {
+    var firstRow = table.querySelector("tr");
+    if (firstRow) {
+      firstRow.querySelectorAll("th").forEach(function (th) {
+        if (!th.hasAttribute("scope")) th.setAttribute("scope", "col");
+      });
+    }
+    table.querySelectorAll("tr").forEach(function (tr) {
+      var first = tr.firstElementChild;
+      if (first && first.tagName === "TH" && tr !== firstRow && !first.hasAttribute("scope")) {
+        first.setAttribute("scope", "row");
+      }
+    });
+  });
+
+  /* ---- code blocks: copy button ----
+     A block that names a file copies that file's path, because the path is what
+     the reader pastes into a shell, an editor, or a chat with an agent. Set
+     data-path on the .file element to copy something other than the caption
+     text — an absolute path, say. A block that names no file has nothing but
+     its code to offer, so it copies the code. */
+  document.querySelectorAll("figure.code").forEach(function (fig) {
+    var pre = fig.querySelector("pre");
+    if (!pre) return;
+    var cap = fig.querySelector("figcaption");
+    if (!cap) {
+      cap = document.createElement("figcaption");
+      fig.insertBefore(cap, pre);
+    }
+    if (cap.querySelector(".copy-btn")) return;
+
+    var file = cap.querySelector(".file");
+    var path = file && (file.dataset.path || file.textContent).trim();
+    var label = path ? "Copy path" : "Copy";
+
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "copy-btn";
+    btn.textContent = label;
+    btn.title = path ? "Copy " + path : "Copy this code";
+
+    btn.addEventListener("click", function () {
+      var text = path || pre.innerText.replace(/^\s*[$#>]\s/gm, "");
+      var done = function () {
+        btn.textContent = "Copied";
+        btn.dataset.copied = "1";
+        setTimeout(function () { btn.textContent = label; delete btn.dataset.copied; }, 1400);
+      };
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(text).then(done, function () { fallback(); });
+      } else {
+        fallback();
+      }
+      function fallback() {
+        var sel = window.getSelection();
+        sel.removeAllRanges();
+        var r = document.createRange();
+        r.selectNodeContents(path ? file : pre);
+        sel.addRange(r);
+        btn.textContent = "Press ⌘C";
+        setTimeout(function () { btn.textContent = label; }, 2000);
+      }
+    });
+
+    var lang = cap.querySelector(".lang");
+    if (lang) cap.insertBefore(btn, lang); else cap.appendChild(btn);
+  });
+})();
+
+</script>
+</body>
+</html>

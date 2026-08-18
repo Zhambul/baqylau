@@ -23,7 +23,9 @@ from domain.events import (
     FileAccessed,
     MessageCreated,
     ModelChanged,
+    OperationBackgrounded,
     OperationFinished,
+    OperationOutputFinished,
     OperationInputProvided,
     OperationProgressed,
     OperationStarted,
@@ -267,7 +269,7 @@ def test_activity_joins_operation_progress_and_finish_by_identity(tmp_path):
                 operation_id,
                 "shell",
                 "shell",
-                "background",
+                "foreground",
                 StructuredContent('{"command":"make test"}'),
                 None,
                 None,
@@ -305,7 +307,77 @@ def test_activity_joins_operation_progress_and_finish_by_identity(tmp_path):
     )
     background = queries.background_work(SESSION_ID, ActivityScope())
     assert background.running_operation_ids == ()
+    assert background.background_job_count == 0    # a foreground command is not background work
+
+
+def test_a_background_operation_runs_until_its_own_output_finish(tmp_path):
+    """Its launch returning is not its end, and the two are seconds to hours apart.
+
+    Taking the end from `operation.finished` made every background job report
+    itself over about a second after it started, with the launch's outcome — so
+    the jobs tab could show nothing as running and a job that exited non-zero
+    read as succeeded.
+    """
+    operation_id = OperationId("job-one")
+    events = [
+        canonical("session-start", SessionStarted("/work", "fixture.jsonl", None, None, None, None, None)),
+        canonical(
+            "job-start",
+            OperationStarted(operation_id, "shell", "Bash", "background", TextContent("sleep 5"), None, None),
+            occurred_at=10.0,
+        ),
+        canonical(
+            "job-launch-returned",
+            OperationFinished(operation_id, "succeeded", TextContent("stub"), 0),
+            occurred_at=11.0,
+        ),
+    ]
+    queries = store_with_events(tmp_path, events).queries()
+
+    running = queries.activity_after(SESSION_ID, 0, ActivityScope(), 10).activities[0]
+    assert isinstance(running, OperationActivity)
+    assert running.state == "running"
+    assert running.context.finished_at is None
+    assert running.outcome is None
+    assert running.result is None          # the launch's boilerplate is not the job's output
+    assert queries.background_work(SESSION_ID, ActivityScope()).running_operation_ids == (operation_id,)
+
+    store = store_with_events(
+        tmp_path / "ended",
+        events + [
+            canonical("job-end", OperationOutputFinished(operation_id, "failed"), occurred_at=99.0),
+        ],
+    )
+    ended = store.queries().activity_after(SESSION_ID, 0, ActivityScope(), 10).activities[0]
+    assert isinstance(ended, OperationActivity)
+    assert ended.state == "finished"
+    assert ended.context.finished_at == 99.0
+    assert ended.outcome == "failed"
+
+
+def test_an_operation_backgrounded_mid_run_becomes_background_work_and_keeps_running(tmp_path):
+    """The ctrl+b case: it STARTED in the foreground, so `OperationStarted.execution`
+    said foreground, and the `operation.finished` that arrives from the same evidence
+    as the backgrounding must not end it."""
+    operation_id = OperationId("op-one")
+    events = [
+        canonical("session-start", SessionStarted("/work", "fixture.jsonl", None, None, None, None, None)),
+        canonical(
+            "start",
+            OperationStarted(operation_id, "shell", "Bash", "foreground", TextContent("sleep 30"), None, None),
+        ),
+        canonical("backgrounded", OperationBackgrounded(operation_id, "btk9y72c9")),
+        canonical("launch-returned", OperationFinished(operation_id, "succeeded", None, 0)),
+    ]
+    queries = store_with_events(tmp_path, events).queries()
+
+    operation = queries.activity_after(SESSION_ID, 0, ActivityScope(), 10).activities[0]
+    assert isinstance(operation, OperationActivity)
+    assert operation.execution == "background"
+    assert operation.state == "running"
+    background = queries.background_work(SESSION_ID, ActivityScope())
     assert background.background_job_count == 1
+    assert background.running_operation_ids == (operation_id,)
 
 
 def test_activity_uses_accepted_time_when_native_time_is_absent(tmp_path):
@@ -851,6 +923,8 @@ def test_tab_state_is_a_canonical_fold_over_semantic_lifecycle(tmp_path):
         ),
         canonical("operation-finished", OperationFinished(operation_id, "succeeded", None, 0)),
         canonical("finished", TurnFinished(None, "succeeded")),
+        canonical("job-end", OperationOutputFinished(operation_id, "succeeded")),
+        canonical("finished-again", TurnFinished(None, "succeeded")),
         canonical("session-finished", SessionFinished("succeeded", None)),
     ]
     queries = store_with_events(tmp_path, events).queries()
@@ -861,5 +935,12 @@ def test_tab_state_is_a_canonical_fold_over_semantic_lifecycle(tmp_path):
     assert queries.tab_state(SESSION_ID, 4) == "awaiting_background"
     assert queries.tab_state(SESSION_ID, 5) == "awaiting_attention"
     assert queries.tab_state(SESSION_ID, 6) == "working"
-    assert queries.tab_state(SESSION_ID, 8) == "awaiting_response"
-    assert queries.tab_state(SESSION_ID, 9) is None
+    # The job's LAUNCH finishing leaves it background work: it used to be dropped
+    # here, which emptied the set before any turn could end on it — so a session
+    # with a job still running read `awaiting_response`, i.e. idle and waiting for
+    # you. Real sessions always finish a launch before the turn, so in practice
+    # `awaiting_background` was a state the fold could not reach.
+    assert queries.tab_state(SESSION_ID, 8) == "awaiting_background"
+    # …and once the JOB itself reports its end, the turn is genuinely yours again.
+    assert queries.tab_state(SESSION_ID, 10) == "awaiting_response"
+    assert queries.tab_state(SESSION_ID, 11) is None

@@ -5,6 +5,7 @@ from __future__ import annotations
 from domain.ids import SessionId
 from domain.uploads import StoredUpload
 from repository.model.uploads import UploadRow
+from repository.model.sql import SqlValues
 
 
 def stored_upload(row: UploadRow) -> StoredUpload:
@@ -19,7 +20,7 @@ def stored_upload(row: UploadRow) -> StoredUpload:
     )
 
 
-def upload_values(upload: StoredUpload) -> tuple[object, ...]:
+def upload_values(upload: StoredUpload) -> SqlValues:
     return (
         upload.upload_id,
         str(upload.session_id) if upload.session_id else "",

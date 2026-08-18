@@ -13,6 +13,7 @@ from domain.events import (
     CanonicalEvent,
     EventPayload,
     FileAccessed,
+    OperationBackgrounded,
     OperationFinished,
     OperationStarted,
 )
@@ -179,6 +180,33 @@ class ToolCallSemantics:
         # only ever seen there — Claude Code fires no PostToolUse for a call that
         # never ran, so the request would otherwise stay open forever.
         self.attention_tool_ids: dict[str, str] = {}
+        # An armed Monitor's TASK id -> the operation that armed it, and how many
+        # of its events have been attributed so far. A monitor's per-event
+        # notification names only the task id — never the tool_use_id (measured
+        # in claude-code 2.1.233) — so this is the only route from an event back
+        # to the operation the monitors tab lists. Its stream-ENDED notification
+        # does carry the tool_use_id, so the end needs no memory and survives a
+        # daemon restart that loses this.
+        self.monitor_tasks: dict[str, str] = {}
+        self.monitor_event_counts: dict[str, int] = {}
+
+    def monitor_armed(self, task_id: str, operation_id: OperationId) -> None:
+        self.monitor_tasks[task_id] = str(operation_id)
+
+    def monitor_operation(self, task_id: str) -> OperationId | None:
+        remembered = self.monitor_tasks.get(task_id)
+        return OperationId(remembered) if remembered else None
+
+    def next_monitor_ordinal(self, task_id: str) -> int:
+        """The position of the next event of this monitor, counted from zero.
+
+        Part of the event's identity, not decoration: `stable_event_id` is built
+        from the subject and the phase, so two events of one monitor recorded
+        under the same phase would collapse into one row (measured — six ticks
+        became one canonical event that way)."""
+        ordinal = self.monitor_event_counts.get(task_id, 0)
+        self.monitor_event_counts[task_id] = ordinal + 1
+        return ordinal
 
     def tool_started(self, raw_event: RawEvent, native: dict) -> list[CanonicalEvent]:
         operation_id = OperationId(str(native.get("tool_use_id") or native.get("id") or raw_event.source_position))
@@ -214,9 +242,47 @@ class ToolCallSemantics:
             self.task_tool_ids.add(str(operation_id))
             return []
         arguments = native.get("tool_input") or {}
-        finished = OperationFinished(operation_id, "failed" if failed else "succeeded", None, None)
-        events = [event(raw_event, "operation", str(operation_id), "finished", finished)]
         tool_response = native.get("tool_response") or {}
+        events: list[CanonicalEvent] = []
+        # BACKGROUNDED MID-RUN (ctrl+b on a running command). Structural, from the
+        # one document that holds both halves: the input never asked to run in the
+        # background, and the response carries a background task id anyway. The
+        # stub in the transcript's tool_result says the same thing in prose, but its
+        # message id belongs to a namespace the transcript never uses again.
+        #
+        # NOT keyed on the response's `backgroundedByUser` flag, though it is right
+        # there beside the task id (measured: `{"backgroundTaskId":"b18ibyhwf",
+        # "backgroundedByUser":true}`). The flag answers WHO moved it, and the
+        # harness can move a command itself — `isAutobackgroundingAllowed` decides
+        # when — which is the same fact about the operation arriving with the flag
+        # false. What matters here is that it moved.
+        #
+        # BEFORE the finish below, deliberately: the follow of the file this
+        # command is still writing to is ended by `operation.finished` unless this
+        # fact has already re-armed it (see OperationBackgrounded).
+        background_task_id = (
+            str(tool_response.get("backgroundTaskId") or "")
+            if isinstance(tool_response, dict)
+            else ""
+        )
+        if background_task_id and not arguments.get("run_in_background"):
+            events.append(event(
+                raw_event,
+                "operation",
+                str(operation_id),
+                "backgrounded",
+                OperationBackgrounded(operation_id, background_task_id),
+            ))
+        # An armed Monitor names its task id here and nowhere else this
+        # translation can see it. The `operation.finished` below is the ARM
+        # returning, not the watch ending — the watch runs on, and its own end
+        # arrives as a notification (see monitor_armed).
+        if native_name == "Monitor" and isinstance(tool_response, dict):
+            task_id = str(tool_response.get("taskId") or "")
+            if task_id:
+                self.monitor_armed(task_id, operation_id)
+        finished = OperationFinished(operation_id, "failed" if failed else "succeeded", None, None)
+        events.append(event(raw_event, "operation", str(operation_id), "finished", finished))
         async_launched = (
             isinstance(tool_response, dict)
             and (

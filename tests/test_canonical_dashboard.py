@@ -7,6 +7,8 @@ import subprocess
 
 import pytest
 
+from api.dashboard.mapper.activity import activity_frame
+from api.sse import sse_frame
 from harness.models import RawEvent, Session, TerminalSessionState, TranslationResult
 from engine.queries.content import CanonicalContentService
 from core.repository import RepositoryQueries
@@ -23,6 +25,7 @@ from audit.recorder import AuditRecorder
 from repository.impl.sqlite.databases import audit_database
 from repository.impl.sqlite.audit import SqliteAuditWriteRepository
 from domain.events import (
+    OperationOutputFinished,
     ActorStarted,
     AttentionRequested,
     AttentionResolved,
@@ -100,7 +103,7 @@ class NoTerminal:
         return TerminalSessionState(None, None)
 
 
-def event(event_id, payload, *, actor_id=LEAD_ACTOR_ID):
+def event(event_id, payload, *, actor_id=LEAD_ACTOR_ID, occurred_at=10.0):
     return CanonicalEvent(
         CanonicalEventId(event_id),
         SESSION_ID,
@@ -108,7 +111,7 @@ def event(event_id, payload, *, actor_id=LEAD_ACTOR_ID):
         None,
         None,
         "example",
-        10.0,
+        occurred_at,
         None,
         None,
         payload,
@@ -180,7 +183,7 @@ def test_backlog_cursor_cannot_skip_an_event_committed_during_projection(tmp_pat
         captured = original_latest_cursor()
         new_event = event(
             "message-after-snapshot",
-            MessageCreated(MessageId("message-two"), "assistant", TextContent("later"), "final", None),
+            MessageCreated(MessageId("message-two"), "assistant", TextContent("later"), "end_turn", None),
         )
         raw = RawEvent(
             RawEventId("raw-after-snapshot"),
@@ -242,7 +245,7 @@ def test_actor_scope_advances_the_cursor_across_invisible_events(tmp_path):
         event("session", SessionStarted("/work", "fixture.jsonl", None, None, None, None, None)),
         event(
             "message",
-            MessageCreated(MessageId("message-one"), "assistant", TextContent("hidden"), "final", None),
+            MessageCreated(MessageId("message-one"), "assistant", TextContent("hidden"), "end_turn", None),
             actor_id=other_actor,
         ),
     ]
@@ -251,7 +254,11 @@ def test_actor_scope_advances_the_cursor_across_invisible_events(tmp_path):
     assert frame is not None
     assert frame.cursor == 2
     assert frame.items == ()
-    assert frame.sse().startswith("id: 2\nevent: activity\ndata: ")
+    # ...and the frame the browser gets carries that cursor as its SSE id, which
+    # is what a reconnecting reader sends back as Last-Event-ID.
+    assert sse_frame("activity", activity_frame(frame), frame.cursor).startswith(
+        "id: 2\nevent: activity\ndata: "
+    )
 
 
 def test_one_canonical_frame_contains_all_changed_focused_projections(tmp_path):
@@ -262,8 +269,9 @@ def test_one_canonical_frame_contains_all_changed_focused_projections(tmp_path):
     assert frame.snapshot.session is not None
     assert frame.snapshot.actors == ()
     assert frame.snapshot.cursor == frame.cursor
-    assert '"cursor":1' in frame.json()
-    assert frame.sse().count("event: activity") == 1
+    encoded = sse_frame("activity", activity_frame(frame), frame.cursor)
+    assert '"cursor":1' in encoded
+    assert encoded.count("event: activity") == 1
 
 
 def test_session_snapshot_uses_one_fixed_canonical_cursor(tmp_path):
@@ -363,10 +371,41 @@ def test_session_snapshot_projects_background_jobs_and_monitors_without_legacy_r
     assert job.command == "make test"
     assert job.output == "passed"
     assert job.line_count == 1
-    assert job.live is False
+    # STILL LIVE, though its `operation.finished` has already been folded in: that
+    # was the LAUNCH returning, which for a background job happens before the work
+    # does. This assertion read `is False` while the projection took the end from
+    # there — so every job in the tab looked already ended, `ended_at` was the
+    # launch time, and `end_reason` was the launch's outcome (a job that exits 1
+    # read as succeeded). Its end is `operation.output_finished`, below.
+    assert job.live is True
+    assert job.ended_at is None
+    assert job.end_reason is None
     monitor = snapshot.background_work.monitors[0]
     assert monitor.live is True
     assert monitor.events[0].event == "connected"
+
+
+def test_a_background_jobs_end_is_its_own_output_finish_not_its_launchs(tmp_path):
+    job_id = OperationId("job-one")
+    events = [
+        event("session", SessionStarted("/work", "fixture.jsonl", None, None, None, None, None)),
+        event(
+            "job-start",
+            OperationStarted(job_id, "shell", "Bash", "background", TextContent("make test"), None, None),
+        ),
+        event("job-finish", OperationFinished(job_id, "succeeded", None, 0), occurred_at=11.0),
+        event("job-output", OperationProgressed(job_id, 0, "output", TextContent("boom"), "append")),
+        event("job-end", OperationOutputFinished(job_id, "failed"), occurred_at=99.0),
+    ]
+    store, _activity, _stream, _content = services(tmp_path, events)
+    snapshot = DashboardSessionService(
+        store, store.queries(), NoTerminal(), RepositoryQueries()
+    ).snapshot(SESSION_ID, ActivityScope())
+
+    job = snapshot.background_work.jobs[0]
+    assert job.live is False
+    assert job.ended_at == 99.0            # when the JOB ended, not when it was launched
+    assert job.end_reason == "failed"      # …and how, which its launch succeeding says nothing about
 
 
 def test_content_reference_resolves_directly_from_the_canonical_event(tmp_path):
@@ -775,6 +814,54 @@ def test_notifier_uses_canonical_tab_transitions(monkeypatch):
 
     assert SESSION_ID not in notifier.delivered
     assert retractions[0][1] == "state-changed"
+
+
+def test_a_turn_that_ends_on_running_background_work_does_not_alert_as_done(monkeypatch):
+    """`awaiting_background` is unmapped ON PURPOSE, and this pins the decision.
+
+    A turn that ended while its own background job still runs has not finished
+    producing what you would come back to read, so an alert then is early. The
+    state only became reachable when background work stopped being ended by its
+    launch (engine/projections/tabstate.py) — before that, nobody had to decide.
+    Without this test the absent mapping reads as an oversight and gets "fixed".
+    """
+    queries = MutableNotificationQueries("idle")
+    notification_state = DashboardNotificationState()
+    notifier = Notifier(
+        StaticNotificationSessions(TerminalSessionState("window-one", None)),
+        queries,
+        notification_state,
+        _alerting_on(),
+        None,
+        None,
+        Presence(),
+        AuditRecorder(SqliteAuditWriteRepository(audit_database())),
+    )
+    monkeypatch.setattr("notify.notifier.config.NOTIFICATION_DELAY_SECONDS", 0)
+    monkeypatch.setattr("notify.notifier.config.NOTIFICATION_SETTLE_SECONDS", 0)
+    monkeypatch.setattr("notify.notifier.config.NOTIFY_WEBPUSH", False)
+    monkeypatch.setattr("notify.notifier.config.NOTIFY_TELEGRAM", True)
+    monkeypatch.setattr(notifier.presence, "route", lambda subscriptions: ("terminal", (), {}))
+    monkeypatch.setattr(
+        "notify.channels.telegram.send_alert",
+        lambda payload, reason: {"payload": payload, "reason": reason},
+    )
+    monkeypatch.setattr(notifier.audit, "state_file", lambda *arguments, **keywords: None)
+
+    notifier.scan()
+    queries.state = "awaiting_background"
+    notifier.scan()
+
+    assert notification_state.notification() is None
+    assert SESSION_ID not in notifier.delivered
+
+    # …and the job's own end is what makes the turn yours to be told about.
+    queries.state = "awaiting_response"
+    notifier.scan()
+
+    notice = notification_state.notification()
+    assert notice is not None
+    assert notice.kind == "done"
 
 
 def test_notifier_retries_failed_retractions_and_audits_success(monkeypatch):

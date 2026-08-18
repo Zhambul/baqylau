@@ -6,7 +6,6 @@
     markdown.py   a small, safe Markdown subset
     diff.py       a unified diff, line-numbered
     items/        one canonical activity -> one item the browser draws
-    serialize.py  one dataclass tree -> JSON-ready data
 
 This tier is reusable precisely because it is inert: `api/common/content.py`
 renders a file with the same functions the session page uses, and a test can

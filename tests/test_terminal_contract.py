@@ -27,6 +27,7 @@ from terminal.impl import resolve
 from terminal.impl.kitty.plugin import kitty_plugin
 from terminal.impl.kitty.remote import KittyRemote
 from terminal.impl.null import null_plugin
+from terminal.impl.pty.plugin import pty_plugin
 from terminal.models import (
     ACTIVITY_PANE_TAG,
     PaneAnchor,
@@ -99,8 +100,8 @@ def flag_value(arguments, flag):
 # concrete class. The cast is the claim, made where it is made.
 @pytest.mark.parametrize(
     "plugin",
-    [null_plugin(), kitty_plugin(cast(KittyRemote, FakeRemote()))],
-    ids=["none", "kitty"],
+    [null_plugin(), kitty_plugin(cast(KittyRemote, FakeRemote())), pty_plugin()],
+    ids=["none", "kitty", "pty"],
 )
 def test_every_terminal_implements_the_five_sub_protocols_and_nothing_more(plugin):
     assert isinstance(plugin, TerminalPlugin)
@@ -134,6 +135,8 @@ def test_the_terminal_that_is_not_there_fails_every_operation_in_shape():
 def test_a_terminal_is_detected_and_pinned_by_name(monkeypatch):
     monkeypatch.setenv("BAQYLAU_TERMINAL", "none")
     assert resolve().name == "none"
+    monkeypatch.setenv("BAQYLAU_TERMINAL", "pty")
+    assert resolve().name == "pty"
     monkeypatch.setenv("BAQYLAU_TERMINAL", "nothing-like-it")
     with pytest.raises(ValueError, match="unsupported terminal"):
         resolve()

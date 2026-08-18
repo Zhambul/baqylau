@@ -502,7 +502,9 @@ def test_codec_rejects_unknown_schema_and_envelope_fields():
     document = codec.encode(canonical_message()).decode()
     with pytest.raises(CanonicalCodecError, match="schema version"):
         codec.decode(document.replace(f'"schema_version":{SCHEMA_VERSION}', '"schema_version":999'))
-    with pytest.raises(CanonicalCodecError, match="envelope fields"):
+    # ...and names the offending field, because the envelope is now a
+    # declaration rather than a set of strings compared against a dict.
+    with pytest.raises(CanonicalCodecError, match=r"CanonicalEnvelope\nglyph"):
         codec.decode(document[:-1] + ',"glyph":"x"}')
 
 
@@ -535,11 +537,11 @@ def test_codec_decodes_rows_written_before_a_defaulted_field_existed():
     assert decoded.payload.actor_name is None
     assert decoded.payload.prompt is None
     document["payload"]["glyph"] = "x"
-    with pytest.raises(CanonicalCodecError, match="extra=\\['glyph'\\]"):
+    with pytest.raises(CanonicalCodecError, match=r"payload\.glyph"):
         codec.decode(json.dumps(document))
     del document["payload"]["glyph"]
     del document["payload"]["brief"]
-    with pytest.raises(CanonicalCodecError, match="missing=\\['brief'\\]"):
+    with pytest.raises(CanonicalCodecError, match="Field required"):
         codec.decode(json.dumps(document))
 
 
@@ -548,7 +550,7 @@ def test_codec_rejects_an_invalid_payload_before_storage():
     event = canonical_message()
     invalid_payload = replace(event.payload, role="tool")
 
-    with pytest.raises(CanonicalCodecError, match="invalid literal"):
+    with pytest.raises(CanonicalCodecError, match="role"):
         codec.encode(replace(event, payload=invalid_payload))
 
 

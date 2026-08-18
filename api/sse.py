@@ -1,13 +1,18 @@
 # api/sse.py — the SSE framing vocabulary every stream router shares: the
 # frame encoder, the idle beat, the cadences, the change-detection dump, and the
 # one hop that keeps a poll off the event loop.
+#
+# A frame body is a MODEL (api/common/models/streams/, and the dashboard's own
+# response models for the big ones), never a dict assembled at the call site:
+# the streams carry the same shapes the routes do, and there is one encoder for
+# both.
 from __future__ import annotations
 
-import json
 from collections.abc import Callable
 from typing import TypeVar
 
 from fastapi.concurrency import run_in_threadpool
+from pydantic import BaseModel
 
 Frame = TypeVar("Frame")
 
@@ -18,8 +23,11 @@ EVENT_STREAM = "text/event-stream"
 NO_STORE = {"Cache-Control": "no-store"}
 
 
-def sse_frame(event: str, payload) -> str:
-    return "event: %s\ndata: %s\n\n" % (event, json.dumps(payload, default=str))
+def sse_frame(event: str, payload: BaseModel, identity: int | None = None) -> str:
+    """One frame. `identity` becomes the SSE `id:`, which the browser sends back
+    as Last-Event-ID — so only a stream whose frames ARE a cursor sets it."""
+    prefix = "" if identity is None else "id: %d\n" % identity
+    return "%sevent: %s\ndata: %s\n\n" % (prefix, event, payload.model_dump_json())
 
 
 async def off_loop(read: Callable[..., Frame], *arguments) -> Frame:
@@ -41,6 +49,11 @@ async def off_loop(read: Callable[..., Frame], *arguments) -> Frame:
     return await run_in_threadpool(read, *arguments)
 
 
-def stable_snapshot(snapshot) -> str:
-    """The change-detection encoding: a differing dump is a frame worth sending."""
-    return json.dumps(snapshot, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+def stable_snapshot(snapshot: BaseModel) -> str:
+    """The change-detection encoding: a differing dump is a frame worth sending.
+
+    The model's own dump, so what is compared is exactly what would be sent —
+    the previous hand-rolled `json.dumps(..., sort_keys=True)` compared a
+    DIFFERENT encoding than the one on the wire.
+    """
+    return snapshot.model_dump_json()

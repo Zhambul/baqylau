@@ -49,7 +49,7 @@ TASK_DISMISSAL_LIMIT = 200
 
 @dataclass(frozen=True)
 class SessionPreferences:
-    view_mode: str
+    view_mode: ViewMode
     notifications_muted: bool
     tasks_hidden: bool
 

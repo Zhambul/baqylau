@@ -15,7 +15,6 @@ import anyio.to_thread
 import yaml
 from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from api import config
@@ -27,6 +26,7 @@ from api.dashboard import streams as dashboard_streams
 from api import dependencies
 from api.lifecycle import background_workers
 from api.middleware import SecurityHeaders, SelectiveGZip
+from api.common.models.replies.error_response import ErrorResponse
 from api.responses import EVERY_ROUTE
 from api.terminal import panes, views
 from api.terminal import streams as terminal_streams
@@ -55,8 +55,12 @@ async def _lifespan(web: FastAPI):
         yield
 
 
-def _error_body(message: str, status_code: int) -> JSONResponse:
+def _error_body(message: str, status_code: int) -> Response:
     """This server's one error shape, and the one place it is built.
+
+    Built from ErrorResponse — the model every route publishes as its 400 and
+    500 — so the declared shape and the emitted bytes cannot drift. An exception
+    handler is not a route, so nothing serializes this one for us.
 
     Carries the security headers itself rather than leaving them to
     api/middleware.py, because `_internal_error` below runs inside Starlette's
@@ -65,17 +69,22 @@ def _error_body(message: str, status_code: int) -> JSONResponse:
     middleware can wrap it. Same constant, so there is still one policy; the
     stamping middleware only ever fills a header in that is absent.
     """
-    return JSONResponse({"error": message}, status_code, headers=config.SECURITY_HEADERS)
+    return Response(
+        ErrorResponse(error=message).model_dump_json(),
+        status_code,
+        headers=config.SECURITY_HEADERS,
+        media_type="application/json",
+    )
 
 
-async def _http_error(_request: Request, error: StarletteHTTPException) -> JSONResponse:
+async def _http_error(_request: Request, error: StarletteHTTPException) -> Response:
     message = str(error.detail)
     if message == _FRAMEWORK_NOT_FOUND:
         message = "not found"
     return _error_body(message, error.status_code)
 
 
-async def _validation_error(_request: Request, error: RequestValidationError) -> JSONResponse:
+async def _validation_error(_request: Request, error: RequestValidationError) -> Response:
     """A schema rejection as this server's one error shape: 400 with the first
     failing field named — {"error": "text: Input should be a valid string"}."""
     first = error.errors()[0]
@@ -84,7 +93,7 @@ async def _validation_error(_request: Request, error: RequestValidationError) ->
     return _error_body(message, 400)
 
 
-async def _application_input_error(_request: Request, error: Exception) -> JSONResponse:
+async def _application_input_error(_request: Request, error: Exception) -> Response:
     """Bad application input raised past a route (unknown session, unknown
     catalogue, a malformed reference) — the read/control planes' 400 contract.
 
@@ -101,7 +110,7 @@ async def _application_input_error(_request: Request, error: Exception) -> JSONR
     return _error_body(str(message), 400)
 
 
-async def _internal_error(request: Request, _error: Exception) -> JSONResponse:
+async def _internal_error(request: Request, _error: Exception) -> Response:
     # An exception handler is not a route: it takes no dependencies. It has the
     # request, though, and the request has the application — so the recorder is
     # resolved from the same registry a route would have been handed it from.

@@ -83,7 +83,7 @@ def _application():
                 MessageId("message-one"),
                 "assistant",
                 TextContent("hello"),
-                "final",
+                "end_turn",
                 None,
             ),
         ),
@@ -1055,7 +1055,7 @@ def _record_agent_message(application):
             MessageId("message-two"),
             "assistant",
             TextContent("hello from the agent"),
-            "final",
+            "end_turn",
             None,
         ),
     )
@@ -1543,16 +1543,18 @@ def _api_routes(web):
 
 
 def test_every_declared_response_model_describes_the_bytes_actually_sent(tmp_path):
-    """`response_model=` is DOCUMENTATION wherever a route answers with a
-    JSONResponse: FastAPI validates nothing it did not serialize itself. That is
-    the deliberate deal in api/dashboard/controls.py — the contract becomes
-    readable, the wire stays put — and the gap it leaves is drift, where
-    `json_ready` renames a field and the published schema keeps describing the
-    old one with nothing to notice.
+    """The published schema and the bytes are one statement.
 
-    So: call the read plane and validate each reply against its OWN declared
-    model. The route table is read from a second application built for the
-    purpose; it is a property of the code, not of the graph.
+    FastAPI validates what it serializes, so a route that RETURNS its model is
+    already held to it — which is why the routes return models now. This checks
+    the same property from OUTSIDE, over the socket: call the read plane and
+    validate each reply against the model its own route declares. It is the
+    check that survives whatever FastAPI decides to do internally, and it is
+    what caught HarnessCatalogResponse describing a nesting
+    (`catalog: HarnessCatalogSnapshot`) that had never been on the wire.
+
+    The route table is read from a second application built for the purpose; it
+    is a property of the code, not of the graph.
     """
     application = _application()
     server, thread = _server(application)

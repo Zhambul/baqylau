@@ -3,21 +3,43 @@
 # HarnessInfo. The contract keeps them apart; this is where the browser wants
 # them together.
 #
-# FLAT, because flat is what the route sends and what the page reads
-# (`catalog.commands`, `catalog.models`): the route merges the snapshot's own
-# fields into the reply rather than nesting it under a key. This model declared
-# `catalog: HarnessCatalogSnapshot` and so described a nesting that has never been
-# on the wire. Nothing caught it, because a route that answers with a JSONResponse
-# is never validated against its own response_model — which is what
-# test_every_declared_response_model_describes_the_bytes_actually_sent is for.
+# FLAT, because flat is what the page reads (`catalog.commands`,
+# `catalog.models`): the route BUILDS one of these from the two sources rather
+# than nesting either under a key. This model once declared
+# `catalog: HarnessCatalogSnapshot` and so described a nesting that has never
+# been on the wire — undetectable while the route hand-built its reply, which
+# FastAPI never validates against the declared model.
 from pydantic import BaseModel
 
-from harness.models import CommandOption, ModelOption, RewindModeOption
+
+
+class EffortOptionResponse(BaseModel):
+    value: str
+    display_name: str
+    default: bool
+
+
+class ModelOptionResponse(BaseModel):
+    model_id: str
+    display_name: str
+    default: bool
+    efforts: tuple[EffortOptionResponse, ...]
+
+
+class CommandOptionResponse(BaseModel):
+    command: str
+    description: str
+    minimum_prompt_count: int
+
+
+class RewindModeOptionResponse(BaseModel):
+    value: str
+    display_name: str
 
 
 class HarnessCatalogResponse(BaseModel):
-    # HarnessCatalogSnapshot's one field: discovered by walking the session's
-    # own directory, so no static literal can hold it.
-    commands: tuple[CommandOption, ...] = ()
-    models: tuple[ModelOption, ...]
-    rewind_modes: tuple[RewindModeOption, ...]
+    # The commands are discovered by walking the session's own directory, so no
+    # static literal can hold them; the models and rewind modes are that literal.
+    commands: tuple[CommandOptionResponse, ...]
+    models: tuple[ModelOptionResponse, ...]
+    rewind_modes: tuple[RewindModeOptionResponse, ...]

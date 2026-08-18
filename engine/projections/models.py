@@ -8,7 +8,6 @@ one module per concern.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Literal, Mapping, TypeAlias
@@ -37,12 +36,12 @@ from domain.values import (
     AttentionAnswer,
     AttentionPrompt,
     Content,
+    content_text,
     ExecutionMode,
     ModelReference,
     OperationCategory,
     Outcome,
     StructuredContent,
-    TextContent,
     TokenUsage,
 )
 
@@ -69,7 +68,7 @@ class MessageActivity:
     # renderer downstream already branched on it — those branches typed as
     # unreachable even though a parent-agent message reaches them at runtime.
     role: Literal["user", "assistant", "system", "peer", "parent"]
-    phase: Literal["prompt", "intermediate", "final", "synthetic", "recap"] | None
+    phase: Literal["prompt", "intermediate", "end_turn", "synthetic", "recap"] | None
     reply_to: MessageId | None
     content: Content
 
@@ -109,32 +108,19 @@ class OperationActivity:
                 streams.setdefault(progress.stream, []).append(progress.content)
         return tuple(content for stream in streams.values() for content in stream)
 
-    @staticmethod
-    def _text(content: Content | None) -> str:
-        if content is None:
-            return ""
-        if isinstance(content, TextContent):
-            return content.text
-        if isinstance(content, StructuredContent):
-            return json.dumps(
-                json.loads(content.json_text),
-                ensure_ascii=False,
-                indent=2,
-                sort_keys=True,
-            )
-        raise TypeError(f"unsupported content: {type(content).__name__}")
-
     def command_text(self) -> str:
+        """What the operation RAN: a shell tool names it in its arguments, and
+        everything else is read as the arguments themselves."""
         if isinstance(self.arguments, StructuredContent):
-            document = json.loads(self.arguments.json_text)
-            if isinstance(document, dict) and isinstance(document.get("command"), str):
-                return document["command"]
-        return self._text(self.arguments)
+            command = self.arguments.field("command")
+            if command is not None:
+                return command
+        return content_text(self.arguments)
 
     def output_text(self) -> str:
         if self.result is not None:
-            return self._text(self.result)
-        return "\n".join(filter(None, map(self._text, self.current_progress())))
+            return content_text(self.result)
+        return "\n".join(filter(None, map(content_text, self.current_progress())))
 
 
 @dataclass(frozen=True)

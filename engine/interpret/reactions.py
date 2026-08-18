@@ -7,6 +7,7 @@ from dataclasses import replace
 
 from domain.events import (
     CanonicalEvent,
+    OperationBackgrounded,
     OperationFinished,
     OperationOutputFinished,
     OperationOutputLocated,
@@ -103,6 +104,14 @@ class OperationOutputCanonicalEventReaction(CanonicalEventReaction):
             self.operation_output.mark_operation_finished(
                 canonical_event.session_id, payload.operation_id
             )
+        elif isinstance(payload, OperationBackgrounded):
+            # Keep reading the file the job is still writing to. Without this the
+            # `operation.finished` from the same evidence marks the row finishing,
+            # one drain later the row is removed and — for a tee file we made —
+            # the file is UNLINKED under a running process.
+            self.operation_output.outlive_operation(
+                canonical_event.session_id, payload.operation_id
+            )
         elif isinstance(payload, OperationOutputFinished):
             # The background job's true end: stop following its file now
             # instead of stat-ing it for the rest of the session.
@@ -118,7 +127,7 @@ class OperationOutputCanonicalEventReaction(CanonicalEventReaction):
         followings = self.operation_output.find_for_session(session_id)
         positions = self.raw_events.latest_positions([
             output_source.operation_output_source_identity(
-                following.harness, following.session_id, str(following.operation_id)
+                following.harness, following.session_id, following.operation_id
             )
             for following in followings
         ])

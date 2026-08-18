@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import APIRouter, Query, Request, Response
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi.responses import StreamingResponse
 
 from api.common.models.fields import SessionIdPath
+from api.common.models.streams.error_frame import ErrorFrame
+from api.common.models.streams.pane_frame import PaneScreenFrame, PaneSessionFrame
 from api.responses import errors
 from api.sse import BEAT, EVENT_STREAM, NO_STORE, STREAM_POLL_SECONDS, off_loop, sse_frame
 from app.providers import PaneStreams, Recorder, Sessions
@@ -35,7 +37,9 @@ def pane_stream(
     the client's width; idle ticks are SSE comments the client uses as its
     resize/liveness clock (a resize is a reconnect at the new width)."""
     if kind not in ("mirror", "scoreboard"):
-        return JSONResponse({"error": "not found"}, 404)
+        # Raised, not built: api/app.py's handler renders every refusal as this
+        # server's one error body, and there is no second place that shape lives.
+        raise HTTPException(404, "not found")
     session = SessionId(session_id)
     request_path = (request.url.path + ("?" + request.url.query if request.url.query else ""))[:200]
     return StreamingResponse(
@@ -59,13 +63,13 @@ async def _pane_frames(
         if kind == "mirror" and await off_loop(sessions.find, session_id) is None:
             # The pane's own banner, as a frame: the client paints nothing of its
             # own, so the "waiting for commands" state has to be sent to it.
-            yield sse_frame("frame", {"ansi": WAITING_FRAME})
+            yield sse_frame("frame", PaneScreenFrame(ansi=WAITING_FRAME))
         while await off_loop(sessions.find, session_id) is None:
             # A pane process can connect before the session's row exists; hold
             # the stream open, beating, until it does.
             yield BEAT
             await asyncio.sleep(STREAM_POLL_SECONDS)
-        yield sse_frame("session", {"session_id": str(session_id)})
+        yield sse_frame("session", PaneSessionFrame(session_id=str(session_id)))
         if kind == "mirror":
             rendered_version = None
             while True:
@@ -76,7 +80,7 @@ async def _pane_frames(
                     yield BEAT
                 else:
                     rendered_version, ansi = frame
-                    yield sse_frame("frame", {"ansi": ansi})
+                    yield sse_frame("frame", PaneScreenFrame(ansi=ansi))
                 await asyncio.sleep(STREAM_POLL_SECONDS)
         else:
             stream = await off_loop(panes.scoreboard_stream, session_id, width)
@@ -84,7 +88,9 @@ async def _pane_frames(
                 # Named apart from the mirror branch's `ansi`: that one is a
                 # str, this one is a str-or-None, and they are two variables.
                 scoreboard = await off_loop(stream.frame)
-                yield BEAT if scoreboard is None else sse_frame("frame", {"ansi": scoreboard})
+                yield BEAT if scoreboard is None else sse_frame(
+                    "frame", PaneScreenFrame(ansi=scoreboard)
+                )
                 await asyncio.sleep(STREAM_POLL_SECONDS)
     except (asyncio.CancelledError, GeneratorExit):
         audit.stream_end(stream_identifier, "client-gone")
@@ -92,4 +98,4 @@ async def _pane_frames(
     except Exception:
         audit.error(str(session_id), f"pane {kind} stream", {"path": request_path})
         audit.stream_end(stream_identifier, "error")
-        yield sse_frame("error", {"error": "pane stream failed"})
+        yield sse_frame("error", ErrorFrame(error="pane stream failed"))

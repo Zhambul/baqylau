@@ -15,15 +15,16 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import json
 import os
 import time
 
-from domain.ids import RawEventId, SessionId
+from domain.ids import OperationId, RawEventId, SessionId
 from domain.operations import OperationOutputFollowing
 from harness.contract import HarnessRawEventSource
 from harness.models import RawEvent
 from repository.contract.operations import OperationOutputRepository
+from domain.codec import encode_document
+from harness.models.directives import OperationOutputChunk
 
 READ_SIZE = 64 * 1024
 MAXIMUM_LIFETIME_SECONDS = 2 * 60 * 60
@@ -31,7 +32,7 @@ FINISHED_POSITION = "finished"
 
 
 def operation_output_source_identity(
-    harness: str, session_id: SessionId, operation_id: str
+    harness: str, session_id: SessionId, operation_id: OperationId
 ) -> str:
     return f"{harness}:operation_output:{session_id}:{operation_id}"
 
@@ -64,7 +65,7 @@ class OperationOutputRawEventSource(HarnessRawEventSource):
         self.following = following
         self.operation_output = operation_output
         self.source_identity = operation_output_source_identity(
-            following.harness, following.session_id, str(following.operation_id)
+            following.harness, following.session_id, following.operation_id
         )
 
     def read(self, after_position: str | None) -> tuple[RawEvent, ...]:
@@ -125,15 +126,14 @@ class OperationOutputRawEventSource(HarnessRawEventSource):
 
     def _chunk(self, start: int, end: int, content: bytes) -> RawEvent:
         following = self.following
-        document = json.dumps(
-            {
-                "operation_id": str(following.operation_id),
-                "ordinal": start,
-                "stream": "output",
-                "content_base64": base64.b64encode(content).decode("ascii"),
-            },
-            separators=(",", ":"),
-        ).encode("utf-8")
+        document = encode_document(
+            OperationOutputChunk(
+                content_base64=base64.b64encode(content).decode("ascii"),
+                operation_id=following.operation_id,
+                ordinal=start,
+                stream="output",
+            )
+        )
         content_hash = hashlib.sha256(content).hexdigest()
         return RawEvent(
             raw_event_id=RawEventId(f"{self.source_identity}:{start}:{content_hash}"),

@@ -98,3 +98,25 @@ def is_synthetic(text, role=""):
         return True
     tag = _wrapper_tag(s)
     return bool(tag) and tag not in INPUT_WRAPPERS
+
+
+def empty_record():
+    """A record that says "recognised type, nothing in it" — NOT the same answer
+    as None.
+
+    `rollout.parse` has two outcomes and the translator reads them as verdicts:
+    a record is something to interpret, and None is `ignored_unknown`, "a type
+    nobody has ruled on". So a handler that recognises its type and finds it
+    carries no text — an assistant `message` whose content is `[{"output_text":
+    ""}]` (measured against codex-cli 0.147.0, a `phase: "commentary"`
+    placeholder), a `reasoning` whose summary was stored encrypted — must not
+    answer None: it would report a shape we understand perfectly as drift, and
+    real drift would stop standing out.
+
+    A fresh dict per call: records are mutated downstream (rollout._stamp).
+
+    NOT for a record whose REQUIRED field is missing (a `CommandExecution` with
+    no `process_id`). That is a field that moved, which is exactly the drift the
+    unknown verdict is for.
+    """
+    return {"kind": "empty"}

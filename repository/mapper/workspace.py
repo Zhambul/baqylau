@@ -21,6 +21,7 @@ from repository.model.workspace import (
     DialogAnswerSelectionRow,
     SessionWorkspaceRow,
 )
+from repository.model.sql import SqlValues
 
 
 def session_workspace(
@@ -83,7 +84,7 @@ def _dialog(
 def queue_item_values(
     session_id: SessionId,
     queue: ComposerQueue,
-) -> tuple[tuple[object, ...], ...]:
+) -> tuple[SqlValues, ...]:
     return tuple(
         (str(session_id), position, message.text)
         for position, message in enumerate(queue.items)
@@ -93,7 +94,7 @@ def queue_item_values(
 def dialog_answer_values(
     session_id: SessionId,
     draft: DialogDraft,
-) -> tuple[tuple[object, ...], ...]:
+) -> tuple[SqlValues, ...]:
     return tuple(
         (str(session_id), prompt_index, answer.other)
         for prompt_index, answer in enumerate(draft.answers)
@@ -103,7 +104,7 @@ def dialog_answer_values(
 def dialog_selection_values(
     session_id: SessionId,
     draft: DialogDraft,
-) -> tuple[tuple[object, ...], ...]:
+) -> tuple[SqlValues, ...]:
     return tuple(
         (str(session_id), prompt_index, selection_index, value)
         for prompt_index, answer in enumerate(draft.answers)

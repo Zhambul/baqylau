@@ -26,6 +26,7 @@ from domain.events import (
     ModelChanged,
     OperationFinished,
     OperationInputProvided,
+    OperationBackgrounded,
     OperationProgressed,
     OperationStarted,
     ReasoningCreated,
@@ -113,6 +114,10 @@ class CodexCanonicalTranslator(HarnessTranslator):
         self._process_operations: dict[tuple[str, str], OperationId] = {}
         self._continuation_operations: dict[tuple[str, str], OperationId] = {}
         self._finished_operations: set[tuple[str, OperationId]] = set()
+        # Announced background once. An exec that outlived its yield is reported
+        # again by every continuation poll, and the fact is about the operation,
+        # not about the poll that observed it.
+        self._backgrounded_operations: set[tuple[str, OperationId]] = set()
         self._semantic_tool_calls: set[tuple[str, str]] = set()
         self._operation_calls: dict[tuple[str, str], bool] = {}
         self._plan_tasks: dict[tuple[str, str], dict[TaskId, TaskChanged]] = {}
@@ -456,7 +461,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
             elif role == "user" and phase is None:
                 phase = "prompt"
             elif record.get("phase") == PHASE_FINAL:
-                phase = "final"
+                phase = "end_turn"
             elif role == "assistant":
                 phase = "intermediate"
             message_id = MessageId(native_identity)
@@ -676,19 +681,35 @@ class CodexCanonicalTranslator(HarnessTranslator):
             if process_id:
                 self._process_operations[(source_key, process_id)] = operation_id
             if record.get("running"):
+                # A BACKGROUND TERMINAL: the command outlived its yield budget, so
+                # codex handed back a live session (its `session_id`, the cell id
+                # `/ps` lists and `write_stdin` polls) with no exit code. Announced
+                # as backgrounded — nothing here ever falsely finished it, but
+                # without the fact it is not background WORK either, and the jobs
+                # tab cannot list what is still running.
+                running_events: list[CanonicalEvent] = []
+                if (source_key, operation_id) not in self._backgrounded_operations:
+                    self._backgrounded_operations.add((source_key, operation_id))
+                    running_events.append(event(
+                        raw_event,
+                        "operation",
+                        str(operation_id),
+                        "backgrounded",
+                        OperationBackgrounded(operation_id, process_id or None),
+                        occurred_at=occurred_at,
+                    ))
                 output = str(record.get("output") or "")
-                if not output:
-                    return []
-                ordinal = int(raw_event.source_position)
-                payload = OperationProgressed(operation_id, ordinal, "output", content(output), "append")
-                return [event(
-                    raw_event,
-                    "operation",
-                    str(operation_id),
-                    f"progress:{ordinal}",
-                    payload,
-                    occurred_at=occurred_at,
-                )]
+                if output:
+                    ordinal = int(raw_event.source_position)
+                    running_events.append(event(
+                        raw_event,
+                        "operation",
+                        str(operation_id),
+                        f"progress:{ordinal}",
+                        OperationProgressed(operation_id, ordinal, "output", content(output), "append"),
+                        occurred_at=occurred_at,
+                    ))
+                return running_events
             outcome: Outcome = "succeeded" if process_exit_code in (None, 0) else "failed"
             payload = OperationFinished(operation_id, outcome, content(record.get("output")), process_exit_code)
             self._finished_operations.add((source_key, operation_id))

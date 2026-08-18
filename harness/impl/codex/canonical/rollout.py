@@ -144,9 +144,17 @@ def _top_compacted(p):
 
 def _top_world_state(p):
     # A large periodic state snapshot (open files, shell sessions, todos).
-    # Explicitly ignored: nothing in it is renderable and it would otherwise
-    # look like an unhandled type to the next reader of this table.
-    return None
+    # Explicitly ignored: nothing in it is renderable.
+    #
+    # It returns a RECORD rather than None, and that is the whole point of this
+    # function: `parse` has exactly two outcomes, a record or None, and None is
+    # what the translator reports as `ignored_unknown` — "a type I do not
+    # recognise". A deliberate ignore that reports itself that way is
+    # indistinguishable from real drift, which is precisely what this table
+    # existed to prevent. The kind produces no canonical events, so the verdict
+    # is `ignored_nonsemantic` with this kind named in its reason: recognised,
+    # and carrying nothing.
+    return {"kind": "world_state"}
 
 
 _TOP = {"turn_context": _turn_context, "compacted": _top_compacted,
@@ -193,6 +201,14 @@ KINDS = frozenset({
     "ask", "plan", "settings", "compact_boundary", "tool",
     "actor_activity", "collaboration_call", "task_list", "goal", "goal_tool",
     "unmapped_tool", "bad",
+    # The RECOGNISED-AND-CARRYING-NOTHING kinds. They exist so that a deliberate
+    # ignore is a verdict of its own (`ignored_nonsemantic`, naming the kind)
+    # rather than the `ignored_unknown` that real drift must stay alone in:
+    # `world_state` is a state snapshot with nothing renderable in it,
+    # `covered_item` an `item_completed` for content another register already
+    # delivered (events.COVERED_ITEMS), and `empty` a record of a type we parse
+    # whose text is absent (vocabulary.empty_record).
+    "world_state", "covered_item", "empty",
 })
 
 

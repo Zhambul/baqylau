@@ -11,6 +11,7 @@ from decimal import Decimal
 
 from harness.models import AccountUsageSnapshot, UsageWindowSample
 from repository.model.usage import AccountUsageSnapshotRow, AccountUsageWindowRow
+from repository.model.sql import SqlValues
 
 # An absent account id is stored as the empty string, because it is half of a
 # composite primary key and SQLite does not treat NULLs in one as equal.
@@ -37,7 +38,7 @@ def account_usage_snapshot(
     )
 
 
-def snapshot_values(snapshot: AccountUsageSnapshot) -> tuple[object, ...]:
+def snapshot_values(snapshot: AccountUsageSnapshot) -> SqlValues:
     return (
         snapshot.harness,
         snapshot.account_id or NO_ACCOUNT,
@@ -46,7 +47,7 @@ def snapshot_values(snapshot: AccountUsageSnapshot) -> tuple[object, ...]:
     )
 
 
-def window_values(snapshot: AccountUsageSnapshot) -> tuple[tuple[object, ...], ...]:
+def window_values(snapshot: AccountUsageSnapshot) -> tuple[SqlValues, ...]:
     return tuple(
         (
             snapshot.harness,

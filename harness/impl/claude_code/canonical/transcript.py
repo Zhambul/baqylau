@@ -70,15 +70,13 @@
 #       one assistant message line — blocks preserve the content order; the
 #       record is returned even with no content list (usage/turn tracking must
 #       still run)
-#   {"kind": "monitor_event", "task": str, "summary": str,
-#    "event": str|None, "status": str|None}
-#       a Monitor tool's EVENT — Claude Code delivers each one mid-turn as a
-#       `queue-operation` record whose `content` is a <task-notification> XML
-#       block (one per event; a final <status>completed</status> when the
-#       monitor's stream ends). Empirically confirmed (docs/streaming.md). The
-#       drill-down timeline surfaces these; conversation()/the mirror do NOT —
-#       the events already ride the ops stream via claude-stream.py, so
-#       re-emitting there would DOUBLE them.
+#   {"kind": "monitor_event", "task": str, "summary": str, "event": str}
+#       one EVENT from an armed Monitor — a line the watched command printed.
+#       Attributable only through `task`: the per-event notification names the
+#       monitor's TASK id and never its tool_use_id (measured, 2.1.233).
+#   {"kind": "monitor_ended", "task": str, "operation_id": str, "status": str}
+#       the same monitor's stream ending, which does carry <tool-use-id> — so
+#       the end is attributable on its own even when nothing remembers the arm.
 import html
 import json
 import os
@@ -94,17 +92,24 @@ from repository.contract.titles import NativeSessionTitleRepository
 TEAMMSG = re.compile(r'^\s*<teammate-message\b([^>]*)>\s*(.*?)\s*</teammate-message>\s*$', re.S)
 _TM_ID  = re.compile(r'teammate_id="([^"]*)"')
 
-# A Monitor EVENT is delivered as a `queue-operation` record whose `content` is
-# a <task-notification> XML block (docs/streaming.md, *Monitor events in the
-# transcript*). We read it with plain tag scans rather than an XML parser: the
-# blocks are small, fixed-shape, and produced by Claude Code (not user input).
+# A <task-notification> XML block. Read with plain tag scans rather than an XML
+# parser: the blocks are small, fixed-shape, and produced by Claude Code (not
+# user input).
+#
+# FOUR different facts ride this one channel — an agent finishing, a background
+# command finishing, a monitor's event, a monitor's stream ending — and it
+# arrives TWICE for each: once as a `queue-operation` enqueue and again as the
+# `user` record that re-injects it into the conversation. The `user` copy is the
+# single owner (`_task_notification`); the queue-operation copy is plumbing.
+# Measured in claude-code 2.1.233, where every notification appeared in both
+# shapes and the queue pair was always enqueue-then-dequeue.
 _TASK_NOTE = re.compile(r'<task-notification>(.*?)</task-notification>', re.S)
 
-# The summary prefix that marks a BACKGROUND-command completion riding the same
-# <task-notification> channel as agent completions and monitor events. One
-# owner: parse_line's notification branch and _monitor_note's filter both mean
-# this exact wording.
+# The summary prefixes that separate the four. Prose, because that is all the
+# channel gives: only the background and monitor-ended notifications carry a
+# <tool-use-id>, and only a monitor's per-event one carries an <event>.
 BACKGROUND_SUMMARY_PREFIX = "Background command"
+MONITOR_SUMMARY_PREFIX = "Monitor"
 
 
 def _note_tag(xml, name):
@@ -112,27 +117,50 @@ def _note_tag(xml, name):
     return m.group(1).strip() if m else None
 
 
-def _monitor_note(content):
-    """A queue-operation's `content` -> a monitor_event record, or None when it
-    isn't a MONITOR <task-notification>. The same <task-notification> mechanism
-    also delivers BACKGROUND-job completions (BACKGROUND_SUMMARY_PREFIX summaries)
-    and other task acks — those are NOT monitor events (they'd otherwise show as
-    phantom monitors on the monitors tab and mislabel the activity timeline). A
-    monitor is the one with a per-event `<event>` tag, or a `Monitor …` summary
-    (its stream-ended notification, which carries only `<status>`). `event` is the
-    per-event line; `status` (e.g. "completed") marks the stream-ended one."""
-    if not isinstance(content, str) or "<task-notification>" not in content:
-        return None
+def _task_notification(content):
+    """A <task-notification> block -> the one fact it carries.
+
+    The single reader of this channel, so that a notification cannot be counted
+    as two different things. The order of the tests is the order of how specific
+    the evidence is: a background completion and a monitor event are each marked
+    by something structural (their summary prefix, an <event> tag), and an
+    agent's completion is what is left — it is the only one of the four with no
+    mark of its own, so it cannot be recognised, only defaulted to."""
     m = _TASK_NOTE.search(content)
     xml = m.group(1) if m else content
-    event = _note_tag(xml, "event")
     summary = _note_tag(xml, "summary") or ""
-    if event is None and not summary.startswith("Monitor"):
-        return None            # a bg-completion / other task ack — not a monitor
-    return {"kind": "monitor_event",
+    if summary.startswith(BACKGROUND_SUMMARY_PREFIX):
+        # A background Bash completion, NOT an agent's: the same channel
+        # delivers both, and treating this as an assignment finish painted
+        # phantom "Agent finished" blocks for plain background commands.
+        return {
+            "kind": "background_command_completed",
+            "operation_id": _note_tag(xml, "tool-use-id") or "",
+            "status": _note_tag(xml, "status") or "completed",
+        }
+    event = _note_tag(xml, "event")
+    if event is not None:
+        return {
+            "kind": "monitor_event",
             "task": _note_tag(xml, "task-id") or "",
-            "summary": summary, "event": event,
-            "status": _note_tag(xml, "status")}
+            "summary": summary,
+            "event": event,
+        }
+    if summary.startswith(MONITOR_SUMMARY_PREFIX):
+        return {
+            "kind": "monitor_ended",
+            "task": _note_tag(xml, "task-id") or "",
+            "operation_id": _note_tag(xml, "tool-use-id") or "",
+            "status": _note_tag(xml, "status") or "completed",
+        }
+    return {
+        "kind": "actor_assignment_finished",
+        "assignment_id": _note_tag(xml, "tool-use-id") or "",
+        "actor_id": _note_tag(xml, "task-id"),
+        "status": _note_tag(xml, "status") or "completed",
+        "summary": summary,
+        "result": html.unescape(_note_tag(xml, "result") or "") or None,
+    }
 
 
 def result_text(content):
@@ -173,6 +201,17 @@ def result_text(content):
 # taking the OUTERMOST span non-greedily and then sweeping any stray tag left over.
 _REMINDER = re.compile(r"<system-reminder>.*?</system-reminder>\s*", re.S | re.I)
 _REMINDER_TAG = re.compile(r"</?system-reminder>\s*", re.I)
+
+
+# Claude Code's name for the session's OWN lead inside the teammate vocabulary —
+# fixed, and stated to every teammate in its system prompt ("The team lead's name
+# is \"team-lead\". Send updates and completion notifications to them.", measured in
+# claude-code 2.1.234). It is an alias, not a participant: the lead already has a
+# canonical actor of its own, so a reader that takes this id at face value invents
+# a second one — a teammate nobody launched, permanently running, one per session.
+# The first record of every teammate's transcript is its brief FROM this sender,
+# which is how it was found.
+LEAD_TEAMMATE_ID = "team-lead"
 
 
 def classify_user_text(text):
@@ -284,16 +323,11 @@ _RESUMES_TURN = (
 
 
 # Every `kind` parse_line can return — the record vocabulary of this module,
-# declared so the two PRESENTERS below can be checked against it rather than
-# each quietly knowing its own subset. `conversation()` (the dashboard's message
-# stream) and `_fold_record()` (the drill-down timeline) both dispatch on it,
-# and both used to do so as long elif ladders: adding a kind meant editing two
-# places, and forgetting one was silent. They are registries now, and
-# tests/test_l1e_transcript.py asserts every kind here is either handled or
-# EXPLICITLY skipped by each.
+# declared in one place so a reader can see the whole of it, and so that adding
+# a kind is a visible act rather than one more branch somewhere.
 KINDS = ("bad", "compact", "recap", "prompt", "teammsg", "results",
-         "assistant", "monitor_event", "actor_assignment_finished",
-         "background_command_completed", "goal")
+         "assistant", "monitor_event", "monitor_ended",
+         "actor_assignment_finished", "background_command_completed", "goal")
 
 
 def parse_line(s):
@@ -328,27 +362,7 @@ def parse_line(s):
             if not content.strip():
                 return None
             if (o.get("origin") or {}).get("kind") == "task-notification":
-                match = _TASK_NOTE.search(content)
-                xml = match.group(1) if match else content
-                summary = _note_tag(xml, "summary") or ""
-                if summary.startswith(BACKGROUND_SUMMARY_PREFIX):
-                    # A background Bash completion, NOT an agent's: the same
-                    # channel delivers both, and treating this as an
-                    # assignment finish painted phantom "Agent finished"
-                    # blocks for plain background commands.
-                    return {
-                        "kind": "background_command_completed",
-                        "operation_id": _note_tag(xml, "tool-use-id") or "",
-                        "status": _note_tag(xml, "status") or "completed",
-                    }
-                return {
-                    "kind": "actor_assignment_finished",
-                    "assignment_id": _note_tag(xml, "tool-use-id") or "",
-                    "actor_id": _note_tag(xml, "task-id"),
-                    "status": _note_tag(xml, "status") or "completed",
-                    "summary": summary,
-                    "result": html.unescape(_note_tag(xml, "result") or "") or None,
-                }
+                return _task_notification(content)
             kind, a, b = classify_user_text(content)
             if kind == "teammsg":
                 return {"kind": "teammsg", "sender": a, "body": b}
@@ -433,9 +447,12 @@ def parse_line(s):
             return {"kind": "prompt", "text": att.get("prompt") or ""}
         return None
     if t == "queue-operation":
-        # A Monitor tool's events land here (see _monitor_note / the module
-        # header). None for any other queue-operation (harness noise).
-        return _monitor_note(o.get("content"))
+        # The ENQUEUE half of a task-notification's delivery, and the same XML
+        # the `user` record above carries — measured: every notification appeared
+        # in both shapes. Read here too, it would double every monitor event.
+        # The `user` copy owns it, because that copy is the one the model was
+        # actually given and the one that carries `origin.kind`.
+        return None
     return None
 
 

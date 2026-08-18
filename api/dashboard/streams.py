@@ -18,6 +18,11 @@ from fastapi.responses import StreamingResponse
 
 from api.dependencies import Policy
 from api.common.models.fields import SessionIdPath
+from api.common.models.streams.error_frame import ErrorFrame
+from api.common.models.streams.ready_frame import ReadyFrame
+from api.dashboard.mapper import activity as activity_mapper
+from api.dashboard.mapper import application as application_mapper
+from api.dashboard.mapper import overview as overview_mapper
 from api.dashboard.sessions import _scope
 from api.sse import (
     BEAT,
@@ -36,7 +41,6 @@ from app.providers import (
     SessionApplication,
     Sessions,
 )
-from dashboard.render.serialize import json_ready
 from dashboard.services.streams import DashboardStreamService
 from dashboard.services.workspace import SessionApplicationService
 from audit.recorder import AuditRecorder
@@ -52,11 +56,11 @@ def global_stream(
 ) -> StreamingResponse:
     async def frames():
         try:
-            yield sse_frame("ready", {"boot_id": policy.boot_id})
+            yield sse_frame("ready", ReadyFrame(boot_id=policy.boot_id))
             previous_snapshot = None
             heartbeat_at = asyncio.get_running_loop().time()
             while True:
-                snapshot = json_ready(await off_loop(overview.snapshot))
+                snapshot = overview_mapper.global_application(await off_loop(overview.snapshot))
                 encoded_snapshot = stable_snapshot(snapshot)
                 now = asyncio.get_running_loop().time()
                 if encoded_snapshot != previous_snapshot:
@@ -74,7 +78,7 @@ def global_stream(
             # The audit row is the trace, the error frame is the client's
             # signal, and the connection ends so the client reconnects.
             audit.error("", "global stream", {"path": "/api/stream"})
-            yield sse_frame("error", {"error": "stream failed"})
+            yield sse_frame("error", ErrorFrame(error="stream failed"))
 
     return StreamingResponse(frames(), media_type=EVENT_STREAM, headers=NO_STORE)
 
@@ -115,10 +119,12 @@ async def _session_frames(
             sent = False
             frame = await off_loop(stream.frame, session_id, cursor, scope)
             if frame is not None:
-                yield frame.sse()
+                yield sse_frame(
+                    "activity", activity_mapper.activity_frame(frame), frame.cursor
+                )
                 cursor = frame.cursor
                 sent = True
-            application_snapshot = json_ready(
+            application_snapshot = application_mapper.session_application(
                 await off_loop(workspace.snapshot, session_id)
             )
             encoded_application = stable_snapshot(application_snapshot)
@@ -139,4 +145,4 @@ async def _session_frames(
         # Same containment as the pane and global streams: audit, tell the
         # client, end the connection so it reconnects.
         audit.error(str(session_id), "session stream", {"cursor": cursor})
-        yield sse_frame("error", {"error": "stream failed"})
+        yield sse_frame("error", ErrorFrame(error="stream failed"))

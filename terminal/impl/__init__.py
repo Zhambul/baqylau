@@ -11,7 +11,8 @@
 #
 # Detection, not a default: a machine with no terminal we can drive gets None,
 # and bootstrap wires the null plugin. $BAQYLAU_TERMINAL pins one by name
-# ("kitty", or "none" for the inert plugin) and overrides detection.
+# ("kitty", "pty" for the headless one, or "none" for the inert plugin) and
+# overrides detection.
 import os
 
 from terminal.contract import TerminalPlugin
@@ -40,6 +41,12 @@ def resolve() -> TerminalPlugin | None:
     if pinned == "none":
         from terminal.impl.null import null_plugin  # noqa: PLC0415 — only the pinned terminal is imported
         return null_plugin()
+    if pinned == "pty":
+        # Pinned only, never detected: a pty is available on every POSIX
+        # machine, so a detector for it would fire wherever kitty is missing
+        # and launch harnesses into windows nobody can see.
+        from terminal.impl.pty.plugin import pty_plugin  # noqa: PLC0415 — only the pinned terminal is imported
+        return pty_plugin()
     if pinned:
         if pinned not in DETECTORS:
             raise ValueError(f"unsupported terminal: {pinned}")

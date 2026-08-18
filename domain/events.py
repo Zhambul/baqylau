@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Generic, Literal, TypeVar
 
+from domain.stored import STORED
 from domain.ids import (
     ActorId,
     AttentionId,
@@ -41,7 +42,13 @@ from domain.values import (
 
 @dataclass(frozen=True)
 class EventPayload:
-    """Marker base for semantic payloads."""
+    """Marker base for semantic payloads.
+
+    Carries the stored-shape config, which every payload inherits: a canonical
+    event is decoded from a row, and an unknown field there is drift.
+    """
+
+    __pydantic_config__ = STORED
 
 
 @dataclass(frozen=True)
@@ -196,13 +203,44 @@ class OperationOutputLocated(EventPayload):
 
 
 @dataclass(frozen=True)
+class OperationBackgrounded(EventPayload):
+    """This operation's `operation.finished` no longer means it ended.
+
+    One sentence, three consumers, each of which gets it wrong by default:
+      * the output following — `operation.finished` must stop ending it, or the
+        file the job is still writing to is drained once and unlinked;
+      * the tab state — the session is `awaiting_background`, not idle;
+      * the activity — it is still running, and saying otherwise reports a
+        `succeeded` for work that has not happened yet.
+
+    Emitted when an operation that STARTED in the foreground moves to the
+    background mid-run — the case `OperationStarted.execution` cannot express,
+    because at start time nobody knew. Both harnesses report it only in the
+    RESULT of the launching call, which is also why this fact must be committed
+    BEFORE the `operation.finished` derived from that same evidence.
+
+    `native_id` is the harness's own handle on the thing (the id a user or the
+    model needs to interact with it again), or None where there isn't one.
+    """
+
+    operation_id: OperationId
+    native_id: str | None
+
+
+@dataclass(frozen=True)
 class OperationOutputFinished(EventPayload):
     """The operation's output file is complete — the harness announced the
     background job's true end, which its launch-time `operation.finished`
     (reported while output still flowed) could not. Ends the following early
-    instead of waiting for the session to finish."""
+    instead of waiting for the session to finish.
+
+    `outcome` is how the JOB ended, which is not how its launch ended: a
+    background command that exits 1 launched perfectly. None when the harness
+    announced an end without saying what kind.
+    """
 
     operation_id: OperationId
+    outcome: Outcome | None = None
 
 
 @dataclass(frozen=True)
@@ -356,6 +394,7 @@ EVENT_TYPES: dict[type[EventPayload], str] = {
     OperationProgressed: "operation.progressed",
     OperationFinished: "operation.finished",
     OperationOutputLocated: "operation.output_located",
+    OperationBackgrounded: "operation.backgrounded",
     OperationOutputFinished: "operation.output_finished",
     FileAccessed: "file.accessed",
     TaskChanged: "task.changed",

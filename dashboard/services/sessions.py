@@ -24,9 +24,9 @@ from dashboard.services.models import (
     DashboardSessionListItem,
     DashboardSessionSnapshot,
     attention_state,
-    content_text,
 )
 from domain.ids import SessionId
+from domain.values import content_text
 from engine.projections import ActivityScope, OperationActivity, SessionQueries
 from repository.contract.facts import CanonicalEventRepository
 from harness.models import TerminalSessionState

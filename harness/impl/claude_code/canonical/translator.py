@@ -5,9 +5,9 @@ from __future__ import annotations
 import base64
 import json
 
+from domain.codec import CanonicalCodecError, decode_document
 from domain.events import OperationProgressed, TaskListChanged
-from domain.ids import OperationId, TaskId
-from domain.values import ProgressStream
+from domain.ids import TaskId
 from harness.contract import HarnessTranslator
 from harness.impl.claude_code.canonical import transcript
 from harness.impl.claude_code.canonical.hooks import translate_hook
@@ -22,21 +22,7 @@ from harness.impl.claude_code.canonical.otel import translate_otel
 from harness.impl.claude_code.canonical.support import content, event
 from harness.impl.claude_code.canonical.toolcalls import ToolCallSemantics
 from harness.models import RawEvent, TranslationError, TranslationResult
-
-
-def _progress_stream(value: object) -> ProgressStream:
-    """The foreground stream name off the wire, as one of the three we record.
-
-    Anything unrecognised reads as output — a progress chunk is evidence, and
-    dropping it because its channel label was unfamiliar would lose the chunk
-    rather than the label.
-    """
-    text = str(value or "output")
-    if text == "error":
-        return "error"
-    if text == "status":
-        return "status"
-    return "output"
+from harness.models.directives import OperationOutputChunk
 
 
 class ClaudeCanonicalTranslator(HarnessTranslator):
@@ -62,18 +48,18 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
                 return TranslationResult((), "ignored_nonsemantic", "OTEL request carries no session usage")
             return TranslationResult(tuple(events), "translated")
         if raw_event.source_type == "foreground_output":
-            operation_id = OperationId(str(document.get("operation_id") or ""))
-            if not operation_id:
-                raise TranslationError("foreground output has no operation id")
+            # OURS on both ends: engine/interpret/output_source.py wrote this
+            # one, so it is decoded as the declared shape rather than read key
+            # by key the way a harness's own records have to be.
             try:
-                ordinal = int(document["ordinal"])
-                output_content = base64.b64decode(document["content_base64"], validate=True)
-            except (KeyError, TypeError, ValueError) as error:
+                chunk = decode_document(OperationOutputChunk, raw_event.payload)
+                output_content = base64.b64decode(chunk.content_base64, validate=True)
+            except (CanonicalCodecError, TypeError, ValueError) as error:
                 raise TranslationError("malformed foreground output") from error
             progress = OperationProgressed(
-                operation_id,
-                ordinal,
-                _progress_stream(document.get("stream")),
+                chunk.operation_id,
+                chunk.ordinal,
+                chunk.stream,
                 content(output_content.decode("utf-8", errors="replace")),
                 "append",
             )
@@ -81,8 +67,8 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
                 (event(
                     raw_event,
                     "operation",
-                    str(operation_id),
-                    f"progress:{ordinal}",
+                    str(chunk.operation_id),
+                    f"progress:{chunk.ordinal}",
                     progress,
                 ),),
                 "translated",

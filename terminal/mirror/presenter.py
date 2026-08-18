@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import json
 
 from terminal.models import RGB
-from domain.values import Content, StructuredContent, TextContent
+from domain.values import Content, content_text
 from engine.projections import (
     Activity,
     AttentionActivity,
@@ -51,12 +50,7 @@ ADDED_CHANGED_BACKGROUND = RGB(43, 87, 58)
 def _plain(content: Content | None) -> str:
     if content is None:
         return ""
-    if isinstance(content, TextContent):
-        return content.text
-    if isinstance(content, StructuredContent):
-        parsed = json.loads(content.json_text)
-        return json.dumps(parsed, ensure_ascii=False, indent=2, sort_keys=True)
-    raise TypeError(f"unsupported content: {type(content).__name__}")
+    return content_text(content)
 
 
 def _line(*parts: TerminalText) -> TerminalLine:

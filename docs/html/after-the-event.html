@@ -1,0 +1,1105 @@
+<!DOCTYPE html>
+<html lang="en" >
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The read side: twelve bugs, one measurement, and the smallest change that fixes both</title>
+<meta name="description" content="Five review passes and one benchmark cut this from a redesign to a plan. The measured problem is 67 ms of redundant folding; the structural problem is a stringly-typed reference and one duplicated decision table. Most of the rest was taste.">
+<style>
+/* baqylau html-communication — base stylesheet.
+   Self-contained: no web fonts, no CDN, no network. */
+
+/* ---------- tokens ---------- */
+:root {
+  color-scheme: light dark;
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+  --bg:        #ffffff;
+  --bg-sunk:   #f6f7f9;
+  --bg-raised: #ffffff;
+  --bg-code:   #f6f7f9;
+  --border:    #e2e5ea;
+  --border-strong: #c7cdd6;
+
+  --text:      #1b1f24;
+  --text-soft: #5b6472;
+  --text-faint:#646d7a;   /* 4.9:1 on --bg-sunk */
+
+  --accent:      #4f46e5;
+  --accent-soft: #eef0fe;
+  --accent-text: #3730a3;
+
+  --ok:      #12805c;  --ok-soft:   #e6f5ef;
+  --warn:    #a15c07;  --warn-soft: #fdf3e3;
+  --danger:  #b3261e;  --danger-soft:#fdeceb;
+  --info:    #0b6bcb;  --info-soft: #e8f1fd;
+
+  --radius: 8px;
+  --radius-lg: 12px;
+  --shadow: 0 1px 2px rgba(16,24,40,.05), 0 1px 3px rgba(16,24,40,.06);
+  --content-width: 78ch;
+  --sidebar-width: 250px;
+}
+
+[data-theme="dark"] {
+  --bg:        #14171c;
+  --bg-sunk:   #1a1e24;
+  --bg-raised: #1c2128;
+  --bg-code:   #1a1e24;
+  --border:    #2c333d;
+  --border-strong: #414b58;
+
+  --text:      #e6e9ee;
+  --text-soft: #a8b1be;
+  --text-faint:#8b96a3;   /* 5.6:1 on --bg-sunk */
+
+  --accent:      #8b85ff;
+  --accent-soft: #24243d;
+  --accent-text: #b6b1ff;
+
+  --ok:      #4ec49a;  --ok-soft:   #16302a;
+  --warn:    #e0a44a;  --warn-soft: #33280f;
+  --danger:  #f08b84;  --danger-soft:#3a1e1d;
+  --info:    #6fb3f7;  --info-soft: #14263b;
+
+  --shadow: 0 1px 2px rgba(0,0,0,.4);
+}
+
+/* ---------- reset ---------- */
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.65 var(--font-sans);
+  font-synthesis: none;
+  -webkit-font-smoothing: antialiased;
+}
+img, svg { max-width: 100%; }
+
+/* ---------- page layout ---------- */
+.page {
+  display: grid;
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  gap: 0 48px;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 0 28px 96px;
+}
+.page > .content { min-width: 0; max-width: var(--content-width); padding-top: 40px; }
+.page.no-toc { grid-template-columns: minmax(0, 1fr); }
+.page.no-toc > .content { margin: 0 auto; }
+.page.wide { --content-width: 100%; max-width: 1400px; }
+
+/* sidebar / table of contents */
+.toc {
+  position: sticky; top: 0; align-self: start;
+  max-height: 100vh; overflow-y: auto;
+  padding: 40px 0 40px; font-size: 14px;
+}
+.toc-title {
+  margin: 0 0 10px; font-size: 11px; font-weight: 700;
+  letter-spacing: .09em; text-transform: uppercase; color: var(--text-faint);
+}
+.toc ol { list-style: none; margin: 0; padding: 0; }
+.toc li { margin: 0; }
+.toc a {
+  display: block; padding: 5px 12px; color: var(--text-soft);
+  text-decoration: none; border-left: 2px solid var(--border);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.toc a:hover { color: var(--text); background: var(--bg-sunk); }
+.toc a.is-active { color: var(--accent-text); border-left-color: var(--accent); font-weight: 600; }
+.toc .lvl-3 a { padding-left: 26px; font-size: 13px; }
+
+/* ---------- document header ---------- */
+.doc-header { padding: 8px 0 28px; border-bottom: 1px solid var(--border); margin-bottom: 36px; }
+.doc-eyebrow {
+  font-size: 12px; font-weight: 700; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--accent-text); margin: 0 0 10px;
+}
+.doc-header h1 { margin: 0; font-size: 34px; line-height: 1.2; letter-spacing: -.02em; }
+.doc-lede { margin: 14px 0 0; font-size: 18px; color: var(--text-soft); }
+.doc-meta {
+  display: flex; flex-wrap: wrap; gap: 8px 18px;
+  margin: 18px 0 0; padding: 0; list-style: none;
+  font-size: 13px; color: var(--text-faint);
+}
+.doc-meta b { color: var(--text-soft); font-weight: 600; }
+
+/* ---------- typography ---------- */
+h2, h3, h4 { line-height: 1.3; letter-spacing: -.01em; scroll-margin-top: 24px; }
+h2 { margin: 52px 0 16px; font-size: 25px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+h3 { margin: 34px 0 12px; font-size: 19px; }
+h4 { margin: 26px 0 10px; font-size: 16px; color: var(--text-soft); }
+p { margin: 0 0 16px; }
+a { color: var(--accent-text); text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent); text-underline-offset: 2px; }
+a:hover { text-decoration-color: var(--accent); }
+strong { font-weight: 650; }
+small { font-size: 13px; color: var(--text-soft); }
+hr { border: 0; border-top: 1px solid var(--border); margin: 40px 0; }
+ul, ol { margin: 0 0 16px; padding-left: 24px; }
+li { margin: 6px 0; }
+li > ul, li > ol { margin: 6px 0; }
+blockquote {
+  margin: 0 0 16px; padding: 2px 0 2px 18px;
+  border-left: 3px solid var(--border-strong); color: var(--text-soft);
+}
+.anchor {
+  margin-left: 8px; color: var(--text-faint); text-decoration: none;
+  opacity: 0; font-weight: 400; transition: opacity .12s;
+}
+h2:hover .anchor, h3:hover .anchor { opacity: 1; }
+
+/* description list — for pairs of related data */
+dl.defs { margin: 0 0 20px; }
+dl.defs dt {
+  font-family: var(--font-mono); font-size: 14px; font-weight: 600;
+  color: var(--text); margin-top: 14px;
+}
+dl.defs dd { margin: 4px 0 0 0; padding-left: 16px; border-left: 2px solid var(--border); color: var(--text-soft); }
+
+/* ---------- inline bits ---------- */
+code, kbd, samp { font-family: var(--font-mono); font-size: .88em; }
+:not(pre) > code {
+  background: var(--bg-code); border: 1px solid var(--border);
+  border-radius: 4px; padding: .1em .35em; color: var(--text);
+  overflow-wrap: break-word;
+}
+kbd {
+  background: var(--bg-raised); border: 1px solid var(--border-strong);
+  border-bottom-width: 2px; border-radius: 5px;
+  padding: .1em .4em; font-size: .82em; box-shadow: var(--shadow);
+}
+.ui { font-weight: 650; }            /* UI element: Google style says bold */
+/* Placeholders. Google's markup is <code><var>PROJECT_ID</var></code>, so style
+   the element itself; .var stays as an alias for hand-written spans. */
+var, .var { font-family: var(--font-mono); font-style: italic; color: var(--accent-text); }
+code > var { font-size: 1em; }
+.badge {
+  display: inline-block; padding: 2px 9px; border-radius: 999px;
+  font-size: 12px; font-weight: 600; line-height: 1.6;
+  background: var(--bg-sunk); border: 1px solid var(--border); color: var(--text-soft);
+}
+.badge.accent { background: var(--accent-soft); border-color: transparent; color: var(--accent-text); }
+.badge.ok     { background: var(--ok-soft);     border-color: transparent; color: var(--ok); }
+.badge.warn   { background: var(--warn-soft);   border-color: transparent; color: var(--warn); }
+.badge.danger { background: var(--danger-soft); border-color: transparent; color: var(--danger); }
+.badge.info   { background: var(--info-soft);   border-color: transparent; color: var(--info); }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); vertical-align: baseline; }
+.dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.danger { background: var(--danger); } .dot.info { background: var(--info); }
+
+/* ---------- callouts ---------- */
+.callout {
+  display: grid; grid-template-columns: 22px minmax(0,1fr); gap: 0 12px;
+  margin: 22px 0; padding: 14px 16px;
+  border: 1px solid var(--border); border-left: 3px solid var(--text-faint);
+  border-radius: var(--radius); background: var(--bg-sunk);
+}
+.callout > .callout-icon { font-size: 15px; line-height: 1.7; text-align: center; }
+.callout > .callout-body { min-width: 0; }
+.callout > .callout-body > :last-child { margin-bottom: 0; }
+.callout-label { font-weight: 700; }
+.callout.note   { border-left-color: var(--info);   background: var(--info-soft); }
+.callout.note   .callout-label { color: var(--info); }
+.callout.key    { border-left-color: var(--accent); background: var(--accent-soft); }
+.callout.key    .callout-label { color: var(--accent-text); }
+.callout.tip    { border-left-color: var(--ok);     background: var(--ok-soft); }
+.callout.tip    .callout-label { color: var(--ok); }
+.callout.success { border-left-color: var(--ok);    background: var(--ok-soft); }
+.callout.success .callout-label { color: var(--ok); }
+.callout.warn   { border-left-color: var(--warn);   background: var(--warn-soft); }
+.callout.warn   .callout-label { color: var(--warn); }
+.callout.danger { border-left-color: var(--danger); background: var(--danger-soft); }
+.callout.danger .callout-label { color: var(--danger); }
+
+/* ---------- code blocks ---------- */
+figure.code {
+  margin: 22px 0; border: 1px solid var(--border);
+  border-radius: var(--radius-lg); background: var(--bg-code); overflow: hidden;
+}
+figure.code > figcaption {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px; border-bottom: 1px solid var(--border);
+  background: var(--bg-raised); font-size: 13px; color: var(--text-soft);
+}
+figure.code > figcaption .file { font-family: var(--font-mono); font-weight: 600; color: var(--text); }
+figure.code > figcaption .lang {
+  margin-left: auto; font-size: 11px; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--text-faint);
+}
+figure.code pre {
+  margin: 0; padding: 14px 16px; overflow-x: auto;
+  font-family: var(--font-mono); font-size: 13.5px; line-height: 1.6; tab-size: 2;
+}
+figure.code pre code { font-size: inherit; background: none; border: 0; padding: 0; }
+.copy-btn {
+  border: 1px solid var(--border); background: var(--bg-sunk); color: var(--text-soft);
+  border-radius: 6px; padding: 2px 8px; font: 600 12px/1.5 var(--font-sans); cursor: pointer;
+}
+.copy-btn:hover { color: var(--text); border-color: var(--border-strong); }
+.copy-btn[data-copied] { color: var(--ok); border-color: var(--ok); }
+
+/* annotated / numbered / diff lines: one <span class="ln"> per line */
+figure.code pre .ln { display: block; padding: 0 4px; border-left: 3px solid transparent; }
+figure.code pre .ln.hl  { background: var(--accent-soft); border-left-color: var(--accent); }
+figure.code pre .ln.add { background: var(--ok-soft);     border-left-color: var(--ok); }
+figure.code pre .ln.del { background: var(--danger-soft); border-left-color: var(--danger); opacity: .85; }
+figure.code.numbered pre { counter-reset: ln; }
+figure.code.numbered pre .ln::before {
+  counter-increment: ln; content: counter(ln);
+  display: inline-block; width: 2.5em; margin-right: 1em;
+  text-align: right; color: var(--text-faint); user-select: none;
+}
+/* terminal flavour */
+figure.code.term pre { background: #12151a; color: #dfe4ec; }
+[data-theme="dark"] figure.code.term pre { background: #0e1116; }
+figure.code.term pre .prompt { color: #6fb3f7; user-select: none; }
+figure.code.term pre .out { color: #9aa4b2; }
+
+/* ---------- tables ---------- */
+.table-wrap { overflow-x: auto; margin: 22px 0; }
+table {
+  width: 100%; border-collapse: collapse; font-size: 14.5px;
+  border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden;
+}
+th, td { text-align: left; padding: 9px 13px; border-bottom: 1px solid var(--border); vertical-align: top; }
+caption {
+  caption-side: top; text-align: left; padding: 0 0 8px;
+  font-size: 13px; color: var(--text-soft);
+}
+thead th { background: var(--bg-sunk); font-size: 12.5px; letter-spacing: .03em; text-transform: uppercase; color: var(--text-soft); }
+tbody tr:last-child td { border-bottom: 0; }
+tbody tr:hover { background: var(--bg-sunk); }
+td code { white-space: nowrap; }
+
+/* ---------- grids, cards, stats ---------- */
+.grid { display: grid; gap: 16px; margin: 22px 0; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+.grid.cols-2 { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+.grid.cols-3 { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+.card {
+  padding: 16px 18px; border: 1px solid var(--border); border-radius: var(--radius-lg);
+  background: var(--bg-raised); box-shadow: var(--shadow);
+}
+.card > :last-child { margin-bottom: 0; }
+.card h4 { margin: 0 0 8px; color: var(--text); font-size: 15px; }
+.card p { font-size: 14.5px; color: var(--text-soft); }
+.stat { text-align: left; }
+.stat .stat-value { display: block; font-size: 28px; font-weight: 680; letter-spacing: -.02em; line-height: 1.2; }
+.stat .stat-label { display: block; font-size: 13px; color: var(--text-soft); margin-top: 4px; }
+.stat.ok .stat-value { color: var(--ok); } .stat.warn .stat-value { color: var(--warn); }
+.stat.danger .stat-value { color: var(--danger); } .stat.accent .stat-value { color: var(--accent-text); }
+
+/* before / after comparison */
+.compare { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); margin: 22px 0; }
+.compare > * { padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius-lg); }
+.compare > * > :last-child { margin-bottom: 0; }
+.compare .compare-title { display: block; font-size: 12px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; margin-bottom: 8px; }
+.compare .bad  { border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); background: var(--danger-soft); }
+.compare .bad  .compare-title { color: var(--danger); }
+.compare .good { border-color: color-mix(in srgb, var(--ok) 35%, var(--border)); background: var(--ok-soft); }
+.compare .good .compare-title { color: var(--ok); }
+
+/* ---------- procedure (vertical numbered steps) ---------- */
+ol.procedure { list-style: none; margin: 22px 0; padding: 0; counter-reset: step; }
+ol.procedure > li { position: relative; padding: 0 0 22px 44px; }
+ol.procedure > li::before {
+  counter-increment: step; content: counter(step);
+  position: absolute; left: 0; top: 0;
+  width: 28px; height: 28px; border-radius: 50%;
+  background: var(--accent); color: #fff;
+  font: 650 14px/28px var(--font-sans); text-align: center;
+}
+ol.procedure > li::after {
+  content: ""; position: absolute; left: 13.5px; top: 32px; bottom: 4px;
+  border-left: 2px solid var(--border);
+}
+/* A one-step procedure is a bulleted list, not a numbered list of one. */
+ul.procedure { list-style: none; margin: 22px 0; padding: 0; }
+ul.procedure > li { position: relative; padding: 0 0 22px 44px; }
+ul.procedure > li::before {
+  content: ""; position: absolute; left: 9px; top: 10px;
+  width: 10px; height: 10px; border-radius: 50%; background: var(--accent);
+}
+ul.procedure > li:last-child { padding-bottom: 0; }
+
+/* Nested steps: lowercase letters, then lowercase roman numerals. */
+ol.procedure ol { list-style: lower-alpha; margin: 8px 0; padding-left: 22px; }
+ol.procedure ol ol { list-style: lower-roman; }
+ol.procedure ul { margin: 8px 0; padding-left: 22px; }
+.optional { font-weight: 650; }
+
+ol.procedure > li:last-child { padding-bottom: 0; }
+ol.procedure > li:last-child::after { display: none; }
+ol.procedure > li > :first-child { margin-top: 3px; }
+ol.procedure > li > :last-child { margin-bottom: 0; }
+.step-title { display: block; font-weight: 650; margin-bottom: 4px; }
+
+/* ---------- flow: horizontal chevron steps ---------- */
+.flow { display: flex; flex-wrap: wrap; align-items: stretch; gap: 8px; margin: 24px 0; }
+.flow > .node {
+  flex: 1 1 150px; min-width: 130px;
+  padding: 11px 14px; border: 1px solid var(--border-strong); border-radius: var(--radius);
+  background: var(--bg-raised); box-shadow: var(--shadow); font-size: 14px;
+}
+.flow > .node .node-title { display: block; font-weight: 650; }
+.flow > .node .node-sub { display: block; color: var(--text-soft); font-size: 13px; margin-top: 2px; }
+.flow > .node.accent { border-color: var(--accent); background: var(--accent-soft); }
+.flow > .node.ok     { border-color: var(--ok);     background: var(--ok-soft); }
+.flow > .node.warn   { border-color: var(--warn);   background: var(--warn-soft); }
+.flow > .node.danger { border-color: var(--danger); background: var(--danger-soft); }
+.flow > .node.ghost  { border-style: dashed; background: transparent; color: var(--text-soft); box-shadow: none; }
+.flow > .arrow {
+  flex: 0 0 auto; align-self: center; color: var(--text-faint);
+  font-size: 18px; line-height: 1; user-select: none;
+}
+.flow > .arrow[data-label]::after {
+  content: attr(data-label); display: block; font-size: 11px; margin-top: 2px; color: var(--text-faint);
+}
+.flow.vertical { flex-direction: column; align-items: stretch; }
+.flow.vertical > .arrow { align-self: center; }
+
+/* ---------- pipeline: labelled stages with connectors ---------- */
+.pipeline { display: flex; flex-wrap: wrap; gap: 0; margin: 24px 0; border-radius: var(--radius); overflow: hidden; border: 1px solid var(--border); }
+.pipeline > .stage {
+  flex: 1 1 130px; min-width: 120px; padding: 12px 14px 12px 26px;
+  background: var(--bg-raised); position: relative; font-size: 14px;
+  border-right: 1px solid var(--border);
+}
+.pipeline > .stage:first-child { padding-left: 14px; }
+.pipeline > .stage:last-child { border-right: 0; }
+.pipeline > .stage::before {
+  content: ""; position: absolute; left: -1px; top: 50%;
+  width: 12px; height: 12px; margin-top: -6px;
+  background: var(--bg-sunk);
+  border-right: 1px solid var(--border); border-top: 1px solid var(--border);
+  transform: rotate(45deg);
+}
+.pipeline > .stage:first-child::before { display: none; }
+.pipeline > .stage .stage-index { display: block; font-size: 11px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--text-faint); }
+.pipeline > .stage .stage-name { display: block; font-weight: 650; margin-top: 2px; }
+.pipeline > .stage .stage-note { display: block; font-size: 13px; color: var(--text-soft); margin-top: 3px; }
+
+/* ---------- branch / decision tree (nested lists, CSS connectors) ---------- */
+.branch, .branch ul { list-style: none; margin: 0; padding: 0; }
+.branch { margin: 24px 0; }
+.branch ul { margin-left: 20px; }
+.branch li { position: relative; padding: 4px 0 4px 26px; }
+.branch li::before {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 50%;
+  width: 18px; border-left: 2px solid var(--border); border-bottom: 2px solid var(--border);
+  border-bottom-left-radius: 6px;
+}
+.branch li::after { content: ""; position: absolute; left: 0; top: 50%; bottom: 0; border-left: 2px solid var(--border); }
+.branch li:last-child::after { display: none; }
+.branch > li:first-child::before, .branch > li:first-child::after { display: none; }
+.branch > li:first-child { padding-left: 0; }
+.branch .test {
+  display: inline-block; padding: 5px 12px; border-radius: 999px;
+  border: 1px solid var(--border-strong); background: var(--bg-raised);
+  font-weight: 650; font-size: 14px;
+}
+.branch .test.q { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-text); }
+.branch .edge { font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--text-faint); margin-right: 6px; }
+.branch .leaf { display: inline-block; padding: 5px 12px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--bg-sunk); font-size: 14px; }
+.branch .leaf.ok { border-color: color-mix(in srgb, var(--ok) 40%, var(--border)); background: var(--ok-soft); }
+.branch .leaf.danger { border-color: color-mix(in srgb, var(--danger) 40%, var(--border)); background: var(--danger-soft); }
+.branch .leaf.warn { border-color: color-mix(in srgb, var(--warn) 40%, var(--border)); background: var(--warn-soft); }
+
+/* ---------- swimlanes (actors x stages) ---------- */
+.swim { margin: 24px 0; overflow-x: auto; }
+.swim table { min-width: 560px; font-size: 13.5px; }
+.swim th.lane { width: 130px; background: var(--bg-sunk); font-weight: 650; text-transform: none; letter-spacing: 0; font-size: 13.5px; color: var(--text); }
+.swim td { background: var(--bg); }
+.swim .act {
+  display: block; padding: 7px 10px; border-radius: 6px;
+  border: 1px solid var(--border-strong); background: var(--bg-raised); box-shadow: var(--shadow);
+}
+.swim .act.accent { border-color: var(--accent); background: var(--accent-soft); }
+.swim .act.ok { border-color: var(--ok); background: var(--ok-soft); }
+.swim .act.danger { border-color: var(--danger); background: var(--danger-soft); }
+.swim td.empty { background: repeating-linear-gradient(45deg, transparent, transparent 6px, var(--bg-sunk) 6px, var(--bg-sunk) 12px); }
+
+/* ---------- timeline ---------- */
+.timeline { list-style: none; margin: 24px 0; padding: 0 0 0 22px; border-left: 2px solid var(--border); }
+.timeline > li { position: relative; padding: 0 0 22px 20px; }
+.timeline > li::before {
+  content: ""; position: absolute; left: -29px; top: 6px;
+  width: 12px; height: 12px; border-radius: 50%;
+  background: var(--bg); border: 2px solid var(--accent);
+}
+.timeline > li.ok::before { border-color: var(--ok); } .timeline > li.warn::before { border-color: var(--warn); }
+.timeline > li.danger::before { border-color: var(--danger); }
+.timeline > li.done::before { background: var(--accent); }
+.timeline .when { display: block; font-family: var(--font-mono); font-size: 12.5px; color: var(--text-faint); }
+.timeline .what { display: block; font-weight: 650; margin: 1px 0 3px; }
+.timeline > li > :last-child { margin-bottom: 0; }
+
+/* ---------- layer / architecture stack ---------- */
+.stack { display: flex; flex-direction: column; gap: 6px; margin: 24px 0; }
+.stack > .layer {
+  padding: 12px 16px; border: 1px solid var(--border-strong); border-radius: var(--radius);
+  background: var(--bg-raised); box-shadow: var(--shadow);
+}
+.stack > .layer .layer-name { font-weight: 650; }
+.stack > .layer .layer-note { color: var(--text-soft); font-size: 13.5px; margin-left: 8px; }
+.stack > .layer.accent { border-color: var(--accent); background: var(--accent-soft); }
+.stack > .layer.muted { background: var(--bg-sunk); border-style: dashed; }
+.stack > .layer .parts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.stack > .layer .parts > span {
+  padding: 3px 9px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--bg); font-family: var(--font-mono); font-size: 12.5px;
+}
+
+/* ---------- file tree ---------- */
+pre.tree {
+  margin: 22px 0; padding: 14px 16px; overflow-x: auto;
+  background: var(--bg-code); border: 1px solid var(--border); border-radius: var(--radius-lg);
+  font-family: var(--font-mono); font-size: 13.5px; line-height: 1.7;
+}
+pre.tree .dir { color: var(--accent-text); font-weight: 650; }
+pre.tree .note { color: var(--text-faint); }
+
+/* ---------- inline SVG diagrams ---------- */
+figure.diagram {
+  margin: 24px 0; padding: 18px 16px 12px;
+  border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-sunk);
+}
+figure.diagram svg { display: block; width: 100%; height: auto; overflow: visible; }
+figure.diagram > figcaption { margin-top: 12px; font-size: 13px; color: var(--text-soft); text-align: center; }
+/* classes used inside SVG */
+svg .n     { fill: var(--bg-raised); stroke: var(--border-strong); stroke-width: 1.5; }
+svg .n.accent { fill: var(--accent-soft); stroke: var(--accent); }
+svg .n.ok     { fill: var(--ok-soft);     stroke: var(--ok); }
+svg .n.warn   { fill: var(--warn-soft);   stroke: var(--warn); }
+svg .n.danger { fill: var(--danger-soft); stroke: var(--danger); }
+svg .n.ghost  { fill: none; stroke: var(--border-strong); stroke-dasharray: 5 4; }
+svg .t  { fill: var(--text); font: 600 13px var(--font-sans); text-anchor: middle; dominant-baseline: middle; }
+svg .t.sub { fill: var(--text-soft); font-weight: 400; font-size: 11.5px; }
+svg .t.mono { font-family: var(--font-mono); font-size: 11.5px; }
+svg .e  { fill: none; stroke: var(--border-strong); stroke-width: 1.75; marker-end: url(#arrow); }
+svg .e.dashed { stroke-dasharray: 5 4; }
+svg .e.accent { stroke: var(--accent); marker-end: url(#arrow-accent); }
+svg .e.danger { stroke: var(--danger); marker-end: url(#arrow-danger); }
+svg .el { fill: var(--text-faint); font: 500 11px var(--font-sans); text-anchor: middle; dominant-baseline: middle; }
+svg .el-bg { fill: var(--bg-sunk); }
+svg .grp { fill: none; stroke: var(--border); stroke-width: 1.25; stroke-dasharray: 4 4; }
+svg .grp-t { fill: var(--text-faint); font: 700 10.5px var(--font-sans); letter-spacing: .07em; text-transform: uppercase; }
+
+/* ---------- details / collapsible ---------- */
+details.fold {
+  margin: 22px 0; padding: 0 16px; border: 1px solid var(--border);
+  border-radius: var(--radius-lg); background: var(--bg-sunk);
+}
+details.fold > summary {
+  padding: 12px 0; cursor: pointer; font-weight: 650; list-style-position: outside;
+}
+details.fold[open] > summary { border-bottom: 1px solid var(--border); margin-bottom: 14px; }
+details.fold > :last-child { margin-bottom: 14px; }
+
+/* ---------- utilities ---------- */
+.muted { color: var(--text-soft); }
+.center { text-align: center; }
+.nowrap { white-space: nowrap; }
+.mt-0 { margin-top: 0; }
+.mb-0 { margin-bottom: 0; }
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap;
+}
+.legend { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 12px 0 22px; font-size: 13px; color: var(--text-soft); }
+.legend > span { display: inline-flex; align-items: center; gap: 6px; }
+.legend .swatch { width: 14px; height: 14px; border-radius: 4px; border: 1px solid var(--border-strong); background: var(--bg-raised); }
+.legend .swatch.accent { border-color: var(--accent); background: var(--accent-soft); }
+.legend .swatch.ok { border-color: var(--ok); background: var(--ok-soft); }
+.legend .swatch.warn { border-color: var(--warn); background: var(--warn-soft); }
+.legend .swatch.danger { border-color: var(--danger); background: var(--danger-soft); }
+
+/* ---------- theme toggle ---------- */
+.theme-toggle {
+  position: fixed; top: 14px; right: 16px; z-index: 20;
+  border: 1px solid var(--border); background: var(--bg-raised); color: var(--text-soft);
+  border-radius: 999px; padding: 5px 12px; font: 600 12.5px var(--font-sans);
+  cursor: pointer; box-shadow: var(--shadow);
+}
+.theme-toggle:hover { color: var(--text); border-color: var(--border-strong); }
+
+/* ---------- responsive ---------- */
+@media (max-width: 900px) {
+  .page { grid-template-columns: minmax(0, 1fr); gap: 0; padding: 0 18px 64px; }
+  .page > .content { max-width: none; padding-top: 24px; }
+  .toc {
+    position: static; max-height: none; padding: 24px 0 0;
+    border-bottom: 1px solid var(--border); margin-bottom: 8px;
+  }
+  .toc ol { columns: 2; column-gap: 20px; }
+  .doc-header h1 { font-size: 27px; }
+  .doc-lede { font-size: 16.5px; }
+}
+
+/* ---------- print ---------- */
+@media print {
+  :root { --bg: #fff; --bg-sunk: #fff; --bg-raised: #fff; --shadow: none; }
+  .toc, .theme-toggle, .copy-btn, .anchor { display: none !important; }
+  .page { display: block; max-width: none; padding: 0; }
+  h2, h3 { page-break-after: avoid; }
+  figure, table, .callout, .flow, .pipeline { page-break-inside: avoid; }
+  a { text-decoration: none; color: inherit; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  * { transition: none !important; animation: none !important; }
+}
+
+</style>
+</head>
+<body>
+<!-- Arrowheads for every inline SVG diagram in this document. Defined once so
+     that ids stay unique; reference them with marker-end="url(#arrow)". -->
+<svg class="visually-hidden" aria-hidden="true" focusable="false"><defs>
+<marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--border-strong)"/></marker>
+<marker id="arrow-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/></marker>
+<marker id="arrow-danger" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--danger)"/></marker>
+</defs></svg>
+<button type="button" class="theme-toggle" aria-label="Switch theme">☾ Dark</button>
+<div class="page">
+<nav class="toc" aria-label="On this page"></nav>
+<main class="content">
+<header class="doc-header">
+<p class="doc-eyebrow">Design review — final</p>
+<h1>The read side: twelve bugs, one measurement, and the smallest change that fixes both</h1>
+<p class="doc-lede">Five review passes and one benchmark cut this from a redesign to a plan. The measured problem is 67 ms of redundant folding; the structural problem is a stringly-typed reference and one duplicated decision table. Most of the rest was taste.</p>
+<ul class="doc-meta"><li><b>Author:</b> Claude</li><li><b>Updated:</b> 2026-08-18</li><li><b>Scope:</b> everything between canonical-event storage and the two clients</li></ul>
+</header>
+<h2>Summary</h2>
+
+<p>This began as a redesign of everything downstream of canonical-event storage: a per-session
+folded state, a display tier, a typed content reference, a repackaged API. Then it was measured,
+and then someone counted what the new types would actually replace. What survived is much
+smaller, and it fixes everything that is genuinely broken.</p>
+
+<div class="grid cols-3">
+  <div class="card stat danger"><span class="stat-value">12</span><span class="stat-label">real defects in the code today, six of them user-visible</span></div>
+  <div class="card stat warn"><span class="stat-value">67 ms</span><span class="stat-label">of a 98 ms stream tick spent folding the same events three times</span></div>
+  <div class="card stat ok"><span class="stat-value">~110</span><span class="stat-label">lines that fix every defect and three quarters of the cost</span></div>
+</div>
+
+<p>The plan, in order:</p>
+
+<ol class="procedure">
+  <li><span class="step-title">Fix the twelve defects</span>
+    About 40 lines across six files, plus tests. Every one has a file and a line number, and six
+    are visible to you today. Specified exactly in Table 1.</li>
+  <li><span class="step-title">Take the measured performance fixes</span>
+    About 70 lines: memoise the fold, release a lock, evict two caches, agree on one cursor,
+    route one query through the page cache. The tick goes from 98 ms to roughly 25 ms.</li>
+  <li><span class="step-title">Stop and re-measure</span>
+    Anything further is judged against that number, not the one at the top of this page.</li>
+  <li><span class="step-title">Later, when it is the thing in front of you</span>
+    <code>ContentRef</code> — the one new type worth building — one shared label-and-format
+    module, one shared protocol, six shared colour constants. About 250 lines, removing the
+    duplication that actually exists.</li>
+</ol>
+
+<div class="callout key">
+  <div class="callout-icon" aria-hidden="true">◆</div>
+  <div class="callout-body"><span class="callout-label">Key point:</span>
+    The original centrepiece — a resident <code>SessionState</code> with its own registry — is
+    <strong>not</strong> recommended, and the reason is worth keeping. <code>EventPages</code>
+    (<code>engine/projections/pages.py</code>, 104 lines) already is that object: per-session,
+    cursor-keyed, locked, replaying on a miss, advancing incrementally. A 25-line memo hung on it
+    delivers every structural claim the larger design made — one door onto session facts, field
+    reads instead of repeated folds, private caches deleted, a resolver that does not re-fold —
+    without giving up the property that makes this system debuggable: today a wrong screen is
+    always explained by the store, because no read can be stale.</div>
+</div>
+
+<p>One rule shaped the final pass: no speculative edge-case handling and no fallbacks, with
+audit logging the single exception — it may always be defensive, because it is the only record left
+after a failure. That rule removed more than it added. Defect 6 inverted from a rename across four
+files into a ten-line deletion; defect 2 went from an <code>Optional</code> threaded through three
+files to one <code>raise</code>; item I stopped deleting two working query parameters and so no
+longer needed the route that repaired them; and item J dropped two changes whose justification did
+not survive checking — one would have altered what a surface prints, the other cited a styleguide
+that was deleted in commit <code>0d2a31a</code>.</p>
+
+<p>The cost figures come from running the read path against the real store on this machine
+(306 MB, 43 sessions, 35,720 canonical events, largest session 7,179). Everything else comes from
+reading the working tree. Line counts are estimates; defect line numbers are exact.</p>
+
+<h2>The twelve defects, and their fixes</h2>
+
+<p>Six are visible to you today; the rest cost time or memory. Every line number is exact and was
+verified against the working tree. Two design choices are settled in the table so an implementer
+needs none of their own: defect 1 is the narrow fix only — the
+<code>OperationProgressed</code>-as-file-content path at <code>activity.py:193-197</code> is
+<strong>not</strong> touched, because a test pins it and it is how a read file's bytes reach the
+UI — and defect 5 is fixed by making the started branch match the finished one, which is also
+what makes a new "attributed actor" field unnecessary.</p>
+
+<div class="table-wrap">
+  <table>
+    <caption>Table 1. Every defect, its evidence, its fix, and its test</caption>
+    <thead><tr><th>#</th><th>What is wrong</th><th>Fix</th><th>Test</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>1</td>
+        <td><strong>Every file edit whose operation finishes with a result shows a ⧉view link that answers 400.</strong> The fold sets <code>content_field="result"</code> (<code>activity.py:290-299</code>), clobbering the good <code>unified_diff</code>/<code>content</code> value set at <code>:372-376</code>. The resolver accepts <code>OperationFinished</code> but only for its three folded field names, so <code>"result"</code> falls through to the allow-table lookup (<code>engine/queries/content.py:83-85</code>), which has no row for that payload. The browser toasts <code>view failed</code>. The terminal misses it too: <code>presenter.py:289,291</code> tests only the two good values, so both arms fall through.</td>
+        <td>Drop both <code>payload.result is not None</code> conditionals at <code>activity.py:290-299</code>, leaving <code>content_event_id=file_activity.content_event_id</code> and <code>content_field=file_activity.content_field</code>. A file's reference must point at the event carrying the file's bytes; <code>result</code> is the tool's textual reply and nothing reads it today.</td>
+        <td><strong>Add</strong> the round trip whose absence let this ship: fold a <code>file_edit</code> whose operation finishes with a result, mint the reference through <code>dashboard/render/items/files.py:73-77</code>, <code>GET</code> it, assert 200 and the diff text — and assert the opposite half too, that a file with no bytes anywhere offers no reference at all. Beside the 400 cases at <code>tests/test_canonical_http.py:1478-1497</code>.</td>
+      </tr>
+      <tr>
+        <td>2</td>
+        <td><strong>A content reference to a hidden or file-backed operation answers 500, not 400.</strong> <code>resolve</code> calls <code>queries.operation_activity</code> (<code>engine/queries/content.py:50</code>) → <code>work.operation_activity</code>. File-category operations are folded into <code>FileActivity</code> and never exist as an <code>OperationActivity</code> (<code>activity.py:156-159</code>); attention, task and message categories are dropped outright (<code>:160-162</code>). The lookup raises a bare <code>KeyError</code>, which <code>api/app.py</code>'s handler renders as a 500 plus an <code>errors</code> audit row.</td>
+        <td><strong>One line.</strong> At <code>engine/projections/work.py:140</code>, change <code>raise KeyError(str(operation_id))</code> to <code>raise UnknownReference(str(operation_id))</code>. That class subclasses both <code>ApplicationInputError</code> and <code>LookupError</code> (<code>domain/errors.py:29</code>), so it keeps the shape a narrow catcher expects while <code>api/app.py:96-111</code> renders it as 400 and writes no <code>errors</code> row — precisely what that module exists for. No <code>OperationActivity | None</code>, no caller branching, no signature that lies.</td>
+        <td><strong>Add</strong> near <code>test_canonical_http.py:1487</code>: an <code>operation_output</code> reference against a <code>file_read</code>-category operation answers 400 and writes no <code>errors</code> row. Expect the ⚠ global-errors count to drop once this lands.</td>
+      </tr>
+      <tr>
+        <td>3</td>
+        <td><strong>Every file of a multi-file operation shares one content reference.</strong> <code>file_activity_ids_by_operation</code> is <code>dict[str, list[str]]</code> (<code>activity.py:105</code>), and the <code>OperationProgressed</code> branch writes the same <code>content_event_id</code> to every file activity of that operation (<code>:182-199</code>). A <code>MultiEdit</code> over N files mints N items carrying one token — and since <code>opened_views</code> is keyed by the token, expanding one file expands all N. Invisible today only because the browser's <code>?path=</code> came from the DOM node rather than the token. The same branch appends without dedup (<code>:395</code>), so a repeated <code>FileAccessed</code> re-applies the merge.</td>
+        <td>Mint a per-file reference in the progress path. <strong>Deferred to item I</strong>, where the type exists to carry it. One consequence for that type: <code>(slot, event_id)</code> <strong>cannot</strong> discriminate N files sharing one <code>OperationProgressed</code> event, so <code>ContentRef</code> needs a third component — the path — which the file activity's id already embeds (<code>file:{actor}:{operation}:{path}</code>, <code>activity.py:366-367</code>).</td>
+        <td>A multi-file operation mints N distinct references, and toggling one leaves the others closed.</td>
+      </tr>
+      <tr>
+        <td>4</td>
+        <td><strong>Three dataset names in committed JS were mangled by a find-replace.</strong> <code>app.05-session.js:813</code> writes <code>dataset.summaryKindivityTime</code> while its only reader (<code>:1263</code>) reads <code>activityTime</code> — a fallback, so a collapsed run loses its live timer anchor only when no member carries <code>started_at</code>. Separately <code>:807</code> writes <code>dataset.summaryKindorId</code> and <code>:833</code> reads it — the replace hit both sides, so only the selector escaped: <code>tintAgentNotes()</code> queries <code>[data-actor-id]</code>, which nothing writes, so the agent-note tinting described at <code>:816-826</code> never runs.</td>
+        <td>Four lines. <code>:813</code> → <code>dataset.activityTime</code>. <code>:807</code> delete entirely — <code>:803-804</code> already writes <code>actorAssignmentId</code> with the same value. <code>:832</code> selector → <code>[data-actor-assignment-id]</code>. <code>:833</code> → <code>row.dataset.actorAssignmentId</code>.</td>
+        <td><strong>Add</strong> one assertion to <code>tests/test_frontend_parity.py</code>: no <code>summaryKind</code>-prefixed dataset key appears anywhere in the source. That is the only assertion catching the <em>next</em> find-replace; asserting the two corrected names would restate the edit. (That file drives jsdom through node at <code>:17-30</code>, so a substring-over-source check is a new shape there.)</td>
+      </tr>
+      <tr>
+        <td>5</td>
+        <td><strong>An assignment's two halves report different actors.</strong> The fold attributes an assignment to the parent for scoping (<code>activity.py:119-126,131</code>) and rewrites <code>context.actor_id</code> to the parent for <code>ActorAssignmentFinished</code> (<code>:485-491</code>) — but not for <code>ActorAssignmentStarted</code> (<code>:468-481</code>), which keeps the child's id from <code>_context</code> (<code>:82</code>). So the started and finished items of one assignment ship different <code>actor_id</code> values.</td>
+        <td>At <code>activity.py:468-481</code>, mirror what <code>:485-491</code> already does: build the context, then <code>if assignment_for_parent: context = replace(context, actor_id=activity_actor_id, parent_actor_id=None)</code>. This also makes <code>context.actor_id</code> mean "the attributed actor" in all seventeen branches, which is why no new field is needed.</td>
+        <td><strong>Amend</strong> <code>tests/test_canonical_projections.py:511-551</code>: add <code>assert lead_activities[0].context.actor_id == LEAD_ACTOR_ID</code>. The existing <code>child_activities == ()</code> assertion stays — it proves scoping still uses the effective id.</td>
+      </tr>
+      <tr>
+        <td>6</td>
+        <td><strong>Three streams emit an error frame no client can act on.</strong> The server writes the audit row <em>before</em> emitting it (<code>api/dashboard/streams.py:80,147</code>; <code>api/terminal/streams.py:99-100</code>, which also calls <code>stream_end(..., "error")</code>), and the frame's body is a fixed string. The session stream registers no listener for it (<code>app.05-session.js:422-454</code>); the pane breaks its read loop on it (<code>client/terminal_pane.py:56</code>) but its <code>while True</code> reconnects on a closed stream anyway (<code>:35,63-64</code>); and <code>EventSource</code> fires <code>onerror</code> on a close as readily as on a server frame, which is why a listener could not distinguish them.</td>
+        <td><strong>Delete the frame instead of handling it.</strong> Remove the three <code>yield sse_frame("error", ErrorFrame(...))</code> emissions (<code>api/dashboard/streams.py:81,148</code>, <code>api/terminal/streams.py:101</code>), delete <code>api/common/models/streams/error_frame.py</code> — those three are its only users — and delete <code>client/terminal_pane.py:56-57</code>. About ten lines removed, where an earlier draft added fifteen across four files plus a browser listener plus a test. The audit row stays: it is the one defensive path this plan keeps, because it is the only record a developer can read afterwards.</td>
+        <td>None, and none is lost — nothing tests this frame on any stream today. Closing the connection is the signal, and both clients already act on it.</td>
+    </tr>
+      <tr>
+        <td>7</td>
+        <td><strong>A control route has no caller.</strong> <code>POST /api/sessions/{id}/controls/open-rewind</code> (<code>api/dashboard/controls.py:121</code>) is called from nowhere — not the JS, not <code>client/</code>, not the tests. The browser's rewind flow uses <code>apply-rewind</code> plus local pick-mode UI.</td>
+        <td>Delete the route (<code>controls.py:120-126</code>), its import (<code>:17</code>) and <code>api/dashboard/models/controls/open_rewind_request.py</code>. The package's <code>__init__.py</code> exports nothing, so nothing else breaks. The harness-side handler stays, now reachable by nothing; removing it is a separate deletion across six files.</td>
+        <td>None. There is no route or OpenAPI inventory test in the suite — the response-model test simply loses a case.</td>
+      </tr>
+      <tr>
+        <td>8</td>
+        <td><strong>The snapshot path consults no cache at all.</strong> <code>snapshot_at</code> (<code>dashboard/services/sessions.py:173-190</code>) never reads <code>_canonical_sessions</code>; that memo is used only inside <code>_build_sessions</code> (<code>:101-164</code>), which serves the session list. So every session-stream tick pays ten uncached folds. Separately, <code>DashboardStreamService</code> constructs its own second <code>DashboardSessionService</code> (<code>dashboard/services/streams.py:26</code>) against the rule in <code>app/injection.py:10</code>; the inner copy never calls <code>sessions()</code>, so it costs little today.</td>
+        <td>Items E and H: read the memo in <code>snapshot_at</code>, and inject the service rather than building a second one.</td>
+        <td>Covered by the tick benchmark in item B.</td>
+      </tr>
+      <tr>
+        <td>9</td>
+        <td><strong>Three caches never evict.</strong> <code>_canonical_sessions</code> (<code>sessions.py:59</code>) and both of <code>EventPages</code>' dicts — <code>_latest_pages</code> and <code>_tail_pages</code> (<code>pages.py:21-22</code>) — grow for the daemon's life. One visit to <code>/api/insights</code> folds a summary for <em>every</em> session in the store (<code>app/services/insights.py:114</code>, uncapped, versus the list's cap of 20) and pins each session's full decoded history in memory permanently.</td>
+        <td>Item D: evict on the mirror's existing 600 s idle rule (<code>MODEL_IDLE_SECONDS</code>, <code>terminal/panes/streams.py:39</code>).</td>
+        <td>A session untouched past the idle window is no longer resident.</td>
+      </tr>
+      <tr>
+        <td>10</td>
+        <td><strong>The page cache holds one lock across blocking SQLite reads.</strong> <code>engine/projections/pages.py:52-72</code> calls both <code>events_between</code> (<code>:60-64</code>) and <code>page_through</code> (<code>:69</code>) inside <code>with self._latest_pages_lock</code>, so every poll thread serializes on one <code>RLock</code> around a potentially full-session read.</td>
+        <td>Item C: release the lock around the reads.</td>
+        <td>Covered by the tick benchmark.</td>
+      </tr>
+      <tr>
+        <td>11</td>
+        <td><strong>Cache thrash when the interpreter is more than 200 events behind.</strong> The stream folds at a cursor capped by <code>page_after(..., limit=200)</code> (<code>dashboard/services/streams.py:37</code>) while the list refresh folds at the global latest, so the two alternately fail <code>EventPages</code>' cursor-equality check and force a full <code>page_through</code> re-read — the stream side re-reads the whole session, every tick, until it catches up.</td>
+        <td>Item F: one cursor source for both.</td>
+        <td>Covered by the tick benchmark; diagnosed from the code paths, not measured.</td>
+      </tr>
+      <tr>
+        <td>12</td>
+        <td><strong>A projection living in the dashboard tier reads the whole session per tick.</strong> <code>SessionApplicationService._delivered_prompts</code> (<code>dashboard/services/workspace.py:207-220</code>) calls <code>canonical_events.page_through(session_id, None)</code> directly, bypassing <code>EventPages</code>, and is reached from <code>snapshot</code> on every session-stream tick.</td>
+        <td>Item G: route it through the page cache.</td>
+        <td>Covered by the tick benchmark.</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<h2>What the read path costs</h2>
+
+<p>Measured against the real store on this machine — 306 MB, 43 sessions, 35,720 canonical
+events, largest session 7,179. These three numbers are the whole performance argument:</p>
+
+<div class="grid cols-3">
+  <div class="card stat warn"><span class="stat-value">97.7 ms</span><span class="stat-label">one session-stream tick on the largest session, against a 250 ms budget</span></div>
+  <div class="card stat danger"><span class="stat-value">~75%</span><span class="stat-label">of one core, with a browser tab, a mirror and a scoreboard on that session</span></div>
+  <div class="card stat accent"><span class="stat-value">67 ms</span><span class="stat-label">of the 98 spent folding the same events three times over</span></div>
+</div>
+
+<p>The redundancy is the finding. <code>statistics</code>
+(<code>engine/projections/work.py:66</code>), <code>background_operations</code>
+(<code>:53</code>) and <code>activity_after</code> (<code>engine/projections/paging.py:30</code>)
+each run <code>activities_of</code> in full over the same page, at the same cursor, with the same
+scope — three identical folds inside one tick, where the cursor cannot have moved. Item B removes
+them. The other 31 ms is eight cheap single-purpose folds plus a 1.4 ms warm page read, and the
+first read of a session costs 481 ms once per process, which <code>EventPages</code> already
+handles.</p>
+
+<p>Two things this measurement killed. The problem is <strong>not</strong> "a fold per query",
+which is what earlier drafts assumed and what a per-session folded state would have addressed. And
+the O(k²) progress rebuild that three earlier drafts used as justification does not exist at this
+scale: the worst operation in the entire store has <strong>11</strong> progress chunks, so 121
+tuple copies. Items B and C take the tick to roughly 25 ms with no new types; per-event folding
+would take it to microseconds, which is not worth rewriting the subtlest 437 lines in the read
+side for. One contrast worth keeping: the mirror folds a <em>bounded tail</em>
+(<code>terminal/panes/streams.py:130-135</code>), which is why its cost does not grow with session
+length, while the dashboard folds the whole session for the same job.</p>
+
+<h2>The minimum change set</h2>
+
+<p>Production changes in dependency order. A–H are the recommendation; I–L are a worthwhile
+second change. Nothing here needs a new package, and only one item adds a type.</p>
+
+<div class="table-wrap">
+  <table>
+    <caption>Table 2. Everything worth doing, and what it costs</caption>
+    <thead><tr><th></th><th>Change</th><th>Fixes</th><th>Lines</th></tr></thead>
+    <tbody>
+      <tr><td>A</td><td>The twelve defects, exactly as specified in Table 1</td><td>all twelve</td><td>~40, six files</td></tr>
+      <tr><td>B</td><td>Memoise the fold <strong>inside the existing <code>_latest_pages</code> entry</strong> (<code>engine/projections/pages.py:21</code>), so an entry becomes cursor, events, and a small <code>{scope: folded}</code> map. Invalidation is then one line in each of the two branches that replace or extend the entry (<code>:68</code>, <code>:72</code>) — clear the folds — and item D's bound covers the memo for free rather than by rule. The scope key is <strong>required</strong>: two scopes are live for one session at once, <code>ActivityScope()</code> from the list-refresh thread (<code>dashboard/services/sessions.py:139</code>) and <code>ActivityScope(actor_id=lead)</code> from the stream (<code>api/dashboard/sessions.py:33</code>), and a single slot would be replaced on every alternation. Return the two cursor maps as <code>MappingProxyType</code> — two lines, enforced rather than documented, and already the idiom at <code>work.py:96</code>.</td><td>the measured 67 ms</td><td>~20</td></tr>
+      <tr><td>C</td><td>Release the page lock around the SQLite reads at <code>engine/projections/pages.py:52-72</code></td><td>defect 10</td><td>~10</td></tr>
+      <tr><td>D</td><td>Bound <code>_latest_pages</code> with a hard cap on resident sessions: it is insertion-ordered, so on insert drop the oldest key when the limit is exceeded. No clock, no <code>polled_at</code> field, no sweeper, and nothing imported from <code>terminal/</code> into <code>engine/</code>. Strictly bounded, which an idle rule is not — 43 actively-polled sessions would stay resident forever under one. <code>_canonical_sessions</code> is <strong>not</strong> included: it holds 43 small folded summaries, not decoded pages, and is already capped at 20 in practice.</td><td>defect 9</td><td>~4</td></tr>
+      <tr><td>E</td><td>Have <code>snapshot_at</code> consult <code>_canonical_sessions</code>; today only <code>_build_sessions</code> does</td><td>defect 8</td><td>~5</td></tr>
+      <tr><td>F</td><td>Serve a prefix instead of re-reading. The thrash is one-directional: the branch at <code>pages.py:54-59</code> already extends cheaply when the cache is <em>behind</em>, and the full <code>page_through</code> at <code>:70</code> fires only when the cache is <em>ahead</em> of the cursor asked for. So when <code>cached[0] &gt; session_cursor</code>, bisect the cached tuple on <code>.cursor</code> and return the prefix. That fixes any two callers at any two cursors, and needs no agreement between two services to stay true.</td><td>defect 11</td><td>~4</td></tr>
+      <tr><td>G</td><td>Route <code>_delivered_prompts</code> through the page cache instead of its own <code>page_through</code></td><td>defect 12</td><td>~10</td></tr>
+      <tr><td>H</td><td>Inject <code>DashboardSessionService</code> rather than constructing a second one</td><td>the DI half of defect 8</td><td>~5</td></tr>
+      <tr><td>I</td><td><code>ContentRef(slot, event_id, path)</code> in <code>domain/references.py</code> with <code>token()</code> and <code>parse()</code>; the ten mint expressions call <code>ref.token()</code>; the allow-table in <code>engine/queries/content.py:73-83</code> becomes a slot-to-reader map so the vocabulary exists once; per-file minting in the progress path, which is what fixes defect 3. <strong>Keep <code>?view=</code> and <code>?path=</code></strong> — an earlier draft proposed deleting them and then needed a second route to undo the damage. They already keep HTML off the clipboard: <code>canonicalViewUrl</code> appends the query only for the view action (<code>app.05-session.js:528-534</code>), the copy action uses the bare URL (<code>:549</code>), and <code>api/common/content.py:24-28</code> renders HTML only when <code>view</code> is explicitly <code>diff</code> or <code>source</code>. No new route, no deleted query parameters, and no silent-failure mode to test for.</td><td>the cause of defect 1, plus defect 3</td><td>~40 new</td></tr>
+      <tr><td>J</td><td>Share only the tables that genuinely agree, in one module both presenters import: the file verb-and-colour map (<code>dashboard/render/items/files.py:15-22</code>), the five label builders, and the attention prompt text. <strong>Not</strong> the duration formatter — the three implementations disagree, so unifying them changes what the scoreboard prints and forces golden-fixture regeneration for no user benefit. <strong>Not</strong> the if/elif-to-registry conversion of <code>terminal/mirror/presenter.py:258-363</code> either: its only justification was a styleguide rule, and <code>docs/styleguide.md</code> was deleted in commit <code>0d2a31a</code>, so that is 40 lines of churn in the subtlest presenter with no rule behind it. <code>make lint</code> is clean as it stands.</td><td>~100 lines of duplicated semantics</td><td>~40 new, ~60 gone</td></tr>
+      <tr><td>K</td><td>One <code>TerminalSessionReader</code> protocol instead of three identical declarations (<code>dashboard/services/sessions.py:38</code>, <code>app/services/insights.py:20</code>, <code>app/services/resume.py:16</code>)</td><td>a triplicated protocol</td><td>~15 gone</td></tr>
+      <tr><td>L</td><td>Six shared RGB constants instead of the same values spelled twice — <code>dashboard/render/items/files.py:17-23</code> hardcodes what the terminal names</td><td>the palette half of the duplication census</td><td>~10</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>About 350 lines touched and 150 deleted in total. A–H is roughly 110 lines and one
+afternoon.</p>
+
+<h3>One note on item J</h3>
+
+<p>The duplication item J removes is ~100 lines of shared <em>semantics</em>, not the ~257 lines of
+parallel rendering. The two largest rows of any duplication census survive it and should: the
+One-Dark syntax ladder (<code>dashboard/render/highlight.py</code>, 84 lines, versus
+<code>terminal/mirror/highlight.py</code>, 173) and the diff row walk
+(<code>render/diff.py</code> versus <code>presenter._file_diff_rows</code>) produce genuinely
+different things — CSS strings versus <code>RGB</code> values, HTML rows versus styled cells.
+Sharing them would mean parameterising output format, which is more machinery than the copies
+cost.</p>
+
+<h3>Item I in detail: the one new type</h3>
+
+<p>The cause of defect 1 is countable. The set of legal content references exists in two copies —
+ten mint expressions, and a hand-maintained allow-table at
+<code>engine/queries/content.py:73-83</code> — and they drifted apart. One type puts the vocabulary
+in one place, with mint and parse adjacent.</p>
+
+<figure class="code">
+  <figcaption><span class="file">domain/references.py</span><span class="lang">python — proposed</span></figcaption>
+  <pre><code>class ContentSlot(StrEnum):
+    # One member per distinct text a reference can name, matching the field names that
+    # exist today rather than splitting `content` per payload type.
+    CONTENT = "content"; UNIFIED_DIFF = "unified-diff"
+    OPERATION_COMMAND = "operation-command"; OPERATION_OUTPUT = "operation-output"
+    OPERATION_CONTENT = "operation-content"
+    BRIEF = "brief"; PROMPT = "prompt"; RESULT = "result"; FEEDBACK = "feedback"
+
+@dataclass(frozen=True)
+class ContentRef:
+    slot: ContentSlot
+    event_id: CanonicalEventId
+    path: str | None          # REQUIRED for file slots: N files of one MultiEdit share
+                              # one OperationProgressed event, so (slot, event_id) alone
+                              # cannot tell them apart — that is defect 3.
+    def token(self) -&gt; str: ...
+    @classmethod
+    def parse(cls, token: str) -&gt; ContentRef: ...   # the one parser, at the api boundary</code></pre>
+</figure>
+
+<p>Three notes, one of them a limit:</p>
+
+<ul>
+  <li><strong><code>parse</code> raising is boundary validation, not a fallback.</strong>
+    <code>engine/queries/content.py:35-37</code> already raises <code>MalformedRequest</code> for a
+    token it cannot split; moving those three lines into the type is free.</li>
+  <li><strong>The routes and query parameters do not change.</strong> <code>?view=</code> and
+    <code>?path=</code> already do the job — the copy action fetches the bare URL and the view
+    action adds the query — so there is no second route to add and nothing to delete. An earlier
+    draft deleted them, discovered that ⧉copy on a file would then receive HTML, and proposed a
+    <code>/rendering</code> sub-resource to repair self-inflicted damage.</li>
+  <li><strong>It does not make defect 1 impossible.</strong> Exhaustiveness holds over slots, not
+    over (slot, payload-type) pairs, so a <code>UNIFIED_DIFF</code> reference minted against the
+    wrong event still constructs. One mint-and-resolve round-trip test per slot is what forbids
+    that, and its absence is why defect 1 shipped. If you only ever do one thing from item I, do
+    that test.</li>
+</ul>
+
+<h2>What I am not building</h2>
+
+<p>Each of these was proposed in an earlier draft and dropped. Recorded compactly so the reasoning
+is not re-derived — and because one pattern explains nearly all of them: a type that groups fields,
+renames a method, or wraps an existing cache does not remove a decision, it moves one behind a dot.
+Every change that survived deletes a <em>copy</em> of something.</p>
+
+<dl class="defs">
+  <dt>A resident <code>SessionState</code> and a <code>SessionStates</code> registry</dt>
+  <dd><code>EventPages</code> (<code>engine/projections/pages.py</code>, 104 lines) is already
+    per-session, cursor-keyed, locked, and replays on a miss. A memo on it names the fold's output,
+    which was the entire structural argument — and it keeps the property that a read can never be
+    stale. The registry version also carried two unresolved questions of its own (what bounds its
+    enumeration, what drives eviction), and its widest consumer, the notifier, wanted something
+    smaller than a full state per session.</dd>
+  <dt>Per-event folding</dt>
+  <dd>~25 ms to microseconds, for a rewrite of the subtlest 437 lines in the read side. Its own
+    proposed mitigation — keep both implementations in the tree until the suite agrees — was the
+    signal it is not earned.</dd>
+  <dt><code>ItemLog</code>, <code>ActiveClock</code>, <code>scope.py</code>, <code>fold.py</code></dt>
+  <dd><code>paging.py</code> is 87 lines of clear pure functions needing a memo, not a persistent
+    vector with a cap, a cursor floor and a replay-on-underflow path. <code>active_seconds</code>
+    is one function, not a three-method class for <code>now - measured_at</code>. And
+    <code>visibility.py</code>'s 12 lines answer a <em>different</em> question from
+    <code>ActivityScope</code> — "the pane does not echo you back" versus "whose tab am I in" —
+    so unifying them hides that.</dd>
+  <dt>An <code>attributed_actor_id</code> field</dt>
+  <dd>Redundant once defect 5 lands: that fix makes <code>context.actor_id</code> mean "the
+    attributed actor" in all seventeen branches.</dd>
+  <dt>An <code>ItemView</code> tier — with <code>ItemIdentity</code>, <code>ItemRefs</code>,
+    <code>FileCounters</code>, a five-member <code>BodySegment</code> union and a <code>Role</code>
+    enum</dt>
+  <dd>~100 lines of duplicated semantics do not justify six modules and ten types built per
+    activity per client per tick. The wrappers group fields; the segment union needed a second
+    discriminator to be useful, which means it was the wrong one; and both palettes already hold
+    the same RGB values, so shared constants (item L) are the fix. Item J keeps the countable
+    part.</dd>
+  <dt>Renaming the two <code>present()</code> methods to <code>html_item</code> and
+    <code>ansi_blocks</code>; a <code>PaneScreen</code> type; a version counter on the expansion
+    service</dt>
+  <dd>A rename moves no boundary — the real fault is that one dispatch is an if/elif ladder the
+    styleguide forbids (item J). <code>PaneScreen</code> is <code>_MirrorModel</code> with fields
+    deleted. And a frozenset comparison already detects the expansion change
+    (<code>terminal/panes/streams.py:156-158</code>).</dd>
+  <dt>Renaming <code>opened_views</code> to <code>expansions</code></dt>
+  <dd>Seven files, the repository contract, the audit-debug skill, a
+    <code>MAIN_SCHEMA_VERSION</code> bump and a fresh-versus-migrated database test — a migration
+    on a 306 MB store to improve one word.</dd>
+  <dt>Repackaging <code>api/dashboard</code>, <code>api/terminal</code> and
+    <code>api/common</code> into one resource-named <code>api/</code>; deleting
+    <code>SessionQueries</code></dt>
+  <dd>~23 test references and an edit to the architecture suite's path-hardcoded no-broker rule,
+    for no user-visible change. The consumer-based split does leak —
+    <code>api/common/content.py</code> serves both surfaces — but that is a naming irritation.
+    And <code>queries.py</code> is 214 lines of one-liners whose docstring explains why that shape
+    was chosen; it is not the problem.</dd>
+  <dt>An event bus; persisting projections to SQLite</dt>
+  <dd>The poll is cheap once the fold is memoised, and an architecture test forbids queues. A
+    read-model table would need a migration every time a fold changed.</dd>
+</dl>
+
+<h2>Open questions</h2>
+
+<ol>
+  <li><strong>Do items I–L happen at all?</strong> They are optional. A–H fixes every
+    user-visible bug and the measured cost; I–L removes duplication that costs you nothing today
+    except the next drift bug like defect 1.</li>
+  <li><strong>The agent-note tinting</strong> is dead code today (defect 4). Table 1's fix corrects the
+    selector to <code>[data-actor-assignment-id]</code> and deletes the duplicate write; say so if
+    you would rather delete <code>tintAgentNotes</code> outright.</li>
+</ol>
+
+<h2>Two notes in passing</h2>
+
+<p><code>bin/baqylau-raw-events-audit.py</code> is untouched by all of this:
+<code>app/raw_events_audit_cli.py</code> imports only <code>RawEventAuditRepository</code> — no
+<code>SessionQueries</code>, no <code>EventPages</code>, no <code>activities_of</code> — so the tool
+you reach for first when a session misbehaves keeps working exactly as it does now. Separately,
+<code>.claude/skills/audit-debug/SKILL.md:467</code> names <code>core/daemon/client.py</code> as the
+byte-copying pane client; that has been <code>client/terminal_pane.py</code> for some time, and
+since <code>CLAUDE.md</code> points every future agent at that skill it is worth the one-line
+correction whenever the file is next open.</p>
+
+<p>Of the three ideas this review started with, one survives in full (<code>ContentRef</code>), one
+survives shrunk to a shared module (the display layer), and one was replaced by twenty-five lines
+(the folded state became a memo). Five review passes and one benchmark did that — along the way
+finding twelve defects a redesign would have carried forward.</p>
+</main>
+</div>
+<script>
+/* baqylau html-communication — base script.
+   Progressive enhancement only: the document reads fine with JS disabled.
+   No network, no dependencies. */
+(function () {
+  "use strict";
+
+  /* ---- theme: remember the reader's choice ---- */
+  var KEY = "hc-theme";
+  var root = document.documentElement;
+  var saved = null;
+  try { saved = localStorage.getItem(KEY); } catch (e) { /* private mode */ }
+  if (!root.getAttribute("data-theme")) {
+    /* Resolve the theme once, so the page and the toggle's label agree. */
+    root.setAttribute("data-theme", saved ||
+      (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
+  }
+
+  function currentTheme() {
+    return root.getAttribute("data-theme");
+  }
+
+  var toggle = document.querySelector(".theme-toggle");
+  if (toggle) {
+    var paint = function () {
+      var dark = currentTheme() === "dark";
+      toggle.textContent = dark ? "☀ Light" : "☾ Dark";
+      toggle.setAttribute("aria-label", dark ? "Switch to light theme" : "Switch to dark theme");
+    };
+    paint();
+    toggle.addEventListener("click", function () {
+      var next = currentTheme() === "dark" ? "light" : "dark";
+      root.setAttribute("data-theme", next);
+      try { localStorage.setItem(KEY, next); } catch (e) {}
+      paint();
+    });
+  }
+
+  /* ---- headings: stable ids + click-to-copy anchors ---- */
+  var used = {};
+  function slug(text) {
+    var s = text.toLowerCase().replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "-") || "section";
+    used[s] = (used[s] || 0) + 1;
+    return used[s] > 1 ? s + "-" + used[s] : s;
+  }
+  var headings = [].slice.call(document.querySelectorAll(".content h2, .content h3"));
+  headings.forEach(function (h) {
+    if (!h.id) h.id = slug(h.textContent);
+    if (h.querySelector(".anchor")) return;
+    var a = document.createElement("a");
+    a.className = "anchor";
+    a.href = "#" + h.id;
+    a.textContent = "#";
+    a.setAttribute("aria-label", "Link to this section");
+    h.appendChild(a);
+  });
+
+  /* ---- table of contents: build from the headings, unless hand-written ---- */
+  var toc = document.querySelector(".toc");
+  if (toc && !toc.dataset.manual && headings.length) {
+    var ol = document.createElement("ol");
+    headings.forEach(function (h) {
+      var li = document.createElement("li");
+      li.className = "lvl-" + h.tagName.charAt(1);
+      var a = document.createElement("a");
+      a.href = "#" + h.id;
+      a.textContent = h.textContent.replace(/#$/, "").trim();
+      li.appendChild(a);
+      ol.appendChild(li);
+    });
+    var title = toc.querySelector(".toc-title");
+    if (!title) {
+      title = document.createElement("p");
+      title.className = "toc-title";
+      title.textContent = "On this page";
+      toc.appendChild(title);
+    }
+    toc.appendChild(ol);
+
+    /* highlight the section in view */
+    var links = {};
+    [].slice.call(ol.querySelectorAll("a")).forEach(function (a) {
+      links[a.getAttribute("href").slice(1)] = a;
+    });
+    if (window.IntersectionObserver) {
+      var seen = [];
+      var obs = new IntersectionObserver(function (entries) {
+        entries.forEach(function (en) {
+          var id = en.target.id;
+          var i = seen.indexOf(id);
+          if (en.isIntersecting && i === -1) seen.push(id);
+          if (!en.isIntersecting && i !== -1) seen.splice(i, 1);
+        });
+        var active = seen.length ? seen[0] : null;
+        for (var id in links) links[id].classList.toggle("is-active", id === active);
+      }, { rootMargin: "0px 0px -70% 0px" });
+      headings.forEach(function (h) { obs.observe(h); });
+    }
+  }
+
+  /* ---- tables: scope attributes ----
+     The style guide asks for th elements with a scope, on the first row and the
+     first column only. Setting it here means no author has to remember. */
+  document.querySelectorAll(".content table").forEach(function (table) {
+    var firstRow = table.querySelector("tr");
+    if (firstRow) {
+      firstRow.querySelectorAll("th").forEach(function (th) {
+        if (!th.hasAttribute("scope")) th.setAttribute("scope", "col");
+      });
+    }
+    table.querySelectorAll("tr").forEach(function (tr) {
+      var first = tr.firstElementChild;
+      if (first && first.tagName === "TH" && tr !== firstRow && !first.hasAttribute("scope")) {
+        first.setAttribute("scope", "row");
+      }
+    });
+  });
+
+  /* ---- code blocks: copy button ----
+     A block that names a file copies that file's path, because the path is what
+     the reader pastes into a shell, an editor, or a chat with an agent. Set
+     data-path on the .file element to copy something other than the caption
+     text — an absolute path, say. A block that names no file has nothing but
+     its code to offer, so it copies the code. */
+  document.querySelectorAll("figure.code").forEach(function (fig) {
+    var pre = fig.querySelector("pre");
+    if (!pre) return;
+    var cap = fig.querySelector("figcaption");
+    if (!cap) {
+      cap = document.createElement("figcaption");
+      fig.insertBefore(cap, pre);
+    }
+    if (cap.querySelector(".copy-btn")) return;
+
+    var file = cap.querySelector(".file");
+    var path = file && (file.dataset.path || file.textContent).trim();
+    var label = path ? "Copy path" : "Copy";
+
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "copy-btn";
+    btn.textContent = label;
+    btn.title = path ? "Copy " + path : "Copy this code";
+
+    btn.addEventListener("click", function () {
+      var text = path || pre.innerText.replace(/^\s*[$#>]\s/gm, "");
+      var done = function () {
+        btn.textContent = "Copied";
+        btn.dataset.copied = "1";
+        setTimeout(function () { btn.textContent = label; delete btn.dataset.copied; }, 1400);
+      };
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(text).then(done, function () { fallback(); });
+      } else {
+        fallback();
+      }
+      function fallback() {
+        var sel = window.getSelection();
+        sel.removeAllRanges();
+        var r = document.createRange();
+        r.selectNodeContents(path ? file : pre);
+        sel.addRange(r);
+        btn.textContent = "Press ⌘C";
+        setTimeout(function () { btn.textContent = label; }, 2000);
+      }
+    });
+
+    var lang = cap.querySelector(".lang");
+    if (lang) cap.insertBefore(btn, lang); else cap.appendChild(btn);
+  });
+})();
+
+</script>
+</body>
+</html>

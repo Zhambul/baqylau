@@ -3,18 +3,20 @@
 # `command` field).
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends, Response
 
 from app.providers import PaneCommands
 from api.guard import control_plane
 from api.responses import GUARDED, with_body
 from api.terminal.models.panes.grow_request import GrowPaneRequest
+from api.terminal.mapper import panes as mapper
 from api.terminal.models.panes.pane_command_response import PaneCommandResponse
+from api.terminal.models.panes.pane_gesture_request import PaneGestureRequest
 from api.terminal.models.panes.reset_request import ResetPaneRequest
 from api.terminal.models.panes.set_percent_request import SetPanePercentRequest
 from api.terminal.models.panes.shrink_request import ShrinkPaneRequest
 from api.terminal.models.panes.toggle_request import TogglePanesRequest
+from terminal.panes.commands import PaneCommandService
 
 router = APIRouter(dependencies=[Depends(control_plane())], responses=GUARDED)
 
@@ -26,7 +28,16 @@ PANE_RESPONSES = with_body(PaneCommandResponse, {
 })
 
 
-def _execute(panes, command, body, columns=None, percent=None) -> JSONResponse:
+def _execute(
+    panes: PaneCommandService,
+    command: str,
+    body: PaneGestureRequest,
+    response: Response,
+    columns: int | None = None,
+    percent: int | None = None,
+) -> PaneCommandResponse:
+    """The status is set ON the injected response, so the handler can return the
+    reply model itself rather than a hand-serialized copy of it."""
     outcome = panes.execute(
         command,
         body.window_id,
@@ -34,38 +45,40 @@ def _execute(panes, command, body, columns=None, percent=None) -> JSONResponse:
         columns=columns,
         percent=percent,
     )
-    reply = PaneCommandResponse(
-        handled=outcome.handled, succeeded=outcome.succeeded, reason=outcome.reason
-    )
-    status = 409 if outcome.handled and not outcome.succeeded else 200
-    return JSONResponse(reply.model_dump(), status)
+    response.status_code = 409 if outcome.handled and not outcome.succeeded else 200
+    return mapper.pane_command(outcome)
 
 
-@router.post("/api/terminal/panes/toggle", response_model=PaneCommandResponse,
-             responses=PANE_RESPONSES)
-def toggle_panes(body: TogglePanesRequest, panes: PaneCommands) -> JSONResponse:
-    return _execute(panes, "toggle", body)
+@router.post("/api/terminal/panes/toggle", responses=PANE_RESPONSES)
+def toggle_panes(
+    body: TogglePanesRequest, panes: PaneCommands, response: Response
+) -> PaneCommandResponse:
+    return _execute(panes, "toggle", body, response)
 
 
-@router.post("/api/terminal/panes/grow", response_model=PaneCommandResponse,
-             responses=PANE_RESPONSES)
-def grow_pane(body: GrowPaneRequest, panes: PaneCommands) -> JSONResponse:
-    return _execute(panes, "grow", body, columns=body.columns)
+@router.post("/api/terminal/panes/grow", responses=PANE_RESPONSES)
+def grow_pane(
+    body: GrowPaneRequest, panes: PaneCommands, response: Response
+) -> PaneCommandResponse:
+    return _execute(panes, "grow", body, response, columns=body.columns)
 
 
-@router.post("/api/terminal/panes/shrink", response_model=PaneCommandResponse,
-             responses=PANE_RESPONSES)
-def shrink_pane(body: ShrinkPaneRequest, panes: PaneCommands) -> JSONResponse:
-    return _execute(panes, "shrink", body, columns=body.columns)
+@router.post("/api/terminal/panes/shrink", responses=PANE_RESPONSES)
+def shrink_pane(
+    body: ShrinkPaneRequest, panes: PaneCommands, response: Response
+) -> PaneCommandResponse:
+    return _execute(panes, "shrink", body, response, columns=body.columns)
 
 
-@router.post("/api/terminal/panes/reset", response_model=PaneCommandResponse,
-             responses=PANE_RESPONSES)
-def reset_pane(body: ResetPaneRequest, panes: PaneCommands) -> JSONResponse:
-    return _execute(panes, "reset", body)
+@router.post("/api/terminal/panes/reset", responses=PANE_RESPONSES)
+def reset_pane(
+    body: ResetPaneRequest, panes: PaneCommands, response: Response
+) -> PaneCommandResponse:
+    return _execute(panes, "reset", body, response)
 
 
-@router.post("/api/terminal/panes/set-percent", response_model=PaneCommandResponse,
-             responses=PANE_RESPONSES)
-def set_pane_percent(body: SetPanePercentRequest, panes: PaneCommands) -> JSONResponse:
-    return _execute(panes, "setpct", body, percent=body.percent)
+@router.post("/api/terminal/panes/set-percent", responses=PANE_RESPONSES)
+def set_pane_percent(
+    body: SetPanePercentRequest, panes: PaneCommands, response: Response
+) -> PaneCommandResponse:
+    return _execute(panes, "setpct", body, response, percent=body.percent)

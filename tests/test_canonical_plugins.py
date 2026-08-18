@@ -70,6 +70,7 @@ from domain.events import (
     OperationInputProvided,
     OperationProgressed,
     OperationStarted,
+    OperationBackgrounded,
     OperationOutputFinished,
     ReasoningCreated,
     SessionAccountChanged,
@@ -94,10 +95,7 @@ from harness.impl.claude_code.hooks import gateway as claude_hooks
 from harness.impl.claude_code.hooks import foreground as claude_foreground
 from harness.impl.claude_code.controls import tui as claude_tui
 from harness.impl.claude_code.usage.rows import usage_reader as claude_usage_reader
-from harness.impl.claude_code.reactors import (
-    ClaudeAccountMigrationCanonicalEventReactor,
-    ClaudeOtelCanonicalEventReactor,
-)
+from harness.impl.claude_code.reactors import ClaudeOtelCanonicalEventReactor
 from harness.impl.codex.canonical.translator import CodexCanonicalTranslator
 from harness.impl.codex.canonical.sources import (
     CodexRawEventSources,
@@ -225,21 +223,15 @@ def _committed(payload, *, parent_actor_id=None):
     )
 
 
-def test_claude_reactor_migrates_the_account_on_a_committed_rate_limit():
-    controls = RecordingControls()
-    reactor = ClaudeAccountMigrationCanonicalEventReactor()
+def test_claude_registers_no_automatic_account_migration_reactor():
+    # A rate limit must not relaunch the CLI: the resumed run's
+    # `session.started` deduplicates against the first run's, so the first
+    # run's `session.finished` would keep the session out of `watchable()`.
+    reactors = ProviderGraph().registry.plugin("claude_code").reactors
 
-    reactor.react(_committed(GoalChanged(None, "usage_limited", "rate_limit")), controls)
-    reactor.react(_committed(GoalChanged("Ship it", "active", None)), controls)
-    reactor.react(_committed(
-        GoalChanged(None, "usage_limited", "rate_limit"),
-        parent_actor_id=ActorId("session-one:lead"),
-    ), controls)
-
-    assert len(controls.executed) == 1
-    request = controls.executed[0]
-    assert isinstance(request, MigrateAccount)
-    assert request.session_id == SessionId("session-one")
+    assert [type(reactor).__name__ for reactor in reactors] == [
+        "ClaudeOtelCanonicalEventReactor"
+    ]
 
 
 def test_claude_stop_failure_rate_limit_yields_the_usage_limited_goal_fact():
@@ -377,10 +369,37 @@ def test_file_sources_read_bounded_batches_and_resume_by_position(tmp_path, sour
 
 
 @pytest.mark.parametrize(
-    ("source_actor_id", "source_parent_actor_id", "sender", "expected_parent_actor_id", "starts_actor"),
+    (
+        "source_actor_id",
+        "source_parent_actor_id",
+        "sender",
+        "expected_actor_id",
+        "expected_parent_actor_id",
+        "starts_actor",
+    ),
     [
-        ("session-one:lead", None, "worker-one", ActorId("session-one:lead"), True),
-        ("worker-one", ActorId("session-one:lead"), "session-one:lead", None, False),
+        ("session-one:lead", None, "worker-one", "worker-one", ActorId("session-one:lead"), True),
+        (
+            "worker-one",
+            ActorId("session-one:lead"),
+            "session-one:lead",
+            "session-one:lead",
+            None,
+            False,
+        ),
+        # The lead under its teammate-vocabulary ALIAS — the first record of every
+        # teammate's transcript, its brief. Read literally it named an actor that
+        # does not exist, so each session grew a phantom "team-lead" teammate that
+        # never started work and never finished it (measured live: two agents
+        # launched at once, one phantom, permanently running).
+        (
+            "worker-one",
+            ActorId("session-one:lead"),
+            "team-lead",
+            "session-one:lead",
+            None,
+            False,
+        ),
     ],
 )
 def test_claude_team_messages_preserve_the_native_sender_as_evidence_actor(
@@ -388,6 +407,7 @@ def test_claude_team_messages_preserve_the_native_sender_as_evidence_actor(
     source_actor_id,
     source_parent_actor_id,
     sender,
+    expected_actor_id,
     expected_parent_actor_id,
     starts_actor,
 ):
@@ -424,10 +444,13 @@ def test_claude_team_messages_preserve_the_native_sender_as_evidence_actor(
     interpreter.tick()
 
     audit = runtime.raw_event_audits.audits_for_session(session.session_id)[-1]
-    assert audit.raw_event.actor_id == ActorId(sender)
+    assert audit.raw_event.actor_id == ActorId(expected_actor_id)
     assert audit.raw_event.parent_actor_id == expected_parent_actor_id
     assert audit.interpretation is not None
-    assert all(item.event.actor_id == ActorId(sender) for item in audit.interpretation.events)
+    assert all(
+        item.event.actor_id == ActorId(expected_actor_id)
+        for item in audit.interpretation.events
+    )
     assert (
         any(
             isinstance(item.event.payload, ActorStarted)
@@ -1241,6 +1264,71 @@ def test_claude_background_output_streams_into_the_operation(monkeypatch, tmp_pa
         runtime.store.latest_cursor(),
     )
     assert "".join(part.text for part in tail.current_progress()) == "1\n2\n3\n4\n"
+
+
+def test_a_command_backgrounded_mid_run_keeps_its_output_file_and_its_following(monkeypatch, tmp_path):
+    """The whole point of the fact, end to end through the real interpreter.
+
+    A foreground command is followed `until="operation_finished"`, and ctrl+b makes
+    that finish arrive while the command runs on. Unhandled, the next tick drained
+    the row, removed it, and UNLINKED the tee file the process was still writing
+    to — output gone, and no exception anywhere to notice it by.
+    """
+    monkeypatch.setenv("BAQYLAU_DATA_DIR", str(tmp_path / "data"))
+    session_id, operation_id = "session-one", "op-one"
+    transcript_path = str(tmp_path / "session-one.jsonl")
+    hook = {
+        "session_id": session_id,
+        "transcript_path": transcript_path,
+        "cwd": "/work",
+        "hook_event_name": "PreToolUse",
+        "hook_event_id": "pretool-one",
+        "tool_name": "Bash",
+        "tool_use_id": operation_id,
+        "tool_input": {"command": "sleep 30; echo done"},
+    }
+    gateway = claude_hooks.ClaudeHookGateway()
+    _deliver_hook(gateway, json.dumps(hook).encode())
+
+    runtime, interpreter = interpreting_runtime(tmp_path / "data" / "main.db")
+    runtime.register("claude_code", Session(
+        SessionId(session_id), ActorId(f"{session_id}:lead"), session_id, transcript_path, "/work",
+    ))
+    interpreter.tick()                                   # the directive starts the following
+    following = runtime.operation_output.find_for_session(SessionId(session_id))
+    assert len(following) == 1
+    tee_path = following[0].source_path
+    assert following[0].until == "operation_finished"     # …as a foreground command
+    Path(tee_path).write_bytes(b"working\n")
+    interpreter.tick()
+    interpreter.tick()
+
+    # ctrl+b: the input never asked for the background, the response carries a task id
+    _deliver_hook(gateway, json.dumps({
+        **hook,
+        "hook_event_name": "PostToolUse",
+        "hook_event_id": "posttool-one",
+        "tool_response": {"backgroundTaskId": "btk9y72c9"},
+    }).encode())
+    interpreter.tick()
+
+    survived = runtime.operation_output.find_for_session(SessionId(session_id))
+    assert len(survived) == 1, "the following was ended by the launch's finish"
+    assert survived[0].until == "session_finished"
+    assert Path(tee_path).exists(), "the file the command is still writing to was unlinked"
+
+    Path(tee_path).write_bytes(b"working\ndone\n")        # the command runs on
+    interpreter.tick()
+    interpreter.tick()
+    operation = runtime.queries().operation_activity(
+        SessionId(session_id),
+        ActorId(f"{session_id}:lead"),
+        OperationId(operation_id),
+        runtime.store.latest_cursor(),
+    )
+    assert "".join(part.text for part in operation.current_progress()).endswith("done\n")
+    assert operation.state == "running"
+    assert operation.execution == "background"
 
 
 def test_claude_foreground_output_is_canonical_append_progress():
@@ -2550,6 +2638,270 @@ def test_claude_background_completion_is_an_output_finish_not_an_agent_finish():
     finished = payloads(notification, OperationOutputFinished)
     assert len(finished) == 1
     assert finished[0].payload.operation_id == OperationId("background-op-one")
+    assert finished[0].payload.outcome == "succeeded"
+
+
+def test_claude_background_completion_carries_the_jobs_own_outcome():
+    """The `<status>` is the JOB's, and the launch's says nothing about it: a
+    command that exits non-zero launched perfectly. Values measured over every
+    retained transcript (2026-08-18): completed, failed, killed, stopped."""
+
+    def outcome_for(status):
+        translation = ClaudeCanonicalTranslator().translate(raw_event(
+            {
+                "type": "user",
+                "uuid": f"background-completion-{status}",
+                "origin": {"kind": "task-notification"},
+                "promptSource": "system",
+                "message": {
+                    "content": (
+                        "<task-notification><task-id>bkdr7jbeo</task-id>"
+                        "<tool-use-id>background-op-one</tool-use-id>"
+                        f"<status>{status}</status>"
+                        '<summary>Background command "Count" completed (exit code 0)</summary>'
+                        "</task-notification>"
+                    )
+                },
+            },
+            harness="claude_code",
+            source_type="transcript",
+            raw_event_id=f"background-completion-{status}",
+        ))
+        return payloads(translation, OperationOutputFinished)[0].payload.outcome
+
+    assert outcome_for("completed") == "succeeded"
+    assert outcome_for("failed") == "failed"
+    assert outcome_for("killed") == "cancelled"
+    assert outcome_for("stopped") == "cancelled"
+    assert outcome_for("something-new") == "unknown"
+
+
+def _monitor_notification(uuid, body):
+    """One <task-notification> as a `user` record — the shape every notification
+    really arrives in (measured, claude-code 2.1.233)."""
+    return raw_event(
+        {
+            "type": "user",
+            "uuid": uuid,
+            "origin": {"kind": "task-notification"},
+            "promptSource": "system",
+            "message": {"content": f"<task-notification>{body}</task-notification>"},
+        },
+        harness="claude_code",
+        source_type="transcript",
+        raw_event_id=uuid,
+    )
+
+
+def _armed_monitor(translator, operation_id="monitor-op-one", task_id="bmfwjr03l"):
+    """A Monitor tool call returning, which is where its task id is announced."""
+    translator.translate(raw_event(
+        {
+            "hook_event_name": "PostToolUse",
+            "tool_use_id": operation_id,
+            "tool_name": "Monitor",
+            "tool_input": {"command": "tail -f log", "description": "ticks"},
+            "tool_response": {"taskId": task_id, "timeoutMs": 300000, "persistent": False},
+        },
+        harness="claude_code",
+        source_type="hook",
+        raw_event_id=f"arm-{operation_id}",
+    ))
+
+
+def test_claude_monitor_events_are_progress_on_the_monitor_not_agent_finishes():
+    """A monitor's events are the whole point of arming one, and every one of them
+    was being read as an AGENT completing (session 246c8079, 2026-08-17): the
+    <task-notification> fallback treated anything that was not a background
+    command as an assignment finish, so six ticks became one phantom
+    `actor.assignment_finished` — one, because they all carried an empty
+    assignment id and collapsed onto a single event id — and the event text was
+    dropped on the floor."""
+    translator = ClaudeCanonicalTranslator()
+    _armed_monitor(translator)
+
+    ticks = [
+        translator.translate(_monitor_notification(
+            f"tick-{number}",
+            "<task-id>bmfwjr03l</task-id>"
+            '<summary>Monitor event: "ticks"</summary>'
+            f"<event>tick-{number}</event>",
+        ))
+        for number in (1, 2, 3)
+    ]
+
+    for tick in ticks:
+        assert not payloads(tick, ActorAssignmentFinished)
+        assert not payloads(tick, MessageCreated)
+    progressed = [payloads(tick, OperationProgressed)[0] for tick in ticks]
+    assert [entry.payload.content.text for entry in progressed] == ["tick-1", "tick-2", "tick-3"]
+    assert all(entry.payload.operation_id == OperationId("monitor-op-one") for entry in progressed)
+    # The "status" stream is what the monitors tab reads as an event rather than
+    # as output, and the ordinals are what keep three events three rows: the
+    # event id is built from the subject and the phase, so a shared phase would
+    # collapse them the way the phantom assignment finishes collapsed.
+    assert all(entry.payload.stream == "status" for entry in progressed)
+    assert [entry.payload.ordinal for entry in progressed] == [0, 1, 2]
+    assert len({entry.event_id for entry in progressed}) == 3
+
+
+def test_claude_monitor_event_for_an_unknown_task_is_dropped_not_invented():
+    """The per-event notification names only the TASK id, so an event whose arm
+    this translator never saw — a daemon restarted mid-watch — cannot be placed.
+    Dropping it loses one line; inventing an operation would put a monitor on the
+    tab that nothing ever armed."""
+    translation = ClaudeCanonicalTranslator().translate(_monitor_notification(
+        "orphan-tick",
+        "<task-id>never-seen</task-id>"
+        '<summary>Monitor event: "ticks"</summary>'
+        "<event>tick-1</event>",
+    ))
+
+    assert translation.canonical_events == ()
+    assert translation.decision == "ignored_nonsemantic"
+
+
+def test_claude_monitor_ends_on_its_own_notification_not_on_its_arm():
+    """The arm's `operation.finished` arrives turns earlier and means only that
+    the tool call returned — the projection ignores it for a monitor, which is
+    why nothing ended one. The stream-ended notification is the monitor's own
+    end, and it carries a tool_use_id, so it needs no memory of the arm."""
+    translator = ClaudeCanonicalTranslator()
+    _armed_monitor(translator)
+
+    ended = translator.translate(_monitor_notification(
+        "monitor-ended",
+        "<task-id>bmfwjr03l</task-id>"
+        "<tool-use-id>monitor-op-one</tool-use-id>"
+        "<output-file>/tmp/tasks/bmfwjr03l.output</output-file>"
+        "<status>completed</status>"
+        '<summary>Monitor "ticks" stream ended</summary>',
+    ))
+
+    assert not payloads(ended, ActorAssignmentFinished)
+    finished = payloads(ended, OperationOutputFinished)
+    assert len(finished) == 1
+    assert finished[0].payload.operation_id == OperationId("monitor-op-one")
+    assert finished[0].payload.outcome == "succeeded"
+
+
+def test_claude_task_notifications_are_counted_once_though_they_arrive_twice():
+    """Every notification appears in the transcript twice: as the `queue-operation`
+    that enqueued it and as the `user` record that delivered it. Reading both
+    would double every monitor event."""
+    translator = ClaudeCanonicalTranslator()
+    _armed_monitor(translator)
+
+    enqueued = translator.translate(raw_event(
+        {
+            "type": "queue-operation",
+            "operation": "enqueue",
+            "content": (
+                "<task-notification><task-id>bmfwjr03l</task-id>"
+                '<summary>Monitor event: "ticks"</summary>'
+                "<event>tick-1</event></task-notification>"
+            ),
+        },
+        harness="claude_code",
+        source_type="transcript",
+        raw_event_id="enqueue-tick-1",
+    ))
+
+    assert enqueued.canonical_events == ()
+    assert enqueued.decision == "ignored_nonsemantic"
+
+
+def test_claude_command_backgrounded_mid_run_says_so_before_it_says_finished():
+    """ctrl+b on a running command. The input never asked for the background and
+    the response carries a task id anyway — and the ORDER matters: the
+    `operation.finished` from this same delivery ends the follow of the file the
+    command is still writing to unless the backgrounded fact lands first."""
+    translation = ClaudeCanonicalTranslator().translate(raw_event(
+        {
+            "hook_event_name": "PostToolUse",
+            "session_id": "session-one",
+            "transcript_path": "/tmp/session-one.jsonl",
+            "tool_name": "Bash",
+            "tool_use_id": "op-backgrounded",
+            "tool_input": {"command": "sleep 30; echo done"},
+            "tool_response": {"backgroundTaskId": "btk9y72c9"},
+        },
+        harness="claude_code",
+        source_type="hook",
+        raw_event_id="post-tool-use-backgrounded",
+    ))
+
+    kinds = [type(canonical.payload).__name__ for canonical in translation.canonical_events]
+    assert kinds.index("OperationBackgrounded") < kinds.index("OperationFinished")
+    backgrounded = payloads(translation, OperationBackgrounded)[0].payload
+    assert backgrounded.operation_id == OperationId("op-backgrounded")
+    assert backgrounded.native_id == "btk9y72c9"
+
+
+def test_claude_background_launch_is_not_a_mid_run_backgrounding():
+    """A command that ASKED for the background is already background at
+    `operation.started`; announcing the transition too would be a second, later
+    answer to a question the launch already settled."""
+    translation = ClaudeCanonicalTranslator().translate(raw_event(
+        {
+            "hook_event_name": "PostToolUse",
+            "session_id": "session-one",
+            "transcript_path": "/tmp/session-one.jsonl",
+            "tool_name": "Bash",
+            "tool_use_id": "op-native-background",
+            "tool_input": {"command": "sleep 30", "run_in_background": True},
+            "tool_response": {"backgroundTaskId": "btk9y72c9"},
+        },
+        harness="claude_code",
+        source_type="hook",
+        raw_event_id="post-tool-use-native-background",
+    ))
+
+    assert not payloads(translation, OperationBackgrounded)
+
+
+def test_codex_exec_that_outlives_its_yield_is_announced_as_background_once():
+    """codex's background terminal: the exec handed back a live session (the cell
+    id `/ps` lists) with no exit code. Every continuation poll reports it again,
+    and the fact is about the operation, not about the poll."""
+    translator = CodexCanonicalTranslator()
+
+    def rollout_event(document, position):
+        return raw_event(
+            document,
+            harness="codex",
+            source_type="rollout",
+            raw_event_id=f"codex-bg-{position}",
+            source_position=str(position),
+        )
+
+    translator.translate(rollout_event({
+        "type": "response_item",
+        "payload": {
+            "type": "custom_tool_call", "name": "exec", "call_id": "call-one",
+            "input": 'const r = await tools.exec_command({"cmd":"sleep 30","yield_time_ms":250});',
+        },
+    }, 10))
+    first = translator.translate(rollout_event({
+        "type": "response_item",
+        "payload": {
+            "type": "custom_tool_call_output", "call_id": "call-one",
+            "output": '{"output":"","session_id":4242}',
+        },
+    }, 20))
+    second = translator.translate(rollout_event({
+        "type": "response_item",
+        "payload": {
+            "type": "custom_tool_call_output", "call_id": "call-one",
+            "output": '{"output":"still going","session_id":4242}',
+        },
+    }, 30))
+
+    backgrounded = payloads(first, OperationBackgrounded)
+    assert len(backgrounded) == 1
+    assert backgrounded[0].payload.native_id == "4242"
+    assert not payloads(first, OperationFinished)
+    assert not payloads(second, OperationBackgrounded)
 
 
 def test_claude_tool_reference_result_has_a_readable_output():
@@ -2626,6 +2978,61 @@ def test_claude_child_actor_uses_the_task_description_from_its_sidecar(tmp_path)
     name = payloads(translated, ActorNameChanged)[0].payload
     assert actor.name == "child-one"
     assert name.name == "Get Bali weather"
+
+
+def test_codex_deliberate_ignores_are_nonsemantic_and_only_drift_stays_unknown():
+    """`ignored_unknown` must mean "a shape nobody has decided about" — nothing else.
+
+    Two records were decided about in code and still reported themselves as
+    unknown (measured against codex-cli 0.147.0, which is what the live-harness
+    suite caught): a `world_state` snapshot, and the `item_completed` envelope for
+    message items whose prose the response_item register already delivers. They
+    are nonsemantic now. An item_completed for a type NOBODY has ruled on stays
+    unknown — that is the tripwire, and it has to survive this change.
+    """
+
+    def verdict(document):
+        return CodexCanonicalTranslator().translate(raw_event(
+            document,
+            harness="codex",
+            source_type="rollout",
+            raw_event_id=f"codex-{document.get('type')}-{id(document)}",
+        )).decision
+
+    def item_completed(item):
+        return {
+            "type": "event_msg",
+            "payload": {"type": "item_completed", "turn_id": "turn-one", "item": item},
+        }
+
+    assert verdict({"type": "world_state", "payload": {"full": True, "state": {}}}) \
+        == "ignored_nonsemantic"
+    assert verdict(item_completed({
+        "type": "AgentMessage", "id": "msg-one",
+        "content": [{"type": "Text", "text": "Hi"}], "phase": "final_answer",
+    })) == "ignored_nonsemantic"
+    assert verdict(item_completed({"type": "UserMessage", "id": "item-one"})) == "ignored_nonsemantic"
+    assert verdict(item_completed({
+        "type": "Reasoning", "id": "rs-one", "summary_text": [], "raw_content": [],
+    })) == "ignored_nonsemantic"
+    assert verdict(item_completed({"type": "SomethingCodexShipsNextMonth", "id": "item-two"})) \
+        == "ignored_unknown"
+
+    # A type we parse whose TEXT is absent: an assistant `message` placeholder
+    # (measured: `phase: "commentary"` with `output_text: ""`) and a `reasoning`
+    # whose summary was stored encrypted. Recognised, empty, not drift.
+    assert verdict({
+        "type": "response_item",
+        "payload": {"type": "message", "role": "assistant", "phase": "commentary",
+                    "content": [{"type": "output_text", "text": ""}]},
+    }) == "ignored_nonsemantic"
+    assert verdict({"type": "response_item", "payload": {"type": "reasoning", "summary": []}}) \
+        == "ignored_nonsemantic"
+
+    # …but a record missing a REQUIRED field stays drift: that is a field that
+    # moved, which is the one thing the unknown verdict is for.
+    assert verdict(item_completed({"type": "CommandExecution", "id": "item-three"})) \
+        == "ignored_unknown"
 
 
 def test_native_instruction_wrappers_are_canonical_system_messages():
@@ -2711,6 +3118,36 @@ def test_claude_assistant_preserves_reasoning_and_model_without_duplicate_usage(
     assert context.window_tokens == 1_000_000
     assert context.model == model.current
     assert payloads(translation, UsageReported) == []
+
+
+def test_claude_marks_where_the_model_stopped_from_the_response_stop_reason():
+    """`stop_reason` is the only structural tell, and it belongs to the RESPONSE.
+
+    So a response that broke off to call a tool ends no turn, and of a response
+    that DID stop only its last text block does — the earlier blocks are prose the
+    model wrote on the way there. Measured against claude-code 2.1.233.
+    """
+
+    def phases(stop_reason, blocks):
+        translation = ClaudeCanonicalTranslator().translate(raw_event(
+            {
+                "type": "assistant",
+                "uuid": "assistant-one",
+                "message": {"content": blocks, "stop_reason": stop_reason},
+            },
+            harness="claude_code",
+            source_type="transcript",
+            raw_event_id=f"assistant-{stop_reason}-{len(blocks)}",
+        ))
+        return [payload.payload.phase for payload in payloads(translation, MessageCreated)]
+
+    one_block = [{"type": "text", "text": "Hi"}]
+    two_blocks = [{"type": "text", "text": "Working on it"}, {"type": "text", "text": "Done"}]
+
+    assert phases("end_turn", one_block) == ["end_turn"]
+    assert phases("tool_use", one_block) == ["intermediate"]
+    assert phases("end_turn", two_blocks) == ["intermediate", "end_turn"]
+    assert phases(None, one_block) == ["intermediate"]
 
 
 def test_claude_otel_translates_raw_usage_once_by_model_and_query_source():

@@ -10,10 +10,7 @@ from harness.impl.claude_code.otel.gateway import ClaudeTelemetryGateway
 from harness.impl.claude_code.catalog import ClaudeCodeCatalog
 from harness.impl.claude_code.controls.controller import controller
 from harness.impl.claude_code.launcher import ClaudeCodeLauncher
-from harness.impl.claude_code.reactors import (
-    ClaudeAccountMigrationCanonicalEventReactor,
-    ClaudeOtelCanonicalEventReactor,
-)
+from harness.impl.claude_code.reactors import ClaudeOtelCanonicalEventReactor
 from harness.impl.claude_code.probe import ClaudeCodeTerminalProbe
 from harness.impl.claude_code.usage.rows import usage_reader
 from harness.impl.claude_code.controls import rewindmenu
@@ -57,10 +54,13 @@ plugin = HarnessPlugin(
     telemetry=ClaudeTelemetryGateway(),
     sources=ClaudeRawEventSources(),
     translator=ClaudeCanonicalTranslator(),
-    reactors=(
-        ClaudeOtelCanonicalEventReactor(),
-        ClaudeAccountMigrationCanonicalEventReactor(),
-    ),
+    # No automatic account migration: a rate limit leaves the session where it
+    # is. Switching accounts relaunches the CLI under the same session id, and a
+    # resumed session's `session.started` is deduplicated against the first
+    # run's, so the first run's `session.finished` keeps it out of
+    # `watchable()` for good (see docs/html/resume-tombstone.html). The manual
+    # `migrate_account` control is untouched.
+    reactors=(ClaudeOtelCanonicalEventReactor(),),
     controller=controller,
     catalog=ClaudeCodeCatalog(),
     usage=usage_reader,

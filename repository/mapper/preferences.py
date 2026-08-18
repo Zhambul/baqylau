@@ -24,6 +24,7 @@ from repository.model.preferences import (
     PushSubscriptionRow,
     SessionViewModeRow,
 )
+from repository.model.sql import SqlValues
 
 
 def view_mode(row: SessionViewModeRow) -> ViewMode:
@@ -61,7 +62,7 @@ def push_subscription(row: PushSubscriptionRow) -> PushSubscription:
     )
 
 
-def push_subscription_values(subscription: PushSubscription) -> tuple[object, ...]:
+def push_subscription_values(subscription: PushSubscription) -> SqlValues:
     return (
         subscription.endpoint,
         subscription.public_key,

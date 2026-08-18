@@ -21,6 +21,17 @@ from repository.contract.preferences import (
     PushSubscriptionRepository,
 )
 
+# The two states worth interrupting you for. `awaiting_background` is DELIBERATELY
+# not among them: a turn that ended while its own background job still runs has not
+# finished producing what you would come back to read, and an alert then is early.
+# Being unmapped is not a gap — the lookup returning None is how a state says "no
+# alert", the same way `idle` and `working` do.
+#
+# It became reachable when background work stopped being ended by its own launch
+# (engine/projections/tabstate.py), so its consequence is new: a session stays
+# unalerted until the JOB reports its end, and one that never reports one stays
+# unalerted for the rest of the session. The alert that DOES fire is the one for
+# the next thing that asks you something.
 NOTIFICATION_KINDS = {
     "awaiting_attention": "asking",
     "awaiting_response": "done",
@@ -138,9 +149,7 @@ class Notifier:
             return
         project = os.path.basename(item.project_directory) or str(session_id)
         title = item.session.title or ""
-        self.notification_state.publish_notification(
-            str(session_id), kind, project, title
-        )
+        self.notification_state.publish_notification(session_id, kind, project, title)
         delay = config.NOTIFICATION_DELAY_SECONDS
         if kind == "done":
             delay = max(delay, config.NOTIFICATION_SETTLE_SECONDS)

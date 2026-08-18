@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-import json
 import time
 
 from core.process import process_alive
 from domain.ids import RawEventId
 from harness.contract import HarnessRawEventSource
 from harness.models import LIVENESS_SOURCE_TYPE, RawEvent, Session
+from domain.codec import encode_document
+from harness.models.directives import ProcessExit
 
 
 class SessionLivenessSource(HarnessRawEventSource):
@@ -61,8 +62,8 @@ class SessionLivenessSource(HarnessRawEventSource):
             parent_actor_id=None,
             observed_at=time.time(),
             encoding="json",
-            payload=json.dumps(
-                {"process_id": self.harness_process_id, "state": "exited"}
-            ).encode("utf-8"),
+            payload=encode_document(
+                ProcessExit(process_id=self.harness_process_id, state="exited")
+            ),
             source_identity=self.source_identity,
         ),)

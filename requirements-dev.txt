@@ -5,6 +5,17 @@
 pytest>=8
 pytest-timeout>=2.3
 pytest-xdist>=3.5
+# Gherkin scenarios for the LIVE-harness suite (tests/e2e, `make test-drift`).
+# pytest-bdd rather than behave because it compiles a .feature into ordinary
+# pytest tests: that suite is all fixtures (a spawned daemon, a pseudo-terminal,
+# a workspace), and behave's own runner would reach none of them. `make test`
+# ignores tests/e2e, so the hermetic suite still runs without this installed.
+pytest-bdd>=8.1
+# The terminal emulator behind terminal/impl/pty — the headless terminal that
+# suite drives its harnesses through. A pty gives paint operations; pyte adds
+# them up into the screen `read_screen` is asked for. Dev-only because pinning
+# BAQYLAU_TERMINAL=pty is what needs it, and nothing does that in production.
+pyte>=0.8
 pygments>=2.17
 wenmode>=0.9
 # Linters (make lint) — pinned exactly so CI findings match local runs. vulture

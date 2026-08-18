@@ -3,9 +3,8 @@
 # never parsed here; the reply rides the HTTP response back to the harness.
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import JSONResponse
 
 from api.common.models.fields import HarnessNamePath
 from api.guard import control_plane
@@ -66,15 +65,17 @@ async def record_hook_delivery(
         )
         output = await run_in_threadpool(gateway.record, harness, delivery)
     except UnknownHookHarness as error:
-        return JSONResponse({"error": str(error)}, 404)
+        # Raised, not built: every refusal this server sends is rendered by the
+        # one handler in api/app.py, from the one ErrorResponse model.
+        raise HTTPException(404, str(error)) from error
     except (KeyError, TypeError, ValueError) as error:
         audit.error("", "hook delivery", {
             "harness": harness,
             "error": repr(error),
             "payload_bytes": len(payload),
         })
-        return JSONResponse({"error": str(error)}, 400)
+        raise HTTPException(400, str(error)) from error
     except RepositoryError as error:
         audit.error("", "hook delivery", {"harness": harness, "error": repr(error)})
-        return JSONResponse({"error": str(error)}, 409)
+        raise HTTPException(409, str(error)) from error
     return Response(content=output, media_type="application/json")

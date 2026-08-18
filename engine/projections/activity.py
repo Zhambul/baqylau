@@ -28,7 +28,9 @@ from domain.events import (
     FileAccessed,
     MessageCreated,
     ModelChanged,
+    OperationBackgrounded,
     OperationFinished,
+    OperationOutputFinished,
     OperationProgressed,
     OperationStarted,
     ActorMessageSent,
@@ -229,6 +231,43 @@ def activities_of(
                     content_event_id=event.event_id,
                     content_field="operation_content",
                 )
+        elif isinstance(payload, OperationBackgrounded):
+            # The operation moved to the background mid-run: it is STILL RUNNING,
+            # and the `operation.finished` that arrives from the same evidence
+            # must not end it (see OperationBackgrounded). Recorded as the
+            # execution mode a background launch would have had, so everything
+            # downstream — the jobs list, the tab state — treats the two alike.
+            activity_id = _activity_id(event, "operation", payload.operation_id)
+            existing = activities.get(activity_id)
+            if not isinstance(existing, OperationActivity):
+                continue
+            activity = replace(
+                existing,
+                context=replace(
+                    existing.context,
+                    source_event_ids=existing.context.source_event_ids + (event.event_id,),
+                ),
+                execution="background",
+            )
+        elif isinstance(payload, OperationOutputFinished):
+            # The job's TRUE end, and the only end a background operation has:
+            # its launch reported "finished" while the work was still running.
+            activity_id = _activity_id(event, "operation", payload.operation_id)
+            existing = activities.get(activity_id)
+            if not isinstance(existing, OperationActivity):
+                continue
+            activity = replace(
+                existing,
+                context=replace(
+                    existing.context,
+                    source_event_ids=existing.context.source_event_ids + (event.event_id,),
+                    finished_at=(
+                        event.occurred_at if event.occurred_at is not None else stored.accepted_at
+                    ),
+                ),
+                state="finished",
+                outcome=payload.outcome,
+            )
         elif isinstance(payload, OperationFinished):
             activity_id = _activity_id(event, "operation", payload.operation_id)
             if activity_id in file_operation_ids:
@@ -264,7 +303,21 @@ def activities_of(
             if activity_id in hidden_operation_ids:
                 continue
             existing = activities.get(activity_id)
-            if isinstance(existing, OperationActivity):
+            if isinstance(existing, OperationActivity) and existing.execution in ("background", "monitor"):
+                # THE LAUNCH finished, not the work. A background job's tool call
+                # returns at once — before its `sleep 5` has slept — so taking the
+                # end from here reported every job as ended one second after it
+                # started, with the LAUNCH's outcome, and left the jobs tab unable
+                # to show anything as running. Its real end is
+                # `operation.output_finished` above. Only provenance is folded in.
+                activity = replace(
+                    existing,
+                    context=replace(
+                        existing.context,
+                        source_event_ids=existing.context.source_event_ids + (event.event_id,),
+                    ),
+                )
+            elif isinstance(existing, OperationActivity):
                 activity = replace(
                     existing,
                     context=replace(

@@ -8,12 +8,13 @@ busy state can get stuck after an otherwise-successful interrupt. See
 
 from __future__ import annotations
 
-import json
 import time
 
 from domain.ids import RawEventId
 from harness.contract import HarnessRawEventSource
 from harness.models import INTERRUPT_SOURCE_TYPE, InterruptRegistry, RawEvent, Session
+from domain.codec import encode_document
+from harness.models.directives import InterruptMark
 
 # How long a marked interrupt waits for the harness's OWN evidence to settle
 # the turn on its own before the fallback fires. Long enough that an ordinary
@@ -58,6 +59,6 @@ class PendingInterruptSource(HarnessRawEventSource):
             parent_actor_id=None,
             observed_at=marked_at,
             encoding="json",
-            payload=json.dumps({"session_id": str(self.session.session_id)}).encode("utf-8"),
+            payload=encode_document(InterruptMark(session_id=self.session.session_id)),
             source_identity=self.source_identity,
         ),)

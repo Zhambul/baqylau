@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import html
-import json
 
 from dashboard.render.items.item import (
     DashboardItem,
@@ -63,12 +62,10 @@ def operation_html(activity: OperationActivity, text: str, state: str | None) ->
         )
     argument_summary: str | None
     if isinstance(activity.arguments, StructuredContent):
-        argument_summary = json.dumps(
-            json.loads(activity.arguments.json_text),
-            ensure_ascii=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        )
+        # Already compact and already sorted: StructuredContent canonicalizes on
+        # construction, so re-encoding it produced the same string it started
+        # with — by way of a parse.
+        argument_summary = activity.arguments.json_text
     else:
         argument_summary = arguments.strip().splitlines()[0] if arguments.strip() else None
     summary = activity.description or argument_summary or str(title)

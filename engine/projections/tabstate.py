@@ -13,7 +13,9 @@ from domain.events import (
     AttentionResolved,
     CompactionStarted,
     MessageCreated,
+    OperationBackgrounded,
     OperationFinished,
+    OperationOutputFinished,
     OperationStarted,
     ReasoningCreated,
     SessionFinished,
@@ -63,8 +65,17 @@ def tab_state(
                 state = "executing"
             else:
                 state = "working"
-        elif isinstance(payload, OperationFinished):
+        elif isinstance(payload, OperationBackgrounded):
+            background_operations.add(payload.operation_id)
+        elif isinstance(payload, OperationOutputFinished):
+            # The only end a background operation has (see OperationBackgrounded).
             background_operations.discard(payload.operation_id)
+        elif isinstance(payload, OperationFinished):
+            # Deliberately does NOT discard: a background job's launch reports
+            # finished immediately, so discarding here emptied the set before the
+            # turn could ever end on it — which is why `awaiting_background` was
+            # unreachable and a session with a job still running read as idle.
+            # `operation.output_finished` above is what ends background work.
             state = "awaiting_attention" if pending_attention else "working"
         elif isinstance(payload, AttentionRequested):
             pending_attention.add((event.actor_id, payload.attention_id))

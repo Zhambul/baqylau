@@ -35,6 +35,26 @@ from harness.impl.claude_code.canonical.toolcalls import BACKGROUND_LAUNCH_STUB,
 from harness.models import RawEvent, TranslationError
 
 
+# How a background command ENDED, from the `<status>` on the completion
+# notification Claude Code posts when the job is over. The four values it really
+# uses, counted over every retained transcript (2026-08-18): completed 6563,
+# failed 375, killed 83, stopped 22 — so "not completed" is a third of a percent
+# of jobs and worth telling apart, and neither `killed` nor `stopped` is the
+# `cancelled` an earlier reader guessed at. Anything else is unknown rather than
+# assumed good: reporting a job as succeeded is the one answer that cannot be
+# walked back by looking at it.
+BACKGROUND_OUTCOMES: dict[str, Outcome] = {
+    "completed": "succeeded",
+    "failed": "failed",
+    "killed": "cancelled",
+    "stopped": "cancelled",
+}
+
+
+def background_outcome(status: object) -> Outcome | None:
+    return BACKGROUND_OUTCOMES.get(str(status or "").strip().lower(), "unknown") if status else None
+
+
 def launch_selections(raw_event: RawEvent, document: dict) -> list[CanonicalEvent]:
     """The launch observation the gateway recorded from the hook's inherited
     environment: the `--model`/`--effort` the launcher started the CLI with.
@@ -287,7 +307,60 @@ def translate_transcript(
                 "Claude Code background completion has no operation id",
                 context=raw_event.source_position,
             )
-        payload = OperationOutputFinished(operation_id)
+        # The JOB's outcome, which the notification carries and this translation
+        # used to drop — leaving the dashboard to report the LAUNCH's outcome, so a
+        # background command that exited non-zero read as succeeded.
+        payload = OperationOutputFinished(operation_id, background_outcome(record.get("status")))
+        return [event(
+            raw_event,
+            "operation",
+            str(operation_id),
+            "output_finished",
+            payload,
+            occurred_at=occurred_at,
+        )]
+    if kind == "monitor_event":
+        # One line the watched command printed. Recorded as progress on the
+        # armed operation — the same shape a command's output takes — under the
+        # "status" stream, which is what the monitors tab reads as an EVENT
+        # rather than as output (dashboard/services/sessions.py).
+        task_id = str(record.get("task") or "")
+        armed = toolcalls.monitor_operation(task_id)
+        if armed is None:
+            # A monitor armed before this translation began — a daemon restarted
+            # mid-watch. The event belongs to an operation we cannot name, and
+            # inventing one would put a phantom monitor on the tab. Dropped;
+            # the watch's own end still lands, because that notification names
+            # its tool_use_id outright.
+            return []
+        ordinal = toolcalls.next_monitor_ordinal(task_id)
+        payload = OperationProgressed(
+            armed,
+            ordinal,
+            "status",
+            content(str(record.get("event") or "")),
+            "append",
+        )
+        return [event(
+            raw_event,
+            "operation",
+            str(armed),
+            f"progress:status:{ordinal}",
+            payload,
+            occurred_at=occurred_at,
+        )]
+    if kind == "monitor_ended":
+        # The watch itself ending, which is NOT its arm returning: the arm's
+        # `operation.finished` arrived turns ago and the projection deliberately
+        # ignores it for a monitor. This is the same fact a background job's
+        # completion is, so it is the same event.
+        operation_id = OperationId(str(record.get("operation_id") or ""))
+        if not str(operation_id):
+            raise TranslationError(
+                "Claude Code monitor end has no operation id",
+                context=raw_event.source_position,
+            )
+        payload = OperationOutputFinished(operation_id, background_outcome(record.get("status")))
         return [event(
             raw_event,
             "operation",
@@ -348,9 +421,34 @@ def translate_transcript(
     if kind == "assistant":
         events = []
         message_identity = native_identity
-        native_blocks = (document.get("message") or {}).get("content")
+        native_message = document.get("message") or {}
+        native_blocks = native_message.get("content")
         if not isinstance(native_blocks, list):
             native_blocks = []
+        # WHERE THE MODEL STOPPED, from the one field that says so structurally.
+        # `stop_reason` is the API's own verdict on this response: "end_turn" is a
+        # response that ended, "tool_use" is one that broke off to call a tool, and
+        # an interrupted or truncated response says something else again. Read here
+        # rather than joined from a hook because it rides the SAME record the
+        # message is built from — the MessageDisplay hook does carry `final: true`,
+        # but its `message_id` is a third id namespace (measured 2026-08-17: the
+        # hook said b0cb4fd2…, the transcript record's uuid was 4bbcc159… and its
+        # `message.id` was msg_011Ce8X6…), so using it would mean a heuristic join
+        # across two sources with different arrival lag.
+        #
+        # Only the LAST text block carries it: one response may hold several text
+        # blocks (`uuid:0`, `uuid:1`, …) and the stop belongs to the response, so
+        # the earlier blocks are prose the model wrote on its way to stopping.
+        ends_turn = native_message.get("stop_reason") == "end_turn"
+        last_text_index = max(
+            (
+                index for index, block in enumerate(native_blocks)
+                if isinstance(block, dict)
+                and block.get("type") == "text"
+                and str(block.get("text") or "").strip()
+            ),
+            default=-1,
+        )
         for block_index, block in enumerate(native_blocks):
             if not isinstance(block, dict):
                 continue
@@ -361,7 +459,7 @@ def translate_transcript(
                     MessageId(block_identity),
                     "assistant",
                     content(block.get("text"), markdown=True),
-                    "intermediate",
+                    "end_turn" if ends_turn and block_index == last_text_index else "intermediate",
                     None,
                 )
                 events.append(

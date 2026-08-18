@@ -10,12 +10,11 @@ message is drawn in.
 from __future__ import annotations
 
 import html
-import json
 from dataclasses import dataclass
 from typing import Literal, TypeAlias
 
-from domain.ids import ActorId, CanonicalEventId
-from domain.values import Content, StructuredContent, TextContent
+from domain.ids import ActorId, AssignmentId, CanonicalEventId, MessageId, TurnId
+from domain.values import content_text
 
 
 # The kinds an item can be SUMMARISED as — the icon/label vocabulary the browser
@@ -93,14 +92,14 @@ class DashboardItem:
         "recap",
         "actor_message",
     ] | None = None
-    turn_id: str | None = None
+    turn_id: TurnId | None = None
     final: bool = False
-    actor_assignment_id: str | None = None
+    actor_assignment_id: AssignmentId | None = None
     actor_assignment_phase: Literal["started", "finished"] | None = None
     lines_added: int | None = None
     lines_removed: int | None = None
-    message_id: str | None = None
-    reply_to_message_id: str | None = None
+    message_id: MessageId | None = None
+    reply_to_message_id: MessageId | None = None
     started_at: float | None = None
     finished_at: float | None = None
     command_reference: str | None = None
@@ -108,14 +107,9 @@ class DashboardItem:
     file_path: str | None = None
 
 
-def plain_text(content: Content | None) -> str:
-    if content is None:
-        return ""
-    if isinstance(content, TextContent):
-        return content.text
-    if isinstance(content, StructuredContent):
-        return json.dumps(json.loads(content.json_text), ensure_ascii=False, indent=2, sort_keys=True)
-    raise TypeError(f"unsupported content: {type(content).__name__}")
+# The content types answer this themselves (domain/values.py content_text); the
+# name stays because it is what every presenter in this package calls.
+plain_text = content_text
 
 
 def content_reference(event_id: CanonicalEventId, field: str, text: str) -> str | None:

@@ -9,8 +9,7 @@ only exists inside the daemon.
 from __future__ import annotations
 
 from harness.contract import HarnessCanonicalEventReactor, HarnessReactorContext
-from harness.models import MigrateAccount
-from domain.events import CanonicalEvent, GoalChanged, SessionStarted
+from domain.events import CanonicalEvent, SessionStarted
 from harness.impl.claude_code.otel import launch as otel
 
 
@@ -21,15 +20,3 @@ class ClaudeOtelCanonicalEventReactor(HarnessCanonicalEventReactor):
         if isinstance(canonical_event.payload, SessionStarted):
             otel.start()
 
-
-class ClaudeAccountMigrationCanonicalEventReactor(HarnessCanonicalEventReactor):
-    def react(
-        self, canonical_event: CanonicalEvent, controls: HarnessReactorContext
-    ) -> None:
-        payload = canonical_event.payload
-        if isinstance(payload, GoalChanged) and payload.state == "usage_limited" \
-                and canonical_event.parent_actor_id is None:
-            controls.execute(MigrateAccount(
-                canonical_event.session_id,
-                f"claude_code:rate_limit:{canonical_event.event_id}",
-            ))

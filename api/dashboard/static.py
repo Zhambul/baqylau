@@ -11,8 +11,8 @@ from __future__ import annotations
 import os
 import re
 
-from fastapi import APIRouter
-from fastapi.responses import JSONResponse, Response
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import Response
 
 from api.dependencies import Policy
 from api.responses import errors
@@ -54,12 +54,12 @@ def _serve(policy, name: str, version: str) -> Response:
     if not content_type and _APP_PART.match(name):
         content_type = "text/javascript; charset=utf-8"
     if not content_type:
-        return JSONResponse({"error": "not found"}, 404)
+        raise HTTPException(404, "not found")
     try:
         with open(os.path.join(STATIC_DIR, name), "rb") as static_file:
             data = static_file.read()
-    except OSError:
-        return JSONResponse({"error": "unreadable"}, 500)
+    except OSError as error:
+        raise HTTPException(500, "unreadable") from error
     if name == "index.html":
         data = _stamped_index(data, policy.boot_id.encode())
     if name == "manifest.webmanifest":

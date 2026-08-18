@@ -10,11 +10,13 @@ from __future__ import annotations
 import threading
 from dataclasses import dataclass
 
+from domain.ids import SessionId
+
 
 @dataclass(frozen=True)
 class DashboardNotificationNotice:
     revision: int
-    session_id: str
+    session_id: SessionId
     kind: str
     project: str
     title: str
@@ -30,7 +32,7 @@ class DashboardNotificationState:
 
     def publish_notification(
         self,
-        session_id: str,
+        session_id: SessionId,
         kind: str,
         project: str,
         title: str,

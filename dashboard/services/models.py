@@ -8,15 +8,13 @@ are facts arranged for one page.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 
 from core.repository import RepositoryStatus
 from dashboard.render.items import DashboardItem
 from dashboard.render.markdown import md_html
-from dashboard.render.serialize import json_ready
 from domain.ids import ActorId, AttentionId, OperationId
-from domain.values import Content, StructuredContent, TextContent
+from domain.values import AttentionType
 from engine.projections import (
     ActorSummary,
     ActivityStatistics,
@@ -29,16 +27,6 @@ from engine.projections import (
     UsageSummary,
 )
 from harness.models import TerminalSessionState
-
-
-def content_text(content: Content | None) -> str:
-    if content is None:
-        return ""
-    if isinstance(content, TextContent):
-        return content.text
-    if isinstance(content, StructuredContent):
-        return json.dumps(json.loads(content.json_text), ensure_ascii=False, indent=2, sort_keys=True)
-    raise TypeError(f"unsupported content type: {type(content).__name__}")
 
 
 @dataclass(frozen=True)
@@ -69,7 +57,7 @@ class DashboardQuestion:
 class DashboardPendingAttention:
     actor_id: ActorId
     attention_id: AttentionId
-    attention_type: str
+    attention_type: AttentionType
     questions: tuple[DashboardQuestion, ...]
     plan_html: str | None
 
@@ -151,15 +139,13 @@ class CanonicalSessionListItem:
 
 @dataclass(frozen=True)
 class DashboardActivityFrame:
+    """Everything that changed since a reader's cursor, and the snapshot as of
+    it. Data only: how a frame reaches a browser is api/sse.py's business, and
+    this file used to carry a `.sse()` that made it the dashboard's."""
+
     cursor: int
     items: tuple[DashboardItem, ...]
     snapshot: DashboardSessionSnapshot
-
-    def json(self) -> str:
-        return json.dumps(json_ready(self), ensure_ascii=False, separators=(",", ":"))
-
-    def sse(self) -> str:
-        return f"id: {self.cursor}\nevent: activity\ndata: {self.json()}\n\n"
 
 
 def attention_state(state: AttentionState) -> DashboardAttentionState:

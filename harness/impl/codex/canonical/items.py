@@ -16,7 +16,12 @@ import ast
 import json
 import re
 
-from harness.impl.codex.canonical.vocabulary import is_synthetic, plan_body, strip_input_wrapper
+from harness.impl.codex.canonical.vocabulary import (
+    empty_record,
+    is_synthetic,
+    plan_body,
+    strip_input_wrapper,
+)
 
 # The exec output's exit-status head line ("Exit code: 2" / "Process exited
 # with code 2") — scanned only in the head window: the status line leads the
@@ -212,7 +217,7 @@ def _rsp_message(p):
     # turn shows up in both.
     txt = content_text(p.get("content"))
     if not txt:
-        return None
+        return empty_record()
     role = (p.get("role") or "").strip()
     # A PLAN before anything else: it is an assistant turn wearing a wrapper tag,
     # so the structural synthetic rule below would drop it as machinery (see
@@ -241,7 +246,7 @@ def _rsp_reasoning(p):
     # summary is a list of {"type": "summary_text", "text": …}; it is empty
     # whenever the think was stored as `encrypted_content` instead.
     txt = content_text(p.get("summary"))
-    return {"kind": "think", "text": txt} if txt else None
+    return {"kind": "think", "text": txt} if txt else empty_record()
 
 
 def _rsp_custom_tool_call(p):

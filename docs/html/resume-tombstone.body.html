@@ -1,0 +1,327 @@
+<!--doc
+title: A resumed session never comes back
+eyebrow: Bug report
+lede: Session 498434ba stopped reading its transcript at 17:43:57 and never resumed, because the first `session.finished` fact is a permanent tombstone and every later `session.started` is discarded as a duplicate.
+meta: Author: Claude, Updated: 2026-08-18, Scope: engine/interpret, repository/impl/sqlite, harness/impl/claude_code
+toc: yes
+width: normal
+-->
+
+<h2>The bug in one sentence</h2>
+
+<p>Claude Code restarted three times under one session id when the fable limit
+forced an account switch, and baqylau treats the first <code>session.finished</code>
+as final: the session left <code>watchable()</code> at 17:43:58 and nothing ever
+put it back.</p>
+
+<div class="grid cols-3">
+  <div class="card stat danger"><span class="stat-value">2h 57m</span><span class="stat-label">transcript unread</span></div>
+  <div class="card stat danger"><span class="stat-value">1.39 MB</span><span class="stat-label">conversation never interpreted</span></div>
+  <div class="card stat accent"><span class="stat-value">3</span><span class="stat-label">runs of one session id</span></div>
+</div>
+
+<p>The session still looks half alive. Hook and OTLP deliveries land on the HTTP
+threads and need no watcher, so tool calls and usage keep flowing; messages and
+reasoning come from the transcript, which only the interpreter pulls, so they
+stop dead.</p>
+
+<div class="callout key">
+  <div class="callout-icon" aria-hidden="true">◆</div>
+  <div class="callout-body"><span class="callout-label">Key point:</span>
+    Lifecycle facts are identified by the session id alone, so a session's second
+    run collides with its first. The resume's <code>session.started</code> is
+    deduplicated, and the tombstone from run 1 outlives every later run.</div>
+</div>
+
+<h2>What happened</h2>
+
+<p>One session id, three processes, three kitty windows, two subscription
+configs. The account switcher stops the CLI and re-launches it with
+<code>--resume</code>, which is why the session id survives across all three.</p>
+
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Run</th><th>pid</th><th>Window</th><th>Account</th><th>Span</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td><code>65919</code></td><td><code>1343</code></td><td><code>c2</code></td><td>16:08:17 → SessionEnd 17:43:57</td></tr>
+      <tr><td>2</td><td><code>79100</code></td><td><code>1346</code></td><td><code>c1</code></td><td>17:43:59 → SessionEnd 17:44:45</td></tr>
+      <tr><td>3</td><td><code>81559</code></td><td><code>1347</code></td><td><code>c2</code></td><td>17:45:03 → still running at 20:41</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<ul class="timeline">
+  <li class="done"><span class="when">16:08:17</span><span class="what">Run 1 starts</span>
+    <p class="muted mb-0"><code>SessionStart</code> with <code>source=startup</code>. The
+      fact <code>claude_code:session:bf68929…</code> is accepted, the
+      <code>sessions</code> row is born, the transcript source starts pulling.</p></li>
+  <li class="danger"><span class="when">17:43:57</span><span class="what">Run 1 ends, and the session is tombstoned</span>
+    <p class="muted mb-0"><code>SessionEnd</code> with <code>reason=other</code> →
+      <code>session.finished</code> at cursor 34334. The session leaves
+      <code>watchable()</code>. Last transcript read: position 987,347.</p></li>
+  <li class="warn"><span class="when">17:43:59</span><span class="what">Run 2 resumes — and is discarded</span>
+    <p class="muted mb-0"><code>SessionStart</code> with <code>source=resume</code> under
+      account <code>c1</code>. Its <code>session.started</code> carries the same
+      <code>event_id</code> as 16:08, so <code>interpretation_events</code> records
+      <code>deduplicated</code>. No new fact exists.</p></li>
+  <li class="warn"><span class="when">17:44:45</span><span class="what">Run 2 ends</span>
+    <p class="muted mb-0">A second <code>SessionEnd</code>, also deduplicated against the
+      first. Both runs' endings are one fact.</p></li>
+  <li class="warn"><span class="when">17:45:03</span><span class="what">Run 3 resumes — also discarded</span>
+    <p class="muted mb-0">Back on account <code>c2</code>, pid 81559. Only its
+      <code>launch</code> evidence lands as new facts
+      (<code>model.changed</code>, <code>effort.changed</code>). The start is
+      deduplicated again.</p></li>
+  <li class="danger"><span class="when">17:45 → now</span><span class="what">Alive, mute, and unwatched</span>
+    <p class="muted mb-0">Hooks and OTLP keep producing operations and usage. The
+      transcript grows to 2,373,518 bytes and nobody reads it.</p></li>
+</ul>
+
+<h2>The evidence</h2>
+
+<p>Every row below comes from <code>main.db</code> and <code>audit.db</code>,
+opened read-only.</p>
+
+<h3>Pulled sources froze; pushed sources did not</h3>
+
+<div class="table-wrap">
+  <table>
+    <thead><tr><th><code>source_type</code></th><th>Rows</th><th>Last observed</th><th>How it arrives</th></tr></thead>
+    <tbody>
+      <tr><td><code>otel</code></td><td>500</td><td>20:37:45</td><td>pushed</td></tr>
+      <tr><td><code>hook</code></td><td>1329</td><td>20:37:44</td><td>pushed</td></tr>
+      <tr><td><code>output_location</code></td><td>267</td><td>20:37:44</td><td>pushed</td></tr>
+      <tr><td><code>transcript</code></td><td>556</td><td><b>17:43:57</b></td><td>pulled</td></tr>
+      <tr><td><code>foreground_output</code></td><td>180</td><td><b>17:40:10</b></td><td>pulled</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>The interpreter itself is healthy: machine-wide, <code>transcript</code> reads
+are current to 20:37:34 for other sessions, the untranslated backlog is two rows
+deep, and <code>audit.db</code> holds no <code>interpreter (…)</code> error for
+this session. The freeze is scoped to one session, which rules out the usual
+dead-thread shape.</p>
+
+<h3>The transcript stopped 1.39 MB short</h3>
+
+<figure class="code">
+  <figcaption><span class="lang">sql</span></figcaption>
+  <pre><code>-- last recorded position for the session's transcript source
+SELECT source_position FROM raw_events
+WHERE source_identity = 'claude_code:transcript:48b959ab…'
+ORDER BY id DESC LIMIT 1;
+-- 987347   (recorded 17:43:57)
+
+-- the file on disk
+-- -rw-------  2373518  Aug 18 20:30  498434ba-….jsonl</code></pre>
+</figure>
+
+<h3>The resume left no fact behind</h3>
+
+<p><code>interpretation_events</code> records what each observation did to the
+store. Four raw events converge on one <code>session.started</code>, and only the
+first is <code>accepted</code>:</p>
+
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Time</th><th>Evidence</th><th><code>storage_result</code></th></tr></thead>
+    <tbody>
+      <tr><td>16:08:17</td><td><code>hook</code> — SessionStart, <code>startup</code></td><td><span class="badge ok">accepted</span></td></tr>
+      <tr><td>16:08:29</td><td><code>transcript</code> — first record</td><td><span class="badge">deduplicated</span></td></tr>
+      <tr><td>17:43:59</td><td><code>hook</code> — SessionStart, <code>resume</code></td><td><span class="badge">deduplicated</span></td></tr>
+      <tr><td>17:45:03</td><td><code>hook</code> — SessionStart, <code>resume</code></td><td><span class="badge">deduplicated</span></td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>Deduplication across the sources of one run is the design working: several
+observers describe one fact. Deduplication across two <em>different</em> runs is
+the bug.</p>
+
+<h3>What the feed shows</h3>
+
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Event type</th><th>Count</th><th>Last</th></tr></thead>
+    <tbody>
+      <tr><td><code>message.created</code></td><td>121</td><td class="nowrap">17:43:56 <span class="dot danger" aria-hidden="true"></span></td></tr>
+      <tr><td><code>session.account_changed</code></td><td>3</td><td>17:45:04</td></tr>
+      <tr><td><code>effort.changed</code></td><td>9</td><td>20:30:02</td></tr>
+      <tr><td><code>operation.started</code></td><td>434</td><td>20:41:06</td></tr>
+      <tr><td><code>usage.reported</code></td><td>311</td><td>20:41:08</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<h2>Why it can never recover</h2>
+
+<p>Two mechanisms combine. Either one alone would be survivable.</p>
+
+<h3>1. Watchability tests existence, not the latest fact</h3>
+
+<p><code>Interpreter._pull()</code> in <code>engine/interpret/loop.py:142</code>
+iterates <code>self.sessions.watchable()</code>, and that query excludes a session
+the moment any <code>session.finished</code> row exists for it:</p>
+
+<figure class="code">
+  <figcaption><span class="file">repository/impl/sqlite/sessions.py</span><span class="lang">python</span></figcaption>
+  <pre><code>def watchable(self) -&gt; tuple[Session, ...]:
+    with self.database.read() as connection:
+        found = connection.execute(
+            "SELECT sessions.* FROM sessions "
+            "WHERE NOT EXISTS ("
+            "  SELECT 1 FROM canonical_events "
+            "  WHERE canonical_events.session_id = sessions.session_id "
+            "  AND canonical_events.event_type = 'session.finished'"
+            ") ORDER BY (…) DESC, sessions.created_at DESC",
+        ).fetchall()</code></pre>
+</figure>
+
+<p>Leaving that set stops the transcript source, the subagent transcripts, the
+output followings and the liveness probe for good. Nothing outside this query
+decides what gets pulled.</p>
+
+<h3>2. Lifecycle facts are named after the session, not the run</h3>
+
+<p>The identity a translator builds is
+<code>(subject_type, subject_id, phase)</code>, and for both ends of a session's
+life the subject id is the session id:</p>
+
+<figure class="code">
+  <figcaption><span class="file">harness/impl/claude_code/canonical/hooks.py</span><span class="lang">python</span></figcaption>
+  <pre><code>if hook_name == "SessionEnd":
+    payload: EventPayload = SessionFinished("succeeded", document.get("reason") or None)
+    return [event(raw_event, "session", str(raw_event.session_id), "finished", payload)]</code></pre>
+</figure>
+
+<figure class="code">
+  <figcaption><span class="file">harness/impl/claude_code/canonical/messages.py</span><span class="lang">python</span></figcaption>
+  <pre><code>events = [
+    event(
+        raw_event,
+        "session",
+        str(raw_event.session_id),      # &lt;- every run of this id, one fact
+        "started",
+        session_started,
+    ),
+    …
+]</code></pre>
+</figure>
+
+<p><code>engine/interpret/translators.py:37</code> does the same for the liveness
+probe, deliberately: a clean exit and a kill are meant to converge on one
+<code>session.finished</code>. That convergence is right within a run and wrong
+across runs.</p>
+
+<p>So the resumed start has nowhere to land. <code>canonical_events</code> keeps
+the first writer and does not compare bodies, which is the correct rule for an
+idempotent projection — it just means the second run's start is silently the
+same fact as the first's.</p>
+
+<div class="flow vertical">
+  <div class="node danger"><span class="node-title">session.finished (run 1)</span><span class="node-sub">cursor 34334, accepted</span></div>
+  <div class="arrow" aria-hidden="true">↓</div>
+  <div class="node"><span class="node-title">watchable() excludes the session</span><span class="node-sub">no source is pulled again</span></div>
+  <div class="arrow" data-label="resume" aria-hidden="true">↓</div>
+  <div class="node warn"><span class="node-title">session.started (runs 2 and 3)</span><span class="node-sub">deduplicated — no new cursor</span></div>
+  <div class="arrow" aria-hidden="true">↓</div>
+  <div class="node danger"><span class="node-title">Nothing can undo the exclusion</span><span class="node-sub">the feed stays frozen</span></div>
+</div>
+
+<h3>Everything downstream already handles a resume</h3>
+
+<p>The projections fold their events and let the last one win, so a later
+<code>SessionStarted</code> would flip them back on its own. They never see one:</p>
+
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Consumer</th><th>On <code>SessionStarted</code></th><th>On <code>SessionFinished</code></th></tr></thead>
+    <tbody>
+      <tr><td><code>engine/projections/session.py:58</code></td><td><code>state = "running"</code></td><td><code>state = "finished"</code></td></tr>
+      <tr><td><code>engine/projections/tabstate.py:42</code></td><td><code>state = "idle"</code></td><td><code>state = None</code></td></tr>
+      <tr><td><code>terminal/panes/reaction.py:29</code></td><td>attaches panes</td><td>closes them</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>That is the useful part of the diagnosis: the fix belongs where facts are
+named and where watchability is decided, and no view code needs to change.</p>
+
+<h2>The fix</h2>
+
+<p>Two changes, both small, and they only work together.</p>
+
+<ol class="procedure">
+  <li><span class="step-title">Name the run in the lifecycle fact identity</span>
+    The envelope already carries <code>harness_process_id</code>, and one process
+    is exactly one run — 65919, 79100, 81559 above. Use it as part of
+    <code>subject_id</code> for <code>session.started</code> and
+    <code>session.finished</code> in
+    <code>harness/impl/claude_code/canonical/messages.py</code>,
+    <code>harness/impl/claude_code/canonical/hooks.py</code>,
+    <code>engine/interpret/translators.py</code> and the Codex equivalents. Hook,
+    transcript and liveness within one run still carry the same pid and still
+    converge on one fact. A session with no pid — a headless launch — falls back
+    to the session id, which is today's behaviour.</li>
+  <li><span class="step-title">Make watchability a fold, not an existence test</span>
+    Exclude a session only when its <b>latest</b> lifecycle fact by
+    <code>cursor</code> is <code>session.finished</code>:
+    <figure class="code">
+      <figcaption><span class="file">repository/impl/sqlite/sessions.py</span><span class="lang">sql</span></figcaption>
+      <pre><code>WHERE NOT EXISTS (
+  SELECT 1 FROM canonical_events f
+  WHERE f.session_id = sessions.session_id
+    AND f.event_type = 'session.finished'
+    AND f.cursor &gt; COALESCE((
+      SELECT MAX(s.cursor) FROM canonical_events s
+      WHERE s.session_id = sessions.session_id
+        AND s.event_type = 'session.started'), 0)
+)</code></pre>
+    </figure>
+  </li>
+</ol>
+
+<div class="compare">
+  <div class="bad"><span class="compare-title">Today</span>
+    <p>A session id has one start and one end for all time. The second run of an
+      id is invisible, and the first end is permanent.</p></div>
+  <div class="good"><span class="compare-title">After</span>
+    <p>Each run is its own pair of facts. The last lifecycle fact decides whether
+      the session is watched, and the projections already agree with it.</p></div>
+</div>
+
+<h3>An alternative worth naming, and why not</h3>
+
+<p>Giving every <code>SessionStart</code> hook its own identity (its
+<code>hook_event_id</code>) is a smaller diff. It also breaks the convergence
+between the hook and the transcript record that describe the same start, so one
+run would emit two <code>session.started</code> facts. The projections tolerate
+that; the event store stops meaning what it says. The pid keys the fact to the
+thing that actually differs.</p>
+
+<div class="callout warn">
+  <div class="callout-icon" aria-hidden="true">▲</div>
+  <div class="callout-body"><span class="callout-label">Caution:</span>
+    A pid can be reused by the operating system. Reuse across two runs of the
+    <em>same session id</em> on one machine is unlikely, and the consequence is
+    the behaviour we have today rather than something worse.</div>
+</div>
+
+<h2>Recovering session 498434ba</h2>
+
+<p>The fix cannot resurrect facts that were deduplicated three hours ago. Once it
+ships, restart the CLI once: the new <code>SessionStart</code> carries a pid that
+has never been seen for this session, so it produces a start fact, the session
+re-enters <code>watchable()</code>, and the transcript source resumes from
+position 987,347.</p>
+
+<p>The missing conversation is not lost. It is 1.39 MB of unread file, and the
+next pull backfills all of it into <code>canonical_events</code>.</p>
+
+<h2>One thing left unexamined</h2>
+
+<p><code>audit.db</code> holds 215 <code>dashboard serve (port busy)</code> errors
+between 20:00:10 and 20:38:05 — a supervisor retrying roughly every ten seconds
+against a port something else already holds. It is unrelated to this bug and was
+not investigated.</p>

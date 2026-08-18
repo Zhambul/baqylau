@@ -1,20 +1,22 @@
 # api/dashboard/sessions.py — the session read API: the list, one session's
 # snapshot pair, and the activity backlog.
 #
-# Responses are the frozen projection dataclasses, serialized by their one
-# encoder (dashboard.render.serialize.json_ready); the route signatures name the types.
+# Responses ARE the frozen projection dataclasses. Each route names the type it
+# answers with and returns that object; FastAPI serializes it against that type,
+# so the published schema and the bytes on the wire are one statement.
 from __future__ import annotations
 
 from fastapi import APIRouter, Query
-from fastapi.responses import JSONResponse
 
 from api.common.models.fields import SessionIdPath
 from app.providers import DashboardActivity, DashboardSessions, SessionApplication, Sessions
-from dashboard.render.serialize import json_ready
 from domain.errors import UnknownReference
 from domain.ids import ActorId, SessionId
+from api.dashboard.mapper import activity as activity_mapper
+from api.dashboard.mapper import sessions as mapper
+from api.dashboard.models.sessions.activity_page import ActivityPageResponse
+from api.dashboard.models.sessions.session_list_item import SessionListItemResponse
 from api.dashboard.models.sessions.session_snapshot_response import SessionSnapshotResponse
-from dashboard.services.models import DashboardActivityPage, DashboardSessionListItem
 from engine.projections import ActivityScope
 
 router = APIRouter()
@@ -33,30 +35,27 @@ def _scope(sessions: Sessions, session_id: SessionId, actor_id: str | None) -> A
     )
 
 
-@router.get("/api/sessions", response_model=list[DashboardSessionListItem])
-def session_list(dashboard: DashboardSessions) -> JSONResponse:
-    return JSONResponse(json_ready(dashboard.sessions()))
+@router.get("/api/sessions")
+def session_list(dashboard: DashboardSessions) -> tuple[SessionListItemResponse, ...]:
+    return tuple(mapper.session_list_item(row) for row in dashboard.sessions())
 
 
-@router.get("/api/sessions/{session_id}", response_model=SessionSnapshotResponse)
+@router.get("/api/sessions/{session_id}")
 def session_snapshot(
     session_id: SessionIdPath,
     sessions: Sessions,
     dashboard: DashboardSessions,
     workspace: SessionApplication,
     actor_id: str | None = None,
-) -> JSONResponse:
+) -> SessionSnapshotResponse:
     session = SessionId(session_id)
     scope = _scope(sessions, session, actor_id)
-    return JSONResponse(
-        {
-            "canonical": json_ready(dashboard.snapshot(session, scope)),
-            "application": json_ready(workspace.snapshot(session)),
-        }
+    return mapper.session_snapshot(
+        dashboard.snapshot(session, scope), workspace.snapshot(session)
     )
 
 
-@router.get("/api/sessions/{session_id}/activity", response_model=DashboardActivityPage)
+@router.get("/api/sessions/{session_id}/activity")
 def session_activity(
     session_id: SessionIdPath,
     sessions: Sessions,
@@ -64,8 +63,9 @@ def session_activity(
     block_count: int = Query(DEFAULT_ACTIVITY_BLOCK_COUNT, gt=0),
     before_cursor: int | None = None,
     actor_id: str | None = None,
-) -> JSONResponse:
+) -> ActivityPageResponse:
     session = SessionId(session_id)
     scope = _scope(sessions, session, actor_id)
-    page = activity.backlog(session, before_cursor, scope, block_count)
-    return JSONResponse(json_ready(page))
+    return activity_mapper.activity_page(
+        activity.backlog(session, before_cursor, scope, block_count)
+    )

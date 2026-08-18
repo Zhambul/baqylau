@@ -4,10 +4,12 @@
 # different reasons and the page re-renders them independently.
 from pydantic import BaseModel
 
-from dashboard.services.models import DashboardSessionSnapshot
-from dashboard.services.workspace import SessionApplicationSnapshot
+from api.dashboard.models.application.session_application_response import (
+    SessionApplicationResponse,
+)
+from api.dashboard.models.sessions.canonical_snapshot import CanonicalSnapshotResponse
 
 
 class SessionSnapshotResponse(BaseModel):
-    canonical: DashboardSessionSnapshot
-    application: SessionApplicationSnapshot
+    canonical: CanonicalSnapshotResponse
+    application: SessionApplicationResponse

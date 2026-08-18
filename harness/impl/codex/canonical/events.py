@@ -10,7 +10,7 @@
 # dispatches through it. An unknown type is not an error — the grammar is
 # VERSION-FRAGILE (verified drift across codex 0.95 → 0.144), so a missing key
 # means None, never an exception.
-from harness.impl.codex.canonical.vocabulary import strip_input_wrapper
+from harness.impl.codex.canonical.vocabulary import empty_record, strip_input_wrapper
 
 # The PHASE codex stamps on an assistant message. `final_answer` is the one that
 # matters: it is codex SAYING this message is the turn's answer, which is what
@@ -18,6 +18,15 @@ from harness.impl.codex.canonical.vocabulary import strip_input_wrapper
 # intermediate note (`commentary` is the other measured value). Absent on older
 # rollouts — "" then, and the result falls back to the pre-phase inference.
 PHASE_FINAL = "final_answer"
+
+# The `item_completed` item types whose content reaches us through ANOTHER
+# register and is therefore read there, not here (measured against codex-cli
+# 0.147.0: `UserMessage` and `AgentMessage` items are completed for the same prose
+# the `response_item/message` records already carry, `Reasoning` for the think the
+# `reasoning` records carry — and `_ev_user_message` / `_ev_agent_message` /
+# `_ev_agent_reasoning` already de-double the event_msg spellings of the same).
+# A CLOSED list on purpose — see _ev_item_completed.
+COVERED_ITEMS = ("UserMessage", "AgentMessage", "Reasoning")
 
 
 def _ev_token_count(p):
@@ -174,8 +183,19 @@ def _ev_item_completed(p):
     *Plan mode*) — the codex analog of Claude's ExitPlanMode plan text, and the
     signal the pending-plan read keys on. Every OTHER item_completed kind (codex
     also completes messages/reasoning as items) is already covered by its own
-    event/response record, so only Plan produces a record here."""
+    event/response record, so only Plan produces a record here.
+
+    The message items say so EXPLICITLY (`covered_item`) instead of returning
+    None: None is reported as `ignored_unknown` — "a type I do not recognise" —
+    which is not what we mean about a record whose content we already read from
+    another register, and which makes a deliberate decision indistinguishable
+    from real drift. Only the item types actually MEASURED as duplicates are
+    named; every other type still falls through to None, so the first
+    item_completed carrying something new (a todo, a web search) trips the wire
+    instead of disappearing into this branch."""
     item = p.get("item") or {}
+    if item.get("type") in COVERED_ITEMS:
+        return {"kind": "covered_item"}
     if item.get("type") == "FileChange":
         return _file_change(item)
     if item.get("type") == "CommandExecution":
@@ -214,7 +234,7 @@ def _ev_item_completed(p):
         return None
     text = (item.get("text") or "").strip()
     return {"kind": "plan", "text": text, "id": item.get("id") or ""} if text \
-        else None
+        else empty_record()
 
 
 def _ev_turn_aborted(p):
@@ -225,18 +245,18 @@ def _ev_user_message(p):
     # Unwrap an INPUT wrapper here too so a `<task>` that also lands in the
     # event_msg register de-doubles with the response_item one to a single bubble.
     msg = strip_input_wrapper((p.get("message") or "").strip())
-    return {"kind": "prompt", "text": msg} if msg else None
+    return {"kind": "prompt", "text": msg} if msg else empty_record()
 
 
 def _ev_agent_reasoning(p):
     txt = (p.get("text") or "").strip()
-    return {"kind": "reasoning", "text": txt} if txt else None
+    return {"kind": "reasoning", "text": txt} if txt else empty_record()
 
 
 def _ev_agent_message(p):
     msg = (p.get("message") or "").strip()
     return {"kind": "message", "text": msg,
-            "phase": (p.get("phase") or "").strip()} if msg else None
+            "phase": (p.get("phase") or "").strip()} if msg else empty_record()
 
 
 def _ev_web_search_end(p):

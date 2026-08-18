@@ -1,0 +1,360 @@
+<!--doc
+title: The read side: twelve bugs, one measurement, and the smallest change that fixes both
+eyebrow: Design review — final
+lede: Five review passes and one benchmark cut this from a redesign to a plan. The measured problem is 67 ms of redundant folding; the structural problem is a stringly-typed reference and one duplicated decision table. Most of the rest was taste.
+meta: Author: Claude, Updated: 2026-08-18, Scope: everything between canonical-event storage and the two clients
+toc: yes
+width: normal
+-->
+
+<h2>Summary</h2>
+
+<p>This began as a redesign of everything downstream of canonical-event storage: a per-session
+folded state, a display tier, a typed content reference, a repackaged API. Then it was measured,
+and then someone counted what the new types would actually replace. What survived is much
+smaller, and it fixes everything that is genuinely broken.</p>
+
+<div class="grid cols-3">
+  <div class="card stat danger"><span class="stat-value">12</span><span class="stat-label">real defects in the code today, six of them user-visible</span></div>
+  <div class="card stat warn"><span class="stat-value">67 ms</span><span class="stat-label">of a 98 ms stream tick spent folding the same events three times</span></div>
+  <div class="card stat ok"><span class="stat-value">~110</span><span class="stat-label">lines that fix every defect and three quarters of the cost</span></div>
+</div>
+
+<p>The plan, in order:</p>
+
+<ol class="procedure">
+  <li><span class="step-title">Fix the twelve defects</span>
+    About 40 lines across six files, plus tests. Every one has a file and a line number, and six
+    are visible to you today. Specified exactly in Table 1.</li>
+  <li><span class="step-title">Take the measured performance fixes</span>
+    About 70 lines: memoise the fold, release a lock, evict two caches, agree on one cursor,
+    route one query through the page cache. The tick goes from 98 ms to roughly 25 ms.</li>
+  <li><span class="step-title">Stop and re-measure</span>
+    Anything further is judged against that number, not the one at the top of this page.</li>
+  <li><span class="step-title">Later, when it is the thing in front of you</span>
+    <code>ContentRef</code> — the one new type worth building — one shared label-and-format
+    module, one shared protocol, six shared colour constants. About 250 lines, removing the
+    duplication that actually exists.</li>
+</ol>
+
+<div class="callout key">
+  <div class="callout-icon" aria-hidden="true">◆</div>
+  <div class="callout-body"><span class="callout-label">Key point:</span>
+    The original centrepiece — a resident <code>SessionState</code> with its own registry — is
+    <strong>not</strong> recommended, and the reason is worth keeping. <code>EventPages</code>
+    (<code>engine/projections/pages.py</code>, 104 lines) already is that object: per-session,
+    cursor-keyed, locked, replaying on a miss, advancing incrementally. A 25-line memo hung on it
+    delivers every structural claim the larger design made — one door onto session facts, field
+    reads instead of repeated folds, private caches deleted, a resolver that does not re-fold —
+    without giving up the property that makes this system debuggable: today a wrong screen is
+    always explained by the store, because no read can be stale.</div>
+</div>
+
+<p>One rule shaped the final pass: no speculative edge-case handling and no fallbacks, with
+audit logging the single exception — it may always be defensive, because it is the only record left
+after a failure. That rule removed more than it added. Defect 6 inverted from a rename across four
+files into a ten-line deletion; defect 2 went from an <code>Optional</code> threaded through three
+files to one <code>raise</code>; item I stopped deleting two working query parameters and so no
+longer needed the route that repaired them; and item J dropped two changes whose justification did
+not survive checking — one would have altered what a surface prints, the other cited a styleguide
+that was deleted in commit <code>0d2a31a</code>.</p>
+
+<p>The cost figures come from running the read path against the real store on this machine
+(306 MB, 43 sessions, 35,720 canonical events, largest session 7,179). Everything else comes from
+reading the working tree. Line counts are estimates; defect line numbers are exact.</p>
+
+<h2>The twelve defects, and their fixes</h2>
+
+<p>Six are visible to you today; the rest cost time or memory. Every line number is exact and was
+verified against the working tree. Two design choices are settled in the table so an implementer
+needs none of their own: defect 1 is the narrow fix only — the
+<code>OperationProgressed</code>-as-file-content path at <code>activity.py:193-197</code> is
+<strong>not</strong> touched, because a test pins it and it is how a read file's bytes reach the
+UI — and defect 5 is fixed by making the started branch match the finished one, which is also
+what makes a new "attributed actor" field unnecessary.</p>
+
+<div class="table-wrap">
+  <table>
+    <caption>Table 1. Every defect, its evidence, its fix, and its test</caption>
+    <thead><tr><th>#</th><th>What is wrong</th><th>Fix</th><th>Test</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>1</td>
+        <td><strong>Every file edit whose operation finishes with a result shows a ⧉view link that answers 400.</strong> The fold sets <code>content_field="result"</code> (<code>activity.py:290-299</code>), clobbering the good <code>unified_diff</code>/<code>content</code> value set at <code>:372-376</code>. The resolver accepts <code>OperationFinished</code> but only for its three folded field names, so <code>"result"</code> falls through to the allow-table lookup (<code>engine/queries/content.py:83-85</code>), which has no row for that payload. The browser toasts <code>view failed</code>. The terminal misses it too: <code>presenter.py:289,291</code> tests only the two good values, so both arms fall through.</td>
+        <td>Drop both <code>payload.result is not None</code> conditionals at <code>activity.py:290-299</code>, leaving <code>content_event_id=file_activity.content_event_id</code> and <code>content_field=file_activity.content_field</code>. A file's reference must point at the event carrying the file's bytes; <code>result</code> is the tool's textual reply and nothing reads it today.</td>
+        <td><strong>Add</strong> the round trip whose absence let this ship: fold a <code>file_edit</code> whose operation finishes with a result, mint the reference through <code>dashboard/render/items/files.py:73-77</code>, <code>GET</code> it, assert 200 and the diff text — and assert the opposite half too, that a file with no bytes anywhere offers no reference at all. Beside the 400 cases at <code>tests/test_canonical_http.py:1478-1497</code>.</td>
+      </tr>
+      <tr>
+        <td>2</td>
+        <td><strong>A content reference to a hidden or file-backed operation answers 500, not 400.</strong> <code>resolve</code> calls <code>queries.operation_activity</code> (<code>engine/queries/content.py:50</code>) → <code>work.operation_activity</code>. File-category operations are folded into <code>FileActivity</code> and never exist as an <code>OperationActivity</code> (<code>activity.py:156-159</code>); attention, task and message categories are dropped outright (<code>:160-162</code>). The lookup raises a bare <code>KeyError</code>, which <code>api/app.py</code>'s handler renders as a 500 plus an <code>errors</code> audit row.</td>
+        <td><strong>One line.</strong> At <code>engine/projections/work.py:140</code>, change <code>raise KeyError(str(operation_id))</code> to <code>raise UnknownReference(str(operation_id))</code>. That class subclasses both <code>ApplicationInputError</code> and <code>LookupError</code> (<code>domain/errors.py:29</code>), so it keeps the shape a narrow catcher expects while <code>api/app.py:96-111</code> renders it as 400 and writes no <code>errors</code> row — precisely what that module exists for. No <code>OperationActivity | None</code>, no caller branching, no signature that lies.</td>
+        <td><strong>Add</strong> near <code>test_canonical_http.py:1487</code>: an <code>operation_output</code> reference against a <code>file_read</code>-category operation answers 400 and writes no <code>errors</code> row. Expect the ⚠ global-errors count to drop once this lands.</td>
+      </tr>
+      <tr>
+        <td>3</td>
+        <td><strong>Every file of a multi-file operation shares one content reference.</strong> <code>file_activity_ids_by_operation</code> is <code>dict[str, list[str]]</code> (<code>activity.py:105</code>), and the <code>OperationProgressed</code> branch writes the same <code>content_event_id</code> to every file activity of that operation (<code>:182-199</code>). A <code>MultiEdit</code> over N files mints N items carrying one token — and since <code>opened_views</code> is keyed by the token, expanding one file expands all N. Invisible today only because the browser's <code>?path=</code> came from the DOM node rather than the token. The same branch appends without dedup (<code>:395</code>), so a repeated <code>FileAccessed</code> re-applies the merge.</td>
+        <td>Mint a per-file reference in the progress path. <strong>Deferred to item I</strong>, where the type exists to carry it. One consequence for that type: <code>(slot, event_id)</code> <strong>cannot</strong> discriminate N files sharing one <code>OperationProgressed</code> event, so <code>ContentRef</code> needs a third component — the path — which the file activity's id already embeds (<code>file:{actor}:{operation}:{path}</code>, <code>activity.py:366-367</code>).</td>
+        <td>A multi-file operation mints N distinct references, and toggling one leaves the others closed.</td>
+      </tr>
+      <tr>
+        <td>4</td>
+        <td><strong>Three dataset names in committed JS were mangled by a find-replace.</strong> <code>app.05-session.js:813</code> writes <code>dataset.summaryKindivityTime</code> while its only reader (<code>:1263</code>) reads <code>activityTime</code> — a fallback, so a collapsed run loses its live timer anchor only when no member carries <code>started_at</code>. Separately <code>:807</code> writes <code>dataset.summaryKindorId</code> and <code>:833</code> reads it — the replace hit both sides, so only the selector escaped: <code>tintAgentNotes()</code> queries <code>[data-actor-id]</code>, which nothing writes, so the agent-note tinting described at <code>:816-826</code> never runs.</td>
+        <td>Four lines. <code>:813</code> → <code>dataset.activityTime</code>. <code>:807</code> delete entirely — <code>:803-804</code> already writes <code>actorAssignmentId</code> with the same value. <code>:832</code> selector → <code>[data-actor-assignment-id]</code>. <code>:833</code> → <code>row.dataset.actorAssignmentId</code>.</td>
+        <td><strong>Add</strong> one assertion to <code>tests/test_frontend_parity.py</code>: no <code>summaryKind</code>-prefixed dataset key appears anywhere in the source. That is the only assertion catching the <em>next</em> find-replace; asserting the two corrected names would restate the edit. (That file drives jsdom through node at <code>:17-30</code>, so a substring-over-source check is a new shape there.)</td>
+      </tr>
+      <tr>
+        <td>5</td>
+        <td><strong>An assignment's two halves report different actors.</strong> The fold attributes an assignment to the parent for scoping (<code>activity.py:119-126,131</code>) and rewrites <code>context.actor_id</code> to the parent for <code>ActorAssignmentFinished</code> (<code>:485-491</code>) — but not for <code>ActorAssignmentStarted</code> (<code>:468-481</code>), which keeps the child's id from <code>_context</code> (<code>:82</code>). So the started and finished items of one assignment ship different <code>actor_id</code> values.</td>
+        <td>At <code>activity.py:468-481</code>, mirror what <code>:485-491</code> already does: build the context, then <code>if assignment_for_parent: context = replace(context, actor_id=activity_actor_id, parent_actor_id=None)</code>. This also makes <code>context.actor_id</code> mean "the attributed actor" in all seventeen branches, which is why no new field is needed.</td>
+        <td><strong>Amend</strong> <code>tests/test_canonical_projections.py:511-551</code>: add <code>assert lead_activities[0].context.actor_id == LEAD_ACTOR_ID</code>. The existing <code>child_activities == ()</code> assertion stays — it proves scoping still uses the effective id.</td>
+      </tr>
+      <tr>
+        <td>6</td>
+        <td><strong>Three streams emit an error frame no client can act on.</strong> The server writes the audit row <em>before</em> emitting it (<code>api/dashboard/streams.py:80,147</code>; <code>api/terminal/streams.py:99-100</code>, which also calls <code>stream_end(..., "error")</code>), and the frame's body is a fixed string. The session stream registers no listener for it (<code>app.05-session.js:422-454</code>); the pane breaks its read loop on it (<code>client/terminal_pane.py:56</code>) but its <code>while True</code> reconnects on a closed stream anyway (<code>:35,63-64</code>); and <code>EventSource</code> fires <code>onerror</code> on a close as readily as on a server frame, which is why a listener could not distinguish them.</td>
+        <td><strong>Delete the frame instead of handling it.</strong> Remove the three <code>yield sse_frame("error", ErrorFrame(...))</code> emissions (<code>api/dashboard/streams.py:81,148</code>, <code>api/terminal/streams.py:101</code>), delete <code>api/common/models/streams/error_frame.py</code> — those three are its only users — and delete <code>client/terminal_pane.py:56-57</code>. About ten lines removed, where an earlier draft added fifteen across four files plus a browser listener plus a test. The audit row stays: it is the one defensive path this plan keeps, because it is the only record a developer can read afterwards.</td>
+        <td>None, and none is lost — nothing tests this frame on any stream today. Closing the connection is the signal, and both clients already act on it.</td>
+    </tr>
+      <tr>
+        <td>7</td>
+        <td><strong>A control route has no caller.</strong> <code>POST /api/sessions/{id}/controls/open-rewind</code> (<code>api/dashboard/controls.py:121</code>) is called from nowhere — not the JS, not <code>client/</code>, not the tests. The browser's rewind flow uses <code>apply-rewind</code> plus local pick-mode UI.</td>
+        <td>Delete the route (<code>controls.py:120-126</code>), its import (<code>:17</code>) and <code>api/dashboard/models/controls/open_rewind_request.py</code>. The package's <code>__init__.py</code> exports nothing, so nothing else breaks. The harness-side handler stays, now reachable by nothing; removing it is a separate deletion across six files.</td>
+        <td>None. There is no route or OpenAPI inventory test in the suite — the response-model test simply loses a case.</td>
+      </tr>
+      <tr>
+        <td>8</td>
+        <td><strong>The snapshot path consults no cache at all.</strong> <code>snapshot_at</code> (<code>dashboard/services/sessions.py:173-190</code>) never reads <code>_canonical_sessions</code>; that memo is used only inside <code>_build_sessions</code> (<code>:101-164</code>), which serves the session list. So every session-stream tick pays ten uncached folds. Separately, <code>DashboardStreamService</code> constructs its own second <code>DashboardSessionService</code> (<code>dashboard/services/streams.py:26</code>) against the rule in <code>app/injection.py:10</code>; the inner copy never calls <code>sessions()</code>, so it costs little today.</td>
+        <td>Items E and H: read the memo in <code>snapshot_at</code>, and inject the service rather than building a second one.</td>
+        <td>Covered by the tick benchmark in item B.</td>
+      </tr>
+      <tr>
+        <td>9</td>
+        <td><strong>Three caches never evict.</strong> <code>_canonical_sessions</code> (<code>sessions.py:59</code>) and both of <code>EventPages</code>' dicts — <code>_latest_pages</code> and <code>_tail_pages</code> (<code>pages.py:21-22</code>) — grow for the daemon's life. One visit to <code>/api/insights</code> folds a summary for <em>every</em> session in the store (<code>app/services/insights.py:114</code>, uncapped, versus the list's cap of 20) and pins each session's full decoded history in memory permanently.</td>
+        <td>Item D: evict on the mirror's existing 600 s idle rule (<code>MODEL_IDLE_SECONDS</code>, <code>terminal/panes/streams.py:39</code>).</td>
+        <td>A session untouched past the idle window is no longer resident.</td>
+      </tr>
+      <tr>
+        <td>10</td>
+        <td><strong>The page cache holds one lock across blocking SQLite reads.</strong> <code>engine/projections/pages.py:52-72</code> calls both <code>events_between</code> (<code>:60-64</code>) and <code>page_through</code> (<code>:69</code>) inside <code>with self._latest_pages_lock</code>, so every poll thread serializes on one <code>RLock</code> around a potentially full-session read.</td>
+        <td>Item C: release the lock around the reads.</td>
+        <td>Covered by the tick benchmark.</td>
+      </tr>
+      <tr>
+        <td>11</td>
+        <td><strong>Cache thrash when the interpreter is more than 200 events behind.</strong> The stream folds at a cursor capped by <code>page_after(..., limit=200)</code> (<code>dashboard/services/streams.py:37</code>) while the list refresh folds at the global latest, so the two alternately fail <code>EventPages</code>' cursor-equality check and force a full <code>page_through</code> re-read — the stream side re-reads the whole session, every tick, until it catches up.</td>
+        <td>Item F: one cursor source for both.</td>
+        <td>Covered by the tick benchmark; diagnosed from the code paths, not measured.</td>
+      </tr>
+      <tr>
+        <td>12</td>
+        <td><strong>A projection living in the dashboard tier reads the whole session per tick.</strong> <code>SessionApplicationService._delivered_prompts</code> (<code>dashboard/services/workspace.py:207-220</code>) calls <code>canonical_events.page_through(session_id, None)</code> directly, bypassing <code>EventPages</code>, and is reached from <code>snapshot</code> on every session-stream tick.</td>
+        <td>Item G: route it through the page cache.</td>
+        <td>Covered by the tick benchmark.</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<h2>What the read path costs</h2>
+
+<p>Measured against the real store on this machine — 306 MB, 43 sessions, 35,720 canonical
+events, largest session 7,179. These three numbers are the whole performance argument:</p>
+
+<div class="grid cols-3">
+  <div class="card stat warn"><span class="stat-value">97.7 ms</span><span class="stat-label">one session-stream tick on the largest session, against a 250 ms budget</span></div>
+  <div class="card stat danger"><span class="stat-value">~75%</span><span class="stat-label">of one core, with a browser tab, a mirror and a scoreboard on that session</span></div>
+  <div class="card stat accent"><span class="stat-value">67 ms</span><span class="stat-label">of the 98 spent folding the same events three times over</span></div>
+</div>
+
+<p>The redundancy is the finding. <code>statistics</code>
+(<code>engine/projections/work.py:66</code>), <code>background_operations</code>
+(<code>:53</code>) and <code>activity_after</code> (<code>engine/projections/paging.py:30</code>)
+each run <code>activities_of</code> in full over the same page, at the same cursor, with the same
+scope — three identical folds inside one tick, where the cursor cannot have moved. Item B removes
+them. The other 31 ms is eight cheap single-purpose folds plus a 1.4 ms warm page read, and the
+first read of a session costs 481 ms once per process, which <code>EventPages</code> already
+handles.</p>
+
+<p>Two things this measurement killed. The problem is <strong>not</strong> "a fold per query",
+which is what earlier drafts assumed and what a per-session folded state would have addressed. And
+the O(k²) progress rebuild that three earlier drafts used as justification does not exist at this
+scale: the worst operation in the entire store has <strong>11</strong> progress chunks, so 121
+tuple copies. Items B and C take the tick to roughly 25 ms with no new types; per-event folding
+would take it to microseconds, which is not worth rewriting the subtlest 437 lines in the read
+side for. One contrast worth keeping: the mirror folds a <em>bounded tail</em>
+(<code>terminal/panes/streams.py:130-135</code>), which is why its cost does not grow with session
+length, while the dashboard folds the whole session for the same job.</p>
+
+<h2>The minimum change set</h2>
+
+<p>Production changes in dependency order. A–H are the recommendation; I–L are a worthwhile
+second change. Nothing here needs a new package, and only one item adds a type.</p>
+
+<div class="table-wrap">
+  <table>
+    <caption>Table 2. Everything worth doing, and what it costs</caption>
+    <thead><tr><th></th><th>Change</th><th>Fixes</th><th>Lines</th></tr></thead>
+    <tbody>
+      <tr><td>A</td><td>The twelve defects, exactly as specified in Table 1</td><td>all twelve</td><td>~40, six files</td></tr>
+      <tr><td>B</td><td>Memoise the fold <strong>inside the existing <code>_latest_pages</code> entry</strong> (<code>engine/projections/pages.py:21</code>), so an entry becomes cursor, events, and a small <code>{scope: folded}</code> map. Invalidation is then one line in each of the two branches that replace or extend the entry (<code>:68</code>, <code>:72</code>) — clear the folds — and item D's bound covers the memo for free rather than by rule. The scope key is <strong>required</strong>: two scopes are live for one session at once, <code>ActivityScope()</code> from the list-refresh thread (<code>dashboard/services/sessions.py:139</code>) and <code>ActivityScope(actor_id=lead)</code> from the stream (<code>api/dashboard/sessions.py:33</code>), and a single slot would be replaced on every alternation. Return the two cursor maps as <code>MappingProxyType</code> — two lines, enforced rather than documented, and already the idiom at <code>work.py:96</code>.</td><td>the measured 67 ms</td><td>~20</td></tr>
+      <tr><td>C</td><td>Release the page lock around the SQLite reads at <code>engine/projections/pages.py:52-72</code></td><td>defect 10</td><td>~10</td></tr>
+      <tr><td>D</td><td>Bound <code>_latest_pages</code> with a hard cap on resident sessions: it is insertion-ordered, so on insert drop the oldest key when the limit is exceeded. No clock, no <code>polled_at</code> field, no sweeper, and nothing imported from <code>terminal/</code> into <code>engine/</code>. Strictly bounded, which an idle rule is not — 43 actively-polled sessions would stay resident forever under one. <code>_canonical_sessions</code> is <strong>not</strong> included: it holds 43 small folded summaries, not decoded pages, and is already capped at 20 in practice.</td><td>defect 9</td><td>~4</td></tr>
+      <tr><td>E</td><td>Have <code>snapshot_at</code> consult <code>_canonical_sessions</code>; today only <code>_build_sessions</code> does</td><td>defect 8</td><td>~5</td></tr>
+      <tr><td>F</td><td>Serve a prefix instead of re-reading. The thrash is one-directional: the branch at <code>pages.py:54-59</code> already extends cheaply when the cache is <em>behind</em>, and the full <code>page_through</code> at <code>:70</code> fires only when the cache is <em>ahead</em> of the cursor asked for. So when <code>cached[0] &gt; session_cursor</code>, bisect the cached tuple on <code>.cursor</code> and return the prefix. That fixes any two callers at any two cursors, and needs no agreement between two services to stay true.</td><td>defect 11</td><td>~4</td></tr>
+      <tr><td>G</td><td>Route <code>_delivered_prompts</code> through the page cache instead of its own <code>page_through</code></td><td>defect 12</td><td>~10</td></tr>
+      <tr><td>H</td><td>Inject <code>DashboardSessionService</code> rather than constructing a second one</td><td>the DI half of defect 8</td><td>~5</td></tr>
+      <tr><td>I</td><td><code>ContentRef(slot, event_id, path)</code> in <code>domain/references.py</code> with <code>token()</code> and <code>parse()</code>; the ten mint expressions call <code>ref.token()</code>; the allow-table in <code>engine/queries/content.py:73-83</code> becomes a slot-to-reader map so the vocabulary exists once; per-file minting in the progress path, which is what fixes defect 3. <strong>Keep <code>?view=</code> and <code>?path=</code></strong> — an earlier draft proposed deleting them and then needed a second route to undo the damage. They already keep HTML off the clipboard: <code>canonicalViewUrl</code> appends the query only for the view action (<code>app.05-session.js:528-534</code>), the copy action uses the bare URL (<code>:549</code>), and <code>api/common/content.py:24-28</code> renders HTML only when <code>view</code> is explicitly <code>diff</code> or <code>source</code>. No new route, no deleted query parameters, and no silent-failure mode to test for.</td><td>the cause of defect 1, plus defect 3</td><td>~40 new</td></tr>
+      <tr><td>J</td><td>Share only the tables that genuinely agree, in one module both presenters import: the file verb-and-colour map (<code>dashboard/render/items/files.py:15-22</code>), the five label builders, and the attention prompt text. <strong>Not</strong> the duration formatter — the three implementations disagree, so unifying them changes what the scoreboard prints and forces golden-fixture regeneration for no user benefit. <strong>Not</strong> the if/elif-to-registry conversion of <code>terminal/mirror/presenter.py:258-363</code> either: its only justification was a styleguide rule, and <code>docs/styleguide.md</code> was deleted in commit <code>0d2a31a</code>, so that is 40 lines of churn in the subtlest presenter with no rule behind it. <code>make lint</code> is clean as it stands.</td><td>~100 lines of duplicated semantics</td><td>~40 new, ~60 gone</td></tr>
+      <tr><td>K</td><td>One <code>TerminalSessionReader</code> protocol instead of three identical declarations (<code>dashboard/services/sessions.py:38</code>, <code>app/services/insights.py:20</code>, <code>app/services/resume.py:16</code>)</td><td>a triplicated protocol</td><td>~15 gone</td></tr>
+      <tr><td>L</td><td>Six shared RGB constants instead of the same values spelled twice — <code>dashboard/render/items/files.py:17-23</code> hardcodes what the terminal names</td><td>the palette half of the duplication census</td><td>~10</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>About 350 lines touched and 150 deleted in total. A–H is roughly 110 lines and one
+afternoon.</p>
+
+<h3>One note on item J</h3>
+
+<p>The duplication item J removes is ~100 lines of shared <em>semantics</em>, not the ~257 lines of
+parallel rendering. The two largest rows of any duplication census survive it and should: the
+One-Dark syntax ladder (<code>dashboard/render/highlight.py</code>, 84 lines, versus
+<code>terminal/mirror/highlight.py</code>, 173) and the diff row walk
+(<code>render/diff.py</code> versus <code>presenter._file_diff_rows</code>) produce genuinely
+different things — CSS strings versus <code>RGB</code> values, HTML rows versus styled cells.
+Sharing them would mean parameterising output format, which is more machinery than the copies
+cost.</p>
+
+<h3>Item I in detail: the one new type</h3>
+
+<p>The cause of defect 1 is countable. The set of legal content references exists in two copies —
+ten mint expressions, and a hand-maintained allow-table at
+<code>engine/queries/content.py:73-83</code> — and they drifted apart. One type puts the vocabulary
+in one place, with mint and parse adjacent.</p>
+
+<figure class="code">
+  <figcaption><span class="file">domain/references.py</span><span class="lang">python — proposed</span></figcaption>
+  <pre><code>class ContentSlot(StrEnum):
+    # One member per distinct text a reference can name, matching the field names that
+    # exist today rather than splitting `content` per payload type.
+    CONTENT = "content"; UNIFIED_DIFF = "unified-diff"
+    OPERATION_COMMAND = "operation-command"; OPERATION_OUTPUT = "operation-output"
+    OPERATION_CONTENT = "operation-content"
+    BRIEF = "brief"; PROMPT = "prompt"; RESULT = "result"; FEEDBACK = "feedback"
+
+@dataclass(frozen=True)
+class ContentRef:
+    slot: ContentSlot
+    event_id: CanonicalEventId
+    path: str | None          # REQUIRED for file slots: N files of one MultiEdit share
+                              # one OperationProgressed event, so (slot, event_id) alone
+                              # cannot tell them apart — that is defect 3.
+    def token(self) -&gt; str: ...
+    @classmethod
+    def parse(cls, token: str) -&gt; ContentRef: ...   # the one parser, at the api boundary</code></pre>
+</figure>
+
+<p>Three notes, one of them a limit:</p>
+
+<ul>
+  <li><strong><code>parse</code> raising is boundary validation, not a fallback.</strong>
+    <code>engine/queries/content.py:35-37</code> already raises <code>MalformedRequest</code> for a
+    token it cannot split; moving those three lines into the type is free.</li>
+  <li><strong>The routes and query parameters do not change.</strong> <code>?view=</code> and
+    <code>?path=</code> already do the job — the copy action fetches the bare URL and the view
+    action adds the query — so there is no second route to add and nothing to delete. An earlier
+    draft deleted them, discovered that ⧉copy on a file would then receive HTML, and proposed a
+    <code>/rendering</code> sub-resource to repair self-inflicted damage.</li>
+  <li><strong>It does not make defect 1 impossible.</strong> Exhaustiveness holds over slots, not
+    over (slot, payload-type) pairs, so a <code>UNIFIED_DIFF</code> reference minted against the
+    wrong event still constructs. One mint-and-resolve round-trip test per slot is what forbids
+    that, and its absence is why defect 1 shipped. If you only ever do one thing from item I, do
+    that test.</li>
+</ul>
+
+<h2>What I am not building</h2>
+
+<p>Each of these was proposed in an earlier draft and dropped. Recorded compactly so the reasoning
+is not re-derived — and because one pattern explains nearly all of them: a type that groups fields,
+renames a method, or wraps an existing cache does not remove a decision, it moves one behind a dot.
+Every change that survived deletes a <em>copy</em> of something.</p>
+
+<dl class="defs">
+  <dt>A resident <code>SessionState</code> and a <code>SessionStates</code> registry</dt>
+  <dd><code>EventPages</code> (<code>engine/projections/pages.py</code>, 104 lines) is already
+    per-session, cursor-keyed, locked, and replays on a miss. A memo on it names the fold's output,
+    which was the entire structural argument — and it keeps the property that a read can never be
+    stale. The registry version also carried two unresolved questions of its own (what bounds its
+    enumeration, what drives eviction), and its widest consumer, the notifier, wanted something
+    smaller than a full state per session.</dd>
+  <dt>Per-event folding</dt>
+  <dd>~25 ms to microseconds, for a rewrite of the subtlest 437 lines in the read side. Its own
+    proposed mitigation — keep both implementations in the tree until the suite agrees — was the
+    signal it is not earned.</dd>
+  <dt><code>ItemLog</code>, <code>ActiveClock</code>, <code>scope.py</code>, <code>fold.py</code></dt>
+  <dd><code>paging.py</code> is 87 lines of clear pure functions needing a memo, not a persistent
+    vector with a cap, a cursor floor and a replay-on-underflow path. <code>active_seconds</code>
+    is one function, not a three-method class for <code>now - measured_at</code>. And
+    <code>visibility.py</code>'s 12 lines answer a <em>different</em> question from
+    <code>ActivityScope</code> — "the pane does not echo you back" versus "whose tab am I in" —
+    so unifying them hides that.</dd>
+  <dt>An <code>attributed_actor_id</code> field</dt>
+  <dd>Redundant once defect 5 lands: that fix makes <code>context.actor_id</code> mean "the
+    attributed actor" in all seventeen branches.</dd>
+  <dt>An <code>ItemView</code> tier — with <code>ItemIdentity</code>, <code>ItemRefs</code>,
+    <code>FileCounters</code>, a five-member <code>BodySegment</code> union and a <code>Role</code>
+    enum</dt>
+  <dd>~100 lines of duplicated semantics do not justify six modules and ten types built per
+    activity per client per tick. The wrappers group fields; the segment union needed a second
+    discriminator to be useful, which means it was the wrong one; and both palettes already hold
+    the same RGB values, so shared constants (item L) are the fix. Item J keeps the countable
+    part.</dd>
+  <dt>Renaming the two <code>present()</code> methods to <code>html_item</code> and
+    <code>ansi_blocks</code>; a <code>PaneScreen</code> type; a version counter on the expansion
+    service</dt>
+  <dd>A rename moves no boundary — the real fault is that one dispatch is an if/elif ladder the
+    styleguide forbids (item J). <code>PaneScreen</code> is <code>_MirrorModel</code> with fields
+    deleted. And a frozenset comparison already detects the expansion change
+    (<code>terminal/panes/streams.py:156-158</code>).</dd>
+  <dt>Renaming <code>opened_views</code> to <code>expansions</code></dt>
+  <dd>Seven files, the repository contract, the audit-debug skill, a
+    <code>MAIN_SCHEMA_VERSION</code> bump and a fresh-versus-migrated database test — a migration
+    on a 306 MB store to improve one word.</dd>
+  <dt>Repackaging <code>api/dashboard</code>, <code>api/terminal</code> and
+    <code>api/common</code> into one resource-named <code>api/</code>; deleting
+    <code>SessionQueries</code></dt>
+  <dd>~23 test references and an edit to the architecture suite's path-hardcoded no-broker rule,
+    for no user-visible change. The consumer-based split does leak —
+    <code>api/common/content.py</code> serves both surfaces — but that is a naming irritation.
+    And <code>queries.py</code> is 214 lines of one-liners whose docstring explains why that shape
+    was chosen; it is not the problem.</dd>
+  <dt>An event bus; persisting projections to SQLite</dt>
+  <dd>The poll is cheap once the fold is memoised, and an architecture test forbids queues. A
+    read-model table would need a migration every time a fold changed.</dd>
+</dl>
+
+<h2>Open questions</h2>
+
+<ol>
+  <li><strong>Do items I–L happen at all?</strong> They are optional. A–H fixes every
+    user-visible bug and the measured cost; I–L removes duplication that costs you nothing today
+    except the next drift bug like defect 1.</li>
+  <li><strong>The agent-note tinting</strong> is dead code today (defect 4). Table 1's fix corrects the
+    selector to <code>[data-actor-assignment-id]</code> and deletes the duplicate write; say so if
+    you would rather delete <code>tintAgentNotes</code> outright.</li>
+</ol>
+
+<h2>Two notes in passing</h2>
+
+<p><code>bin/baqylau-raw-events-audit.py</code> is untouched by all of this:
+<code>app/raw_events_audit_cli.py</code> imports only <code>RawEventAuditRepository</code> — no
+<code>SessionQueries</code>, no <code>EventPages</code>, no <code>activities_of</code> — so the tool
+you reach for first when a session misbehaves keeps working exactly as it does now. Separately,
+<code>.claude/skills/audit-debug/SKILL.md:467</code> names <code>core/daemon/client.py</code> as the
+byte-copying pane client; that has been <code>client/terminal_pane.py</code> for some time, and
+since <code>CLAUDE.md</code> points every future agent at that skill it is worth the one-line
+correction whenever the file is next open.</p>
+
+<p>Of the three ideas this review started with, one survives in full (<code>ContentRef</code>), one
+survives shrunk to a shared module (the display layer), and one was replaced by twenty-five lines
+(the folded state became a memo). Five review passes and one benchmark did that — along the way
+finding twelve defects a redesign would have carried forward.</p>

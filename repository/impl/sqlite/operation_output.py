@@ -60,6 +60,14 @@ class SqliteOperationOutputRepository(OperationOutputRepository):
                 (str(session_id), str(operation_id)),
             )
 
+    def outlive_operation(self, session_id: SessionId, operation_id: OperationId) -> None:
+        with self.database.write() as connection:
+            connection.execute(
+                "UPDATE operation_output SET until='session_finished', state='active' "
+                "WHERE session_id=? AND operation_id=?",
+                (str(session_id), str(operation_id)),
+            )
+
     def remove(self, session_id: SessionId, operation_id: OperationId) -> None:
         with self.database.write() as connection:
             connection.execute(

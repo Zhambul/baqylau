@@ -16,6 +16,7 @@ from audit.models import (
     StreamOpened,
 )
 from repository.model.audit import ErrorRow
+from repository.model.sql import SqlValues
 
 # A audit context is arbitrary caller data. It is recorded, never queried,
 # so it is bounded rather than shaped.
@@ -44,7 +45,7 @@ def application_error(row: ErrorRow) -> ApplicationError:
     )
 
 
-def error_values(record: ApplicationErrorRecord) -> tuple[object, ...]:
+def error_values(record: ApplicationErrorRecord) -> SqlValues:
     return (
         record.timestamp,
         record.session_id,
@@ -56,7 +57,7 @@ def error_values(record: ApplicationErrorRecord) -> tuple[object, ...]:
     )
 
 
-def state_file_values(record: StateFileRecord) -> tuple[object, ...]:
+def state_file_values(record: StateFileRecord) -> SqlValues:
     return (
         record.timestamp,
         record.session_id,
@@ -68,7 +69,7 @@ def state_file_values(record: StateFileRecord) -> tuple[object, ...]:
     )
 
 
-def spawn_values(record: SpawnRecord) -> tuple[object, ...]:
+def spawn_values(record: SpawnRecord) -> SqlValues:
     return (
         record.timestamp,
         record.session_id,
@@ -79,7 +80,7 @@ def spawn_values(record: SpawnRecord) -> tuple[object, ...]:
     )
 
 
-def stream_values(record: StreamOpened) -> tuple[object, ...]:
+def stream_values(record: StreamOpened) -> SqlValues:
     return (
         record.session_id,
         record.kind,

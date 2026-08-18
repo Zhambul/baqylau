@@ -31,6 +31,7 @@ from repository.contract.audit import (
 from repository.impl.sqlite import rows
 from repository.impl.sqlite.connection import SqliteDatabase
 from repository.mapper import audit as mapper
+from repository.model.sql import SqlValues
 
 
 def audit_enabled() -> bool:
@@ -92,7 +93,7 @@ class SqliteAuditWriteRepository(AuditWriteRepository):
             (time.time(), end_reason, lines_emitted, handle.stream_id),
         )
 
-    def _insert(self, statement: str, values: tuple[object, ...]) -> None:
+    def _insert(self, statement: str, values: SqlValues) -> None:
         if not audit_enabled():
             return
         try:

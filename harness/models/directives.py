@@ -1,0 +1,56 @@
+"""The engine's own synthetic evidence, as documents.
+
+Three raw-event payloads that nothing outside this tree ever produces: a chunk
+of a followed output file, the observation that a CLI process is gone, and the
+mark left by an interrupt no native evidence corroborated. They are OURS on
+both ends — written by `engine/interpret/`, read by a translator — and each was
+a dict literal at the writer and a field-by-field read at the reader, with
+nothing but agreement between two files holding the shape together.
+
+Declared here, beside the source-type constants that name them
+(`harness/models/raw_events.py`), because both ends may import this and neither
+may import the other. Encoded and decoded by `domain.codec`, which is the one
+thing in the tree that turns an object into bytes.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Literal
+
+from domain.ids import OperationId, SessionId
+from domain.stored import STORED
+from domain.values import ProgressStream
+
+
+@dataclass(frozen=True)
+class OperationOutputChunk:
+    """One slice of a followed output file. Base64 because the bytes are a
+    terminal's, and no encoding may be assumed of them until they are rendered."""
+
+    __pydantic_config__ = STORED
+
+    content_base64: str
+    operation_id: OperationId
+    ordinal: int
+    stream: ProgressStream
+
+
+@dataclass(frozen=True)
+class ProcessExit:
+    """The CLI process this session was running in is gone."""
+
+    __pydantic_config__ = STORED
+
+    process_id: int | None
+    state: Literal["exited"]
+
+
+@dataclass(frozen=True)
+class InterruptMark:
+    """An acknowledged interrupt whose grace period passed with nothing in the
+    harness's own evidence confirming it."""
+
+    __pydantic_config__ = STORED
+
+    session_id: SessionId

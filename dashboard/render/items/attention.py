@@ -108,7 +108,7 @@ def present_attention(activity: AttentionActivity) -> DashboardItem:
             if activity.attention_type == "plan"
             else "answer"
         ),
-        turn_id=str(activity.context.turn_id) if activity.context.turn_id else None,
+        turn_id=activity.context.turn_id,
         started_at=activity.context.started_at,
         finished_at=activity.context.finished_at,
     )
