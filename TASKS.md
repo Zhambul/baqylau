@@ -33,6 +33,13 @@ the one gap. Starts when an agent slot frees.
 - Item 4c: one typed public method per command; all methods go through one
   private core that writes the one audit row.
 
+## Small tickets
+
+- **EnterPlanMode is not in TOOL_KINDS** — the real corpus shows 24 uses;
+  each hits `ignored_unknown` today. A translator semantic gap, not a
+  type-safety one: map it to an entry kind (or an explicit nonsemantic
+  ignore with a reason) so the verdict is deliberate.
+
 ## Queued (approved direction, plan needs owner approval before implementation)
 
 4. **Absolute type safety** — ban `object`, `Any`, `dict[str, Any]`
