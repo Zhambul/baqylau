@@ -9,13 +9,13 @@ only exists inside the daemon.
 from __future__ import annotations
 
 from harness.contract import HarnessCanonicalEventReactor, HarnessReactorContext
-from domain.events import CanonicalEvent, SessionStarted
+from domain.events import CanonicalEvent, EventPayload, SessionStarted
 from harness.impl.claude_code.otel import launch as otel
 
 
 class ClaudeOtelCanonicalEventReactor(HarnessCanonicalEventReactor):
     def react(
-        self, canonical_event: CanonicalEvent, controls: HarnessReactorContext
+        self, canonical_event: CanonicalEvent[EventPayload], controls: HarnessReactorContext
     ) -> None:
         if isinstance(canonical_event.payload, SessionStarted):
             otel.start()

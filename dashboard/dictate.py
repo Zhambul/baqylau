@@ -18,6 +18,7 @@
 import json
 import os
 import urllib.request
+from typing import TypedDict, cast
 from urllib.parse import quote
 
 DEFAULT_KEY_FILE = "~/.config/deepgram/api-key"
@@ -43,12 +44,18 @@ SAMPLE_RATE_MIN, SAMPLE_RATE_MAX = 8000, 384000
 KEYTERMS_MAX = 100       # keep the URL sane; Deepgram tolerates ~100s of terms
 
 
-def key_file():
+class GrantResponse(TypedDict):
+    """Deepgram's POST /v1/auth/grant body: the browser token and its lifetime."""
+    access_token: str
+    expires_in: int
+
+
+def key_file() -> str:
     return os.path.expanduser(
         os.environ.get("BAQYLAU_DICTATION_KEY_FILE") or DEFAULT_KEY_FILE)
 
 
-def available():
+def available() -> bool:
     """Feature probe: a readable, non-empty key file. The mic button renders
     iff this is true — no key means the feature is invisible, never broken."""
     try:
@@ -60,17 +67,18 @@ def available():
         return False
 
 
-def _read(path):
+def _read(path: str) -> str:
     with open(path, encoding="utf-8") as f:
         return f.read().strip()
 
 
-def keyterms():
+def keyterms() -> list[str]:
     """The user-global dictation vocabulary."""
     files = [os.path.expanduser(
         os.environ.get("BAQYLAU_DICTATION_KEYTERMS_FILE")
         or DEFAULT_KEYTERMS_FILE)]
-    terms, seen = [], set()
+    terms: list[str] = []
+    seen: set[str] = set()
     for path in files:
         try:
             raw = _read(path)
@@ -84,7 +92,7 @@ def keyterms():
     return terms[:KEYTERMS_MAX]
 
 
-def grant(lifetime_seconds=None):
+def grant(lifetime_seconds: int | None = None) -> GrantResponse:
     """Trade the on-disk API key for a short-lived browser token: Deepgram's
     POST /v1/auth/grant → {"access_token", "expires_in"}. Raises on any
     failure (no key, HTTP error, malformed response) — the route turns that
@@ -104,10 +112,10 @@ def grant(lifetime_seconds=None):
         document = json.loads(response.read().decode("utf-8"))
     if not isinstance(document, dict) or not document.get("access_token"):
         raise ValueError("grant response missing access_token")
-    return document
+    return cast(GrantResponse, document)
 
 
-def ws_url(sample_rate, terms=()):
+def ws_url(sample_rate: int, terms: tuple[str, ...] | list[str] = ()) -> str:
     """The full live-listen URL the browser connects to, every parameter
     server-decided: nova-3 + interim results (the whole point — text lands in
     the textarea as you speak), smart_format for punctuation, raw linear16

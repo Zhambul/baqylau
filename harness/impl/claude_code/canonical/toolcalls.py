@@ -11,7 +11,7 @@ arguments are remembered until the result arrives.
 from __future__ import annotations
 
 import json
-from typing import Literal, TypeAlias
+from typing import Any, Literal, TypeAlias
 
 from domain.events import (
     ActorAssignmentFinished,
@@ -135,7 +135,7 @@ def tool_kind(native_name: str) -> ToolKind:
     return kind
 
 
-def structured_patch(path: str, tool_response: dict) -> tuple[str | None, int | None, int | None]:
+def structured_patch(path: str, tool_response: dict[str, Any]) -> tuple[str | None, int | None, int | None]:
     patches = tool_response.get("structuredPatch")
     if not isinstance(patches, list) or not patches:
         return None, None, None
@@ -172,7 +172,7 @@ def result_content(tool_response: object) -> Content | None:
     return content(tool_response)
 
 
-def attention_answers(arguments: dict) -> tuple[AttentionAnswer, ...]:
+def attention_answers(arguments: dict[str, Any]) -> tuple[AttentionAnswer, ...]:
     native_answers = arguments.get("answers")
     if not isinstance(native_answers, dict):
         return ()
@@ -199,7 +199,7 @@ def attention_answers(arguments: dict) -> tuple[AttentionAnswer, ...]:
     return tuple(answers)
 
 
-def plan_resolution(native: dict, failed: bool) -> tuple[PlanState, str | None, bool]:
+def plan_resolution(native: dict[str, Any], failed: bool) -> tuple[PlanState, str | None, bool]:
     response = native.get("tool_response") or native.get("tool_result")
     if not failed:
         edited = bool(isinstance(response, dict) and response.get("planWasEdited"))
@@ -225,7 +225,7 @@ class ToolCallSemantics:
     """
 
     def __init__(self) -> None:
-        self.calls: dict[str, tuple[str, dict]] = {}
+        self.calls: dict[str, tuple[str, dict[str, Any]]] = {}
         # An armed Monitor's TASK id -> the shell that armed it, and how many
         # of its events have been attributed so far. A monitor's per-event
         # notification names only the task id — never the tool_use_id (measured
@@ -238,10 +238,12 @@ class ToolCallSemantics:
 
     # --- what a call was, across the two evidence streams ---------------------
 
-    def remember(self, call_id: str, native_name: str, arguments: dict) -> None:
+    def remember(self, call_id: str, native_name: str, arguments: dict[str, Any]) -> None:
         self.calls[call_id] = (native_name, arguments)
 
-    def recall(self, call_id: str, native_name: str | None, arguments: dict | None) -> tuple[str, dict]:
+    def recall(
+        self, call_id: str, native_name: str | None, arguments: dict[str, Any] | None,
+    ) -> tuple[str, dict[str, Any]]:
         """The call's name and input: what this record carries, else what the
         request said. A record that has neither is a call whose start we never
         saw — a daemon that restarted mid-call — and it cannot be classified."""
@@ -274,7 +276,7 @@ class ToolCallSemantics:
 
     # --- the request ---------------------------------------------------------
 
-    def tool_started(self, raw_event: RawEvent, native: dict) -> list[CanonicalEvent]:
+    def tool_started(self, raw_event: RawEvent, native: dict[str, Any]) -> list[CanonicalEvent[EventPayload]]:
         call_id = str(native.get("tool_use_id") or native.get("id") or raw_event.source_position)
         native_name = str(native.get("tool_name") or native.get("name") or "tool")
         kind = tool_kind(native_name)
@@ -306,8 +308,8 @@ class ToolCallSemantics:
         raw_event: RawEvent,
         call_id: str,
         native_name: str,
-        arguments: dict,
-    ) -> CanonicalEvent:
+        arguments: dict[str, Any],
+    ) -> CanonicalEvent[EventPayload]:
         shell_id = ShellId(call_id)
         if native_name == "Monitor":
             execution: ExecutionMode = "monitor"
@@ -324,7 +326,9 @@ class ToolCallSemantics:
         )
         return event(raw_event, "shell", str(shell_id), "started", payload)
 
-    def _skill_started(self, raw_event: RawEvent, call_id: str, arguments: dict) -> CanonicalEvent:
+    def _skill_started(
+        self, raw_event: RawEvent, call_id: str, arguments: dict[str, Any],
+    ) -> CanonicalEvent[EventPayload]:
         skill_id = SkillId(call_id)
         name = str(arguments.get("skill") or "")
         # The input a Skill call carries is the skill name and, at most, an
@@ -334,7 +338,9 @@ class ToolCallSemantics:
         payload = SkillStarted(skill_id, name, content(extra) if extra else None)
         return event(raw_event, "skill", str(skill_id), "started", payload)
 
-    def _assignment_started(self, raw_event: RawEvent, call_id: str, arguments: dict) -> CanonicalEvent:
+    def _assignment_started(
+        self, raw_event: RawEvent, call_id: str, arguments: dict[str, Any],
+    ) -> CanonicalEvent[EventPayload]:
         assignment_id = AssignmentId(call_id)
         actor_name = arguments.get("name") or arguments.get("subagent_type")
         prompt = arguments.get("prompt")
@@ -346,7 +352,9 @@ class ToolCallSemantics:
         )
         return event(raw_event, "actor_assignment", str(assignment_id), "started", payload)
 
-    def _actor_message(self, raw_event: RawEvent, call_id: str, arguments: dict) -> CanonicalEvent:
+    def _actor_message(
+        self, raw_event: RawEvent, call_id: str, arguments: dict[str, Any],
+    ) -> CanonicalEvent[EventPayload]:
         """A SendMessage: the actor speaking to a named peer, which is a message
         with a recipient — not a tool call with a text argument."""
         recipient = ActorId(str(arguments.get("recipient") or arguments.get("to") or "peer"))
@@ -366,11 +374,11 @@ class ToolCallSemantics:
     def tool_finished(
         self,
         raw_event: RawEvent,
-        native: dict,
+        native: dict[str, Any],
         failed: bool,
         *,
         result: Content | None = None,
-    ) -> list[CanonicalEvent]:
+    ) -> list[CanonicalEvent[EventPayload]]:
         """Everything one tool call's RESULT says.
 
         `result` is the transcript's own text of the answer, when that is where
@@ -432,7 +440,7 @@ class ToolCallSemantics:
         result_text: str,
         failed: bool,
         tool_response: object,
-    ) -> list[CanonicalEvent]:
+    ) -> list[CanonicalEvent[EventPayload]]:
         """One tool_result block from the transcript, as facts.
 
         The transcript names no tool and carries no input, so a call whose start
@@ -446,7 +454,7 @@ class ToolCallSemantics:
         kind = tool_kind(native_name)
         if kind not in TRANSCRIPT_RESULT_KINDS:
             return []
-        events: list[CanonicalEvent] = []
+        events: list[CanonicalEvent[EventPayload]] = []
         if kind == "shell":
             shell_id = ShellId(call_id)
             # REPLACE, and ordinal zero: this is the whole output as the harness
@@ -476,12 +484,12 @@ class ToolCallSemantics:
         raw_event: RawEvent,
         call_id: str,
         native_name: str,
-        arguments: dict,
+        arguments: dict[str, Any],
         tool_response: object,
         outcome: Outcome,
-    ) -> list[CanonicalEvent]:
+    ) -> list[CanonicalEvent[EventPayload]]:
         shell_id = ShellId(call_id)
-        events: list[CanonicalEvent] = []
+        events: list[CanonicalEvent[EventPayload]] = []
         response = tool_response if isinstance(tool_response, dict) else {}
         # BACKGROUNDED MID-RUN (ctrl+b on a running command). Structural, from the
         # one document that holds both halves: the input never asked to run in the
@@ -532,7 +540,7 @@ class ToolCallSemantics:
         call_id: str,
         tool_response: object,
         outcome: Outcome,
-    ) -> list[CanonicalEvent]:
+    ) -> list[CanonicalEvent[EventPayload]]:
         response = tool_response if isinstance(tool_response, dict) else {}
         async_launched = (
             response.get("isAsync") is True or response.get("status") == "async_launched"
@@ -548,7 +556,7 @@ class ToolCallSemantics:
         raw_event: RawEvent,
         call_id: str,
         result_text: str,
-    ) -> CanonicalEvent:
+    ) -> CanonicalEvent[EventPayload]:
         """The resolution of an attention the user REFUSED. A refused tool call never
         runs, so Claude Code fires no PostToolUse and `tool_finished` — the only other
         emitter — never sees it; the transcript's tool_result is the sole evidence the
@@ -569,10 +577,10 @@ class ToolCallSemantics:
         raw_event: RawEvent,
         call_id: str,
         native_name: str,
-        arguments: dict,
+        arguments: dict[str, Any],
         tool_response: object,
         outcome: Outcome,
-    ) -> list[CanonicalEvent]:
+    ) -> list[CanonicalEvent[EventPayload]]:
         action = FILE_ACTIONS.get(native_name)
         if action is None:
             return []
@@ -596,7 +604,7 @@ class ToolCallSemantics:
         return [event(raw_event, "file", f"{call_id}:{action}:{path}", "accessed", payload)]
 
     @staticmethod
-    def questions(arguments: dict) -> tuple[AttentionPrompt, ...]:
+    def questions(arguments: dict[str, Any]) -> tuple[AttentionPrompt, ...]:
         prompts = []
         for index, question in enumerate(arguments.get("questions") or ()):
             choices = tuple(

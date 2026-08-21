@@ -84,8 +84,6 @@ ignore = [
 # mypy.ini's per-module blocks, and tests/test_canonical_typing.py fails if the
 # two drift — one gate exempting a package the other checks would let unannotated
 # code in through the gap between them. Both lists only ever shrink.
-"dashboard/**/*.py" = ["ANN"]
-"harness/**/*.py" = ["ANN"]
 "tests/**/*.py" = [
     "ANN",
     # The suite BUILDS the foreign documents the translators read — a Claude

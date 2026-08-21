@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from domain.events import (
     ActorFinished,
     ActorNameChanged,
@@ -25,9 +27,9 @@ from harness.models.selections import SelectionSemantics
 
 def effort_report(
     raw_event: RawEvent,
-    document: dict,
+    document: dict[str, Any],
     selections: SelectionSemantics,
-) -> list[CanonicalEvent]:
+) -> list[CanonicalEvent[EventPayload]]:
     """The active effort level Claude Code reports on hooks that fire mid-turn
     (PreToolUse, PostToolUse, Stop, SubagentStop), when the current model
     supports the effort parameter. `launch_selections()` and a typed `/effort`
@@ -63,7 +65,7 @@ def turn_finished(
     turns: TurnSemantics,
     native_identity: str,
     outcome: Outcome,
-) -> CanonicalEvent:
+) -> CanonicalEvent[EventPayload]:
     """The Stop hook closes whatever turn is open. Its identity is that turn's,
     so the one Stop per turn is one fact; a Stop with no turn open — the daemon
     started mid-turn — falls back to the hook's own identity rather than
@@ -81,11 +83,11 @@ def turn_finished(
 
 def translate_hook(
     raw_event: RawEvent,
-    document: dict,
+    document: dict[str, Any],
     toolcalls: ToolCallSemantics,
     turns: TurnSemantics,
     selections: SelectionSemantics,
-) -> list[CanonicalEvent]:
+) -> list[CanonicalEvent[EventPayload]]:
     hook_name = document.get("hook_event_name") or ""
     native_identity = str(document.get("hook_event_id") or document.get("uuid") or raw_event.source_position)
     if hook_name == "SessionStart":

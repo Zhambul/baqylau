@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from typing import Any
 
 from harness.contract import ControlHandler, HarnessController
 from harness.models import (
@@ -54,25 +55,25 @@ class _TerminalDriver:
     def __init__(self, terminal: TerminalPlugin) -> None:
         self.terminal = terminal
 
-    def get_text(self, window_id, extent="screen", ansi=False):
+    def get_text(self, window_id: str, extent: str = "screen", ansi: bool = False) -> str | None:
         del extent
         response = self.terminal.viewport.read_screen(
             ScreenReadRequest(str(window_id), ansi=ansi)
         )
         return response.text
 
-    def send_key(self, window_id, *keys):
+    def send_key(self, window_id: str, *keys: str) -> bool:
         return all(
             self.terminal.input.send_key(KeySendRequest(str(window_id), str(key))).succeeded
             for key in keys
         )
 
-    def send_text(self, window_id, text):
+    def send_text(self, window_id: str, text: str) -> bool:
         return self.terminal.input.submit_text(
             TextSubmitRequest(str(window_id), str(text), "type")
         ).succeeded
 
-    def paste_text(self, window_id, text):
+    def paste_text(self, window_id: str, text: str) -> bool:
         return self.terminal.input.submit_text(
             TextSubmitRequest(str(window_id), str(text), "paste")
         ).succeeded
@@ -372,7 +373,7 @@ class SelectEffortHandler(ControlHandler):
         return _command(request, context, f"/effort {request.effort}", confirm=True)
 
 
-def _native_prompts(attention: QuestionAsked) -> list[dict]:
+def _native_prompts(attention: QuestionAsked) -> list[dict[str, Any]]:
     return [
         {
             "id": prompt.prompt_id,

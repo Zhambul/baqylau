@@ -40,7 +40,7 @@ from harness.models.telemetry import (
 )
 from harness.models.usage import UsageRow
 from repository.contract.usage import AccountUsageRepository
-from domain.events import CanonicalEvent
+from domain.events import CanonicalEvent, EventPayload
 from terminal.contract import TerminalViewport
 
 
@@ -115,7 +115,7 @@ class CanonicalEventReaction(Protocol):
     A reaction gets everything it needs from the fact itself — raw events never
     reach this layer."""
 
-    def react(self, canonical_event: CanonicalEvent) -> None: ...
+    def react(self, canonical_event: CanonicalEvent[EventPayload]) -> None: ...
 
 
 class HarnessReactorContext(Protocol):
@@ -130,7 +130,7 @@ class HarnessCanonicalEventReactor(Protocol):
     the event's harness, so implementations carry no harness check."""
 
     def react(
-        self, canonical_event: CanonicalEvent, controls: HarnessReactorContext
+        self, canonical_event: CanonicalEvent[EventPayload], controls: HarnessReactorContext
     ) -> None: ...
 
 

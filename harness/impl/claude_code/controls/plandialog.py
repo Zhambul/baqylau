@@ -24,8 +24,11 @@
 #     (Escape here would reject the plan the user may still want to approve).
 import re
 import time
+from collections.abc import Callable
+from typing import TypedDict
 
 from harness.impl.claude_code.controls import screen_driver as screendrive
+from harness.impl.claude_code.controls.screen_driver import ScreenDriver
 
 POLL_S = 0.15
 STEP_TIMEOUT_S = 2.5
@@ -37,13 +40,43 @@ FEEDBACK_LABEL = "Tell Claude what to change"
 _ROW = re.compile(r"^\s*(?P<cur>❯\s+)?(?P<digit>\d+)\.\s+(?P<label>.+?)\s*$")
 
 
+class Row(TypedDict):
+    """One numbered decision row as parsed off the screen (see rows())."""
+
+    digit: str
+    label: str
+    cursor: bool
+    feedback: bool
+
+
+class Option(TypedDict):
+    """One decision option as offered to the page — a `Row` without the
+    cursor position, which the page has no use for."""
+
+    digit: str
+    label: str
+    feedback: bool
+
+
+class Decided(TypedDict):
+    decided: str
+
+
+class Fedback(TypedDict):
+    feedback: bool
+
+
+class Dismissed(TypedDict):
+    dismissed: bool
+
+
 class PlanError(screendrive.StepError):
     """A step's expected screen state never appeared. .step names it for the
     audit row. The dialog is left EXACTLY as it was — never Escape-closed
     (Escape REJECTS the plan)."""
 
 
-def region(screen):
+def region(screen: str) -> str:
     """The decision region: from the LAST "Would you like to proceed?" down.
     "" when no plan dialog is on screen."""
     if not screen:
@@ -52,13 +85,13 @@ def region(screen):
     return screen[i:] if i >= 0 else ""
 
 
-def dialog_open(screen):
+def dialog_open(screen: str) -> bool:
     return bool(region(screen))
 
 
-def rows(screen):
+def rows(screen: str) -> list[Row]:
     """The numbered decision rows: [{digit, label, cursor, feedback}]."""
-    out = []
+    out: list[Row] = []
     for ln in region(screen).splitlines():
         m = _ROW.match(ln)
         if m:
@@ -69,7 +102,7 @@ def rows(screen):
     return out
 
 
-def _open_rows(fe, win):
+def _open_rows(fe: ScreenDriver, win: str) -> list[Row]:
     screen = fe.get_text(win) or ""
     if not dialog_open(screen):
         raise PlanError("open", "no plan dialog on screen")
@@ -79,14 +112,16 @@ def _open_rows(fe, win):
     return rs
 
 
-def options(fe, win):
+def options(fe: ScreenDriver, win: str) -> list[Option]:
     """The live decision options, for the page's buttons — labels vary with
     the session's permission mode, so they can only come from the screen."""
     return [{"digit": r["digit"], "label": r["label"],
              "feedback": r["feedback"]} for r in _open_rows(fe, win)]
 
 
-def decide(fe, win, digit, label, sleep=time.sleep):
+def decide(
+    fe: ScreenDriver, win: str, digit: str, label: str, sleep: Callable[[float], None] = time.sleep,
+) -> Decided:
     """Press decision row `digit` after verifying the screen still shows
     `label` on it (the dialog may have been replaced since the page fetched
     its options). Feedback rows are refused — use feedback()."""
@@ -104,7 +139,9 @@ def decide(fe, win, digit, label, sleep=time.sleep):
     return {"decided": label}
 
 
-def feedback(fe, win, text, sleep=time.sleep):
+def feedback(
+    fe: ScreenDriver, win: str, text: str, sleep: Callable[[float], None] = time.sleep,
+) -> Fedback:
     """Reject the plan with feedback: focus the "Tell Claude what to change"
     row (its digit only focuses — measured), type the text inline, Enter
     submits. Newlines collapse to spaces (the row is a single-line editor;
@@ -127,7 +164,7 @@ def feedback(fe, win, text, sleep=time.sleep):
     return {"feedback": True}
 
 
-def dismiss(fe, win, sleep=time.sleep):
+def dismiss(fe: ScreenDriver, win: str, sleep: Callable[[float], None] = time.sleep) -> Dismissed:
     """Esc — reject the plan and keep planning (the TUI's own dismiss)."""
     _open_rows(fe, win)
     fe.send_key(win, "escape")

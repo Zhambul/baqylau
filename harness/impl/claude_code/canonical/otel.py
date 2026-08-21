@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from typing import Any
 
-from domain.events import CanonicalEvent, UsageReported
+from domain.events import CanonicalEvent, EventPayload, UsageReported
 from domain.values import TokenUsage
 from harness.impl.claude_code.canonical.support import event, model_reference
 from harness.models import RawEvent
 
 
-def translate_otel(raw_event: RawEvent, document: dict) -> list[CanonicalEvent]:
+def translate_otel(raw_event: RawEvent, document: dict[str, Any]) -> list[CanonicalEvent[EventPayload]]:
     grouped: dict[tuple[str, str], dict[str, Decimal]] = {}
     for resource in document.get("resourceMetrics", []):
         for scope in resource.get("scopeMetrics", []):

@@ -52,3 +52,11 @@ _.total_tokens
 # the only bare-name mention, which is what an unused variable looks like to
 # vulture. The field is the checkbox state the multi-select dialog reads.
 check  # harness/impl/claude_code/controls/askdialog_screen.py Row
+
+# Three more TypedDict fields with the same shape as `check` above: the typed
+# migration gave dict-shaped returns their real field types, and each field's
+# only bare-name mention is its annotation — readers go through ["…"]
+# subscripts and dict literals, which vulture cannot connect to the name.
+access_token  # dashboard/dictate.py GrantResponse
+alias         # harness/impl/claude_code/account.py AccountRecord
+decided       # harness/impl/claude_code/controls/plandialog.py Decided

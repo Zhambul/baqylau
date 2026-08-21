@@ -14,6 +14,7 @@ being pending.
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -82,7 +83,7 @@ class SessionApplicationService:
         view_modes: ViewModeRepository,
         notifications: NotificationSettingRepository,
         dismissals: TaskDismissalRepository,
-        clock=None,
+        clock: Callable[[], float] | None = None,
     ) -> None:
         self.read_model = read_model
         self.terminal = terminal

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import re
+from typing import TypedDict
+
 from harness.models import AccountUsageSnapshot
 
 ACCOUNTS_FILE = os.path.expanduser("~/.config/claude-subscriptions/accounts.tsv")
@@ -38,8 +40,14 @@ def normalize(account_id: str | None, display_name: str | None) -> tuple[str | N
     return account_id or None, display_name or account_id or "default"
 
 
-def registry() -> list[dict]:
-    accounts = []
+class AccountRecord(TypedDict):
+    slug: str
+    label: str
+    alias: str
+
+
+def registry() -> list[AccountRecord]:
+    accounts: list[AccountRecord] = []
     account_ids = set()
     try:
         with open(ACCOUNTS_FILE, encoding="utf-8") as source:
@@ -82,7 +90,7 @@ def alias_for(account_id: str) -> str | None:
 def migration_target(
     current_account_id: str,
     account_usage: tuple[AccountUsageSnapshot, ...],
-) -> dict | None:
+) -> AccountRecord | None:
     """Choose the least-used launchable account other than the current one."""
 
     snapshots = {
@@ -90,7 +98,7 @@ def migration_target(
         for snapshot in account_usage
         if snapshot.harness == "claude_code"
     }
-    candidates = []
+    candidates: list[tuple[float, AccountRecord]] = []
     for account_record in registry():
         if account_record["slug"] == current_account_id:
             continue

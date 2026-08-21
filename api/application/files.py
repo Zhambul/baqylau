@@ -153,7 +153,7 @@ def dictation_token(body: DictationTokenRequest, audit: Recorder) -> DictationGr
         audit.state_file("", "", "web-dictate",
                      {"ok": False, "why": "bad-rate", "rate": repr(body.sample_rate)[:40]})
         raise HTTPException(400, "bad sample_rate")
-    if not dictate.available():  # type: ignore[no-untyped-call]
+    if not dictate.available():
         audit.state_file("", "", "web-dictate", {"ok": False, "why": "no-key"})
         raise HTTPException(501, "no deepgram key configured")
     # An omitted directory requests global terms. A supplied directory is
@@ -161,16 +161,16 @@ def dictation_token(body: DictationTokenRequest, audit: Recorder) -> DictationGr
     if body.working_directory is not None and not os.path.isdir(body.working_directory):
         raise HTTPException(400, "working_directory must be an existing directory")
     try:
-        grant = dictate.grant()  # type: ignore[no-untyped-call]
+        grant = dictate.grant()
     except Exception as error:
         audit.error("", "dashboard dictate (grant failed)",
                 {"err": ("%s: %s" % (type(error).__name__, error))[:200]})
         audit.state_file("", "", "web-dictate", {"ok": False, "why": "grant"})
         raise HTTPException(502, "token grant failed") from error
-    terms = dictate.keyterms()  # type: ignore[no-untyped-call]
+    terms = dictate.keyterms()
     audit.state_file("", "", "web-dictate",
                  {"ok": True, "rate": body.sample_rate,
                   "working_directory": body.working_directory, "keyterms": len(terms)})
     return DictationGrantResponse(token=grant["access_token"],
                                   expires_in=grant.get("expires_in"),
-                                  ws_url=dictate.ws_url(body.sample_rate, terms))  # type: ignore[no-untyped-call]
+                                  ws_url=dictate.ws_url(body.sample_rate, terms))

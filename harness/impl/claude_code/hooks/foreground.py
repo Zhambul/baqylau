@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from dataclasses import dataclass
+from typing import Any
 
 from domain.events import ShellOutputLocated
 from domain.ids import ShellId
@@ -47,7 +48,7 @@ def _tee_path(session_id: str, shell_id: str) -> str:
     return os.path.join(_directory(session_id), _safe_identity(shell_id)) + ".out"
 
 
-def _updated_input(tool_input: dict, command: str) -> bytes:
+def _updated_input(tool_input: dict[str, Any], command: str) -> bytes:
     updated_input = dict(tool_input)
     updated_input["command"] = command
     return (
@@ -66,7 +67,7 @@ def _updated_input(tool_input: dict, command: str) -> bytes:
     ).encode("utf-8")
 
 
-def background_output(document: dict) -> ShellOutputLocated | None:
+def background_output(document: dict[str, Any]) -> ShellOutputLocated | None:
     """The output location of a background command's native output file.
 
     Background commands are not rewritten (Claude Code redirects their output
@@ -102,7 +103,7 @@ def background_output(document: dict) -> ShellOutputLocated | None:
     )
 
 
-def prepare(document: dict) -> PreparedForegroundCommand | None:
+def prepare(document: dict[str, Any]) -> PreparedForegroundCommand | None:
     """Rewrite one Bash command so its output lands in a readable file.
 
     The returned location is NOT applied here — the gateway records it as an

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import os
 import json
+import os
+from typing import Any
 
 from domain.events import (
     ActorAssignmentFinished,
@@ -57,9 +58,9 @@ def background_outcome(status: object) -> Outcome | None:
 
 def launch_selections(
     raw_event: RawEvent,
-    document: dict,
+    document: dict[str, Any],
     selections: SelectionSemantics,
-) -> list[CanonicalEvent]:
+) -> list[CanonicalEvent[EventPayload]]:
     """The launch observation the gateway recorded from the hook's inherited
     environment: the `--model`/`--effort` the launcher started the CLI with.
 
@@ -96,7 +97,7 @@ def prompt_turn(
     turns: TurnSemantics,
     native_identity: str,
     occurred_at: float | None,
-) -> list[CanonicalEvent]:
+) -> list[CanonicalEvent[EventPayload]]:
     """The turn this prompt opens, if it opens one.
 
     The prompt's own identity is the turn's: nothing else in Claude Code's
@@ -120,12 +121,12 @@ def prompt_turn(
 
 def slash_command(
     raw_event: RawEvent,
-    record: dict,
+    record: dict[str, Any],
     native_identity: str,
     occurred_at: float | None,
     turns: TurnSemantics,
     selections: SelectionSemantics,
-) -> list[CanonicalEvent]:
+) -> list[CanonicalEvent[EventPayload]]:
     """A `/command` turn: the SESSION-STATE event the command asked for,
     where there is one, otherwise a prompt bubble holding what the human
     typed.
@@ -183,7 +184,7 @@ def slash_command(
     return events
 
 
-def transcript_metadata(raw_event: RawEvent, document: dict) -> list[CanonicalEvent]:
+def transcript_metadata(raw_event: RawEvent, document: dict[str, Any]) -> list[CanonicalEvent[EventPayload]]:
     if raw_event.parent_actor_id is not None:
         return []
     record_type = document.get("type")
@@ -211,7 +212,7 @@ def transcript_metadata(raw_event: RawEvent, document: dict) -> list[CanonicalEv
     ]
 
 
-def session_events(raw_event: RawEvent, document: dict) -> list[CanonicalEvent]:
+def session_events(raw_event: RawEvent, document: dict[str, Any]) -> list[CanonicalEvent[EventPayload]]:
     lead_actor_id = raw_event.actor_id
     if raw_event.parent_actor_id is not None:
         metadata = {}
@@ -285,7 +286,7 @@ def session_events(raw_event: RawEvent, document: dict) -> list[CanonicalEvent]:
     return events
 
 
-def task_event(raw_event: RawEvent, task: dict) -> CanonicalEvent:
+def task_event(raw_event: RawEvent, task: dict[str, Any]) -> CanonicalEvent[EventPayload]:
     task_id = TaskId(str(task.get("id") or ""))
     if not task_id:
         raise TranslationError("Claude Code task has no id", context=raw_event.source_position)
@@ -308,14 +309,14 @@ def task_event(raw_event: RawEvent, task: dict) -> CanonicalEvent:
 
 def translate_transcript(
     raw_event: RawEvent,
-    document: dict,
-    record: dict,
+    document: dict[str, Any],
+    record: dict[str, Any],
     toolcalls: ToolCallSemantics,
     turns: TurnSemantics,
     selections: SelectionSemantics,
     *,
     actor_started: bool,
-) -> list[CanonicalEvent]:
+) -> list[CanonicalEvent[EventPayload]]:
     kind = record["kind"]
     native_identity = str(
         document.get("uuid")

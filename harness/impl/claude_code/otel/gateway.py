@@ -15,6 +15,7 @@ import hashlib
 import json
 import re
 import time
+from typing import Any
 
 from domain.ids import RawEventId, SessionId
 from harness.contract import HarnessTelemetryGateway
@@ -41,7 +42,7 @@ KNOWN_WINDOWS = ("five_hour", "seven_day")
 MAX_WINDOWS = 8
 
 
-def _session_ids(document: dict) -> tuple[SessionId, ...]:
+def _session_ids(document: dict[str, Any]) -> tuple[SessionId, ...]:
     session_ids = set()
     for resource in document.get("resourceMetrics", []):
         for scope in resource.get("scopeMetrics", []):
@@ -71,7 +72,7 @@ def _percent(value: object) -> Decimal | None:
     return Decimal(max(0, min(100, int(round(value)))))
 
 
-def windows(document: dict) -> tuple[UsageWindowSample, ...]:
+def windows(document: dict[str, Any]) -> tuple[UsageWindowSample, ...]:
     """Every `rate_limits.<key>.{used_percentage, resets_at}` entry, the
     account-wide pair first and any other window sorted by key.
 

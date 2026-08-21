@@ -40,6 +40,7 @@ import signal
 import subprocess
 import sys
 import time
+from types import ModuleType
 
 from audit import record
 from core.process import process_is_alive
@@ -121,13 +122,13 @@ def _redirect(log_path: str) -> None:
         os.close(handle)
 
 
-def _server():
+def _serve() -> int:
     from api import server  # noqa: PLC0415 — import purity: serve() is the only thing that pulls the server in
 
-    return server
+    return server.serve()
 
 
-def holder():
+def holder() -> int:
     """The running server's pid, or 0.
 
     Asked over the port the daemon binds, because that bind IS the singleton
@@ -141,13 +142,13 @@ def holder():
     answers the probe with a 404. Both are exactly the daemon you need `stop`
     for, and reporting "not running" at one is how you end up with two.
     """
-    from core.daemon import contract as daemon_contract  # noqa: PLC0415 — same import purity as _server()
+    from core.daemon import contract as daemon_contract  # noqa: PLC0415 — same import purity as _serve()
 
     pid = _answered_pid(daemon_contract) or _listening_pid(daemon_contract.PORT_NUMBER)
     return pid if pid and process_is_alive(pid) else 0
 
 
-def _answered_pid(daemon_contract):
+def _answered_pid(daemon_contract: ModuleType) -> int:
     """The pid the daemon reports for itself, or 0 if it does not report one."""
     connection = http.client.HTTPConnection(
         daemon_contract.HOST_ADDRESS, daemon_contract.PORT_NUMBER,
@@ -165,7 +166,7 @@ def _answered_pid(daemon_contract):
         connection.close()
 
 
-def _listening_pid(port):
+def _listening_pid(port: int) -> int:
     """Whoever holds the port, when it no longer answers. Best effort: if lsof
     is not installed there is nothing to signal and nothing to report."""
     try:
@@ -179,16 +180,16 @@ def _listening_pid(port):
     return int(first[0]) if first and first[0].isdigit() else 0
 
 
-def url():
+def url() -> str:
     # the daemon contract, not the server facade: the bind address is
     # core/daemon/contract.py's to own, and a lazy import keeps this module import-pure
-    # like _server() does (`serve` must stay the only thing that pulls the
+    # like _serve() does (`serve` must stay the only thing that pulls the
     # server in).
-    from core.daemon import contract as daemon_contract  # noqa: PLC0415 — same import purity as _server()
+    from core.daemon import contract as daemon_contract  # noqa: PLC0415 — same import purity as _serve()
     return "http://%s:%d" % (daemon_contract.HOST_ADDRESS, daemon_contract.PORT_NUMBER)
 
 
-def start(flags: list[str] | None = None):
+def start(flags: list[str] | None = None) -> int:
     if holder():
         print("dashboard already running · %s" % url())
         return 0
@@ -222,7 +223,7 @@ def start(flags: list[str] | None = None):
     return 0
 
 
-def stop():
+def stop() -> int:
     pid = holder()
     if not pid:
         print("dashboard not running")
@@ -236,7 +237,7 @@ def stop():
         return 1
 
 
-def status():
+def status() -> int:
     pid = holder()
     if pid:
         print("running · pid %d · %s" % (pid, url()))
@@ -245,7 +246,7 @@ def status():
     return 0
 
 
-def open_browser():
+def open_browser() -> int:
     rc = start()
     if rc:
         return rc
@@ -256,7 +257,7 @@ def open_browser():
     return 0
 
 
-def rebuild():
+def rebuild() -> int:
     """Re-derive `session_data`, `session_data_actors` and `session_entries`.
 
     The insurance the push-based read model needs: if a writer was wrong, or
@@ -297,7 +298,7 @@ def main(argv: list[str]) -> int:
     if cmd == "serve":
         if log_path is not None:
             _redirect(log_path)
-        return _server().serve()
+        return _serve()
     if cmd == "start":
         return start(_forwarded(argv[2:]))
     if cmd == "stop":

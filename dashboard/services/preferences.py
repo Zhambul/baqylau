@@ -9,10 +9,10 @@ the read path it used to sit beside.
 
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
-
-import time
 
 from core.daemon import contract as daemon_contract
 from core.repository import RepositoryQueries
@@ -122,7 +122,7 @@ class ApplicationPreferenceService:
         directories: HiddenDirectoryRepository,
         subscriptions: PushSubscriptionRepository,
         presence: Presence,
-        clock=time.time,
+        clock: Callable[[], float] = time.time,
     ) -> None:
         self.read_model = read_model
         self.terminal = terminal

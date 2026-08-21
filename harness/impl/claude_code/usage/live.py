@@ -38,6 +38,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
+from typing import Any
 
 from harness.models import UsageWindowSample
 
@@ -183,7 +184,7 @@ def windows(rate_limits: object) -> tuple[UsageWindowSample, ...]:
     return tuple(samples)
 
 
-def _control_response(process: subprocess.Popen[str], deadline: float) -> dict | None:
+def _control_response(process: subprocess.Popen[str], deadline: float) -> dict[str, Any] | None:
     """The reply to our one request, out of a stream that also carries the
     session's own lifecycle lines."""
     if process.stdout is None:
@@ -206,7 +207,7 @@ def _control_response(process: subprocess.Popen[str], deadline: float) -> dict |
     return None
 
 
-def request_usage(config_directory: str | None) -> dict | None:
+def request_usage(config_directory: str | None) -> dict[str, Any] | None:
     """One `get_usage` round trip against one account's configuration."""
     try:
         process = subprocess.Popen(

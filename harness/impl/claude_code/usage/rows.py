@@ -22,6 +22,7 @@ from harness.contract import HarnessUsage
 from harness.models import AccountUsageSnapshot, UsageRow, UsageWindow, UsageWindowSample
 from repository.contract.usage import AccountUsageRepository
 from harness.impl.claude_code import account
+from harness.impl.claude_code.account import AccountRecord
 from harness.impl.claude_code.usage import live
 
 HARNESS = "claude_code"
@@ -93,7 +94,7 @@ class ClaudeCodeUsage(HarnessUsage):
         }
         accounts = account.registry()
         if not accounts and None in snapshots:
-            accounts = [{"slug": "", "label": snapshots[None].display_name}]
+            accounts = [{"slug": "", "label": snapshots[None].display_name, "alias": ""}]
         return tuple(
             self._row(
                 record,
@@ -105,7 +106,7 @@ class ClaudeCodeUsage(HarnessUsage):
 
     @staticmethod
     def _row(
-        account_record: dict,
+        account_record: AccountRecord,
         snapshot: AccountUsageSnapshot | None,
         live_usage: live.LiveUsage | None,
     ) -> UsageRow:
