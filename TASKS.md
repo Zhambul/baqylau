@@ -5,14 +5,7 @@ to the bottom with their commit.
 
 ## In flight
 
-1. **Rename sweep, wave A** — agent `rename-a` (sonnet): parameters named
-   after their class in domain/audit/core/repository/engine/app (~205 sites).
-   Gate: `tests/test_canonical_naming.py::test_a_parameter_is_named_after_its_class`.
-2. **Rename sweep, wave B** — api/dashboard/notify/terminal/harness (~260
-   sites). Starts when wave A lands.
-3. **Typed-id sweep** — no bare `str` for `*_id` params/fields outside api/
-   (161 sites). Gate: `test_an_id_is_a_typed_id_not_a_bare_str`. New NewTypes
-   (WindowId, CallId, AccountId, …) go in domain/ids.py; reuse before create.
+4d (running). **Remove MigrateAccount completely** — see below.
 
 ## Queued (approved direction, plan needs owner approval before implementation)
 
@@ -40,7 +33,7 @@ to the bottom with their commit.
    the one method it means. Same plan-then-approve batch as 4/4b — the enum
    sweep and this one touch the same dispatchers.
 
-4d. **Remove MigrateAccount completely** — the `migrate_account` control and
+4d. (running) **Remove MigrateAccount completely** — the `migrate_account` control and
    everything that exists only for it: the api/controls request model and
    route, the harness control implementation, `migration_target`/alias
    machinery in claude_code/account.py that only serves migration, the
@@ -76,6 +69,9 @@ to the bottom with their commit.
    picks.
 
 ## Done
+
+- Rename sweeps A+B (465→560 sites, both waves) — `3fddea7`, `37d2d37`.
+- Typed-id sweep (15 new NewTypes, gate 2 green) — `19be80b`.
 
 - Daemon slowness (fork storm, per-session `ls`, git dedup) — `c8059fc` and
   earlier.
