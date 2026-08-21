@@ -3006,6 +3006,45 @@ def test_claude_plan_is_proposed_and_then_resolved_with_what_the_person_decided(
     assert resolved.edited is False
 
 
+def test_claude_enter_plan_mode_is_a_deliberate_ignore_not_drift():
+    """`EnterPlanMode` is `ExitPlanMode`'s sibling, but it carries nothing to
+    show: measured against the real corpus, every call sends no arguments and
+    every result is the one fixed instruction Claude Code always sends back
+    ("Entered plan mode. You should now focus on..."). Nothing there is
+    session-specific, so it must land as a named, deliberate ignore — not
+    `ignored_unknown`, which means a shape nobody has decided about."""
+    translator = ClaudeCanonicalTranslator()
+    started = translator.translate(raw_event(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_use_id": "enter-plan-one",
+            "tool_name": "EnterPlanMode",
+            "tool_input": {},
+        },
+        harness="claude_code",
+        source_type="hook",
+        raw_event_id="enter-plan-started",
+    ))
+    finished = translator.translate(raw_event(
+        {
+            "hook_event_name": "PostToolUse",
+            "tool_use_id": "enter-plan-one",
+            "tool_name": "EnterPlanMode",
+            "tool_input": {},
+            "tool_response": (
+                "Entered plan mode. You should now focus on exploring the "
+                "codebase and designing an implementation approach."
+            ),
+        },
+        harness="claude_code",
+        source_type="hook",
+        raw_event_id="enter-plan-finished",
+    ))
+
+    assert started.decision == "ignored_nonsemantic"
+    assert finished.decision == "ignored_nonsemantic"
+
+
 def test_claude_turn_opens_on_the_prompt_and_closes_on_the_stop_hook():
     """Claude Code emits no turn boundary of its own — its Stop hook says a turn
     ended and nothing says one began — so the prompt opens the turn and every

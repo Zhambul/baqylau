@@ -88,7 +88,12 @@ class ToolKind(StrEnum):
 # What each tool IS. The `IGNORED` entries are named rather than left to fall
 # through: a task tool's fact arrives as `task.changed` from the task source, a
 # generated image exposes no readable path to put on a file fact, and the two
-# agent-plumbing calls carry nothing anybody reads. An unlisted name is drift.
+# agent-plumbing calls carry nothing anybody reads. `EnterPlanMode` is the same
+# shape: every call in the real corpus carries no arguments, and every result
+# is the one fixed instruction text Claude Code always sends back — nothing
+# session-specific for the feed to show. Its sibling `ExitPlanMode` is PLAN
+# below, because that call carries the plan text and the person's decision.
+# An unlisted name is drift.
 TOOL_KINDS: dict[str, ToolKind] = {
     "Bash": ToolKind.SHELL,
     "Monitor": ToolKind.SHELL,
@@ -114,6 +119,7 @@ TOOL_KINDS: dict[str, ToolKind] = {
     "SendMessage": ToolKind.MESSAGE,
     "AskUserQuestion": ToolKind.QUESTION,
     "ExitPlanMode": ToolKind.PLAN,
+    "EnterPlanMode": ToolKind.IGNORED,
     "TaskCreate": ToolKind.IGNORED,
     "TaskUpdate": ToolKind.IGNORED,
     "TaskGet": ToolKind.IGNORED,
