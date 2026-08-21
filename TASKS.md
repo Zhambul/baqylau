@@ -40,6 +40,14 @@ to the bottom with their commit.
    the one method it means. Same plan-then-approve batch as 4/4b — the enum
    sweep and this one touch the same dispatchers.
 
+4d. **Remove MigrateAccount completely** — the `migrate_account` control and
+   everything that exists only for it: the api/controls request model and
+   route, the harness control implementation, `migration_target`/alias
+   machinery in claude_code/account.py that only serves migration, the
+   `account_migration` reason in ModelChangeReason/EffortChangeReason, the
+   frontend button/menu entry, and the tests that cover it. A straight
+   removal, no replacement.
+
 ## Queued bugs (reported 2026-08-21, diagnose then fix; sonnet agents)
 
 5. **Main dashboard shows ALL entries** — it must show only the LEAD actor's
