@@ -5,7 +5,12 @@ to the bottom with their commit.
 
 ## In flight
 
-Bugs 5–8, in order, one sonnet agent at a time. Bug 5 is running.
+(nothing running — next: item 4 gate, then the parsing rewrite, 4b, 4c)
+
+Bug 8 could NOT be reproduced at HEAD: every expand path was verified in
+a real Chromium, and a new test clicks a real block open and closed. The
+report stays open until the owner retries after a hard reload; if it
+returns, we need the session id, the entry type, and the browser console.
 
 ## Owner decisions, recorded 2026-08-21
 
@@ -47,24 +52,6 @@ Bugs 5–8, in order, one sonnet agent at a time. Bug 5 is running.
    the one method it means. Same plan-then-approve batch as 4/4b — the enum
    sweep and this one touch the same dispatchers.
 
-## Queued bugs (reported 2026-08-21, diagnose then fix; sonnet agents)
-
-5. **Main dashboard shows ALL entries** — it must show only the LEAD actor's
-   entries; the terminal app keeps showing all. Likely the feed scope default
-   regressed in the rewrite/restore.
-6. **Repeated "is done" notifications** — the same finished sessions notify
-   over and over (eight pushes across five sessions in one stretch). Suspect:
-   the notifier re-fires on daemon restarts or on status flaps; check
-   `notification-route`/`notification-suppressed` audit rows and the
-   retraction path.
-7. **Burst of per-session /sessionData/{id} reads on page load** — diagnosed:
-   the global stream opens with no `after_cursor`, so its first frame carries
-   the whole backlog and can BEAT the list response; every session then looks
-   unknown and `adoptStreamedSession` fetches each one. Fix: open the stream
-   from the list's cursor (the list read and the stream share one high-water
-   mark), and only adopt sessions the list has already answered for.
-8. **Nothing expands on the web dashboard** (Update entries, shell entries) —
-   reproduce with the console open; likely a JS regression from the restore.
 
 ## Done
 
