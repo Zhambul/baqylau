@@ -5,7 +5,8 @@ to the bottom with their commit.
 
 ## In flight
 
-(nothing running — next: item 4 gate, then the parsing rewrite, 4b, 4c)
+(nothing running — the 4/4b/4c batch is DONE; open: the EnterPlanMode
+ticket, and bug 8's hard-reload check by the owner)
 
 Bug 8 could NOT be reproduced at HEAD: every expand path was verified in
 a real Chromium, and a new test clicks a real block open and closed. The
@@ -40,28 +41,14 @@ the one gap. Starts when an agent slot frees.
   type-safety one: map it to an entry kind (or an explicit nonsemantic
   ignore with a reason) so the verdict is deliberate.
 
-## Queued (approved direction, plan needs owner approval before implementation)
-
-4b. **Enums, not string vocabularies** — every `frozenset({"toggle", ...})`
-   command set and every `Literal["...", "..."]` union becomes an enum
-   (`StrEnum`, so stored JSON and the wire stay byte-identical). Covers
-   domain/values.py's type aliases (Outcome, ActorRole, MessagePhase,
-   FileAction, PlanState, …), the pane COMMANDS set, and every other bare-str
-   closed set. Enforce with a gate: no new `Literal` string unions, no
-   module-level `frozenset` of strings used as a vocabulary. Part of the same
-   plan-then-approve batch as item 4.
-4c. **One method per command, no generic `execute(command)`** —
-   `PaneCommandService.execute` dispatches on a command string; it becomes a
-   distinct, typed method per command (toggle/grow/shrink/reset/setpct).
-   Same for `HarnessControlService.execute` and every other string-dispatch
-   service the sweep finds (grep: methods taking a command/kind/action string
-   and branching on it). Callers call the method; the string vocabulary
-   survives only at the HTTP boundary, where the route maps the wire word to
-   the one method it means. Same plan-then-approve batch as 4/4b — the enum
-   sweep and this one touch the same dispatchers.
-
-
 ## Done
+
+- The 4/4b/4c batch, complete: loose-annotation gate (216 pinned, then
+  emptied), codex + claude_code parse into declared models with
+  extra=forbid (drift fixed against real corpora and live e2e),
+  StrEnums for every vocabulary of ours with Gate 5, one typed method
+  per command over one audit core. Suites green throughout; daemon
+  current.
 
 - HarnessName typed everywhere outside api/, Gate 4 with a zero-entry
   allowlist — the wave 2 commit.
