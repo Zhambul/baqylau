@@ -12,6 +12,11 @@ from harness.impl.claude_code import model
 from harness.models import RawEvent, canonical_event
 
 
+# The transcript's model field on a machine-injected assistant record. Not a
+# model: nothing selected it and nothing runs on it.
+SYNTHETIC_MODEL_ID = "<synthetic>"
+
+
 def model_reference(native_id: str) -> ModelReference:
     return ModelReference(
         native_id=native_id,

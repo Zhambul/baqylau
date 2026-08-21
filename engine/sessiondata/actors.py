@@ -114,6 +114,9 @@ class ActorWriter(SessionDataWriter):
         if isinstance(payload, ActorAssignmentStarted):
             return state.with_actor(replace(actor, state="running", finished_at=None))
         if isinstance(payload, ModelChanged):
+            if payload.current.native_id == "<synthetic>":
+                return state  # a machine-injected record, not a model
+
             # The display settles HERE, through the harness's one namer, so an
             # unrefined alias ("sonnet") and its later native id show the same
             # name — and a rebuild re-settles history too.

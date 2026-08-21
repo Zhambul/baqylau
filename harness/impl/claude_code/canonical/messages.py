@@ -28,7 +28,7 @@ from domain.ids import ActorId, AssignmentId, MessageId, ShellId, TaskId, TurnId
 from domain.values import AccountReference, MessagePhase, MessageRole, Outcome, TitleOrigin
 from harness.impl.claude_code import model
 from harness.impl.claude_code.canonical import transcript
-from harness.impl.claude_code.canonical.support import content, event, model_reference, timestamp
+from harness.impl.claude_code.canonical.support import SYNTHETIC_MODEL_ID, content, event, model_reference, timestamp
 from harness.impl.claude_code.canonical.toolcalls import BACKGROUND_LAUNCH_STUB, ToolCallSemantics
 from harness.impl.claude_code.canonical.turns import TurnSemantics
 from harness.models import RawEvent, TranslationError
@@ -540,7 +540,14 @@ def translate_transcript(
             elif block_type == "tool_use":
                 events.extend(toolcalls.tool_started(raw_event, block))
         model_id = record.get("model")
-        model_reference_value = model_reference(model_id) if model_id else None
+        # "<synthetic>" is the transcript's marker on machine-injected
+        # assistant records (interrupt notices, hook output). It names no model
+        # anyone selected, so it reports nothing.
+        model_reference_value = (
+            model_reference(model_id)
+            if model_id and model_id != SYNTHETIC_MODEL_ID
+            else None
+        )
         if model_reference_value is not None:
             reported = selections.model(
                 raw_event.session_id,

@@ -247,6 +247,11 @@ def _is_a_switch(payload: ModelChanged) -> bool:
     previous, current = payload.previous, payload.current
     if previous is None:
         return False
+    # A source may stamp machine-injected records with the pseudo-model
+    # "<synthetic>". Facts carrying it exist in stored history, and a change to
+    # or from a pseudo-model is a report about machinery, never a switch.
+    if "<synthetic>" in (previous.native_id, current.native_id):
+        return False
     if previous.selection_id is not None and current.selection_id is not None:
         return previous.selection_id != current.selection_id
     return previous.native_id != current.native_id
