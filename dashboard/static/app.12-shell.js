@@ -10,7 +10,7 @@
 // frame, not to the list, a session, or a dialog. It lived at the tail of
 // app.09-newsession.js — 120 lines of alerts toggle, fullscreen, readline keys
 // and session cycling under a filename that says "new session" — because that
-// is simply where the header composition happened to be when the monolith was split.
+// is simply where the header event listeners happened to be when the monolith was split.
 // A reader looking for the ⌃⇧←/→ handler had no reason to open that file.
 
 $newbtn.onclick = () => openNewSession("");

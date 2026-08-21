@@ -12,6 +12,7 @@ from dataclasses import replace
 from decimal import Decimal
 
 from domain.events import (
+    CanonicalEvent,
     ActorAssignmentFinished,
     ActorAssignmentStarted,
     ActorDescriptionChanged,
@@ -50,7 +51,6 @@ from domain.events import (
     WorktreeChanged,
 )
 from domain.ids import AttentionId, ShellId
-from domain.records import CommittedEvent
 from domain.sessiondata import (
     ActorContext,
     ActorFacts,
@@ -80,9 +80,9 @@ class ActorWriter(SessionDataWriter):
         self.model_naming = model_naming or ModelNaming()
 
     def write(
-        self, committed_event: CommittedEvent, aggregate_state: AggregateState
+        self, canonical_event: CanonicalEvent[EventPayload], aggregate_state: AggregateState
     ) -> AggregateState:
-        event = committed_event.event
+        event = canonical_event
         payload = event.payload
         if isinstance(payload, ActorStarted):
             existing = aggregate_state.actor(event.actor_id)
@@ -93,7 +93,7 @@ class ActorWriter(SessionDataWriter):
                 name=payload.name,
                 state="running",
                 parent_actor_id=event.parent_actor_id,
-                started_at=committed_event.happened_at,
+                started_at=canonical_event.happened_at,
             )
             # An actor announced twice — two raw event streams both saying so —
             # keeps everything already folded about it and only reopens.
@@ -111,7 +111,7 @@ class ActorWriter(SessionDataWriter):
             return aggregate_state.with_actor(replace(actor, description=payload.description))
         if isinstance(payload, (ActorFinished, ActorAssignmentFinished)):
             return aggregate_state.with_actor(
-                replace(actor, state="finished", finished_at=committed_event.happened_at)
+                replace(actor, state="finished", finished_at=canonical_event.happened_at)
             )
         if isinstance(payload, ActorAssignmentStarted):
             return aggregate_state.with_actor(replace(actor, state="running", finished_at=None))
@@ -147,9 +147,9 @@ class StatusWriter(SessionDataWriter):
     """
 
     def write(
-        self, committed_event: CommittedEvent, aggregate_state: AggregateState
+        self, canonical_event: CanonicalEvent[EventPayload], aggregate_state: AggregateState
     ) -> AggregateState:
-        event = committed_event.event
+        event = canonical_event
         payload = event.payload
         if isinstance(payload, SessionFinished):
             # The session is over: nobody is doing anything, and every actor
@@ -329,12 +329,12 @@ class UsageWriter(SessionDataWriter):
     """
 
     def write(
-        self, committed_event: CommittedEvent, aggregate_state: AggregateState
+        self, canonical_event: CanonicalEvent[EventPayload], aggregate_state: AggregateState
     ) -> AggregateState:
-        payload = committed_event.event.payload
+        payload = canonical_event.payload
         if not isinstance(payload, UsageReported):
             return aggregate_state
-        actor = aggregate_state.actor(committed_event.event.actor_id)
+        actor = aggregate_state.actor(canonical_event.actor_id)
         if actor is None:
             return aggregate_state
         usage = actor.usage
@@ -359,10 +359,10 @@ class ContextWriter(SessionDataWriter):
     """How full the window is, and whether it is being emptied."""
 
     def write(
-        self, committed_event: CommittedEvent, aggregate_state: AggregateState
+        self, canonical_event: CanonicalEvent[EventPayload], aggregate_state: AggregateState
     ) -> AggregateState:
-        payload = committed_event.event.payload
-        actor = aggregate_state.actor(committed_event.event.actor_id)
+        payload = canonical_event.payload
+        actor = aggregate_state.actor(canonical_event.actor_id)
         if actor is None:
             return aggregate_state
         if isinstance(payload, ContextReported):
@@ -408,15 +408,15 @@ class StatisticsWriter(SessionDataWriter):
     """
 
     def write(
-        self, committed_event: CommittedEvent, aggregate_state: AggregateState
+        self, canonical_event: CanonicalEvent[EventPayload], aggregate_state: AggregateState
     ) -> AggregateState:
-        event = committed_event.event
+        event = canonical_event
         payload = event.payload
         actor = aggregate_state.actor(event.actor_id)
         if actor is None:
             return aggregate_state
         statistics = _counted(actor.statistics, payload)
-        statistics = _timed(statistics, committed_event)
+        statistics = _timed(statistics, canonical_event)
         if statistics == actor.statistics:
             return aggregate_state
         return aggregate_state.with_actor(replace(actor, statistics=statistics))
@@ -478,7 +478,7 @@ def _tool_counted(actor_statistics: ActorStatistics, tool: str) -> ActorStatisti
     return replace(actor_statistics, tool_counts=tuple(sorted(counts.items())))
 
 
-def _timed(actor_statistics: ActorStatistics, committed_event: CommittedEvent) -> ActorStatistics:
+def _timed(actor_statistics: ActorStatistics, canonical_event: CanonicalEvent[EventPayload]) -> ActorStatistics:
     """One interval at a time: it opens when the actor has something to do and
     closes when the turn it was doing ends.
 
@@ -486,8 +486,8 @@ def _timed(actor_statistics: ActorStatistics, committed_event: CommittedEvent) -
     sees — its session starting, itself starting, or a prompt arriving mid-run.
     Whichever comes first opens it, and the rest are already inside it.
     """
-    payload = committed_event.event.payload
-    at = committed_event.happened_at
+    payload = canonical_event.payload
+    at = canonical_event.happened_at
     if actor_statistics.active_since_internal is None:
         if isinstance(payload, (SessionStarted, ActorStarted)) or _is_prompt(payload):
             return replace(actor_statistics, active_since_internal=at)

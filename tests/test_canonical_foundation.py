@@ -55,6 +55,7 @@ from repository.mapper import facts as mapper
 from repository.mapper.documents import StoredDocumentError, encode_document
 from domain.events import (
     SCHEMA_VERSION,
+    EVENT_TYPES,
     ActorAssignmentFinished,
     ActorAssignmentStarted,
     ActorFinished,
@@ -78,10 +79,12 @@ from domain.ids import (
     ShellId,
     RawEventId,
     SessionId,
+    TurnId,
     WindowId,
     stable_event_id,
 )
 from domain.values import StructuredContent, TextContent
+from repository.model.facts import CanonicalEventRow
 from audit.recorder import AuditRecorder
 from harness.registry import HarnessRegistry, HarnessRegistryError
 from repository.errors import EventIdentityConflict
@@ -276,14 +279,14 @@ SESSION_DATA_WRITERS = (
 )
 
 
-def _provenance(store, committed):
+def _provenance(store, canonical_event):
     """Which raw observations a committed fact was built from.
 
     Two reads because they answer two questions: the reaction loop's page says
-    WHAT was committed and in what order, and the store says which evidence
+    WHAT was committed and in what order, and the store says which raw events
     converged on any one of those facts.
     """
-    stored = store.find(committed.event.event_id)
+    stored = store.find(canonical_event.event_id)
     assert stored is not None
     return stored.raw_event_ids
 
@@ -448,11 +451,9 @@ def test_actor_lifecycle_payload_contract(payload, event_type, expected_payload)
         payload=payload,
     )
 
-    encoded = json.loads(mapper.encode_canonical_event(event))
-
-    assert encoded["event_type"] == event_type
-    assert encoded["payload"] == expected_payload
-    assert "child" not in encoded["event_type"]
+    assert EVENT_TYPES[type(payload)] == event_type
+    assert json.loads(mapper.payload_json(event)) == expected_payload
+    assert "child" not in event_type
 
 
 def test_a_repository_never_leaves_its_connection_open(tmp_path):
@@ -545,13 +546,39 @@ def test_harness_registry_rejects_multiple_launch_defaults():
                 registry.register(plugin)
 
 
+def _row_from_values(values: tuple, cursor: int = 1) -> CanonicalEventRow:
+    """`canonical_event_values`' tuple, as the row the store would hand back —
+    the one thing missing from it is `cursor`, which only the AUTOINCREMENT
+    column assigns."""
+    (
+        event_id, schema_version, event_type, session_id, actor_id, turn_id,
+        parent_actor_id, harness, occurred_at, terminal_window_id,
+        harness_process_id, accepted_at, payload,
+    ) = values
+    return CanonicalEventRow(
+        cursor=cursor,
+        event_id=CanonicalEventId(event_id),
+        schema_version=schema_version,
+        event_type=event_type,
+        session_id=SessionId(session_id),
+        actor_id=ActorId(actor_id),
+        turn_id=TurnId(turn_id) if turn_id is not None else None,
+        parent_actor_id=ActorId(parent_actor_id) if parent_actor_id is not None else None,
+        harness=harness,
+        occurred_at=occurred_at,
+        terminal_window_id=terminal_window_id,
+        harness_process_id=harness_process_id,
+        accepted_at=accepted_at,
+        payload=payload,
+    )
+
+
 def test_codec_round_trip_is_deterministic_and_structured_content_is_canonical():
     event = canonical_message()
-    assert mapper.decode_canonical_event(mapper.encode_canonical_event(event)) == event
-    assert (
-        mapper.encode_canonical_event(mapper.decode_canonical_event(mapper.encode_canonical_event(event)))
-        == mapper.encode_canonical_event(event)
-    )
+    values = mapper.canonical_event_values(event, accepted_at=100.0)
+    decoded = mapper.row_canonical_event(_row_from_values(values))
+    assert replace(decoded, cursor=None, accepted_at=None) == event
+    assert mapper.canonical_event_values(decoded, accepted_at=100.0) == values
     assert StructuredContent('{ "z": 1, "a": [true] }').json_text == '{"a":[true],"z":1}'
 
 
@@ -559,21 +586,19 @@ def test_codec_round_trips_the_observation_location_on_the_envelope():
     event = replace(
         canonical_message(), terminal_window_id="window-9", harness_process_id=1234
     )
-    decoded = mapper.decode_canonical_event(mapper.encode_canonical_event(event))
+    values = mapper.canonical_event_values(event, accepted_at=100.0)
+    decoded = mapper.row_canonical_event(_row_from_values(values))
     assert decoded.terminal_window_id == "window-9"
     assert decoded.harness_process_id == 1234
 
 
-def test_codec_rejects_unknown_schema_and_envelope_fields():
-    document = mapper.encode_canonical_event(canonical_message()).decode()
+def test_codec_rejects_an_unsupported_schema_version():
+    row = replace(
+        _row_from_values(mapper.canonical_event_values(canonical_message(), accepted_at=100.0)),
+        schema_version=999,
+    )
     with pytest.raises(StoredDocumentError, match="schema version"):
-        mapper.decode_canonical_event(
-            document.replace(f'"schema_version":{SCHEMA_VERSION}', '"schema_version":999')
-        )
-    # ...and names the offending field, because the stored document is now a
-    # declaration rather than a set of strings compared against a dict.
-    with pytest.raises(StoredDocumentError, match=r"CanonicalEventDocument\nglyph"):
-        mapper.decode_canonical_event(document[:-1] + ',"glyph":"x"}')
+        mapper.row_canonical_event(row)
 
 
 def test_codec_decodes_rows_written_before_a_defaulted_field_existed():
@@ -581,6 +606,9 @@ def test_codec_decodes_rows_written_before_a_defaulted_field_existed():
     # optional on decode, so stored events survive the field's introduction
     # without a rewrite. Fields without a default stay required, and extra
     # payload fields stay rejected.
+    payload = ActorAssignmentStarted(
+        AssignmentId("assignment-one"), TextContent("Get Bali weather")
+    )
     event = CanonicalEvent(
         event_id=CanonicalEventId("event-one"),
         session_id=SessionId("session-one"),
@@ -591,25 +619,24 @@ def test_codec_decodes_rows_written_before_a_defaulted_field_existed():
         occurred_at=1.0,
         terminal_window_id=None,
         harness_process_id=None,
-        payload=ActorAssignmentStarted(
-            AssignmentId("assignment-one"), TextContent("Get Bali weather")
-        ),
+        payload=payload,
     )
-    document = json.loads(mapper.encode_canonical_event(event))
-    del document["payload"]["actor_name"]
-    del document["payload"]["prompt"]
+    event_type = EVENT_TYPES[type(payload)]
+    document = json.loads(mapper.payload_json(event))
+    del document["actor_name"]
+    del document["prompt"]
 
-    decoded = mapper.decode_canonical_event(json.dumps(document))
+    decoded = mapper.payload(event_type, json.dumps(document))
 
-    assert decoded.payload.actor_name is None
-    assert decoded.payload.prompt is None
-    document["payload"]["glyph"] = "x"
-    with pytest.raises(StoredDocumentError, match=r"payload\.glyph"):
-        mapper.decode_canonical_event(json.dumps(document))
-    del document["payload"]["glyph"]
-    del document["payload"]["brief"]
+    assert decoded.actor_name is None
+    assert decoded.prompt is None
+    document["glyph"] = "x"
+    with pytest.raises(StoredDocumentError, match="glyph"):
+        mapper.payload(event_type, json.dumps(document))
+    del document["glyph"]
+    del document["brief"]
     with pytest.raises(StoredDocumentError, match="Field required"):
-        mapper.decode_canonical_event(json.dumps(document))
+        mapper.payload(event_type, json.dumps(document))
 
 
 def test_codec_rejects_an_invalid_payload_before_storage():
@@ -726,7 +753,8 @@ def test_interpretation_commits_verdict_canonical_and_provenance_together(tmp_pa
     interpreter.tick()
 
     assert recorder.unverdicted(10) == ()
-    assert store.page_from(0, 10)[0].event == event
+    committed = store.page_from(0, 10)[0]
+    assert replace(committed, cursor=None, accepted_at=None) == event
     connection = sqlite3.connect(store.sqlite_database.path)
     assert connection.execute("SELECT count(*) FROM raw_events").fetchone()[0] == 1
     assert connection.execute("SELECT decision FROM interpretations").fetchone()[0] == "translated"
@@ -800,7 +828,7 @@ def test_re_observing_one_fact_is_idempotent_even_when_observers_disagree(tmp_pa
     ]
     stored = store.page_from(0, 10)
     assert len(stored) == 1
-    assert stored[0].event.payload.content.text == "hello"
+    assert stored[0].payload.content.text == "hello"
     assert _provenance(store, stored[0]) == (RawEventId("raw-one"), RawEventId("raw-two"))
     # Nothing is lost: the disagreeing rendering survives as its own raw evidence.
     connection = sqlite3.connect(store.sqlite_database.path)
@@ -962,8 +990,8 @@ def test_the_interpreter_pulls_translates_and_commits_in_one_tick(tmp_path):
     interpreter.tick()
 
     committed = store.page_from(0, 10)
-    assert [item.event.event_id for item in committed] == [event.event_id]
-    assert committed[0].event.payload == event.payload
+    assert [item.event_id for item in committed] == [event.event_id]
+    assert committed[0].payload == event.payload
 
 
 def test_one_failing_source_neither_stops_its_siblings_nor_the_interpreter(tmp_path, monkeypatch):
@@ -1077,7 +1105,7 @@ def test_a_dead_cli_process_becomes_one_session_finished_fact(tmp_path):
     interpreter.tick()
 
     events = store.page_from(0, 10)
-    assert [type(stored.event.payload) for stored in events] == [SessionFinished]
+    assert [type(stored.payload) for stored in events] == [SessionFinished]
     assert stored_reason(events[0]) == "process_exited"
     assert sessions.watchable() == ()
 
@@ -1090,7 +1118,7 @@ def test_a_dead_cli_process_becomes_one_session_finished_fact(tmp_path):
 
 
 def stored_reason(stored) -> str | None:
-    return stored.event.payload.reason
+    return stored.payload.reason
 
 
 def test_the_liveness_source_verifies_the_process_is_still_the_cli():
@@ -1181,7 +1209,7 @@ def test_an_uncorroborated_interrupt_eventually_clears_the_busy_state(tmp_path):
     interpreter.tick()
 
     events = store.page_from(0, 10)
-    assert [type(stored.event.payload) for stored in events] == [TurnAborted]
+    assert [type(stored.payload) for stored in events] == [TurnAborted]
     reactions.tick()
     # The reaction cleared the mark once the fact was committed AND followed.
     assert registry.pending(SessionId("session-one")) is None
@@ -1313,7 +1341,7 @@ def test_output_location_directives_run_the_whole_foreground_lifecycle(tmp_path)
     assert "tool_output" in chunk_types
     assert len(shell_output.find_for_session(SessionId("session-one"))) == 1
     committed_types = {
-        type(stored.event.payload)
+        type(stored.payload)
         for stored in store.page_from(0, 100)
     }
     assert ShellOutputLocated in committed_types

@@ -351,16 +351,16 @@ def test_the_reaction_loops_page_walks_every_session_in_commit_order(main):
         )
 
     whole = canonical.page_from(0, 10)
-    assert [committed.event.event_id for committed in whole] == [
+    assert [committed.event_id for committed in whole] == [
         CanonicalEventId("event-0"),
         CanonicalEventId("event-1"),
         CanonicalEventId("event-2"),
     ]
-    assert [committed.event.session_id for committed in whole] == [SESSION, other, SESSION]
+    assert [committed.session_id for committed in whole] == [SESSION, other, SESSION]
     # Cursors ascend, and resuming from one returns exactly what follows it.
     cursors = [committed.cursor for committed in whole]
     assert cursors == sorted(cursors)
-    assert [committed.event.event_id for committed in canonical.page_from(cursors[0], 10)] == [
+    assert [committed.event_id for committed in canonical.page_from(cursors[0], 10)] == [
         CanonicalEventId("event-1"),
         CanonicalEventId("event-2"),
     ]

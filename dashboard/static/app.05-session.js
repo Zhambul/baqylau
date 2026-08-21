@@ -1558,7 +1558,7 @@ function buildViewBar() {
 // authoritative — sending just types the command into the terminal and Claude
 // Code's own palette executes it. The menu drops BELOW its host box (never up
 // over the stats row); `host` must be position:relative.
-// Composition contract: the helper listens to input/blur itself; the caller keeps
+// Listener contract: the helper listens to input/blur itself; the caller keeps
 // its own oninput (autoGrow) and calls sm.key(e) FIRST in onkeydown — a true
 // return means the menu consumed the key.
 

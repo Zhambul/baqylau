@@ -738,7 +738,7 @@ function resumePicker() {
 
 // ---- the new-session form, in named phases -----------------------------------
 // openNewSession built the whole modal in one 344-line function — seven field
-// rows, their cross-composition, the draft machinery and the launch, in a single
+// rows, the connections between them, the draft machinery and the launch, in a single
 // scope where every closure could see every local. That is the shape the Python
 // side is not allowed to have (docs/styleguide.md, *Module shape*: "long entry
 // main()s are named phases" — small functions named for what they do, sharing

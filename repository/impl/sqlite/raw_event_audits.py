@@ -90,9 +90,7 @@ class SqliteRawEventAuditRepository(RawEventAuditRepository):
                     completed_at=raw["completed_at"],
                     events=tuple(
                         InterpretationAuditEvent(
-                            event=mapper.stored_canonical_event(
-                                rows.canonical_event(row), ()
-                            ).event,
+                            event=mapper.row_canonical_event(rows.canonical_event(row)),
                             accepted_at=row["accepted_at"],
                             event_order=row["event_order"],
                             storage_result=_storage_result(row["storage_result"]),

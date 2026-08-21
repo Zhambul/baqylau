@@ -6,12 +6,10 @@
 #
 # What is left is two kinds, and they are NOT the same debt:
 #
-#   unused function/method (2) — product code that ONLY tests/ reaches. The
-#     scan omits tests/ from its paths precisely so these surface instead of
-#     looking alive. Each is a real question: is the method the product's, or
-#     the test's? Answering it means deleting it or using it.
-#     `decode_canonical_event` is the plain counterpart to
-#     `encode_canonical_event`, kept for the round-trip tests that exercise it.
+#   unused method (1) — product code that ONLY tests/ reaches. The scan omits
+#     tests/ from its paths precisely so these surface instead of looking
+#     alive. Each is a real question: is the method the product's, or the
+#     test's? Answering it means deleting the method or using it.
 #
 #   unused variable (85) — response-model fields (dataclass / pydantic). These are
 #     NOT dead: they are consumed by serialization vulture cannot follow — the
@@ -83,6 +81,5 @@ scheduling_allowed  # unused variable (harness/models/usage.py:37)
 authentication_error  # unused variable (harness/models/usage.py:39)
 DELETE_WINDOW_SECONDS  # unused variable (notify/channels/telegram.py:52)
 _.current_session  # unused method (terminal/adapter.py:102)
-decode_canonical_event  # unused function (repository/mapper/facts.py:293)
 to_bottom  # unused variable (terminal/models/viewport.py:37)
 up_lines  # unused variable (terminal/models/viewport.py:38)

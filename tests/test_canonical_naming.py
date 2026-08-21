@@ -184,11 +184,19 @@ def test_an_id_is_a_typed_id_not_a_bare_str():
 #
 # A vocabulary the owner has retired, because each word named a thing this tree
 # no longer has (a hand-written codec, an "envelope" that is a plain stored
-# event, a "wire" that is the HTTP boundary) or invited one back (a bare
-# "wiring" for what `app/injection.py` calls composition, a "provenance" no
-# reader outside a lookup table would use). Grow-only: a word retired here may
-# never come back off the list, only new words may join it.
+# event, a "wire" that is the HTTP boundary) or was too vague to keep (a
+# "wiring" or a "provenance" that always meant something more specific the
+# sentence should say instead — a dependency graph, a set of raw event ids,
+# whatever the concrete thing actually is). There is no fixed one-word
+# replacement for these two: say the plain thing, in place. Grow-only: a word
+# retired here may never come back off the list, only new words may join it.
 BANNED_WORDS = ("envelope", "evidence", "wire", "wiring", "provenance")
+
+# Classes the owner decided should never exist: one canonical event class,
+# `domain.events.CanonicalEvent`, end to end. A second one always meant to grow
+# back into a stored-document type this tree no longer has. Grow-only, like
+# the word list above.
+BANNED_IDENTIFIERS = ("StoredCanonicalEvent", "CommittedEvent", "CanonicalEventDocument")
 
 # Scanned wider than the two naming gates above: `bin/` and `client/` carry
 # prose and identifiers too, and the browser half of this codebase is JS, not
@@ -223,4 +231,19 @@ def test_no_banned_word_appears_in_code_comments_or_file_names():
             for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
                 if pattern.search(line):
                     violations.append(f"{relative}:{number}: {word!r}")
+    assert violations == []
+
+
+def test_no_banned_identifier_appears_anywhere():
+    """Case-sensitive, unlike Gate 3: these are exact class names, not prose."""
+    violations = []
+    for path in _banned_word_files():
+        relative = path.relative_to(ROOT)
+        for name in BANNED_IDENTIFIERS:
+            pattern = re.compile(rf"(?<![A-Za-z0-9]){re.escape(name)}(?![A-Za-z0-9])")
+            if pattern.search(path.name):
+                violations.append(f"{relative} — file name contains {name!r}")
+            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                if pattern.search(line):
+                    violations.append(f"{relative}:{number}: {name!r}")
     assert violations == []

@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from domain.events import (
+    CanonicalEvent,
     EventPayload,
     GoalChanged,
     MessageCreated,
@@ -20,7 +21,6 @@ from domain.events import (
     TaskChanged,
     TaskListChanged,
 )
-from domain.records import CommittedEvent
 from domain.sessiondata import SessionFacts, SessionGoal, SessionTask
 from domain.values import TextContent
 from engine.sessiondata.contract import AggregateState, SessionDataWriter
@@ -35,12 +35,12 @@ class SessionWriter(SessionDataWriter):
     title, account and lifecycle from then on."""
 
     def write(
-        self, committed_event: CommittedEvent, aggregate_state: AggregateState
+        self, canonical_event: CanonicalEvent[EventPayload], aggregate_state: AggregateState
     ) -> AggregateState:
-        event = committed_event.event
+        event = canonical_event
         payload = event.payload
         if isinstance(payload, SessionStarted):
-            born = _born(committed_event)
+            born = _born(canonical_event)
             if aggregate_state.session is None:
                 return replace(aggregate_state, session=born)
             # A session that starts again is the same session RESUMED: the
@@ -68,7 +68,7 @@ class SessionWriter(SessionDataWriter):
             return replace(
                 aggregate_state,
                 session=replace(
-                    session, state="finished", finished_at=committed_event.happened_at
+                    session, state="finished", finished_at=canonical_event.happened_at
                 ),
             )
         if (
@@ -80,8 +80,8 @@ class SessionWriter(SessionDataWriter):
         return aggregate_state
 
 
-def _born(committed_event: CommittedEvent) -> SessionFacts:
-    event = committed_event.event
+def _born(canonical_event: CanonicalEvent[EventPayload]) -> SessionFacts:
+    event = canonical_event
     payload = event.payload
     assert isinstance(payload, SessionStarted)
     return SessionFacts(
@@ -89,7 +89,7 @@ def _born(committed_event: CommittedEvent) -> SessionFacts:
         harness=event.harness,
         state="running",
         working_directory=payload.working_directory,
-        started_at=committed_event.happened_at,
+        started_at=canonical_event.happened_at,
         lead_actor_id=event.actor_id,
         account=payload.account,
         automatic_title_internal=payload.title,
@@ -148,9 +148,9 @@ class GoalWriter(SessionDataWriter):
     """
 
     def write(
-        self, committed_event: CommittedEvent, aggregate_state: AggregateState
+        self, canonical_event: CanonicalEvent[EventPayload], aggregate_state: AggregateState
     ) -> AggregateState:
-        payload = committed_event.event.payload
+        payload = canonical_event.payload
         if not isinstance(payload, GoalChanged) or aggregate_state.session is None:
             return aggregate_state
         if payload.state == "cleared":
@@ -173,9 +173,9 @@ class TaskWriter(SessionDataWriter):
     """
 
     def write(
-        self, committed_event: CommittedEvent, aggregate_state: AggregateState
+        self, canonical_event: CanonicalEvent[EventPayload], aggregate_state: AggregateState
     ) -> AggregateState:
-        payload = committed_event.event.payload
+        payload = canonical_event.payload
         session = aggregate_state.session
         if session is None:
             return aggregate_state

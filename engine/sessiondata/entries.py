@@ -46,6 +46,7 @@ from domain.entries import (
 from domain.events import (
     ActorAssignmentFinished,
     ActorAssignmentStarted,
+    CanonicalEvent,
     CompactionFinished,
     CompactionStarted,
     EffortChanged,
@@ -71,7 +72,6 @@ from domain.events import (
     WebFetched,
     WorktreeChanged,
 )
-from domain.records import CommittedEvent
 from engine.sessiondata.naming import ModelNaming
 from domain.values import Outcome, TextContent, content_text
 from engine.sessiondata.contract import SessionEntryWriter
@@ -94,8 +94,8 @@ class EntryWriter(SessionEntryWriter):
     def __init__(self, model_naming: ModelNaming | None = None) -> None:
         self.model_naming = model_naming or ModelNaming()
 
-    def entry(self, committed_event: CommittedEvent) -> SessionEntry | None:
-        event = committed_event.event
+    def entry(self, canonical_event: CanonicalEvent[EventPayload]) -> SessionEntry | None:
+        event = canonical_event
         body = _body(event.payload, event.harness, self.model_naming)
         if body is None:
             return None
@@ -108,7 +108,7 @@ class EntryWriter(SessionEntryWriter):
             # Always a number: a feed shows when things happened, and a source
             # that carries no clock of its own would otherwise leave a hole in
             # the middle of a conversation.
-            occurred_at=committed_event.happened_at,
+            occurred_at=canonical_event.happened_at,
             summary=_summary(event.payload),
             body=body,
         )

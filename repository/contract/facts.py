@@ -15,12 +15,9 @@ from __future__ import annotations
 
 from typing import Mapping, Protocol, Sequence
 
+from domain.events import CanonicalEvent, EventPayload
 from domain.ids import CanonicalEventId, RawEventId, SessionId
-from domain.records import (
-    CommittedEvent,
-    StoredCanonicalEvent,
-    TranslationOutcome,
-)
+from domain.records import TranslationOutcome
 from harness.models import RawEvent, RawEventAudit, TranslationResult
 
 
@@ -85,13 +82,16 @@ class CanonicalEventRepository(Protocol):
         """
         ...
 
-    def find(self, event_id: CanonicalEventId) -> StoredCanonicalEvent | None: ...
+    def find(self, event_id: CanonicalEventId) -> CanonicalEvent[EventPayload] | None:
+        """The fact, its `raw_event_ids` filled in — the one read that pays for
+        the audit join, because it is the one caller that looks at them."""
+        ...
 
     def session_ids(self) -> tuple[SessionId, ...]:
         """Every session that has a `session.started` fact, most recent first."""
         ...
 
-    def page_from(self, cursor: int, limit: int) -> tuple[CommittedEvent, ...]:
+    def page_from(self, cursor: int, limit: int) -> tuple[CanonicalEvent[EventPayload], ...]:
         """Every session's facts after `cursor`, in the order they were accepted.
 
         The reaction loop's whole input, and the one read that crosses sessions:

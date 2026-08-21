@@ -78,7 +78,6 @@ from domain.ids import (
     TaskListId,
     TurnId,
 )
-from domain.records import CommittedEvent
 from domain.sessiondata import ActorStatus
 from domain.values import AccountReference, ModelReference, TextContent, TokenUsage
 from engine.react.loop import ReactionLoop
@@ -127,32 +126,30 @@ def committed(
     accepted_at: float = 100.0,
     cursor: int = 1,
     event_id: str | None = None,
-) -> CommittedEvent:
-    return CommittedEvent(
+) -> CanonicalEvent[EventPayload]:
+    return CanonicalEvent(
+        event_id=CanonicalEventId(event_id or f"event-{cursor}"),
+        session_id=SESSION,
+        actor_id=actor_id,
+        turn_id=turn_id,
+        parent_actor_id=parent_actor_id,
+        harness="example",
+        occurred_at=occurred_at,
+        terminal_window_id=None,
+        harness_process_id=None,
+        payload=payload,
         cursor=cursor,
         accepted_at=accepted_at,
-        event=CanonicalEvent(
-            event_id=CanonicalEventId(event_id or f"event-{cursor}"),
-            session_id=SESSION,
-            actor_id=actor_id,
-            turn_id=turn_id,
-            parent_actor_id=parent_actor_id,
-            harness="example",
-            occurred_at=occurred_at,
-            terminal_window_id=None,
-            harness_process_id=None,
-            payload=payload,
-        ),
     )
 
 
-def fold(*payloads: EventPayload | CommittedEvent) -> AggregateState:
+def fold(*payloads: EventPayload | CanonicalEvent[EventPayload]) -> AggregateState:
     """Every writer over every fact, in order — the loop's fold, without the store."""
     state = AggregateState()
     for cursor, payload in enumerate(payloads, start=1):
         event = (
             payload
-            if isinstance(payload, CommittedEvent)
+            if isinstance(payload, CanonicalEvent)
             else committed(payload, cursor=cursor)
         )
         for writer in WRITERS:
@@ -889,7 +886,7 @@ def _record(database, events, payloads) -> None:
             source_name="fixture.jsonl",
             source_position=str(cursor),
             session_id=SESSION,
-            actor_id=committed(payload, cursor=cursor).event.actor_id,
+            actor_id=committed(payload, cursor=cursor).actor_id,
             parent_actor_id=None,
             observed_at=100.0,
             encoding="json",
@@ -899,7 +896,7 @@ def _record(database, events, payloads) -> None:
         events.record_translation(
             raw_event,
             "1",
-            TranslationResult((committed(payload, cursor=cursor).event,), "translated"),
+            TranslationResult((committed(payload, cursor=cursor),), "translated"),
             time.time(),
         )
 
@@ -1088,7 +1085,7 @@ def test_a_subagents_status_never_paints_the_sessions_tab(tmp_path):
         tmp_path,
         (
             *alive(),
-            committed(ActorStarted("Explore", "child"), actor_id=CHILD, cursor=3).event.payload,
+            committed(ActorStarted("Explore", "child"), actor_id=CHILD, cursor=3).payload,
         ),
         listener=TabColorPainter(tabs, FixedSessions(LEAD)),
     )

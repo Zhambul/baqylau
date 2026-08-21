@@ -220,9 +220,9 @@ def stored_payloads(runtime, session_id, payload_type):
     sees belongs to the read model, and has its own tests.
     """
     return [
-        item.event.payload
+        item.payload
         for item in runtime.store.page_from(0, 100_000)
-        if isinstance(item.event.payload, payload_type)
+        if isinstance(item.payload, payload_type)
     ]
 
 
@@ -4385,7 +4385,7 @@ def test_claude_hook_and_transcript_tool_finish_deduplicate_transactionally(tmp_
     accepted = store.record(transcript_raw, "1", transcript)
     assert hook_finished.event_id not in {event.event_id for event in accepted}
     committed = store.store.page_from(0, 10)
-    assert hook_finished.event_id in {item.event.event_id for item in committed}
+    assert hook_finished.event_id in {item.event_id for item in committed}
     finished = store.store.find(hook_finished.event_id)
     assert finished is not None
     assert RawEventId("transcript-finish") in finished.raw_event_ids

@@ -17,8 +17,8 @@ from dataclasses import dataclass, field, replace
 from typing import Protocol
 
 from domain.entries import SessionEntry
+from domain.events import CanonicalEvent, EventPayload
 from domain.ids import ActorId, SessionId
-from domain.records import CommittedEvent
 from domain.sessiondata import ActorFacts, SessionFacts
 
 
@@ -52,7 +52,7 @@ class SessionDataWriter(Protocol):
     """One concern of the aggregate. Sees every accepted event, in order."""
 
     def write(
-        self, committed_event: CommittedEvent, aggregate_state: AggregateState
+        self, canonical_event: CanonicalEvent[EventPayload], aggregate_state: AggregateState
     ) -> AggregateState:
         ...
 
@@ -64,7 +64,7 @@ class SessionEntryWriter(Protocol):
     produces is ever revised, so there is no state for it to carry.
     """
 
-    def entry(self, committed_event: CommittedEvent) -> SessionEntry | None:
+    def entry(self, canonical_event: CanonicalEvent[EventPayload]) -> SessionEntry | None:
         ...
 
 

@@ -1,12 +1,9 @@
-"""What a stored canonical fact looks like once it is read back.
+"""The verdicts a store hands out, and the operations they compose into.
 
-The event itself is `domain/events.py`'s business. These are the shapes the
-STORE hands out around it: the cursor and acceptance time an event acquired by
-being written, the page a range read returns, the verdict recorded against one
-observation, and the link between the two.
-
-They used to live inside the SQLite store class, which meant every consumer of
-a stored event imported the storage module to name its type.
+The event itself, stored or not, is `domain/events.py`'s `CanonicalEvent` — one
+class end to end, with `cursor`/`accepted_at`/`raw_event_ids` filled in once it
+is written. What is left here is what happened AROUND an event: the verdict
+reached about one raw observation, and the outcome of writing a batch of them.
 """
 
 from __future__ import annotations
@@ -21,39 +18,6 @@ CanonicalStorageResult: TypeAlias = Literal["accepted", "deduplicated"]
 RecordedTranslationDecision: TypeAlias = Literal[
     "translated", "ignored_unknown", "ignored_nonsemantic", "translation_failed"
 ]
-
-
-@dataclass(frozen=True)
-class StoredCanonicalEvent:
-    cursor: int
-    accepted_at: float
-    event: CanonicalEvent[EventPayload]
-    raw_event_ids: tuple[RawEventId, ...]
-
-
-@dataclass(frozen=True)
-class CommittedEvent:
-    """One accepted fact, as the reaction loop reads it.
-
-    The fact, when we recorded it, and its place in the one order everything
-    after it depends on. Deliberately NOT a `StoredCanonicalEvent`: that one
-    also carries the raw events its fact was derived from, which the audit
-    needs and a reaction never does — and reading it would mean a second query
-    per page, across sessions, for an origin nobody looks at.
-    """
-
-    cursor: int
-    accepted_at: float
-    event: CanonicalEvent[EventPayload]
-
-    @property
-    def happened_at(self) -> float:
-        """When it happened, or failing that when we heard about it.
-
-        `occurred_at` is nullable BY DESIGN — it is what the source said, and
-        sources that carry no clock leave it empty. Every fold that measures or
-        orders needs one number, and this is that number."""
-        return self.event.occurred_at if self.event.occurred_at is not None else self.accepted_at
 
 
 @dataclass(frozen=True)

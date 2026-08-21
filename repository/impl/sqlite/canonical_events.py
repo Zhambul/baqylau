@@ -14,9 +14,7 @@ from domain.events import CanonicalEvent, EventPayload
 from domain.ids import CanonicalEventId, RawEventId, SessionId
 from domain.records import (
     CanonicalStorageResult,
-    CommittedEvent,
     InterpretationEventRecord,
-    StoredCanonicalEvent,
     TranslationOutcome,
     InterpretationRecord,
 )
@@ -104,7 +102,7 @@ class SqliteCanonicalEventRepository(CanonicalEventRepository):
 
     # --- reads -----------------------------------------------------------------
 
-    def find(self, event_id: CanonicalEventId) -> StoredCanonicalEvent | None:
+    def find(self, event_id: CanonicalEventId) -> CanonicalEvent[EventPayload] | None:
         with self.sqlite_database.read() as connection:
             row = connection.execute(
                 "SELECT * FROM canonical_events WHERE event_id=?", (str(event_id),)
@@ -116,7 +114,7 @@ class SqliteCanonicalEventRepository(CanonicalEventRepository):
                 "ORDER BY raw_event_id",
                 (row["event_id"],),
             ).fetchall()
-        return mapper.stored_canonical_event(
+        return mapper.row_canonical_event(
             rows.canonical_event(row),
             tuple(RawEventId(entry["raw_event_id"]) for entry in interpretation_events),
         )
@@ -131,7 +129,7 @@ class SqliteCanonicalEventRepository(CanonicalEventRepository):
             ).fetchall()
         return tuple(SessionId(row["session_id"]) for row in found)
 
-    def page_from(self, cursor: int, limit: int) -> tuple[CommittedEvent, ...]:
+    def page_from(self, cursor: int, limit: int) -> tuple[CanonicalEvent[EventPayload], ...]:
         if limit <= 0:
             raise ValueError("event page limit must be positive")
         with self.sqlite_database.read() as connection:
@@ -139,12 +137,5 @@ class SqliteCanonicalEventRepository(CanonicalEventRepository):
                 "SELECT * FROM canonical_events WHERE cursor>? ORDER BY cursor LIMIT ?",
                 (cursor, limit),
             ).fetchall()
-        return tuple(
-            CommittedEvent(
-                cursor=row["cursor"],
-                accepted_at=row["accepted_at"],
-                event=mapper.canonical_event(mapper.row_canonical_event_document(rows.canonical_event(row))),
-            )
-            for row in found
-        )
+        return tuple(mapper.row_canonical_event(rows.canonical_event(row)) for row in found)
 

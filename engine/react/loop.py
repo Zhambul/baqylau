@@ -27,8 +27,8 @@ import time
 from typing import Callable
 
 from audit.recorder import AuditRecorder
+from domain.events import CanonicalEvent, EventPayload
 from domain.ids import SessionId
-from domain.records import CommittedEvent
 from domain.sessiondata import ActorFacts
 from engine.sessiondata.contract import (
     AggregateState,
@@ -94,9 +94,9 @@ class ReactionLoop:
         # of the batch, which is what makes a failed apply self-healing — the
         # next tick reads the committed truth again.
         states: dict[SessionId, AggregateState] = {}
-        for committed in events:
-            self._react(committed)
-            self._materialize(committed, states, self.listeners)
+        for canonical_event in events:
+            self._react(canonical_event)
+            self._materialize(canonical_event, states, self.listeners)
         return len(events)
 
     def rebuild(self) -> int:
@@ -116,38 +116,37 @@ class ReactionLoop:
             if not events:
                 return total
             states: dict[SessionId, AggregateState] = {}
-            for committed in events:
+            for canonical_event in events:
                 # No reactions AND no listeners: both are side effects, and a
                 # replay of history must not reopen a pane or repaint the tab of
                 # a session that finished days ago.
-                self._materialize(committed, states, ())
+                self._materialize(canonical_event, states, ())
             total += len(events)
 
     # --- the side effects ----------------------------------------------------
 
-    def _react(self, committed_event: CommittedEvent) -> None:
-        event = committed_event.event
+    def _react(self, canonical_event: CanonicalEvent[EventPayload]) -> None:
         for reaction in self.reactions:
             try:
-                reaction.react(event)
+                reaction.react(canonical_event)
             except Exception:
-                self._audit_failure(type(reaction).__name__, _context(committed_event))
+                self._audit_failure(type(reaction).__name__, _context(canonical_event))
         try:
-            reactors = self.harnesses.plugin(event.harness).reactors
+            reactors = self.harnesses.plugin(canonical_event.harness).reactors
         except Exception:
-            self._audit_failure("harness lookup", _context(committed_event))
+            self._audit_failure("harness lookup", _context(canonical_event))
             return
         for reactor in reactors:
             try:
-                reactor.react(event, self.controls)
+                reactor.react(canonical_event, self.controls)
             except Exception:
-                self._audit_failure(type(reactor).__name__, _context(committed_event))
+                self._audit_failure(type(reactor).__name__, _context(canonical_event))
 
     # --- the read model ------------------------------------------------------
 
     def _materialize(
         self,
-        committed_event: CommittedEvent,
+        canonical_event: CanonicalEvent[EventPayload],
         states: dict[SessionId, AggregateState],
         listeners: tuple[AppliedActorListener, ...],
     ) -> None:
@@ -157,30 +156,32 @@ class ReactionLoop:
         the same transaction as the rows, so the next tick sees this event again
         — and its entry insert is idempotent, so seeing it twice is harmless.
         """
-        session_id = committed_event.event.session_id
+        session_id = canonical_event.session_id
         try:
             before = states.get(session_id) or _state(self.session_data, session_id)
             after = before
             for writer in self.writers:
-                after = writer.write(committed_event, after)
+                after = writer.write(canonical_event, after)
             changes = SessionDataChanges(
-                entry=self.entry_writer.entry(committed_event),
+                entry=self.entry_writer.entry(canonical_event),
                 session=after.session if after.session != before.session else None,
                 actors=_changed_actors(before, after),
             )
-            self.session_data.apply(session_id, changes, committed_event.cursor)
+            if canonical_event.cursor is None:
+                raise ValueError("an event with no cursor was handed to the reaction loop")
+            self.session_data.apply(session_id, changes, canonical_event.cursor)
             states[session_id] = after
         except Exception:
-            self._audit_failure("session data", _context(committed_event))
+            self._audit_failure("session data", _context(canonical_event))
             return
-        self._announce(listeners, session_id, changes.actors, committed_event)
+        self._announce(listeners, session_id, changes.actors, canonical_event)
 
     def _announce(
         self,
         listeners: tuple[AppliedActorListener, ...],
         session_id: SessionId,
         actors: tuple[ActorFacts, ...],
-        committed_event: CommittedEvent,
+        canonical_event: CanonicalEvent[EventPayload],
     ) -> None:
         """Tell the listeners what committed. After the transaction, deliberately:
         an aggregate change does not exist until it is durable, and a listener
@@ -192,7 +193,7 @@ class ReactionLoop:
             try:
                 listener.applied(session_id, actors)
             except Exception:
-                self._audit_failure(type(listener).__name__, _context(committed_event))
+                self._audit_failure(type(listener).__name__, _context(canonical_event))
 
     def _audit_failure(self, where: str, context: dict[str, object]) -> None:
         """Record a swallowed failure, then carry on. Guarded, so a broken
@@ -205,11 +206,11 @@ class ReactionLoop:
             pass
 
 
-def _context(committed_event: CommittedEvent) -> dict[str, object]:
+def _context(canonical_event: CanonicalEvent[EventPayload]) -> dict[str, object]:
     return {
-        "session_id": str(committed_event.event.session_id),
-        "event_id": str(committed_event.event.event_id),
-        "cursor": committed_event.cursor,
+        "session_id": str(canonical_event.session_id),
+        "event_id": str(canonical_event.event_id),
+        "cursor": canonical_event.cursor,
     }
 
 

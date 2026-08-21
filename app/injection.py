@@ -1,6 +1,6 @@
 """The daemon's injection kernel: three names, and no state of its own.
 
-The composition lives in the providers' SIGNATURES (`app/providers.py`), which is what
+The dependency graph lives in the providers' SIGNATURES (`app/providers.py`), which is what
 FastAPI reads to build a route's dependencies — so the graph is declared once and
 resolved by the framework, not assembled by hand into an object every consumer
 then reaches into.
