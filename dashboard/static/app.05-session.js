@@ -120,9 +120,31 @@ function canonicalUsageStats(usage) {
 
 // The actor this view is ABOUT: the one the ?agent= scope names, or the lead.
 function scopedActor(data) {
-  const wanted = (S.sessionView && S.sessionView.agent)
-    || (data.session || {}).lead_actor_id || "";
+  const wanted = feedScopeActorId(data.session);
   return (data.actors || []).find(actor => actor.actor_id === wanted) || null;
+}
+
+// The actor the FEED is filtered to: the one the ?agent= scope names, or —
+// with no scope chosen — the lead. A session's feed defaults to the lead
+// actor's own entries, the same rule `scopedActor` applies to the aggregate;
+// a launched agent's own messages and commands stay out of sight until a
+// reader opens that agent's scope. `session` is optional so a caller mid-load
+// (before a snapshot has landed) can still fall back to the held one.
+function feedScopeActorId(session) {
+  const facts = session || (S.sessionView && S.sessionView.sessionFacts) || {};
+  return (S.sessionView && S.sessionView.agent) || facts.lead_actor_id || "";
+}
+
+// Whether an entry belongs in the feed at the current scope. An empty scope
+// means the lead actor is not known, which is a real problem: report it
+// loudly, and paint everything so the feed is not blank while it is reported.
+function inFeedScope(entry, scopeActorId) {
+  if (!scopeActorId) {
+    failLoudly(S.currentSessionId, "feed.scope.unknown_lead",
+               { msg: "no lead actor known; the feed shows all actors" });
+    return true;
+  }
+  return entry.actor_id === scopeActorId;
 }
 
 function canonicalActivityStats(data) {
@@ -186,9 +208,9 @@ function canonicalPlan(entry) {
 function canonicalSessionMeta(data) {
   const session = data.session || {};
   const actor = scopedActor(data) || {};
-  const actorId = (S.sessionView && S.sessionView.agent) || session.lead_actor_id || "";
+  const actorId = feedScopeActorId(session);
   const pending = pendingAttentionEntries()
-    .filter(entry => !actorId || entry.actor_id === actorId);
+    .filter(entry => inFeedScope(entry, actorId));
   const asked = pending.find(entry => entry.type === "question_asked") || null;
   const proposed = pending.find(entry => entry.type === "plan_proposed") || null;
   const meta = {
@@ -471,10 +493,12 @@ function loadEntryPage(sessionId, cursor) {
       if (S.currentSessionId !== sessionId || !S.sessionView) return;
       S.sessionView.lastId = cursor | 0;
       S.sessionView.oldest = page.has_more ? (page.oldest_cursor || 0) : 0;
-      rememberAttention(page.items || []);
+      const scope = feedScopeActorId();
+      const items = (page.items || []).filter(entry => inFeedScope(entry, scope));
+      rememberAttention(items);
       // The page is oldest-first and the feed is newest-top, so it is applied
       // the way a live tail would have arrived: one at a time, prepending.
-      appendEntries(page.items || []);
+      appendEntries(items);
       applyBackgroundPanels();
       applyCanonicalSnapshotRefresh();
     })
@@ -587,9 +611,14 @@ function applySessionDataFrame(frame) {
   }
   const entries = frame.entries || [];
   if (entries.length) {
+    // The resume cursor tracks every entry the stream sent, in scope or not —
+    // it names a position in the whole feed, and a reconnect must not re-ask
+    // for entries this scope only skipped painting.
     view.lastId = Math.max(view.lastId || 0, entries[entries.length - 1].cursor || 0);
-    rememberAttention(entries);
-    appendEntries(entries);
+    const scope = feedScopeActorId();
+    const scoped = entries.filter(entry => inFeedScope(entry, scope));
+    rememberAttention(scoped);
+    appendEntries(scoped);
   }
   applyBackgroundPanels();
   updateStatsRow();
@@ -962,8 +991,8 @@ function loadOlder(want) {
     .then(d => {
       if (S.currentSessionId !== sessionId || !S.sessionView) return;         // navigated away mid-fetch
       tries++;
-      const scope = sessionView.agent || "";
-      const items = (d.items || []).filter(entry => !scope || entry.actor_id === scope);
+      const scope = feedScopeActorId();
+      const items = (d.items || []).filter(entry => inFeedScope(entry, scope));
       rememberAttention(items);
       appendOlder(items);
       sessionView.oldest = d.has_more ? (d.oldest_cursor | 0) : 0;

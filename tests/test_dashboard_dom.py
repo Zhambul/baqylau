@@ -270,3 +270,16 @@ def test_new_session_sections_task_order_and_density_are_unchanged():
         "focus": "0",
         "userStateAfterSwitch": None,
     }
+
+
+def test_the_feed_defaults_to_the_lead_actor_and_a_chosen_scope_overrides_it():
+    scope = run("feedscope.js", "dashboard/static/app.05-session.js")
+    assert scope["defaultScope"] == "lead"
+    assert scope["chosenScope"] == "child"
+    assert scope["unknownScope"] == ""
+    assert scope["leadInDefaultScope"] is True
+    assert scope["childInDefaultScope"] is False
+    assert scope["childInChosenScope"] is True
+    assert scope["leadInChosenScope"] is False
+    assert scope["everythingInUnknownScope"] is True
+    assert scope["unknownScopeReportedLoudly"] is True
