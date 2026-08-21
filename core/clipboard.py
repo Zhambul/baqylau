@@ -42,7 +42,7 @@ NAMES_TYPE = "NSFilenamesPboardType"   # plist array of POSIX paths (multi-file)
 URL_TYPE = "public.file-url"           # a single file:// URL (the fallback)
 
 
-def _from_env():
+def _from_env() -> list[str] | None:
     """The test/override channel: an explicit path list, or None when unset."""
     raw = os.environ.get(ENV_FILES)
     if raw is None:
@@ -50,7 +50,7 @@ def _from_env():
     return [p for p in raw.split(":") if p]
 
 
-def _from_pasteboard():
+def _from_pasteboard() -> list[str]:
     """The real read: every file path on the general pasteboard, in order.
 
     pyobjc is imported HERE, not at module scope — the dashboard imports this
@@ -74,7 +74,7 @@ def _from_pasteboard():
     return []
 
 
-def files():
+def files() -> list[str]:
     """The absolute paths of the files currently on the local clipboard —
     existing ones only, capped at FILES_MAX. [] when there are none, when the
     host has no readable pasteboard, or on ANY failure (audited, never raised:
@@ -91,7 +91,7 @@ def files():
             and os.path.exists(p)][:FILES_MAX]
 
 
-def match(names):
+def match(names: list[str] | None) -> list[str]:
     """The clipboard's paths IFF they are the files the BROWSER just reported
     pasting — same basenames, same count, order-insensitive. Else [].
 

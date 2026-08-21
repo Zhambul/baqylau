@@ -448,7 +448,9 @@ class CodexCanonicalTranslator(HarnessTranslator):
             ),
         ]
 
-    def _translate_record(self, raw_event: RawEvent, document: dict[str, Any], record: dict[str, Any]) -> list[CanonicalEvent[EventPayload]]:
+    def _translate_record(
+        self, raw_event: RawEvent, document: dict[str, Any], record: dict[str, Any]
+    ) -> list[CanonicalEvent[EventPayload]]:
         kind = record["kind"]
         native_payload = document.get("payload") or {}
         native_identity = str(

@@ -194,7 +194,7 @@ class ReactionLoop:
             except Exception:
                 self._audit_failure(type(listener).__name__, _context(committed))
 
-    def _audit_failure(self, where: str, context: dict) -> None:
+    def _audit_failure(self, where: str, context: dict[str, object]) -> None:
         """Record a swallowed failure, then carry on. Guarded, so a broken
         auditor can never take down the loop it exists to explain."""
         try:
@@ -205,7 +205,7 @@ class ReactionLoop:
             pass
 
 
-def _context(committed: CommittedEvent) -> dict:
+def _context(committed: CommittedEvent) -> dict[str, object]:
     return {
         "session_id": str(committed.event.session_id),
         "event_id": str(committed.event.event_id),

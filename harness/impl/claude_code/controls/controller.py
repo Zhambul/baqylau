@@ -137,7 +137,7 @@ class SendTextHandler(ControlHandler):
         driver = _TerminalDriver(terminal)
         if request.replace_terminal_draft:
             input_state = ClaudeCodeTerminalProbe().input_state(terminal.viewport, window_id)
-            tui.clear_input(driver, window_id, input_state.typed_text if input_state else "")
+            tui.clear_input(driver, window_id, (input_state.typed_text or "") if input_state else "")
         attachment_text = " ".join(f"@{attachment.local_path}" for attachment in request.attachments)
         message = attachment_text + ("\n" if attachment_text and request.text else "") + request.text
         succeeded, _cleared_image = tui.type_command(driver, window_id, message)

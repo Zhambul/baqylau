@@ -107,7 +107,7 @@ class Interpreter:
         # memory has to outlive them (engine/interpret/liveness.py ProcessProbe).
         self.liveness = ProcessProbe()
 
-    def _audit_failure(self, where: str, context: dict) -> None:
+    def _audit_failure(self, where: str, context: dict[str, object]) -> None:
         """Record a swallowed interpreter failure, then carry on.
 
         Guarded, so a broken auditor can never take down the interpreter it

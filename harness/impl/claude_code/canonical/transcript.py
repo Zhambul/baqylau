@@ -392,7 +392,7 @@ def parse_line(s: str) -> dict[str, Any] | None:
                 if blk.get("type") == "tool_result":
                     blocks.append(blk)
                 elif blk.get("type") == "text" and (blk.get("text") or "").strip():
-                    texts.append(blk.get("text"))
+                    texts.append(str(blk.get("text")))
             if blocks or texts:
                 # `meta` as on a plain prompt (see the header): a SKILL LOAD
                 # arrives in exactly this shape — an isMeta user record whose

@@ -53,7 +53,7 @@ class RepositoryQueries:
         return canonical_directory
 
     @staticmethod
-    def run_git(working_directory: str, *arguments: str) -> subprocess.CompletedProcess | None:
+    def run_git(working_directory: str, *arguments: str) -> subprocess.CompletedProcess[str] | None:
         try:
             return subprocess.run(
                 ["git", "-C", working_directory, *arguments],

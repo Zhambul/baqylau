@@ -60,8 +60,8 @@ def push_configuration(signing_keys: PushSigningKeys) -> PushConfigurationRespon
     """The Web Push feature probe: the page offers the notification opt-in +
     subscribes only when push is possible AND has an application-server key.
     The public key is not a secret."""
-    key = webpush.public_key(signing_keys)  # type: ignore[no-untyped-call]
-    return PushConfigurationResponse(enabled=bool(webpush.enabled() and key), key=key)  # type: ignore[no-untyped-call]
+    key = webpush.public_key(signing_keys)
+    return PushConfigurationResponse(enabled=bool(webpush.enabled() and key), key=key)
 
 
 # Browser-owned state, served from the PREFERENCES store and deliberately

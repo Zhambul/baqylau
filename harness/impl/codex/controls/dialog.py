@@ -352,10 +352,10 @@ def drive(
         _answer_one(fe, win, questions[i], answers[i], sleep)
         # confirm the answer advanced the pane (or closed the dialog) before
         # looking for the next question
-        _, ok = _poll(fe, win,
-                      lambda s, n=n: (current_question(s) or (0,))[0] != n
-                      or not dialog_open(s) or confirm_open(s),
-                      STEP_TIMEOUT_S, sleep)
+        def answer_landed(s: str, n: int = n) -> bool:
+            return ((current_question(s) or (0,))[0] != n
+                    or not dialog_open(s) or confirm_open(s))
+        _, ok = _poll(fe, win, answer_landed, STEP_TIMEOUT_S, sleep)
         if not ok:
             raise CodexAskError("advance",
                                 "dialog did not advance past question %d" % n)
@@ -405,9 +405,9 @@ def decline(
         if n >= m:
             break
         fe.send_key(win, "right")
-        screen, ok = _poll(fe, win,
-                           lambda s, n=n: (current_question(s) or (n,))[0] != n,
-                           STEP_TIMEOUT_S, sleep)
+        def moved_on(s: str, n: int = n) -> bool:
+            return (current_question(s) or (n,))[0] != n
+        screen, ok = _poll(fe, win, moved_on, STEP_TIMEOUT_S, sleep)
         if not ok:
             raise CodexAskError("navigate",
                                 "dialog did not move past question %d" % n)

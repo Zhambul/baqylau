@@ -55,11 +55,13 @@ def retract(handle: dict[str, Any] | None, reason: str, badge: int = 0, *,
     expiries, which never reach a channel at all). What each channel audits is
     its own delivery detail — the resolve push's per-device result — which the
     notifier could not describe."""
-    fn = _RETRACT.get((handle or {}).get("ch"))
+    if handle is None:
+        return NOTHING
+    fn = _RETRACT.get(str(handle.get("ch") or ""))
     if fn is None:
         return NOTHING
     try:
         return fn(handle, reason, badge, keys=keys, subscriptions=subscriptions)
     except Exception:
-        A.error("", "notify retract", {"session_id": (handle or {}).get("session_id")})
+        A.error("", "notify retract", {"session_id": handle.get("session_id")})
         return FAILED

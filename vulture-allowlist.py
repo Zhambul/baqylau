@@ -46,3 +46,9 @@ error_id         # audit/models.py
 # The only reference of ours is the assignment, which is what a framework
 # attribute looks like from inside our own graph.
 _.total_tokens
+
+# A TypedDict field read only through dict-literal construction and ["check"]
+# subscripts (askdialog_screen.rows / its dialog callers) — the ANNOTATION is
+# the only bare-name mention, which is what an unused variable looks like to
+# vulture. The field is the checkbox state the multi-select dialog reads.
+check  # harness/impl/claude_code/controls/askdialog_screen.py Row

@@ -68,7 +68,8 @@ def find_menu(screen: str) -> str | None:
     return yes if (yes and no) else None
 
 
-def confirm(fe, win, sleep=time.sleep):
+def confirm(fe: ScreenDriver, win: str,
+            sleep: Callable[[float], None] = time.sleep) -> ConfirmOutcome:
     """Watch window `win` for the switch-confirm menu a just-pasted /model or
     /effort may open; press its own Yes digit, verified. Returns
     {"dialog": False} when no menu appeared (the switch applied outright) or
@@ -79,6 +80,11 @@ def confirm(fe, win, sleep=time.sleep):
     if not ok:
         return {"dialog": False}
     digit = find_menu(screen)
+    if digit is None:
+        # The menu closed between the poll that saw it and this re-read —
+        # the switch applied on its own. Pressing a key here would land in
+        # the composer.
+        return {"dialog": False}
     fe.send_key(win, digit)
     _, ok = screendrive.poll_until(
         fe, win, lambda s: not find_menu(s), STEP_TIMEOUT_S, sleep)

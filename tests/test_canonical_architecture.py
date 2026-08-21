@@ -1282,6 +1282,9 @@ PROTOCOL_DECLARATION_EXEMPTIONS = {
         "the Protocol lives in dashboard/, which app/ may not import",
     ("ApplicationUsageState", "UsageReader"):
         "the Protocol lives in dashboard/, which harness/ may not import",
+    ("_TerminalDriver", "ScreenDriver"):
+        "the Protocol lives in claude_code/, which codex/ may not import "
+        "(one harness may not name another)",
 }
 
 

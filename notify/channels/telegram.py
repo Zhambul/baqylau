@@ -253,7 +253,7 @@ def retract_alert(h: dict[str, Any], reason: str, badge: int = 0, *,
         return PENDING                     # the SEND hasn't landed yet
     outcome = h.get("outcome")
     if outcome in (OK, GONE):
-        return outcome                     # the delete thread finished
+        return str(outcome)                # the delete thread finished
     if outcome == FAILED:
         if time.monotonic() < h.get("retry_at", 0):
             return PENDING

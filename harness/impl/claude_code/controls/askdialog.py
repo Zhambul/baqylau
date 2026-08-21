@@ -104,7 +104,7 @@ def cursor_to(
     prev = object()
     for _ in range(NAV_STEPS):               # normalize to the first row
         cur = askscreen.cursor_row(fe.get_text(win) or "")
-        if (cur or {}).get("digit") == "1":
+        if cur is not None and cur.get("digit") == "1":
             break
         key = None if cur is None else (cur["digit"], cur["label"])
         if key == prev:                      # up made no progress (trapped row)
@@ -313,10 +313,11 @@ def drive(
         _answer_question(fe, win, questions, i, answers[i], sleep)
         # confirm the answer advanced the pane before looking for the next one
         # (single-select auto-advance has no explicit verify of its own)
-        screen, ok = screendrive.poll_until(fe, win,
-                           lambda s, i=i: current_question(s, questions) != i
-                           or review_open(s) or not dialog_open(s),
-                           STEP_TIMEOUT_S, sleep)
+        def answer_landed(s: str, i: int = i) -> bool:
+            return (current_question(s, questions) != i
+                    or review_open(s) or not dialog_open(s))
+        screen, ok = screendrive.poll_until(fe, win, answer_landed,
+                                            STEP_TIMEOUT_S, sleep)
         if not ok:
             raise AskError("advance",
                            "dialog did not advance past question %d" % (i + 1),

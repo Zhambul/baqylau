@@ -7,6 +7,7 @@ from dataclasses import replace
 
 from domain.events import (
     CanonicalEvent,
+    EventPayload,
     SessionFinished,
     SessionStarted,
     ShellBackgrounded,
@@ -38,7 +39,7 @@ class SessionUpsertCanonicalEventReaction(CanonicalEventReaction):
     def __init__(self, sessions: SessionRepository) -> None:
         self.sessions = sessions
 
-    def react(self, canonical_event: CanonicalEvent) -> None:
+    def react(self, canonical_event: CanonicalEvent[EventPayload]) -> None:
         payload = canonical_event.payload
         started = payload if isinstance(payload, SessionStarted) else None
         if started is None and canonical_event.terminal_window_id is None \
@@ -77,7 +78,7 @@ class ShellOutputCanonicalEventReaction(CanonicalEventReaction):
         self.shell_output = shell_output
         self.raw_events = raw_events
 
-    def react(self, canonical_event: CanonicalEvent) -> None:
+    def react(self, canonical_event: CanonicalEvent[EventPayload]) -> None:
         payload = canonical_event.payload
         if isinstance(payload, ShellOutputLocated):
             self.shell_output.save(
@@ -154,7 +155,7 @@ class InterruptCanonicalEventReaction(CanonicalEventReaction):
     def __init__(self, interrupts: InterruptRegistry) -> None:
         self.interrupts = interrupts
 
-    def react(self, canonical_event: CanonicalEvent) -> None:
+    def react(self, canonical_event: CanonicalEvent[EventPayload]) -> None:
         payload = canonical_event.payload
         if isinstance(payload, (TurnFinished, TurnAborted)):
             self.interrupts.clear(canonical_event.session_id)
