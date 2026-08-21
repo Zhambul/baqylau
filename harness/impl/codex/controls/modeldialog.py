@@ -37,6 +37,8 @@
 import time
 from collections.abc import Callable
 
+from domain.ids import WindowId
+
 from harness.impl.codex.controls.dialog import (Driver, STEP_TIMEOUT_S, _cursor_to, _poll, rows)
 
 # step headers + the shared footer (disjoint from the ask "to submit" / plan
@@ -86,7 +88,7 @@ def _norm(label: str) -> str:
     return s.strip()
 
 
-def _await(driver: Driver, win: str, needle: str, sleep: Callable[[float], None]) -> str:
+def _await(driver: Driver, win: WindowId, needle: str, sleep: Callable[[float], None]) -> str:
     screen, ok = _poll(driver, win, lambda s: needle in (s or ""), STEP_TIMEOUT_S,
                        sleep)
     if not ok:
@@ -94,7 +96,7 @@ def _await(driver: Driver, win: str, needle: str, sleep: Callable[[float], None]
     return screen
 
 
-def _goto(driver: Driver, win: str, num: str, sleep: Callable[[float], None]) -> None:
+def _goto(driver: Driver, win: WindowId, num: str, sleep: Callable[[float], None]) -> None:
     """Move the `›` cursor onto row `num`, mapping dialog._cursor_to's error into
     a CodexModelError so the gesture's one except clause owns it."""
     try:
@@ -103,7 +105,7 @@ def _goto(driver: Driver, win: str, num: str, sleep: Callable[[float], None]) ->
         raise CodexModelError("cursor", str(e)) from e
 
 
-def _pick(driver: Driver, win: str, header: str, want: str, sleep: Callable[[float], None]) -> None:
+def _pick(driver: Driver, win: WindowId, header: str, want: str, sleep: Callable[[float], None]) -> None:
     """On the picker step whose header contains `header`, move the `›` cursor to
     the row whose normalized label EQUALS `want` (or, when `want` is "", accept
     the pre-selected row) and ENTER. `want` may also be a marker like `(current)`
@@ -122,7 +124,7 @@ def _pick(driver: Driver, win: str, header: str, want: str, sleep: Callable[[flo
 
 def _pick_level(
     driver: Driver,
-    win: str,
+    win: WindowId,
     want: str,
     sleep: Callable[[float], None],
     strict: bool = True,
@@ -173,7 +175,7 @@ def _pick_level(
 
 def set_model_effort(
     driver: Driver,
-    win: str,
+    win: WindowId,
     model: str = "",
     effort: str | None = "",
     sleep: Callable[[float], None] = time.sleep,

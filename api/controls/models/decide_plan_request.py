@@ -2,7 +2,7 @@
 from api.common.models.fields import RequiredText
 from api.controls.models.control_request import ControlRequestBody
 from harness.models import ControlRequest, DecidePlan
-from domain.ids import AttentionId, SessionId
+from domain.ids import AttentionId, RequestId, SessionId
 
 
 class DecidePlanRequest(ControlRequestBody):
@@ -13,7 +13,7 @@ class DecidePlanRequest(ControlRequestBody):
     def request(self, session_id: SessionId) -> ControlRequest:
         return DecidePlan(
             session_id,
-            self.request_id,
+            RequestId(self.request_id),
             attention_id=AttentionId(self.attention_id),
             decision=self.decision,
             feedback=self.feedback,

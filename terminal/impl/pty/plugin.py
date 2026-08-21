@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 from itertools import count
 
+from terminal.models.values import TabId, WindowId
 from terminal.contract import (
     TerminalInput,
     TerminalMetadata,
@@ -96,7 +97,7 @@ class PtyWindows:
 
     def __init__(self, environment: dict[str, str] | None = None) -> None:
         self.environment = dict(os.environ if environment is None else environment)
-        self.windows: dict[str, PtyWindow] = {}
+        self.windows: dict[WindowId, PtyWindow] = {}
         self._ids = count(1)
 
     def launch(
@@ -105,7 +106,7 @@ class PtyWindows:
         working_directory: str,
         environment: tuple[tuple[str, str], ...],
     ) -> PtyWindow | None:
-        window_id = str(next(self._ids))
+        window_id = WindowId(str(next(self._ids)))
         child_environment = dict(self.environment)
         child_environment.update({str(name): str(value) for name, value in environment})
         # Last, so the window's own identity cannot be overridden by a caller's
@@ -117,11 +118,11 @@ class PtyWindows:
             self.windows[window_id] = window
         return window
 
-    def get(self, window_id: str) -> PtyWindow | None:
-        return self.windows.get(str(window_id))
+    def get(self, window_id: WindowId) -> PtyWindow | None:
+        return self.windows.get(window_id)
 
-    def close(self, window_id: str) -> bool:
-        window = self.windows.pop(str(window_id), None)
+    def close(self, window_id: WindowId) -> bool:
+        window = self.windows.pop(window_id, None)
         if window is None:
             return False
         return window.close()
@@ -200,7 +201,7 @@ class PtyMetadata(TerminalMetadata):
         return tuple(
             WindowInfo(
                 window_id=window.window_id,
-                tab_id=window.window_id,
+                tab_id=TabId(str(window.window_id)),
                 tags=dict(window.tags),
                 columns=window.screen.columns,
                 lines=window.screen.lines,
@@ -224,7 +225,7 @@ class PtyMetadata(TerminalMetadata):
         window.tags.update({str(name): str(value) for name, value in window_tag_request.tags.items()})
         return WindowTagResponse(True)
 
-    def current_window_id(self) -> str | None:
+    def current_window_id(self) -> WindowId | None:
         # The process asking is never inside one of these: it OWNS them.
         return None
 

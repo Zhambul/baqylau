@@ -34,6 +34,8 @@ import time
 from collections.abc import Callable
 from typing import TypedDict
 
+from domain.ids import WindowId
+
 from harness.impl.claude_code.controls import screen_driver as screendrive
 from harness.impl.claude_code.controls import tui
 from harness.impl.claude_code.controls.screen_driver import ScreenDriver
@@ -160,7 +162,7 @@ class RewindOutcome(TypedDict):
     degraded: bool
 
 
-def _bail(screen_driver: ScreenDriver, win: str, sleep: Callable[[float], None]) -> None:
+def _bail(screen_driver: ScreenDriver, win: WindowId, sleep: Callable[[float], None]) -> None:
     """Close whatever menu is open — Escape once per open level, verified."""
     for _ in range(2):
         screen = screen_driver.get_text(win) or ""
@@ -172,7 +174,7 @@ def _bail(screen_driver: ScreenDriver, win: str, sleep: Callable[[float], None])
 
 def _scan(
     screen_driver: ScreenDriver,
-    win: str,
+    win: WindowId,
     target: str,
     key: str,
     sleep: Callable[[float], None],
@@ -198,7 +200,7 @@ def _scan(
 
 def drive(
     screen_driver: ScreenDriver,
-    win: str,
+    win: WindowId,
     target: str,
     mode: str,
     ups: int = 0,

@@ -212,7 +212,7 @@ class Notifier:
                 # different channel. A state transition already removed this
                 # pending record in _resolve.
                 self.pending.pop(session_id, None)
-                if self.presence.web_viewing(str(session_id)):
+                if self.presence.web_viewing(session_id):
                     continue
                 if config.NOTIFY_TELEGRAM:
                     self._track(
@@ -222,7 +222,7 @@ class Notifier:
                         ),
                     )
                 continue
-            if self.presence.web_viewing(str(session_id)) or self.presence.device_active():
+            if self.presence.web_viewing(session_id) or self.presence.device_active():
                 self.pending.pop(session_id, None)
                 self.audit.state_file(
                     "",

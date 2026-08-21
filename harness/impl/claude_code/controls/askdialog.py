@@ -43,6 +43,8 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+from domain.ids import WindowId
+
 from harness.impl.claude_code.controls import askdialog_screen as askscreen
 from harness.impl.claude_code.controls import screen_driver as screendrive
 from harness.impl.claude_code.controls.askdialog_screen import (
@@ -72,7 +74,7 @@ class AskError(screendrive.StepError):
 
 def cursor_to(
     screen_driver: ScreenDriver,
-    win: str,
+    win: WindowId,
     pred: Callable[[Row], bool],
     sleep: Callable[[float], None],
     what: str,
@@ -125,7 +127,7 @@ def _by_digit(d: str) -> Callable[[Row], bool]:
     return lambda r: r["digit"] == d
 
 
-def _require_type_row(screen_driver: ScreenDriver, win: str, type_digit: str) -> None:
+def _require_type_row(screen_driver: ScreenDriver, win: WindowId, type_digit: str) -> None:
     """Guard the typed-answer ('other') path: the free-text 'Type something'
     row is digit len(options)+1 in the PLAIN dialog, but the PREVIEW
     side-by-side layout omits it entirely (measured — a single-select
@@ -143,7 +145,7 @@ def _require_type_row(screen_driver: ScreenDriver, win: str, type_digit: str) ->
 
 def _advance_multi(
     screen_driver: ScreenDriver,
-    win: str,
+    win: WindowId,
     questions: list[dict[str, Any]],
     i: int,
     sleep: Callable[[float], None],
@@ -177,7 +179,7 @@ def _advance_multi(
 
 def _answer_question(
     screen_driver: ScreenDriver,
-    win: str,
+    win: WindowId,
     questions: list[dict[str, Any]],
     i: int,
     ans: dict[str, Any],
@@ -244,7 +246,7 @@ def _answer_question(
 
 def drive(
     screen_driver: ScreenDriver,
-    win: str,
+    win: WindowId,
     questions: list[dict[str, Any]],
     answers: list[dict[str, Any]],
     chat: bool = False,

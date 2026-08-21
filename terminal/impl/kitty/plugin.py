@@ -7,6 +7,7 @@
 
 from typing import Any
 
+from terminal.models.values import TabId, WindowId
 from terminal.contract import (
     TerminalInput,
     TerminalMetadata,
@@ -93,7 +94,7 @@ class KittyTabs(TerminalTabs):
         printed = self.kitty_remote.capture(*arguments, *tab_open_request.command)
         if printed is None:
             return TabOpenResponse(False, None, "terminal launch failed")
-        return TabOpenResponse(True, printed.strip() or None)
+        return TabOpenResponse(True, WindowId(printed.strip()) if printed.strip() else None)
 
     def close_tab(self, tab_close_request: TabCloseRequest) -> TabCloseResponse:
         failed = self.kitty_remote.run("close-tab", "--match", match.tab_of(tab_close_request.window_id))
@@ -119,7 +120,7 @@ class KittyTabs(TerminalTabs):
         failed = self._paint(tab_color_clear_request.window_id, *(TAB_COLOR_NONE,) * 4)
         return TabColorClearResponse(not failed, "terminal tab clear failed" if failed else None)
 
-    def _paint(self, window_id: str, active_bg: str, active_fg: str,
+    def _paint(self, window_id: WindowId, active_bg: str, active_fg: str,
                inactive_bg: str, inactive_fg: str) -> int:
         """Colour the tab containing `window_id`; 0 when kitty acknowledged it.
 
@@ -164,14 +165,14 @@ class KittyPanes(TerminalPanes):
         # arranging that is this layer's business. `--match window_id:`
         # re-layouts the tab holding the anchor: a daemon-origin call without
         # focus must not re-layout whatever tab the user is looking at.
-        self.kitty_remote.run("goto-layout", "--match", match.tab_of(pane_open_request.same_tab_as), "splits")
+        self.kitty_remote.run("goto-layout", "--match", match.tab_of(WindowId(pane_open_request.same_tab_as)), "splits")
         arguments = ["launch"]
         # `--next-to` alone CANNOT cross tabs: kitty resolves it only within
         # the ACTIVE tab, so an open anchored to a window in an unfocused tab
         # silently split whatever tab the user was looking at instead (observed
         # live 2026-07-11 — the two-mirrors bug). `--match window_id:N` selects
         # the TAB first; --next-to then picks the right window inside it.
-        arguments += ["--match", match.tab_of(pane_open_request.same_tab_as)]
+        arguments += ["--match", match.tab_of(WindowId(pane_open_request.same_tab_as))]
         arguments += [f"--location={SPLIT_LOCATIONS[pane_open_request.split]}"]
         arguments += ["--next-to", match.anchor(pane_open_request.anchor)]
         arguments += ["--bias", str(pane_open_request.size_percent)]
@@ -193,7 +194,7 @@ class KittyPanes(TerminalPanes):
         printed = self.kitty_remote.capture(*arguments, *pane_open_request.command)
         if printed is None:
             return PaneOpenResponse(False, None, "terminal pane launch failed")
-        return PaneOpenResponse(True, printed.strip() or None)
+        return PaneOpenResponse(True, WindowId(printed.strip()) if printed.strip() else None)
 
     def close_pane(self, pane_close_request: PaneCloseRequest) -> PaneCloseResponse:
         failed = self.kitty_remote.run("close-window", "--match", match.window(pane_close_request.window_id))
@@ -223,7 +224,7 @@ class KittyPanes(TerminalPanes):
         failed = self.kitty_remote.run("action", "--match", match.tab_of(window_focus_request.window_id), *action)
         return WindowFocusResponse(not failed, "terminal focus failed" if failed else None)
 
-    def _position_in_tab(self, window_id: str) -> int | None:
+    def _position_in_tab(self, window_id: WindowId) -> int | None:
         """The window's index among its tab's windows, or None when it is gone."""
         windows = self.terminal_metadata.windows()
         tab_id = next((window.tab_id for window in windows
@@ -248,8 +249,8 @@ class KittyMetadata(TerminalMetadata):
                 windows = tab.get("windows") or []
                 for position, window in enumerate(windows):
                     found.append(WindowInfo(
-                        window_id=str(window.get("id")),
-                        tab_id=str(tab.get("id")),
+                        window_id=WindowId(str(window.get("id"))),
+                        tab_id=TabId(str(tab.get("id"))),
                         tags=dict(window.get("user_vars") or {}),
                         columns=int(window.get("columns") or 0),
                         lines=int(window.get("lines") or 0),
@@ -269,8 +270,9 @@ class KittyMetadata(TerminalMetadata):
                                  match.window(window_tag_request.window_id), *assignments)
         return WindowTagResponse(not failed, "terminal window tagging failed" if failed else None)
 
-    def current_window_id(self) -> str | None:
-        return current_window_id() or None
+    def current_window_id(self) -> WindowId | None:
+        found = current_window_id()
+        return WindowId(found) if found else None
 
 
 class KittyInput(TerminalInput):

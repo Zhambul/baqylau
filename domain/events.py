@@ -13,11 +13,15 @@ from domain.ids import (
     CanonicalEventId,
     AssignmentId,
     MessageId,
+    ReasoningId,
     SessionId,
     ShellId,
+    ShellNativeId,
     SkillId,
     TaskId,
+    TaskListId,
     TurnId,
+    WindowId,
 )
 from domain.values import (
     AccountReference,
@@ -150,7 +154,7 @@ class MessageCreated(EventPayload):
 
 @dataclass(frozen=True)
 class ReasoningCreated(EventPayload):
-    reasoning_id: str
+    reasoning_id: ReasoningId
     content: Content
 
 
@@ -227,7 +231,7 @@ class ShellBackgrounded(EventPayload):
     """
 
     shell_id: ShellId
-    native_id: str | None
+    native_id: ShellNativeId | None
 
 
 @dataclass(frozen=True)
@@ -342,7 +346,7 @@ class TaskChanged(EventPayload):
 
 @dataclass(frozen=True)
 class TaskListChanged(EventPayload):
-    list_id: str
+    list_id: TaskListId
     task_ids: tuple[TaskId, ...]
 
 
@@ -427,7 +431,7 @@ class CanonicalEvent(Generic[EventPayloadType]):
     parent_actor_id: ActorId | None
     harness: str
     occurred_at: float | None
-    terminal_window_id: str | None
+    terminal_window_id: WindowId | None
     harness_process_id: int | None
     payload: EventPayloadType
 

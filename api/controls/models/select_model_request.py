@@ -2,11 +2,11 @@
 from api.common.models.fields import RequiredText
 from api.controls.models.control_request import ControlRequestBody
 from harness.models import ControlRequest, SelectModel
-from domain.ids import SessionId
+from domain.ids import ModelId, RequestId, SessionId
 
 
 class SelectModelRequest(ControlRequestBody):
     model_id: RequiredText
 
     def request(self, session_id: SessionId) -> ControlRequest:
-        return SelectModel(session_id, self.request_id, model_id=self.model_id)
+        return SelectModel(session_id, RequestId(self.request_id), model_id=ModelId(self.model_id))

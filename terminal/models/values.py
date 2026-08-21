@@ -7,7 +7,16 @@ because they are what the operations are *about*, not the operations themselves.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Mapping
+from typing import Mapping, NewType
+
+# Opaque terminal-side identities. Defined HERE rather than reused from
+# `domain/ids.py`: `terminal/` may import nothing outside itself
+# (test_the_terminal_contract_and_models_import_nothing_of_ours), so a second
+# terminal stays implementable against this one small package. A caller that
+# bridges a terminal window to a domain fact (`terminal/adapter.py`, the
+# harness control modules) converts explicitly at that boundary.
+WindowId = NewType("WindowId", str)
+TabId = NewType("TabId", str)
 
 
 # Generic window-metadata keys — baqylau's own names for "this window serves
@@ -57,8 +66,8 @@ class WindowInfo:
     focused.
     """
 
-    window_id: str
-    tab_id: str
+    window_id: WindowId
+    tab_id: TabId
     tags: Mapping[str, str]
     columns: int
     lines: int

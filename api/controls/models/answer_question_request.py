@@ -15,7 +15,7 @@ from api.common.models.fields import RequiredText
 from api.application.models.preferences.dialog_draft_request import AnswerSelectionBody
 from api.controls.models.control_request import ControlRequestBody
 from harness.models import AnswerQuestion, ControlRequest
-from domain.ids import AttentionId, SessionId
+from domain.ids import AttentionId, RequestId, SessionId
 from domain.values import StructuredContent
 
 
@@ -33,7 +33,7 @@ class AnswerQuestionRequest(ControlRequestBody):
     def request(self, session_id: SessionId) -> ControlRequest:
         return AnswerQuestion(
             session_id,
-            self.request_id,
+            RequestId(self.request_id),
             attention_id=AttentionId(self.attention_id),
             decision=self.decision,
             answers=(

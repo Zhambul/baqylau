@@ -18,6 +18,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Literal
 
+from domain.ids import AccountId, ModelId
 from harness.contract import HarnessUsage
 from harness.models import AccountUsageSnapshot, UsageRow, UsageWindow, UsageWindowSample
 from repository.contract.usage import AccountUsageRepository
@@ -36,7 +37,7 @@ WINDOWS: dict[str, tuple[str, int]] = {
 UNKNOWN_WINDOW_MINUTES = 7 * 24 * 60
 
 
-def window_shape(key: str) -> tuple[str, int, Literal["account", "model"], str | None]:
+def window_shape(key: str) -> tuple[str, int, Literal["account", "model"], ModelId | None]:
     """One window key as (label, duration, scope, model).
 
     Scope is what the strip lays itself out by: an `account` window gets its own
@@ -49,12 +50,12 @@ def window_shape(key: str) -> tuple[str, int, Literal["account", "model"], str |
     for base, (label, minutes) in WINDOWS.items():
         prefix = f"{base}_"
         if key.startswith(prefix) and len(key) > len(prefix):
-            model = key[len(prefix):].replace("_", " ")
+            model = ModelId(key[len(prefix):].replace("_", " "))
             return f"{label} {model}", minutes, "model", model
     # A window neither source has sent before still renders, because the harness
     # may add one without telling us: model-scoped by assumption, since every
     # account-wide window we know of is named above.
-    return key.replace("_", " "), UNKNOWN_WINDOW_MINUTES, "model", key
+    return key.replace("_", " "), UNKNOWN_WINDOW_MINUTES, "model", ModelId(key)
 
 
 def _order(usage_window_sample: UsageWindowSample) -> tuple[int, str]:
@@ -98,8 +99,8 @@ class ClaudeCodeUsage(HarnessUsage):
         return tuple(
             self._row(
                 record,
-                snapshots.get(record["slug"] or None),
-                live.usage(account.config_directory(record["slug"] or None)),
+                snapshots.get(AccountId(record["slug"]) if record["slug"] else None),
+                live.usage(account.config_directory(AccountId(record["slug"]) if record["slug"] else None)),
             )
             for record in accounts
         )
@@ -131,7 +132,7 @@ class ClaudeCodeUsage(HarnessUsage):
         scheduling_score = Decimal(100) - five_hour if five_hour is not None else None
         return UsageRow(
             harness=HARNESS,
-            account_id=account_record["slug"] or None,
+            account_id=AccountId(account_record["slug"]) if account_record["slug"] else None,
             display_name=account_record["label"],
             switchable=bool(account_record["slug"]),
             plan=live_usage.plan if live_usage is not None else None,

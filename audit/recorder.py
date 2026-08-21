@@ -24,6 +24,7 @@ from audit.models import (
     StreamHandle,
     StreamOpened,
 )
+from domain.ids import ActorId, SessionId, TaskId
 from repository.contract.audit import AuditWriteRepository
 from repository.mapper import audit as mapper
 
@@ -41,7 +42,7 @@ class AuditRecorder:
     def error(self, session_or_log: str = "", func: str = "", context: object = None) -> None:
         self.audit_write_repository.record_error(
             ApplicationErrorRecord(
-                session_id=session_or_log,
+                session_id=SessionId(session_or_log),
                 script=script_name(),
                 function=func,
                 traceback=traceback.format_exc(),
@@ -54,7 +55,7 @@ class AuditRecorder:
     def state_file(self, log: str, path: str, action: str, content: object = "") -> None:
         self.audit_write_repository.record_state_file(
             StateFileRecord(
-                session_id=log,
+                session_id=SessionId(log),
                 path=path,
                 action=action,
                 content=mapper.truncated(content),
@@ -67,7 +68,7 @@ class AuditRecorder:
     def spawn(self, log: str, child_pid: int, argv: list[str], purpose: str = "") -> None:
         self.audit_write_repository.record_spawn(
             SpawnRecord(
-                session_id=log,
+                session_id=SessionId(log),
                 parent_script=script_name(),
                 child_process_id=child_pid,
                 argv=mapper.text([str(argument) for argument in argv]),
@@ -80,16 +81,16 @@ class AuditRecorder:
         self,
         log: str,
         kind: str,
-        agent_id: str = "",
-        task_id: str = "",
+        agent_id: ActorId | None = None,
+        task_id: TaskId | None = None,
         src_path: str = "",
     ) -> StreamHandle | None:
         return self.audit_write_repository.open_stream(
             StreamOpened(
-                session_id=log,
+                session_id=SessionId(log),
                 kind=kind,
-                agent_id=agent_id,
-                task_id=task_id,
+                agent_id=agent_id or ActorId(""),
+                task_id=task_id or TaskId(""),
                 source_path=src_path,
                 process_id=os.getpid(),
                 started_at=time.time(),

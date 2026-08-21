@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Literal
 
+from domain.ids import AccountId, ModelId
+
 
 @dataclass(frozen=True)
 class UsageWindow:
@@ -15,12 +17,12 @@ class UsageWindow:
     resets_at: float | None
     duration_minutes: int | None
     scope: Literal["account", "model"]
-    model_id: str | None
+    model_id: ModelId | None
 
 
 @dataclass(frozen=True)
 class UsageBlock:
-    model_id: str | None
+    model_id: ModelId | None
     message: str | None
     resets_at: float | None
 
@@ -43,7 +45,7 @@ class AccountUsageSnapshot:
     """The current plan-limit picture for one account of one harness."""
 
     harness: str
-    account_id: str | None
+    account_id: AccountId | None
     display_name: str
     captured_at: float
     windows: tuple[UsageWindowSample, ...]
@@ -52,7 +54,7 @@ class AccountUsageSnapshot:
 @dataclass(frozen=True)
 class UsageRow:
     harness: str
-    account_id: str | None
+    account_id: AccountId | None
     display_name: str
     switchable: bool
     plan: str | None

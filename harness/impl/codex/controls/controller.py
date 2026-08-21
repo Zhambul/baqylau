@@ -34,6 +34,12 @@ from terminal.models import (
     TextSubmitRequest,
 )
 from domain.events import QuestionAsked
+from domain.ids import WindowId
+# The terminal's own window id: `terminal/` may depend on nothing outside
+# itself, so this module — the harness boundary that talks to a live
+# terminal — converts explicitly wherever a domain `WindowId` reaches a
+# terminal contract request.
+from terminal.models.values import WindowId as NativeWindowId
 from harness.impl.codex.canonical import rollout, title
 from harness.impl.codex.controls import dialog, modeldialog, plandialog
 
@@ -44,27 +50,28 @@ class _TerminalDriver:
     def __init__(self, terminal_plugin: TerminalPlugin) -> None:
         self.terminal = terminal_plugin
 
-    def get_text(self, window_id: str, extent: str = "screen", ansi: bool = False) -> str | None:
+    def get_text(self, window_id: WindowId, extent: str = "screen", ansi: bool = False) -> str | None:
         del extent
         response = self.terminal.viewport.read_screen(
-            ScreenReadRequest(str(window_id), ansi=ansi)
+            ScreenReadRequest(NativeWindowId(str(window_id)), ansi=ansi)
         )
         return response.text
 
-    def send_key(self, window_id: str, *keys: str) -> bool:
+    def send_key(self, window_id: WindowId, *keys: str) -> bool:
+        native = NativeWindowId(str(window_id))
         return all(
-            self.terminal.input.send_key(KeySendRequest(str(window_id), str(key))).succeeded
+            self.terminal.input.send_key(KeySendRequest(native, str(key))).succeeded
             for key in keys
         )
 
-    def send_text(self, window_id: str, text: str) -> bool:
+    def send_text(self, window_id: WindowId, text: str) -> bool:
         return self.terminal.input.submit_text(
-            TextSubmitRequest(str(window_id), str(text), "type")
+            TextSubmitRequest(NativeWindowId(str(window_id)), str(text), "type")
         ).succeeded
 
-    def paste_text(self, window_id: str, text: str) -> bool:
+    def paste_text(self, window_id: WindowId, text: str) -> bool:
         return self.terminal.input.submit_text(
-            TextSubmitRequest(str(window_id), str(text), "paste")
+            TextSubmitRequest(NativeWindowId(str(window_id)), str(text), "paste")
         ).succeeded
 
 
@@ -80,7 +87,9 @@ def _submit(request: ControlRequest, control_context: ControlContext, text: str)
     window_id = control_context.terminal_window_id
     if window_id is None:
         return ControlResult(request.request_id, "rejected", "session is not live")
-    result = control_context.terminal.input.submit_text(TextSubmitRequest(window_id, text, "paste"))
+    result = control_context.terminal.input.submit_text(
+        TextSubmitRequest(NativeWindowId(str(window_id)), text, "paste")
+    )
     return _result(request, result.succeeded, result.reason or "terminal text was not delivered")
 
 
@@ -149,8 +158,10 @@ class InterruptHandler(ControlHandler):
         except OSError:
             position = -1
         delivered = False
+        native_window_id = NativeWindowId(str(window_id))
         for _attempt in range(2):
-            delivered = terminal.input.send_key(KeySendRequest(window_id, "escape")).succeeded or delivered
+            sent = terminal.input.send_key(KeySendRequest(native_window_id, "escape")).succeeded
+            delivered = sent or delivered
             if not delivered:
                 break
             deadline = time.monotonic() + 0.8
@@ -181,7 +192,7 @@ class CloseSessionHandler(ControlHandler):
         window_id = control_context.terminal_window_id
         if window_id is None:
             return ControlResult(request.request_id, "rejected", "session is not live")
-        result = terminal.tabs.close_tab(TabCloseRequest(window_id))
+        result = terminal.tabs.close_tab(TabCloseRequest(NativeWindowId(str(window_id))))
         return _result(request, result.succeeded, result.reason or "terminal tab was not closed")
 
 
@@ -202,7 +213,7 @@ class RenameSessionHandler(ControlHandler):
         if result.status == "acknowledged":
             window_id = control_context.terminal_window_id
             if window_id is not None:
-                terminal.tabs.rename_tab(TabRenameRequest(window_id, request.name))
+                terminal.tabs.rename_tab(TabRenameRequest(NativeWindowId(str(window_id)), request.name))
         return result
 
 

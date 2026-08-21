@@ -49,6 +49,13 @@ ID_GATE_ALLOWED = {
     # stable_event_id builds identity from whatever subject an event has —
     # a shell id, a call id, a path. There is no one kind to name.
     "domain/ids.py:subject_id",
+    # UsageReported.scope says which id `subject_id` is (session, actor, turn
+    # or operation) — the same "no one fixed kind" shape as stable_event_id's
+    # own subject_id above, and for the same reason.
+    "domain/events.py:subject_id",
+    "harness/impl/claude_code/canonical/support.py:subject_id",
+    "harness/impl/codex/canonical/support.py:subject_id",
+    "harness/models/raw_events.py:subject_id",
 }
 
 

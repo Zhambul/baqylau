@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+from terminal.models.values import WindowId
+
 
 @dataclass(frozen=True)
 class TextSubmitRequest:
@@ -17,7 +19,7 @@ class TextSubmitRequest:
     still submits rather than becoming a newline in the draft.
     """
 
-    window_id: str
+    window_id: WindowId
     text: str
     mode: Literal["type", "paste"]
 
@@ -34,7 +36,7 @@ class KeySendRequest:
     keyboard mode — raw bytes bypass it, and a TUI speaking an enhanced
     keyboard protocol never sees a bare \\x1b as Escape."""
 
-    window_id: str
+    window_id: WindowId
     key: str
 
 

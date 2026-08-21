@@ -15,6 +15,7 @@ from api.terminal.models.panes.reset_request import ResetPaneRequest
 from api.terminal.models.panes.set_percent_request import SetPanePercentRequest
 from api.terminal.models.panes.shrink_request import ShrinkPaneRequest
 from api.terminal.models.panes.toggle_request import TogglePanesRequest
+from domain.ids import WindowId
 from terminal.panes.commands import PaneCommandService
 
 router = APIRouter()
@@ -39,7 +40,7 @@ def _execute(
     reply model itself rather than a hand-serialized copy of it."""
     outcome = pane_command_service.execute(
         command,
-        pane_gesture_request.window_id,
+        WindowId(pane_gesture_request.window_id) if pane_gesture_request.window_id else None,
         pane_gesture_request.working_directory,
         columns=columns,
         percent=percent,

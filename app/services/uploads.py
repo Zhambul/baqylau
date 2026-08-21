@@ -13,6 +13,7 @@ import time
 from typing import Callable
 
 from audit.models import ApplicationErrorRecord
+from domain.ids import SessionId
 from domain.uploads import StoredUpload
 from repository.contract.audit import AuditWriteRepository
 from repository.contract.uploads import UploadRepository
@@ -48,7 +49,7 @@ class UploadService:
                 if self.audit is not None:
                     self.audit.record_error(
                         ApplicationErrorRecord(
-                            session_id=str(upload.session_id or ""),
+                            session_id=upload.session_id or SessionId(""),
                             script="dashboard",
                             function="upload prune",
                             traceback="",

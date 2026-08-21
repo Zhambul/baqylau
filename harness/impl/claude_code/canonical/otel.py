@@ -6,6 +6,7 @@ from decimal import Decimal
 from typing import Any
 
 from domain.events import CanonicalEvent, EventPayload, UsageReported
+from domain.ids import ModelId
 from domain.values import TokenUsage
 from harness.impl.claude_code.canonical.support import event, model_reference
 from harness.models import RawEvent
@@ -50,7 +51,7 @@ def translate_otel(raw_event: RawEvent, document: dict[str, Any]) -> list[Canoni
         cost = values.get("cost")
         if tokens == TokenUsage() and cost is None:
             continue
-        model = model_reference(model_id) if model_id else None
+        model = model_reference(ModelId(model_id)) if model_id else None
         payload = UsageReported(
             "session",
             str(raw_event.session_id),

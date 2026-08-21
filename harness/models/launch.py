@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from domain.ids import SessionId
+from domain.ids import AccountId, ModelId, SessionId, WindowId
 from harness.models.controls import AttachmentReference
 
 
@@ -13,9 +13,9 @@ from harness.models.controls import AttachmentReference
 class LaunchRequest:
     working_directory: str
     initial_text: str | None
-    model_id: str | None
+    model_id: ModelId | None
     effort: str | None
-    account_id: str | None
+    account_id: AccountId | None
     resume_session_id: SessionId | None
     attachments: tuple[AttachmentReference, ...] = ()
 
@@ -30,7 +30,7 @@ class LaunchRequest:
 @dataclass(frozen=True)
 class LaunchResult:
     status: Literal["started", "rejected"]
-    window_id: str | None = None
+    window_id: WindowId | None = None
     reason: str | None = None
 
 

@@ -19,6 +19,7 @@ from collections import OrderedDict
 from typing import TypedDict
 
 from core import env as EV
+from domain.ids import DeviceId, SessionId
 from repository.contract.preferences import PushSubscriptionRepository
 
 
@@ -121,7 +122,7 @@ class Presence:
         self.seen_at = RecentDevices()
         self.away: set[str] = set()
 
-    def mark_viewing(self, session_id: str) -> None:
+    def mark_viewing(self, session_id: SessionId) -> None:
         """Record a viewing heartbeat for `session_id` — presence is fresh for VIEW_LIFETIME_SECONDS.
 
         Also SWEEPS the expired entries, which is what keeps this dict bounded in a
@@ -141,7 +142,7 @@ class Presence:
         self.viewing[session_id] = now + VIEW_LIFETIME_SECONDS
 
 
-    def web_viewing(self, session_id: str) -> bool:
+    def web_viewing(self, session_id: SessionId) -> bool:
         """True when a browser reported viewing `session_id` within the last VIEW_LIFETIME_SECONDS
         (visible + focused + on that session). Read-only; also GC's the stale key."""
         if not session_id:
@@ -164,7 +165,7 @@ class Presence:
             self.away.discard(device)
 
 
-    def mark_away(self, device: str, session_id: str | None = None) -> None:
+    def mark_away(self, device: str, session_id: SessionId | None = None) -> None:
         """The page reports it has STOPPED being present — it lost focus or was
         hidden. The explicit end of a beat, and the fix for a gap the TTL cannot
         close on its own.
@@ -254,13 +255,13 @@ class Presence:
         ]
         now = time.monotonic()
 
-        def cand(device_id: str, label: str | None = None) -> dict[str, object]:
+        def cand(device_id: DeviceId, label: str | None = None) -> dict[str, object]:
             seen = self.last_seen(device_id)
             return {"device": device_id, "label": label,
                     "age_s": (None if seen == float("-inf") else round(now - seen, 1))}
 
         term_seen = self.last_seen(TERMINAL)
-        term = [cand(TERMINAL, "terminal")] if term_seen != float("-inf") else []
+        term = [cand(DeviceId(TERMINAL), "terminal")] if term_seen != float("-inf") else []
 
         def decision(target: str | None, candidates: list[dict[str, object]],
                      label: str | None = None) -> dict[str, object]:
@@ -273,10 +274,10 @@ class Presence:
             targets = [subscription for subscription in subs
                        if subscription["device"] == best]
             return best, targets, decision(best,
-                                           [cand(subscription["device"], subscription.get("label"))
+                                           [cand(DeviceId(subscription["device"]), subscription.get("label"))
                                             for subscription in subs],
                                            targets[0].get("label"))
-        cands = [cand(subscription["device"], subscription.get("label"))
+        cands = [cand(DeviceId(subscription["device"]), subscription.get("label"))
                  for subscription in subs]
         if term_seen == float("-inf"):     # nothing subscribed, terminal never seen
             return None, [], decision(None, cands)

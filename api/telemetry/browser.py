@@ -18,7 +18,7 @@ from audit.telemetry import (
     ClientFailureReport,
     OptimisticActionReport,
 )
-from domain.ids import SessionId
+from domain.ids import ClientId, DeviceId, SessionId
 
 router = APIRouter()
 
@@ -29,8 +29,8 @@ def record_browser_events(
 ) -> RecordedResponse:
     telemetry.record_events(
         BrowserEventBatch(
-            browser_events_request.client_id,
-            browser_events_request.device_id,
+            ClientId(browser_events_request.client_id),
+            DeviceId(browser_events_request.device_id),
             browser_events_request.connection,
             tuple(
                 BrowserEvent(

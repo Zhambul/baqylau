@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import ClassVar, Literal, TypeAlias
 
 from domain.events import PlanProposed, QuestionAsked
-from domain.ids import AttentionId, MessageId, SessionId
+from domain.ids import AccountId, AttentionId, MessageId, ModelId, RequestId, SessionId, WindowId
 from domain.values import (
     AccountReference,
     ModelReference,
@@ -57,7 +57,7 @@ class ControlContext:
     # on screen, which most gestures must decline.
     session: Session
     terminal: TerminalPlugin
-    terminal_window_id: str | None
+    terminal_window_id: WindowId | None
     current_model: ModelReference | None
     current_effort: str | None
     current_account: AccountReference | None
@@ -70,7 +70,7 @@ class ControlContext:
 @dataclass(frozen=True)
 class ControlTarget:
     session_id: SessionId
-    request_id: str
+    request_id: RequestId
 
 
 @dataclass(frozen=True)
@@ -148,7 +148,7 @@ class Compact(ControlTarget):
 @dataclass(frozen=True)
 class SelectModel(ControlTarget):
     control_name: ClassVar[ControlName] = "select_model"
-    model_id: str
+    model_id: ModelId
 
 
 @dataclass(frozen=True)
@@ -201,7 +201,7 @@ ControlRequest: TypeAlias = (
 
 @dataclass(frozen=True)
 class ControlResult:
-    request_id: str
+    request_id: RequestId
     status: Literal["acknowledged", "rejected", "indeterminate"]
     reason: str | None = None
 
@@ -231,7 +231,7 @@ class RewindResult(ControlResult):
 
 @dataclass(frozen=True)
 class MigrationResult(ControlResult):
-    target_account_id: str | None = None
+    target_account_id: AccountId | None = None
 
 
 @dataclass(frozen=True)

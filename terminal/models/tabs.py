@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from terminal.models.values import WindowId
 from terminal.models.values import TabAppearance
 
 
@@ -29,13 +30,13 @@ class TabOpenRequest:
 @dataclass(frozen=True)
 class TabOpenResponse:
     succeeded: bool
-    window_id: str | None
+    window_id: WindowId | None
     reason: str | None = None
 
 
 @dataclass(frozen=True)
 class TabCloseRequest:
-    window_id: str          # closes the whole tab CONTAINING this window
+    window_id: WindowId     # closes the whole tab CONTAINING this window
 
 
 @dataclass(frozen=True)
@@ -46,7 +47,7 @@ class TabCloseResponse:
 
 @dataclass(frozen=True)
 class TabRenameRequest:
-    window_id: str
+    window_id: WindowId
     title: str              # a sticky, explicit title
 
 
@@ -58,7 +59,7 @@ class TabRenameResponse:
 
 @dataclass(frozen=True)
 class TabColorSetRequest:
-    window_id: str
+    window_id: WindowId
     appearance: TabAppearance
 
 
@@ -70,7 +71,7 @@ class TabColorSetResponse:
 
 @dataclass(frozen=True)
 class TabColorClearRequest:
-    window_id: str
+    window_id: WindowId
 
 
 @dataclass(frozen=True)

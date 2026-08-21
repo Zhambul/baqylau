@@ -34,6 +34,7 @@ import threading
 
 from audit import record as A
 from dashboard import config
+from domain.ids import SessionId
 from domain.preferences import PushSigningKeypair
 from notify.channels.alert import NOTHING, OK, alert_text, push_tag
 from notify.presence import RoutedSubscription
@@ -278,7 +279,7 @@ def send_alert(entry: dict[str, str], subs: list[RoutedSubscription], badge: int
     # the alert actually went to, NOT whichever device is most-recently-used by
     # then — the banner is on the former.
     return {"ch": "webpush", "session_id": session_id, "kind": entry.get("kind"),
-            "subs": subs, "tag": push_tag(session_id)}
+            "subs": subs, "tag": push_tag(SessionId(session_id))}
 
 
 def _webpush_fanout(subs: list[RoutedSubscription], payload: dict[str, object], action: str,

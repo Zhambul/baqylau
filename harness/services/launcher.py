@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from domain.ids import WindowId
 from harness.models import LaunchRejected, LaunchRequest, LaunchResult
 from harness.registry import HarnessRegistry
 from terminal.adapter import TerminalAdapter
@@ -55,4 +56,4 @@ class HarnessLauncherService:
             return LaunchResult("rejected", reason=terminal_result.reason)
         if terminal_result.window_id is None:
             return LaunchResult("rejected", reason="terminal did not identify the launched window")
-        return LaunchResult("started", window_id=terminal_result.window_id)
+        return LaunchResult("started", window_id=WindowId(str(terminal_result.window_id)))

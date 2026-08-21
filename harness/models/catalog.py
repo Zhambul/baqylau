@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from domain.ids import SessionId
+from domain.ids import ModelId, SessionId
 
 
 @dataclass(frozen=True)
@@ -25,7 +25,7 @@ class ModelOption:
     levels do not vary simply repeats the same tuple on every model.
     """
 
-    model_id: str
+    model_id: ModelId
     display_name: str
     default: bool
     efforts: tuple[EffortOption, ...] = ()

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Mapping
 
 from audit.models import StateFileRecord
-from domain.ids import SessionId
+from domain.ids import ClientId, DeviceId, SessionId
 from repository.contract.audit import AuditWriteRepository
 from repository.mapper import audit as mapper
 
@@ -45,8 +45,8 @@ class BrowserEvent:
 
 @dataclass(frozen=True)
 class BrowserEventBatch:
-    client_id: str
-    device_id: str
+    client_id: ClientId
+    device_id: DeviceId
     connection: Mapping[str, Scalar]
     events: tuple[BrowserEvent, ...]
 
@@ -61,7 +61,7 @@ class BrowserTelemetryService:
     def _record(self, action: str, content: Mapping[str, object]) -> None:
         self.audit_write_repository.record_state_file(
             StateFileRecord(
-                session_id="",
+                session_id=SessionId(""),
                 path="",
                 action=action,
                 content=mapper.truncated(dict(content)),

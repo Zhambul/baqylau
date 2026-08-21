@@ -28,6 +28,8 @@ from dataclasses import dataclass, field
 
 import pyte
 
+from terminal.models.values import WindowId
+
 COLUMNS = 200
 LINES = 50
 CLOSE_TIMEOUT_SECONDS = 10.0
@@ -38,7 +40,7 @@ READ_SIZE = 65536
 class PtyWindow:
     """A running program, everything it has painted, and how to type at it."""
 
-    window_id: str
+    window_id: WindowId
     process: subprocess.Popen[bytes]
     descriptor: int
     screen: pyte.Screen
@@ -93,7 +95,7 @@ class PtyWindow:
 
 
 def open_window(
-    window_id: str,
+    window_id: WindowId,
     command: tuple[str, ...],
     working_directory: str,
     environment: dict[str, str],

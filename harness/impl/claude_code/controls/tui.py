@@ -10,6 +10,8 @@
 import time
 from collections.abc import Callable
 
+from domain.ids import WindowId
+
 from harness.impl.claude_code.controls import clipboard_image
 from harness.impl.claude_code.controls.screen_driver import ScreenDriver
 
@@ -20,7 +22,7 @@ CLEAR_LINES_MAX = 50    # ceiling on the per-line kill loop: a corrupt/huge
 #                         stash must not become an unbounded keystroke storm.
 
 
-def type_command(screen_driver: ScreenDriver, win: str, text: str) -> tuple[bool, bool]:
+def type_command(screen_driver: ScreenDriver, win: WindowId, text: str) -> tuple[bool, bool]:
     """Put a SLASH COMMAND into a session's input box and submit it. Returns
     (ok, cleared_clipboard_image).
 
@@ -88,12 +90,12 @@ def _submission_marker(text: str) -> str:
     return lines[0][:SUBMISSION_MARKER_LENGTH].strip()
 
 
-def _submission_pending(screen_driver: ScreenDriver, win: str, marker: str) -> bool:
+def _submission_pending(screen_driver: ScreenDriver, win: WindowId, marker: str) -> bool:
     """Is the message still sitting in the input box? Unreadable = assume sent."""
     try:
         from harness.impl.claude_code.probe import ClaudeCodeTerminalProbe  # noqa: PLC0415 — probe is optional; unreadable means assume sent
 
-        state = ClaudeCodeTerminalProbe().input_state(screen_driver.terminal.viewport, str(win))
+        state = ClaudeCodeTerminalProbe().input_state(screen_driver.terminal.viewport, win)
     except Exception:
         try:
             from audit import record  # noqa: PLC0415 — audit fallback inside the failure path
@@ -108,7 +110,7 @@ def _submission_pending(screen_driver: ScreenDriver, win: str, marker: str) -> b
 
 def clear_input(
     screen_driver: ScreenDriver,
-    win: str,
+    win: WindowId,
     prev_text: str = "",
     sleep: Callable[[float], None] = time.sleep,
 ) -> int:

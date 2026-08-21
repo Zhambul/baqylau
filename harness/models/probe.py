@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from domain.ids import WindowId
+
 
 @dataclass(frozen=True)
 class TerminalInputState:
@@ -13,5 +15,5 @@ class TerminalInputState:
 
 @dataclass(frozen=True)
 class TerminalSessionState:
-    window_id: str | None
+    window_id: WindowId | None
     input_state: TerminalInputState | None

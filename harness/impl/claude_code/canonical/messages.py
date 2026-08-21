@@ -25,7 +25,19 @@ from domain.events import (
     TaskChanged,
     TurnStarted,
 )
-from domain.ids import ActorId, AssignmentId, MessageId, ShellId, TaskId, TurnId
+from domain.ids import (
+    AccountId,
+    ActorId,
+    AssignmentId,
+    CallId,
+    MessageId,
+    ModelId,
+    ReasoningId,
+    ShellId,
+    ShellNativeId,
+    TaskId,
+    TurnId,
+)
 from domain.values import AccountReference, MessagePhase, MessageRole, Outcome, TitleOrigin
 from harness.impl.claude_code import model
 from harness.impl.claude_code.canonical import transcript
@@ -77,7 +89,7 @@ def launch_selections(
         changed = selection_semantics.model(
             raw_event.session_id,
             raw_event.actor_id,
-            model_reference(model_selection),
+            model_reference(ModelId(model_selection)),
             "selected",
         )
         if changed is not None:
@@ -153,7 +165,7 @@ def slash_command(
     if selection and len(selection.split()) == 1 and name in ("model", "effort"):
         payload: EventPayload | None = (
             selection_semantics.model(
-                raw_event.session_id, raw_event.actor_id, model_reference(selection), "selected"
+                raw_event.session_id, raw_event.actor_id, model_reference(ModelId(selection)), "selected"
             )
             if name == "model"
             else selection_semantics.effort(
@@ -274,7 +286,7 @@ def session_events(raw_event: RawEvent, document: dict[str, Any]) -> list[Canoni
         ),
     ]
     if raw_event.account_id is not None or raw_event.account_display_name is not None:
-        account_id = raw_event.account_id or ""
+        account_id = raw_event.account_id or AccountId("")
         display_name = raw_event.account_display_name or account_id or "default"
         events.append(event(
             raw_event,
@@ -374,7 +386,7 @@ def translate_transcript(
         # armed command — the same shape a command's output takes — under the
         # "status" stream, which is what a monitors panel reads as an EVENT
         # rather than as output.
-        task_id = str(record.get("task") or "")
+        task_id = ShellNativeId(str(record.get("task") or ""))
         armed = tool_call_semantics.monitor_shell(task_id)
         if armed is None:
             # A monitor armed before this translation began — a daemon restarted
@@ -525,7 +537,7 @@ def translate_transcript(
             elif block_type == "thinking" and str(block.get("thinking") or "").strip():
                 block_identity = f"{message_identity}:{block_index}"
                 payload = ReasoningCreated(
-                    block_identity,
+                    ReasoningId(block_identity),
                     content(block.get("thinking"), markdown=True),
                 )
                 events.append(
@@ -545,7 +557,7 @@ def translate_transcript(
         # assistant records (interrupt notices, hook output). It names no model
         # anyone selected, so it reports nothing.
         model_reference_value = (
-            model_reference(model_id)
+            model_reference(ModelId(model_id))
             if model_id and model_id != SYNTHETIC_MODEL_ID
             else None
         )
@@ -593,7 +605,7 @@ def translate_transcript(
         # when the line holds exactly one result.
         sidecar = record.get("tur") if len(blocks) == 1 else None
         for block in blocks:
-            call_id = str(block.get("tool_use_id") or native_identity)
+            call_id = CallId(str(block.get("tool_use_id") or native_identity))
             result_text = transcript.result_text(block.get("content"))
             # A background launch's tool_result is boilerplate ("Command
             # running in background with ID … Output is being written to …"),

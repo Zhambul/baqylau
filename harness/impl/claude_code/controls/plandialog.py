@@ -27,6 +27,8 @@ import time
 from collections.abc import Callable
 from typing import TypedDict
 
+from domain.ids import WindowId
+
 from harness.impl.claude_code.controls import screen_driver as screendrive
 from harness.impl.claude_code.controls.screen_driver import ScreenDriver
 
@@ -102,7 +104,7 @@ def rows(screen: str) -> list[Row]:
     return out
 
 
-def _open_rows(screen_driver: ScreenDriver, win: str) -> list[Row]:
+def _open_rows(screen_driver: ScreenDriver, win: WindowId) -> list[Row]:
     screen = screen_driver.get_text(win) or ""
     if not dialog_open(screen):
         raise PlanError("open", "no plan dialog on screen")
@@ -112,7 +114,7 @@ def _open_rows(screen_driver: ScreenDriver, win: str) -> list[Row]:
     return rs
 
 
-def options(screen_driver: ScreenDriver, win: str) -> list[Option]:
+def options(screen_driver: ScreenDriver, win: WindowId) -> list[Option]:
     """The live decision options, for the page's buttons — labels vary with
     the session's permission mode, so they can only come from the screen."""
     return [{"digit": r["digit"], "label": r["label"],
@@ -120,7 +122,7 @@ def options(screen_driver: ScreenDriver, win: str) -> list[Option]:
 
 
 def decide(
-    screen_driver: ScreenDriver, win: str, digit: str, label: str, sleep: Callable[[float], None] = time.sleep,
+    screen_driver: ScreenDriver, win: WindowId, digit: str, label: str, sleep: Callable[[float], None] = time.sleep,
 ) -> Decided:
     """Press decision row `digit` after verifying the screen still shows
     `label` on it (the dialog may have been replaced since the page fetched
@@ -140,7 +142,7 @@ def decide(
 
 
 def feedback(
-    screen_driver: ScreenDriver, win: str, text: str, sleep: Callable[[float], None] = time.sleep,
+    screen_driver: ScreenDriver, win: WindowId, text: str, sleep: Callable[[float], None] = time.sleep,
 ) -> Fedback:
     """Reject the plan with feedback: focus the "Tell Claude what to change"
     row (its digit only focuses — measured), type the text inline, Enter
@@ -164,7 +166,7 @@ def feedback(
     return {"feedback": True}
 
 
-def dismiss(screen_driver: ScreenDriver, win: str, sleep: Callable[[float], None] = time.sleep) -> Dismissed:
+def dismiss(screen_driver: ScreenDriver, win: WindowId, sleep: Callable[[float], None] = time.sleep) -> Dismissed:
     """Esc — reject the plan and keep planning (the TUI's own dismiss)."""
     _open_rows(screen_driver, win)
     screen_driver.send_key(win, "escape")

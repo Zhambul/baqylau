@@ -37,7 +37,7 @@ from domain.events import (
     EventPayload,
     EventPayloadType,
 )
-from domain.ids import ActorId, CanonicalEventId, SessionId, TurnId
+from domain.ids import ActorId, CanonicalEventId, SessionId, TurnId, WindowId
 from domain.stored import STORED
 
 SCHEMA_VERSION = 17
@@ -68,7 +68,7 @@ class CanonicalEnvelope(Generic[EventPayloadType]):
     payload: EventPayloadType
     schema_version: int
     session_id: SessionId
-    terminal_window_id: str | None
+    terminal_window_id: WindowId | None
     turn_id: TurnId | None
 
     __pydantic_config__ = STORED

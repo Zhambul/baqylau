@@ -10,7 +10,7 @@ import re
 import time
 from typing import Any, Literal
 
-from domain.ids import ActorId, RawEventId
+from domain.ids import ActorId, HarnessSessionId, RawEventId
 from harness.contract import HarnessRawEventSource, HarnessRawEventSources
 from harness.impl.codex.canonical import rollout
 from harness.models import RawEvent, RawEventSourceContext, Session
@@ -138,7 +138,7 @@ class CodexRawEventSources(HarnessRawEventSources):
         self._child_rollouts: dict[str, tuple[str, ...]] = {}
         self._next_child: dict[str, int] = {}
 
-    def _next_child_rollout(self, parent_harness_session_id: str) -> tuple[str, ...]:
+    def _next_child_rollout(self, parent_harness_session_id: HarnessSessionId) -> tuple[str, ...]:
         rollout_paths = _rollout_paths()
         if rollout_paths != self._known_rollout_paths:
             children: dict[str, list[str]] = {}
@@ -151,11 +151,12 @@ class CodexRawEventSources(HarnessRawEventSources):
                 parent_id: tuple(paths)
                 for parent_id, paths in children.items()
             }
-        child_rollouts = self._child_rollouts.get(parent_harness_session_id, ())
+        parent_id_text = str(parent_harness_session_id)
+        child_rollouts = self._child_rollouts.get(parent_id_text, ())
         if not child_rollouts:
             return ()
-        position = self._next_child.get(parent_harness_session_id, 0) % len(child_rollouts)
-        self._next_child[parent_harness_session_id] = position + 1
+        position = self._next_child.get(parent_id_text, 0) % len(child_rollouts)
+        self._next_child[parent_id_text] = position + 1
         return (child_rollouts[position],)
 
     def for_session(self, session: Session) -> tuple[HarnessRawEventSource, ...]:

@@ -24,6 +24,7 @@ import time
 from typing import Any
 
 from core import env as EV
+from domain.ids import ActorId
 from domain.values import ModelReference
 
 # How much of a transcript's tail session_model() scans for the last assistant
@@ -153,7 +154,7 @@ def context_used(usage: object) -> int:
             + int(usage.get("cache_read_input_tokens") or 0))
 
 
-def agent_meta(tpath: str, agent_id: str) -> dict[str, Any]:
+def agent_meta(tpath: str, agent_id: ActorId) -> dict[str, Any]:
     """The agent's meta.json sidecar (present at SubagentStart for teammates; may
     lag a beat for ordinary subagents, so retry briefly). Carries
     `customAgentType` — the DEFINITION's name, which for a teammate differs from

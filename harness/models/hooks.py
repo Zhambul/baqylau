@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from domain.ids import AccountId, WindowId
 from harness.models.raw_events import RawEvent
 
 
@@ -19,9 +20,9 @@ class HarnessHookRequest:
     """
 
     payload: bytes
-    terminal_window_id: str | None
+    terminal_window_id: WindowId | None
     harness_process_id: int | None
-    account_id: str | None
+    account_id: AccountId | None
     account_display_name: str | None
     launch_model: str | None = None
     launch_effort: str | None = None

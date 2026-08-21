@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, Mapping
 
+from terminal.models.values import WindowId
+
 
 @dataclass(frozen=True)
 class PaneAnchor:
@@ -17,7 +19,7 @@ class PaneAnchor:
     then only be recovered by parsing one terminal's grammar back apart.
     """
 
-    window_id: str | None = None
+    window_id: WindowId | None = None
     tag: tuple[str, str] | None = None
 
     def __post_init__(self) -> None:
@@ -55,13 +57,13 @@ class PaneOpenRequest:
 @dataclass(frozen=True)
 class PaneOpenResponse:
     succeeded: bool
-    window_id: str | None
+    window_id: WindowId | None
     reason: str | None = None
 
 
 @dataclass(frozen=True)
 class PaneCloseRequest:
-    window_id: str
+    window_id: WindowId
 
 
 @dataclass(frozen=True)
@@ -72,7 +74,7 @@ class PaneCloseResponse:
 
 @dataclass(frozen=True)
 class PaneResizeRequest:
-    window_id: str
+    window_id: WindowId
     axis: Literal["horizontal", "vertical"]
     cells: int                           # grow (+) / shrink (−)
 
@@ -92,7 +94,7 @@ class WindowFocusRequest:
     whatever they are actually looking at.
     """
 
-    window_id: str
+    window_id: WindowId
 
 
 @dataclass(frozen=True)

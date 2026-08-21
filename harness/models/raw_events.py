@@ -17,10 +17,12 @@ from domain.events import (
     ShellOutputLocated,
 )
 from domain.ids import (
+    AccountId,
     ActorId,
     RawEventId,
     SessionId,
     TurnId,
+    WindowId,
     stable_event_id,
 )
 from domain.records import InterpretationAudit
@@ -51,9 +53,9 @@ class RawEvent:
     # Set only on hook evidence, None everywhere else. Flat and typed: a hook
     # delivery is the one observation made from INSIDE the session's terminal
     # window and process tree, so what it saw around itself rides its row.
-    terminal_window_id: str | None = None
+    terminal_window_id: WindowId | None = None
     harness_process_id: int | None = None
-    account_id: str | None = None
+    account_id: AccountId | None = None
     account_display_name: str | None = None
 
 

@@ -6,7 +6,7 @@ import json
 from datetime import datetime
 
 from domain.events import CanonicalEvent, EventPayload
-from domain.ids import TurnId
+from domain.ids import ModelId, SelectionId, TurnId
 from domain.values import Content, ModelReference, StructuredContent, TextContent
 from harness.impl.claude_code import model
 from harness.models import RawEvent, canonical_event
@@ -17,11 +17,12 @@ from harness.models import RawEvent, canonical_event
 SYNTHETIC_MODEL_ID = "<synthetic>"
 
 
-def model_reference(native_id: str) -> ModelReference:
+def model_reference(native_id: ModelId) -> ModelReference:
+    family = model.family(native_id)
     return ModelReference(
         native_id=native_id,
         display_name=model.short_model(native_id),
-        selection_id=model.family(native_id),
+        selection_id=SelectionId(family) if family is not None else None,
     )
 
 

@@ -12,12 +12,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from domain.ids import ActorId, SessionId, TaskId
+
 
 @dataclass(frozen=True)
 class ApplicationErrorRecord:
     """A swallowed exception, on the way in."""
 
-    session_id: str
+    session_id: SessionId
     script: str
     function: str
     traceback: str
@@ -40,7 +42,7 @@ class ApplicationError:
 
 @dataclass(frozen=True)
 class StateFileRecord:
-    session_id: str
+    session_id: SessionId
     path: str
     action: str
     content: str
@@ -51,7 +53,7 @@ class StateFileRecord:
 
 @dataclass(frozen=True)
 class SpawnRecord:
-    session_id: str
+    session_id: SessionId
     parent_script: str
     child_process_id: int
     argv: str
@@ -61,10 +63,10 @@ class SpawnRecord:
 
 @dataclass(frozen=True)
 class StreamOpened:
-    session_id: str
+    session_id: SessionId
     kind: str
-    agent_id: str
-    task_id: str
+    agent_id: ActorId
+    task_id: TaskId
     source_path: str
     process_id: int
     started_at: float

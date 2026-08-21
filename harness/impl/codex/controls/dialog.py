@@ -59,6 +59,8 @@ import time
 from collections.abc import Callable
 from typing import Any, Protocol, TypedDict
 
+from domain.ids import WindowId
+
 POLL_S = 0.15           # screen re-read beat while waiting for a dialog state
 STEP_TIMEOUT_S = 2.5    # a key press → its screen effect visible
 NAV_STEPS = 24          # max up/down presses to walk the cursor to a target row
@@ -91,10 +93,10 @@ class Driver(Protocol):
     """The screen-driver vocabulary these dialog modules speak — satisfied by
     controller._TerminalDriver (and structurally by the tests' fakes)."""
 
-    def get_text(self, window_id: str) -> str | None: ...
-    def send_key(self, window_id: str, *keys: str) -> bool: ...
-    def send_text(self, window_id: str, text: str) -> bool: ...
-    def paste_text(self, window_id: str, text: str) -> bool: ...
+    def get_text(self, window_id: WindowId) -> str | None: ...
+    def send_key(self, window_id: WindowId, *keys: str) -> bool: ...
+    def send_text(self, window_id: WindowId, text: str) -> bool: ...
+    def paste_text(self, window_id: WindowId, text: str) -> bool: ...
 
 
 class PromptChoice(TypedDict):
@@ -134,7 +136,7 @@ class CodexAskError(Exception):
 
 def _poll(
     driver: Driver,
-    win: str,
+    win: WindowId,
     pred: Callable[[str], bool],
     timeout: float,
     sleep: Callable[[float], None],
@@ -224,7 +226,7 @@ def _cursor_row(screen: str) -> OptionRow | None:
     return next((r for r in rows(screen) if r["cursor"]), None)
 
 
-def _cursor_to(driver: Driver, win: str, num: str, sleep: Callable[[float], None]) -> None:
+def _cursor_to(driver: Driver, win: WindowId, num: str, sleep: Callable[[float], None]) -> None:
     """Move the `›` cursor onto option `num`: normalize UP to option 1 (up is a
     no-op there), then walk DOWN, screen-verified each step. Bail if `up` stops
     making progress (a trapped/edit row)."""
@@ -248,7 +250,7 @@ def _cursor_to(driver: Driver, win: str, num: str, sleep: Callable[[float], None
     raise CodexAskError("cursor", "cursor never reached option %s" % num)
 
 
-def _note(driver: Driver, win: str, text: str, sleep: Callable[[float], None]) -> None:
+def _note(driver: Driver, win: WindowId, text: str, sleep: Callable[[float], None]) -> None:
     """`tab` into the notes field and type `text` (send_text presses Enter, which
     submits the question). The tab is VERIFIED — an unopened field would take the
     keystrokes as dialog navigation, and the Enter as a submit of whatever row the
@@ -263,7 +265,7 @@ def _note(driver: Driver, win: str, text: str, sleep: Callable[[float], None]) -
 
 def _answer_one(
     driver: Driver,
-    win: str,
+    win: WindowId,
     prompt: Prompt,
     ans: dict[str, Any],
     sleep: Callable[[float], None],
@@ -298,7 +300,7 @@ def _answer_one(
         driver.send_key(win, "enter")          # submit this question + advance
 
 
-def _confirm(driver: Driver, win: str, sleep: Callable[[float], None]) -> None:
+def _confirm(driver: Driver, win: WindowId, sleep: Callable[[float], None]) -> None:
     """Resolve the `Submit with unanswered questions?` step if it is up: cursor
     onto `Proceed` and ENTER. A no-op when no confirmation appeared (every
     question answered), so both callers can end with it."""
@@ -316,7 +318,7 @@ def _confirm(driver: Driver, win: str, sleep: Callable[[float], None]) -> None:
 
 def drive(
     driver: Driver,
-    win: str,
+    win: WindowId,
     questions: list[Prompt],
     answers: list[dict[str, Any]],
     sleep: Callable[[float], None] = time.sleep,
@@ -369,7 +371,7 @@ def drive(
 
 def decline(
     driver: Driver,
-    win: str,
+    win: WindowId,
     questions: list[Prompt],
     message: str = "",
     sleep: Callable[[float], None] = time.sleep,

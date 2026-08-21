@@ -4,7 +4,7 @@ from pydantic import model_validator
 from api.controls.models.attachment_reference import AttachmentReferenceBody, references
 from api.controls.models.control_request import ControlRequestBody
 from harness.models import ControlRequest, SendText
-from domain.ids import SessionId
+from domain.ids import RequestId, SessionId
 
 
 class SendTextRequest(ControlRequestBody):
@@ -21,7 +21,7 @@ class SendTextRequest(ControlRequestBody):
     def request(self, session_id: SessionId) -> ControlRequest:
         return SendText(
             session_id,
-            self.request_id,
+            RequestId(self.request_id),
             text=self.text,
             attachments=references(self.attachments),
             replace_terminal_draft=self.replace_terminal_draft,

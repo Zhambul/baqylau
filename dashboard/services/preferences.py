@@ -18,7 +18,7 @@ from core.daemon import contract as daemon_contract
 from core.repository import RepositoryQueries
 from dashboard import config
 from dashboard.services.notices import DashboardNotificationNotice, DashboardNotificationState
-from domain.ids import SessionId
+from domain.ids import DeviceId, SessionId
 from domain.preferences import (
     NewSessionDraft as StoredNewSessionDraft,
     NewSessionPreferences as StoredNewSessionPreferences,
@@ -98,13 +98,13 @@ class BrowserPushSubscription:
     endpoint: str
     public_key: str
     authentication_secret: str
-    device_id: str
+    device_id: DeviceId
     device_label: str | None
 
 
 @dataclass(frozen=True)
 class BrowserPresence:
-    device_id: str
+    device_id: DeviceId
     session_id: SessionId | None
     away: bool
 
@@ -245,7 +245,7 @@ class ApplicationPreferenceService:
         )
 
     def report_presence(self, browser_presence: BrowserPresence) -> None:
-        session_id = str(browser_presence.session_id) if browser_presence.session_id is not None else None
+        session_id = browser_presence.session_id
         if browser_presence.away:
             self.presence.mark_away(browser_presence.device_id, session_id)
             return

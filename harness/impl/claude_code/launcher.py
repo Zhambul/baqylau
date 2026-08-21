@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from domain.ids import AccountId
 from harness.contract import HarnessLauncher
 from harness.models import HarnessLaunchPlan, LaunchRejected, LaunchRequest
 from harness.impl.claude_code import account
@@ -17,7 +18,7 @@ LAUNCH_EFFORT_VARIABLE = "BAQYLAU_LAUNCH_EFFORT"
 
 class ClaudeCodeLauncher(HarnessLauncher):
     def prepare(self, launch_request: LaunchRequest) -> HarnessLaunchPlan:
-        account_alias = account.alias_for(launch_request.account_id or "")
+        account_alias = account.alias_for(launch_request.account_id or AccountId(""))
         if account_alias is None:
             raise LaunchRejected("unknown Claude Code account")
         attachment_text = " ".join(

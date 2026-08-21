@@ -10,12 +10,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from domain.ids import SessionId
+from domain.ids import SessionId, UploadId
 
 
 @dataclass(frozen=True)
 class StoredUpload:
-    upload_id: str
+    upload_id: UploadId
     session_id: SessionId | None
     name: str
     media_type: str

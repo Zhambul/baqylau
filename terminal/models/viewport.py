@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from terminal.models.values import WindowId
+
 
 @dataclass(frozen=True)
 class ScreenReadRequest:
@@ -12,7 +14,7 @@ class ScreenReadRequest:
     position across a reflow. `ansi=True` keeps the SGR formatting escapes (the
     ghost-suggestion probe detects the faint input line by them)."""
 
-    window_id: str
+    window_id: WindowId
     ansi: bool = False
 
 
@@ -33,7 +35,7 @@ class ViewportScrollRequest:
     bottom as its deterministic base first.
     """
 
-    window_id: str
+    window_id: WindowId
     to_bottom: bool = False
     up_lines: int = 0
 

@@ -4,7 +4,7 @@ from pydantic import BaseModel
 from api.common.models.fields import RequiredText
 from api.controls.models.attachment_reference import AttachmentReferenceBody, references
 from harness.models import LaunchRequest
-from domain.ids import SessionId
+from domain.ids import AccountId, ModelId, SessionId
 
 
 class LaunchSessionRequest(BaseModel):
@@ -21,9 +21,9 @@ class LaunchSessionRequest(BaseModel):
         return LaunchRequest(
             working_directory=self.working_directory,
             initial_text=self.initial_text,
-            model_id=self.model_id,
+            model_id=ModelId(self.model_id) if self.model_id else None,
             effort=self.effort,
-            account_id=self.account_id,
+            account_id=AccountId(self.account_id) if self.account_id else None,
             resume_session_id=(
                 SessionId(self.resume_session_id) if self.resume_session_id else None
             ),

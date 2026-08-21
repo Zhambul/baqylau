@@ -47,7 +47,7 @@ from app.providers import ApplicationPreferences, PushSigningKeys, SessionApplic
 from notify.channels import webpush
 from dashboard.services.preferences import BrowserPresence, BrowserPushSubscription
 from domain.workspace import AnswerSelection, QueuedMessage
-from domain.ids import AttentionId, SessionId
+from domain.ids import AttentionId, DeviceId, SessionId
 
 router = APIRouter()
 guarded = APIRouter()
@@ -138,7 +138,7 @@ def register_push_subscription(
             push_subscription_request.subscription.endpoint,
             push_subscription_request.subscription.keys.p256dh,
             push_subscription_request.subscription.keys.auth,
-            push_subscription_request.device_id,
+            DeviceId(push_subscription_request.device_id),
             push_subscription_request.device_label or None,
         )
     )
@@ -151,7 +151,7 @@ def report_presence(
 ) -> SavedResponse:
     application_preferences.report_presence(
         BrowserPresence(
-            presence_request.device_id,
+            DeviceId(presence_request.device_id),
             SessionId(presence_request.session_id) if presence_request.session_id else None,
             presence_request.away,
         )

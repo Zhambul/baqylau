@@ -43,6 +43,12 @@ from terminal.models import (
     TextSubmitRequest,
 )
 from domain.events import QuestionAsked
+from domain.ids import AccountId, WindowId
+# The terminal's own window id: `terminal/` may depend on nothing outside
+# itself, so this module — the harness boundary that talks to a live
+# terminal — converts explicitly wherever a domain `WindowId` reaches a
+# terminal contract request.
+from terminal.models.values import WindowId as NativeWindowId
 from harness.impl.claude_code import account
 from harness.impl.claude_code.canonical import transcript
 from harness.impl.claude_code.controls import askdialog, confirmdialog, plandialog, rewindmenu, tui
@@ -55,32 +61,35 @@ class _TerminalDriver:
     def __init__(self, terminal_plugin: TerminalPlugin) -> None:
         self.terminal = terminal_plugin
 
-    def get_text(self, window_id: str, extent: str = "screen", ansi: bool = False) -> str | None:
+    def get_text(self, window_id: WindowId, extent: str = "screen", ansi: bool = False) -> str | None:
         del extent
         response = self.terminal.viewport.read_screen(
-            ScreenReadRequest(str(window_id), ansi=ansi)
+            ScreenReadRequest(NativeWindowId(str(window_id)), ansi=ansi)
         )
         return response.text
 
-    def send_key(self, window_id: str, *keys: str) -> bool:
+    def send_key(self, window_id: WindowId, *keys: str) -> bool:
+        native = NativeWindowId(str(window_id))
         return all(
-            self.terminal.input.send_key(KeySendRequest(str(window_id), str(key))).succeeded
+            self.terminal.input.send_key(KeySendRequest(native, str(key))).succeeded
             for key in keys
         )
 
-    def send_text(self, window_id: str, text: str) -> bool:
+    def send_text(self, window_id: WindowId, text: str) -> bool:
         return self.terminal.input.submit_text(
-            TextSubmitRequest(str(window_id), str(text), "type")
+            TextSubmitRequest(NativeWindowId(str(window_id)), str(text), "type")
         ).succeeded
 
-    def paste_text(self, window_id: str, text: str) -> bool:
+    def paste_text(self, window_id: WindowId, text: str) -> bool:
         return self.terminal.input.submit_text(
-            TextSubmitRequest(str(window_id), str(text), "paste")
+            TextSubmitRequest(NativeWindowId(str(window_id)), str(text), "paste")
         ).succeeded
 
 
-def _screen_text(terminal_plugin: TerminalPlugin, window_id: str) -> str | None:
-    return terminal_plugin.viewport.read_screen(ScreenReadRequest(window_id)).text
+def _screen_text(terminal_plugin: TerminalPlugin, window_id: WindowId) -> str | None:
+    return terminal_plugin.viewport.read_screen(
+        ScreenReadRequest(NativeWindowId(str(window_id)))
+    ).text
 
 
 def _result(request: ControlRequest, succeeded: bool, reason: str) -> ControlResult:
@@ -163,7 +172,7 @@ class InterruptHandler(ControlHandler):
         if window_id is None:
             return DeliveryResult(request.request_id, "rejected", "session is not live")
         previous = _screen_text(terminal, window_id)
-        if not terminal.input.send_key(KeySendRequest(window_id, "escape")).succeeded:
+        if not terminal.input.send_key(KeySendRequest(NativeWindowId(str(window_id)), "escape")).succeeded:
             return DeliveryResult(request.request_id, "indeterminate", "interrupt key was not delivered")
         stopped: bool | None = None
         for _attempt in range(4):
@@ -176,7 +185,7 @@ class InterruptHandler(ControlHandler):
                 break
             stopped = False
             previous = current
-            terminal.input.send_key(KeySendRequest(window_id, "escape"))
+            terminal.input.send_key(KeySendRequest(NativeWindowId(str(window_id)), "escape"))
         input_state = ClaudeCodeTerminalProbe().input_state(terminal.viewport, window_id)
         return DeliveryResult(
             request.request_id,
@@ -237,7 +246,7 @@ class BackgroundHandler(ControlHandler):
                 )
             time.sleep(BACKGROUND_POLL_SECONDS)
         delivered = terminal.input.send_key(
-            KeySendRequest(window_id, BACKGROUND_CHORD)
+            KeySendRequest(NativeWindowId(str(window_id)), BACKGROUND_CHORD)
         ).succeeded
         return DeliveryResult(
             request.request_id,
@@ -255,7 +264,7 @@ class CloseSessionHandler(ControlHandler):
         window_id = control_context.terminal_window_id
         if window_id is None:
             return ControlResult(request.request_id, "rejected", "session is not live")
-        result = terminal.tabs.close_tab(TabCloseRequest(window_id))
+        result = terminal.tabs.close_tab(TabCloseRequest(NativeWindowId(str(window_id))))
         return _result(request, result.succeeded, result.reason or "terminal tab was not closed")
 
 
@@ -330,7 +339,7 @@ class MigrateAccountHandler(ControlHandler):
         window_id = control_context.terminal_window_id
         if window_id is None:
             return MigrationResult(request.request_id, "rejected", "session is not live")
-        closed = control_context.terminal.tabs.close_tab(TabCloseRequest(window_id))
+        closed = control_context.terminal.tabs.close_tab(TabCloseRequest(NativeWindowId(str(window_id))))
         if not closed.succeeded:
             return MigrationResult(request.request_id, "indeterminate", closed.reason)
         arguments = ["--resume", str(session.session_id)]
@@ -348,7 +357,7 @@ class MigrateAccountHandler(ControlHandler):
         return MigrationResult(
             request.request_id,
             "acknowledged",
-            target_account_id=target["slug"],
+            target_account_id=AccountId(target["slug"]),
         )
 
 

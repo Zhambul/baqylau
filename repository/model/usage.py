@@ -9,11 +9,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from domain.ids import AccountId
+
 
 @dataclass(frozen=True)
 class AccountUsageSnapshotRow:
     harness: str
-    account_id: str
+    account_id: AccountId
     display_name: str
     captured_at: float
 
@@ -21,7 +23,7 @@ class AccountUsageSnapshotRow:
 @dataclass(frozen=True)
 class AccountUsageWindowRow:
     harness: str
-    account_id: str
+    account_id: AccountId
     window_key: str
     used_percent: str
     resets_at: float | None

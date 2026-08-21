@@ -8,7 +8,7 @@ from dataclasses import replace
 
 from domain.codec import CanonicalCodecError, decode_document
 from domain.events import ShellProgressed, TaskListChanged
-from domain.ids import TaskId
+from domain.ids import TaskId, TaskListId
 from harness.contract import HarnessTranslator
 from harness.impl.claude_code.canonical import transcript
 from harness.impl.claude_code.canonical.hooks import translate_hook
@@ -113,7 +113,7 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
                 or not all(isinstance(task_id, str) for task_id in task_ids)
             ):
                 raise TranslationError("malformed Claude Code task list")
-            payload = TaskListChanged(list_id, tuple(TaskId(task_id) for task_id in task_ids))
+            payload = TaskListChanged(TaskListId(list_id), tuple(TaskId(task_id) for task_id in task_ids))
             canonical = event(raw_event, "task_list", raw_event.source_position, "changed", payload)
             return TranslationResult((canonical,), "translated")
         if raw_event.source_type in ("hook", "teammate_hook"):

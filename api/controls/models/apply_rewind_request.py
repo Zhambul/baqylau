@@ -2,7 +2,7 @@
 from api.common.models.fields import RequiredText
 from api.controls.models.control_request import ControlRequestBody
 from harness.models import ApplyRewind, ControlRequest
-from domain.ids import MessageId, SessionId
+from domain.ids import MessageId, RequestId, SessionId
 
 
 class ApplyRewindRequest(ControlRequestBody):
@@ -14,7 +14,7 @@ class ApplyRewindRequest(ControlRequestBody):
     def request(self, session_id: SessionId) -> ControlRequest:
         return ApplyRewind(
             session_id,
-            self.request_id,
+            RequestId(self.request_id),
             target_message_id=MessageId(self.target_message_id),
             target_text=self.target_text,
             newer_prompt_count=self.newer_prompt_count,

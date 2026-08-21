@@ -26,11 +26,13 @@ from domain.ids import (
     ActorId,
     AttentionId,
     CanonicalEventId,
+    HarnessSessionId,
     MessageId,
     ShellId,
     RawEventId,
     SessionId,
     TaskId,
+    WindowId,
 )
 from domain.sessiondata import ActorFacts, SessionFacts
 from domain.shells import ShellOutputFollowing
@@ -89,13 +91,13 @@ def main(tmp_path):
 
 
 def a_session(
-    terminal_window_id: str | None = None,
+    terminal_window_id: WindowId | None = None,
     harness_process_id: int | None = None,
 ) -> Session:
     return Session(
         session_id=SESSION,
         lead_actor_id=ACTOR,
-        harness_session_id="harness-one",
+        harness_session_id=HarnessSessionId("harness-one"),
         source_reference="/transcripts/one.jsonl",
         working_directory="/project",
         terminal_window_id=terminal_window_id,
@@ -196,7 +198,7 @@ def test_a_failed_write_rolls_the_whole_transaction_back(main):
 def test_a_session_upsert_writes_identity_once_and_refreshes_the_live_columns(main):
     sessions = SqliteSessionRepository(main)
     sessions.save("example", a_session())
-    sessions.save("example", a_session(terminal_window_id="7", harness_process_id=42))
+    sessions.save("example", a_session(terminal_window_id=WindowId("7"), harness_process_id=42))
     stored = sessions.find(SESSION)
     assert stored is not None
     assert (stored.terminal_window_id, stored.harness_process_id) == ("7", 42)

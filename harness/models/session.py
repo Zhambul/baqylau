@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from domain.ids import ActorId, SessionId
+from domain.ids import ActorId, HarnessSessionId, SessionId, WindowId
 from harness.models.raw_events import RawEventSourceContext
 
 if TYPE_CHECKING:  # the plugin is the composition root above these messages
@@ -27,10 +27,10 @@ class Session:
 
     session_id: SessionId
     lead_actor_id: ActorId
-    harness_session_id: str
+    harness_session_id: HarnessSessionId
     source_reference: str
     working_directory: str | None
-    terminal_window_id: str | None = None
+    terminal_window_id: WindowId | None = None
     harness_process_id: int | None = None
     plugin: HarnessPlugin | None = field(default=None, compare=False, repr=False)
 

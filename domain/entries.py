@@ -27,6 +27,7 @@ from domain.ids import (
     AttentionId,
     CanonicalEventId,
     MessageId,
+    ReasoningId,
     SessionId,
     ShellId,
     SkillId,
@@ -118,7 +119,7 @@ class MessageBody(EntryBody):
 
 @dataclass(frozen=True)
 class ReasoningBody(EntryBody):
-    reasoning_id: str
+    reasoning_id: ReasoningId
     content: Content
 
 

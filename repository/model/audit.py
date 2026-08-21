@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from domain.ids import ActorId, SessionId, TaskId
+
 
 @dataclass(frozen=True)
 class ErrorRow:
     id: int
     ts: float
-    session_id: str
+    session_id: SessionId
     script: str
     func: str
     traceback: str
@@ -21,7 +23,7 @@ class ErrorRow:
 class StateFileRow:
     id: int
     ts: float
-    session_id: str
+    session_id: SessionId
     path: str
     action: str
     content: str
@@ -33,7 +35,7 @@ class StateFileRow:
 class SpawnRow:
     id: int
     ts: float
-    session_id: str
+    session_id: SessionId
     parent_script: str
     child_pid: int
     argv: str
@@ -43,10 +45,10 @@ class SpawnRow:
 @dataclass(frozen=True)
 class StreamRow:
     id: int
-    session_id: str
+    session_id: SessionId
     kind: str
-    agent_id: str
-    task_id: str
+    agent_id: ActorId
+    task_id: TaskId
     src_path: str
     pid: int
     started_at: float

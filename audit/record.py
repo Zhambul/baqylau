@@ -29,6 +29,7 @@ from threading import Lock
 
 from audit.models import StreamHandle
 from audit.recorder import AuditRecorder
+from domain.ids import ActorId, TaskId
 from repository.impl.sqlite.databases import audit_database
 from repository.impl.sqlite.audit import (
     SqliteAuditWriteRepository,
@@ -76,11 +77,13 @@ def spawn(log: str, child_pid: int, argv: list[str], purpose: str = "") -> None:
 def stream_start(
     log: str,
     kind: str,
-    agent_id: str = "",
-    task_id: str = "",
+    agent_id: ActorId | None = None,
+    task_id: TaskId | None = None,
     src_path: str = "",
 ) -> StreamHandle | None:
-    return recorder().stream_start(log, kind, agent_id, task_id, src_path)
+    return recorder().stream_start(
+        log, kind, agent_id or ActorId(""), task_id or TaskId(""), src_path
+    )
 
 
 def stream_end(

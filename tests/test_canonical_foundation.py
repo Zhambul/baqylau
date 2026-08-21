@@ -71,10 +71,12 @@ from domain.ids import (
     ActorId,
     AssignmentId,
     CanonicalEventId,
+    HarnessSessionId,
     MessageId,
     ShellId,
     RawEventId,
     SessionId,
+    WindowId,
     stable_event_id,
 )
 from domain.values import StructuredContent, TextContent
@@ -150,7 +152,7 @@ def example_session(session_id: str = "session-one") -> Session:
     return Session(
         session_id=SessionId(session_id),
         lead_actor_id=ActorId("actor-lead"),
-        harness_session_id=f"harness-{session_id}",
+        harness_session_id=HarnessSessionId(f"harness-{session_id}"),
         source_reference="fixture.jsonl",
         working_directory="/work",
         harness_process_id=os.getpid(),
@@ -200,7 +202,7 @@ def canonical_message(
 def session_started_event(
     *,
     session_id: str = "session-one",
-    terminal_window_id: str | None = None,
+    terminal_window_id: WindowId | None = None,
     harness_process_id: int | None = None,
 ) -> CanonicalEvent:
     return CanonicalEvent(

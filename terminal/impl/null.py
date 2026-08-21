@@ -9,6 +9,7 @@ reason string like any other failure.
 
 from __future__ import annotations
 
+from terminal.models.values import WindowId
 from terminal.contract import (
     TerminalInput,
     TerminalMetadata,
@@ -90,7 +91,7 @@ class NullMetadata(TerminalMetadata):
     def tag_window(self, window_tag_request: WindowTagRequest) -> WindowTagResponse:
         return WindowTagResponse(False, NO_TERMINAL)
 
-    def current_window_id(self) -> str | None:
+    def current_window_id(self) -> WindowId | None:
         return None
 
 

@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Mapping
 
+from terminal.models.values import WindowId
+
 
 @dataclass(frozen=True)
 class WindowTagRequest:
@@ -15,7 +17,7 @@ class WindowTagRequest:
     An empty value clears the tag.
     """
 
-    window_id: str
+    window_id: WindowId
     tags: Mapping[str, str]
 
 

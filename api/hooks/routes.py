@@ -9,6 +9,7 @@ from fastapi.concurrency import run_in_threadpool
 from api.common.models.fields import HarnessNamePath
 from api.responses import errors
 from app.providers import HookGateway, Recorder
+from domain.ids import AccountId, WindowId
 from harness.hooks.gateway import UnknownHookHarness
 from harness.models import HarnessHookRequest
 from harness.hooks.headers import (
@@ -51,10 +52,18 @@ async def record_hook_delivery(
         process_header = (request.headers.get(CLIENT_PROCESS_HEADER) or "").strip()
         delivery = HarnessHookRequest(
             payload=payload,
-            terminal_window_id=request.headers.get(TERMINAL_WINDOW_HEADER) or None,
+            terminal_window_id=(
+                WindowId(request.headers[TERMINAL_WINDOW_HEADER])
+                if request.headers.get(TERMINAL_WINDOW_HEADER)
+                else None
+            ),
             harness_process_id=None,
             client_process_id=int(process_header) if process_header else None,
-            account_id=request.headers.get(ACCOUNT_ID_HEADER) or None,
+            account_id=(
+                AccountId(request.headers[ACCOUNT_ID_HEADER])
+                if request.headers.get(ACCOUNT_ID_HEADER)
+                else None
+            ),
             account_display_name=request.headers.get(ACCOUNT_NAME_HEADER) or None,
             launch_model=request.headers.get(LAUNCH_MODEL_HEADER) or None,
             launch_effort=request.headers.get(LAUNCH_EFFORT_HEADER) or None,

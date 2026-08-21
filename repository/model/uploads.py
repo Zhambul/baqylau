@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from domain.ids import SessionId, UploadId
+
 
 @dataclass(frozen=True)
 class UploadRow:
-    upload_id: str
-    session_id: str
+    upload_id: UploadId
+    session_id: SessionId
     name: str
     media_type: str
     byte_size: int

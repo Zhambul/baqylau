@@ -3,6 +3,7 @@
 from harness.contract import HarnessPlugin
 from harness.models import EffortOption, HarnessInfo, ModelOption, RewindModeOption
 from domain.codec import SCHEMA_VERSION
+from domain.ids import ModelId
 from harness.impl.claude_code.canonical.translator import ClaudeCanonicalTranslator
 from harness.impl.claude_code.canonical.sources import ClaudeRawEventSources
 from harness.impl.claude_code.hooks.gateway import CLI_PROCESS_NAME, ClaudeHookGateway
@@ -34,7 +35,7 @@ MODELS = tuple(
     # value = the alias the harness's /model takes; label = the ONE display
     # name (model.ALIAS_DISPLAY), so the picker says what the actor row says.
     ModelOption(
-        model_id,
+        ModelId(model_id),
         model.ALIAS_DISPLAY.get(model_id, model_id),
         model_id == DEFAULT_MODEL_ID,
         EFFORTS,

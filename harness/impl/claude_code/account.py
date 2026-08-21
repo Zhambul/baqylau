@@ -6,6 +6,7 @@ import os
 import re
 from typing import TypedDict
 
+from domain.ids import AccountId
 from harness.models import AccountUsageSnapshot
 
 ACCOUNTS_FILE = os.path.expanduser("~/.config/claude-subscriptions/accounts.tsv")
@@ -23,7 +24,7 @@ SLUG_VARIABLE = "CLAUDE_SUBSCRIPTION_SLUG"
 LABEL_VARIABLE = "CLAUDE_SUBSCRIPTION_LABEL"
 
 
-def normalize(account_id: str | None, display_name: str | None) -> tuple[str | None, str]:
+def normalize(account_id: AccountId | None, display_name: str | None) -> tuple[AccountId | None, str]:
     """One account as a client reported it, made trustworthy: (id, label).
 
     A client forwards what its environment said and validates nothing — the
@@ -33,11 +34,11 @@ def normalize(account_id: str | None, display_name: str | None) -> tuple[str | N
     """
     # str(): both values arrive as external input — a header, or a JSON field a
     # status line wrote — so neither is known to be a string yet.
-    account_id = str(account_id or "").strip()
+    account_id_text = str(account_id or "").strip()
     display_name = str(display_name or "").strip()
-    if not VALID_ACCOUNT_ID.fullmatch(account_id or "x"):
-        account_id = ""
-    return account_id or None, display_name or account_id or "default"
+    if not VALID_ACCOUNT_ID.fullmatch(account_id_text or "x"):
+        account_id_text = ""
+    return (AccountId(account_id_text) if account_id_text else None), display_name or account_id_text or "default"
 
 
 class AccountRecord(TypedDict):
@@ -64,7 +65,7 @@ def registry() -> list[AccountRecord]:
     return accounts
 
 
-def config_directory(account_id: str | None) -> str | None:
+def config_directory(account_id: AccountId | None) -> str | None:
     """The `CLAUDE_CONFIG_DIR` one account runs under, or None for the default.
 
     The switcher gives each subscription its own configuration directory, and
@@ -78,7 +79,7 @@ def config_directory(account_id: str | None) -> str | None:
     return directory if os.path.isdir(directory) else None
 
 
-def alias_for(account_id: str) -> str | None:
+def alias_for(account_id: AccountId) -> str | None:
     if not account_id or account_id == DEFAULT_COMMAND:
         return DEFAULT_COMMAND
     for account_record in registry():
@@ -88,7 +89,7 @@ def alias_for(account_id: str) -> str | None:
 
 
 def migration_target(
-    current_account_id: str,
+    current_account_id: AccountId,
     account_usage: tuple[AccountUsageSnapshot, ...],
 ) -> AccountRecord | None:
     """Choose the least-used launchable account other than the current one."""
@@ -102,7 +103,7 @@ def migration_target(
     for account_record in registry():
         if account_record["slug"] == current_account_id:
             continue
-        snapshot = snapshots.get(account_record["slug"] or None)
+        snapshot = snapshots.get(AccountId(account_record["slug"]) if account_record["slug"] else None)
         used_percent = next(
             (
                 float(window.used_percent)

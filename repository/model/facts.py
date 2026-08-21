@@ -10,16 +10,28 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from domain.ids import (
+    ActorId,
+    AccountId,
+    CanonicalEventId,
+    HarnessSessionId,
+    RawEventId,
+    SessionId,
+    ShellId,
+    TurnId,
+    WindowId,
+)
+
 
 @dataclass(frozen=True)
 class SessionRow:
-    session_id: str
-    lead_actor_id: str
+    session_id: SessionId
+    lead_actor_id: ActorId
     harness: str
-    harness_session_id: str
+    harness_session_id: HarnessSessionId
     source_reference: str
     working_directory: str | None
-    terminal_window_id: str | None
+    terminal_window_id: WindowId | None
     harness_process_id: int | None
     created_at: float
 
@@ -27,37 +39,37 @@ class SessionRow:
 @dataclass(frozen=True)
 class RawEventRow:
     id: int
-    raw_event_id: str
-    session_id: str
+    raw_event_id: RawEventId
+    session_id: SessionId
     harness: str
     source_type: str
     source_identity: str
     source_name: str
     source_position: str
-    actor_id: str
-    parent_actor_id: str | None
+    actor_id: ActorId
+    parent_actor_id: ActorId | None
     observed_at: float
     encoding: str
     payload: bytes
-    terminal_window_id: str | None
+    terminal_window_id: WindowId | None
     harness_process_id: int | None
-    account_id: str | None
+    account_id: AccountId | None
     account_display_name: str | None
 
 
 @dataclass(frozen=True)
 class CanonicalEventRow:
     cursor: int
-    event_id: str
+    event_id: CanonicalEventId
     schema_version: int
     event_type: str
-    session_id: str
-    actor_id: str
-    turn_id: str | None
-    parent_actor_id: str | None
+    session_id: SessionId
+    actor_id: ActorId
+    turn_id: TurnId | None
+    parent_actor_id: ActorId | None
     harness: str
     occurred_at: float | None
-    terminal_window_id: str | None
+    terminal_window_id: WindowId | None
     harness_process_id: int | None
     accepted_at: float
     payload: str
@@ -65,11 +77,11 @@ class CanonicalEventRow:
 
 @dataclass(frozen=True)
 class ShellOutputRow:
-    session_id: str
-    shell_id: str
+    session_id: SessionId
+    shell_id: ShellId
     harness: str
-    actor_id: str
-    parent_actor_id: str | None
+    actor_id: ActorId
+    parent_actor_id: ActorId | None
     source_path: str
     chunk_source_type: str
     delete_source: int
@@ -83,15 +95,15 @@ class ShellOutputRow:
 
 @dataclass(frozen=True)
 class SessionDataRow:
-    session_id: str
+    session_id: SessionId
     revision: int
     payload: str
 
 
 @dataclass(frozen=True)
 class SessionDataActorRow:
-    session_id: str
-    actor_id: str
+    session_id: SessionId
+    actor_id: ActorId
     revision: int
     payload: str
 
@@ -99,12 +111,12 @@ class SessionDataActorRow:
 @dataclass(frozen=True)
 class SessionEntryRow:
     cursor: int
-    entry_id: str
-    session_id: str
+    entry_id: CanonicalEventId
+    session_id: SessionId
     entry_type: str
-    actor_id: str
-    parent_actor_id: str | None
-    turn_id: str | None
+    actor_id: ActorId
+    parent_actor_id: ActorId | None
+    turn_id: TurnId | None
     occurred_at: float | None
     summary: str | None
     payload: str

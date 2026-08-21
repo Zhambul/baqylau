@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from collections.abc import Callable
 from typing import Mapping, Protocol
 
+from domain.ids import WindowId
 from domain.values import ModelReference
 from harness.models.catalog import HarnessCatalogSnapshot, QueryContext
 from harness.models.controls import (
@@ -192,7 +193,7 @@ class HarnessUsage(Protocol):
 
 
 class HarnessTerminalProbe(Protocol):
-    def input_state(self, terminal_viewport: TerminalViewport, window_id: str) -> TerminalInputState | None: ...
+    def input_state(self, terminal_viewport: TerminalViewport, window_id: WindowId) -> TerminalInputState | None: ...
 
 
 @dataclass(frozen=True)

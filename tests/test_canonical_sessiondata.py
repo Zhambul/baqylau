@@ -75,6 +75,7 @@ from domain.ids import (
     ShellId,
     SkillId,
     TaskId,
+    TaskListId,
     TurnId,
 )
 from domain.records import CommittedEvent
@@ -283,14 +284,14 @@ def test_the_list_fact_orders_the_tasks_and_decides_which_belong():
     list stopped naming is gone from it even though its own last state stands."""
     first = TaskChanged(TaskId("t1"), "Read it", None, "completed", LEAD)
     second = TaskChanged(TaskId("t2"), "Change it", None, "in_progress", LEAD)
-    state = fold(*alive(), second, first, TaskListChanged("list", (TaskId("t1"), TaskId("t2"))))
+    state = fold(*alive(), second, first, TaskListChanged(TaskListId("list"), (TaskId("t1"), TaskId("t2"))))
     assert [task.subject for task in state.session.tasks] == ["Read it", "Change it"]
 
     dropped = fold(
         *alive(),
         first,
         second,
-        TaskListChanged("list", (TaskId("t2"),)),
+        TaskListChanged(TaskListId("list"), (TaskId("t2"),)),
     )
     assert [task.task_id for task in dropped.session.tasks] == [TaskId("t2")]
 
@@ -404,7 +405,7 @@ def test_an_assistant_message_is_not_a_prompt():
         ShellStarted(ShellId("sh1"), TextContent("make test"), "foreground", None),
         SkillStarted(SkillId("k1"), "audit-debug", None),
         TaskChanged(TaskId("t1"), "Read it", None, "in_progress", LEAD),
-        TaskListChanged("list", (TaskId("t1"),)),
+        TaskListChanged(TaskListId("list"), (TaskId("t1"),)),
     ),
 )
 def test_work_being_done_is_executing(payload):
@@ -680,7 +681,7 @@ def test_an_actor_to_actor_message_is_a_message_with_a_recipient():
         ActorStarted("claude", "lead"),
         ActorFinished(None),
         TaskChanged(TaskId("t1"), "Read it", None, "pending", None),
-        TaskListChanged("list", ()),
+        TaskListChanged(TaskListId("list"), ()),
         GoalChanged("ship it", "active", None),
         UsageReported("actor", "lead", None, None, TokenUsage(1), True, None),
         ContextReported(1, 2, None),

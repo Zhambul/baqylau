@@ -19,6 +19,7 @@ import re
 
 from core.clients import REPOSITORY_ROOT
 from core.data import data_directory
+from domain.ids import SessionId
 
 # The daemon re-spawns itself through `bin/`. The root it hangs off is resolved
 # once, in core/clients.py, from a package's own location — this module used to
@@ -31,10 +32,10 @@ def uploads_directory() -> str:
     return os.path.join(data_directory(), "uploads")
 
 
-def safe_session_name(session_id: str) -> str:
+def safe_session_name(session_id: SessionId) -> str:
     return re.sub(r"[^A-Za-z0-9._-]", "-", session_id)
 
 
-def session_uploads_directory(session_id: str) -> str:
-    name = safe_session_name(session_id.strip()) or "staging"
+def session_uploads_directory(session_id: SessionId) -> str:
+    name = safe_session_name(SessionId(session_id.strip())) or "staging"
     return os.path.join(uploads_directory(), name)

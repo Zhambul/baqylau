@@ -6,6 +6,7 @@ import json
 from dataclasses import dataclass
 from typing import Literal, TypeAlias
 
+from domain.ids import AccountId, ModelId, QuestionId, SelectionId
 from domain.stored import STORED
 
 Outcome: TypeAlias = Literal["succeeded", "failed", "cancelled", "rejected", "unknown"]
@@ -65,16 +66,16 @@ GoalState: TypeAlias = Literal[
 class ModelReference:
     __pydantic_config__ = STORED
 
-    native_id: str
+    native_id: ModelId
     display_name: str | None
-    selection_id: str | None
+    selection_id: SelectionId | None
 
 
 @dataclass(frozen=True)
 class AccountReference:
     __pydantic_config__ = STORED
 
-    account_id: str
+    account_id: AccountId
     display_name: str
 
 
@@ -196,7 +197,7 @@ class AttentionChoice:
 class AttentionPrompt:
     __pydantic_config__ = STORED
 
-    prompt_id: str
+    prompt_id: QuestionId
     title: str | None
     prompt: str
     multiple: bool
@@ -207,5 +208,5 @@ class AttentionPrompt:
 class AttentionAnswer:
     __pydantic_config__ = STORED
 
-    prompt_id: str
+    prompt_id: QuestionId
     labels: tuple[str, ...]

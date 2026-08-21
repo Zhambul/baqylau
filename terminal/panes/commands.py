@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from audit.recorder import AuditRecorder
-from domain.ids import SessionId
+from domain.ids import SessionId, WindowId
 from terminal.services.panes import PaneWidthService
 from terminal.adapter import TerminalAdapter
 
@@ -40,7 +40,7 @@ class PaneCommandService:
     def execute(
         self,
         command: str,
-        window_id: str | None,
+        window_id: WindowId | None,
         working_directory: str,
         columns: int | None = None,
         percent: int | None = None,

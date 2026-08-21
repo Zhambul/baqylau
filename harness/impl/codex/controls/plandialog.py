@@ -25,6 +25,8 @@
 import time
 from collections.abc import Callable
 
+from domain.ids import WindowId
+
 from harness.impl.codex.controls.dialog import (CodexAskError, Driver, OptionRow,
                                    STEP_TIMEOUT_S, _cursor_to, _poll, rows)
 
@@ -77,7 +79,7 @@ def option_rows(screen: str) -> list[OptionRow]:
     return rows(_picker_region(screen))
 
 
-def options(driver: Driver, win: str) -> list[dict[str, str]]:
+def options(driver: Driver, win: WindowId) -> list[dict[str, str]]:
     """The APPROVE options on the live picker as [{digit, label}] — every
     decision row EXCEPT the keep-planning row (which the card offers as its own
     'keep planning' button, mapped to dismiss). Read-only: no key is pressed.
@@ -94,7 +96,7 @@ def options(driver: Driver, win: str) -> list[dict[str, str]]:
     return out
 
 
-def _decide_row(driver: Driver, win: str, num: str, sleep: Callable[[float], None]) -> None:
+def _decide_row(driver: Driver, win: WindowId, num: str, sleep: Callable[[float], None]) -> None:
     """Move the `›` cursor onto option `num` and ENTER, then verify the picker is
     GONE (the decision took). Raises CodexPlanError otherwise."""
     screen, ok = _poll(driver, win, picker_open, STEP_TIMEOUT_S, sleep)
@@ -112,7 +114,7 @@ def _decide_row(driver: Driver, win: str, num: str, sleep: Callable[[float], Non
 
 def decide(
     driver: Driver,
-    win: str,
+    win: WindowId,
     digit: str,
     label: str,
     sleep: Callable[[float], None] = time.sleep,
@@ -135,7 +137,7 @@ def decide(
     return {"decided": True}
 
 
-def dismiss(driver: Driver, win: str, sleep: Callable[[float], None] = time.sleep) -> dict[str, bool]:
+def dismiss(driver: Driver, win: WindowId, sleep: Callable[[float], None] = time.sleep) -> dict[str, bool]:
     """KEEP PLANNING: pick the 'No, stay in Plan mode' row (an explicit choice,
     not an Esc — Esc only steps BACK). Returns {"dismissed": True}."""
     screen, ok = _poll(driver, win, picker_open, STEP_TIMEOUT_S, sleep)

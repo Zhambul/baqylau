@@ -27,10 +27,13 @@ from domain.entries import (
     ShellStartedBody,
 )
 from domain.ids import (
+    AccountId,
     ActorId,
     AttentionId,
     CanonicalEventId,
     MessageId,
+    ModelId,
+    SelectionId,
     SessionId,
     ShellId,
     TaskId,
@@ -79,7 +82,7 @@ FACTS = SessionFacts(
     started_at=1755590000.0,
     lead_actor_id=LEAD,
     title="Fix the SSE reconnect bug",
-    account=AccountReference("acc_01", "zhambyl"),
+    account=AccountReference(AccountId("acc_01"), "zhambyl"),
 )
 ACTOR = ActorFacts(
     session_id=SESSION,
@@ -88,7 +91,7 @@ ACTOR = ActorFacts(
     name="Claude",
     state="running",
     status="executing",
-    model=ModelReference("claude-fable-5", "Fable 5", "fable"),
+    model=ModelReference(ModelId("claude-fable-5"), "Fable 5", SelectionId("fable")),
     effort="high",
 )
 

@@ -7,13 +7,13 @@ from datetime import datetime
 from typing import Any
 
 from domain.events import CanonicalEvent, EventPayload
-from domain.ids import TurnId
+from domain.ids import ModelId, SelectionId, TurnId
 from domain.values import Content, ModelReference, Outcome, StructuredContent, TextContent
 from harness.models import RawEvent, canonical_event
 
 
-def model_reference(native_id: str) -> ModelReference:
-    return ModelReference(native_id, native_id, native_id)
+def model_reference(native_id: ModelId) -> ModelReference:
+    return ModelReference(native_id, native_id, SelectionId(native_id))
 
 
 def timestamp(value: object) -> float | None:

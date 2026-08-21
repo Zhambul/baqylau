@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from domain.events import ShellOutputLocated
-from domain.ids import ShellId
+from domain.ids import SessionId, ShellId
 from harness.impl.claude_code import shell
 
 CHUNK_SOURCE_TYPE = "foreground_output"
@@ -32,7 +32,7 @@ def _safe_identity(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def _directory(session_id: str) -> str:
+def _directory(session_id: SessionId) -> str:
     configuration_directory = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser(
         "~/.claude"
     )
@@ -44,7 +44,7 @@ def _directory(session_id: str) -> str:
     )
 
 
-def _tee_path(session_id: str, shell_id: str) -> str:
+def _tee_path(session_id: SessionId, shell_id: ShellId) -> str:
     return os.path.join(_directory(session_id), _safe_identity(shell_id)) + ".out"
 
 
@@ -115,8 +115,8 @@ def prepare(document: dict[str, Any]) -> PreparedForegroundCommand | None:
     command = str(tool_input.get("command") or "")
     if not command.strip() or tool_input.get("run_in_background"):
         return None
-    session_id = str(document.get("session_id") or "")
-    shell_id = str(document.get("tool_use_id") or "")
+    session_id = SessionId(str(document.get("session_id") or ""))
+    shell_id = ShellId(str(document.get("tool_use_id") or ""))
     if not session_id or not shell_id:
         raise ValueError("Claude Code foreground command has no session or command id")
 

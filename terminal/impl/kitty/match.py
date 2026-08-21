@@ -5,15 +5,16 @@
 # `PaneAnchor`, a window id — and each terminal implementation renders its own
 # syntax for it. A second terminal has its own equivalent of this file.
 
+from terminal.models.values import WindowId
 from terminal.models.panes import PaneAnchor
 
 
-def window(window_id: str) -> str:
+def window(window_id: WindowId) -> str:
     """The WINDOW itself."""
     return f"id:{window_id}"
 
 
-def tab_of(window_id: str) -> str:
+def tab_of(window_id: WindowId) -> str:
     """The TAB CONTAINING the window. kitty's tab-scoped commands (close-tab,
     set-tab-title, set-tab-color) match a tab by a window it holds."""
     return f"window_id:{window_id}"

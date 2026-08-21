@@ -23,6 +23,8 @@ import time
 from collections.abc import Callable
 from typing import NotRequired, TypedDict
 
+from domain.ids import WindowId
+
 from harness.impl.claude_code.controls import screen_driver as screendrive
 from harness.impl.claude_code.controls.screen_driver import ScreenDriver
 
@@ -68,7 +70,7 @@ def find_menu(screen: str) -> str | None:
     return yes if (yes and no) else None
 
 
-def confirm(screen_driver: ScreenDriver, win: str,
+def confirm(screen_driver: ScreenDriver, win: WindowId,
             sleep: Callable[[float], None] = time.sleep) -> ConfirmOutcome:
     """Watch window `win` for the switch-confirm menu a just-pasted /model or
     /effort may open; press its own Yes digit, verified. Returns

@@ -29,7 +29,7 @@ from api.application.models.files.upload_request import UploadRequest
 from api.application.models.files.upload_response import UploadResponse
 from app.providers import Uploads
 from api.responses import errors
-from domain.ids import SessionId
+from domain.ids import SessionId, UploadId
 from domain.uploads import StoredUpload
 from core.daemon.contract import UPLOAD_MAX
 from core import clipboard
@@ -94,7 +94,7 @@ def upload(
     if len(file_bytes) > UPLOAD_MAX:
         raise reject_input(audit, "web-upload", "too large", "file too large",
                            {"bytes": len(file_bytes)}, code=413)
-    destination_directory = paths.session_uploads_directory(session_id)
+    destination_directory = paths.session_uploads_directory(SessionId(session_id))
     path = os.path.join(destination_directory, "%s-%s" % (uuid.uuid4().hex[:8], safe_name))
     try:
         os.makedirs(destination_directory, exist_ok=True)
@@ -115,7 +115,7 @@ def upload(
     # is what makes them attributable and prunable.
     uploads.record(
         StoredUpload(
-            upload_id=os.path.basename(path),
+            upload_id=UploadId(os.path.basename(path)),
             session_id=SessionId(session_id) if session_id else None,
             name=safe_name,
             media_type=upload_request.mime,

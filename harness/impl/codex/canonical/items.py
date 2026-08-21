@@ -17,6 +17,7 @@ import json
 import re
 from typing import Any
 
+from domain.ids import CallId
 from harness.impl.codex.canonical.vocabulary import (
     empty_record,
     is_synthetic,
@@ -275,7 +276,7 @@ def _rsp_custom_tool_call(p: dict[str, Any]) -> dict[str, Any] | None:
             if fn == "apply_patch":
                 return None
             if fn == "write_stdin":
-                return _stdin_record(p.get("call_id") or "", args)
+                return _stdin_record(CallId(p.get("call_id") or ""), args)
             if fn == "update_plan":
                 plan = _plan_tasks(args)
                 if not isinstance(plan, list):
@@ -364,10 +365,10 @@ def _call_stdin(p: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
     # exec session and reads more of its output. Its function_call_output is
     # an ordinary `exec_result` — this record exists so that output is not
     # orphaned (a presenter pairs the two by call_id).
-    return _stdin_record(p.get("call_id") or "", args)
+    return _stdin_record(CallId(p.get("call_id") or ""), args)
 
 
-def _stdin_record(call_id: str, arguments: str | dict[str, Any]) -> dict[str, Any]:
+def _stdin_record(call_id: CallId, arguments: str | dict[str, Any]) -> dict[str, Any]:
     """Normalize only the measured write_stdin argument shape.
 
     Current custom-tool rollouts contain either JSON or a JavaScript object

@@ -17,7 +17,7 @@ from domain.events import (
     TurnAborted,
     TurnFinished,
 )
-from domain.ids import SessionId, ShellId
+from domain.ids import HarnessSessionId, SessionId, ShellId
 from domain.shells import ShellOutputFollowing
 from engine.interpret import output_source
 from harness.contract import CanonicalEventReaction
@@ -52,7 +52,7 @@ class SessionUpsertCanonicalEventReaction(CanonicalEventReaction):
             session = Session(
                 session_id=canonical_event.session_id,
                 lead_actor_id=canonical_event.actor_id,
-                harness_session_id=str(canonical_event.session_id),
+                harness_session_id=HarnessSessionId(str(canonical_event.session_id)),
                 source_reference=started.source_reference,
                 working_directory=started.working_directory or None,
             )

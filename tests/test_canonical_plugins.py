@@ -89,7 +89,18 @@ from domain.events import (
     WebFetched,
     WorktreeChanged,
 )
-from domain.ids import ActorId, AssignmentId, CanonicalEventId, RawEventId, SessionId, ShellId, TaskId, TurnId
+from domain.ids import (
+    AccountId,
+    ActorId,
+    AssignmentId,
+    CanonicalEventId,
+    RawEventId,
+    SessionId,
+    ShellId,
+    TaskId,
+    TurnId,
+    WindowId,
+)
 from domain.values import AccountReference, AttentionPrompt, ModelReference, TextContent
 from harness.impl.claude_code.canonical.translator import ClaudeCanonicalTranslator
 from harness.impl.claude_code.canonical.sources import (
@@ -147,9 +158,9 @@ def quiet_liveness(monkeypatch):
 def hook_request(
     payload: bytes,
     *,
-    terminal_window_id: str | None = None,
+    terminal_window_id: WindowId | None = None,
     harness_process_id: int | None = None,
-    account_id: str | None = None,
+    account_id: AccountId | None = None,
     account_display_name: str | None = None,
     launch_model: str | None = None,
     launch_effort: str | None = None,
@@ -1603,7 +1614,7 @@ def test_hook_gateway_service_records_only_for_harnesses_that_accept_deliveries(
         "tool_name": "Read",
     }).encode()
 
-    assert service.record("claude_code", hook_request(payload, terminal_window_id="9")) == b""
+    assert service.record("claude_code", hook_request(payload, terminal_window_id=WindowId("9"))) == b""
     evidence = CanonicalRuntime(str(tmp_path / "main.db")).raw_event_audits.audits_for_session(
         SessionId("session-one")
     )

@@ -3,6 +3,7 @@
 from harness.contract import HarnessPlugin
 from harness.models import EffortOption, HarnessInfo, ModelOption
 from domain.codec import SCHEMA_VERSION
+from domain.ids import ModelId
 from harness.impl.codex.canonical.translator import CodexCanonicalTranslator
 from harness.impl.codex.canonical.sources import CodexRawEventSources
 from harness.impl.codex.hooks.gateway import CLI_PROCESS_NAME, CodexHookGateway
@@ -19,17 +20,17 @@ from harness.impl.codex.controls import modeldialog
 LUNA_EFFORTS = tuple(effort for effort in modeldialog.EFFORT_CHOICES if effort != "ultra")
 
 
-def _efforts(model_id: str) -> tuple[EffortOption, ...]:
+def _efforts(model_id: ModelId) -> tuple[EffortOption, ...]:
     values = LUNA_EFFORTS if model_id == "gpt-5.6-luna" else modeldialog.EFFORT_CHOICES
     return tuple(EffortOption(value, value, value == "low") for value in values)
 
 
 MODELS = tuple(
     ModelOption(
-        model_id,
+        ModelId(model_id),
         model_id,
         model_id == modeldialog.MODEL_CHOICES[0],
-        _efforts(model_id),
+        _efforts(ModelId(model_id)),
     )
     for model_id in modeldialog.MODEL_CHOICES
 )

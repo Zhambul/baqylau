@@ -34,7 +34,17 @@ from domain.events import (
     WebFetched,
     WorktreeChanged,
 )
-from domain.ids import ActorId, AssignmentId, AttentionId, MessageId, ShellId, SkillId
+from domain.ids import (
+    ActorId,
+    AssignmentId,
+    AttentionId,
+    CallId,
+    MessageId,
+    QuestionId,
+    ShellId,
+    ShellNativeId,
+    SkillId,
+)
 from domain.values import (
     AttentionAnswer,
     AttentionChoice,
@@ -192,7 +202,7 @@ def attention_answers(arguments: dict[str, Any]) -> tuple[AttentionAnswer, ...]:
             labels = (str(native_answer),)
         answers.append(
             AttentionAnswer(
-                prompt_id=str(question.get("id") or question_index),
+                prompt_id=QuestionId(str(question.get("id") or question_index)),
                 labels=labels,
             )
         )
@@ -225,7 +235,7 @@ class ToolCallSemantics:
     """
 
     def __init__(self) -> None:
-        self.calls: dict[str, tuple[str, dict[str, Any]]] = {}
+        self.calls: dict[CallId, tuple[str, dict[str, Any]]] = {}
         # An armed Monitor's TASK id -> the shell that armed it, and how many
         # of its events have been attributed so far. A monitor's per-event
         # notification names only the task id — never the tool_use_id (measured
@@ -233,16 +243,16 @@ class ToolCallSemantics:
         # to the command the monitors tab lists. Its stream-ENDED notification
         # does carry the tool_use_id, so the end needs no memory and survives a
         # daemon restart that loses this.
-        self.monitor_tasks: dict[str, str] = {}
-        self.monitor_event_counts: dict[str, int] = {}
+        self.monitor_tasks: dict[ShellNativeId, str] = {}
+        self.monitor_event_counts: dict[ShellNativeId, int] = {}
 
     # --- what a call was, across the two evidence streams ---------------------
 
-    def remember(self, call_id: str, native_name: str, arguments: dict[str, Any]) -> None:
+    def remember(self, call_id: CallId, native_name: str, arguments: dict[str, Any]) -> None:
         self.calls[call_id] = (native_name, arguments)
 
     def recall(
-        self, call_id: str, native_name: str | None, arguments: dict[str, Any] | None,
+        self, call_id: CallId, native_name: str | None, arguments: dict[str, Any] | None,
     ) -> tuple[str, dict[str, Any]]:
         """The call's name and input: what this record carries, else what the
         request said. A record that has neither is a call whose start we never
@@ -253,17 +263,17 @@ class ToolCallSemantics:
             raise UnknownEvidence(f"Claude Code tool result names no call: {call_id or '<missing>'}")
         return name, arguments if arguments else remembered_arguments
 
-    def known(self, call_id: str) -> bool:
+    def known(self, call_id: CallId) -> bool:
         return call_id in self.calls
 
-    def monitor_armed(self, task_id: str, shell_id: ShellId) -> None:
+    def monitor_armed(self, task_id: ShellNativeId, shell_id: ShellId) -> None:
         self.monitor_tasks[task_id] = str(shell_id)
 
-    def monitor_shell(self, task_id: str) -> ShellId | None:
+    def monitor_shell(self, task_id: ShellNativeId) -> ShellId | None:
         remembered = self.monitor_tasks.get(task_id)
         return ShellId(remembered) if remembered else None
 
-    def next_monitor_ordinal(self, task_id: str) -> int:
+    def next_monitor_ordinal(self, task_id: ShellNativeId) -> int:
         """The position of the next event of this monitor, counted from zero.
 
         Part of the event's identity, not decoration: `stable_event_id` is built
@@ -277,7 +287,7 @@ class ToolCallSemantics:
     # --- the request ---------------------------------------------------------
 
     def tool_started(self, raw_event: RawEvent, native: dict[str, Any]) -> list[CanonicalEvent[EventPayload]]:
-        call_id = str(native.get("tool_use_id") or native.get("id") or raw_event.source_position)
+        call_id = CallId(str(native.get("tool_use_id") or native.get("id") or raw_event.source_position))
         native_name = str(native.get("tool_name") or native.get("name") or "tool")
         kind = tool_kind(native_name)
         arguments = native.get("tool_input") if "tool_input" in native else native.get("input")
@@ -306,7 +316,7 @@ class ToolCallSemantics:
     def _shell_started(
         self,
         raw_event: RawEvent,
-        call_id: str,
+        call_id: CallId,
         native_name: str,
         arguments: dict[str, Any],
     ) -> CanonicalEvent[EventPayload]:
@@ -327,7 +337,7 @@ class ToolCallSemantics:
         return event(raw_event, "shell", str(shell_id), "started", payload)
 
     def _skill_started(
-        self, raw_event: RawEvent, call_id: str, arguments: dict[str, Any],
+        self, raw_event: RawEvent, call_id: CallId, arguments: dict[str, Any],
     ) -> CanonicalEvent[EventPayload]:
         skill_id = SkillId(call_id)
         name = str(arguments.get("skill") or "")
@@ -339,7 +349,7 @@ class ToolCallSemantics:
         return event(raw_event, "skill", str(skill_id), "started", payload)
 
     def _assignment_started(
-        self, raw_event: RawEvent, call_id: str, arguments: dict[str, Any],
+        self, raw_event: RawEvent, call_id: CallId, arguments: dict[str, Any],
     ) -> CanonicalEvent[EventPayload]:
         assignment_id = AssignmentId(call_id)
         actor_name = arguments.get("name") or arguments.get("subagent_type")
@@ -353,7 +363,7 @@ class ToolCallSemantics:
         return event(raw_event, "actor_assignment", str(assignment_id), "started", payload)
 
     def _actor_message(
-        self, raw_event: RawEvent, call_id: str, arguments: dict[str, Any],
+        self, raw_event: RawEvent, call_id: CallId, arguments: dict[str, Any],
     ) -> CanonicalEvent[EventPayload]:
         """A SendMessage: the actor speaking to a named peer, which is a message
         with a recipient — not a tool call with a text argument."""
@@ -386,7 +396,7 @@ class ToolCallSemantics:
         response document below stands in for it. Both spellings of one answer
         converge on one fact.
         """
-        call_id = str(native.get("tool_use_id") or native.get("id") or raw_event.source_position)
+        call_id = CallId(str(native.get("tool_use_id") or native.get("id") or raw_event.source_position))
         native_arguments = native.get("tool_input")
         native_name, arguments = self.recall(
             call_id,
@@ -436,7 +446,7 @@ class ToolCallSemantics:
     def tool_result(
         self,
         raw_event: RawEvent,
-        call_id: str,
+        call_id: CallId,
         result_text: str,
         failed: bool,
         tool_response: object,
@@ -472,7 +482,7 @@ class ToolCallSemantics:
         )
         return events
 
-    def pending_attention(self, call_id: str) -> bool:
+    def pending_attention(self, call_id: CallId) -> bool:
         """Whether this call was one that asks a person something."""
         if not self.known(call_id):
             return False
@@ -482,7 +492,7 @@ class ToolCallSemantics:
     def _shell_finished(
         self,
         raw_event: RawEvent,
-        call_id: str,
+        call_id: CallId,
         native_name: str,
         arguments: dict[str, Any],
         tool_response: object,
@@ -507,7 +517,7 @@ class ToolCallSemantics:
         # BEFORE the finish below, deliberately: the follow of the file this
         # command is still writing to is ended by `shell.finished` unless this
         # fact has already re-armed it (see ShellBackgrounded).
-        background_task_id = str(response.get("backgroundTaskId") or "")
+        background_task_id = ShellNativeId(str(response.get("backgroundTaskId") or ""))
         if background_task_id and not arguments.get("run_in_background"):
             events.append(event(
                 raw_event,
@@ -521,7 +531,7 @@ class ToolCallSemantics:
         # returning, not the watch ending — the watch runs on, and its own end
         # arrives as a notification (see monitor_armed).
         if native_name == "Monitor":
-            task_id = str(response.get("taskId") or "")
+            task_id = ShellNativeId(str(response.get("taskId") or ""))
             if task_id:
                 self.monitor_armed(task_id, shell_id)
         events.append(event(
@@ -537,7 +547,7 @@ class ToolCallSemantics:
     def _assignment_finished(
         self,
         raw_event: RawEvent,
-        call_id: str,
+        call_id: CallId,
         tool_response: object,
         outcome: Outcome,
     ) -> list[CanonicalEvent[EventPayload]]:
@@ -554,7 +564,7 @@ class ToolCallSemantics:
     def attention_declined(
         self,
         raw_event: RawEvent,
-        call_id: str,
+        call_id: CallId,
         result_text: str,
     ) -> CanonicalEvent[EventPayload]:
         """The resolution of an attention the user REFUSED. A refused tool call never
@@ -575,7 +585,7 @@ class ToolCallSemantics:
     def file_facts(
         self,
         raw_event: RawEvent,
-        call_id: str,
+        call_id: CallId,
         native_name: str,
         arguments: dict[str, Any],
         tool_response: object,
@@ -617,7 +627,7 @@ class ToolCallSemantics:
             )
             prompts.append(
                 AttentionPrompt(
-                    prompt_id=str(question.get("id") or index),
+                    prompt_id=QuestionId(str(question.get("id") or index)),
                     title=question.get("header") or None,
                     prompt=question.get("question") or "",
                     multiple=bool(question.get("multiSelect")),

@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from domain.ids import DeviceId, SessionId
+
 
 @dataclass(frozen=True)
 class SessionViewModeRow:
-    session_id: str
+    session_id: SessionId
     view_mode: str
 
 
@@ -38,7 +40,7 @@ class PushSubscriptionRow:
     endpoint: str
     public_key: str
     authentication_secret: str
-    device_id: str
+    device_id: DeviceId
     device_label: str | None
     created_at: float
 

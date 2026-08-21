@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
 from core import clients
-from domain.ids import SessionId
+from domain.ids import SessionId, WindowId
 from terminal.contract import TerminalPlugin
 from terminal.models import (
     ACTIVITY_PANE_TAG,
@@ -38,6 +38,12 @@ from terminal.models import (
     WindowInfo,
     WindowTagRequest,
 )
+# The terminal's own window id (`terminal/models/`), distinct from the domain
+# fact of the same name: `terminal/` may depend on nothing outside itself, so
+# this module — the one place a session's EVIDENCE (`WindowId` above) meets a
+# live terminal window — converts explicitly at the boundary rather than
+# reusing one NewType across it.
+from terminal.models.values import WindowId as NativeWindowId
 
 if TYPE_CHECKING:
     from repository.contract.sessions import SessionRepository
@@ -92,7 +98,7 @@ class SessionTerminalResult:
 @dataclass(frozen=True)
 class SessionPaneRequest:
     session_id: SessionId
-    anchor_window_id: str
+    anchor_window_id: WindowId
     activity_width_percent: int
 
     def __post_init__(self) -> None:
@@ -106,13 +112,14 @@ class TerminalAdapter:
         self._sessions = sessions
 
     # --- session ⇄ window ---------------------------------------------------
-    def window_for_session(self, session_id: SessionId) -> str | None:
+    def window_for_session(self, session_id: SessionId) -> WindowId | None:
         """The session's window, when it is still on screen."""
         session = self._sessions.find(session_id)
         window_id = session.terminal_window_id if session is not None else None
         if not window_id:
             return None
-        return window_id if self._window(str(window_id)) is not None else None
+        native = NativeWindowId(str(window_id))
+        return window_id if self._window(native) is not None else None
 
     def live_sessions(self, session_ids: Iterable[SessionId]) -> frozenset[SessionId]:
         """The subset whose window is still on screen — `window_for_session`
@@ -124,15 +131,17 @@ class TerminalAdapter:
         for session_id in session_ids:
             session = self._sessions.find(session_id)
             window_id = session.terminal_window_id if session is not None else None
-            if window_id and str(window_id) in on_screen:
+            if window_id and NativeWindowId(str(window_id)) in on_screen:
                 live.add(session_id)
         return frozenset(live)
 
-    def current_window(self) -> str | None:
-        return self._plugin.metadata.current_window_id()
+    def current_window(self) -> WindowId | None:
+        native = self._plugin.metadata.current_window_id()
+        return WindowId(str(native)) if native else None
 
-    def session_for_window(self, window_id: str | None) -> SessionId | None:
-        for window in self._tab_windows(window_id):
+    def session_for_window(self, window_id: WindowId | None) -> SessionId | None:
+        native = NativeWindowId(str(window_id)) if window_id else None
+        for window in self._tab_windows(native):
             session_id = window.tags.get(SESSION_WINDOW_TAG)
             if session_id:
                 return SessionId(session_id)
@@ -152,13 +161,13 @@ class TerminalAdapter:
         tag and left alone, so a toggle survives a daemon restart.
         """
         session_id = str(session_pane_request.session_id)
-        anchor_window_id = session_pane_request.anchor_window_id
+        anchor_window_id = NativeWindowId(str(session_pane_request.anchor_window_id))
         outcomes: list[TerminalOutcome] = [self._plugin.metadata.tag_window(
             WindowTagRequest(anchor_window_id, {SESSION_WINDOW_TAG: session_id})
         )]
         if self._tagged(ACTIVITY_PANE_TAG, session_pane_request.session_id) is None:
             outcomes.append(self._plugin.panes.open_pane(PaneOpenRequest(
-                command=self._pane_command("mirror", session_id),
+                command=self._pane_command("mirror", session_pane_request.session_id),
                 working_directory="",
                 title=MIRROR_PANE_TITLE,
                 split="vertical",
@@ -169,7 +178,7 @@ class TerminalAdapter:
             )))
         if self._tagged(SCOREBOARD_PANE_TAG, session_pane_request.session_id) is None:
             outcomes.append(self._plugin.panes.open_pane(PaneOpenRequest(
-                command=self._pane_command("scoreboard", session_id),
+                command=self._pane_command("scoreboard", session_pane_request.session_id),
                 working_directory="",
                 title=SCOREBOARD_PANE_TITLE,
                 split="horizontal",
@@ -199,7 +208,7 @@ class TerminalAdapter:
         self,
         session_id: SessionId,
         activity_width_percent: int,
-        anchor_window_id: str | None = None,
+        anchor_window_id: WindowId | None = None,
     ) -> SessionTerminalResult:
         if self.session_panes_are_open(session_id):
             # A toggle-off keeps the tab colour: the session is still running
@@ -261,19 +270,21 @@ class TerminalAdapter:
         window_id = self.window_for_session(session_id)
         if window_id is None:
             return SessionTerminalResult(False, "session has no terminal window")
-        response = self._plugin.tabs.set_tab_color(TabColorSetRequest(window_id, tab_appearance))
+        request = TabColorSetRequest(NativeWindowId(str(window_id)), tab_appearance)
+        response = self._plugin.tabs.set_tab_color(request)
         return SessionTerminalResult(response.succeeded, response.reason)
 
     def clear_session_tab(self, session_id: SessionId) -> SessionTerminalResult:
         window_id = self.window_for_session(session_id)
         if window_id is None:
             return SessionTerminalResult(False, "session has no terminal window")
-        response = self._plugin.tabs.clear_tab_color(TabColorClearRequest(window_id))
+        request = TabColorClearRequest(NativeWindowId(str(window_id)))
+        response = self._plugin.tabs.clear_tab_color(request)
         return SessionTerminalResult(response.succeeded, response.reason)
 
     # --- internals -----------------------------------------------------------
     @staticmethod
-    def _pane_command(kind: str, session_id: str) -> tuple[str, ...]:
+    def _pane_command(kind: str, session_id: SessionId) -> tuple[str, ...]:
         """The argv a terminal runs for one pane.
 
         The daemon's address is PASSED, not shared: a pane imports nothing of
@@ -307,11 +318,12 @@ class TerminalAdapter:
                 outcomes.append(self._plugin.panes.close_pane(PaneCloseRequest(pane.window_id)))
         session_window_id = self.window_for_session(session_id)
         if clear_tab and session_window_id is not None:
+            native_session_window_id = NativeWindowId(str(session_window_id))
             outcomes.append(
-                self._plugin.tabs.clear_tab_color(TabColorClearRequest(session_window_id))
+                self._plugin.tabs.clear_tab_color(TabColorClearRequest(native_session_window_id))
             )
             outcomes.append(self._plugin.metadata.tag_window(
-                WindowTagRequest(session_window_id, {SESSION_WINDOW_TAG: ""})
+                WindowTagRequest(native_session_window_id, {SESSION_WINDOW_TAG: ""})
             ))
         return self._combined(outcomes, "terminal pane close failed")
 
@@ -338,19 +350,19 @@ class TerminalAdapter:
         return next((window for window in self._plugin.metadata.windows()
                      if window.tags.get(tag) == str(session_id)), None)
 
-    def _window(self, window_id: str) -> WindowInfo | None:
+    def _window(self, window_id: NativeWindowId) -> WindowInfo | None:
         return next((window for window in self._plugin.metadata.windows()
                      if window.window_id == window_id), None)
 
-    def _tab_windows(self, window_id: str | None) -> tuple[WindowInfo, ...]:
+    def _tab_windows(self, window_id: NativeWindowId | None) -> tuple[WindowInfo, ...]:
         """The windows of one tab: the tab holding `window_id`, or — when no
         window is named (a caller with no terminal environment of its own) —
         the focused terminal's active tab."""
         windows = self._plugin.metadata.windows()
-        named = window_id or self.current_window()
+        named = window_id or self._plugin.metadata.current_window_id()
         if named:
             tab_id = next((window.tab_id for window in windows
-                           if window.window_id == str(named)), None)
+                           if window.window_id == named), None)
             if tab_id is not None:
                 return tuple(window for window in windows if window.tab_id == tab_id)
         focused = tuple(window for window in windows if window.tab_is_focused)

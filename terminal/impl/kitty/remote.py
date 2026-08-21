@@ -16,6 +16,8 @@ import shutil
 import time
 from typing import Any
 
+from terminal.models.values import WindowId
+
 # The variable kitty exports into every process it starts in a window. Named
 # rather than inlined because a stdlib-only client observes its own window from
 # INSIDE it and cannot import a plugin to ask: its copy of this name
@@ -209,7 +211,7 @@ class KittyRemote:
         except Exception:
             return False
 
-    def get_text(self, win_id: str, extent: str = "screen", ansi: bool = False) -> str | None:
+    def get_text(self, win_id: WindowId, extent: str = "screen", ansi: bool = False) -> str | None:
         """`kitten @ get-text` for a window, or None on failure. extent="screen"
         is the VISIBLE viewport — verified live: a window scrolled up returns the
         scrolled-to rows, not the live screen's bottom — which is what lets the

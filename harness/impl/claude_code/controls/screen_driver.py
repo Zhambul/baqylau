@@ -6,6 +6,7 @@ import time
 from collections.abc import Callable
 from typing import Protocol
 
+from domain.ids import WindowId
 from terminal.contract import TerminalPlugin
 
 POLL_SECONDS = 0.15
@@ -18,16 +19,16 @@ class ScreenDriver(Protocol):
     terminal: TerminalPlugin
 
     def get_text(
-        self, window_id: str, extent: str = "screen", ansi: bool = False
+        self, window_id: WindowId, extent: str = "screen", ansi: bool = False
     ) -> str | None: ...
-    def send_key(self, window_id: str, *keys: str) -> bool: ...
-    def send_text(self, window_id: str, text: str) -> bool: ...
-    def paste_text(self, window_id: str, text: str) -> bool: ...
+    def send_key(self, window_id: WindowId, *keys: str) -> bool: ...
+    def send_text(self, window_id: WindowId, text: str) -> bool: ...
+    def paste_text(self, window_id: WindowId, text: str) -> bool: ...
 
 
 def poll_until(
     screen_driver: ScreenDriver,
-    window_id: str,
+    window_id: WindowId,
     predicate: Callable[[str], object],
     timeout: float,
     sleep: Callable[[float], None] = time.sleep,

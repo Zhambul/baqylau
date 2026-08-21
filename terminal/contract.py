@@ -48,7 +48,7 @@ from terminal.models.tabs import (
     TabRenameRequest,
     TabRenameResponse,
 )
-from terminal.models.values import WindowInfo
+from terminal.models.values import WindowId, WindowInfo
 from terminal.models.viewport import (
     ScreenReadRequest,
     ScreenReadResponse,
@@ -111,7 +111,7 @@ class TerminalMetadata(Protocol):
     def tag_window(self, window_tag_request: WindowTagRequest) -> WindowTagResponse:
         """The write half of the tag read in `windows()`."""
 
-    def current_window_id(self) -> str | None:
+    def current_window_id(self) -> WindowId | None:
         """This process's own window, from the terminal's environment.
 
         The ORIGIN of all window evidence: only a process running INSIDE a

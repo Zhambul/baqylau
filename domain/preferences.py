@@ -13,6 +13,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, TypeAlias
 
+from domain.ids import DeviceId
+
 
 # Which of the harness TUI's three native history densities a session's web
 # mirror is rendered at, in CONTROL order — the segmented control reads densest
@@ -81,7 +83,7 @@ class PushSubscription:
     endpoint: str
     public_key: str
     authentication_secret: str
-    device_id: str
+    device_id: DeviceId
     device_label: str | None
     created_at: float
 

@@ -11,6 +11,7 @@
 from urllib.parse import quote
 
 from dashboard import config
+from domain.ids import SessionId
 
 
 # `retract()` outcome vocabulary. Everything except PENDING is settled — the
@@ -45,7 +46,7 @@ def alert_text(entry: dict[str, str]) -> tuple[str, str, str]:
     return head, detail, url
 
 
-def push_tag(session_id: str) -> str:
+def push_tag(session_id: SessionId) -> str:
     """The notification tag a pushed alert is shown under — the ONE encoding of
     it, shared by the sender, the retraction and the service worker (sw.js
     builds the same string). It is what makes a repeat alert REPLACE its

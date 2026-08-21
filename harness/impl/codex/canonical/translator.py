@@ -43,9 +43,15 @@ from domain.ids import (
     ActorId,
     AttentionId,
     AssignmentId,
+    CallId,
     MessageId,
+    ModelId,
+    QuestionId,
+    ReasoningId,
     ShellId,
+    ShellNativeId,
     TaskId,
+    TaskListId,
     TurnId,
 )
 from domain.values import (
@@ -203,7 +209,9 @@ class CodexCanonicalTranslator(HarnessTranslator):
         return os.path.realpath(raw_event.source_name)
 
     @staticmethod
-    def _collaboration_call_from_document(document: dict[str, Any], call_id: str) -> tuple[str, dict[str, Any]] | None:
+    def _collaboration_call_from_document(
+        document: dict[str, Any], call_id: CallId
+    ) -> tuple[str, dict[str, Any]] | None:
         payload = document.get("payload") or {}
         if not (
             document.get("type") == "response_item"
@@ -225,7 +233,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
             arguments = {}
         return str(payload["name"]), arguments if isinstance(arguments, dict) else {}
 
-    def _collaboration_call(self, raw_event: RawEvent, call_id: str) -> tuple[str, dict[str, Any]] | None:
+    def _collaboration_call(self, raw_event: RawEvent, call_id: CallId) -> tuple[str, dict[str, Any]] | None:
         """Resolve the preceding call without scanning historical rollout data."""
         source_path = os.path.realpath(raw_event.source_name)
         key = (source_path, call_id)
@@ -254,7 +262,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
         return None
 
     @staticmethod
-    def _call_from_document(document: dict[str, Any], call_id: str) -> dict[str, Any] | bool | None:
+    def _call_from_document(document: dict[str, Any], call_id: CallId) -> dict[str, Any] | bool | None:
         """The parsed call this output belongs to.
 
         None means this is not the call being sought; False means it is the
@@ -275,7 +283,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
             return False
         return record
 
-    def _call_record(self, raw_event: RawEvent, call_id: str) -> dict[str, Any] | None:
+    def _call_record(self, raw_event: RawEvent, call_id: CallId) -> dict[str, Any] | None:
         """Pair an output with the call that opened it.
 
         The in-memory answer handles the normal adjacent call/output pair. The
@@ -569,10 +577,10 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 occurred_at,
             )]
         if kind in ("reasoning", "think"):
-            payload = ReasoningCreated(native_identity, content(record["text"], markdown=True))
+            payload = ReasoningCreated(ReasoningId(native_identity), content(record["text"], markdown=True))
             return [event(raw_event, "reasoning", native_identity, "created", payload, occurred_at=occurred_at)]
         if kind == "collaboration_call":
-            call_id = str(record.get("call_id") or "")
+            call_id = CallId(str(record.get("call_id") or ""))
             # Fetched once and then tested: the isinstance guard and the value
             # it guards were two separate .get() calls, so the check proved
             # nothing about the thing actually stored.
@@ -583,7 +591,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
             )
             return []
         if kind == "actor_activity":
-            call_id = str(record.get("call_id") or "")
+            call_id = CallId(str(record.get("call_id") or ""))
             call = self._collaboration_call(raw_event, call_id)
             if call is None:
                 raise TranslationError(f"Codex actor activity has no collaboration call: {call_id or '<missing>'}")
@@ -658,11 +666,11 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 occurred_at=occurred_at,
             )]
         if kind == "goal_tool":
-            call_id = str(record.get("call_id") or native_identity)
+            call_id = CallId(str(record.get("call_id") or native_identity))
             self._semantic_tool_calls.add((self._source_key(raw_event), call_id))
             return []
         if kind == "task_list":
-            call_id = str(record.get("call_id") or native_identity)
+            call_id = CallId(str(record.get("call_id") or native_identity))
             source_key = self._source_key(raw_event)
             self._semantic_tool_calls.add((source_key, call_id))
             plan_key = (str(raw_event.session_id), str(raw_event.actor_id))
@@ -690,7 +698,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 "task_list",
                 str(raw_event.actor_id),
                 f"changed:{call_id}",
-                TaskListChanged(str(raw_event.actor_id), tuple(current)),
+                TaskListChanged(TaskListId(str(raw_event.actor_id)), tuple(current)),
                 occurred_at=occurred_at,
             )]
             for task_id, task in current.items():
@@ -703,7 +711,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
             self._plan_tasks[plan_key] = current
             return events
         if kind in ("exec", "tool"):
-            call_id = str(record.get("call_id") or native_identity)
+            call_id = CallId(str(record.get("call_id") or native_identity))
             # Remembered whichever kind it is: the output that lands later is
             # only meaningful as this call's output (see `_call_record`).
             self._call_records[(self._source_key(raw_event), call_id)] = record
@@ -730,7 +738,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
             if known_shell_id is None:
                 raise TranslationError(f"Codex write_stdin references unknown process session: {process_id}")
             shell_id = known_shell_id
-            call_id = str(record.get("call_id") or native_identity)
+            call_id = CallId(str(record.get("call_id") or native_identity))
             self._continuation_shells[(source_key, call_id)] = shell_id
             text = str(record.get("text") or "")
             if not text:
@@ -747,7 +755,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 occurred_at=occurred_at,
             )]
         if kind == "exec_result":
-            call_id = str(record.get("call_id") or native_identity)
+            call_id = CallId(str(record.get("call_id") or native_identity))
             source_key = self._source_key(raw_event)
             if (source_key, call_id) in self._semantic_tool_calls:
                 return []
@@ -801,7 +809,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
                         "shell",
                         str(shell_id),
                         "backgrounded",
-                        ShellBackgrounded(shell_id, process_id or None),
+                        ShellBackgrounded(shell_id, ShellNativeId(process_id) if process_id else None),
                         occurred_at=occurred_at,
                     ))
                 output = str(record.get("output") or "")
@@ -938,7 +946,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 changed = self._selections.model(
                     raw_event.session_id,
                     raw_event.actor_id,
-                    model_reference(record["model"]),
+                    model_reference(ModelId(record["model"])),
                     "reported_by_harness",
                 )
                 if changed is not None:
@@ -981,7 +989,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
         if kind == "ask":
             questions = tuple(
                 AttentionPrompt(
-                    prompt_id=question.get("id") or str(index),
+                    prompt_id=QuestionId(question.get("id") or str(index)),
                     title=question.get("header") or None,
                     prompt=question.get("question") or "",
                     multiple=False,
@@ -1025,7 +1033,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
     def _tool_result(
         self,
         raw_event: RawEvent,
-        call_id: str,
+        call_id: CallId,
         call_record: dict[str, Any],
         result: dict[str, Any],
         occurred_at: float | None,
