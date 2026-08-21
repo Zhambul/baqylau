@@ -24,12 +24,26 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Callable
+from collections.abc import Mapping
+from typing import Callable, Final
 
 from audit.recorder import AuditRecorder
-from domain.events import CanonicalEvent, EventPayload
+from domain.entries import (
+    EntryBody,
+    EntryTypeName,
+    FileBody,
+    MessageBody,
+    ReasoningBody,
+    SearchBody,
+    SessionEntry,
+    ShellFinishedBody,
+    ShellOutputBody,
+    WebBody,
+)
+from domain.events import EVENT_TYPES, CanonicalEvent, EventPayload
 from domain.ids import SessionId
 from domain.sessiondata import ActorFacts
+from domain.values import Content, content_text
 from engine.sessiondata.contract import (
     AggregateState,
     AppliedActorListener,
@@ -43,6 +57,41 @@ from repository.contract.session_data import SessionDataChanges, SessionDataRepo
 
 TICK_INTERVAL_SECONDS = 0.25
 REACTION_BATCH_SIZE = 500
+
+# Body-carrying entry kinds — the ones a reader clicks open expecting to find
+# something — and the one field on each body that IS the content. A kind
+# left out here is allowed to carry nothing: a marker, a note, or a start
+# with no finish yet (`domain/entries.py` names the body of each).
+EMPTY_BODY_SUSPECT: Final[Mapping[EntryTypeName, str]] = {
+    "message": "content",         # the message itself
+    "reasoning": "content",       # the thinking a reader expands to read
+    "shell_output": "content",    # the chunk that IS the entry
+    "shell_finished": "result",   # the output a non-streaming harness attaches to its finish
+    "file": "content",            # the diff, or the file's text
+    "search": "result",           # what the search found
+    "web": "result",              # what the fetch returned
+}
+
+
+def _content_field(entry_body: EntryBody) -> Content | None:
+    """The content named by `EMPTY_BODY_SUSPECT` for this body, or None if
+    the field itself is unset — which the caller checks against the mapping
+    first, so this only runs for a kind that is supposed to carry one."""
+    if isinstance(entry_body, MessageBody):
+        return entry_body.content
+    if isinstance(entry_body, ReasoningBody):
+        return entry_body.content
+    if isinstance(entry_body, ShellOutputBody):
+        return entry_body.content
+    if isinstance(entry_body, ShellFinishedBody):
+        return entry_body.result
+    if isinstance(entry_body, FileBody):
+        return entry_body.content
+    if isinstance(entry_body, SearchBody):
+        return entry_body.result
+    if isinstance(entry_body, WebBody):
+        return entry_body.result
+    return None
 
 
 class ReactionLoop:
@@ -162,8 +211,11 @@ class ReactionLoop:
             after = before
             for writer in self.writers:
                 after = writer.write(canonical_event, after)
+            entry = self.entry_writer.entry(canonical_event)
+            if entry is not None:
+                self._audit_empty_body(canonical_event, entry)
             changes = SessionDataChanges(
-                entry=self.entry_writer.entry(canonical_event),
+                entry=entry,
                 session=after.session if after.session != before.session else None,
                 actors=_changed_actors(before, after),
             )
@@ -205,6 +257,33 @@ class ReactionLoop:
         try:
             self.audit.error(
                 str(context.get("session_id", "")), f"reactions ({where})", context
+            )
+        except Exception:
+            pass
+
+    def _audit_empty_body(
+        self, canonical_event: CanonicalEvent[EventPayload], session_entry: SessionEntry
+    ) -> None:
+        """Trace a fold that produced a body-carrying entry with nothing in
+        it: no exception, a row that applies, and a reader who expands it to
+        find nothing. Runs once, because an entry is folded once — and never
+        blocks or skips the entry, which still applies unchanged; this only
+        leaves a trace pointing at the fact that caused it.
+        """
+        if session_entry.entry_type not in EMPTY_BODY_SUSPECT:
+            return
+        content = _content_field(session_entry.body)
+        if content is None or content_text(content).strip() != "":
+            return
+        context = {
+            **_context(canonical_event),
+            "entry_id": str(session_entry.entry_id),
+            "entry_type": session_entry.entry_type,
+            "event_type": EVENT_TYPES[type(canonical_event.payload)],
+        }
+        try:
+            self.audit.error(
+                str(canonical_event.session_id), "entry fold (empty body)", context
             )
         except Exception:
             pass

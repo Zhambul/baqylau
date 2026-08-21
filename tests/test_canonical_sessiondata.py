@@ -1016,6 +1016,44 @@ def test_a_writer_that_raises_is_audited_and_the_loop_carries_on(tmp_path):
     assert read_model.progress() == 0
 
 
+def test_a_body_carrying_entry_folded_empty_writes_one_audit_row(tmp_path):
+    """The last silent shape: an entry a reader expands expecting content
+    lands empty, with no exception and a 200 for the fold. The row still
+    applies — this only leaves a trace pointing back at the fact that made
+    it, so the cause stays attributable."""
+    loop, read_model, audit = loop_over(
+        tmp_path,
+        (*alive(), MessageCreated(MessageId("m1"), "assistant", TextContent(""), "end_turn", None)),
+    )
+    loop.tick()
+
+    entries = read_model.entries_page(SESSION, limit=10).items
+    assert [entry.entry_type for entry in entries] == ["message"]
+    assert [where for where, _context in audit.failures] == ["entry fold (empty body)"]
+    _where, context = audit.failures[0]
+    assert context["entry_id"] == str(entries[0].entry_id)
+    assert context["entry_type"] == "message"
+    assert context["event_type"] == "message.created"
+    assert context["session_id"] == str(SESSION)
+
+
+def test_a_legitimately_empty_marker_writes_no_audit_row(tmp_path):
+    """A turn marker carries nothing by design, so it must never trip the
+    empty-body trace meant for the kinds a reader expects content in."""
+    loop, _read_model, audit = loop_over(tmp_path, (*alive(), TurnStarted(MessageId("m1"))))
+    loop.tick()
+    assert audit.failures == []
+
+
+def test_a_body_with_content_writes_no_audit_row(tmp_path):
+    loop, _read_model, audit = loop_over(
+        tmp_path,
+        (*alive(), MessageCreated(MessageId("m1"), "assistant", TextContent("hi"), "end_turn", None)),
+    )
+    loop.tick()
+    assert audit.failures == []
+
+
 # --- what a committed change causes -------------------------------------------
 
 
