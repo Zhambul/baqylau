@@ -18,13 +18,16 @@ import pytest
 
 from domain.entries import (
     EntryBody,
+    FileState,
     MessageBody,
     PlanProposedBody,
     PlanResolvedBody,
     QuestionAnsweredBody,
     QuestionAskedBody,
+    RunState,
     SessionEntry,
     ShellStartedBody,
+    TurnState,
 )
 from domain.ids import (
     AccountId,
@@ -58,10 +61,19 @@ from domain.values import (
     AttentionAnswer,
     AttentionChoice,
     AttentionPrompt,
+    ExecutionMode,
+    FileAction,
+    MessagePhase,
+    MessageRole,
     ModelReference,
+    OutputMode,
+    PlanState,
+    ProgressStream,
     StructuredContent,
+    TaskState,
     TextContent,
     TokenUsage,
+    WorktreeAction,
 )
 from api.sessiondata import mapper, streams
 from core.repository import RepositoryStatus
@@ -135,7 +147,7 @@ def test_the_snapshot_carries_the_facts_the_world_state_and_one_cursor():
         session=replace(
             FACTS,
             goal=SessionGoal("ship the redesign", False),
-            tasks=(SessionTask(TaskId("t1"), "Fix the reconnect", None, "in_progress", LEAD),),
+            tasks=(SessionTask(TaskId("t1"), "Fix the reconnect", None, TaskState.IN_PROGRESS, LEAD),),
         ),
         actors=(ACTOR,),
         cursor=4812,
@@ -251,7 +263,7 @@ def test_the_writers_own_memory_never_reaches_a_client():
 def test_an_entry_carries_its_envelope_and_its_typed_body():
     response = mapper.entry(
         entry(
-            MessageBody(MessageId("m1"), "assistant", "end_turn", TextContent("Done.")),
+            MessageBody(MessageId("m1"), MessageRole.ASSISTANT, MessagePhase.END_TURN, TextContent("Done.")),
         )
     )
     assert response.entry_id == "event-one"
@@ -267,12 +279,16 @@ def test_content_says_how_to_draw_itself():
     """Markdown or not is a fact the harness told us; a client that had to guess
     by role would render a plain-text tool result as markdown."""
     markdown = mapper.entry(
-        entry(MessageBody(MessageId("m1"), "assistant", "end_turn", TextContent("**bold**", "text/markdown")))
+        entry(
+            MessageBody(
+                MessageId("m1"), MessageRole.ASSISTANT, MessagePhase.END_TURN, TextContent("**bold**", "text/markdown")
+            )
+        )
     )
     assert markdown.body.content.media_type == "text/markdown"
 
     structured = mapper.entry(
-        entry(ShellStartedBody(ShellId("sh1"), StructuredContent('{"b":2,"a":1}'), "foreground"))
+        entry(ShellStartedBody(ShellId("sh1"), StructuredContent('{"b":2,"a":1}'), ExecutionMode.FOREGROUND))
     )
     # A document in a shape we do not define is laid out as the text a person
     # reads — the only thing a client can do with it.
@@ -323,23 +339,23 @@ def _sample(body_type):
     """One of each body, built with the least it accepts."""
     samples = {
         "TurnStartedBody": lambda: body_type(),
-        "TurnFinishedBody": lambda: body_type("finished"),
-        "MessageBody": lambda: body_type(MessageId("m"), "user", "prompt", TextContent("x")),
+        "TurnFinishedBody": lambda: body_type(TurnState.FINISHED),
+        "MessageBody": lambda: body_type(MessageId("m"), MessageRole.USER, MessagePhase.PROMPT, TextContent("x")),
         "ReasoningBody": lambda: body_type("r", TextContent("x")),
-        "ShellStartedBody": lambda: body_type(ShellId("s"), TextContent("ls"), "foreground"),
-        "ShellOutputBody": lambda: body_type(ShellId("s"), "output", "append", TextContent("x")),
+        "ShellStartedBody": lambda: body_type(ShellId("s"), TextContent("ls"), ExecutionMode.FOREGROUND),
+        "ShellOutputBody": lambda: body_type(ShellId("s"), ProgressStream.OUTPUT, OutputMode.APPEND, TextContent("x")),
         "ShellBackgroundedBody": lambda: body_type(ShellId("s")),
-        "ShellFinishedBody": lambda: body_type(ShellId("s"), "succeeded"),
-        "FileBody": lambda: body_type("/p", "read", "succeeded"),
-        "SearchBody": lambda: body_type("Grep", TextContent("q"), "succeeded"),
-        "WebBody": lambda: body_type("https://x", "succeeded"),
-        "WorktreeBody": lambda: body_type("entered", "succeeded"),
+        "ShellFinishedBody": lambda: body_type(ShellId("s"), RunState.SUCCEEDED),
+        "FileBody": lambda: body_type("/p", FileAction.READ, FileState.SUCCEEDED),
+        "SearchBody": lambda: body_type("Grep", TextContent("q"), FileState.SUCCEEDED),
+        "WebBody": lambda: body_type("https://x", FileState.SUCCEEDED),
+        "WorktreeBody": lambda: body_type(WorktreeAction.ENTERED, FileState.SUCCEEDED),
         "SkillStartedBody": lambda: body_type("k", "audit-debug"),
-        "SkillFinishedBody": lambda: body_type("k", "succeeded"),
+        "SkillFinishedBody": lambda: body_type("k", RunState.SUCCEEDED),
         "QuestionAskedBody": lambda: body_type(AttentionId("a"), ()),
         "QuestionAnsweredBody": lambda: body_type(AttentionId("a")),
         "PlanProposedBody": lambda: body_type(AttentionId("a"), TextContent("plan")),
-        "PlanResolvedBody": lambda: body_type(AttentionId("a"), "approved"),
+        "PlanResolvedBody": lambda: body_type(AttentionId("a"), PlanState.APPROVED),
         "CompactionStartedBody": lambda: body_type(),
         "CompactionFinishedBody": lambda: body_type(),
         "AssignmentStartedBody": lambda: body_type("as"),
@@ -367,7 +383,7 @@ def test_a_page_taken_at_the_snapshots_cursor_and_a_stream_from_it_never_overlap
             SESSION,
             SessionDataChanges(
                 entry=entry(
-                    MessageBody(MessageId("m%d" % ordinal), "user", "prompt", TextContent("go")),
+                    MessageBody(MessageId("m%d" % ordinal), MessageRole.USER, MessagePhase.PROMPT, TextContent("go")),
                     entry_id=CanonicalEventId("event-%d" % ordinal),
                 )
             ),
@@ -385,7 +401,7 @@ def test_a_page_taken_at_the_snapshots_cursor_and_a_stream_from_it_never_overlap
         SESSION,
         SessionDataChanges(
             entry=entry(
-                MessageBody(MessageId("m4"), "user", "prompt", TextContent("more")),
+                MessageBody(MessageId("m4"), MessageRole.USER, MessagePhase.PROMPT, TextContent("more")),
                 entry_id=CanonicalEventId("event-4"),
             )
         ),
@@ -439,7 +455,7 @@ def test_a_pending_question_is_derived_and_stops_being_pending_when_answered(tmp
         SESSION,
         SessionDataChanges(
             entry=entry(
-                PlanResolvedBody(AttentionId("att-2"), "approved"),
+                PlanResolvedBody(AttentionId("att-2"), PlanState.APPROVED),
                 entry_id=CanonicalEventId("resolved-2"),
             )
         ),
@@ -454,7 +470,7 @@ def test_the_entries_of_one_kind_are_read_without_paging_the_whole_feed(tmp_path
         SESSION,
         SessionDataChanges(
             entry=entry(
-                MessageBody(MessageId("m1"), "user", "prompt", TextContent("go")),
+                MessageBody(MessageId("m1"), MessageRole.USER, MessagePhase.PROMPT, TextContent("go")),
                 entry_id=CanonicalEventId("message-1"),
             )
         ),
@@ -464,7 +480,7 @@ def test_the_entries_of_one_kind_are_read_without_paging_the_whole_feed(tmp_path
         SESSION,
         SessionDataChanges(
             entry=entry(
-                ShellStartedBody(ShellId("sh1"), TextContent("make test"), "foreground"),
+                ShellStartedBody(ShellId("sh1"), TextContent("make test"), ExecutionMode.FOREGROUND),
                 entry_id=CanonicalEventId("shell-1"),
             )
         ),
@@ -488,7 +504,7 @@ def test_the_last_activity_is_the_newest_entry_not_a_stored_clock(tmp_path):
         SESSION,
         SessionDataChanges(
             entry=entry(
-                MessageBody(MessageId("m1"), "user", "prompt", TextContent("go")),
+                MessageBody(MessageId("m1"), MessageRole.USER, MessagePhase.PROMPT, TextContent("go")),
                 occurred_at=1755599999.0,
             )
         ),
@@ -509,7 +525,7 @@ def test_the_wire_shapes_survive_a_round_trip_through_the_store(tmp_path):
         SessionDataChanges(
             session=FACTS,
             actors=(ACTOR,),
-            entry=entry(ShellStartedBody(ShellId("sh9"), TextContent("make test"), "background")),
+            entry=entry(ShellStartedBody(ShellId("sh9"), TextContent("make test"), ExecutionMode.BACKGROUND)),
         ),
         1,
     )
@@ -567,8 +583,8 @@ def test_a_session_stream_sends_one_frame_per_poll_with_news(tmp_path):
         read_model.apply(
             SESSION,
             SessionDataChanges(
-                entry=entry(MessageBody(MessageId("m1"), "user", "prompt", TextContent("go"))),
-                actors=(replace(ACTOR, status="thinking"),),
+                entry=entry(MessageBody(MessageId("m1"), MessageRole.USER, MessagePhase.PROMPT, TextContent("go"))),
+                actors=(replace(ACTOR, status=ActorStatus.THINKING),),
             ),
             2,
         )
@@ -602,7 +618,7 @@ def test_a_stream_resumes_from_the_id_the_client_last_saw(tmp_path):
         SESSION,
         SessionDataChanges(
             entry=entry(
-                MessageBody(MessageId("m1"), "user", "prompt", TextContent("first")),
+                MessageBody(MessageId("m1"), MessageRole.USER, MessagePhase.PROMPT, TextContent("first")),
                 entry_id=CanonicalEventId("event-1"),
             )
         ),
@@ -613,7 +629,7 @@ def test_a_stream_resumes_from_the_id_the_client_last_saw(tmp_path):
         SESSION,
         SessionDataChanges(
             entry=entry(
-                MessageBody(MessageId("m2"), "user", "prompt", TextContent("second")),
+                MessageBody(MessageId("m2"), MessageRole.USER, MessagePhase.PROMPT, TextContent("second")),
                 entry_id=CanonicalEventId("event-2"),
             )
         ),
@@ -666,7 +682,7 @@ def test_the_global_stream_carries_every_session_and_no_entries(tmp_path):
     read_model.apply(
         SESSION,
         SessionDataChanges(
-            entry=entry(MessageBody(MessageId("m1"), "user", "prompt", TextContent("go")))
+            entry=entry(MessageBody(MessageId("m1"), MessageRole.USER, MessagePhase.PROMPT, TextContent("go")))
         ),
         3,
     )

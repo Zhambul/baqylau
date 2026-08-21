@@ -102,7 +102,7 @@ from domain.ids import (
     TurnId,
     WindowId,
 )
-from domain.values import AccountReference, AttentionPrompt, ModelReference, TextContent
+from domain.values import AccountReference, AttentionPrompt, ModelReference, ShellFollowUntil, TextContent
 from harness.impl.claude_code.canonical.translator import ClaudeCanonicalTranslator
 from harness.impl.claude_code.canonical.sources import (
     ClaudeRawEventSources,
@@ -1070,7 +1070,7 @@ def test_claude_hook_returns_native_pretool_output_and_an_output_location(monkey
         initial_size=0,
         initial_modified_at=0,
         wait_for_source_change=False,
-        until="operation_finished",
+        until=ShellFollowUntil.SESSION_FINISHED,
     )
     monkeypatch.setattr(
         claude_hooks.foreground,
@@ -1088,7 +1088,7 @@ def test_claude_hook_returns_native_pretool_output_and_an_output_location(monkey
     assert directive.source_type == "output_location"
     body = json.loads(directive.payload)
     assert body["source_path"] == "/work/out"
-    assert body["until"] == "operation_finished"
+    assert body["until"] == ShellFollowUntil.SESSION_FINISHED
 
 
 def test_the_hook_row_carries_what_the_delivery_observed():

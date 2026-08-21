@@ -28,7 +28,8 @@ from harness.models import RawEvent, Session, TranslationResult
 from notify.presence import Presence
 from domain.events import CanonicalEvent, MessageCreated, SessionStarted
 from domain.ids import ActorId, CanonicalEventId, HarnessName, MessageId, RawEventId, SessionId
-from domain.values import TextContent
+from domain.records import RecordedTranslationDecision
+from domain.values import MessagePhase, MessageRole, TextContent
 from repository.impl.sqlite.raw_event_audits import SqliteRawEventAuditRepository
 
 SESSION_ID = SessionId("session-one")
@@ -78,9 +79,9 @@ def _application():
             "message",
             MessageCreated(
                 MessageId("message-one"),
-                "assistant",
+                MessageRole.ASSISTANT,
                 TextContent("hello"),
-                "end_turn",
+                MessagePhase.END_TURN,
                 None,
             ),
         ),
@@ -102,7 +103,7 @@ def _application():
                 b"{}",
             ),
             "1",
-            TranslationResult((event,), "translated"),
+            TranslationResult((event,), RecordedTranslationDecision.TRANSLATED),
         )
     # The read model is what every read route answers from, and the reaction
     # loop is what fills it — so a seeded graph runs the real pipeline once
@@ -742,9 +743,9 @@ def _record_agent_message(application):
         harness_process_id=None,
         payload=MessageCreated(
             MessageId("message-two"),
-            "assistant",
+            MessageRole.ASSISTANT,
             TextContent("hello from the agent"),
-            "end_turn",
+            MessagePhase.END_TURN,
             None,
         ),
     )
@@ -764,7 +765,7 @@ def _record_agent_message(application):
             b"{}",
         ),
         "1",
-        TranslationResult((event,), "translated"),
+        TranslationResult((event,), RecordedTranslationDecision.TRANSLATED),
     )
 
 

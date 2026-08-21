@@ -84,7 +84,16 @@ from domain.ids import (
     WindowId,
     stable_event_id,
 )
-from domain.values import ActorRole, MediaType, MessagePhase, MessageRole, Outcome, StructuredContent, TextContent
+from domain.values import (
+    ActorRole,
+    MediaType,
+    MessagePhase,
+    MessageRole,
+    Outcome,
+    ShellFollowUntil,
+    StructuredContent,
+    TextContent,
+)
 from repository.model.facts import CanonicalEventRow
 from audit.recorder import AuditRecorder
 from harness.registry import HarnessRegistry, HarnessRegistryError
@@ -1059,7 +1068,7 @@ def test_watchable_is_every_unfinished_session_without_a_count_limit(tmp_path):
         10.0,
         None,
         None,
-        SessionFinished("succeeded", None),
+        SessionFinished(Outcome.SUCCEEDED, None),
     )
     SqliteRawEventRepository(main_database(database_path)).record((
         replace(raw_observation("raw-finish"), session_id=SessionId("session-3")),
@@ -1304,7 +1313,7 @@ def test_output_location_directives_run_the_whole_foreground_lifecycle(tmp_path)
         10.0,
         None,
         None,
-        ShellFinished(ShellId("operation-1"), "succeeded", None, None),
+        ShellFinished(ShellId("operation-1"), Outcome.SUCCEEDED, None, None),
     )
     harnesses.register(example_plugin(TranslationResult((finished,), "translated")))
     interpreter, sessions, recorder, store, shell_output = build_interpreter(
@@ -1329,7 +1338,7 @@ def test_output_location_directives_run_the_whole_foreground_lifecycle(tmp_path)
         initial_size=0,
         initial_modified_at=0,
         wait_for_source_change=False,
-        until="shell_finished",
+        until=ShellFollowUntil.SHELL_FINISHED,
     )
     recorder.record((
         output_location_raw_event(context, "example", located, payload=encode_document(located)),
@@ -1377,17 +1386,17 @@ def test_a_background_following_survives_operation_finished_until_the_session_en
         initial_size=0,
         initial_modified_at=0,
         wait_for_source_change=False,
-        until="session_finished",
+        until=ShellFollowUntil.SESSION_FINISHED,
     )
     reaction.react(replace(canonical_message(), payload=located))
     reaction.react(replace(
         canonical_message(),
-        payload=ShellFinished(ShellId("operation-bg"), "succeeded", None, None),
+        payload=ShellFinished(ShellId("operation-bg"), Outcome.SUCCEEDED, None, None),
     ))
     assert len(shell_output.find_for_session(SessionId("session-one"))) == 1
 
     sessions.save("example", example_session())
-    reaction.react(replace(canonical_message(), payload=SessionFinished("succeeded", None)))
+    reaction.react(replace(canonical_message(), payload=SessionFinished(Outcome.SUCCEEDED, None)))
 
     assert shell_output.find_for_session(SessionId("session-one")) == ()
     assert output_path.exists()  # the harness's own file is never deleted by us
@@ -1414,13 +1423,13 @@ def test_the_background_completion_fact_ends_the_following_early(tmp_path):
         initial_size=0,
         initial_modified_at=0,
         wait_for_source_change=False,
-        until="session_finished",
+        until=ShellFollowUntil.SESSION_FINISHED,
     )
     reaction.react(replace(canonical_message(), payload=located))
     # the launch-time operation.finished must NOT end a background following…
     reaction.react(replace(
         canonical_message(),
-        payload=ShellFinished(ShellId("operation-bg"), "succeeded", None, None),
+        payload=ShellFinished(ShellId("operation-bg"), Outcome.SUCCEEDED, None, None),
     ))
     assert len(shell_output.find_for_session(SessionId("session-one"))) == 1
 

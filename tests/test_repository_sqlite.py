@@ -34,7 +34,7 @@ from domain.ids import (
     TaskId,
     WindowId,
 )
-from domain.sessiondata import ActorFacts, LifecycleState, SessionFacts
+from domain.sessiondata import ActorFacts, ActorStatus, LifecycleState, SessionFacts
 from domain.shells import ShellFollowState, ShellOutputFollowing
 from domain.preferences import (
     NewSessionDraft,
@@ -43,7 +43,15 @@ from domain.preferences import (
     PushSubscription,
 )
 from domain.uploads import StoredUpload
-from domain.values import ActorRole, MessagePhase, MessageRole, ShellFollowUntil, TextContent
+from domain.values import (
+    ActorRole,
+    ExecutionMode,
+    MessagePhase,
+    MessageRole,
+    Outcome,
+    ShellFollowUntil,
+    TextContent,
+)
 from domain.workspace import AnswerSelection, ComposerDraft, ComposerQueue, DialogDraft, QueuedMessage
 from harness.models import AccountUsageSnapshot, RawEvent, Session, TranslationResult, UsageWindowSample
 from repository.errors import EventIdentityConflict, SchemaVersionMismatch
@@ -224,7 +232,7 @@ def test_a_finished_session_leaves_the_watchable_set(main):
         occurred_at=1001.0,
         terminal_window_id=None,
         harness_process_id=None,
-        payload=SessionFinished("succeeded", None),
+        payload=SessionFinished(Outcome.SUCCEEDED, None),
     )
     canonical.record_translation(
         a_raw_event(), "1", TranslationResult((finished,), "translated"), 1001.0
@@ -345,7 +353,7 @@ def test_the_reaction_loops_page_walks_every_session_in_commit_order(main):
                 terminal_window_id=None,
                 harness_process_id=None,
                 payload=MessageCreated(
-                    MessageId(f"m{index}"), "user", TextContent("hi"), "prompt", None
+                    MessageId(f"m{index}"), MessageRole.USER, TextContent("hi"), MessagePhase.PROMPT, None
                 ),
             ),), "translated"),
             1000.0 + index,
@@ -491,7 +499,7 @@ def test_one_counter_stamps_the_entries_and_the_aggregate_revisions_alike(main):
 
     first = store.apply(SESSION, SessionDataChanges(session=A_SESSION, actors=(AN_ACTOR,)), 10)
     second = store.apply(SESSION, SessionDataChanges(entry=an_entry("e1")), 11)
-    third = store.apply(SESSION, SessionDataChanges(actors=(replace(AN_ACTOR, status="working"),)), 12)
+    third = store.apply(SESSION, SessionDataChanges(actors=(replace(AN_ACTOR, status=ActorStatus.WORKING),)), 12)
 
     assert (first, second, third) == (1, 2, 3)
     data = store.read(SESSION)
@@ -554,7 +562,7 @@ def test_the_deltas_answer_only_what_changed_after_a_cursor(main):
     store.apply(SESSION, SessionDataChanges(session=A_SESSION, actors=(AN_ACTOR,)), 1)
     boundary = store.read(SESSION).cursor
     store.apply(SESSION, SessionDataChanges(entry=an_entry("e1")), 2)
-    store.apply(SESSION, SessionDataChanges(actors=(replace(AN_ACTOR, status="working"),)), 3)
+    store.apply(SESSION, SessionDataChanges(actors=(replace(AN_ACTOR, status=ActorStatus.WORKING),)), 3)
 
     delta = store.delta(SESSION, boundary)
     assert [entry.entry_id for entry in delta.entries] == ["e1"]
@@ -581,14 +589,14 @@ def test_an_entry_body_decodes_as_the_shape_its_own_type_names(main):
         SessionDataChanges(
             entry=replace(
                 an_entry("e1"),
-                body=ShellStartedBody(ShellId("sh1"), TextContent("make test"), "background"),
+                body=ShellStartedBody(ShellId("sh1"), TextContent("make test"), ExecutionMode.BACKGROUND),
             )
         ),
         1,
     )
     stored = store.entries_page(SESSION, limit=10).items[0]
     assert stored.entry_type == "shell_started"
-    assert stored.body == ShellStartedBody(ShellId("sh1"), TextContent("make test"), "background")
+    assert stored.body == ShellStartedBody(ShellId("sh1"), TextContent("make test"), ExecutionMode.BACKGROUND)
 
 
 def test_clearing_the_read_model_resets_the_cursor_space_it_handed_out(main):
