@@ -65,6 +65,73 @@ plan_type         # records.py RateLimitsBlock
 originator        # records.py SessionMetaPayload
 item_id           # records.py CommandCompletedRecord (the codex item's own id)
 
+# The same shape, all found by fixing the live e2e drift (a real codex
+# session's rollout carries these; test-drift's kept-dir interpretations
+# named each one) — declared to keep `extra="forbid"`, not read by anything.
+rate_limit_reached_type      # records.py RateLimitsBlock
+spend_control_reached        # records.py RateLimitsBlock
+limit_id                     # records.py RateLimitsBlock
+limit_name                   # records.py RateLimitsBlock
+individual_limit             # records.py RateLimitsBlock
+credits                      # records.py RateLimitsBlock
+has_credits                  # records.py RateLimitCredits
+unlimited                    # records.py RateLimitCredits
+balance                      # records.py RateLimitCredits
+cache_write_input_tokens     # records.py TokenUsageBlock
+reasoning_output_tokens      # records.py TokenUsageBlock
+threadId                     # records.py GoalBlock / ThreadGoalUpdatedPayload
+collaboration_mode_kind      # records.py TaskStartedPayload
+duration_ms                  # records.py TaskCompletePayload / TurnAbortedPayload
+time_to_first_token_ms       # records.py TaskCompletePayload
+developer_instructions       # records.py CollaborationModeSettings / TurnContextPayload
+model_provider_id            # records.py ThreadSettingsBlock
+service_tier                 # records.py ThreadSettingsBlock
+approval_policy               # records.py ThreadSettingsBlock / TurnContextPayload
+approvals_reviewer            # records.py ThreadSettingsBlock / TurnContextPayload
+personality                   # records.py ThreadSettingsBlock / TurnContextPayload
+reasoning_summary             # records.py ThreadSettingsBlock
+active_permission_profile     # records.py ThreadSettingsBlock
+permission_profile            # records.py ThreadSettingsBlock / TurnContextPayload
+secs                          # records.py DurationBlock
+nanos                         # records.py DurationBlock
+parsed_cmd                    # records.py CommandExecutionItem
+current_date                  # records.py TurnContextPayload
+timezone                      # records.py TurnContextPayload
+sandbox_policy                # records.py TurnContextPayload
+user_instructions              # records.py TurnContextPayload
+truncation_policy              # records.py TurnContextPayload
+realtime_active                # records.py TurnContextPayload
+file_system_sandbox_policy     # records.py TurnContextPayload
+workspace_roots                # records.py TurnContextPayload
+comp_hash                      # records.py TurnContextPayload
+multi_agent_version            # records.py TurnContextPayload / SessionMetaPayload
+multi_agent_mode                # records.py TurnContextPayload
+first_window_id                 # records.py CompactedPayload
+window_number                   # records.py CompactedPayload
+commit_hash                     # records.py SessionMetaGit
+repository_url                  # records.py SessionMetaGit
+cli_version                     # records.py SessionMetaPayload
+model_provider                  # records.py SessionMetaPayload
+base_instructions               # records.py SessionMetaPayload
+history_mode                    # records.py SessionMetaPayload
+git                             # records.py SessionMetaPayload
+dynamic_tools                   # records.py SessionMetaPayload
+agent_nickname                  # records.py SessionMetaPayload / ThreadSpawn
+agent_role                      # records.py ThreadSpawn
+forked_from_id                  # records.py SessionMetaPayload
+subagent_history_start_ordinal  # records.py SessionMetaPayload
+encrypted_content               # records.py ReasoningPayload
+namespace                       # records.py FunctionCallPayload
+images          # records.py UserMessagePayload
+local_images    # records.py UserMessagePayload
+text_elements   # records.py UserMessagePayload
+audio           # records.py UserMessagePayload
+local_audio     # records.py UserMessagePayload
+memory_citation # records.py AgentMessagePayload
+results         # records.py WebSearchEndPayload
+completed_at_ms # records.py ItemCompletedPayload
+thread_id       # records.py ItemCompletedPayload
+
 # A TypedDict field read only through dict-literal construction and ["check"]
 # subscripts (askdialog_screen.rows / its dialog callers) — the ANNOTATION is
 # the only bare-name mention, which is what an unused variable looks like to

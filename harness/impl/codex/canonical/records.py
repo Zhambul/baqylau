@@ -60,6 +60,8 @@ class TokenUsageBlock(BaseModel):
     input_tokens: int | None = None
     output_tokens: int | None = None
     cached_input_tokens: int | None = None
+    cache_write_input_tokens: int | None = None
+    reasoning_output_tokens: int | None = None
     total_tokens: int | None = None
 
 
@@ -77,11 +79,24 @@ class RateLimitWindow(BaseModel):
     resets_at: int | None = None
 
 
+class RateLimitCredits(BaseModel):
+    model_config = FOREIGN
+    has_credits: bool | None = None
+    unlimited: bool | None = None
+    balance: float | int | None = None
+
+
 class RateLimitsBlock(BaseModel):
     model_config = FOREIGN
     plan_type: str | None = None
     primary: RateLimitWindow | None = None
     secondary: RateLimitWindow | None = None
+    limit_id: str | None = None
+    limit_name: str | None = None
+    individual_limit: str | int | float | None = None
+    credits: RateLimitCredits | None = None
+    rate_limit_reached_type: str | None = None
+    spend_control_reached: bool | None = None
 
 
 class TokenCountPayload(BaseModel):
@@ -100,12 +115,14 @@ class GoalBlock(BaseModel):
     objective: str | None = None
     status: str | None = None
     reason: str | None = None
+    threadId: HarnessSessionId | None = None
 
 
 class ThreadGoalUpdatedPayload(BaseModel):
     model_config = FOREIGN
     type: Literal["thread_goal_updated"] = "thread_goal_updated"
     goal: GoalBlock | None = None
+    threadId: HarnessSessionId | None = None
 
 
 class EmptyPayload(BaseModel):
@@ -134,6 +151,13 @@ class TaskStartedPayload(BaseModel):
     type: Literal["task_started"] = "task_started"
     started_at: str | int | float | None = None
     turn_id: TurnId | None = None
+    collaboration_mode_kind: str | None = None
+    model_context_window: int | None = None
+
+
+class TaskCompleteError(BaseModel):
+    model_config = FOREIGN
+    message: str | None = None
 
 
 class TaskCompletePayload(BaseModel):
@@ -142,12 +166,41 @@ class TaskCompletePayload(BaseModel):
     completed_at: str | int | float | None = None
     turn_id: TurnId | None = None
     last_agent_message: str | None = None
+    started_at: str | int | float | None = None
+    duration_ms: int | None = None
+    time_to_first_token_ms: int | None = None
+    error: TaskCompleteError | None = None
+
+
+class CollaborationModeSettings(BaseModel):
+    model_config = FOREIGN
+    model: str | None = None
+    reasoning_effort: str | None = None
+    developer_instructions: str | None = None
+
+
+class CollaborationMode(BaseModel):
+    model_config = FOREIGN
+    mode: str | None = None
+    settings: CollaborationModeSettings | None = None
 
 
 class ThreadSettingsBlock(BaseModel):
     model_config = FOREIGN
     model: str | None = None
     reasoning_effort: str | None = None
+    model_provider_id: str | None = None
+    service_tier: str | None = None
+    approval_policy: str | None = None
+    approvals_reviewer: str | None = None
+    cwd: str | None = None
+    personality: str | None = None
+    reasoning_summary: str | None = None
+    collaboration_mode: CollaborationMode | None = None
+    # Deep, vendor-owned policy trees nothing here reads a field of — same
+    # treatment as TurnContextPayload's sandbox/permission fields below.
+    active_permission_profile: dict[str, JsonValue] | None = None
+    permission_profile: dict[str, JsonValue] | None = None
 
 
 class ThreadSettingsAppliedPayload(BaseModel):
@@ -170,6 +223,14 @@ class FileChangeItem(BaseModel):
     id: str | None = None
     status: str | None = None
     changes: dict[str, FileChangeEntry] | None = None
+    stdout: str | None = None
+    stderr: str | None = None
+
+
+class DurationBlock(BaseModel):
+    model_config = FOREIGN
+    secs: int | None = None
+    nanos: int | None = None
 
 
 class CommandExecutionItem(BaseModel):
@@ -183,6 +244,14 @@ class CommandExecutionItem(BaseModel):
     stdout: str | None = None
     stderr: str | None = None
     exit_code: int | None = None
+    command: list[str] | None = None
+    cwd: str | None = None
+    duration: DurationBlock | None = None
+    source: str | None = None
+    # The parser's own guess at the command's shell-builtin shape — never
+    # read here (the raw `command`/`aggregated_output` are); a real vendor
+    # field, still open (module header): its element shape varies by guess.
+    parsed_cmd: list[JsonValue] | None = None
 
 
 class SubAgentActivityItem(BaseModel):
@@ -243,6 +312,8 @@ class ItemCompletedPayload(BaseModel):
     type: Literal["item_completed"] = "item_completed"
     turn_id: TurnId | None = None
     started_at_ms: int | None = None
+    completed_at_ms: int | None = None
+    thread_id: HarnessSessionId | None = None
     item: dict[str, JsonValue] | None = None
 
 
@@ -251,12 +322,24 @@ class TurnAbortedPayload(BaseModel):
     type: Literal["turn_aborted"] = "turn_aborted"
     turn_id: TurnId | None = None
     reason: str | None = None
+    completed_at: str | int | float | None = None
+    duration_ms: int | None = None
+    started_at: str | int | float | None = None
 
 
 class UserMessagePayload(BaseModel):
     model_config = FOREIGN
     type: Literal["user_message"] = "user_message"
     message: str | None = None
+    client_id: str | None = None
+    # Attachment lists — every measured rollout carries them EMPTY, so their
+    # populated element shape is not yet known (module header: declare what
+    # reality allows, not what it might one day be).
+    images: list[JsonValue] | None = None
+    local_images: list[JsonValue] | None = None
+    text_elements: list[JsonValue] | None = None
+    audio: list[JsonValue] | None = None
+    local_audio: list[JsonValue] | None = None
 
 
 class AgentReasoningPayload(BaseModel):
@@ -270,6 +353,8 @@ class AgentMessagePayload(BaseModel):
     type: Literal["agent_message"] = "agent_message"
     message: str | None = None
     phase: str | None = None
+    # Always None in every measured rollout; its populated shape is unknown.
+    memory_citation: JsonValue = None
 
 
 class WebSearchAction(BaseModel):
@@ -282,26 +367,50 @@ class WebSearchEndPayload(BaseModel):
     type: Literal["web_search_end"] = "web_search_end"
     query: str | None = None
     action: WebSearchAction | None = None
+    call_id: CallId | None = None
+    results: list[JsonValue] | None = None
 
 
 # === FOREIGN: the top-level register (rollout.py) ============================
-
-
-class CollaborationModeSettings(BaseModel):
-    model_config = FOREIGN
-    reasoning_effort: str | None = None
-
-
-class CollaborationMode(BaseModel):
-    model_config = FOREIGN
-    settings: CollaborationModeSettings | None = None
+# CollaborationMode/CollaborationModeSettings are declared earlier (the
+# event_msg section above) — codex stamps the SAME `{mode, settings}` shape
+# on task_started/thread_settings_applied AND here, so one model serves all
+# three.
 
 
 class TurnContextPayload(BaseModel):
+    """A `turn_context` top-level record. `model`/`effort`/
+    `collaboration_mode.settings.reasoning_effort` are the only fields
+    rollout._turn_context reads; the rest are real (a live codex-cli 0.147.0
+    rollout) but unread — declared because `extra="forbid"` demands every
+    field codex sends, not only the ones used. The deep policy trees
+    (sandbox/permission/file-system) are GENUINELY open (module header,
+    OPEN_FOREIGN in spirit, `dict[str, JsonValue]` in practice): a vendor
+    policy DSL nothing here has ever read one field of."""
+
     model_config = FOREIGN
     model: str | None = None
     effort: str | None = None
     collaboration_mode: CollaborationMode | None = None
+    turn_id: TurnId | None = None
+    cwd: str | None = None
+    current_date: str | None = None
+    timezone: str | None = None
+    approval_policy: str | None = None
+    sandbox_policy: dict[str, JsonValue] | None = None
+    personality: str | None = None
+    summary: str | None = None
+    user_instructions: str | None = None
+    developer_instructions: str | None = None
+    truncation_policy: dict[str, JsonValue] | None = None
+    permission_profile: dict[str, JsonValue] | None = None
+    realtime_active: bool | None = None
+    file_system_sandbox_policy: dict[str, JsonValue] | None = None
+    workspace_roots: list[str] | None = None
+    comp_hash: str | None = None
+    multi_agent_version: str | None = None
+    approvals_reviewer: str | None = None
+    multi_agent_mode: str | None = None
 
 
 class CompactedPayload(BaseModel):
@@ -313,12 +422,17 @@ class CompactedPayload(BaseModel):
     replacement_history: list[JsonValue] | None = None
     window_id: str | int | None = None
     previous_window_id: str | int | None = None
+    first_window_id: str | int | None = None
+    window_number: int | None = None
 
 
 class ThreadSpawn(BaseModel):
     model_config = FOREIGN
     parent_thread_id: HarnessSessionId | None = None
     agent_path: str | None = None
+    depth: int | None = None
+    agent_nickname: str | None = None
+    agent_role: str | None = None
 
 
 class SubagentSource(BaseModel):
@@ -331,21 +445,66 @@ class SessionMetaSource(BaseModel):
     subagent: SubagentSource | None = None
 
 
+class SessionMetaBaseInstructions(BaseModel):
+    model_config = FOREIGN
+    text: str | None = None
+
+
+class SessionMetaContextWindow(BaseModel):
+    model_config = FOREIGN
+    window_id: str | None = None
+
+
+class SessionMetaGit(BaseModel):
+    """The repository facts codex stamps on a session — `{}` outside a repo,
+    `{commit_hash, branch, repository_url}` inside one (both measured, real
+    local rollouts)."""
+
+    model_config = FOREIGN
+    commit_hash: str | None = None
+    branch: str | None = None
+    repository_url: str | None = None
+
+
 class SessionMetaPayload(BaseModel):
     """A `session_meta` record's `payload` — read by sources.py (rollout
-    ownership / parent-thread discovery) and translator.py (actor naming)."""
+    ownership / parent-thread discovery) and translator.py (actor naming).
+    Most fields below (session_id, cli_version, model_provider, …) are real,
+    measured (a live codex-cli 0.147.0 rollout) but read by NOTHING here —
+    declared anyway because `extra="forbid"` demands it of every field codex
+    actually sends, not only the ones this translator uses."""
 
     model_config = FOREIGN
     id: str | None = None
+    session_id: HarnessSessionId | None = None
     cwd: str | None = None
     timestamp: str | None = None
     thread_source: str | None = None
     parent_thread_id: HarnessSessionId | None = None
     # A subagent's spawn detail (SessionMetaSource) OR a plain string naming
-    # WHAT started the session ("vscode", the IDE extension) — codex uses the
-    # one field for both.
+    # WHAT started the session ("vscode", the IDE extension, "startup" the
+    # CLI itself) — codex uses the one field for all three.
     source: SessionMetaSource | str | None = None
     originator: str | None = None
+    cli_version: str | None = None
+    model_provider: str | None = None
+    base_instructions: SessionMetaBaseInstructions | None = None
+    history_mode: str | None = None
+    context_window: SessionMetaContextWindow | None = None
+    git: SessionMetaGit | None = None
+    # The MCP-style tool manifest codex's app-server negotiates per session —
+    # an arbitrarily deep, vendor-versioned JSON-Schema tree (measured: nested
+    # `oneOf`/`$ref`/`$defs`) nothing here reads a field of; a valid JSON list
+    # is the whole of what this codebase can honestly claim to know about it.
+    dynamic_tools: list[JsonValue] | None = None
+    agent_nickname: str | None = None
+    # The spawning actor's own agent_path — a TOP-LEVEL sibling of the nested
+    # `source.subagent.thread_spawn.agent_path` above (both measured, real
+    # local rollouts; codex writes the fact in two places).
+    agent_path: str | None = None
+    forked_from_id: HarnessSessionId | None = None
+    multi_agent_version: str | None = None
+    subagent_history_start_ordinal: int | None = None
 
 
 class CodexHookPayload(BaseModel):
@@ -369,6 +528,11 @@ class CodexHookPayload(BaseModel):
 # === FOREIGN: the response_item register (items.py) ==========================
 
 
+class ChatMessageMetadata(BaseModel):
+    model_config = FOREIGN
+    turn_id: TurnId | None = None
+
+
 class WebSearchCallAction(BaseModel):
     model_config = FOREIGN
     query: str | None = None
@@ -379,6 +543,8 @@ class WebSearchCallPayload(BaseModel):
     type: Literal["web_search_call"] = "web_search_call"
     id: str | None = None
     action: WebSearchCallAction | None = None
+    status: str | None = None
+    internal_chat_message_metadata_passthrough: ChatMessageMetadata | None = None
 
 
 class ContentPart(BaseModel):
@@ -393,11 +559,7 @@ class FunctionCallOutputPayload(BaseModel):
     id: str | None = None
     output: str | list[ContentPart | str] | None = None
     call_id: CallId | None = None
-
-
-class ChatMessageMetadata(BaseModel):
-    model_config = FOREIGN
-    turn_id: TurnId | None = None
+    internal_chat_message_metadata_passthrough: ChatMessageMetadata | None = None
 
 
 class MessagePayload(BaseModel):
@@ -415,6 +577,12 @@ class ReasoningPayload(BaseModel):
     type: Literal["reasoning"] = "reasoning"
     id: str | None = None
     summary: str | list[ContentPart | str] | None = None
+    # Always None where `summary` carries the text (encrypted_content holds
+    # it instead when the think is stored encrypted) — never both populated
+    # in any measured rollout, so `content`'s populated shape is unknown.
+    content: JsonValue = None
+    encrypted_content: str | None = None
+    internal_chat_message_metadata_passthrough: ChatMessageMetadata | None = None
 
 
 class CustomToolCallPayload(BaseModel):
@@ -424,6 +592,8 @@ class CustomToolCallPayload(BaseModel):
     name: str | None = None
     input: str | list[ContentPart | str] | None = None
     call_id: CallId | None = None
+    status: str | None = None
+    internal_chat_message_metadata_passthrough: ChatMessageMetadata | None = None
 
 
 class CustomToolCallOutputPayload(BaseModel):
@@ -432,6 +602,7 @@ class CustomToolCallOutputPayload(BaseModel):
     id: str | None = None
     output: str | list[ContentPart | str] | None = None
     call_id: CallId | None = None
+    internal_chat_message_metadata_passthrough: ChatMessageMetadata | None = None
 
 
 class FunctionCallPayload(BaseModel):
@@ -439,6 +610,8 @@ class FunctionCallPayload(BaseModel):
     type: Literal["function_call"] = "function_call"
     id: str | None = None
     name: str | None = None
+    namespace: str | None = None
+    internal_chat_message_metadata_passthrough: ChatMessageMetadata | None = None
     call_id: CallId | None = None
     arguments: str | None = None
 

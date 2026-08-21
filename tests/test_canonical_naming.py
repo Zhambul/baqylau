@@ -68,6 +68,7 @@ ID_GATE_ALLOWED = {
     # reader, not worth a NewType for a field nothing consumes yet.
     "harness/impl/codex/canonical/records.py:window_id",
     "harness/impl/codex/canonical/records.py:previous_window_id",
+    "harness/impl/codex/canonical/records.py:first_window_id",
     # A hook delivery's own id (SessionStart/PreCompact/PostCompact) — used
     # only as a last-resort native_identity fallback string, the same role
     # raw_event.source_position plays; not a domain concept.
@@ -77,6 +78,15 @@ ID_GATE_ALLOWED = {
     # dict literal carried it unread. Not worth a NewType for a value with no
     # reader.
     "harness/impl/codex/canonical/records.py:item_id",
+    # codex's own account plan-limit identifier (measured: "codex") — unread,
+    # opaque, no domain equivalent.
+    "harness/impl/codex/canonical/records.py:limit_id",
+    # The model provider's own name ("openai") — a vendor label, not an id
+    # this codebase has a NewType for.
+    "harness/impl/codex/canonical/records.py:model_provider_id",
+    # The client UI's own opaque session id on a `user_message` — unread by
+    # any canonical logic.
+    "harness/impl/codex/canonical/records.py:client_id",
 }
 
 
