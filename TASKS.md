@@ -5,24 +5,11 @@ to the bottom with their commit.
 
 ## In flight
 
-9. **Dissolve the codec, banned words, harness type** — owner approved.
-   Wave 1 (agent running): ONE event class. `CanonicalEvent` gains
-   store-assigned `cursor`/`accepted_at`/`raw_event_ids` (defaults) and
-   `happened_at`; `StoredCanonicalEvent` and `CommittedEvent` deleted from
-   `domain/records.py` and their NAMES banned. No document class anywhere:
-   `repository/mapper/facts.py` holds functions only (validate at write,
-   version-check at read, payload column adapters); `documents.py` holds
-   `encode_document`/`decode_document`/`StoredDocumentError`;
-   `SCHEMA_VERSION` to `domain/events.py`; `domain/codec.py` deleted;
-   `output_location_raw_event` takes `payload: bytes` (gateway encodes).
-   Banned words gone from all code and comments — envelope, evidence, wire,
-   wiring, provenance (sentences rewritten in plain words, no fixed
-   synonyms); `client/_wire.py`→`client/_http.py`; new gate test
-   (grow-only ban list + banned identifiers, .py + dashboard JS + file
-   names, comments included).
-   Wave 2 (after wave 1 commits): `HarnessName` NewType in `domain/ids.py`,
-   every `harness: str` converted outside api/, gate added. A closed enum is
-   impossible: shared code may not contain a harness's name.
+9b. **Harness name type** (agent running): `HarnessName` NewType in
+   `domain/ids.py`, every `harness: str` converted outside api/, gate added
+   beside the typed-id gate. A closed enum is impossible: shared code may
+   not contain a harness's name; the owner may overrule that rule to get a
+   true enum.
 
 ## Queued (approved direction, plan needs owner approval before implementation)
 
@@ -71,6 +58,8 @@ to the bottom with their commit.
 
 ## Done
 
+- Codec dissolved, five words banned with a gate, one CanonicalEvent class
+  end to end — the wave 1 commit and `3339d38`.
 - MigrateAccount removed, SCHEMA_VERSION 18, store rotated — `f2dd3f6`.
 - Rename sweeps A+B (465→560 sites, both waves) — `3fddea7`, `37d2d37`.
 - Typed-id sweep (15 new NewTypes, gate 2 green) — `19be80b`.
