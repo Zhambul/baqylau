@@ -11,7 +11,7 @@ from fastapi import APIRouter, Query
 from api.common.models.fields import SessionIdPath
 from api.sessiondata import mapper
 from api.sessiondata.models.entry import EntryPageResponse
-from api.sessiondata.models.session_data import SessionDataResponse
+from api.sessiondata.models.session_data import SessionDataListResponse, SessionDataResponse
 from app.providers import Repositories, SessionDataStore, Terminal
 from core.repository import RepositoryStatus
 from domain.errors import UnknownReference
@@ -31,14 +31,22 @@ def session_data_list(
     read_model: SessionDataStore,
     terminal: Terminal,
     repositories: Repositories,
-) -> tuple[SessionDataResponse, ...]:
-    """Every visible session's aggregate — the list view, in two queries.
+) -> SessionDataListResponse:
+    """Every visible session's aggregate, and the cursor to open the global
+    stream from — the list view, in two queries.
+
+    The cursor is read BEFORE the rows: a write landing between the two shows
+    up in `sessions` (its row already carries the change) and is harmlessly
+    re-sent by a stream opened from this cursor, which is safe. Read the other
+    way round, that same write would fall strictly before the stream's cursor
+    and never reach either the list or the stream — a silent loss.
 
     The two read-time lookups are batched because both are subprocesses: git is
     asked once per DIRECTORY, and the terminal is asked for its window list
     ONCE — a machine with twenty sessions in four checkouts would otherwise pay
     for sixteen git answers it already had and twenty window listings for one.
     """
+    cursor = read_model.high_water_cursor()
     known: dict[str, RepositoryStatus | None] = {}
 
     def repository(working_directory: str) -> RepositoryStatus | None:
@@ -48,13 +56,16 @@ def session_data_list(
 
     visible = read_model.visible()
     live = terminal.live_sessions(data.session.session_id for data in visible)
-    return tuple(
-        mapper.session_data(
-            data,
-            live=data.session.session_id in live,
-            repository_status=repository(data.session.working_directory),
-        )
-        for data in visible
+    return SessionDataListResponse(
+        cursor=cursor,
+        sessions=tuple(
+            mapper.session_data(
+                data,
+                live=data.session.session_id in live,
+                repository_status=repository(data.session.working_directory),
+            )
+            for data in visible
+        ),
     )
 
 

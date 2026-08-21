@@ -149,3 +149,17 @@ class SessionDataResponse(BaseModel):
     # ANSWER, not to the session.
     live: bool
     repository: RepositoryStatusResponse | None
+
+
+class SessionDataListResponse(BaseModel):
+    """The list view: every visible session, and the cursor to open the global
+    stream from.
+
+    `cursor` is the read model's high-water mark AT THE SAME READ as `sessions`
+    — so a stream opened from it carries only what committed after this list,
+    and never the backlog a stream opened from 0 would replay as if every
+    session had just been born.
+    """
+
+    cursor: int
+    sessions: tuple[SessionDataResponse, ...]

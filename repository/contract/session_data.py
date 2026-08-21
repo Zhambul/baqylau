@@ -131,6 +131,14 @@ class SessionDataRepository(Protocol):
         """Every session's aggregate — the list view, one query per table."""
         ...
 
+    def high_water_cursor(self) -> int:
+        """The read model's own greatest cursor, across all three tables.
+
+        The list route reports this beside its rows, so a global stream opened
+        from it carries only what committed after the list was read — never the
+        backlog a stream opened from 0 would replay."""
+        ...
+
     def entries_page(
         self,
         session_id: SessionId,

@@ -283,3 +283,23 @@ def test_the_feed_defaults_to_the_lead_actor_and_a_chosen_scope_overrides_it():
     assert scope["leadInChosenScope"] is False
     assert scope["everythingInUnknownScope"] is True
     assert scope["unknownScopeReportedLoudly"] is True
+
+
+def test_the_global_stream_opens_only_after_the_list_answers_and_from_its_cursor():
+    """The page-load fetch-burst bug: the stream used to open at cursor 0
+    alongside the list fetch, and if its first (backlog) frame beat the list's
+    reply, every session in it looked unknown to the client and
+    `adoptStreamedSession` fired once per session.
+
+    The fix is one shared high-water mark: `connectGlobal` (app.02-router.js)
+    now opens the stream only once `/sessionData` has answered, and from the
+    cursor that answer reports.
+    """
+    sequence = run("globalstreamsequence.js", "dashboard/static/app.02-router.js")
+    assert sequence["errors"] == []
+    assert sequence["fetched_list_first"] is True
+    # No stream at all while the list is still in flight — not even at cursor 0.
+    assert sequence["stream_before_list_answers"] == 0
+    assert sequence["stream_opened_after_list"] == 1
+    assert sequence["stream_opened_from_lists_cursor"] is True
+    assert sequence["list_rows_applied"] == ["s1"]

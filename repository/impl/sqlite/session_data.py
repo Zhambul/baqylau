@@ -133,11 +133,11 @@ class SqliteSessionDataRepository(SessionDataRepository):
     def _next_revision(self) -> int:
         with self._revision_lock:
             if self._revision is None:
-                self._revision = self._highest_revision()
+                self._revision = self.high_water_cursor()
             self._revision += 1
             return self._revision
 
-    def _highest_revision(self) -> int:
+    def high_water_cursor(self) -> int:
         with self.sqlite_database.read() as connection:
             found = connection.execute(
                 "SELECT MAX(value) AS value FROM ("

@@ -78,8 +78,20 @@ function announceNotice(notice) {
 
 function connectGlobal() {
   loadApplicationPreferences();
-  if (!S.sessions.length) loadSessionDataList();
-  const es = new EventSource("/sessionData/stream");
+  loadSessionDataList().then(openGlobalStream);
+}
+
+// Opened only once `/sessionData` has answered, and only from the cursor that
+// answer reports: the list and the stream share ONE high-water mark, so the
+// stream carries just what committed after the list the client already
+// holds. Opened from 0 before the list lands, the stream's first frame
+// carries the WHOLE backlog and can beat the list reply — every session in it
+// then looks unknown to the client and adoptStreamedSession fires once per
+// session (a GET /sessionData/<id> burst on every page load, when there was
+// only ever one active session). adoptStreamedSession itself stays the right
+// path for a session genuinely born after this point.
+function openGlobalStream(afterCursor) {
+  const es = new EventSource("/sessionData/stream?after_cursor=" + (afterCursor || 0));
   S.esGlobal = es;
   es.onopen = () => { $conn.dataset.on = "1"; sseMark("global", true); };
   es.onerror = () => { $conn.dataset.on = "0"; sseMark("global", false); };
@@ -112,10 +124,19 @@ function connectGlobal() {
   });
 }
 
+// Resolves to the list's cursor, so `connectGlobal` can open the stream from
+// it. Also used to just refresh the rows (showList, refreshWhenVisible), which
+// ignore the resolved value. A failed read is reported loudly rather than
+// retried here — a caller waiting on the cursor still gets `undefined`
+// (`openGlobalStream` then opens from 0, and adoptStreamedSession recovers the
+// rows one at a time, the same path a genuinely new session takes).
 function loadSessionDataList() {
   return fetch("/sessionData")
     .then(response => response.json())
-    .then(applyCanonicalSessions)
+    .then(list => {
+      applyCanonicalSessions(list.sessions);
+      return list.cursor;
+    })
     .catch(error => failLoudly("", "sessions.load.fail", { error: String(error) }));
 }
 

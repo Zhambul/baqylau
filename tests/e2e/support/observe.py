@@ -48,6 +48,7 @@ from api.sessiondata.models.entry import (
 )
 from api.sessiondata.models.session_data import (
     ActorResponse,
+    SessionDataListResponse,
     SessionDataResponse,
     SessionResponse,
 )
@@ -68,7 +69,7 @@ POLL_SECONDS = 0.5
 ENTRY_LIMIT = 1000
 
 # One adapter per resource this suite reads: the model the route declares.
-SESSION_DATA_LIST = TypeAdapter(tuple[SessionDataResponse, ...])
+SESSION_DATA_LIST = TypeAdapter(SessionDataListResponse)
 SESSION_DATA = TypeAdapter(SessionDataResponse)
 ENTRY_PAGE = TypeAdapter(EntryPageResponse)
 
@@ -107,7 +108,7 @@ def session_ids(daemon: Daemon) -> frozenset[str]:
     """Every session the daemon knows about — the "before" of a launch."""
     return frozenset(
         data.session.session_id
-        for data in daemon.read("/sessionData", SESSION_DATA_LIST)
+        for data in daemon.read("/sessionData", SESSION_DATA_LIST).sessions
     )
 
 
@@ -135,7 +136,7 @@ def session_started_in(
     """
     appeared = [
         data.session
-        for data in daemon.read("/sessionData", SESSION_DATA_LIST)
+        for data in daemon.read("/sessionData", SESSION_DATA_LIST).sessions
         if data.session.session_id not in known
         and data.session.harness == harness
         and data.session.working_directory == workspace
