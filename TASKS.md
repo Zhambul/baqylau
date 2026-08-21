@@ -5,11 +5,7 @@ to the bottom with their commit.
 
 ## In flight
 
-9b. **Harness name type** (agent running): `HarnessName` NewType in
-   `domain/ids.py`, every `harness: str` converted outside api/, gate added
-   beside the typed-id gate. A closed enum is impossible: shared code may
-   not contain a harness's name; the owner may overrule that rule to get a
-   true enum.
+(nothing — next: owner approval for the 4/4b/4c batch, or bugs 5–8 first)
 
 ## Queued (approved direction, plan needs owner approval before implementation)
 
@@ -58,8 +54,10 @@ to the bottom with their commit.
 
 ## Done
 
+- HarnessName typed everywhere outside api/, Gate 4 with a zero-entry
+  allowlist — the wave 2 commit.
 - Codec dissolved, five words banned with a gate, one CanonicalEvent class
-  end to end — the wave 1 commit and `3339d38`.
+  end to end — `c85eec9`, `3339d38`.
 - MigrateAccount removed, SCHEMA_VERSION 18, store rotated — `f2dd3f6`.
 - Rename sweeps A+B (465→560 sites, both waves) — `3fddea7`, `37d2d37`.
 - Typed-id sweep (15 new NewTypes, gate 2 green) — `19be80b`.
