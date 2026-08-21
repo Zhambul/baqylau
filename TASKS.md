@@ -22,6 +22,14 @@ to the bottom with their commit.
    on shape mismatch (a `translation_failed` verdict is the intended
    behavior). Major: plan first, owner approves, then sonnet agents per
    harness.
+4b. **Enums, not string vocabularies** — every `frozenset({"toggle", ...})`
+   command set and every `Literal["...", "..."]` union becomes an enum
+   (`StrEnum`, so stored JSON and the wire stay byte-identical). Covers
+   domain/values.py's type aliases (Outcome, ActorRole, MessagePhase,
+   FileAction, PlanState, …), the pane COMMANDS set, and every other bare-str
+   closed set. Enforce with a gate: no new `Literal` string unions, no
+   module-level `frozenset` of strings used as a vocabulary. Part of the same
+   plan-then-approve batch as item 4.
 
 ## Queued bugs (reported 2026-08-21, diagnose then fix; sonnet agents)
 
