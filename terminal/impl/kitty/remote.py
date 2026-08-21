@@ -152,16 +152,24 @@ class KittyRemote:
             return None
         return r.stdout.decode("utf-8", "replace")
 
-    def ls(self) -> list[dict[str, Any]]:
-        """Parsed `kitten @ ls` (the OS-window/tab/window tree), or [] on failure."""
+    def ls(self) -> list[dict[str, Any]] | None:
+        """Parsed `kitten @ ls` (the OS-window/tab/window tree), or `None` when
+        the query itself failed (a timeout, a dropped socket, bad output).
+
+        `None` is not `[]`: a caller who needs to tell "kitty reports zero
+        windows" apart from "kitty could not be asked right now" can. Getting
+        this distinction wrong is what makes a five-second query hiccup read
+        as EVERY window having just closed — safe for a caller that only
+        paints the screen, wrong for one that decides whether to push an
+        alert about a session that is still there."""
         out = self.capture("ls", timeout=KITTEN_QUERY_TIMEOUT_SECONDS)
         if out is None:
-            return []
+            return None
         try:
             tree = json.loads(out)
         except ValueError:
-            return []
-        return tree if isinstance(tree, list) else []
+            return None
+        return tree if isinstance(tree, list) else None
 
     def app_focused(self, tree: list[dict[str, Any]] | None = None) -> bool:
         """True when ANY kitty OS window is focused — i.e. kitty is the frontmost
@@ -172,10 +180,11 @@ class KittyRemote:
         is in (the dashboard web-launch steal — the panes opened at
         SessionStart were the thieves). `tree` reuses an ls() the caller
         already paid for. False on an ls failure (degrade toward not
-        stealing)."""
+        stealing) — unlike `windows()`, a focus probe has no earlier answer
+        worth repeating, so its failure default stays "not focused"."""
         try:
             return any(osw.get("is_focused")
-                       for osw in (self.ls() if tree is None else tree or []))
+                       for osw in ((self.ls() if tree is None else tree) or []))
         except Exception:
             return False
 

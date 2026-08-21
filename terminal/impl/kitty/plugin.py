@@ -239,12 +239,22 @@ class KittyPanes(TerminalPanes):
 class KittyMetadata(TerminalMetadata):
     def __init__(self, kitty_remote: KittyRemote) -> None:
         self.kitty_remote = kitty_remote
+        # The last tree a real `ls` produced. A failed query (a timeout, a
+        # dropped socket) answers from here instead of as an empty tree: this
+        # is what a session watcher reads to decide a window is still on
+        # screen, and "kitty could not be asked" is not "every window just
+        # closed". Treating the two alike used to retract and immediately
+        # re-send an alert for a session that never moved.
+        self._last_windows: tuple[WindowInfo, ...] = ()
 
     def windows(self) -> tuple[WindowInfo, ...]:
         """The `ls` tree, flattened. This is the ONE place kitty's JSON shape
         (`tabs`, `windows`, `user_vars`, `is_active`, `is_focused`) is read."""
+        tree = self.kitty_remote.ls()
+        if tree is None:
+            return self._last_windows
         found = []
-        for operating_system_window in self.kitty_remote.ls() or []:
+        for operating_system_window in tree:
             for tab in operating_system_window.get("tabs") or []:
                 windows = tab.get("windows") or []
                 for position, window in enumerate(windows):
@@ -262,7 +272,8 @@ class KittyMetadata(TerminalMetadata):
                         # backgrounded, which reads active but not focused.
                         tab_is_focused=bool(tab.get("is_focused")),
                     ))
-        return tuple(found)
+        self._last_windows = tuple(found)
+        return self._last_windows
 
     def tag_window(self, window_tag_request: WindowTagRequest) -> WindowTagResponse:
         assignments = [f"{name}={value}" for name, value in window_tag_request.tags.items()]

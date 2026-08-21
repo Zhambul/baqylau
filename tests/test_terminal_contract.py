@@ -217,6 +217,33 @@ def test_the_window_tree_is_flattened_into_terminal_agnostic_rows():
     assert (windows[0].columns, windows[0].lines) == (75, 40)
 
 
+def test_a_failed_listing_answers_with_the_last_good_one_not_emptiness():
+    """A `kitten @ ls` timeout must not read as "every window just closed".
+
+    A session watcher decides a window is gone by calling `windows()`; if a
+    transient query failure answered `()` here, the watcher would retract and
+    immediately re-schedule an alert for a session that never moved — the
+    duplicate "is done" push this pins against.
+    """
+    remote = FakeRemote(tree=[{
+        "tabs": [{
+            "id": 3,
+            "windows": [{"id": 7, "columns": 75, "lines": 40, "user_vars": {}}],
+        }],
+    }])
+    metadata = kitty_plugin(remote).metadata
+
+    first = metadata.windows()
+    assert [found.window_id for found in first] == ["7"]
+
+    remote.tree = None  # the next `ls` fails: a timeout, a dropped socket
+    assert metadata.windows() == first
+
+    # a later SUCCESSFUL empty listing is trusted — the window really closed
+    remote.tree = []
+    assert metadata.windows() == ()
+
+
 def test_a_tab_colour_is_a_validated_colour_until_the_implementation_sees_it():
     remote = FakeRemote()
     appearance = TabAppearance(RGB(198, 120, 221), RGB(26, 6, 32), RGB(74, 43, 82), RGB(192, 196, 204))
