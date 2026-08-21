@@ -12,7 +12,7 @@ from pydantic import RootModel
 from api.common.models.fields import RequiredText
 from api.application.models.preferences.dialog_draft_request import AnswerSelectionBody
 from api.controls.models.control_request import ControlRequestBody
-from harness.models import AnswerDecision, AnswerQuestion, ControlRequest
+from harness.models import AnswerDecision, AnswerQuestion
 from domain.ids import AttentionId, RequestId, SessionId
 from domain.values import StructuredContent
 
@@ -28,7 +28,7 @@ class AnswerQuestionRequest(ControlRequestBody):
     answers: tuple[AnswerSelectionBody, ...] | None = None
     discussion: str | None = None
 
-    def request(self, session_id: SessionId) -> ControlRequest:
+    def request(self, session_id: SessionId) -> AnswerQuestion:
         return AnswerQuestion(
             session_id,
             RequestId(self.request_id),

@@ -3,7 +3,7 @@ from pydantic import model_validator
 
 from api.controls.models.attachment_reference import AttachmentReferenceBody, references
 from api.controls.models.control_request import ControlRequestBody
-from harness.models import ControlRequest, SendText
+from harness.models import SendText
 from domain.ids import RequestId, SessionId
 
 
@@ -18,7 +18,7 @@ class SendTextRequest(ControlRequestBody):
             raise ValueError("text or attachments are required")
         return self
 
-    def request(self, session_id: SessionId) -> ControlRequest:
+    def request(self, session_id: SessionId) -> SendText:
         return SendText(
             session_id,
             RequestId(self.request_id),

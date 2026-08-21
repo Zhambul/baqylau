@@ -639,7 +639,7 @@ def _audited_control(monkeypatch, outcome):
     monkeypatch.setattr(service, "_execute", run)
     raised = None
     try:
-        service.execute(request)
+        service.select_model(request)
     except Exception as error:      # noqa: BLE001 — the raised-path assertion
         raised = error
     return rows, raised
@@ -700,8 +700,104 @@ def test_a_broken_audit_never_takes_down_the_gesture(monkeypatch):
         service, "_execute", lambda r: ControlResult(r.request_id, "acknowledged")
     )
 
-    outcome = service.execute(SelectModel(SESSION_ID, "request-one", model_id="x"))
+    outcome = service.select_model(SelectModel(SESSION_ID, "request-one", model_id="x"))
     assert outcome.status == "acknowledged"
+
+
+# Every one of the 14 typed gesture methods must flow through the SAME private
+# core (`_audited`) that writes the one audit row — a method that wrote its own
+# row, or skipped the core, would leave the control audit contract silently
+# incomplete for just that gesture.
+def test_every_control_method_writes_exactly_one_audit_row_through_one_core(monkeypatch):
+    from harness.services import controls as services
+    from harness.models import (
+        AnswerDecision,
+        AnswerQuestion,
+        ApplyRewind,
+        AutoNameSession,
+        Background,
+        CloseSession,
+        Compact,
+        ControlResult,
+        DecidePlan,
+        Interrupt,
+        OpenRewind,
+        ReadPlanChoices,
+        RenameSession,
+        SelectEffort,
+        SelectModel,
+        SendText,
+    )
+    from domain.ids import AttentionId, ModelId, RequestId
+
+    rows = []
+
+    class RowRecorder(AuditRecorder):
+        def __init__(self):
+            pass
+
+        def state_file(self, log, path, action, content=""):
+            rows.append((action, content))
+
+    class _NullInterruptRegistry:
+        def mark(self, session_id):
+            pass
+
+    service = object.__new__(services.HarnessControlService)
+    service.audit = RowRecorder()
+    service.interrupts = _NullInterruptRegistry()
+    monkeypatch.setattr(
+        service, "_execute", lambda r: ControlResult(r.request_id, "acknowledged")
+    )
+
+    calls = (
+        (service.send_text, SendText(SESSION_ID, RequestId("r1"), text="hi")),
+        (service.interrupt, Interrupt(SESSION_ID, RequestId("r2"))),
+        (service.background, Background(SESSION_ID, RequestId("r3"))),
+        (service.close_session, CloseSession(SESSION_ID, RequestId("r4"))),
+        (service.rename_session, RenameSession(SESSION_ID, RequestId("r5"), name="new")),
+        (service.auto_name_session, AutoNameSession(SESSION_ID, RequestId("r6"))),
+        (service.open_rewind, OpenRewind(SESSION_ID, RequestId("r7"))),
+        (
+            service.apply_rewind,
+            ApplyRewind(
+                SESSION_ID,
+                RequestId("r8"),
+                target_message_id=MessageId("m1"),
+                target_text="was",
+                newer_prompt_count=0,
+                mode="restore",
+            ),
+        ),
+        (service.compact, Compact(SESSION_ID, RequestId("r9"))),
+        (service.select_model, SelectModel(SESSION_ID, RequestId("r10"), model_id=ModelId("x"))),
+        (service.select_effort, SelectEffort(SESSION_ID, RequestId("r11"), effort="high")),
+        (
+            service.answer_question,
+            AnswerQuestion(
+                SESSION_ID,
+                RequestId("r12"),
+                attention_id=AttentionId("a1"),
+                decision=AnswerDecision.ANSWER,
+            ),
+        ),
+        (
+            service.read_plan_choices,
+            ReadPlanChoices(SESSION_ID, RequestId("r13"), attention_id=AttentionId("a2")),
+        ),
+        (
+            service.decide_plan,
+            DecidePlan(SESSION_ID, RequestId("r14"), attention_id=AttentionId("a3"), decision="keep"),
+        ),
+    )
+
+    for before, (method, request) in enumerate(calls):
+        method(request)
+        assert len(rows) == before + 1
+        action, content = rows[-1]
+        assert action == "control"
+        assert content["control"] == request.control_name
+        assert content["status"] == "acknowledged"
 
 
 # --- terminal pane clients ------------------------------------------------------
@@ -777,8 +873,24 @@ def test_pane_command_route_carries_the_keypress_environment(tmp_path):
             self.calls = []
             self.outcome = PaneCommandOutcome(True, True)
 
-        def execute(self, command, window_id, working_directory, columns=None, percent=None):
-            self.calls.append((command, window_id, working_directory, columns, percent))
+        def toggle(self, window_id, working_directory):
+            self.calls.append(("toggle", window_id, working_directory, None, None))
+            return self.outcome
+
+        def grow(self, window_id, working_directory, columns=None):
+            self.calls.append(("grow", window_id, working_directory, columns, None))
+            return self.outcome
+
+        def shrink(self, window_id, working_directory, columns=None):
+            self.calls.append(("shrink", window_id, working_directory, columns, None))
+            return self.outcome
+
+        def reset(self, window_id, working_directory):
+            self.calls.append(("reset", window_id, working_directory, None, None))
+            return self.outcome
+
+        def set_percent(self, window_id, working_directory, percent):
+            self.calls.append(("setpct", window_id, working_directory, None, percent))
             return self.outcome
 
     pane_commands = PaneCommands()

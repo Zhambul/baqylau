@@ -1,7 +1,7 @@
 # The apply-rewind gesture.
 from api.common.models.fields import RequiredText
 from api.controls.models.control_request import ControlRequestBody
-from harness.models import ApplyRewind, ControlRequest
+from harness.models import ApplyRewind
 from domain.ids import MessageId, RequestId, SessionId
 
 
@@ -11,7 +11,7 @@ class ApplyRewindRequest(ControlRequestBody):
     newer_prompt_count: int = 0
     mode: RequiredText
 
-    def request(self, session_id: SessionId) -> ControlRequest:
+    def request(self, session_id: SessionId) -> ApplyRewind:
         return ApplyRewind(
             session_id,
             RequestId(self.request_id),

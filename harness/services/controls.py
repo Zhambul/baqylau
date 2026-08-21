@@ -9,13 +9,26 @@ from domain.entries import PlanProposedBody, QuestionAskedBody
 from domain.events import PlanProposed, QuestionAsked
 from harness.contract import HarnessReactorContext
 from harness.models import (
+    AnswerQuestion,
+    ApplyRewind,
+    AutoNameSession,
+    Background,
+    CloseSession,
+    Compact,
     ControlAcknowledgement,
     ControlContext,
     ControlOutcome,
     ControlRequest,
     ControlResult,
+    DecidePlan,
     Interrupt,
     InterruptRegistry,
+    OpenRewind,
+    ReadPlanChoices,
+    RenameSession,
+    SelectEffort,
+    SelectModel,
+    SendText,
 )
 from repository.contract.session_data import SessionDataRepository
 from repository.contract.sessions import SessionRepository
@@ -88,7 +101,54 @@ class HarnessControlService(HarnessReactorContext):
         self.audit = audit_recorder
         self.interrupts = interrupt_registry
 
-    def execute(self, request: ControlRequest) -> ControlOutcome:
+    # One typed public method per gesture — the request type IS the parameter,
+    # so a caller never builds a bare `ControlRequest` and this class never
+    # branches on a command word. Every one of them flows through `_audited`,
+    # the single core that times the gesture, calls the harness, and writes
+    # the one audit row.
+    def send_text(self, send_text: SendText) -> ControlOutcome:
+        return self._audited(send_text)
+
+    def interrupt(self, interrupt: Interrupt) -> ControlOutcome:
+        return self._audited(interrupt)
+
+    def background(self, background: Background) -> ControlOutcome:
+        return self._audited(background)
+
+    def close_session(self, close_session: CloseSession) -> ControlOutcome:
+        return self._audited(close_session)
+
+    def rename_session(self, rename_session: RenameSession) -> ControlOutcome:
+        return self._audited(rename_session)
+
+    def auto_name_session(self, auto_name_session: AutoNameSession) -> ControlOutcome:
+        return self._audited(auto_name_session)
+
+    def open_rewind(self, open_rewind: OpenRewind) -> ControlOutcome:
+        return self._audited(open_rewind)
+
+    def apply_rewind(self, apply_rewind: ApplyRewind) -> ControlOutcome:
+        return self._audited(apply_rewind)
+
+    def compact(self, compact: Compact) -> ControlOutcome:
+        return self._audited(compact)
+
+    def select_model(self, select_model: SelectModel) -> ControlOutcome:
+        return self._audited(select_model)
+
+    def select_effort(self, select_effort: SelectEffort) -> ControlOutcome:
+        return self._audited(select_effort)
+
+    def answer_question(self, answer_question: AnswerQuestion) -> ControlOutcome:
+        return self._audited(answer_question)
+
+    def read_plan_choices(self, read_plan_choices: ReadPlanChoices) -> ControlOutcome:
+        return self._audited(read_plan_choices)
+
+    def decide_plan(self, decide_plan: DecidePlan) -> ControlOutcome:
+        return self._audited(decide_plan)
+
+    def _audited(self, request: ControlRequest) -> ControlOutcome:
         started = time.monotonic()
         try:
             outcome = self._execute(request)

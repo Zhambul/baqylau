@@ -1,12 +1,12 @@
 # The rename gesture.
 from api.common.models.fields import RequiredText
 from api.controls.models.control_request import ControlRequestBody
-from harness.models import ControlRequest, RenameSession
+from harness.models import RenameSession
 from domain.ids import RequestId, SessionId
 
 
 class RenameSessionRequest(ControlRequestBody):
     name: RequiredText
 
-    def request(self, session_id: SessionId) -> ControlRequest:
+    def request(self, session_id: SessionId) -> RenameSession:
         return RenameSession(session_id, RequestId(self.request_id), name=self.name)

@@ -1728,11 +1728,11 @@ def test_pane_command_service_executes_gestures_for_the_windows_session():
     service = pane_commands.PaneCommandService(terminal, _Widths(remembered), _silent_audit())
 
     outcomes = [
-        service.execute("toggle", "77", "/project"),
-        service.execute("grow", "77", "/project"),
-        service.execute("shrink", "77", "/project"),
-        service.execute("reset", "77", "/project"),
-        service.execute("setpct", "77", "/project", percent=75),
+        service.toggle("77", "/project"),
+        service.grow("77", "/project"),
+        service.shrink("77", "/project"),
+        service.reset("77", "/project"),
+        service.set_percent("77", "/project", 75),
     ]
 
     assert all(outcome.handled and outcome.succeeded for outcome in outcomes)
@@ -1753,10 +1753,51 @@ def test_pane_command_in_a_tab_without_a_session_is_quietly_unhandled():
         def session_for_window(self, window_id):
             return None
 
-    outcome = pane_commands.PaneCommandService(Terminal(), _Widths([]), _silent_audit()).execute(
-        "toggle", "", "/project"
-    )
+    outcome = pane_commands.PaneCommandService(Terminal(), _Widths([]), _silent_audit()).toggle("", "/project")
     assert outcome == pane_commands.PaneCommandOutcome(False, True)
+
+
+# Every one of the 5 typed gesture methods must flow through the SAME private
+# core (`_audited`) that writes the one pane-command audit row — a method that
+# wrote its own row, or skipped the core, would leave that gesture unaudited.
+def test_every_pane_command_method_writes_exactly_one_audit_row_through_one_core():
+    class Terminal:
+        def session_for_window(self, window_id):
+            return SessionId("session-one")
+
+        def toggle_session_panes(self, session_id, width_percent):
+            return SessionTerminalResult(True)
+
+        def resize_activity_pane(self, session_id, columns):
+            return SessionTerminalResult(True)
+
+        def activity_pane_geometry(self, session_id):
+            return (25, 100)
+
+        def set_activity_pane_width(self, session_id, width_percent):
+            return SessionTerminalResult(True)
+
+    rows = []
+
+    class RowRecorder:
+        def state_file(self, log, path, action, content=""):
+            rows.append((action, content))
+
+    service = pane_commands.PaneCommandService(Terminal(), _Widths([]), RowRecorder())
+    calls = (
+        (service.toggle, ("77", "/project")),
+        (service.grow, ("77", "/project")),
+        (service.shrink, ("77", "/project")),
+        (service.reset, ("77", "/project")),
+        (service.set_percent, ("77", "/project", 75)),
+    )
+
+    for before, (method, arguments) in enumerate(calls):
+        method(*arguments)
+        assert len(rows) == before + 1
+        action, content = rows[-1]
+        assert action == "pane-command"
+        assert content["ok"] is True
 
 
 def test_claude_hook_and_child_transcript_deduplicate_actor_start():

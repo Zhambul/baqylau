@@ -22,12 +22,26 @@ from domain.ids import WindowId
 from domain.values import ModelReference
 from harness.models.catalog import HarnessCatalogSnapshot, QueryContext
 from harness.models.controls import (
+    AnswerQuestion,
+    ApplyRewind,
+    AutoNameSession,
+    Background,
+    CloseSession,
+    Compact,
     ControlAcknowledgement,
     ControlContext,
     ControlName,
     ControlOutcome,
     ControlRequest,
     ControlResult,
+    DecidePlan,
+    Interrupt,
+    OpenRewind,
+    ReadPlanChoices,
+    RenameSession,
+    SelectEffort,
+    SelectModel,
+    SendText,
 )
 from harness.models.raw_events import RawEvent, TranslationResult
 from harness.models.hooks import HarnessHookRequest, HarnessHookResponse
@@ -121,9 +135,25 @@ class CanonicalEventReaction(Protocol):
 
 
 class HarnessReactorContext(Protocol):
-    """What the interpreter lends a harness reactor: the one control dispatch point."""
+    """What the interpreter lends a harness reactor: one typed method per
+    gesture a reactor may raise on its own harness's behalf — the same
+    surface `HarnessControlService` exposes to the HTTP layer, so a reactor
+    calls a named gesture and never builds a bare `ControlRequest`."""
 
-    def execute(self, request: ControlRequest) -> ControlOutcome: ...
+    def send_text(self, send_text: SendText) -> ControlOutcome: ...
+    def interrupt(self, interrupt: Interrupt) -> ControlOutcome: ...
+    def background(self, background: Background) -> ControlOutcome: ...
+    def close_session(self, close_session: CloseSession) -> ControlOutcome: ...
+    def rename_session(self, rename_session: RenameSession) -> ControlOutcome: ...
+    def auto_name_session(self, auto_name_session: AutoNameSession) -> ControlOutcome: ...
+    def open_rewind(self, open_rewind: OpenRewind) -> ControlOutcome: ...
+    def apply_rewind(self, apply_rewind: ApplyRewind) -> ControlOutcome: ...
+    def compact(self, compact: Compact) -> ControlOutcome: ...
+    def select_model(self, select_model: SelectModel) -> ControlOutcome: ...
+    def select_effort(self, select_effort: SelectEffort) -> ControlOutcome: ...
+    def answer_question(self, answer_question: AnswerQuestion) -> ControlOutcome: ...
+    def read_plan_choices(self, read_plan_choices: ReadPlanChoices) -> ControlOutcome: ...
+    def decide_plan(self, decide_plan: DecidePlan) -> ControlOutcome: ...
 
 
 class HarnessCanonicalEventReactor(Protocol):

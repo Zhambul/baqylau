@@ -1,7 +1,7 @@
 # The plan-decision gesture.
 from api.common.models.fields import RequiredText
 from api.controls.models.control_request import ControlRequestBody
-from harness.models import ControlRequest, DecidePlan
+from harness.models import DecidePlan
 from domain.ids import AttentionId, RequestId, SessionId
 
 
@@ -10,7 +10,7 @@ class DecidePlanRequest(ControlRequestBody):
     decision: RequiredText
     feedback: str | None = None
 
-    def request(self, session_id: SessionId) -> ControlRequest:
+    def request(self, session_id: SessionId) -> DecidePlan:
         return DecidePlan(
             session_id,
             RequestId(self.request_id),
