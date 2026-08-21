@@ -5,7 +5,17 @@ to the bottom with their commit.
 
 ## In flight
 
-(nothing — next: owner approval for the 4/4b/4c batch, or bugs 5–8 first)
+Bugs 5–8, in order, one sonnet agent at a time. Bug 5 is running.
+
+## Owner decisions, recorded 2026-08-21
+
+- Order: bugs 5–8 first, then the 4/4b/4c batch.
+- Item 4 extra fields: FAIL on any unknown field in a foreign record
+  (strictest; a vendor update stops translation with `translation_failed`
+  until the field is declared; rebuild heals history after the fix).
+- Item 4b: `StrEnum`, so stored JSON and HTTP responses stay byte-identical.
+- Item 4c: one typed public method per command; all methods go through one
+  private core that writes the one audit row.
 
 ## Queued (approved direction, plan needs owner approval before implementation)
 
