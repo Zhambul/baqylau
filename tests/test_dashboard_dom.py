@@ -272,6 +272,20 @@ def test_new_session_sections_task_order_and_density_are_unchanged():
     }
 
 
+def test_a_finished_blocks_header_click_opens_and_closes_its_body():
+    result = run(
+        "expand.js",
+        "dashboard/static/app.00a-markup.js",
+        "dashboard/static/app.00b-entries.js",
+        "dashboard/static/app.05-session.js",
+    )
+    assert result["hasHeader"] is True
+    assert result["hasHandler"] is True
+    assert result["before"] == "0"
+    assert result["afterFirstClick"] == "1"
+    assert result["afterSecondClick"] == "0"
+
+
 def test_the_feed_defaults_to_the_lead_actor_and_a_chosen_scope_overrides_it():
     scope = run("feedscope.js", "dashboard/static/app.05-session.js")
     assert scope["defaultScope"] == "lead"

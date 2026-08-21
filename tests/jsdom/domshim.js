@@ -7,6 +7,67 @@
 // the page sources actually touch, and asserts nothing itself.
 "use strict";
 
+/* ---------- a real, small HTML parser --------------------------------------
+   `innerHTML` is how every entry's markup (app.00a-markup.js, app.00b-entries.js)
+   enters the DOM, so a shim that does not really parse it cannot tell "the
+   markup is right but the click handler is broken" from "the markup never
+   built the nodes the handler reads". Void tags and comments are the only
+   HTML quirks the sources' own output ever needs. */
+const VOID_TAGS = new Set([
+  "area", "base", "br", "col", "embed", "hr", "img", "input",
+  "link", "meta", "param", "source", "track", "wbr",
+]);
+
+function decodeEntities(text) {
+  return text
+    .replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, " ").replace(/&amp;/g, "&");
+}
+
+function parseAttributes(text) {
+  const attrs = {};
+  const attrPattern = /([a-zA-Z_:][-\w:.]*)\s*=\s*("([^"]*)"|'([^']*)'|(\S+))/g;
+  let match;
+  while ((match = attrPattern.exec(text)) !== null) {
+    attrs[match[1]] = match[3] !== undefined ? match[3]
+      : match[4] !== undefined ? match[4] : match[5];
+  }
+  return attrs;
+}
+
+// Builds real element/text children under `root`, one open tag deep at a
+// time — exactly what a browser's parser does, minus everything this
+// codebase's own markup never emits (unquoted attributes aside, self-closing
+// foreign tags, and so on).
+function parseHtmlInto(root, html) {
+  const tokenPattern =
+    /<!--[\s\S]*?-->|<\/([a-zA-Z][\w-]*)\s*>|<([a-zA-Z][\w-]*)((?:\s+[^<>]*?)?)\s*(\/?)>|([^<]+)/g;
+  const stack = [root];
+  let match;
+  while ((match = tokenPattern.exec(html)) !== null) {
+    const [whole, closeTag, openTag, attrText, selfClosingMark, text] = match;
+    if (whole.startsWith("<!--")) continue;
+    if (closeTag) {
+      if (stack.length > 1) stack.pop();
+      continue;
+    }
+    if (openTag) {
+      const attrs = parseAttributes(attrText || "");
+      const node = new El(openTag, attrs.class || "");
+      for (const [name, value] of Object.entries(attrs)) {
+        if (!name.startsWith("data-")) continue;
+        const camel = name.slice(5).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+        node.dataset[camel] = value;
+      }
+      stack[stack.length - 1].append(node);
+      if (!selfClosingMark && !VOID_TAGS.has(openTag.toLowerCase())) stack.push(node);
+      continue;
+    }
+    if (text) stack[stack.length - 1].append(new El("#text", "", decodeEntities(text)));
+  }
+}
+
 /* ---------- the DOM shim: elements, classes, dataset, class-selector queries */
 class El {
   constructor(tag, cls, text) {
@@ -103,35 +164,40 @@ class El {
     a.splice(a.indexOf(this), 1);
     this.parentNode = null;
   }
-  // Enough of innerHTML for canonical DashboardItem insertion: one complete
-  // top-level node. A block also exposes its header/body because the browser
-  // binds its fold interaction after insertion.
+  // A REAL parse of the markup, not a stand-in for it: the renderer nests a
+  // block's header inside its chips inside its summary, and a click handler
+  // reads that structure back (`.bhead`, `.bbody`, `body.childElementCount`) —
+  // a shim that only sniffed the outer tag left every one of those checks
+  // seeing an empty shell, which is exactly the shape "nothing expands" bug
+  // took (issue: a real click reaching a handler that then bails on a body
+  // the shim never actually built).
   set innerHTML(html) {
-    const m = /^\s*<(\w+)[^>]*?(?:\sclass="([^"]*)")?[^>]*>/.exec(String(html));
     this.children = [];
-    if (m) {
-      const node = new El(m[1], m[2] || "");
-      if (node.classList.contains("blk")) {
-        node.append(new El("div", "bhead"), new El("div", "bbody"));
-      }
-      this.append(node);
-    }
+    parseHtmlInto(this, String(html));
   }
   get innerHTML() { return ""; }
   // sibling walks — the click-to-view panel is tied to its host row by ADJACENCY
   // alone (toggleView inserts it "afterend"), so a test of that invariant needs them
   get nextElementSibling() {
-    const a = this.parentNode ? this.parentNode.children : [];
+    const a = this.parentNode ? this.parentNode._elementChildren() : [];
     return a[a.indexOf(this) + 1] || null;
   }
   get previousElementSibling() {
-    const a = this.parentNode ? this.parentNode.children : [];
+    const a = this.parentNode ? this.parentNode._elementChildren() : [];
     const i = a.indexOf(this);
     return i > 0 ? a[i - 1] : null;
   }
-  get firstElementChild() { return this.children[0] || null; }
-  get lastElementChild() { return this.children[this.children.length - 1] || null; }
-  get childElementCount() { return this.children.length; }
+  // ELEMENT views of `children`: real DOM excludes text nodes from all three,
+  // and innerHTML now parses real text runs (a block's summary, a message's
+  // words), so a count or a walk that did not skip them would see phantom
+  // children a bare-markup shim never produced.
+  _elementChildren() { return this.children.filter(c => c.tag !== "#text"); }
+  get firstElementChild() { return this._elementChildren()[0] || null; }
+  get lastElementChild() {
+    const kids = this._elementChildren();
+    return kids[kids.length - 1] || null;
+  }
+  get childElementCount() { return this._elementChildren().length; }
   // Enough of insertAdjacentHTML for the block filler: the served HTML is opaque
   // to these tests (they measure counts, classes and data-*), so it is kept as
   // one text-bearing child rather than parsed.
@@ -154,13 +220,28 @@ class El {
   _all(out) { for (const c of this.children) { out.push(c); c._all(out); } return out; }
   querySelectorAll(sel) {              // only ".cls" / ".cls[data-x]" / "[data-x]"
     const cls = sel.split("[")[0].replace(".", "");
-    const attr = (/\[data-([a-z]+)\]/.exec(sel) || [])[1];
+    // `data-copy-block` names the dataset key `copyBlock` (the DOM's own
+    // hyphen-to-camelCase rule) — a selector that skipped this dropped the
+    // attribute filter for every hyphenated name and matched EVERY node.
+    const rawAttr = (/\[data-([a-z-]+)\]/.exec(sel) || [])[1];
+    const attr = rawAttr && rawAttr.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
     // an attribute-ONLY selector filters on the attribute alone (the note-dot tint
     // asks for every `[data-agent]` row, block card or loose line alike)
     return this._all([]).filter(n => (!cls || n._cls().includes(cls))
       && (!attr || n.dataset[attr] !== undefined));
   }
   querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
+  // Walks SELF then ancestors for a match — only what the sources ask of it: a
+  // bare tag name, or a ".cls" class selector. `matches` is the one-node half.
+  matches(sel) {
+    if (sel.startsWith(".")) return this._cls().includes(sel.slice(1));
+    return this.tag === sel;
+  }
+  closest(sel) {
+    for (let node = this; node; node = node.parentNode)
+      if (node.matches && node.matches(sel)) return node;
+    return null;
+  }
 }
 
 /* The document + element factories every harness's sandbox starts from. Each
