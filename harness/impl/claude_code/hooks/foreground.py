@@ -7,7 +7,8 @@ import hashlib
 import json
 import os
 from dataclasses import dataclass
-from typing import Any
+
+from pydantic import JsonValue
 
 from domain.events import ShellOutputLocated
 from domain.ids import SessionId, ShellId
@@ -49,7 +50,7 @@ def _tee_path(session_id: SessionId, shell_id: ShellId) -> str:
 
 
 def _updated_input(
-    tool_input: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
+    tool_input: dict[str, JsonValue],
     command: str,
 ) -> bytes:
     updated_input = dict(tool_input)
@@ -71,7 +72,7 @@ def _updated_input(
 
 
 def background_output(
-    document: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
+    document: dict[str, JsonValue],
 ) -> ShellOutputLocated | None:
     """The output location of a background command's native output file.
 
@@ -81,7 +82,8 @@ def background_output(
     following ends with the session (or the lifetime cap), never with the
     command, whose launch reports "finished" while output keeps flowing.
     """
-    tool_input = document.get("tool_input") or {}
+    tool_input_value = document.get("tool_input")
+    tool_input = tool_input_value if isinstance(tool_input_value, dict) else {}
     if not tool_input.get("run_in_background"):
         return None
     shell_id = str(document.get("tool_use_id") or "")
@@ -109,7 +111,7 @@ def background_output(
 
 
 def prepare(
-    document: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
+    document: dict[str, JsonValue],
 ) -> PreparedForegroundCommand | None:
     """Rewrite one Bash command so its output lands in a readable file.
 
@@ -118,7 +120,8 @@ def prepare(
     gateway's only file act is creating the tee target, which the rewritten
     command itself requires.
     """
-    tool_input = document.get("tool_input") or {}
+    tool_input_value = document.get("tool_input")
+    tool_input = tool_input_value if isinstance(tool_input_value, dict) else {}
     command = str(tool_input.get("command") or "")
     if not command.strip() or tool_input.get("run_in_background"):
         return None
@@ -127,7 +130,10 @@ def prepare(
     if not session_id or not shell_id:
         raise ValueError("Claude Code foreground command has no session or command id")
 
-    redirect = shell.redirected_output(command, document.get("cwd"))
+    working_directory = document.get("cwd")
+    redirect = shell.redirected_output(
+        command, str(working_directory) if working_directory is not None else None
+    )
     if redirect is None:
         source_path = _tee_path(session_id, shell_id)
         os.makedirs(os.path.dirname(source_path), mode=0o700, exist_ok=True)

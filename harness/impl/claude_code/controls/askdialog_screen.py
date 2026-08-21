@@ -31,7 +31,9 @@
 #     appears after the last question unless the ask was a single
 #     single-select question.
 import re
-from typing import Any, TypedDict
+from typing import TypedDict
+
+from harness.impl.claude_code.canonical import records
 
 FOOT = "Enter to select"                 # question-pane open detector
 REVIEW = "Review your answers"           # review-pane detector
@@ -129,7 +131,7 @@ def rows(screen: str) -> list[Row]:
 
 def current_question(
     screen: str,
-    questions: list[dict[str, Any]],  # loose: claude code JSON, wave 2 gives it a real shape
+    questions: list[records.Question],
 ) -> int | None:
     """Which of the ask's questions the dialog currently shows, or None.
     Long question text WRAPS across screen lines (a 555-char question never
@@ -151,7 +153,7 @@ def current_question(
     best: int | None = None
     best_len = -1
     for i, q in enumerate(questions):
-        text = "".join((q.get("question") or "").split())
+        text = "".join((q.question or "").split())
         if text and text in flat and len(text) > best_len:
             best, best_len = i, len(text)
     return best

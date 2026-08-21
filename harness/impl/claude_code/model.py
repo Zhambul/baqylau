@@ -21,11 +21,13 @@
 import json
 import os
 import time
-from typing import Any
+
+from pydantic import JsonValue
 
 from core import env as EV
 from domain.ids import ActorId
 from domain.values import ModelReference
+from harness.impl.claude_code.canonical import records
 
 # How much of a transcript's tail session_model() scans for the last assistant
 # turn: the latest turn is near the end, so a bounded read stays cheap even on
@@ -140,7 +142,7 @@ def context_window(*models: str | None) -> int:
     return 200_000
 
 
-def context_used(usage: object) -> int:  # loose: claude code JSON, wave 2 gives it a real shape
+def context_used(usage: JsonValue) -> int:
     """The occupied context window from ONE assistant message's usage dict:
     every input token the model saw — fresh + just-cached + replayed-from-cache.
     output_tokens is excluded (what the model produced back, not context). 0
@@ -149,34 +151,44 @@ def context_used(usage: object) -> int:  # loose: claude code JSON, wave 2 gives
     transcript.context_probe (the dashboard's saturation chips) both call it."""
     if not isinstance(usage, dict):
         return 0
-    return (int(usage.get("input_tokens") or 0)
-            + int(usage.get("cache_creation_input_tokens") or 0)
-            + int(usage.get("cache_read_input_tokens") or 0))
+
+    def _tokens(key: str) -> int:
+        value = usage.get(key)
+        return int(value) if isinstance(value, (int, float)) else 0
+
+    return _tokens("input_tokens") + _tokens("cache_creation_input_tokens") + _tokens("cache_read_input_tokens")
 
 
 def agent_meta(
     tpath: str,
     agent_id: ActorId,
-) -> dict[str, Any]:  # loose: claude code JSON, wave 2 gives it a real shape
+) -> records.AgentMetaFile:
     """The agent's meta.json sidecar (present at SubagentStart for teammates; may
     lag a beat for ordinary subagents, so retry briefly). Carries
     `customAgentType` — the DEFINITION's name, which for a teammate differs from
     its short display type (agentType "container" vs def "task-container") — and
-    its configured `model`. {} when it never appears."""
+    its configured `model`. An empty AgentMetaFile when it never appears."""
     base = tpath[:-6] if tpath.endswith(".jsonl") else tpath
     p = os.path.join(base, "subagents", f"agent-{agent_id}.meta.json")
     for _ in range(6):
         try:
             with open(p, encoding="utf-8") as fh:
                 data = json.load(fh)
-            return data if isinstance(data, dict) else {}
+            return records.AgentMetaFile.model_validate(data) if isinstance(data, dict) else records.AgentMetaFile()
         except (FileNotFoundError, json.JSONDecodeError):
             # Missing OR mid-write (a partial file json-fails) — both are the same
             # "not there yet" race, so both retry.
             time.sleep(0.05)
-        except Exception:
+        except OSError:
+            # A read failure that is not "not there yet" (permissions, a
+            # vanished mount) — degrade the same way a missing file does.
+            # NOT `except Exception`: a `pydantic.ValidationError` off a real,
+            # readable meta.json that does not match AgentMetaFile is schema
+            # drift, not a race, and must propagate rather than be read as
+            # "no sidecar" — the same distinction records.py's module header
+            # draws for every other foreign shape in this package.
             break
-    return {}
+    return records.AgentMetaFile()
 
 
 def short_model(model: str | None) -> str:

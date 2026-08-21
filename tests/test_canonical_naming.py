@@ -87,6 +87,13 @@ ID_GATE_ALLOWED = {
     # The client UI's own opaque session id on a `user_message` — unread by
     # any canonical logic.
     "harness/impl/codex/canonical/records.py:client_id",
+    # A Claude Code hook delivery's own id (SessionStart/PreCompact/…) — the
+    # same role codex's own hook_event_id plays above: used only as a
+    # last-resort native_identity fallback string, not a domain concept.
+    "harness/impl/claude_code/canonical/records.py:hook_event_id",
+    # Declared (a real, corpus-observed hook field) but read by nothing here —
+    # the same "not worth a NewType" shape as codex's item_id/limit_id above.
+    "harness/impl/claude_code/canonical/records.py:prompt_id",
 }
 
 

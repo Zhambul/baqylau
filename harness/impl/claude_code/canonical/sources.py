@@ -206,7 +206,7 @@ class ClaudeRawEventSources(HarnessRawEventSources):
                     ),
                     (
                         "teammate"
-                        if model.agent_meta(session.source_reference, ActorId(actor_name)).get("taskKind")
+                        if model.agent_meta(session.source_reference, ActorId(actor_name)).taskKind
                         == "in_process_teammate"
                         else "child"
                     ),

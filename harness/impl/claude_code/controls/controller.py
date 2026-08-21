@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 import re
 import time
-from typing import Any
+
+from pydantic import ValidationError
 
 from harness.contract import ControlHandler, HarnessController
 from harness.models import (
@@ -46,7 +47,7 @@ from domain.ids import WindowId
 # terminal — converts explicitly wherever a domain `WindowId` reaches a
 # terminal contract request.
 from terminal.models.values import WindowId as NativeWindowId
-from harness.impl.claude_code.canonical import transcript
+from harness.impl.claude_code.canonical import records, transcript
 from harness.impl.claude_code.controls import askdialog, confirmdialog, plandialog, rewindmenu, tui
 from harness.impl.claude_code.probe import ClaudeCodeTerminalProbe
 
@@ -343,18 +344,18 @@ class SelectEffortHandler(ControlHandler):
 
 def _native_prompts(
     question_asked: QuestionAsked,
-) -> list[dict[str, Any]]:  # loose: claude code JSON, wave 2 gives it a real shape
+) -> list[records.Question]:
     return [
-        {
-            "id": prompt.prompt_id,
-            "header": prompt.title or "",
-            "question": prompt.prompt,
-            "multiSelect": prompt.multiple,
-            "options": [
-                {"label": choice.label, "description": choice.description or ""}
+        records.Question(
+            id=prompt.prompt_id,
+            header=prompt.title or "",
+            question=prompt.prompt,
+            multiSelect=prompt.multiple,
+            options=[
+                records.QuestionOption(label=choice.label, description=choice.description or "")
                 for choice in prompt.choices
             ],
-        }
+        )
         for prompt in question_asked.questions
     ]
 
@@ -369,9 +370,13 @@ class AnswerQuestionHandler(ControlHandler):
         window_id = control_context.terminal_window_id
         if window_id is None:
             return ControlResult(request.request_id, "rejected", "session is not live")
-        answers = json.loads(request.answers.json_text) if request.answers is not None else []
-        if not isinstance(answers, list):
+        raw_answers = json.loads(request.answers.json_text) if request.answers is not None else []
+        if not isinstance(raw_answers, list):
             return ControlResult(request.request_id, "rejected", "question answers must be an array")
+        try:
+            answers = [askdialog.AnswerDraft.model_validate(a) for a in raw_answers]
+        except ValidationError as error:
+            return ControlResult(request.request_id, "rejected", f"malformed question answer: {error}")
         driver = _TerminalDriver(terminal)
         try:
             askdialog.drive(

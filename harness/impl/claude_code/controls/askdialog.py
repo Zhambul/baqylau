@@ -41,16 +41,31 @@
 #     question set — which is why this driver never presses Escape.
 import time
 from collections.abc import Callable
-from typing import Any
+
+from pydantic import BaseModel, ConfigDict
 
 from domain.ids import WindowId
 
+from harness.impl.claude_code.canonical import records
 from harness.impl.claude_code.controls import askdialog_screen as askscreen
 from harness.impl.claude_code.controls import screen_driver as screendrive
 from harness.impl.claude_code.controls.askdialog_screen import (
     CHAT_LABEL, SUBMIT_LABEL, Row, current_question, dialog_open, review_open, rows,
 )
 from harness.impl.claude_code.controls.screen_driver import ScreenDriver
+
+class AnswerDraft(BaseModel):
+    """One question's answer, as the WEB CLIENT posts it — OUR OWN request
+    shape (AnswerQuestionHandler's `request.answers`), not Claude Code's:
+    `{"selected": [labels…], "other": "text"}`. Declared FOREIGN (like every
+    boundary this codebase does not control) so a malformed answers array
+    is a rejected control request rather than an AttributeError deep in the
+    driver."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    selected: list[str] | None = None
+    other: str | None = None
+
 
 POLL_S = 0.15          # screen re-read beat while waiting for a dialog state
 STEP_TIMEOUT_S = 2.5   # a key press → its screen effect visible
@@ -146,7 +161,7 @@ def _require_type_row(screen_driver: ScreenDriver, win: WindowId, type_digit: st
 def _advance_multi(
     screen_driver: ScreenDriver,
     win: WindowId,
-    questions: list[dict[str, Any]],  # loose: claude code JSON, wave 2 gives it a real shape
+    questions: list[records.Question],
     i: int,
     sleep: Callable[[float], None],
 ) -> None:
@@ -180,9 +195,9 @@ def _advance_multi(
 def _answer_question(
     screen_driver: ScreenDriver,
     win: WindowId,
-    questions: list[dict[str, Any]],  # loose: claude code JSON, wave 2 gives it a real shape
+    questions: list[records.Question],
     i: int,
-    ans: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
+    answer_draft: AnswerDraft,
     sleep: Callable[[float], None],
 ) -> None:
     """Apply one question's answer to the CURRENT pane. Leaves the dialog on
@@ -192,11 +207,11 @@ def _answer_question(
     Digits are inert in v2.1.215 — every selection is cursor-to-the-row +
     Enter."""
     q = questions[i]
-    labels = [o.get("label") or "" for o in (q.get("options") or [])]
-    selected = [s for s in (ans.get("selected") or []) if s in labels]
-    other = (ans.get("other") or "").strip()
+    labels = [o.label or "" for o in (q.options or [])]
+    selected = [s for s in (answer_draft.selected or []) if s in labels]
+    other = (answer_draft.other or "").strip()
     type_digit = str(len(labels) + 1)
-    if q.get("multiSelect"):
+    if q.multiSelect:
         # Enter TOGGLES the cursored box — diff each option's desired state
         # against the checkbox the screen actually shows (the user may have
         # pre-toggled some in the terminal), and only flip the ones that differ
@@ -238,7 +253,7 @@ def _answer_question(
         return
     if not selected:
         raise AskError("options", "no answer for %r"
-                       % (q.get("question") or "")[:60])
+                       % (q.question or "")[:60])
     tgt = str(1 + labels.index(selected[0]))
     cursor_to(screen_driver, win, _by_digit(tgt), sleep, "option " + tgt)
     screen_driver.send_key(win, "enter")                    # select + auto-advance
@@ -247,8 +262,8 @@ def _answer_question(
 def drive(
     screen_driver: ScreenDriver,
     win: WindowId,
-    questions: list[dict[str, Any]],  # loose: claude code JSON, wave 2 gives it a real shape
-    answers: list[dict[str, Any]],  # loose: claude code JSON, wave 2 gives it a real shape
+    questions: list[records.Question],
+    answers: list[AnswerDraft],
     chat: bool = False,
     sleep: Callable[[float], None] = time.sleep,
 ) -> dict[str, bool]:

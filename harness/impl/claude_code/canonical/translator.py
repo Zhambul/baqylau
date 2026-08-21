@@ -7,10 +7,10 @@ import json
 from dataclasses import replace
 
 from domain.events import ShellProgressed, TaskListChanged
-from domain.ids import TaskId, TaskListId
+from domain.ids import TaskId
 from repository.mapper.documents import StoredDocumentError, decode_document
 from harness.contract import HarnessTranslator
-from harness.impl.claude_code.canonical import transcript
+from harness.impl.claude_code.canonical import records, transcript
 from harness.impl.claude_code.canonical.hooks import translate_hook
 from harness.impl.claude_code.canonical.messages import (
     launch_selections,
@@ -105,15 +105,12 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
             canonical = task_event(raw_event, document)
             return TranslationResult((canonical,), "translated")
         if raw_event.source_type == "task_list":
-            task_ids = document.get("task_ids")
-            list_id = document.get("list_id")
-            if (
-                not isinstance(list_id, str)
-                or not isinstance(task_ids, list)
-                or not all(isinstance(task_id, str) for task_id in task_ids)
-            ):
+            task_list = records.TaskListDocument.model_validate(document)
+            if task_list.list_id is None or task_list.task_ids is None:
                 raise TranslationError("malformed Claude Code task list")
-            payload = TaskListChanged(TaskListId(list_id), tuple(TaskId(task_id) for task_id in task_ids))
+            payload = TaskListChanged(
+                task_list.list_id, tuple(TaskId(task_id) for task_id in task_list.task_ids)
+            )
             canonical = event(raw_event, "task_list", raw_event.source_position, "changed", payload)
             return TranslationResult((canonical,), "translated")
         if raw_event.source_type in ("hook", "teammate_hook"):

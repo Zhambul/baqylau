@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any
+from typing import Literal, cast
+
+from pydantic import JsonValue
 
 from domain.events import (
     ActorAssignmentFinished,
@@ -38,9 +40,9 @@ from domain.ids import (
     TaskId,
     TurnId,
 )
-from domain.values import AccountReference, MessagePhase, MessageRole, Outcome, TitleOrigin
+from domain.values import AccountReference, GoalState, MessagePhase, MessageRole, Outcome, TitleOrigin
 from harness.impl.claude_code import model
-from harness.impl.claude_code.canonical import transcript
+from harness.impl.claude_code.canonical import records, transcript
 from harness.impl.claude_code.canonical.support import SYNTHETIC_MODEL_ID, content, event, model_reference, timestamp
 from harness.impl.claude_code.canonical.toolcalls import BACKGROUND_LAUNCH_STUB, ToolCallSemantics
 from harness.impl.claude_code.canonical.turns import TurnSemantics
@@ -64,13 +66,13 @@ BACKGROUND_OUTCOMES: dict[str, Outcome] = {
 }
 
 
-def background_outcome(status: object) -> Outcome | None:  # loose: claude code JSON, wave 2 gives it a real shape
+def background_outcome(status: JsonValue) -> Outcome | None:
     return BACKGROUND_OUTCOMES.get(str(status or "").strip().lower(), "unknown") if status else None
 
 
 def launch_selections(
     raw_event: RawEvent,
-    document: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
+    document: dict[str, JsonValue],
     selection_semantics: SelectionSemantics,
 ) -> list[CanonicalEvent[EventPayload]]:
     """The launch observation the gateway recorded from the hook's inherited
@@ -82,9 +84,10 @@ def launch_selections(
     `reported_by_harness`. Without this event the selectors sit empty until
     then — and for the effort, forever: Claude Code never echoes it in any
     raw event stream."""
+    launch = records.LaunchSelectionDocument.model_validate(document)
     subject_id = f"launch:{raw_event.source_position}"
     events = []
-    model_selection = document.get("model")
+    model_selection = launch.model
     if isinstance(model_selection, str) and model_selection:
         changed = selection_semantics.model(
             raw_event.session_id,
@@ -94,7 +97,7 @@ def launch_selections(
         )
         if changed is not None:
             events.append(event(raw_event, "model", subject_id, "selected", changed))
-    effort_selection = document.get("effort")
+    effort_selection = launch.effort
     if isinstance(effort_selection, str) and effort_selection:
         chosen = selection_semantics.effort(
             raw_event.session_id, raw_event.actor_id, effort_selection, "selected"
@@ -133,7 +136,7 @@ def prompt_turn(
 
 def slash_command(
     raw_event: RawEvent,
-    record: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
+    record: dict[str, JsonValue],
     native_identity: str,
     occurred_at: float | None,
     turn_semantics: TurnSemantics,
@@ -160,8 +163,8 @@ def slash_command(
     A bare `/model` (no argument) opens the picker and settles nothing, and a
     multi-token argument is not a selection, so neither emits a state event.
     """
-    name = record["name"].lstrip("/").strip().lower()
-    selection = record["args"].strip()
+    name = str(record["name"]).lstrip("/").strip().lower()
+    selection = str(record["args"]).strip()
     if selection and len(selection.split()) == 1 and name in ("model", "effort"):
         payload: EventPayload | None = (
             selection_semantics.model(
@@ -198,22 +201,23 @@ def slash_command(
 
 def transcript_metadata(
     raw_event: RawEvent,
-    document: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
+    document: dict[str, JsonValue],
 ) -> list[CanonicalEvent[EventPayload]]:
     if raw_event.parent_actor_id is not None:
         return []
     record_type = document.get("type")
+    if record_type not in ("agent-name", "ai-title", "summary"):
+        return []
+    title_record = records.TitleRecord.model_validate(document)
     if record_type == "agent-name":
-        title = str(document.get("agentName") or "").strip()
+        title = str(title_record.agentName or "").strip()
         origin: TitleOrigin = "custom"
     elif record_type == "ai-title":
-        title = str(document.get("aiTitle") or "").strip()
+        title = str(title_record.aiTitle or "").strip()
         origin = "automatic"
-    elif record_type == "summary":
-        title = str(document.get("summary") or "").strip()
-        origin = "summary"
     else:
-        return []
+        title = str(title_record.summary or "").strip()
+        origin = "summary"
     if not title:
         return []
     return [
@@ -229,18 +233,18 @@ def transcript_metadata(
 
 def session_events(
     raw_event: RawEvent,
-    document: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
+    document: dict[str, JsonValue],
 ) -> list[CanonicalEvent[EventPayload]]:
     lead_actor_id = raw_event.actor_id
     if raw_event.parent_actor_id is not None:
-        metadata = {}
+        metadata = records.AgentMetaFile()
         if raw_event.source_type == "child_transcript":
             metadata_path = os.path.splitext(raw_event.source_name)[0] + ".meta.json"
             try:
                 with open(metadata_path, encoding="utf-8") as metadata_file:
-                    metadata = json.load(metadata_file)
+                    metadata = records.AgentMetaFile.model_validate(json.load(metadata_file))
             except (OSError, json.JSONDecodeError):
-                metadata = {}
+                metadata = records.AgentMetaFile()
         events = [
             event(
                 raw_event,
@@ -253,7 +257,7 @@ def session_events(
                 ),
             )
         ]
-        description = str(metadata.get("description") or "").strip()
+        description = str(metadata.description or "").strip()
         if description:
             events.append(event(
                 raw_event,
@@ -265,7 +269,7 @@ def session_events(
         return events
     transcript_path = str(document.get("transcript_path") or "")
     session_started = SessionStarted(
-        working_directory=document.get("cwd") or "",
+        working_directory=str(document.get("cwd") or ""),
         source_reference=(
             os.path.realpath(transcript_path) if transcript_path else raw_event.source_name
         ),
@@ -306,22 +310,26 @@ def session_events(
 
 def task_event(
     raw_event: RawEvent,
-    task: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
+    document: dict[str, JsonValue],
 ) -> CanonicalEvent[EventPayload]:
-    task_id = TaskId(str(task.get("id") or ""))
+    task = records.TaskFile.model_validate(document)
+    task_id = TaskId(str(task.id or ""))
     if not task_id:
         raise TranslationError("Claude Code task has no id", context=raw_event.source_position)
-    state = task.get("status")
-    if state not in ("pending", "in_progress", "completed", "deleted"):
+    native_state = task.status
+    if native_state not in ("pending", "in_progress", "completed", "deleted"):
         raise TranslationError(
-            f"unknown Claude Code task state: {state!r}",
+            f"unknown Claude Code task state: {native_state!r}",
             context=raw_event.source_position,
         )
-    owner = str(task.get("owner") or "").strip()
+    state = cast(
+        Literal["pending", "in_progress", "completed", "deleted"], native_state
+    )
+    owner = str(task.owner or "").strip()
     payload = TaskChanged(
         task_id,
-        str(task.get("subject") or ""),
-        str(task.get("description") or "").strip() or None,
+        str(task.subject or ""),
+        str(task.description or "").strip() or None,
         state,
         ActorId(owner) if owner else None,
     )
@@ -330,8 +338,8 @@ def task_event(
 
 def translate_transcript(
     raw_event: RawEvent,
-    document: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
-    record: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
+    document: dict[str, JsonValue],
+    record: dict[str, JsonValue],
     tool_call_semantics: ToolCallSemantics,
     turn_semantics: TurnSemantics,
     selection_semantics: SelectionSemantics,
@@ -339,9 +347,13 @@ def translate_transcript(
     actor_started: bool,
 ) -> list[CanonicalEvent[EventPayload]]:
     kind = record["kind"]
+    native_message = document.get("message")
+    native_message_id = (
+        native_message.get("id") if isinstance(native_message, dict) else None
+    )
     native_identity = str(
         document.get("uuid")
-        or document.get("message", {}).get("id")
+        or native_message_id
         or raw_event.source_position
     )
     occurred_at = timestamp(document.get("timestamp"))
@@ -369,7 +381,17 @@ def translate_transcript(
             raw_event, record, native_identity, occurred_at, turn_semantics, selection_semantics
         )
     if kind == "goal":
-        payload = GoalChanged(record.get("objective"), record["state"], record.get("reason"))
+        objective = record.get("objective")
+        reason = record.get("reason")
+        # The state string is ours (built by parse_line/_task_notification,
+        # never read back off Claude Code's own JSON), so the Literal it
+        # promises is a fact about THIS module, not a foreign claim.
+        state = cast(GoalState, record["state"])
+        payload = GoalChanged(
+            str(objective) if objective is not None else None,
+            state,
+            str(reason) if reason is not None else None,
+        )
         return [event(raw_event, "goal", native_identity, "changed", payload, occurred_at=occurred_at)]
     if kind == "background_command_completed":
         shell_id = ShellId(str(record.get("operation_id") or ""))
@@ -441,8 +463,8 @@ def translate_transcript(
             occurred_at=occurred_at,
         )]
     if kind == "actor_assignment_finished":
-        assignment_id = AssignmentId(record["assignment_id"])
-        status = record["status"]
+        assignment_id = AssignmentId(str(record["assignment_id"]))
+        status = str(record["status"])
         outcome: Outcome = "failed" if status == "failed" else "cancelled" if status == "cancelled" else "succeeded"
         result = record.get("result")
         payload = ActorAssignmentFinished(
@@ -492,7 +514,8 @@ def translate_transcript(
     if kind == "assistant":
         events = []
         message_identity = native_identity
-        native_message = document.get("message") or {}
+        native_message_value = document.get("message")
+        native_message = native_message_value if isinstance(native_message_value, dict) else {}
         native_blocks = native_message.get("content")
         if not isinstance(native_blocks, list):
             native_blocks = []
@@ -561,7 +584,7 @@ def translate_transcript(
                 )
             elif block_type == "tool_use":
                 events.extend(tool_call_semantics.tool_started(raw_event, block))
-        model_id = record.get("model")
+        model_id = str(record.get("model")) if record.get("model") else None
         # "<synthetic>" is the transcript's marker on machine-injected
         # assistant records (interrupt notices, hook output). It names no model
         # anyone selected, so it reports nothing.
@@ -607,7 +630,8 @@ def translate_transcript(
         return events
     if kind == "results":
         events = []
-        blocks = list(record.get("blocks") or ())
+        blocks_value = record.get("blocks")
+        blocks = [b for b in blocks_value if isinstance(b, dict)] if isinstance(blocks_value, list) else []
         # The line's `toolUseResult` sidecar carries what only the native
         # response document holds — a diff's structured patch, a background
         # launch's task id. It belongs to the line, so it can only be attributed
@@ -628,7 +652,9 @@ def translate_transcript(
             )
             if failed and tool_call_semantics.pending_attention(call_id):
                 events.append(tool_call_semantics.attention_declined(raw_event, call_id, result_text))
-        for text_index, result_text in enumerate(record.get("texts") or ()):
+        texts_value = record.get("texts")
+        texts = [t for t in texts_value if isinstance(t, str)] if isinstance(texts_value, list) else []
+        for text_index, result_text in enumerate(texts):
             text_identity = f"{native_identity}:text:{text_index}"
             payload = MessageCreated(
                 MessageId(text_identity),
@@ -640,7 +666,9 @@ def translate_transcript(
             events.append(event(raw_event, "message", text_identity, "created", payload))
         return events
     if kind == "compact":
-        before = (record.get("meta") or {}).get("preTokens")
+        meta_value = record.get("meta")
+        meta = meta_value if isinstance(meta_value, dict) else {}
+        before = meta.get("preTokens")
         payload = CompactionFinished(int(before) if isinstance(before, int) else None, None)
         return [event(raw_event, "compaction", native_identity, "finished", payload, occurred_at=occurred_at)]
     if kind == "recap":

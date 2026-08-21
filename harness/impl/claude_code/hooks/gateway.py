@@ -57,7 +57,7 @@ class ClaudeHookGateway(HarnessHookGateway):
         if (
             hook_name == "SubagentStart"
             and native_actor_id
-            and model.agent_meta(source_reference, ActorId(str(native_actor_id))).get("taskKind")
+            and model.agent_meta(source_reference, ActorId(str(native_actor_id))).taskKind
             == "in_process_teammate"
         ):
             source_type = "teammate_hook"

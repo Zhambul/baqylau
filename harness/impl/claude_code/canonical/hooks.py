@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from pydantic import JsonValue
 
 from domain.events import (
     ActorFinished,
@@ -17,6 +17,7 @@ from domain.events import (
     TurnFinished,
 )
 from domain.values import ActorRole, Outcome
+from harness.impl.claude_code.canonical import records
 from harness.impl.claude_code.canonical.messages import session_events
 from harness.impl.claude_code.canonical.support import event
 from harness.impl.claude_code.canonical.toolcalls import ToolCallSemantics
@@ -27,7 +28,7 @@ from harness.models.selections import SelectionSemantics
 
 def effort_report(
     raw_event: RawEvent,
-    document: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
+    hook: records.HookPayload,
     selection_semantics: SelectionSemantics,
 ) -> list[CanonicalEvent[EventPayload]]:
     """The active effort level Claude Code reports on hooks that fire mid-turn
@@ -39,7 +40,7 @@ def effort_report(
     Every one of those hooks reports it, so all but the first report the level
     that is already known — a change event with nothing changed. Only a real
     transition survives `selections`."""
-    level = document.get("effort")
+    level: JsonValue = hook.effort
     if isinstance(level, dict):
         level = level.get("level")
     if not isinstance(level, str) or not level:
@@ -83,26 +84,27 @@ def turn_finished(
 
 def translate_hook(
     raw_event: RawEvent,
-    document: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
+    document: dict[str, JsonValue],
     tool_call_semantics: ToolCallSemantics,
     turn_semantics: TurnSemantics,
     selection_semantics: SelectionSemantics,
 ) -> list[CanonicalEvent[EventPayload]]:
-    hook_name = document.get("hook_event_name") or ""
-    native_identity = str(document.get("hook_event_id") or document.get("uuid") or raw_event.source_position)
+    hook = records.HookPayload.model_validate(document)
+    hook_name = hook.hook_event_name or ""
+    native_identity = str(hook.hook_event_id or hook.uuid or raw_event.source_position)
     if hook_name == "SessionStart":
         return session_events(raw_event, document)
     if hook_name == "SessionEnd":
-        payload: EventPayload = SessionFinished("succeeded", document.get("reason") or None)
+        payload: EventPayload = SessionFinished("succeeded", hook.reason or None)
         return [event(raw_event, "session", str(raw_event.session_id), "finished", payload)]
     if hook_name == "Stop":
         return [
             turn_finished(raw_event, turn_semantics, native_identity, "succeeded"),
-            *effort_report(raw_event, document, selection_semantics),
+            *effort_report(raw_event, hook, selection_semantics),
         ]
     if hook_name == "StopFailure":
         events = [turn_finished(raw_event, turn_semantics, native_identity, "failed")]
-        if document.get("error") == "rate_limit":
+        if hook.error == "rate_limit":
             events.append(event(
                 raw_event,
                 "goal",
@@ -114,12 +116,12 @@ def translate_hook(
     if hook_name == "PreToolUse":
         return [
             *tool_call_semantics.tool_started(raw_event, document),
-            *effort_report(raw_event, document, selection_semantics),
+            *effort_report(raw_event, hook, selection_semantics),
         ]
     if hook_name in ("PostToolUse", "PostToolUseFailure"):
         return [
             *tool_call_semantics.tool_finished(raw_event, document, hook_name == "PostToolUseFailure"),
-            *effort_report(raw_event, document, selection_semantics),
+            *effort_report(raw_event, hook, selection_semantics),
         ]
     if hook_name == "SubagentStart":
         actor_id = raw_event.actor_id
@@ -133,14 +135,14 @@ def translate_hook(
                 ActorStarted(str(actor_id), role),
             )
         ]
-        if document.get("agent_type"):
+        if hook.agent_type:
             events.append(
                 event(
                     raw_event,
                     "actor",
                     str(actor_id),
                     "name",
-                    ActorNameChanged(str(document["agent_type"])),
+                    ActorNameChanged(str(hook.agent_type)),
                 )
             )
         return events
@@ -154,7 +156,7 @@ def translate_hook(
         # regardless, straight from the child's own process.
         return [
             event(raw_event, "actor", str(raw_event.actor_id), "finished", ActorFinished(None)),
-            *effort_report(raw_event, document, selection_semantics),
+            *effort_report(raw_event, hook, selection_semantics),
         ]
     if hook_name in ("TaskCreated", "TaskCompleted"):
         return []

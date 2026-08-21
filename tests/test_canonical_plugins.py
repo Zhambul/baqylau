@@ -3218,6 +3218,68 @@ def test_codex_unknown_record_kind_stays_ignored_not_failed():
     assert translated.canonical_events == ()
 
 
+def test_claude_unknown_hook_field_fails_translation_naming_it():
+    """The owner's strictest-stance decision (TASKS.md, 2026-08-21) applied to
+    Claude Code's own hook contract (canonical/records.py's HookPayload): a
+    hook delivery carrying a field that module has not declared is schema
+    drift, not tolerance — the same outcome the codex wave's equivalent test
+    checks for its own foreign register."""
+    with pytest.raises(ValidationError, match="a_field_records_py_has_never_declared"):
+        ClaudeCanonicalTranslator().translate(raw_event(
+            {
+                "hook_event_name": "Stop",
+                "session_id": "session-one",
+                "a_field_records_py_has_never_declared": "surprise",
+            },
+            harness="claude_code",
+            source_type="hook",
+            raw_event_id="claude-unknown-field",
+        ))
+
+
+def test_claude_wrong_typed_hook_field_fails_translation():
+    """Same decision, the other half of "shape mismatch": a declared field
+    present with the WRONG type is exactly as much drift as a missing or an
+    extra one — `duration_ms` is a number in every measured hook delivery,
+    never a list."""
+    with pytest.raises(ValidationError, match="duration_ms"):
+        ClaudeCanonicalTranslator().translate(raw_event(
+            {
+                "hook_event_name": "PostToolUse",
+                "session_id": "session-one",
+                "tool_use_id": "call-one",
+                "tool_name": "Bash",
+                "duration_ms": ["not", "a", "number"],
+            },
+            harness="claude_code",
+            source_type="hook",
+            raw_event_id="claude-wrong-type",
+        ))
+
+
+def test_claude_unmapped_tool_stays_ignored_not_failed():
+    """The distinction the owner's decision draws, on THIS package's own
+    "unknown kind" dispatch (toolcalls.TOOL_KINDS, not records.py): an
+    unrecognised NATIVE TOOL NAME is that vocabulary growing — a Claude Code
+    build shipping a tool this codebase has not mapped yet — not a shape
+    mismatch within a tool it claims to know, so it stays `ignored_unknown`,
+    never `translation_failed`, however ordinary its arguments look."""
+    translated = ClaudeCanonicalTranslator().translate(raw_event(
+        {
+            "hook_event_name": "PreToolUse",
+            "session_id": "session-one",
+            "tool_use_id": "call-one",
+            "tool_name": "ATool2026HasNotShippedYet",
+            "tool_input": {"whatever": "fields"},
+        },
+        harness="claude_code",
+        source_type="hook",
+        raw_event_id="claude-unknown-kind",
+    ))
+    assert translated.decision == "ignored_unknown"
+    assert translated.canonical_events == ()
+
+
 def test_native_instruction_wrappers_are_canonical_system_messages():
     codex = CodexCanonicalTranslator().translate(
         raw_event(

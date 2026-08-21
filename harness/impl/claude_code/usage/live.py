@@ -38,9 +38,48 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
+
+from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
 
 from harness.models import UsageWindowSample
+
+# The CLI's `get_usage` control-response body — a DIFFERENT foreign source
+# from the transcript/hook registers (canonical/records.py owns those): a
+# live subprocess reply, not a stored document, so a shape mismatch here
+# degrades to "no live usage" (usage() falls back to the status-line
+# snapshot) rather than a stored `translation_failed` — there is nothing
+# recorded to fail. `extra="forbid"` still applies: an unrecognised field is
+# exactly as much a sign the CLI's own `get_usage` contract moved as a
+# transcript field would be. Every field below is what this module's own
+# `windows`/`usage` read; the module's own docstring already calls this
+# channel "documented... as experimental, hence the defensive parsing."
+_LIVE_FOREIGN = ConfigDict(extra="forbid", frozen=True)
+
+
+class LiveUsageWindow(BaseModel):
+    model_config = _LIVE_FOREIGN
+    utilization: float | int | None = None
+    resets_at: str | None = None
+
+
+class LiveModelScopedWindow(BaseModel):
+    model_config = _LIVE_FOREIGN
+    display_name: str | None = None
+    utilization: float | int | None = None
+    resets_at: str | None = None
+
+
+class LiveRateLimits(BaseModel):
+    model_config = _LIVE_FOREIGN
+    five_hour: LiveUsageWindow | None = None
+    seven_day: LiveUsageWindow | None = None
+    model_scoped: list[LiveModelScopedWindow] | None = None
+
+
+class GetUsageResponse(BaseModel):
+    model_config = _LIVE_FOREIGN
+    rate_limits: LiveRateLimits | None = None
+    subscription_type: str | None = None
 
 # The probe must not out-live a refresh cycle by much. Two seconds is the happy
 # path; the slow one is the CLI's own retry ladder when the usage endpoint is
@@ -120,13 +159,13 @@ def subprocess_environment(config_directory: str | None) -> dict[str, str]:
     return environment
 
 
-def _epoch_seconds(value: object) -> float | None:  # loose: claude code JSON, wave 2 gives it a real shape
+def _epoch_seconds(value: str | None) -> float | None:
     """An ISO 8601 `resets_at` to epoch seconds, or None.
 
     This channel spells the reset as a timestamp string where the status line
     spells it as a number; both end up in the same column.
     """
-    if not isinstance(value, str) or not value.strip():
+    if not value or not value.strip():
         return None
     try:
         return datetime.fromisoformat(value).timestamp()
@@ -134,19 +173,19 @@ def _epoch_seconds(value: object) -> float | None:  # loose: claude code JSON, w
         return None
 
 
-def _percent(value: object) -> Decimal | None:  # loose: claude code JSON, wave 2 gives it a real shape
-    if not isinstance(value, (int, float)) or isinstance(value, bool):
+def _percent(value: float | int | None) -> Decimal | None:
+    if value is None or isinstance(value, bool):
         return None
     return Decimal(max(0, min(100, int(round(value)))))
 
 
-def _model_key(display_name: object) -> str | None:  # loose: claude code JSON, wave 2 gives it a real shape
+def _model_key(display_name: str | None) -> str | None:
     """A server-supplied bucket label ("Fable 5") as a window key ("fable_5").
 
     Server text becomes a stored key here, so it is reduced to the same shape
     every other window key has: lower case, `[a-z0-9_]`, and short.
     """
-    if not isinstance(display_name, str):
+    if not display_name:
         return None
     slug = "".join(character if character.isalnum() else "_" for character in display_name.lower())
     slug = "_".join(part for part in slug.split("_") if part)
@@ -156,32 +195,30 @@ def _model_key(display_name: object) -> str | None:  # loose: claude code JSON, 
 
 
 def windows(
-    rate_limits: object,  # loose: claude code JSON, wave 2 gives it a real shape
+    live_rate_limits: LiveRateLimits | None,
 ) -> tuple[UsageWindowSample, ...]:
     """The account-wide pair first, then one sample per model bucket."""
-    if not isinstance(rate_limits, dict):
+    if live_rate_limits is None:
         return ()
     samples = []
-    for key in ACCOUNT_WINDOWS:
-        window = rate_limits.get(key)
-        if not isinstance(window, dict):
+    for key, window in (
+        ("five_hour", live_rate_limits.five_hour), ("seven_day", live_rate_limits.seven_day)
+    ):
+        if window is None:
             continue
-        used_percent = _percent(window.get("utilization"))
+        used_percent = _percent(window.utilization)
         if used_percent is None:
             continue
-        samples.append(UsageWindowSample(key, used_percent, _epoch_seconds(window.get("resets_at"))))
-    scoped = rate_limits.get("model_scoped")
-    for bucket in scoped if isinstance(scoped, list) else []:
+        samples.append(UsageWindowSample(key, used_percent, _epoch_seconds(window.resets_at)))
+    for bucket in live_rate_limits.model_scoped or ():
         if len(samples) >= len(ACCOUNT_WINDOWS) + MAX_MODEL_WINDOWS:
             break
-        if not isinstance(bucket, dict):
-            continue
-        model_key = _model_key(bucket.get("display_name"))
-        used_percent = _percent(bucket.get("utilization"))
+        model_key = _model_key(bucket.display_name)
+        used_percent = _percent(bucket.utilization)
         if model_key is None or used_percent is None:
             continue
         samples.append(
-            UsageWindowSample(model_key, used_percent, _epoch_seconds(bucket.get("resets_at")))
+            UsageWindowSample(model_key, used_percent, _epoch_seconds(bucket.resets_at))
         )
     return tuple(samples)
 
@@ -189,7 +226,7 @@ def windows(
 def _control_response(
     process: subprocess.Popen[str],
     deadline: float,
-) -> dict[str, Any] | None:  # loose: claude code JSON, wave 2 gives it a real shape
+) -> dict[str, JsonValue] | None:
     """The reply to our one request, out of a stream that also carries the
     session's own lifecycle lines."""
     if process.stdout is None:
@@ -214,7 +251,7 @@ def _control_response(
 
 def request_usage(
     config_directory: str | None,
-) -> dict[str, Any] | None:  # loose: claude code JSON, wave 2 gives it a real shape
+) -> GetUsageResponse | None:
     """One `get_usage` round trip against one account's configuration."""
     try:
         process = subprocess.Popen(
@@ -238,7 +275,13 @@ def request_usage(
             return None
         process.stdin.write(json.dumps(REQUEST) + "\n")
         process.stdin.flush()
-        return _control_response(process, time.time() + PROBE_TIMEOUT_SECONDS)
+        payload = _control_response(process, time.time() + PROBE_TIMEOUT_SECONDS)
+        if payload is None:
+            return None
+        try:
+            return GetUsageResponse.model_validate(payload)
+        except ValidationError:
+            return None
     except OSError:
         return None
     finally:
@@ -259,12 +302,12 @@ def usage(config_directory: str | None) -> LiveUsage | None:
     document = request_usage(config_directory)
     result = None
     if document is not None:
-        samples = windows(document.get("rate_limits"))
+        samples = windows(document.rate_limits)
         if samples:
-            plan = document.get("subscription_type")
+            plan = document.subscription_type
             result = LiveUsage(
                 captured_at=now,
-                plan=plan if isinstance(plan, str) and plan else None,
+                plan=plan if plan else None,
                 windows=samples,
             )
     _cache[config_directory or ""] = (now + CACHE_SECONDS, result)

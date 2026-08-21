@@ -1,0 +1,752 @@
+# harness/impl/claude_code/canonical/records.py — Claude Code's DECLARED
+# foreign shapes: the transcript JSONL record, the hook delivery, the OTLP
+# metrics document, and the free-form tool call bodies riding inside them.
+#
+# Same two-tier scheme codex/canonical/records.py uses:
+#
+#   FOREIGN (`extra="forbid"`) is Claude Code's OWN, closed, fully-observed
+#   shape: every field below a FOREIGN model declares is transcribed from a
+#   real corpus read (~/.claude/projects/**/*.jsonl, plus this machine's own
+#   raw_events table for hook/otel deliveries that never touch disk) or from
+#   what the code already read before this module existed — never a guessed
+#   field. A payload that does not match — missing, wrong type, or an EXTRA
+#   field Claude Code did not used to send — raises `pydantic.ValidationError`,
+#   which the interpreter loop (engine/interpret/loop.py) turns into the
+#   `translation_failed` verdict naming the error. Owner's decision (TASKS.md):
+#   a foreign record either matches exactly what we declared, or translation
+#   stops until the new field is declared.
+#
+#   OPEN_FOREIGN (`extra="ignore"`) is for a shape that is GENUINELY open by
+#   the vendor's own contract, not by an oversight of ours: a tool call's own
+#   arguments/response, whose exact key set is chosen by whatever Claude Code
+#   built-in or MCP tool answered, most of which nothing here reads. Declared
+#   as far as reality allows — the fields something in this package actually
+#   reads, plus what a real corpus sample showed for the better-travelled
+#   tools — with every OTHER field riding along unread rather than failing the
+#   record for it.
+#
+# The RECORD DISPATCH stays a plain dict lookup on `type` (transcript.py's
+# `if t == "user":` chain, hooks.py's `if hook_name == "Stop":` chain, TOOL_KINDS
+# in toolcalls.py) exactly as before — never a pydantic discriminated union,
+# for the same reason codex's module gives: an unknown discriminant value must
+# stay the `ignored` verdict it already gets, and only a RECOGNISED one is
+# strict-validated against the model that owns it. A record whose top-level
+# `type` this package never reads a field of (Claude Code writes ~15 of them —
+# `last-prompt`, `permission-mode`, `mode`, `relocated`, `worktree-state`,
+# `file-history-delta`, `file-history-snapshot`, `custom-title`, `atis-latch`,
+# `pr-link`, `agent-setting`, `fork-context-ref`, `bridge-session`, and more to
+# come) is never handed to a model at all — the same "ignored, not failed"
+# outcome parse_line already gives it.
+from __future__ import annotations
+
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
+
+from domain.ids import ActorId, CallId, MessageId, SessionId, TaskListId, TurnId
+
+# The one config every FOREIGN payload model shares — see the module header.
+FOREIGN = ConfigDict(extra="forbid", frozen=True)
+
+# The escape hatch for a shape that is open by the VENDOR's contract, not by
+# an oversight of ours — see the module header.
+OPEN_FOREIGN = ConfigDict(extra="ignore", frozen=True)
+
+
+# === The transcript record register (transcript.py) ==========================
+# Claude Code's `~/.claude/projects/**/*.jsonl` line grammar. Every field below
+# is corpus-observed (a 549k-line scan of this machine's own transcripts,
+# 2026-08-22) for the record `type` it sits under; parse_line() dispatches on
+# `type` BEFORE any model sees the record, so the ~15 other top-level types
+# this package never reads a field of never reach one of these.
+
+
+class TextBlock(BaseModel):
+    model_config = FOREIGN
+    type: Literal["text"] = "text"
+    text: str | None = None
+
+
+class ToolUseBlock(BaseModel):
+    model_config = FOREIGN
+    type: Literal["tool_use"] = "tool_use"
+    id: str | None = None
+    name: str | None = None
+    caller: str | None = None
+    # The tool's own arguments — a genuinely open, per-tool shape (module
+    # header); read generically here and validated against the specific
+    # tool's ARGUMENTS model only once TOOL_KINDS has named it (toolcalls.py).
+    input: dict[str, JsonValue] | None = None
+
+
+class InnerContentBlock(BaseModel):
+    """One block of a tool_result's OWN `content` — GENUINELY open (module
+    header): it is whatever the tool that answered chose to put there, a
+    Claude Code built-in's plain text/image or an MCP tool's own shape.
+    Declared as far as reality allows: `text`/`tool_name`/`source` are the
+    three fields transcript.result_text() reads (the corpus's `text`,
+    `tool_reference`, `image` block kinds); anything else rides along unread.
+    """
+
+    model_config = OPEN_FOREIGN
+    type: str | None = None
+    text: str | None = None
+    tool_name: str | None = None
+    source: dict[str, JsonValue] | None = None
+
+
+class ToolResultBlock(BaseModel):
+    model_config = FOREIGN
+    type: Literal["tool_result"] = "tool_result"
+    tool_use_id: CallId | None = None
+    is_error: bool | None = None
+    content: str | list[InnerContentBlock | str] | None = None
+
+
+class ThinkingBlock(BaseModel):
+    model_config = FOREIGN
+    type: Literal["thinking"] = "thinking"
+    thinking: str | None = None
+    signature: str | None = None
+
+
+class ImageBlock(BaseModel):
+    model_config = FOREIGN
+    type: Literal["image"] = "image"
+    source: dict[str, JsonValue] | None = None
+
+
+class FallbackBlock(BaseModel):
+    """A model-swap notice Claude Code injects into `message.content` itself
+    (corpus: `{"type": "fallback", "from": "...", "to": "..."}`) — nothing
+    here reads it, declared so its shape does not silently drift unnoticed.
+    `from` is aliased: it is a Python keyword."""
+
+    model_config = FOREIGN
+    type: Literal["fallback"] = "fallback"
+    from_: str | None = Field(default=None, alias="from")
+    to: str | None = None
+
+
+
+class MessageObject(BaseModel):
+    """The `message` object a `user`/`assistant` transcript record carries —
+    one shape shared by both (corpus: the assistant's `usage`/`model`/
+    `stop_reason` sit beside the same `id`/`role`/`content` a user message
+    carries, just usually empty on the user side)."""
+
+    model_config = FOREIGN
+    id: str | None = None
+    type: str | None = None
+    role: str | None = None
+    model: str | None = None
+    content: str | list[dict[str, JsonValue]] | None = None
+    stop_reason: str | None = None
+    stop_sequence: str | None = None
+    stop_details: dict[str, JsonValue] | None = None
+    usage: dict[str, JsonValue] | None = None
+    container: dict[str, JsonValue] | None = None
+    context_management: dict[str, JsonValue] | None = None
+    diagnostics: dict[str, JsonValue] | None = None
+
+
+class Origin(BaseModel):
+    """A `user` record's `origin` — read for `origin.kind == "task-notification"`
+    (transcript.parse_line); the other fields ride along unread but are
+    corpus-observed on the same object."""
+
+    model_config = FOREIGN
+    kind: str | None = None
+    name: str | None = None
+    senderTaskId: str | None = None
+    body: str | None = None
+    from_: str | None = Field(default=None, alias="from")
+
+
+class UserRecord(BaseModel):
+    model_config = FOREIGN
+    type: Literal["user"] = "user"
+    message: MessageObject | None = None
+    origin: Origin | None = None
+    # The tool result sidecar — GENUINELY open (module header): its shape
+    # varies by WHICH tool answered, from a plain string to any of the
+    # dozens of per-tool result documents toolUseResult.py's corpus scan
+    # turned up. Read generically here; the specific tool's RESPONSE model
+    # (ToolResponse below) validates it once the call it answers is known.
+    toolUseResult: str | dict[str, JsonValue] | None = None
+    uuid: str | None = None
+    parentUuid: str | None = None
+    sessionId: str | None = None
+    session_id: SessionId | None = None
+    timestamp: str | None = None
+    cwd: str | None = None
+    gitBranch: str | None = None
+    entrypoint: str | None = None
+    slug: str | None = None
+    userType: str | None = None
+    version: str | None = None
+    agentId: str | None = None
+    isSidechain: bool | None = None
+    isMeta: bool | None = None
+    isCompactSummary: bool | None = None
+    isVisibleInTranscriptOnly: bool | None = None
+    interruptedMessageId: str | None = None
+    permissionMode: str | None = None
+    promptId: str | None = None
+    promptSource: str | None = None
+    sourceToolAssistantUUID: str | None = None
+    sourceToolUseID: str | None = None
+    toolDenialKind: str | None = None
+    turnCompanion: bool | None = None
+    userFeedback: dict[str, JsonValue] | None = None
+    imagePasteIds: list[JsonValue] | None = None
+
+
+class AssistantRecord(BaseModel):
+    model_config = FOREIGN
+    type: Literal["assistant"] = "assistant"
+    message: MessageObject | None = None
+    uuid: str | None = None
+    parentUuid: str | None = None
+    sessionId: str | None = None
+    session_id: SessionId | None = None
+    timestamp: str | None = None
+    cwd: str | None = None
+    gitBranch: str | None = None
+    entrypoint: str | None = None
+    slug: str | None = None
+    userType: str | None = None
+    version: str | None = None
+    agentId: str | None = None
+    isSidechain: bool | None = None
+    isAbortedMidStream: bool | None = None
+    isApiErrorMessage: bool | None = None
+    apiErrorStatus: str | int | None = None
+    error: str | None = None
+    errorDetails: dict[str, JsonValue] | None = None
+    requestId: str | None = None
+    effort: str | dict[str, JsonValue] | None = None
+    attributionAgent: str | None = None
+    attributionPlugin: str | None = None
+    attributionSkill: str | None = None
+    quotaLimits: dict[str, JsonValue] | None = None
+
+
+class SystemRecord(BaseModel):
+    """A `type=system` record, of any `subtype` — one model shared by every
+    subtype (corpus: `stop_hook_summary`, `turn_duration`, `away_summary`,
+    `local_command`, `compact_boundary`, `informational`,
+    `model_consent_fallback`, `model_refusal_fallback`, `bridge_status`), each
+    of which uses a subset of the union of fields below. parse_line() reads
+    `subtype` first and only two of these carry content this package acts on
+    (`compact_boundary`'s `compactMetadata`, `away_summary`/plain `content`)."""
+
+    model_config = FOREIGN
+    type: Literal["system"] = "system"
+    subtype: str | None = None
+    content: str | None = None
+    compactMetadata: dict[str, JsonValue] | None = None
+    uuid: str | None = None
+    parentUuid: str | None = None
+    logicalParentUuid: str | None = None
+    sessionId: str | None = None
+    session_id: SessionId | None = None
+    timestamp: str | None = None
+    cwd: str | None = None
+    gitBranch: str | None = None
+    entrypoint: str | None = None
+    slug: str | None = None
+    userType: str | None = None
+    version: str | None = None
+    agentId: str | None = None
+    isSidechain: bool | None = None
+    isMeta: bool | None = None
+    level: str | None = None
+    toolUseID: str | None = None
+    toolUseId: str | None = None
+    stopReason: str | None = None
+    hasOutput: bool | None = None
+    hookAdditionalContext: str | None = None
+    hookCount: int | None = None
+    hookErrors: list[JsonValue] | None = None
+    hookInfos: list[JsonValue] | None = None
+    preventContinuation: bool | None = None
+    preventedContinuation: bool | None = None
+    durationMs: int | float | None = None
+    messageCount: int | None = None
+    pendingBackgroundAgentCount: int | None = None
+    choice: str | None = None
+    fallbackModel: str | None = None
+    originalModel: str | None = None
+    persistedAsDefault: bool | None = None
+    apiRefusalCategory: str | None = None
+    apiRefusalExplanation: str | None = None
+    direction: str | None = None
+    refusedUserMessageUuid: str | None = None
+    requestId: str | None = None
+    trigger: str | None = None
+    url: str | None = None
+
+
+class GoalStatusAttachment(BaseModel):
+    """An `attachment.type == "goal_status"` body — the one attachment kind
+    parse_line reads a field of (`condition`/`met`/`reason`)."""
+
+    model_config = FOREIGN
+    type: Literal["goal_status"] = "goal_status"
+    condition: str | None = None
+    met: bool | None = None
+    reason: str | None = None
+    durationMs: int | float | None = None
+    iterations: int | None = None
+    sentinel: str | None = None
+    tokens: int | None = None
+
+
+class QueuedCommandAttachment(BaseModel):
+    """An `attachment.type == "queued_command"` body — the other attachment
+    kind parse_line reads a field of (`commandMode`/`prompt`)."""
+
+    model_config = FOREIGN
+    type: Literal["queued_command"] = "queued_command"
+    commandMode: str | None = None
+    prompt: str | None = None
+    isMeta: bool | None = None
+    origin: dict[str, JsonValue] | None = None
+    source_uuid: str | None = None
+    timestamp: str | None = None
+
+
+class AttachmentRecord(BaseModel):
+    """A `type=attachment` record. Claude Code writes ~28 `attachment.type`
+    values (corpus: `hook_success`, `total_tokens_reminder`, `skill_listing`,
+    …); only `goal_status`/`queued_command` are read a field of, so the
+    `attachment` body itself stays a JSON object here — `_attachment_body`
+    (transcript.py) is what dispatches THOSE two into their own strict model,
+    the same two-step "peek the discriminant, then validate" every other
+    register in this module uses."""
+
+    model_config = FOREIGN
+    type: Literal["attachment"] = "attachment"
+    attachment: dict[str, JsonValue] | None = None
+    uuid: str | None = None
+    parentUuid: str | None = None
+    sessionId: str | None = None
+    session_id: SessionId | None = None
+    timestamp: str | None = None
+    cwd: str | None = None
+    gitBranch: str | None = None
+    entrypoint: str | None = None
+    slug: str | None = None
+    userType: str | None = None
+    version: str | None = None
+    agentId: str | None = None
+    isSidechain: bool | None = None
+
+
+class QueueOperationRecord(BaseModel):
+    """A `type=queue-operation` record — the enqueue half of a
+    task-notification's delivery (transcript.py header); read for nothing but
+    its `type`, so declared as far as the corpus goes and no further."""
+
+    model_config = FOREIGN
+    type: Literal["queue-operation"] = "queue-operation"
+    operation: str | None = None
+    # The same <task-notification> XML string a `user` record's plain-string
+    # content carries (transcript.py header) — a raw string here, not JSON.
+    content: str | dict[str, JsonValue] | None = None
+    sessionId: str | None = None
+    timestamp: str | None = None
+
+
+# `document["type"]` dispatches to one of UserRecord/AssistantRecord/
+# SystemRecord/AttachmentRecord/QueueOperationRecord above — a plain
+# `if t == "user":` chain in transcript.py's parse_line, for the same "smart
+# union" reason the module header gives, so no dispatch DICT is declared here.
+# Every OTHER top-level type Claude Code writes (`last-prompt`,
+# `permission-mode`, `mode`, `ai-title`, `relocated`, `worktree-state`,
+# `file-history-delta`, `file-history-snapshot`, `agent-name`, `summary`,
+# `custom-title`, `atis-latch`, `pr-link`, `agent-setting`, `fork-context-ref`,
+# `bridge-session`) is read only for the three-field TITLE shape below (an
+# `agent-name`/`ai-title`/`summary` record) or not at all — see TitleRecord.
+
+
+class TitleRecord(BaseModel):
+    """An `agent-name` / `ai-title` / `summary` record — the three shapes
+    transcript_metadata (messages.py) reads a naming fact out of. One model:
+    each carries exactly one of the three text fields plus the two identity
+    fields every transcript record type shares."""
+
+    model_config = FOREIGN
+    type: Literal["agent-name", "ai-title", "summary"]
+    agentName: str | None = None
+    aiTitle: str | None = None
+    summary: str | None = None
+    sessionId: str | None = None
+    uuid: str | None = None
+
+
+# === The tool call bodies (toolcalls.py) ======================================
+# What TOOL_KINDS names a call — Bash, Read, AskUserQuestion, and so on — is a
+# CLOSED, small vocabulary (toolcalls.TOOL_KINDS); an unlisted native tool name
+# raises UnknownRawEvent there, which is this register's own "unknown kind
+# stays ignored" outcome, decided before ANY of the models below is reached.
+# Each declared ARGUMENTS/RESPONSE model below is scoped to the KIND its tool
+# belongs to, not to one native tool name, because Claude Code's own built-in
+# tools of one kind share a body (Read/Write/Edit all carry `file_path`).
+#
+# OPEN_FOREIGN throughout this section: a tool's arguments and its response are
+# the vendor's own per-tool contract (an MCP server's schema above all), not
+# ours, and several of the native names TOOL_KINDS lists (`MultiEdit`,
+# `NotebookEdit`, `Grep`, `Glob`, `mcp__node_repl__js`, `exec_command`,
+# `read_command`, `py`, `GenerateImage`) have no fixture in this machine's own
+# corpus to declare exhaustively (module header) — the fields below are what
+# toolcalls.py itself reads, plus what a corpus sample (this machine's
+# `raw_events` table and its own `~/.claude/projects` transcripts, 2026-08-22)
+# showed for the better-travelled tools of each kind.
+
+
+class ShellArguments(BaseModel):
+    """Bash / Monitor / exec_command / read_command / py / the node REPL MCP
+    tool — everything TOOL_KINDS maps to `"shell"`. `command` is read by
+    every one of them; `run_in_background` only by Bash (_shell_started)."""
+
+    model_config = OPEN_FOREIGN
+    command: str | list[str] | None = None
+    description: str | None = None
+    run_in_background: bool | None = None
+    timeout: int | float | None = None
+
+
+class FileArguments(BaseModel):
+    """Read / Write / Edit / MultiEdit / NotebookEdit — everything TOOL_KINDS
+    maps to `"file"`. `file_path`/`notebook_path`/`content` are what
+    file_facts (toolcalls.py) reads."""
+
+    model_config = OPEN_FOREIGN
+    file_path: str | None = None
+    notebook_path: str | None = None
+    content: str | None = None
+    old_string: str | None = None
+    new_string: str | None = None
+    replace_all: bool | None = None
+    limit: int | None = None
+    offset: int | None = None
+    description: str | None = None
+
+
+class SearchArguments(BaseModel):
+    """Grep / Glob / WebSearch / ToolSearch — everything TOOL_KINDS maps to
+    `"search"`. `pattern`/`query` are SEARCH_QUERY_FIELDS, the two fields
+    tool_finished actually reads."""
+
+    model_config = OPEN_FOREIGN
+    pattern: str | None = None
+    query: str | None = None
+    max_results: int | None = None
+    allowed_domains: list[str] | None = None
+
+
+class WebFetchArguments(BaseModel):
+    model_config = OPEN_FOREIGN
+    url: str | None = None
+    prompt: str | None = None
+    limit: int | None = None
+
+
+class WorktreeArguments(BaseModel):
+    """EnterWorktree / ExitWorktree. Nothing here reads a specific field —
+    tool_finished serialises the whole call as `content(arguments)` — so
+    this exists to give the argument dict a real shape rather than to feed
+    any one field to a reader."""
+
+    model_config = OPEN_FOREIGN
+    name: str | None = None
+    path: str | None = None
+    action: str | None = None
+    discard_changes: bool | None = None
+
+
+class SkillArguments(BaseModel):
+    """A Skill call's own input: `skill` names it, and _skill_started reports
+    every OTHER field it carries (today just `args`) generically as "the
+    call's arguments" — open by the reader's OWN design, not only by the
+    vendor's, so `skill` is the one field pulled out."""
+
+    model_config = OPEN_FOREIGN
+    skill: str | None = None
+
+
+class AssignmentArguments(BaseModel):
+    """Agent / Task — everything TOOL_KINDS maps to `"assignment"`."""
+
+    model_config = OPEN_FOREIGN
+    name: str | None = None
+    subagent_type: str | None = None
+    prompt: str | None = None
+    description: str | None = None
+    model: str | None = None
+    team_name: str | None = None
+    isolation: str | None = None
+    run_in_background: bool | None = None
+
+
+class SendMessageArguments(BaseModel):
+    """A SendMessage call's input — closed and fully corpus-observed (this
+    machine's own hook deliveries and transcript, 2026-08-22), so strict."""
+
+    model_config = FOREIGN
+    recipient: str | None = None
+    to: str | None = None
+    content: str | None = None
+    message: str | None = None
+    summary: str | None = None
+    type: str | None = None
+
+
+class QuestionOption(BaseModel):
+    model_config = OPEN_FOREIGN
+    label: str | None = None
+    description: str | None = None
+
+
+class Question(BaseModel):
+    model_config = OPEN_FOREIGN
+    id: str | int | None = None
+    header: str | None = None
+    question: str | None = None
+    multiSelect: bool | None = None
+    options: list[QuestionOption] | None = None
+
+
+class QuestionArguments(BaseModel):
+    """An AskUserQuestion call's input."""
+
+    model_config = OPEN_FOREIGN
+    questions: list[Question] | None = None
+    answers: dict[str, JsonValue] | None = None
+    annotations: dict[str, JsonValue] | None = None
+
+
+class PlanArguments(BaseModel):
+    """An ExitPlanMode call's input."""
+
+    model_config = OPEN_FOREIGN
+    plan: str | None = None
+    planFilePath: str | None = None
+
+
+# `tool_kind(native_name)` names which of the ARGUMENTS models above owns a
+# call's input; toolcalls.py's own per-kind methods (_shell_started,
+# file_facts, …) each call the one that is theirs directly, so no dispatch
+# DICT is declared here — `"ignored"` has none: nothing ever reads a field of
+# one, so no model was worth declaring for it either.
+
+
+class PatchHunk(BaseModel):
+    """One `structuredPatch` hunk of a file-edit tool's response — closed and
+    ours to expect exactly (toolcalls.structured_patch reads every field)."""
+
+    model_config = FOREIGN
+    oldStart: int | None = None
+    oldLines: int | None = None
+    newStart: int | None = None
+    newLines: int | None = None
+    lines: list[str] | None = None
+
+
+class ToolResponse(BaseModel):
+    """A tool call's answer — the hook path's `tool_response`, the
+    transcript's `toolUseResult` sidecar, and tool_result()'s synthetic
+    `{"tool_use_id": …, "tool_response": …}` all converge on this one shape
+    (support.py/toolcalls.py already read it as one interchangeable thing).
+    GENUINELY open (module header): its key set is chosen by whichever tool
+    answered. Declared as far as reality allows — every field
+    structured_patch/_shell_finished/_assignment_finished/plan_resolution
+    reads, plus `content`/`type` for the image-edit variants a corpus scan of
+    this machine's own transcripts turned up (`create`/`update`/`text`/
+    `image`, each carrying `content`/`filePath`/`structuredPatch`)."""
+
+    model_config = OPEN_FOREIGN
+    content: JsonValue = None
+    type: str | None = None
+    structuredPatch: list[PatchHunk] | None = None
+    backgroundTaskId: str | None = None
+    backgroundedByUser: bool | None = None
+    isAsync: bool | None = None
+    status: str | None = None
+    taskId: str | None = None
+    planWasEdited: bool | None = None
+
+
+class ToolCallNative(BaseModel):
+    """The "one call, however it arrived" shape tool_started/tool_finished
+    read: a hook's PreToolUse/PostToolUse delivery (HookPayload, below) OR a
+    transcript assistant block's tool_use OR tool_result's own synthetic
+    stand-in. All three name the call the same two ways (`tool_use_id`/`id`,
+    `tool_name`/`name`) and carry the same two payload fields
+    (`tool_input`/`input`, `tool_response`) under different names depending on
+    which of the two raw event streams it rode."""
+
+    model_config = OPEN_FOREIGN
+    tool_use_id: CallId | None = None
+    id: str | None = None
+    tool_name: str | None = None
+    name: str | None = None
+    tool_input: dict[str, JsonValue] | None = None
+    input: dict[str, JsonValue] | None = None
+    tool_response: ToolResponse | str | None = None
+    caller: str | None = None
+
+
+# === The hook delivery (hooks.py, hooks/foreground.py, hooks/gateway.py) =====
+
+
+class HookPayload(BaseModel):
+    """One hook delivery's JSON body — Claude Code's own hook contract, closed
+    and version-stable (unlike a tool's own arguments), so FOREIGN. Every
+    field below is corpus-observed: this machine's own `raw_events` table
+    (`harness='claude_code' and source_type='hook'`), grouped by
+    `hook_event_name`, across all 18 hook events this installation has fired
+    (2026-08-22) — `PreToolUse`, `PostToolUse`, `PostToolBatch`, `Stop`,
+    `SubagentStart`, `SubagentStop`, `SessionStart`, `SessionEnd`,
+    `PreCompact`, `PostCompact`, `Notification`, `MessageDisplay`,
+    `UserPromptSubmit`, `InstructionsLoaded`, `ConfigChange`, `TeammateIdle`,
+    `PostToolUseFailure`, `PermissionRequest`. One model for all of them, on
+    the same footing as SystemRecord above: each event uses a subset of the
+    union below, and `hook_event_name` is read first (translate_hook) to pick
+    the branch, so a field one event never carries simply stays None on it."""
+
+    model_config = FOREIGN
+    hook_event_name: str | None = None
+    hook_event_id: str | None = None
+    uuid: str | None = None
+    session_id: SessionId | None = None
+    transcript_path: str | None = None
+    agent_transcript_path: str | None = None
+    cwd: str | None = None
+    prompt_id: str | None = None
+    permission_mode: str | None = None
+    effort: str | dict[str, JsonValue] | None = None
+    agent_id: ActorId | None = None
+    agent_type: str | None = None
+    tool_use_id: CallId | None = None
+    tool_name: str | None = None
+    tool_input: dict[str, JsonValue] | None = None
+    tool_response: ToolResponse | str | None = None
+    tool_calls: list[dict[str, JsonValue]] | None = None
+    duration_ms: int | float | None = None
+    error: str | None = None
+    is_interrupt: bool | None = None
+    reason: str | None = None
+    stop_hook_active: bool | None = None
+    last_assistant_message: str | None = None
+    background_tasks: list[JsonValue] | None = None
+    session_crons: list[JsonValue] | None = None
+    message: str | None = None
+    message_id: MessageId | None = None
+    delta: str | None = None
+    final: bool | None = None
+    index: int | None = None
+    turn_id: TurnId | None = None
+    notification_type: str | None = None
+    prompt: str | None = None
+    custom_instructions: str | None = None
+    compact_summary: str | None = None
+    trigger: str | None = None
+    model: str | None = None
+    source: str | None = None
+    file_path: str | None = None
+    load_reason: str | None = None
+    memory_type: str | None = None
+    team_name: str | None = None
+    teammate_name: str | None = None
+
+
+# === The OTLP metrics document (otel.py, otel/gateway.py) ====================
+
+
+class OTelMetricsDocument(BaseModel):
+    """The OTLP JSON metrics export Claude Code POSTs — GENUINELY open (module
+    header): OTLP is a large, evolving standard this package deliberately
+    walks with `.get()`/`isinstance` at every level rather than asserting a
+    fixed shape (translate_otel, otel/gateway._session_ids/windows), the same
+    posture codex's WorldStatePayload takes for its own periodic snapshot. No
+    field is declared beyond that: this model exists to require "a JSON
+    object", not to describe OTLP itself."""
+
+    model_config = OPEN_FOREIGN
+
+
+# === The launch selection (messages.py launch_selections) ====================
+
+
+class LaunchSelectionDocument(BaseModel):
+    """The launch observation the hook gateway records from the CLI's
+    inherited environment (`--model`/`--effort`) — closed, ours to define on
+    both ends (hooks/gateway.py writes it, launch_selections reads it)."""
+
+    model_config = FOREIGN
+    model: str | None = None
+    effort: str | None = None
+
+
+# === The agent meta.json sidecar (model.py agent_meta, canonical/messages.py
+# session_events) =============================================================
+
+
+class AgentMetaFile(BaseModel):
+    """A subagent's `agent-<id>.meta.json` sidecar — corpus-observed (this
+    machine's own sidecars, 2026-08-22): every field any of them has ever
+    carried, though `description`/`taskKind` are the only two read."""
+
+    model_config = FOREIGN
+    agentType: str | None = None
+    color: str | None = None
+    customAgentType: str | None = None
+    description: str | None = None
+    isFork: bool | None = None
+    model: str | None = None
+    name: str | None = None
+    parentAgentId: str | None = None
+    permissionMode: str | None = None
+    planModeRequired: bool | None = None
+    spawnDepth: int | None = None
+    stoppedByUser: bool | None = None
+    taskKind: str | None = None
+    teamName: str | None = None
+    toolUseId: str | None = None
+    worktreeBranch: str | None = None
+    worktreeCleanlyRemoved: bool | None = None
+    worktreePath: str | None = None
+
+
+# === The session task file (canonical/sources.py ClaudeTaskRawEventSource) ===
+
+
+class TaskFile(BaseModel):
+    """One `~/.claude/tasks/session-<id>/<task-id>.json` snapshot — corpus-
+    observed (this machine's own task files, 2026-08-22): every session task
+    Claude Code has ever written carries exactly these eight fields."""
+
+    model_config = FOREIGN
+    id: str | int | None = None
+    subject: str | None = None
+    description: str | None = None
+    activeForm: str | None = None
+    status: str | None = None
+    owner: str | None = None
+    blocks: list[JsonValue] | None = None
+    blockedBy: list[JsonValue] | None = None
+
+
+# === The task list membership document (translator.py) =======================
+
+
+class TaskListDocument(BaseModel):
+    """The `task_list` raw event's payload — OURS on both ends
+    (ClaudeTaskRawEventSource writes it, ClaudeCanonicalTranslator reads it)."""
+
+    model_config = FOREIGN
+    list_id: TaskListId | None = None
+    task_ids: list[str] | None = None

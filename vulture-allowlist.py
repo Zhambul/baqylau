@@ -145,3 +145,112 @@ check  # harness/impl/claude_code/controls/askdialog_screen.py Row
 access_token  # dashboard/dictate.py GrantResponse
 alias         # harness/impl/claude_code/account.py AccountRecord
 decided       # harness/impl/claude_code/controls/plandialog.py Decided
+
+# harness/impl/claude_code/canonical/records.py — the Claude Code transcript/
+# hook/tool-call FOREIGN models. Every name below is a declared, corpus-
+# observed field nothing in this package reads (the same "declared as far as
+# reality allows, not only as far as a reader needs" stance codex's own
+# records.py section above takes): `extra="forbid"` demands them of every
+# record Claude Code actually sends, not only the ones a translator uses.
+caller                          # ToolUseBlock / ToolCallNative
+is_error                        # ToolResultBlock
+thinking                        # ThinkingBlock
+from_                           # FallbackBlock / Origin
+stop_reason                     # MessageObject
+stop_sequence                   # MessageObject
+stop_details                    # MessageObject
+container                       # MessageObject
+context_management              # MessageObject
+diagnostics                      # MessageObject
+senderTaskId                     # Origin
+parentUuid                        # UserRecord / AssistantRecord / SystemRecord / AttachmentRecord
+sessionId                          # UserRecord / AssistantRecord / SystemRecord / AttachmentRecord / TitleRecord
+gitBranch                          # UserRecord / AssistantRecord / SystemRecord
+entrypoint                         # UserRecord / AssistantRecord / SystemRecord
+userType                           # UserRecord / AssistantRecord / SystemRecord
+agentId                            # UserRecord / AssistantRecord / SystemRecord
+isSidechain                        # UserRecord / AssistantRecord / SystemRecord / AttachmentRecord
+isVisibleInTranscriptOnly          # UserRecord
+permissionMode                     # UserRecord
+promptId                           # UserRecord
+promptSource                       # UserRecord
+sourceToolAssistantUUID            # UserRecord
+sourceToolUseID                    # UserRecord
+toolDenialKind                      # UserRecord
+turnCompanion                       # UserRecord
+userFeedback                        # UserRecord
+imagePasteIds                       # UserRecord
+isAbortedMidStream                  # AssistantRecord
+isApiErrorMessage                   # AssistantRecord
+apiErrorStatus                      # AssistantRecord
+errorDetails                        # AssistantRecord
+requestId                           # AssistantRecord / SystemRecord
+attributionAgent                    # AssistantRecord
+attributionPlugin                   # AssistantRecord
+attributionSkill                    # AssistantRecord
+quotaLimits                         # AssistantRecord
+logicalParentUuid                   # SystemRecord
+toolUseID                           # SystemRecord
+toolUseId                           # SystemRecord / AgentMetaFile
+stopReason                          # SystemRecord
+hasOutput                           # SystemRecord
+hookAdditionalContext               # SystemRecord
+hookCount                           # SystemRecord
+hookErrors                          # SystemRecord
+hookInfos                           # SystemRecord
+preventContinuation                 # SystemRecord
+preventedContinuation               # SystemRecord
+durationMs                          # SystemRecord / GoalStatusAttachment
+messageCount                        # SystemRecord
+pendingBackgroundAgentCount         # SystemRecord
+fallbackModel                       # SystemRecord
+originalModel                       # SystemRecord
+persistedAsDefault                  # SystemRecord
+apiRefusalCategory                  # SystemRecord
+apiRefusalExplanation               # SystemRecord
+direction                           # SystemRecord
+refusedUserMessageUuid              # SystemRecord
+trigger                             # SystemRecord / HookPayload
+iterations                          # GoalStatusAttachment
+sentinel                            # GoalStatusAttachment
+source_uuid                         # QueuedCommandAttachment
+old_string                         # FileArguments
+new_string                         # FileArguments
+replace_all                        # FileArguments
+offset                             # FileArguments
+max_results                        # SearchArguments
+allowed_domains                    # SearchArguments
+discard_changes                    # WorktreeArguments
+team_name                          # AssignmentArguments / HookPayload
+isolation                          # AssignmentArguments
+annotations                        # QuestionArguments
+planFilePath                       # PlanArguments
+backgroundedByUser                  # ToolResponse
+agent_transcript_path               # HookPayload
+permission_mode                     # HookPayload
+tool_calls                          # HookPayload
+is_interrupt                        # HookPayload
+stop_hook_active                    # HookPayload
+last_assistant_message              # HookPayload
+background_tasks                    # HookPayload
+session_crons                       # HookPayload
+final                               # HookPayload
+notification_type                   # HookPayload
+custom_instructions                 # HookPayload
+compact_summary                     # HookPayload
+load_reason                         # HookPayload
+memory_type                         # HookPayload
+teammate_name                       # HookPayload
+agentType                          # AgentMetaFile
+customAgentType                    # AgentMetaFile
+isFork                              # AgentMetaFile
+parentAgentId                       # AgentMetaFile
+planModeRequired                    # AgentMetaFile
+spawnDepth                          # AgentMetaFile
+stoppedByUser                       # AgentMetaFile
+teamName                            # AgentMetaFile
+worktreeBranch                      # AgentMetaFile
+worktreeCleanlyRemoved              # AgentMetaFile
+worktreePath                        # AgentMetaFile
+activeForm                          # TaskFile
+blockedBy                           # TaskFile

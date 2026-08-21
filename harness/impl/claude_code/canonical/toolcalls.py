@@ -11,7 +11,9 @@ arguments are remembered until the result arrives.
 from __future__ import annotations
 
 import json
-from typing import Any, Literal, TypeAlias
+from typing import Literal, TypeAlias
+
+from pydantic import JsonValue
 
 from domain.events import (
     ActorAssignmentFinished,
@@ -56,6 +58,7 @@ from domain.values import (
     PlanState,
     WorktreeAction,
 )
+from harness.impl.claude_code.canonical import records
 from harness.impl.claude_code.canonical.support import content, event
 from harness.models import RawEvent, UnknownRawEvent
 
@@ -147,23 +150,21 @@ def tool_kind(native_name: str) -> ToolKind:
 
 def structured_patch(
     path: str,
-    tool_response: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
+    tool_response: records.ToolResponse,
 ) -> tuple[str | None, int | None, int | None]:
-    patches = tool_response.get("structuredPatch")
-    if not isinstance(patches, list) or not patches:
+    patches = tool_response.structuredPatch
+    if not patches:
         return None, None, None
     lines = [f"--- {path}", f"+++ {path}"]
     added = 0
     removed = 0
     for patch in patches:
-        if not isinstance(patch, dict):
-            continue
-        old_start = int(patch.get("oldStart") or 0)
-        old_lines = int(patch.get("oldLines") or 0)
-        new_start = int(patch.get("newStart") or 0)
-        new_lines = int(patch.get("newLines") or 0)
+        old_start = patch.oldStart or 0
+        old_lines = patch.oldLines or 0
+        new_start = patch.newStart or 0
+        new_lines = patch.newLines or 0
         lines.append(f"@@ -{old_start},{old_lines} +{new_start},{new_lines} @@")
-        for line in patch.get("lines") or ():
+        for line in patch.lines or ():
             text = str(line)
             lines.append(text)
             if text.startswith("+"):
@@ -173,7 +174,7 @@ def structured_patch(
     return "\n".join(lines) + "\n", added, removed
 
 
-def result_content(tool_response: object) -> Content | None:  # loose: claude code JSON, wave 2 gives it a real shape
+def result_content(tool_response: JsonValue) -> Content | None:
     """What a call answered, whatever shape the raw event held it in.
 
     A hook reports the native response document, the transcript reports the
@@ -186,28 +187,26 @@ def result_content(tool_response: object) -> Content | None:  # loose: claude co
 
 
 def attention_answers(
-    arguments: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
+    arguments: records.QuestionArguments,
 ) -> tuple[AttentionAnswer, ...]:
-    native_answers = arguments.get("answers")
+    native_answers = arguments.answers
     if not isinstance(native_answers, dict):
         return ()
     answers = []
-    for question_index, question in enumerate(arguments.get("questions") or ()):
-        if not isinstance(question, dict):
-            continue
-        prompt = str(question.get("question") or "")
+    for question_index, question in enumerate(arguments.questions or ()):
+        prompt = str(question.question or "")
         native_answer = native_answers.get(prompt)
         if native_answer is None:
             continue
         if isinstance(native_answer, list):
             labels = tuple(str(value) for value in native_answer)
-        elif question.get("multiSelect"):
+        elif question.multiSelect:
             labels = tuple(part.strip() for part in str(native_answer).split(", ") if part.strip())
         else:
             labels = (str(native_answer),)
         answers.append(
             AttentionAnswer(
-                prompt_id=QuestionId(str(question.get("id") or question_index)),
+                prompt_id=QuestionId(str(question.id if question.id is not None else question_index)),
                 labels=labels,
             )
         )
@@ -215,14 +214,20 @@ def attention_answers(
 
 
 def plan_resolution(
-    native: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
+    tool_response: records.ToolResponse | str | None,
     failed: bool,
 ) -> tuple[PlanState, str | None, bool]:
-    response = native.get("tool_response") or native.get("tool_result")
     if not failed:
-        edited = bool(isinstance(response, dict) and response.get("planWasEdited"))
+        edited = bool(
+            isinstance(tool_response, records.ToolResponse) and tool_response.planWasEdited
+        )
         return "approved", None, edited
-    text = response if isinstance(response, str) else json.dumps(response or {}, ensure_ascii=False)
+    if isinstance(tool_response, str):
+        text = tool_response
+    elif tool_response is None:
+        text = "{}"
+    else:
+        text = json.dumps(tool_response.model_dump(exclude_none=True), ensure_ascii=False)
     marker = "the user said:"
     marker_position = text.find(marker)
     if marker_position >= 0:
@@ -243,7 +248,7 @@ class ToolCallSemantics:
     """
 
     def __init__(self) -> None:
-        self.calls: dict[CallId, tuple[str, dict[str, Any]]] = {}
+        self.calls: dict[CallId, tuple[str, dict[str, JsonValue]]] = {}
         # An armed Monitor's TASK id -> the shell that armed it, and how many
         # of its events have been attributed so far. A monitor's per-event
         # notification names only the task id — never the tool_use_id (measured
@@ -260,7 +265,7 @@ class ToolCallSemantics:
         self,
         call_id: CallId,
         native_name: str,
-        arguments: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
+        arguments: dict[str, JsonValue],
     ) -> None:
         self.calls[call_id] = (native_name, arguments)
 
@@ -268,8 +273,8 @@ class ToolCallSemantics:
         self,
         call_id: CallId,
         native_name: str | None,
-        arguments: dict[str, Any] | None,  # loose: claude code JSON, wave 2 gives it a real shape
-    ) -> tuple[str, dict[str, Any]]:  # loose: claude code JSON, wave 2 gives it a real shape
+        arguments: dict[str, JsonValue] | None,
+    ) -> tuple[str, dict[str, JsonValue]]:
         """The call's name and input: what this record carries, else what the
         request said. A record that has neither is a call whose start we never
         saw — a daemon that restarted mid-call — and it cannot be classified."""
@@ -305,13 +310,14 @@ class ToolCallSemantics:
     def tool_started(
         self,
         raw_event: RawEvent,
-        native: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
+        native: dict[str, JsonValue],
     ) -> list[CanonicalEvent[EventPayload]]:
-        call_id = CallId(str(native.get("tool_use_id") or native.get("id") or raw_event.source_position))
-        native_name = str(native.get("tool_name") or native.get("name") or "tool")
+        call = records.ToolCallNative.model_validate(native)
+        call_id = CallId(str(call.tool_use_id or call.id or raw_event.source_position))
+        native_name = str(call.tool_name or call.name or "tool")
         kind = tool_kind(native_name)
-        arguments = native.get("tool_input") if "tool_input" in native else native.get("input")
-        arguments = arguments if isinstance(arguments, dict) else {}
+        arguments = call.tool_input if call.tool_input is not None else call.input
+        arguments = arguments if arguments is not None else {}
         self.remember(call_id, native_name, arguments)
         if kind == "shell":
             return [self._shell_started(raw_event, call_id, native_name, arguments)]
@@ -327,7 +333,8 @@ class ToolCallSemantics:
             return [event(raw_event, "question", str(attention_id), "asked", payload)]
         if kind == "plan":
             attention_id = AttentionId(call_id)
-            payload = PlanProposed(attention_id, content(arguments.get("plan") or "", markdown=True))
+            plan_arguments = records.PlanArguments.model_validate(arguments)
+            payload = PlanProposed(attention_id, content(plan_arguments.plan or "", markdown=True))
             return [event(raw_event, "plan", str(attention_id), "proposed", payload)]
         # file, search, web, worktree: nothing is known yet that is worth a
         # fact. `ignored`: nothing ever will be.
@@ -338,21 +345,22 @@ class ToolCallSemantics:
         raw_event: RawEvent,
         call_id: CallId,
         native_name: str,
-        arguments: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
+        arguments: dict[str, JsonValue],
     ) -> CanonicalEvent[EventPayload]:
+        shell = records.ShellArguments.model_validate(arguments)
         shell_id = ShellId(call_id)
         if native_name == "Monitor":
             execution: ExecutionMode = "monitor"
-        elif native_name == "Bash" and arguments.get("run_in_background"):
+        elif native_name == "Bash" and shell.run_in_background:
             execution = "background"
         else:
             execution = "foreground"
-        command = arguments.get("command")
+        command = shell.command
         payload = ShellStarted(
             shell_id,
             content(command) if isinstance(command, str) and command else content(arguments),
             execution,
-            arguments.get("description") or None,
+            shell.description or None,
         )
         return event(raw_event, "shell", str(shell_id), "started", payload)
 
@@ -360,10 +368,11 @@ class ToolCallSemantics:
         self,
         raw_event: RawEvent,
         call_id: CallId,
-        arguments: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
+        arguments: dict[str, JsonValue],
     ) -> CanonicalEvent[EventPayload]:
         skill_id = SkillId(call_id)
-        name = str(arguments.get("skill") or "")
+        skill = records.SkillArguments.model_validate(arguments)
+        name = str(skill.skill or "")
         # The input a Skill call carries is the skill name and, at most, an
         # `args` string; when that is all there is, there are no arguments to
         # show and saying so beats echoing the name twice.
@@ -375,14 +384,15 @@ class ToolCallSemantics:
         self,
         raw_event: RawEvent,
         call_id: CallId,
-        arguments: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
+        arguments: dict[str, JsonValue],
     ) -> CanonicalEvent[EventPayload]:
         assignment_id = AssignmentId(call_id)
-        actor_name = arguments.get("name") or arguments.get("subagent_type")
-        prompt = arguments.get("prompt")
+        assignment = records.AssignmentArguments.model_validate(arguments)
+        actor_name = assignment.name or assignment.subagent_type
+        prompt = assignment.prompt
         payload = ActorAssignmentStarted(
             assignment_id,
-            content(arguments.get("description") or prompt or ""),
+            content(assignment.description or prompt or ""),
             actor_name=str(actor_name) if actor_name else None,
             prompt=content(prompt, markdown=True) if prompt else None,
         )
@@ -392,16 +402,17 @@ class ToolCallSemantics:
         self,
         raw_event: RawEvent,
         call_id: CallId,
-        arguments: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
+        arguments: dict[str, JsonValue],
     ) -> CanonicalEvent[EventPayload]:
         """A SendMessage: the actor speaking to a named peer, which is a message
         with a recipient — not a tool call with a text argument."""
-        recipient = ActorId(str(arguments.get("recipient") or arguments.get("to") or "peer"))
+        message = records.SendMessageArguments.model_validate(arguments)
+        recipient = ActorId(str(message.recipient or message.to or "peer"))
         message_id = MessageId(call_id)
         payload = MessageCreated(
             message_id,
             "assistant",
-            content(arguments.get("content") or arguments.get("message"), markdown=True),
+            content(message.content or message.message, markdown=True),
             "intermediate",
             None,
             recipient,
@@ -413,7 +424,7 @@ class ToolCallSemantics:
     def tool_finished(
         self,
         raw_event: RawEvent,
-        native: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
+        native: dict[str, JsonValue],
         failed: bool,
         *,
         result: Content | None = None,
@@ -425,19 +436,28 @@ class ToolCallSemantics:
         response document below stands in for it. Both spellings of one answer
         converge on one fact.
         """
-        call_id = CallId(str(native.get("tool_use_id") or native.get("id") or raw_event.source_position))
-        native_arguments = native.get("tool_input")
+        call = records.ToolCallNative.model_validate(native)
+        call_id = CallId(str(call.tool_use_id or call.id or raw_event.source_position))
         native_name, arguments = self.recall(
             call_id,
-            str(native.get("tool_name")) if native.get("tool_name") else None,
-            native_arguments if isinstance(native_arguments, dict) else None,
+            call.tool_name if call.tool_name else None,
+            call.tool_input,
         )
         kind = tool_kind(native_name)
         if kind in ("ignored", "message"):
             return []
-        tool_response = native.get("tool_response") or {}
+        tool_response = (
+            call.tool_response
+            if isinstance(call.tool_response, records.ToolResponse)
+            else records.ToolResponse()
+        )
         outcome: Outcome = "failed" if failed else "succeeded"
-        answered = result if result is not None else result_content(tool_response)
+        raw_tool_response: JsonValue = (
+            call.tool_response.model_dump(exclude_none=True)
+            if isinstance(call.tool_response, records.ToolResponse)
+            else call.tool_response
+        )
+        answered = result if result is not None else result_content(raw_tool_response)
         if kind == "shell":
             return self._shell_finished(raw_event, call_id, native_name, arguments, tool_response, outcome)
         if kind == "skill":
@@ -448,26 +468,33 @@ class ToolCallSemantics:
             return self._assignment_finished(raw_event, call_id, tool_response, outcome)
         if kind == "question":
             attention_id = AttentionId(call_id)
-            payload = QuestionAnswered(attention_id, attention_answers(arguments), None)
+            question_arguments = records.QuestionArguments.model_validate(arguments)
+            payload = QuestionAnswered(attention_id, attention_answers(question_arguments), None)
             return [event(raw_event, "question", str(attention_id), "answered", payload)]
         if kind == "plan":
             attention_id = AttentionId(call_id)
-            state, feedback, edited = plan_resolution(native, failed)
+            state, feedback, edited = plan_resolution(call.tool_response, failed)
             payload = PlanResolved(attention_id, state, feedback, edited)
             return [event(raw_event, "plan", str(attention_id), "resolved", payload)]
         if kind == "file":
             return self.file_facts(raw_event, call_id, native_name, arguments, tool_response, outcome)
         if kind == "search":
+            search_arguments = records.SearchArguments.model_validate(arguments)
             query = next(
-                (arguments[field] for field in SEARCH_QUERY_FIELDS if arguments.get(field)),
+                (
+                    getattr(search_arguments, field)
+                    for field in SEARCH_QUERY_FIELDS
+                    if getattr(search_arguments, field)
+                ),
                 None,
             )
             payload = SearchPerformed(native_name, content(query), answered, outcome)
             return [event(raw_event, "search", call_id, "performed", payload)]
         if kind == "web":
-            url = arguments.get("url")
+            url = records.WebFetchArguments.model_validate(arguments).url
             payload = WebFetched(str(url) if url else None, answered, outcome)
             return [event(raw_event, "web", call_id, "fetched", payload)]
+        records.WorktreeArguments.model_validate(arguments)  # shape-check only
         action: WorktreeAction = "entered" if native_name == "EnterWorktree" else "exited"
         payload = WorktreeChanged(action, content(arguments) if arguments else None, outcome)
         return [event(raw_event, "worktree", call_id, "changed", payload)]
@@ -478,7 +505,7 @@ class ToolCallSemantics:
         call_id: CallId,
         result_text: str,
         failed: bool,
-        tool_response: object,  # loose: claude code JSON, wave 2 gives it a real shape
+        tool_response: JsonValue,
     ) -> list[CanonicalEvent[EventPayload]]:
         """One tool_result block from the transcript, as facts.
 
@@ -505,7 +532,7 @@ class ToolCallSemantics:
                 "progress:0",
                 ShellProgressed(shell_id, 0, "output", content(result_text), "replace"),
             ))
-        native = {"tool_use_id": call_id, "tool_response": tool_response}
+        native: dict[str, JsonValue] = {"tool_use_id": str(call_id), "tool_response": tool_response}
         events.extend(
             self.tool_finished(raw_event, native, failed, result=content(result_text))
         )
@@ -523,13 +550,14 @@ class ToolCallSemantics:
         raw_event: RawEvent,
         call_id: CallId,
         native_name: str,
-        arguments: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
-        tool_response: object,  # loose: claude code JSON, wave 2 gives it a real shape
+        arguments: dict[str, JsonValue],
+        tool_response: records.ToolResponse,
         outcome: Outcome,
     ) -> list[CanonicalEvent[EventPayload]]:
         shell_id = ShellId(call_id)
         events: list[CanonicalEvent[EventPayload]] = []
-        response = tool_response if isinstance(tool_response, dict) else {}
+        response = tool_response
+        shell_arguments = records.ShellArguments.model_validate(arguments)
         # BACKGROUNDED MID-RUN (ctrl+b on a running command). Structural, from the
         # one document that holds both halves: the input never asked to run in the
         # background, and the response carries a background task id anyway. The
@@ -546,8 +574,8 @@ class ToolCallSemantics:
         # BEFORE the finish below, deliberately: the follow of the file this
         # command is still writing to is ended by `shell.finished` unless this
         # fact has already re-armed it (see ShellBackgrounded).
-        background_task_id = ShellNativeId(str(response.get("backgroundTaskId") or ""))
-        if background_task_id and not arguments.get("run_in_background"):
+        background_task_id = ShellNativeId(str(response.backgroundTaskId or ""))
+        if background_task_id and not shell_arguments.run_in_background:
             events.append(event(
                 raw_event,
                 "shell",
@@ -560,7 +588,7 @@ class ToolCallSemantics:
         # returning, not the watch ending — the watch runs on, and its own end
         # arrives as a notification (see monitor_armed).
         if native_name == "Monitor":
-            task_id = ShellNativeId(str(response.get("taskId") or ""))
+            task_id = ShellNativeId(str(response.taskId or ""))
             if task_id:
                 self.monitor_armed(task_id, shell_id)
         events.append(event(
@@ -577,12 +605,11 @@ class ToolCallSemantics:
         self,
         raw_event: RawEvent,
         call_id: CallId,
-        tool_response: object,  # loose: claude code JSON, wave 2 gives it a real shape
+        tool_response: records.ToolResponse,
         outcome: Outcome,
     ) -> list[CanonicalEvent[EventPayload]]:
-        response = tool_response if isinstance(tool_response, dict) else {}
         async_launched = (
-            response.get("isAsync") is True or response.get("status") == "async_launched"
+            tool_response.isAsync is True or tool_response.status == "async_launched"
         )
         if async_launched:
             return []
@@ -607,7 +634,7 @@ class ToolCallSemantics:
         if native_name == "AskUserQuestion":
             payload: EventPayload = QuestionAnswered(attention_id, (), None)
             return event(raw_event, "question", str(attention_id), "answered", payload)
-        state, feedback, edited = plan_resolution({"tool_response": result_text}, True)
+        state, feedback, edited = plan_resolution(result_text, True)
         payload = PlanResolved(attention_id, state, feedback, edited)
         return event(raw_event, "plan", str(attention_id), "resolved", payload)
 
@@ -616,19 +643,21 @@ class ToolCallSemantics:
         raw_event: RawEvent,
         call_id: CallId,
         native_name: str,
-        arguments: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
-        tool_response: object,  # loose: claude code JSON, wave 2 gives it a real shape
+        arguments: dict[str, JsonValue],
+        tool_response: records.ToolResponse,
         outcome: Outcome,
     ) -> list[CanonicalEvent[EventPayload]]:
         action = FILE_ACTIONS.get(native_name)
         if action is None:
             return []
-        path = arguments.get("file_path") or arguments.get("notebook_path") or ""
+        file_arguments = records.FileArguments.model_validate(arguments)
+        path = file_arguments.file_path or file_arguments.notebook_path or ""
         if not path:
             return []
-        response = tool_response if isinstance(tool_response, dict) else {}
-        content_value = response.get("content", arguments.get("content"))
-        unified_diff, lines_added, lines_removed = structured_patch(path, response)
+        content_value = (
+            tool_response.content if tool_response.content is not None else file_arguments.content
+        )
+        unified_diff, lines_added, lines_removed = structured_patch(path, tool_response)
         payload = FileAccessed(
             path,
             action,
@@ -644,24 +673,21 @@ class ToolCallSemantics:
 
     @staticmethod
     def questions(
-        arguments: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
+        arguments: dict[str, JsonValue],
     ) -> tuple[AttentionPrompt, ...]:
+        question_arguments = records.QuestionArguments.model_validate(arguments)
         prompts = []
-        for index, question in enumerate(arguments.get("questions") or ()):
+        for index, question in enumerate(question_arguments.questions or ()):
             choices = tuple(
-                AttentionChoice(
-                    option.get("label") or "",
-                    option.get("description") or None,
-                )
-                for option in question.get("options") or ()
-                if isinstance(option, dict)
+                AttentionChoice(option.label or "", option.description or None)
+                for option in question.options or ()
             )
             prompts.append(
                 AttentionPrompt(
-                    prompt_id=QuestionId(str(question.get("id") or index)),
-                    title=question.get("header") or None,
-                    prompt=question.get("question") or "",
-                    multiple=bool(question.get("multiSelect")),
+                    prompt_id=QuestionId(str(question.id if question.id is not None else index)),
+                    title=question.header or None,
+                    prompt=question.question or "",
+                    multiple=bool(question.multiSelect),
                     choices=choices,
                 )
             )

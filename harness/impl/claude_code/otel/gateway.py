@@ -15,7 +15,8 @@ import hashlib
 import json
 import re
 import time
-from typing import Any
+
+from pydantic import JsonValue
 
 from domain.ids import HarnessName, RawEventId, SessionId
 from harness.contract import HarnessTelemetryGateway
@@ -42,24 +43,37 @@ KNOWN_WINDOWS = ("five_hour", "seven_day")
 MAX_WINDOWS = 8
 
 
+def _dicts(value: JsonValue) -> list[dict[str, JsonValue]]:
+    """`value` as a list of objects — the recurring OTLP shape, shared with
+    canonical/otel.py's own reader of the same tree."""
+    return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
+
 def _session_ids(
-    document: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
+    document: dict[str, JsonValue],
 ) -> tuple[SessionId, ...]:
     session_ids = set()
-    for resource in document.get("resourceMetrics", []):
-        for scope in resource.get("scopeMetrics", []):
-            for metric in scope.get("metrics", []):
-                for point in (metric.get("sum") or {}).get("dataPoints", []):
-                    for attribute in point.get("attributes", []):
+    for resource in _dicts(document.get("resourceMetrics")):
+        for scope in _dicts(resource.get("scopeMetrics")):
+            for metric in _dicts(scope.get("metrics")):
+                metric_sum = metric.get("sum")
+                data_points = metric_sum.get("dataPoints") if isinstance(metric_sum, dict) else None
+                for point in _dicts(data_points):
+                    for attribute in _dicts(point.get("attributes")):
                         if attribute.get("key") != "session.id":
                             continue
-                        value = (attribute.get("value") or {}).get("stringValue")
+                        attribute_value = attribute.get("value")
+                        value = (
+                            attribute_value.get("stringValue")
+                            if isinstance(attribute_value, dict)
+                            else None
+                        )
                         if value:
                             session_ids.add(SessionId(str(value)))
     return tuple(sorted(session_ids, key=str))
 
 
-def _epoch_seconds(value: object) -> float | None:  # loose: claude code JSON, wave 2 gives it a real shape
+def _epoch_seconds(value: JsonValue) -> float | None:
     """A rate-limit `resets_at` to epoch SECONDS, or None. Claude Code has sent
     this as either seconds or milliseconds across versions; >1e12 is
     unambiguously milliseconds (a seconds value that large is year ~33000)."""
@@ -68,14 +82,14 @@ def _epoch_seconds(value: object) -> float | None:  # loose: claude code JSON, w
     return value / 1000.0 if value > 1e12 else float(value)
 
 
-def _percent(value: object) -> Decimal | None:  # loose: claude code JSON, wave 2 gives it a real shape
+def _percent(value: JsonValue) -> Decimal | None:
     if not isinstance(value, (int, float)) or isinstance(value, bool):
         return None
     return Decimal(max(0, min(100, int(round(value)))))
 
 
 def windows(
-    document: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
+    document: dict[str, JsonValue],
 ) -> tuple[UsageWindowSample, ...]:
     """Every `rate_limits.<key>.{used_percentage, resets_at}` entry, the
     account-wide pair first and any other window sorted by key.
@@ -84,7 +98,8 @@ def windows(
     model-scoped one it flows through here and into the dashboard's per-window
     bars with no code change.
     """
-    limits = (document or {}).get("rate_limits") or {}
+    limits_value = (document or {}).get("rate_limits")
+    limits = limits_value if isinstance(limits_value, dict) else {}
     known = [key for key in KNOWN_WINDOWS if key in limits]
     extra = sorted(key for key in limits if isinstance(key, str) and key not in KNOWN_WINDOWS)
     samples: list[UsageWindowSample] = []
@@ -120,6 +135,8 @@ class ClaudeTelemetryGateway(HarnessTelemetryGateway):
     @staticmethod
     def _metrics(payload: bytes, telemetry_context: TelemetryContext) -> tuple[RawEvent, ...]:
         document = json.loads(payload)
+        if not isinstance(document, dict):
+            return ()
         raw_events = []
         for session_id in _session_ids(document):
             session = telemetry_context.find_session(session_id)

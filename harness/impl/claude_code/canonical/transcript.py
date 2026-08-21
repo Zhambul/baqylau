@@ -80,8 +80,11 @@ import html
 import json
 import os
 import re
-from typing import Any
+from typing import cast
 
+from pydantic import JsonValue
+
+from harness.impl.claude_code.canonical import records
 from harness.models import TitleWriteOutcome
 from repository.contract.titles import NativeSessionTitleRepository
 
@@ -117,7 +120,7 @@ def _note_tag(xml: str, name: str) -> str | None:
     return m.group(1).strip() if m else None
 
 
-def _task_notification(content: str) -> dict[str, str | None]:
+def _task_notification(content: str) -> dict[str, JsonValue]:
     """A <task-notification> block -> the one fact it carries.
 
     The single reader of this channel, so that a notification cannot be counted
@@ -163,8 +166,13 @@ def _task_notification(content: str) -> dict[str, str | None]:
     }
 
 
-def result_text(content: Any) -> str:  # loose: claude code JSON, wave 2 gives it a real shape
-    """Normalise a tool_result's content (str | block | block list) to text."""
+def result_text(content: JsonValue) -> str:
+    """Normalise a tool_result's content (str | block | block list) to text.
+
+    Each block is validated against `records.InnerContentBlock` (a genuinely
+    open, per-tool shape — see records.py) before being read: a block whose
+    `text`/`tool_name` do not match the declared types still fails the record
+    rather than riding along silently misread."""
     if isinstance(content, str):
         return content
     if isinstance(content, dict):       # a lone content block — normalise to a 1-list
@@ -173,18 +181,15 @@ def result_text(content: Any) -> str:  # loose: claude code JSON, wave 2 gives i
         parts = []
         for b in content:
             if isinstance(b, dict):
-                t = b.get("type")
-                if t == "text" or isinstance(b.get("text"), str):
-                    parts.append(b.get("text", ""))
-                elif t == "tool_reference":                 # ToolSearch result
-                    parts.append("→ loaded tool: " + str(b.get("tool_name", "")))
-                elif t == "image":
+                block = records.InnerContentBlock.model_validate(b)
+                if block.type == "text" or isinstance(block.text, str):
+                    parts.append(block.text or "")
+                elif block.type == "tool_reference":         # ToolSearch result
+                    parts.append("→ loaded tool: " + str(block.tool_name or ""))
+                elif block.type == "image":
                     parts.append("[image]")
                 else:                                        # unknown block -> show it
-                    try:
-                        parts.append(json.dumps(b, ensure_ascii=False))
-                    except Exception:
-                        parts.append(str(b))
+                    parts.append(block.model_dump_json(exclude_none=True))
             elif isinstance(b, str):
                 parts.append(b)
         return "\n".join(p for p in parts if p)
@@ -258,7 +263,7 @@ _TEAM_WRAPPER = re.compile(
     r'^\s*Another Claude session sent a message:\s*<teammate-message\b')
 
 
-def _injected(o: dict[str, Any], text: str = "") -> bool:  # loose: claude code JSON, wave 2 gives it a real shape
+def _injected(record: records.UserRecord, text: str = "") -> bool:
     """Whether this user-shaped record was written by CLAUDE CODE rather than
     typed by the human — the `meta` flag on the prompt/results records below.
     Three structural marks plus one anchored text shape (`text`, the record's
@@ -287,8 +292,8 @@ def _injected(o: dict[str, Any], text: str = "") -> bool:  # loose: claude code 
     thing, and the marker can appear anywhere in a record. The id-bearing/boolean
     fields cannot be quoted. The teammate wrapper has no such field to read and
     is instead pinned to the START of the content (see _TEAM_WRAPPER)."""
-    return bool(o.get("isMeta") or o.get("interruptedMessageId")
-                or o.get("isCompactSummary")
+    return bool(record.isMeta or record.interruptedMessageId
+                or record.isCompactSummary
                 or (text and _TEAM_WRAPPER.match(text)))
 
 
@@ -330,38 +335,52 @@ KINDS = ("bad", "compact", "recap", "prompt", "teammsg", "results",
          "actor_assignment_finished", "background_command_completed", "goal")
 
 
-def parse_line(s: str) -> dict[str, Any] | None:  # loose: claude code JSON, wave 2 gives it a real shape
-    """One transcript JSONL line -> a typed record (see the module header)."""
+def parse_line(s: str) -> dict[str, JsonValue] | None:
+    """One transcript JSONL line -> a typed record (see the module header).
+
+    Dispatches on the raw `type` string FIRST — exactly as records.py's own
+    header describes — and only then hands the line to the model that owns
+    that type; an unrecognised `type` returns None here untouched, the same
+    "ignored" outcome it always had. A recognised type that does not match its
+    declared shape raises `pydantic.ValidationError`, which the interpreter
+    loop turns into `translation_failed`."""
     try:
         o = json.loads(s)
     except Exception:
         return {"kind": "bad", "raw": s}
+    if not isinstance(o, dict):
+        return {"kind": "bad", "raw": s}
     t = o.get("type")
-    msg = o.get("message") or {}
-    content = msg.get("content")
-    if t == "system" and o.get("subtype") == "compact_boundary":
-        return {"kind": "compact", "meta": o.get("compactMetadata") or {}}
-    if t == "system" and o.get("subtype") == "away_summary":
-        # Claude Code's recap — the away summary (see the module header). The
-        # summary text is the system record's plain-string `content`; drop the
-        # trailing "(disable recaps in /config)" config hint, which points at a
-        # terminal-only menu and is noise in the dashboard bubble.
-        text = _strip_recap_hint(o.get("content") or "")
-        return {"kind": "recap", "text": text} if text else None
-    if t == "system" and isinstance(o.get("content"), str):
-        cleared_prefix = "Goal cleared:"
-        if o["content"].startswith(cleared_prefix):
-            return {
-                "kind": "goal",
-                "objective": o["content"][len(cleared_prefix):].strip() or None,
-                "state": "cleared",
-                "reason": None,
-            }
+    if t == "system":
+        system = records.SystemRecord.model_validate(o)
+        if system.subtype == "compact_boundary":
+            return {"kind": "compact", "meta": system.compactMetadata or {}}
+        if system.subtype == "away_summary":
+            # Claude Code's recap — the away summary (see the module header).
+            # The summary text is the system record's plain-string `content`;
+            # drop the trailing "(disable recaps in /config)" config hint,
+            # which points at a terminal-only menu and is noise in the
+            # dashboard bubble.
+            text = _strip_recap_hint(system.content or "")
+            return {"kind": "recap", "text": text} if text else None
+        if isinstance(system.content, str):
+            cleared_prefix = "Goal cleared:"
+            if system.content.startswith(cleared_prefix):
+                return {
+                    "kind": "goal",
+                    "objective": system.content[len(cleared_prefix):].strip() or None,
+                    "state": "cleared",
+                    "reason": None,
+                }
+        return None
     if t == "user":
+        user = records.UserRecord.model_validate(o)
+        message = user.message
+        content = message.content if message else None
         if isinstance(content, str):
             if not content.strip():
                 return None
-            if (o.get("origin") or {}).get("kind") == "task-notification":
+            if user.origin is not None and user.origin.kind == "task-notification":
                 return _task_notification(content)
             kind, a, b = classify_user_text(content)
             if kind == "teammsg":
@@ -382,17 +401,18 @@ def parse_line(s: str) -> dict[str, Any] | None:  # loose: claude code JSON, wav
             # The content goes in too: the teammate-mail wrapper is injected
             # with no structural flag to show it (see _TEAM_WRAPPER).
             return {"kind": "prompt", "text": content,
-                    "meta": _injected(o, content)}
+                    "meta": _injected(user, content)}
         if isinstance(content, list):
-            blocks: list[dict[str, Any]] = []  # loose: claude code JSON, wave 2 gives it a real shape
+            blocks: list[dict[str, JsonValue]] = []
             texts: list[str] = []
             for blk in content:
-                if not isinstance(blk, dict):
-                    continue
                 if blk.get("type") == "tool_result":
+                    records.ToolResultBlock.model_validate(blk)  # shape-check only
                     blocks.append(blk)
-                elif blk.get("type") == "text" and (blk.get("text") or "").strip():
-                    texts.append(str(blk.get("text")))
+                elif blk.get("type") == "text":
+                    text_block = records.TextBlock.model_validate(blk)
+                    if (text_block.text or "").strip():
+                        texts.append(text_block.text or "")
             if blocks or texts:
                 # `meta` as on a plain prompt (see the header): a SKILL LOAD
                 # arrives in exactly this shape — an isMeta user record whose
@@ -400,27 +420,43 @@ def parse_line(s: str) -> dict[str, Any] | None:  # loose: claude code JSON, wav
                 # this skill: …"), injected right after the Skill tool_result.
                 # Without the flag conversation() rendered it as a YOU prompt
                 # bubble holding the entire skill.
-                return {"kind": "results", "blocks": blocks,
-                        "tur": o.get("toolUseResult"), "texts": texts,
-                        # the leading text block, for the one text-read mark
-                        # (_TEAM_WRAPPER): a wrapper arriving in list form
-                        # would be that block, and the mark is anchored anyway
-                        "meta": _injected(o, texts[0] if texts else "")}
+                results_record: dict[str, JsonValue] = {
+                    "kind": "results", "blocks": cast(list[JsonValue], blocks),
+                    "tur": user.toolUseResult, "texts": cast(list[JsonValue], texts),
+                    # the leading text block, for the one text-read mark
+                    # (_TEAM_WRAPPER): a wrapper arriving in list form
+                    # would be that block, and the mark is anchored anyway
+                    "meta": _injected(user, texts[0] if texts else ""),
+                }
+                return results_record
         return None
     if t == "assistant":
-        assistant_blocks: list[tuple[str, Any]] = []  # loose: claude code JSON, wave 2 gives it a real shape
+        assistant = records.AssistantRecord.model_validate(o)
+        message = assistant.message
+        content = message.content if message else None
+        assistant_blocks: list[JsonValue] = []
         if isinstance(content, list):
             for blk in content:
-                if not isinstance(blk, dict):
-                    continue
                 if blk.get("type") == "text":
-                    assistant_blocks.append(("text", blk.get("text", "")))
+                    text_block = records.TextBlock.model_validate(blk)
+                    assistant_blocks.append(["text", text_block.text or ""])
                 elif blk.get("type") == "tool_use":
-                    assistant_blocks.append(("tool", blk))
-        u = msg.get("usage")
-        return {"kind": "assistant", "usage": u if isinstance(u, dict) else None,
-                "model": msg.get("model"), "id": msg.get("id"),
-                "blocks": assistant_blocks}
+                    records.ToolUseBlock.model_validate(blk)  # shape-check only
+                    assistant_blocks.append(["tool", blk])
+                elif blk.get("type") == "thinking":
+                    records.ThinkingBlock.model_validate(blk)  # shape-check only
+                elif blk.get("type") == "image":
+                    records.ImageBlock.model_validate(blk)  # shape-check only
+                elif blk.get("type") == "fallback":
+                    records.FallbackBlock.model_validate(blk)  # shape-check only
+        usage = message.usage if message else None
+        assistant_record: dict[str, JsonValue] = {
+            "kind": "assistant", "usage": usage,
+            "model": message.model if message else None,
+            "id": message.id if message else None,
+            "blocks": assistant_blocks,
+        }
+        return assistant_record
     if t == "attachment":
         # A message typed while a turn is running is QUEUED by Claude Code and,
         # when the turn boundary delivers it, recorded ONLY as this
@@ -434,21 +470,27 @@ def parse_line(s: str) -> dict[str, Any] | None:  # loose: claude code JSON, wav
         # auto-continuation) from the `task-notification` re-injections (which
         # are harness noise, not user turns); conversation()'s own `<`-wrapper
         # filter still drops any command/caveat wrapper, same as a typed prompt.
-        att = o.get("attachment") or {}
-        if att.get("type") == "goal_status":
-            objective = str(att.get("condition") or "").strip()
+        attachment = records.AttachmentRecord.model_validate(o)
+        att = attachment.attachment or {}
+        att_type = att.get("type")
+        if att_type == "goal_status":
+            goal = records.GoalStatusAttachment.model_validate(att)
+            objective = str(goal.condition or "").strip()
             if not objective:
                 return None
             return {
                 "kind": "goal",
                 "objective": objective,
-                "state": "completed" if att.get("met") is True else "active",
-                "reason": str(att.get("reason") or "").strip() or None,
+                "state": "completed" if goal.met is True else "active",
+                "reason": str(goal.reason or "").strip() or None,
             }
-        if att.get("type") == "queued_command" and att.get("commandMode") == "prompt":
-            return {"kind": "prompt", "text": att.get("prompt") or ""}
+        if att_type == "queued_command":
+            queued = records.QueuedCommandAttachment.model_validate(att)
+            if queued.commandMode == "prompt":
+                return {"kind": "prompt", "text": queued.prompt or ""}
         return None
     if t == "queue-operation":
+        records.QueueOperationRecord.model_validate(o)  # shape-check only
         # The ENQUEUE half of a task-notification's delivery, and the same XML
         # the `user` record above carries — measured: every notification appeared
         # in both shapes. Read here too, it would double every monitor event.

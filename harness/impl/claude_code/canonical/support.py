@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
+from pydantic import JsonValue
+
 from domain.events import CanonicalEvent, EventPayload
 from domain.ids import ModelId, SelectionId, TurnId
 from domain.values import Content, ModelReference, StructuredContent, TextContent
@@ -26,7 +28,7 @@ def model_reference(native_id: ModelId) -> ModelReference:
     )
 
 
-def timestamp(value: object) -> float | None:  # loose: claude code JSON, wave 2 gives it a real shape
+def timestamp(value: JsonValue) -> float | None:
     if isinstance(value, (int, float)):
         return float(value)
     if not isinstance(value, str) or not value:
@@ -38,7 +40,7 @@ def timestamp(value: object) -> float | None:  # loose: claude code JSON, wave 2
 
 
 def content(
-    value: object,  # loose: claude code JSON, wave 2 gives it a real shape
+    value: JsonValue,
     *,
     markdown: bool = False,
 ) -> Content:
