@@ -393,12 +393,11 @@ def controls(
     adapter: Terminal,
     plugin: InstalledTerminal,
     read_model: SessionDataStore,
-    usage: AccountUsage,
     audit: Recorder,
     interrupts: InterruptTracking,
 ) -> HarnessControlService:
     return HarnessControlService(
-        session_storage, adapter, plugin, read_model, usage, audit, interrupts
+        session_storage, adapter, plugin, read_model, audit, interrupts
     )
 
 

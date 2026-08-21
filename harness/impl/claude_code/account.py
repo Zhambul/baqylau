@@ -7,7 +7,6 @@ import re
 from typing import TypedDict
 
 from domain.ids import AccountId
-from harness.models import AccountUsageSnapshot
 
 ACCOUNTS_FILE = os.path.expanduser("~/.config/claude-subscriptions/accounts.tsv")
 ACCOUNT_CONFIG_DIRECTORY = os.path.expanduser("~/.config/claude-subscriptions/configs")
@@ -86,33 +85,3 @@ def alias_for(account_id: AccountId) -> str | None:
         if account_record["slug"] == account_id:
             return account_record["alias"]
     return None
-
-
-def migration_target(
-    current_account_id: AccountId,
-    account_usage: tuple[AccountUsageSnapshot, ...],
-) -> AccountRecord | None:
-    """Choose the least-used launchable account other than the current one."""
-
-    snapshots = {
-        snapshot.account_id: snapshot
-        for snapshot in account_usage
-        if snapshot.harness == "claude_code"
-    }
-    candidates: list[tuple[float, AccountRecord]] = []
-    for account_record in registry():
-        if account_record["slug"] == current_account_id:
-            continue
-        snapshot = snapshots.get(AccountId(account_record["slug"]) if account_record["slug"] else None)
-        used_percent = next(
-            (
-                float(window.used_percent)
-                for window in (snapshot.windows if snapshot is not None else ())
-                if window.key == "five_hour"
-            ),
-            0.0,
-        )
-        candidates.append((used_percent, account_record))
-    if not candidates:
-        return None
-    return min(candidates, key=lambda candidate: candidate[0])[1]

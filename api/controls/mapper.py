@@ -1,6 +1,6 @@
 """Control outcomes to the control plane's models.
 
-The harness layer answers with a base result or one of five extensions; each has
+The harness layer answers with a base result or one of four extensions; each has
 a model here that mirrors it, and this picks the right one. The extensions are
 tested BEFORE the base, because every one of them IS a ControlResult.
 """
@@ -13,7 +13,6 @@ from api.controls.models.control_outcome_response import (
     ControlOutcomeResponse,
     ControlResultResponse,
     DeliveryResultResponse,
-    MigrationResultResponse,
     PlanChoicesResultResponse,
     RewindResultResponse,
 )
@@ -23,7 +22,6 @@ from harness.models import (
     ControlOutcome,
     DeliveryResult,
     LaunchResult,
-    MigrationResult,
     PlanChoicesResult,
     RewindResult,
 )
@@ -62,13 +60,6 @@ def control_outcome(outcome: ControlOutcome) -> ControlOutcomeResponse:
             reason=reason,
             restored_text=outcome.restored_text,
             degraded=outcome.degraded,
-        )
-    if isinstance(outcome, MigrationResult):
-        return MigrationResultResponse(
-            request_id=identity,
-            status=status,
-            reason=reason,
-            target_account_id=outcome.target_account_id,
         )
     if isinstance(outcome, PlanChoicesResult):
         return PlanChoicesResultResponse(

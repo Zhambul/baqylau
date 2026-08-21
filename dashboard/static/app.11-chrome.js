@@ -112,7 +112,7 @@ function chromeIdentity(sessionView, meta) {
    Two `.actrow`s side by side, ordered by how often you reach for them rather
    than by what they do to the session: the QUICK COMMANDS lead (✦ model ✧
    effort ⊜ compact — the knobs you turn mid-conversation), then the session
-   gestures (✎ rename ⇆ migrate ◉ alerts ↶ rewind ■ stop ✕ close), ending on the
+   gestures (✎ rename ◉ alerts ↶ rewind ■ stop ✕ close), ending on the
    two most destructive so a fumbled click lands on nothing worse than a rewind
    arm. Mounted here rather than built inline so there is ONE owner of "the
    header belongs to this session" — and one place to empty it when you leave
@@ -190,7 +190,7 @@ function tooThin(meta, cmd) {
 // window to type into (the server rejects them too — this just says so first).
 const NO_WINDOW = "this session is parked — there is no terminal to type into";
 
-/* The header bar's SECOND row: the session-level gestures. rename / migrate /
+/* The header bar's SECOND row: the session-level gestures. rename /
    alerts work live AND parked (they touch the transcript or a dashboard pref,
    not the terminal); rewind / stop / close need a window to type into and close
    the row on its destructive end, and resume is the parked-only counterpart. */
@@ -206,16 +206,6 @@ function chromeActions(sessionView, meta) {
   ren.onclick = () => startRenameHeader();
   gate(ren, capOk(meta, "rename"), CAP_OFF);   // a tool that can't rename greys it
   act.append(ren);
-  // migrate: hand this session to the other subscription account — the same
-  // detached migrator as the automatic rate-limit path (docs/relimit.md
-  // *Manual migrate*): live → the tab swaps (close, park, resume under the
-  // other alias); parked → it just relaunches there. Immediate, no confirm
-  // (like ■ stop), and like rename it works live AND parked.
-  const mig = el("button", "sstop actses", "⇆ migrate");
-  mig.dataset.tip = "migrate this session to another account";
-  mig.onclick = () => lockDuring(mig, migrateSession);
-  gate(mig, capOk(meta, "migrate"), CAP_OFF);   // the server 409s it too
-  act.append(mig);
   // ◉ alerts / ○ muted: opt this session in/out of the DEFERRED Telegram
   // alert — the off-device notification
   // that fires when a chat sits red/green unattended past the grace window.
@@ -589,7 +579,7 @@ function updateStatsRow() {
 }
 
 /* Header-action visibility for the agent-focus state. While a subagent scoreboard is showing, the
-   session-only actions (`.actses` — rename / migrate / rewind / close /
+   session-only actions (`.actses` — rename / rewind / close /
    resume / compact / model / effort) don't apply to a subagent, so they hide;
    ■ stop (`.actstop`) stays ONLY while the focused subagent is still running
    (interrupting the session is the one way to stop it). An action row left with

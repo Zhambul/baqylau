@@ -11,14 +11,9 @@ from dataclasses import dataclass
 from typing import ClassVar, Literal, TypeAlias
 
 from domain.events import PlanProposed, QuestionAsked
-from domain.ids import AccountId, AttentionId, MessageId, ModelId, RequestId, SessionId, WindowId
-from domain.values import (
-    AccountReference,
-    ModelReference,
-    StructuredContent,
-)
+from domain.ids import AttentionId, MessageId, ModelId, RequestId, SessionId, WindowId
+from domain.values import StructuredContent
 from harness.models.session import Session
-from harness.models.usage import AccountUsageSnapshot
 from terminal.contract import TerminalPlugin
 
 # What writing a session's NATIVE title did — the parked-rename path, which
@@ -39,7 +34,6 @@ ControlName: TypeAlias = Literal[
     "auto_name_session",
     "open_rewind",
     "apply_rewind",
-    "migrate_account",
     "compact",
     "select_model",
     "select_effort",
@@ -58,13 +52,8 @@ class ControlContext:
     session: Session
     terminal: TerminalPlugin
     terminal_window_id: WindowId | None
-    current_model: ModelReference | None
     current_effort: str | None
-    current_account: AccountReference | None
     pending_attention: QuestionAsked | PlanProposed | None
-    # Every account's current plan usage, read ONCE by the service. A value,
-    # not a repository: the harness contract names no storage.
-    account_usage: tuple[AccountUsageSnapshot, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -136,11 +125,6 @@ class ApplyRewind(ControlTarget):
 
 
 @dataclass(frozen=True)
-class MigrateAccount(ControlTarget):
-    control_name: ClassVar[ControlName] = "migrate_account"
-
-
-@dataclass(frozen=True)
 class Compact(ControlTarget):
     control_name: ClassVar[ControlName] = "compact"
 
@@ -189,7 +173,6 @@ ControlRequest: TypeAlias = (
     | AutoNameSession
     | OpenRewind
     | ApplyRewind
-    | MigrateAccount
     | Compact
     | SelectModel
     | SelectEffort
@@ -230,11 +213,6 @@ class RewindResult(ControlResult):
 
 
 @dataclass(frozen=True)
-class MigrationResult(ControlResult):
-    target_account_id: AccountId | None = None
-
-
-@dataclass(frozen=True)
 class PlanChoice:
     """One decision offered by a harness's LIVE plan dialog.
 
@@ -260,6 +238,5 @@ ControlOutcome: TypeAlias = (
     | DeliveryResult
     | CommandResult
     | RewindResult
-    | MigrationResult
     | PlanChoicesResult
 )

@@ -1375,17 +1375,3 @@ function openNewSession(prefillCwd, resumeSid, presetTool) {
   nsActions(F);
   nsMount(F);
 }
-
-// Esc in a live session view = interrupt the agent (the terminal's own Esc,
-// via /interrupt → Frontend.send_key). Every overlay Escape (modal below,
-// slash menu, filter, dropdowns) either runs first here or stopPropagation()s
-// before the document level, so this is the fallback meaning of Esc.
-// The header's ⇆ migrate button: resume this session under the other
-// subscription account (the server picks it — least used, active limit-hit
-// excluded, no % ceiling for a manual click; docs/relimit.md *Manual
-// migrate*). The old tab closes and a new one opens; the sessionId forks on
-// resume and the adopt machinery + jump watch carry the page over.
-// Returns the POST promise so the button wiring can disable itself for the
-// round-trip — a double-click on ⇆ migrate would otherwise spawn two racing
-// migrators (each closing the tab, each picking a target). The guard path
-// resolves so a caller's `.finally` re-enable still runs.

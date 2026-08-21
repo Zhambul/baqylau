@@ -40,15 +40,6 @@ function canonicalControl(controlName, fields, options) {
   return sessionControl(S.currentSessionId, controlName, fields, options);
 }
 
-function migrateSession() {
-  if (!S.currentSessionId) return Promise.resolve();
-  return canonicalControl("migrate_account", {},
-                  { audit: "migrate" })
-    .then(r => toast("done", "migrating",
-                     "resuming on " + ((r && r.to) || "another account")))
-    .catch(e => toast("ask", "migrate failed", (e && e.error) || ""));
-}
-
 // Returns the POST promise for the same in-flight button lock (a double-tap
 // mid round-trip would send Escape to the terminal twice).
 function interruptSession() {
@@ -683,8 +674,8 @@ function startRenameHeader() {
 
 
 // Lock an immediate (no-confirm) control-plane action button for the duration
-// of its POST so a double-tap can't fire the terminal write twice — ⇆ migrate
-// would spawn two racing migrators, ■ stop would double-send Escape.
+// of its POST so a double-tap can't fire the terminal write twice — ■ stop
+// would double-send Escape.
 // `run` returns the POST promise; `rest` restores the button's resting state
 // once it settles (default: re-enable; cancel re-derives from the tab). This
 // lives on the buttons, not the functions, because the Esc-key gesture has its

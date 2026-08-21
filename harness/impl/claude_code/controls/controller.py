@@ -22,8 +22,6 @@ from harness.models import (
     DecidePlan,
     DeliveryResult,
     Interrupt,
-    MigrateAccount,
-    MigrationResult,
     OpenRewind,
     PlanChoice,
     PlanChoicesResult,
@@ -35,7 +33,6 @@ from harness.models import (
     SendText,
 )
 from terminal.contract import TerminalPlugin
-from terminal.launch import launch_tab_request
 from terminal.models import (
     KeySendRequest,
     ScreenReadRequest,
@@ -43,13 +40,12 @@ from terminal.models import (
     TextSubmitRequest,
 )
 from domain.events import QuestionAsked
-from domain.ids import AccountId, WindowId
+from domain.ids import WindowId
 # The terminal's own window id: `terminal/` may depend on nothing outside
 # itself, so this module — the harness boundary that talks to a live
 # terminal — converts explicitly wherever a domain `WindowId` reaches a
 # terminal contract request.
 from terminal.models.values import WindowId as NativeWindowId
-from harness.impl.claude_code import account
 from harness.impl.claude_code.canonical import transcript
 from harness.impl.claude_code.controls import askdialog, confirmdialog, plandialog, rewindmenu, tui
 from harness.impl.claude_code.probe import ClaudeCodeTerminalProbe
@@ -324,43 +320,6 @@ class ApplyRewindHandler(ControlHandler):
         )
 
 
-class MigrateAccountHandler(ControlHandler):
-    def __call__(self, request: ControlRequest, control_context: ControlContext) -> MigrationResult:
-        if not isinstance(request, MigrateAccount):
-            raise TypeError("migrate_account handler requires MigrateAccount")
-        if control_context.current_account is None:
-            return MigrationResult(request.request_id, "rejected", "current account is unknown")
-        target = account.migration_target(
-            control_context.current_account.account_id, control_context.account_usage
-        )
-        if target is None:
-            return MigrationResult(request.request_id, "rejected", "no other account is available")
-        session = control_context.session
-        window_id = control_context.terminal_window_id
-        if window_id is None:
-            return MigrationResult(request.request_id, "rejected", "session is not live")
-        closed = control_context.terminal.tabs.close_tab(TabCloseRequest(NativeWindowId(str(window_id))))
-        if not closed.succeeded:
-            return MigrationResult(request.request_id, "indeterminate", closed.reason)
-        arguments = ["--resume", str(session.session_id)]
-        if control_context.current_model is not None:
-            arguments.extend(("--model", control_context.current_model.native_id))
-        # Launching is just running the CLI under the target account's alias;
-        # the resumed session announces itself through its own hook evidence.
-        launched = control_context.terminal.tabs.open_tab(launch_tab_request(
-            session.working_directory or "",
-            (target["alias"], *arguments),
-            title="Claude Code",
-        ))
-        if not launched.succeeded:
-            return MigrationResult(request.request_id, "indeterminate", launched.reason)
-        return MigrationResult(
-            request.request_id,
-            "acknowledged",
-            target_account_id=AccountId(target["slug"]),
-        )
-
-
 class CompactHandler(ControlHandler):
     def __call__(self, request: ControlRequest, control_context: ControlContext) -> ControlResult:
         if not isinstance(request, Compact):
@@ -489,7 +448,6 @@ controller = HarnessController({
     "auto_name_session": AutoNameSessionHandler(),
     "open_rewind": OpenRewindHandler(),
     "apply_rewind": ApplyRewindHandler(),
-    "migrate_account": MigrateAccountHandler(),
     "compact": CompactHandler(),
     "select_model": SelectModelHandler(),
     "select_effort": SelectEffortHandler(),

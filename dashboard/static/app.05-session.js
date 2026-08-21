@@ -409,7 +409,6 @@ function applyCanonicalCatalog(snapshot, catalog) {
     rename: controls.has("rename_session"),
     autoname: controls.has("auto_name_session"),
     rewind: controls.has("apply_rewind"),
-    migrate: controls.has("migrate_account"),
     compact: controls.has("compact"),
     model: controls.has("select_model"),
     effort: controls.has("select_effort"),

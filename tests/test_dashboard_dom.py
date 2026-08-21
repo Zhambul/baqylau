@@ -212,7 +212,6 @@ def test_header_interactions_are_unchanged():
         "dashboard/static/app.10-control.js",
         "dashboard/static/app.11-chrome.js",
     )
-    assert header["idle"]["⇆ migrate"]["disabled"] is False
     # the ✦ button follows the session's model.changed, not the ctx probe's
     # measurement model, so a terminal `/model opus` shows at once instead of
     # waiting for the next assistant record

@@ -14,7 +14,6 @@ from api.controls.models.compact_request import CompactRequest
 from api.controls.models.control_request import ControlRequestBody
 from api.controls.models.decide_plan_request import DecidePlanRequest
 from api.controls.models.interrupt_request import InterruptRequest
-from api.controls.models.migrate_account_request import MigrateAccountRequest
 from api.controls.models.open_rewind_request import OpenRewindRequest
 from api.controls.models.read_plan_choices_request import ReadPlanChoicesRequest
 from api.controls.models.rename_session_request import RenameSessionRequest
@@ -147,14 +146,6 @@ def apply_rewind(
     session_id: SessionIdPath, apply_rewind_request: ApplyRewindRequest, controls: Controls, response: Response
 ) -> ControlOutcomeResponse:
     return _execute(controls, session_id, apply_rewind_request, response)
-
-
-@router.post("/api/sessions/{session_id}/controls/migrate-account",
-             responses=CONTROL_RESPONSES)
-def migrate_account(
-    session_id: SessionIdPath, migrate_account_request: MigrateAccountRequest, controls: Controls, response: Response
-) -> ControlOutcomeResponse:
-    return _execute(controls, session_id, migrate_account_request, response)
 
 
 @router.post("/api/sessions/{session_id}/controls/compact",

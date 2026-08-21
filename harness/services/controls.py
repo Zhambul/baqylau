@@ -18,7 +18,6 @@ from harness.models import (
 )
 from repository.contract.session_data import SessionDataRepository
 from repository.contract.sessions import SessionRepository
-from repository.contract.usage import AccountUsageRepository
 from terminal.adapter import TerminalAdapter
 from terminal.contract import TerminalPlugin
 
@@ -78,7 +77,6 @@ class HarnessControlService(HarnessReactorContext):
         terminal_adapter: TerminalAdapter,
         terminal_plugin: TerminalPlugin,
         session_data_repository: SessionDataRepository,
-        account_usage_repository: AccountUsageRepository,
         audit_recorder: AuditRecorder,
         interrupt_registry: InterruptRegistry,
     ) -> None:
@@ -86,7 +84,6 @@ class HarnessControlService(HarnessReactorContext):
         self.terminal = terminal_adapter
         self.plugin = terminal_plugin
         self.read_model = session_data_repository
-        self.account_usage = account_usage_repository
         self.audit = audit_recorder
         self.interrupts = interrupt_registry
 
@@ -134,11 +131,8 @@ class HarnessControlService(HarnessReactorContext):
                 session=session,
                 terminal=self.plugin,
                 terminal_window_id=self.terminal.window_for_session(request.session_id),
-                current_model=lead.model if lead is not None else None,
                 current_effort=lead.effort if lead is not None else None,
-                current_account=data.session.account if data is not None else None,
                 pending_attention=self._pending_attention(request),
-                account_usage=self.account_usage.snapshots(),
             ),
         )
 

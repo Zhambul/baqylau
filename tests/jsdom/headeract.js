@@ -130,7 +130,7 @@ const CC_RW = [{ mode: "both", label: "restore code and conversation" },
                { mode: "conversation", label: "restore conversation" },
                { mode: "code", label: "restore code" }];
 const CC_CAPS = { interrupt: true, close: true, rename: true,
-                  rewind: true, migrate: true, compact: true,
+                  rewind: true, compact: true,
                   model: true, effort: true, answer: true, plan: true };
 const LIVE = { live: true, workingDirectory: "/w", prompts: 9,
                quick_commands: CC_CMDS, rewind_modes: CC_RW,
@@ -140,7 +140,7 @@ const LIVE = { live: true, workingDirectory: "/w", prompts: 9,
 // inert) and cannot rewind (the cap), and it declares no refusal floors at all.
 const OTHER = { ...LIVE, rewind_modes: [],
                 caps: { interrupt: true, send: true, rename: true,
-                        rewind: false, migrate: false, compact: true,
+                        rewind: false, compact: true,
                         model: true, effort: true, ask: true, plan: true },
                 quick_commands: [{ cmd: "compact" }, { cmd: "model" },
                                  { cmd: "effort" }] };

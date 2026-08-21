@@ -30,7 +30,6 @@ from harness.models import (
     InterruptRegistry,
     LIVENESS_SOURCE_TYPE,
     LaunchRequest,
-    MigrateAccount,
     OUTPUT_LOCATION_SOURCE_TYPE,
     QueryContext,
     RawEvent,
@@ -2301,7 +2300,7 @@ def test_claude_terminal_probe_owns_input_box_grammar(tmp_path):
 
 def control_context(session, terminal, pending_attention=None, window_id="window-one"):
     return ControlContext(
-        session, terminal, window_id, None, None, None, pending_attention
+        session, terminal, window_id, None, pending_attention
     )
 
 
@@ -2405,48 +2404,6 @@ def test_claude_model_control_resolves_the_native_confirmation(monkeypatch, tmp_
 
     assert outcome.status == "acknowledged"
     assert outcome.confirmation == "confirmed"
-
-
-def test_claude_account_migration_uses_only_projected_context(monkeypatch, tmp_path):
-    monkeypatch.setattr(
-        "harness.impl.claude_code.controls.controller.account.migration_target",
-        lambda current_account, account_usage: {
-            "slug": "account-two",
-            "alias": "account-two",
-        },
-    )
-    terminal = FakeTerminal()
-    application = ProviderGraph()
-    session = Session(
-        SessionId("session-one"),
-        ActorId("session-one:lead"),
-        "native-one",
-        "/work/session.jsonl",
-        "/work",
-    )
-    context = ControlContext(
-        session,
-        terminal.plugin(),
-        "window-one",
-        ModelReference("fable", None, None),
-        "high",
-        AccountReference("account-one", "Account One"),
-        None,
-    )
-
-    outcome = application.registry.plugin("claude_code").controller.execute(
-        MigrateAccount(session.session_id, "request-one"),
-        context,
-    )
-
-    assert outcome.status == "acknowledged"
-    assert outcome.target_account_id == "account-two"
-    assert terminal.closed_tabs == ["window-one"]
-    # the relaunch rides a login shell, so an account ALIAS still resolves
-    assert terminal.opened_tabs[0].command[:2] == (os.environ.get("SHELL") or "/bin/zsh", "-lic")
-    assert terminal.opened_tabs[0].command[3:] == (
-        "account-two", "--resume", "session-one", "--model", "fable",
-    )
 
 
 class _RecordingTitles:

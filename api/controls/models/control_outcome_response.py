@@ -1,5 +1,5 @@
 # What a control gesture DID. One model per kind of verdict, mirroring the
-# harness layer's own union: a plain result, and the five that carry something
+# harness layer's own union: a plain result, and the four that carry something
 # extra. The api layer keeps its own copy so a field the controllers add is a
 # deliberate change to the browser contract rather than an automatic one.
 #
@@ -35,10 +35,6 @@ class RewindResultResponse(ControlResultResponse):
     degraded: bool
 
 
-class MigrationResultResponse(ControlResultResponse):
-    target_account_id: str | None
-
-
 class PlanChoicesResultResponse(ControlResultResponse):
     choices: tuple[PlanChoiceResponse, ...]
 
@@ -48,6 +44,5 @@ ControlOutcomeResponse: TypeAlias = (
     | DeliveryResultResponse
     | CommandResultResponse
     | RewindResultResponse
-    | MigrationResultResponse
     | PlanChoicesResultResponse
 )

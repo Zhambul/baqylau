@@ -67,8 +67,7 @@ plugin = HarnessPlugin(
     # is. Switching accounts relaunches the CLI under the same session id, and a
     # resumed session's `session.started` is deduplicated against the first
     # run's, so the first run's `session.finished` keeps it out of
-    # `watchable()` for good (see docs/html/resume-tombstone.html). The manual
-    # `migrate_account` control is untouched.
+    # `watchable()` for good (see docs/html/resume-tombstone.html).
     reactors=(ClaudeOtelCanonicalEventReactor(),),
     controller=controller,
     catalog=ClaudeCodeCatalog(),

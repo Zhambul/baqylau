@@ -44,10 +44,9 @@ PlanState: TypeAlias = Literal["approved", "changes_requested", "rejected"]
 ModelChangeReason: TypeAlias = Literal[
     "selected",
     "automatic_fallback",
-    "account_migration",
     "reported_by_harness",
 ]
-EffortChangeReason: TypeAlias = Literal["selected", "account_migration", "reported_by_harness"]
+EffortChangeReason: TypeAlias = Literal["selected", "reported_by_harness"]
 WorktreeAction: TypeAlias = Literal["entered", "exited"]
 ProgressStream: TypeAlias = Literal["output", "error", "status"]
 TitleOrigin: TypeAlias = Literal["custom", "automatic", "summary"]
