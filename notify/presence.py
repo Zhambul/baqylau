@@ -224,8 +224,9 @@ class Presence:
 
 
     def route(
-        self, push_subscription_repository: PushSubscriptionRepository
-    ) -> tuple[str | None, list[RoutedSubscription], dict[str, object]]:
+        self,
+        push_subscription_repository: PushSubscriptionRepository,
+    ) -> tuple[str | None, list[RoutedSubscription], dict[str, object]]:  # loose: routing decision
         """WHICH DEVICE you are most likely at right now, and what can reach it.
         Returns `(target, targets, decision)`:
 
@@ -255,7 +256,10 @@ class Presence:
         ]
         now = time.monotonic()
 
-        def cand(device_id: DeviceId, label: str | None = None) -> dict[str, object]:
+        def cand(
+            device_id: DeviceId,
+            label: str | None = None,
+        ) -> dict[str, object]:  # loose: notification payload, wave 2 gives it a real shape
             seen = self.last_seen(device_id)
             return {"device": device_id, "label": label,
                     "age_s": (None if seen == float("-inf") else round(now - seen, 1))}
@@ -263,8 +267,11 @@ class Presence:
         term_seen = self.last_seen(TERMINAL)
         term = [cand(DeviceId(TERMINAL), "terminal")] if term_seen != float("-inf") else []
 
-        def decision(target: str | None, candidates: list[dict[str, object]],
-                     label: str | None = None) -> dict[str, object]:
+        def decision(
+            target: str | None,
+            candidates: list[dict[str, object]],  # loose: notification payload, wave 2 gives it a real shape
+            label: str | None = None,
+        ) -> dict[str, object]:  # loose: notification payload, wave 2 gives it a real shape
             return {"target": target, "target_label": label,
                     "subscription_count": len(subs), "candidates": candidates + term}
 

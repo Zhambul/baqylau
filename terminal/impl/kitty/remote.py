@@ -152,7 +152,7 @@ class KittyRemote:
             return None
         return r.stdout.decode("utf-8", "replace")
 
-    def ls(self) -> list[dict[str, Any]] | None:
+    def ls(self) -> list[dict[str, Any]] | None:  # loose: kitty's own JSON reply, wave 2 gives it a real shape
         """Parsed `kitten @ ls` (the OS-window/tab/window tree), or `None` when
         the query itself failed (a timeout, a dropped socket, bad output).
 
@@ -171,7 +171,10 @@ class KittyRemote:
             return None
         return tree if isinstance(tree, list) else None
 
-    def app_focused(self, tree: list[dict[str, Any]] | None = None) -> bool:
+    def app_focused(
+        self,
+        tree: list[dict[str, Any]] | None = None,  # loose: kitty's own JSON reply, wave 2 gives it a real shape
+    ) -> bool:
         """True when ANY kitty OS window is focused — i.e. kitty is the frontmost
         app on this desktop right now. The gate for a pane launch's
         --keep-focus: kitty's keep-focus "restore the previous window" path
@@ -231,8 +234,13 @@ class KittyRemote:
         return self.capture(*argv, timeout=KITTEN_QUERY_TIMEOUT_SECONDS)
 
     # --- the raw socket ------------------------------------------------------
-    def raw(self, cmd: str, payload: dict[str, Any], want_response: bool = False,
-            timeout: float = REMOTE_CONTROL_SOCKET_TIMEOUT_SECONDS) -> dict[str, Any] | bool | None:
+    def raw(
+        self,
+        cmd: str,
+        payload: dict[str, Any],  # loose: kitty's own JSON reply, wave 2 gives it a real shape
+        want_response: bool = False,
+        timeout: float = REMOTE_CONTROL_SOCKET_TIMEOUT_SECONDS,
+    ) -> dict[str, Any] | bool | None:  # loose: kitty's own JSON reply, wave 2 gives it a real shape
         """A remote-control command over a RAW unix-socket write of the
         @kitty-cmd DCS — sub-millisecond vs the ~30-100ms kitten subprocess
         spawn. The raw bytes are exactly what the kitten client sends

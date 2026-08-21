@@ -146,7 +146,7 @@ def _require_type_row(screen_driver: ScreenDriver, win: WindowId, type_digit: st
 def _advance_multi(
     screen_driver: ScreenDriver,
     win: WindowId,
-    questions: list[dict[str, Any]],
+    questions: list[dict[str, Any]],  # loose: claude code JSON, wave 2 gives it a real shape
     i: int,
     sleep: Callable[[float], None],
 ) -> None:
@@ -180,9 +180,9 @@ def _advance_multi(
 def _answer_question(
     screen_driver: ScreenDriver,
     win: WindowId,
-    questions: list[dict[str, Any]],
+    questions: list[dict[str, Any]],  # loose: claude code JSON, wave 2 gives it a real shape
     i: int,
-    ans: dict[str, Any],
+    ans: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
     sleep: Callable[[float], None],
 ) -> None:
     """Apply one question's answer to the CURRENT pane. Leaves the dialog on
@@ -247,8 +247,8 @@ def _answer_question(
 def drive(
     screen_driver: ScreenDriver,
     win: WindowId,
-    questions: list[dict[str, Any]],
-    answers: list[dict[str, Any]],
+    questions: list[dict[str, Any]],  # loose: claude code JSON, wave 2 gives it a real shape
+    answers: list[dict[str, Any]],  # loose: claude code JSON, wave 2 gives it a real shape
     chat: bool = False,
     sleep: Callable[[float], None] = time.sleep,
 ) -> dict[str, bool]:

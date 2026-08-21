@@ -140,7 +140,7 @@ def context_window(*models: str | None) -> int:
     return 200_000
 
 
-def context_used(usage: object) -> int:
+def context_used(usage: object) -> int:  # loose: claude code JSON, wave 2 gives it a real shape
     """The occupied context window from ONE assistant message's usage dict:
     every input token the model saw — fresh + just-cached + replayed-from-cache.
     output_tokens is excluded (what the model produced back, not context). 0
@@ -154,7 +154,10 @@ def context_used(usage: object) -> int:
             + int(usage.get("cache_read_input_tokens") or 0))
 
 
-def agent_meta(tpath: str, agent_id: ActorId) -> dict[str, Any]:
+def agent_meta(
+    tpath: str,
+    agent_id: ActorId,
+) -> dict[str, Any]:  # loose: claude code JSON, wave 2 gives it a real shape
     """The agent's meta.json sidecar (present at SubagentStart for teammates; may
     lag a beat for ordinary subagents, so retry briefly). Carries
     `customAgentType` — the DEFINITION's name, which for a teammate differs from

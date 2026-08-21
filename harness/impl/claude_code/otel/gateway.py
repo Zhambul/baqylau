@@ -42,7 +42,9 @@ KNOWN_WINDOWS = ("five_hour", "seven_day")
 MAX_WINDOWS = 8
 
 
-def _session_ids(document: dict[str, Any]) -> tuple[SessionId, ...]:
+def _session_ids(
+    document: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
+) -> tuple[SessionId, ...]:
     session_ids = set()
     for resource in document.get("resourceMetrics", []):
         for scope in resource.get("scopeMetrics", []):
@@ -57,7 +59,7 @@ def _session_ids(document: dict[str, Any]) -> tuple[SessionId, ...]:
     return tuple(sorted(session_ids, key=str))
 
 
-def _epoch_seconds(value: object) -> float | None:
+def _epoch_seconds(value: object) -> float | None:  # loose: claude code JSON, wave 2 gives it a real shape
     """A rate-limit `resets_at` to epoch SECONDS, or None. Claude Code has sent
     this as either seconds or milliseconds across versions; >1e12 is
     unambiguously milliseconds (a seconds value that large is year ~33000)."""
@@ -66,13 +68,15 @@ def _epoch_seconds(value: object) -> float | None:
     return value / 1000.0 if value > 1e12 else float(value)
 
 
-def _percent(value: object) -> Decimal | None:
+def _percent(value: object) -> Decimal | None:  # loose: claude code JSON, wave 2 gives it a real shape
     if not isinstance(value, (int, float)) or isinstance(value, bool):
         return None
     return Decimal(max(0, min(100, int(round(value)))))
 
 
-def windows(document: dict[str, Any]) -> tuple[UsageWindowSample, ...]:
+def windows(
+    document: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
+) -> tuple[UsageWindowSample, ...]:
     """Every `rate_limits.<key>.{used_percentage, resets_at}` entry, the
     account-wide pair first and any other window sorted by key.
 

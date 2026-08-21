@@ -16,10 +16,16 @@ directions and both are silent:
 
 These tests fail on either. Nothing here checks the code — mypy does that, in
 `make typecheck`. This checks the gate.
+
+A third gate, below, checks something ruff and mypy both let through: an
+annotation that is TRUE but LOOSE. `dict[str, Any]` satisfies both gates and
+tells the reader nothing. That gate is AST-based, not a config check, so it
+finds the loose spot itself instead of trusting a per-package exemption list.
 """
 
 from __future__ import annotations
 
+import ast
 import configparser
 import os
 import pathlib
@@ -141,3 +147,424 @@ def test_a_type_ignore_names_the_error_it_silences():
             if re.search(r"#\s*type:\s*ignore(?!\[)", line):
                 blanket.append(f"{path.relative_to(ROOT)}:{number}")
     assert blanket == []
+
+
+
+# --- Gate: no loose annotation --------------------------------------------
+#
+# `Any` and `object` both say "could be anything" — the type checker stops
+# helping the moment one appears, no matter how deep it is nested. This gate
+# bans them from every annotation (parameter, return, class field, variable)
+# in the production packages, together with the container shapes that hide
+# the same hole one level down: `dict[str, Any]`, `list[Any]`, a bare `dict`
+# with no argument at all. `tuple[Any, ...]` trips the same way a subscript
+# does; a bare `tuple` does not, because a fixed-length tuple with unstated
+# element types is a narrower, less common shape than the other three.
+#
+# This is wave 1 of the owner's "absolute type safety" decision: it PINS
+# today's loose spots in LOOSE_ANNOTATION_ALLOWED without redesigning the
+# parsing code that produces most of them. Wave 2 is the parsing rewrite,
+# and it empties this list — the list only ever shrinks.
+#
+# An entry needs two things, not one: the allowlist entry below, AND a
+# `# loose: <reason>` comment on the offending line. Either alone is not
+# enough — the comment without the list entry does not silence the gate,
+# and the list entry without the comment lets the line drift silently once
+# something else on it changes. Both together mean a reader sees WHY the
+# instant they look at the line, and the list stays the single place that
+# says how many such spots remain.
+LOOSE_ANNOTATION_PACKAGES = (
+    "api",
+    "app",
+    "audit",
+    "core",
+    "dashboard",
+    "domain",
+    "engine",
+    "harness",
+    "notify",
+    "repository",
+    "terminal",
+)
+
+LOOSE_ANNOTATION_ALLOWED: set[str] = {
+    'api/app.py:_publish_openapi_without_the_422.document.return',
+    'api/sse.py:off_loop.arguments',
+    'app/injection.py:_dependency_of.annotation',
+    'app/injection.py:singleton.provider.dependencies',
+    'app/raw_events_audit_cli.py:_document.return',
+    'app/raw_events_audit_cli.py:_print.document',
+    'audit/record.py:error.context',
+    'audit/record.py:state_file.content',
+    'audit/recorder.py:AuditRecorder.error.context',
+    'audit/recorder.py:AuditRecorder.state_file.content',
+    'audit/telemetry.py:BrowserTelemetryService.record_client_failure.content',
+    'audit/telemetry.py:BrowserTelemetryService.record_events.content',
+    'audit/telemetry.py:BrowserTelemetryService.record_optimistic_action.content',
+    'core/clients.py:command.arguments',
+    'engine/interpret/loop.py:Interpreter._audit_failure.context',
+    'engine/react/loop.py:ReactionLoop._audit_failure.context',
+    'engine/react/loop.py:_context.return',
+    'harness/impl/claude_code/canonical/hooks.py:effort_report.document',
+    'harness/impl/claude_code/canonical/hooks.py:translate_hook.document',
+    'harness/impl/claude_code/canonical/messages.py:background_outcome.status',
+    'harness/impl/claude_code/canonical/messages.py:launch_selections.document',
+    'harness/impl/claude_code/canonical/messages.py:session_events.document',
+    'harness/impl/claude_code/canonical/messages.py:slash_command.record',
+    'harness/impl/claude_code/canonical/messages.py:task_event.task',
+    'harness/impl/claude_code/canonical/messages.py:transcript_metadata.document',
+    'harness/impl/claude_code/canonical/messages.py:translate_transcript.document',
+    'harness/impl/claude_code/canonical/messages.py:translate_transcript.record',
+    'harness/impl/claude_code/canonical/otel.py:translate_otel.document',
+    'harness/impl/claude_code/canonical/support.py:content.value',
+    'harness/impl/claude_code/canonical/support.py:timestamp.value',
+    'harness/impl/claude_code/canonical/toolcalls.py:ToolCallSemantics._actor_message.arguments',
+    'harness/impl/claude_code/canonical/toolcalls.py:ToolCallSemantics._assignment_finished.tool_response',
+    'harness/impl/claude_code/canonical/toolcalls.py:ToolCallSemantics._assignment_started.arguments',
+    'harness/impl/claude_code/canonical/toolcalls.py:ToolCallSemantics._shell_finished.arguments',
+    'harness/impl/claude_code/canonical/toolcalls.py:ToolCallSemantics._shell_finished.tool_response',
+    'harness/impl/claude_code/canonical/toolcalls.py:ToolCallSemantics._shell_started.arguments',
+    'harness/impl/claude_code/canonical/toolcalls.py:ToolCallSemantics._skill_started.arguments',
+    'harness/impl/claude_code/canonical/toolcalls.py:ToolCallSemantics.file_facts.arguments',
+    'harness/impl/claude_code/canonical/toolcalls.py:ToolCallSemantics.file_facts.tool_response',
+    'harness/impl/claude_code/canonical/toolcalls.py:ToolCallSemantics.questions.arguments',
+    'harness/impl/claude_code/canonical/toolcalls.py:ToolCallSemantics.recall.arguments',
+    'harness/impl/claude_code/canonical/toolcalls.py:ToolCallSemantics.recall.return',
+    'harness/impl/claude_code/canonical/toolcalls.py:ToolCallSemantics.remember.arguments',
+    'harness/impl/claude_code/canonical/toolcalls.py:ToolCallSemantics.tool_finished.native',
+    'harness/impl/claude_code/canonical/toolcalls.py:ToolCallSemantics.tool_result.tool_response',
+    'harness/impl/claude_code/canonical/toolcalls.py:ToolCallSemantics.tool_started.native',
+    'harness/impl/claude_code/canonical/toolcalls.py:attention_answers.arguments',
+    'harness/impl/claude_code/canonical/toolcalls.py:plan_resolution.native',
+    'harness/impl/claude_code/canonical/toolcalls.py:result_content.tool_response',
+    'harness/impl/claude_code/canonical/toolcalls.py:structured_patch.tool_response',
+    'harness/impl/claude_code/canonical/transcript.py:_injected.o',
+    'harness/impl/claude_code/canonical/transcript.py:parse_line.assistant_blocks',
+    'harness/impl/claude_code/canonical/transcript.py:parse_line.blocks',
+    'harness/impl/claude_code/canonical/transcript.py:parse_line.return',
+    'harness/impl/claude_code/canonical/transcript.py:result_text.content',
+    'harness/impl/claude_code/controls/askdialog.py:_advance_multi.questions',
+    'harness/impl/claude_code/controls/askdialog.py:_answer_question.ans',
+    'harness/impl/claude_code/controls/askdialog.py:_answer_question.questions',
+    'harness/impl/claude_code/controls/askdialog.py:drive.answers',
+    'harness/impl/claude_code/controls/askdialog.py:drive.questions',
+    'harness/impl/claude_code/controls/askdialog_screen.py:current_question.questions',
+    'harness/impl/claude_code/controls/controller.py:_native_prompts.return',
+    'harness/impl/claude_code/hooks/foreground.py:_updated_input.tool_input',
+    'harness/impl/claude_code/hooks/foreground.py:background_output.document',
+    'harness/impl/claude_code/hooks/foreground.py:prepare.document',
+    'harness/impl/claude_code/model.py:agent_meta.return',
+    'harness/impl/claude_code/model.py:context_used.usage',
+    'harness/impl/claude_code/otel/gateway.py:_epoch_seconds.value',
+    'harness/impl/claude_code/otel/gateway.py:_percent.value',
+    'harness/impl/claude_code/otel/gateway.py:_session_ids.document',
+    'harness/impl/claude_code/otel/gateway.py:windows.document',
+    'harness/impl/claude_code/usage/live.py:_control_response.return',
+    'harness/impl/claude_code/usage/live.py:_epoch_seconds.value',
+    'harness/impl/claude_code/usage/live.py:_model_key.display_name',
+    'harness/impl/claude_code/usage/live.py:_percent.value',
+    'harness/impl/claude_code/usage/live.py:request_usage.return',
+    'harness/impl/claude_code/usage/live.py:windows.rate_limits',
+    'harness/impl/codex/canonical/events.py:_ev_agent_message.p',
+    'harness/impl/codex/canonical/events.py:_ev_agent_message.return',
+    'harness/impl/codex/canonical/events.py:_ev_agent_reasoning.p',
+    'harness/impl/codex/canonical/events.py:_ev_agent_reasoning.return',
+    'harness/impl/codex/canonical/events.py:_ev_context_compacted.p',
+    'harness/impl/codex/canonical/events.py:_ev_context_compacted.return',
+    'harness/impl/codex/canonical/events.py:_ev_item_completed.p',
+    'harness/impl/codex/canonical/events.py:_ev_item_completed.return',
+    'harness/impl/codex/canonical/events.py:_ev_task_complete.p',
+    'harness/impl/codex/canonical/events.py:_ev_task_complete.return',
+    'harness/impl/codex/canonical/events.py:_ev_task_started.p',
+    'harness/impl/codex/canonical/events.py:_ev_task_started.return',
+    'harness/impl/codex/canonical/events.py:_ev_thread_goal_cleared.p',
+    'harness/impl/codex/canonical/events.py:_ev_thread_goal_cleared.return',
+    'harness/impl/codex/canonical/events.py:_ev_thread_goal_updated.p',
+    'harness/impl/codex/canonical/events.py:_ev_thread_goal_updated.return',
+    'harness/impl/codex/canonical/events.py:_ev_thread_settings_applied.p',
+    'harness/impl/codex/canonical/events.py:_ev_thread_settings_applied.return',
+    'harness/impl/codex/canonical/events.py:_ev_token_count.p',
+    'harness/impl/codex/canonical/events.py:_ev_token_count.return',
+    'harness/impl/codex/canonical/events.py:_ev_turn_aborted.p',
+    'harness/impl/codex/canonical/events.py:_ev_turn_aborted.return',
+    'harness/impl/codex/canonical/events.py:_ev_user_message.p',
+    'harness/impl/codex/canonical/events.py:_ev_user_message.return',
+    'harness/impl/codex/canonical/events.py:_ev_web_search_end.p',
+    'harness/impl/codex/canonical/events.py:_ev_web_search_end.return',
+    'harness/impl/codex/canonical/events.py:_file_change.item',
+    'harness/impl/codex/canonical/events.py:_file_change.return',
+    'harness/impl/codex/canonical/events.py:_patch_delta.ch',
+    'harness/impl/codex/canonical/events.py:rate_limits.p',
+    'harness/impl/codex/canonical/events.py:rate_limits.return',
+    'harness/impl/codex/canonical/items.py:_args.p',
+    'harness/impl/codex/canonical/items.py:_args.return',
+    'harness/impl/codex/canonical/items.py:_call_ask.args',
+    'harness/impl/codex/canonical/items.py:_call_ask.p',
+    'harness/impl/codex/canonical/items.py:_call_ask.return',
+    'harness/impl/codex/canonical/items.py:_call_exec.args',
+    'harness/impl/codex/canonical/items.py:_call_exec.p',
+    'harness/impl/codex/canonical/items.py:_call_exec.return',
+    'harness/impl/codex/canonical/items.py:_call_stdin.args',
+    'harness/impl/codex/canonical/items.py:_call_stdin.p',
+    'harness/impl/codex/canonical/items.py:_call_stdin.return',
+    'harness/impl/codex/canonical/items.py:_plan_tasks.arguments',
+    'harness/impl/codex/canonical/items.py:_plan_tasks.return',
+    'harness/impl/codex/canonical/items.py:_rsp_custom_tool_call.p',
+    'harness/impl/codex/canonical/items.py:_rsp_custom_tool_call.return',
+    'harness/impl/codex/canonical/items.py:_rsp_custom_tool_call_output.p',
+    'harness/impl/codex/canonical/items.py:_rsp_custom_tool_call_output.return',
+    'harness/impl/codex/canonical/items.py:_rsp_function_call.p',
+    'harness/impl/codex/canonical/items.py:_rsp_function_call.return',
+    'harness/impl/codex/canonical/items.py:_rsp_function_call_output.p',
+    'harness/impl/codex/canonical/items.py:_rsp_function_call_output.return',
+    'harness/impl/codex/canonical/items.py:_rsp_message.p',
+    'harness/impl/codex/canonical/items.py:_rsp_message.return',
+    'harness/impl/codex/canonical/items.py:_rsp_reasoning.p',
+    'harness/impl/codex/canonical/items.py:_rsp_reasoning.return',
+    'harness/impl/codex/canonical/items.py:_rsp_web_search_call.p',
+    'harness/impl/codex/canonical/items.py:_rsp_web_search_call.return',
+    'harness/impl/codex/canonical/items.py:_stdin_record.arguments',
+    'harness/impl/codex/canonical/items.py:_stdin_record.return',
+    'harness/impl/codex/canonical/items.py:content_text.c',
+    'harness/impl/codex/canonical/rollout.py:_stamp.o',
+    'harness/impl/codex/canonical/rollout.py:_stamp.rec',
+    'harness/impl/codex/canonical/rollout.py:_stamp.return',
+    'harness/impl/codex/canonical/rollout.py:_top_compacted.p',
+    'harness/impl/codex/canonical/rollout.py:_top_compacted.return',
+    'harness/impl/codex/canonical/rollout.py:_top_world_state.p',
+    'harness/impl/codex/canonical/rollout.py:_top_world_state.return',
+    'harness/impl/codex/canonical/rollout.py:_turn_context.p',
+    'harness/impl/codex/canonical/rollout.py:_turn_context.return',
+    'harness/impl/codex/canonical/rollout.py:is_child_bootstrap.rec',
+    'harness/impl/codex/canonical/rollout.py:parse.o',
+    'harness/impl/codex/canonical/rollout.py:parse.return',
+    'harness/impl/codex/canonical/rollout.py:parse_line.return',
+    'harness/impl/codex/canonical/sources.py:_parent_thread_id.metadata',
+    'harness/impl/codex/canonical/sources.py:session_metadata.return',
+    'harness/impl/codex/canonical/support.py:content.value',
+    'harness/impl/codex/canonical/support.py:exit_code.record',
+    'harness/impl/codex/canonical/support.py:timestamp.value',
+    'harness/impl/codex/canonical/translator.py:CodexCanonicalTranslator._call_from_document.document',
+    'harness/impl/codex/canonical/translator.py:CodexCanonicalTranslator._call_from_document.return',
+    'harness/impl/codex/canonical/translator.py:CodexCanonicalTranslator._call_record.return',
+    'harness/impl/codex/canonical/translator.py:CodexCanonicalTranslator._collaboration_call.return',
+    'harness/impl/codex/canonical/translator.py:CodexCanonicalTranslator._collaboration_call_from_document.document',
+    'harness/impl/codex/canonical/translator.py:CodexCanonicalTranslator._collaboration_call_from_document.return',
+    'harness/impl/codex/canonical/translator.py:CodexCanonicalTranslator._tool_result.call_record',
+    'harness/impl/codex/canonical/translator.py:CodexCanonicalTranslator._tool_result.result',
+    'harness/impl/codex/canonical/translator.py:CodexCanonicalTranslator._translate_hook.document',
+    'harness/impl/codex/canonical/translator.py:CodexCanonicalTranslator._translate_record.document',
+    'harness/impl/codex/canonical/translator.py:CodexCanonicalTranslator._translate_record.record',
+    'harness/impl/codex/canonical/translator.py:_codex_tool.arguments',
+    'harness/impl/codex/canonical/translator.py:_search_query.arguments',
+    'harness/impl/codex/canonical/translator.py:_tool_fields.arguments',
+    'harness/impl/codex/canonical/translator.py:_tool_fields.return',
+    'harness/impl/codex/canonical/translator.py:_tool_path.arguments',
+    'harness/impl/codex/canonical/translator.py:_web_url.arguments',
+    'harness/impl/codex/canonical/vocabulary.py:empty_record.return',
+    'harness/impl/codex/controls/controller.py:_rollout_abort_state.records',
+    'harness/impl/codex/controls/dialog.py:_answer_one.ans',
+    'harness/impl/codex/controls/dialog.py:_cursor_to.prev',
+    'harness/impl/codex/controls/dialog.py:drive.answers',
+    'harness/impl/codex/usage.py:_cached_rate_limits',
+    'harness/impl/codex/usage.py:normalize_rate_limits.response',
+    'harness/impl/codex/usage.py:normalize_rate_limits.return',
+    'harness/impl/codex/usage.py:read_rate_limits.return',
+    'harness/impl/codex/usage.py:request_rate_limits.return',
+    'notify/channels/__init__.py:retract.handle',
+    'notify/channels/telegram.py:_call.body',
+    'notify/channels/telegram.py:_call.params',
+    'notify/channels/telegram.py:_call.result',
+    'notify/channels/telegram.py:_call.return',
+    'notify/channels/telegram.py:_telegram_delete_body.h',
+    'notify/channels/telegram.py:_telegram_send_body.h',
+    'notify/channels/telegram.py:retract_alert.h',
+    'notify/channels/telegram.py:send_alert.h',
+    'notify/channels/telegram.py:send_alert.return',
+    'notify/channels/webpush.py:_webpush_fanout.payload',
+    'notify/channels/webpush.py:deliver.payload',
+    'notify/channels/webpush.py:retract_alert.h',
+    'notify/channels/webpush.py:retract_alert.payload',
+    'notify/channels/webpush.py:send_alert.payload',
+    'notify/channels/webpush.py:send_alert.return',
+    'notify/notifier.py:DeliveredNotification.handle',
+    'notify/notifier.py:Notifier._track.handle',
+    'notify/presence.py:Presence.route.cand.return',
+    'notify/presence.py:Presence.route.decision.candidates',
+    'notify/presence.py:Presence.route.decision.return',
+    'notify/presence.py:Presence.route.return',
+    'repository/impl/sqlite/session_data.py:SqliteSessionDataRepository.entries_page.arguments',
+    'repository/mapper/audit.py:text.value',
+    'repository/mapper/audit.py:truncated.value',
+    'repository/mapper/documents.py:encode_document.value',
+    'repository/mapper/facts.py:_event_adapter.event',
+    'terminal/impl/kitty/plugin.py:KittyViewport.read_screen.payload',
+    'terminal/impl/kitty/remote.py:KittyRemote.app_focused.tree',
+    'terminal/impl/kitty/remote.py:KittyRemote.ls.return',
+    'terminal/impl/kitty/remote.py:KittyRemote.raw.payload',
+    'terminal/impl/kitty/remote.py:KittyRemote.raw.return',
+}
+
+
+def _loose_annotation_paths() -> list[pathlib.Path]:
+    paths = []
+    for package in LOOSE_ANNOTATION_PACKAGES:
+        for path in sorted((ROOT / package).rglob("*.py")):
+            if "__pycache__" not in path.parts:
+                paths.append(path)
+    return paths
+
+
+def _loose_container_name(node: ast.expr) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return None
+
+
+def _is_any_or_object(node: ast.expr) -> bool:
+    return _loose_container_name(node) in ("Any", "object")
+
+
+def _is_bare_loose_container(node: ast.expr) -> bool:
+    return _loose_container_name(node) in ("dict", "list", "set")
+
+
+def _contains_any_or_object(node: ast.expr | None) -> bool:
+    """True if a dict/list/tuple/set subscript carries `Any` or `object`.
+
+    Checked one level of nesting at a time, so `dict[str, list[Any]]` trips
+    through the recursive call on its second argument.
+    """
+    if node is None:
+        return False
+    if _is_any_or_object(node):
+        return True
+    if isinstance(node, ast.Subscript):
+        if _loose_container_name(node.value) not in ("dict", "list", "tuple", "set"):
+            return False
+        arguments = node.slice.elts if isinstance(node.slice, ast.Tuple) else [node.slice]
+        return any(_contains_any_or_object(argument) for argument in arguments)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+        return _contains_any_or_object(node.left) or _contains_any_or_object(node.right)
+    return False
+
+
+def _loose_annotation(node: ast.expr | None) -> bool:
+    """True for `Any`, `object`, a bare `dict`/`list`/`set`, or a subscript
+
+    of `dict`/`list`/`tuple`/`set` that carries `Any` or `object` anywhere
+    inside it. A typed generic like `dict[str, int]` does not trip.
+    """
+    if node is None:
+        return False
+    if _is_any_or_object(node):
+        return True
+    if _is_bare_loose_container(node):
+        return True
+    if isinstance(node, ast.Subscript):
+        return _contains_any_or_object(node)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+        return _loose_annotation(node.left) or _loose_annotation(node.right)
+    return False
+
+
+class _LooseAnnotationVisitor(ast.NodeVisitor):
+    """Walks one module, naming every annotation by its enclosing scope.
+
+    The name is `Outer.Inner.field` — class and function names joined by the
+    scope they nest in — chosen instead of a line number because a line
+    shifts on every unrelated edit above it, while a name only changes when
+    the thing itself is renamed or moved.
+    """
+
+    def __init__(self) -> None:
+        self.violations: list[tuple[int, str, str]] = []
+        self._scope: list[str] = []
+
+    def _qualify(self, name: str) -> str:
+        return ".".join((*self._scope, name))
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        self._scope.append(node.name)
+        self.generic_visit(node)
+        self._scope.pop()
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self._visit_function(node)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self._visit_function(node)
+
+    def _visit_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+        for argument in (
+            *node.args.posonlyargs,
+            *node.args.args,
+            *node.args.kwonlyargs,
+        ):
+            if argument.arg in ("self", "cls"):
+                continue
+            self._record(argument.annotation, self._qualify(f"{node.name}.{argument.arg}"))
+        for optional_argument in (node.args.vararg, node.args.kwarg):
+            if optional_argument is not None:
+                self._record(
+                    optional_argument.annotation,
+                    self._qualify(f"{node.name}.{optional_argument.arg}"),
+                )
+        self._record(node.returns, self._qualify(f"{node.name}.return"))
+        self._scope.append(node.name)
+        self.generic_visit(node)
+        self._scope.pop()
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        if isinstance(node.target, ast.Name):
+            self._record(node.annotation, self._qualify(node.target.id))
+        self.generic_visit(node)
+
+    def _record(self, annotation: ast.expr | None, key: str) -> None:
+        if annotation is not None and _loose_annotation(annotation):
+            self.violations.append((annotation.lineno, key, ast.unparse(annotation)))
+
+
+def test_no_loose_annotation_outside_the_seeded_allowlist():
+    """`Any`, `object`, and the container shapes that hide the same hole.
+
+    A hit here means: declare the real shape, or (rarely) add a justified
+    allowlist entry.
+    """
+    violations = []
+    for path in _loose_annotation_paths():
+        relative = str(path.relative_to(ROOT))
+        lines = path.read_text(encoding="utf-8").splitlines()
+        visitor = _LooseAnnotationVisitor()
+        visitor.visit(ast.parse("\n".join(lines)))
+        for lineno, key, annotation_text in visitor.violations:
+            allowed = f"{relative}:{key}" in LOOSE_ANNOTATION_ALLOWED
+            marked = "# loose:" in lines[lineno - 1]
+            if allowed and marked:
+                continue
+            violations.append(
+                f"{relative}:{lineno} {key}: {annotation_text} — declare the real "
+                f"shape, or (rarely) add a justified allowlist entry"
+            )
+    assert violations == []
+
+
+def test_the_loose_annotation_allowlist_has_no_dead_entries():
+    """The allowlist only ever shrinks — an entry with nothing to protect
+
+    must be deleted, or it silently exempts whatever is written at that
+    name next.
+    """
+    live_keys = set()
+    for path in _loose_annotation_paths():
+        relative = str(path.relative_to(ROOT))
+        lines = path.read_text(encoding="utf-8").splitlines()
+        visitor = _LooseAnnotationVisitor()
+        visitor.visit(ast.parse("\n".join(lines)))
+        for lineno, key, _ in visitor.violations:
+            if "# loose:" in lines[lineno - 1]:
+                live_keys.add(f"{relative}:{key}")
+    dead = LOOSE_ANNOTATION_ALLOWED - live_keys
+    assert dead == set(), f"remove these dead allowlist entries: {sorted(dead)}"

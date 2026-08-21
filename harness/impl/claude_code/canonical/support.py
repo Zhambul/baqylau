@@ -26,7 +26,7 @@ def model_reference(native_id: ModelId) -> ModelReference:
     )
 
 
-def timestamp(value: object) -> float | None:
+def timestamp(value: object) -> float | None:  # loose: claude code JSON, wave 2 gives it a real shape
     if isinstance(value, (int, float)):
         return float(value)
     if not isinstance(value, str) or not value:
@@ -37,7 +37,11 @@ def timestamp(value: object) -> float | None:
         return None
 
 
-def content(value: object, *, markdown: bool = False) -> Content:
+def content(
+    value: object,  # loose: claude code JSON, wave 2 gives it a real shape
+    *,
+    markdown: bool = False,
+) -> Content:
     if isinstance(value, (dict, list)):
         return StructuredContent(json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True))
     return TextContent(str(value or ""), "text/markdown" if markdown else "text/plain")

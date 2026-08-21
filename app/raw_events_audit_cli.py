@@ -21,7 +21,9 @@ from repository.impl.sqlite.raw_event_audits import SqliteRawEventAuditRepositor
 from repository.mapper import facts as mapper
 
 
-def _document(raw_event_audit: RawEventAudit) -> dict[str, object]:
+def _document(
+    raw_event_audit: RawEventAudit,
+) -> dict[str, object]:  # loose: raw JSON from the audit CLI, wave 2 gives it a real shape
     raw_event = raw_event_audit.raw_event
     interpretation = raw_event_audit.interpretation
     return {
@@ -52,7 +54,7 @@ def _document(raw_event_audit: RawEventAudit) -> dict[str, object]:
     }
 
 
-def _print(document: object) -> None:
+def _print(document: object) -> None:  # loose: raw JSON from the audit CLI, wave 2 gives it a real shape
     print(json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True))
 
 

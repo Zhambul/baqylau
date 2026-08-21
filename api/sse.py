@@ -30,7 +30,10 @@ def sse_frame(event: str, payload: BaseModel, identity: int | None = None) -> st
     return "%sevent: %s\ndata: %s\n\n" % (prefix, event, payload.model_dump_json())
 
 
-async def off_loop(read: Callable[..., Frame], *arguments: object) -> Frame:
+async def off_loop(
+    read: Callable[..., Frame],
+    *arguments: object,  # loose: generic forwarding of a store read's own arguments
+) -> Frame:
     """One synchronous store read, on a worker thread.
 
     THE POLL DESIGN DEPENDS ON THIS. Every frame in every stream comes from a

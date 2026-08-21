@@ -178,7 +178,7 @@ def _event_adapter(event_type: str) -> TypeAdapter[Any]:
     identity columns are never serialized together — they are typed SQL
     columns, and only the payload is ever turned into bytes.
     """
-    event: Any = CanonicalEvent
+    event: Any = CanonicalEvent  # loose: generic TypeAdapter over a registered payload type
     return TypeAdapter(event[PAYLOAD_TYPES[event_type]])
 
 

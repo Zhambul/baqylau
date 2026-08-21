@@ -123,7 +123,10 @@ class Result:
         self.message_id, self.chat = message_id, chat
 
 
-def _call(method: str, params: dict[str, object]) -> tuple[dict[str, Any] | None, Result | None]:
+def _call(
+    method: str,
+    params: dict[str, object],  # loose: notification payload, wave 2 gives it a real shape
+) -> tuple[dict[str, Any] | None, Result | None]:  # loose: notification payload, wave 2 gives it a real shape
     """POST one Bot API method. Returns (payload_dict, Result-on-failure) —
     exactly one of the two is meaningful. Never raises."""
     tok = token()
@@ -134,7 +137,7 @@ def _call(method: str, params: dict[str, object]) -> tuple[dict[str, Any] | None
     try:
         req = urllib.request.Request(url, data=data, method="POST")
         with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_SECONDS) as resp:
-            body: dict[str, Any] = json.loads(resp.read() or b"{}")
+            body: dict[str, Any] = json.loads(resp.read() or b"{}")  # loose: telegram JSON
             status = resp.status
     except urllib.error.HTTPError as e:
         # The API reports its real reason in a JSON body even on a 4xx, and that
@@ -152,7 +155,7 @@ def _call(method: str, params: dict[str, object]) -> tuple[dict[str, Any] | None
         # message is already out of the chat, which is what we wanted.
         gone = status == 400 and "not found" in desc.lower()
         return None, Result(gone=gone, status=status, error=desc)
-    result: dict[str, Any] = body.get("result") or {}
+    result: dict[str, Any] = body.get("result") or {}  # loose: notification payload, wave 2 gives it a real shape
     return result, None
 
 
@@ -186,7 +189,10 @@ def delete_message(chat: int | str | None, message_id: int | None) -> Result:
 
 # ------------------------------------------------ the alert this channel carries
 
-def send_alert(entry: dict[str, str], reason: str | None = None) -> dict[str, Any] | None:
+def send_alert(
+    entry: dict[str, str],
+    reason: str | None = None,
+) -> dict[str, Any] | None:  # loose: notification payload, wave 2 gives it a real shape
     """Send the deferred alert to Telegram. `reason` (in the audit row) says WHY
     it fired: `escalation` (the nudge after an on-device push you ignored),
     `no-device` (nobody was push-subscribed — the immediate fallback), or
@@ -204,7 +210,7 @@ def send_alert(entry: dict[str, str], reason: str | None = None) -> dict[str, An
     # home. `msg_id` None + `done` False is exactly the PENDING state retract()
     # reads. Single assignments of small immutables, read by the one watcher
     # thread — the same "atomic enough" bargain presence.py's maps make.
-    h: dict[str, Any] = {"ch": "telegram", "session_id": entry.get("session_id"),
+    h: dict[str, Any] = {"ch": "telegram", "session_id": entry.get("session_id"),  # loose: telegram handle
                          "kind": entry.get("kind"),
                          "chat": None, "msg_id": None, "done": False}
     threading.Thread(target=_telegram_send_body, args=(h, msg, reason),
@@ -212,7 +218,11 @@ def send_alert(entry: dict[str, str], reason: str | None = None) -> dict[str, An
     return h
 
 
-def _telegram_send_body(h: dict[str, Any], msg: str, reason: str | None) -> None:
+def _telegram_send_body(
+    h: dict[str, Any],  # loose: notification payload, wave 2 gives it a real shape
+    msg: str,
+    reason: str | None,
+) -> None:
     """The off-watcher send body: call the Bot API, record the id in the handle,
     audit. `done` is set LAST and unconditionally — it is what releases retract()
     from PENDING, so an exception path that skipped it would pin the record until
@@ -236,9 +246,14 @@ def _telegram_send_body(h: dict[str, Any], msg: str, reason: str | None) -> None
     h["done"] = True
 
 
-def retract_alert(h: dict[str, Any], reason: str, badge: int = 0, *,
-                  push_signing_key_repository: PushSigningKeyRepository | None = None,
-                  push_subscription_repository: PushSubscriptionRepository | None = None) -> str:
+def retract_alert(
+    h: dict[str, Any],  # loose: notification payload, wave 2 gives it a real shape
+    reason: str,
+    badge: int = 0,
+    *,
+    push_signing_key_repository: PushSigningKeyRepository | None = None,
+    push_subscription_repository: PushSubscriptionRepository | None = None,
+) -> str:
     """Delete the message — OFF the watcher thread, for the same reason the send
     is: `delete_message` is a synchronous HTTPS round-trip with a 10 s timeout,
     and the 1 s scan loop cannot wear that. So the outcome is not known
@@ -268,7 +283,7 @@ def retract_alert(h: dict[str, Any], reason: str, badge: int = 0, *,
     return PENDING
 
 
-def _telegram_delete_body(h: dict[str, Any]) -> None:
+def _telegram_delete_body(h: dict[str, Any]) -> None:  # loose: notification payload, wave 2 gives it a real shape
     """The off-watcher delete body: `outcome` is set on every path (it is what
     releases the retraction from PENDING), and a `gone` message counts as done —
     someone clearing the chat first is the outcome we wanted, not a failure."""

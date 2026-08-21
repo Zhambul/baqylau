@@ -16,7 +16,7 @@ def model_reference(native_id: ModelId) -> ModelReference:
     return ModelReference(native_id, native_id, SelectionId(native_id))
 
 
-def timestamp(value: object) -> float | None:
+def timestamp(value: object) -> float | None:  # loose: codex JSON, wave 2 gives it a real shape
     if isinstance(value, (int, float)):
         return float(value)
     if not isinstance(value, str) or not value:
@@ -27,7 +27,7 @@ def timestamp(value: object) -> float | None:
         return None
 
 
-def exit_code(record: dict[str, Any]) -> int | None:
+def exit_code(record: dict[str, Any]) -> int | None:  # loose: codex JSON, wave 2 gives it a real shape
     """The record's exit status, honest about zero: `0` is a real exit code
     (a falsy-int coercion once turned a clean exit into outcome "failed")."""
     # Parsed from the same string the guard tests, rather than from the raw
@@ -37,7 +37,7 @@ def exit_code(record: dict[str, Any]) -> int | None:
     return int(text) if text.lstrip("-").isdigit() else None
 
 
-def content(value: object, *, markdown: bool = False) -> Content:
+def content(value: object, *, markdown: bool = False) -> Content:  # loose: codex JSON, wave 2 gives it a real shape
     if isinstance(value, (dict, list)):
         return StructuredContent(json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True))
     return TextContent(str(value or ""), "text/markdown" if markdown else "text/plain")

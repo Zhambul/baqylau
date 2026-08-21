@@ -101,7 +101,7 @@ def is_synthetic(text: str, role: str = "") -> bool:
     return bool(tag) and tag not in INPUT_WRAPPERS
 
 
-def empty_record() -> dict[str, Any]:
+def empty_record() -> dict[str, Any]:  # loose: codex JSON, wave 2 gives it a real shape
     """A record that says "recognised type, nothing in it" — NOT the same answer
     as None.
 

@@ -88,7 +88,7 @@ def _lead_status(session_data: SessionData) -> ActorStatus | None:
 class DeliveredNotification:
     session_id: SessionId
     state: ActorStatus
-    handle: dict[str, Any]
+    handle: dict[str, Any]  # loose: notification payload, wave 2 gives it a real shape
     delivered_at: float
 
 
@@ -285,7 +285,11 @@ class Notifier:
                     channels.telegram.send_alert(payload, reason),
                 )
 
-    def _track(self, pending_notification: PendingNotification, handle: dict[str, Any] | None) -> None:
+    def _track(
+        self,
+        pending_notification: PendingNotification,
+        handle: dict[str, Any] | None,  # loose: notification payload, wave 2 gives it a real shape
+    ) -> None:
         if handle is None:
             return
         self.delivered.setdefault(pending_notification.session_id, []).append(

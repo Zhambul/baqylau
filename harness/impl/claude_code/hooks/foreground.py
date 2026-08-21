@@ -48,7 +48,10 @@ def _tee_path(session_id: SessionId, shell_id: ShellId) -> str:
     return os.path.join(_directory(session_id), _safe_identity(shell_id)) + ".out"
 
 
-def _updated_input(tool_input: dict[str, Any], command: str) -> bytes:
+def _updated_input(
+    tool_input: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
+    command: str,
+) -> bytes:
     updated_input = dict(tool_input)
     updated_input["command"] = command
     return (
@@ -67,7 +70,9 @@ def _updated_input(tool_input: dict[str, Any], command: str) -> bytes:
     ).encode("utf-8")
 
 
-def background_output(document: dict[str, Any]) -> ShellOutputLocated | None:
+def background_output(
+    document: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
+) -> ShellOutputLocated | None:
     """The output location of a background command's native output file.
 
     Background commands are not rewritten (Claude Code redirects their output
@@ -103,7 +108,9 @@ def background_output(document: dict[str, Any]) -> ShellOutputLocated | None:
     )
 
 
-def prepare(document: dict[str, Any]) -> PreparedForegroundCommand | None:
+def prepare(
+    document: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
+) -> PreparedForegroundCommand | None:
     """Rewrite one Bash command so its output lands in a readable file.
 
     The returned location is NOT applied here — the gateway records it as an

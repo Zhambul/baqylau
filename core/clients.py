@@ -31,7 +31,7 @@ def path(name: str) -> str:
     return str(CLIENT_DIRECTORY / name)
 
 
-def command(name: str, *arguments: object) -> tuple[str, ...]:
+def command(name: str, *arguments: object) -> tuple[str, ...]:  # loose: heterogeneous argv values, converted with str()
     """The argv for a client WE launch: our own address first, always.
 
     A client cannot import where the daemon listens — it imports nothing of ours

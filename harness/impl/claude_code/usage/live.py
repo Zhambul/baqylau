@@ -120,7 +120,7 @@ def subprocess_environment(config_directory: str | None) -> dict[str, str]:
     return environment
 
 
-def _epoch_seconds(value: object) -> float | None:
+def _epoch_seconds(value: object) -> float | None:  # loose: claude code JSON, wave 2 gives it a real shape
     """An ISO 8601 `resets_at` to epoch seconds, or None.
 
     This channel spells the reset as a timestamp string where the status line
@@ -134,13 +134,13 @@ def _epoch_seconds(value: object) -> float | None:
         return None
 
 
-def _percent(value: object) -> Decimal | None:
+def _percent(value: object) -> Decimal | None:  # loose: claude code JSON, wave 2 gives it a real shape
     if not isinstance(value, (int, float)) or isinstance(value, bool):
         return None
     return Decimal(max(0, min(100, int(round(value)))))
 
 
-def _model_key(display_name: object) -> str | None:
+def _model_key(display_name: object) -> str | None:  # loose: claude code JSON, wave 2 gives it a real shape
     """A server-supplied bucket label ("Fable 5") as a window key ("fable_5").
 
     Server text becomes a stored key here, so it is reduced to the same shape
@@ -155,7 +155,9 @@ def _model_key(display_name: object) -> str | None:
     return MODEL_WINDOW_PREFIX + slug
 
 
-def windows(rate_limits: object) -> tuple[UsageWindowSample, ...]:
+def windows(
+    rate_limits: object,  # loose: claude code JSON, wave 2 gives it a real shape
+) -> tuple[UsageWindowSample, ...]:
     """The account-wide pair first, then one sample per model bucket."""
     if not isinstance(rate_limits, dict):
         return ()
@@ -184,7 +186,10 @@ def windows(rate_limits: object) -> tuple[UsageWindowSample, ...]:
     return tuple(samples)
 
 
-def _control_response(process: subprocess.Popen[str], deadline: float) -> dict[str, Any] | None:
+def _control_response(
+    process: subprocess.Popen[str],
+    deadline: float,
+) -> dict[str, Any] | None:  # loose: claude code JSON, wave 2 gives it a real shape
     """The reply to our one request, out of a stream that also carries the
     session's own lifecycle lines."""
     if process.stdout is None:
@@ -207,7 +212,9 @@ def _control_response(process: subprocess.Popen[str], deadline: float) -> dict[s
     return None
 
 
-def request_usage(config_directory: str | None) -> dict[str, Any] | None:
+def request_usage(
+    config_directory: str | None,
+) -> dict[str, Any] | None:  # loose: claude code JSON, wave 2 gives it a real shape
     """One `get_usage` round trip against one account's configuration."""
     try:
         process = subprocess.Popen(

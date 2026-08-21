@@ -196,9 +196,12 @@ class Result:
         self.ok, self.gone, self.status, self.error = ok, gone, status, error
 
 
-def deliver(routed_subscription: RoutedSubscription, payload: dict[str, object],
-            push_signing_key_repository: PushSigningKeyRepository | None,
-            ttl: int = DELIVERY_LIFETIME_SECONDS) -> Result:
+def deliver(
+    routed_subscription: RoutedSubscription,
+    payload: dict[str, object],  # loose: notification payload, wave 2 gives it a real shape
+    push_signing_key_repository: PushSigningKeyRepository | None,
+    ttl: int = DELIVERY_LIFETIME_SECONDS,
+) -> Result:
     """Deliver `payload` (a dict, JSON-encoded) to one `subscription` (its JSON
     document: {endpoint, keys:{p256dh, auth}}). Never raises — returns a Result.
     Synchronous network I/O, so callers run it OFF the watcher thread."""
@@ -247,9 +250,14 @@ def deliver(routed_subscription: RoutedSubscription, payload: dict[str, object],
 
 # ------------------------------------------------ the alert this channel carries
 
-def send_alert(entry: dict[str, str], subs: list[RoutedSubscription], badge: int = 0, *,
-               push_signing_key_repository: PushSigningKeyRepository | None = None,
-               push_subscription_repository: PushSubscriptionRepository | None = None) -> dict[str, Any] | None:
+def send_alert(
+    entry: dict[str, str],
+    subs: list[RoutedSubscription],
+    badge: int = 0,
+    *,
+    push_signing_key_repository: PushSigningKeyRepository | None = None,
+    push_subscription_repository: PushSubscriptionRepository | None = None,
+) -> dict[str, Any] | None:  # loose: notification payload, wave 2 gives it a real shape
     """Send the on-device alert as a Web Push to `subs` — the subscriptions of
     the ONE device the caller routed to (`presence.route`), NOT every
     subscription, so a session going done/asking buzzes the device you're
@@ -270,7 +278,7 @@ def send_alert(entry: dict[str, str], subs: list[RoutedSubscription], badge: int
         return None
     session_id = entry.get("session_id") or ""
     title, body, url = alert_text(entry)
-    payload: dict[str, object] = {"title": title, "body": body, "session_id": session_id,
+    payload: dict[str, object] = {"title": title, "body": body, "session_id": session_id,  # loose: push payload
                                   "kind": entry.get("kind"), "url": url, "badge": badge}
     threading.Thread(target=_webpush_fanout,
                      args=(subs, payload, "send", push_signing_key_repository, push_subscription_repository),
@@ -282,9 +290,13 @@ def send_alert(entry: dict[str, str], subs: list[RoutedSubscription], badge: int
             "subs": subs, "tag": push_tag(SessionId(session_id))}
 
 
-def _webpush_fanout(subs: list[RoutedSubscription], payload: dict[str, object], action: str,
-                    push_signing_key_repository: PushSigningKeyRepository | None,
-                    push_subscription_repository: PushSubscriptionRepository | None) -> None:
+def _webpush_fanout(
+    subs: list[RoutedSubscription],
+    payload: dict[str, object],  # loose: notification payload, wave 2 gives it a real shape
+    action: str,
+    push_signing_key_repository: PushSigningKeyRepository | None,
+    push_subscription_repository: PushSubscriptionRepository | None,
+) -> None:
     """The detached fan-out body, shared by the alert and its retraction:
     deliver `payload` to each subscription, audit the outcome (with the target
     `device` — the on-device analog of the route decision), and prune the dead
@@ -309,9 +321,14 @@ def _webpush_fanout(subs: list[RoutedSubscription], payload: dict[str, object], 
                       "device": dev, "endpoint": ep[:80]})
 
 
-def retract_alert(h: dict[str, Any], reason: str, badge: int = 0, *,
-                  push_signing_key_repository: PushSigningKeyRepository | None = None,
-                  push_subscription_repository: PushSubscriptionRepository | None = None) -> str:
+def retract_alert(
+    h: dict[str, Any],  # loose: notification payload, wave 2 gives it a real shape
+    reason: str,
+    badge: int = 0,
+    *,
+    push_signing_key_repository: PushSigningKeyRepository | None = None,
+    push_subscription_repository: PushSubscriptionRepository | None = None,
+) -> str:
     """Close the delivered banner by pushing a RESOLVE message to the same
     subscriptions; sw.js closes everything under the tag and shows nothing.
 
@@ -330,7 +347,7 @@ def retract_alert(h: dict[str, Any], reason: str, badge: int = 0, *,
     subs = h.get("subs") or []
     if not subs:
         return NOTHING
-    payload: dict[str, object] = {"type": "resolve", "session_id": h.get("session_id") or "",
+    payload: dict[str, object] = {"type": "resolve", "session_id": h.get("session_id") or "",  # loose: push payload
                                   "kind": h.get("kind"), "tag": h.get("tag"), "badge": badge}
     threading.Thread(target=_webpush_fanout,
                      args=(subs, payload, "resolve", push_signing_key_repository, push_subscription_repository),

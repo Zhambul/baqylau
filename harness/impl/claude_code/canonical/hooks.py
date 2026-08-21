@@ -27,7 +27,7 @@ from harness.models.selections import SelectionSemantics
 
 def effort_report(
     raw_event: RawEvent,
-    document: dict[str, Any],
+    document: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
     selection_semantics: SelectionSemantics,
 ) -> list[CanonicalEvent[EventPayload]]:
     """The active effort level Claude Code reports on hooks that fire mid-turn
@@ -83,7 +83,7 @@ def turn_finished(
 
 def translate_hook(
     raw_event: RawEvent,
-    document: dict[str, Any],
+    document: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
     tool_call_semantics: ToolCallSemantics,
     turn_semantics: TurnSemantics,
     selection_semantics: SelectionSemantics,

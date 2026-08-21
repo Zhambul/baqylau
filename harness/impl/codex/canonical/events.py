@@ -31,7 +31,7 @@ PHASE_FINAL = "final_answer"
 COVERED_ITEMS = ("UserMessage", "AgentMessage", "Reasoning")
 
 
-def _ev_token_count(p: dict[str, Any]) -> dict[str, Any] | None:
+def _ev_token_count(p: dict[str, Any]) -> dict[str, Any] | None:  # loose: codex JSON, wave 2 gives it a real shape
     # Cumulative usage snapshot (info is null on rate-limit-only events).
     # `last_token_usage` + `model_context_window` ride along: the CUMULATIVE
     # total never resets across a compaction, so only the last turn's total
@@ -49,7 +49,9 @@ def _ev_token_count(p: dict[str, Any]) -> dict[str, Any] | None:
             "window": win if isinstance(win, int) else None}
 
 
-def _ev_thread_goal_updated(p: dict[str, Any]) -> dict[str, Any] | None:
+def _ev_thread_goal_updated(
+    p: dict[str, Any],  # loose: codex JSON, wave 2 gives it a real shape
+) -> dict[str, Any] | None:  # loose: codex JSON, wave 2 gives it a real shape
     goal = p.get("goal")
     if not isinstance(goal, dict):
         return None
@@ -61,11 +63,11 @@ def _ev_thread_goal_updated(p: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
-def _ev_thread_goal_cleared(p: dict[str, Any]) -> dict[str, Any]:
+def _ev_thread_goal_cleared(p: dict[str, Any]) -> dict[str, Any]:  # loose: codex JSON, wave 2 gives it a real shape
     return {"kind": "goal", "objective": None, "status": "cleared", "reason": None}
 
 
-def rate_limits(p: dict[str, Any]) -> dict[str, Any] | None:
+def rate_limits(p: dict[str, Any]) -> dict[str, Any] | None:  # loose: codex JSON, wave 2 gives it a real shape
     """A `token_count` payload's `rate_limits` block, normalized to codex's
     windows shape — {"planType", "windows": [{used_pct, window_mins,
     resets_at}]} — or None when the event carries none (the field is NULLABLE)
@@ -99,7 +101,7 @@ def rate_limits(p: dict[str, Any]) -> dict[str, Any] | None:
     return {"planType": rl.get("plan_type") or "", "windows": wins}
 
 
-def _patch_delta(ch: dict[str, Any]) -> tuple[int, int]:
+def _patch_delta(ch: dict[str, Any]) -> tuple[int, int]:  # loose: codex JSON, wave 2 gives it a real shape
     """(added, removed) line counts for one patch_apply_end change entry."""
     t = ch.get("type")
     if t == "add":
@@ -115,7 +117,7 @@ def _patch_delta(ch: dict[str, Any]) -> tuple[int, int]:
     return add, rem
 
 
-def _file_change(item: dict[str, Any]) -> dict[str, Any]:
+def _file_change(item: dict[str, Any]) -> dict[str, Any]:  # loose: codex JSON, wave 2 gives it a real shape
     """Normalize Codex's authoritative completed FileChange item."""
     files = []
     for path, ch in (item.get("changes") or {}).items():
@@ -140,11 +142,11 @@ def _file_change(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _ev_context_compacted(p: dict[str, Any]) -> dict[str, Any]:
+def _ev_context_compacted(p: dict[str, Any]) -> dict[str, Any]:  # loose: codex JSON, wave 2 gives it a real shape
     return {"kind": "compact"}
 
 
-def _ev_task_started(p: dict[str, Any]) -> dict[str, Any]:
+def _ev_task_started(p: dict[str, Any]) -> dict[str, Any]:  # loose: codex JSON, wave 2 gives it a real shape
     # `turn_id` is codex's identity for the TURN this task is — the fact the
     # actor-assignment model is built on (core/childtask.py). A child rollout opens by
     # replaying the parent thread, so the task_started records BEFORE the child's
@@ -155,7 +157,7 @@ def _ev_task_started(p: dict[str, Any]) -> dict[str, Any]:
             "turn": p.get("turn_id") or ""}
 
 
-def _ev_task_complete(p: dict[str, Any]) -> dict[str, Any]:
+def _ev_task_complete(p: dict[str, Any]) -> dict[str, Any]:  # loose: codex JSON, wave 2 gives it a real shape
     # …and the same turn id closing it, plus `last_agent_message`: codex's own
     # statement of what the turn ANSWERED. Kept because it is the FALLBACK result
     # text (harness/impl/codex/stream._ro_task_complete) for a run whose messages
@@ -167,7 +169,7 @@ def _ev_task_complete(p: dict[str, Any]) -> dict[str, Any]:
             "last": (p.get("last_agent_message") or "").strip()}
 
 
-def _ev_thread_settings_applied(p: dict[str, Any]) -> dict[str, Any]:
+def _ev_thread_settings_applied(p: dict[str, Any]) -> dict[str, Any]:  # loose: codex JSON, wave 2 gives it a real shape
     """codex's PICKER state: a `thread_settings_applied` fires on EVERY /model
     change (model or reasoning level) — so it is FRESHER than `turn_context`,
     which is written only per-TURN. Its `thread_settings.model` +
@@ -180,7 +182,7 @@ def _ev_thread_settings_applied(p: dict[str, Any]) -> dict[str, Any]:
             "effort": (ts.get("reasoning_effort") or "").strip()}
 
 
-def _ev_item_completed(p: dict[str, Any]) -> dict[str, Any] | None:
+def _ev_item_completed(p: dict[str, Any]) -> dict[str, Any] | None:  # loose: codex JSON, wave 2 gives it a real shape
     """codex's PLAN-mode plan: an `item_completed` whose `item.type == "Plan"`
     carries the full plan as markdown (`item.text`) with a stable id. This is
     the structured plan the dashboard renders as a plan card (docs/codex.md
@@ -245,29 +247,29 @@ def _ev_item_completed(p: dict[str, Any]) -> dict[str, Any] | None:
         else empty_record()
 
 
-def _ev_turn_aborted(p: dict[str, Any]) -> dict[str, Any]:
+def _ev_turn_aborted(p: dict[str, Any]) -> dict[str, Any]:  # loose: codex JSON, wave 2 gives it a real shape
     return {"kind": "turn_aborted", "turn": p.get("turn_id") or ""}
 
 
-def _ev_user_message(p: dict[str, Any]) -> dict[str, Any]:
+def _ev_user_message(p: dict[str, Any]) -> dict[str, Any]:  # loose: codex JSON, wave 2 gives it a real shape
     # Unwrap an INPUT wrapper here too so a `<task>` that also lands in the
     # event_msg register de-doubles with the response_item one to a single bubble.
     msg = strip_input_wrapper((p.get("message") or "").strip())
     return {"kind": "prompt", "text": msg} if msg else empty_record()
 
 
-def _ev_agent_reasoning(p: dict[str, Any]) -> dict[str, Any]:
+def _ev_agent_reasoning(p: dict[str, Any]) -> dict[str, Any]:  # loose: codex JSON, wave 2 gives it a real shape
     txt = (p.get("text") or "").strip()
     return {"kind": "reasoning", "text": txt} if txt else empty_record()
 
 
-def _ev_agent_message(p: dict[str, Any]) -> dict[str, Any]:
+def _ev_agent_message(p: dict[str, Any]) -> dict[str, Any]:  # loose: codex JSON, wave 2 gives it a real shape
     msg = (p.get("message") or "").strip()
     return {"kind": "message", "text": msg,
             "phase": (p.get("phase") or "").strip()} if msg else empty_record()
 
 
-def _ev_web_search_end(p: dict[str, Any]) -> dict[str, Any] | None:
+def _ev_web_search_end(p: dict[str, Any]) -> dict[str, Any] | None:  # loose: codex JSON, wave 2 gives it a real shape
     """codex's web SEARCH in the event_msg register — and on cli 0.146 the ONLY
     place a search appears at all: the measured child rollout (019fb363-4028…)
     carries five `web_search_end` events and ZERO `web_search_call`

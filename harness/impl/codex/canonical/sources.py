@@ -25,7 +25,7 @@ def harness_session_id(path: str) -> str:
     return match.group(1) if match else os.path.splitext(os.path.basename(path))[0]
 
 
-def session_metadata(path: str) -> dict[str, Any]:
+def session_metadata(path: str) -> dict[str, Any]:  # loose: codex JSON, wave 2 gives it a real shape
     try:
         with open(path, encoding="utf-8") as source:
             for _ in range(5):
@@ -40,7 +40,7 @@ def session_metadata(path: str) -> dict[str, Any]:
     return {}
 
 
-def _parent_thread_id(metadata: dict[str, Any]) -> str | None:
+def _parent_thread_id(metadata: dict[str, Any]) -> str | None:  # loose: codex JSON, wave 2 gives it a real shape
     source = metadata.get("source")
     spawn = (
         ((source.get("subagent") or {}).get("thread_spawn") or {})

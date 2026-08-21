@@ -127,7 +127,10 @@ def rows(screen: str) -> list[Row]:
     return out
 
 
-def current_question(screen: str, questions: list[dict[str, Any]]) -> int | None:
+def current_question(
+    screen: str,
+    questions: list[dict[str, Any]],  # loose: claude code JSON, wave 2 gives it a real shape
+) -> int | None:
     """Which of the ask's questions the dialog currently shows, or None.
     Long question text WRAPS across screen lines (a 555-char question never
     matched the old exact line-set lookup — the live `question 1 never

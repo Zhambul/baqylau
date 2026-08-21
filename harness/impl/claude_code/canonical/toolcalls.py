@@ -145,7 +145,10 @@ def tool_kind(native_name: str) -> ToolKind:
     return kind
 
 
-def structured_patch(path: str, tool_response: dict[str, Any]) -> tuple[str | None, int | None, int | None]:
+def structured_patch(
+    path: str,
+    tool_response: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
+) -> tuple[str | None, int | None, int | None]:
     patches = tool_response.get("structuredPatch")
     if not isinstance(patches, list) or not patches:
         return None, None, None
@@ -170,7 +173,7 @@ def structured_patch(path: str, tool_response: dict[str, Any]) -> tuple[str | No
     return "\n".join(lines) + "\n", added, removed
 
 
-def result_content(tool_response: object) -> Content | None:
+def result_content(tool_response: object) -> Content | None:  # loose: claude code JSON, wave 2 gives it a real shape
     """What a call answered, whatever shape the raw event held it in.
 
     A hook reports the native response document, the transcript reports the
@@ -182,7 +185,9 @@ def result_content(tool_response: object) -> Content | None:
     return content(tool_response)
 
 
-def attention_answers(arguments: dict[str, Any]) -> tuple[AttentionAnswer, ...]:
+def attention_answers(
+    arguments: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
+) -> tuple[AttentionAnswer, ...]:
     native_answers = arguments.get("answers")
     if not isinstance(native_answers, dict):
         return ()
@@ -209,7 +214,10 @@ def attention_answers(arguments: dict[str, Any]) -> tuple[AttentionAnswer, ...]:
     return tuple(answers)
 
 
-def plan_resolution(native: dict[str, Any], failed: bool) -> tuple[PlanState, str | None, bool]:
+def plan_resolution(
+    native: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
+    failed: bool,
+) -> tuple[PlanState, str | None, bool]:
     response = native.get("tool_response") or native.get("tool_result")
     if not failed:
         edited = bool(isinstance(response, dict) and response.get("planWasEdited"))
@@ -248,12 +256,20 @@ class ToolCallSemantics:
 
     # --- what a call was, across the two raw event streams ------------------
 
-    def remember(self, call_id: CallId, native_name: str, arguments: dict[str, Any]) -> None:
+    def remember(
+        self,
+        call_id: CallId,
+        native_name: str,
+        arguments: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
+    ) -> None:
         self.calls[call_id] = (native_name, arguments)
 
     def recall(
-        self, call_id: CallId, native_name: str | None, arguments: dict[str, Any] | None,
-    ) -> tuple[str, dict[str, Any]]:
+        self,
+        call_id: CallId,
+        native_name: str | None,
+        arguments: dict[str, Any] | None,  # loose: claude code JSON, wave 2 gives it a real shape
+    ) -> tuple[str, dict[str, Any]]:  # loose: claude code JSON, wave 2 gives it a real shape
         """The call's name and input: what this record carries, else what the
         request said. A record that has neither is a call whose start we never
         saw — a daemon that restarted mid-call — and it cannot be classified."""
@@ -286,7 +302,11 @@ class ToolCallSemantics:
 
     # --- the request ---------------------------------------------------------
 
-    def tool_started(self, raw_event: RawEvent, native: dict[str, Any]) -> list[CanonicalEvent[EventPayload]]:
+    def tool_started(
+        self,
+        raw_event: RawEvent,
+        native: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
+    ) -> list[CanonicalEvent[EventPayload]]:
         call_id = CallId(str(native.get("tool_use_id") or native.get("id") or raw_event.source_position))
         native_name = str(native.get("tool_name") or native.get("name") or "tool")
         kind = tool_kind(native_name)
@@ -318,7 +338,7 @@ class ToolCallSemantics:
         raw_event: RawEvent,
         call_id: CallId,
         native_name: str,
-        arguments: dict[str, Any],
+        arguments: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
     ) -> CanonicalEvent[EventPayload]:
         shell_id = ShellId(call_id)
         if native_name == "Monitor":
@@ -337,7 +357,10 @@ class ToolCallSemantics:
         return event(raw_event, "shell", str(shell_id), "started", payload)
 
     def _skill_started(
-        self, raw_event: RawEvent, call_id: CallId, arguments: dict[str, Any],
+        self,
+        raw_event: RawEvent,
+        call_id: CallId,
+        arguments: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
     ) -> CanonicalEvent[EventPayload]:
         skill_id = SkillId(call_id)
         name = str(arguments.get("skill") or "")
@@ -349,7 +372,10 @@ class ToolCallSemantics:
         return event(raw_event, "skill", str(skill_id), "started", payload)
 
     def _assignment_started(
-        self, raw_event: RawEvent, call_id: CallId, arguments: dict[str, Any],
+        self,
+        raw_event: RawEvent,
+        call_id: CallId,
+        arguments: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
     ) -> CanonicalEvent[EventPayload]:
         assignment_id = AssignmentId(call_id)
         actor_name = arguments.get("name") or arguments.get("subagent_type")
@@ -363,7 +389,10 @@ class ToolCallSemantics:
         return event(raw_event, "actor_assignment", str(assignment_id), "started", payload)
 
     def _actor_message(
-        self, raw_event: RawEvent, call_id: CallId, arguments: dict[str, Any],
+        self,
+        raw_event: RawEvent,
+        call_id: CallId,
+        arguments: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
     ) -> CanonicalEvent[EventPayload]:
         """A SendMessage: the actor speaking to a named peer, which is a message
         with a recipient — not a tool call with a text argument."""
@@ -384,7 +413,7 @@ class ToolCallSemantics:
     def tool_finished(
         self,
         raw_event: RawEvent,
-        native: dict[str, Any],
+        native: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
         failed: bool,
         *,
         result: Content | None = None,
@@ -449,7 +478,7 @@ class ToolCallSemantics:
         call_id: CallId,
         result_text: str,
         failed: bool,
-        tool_response: object,
+        tool_response: object,  # loose: claude code JSON, wave 2 gives it a real shape
     ) -> list[CanonicalEvent[EventPayload]]:
         """One tool_result block from the transcript, as facts.
 
@@ -494,8 +523,8 @@ class ToolCallSemantics:
         raw_event: RawEvent,
         call_id: CallId,
         native_name: str,
-        arguments: dict[str, Any],
-        tool_response: object,
+        arguments: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
+        tool_response: object,  # loose: claude code JSON, wave 2 gives it a real shape
         outcome: Outcome,
     ) -> list[CanonicalEvent[EventPayload]]:
         shell_id = ShellId(call_id)
@@ -548,7 +577,7 @@ class ToolCallSemantics:
         self,
         raw_event: RawEvent,
         call_id: CallId,
-        tool_response: object,
+        tool_response: object,  # loose: claude code JSON, wave 2 gives it a real shape
         outcome: Outcome,
     ) -> list[CanonicalEvent[EventPayload]]:
         response = tool_response if isinstance(tool_response, dict) else {}
@@ -587,8 +616,8 @@ class ToolCallSemantics:
         raw_event: RawEvent,
         call_id: CallId,
         native_name: str,
-        arguments: dict[str, Any],
-        tool_response: object,
+        arguments: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
+        tool_response: object,  # loose: claude code JSON, wave 2 gives it a real shape
         outcome: Outcome,
     ) -> list[CanonicalEvent[EventPayload]]:
         action = FILE_ACTIONS.get(native_name)
@@ -614,7 +643,9 @@ class ToolCallSemantics:
         return [event(raw_event, "file", f"{call_id}:{action}:{path}", "accessed", payload)]
 
     @staticmethod
-    def questions(arguments: dict[str, Any]) -> tuple[AttentionPrompt, ...]:
+    def questions(
+        arguments: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
+    ) -> tuple[AttentionPrompt, ...]:
         prompts = []
         for index, question in enumerate(arguments.get("questions") or ()):
             choices = tuple(

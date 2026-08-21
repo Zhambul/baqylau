@@ -312,7 +312,8 @@ class KittyViewport(TerminalViewport):
     def read_screen(self, screen_read_request: ScreenReadRequest) -> ScreenReadResponse:
         # Raw socket first (~0.4ms; it runs on every click-to-view toggle),
         # kitten subprocess as the fallback.
-        payload: dict[str, Any] = {"match": match.window(screen_read_request.window_id), "extent": "screen"}
+        payload: dict[str, Any] = {  # loose: kitty's own JSON reply, wave 2 gives it a real shape
+            "match": match.window(screen_read_request.window_id), "extent": "screen"}
         if screen_read_request.ansi:
             payload["ansi"] = True
         response = self.kitty_remote.raw("get-text", payload, want_response=True)

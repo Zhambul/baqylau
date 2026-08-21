@@ -64,13 +64,13 @@ BACKGROUND_OUTCOMES: dict[str, Outcome] = {
 }
 
 
-def background_outcome(status: object) -> Outcome | None:
+def background_outcome(status: object) -> Outcome | None:  # loose: claude code JSON, wave 2 gives it a real shape
     return BACKGROUND_OUTCOMES.get(str(status or "").strip().lower(), "unknown") if status else None
 
 
 def launch_selections(
     raw_event: RawEvent,
-    document: dict[str, Any],
+    document: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
     selection_semantics: SelectionSemantics,
 ) -> list[CanonicalEvent[EventPayload]]:
     """The launch observation the gateway recorded from the hook's inherited
@@ -133,7 +133,7 @@ def prompt_turn(
 
 def slash_command(
     raw_event: RawEvent,
-    record: dict[str, Any],
+    record: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
     native_identity: str,
     occurred_at: float | None,
     turn_semantics: TurnSemantics,
@@ -196,7 +196,10 @@ def slash_command(
     return events
 
 
-def transcript_metadata(raw_event: RawEvent, document: dict[str, Any]) -> list[CanonicalEvent[EventPayload]]:
+def transcript_metadata(
+    raw_event: RawEvent,
+    document: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
+) -> list[CanonicalEvent[EventPayload]]:
     if raw_event.parent_actor_id is not None:
         return []
     record_type = document.get("type")
@@ -224,7 +227,10 @@ def transcript_metadata(raw_event: RawEvent, document: dict[str, Any]) -> list[C
     ]
 
 
-def session_events(raw_event: RawEvent, document: dict[str, Any]) -> list[CanonicalEvent[EventPayload]]:
+def session_events(
+    raw_event: RawEvent,
+    document: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
+) -> list[CanonicalEvent[EventPayload]]:
     lead_actor_id = raw_event.actor_id
     if raw_event.parent_actor_id is not None:
         metadata = {}
@@ -298,7 +304,10 @@ def session_events(raw_event: RawEvent, document: dict[str, Any]) -> list[Canoni
     return events
 
 
-def task_event(raw_event: RawEvent, task: dict[str, Any]) -> CanonicalEvent[EventPayload]:
+def task_event(
+    raw_event: RawEvent,
+    task: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
+) -> CanonicalEvent[EventPayload]:
     task_id = TaskId(str(task.get("id") or ""))
     if not task_id:
         raise TranslationError("Claude Code task has no id", context=raw_event.source_position)
@@ -321,8 +330,8 @@ def task_event(raw_event: RawEvent, task: dict[str, Any]) -> CanonicalEvent[Even
 
 def translate_transcript(
     raw_event: RawEvent,
-    document: dict[str, Any],
-    record: dict[str, Any],
+    document: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
+    record: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
     tool_call_semantics: ToolCallSemantics,
     turn_semantics: TurnSemantics,
     selection_semantics: SelectionSemantics,

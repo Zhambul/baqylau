@@ -341,7 +341,9 @@ class SelectEffortHandler(ControlHandler):
         return _command(request, control_context, f"/effort {request.effort}", confirm=True)
 
 
-def _native_prompts(question_asked: QuestionAsked) -> list[dict[str, Any]]:
+def _native_prompts(
+    question_asked: QuestionAsked,
+) -> list[dict[str, Any]]:  # loose: claude code JSON, wave 2 gives it a real shape
     return [
         {
             "id": prompt.prompt_id,

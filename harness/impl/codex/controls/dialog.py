@@ -230,7 +230,7 @@ def _cursor_to(driver: Driver, win: WindowId, num: str, sleep: Callable[[float],
     """Move the `›` cursor onto option `num`: normalize UP to option 1 (up is a
     no-op there), then walk DOWN, screen-verified each step. Bail if `up` stops
     making progress (a trapped/edit row)."""
-    prev: object = object()
+    prev: object = object()  # loose: codex JSON, wave 2 gives it a real shape
     for _ in range(NAV_STEPS):
         cur = _cursor_row(driver.get_text(win) or "")
         if cur is not None and cur["num"] == "1":
@@ -267,7 +267,7 @@ def _answer_one(
     driver: Driver,
     win: WindowId,
     prompt: Prompt,
-    ans: dict[str, Any],
+    ans: dict[str, Any],  # loose: codex JSON, wave 2 gives it a real shape
     sleep: Callable[[float], None],
 ) -> None:
     """Apply one question's answer to the CURRENT pane. The cursor is moved onto
@@ -320,7 +320,7 @@ def drive(
     driver: Driver,
     win: WindowId,
     questions: list[Prompt],
-    answers: list[dict[str, Any]],
+    answers: list[dict[str, Any]],  # loose: codex JSON, wave 2 gives it a real shape
     sleep: Callable[[float], None] = time.sleep,
 ) -> dict[str, bool]:
     """Answer codex's OPEN request_user_input dialog in window `win`. `questions`

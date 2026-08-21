@@ -120,7 +120,7 @@ def _rollout_abort_state(path: str, position: int) -> tuple[bool, bool]:
     # None marks a line that would not parse. The slot is KEPT rather than
     # skipped because abort_index is an index into this list, and dropping
     # unparseable lines would silently shift every position after one.
-    records: list[dict[str, object] | None] = []
+    records: list[dict[str, object] | None] = []  # loose: codex JSON, wave 2 gives it a real shape
     for line in lines:
         try:
             document = json.loads(line)

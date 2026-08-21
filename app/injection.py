@@ -55,7 +55,10 @@ def singleton(build: Callable[..., T]) -> Callable[..., T]:
     )
 
     @functools.wraps(build)
-    def provider(request: Request, **dependencies: Any) -> T:
+    def provider(
+        request: Request,
+        **dependencies: Any,  # loose: generic dependency kernel, a provider's shape is not fixed here
+    ) -> T:
         instances: Instances = request.app.state.instances
         if build not in instances:
             instances[build] = build(**dependencies)
@@ -90,7 +93,10 @@ def resolve(instances: Instances, provider: Callable[..., T]) -> T:
     return built
 
 
-def _dependency_of(name: str, annotation: Any) -> Callable[..., Any]:
+def _dependency_of(
+    name: str,
+    annotation: Any,  # loose: generic dependency kernel, a provider's shape is not fixed here
+) -> Callable[..., Any]:
     """The provider an `Annotated[T, Depends(provider)]` parameter names."""
     if get_origin(annotation) is Annotated:
         for extra in get_args(annotation)[1:]:

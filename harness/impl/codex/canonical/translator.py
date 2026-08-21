@@ -86,7 +86,10 @@ from harness.models.selections import SelectionSemantics
 CodexToolKind: TypeAlias = Literal["search", "web", "file", "ignored"]
 
 
-def _codex_tool(native_name: str, arguments: str | dict[str, Any] | None) -> tuple[CodexToolKind, str]:
+def _codex_tool(
+    native_name: str,
+    arguments: str | dict[str, Any] | None,  # loose: codex JSON, wave 2 gives it a real shape
+) -> tuple[CodexToolKind, str]:
     """Map Codex transport names onto the canonical vocabulary.
 
     A name with no fact behind it raises `UnknownRawEvent`: the delivery is
@@ -138,7 +141,9 @@ _JS_STRING_FIELD = re.compile(r"""["']?([A-Za-z_][A-Za-z0-9_]*)["']?\s*:\s*"((?:
 _SEARCH_QUERY_FIELDS = ("search_query", "image_query", "weather", "finance", "sports", "query")
 
 
-def _tool_fields(arguments: str | dict[str, Any] | None) -> dict[str, Any]:
+def _tool_fields(
+    arguments: str | dict[str, Any] | None,  # loose: codex JSON, wave 2 gives it a real shape
+) -> dict[str, Any]:  # loose: codex JSON, wave 2 gives it a real shape
     """A Codex tool call's arguments as fields.
 
     Three spellings arrive: a dict, JSON text, and a JavaScript object literal
@@ -159,7 +164,7 @@ def _tool_fields(arguments: str | dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
-def _search_query(arguments: str | dict[str, Any] | None) -> Content:
+def _search_query(arguments: str | dict[str, Any] | None) -> Content:  # loose: codex JSON, wave 2 gives it a real shape
     """What was searched for. The whole argument blob is the fallback: a query
     nobody can read is still a better raw event than an empty one."""
     fields = _tool_fields(arguments)
@@ -170,7 +175,7 @@ def _search_query(arguments: str | dict[str, Any] | None) -> Content:
     return content(arguments)
 
 
-def _web_url(arguments: str | dict[str, Any] | None) -> str | None:
+def _web_url(arguments: str | dict[str, Any] | None) -> str | None:  # loose: codex JSON, wave 2 gives it a real shape
     """The address a fetch was for, when the call names one. Codex's `open` is
     often an index into a previous search's results rather than an address, so
     only something that reads as one counts."""
@@ -180,7 +185,7 @@ def _web_url(arguments: str | dict[str, Any] | None) -> str | None:
     return None
 
 
-def _tool_path(arguments: str | dict[str, Any] | None) -> str:
+def _tool_path(arguments: str | dict[str, Any] | None) -> str:  # loose: codex JSON, wave 2 gives it a real shape
     fields = _tool_fields(arguments)
     for name in ("path", "file_path"):
         value = fields.get(name)
@@ -210,8 +215,8 @@ class CodexCanonicalTranslator(HarnessTranslator):
 
     @staticmethod
     def _collaboration_call_from_document(
-        document: dict[str, Any], call_id: CallId
-    ) -> tuple[str, dict[str, Any]] | None:
+        document: dict[str, Any], call_id: CallId  # loose: codex JSON, wave 2 gives it a real shape
+    ) -> tuple[str, dict[str, Any]] | None:  # loose: codex JSON, wave 2 gives it a real shape
         payload = document.get("payload") or {}
         if not (
             document.get("type") == "response_item"
@@ -233,7 +238,11 @@ class CodexCanonicalTranslator(HarnessTranslator):
             arguments = {}
         return str(payload["name"]), arguments if isinstance(arguments, dict) else {}
 
-    def _collaboration_call(self, raw_event: RawEvent, call_id: CallId) -> tuple[str, dict[str, Any]] | None:
+    def _collaboration_call(
+        self,
+        raw_event: RawEvent,
+        call_id: CallId,
+    ) -> tuple[str, dict[str, Any]] | None:  # loose: codex JSON, wave 2 gives it a real shape
         """Resolve the preceding call without scanning historical rollout data."""
         source_path = os.path.realpath(raw_event.source_name)
         key = (source_path, call_id)
@@ -262,7 +271,10 @@ class CodexCanonicalTranslator(HarnessTranslator):
         return None
 
     @staticmethod
-    def _call_from_document(document: dict[str, Any], call_id: CallId) -> dict[str, Any] | bool | None:
+    def _call_from_document(
+        document: dict[str, Any],  # loose: codex JSON, wave 2 gives it a real shape
+        call_id: CallId,
+    ) -> dict[str, Any] | bool | None:  # loose: codex JSON, wave 2 gives it a real shape
         """The parsed call this output belongs to.
 
         None means this is not the call being sought; False means it is the
@@ -283,7 +295,11 @@ class CodexCanonicalTranslator(HarnessTranslator):
             return False
         return record
 
-    def _call_record(self, raw_event: RawEvent, call_id: CallId) -> dict[str, Any] | None:
+    def _call_record(
+        self,
+        raw_event: RawEvent,
+        call_id: CallId,
+    ) -> dict[str, Any] | None:  # loose: codex JSON, wave 2 gives it a real shape
         """Pair an output with the call that opened it.
 
         The in-memory answer handles the normal adjacent call/output pair. The
@@ -390,7 +406,11 @@ class CodexCanonicalTranslator(HarnessTranslator):
             return TranslationResult((), "ignored_nonsemantic", f"nonsemantic Codex record {record['kind']!r}")
         return TranslationResult(tuple(events), "translated")
 
-    def _translate_hook(self, raw_event: RawEvent, document: dict[str, Any]) -> list[CanonicalEvent[EventPayload]]:
+    def _translate_hook(
+        self,
+        raw_event: RawEvent,
+        document: dict[str, Any],  # loose: codex JSON, wave 2 gives it a real shape
+    ) -> list[CanonicalEvent[EventPayload]]:
         hook_name = str(document.get("hook_event_name") or "")
         native_identity = str(
             document.get("hook_event_id")
@@ -457,7 +477,10 @@ class CodexCanonicalTranslator(HarnessTranslator):
         ]
 
     def _translate_record(
-        self, raw_event: RawEvent, document: dict[str, Any], record: dict[str, Any]
+        self,
+        raw_event: RawEvent,
+        document: dict[str, Any],  # loose: codex JSON, wave 2 gives it a real shape
+        record: dict[str, Any],  # loose: codex JSON, wave 2 gives it a real shape
     ) -> list[CanonicalEvent[EventPayload]]:
         kind = record["kind"]
         native_payload = document.get("payload") or {}
@@ -1034,8 +1057,8 @@ class CodexCanonicalTranslator(HarnessTranslator):
         self,
         raw_event: RawEvent,
         call_id: CallId,
-        call_record: dict[str, Any],
-        result: dict[str, Any],
+        call_record: dict[str, Any],  # loose: codex JSON, wave 2 gives it a real shape
+        result: dict[str, Any],  # loose: codex JSON, wave 2 gives it a real shape
         occurred_at: float | None,
     ) -> list[CanonicalEvent[EventPayload]]:
         """One non-shell tool call and its result, as the single fact it is.

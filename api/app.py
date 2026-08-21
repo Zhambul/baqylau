@@ -138,7 +138,7 @@ def _publish_openapi_without_the_422(web: FastAPI) -> None:
     """
     generate = web.openapi
 
-    def document() -> dict[str, Any]:
+    def document() -> dict[str, Any]:  # loose: wave 1 debt, wave 2 gives it a real shape
         if web.openapi_schema is None:
             schema = generate()
             for operations in schema.get("paths", {}).values():

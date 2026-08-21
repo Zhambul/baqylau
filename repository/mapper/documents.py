@@ -22,7 +22,7 @@ class StoredDocumentError(ValueError):
     never a valid instance of the shape asked for."""
 
 
-def encode_document(value: object) -> bytes:
+def encode_document(value: object) -> bytes:  # loose: stored value of no fixed kind, wave 2 gives it a real shape
     adapter: TypeAdapter[Any] = TypeAdapter(type(value))
     return adapter.dump_json(value)
 

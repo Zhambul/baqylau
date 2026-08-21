@@ -62,11 +62,20 @@ def enabled() -> bool:
     return audit_enabled()
 
 
-def error(session_or_log: str = "", func: str = "", context: object = None) -> None:
+def error(
+    session_or_log: str = "",
+    func: str = "",
+    context: object = None,  # loose: audit payload, wave 2 gives it a real shape
+) -> None:
     recorder().error(session_or_log, func, context)
 
 
-def state_file(log: str, path: str, action: str, content: object = "") -> None:
+def state_file(
+    log: str,
+    path: str,
+    action: str,
+    content: object = "",  # loose: audit payload, wave 2 gives it a real shape
+) -> None:
     recorder().state_file(log, path, action, content)
 
 

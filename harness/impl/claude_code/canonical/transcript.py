@@ -163,7 +163,7 @@ def _task_notification(content: str) -> dict[str, str | None]:
     }
 
 
-def result_text(content: Any) -> str:
+def result_text(content: Any) -> str:  # loose: claude code JSON, wave 2 gives it a real shape
     """Normalise a tool_result's content (str | block | block list) to text."""
     if isinstance(content, str):
         return content
@@ -258,7 +258,7 @@ _TEAM_WRAPPER = re.compile(
     r'^\s*Another Claude session sent a message:\s*<teammate-message\b')
 
 
-def _injected(o: dict[str, Any], text: str = "") -> bool:
+def _injected(o: dict[str, Any], text: str = "") -> bool:  # loose: claude code JSON, wave 2 gives it a real shape
     """Whether this user-shaped record was written by CLAUDE CODE rather than
     typed by the human — the `meta` flag on the prompt/results records below.
     Three structural marks plus one anchored text shape (`text`, the record's
@@ -330,7 +330,7 @@ KINDS = ("bad", "compact", "recap", "prompt", "teammsg", "results",
          "actor_assignment_finished", "background_command_completed", "goal")
 
 
-def parse_line(s: str) -> dict[str, Any] | None:
+def parse_line(s: str) -> dict[str, Any] | None:  # loose: claude code JSON, wave 2 gives it a real shape
     """One transcript JSONL line -> a typed record (see the module header)."""
     try:
         o = json.loads(s)
@@ -384,7 +384,7 @@ def parse_line(s: str) -> dict[str, Any] | None:
             return {"kind": "prompt", "text": content,
                     "meta": _injected(o, content)}
         if isinstance(content, list):
-            blocks: list[dict[str, Any]] = []
+            blocks: list[dict[str, Any]] = []  # loose: claude code JSON, wave 2 gives it a real shape
             texts: list[str] = []
             for blk in content:
                 if not isinstance(blk, dict):
@@ -408,7 +408,7 @@ def parse_line(s: str) -> dict[str, Any] | None:
                         "meta": _injected(o, texts[0] if texts else "")}
         return None
     if t == "assistant":
-        assistant_blocks: list[tuple[str, Any]] = []
+        assistant_blocks: list[tuple[str, Any]] = []  # loose: claude code JSON, wave 2 gives it a real shape
         if isinstance(content, list):
             for blk in content:
                 if not isinstance(blk, dict):

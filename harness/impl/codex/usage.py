@@ -17,7 +17,7 @@ BINARY_DIRECTORIES = (
     "~/.local/bin",
 )
 
-_cached_rate_limits: tuple[float, dict[str, Any] | None] | None = None
+_cached_rate_limits: tuple[float, dict[str, Any] | None] | None = None  # loose: codex JSON
 
 
 def subprocess_environment() -> dict[str, str]:
@@ -36,7 +36,7 @@ def subprocess_environment() -> dict[str, str]:
     return environment
 
 
-def request_rate_limits() -> dict[str, Any] | None:
+def request_rate_limits() -> dict[str, Any] | None:  # loose: codex app-server JSON, wave 2 gives it a real shape
     try:
         process = subprocess.Popen(
             ["codex", "app-server"],
@@ -85,7 +85,9 @@ def request_rate_limits() -> dict[str, Any] | None:
         process.terminate()
 
 
-def normalize_rate_limits(response: dict[str, Any] | None) -> dict[str, Any] | None:
+def normalize_rate_limits(
+    response: dict[str, Any] | None,  # loose: codex app-server JSON, wave 2 gives it a real shape
+) -> dict[str, Any] | None:  # loose: codex app-server JSON, wave 2 gives it a real shape
     rate_limits = response.get("rateLimits") if isinstance(response, dict) else None
     if not isinstance(rate_limits, dict):
         return None
@@ -108,7 +110,7 @@ def normalize_rate_limits(response: dict[str, Any] | None) -> dict[str, Any] | N
     return {"plan": rate_limits.get("planType") or "", "windows": tuple(windows)}
 
 
-def read_rate_limits() -> dict[str, Any] | None:
+def read_rate_limits() -> dict[str, Any] | None:  # loose: codex app-server JSON, wave 2 gives it a real shape
     global _cached_rate_limits
     now = time.time()
     if _cached_rate_limits is not None and _cached_rate_limits[0] > now:

@@ -120,7 +120,7 @@ def owns(path: str) -> bool:
 
 # --- the TOP-LEVEL register (neither event_msg nor response_item) ----------------
 
-def _turn_context(p: dict[str, Any]) -> dict[str, Any]:
+def _turn_context(p: dict[str, Any]) -> dict[str, Any]:  # loose: codex JSON, wave 2 gives it a real shape
     # `reasoning_effort` moved under collaboration_mode.settings in 0.14x; the
     # bare top-level `effort` is the older (and still emitted) spelling.
     eff = (((p.get("collaboration_mode") or {}).get("settings") or {})
@@ -129,7 +129,7 @@ def _turn_context(p: dict[str, Any]) -> dict[str, Any]:
             "effort": eff}
 
 
-def _top_compacted(p: dict[str, Any]) -> dict[str, Any]:
+def _top_compacted(p: dict[str, Any]) -> dict[str, Any]:  # loose: codex JSON, wave 2 gives it a real shape
     # The TOP-LEVEL compaction record (distinct from the event_msg
     # `context_compacted` notice the mirror paints as ⟳): it is the boundary
     # itself, and `message` is usually "" because the summary is encrypted.
@@ -143,7 +143,7 @@ def _top_compacted(p: dict[str, Any]) -> dict[str, Any]:
             "previous_window_id": p.get("previous_window_id")}
 
 
-def _top_world_state(p: dict[str, Any]) -> dict[str, Any]:
+def _top_world_state(p: dict[str, Any]) -> dict[str, Any]:  # loose: codex JSON, wave 2 gives it a real shape
     # A large periodic state snapshot (open files, shell sessions, todos).
     # Explicitly ignored: nothing in it is renderable.
     #
@@ -177,7 +177,10 @@ _RECORD_TS = ("task_started", "task_complete", "exec", "exec_result",
               "message")
 
 
-def _stamp(rec: dict[str, Any] | None, o: dict[str, Any]) -> dict[str, Any] | None:
+def _stamp(
+    rec: dict[str, Any] | None,  # loose: codex JSON, wave 2 gives it a real shape
+    o: dict[str, Any],  # loose: codex JSON, wave 2 gives it a real shape
+) -> dict[str, Any] | None:  # loose: codex JSON, wave 2 gives it a real shape
     if rec is not None and rec["kind"] in _RECORD_TS:
         rec["ts"] = o.get("timestamp")
     return rec
@@ -213,7 +216,7 @@ KINDS = frozenset({
 })
 
 
-def parse(o: dict[str, Any]) -> dict[str, Any] | None:
+def parse(o: dict[str, Any]) -> dict[str, Any] | None:  # loose: codex JSON, wave 2 gives it a real shape
     """One decoded rollout object -> a typed record (module header) or None."""
     t = o.get("type")
     p = o.get("payload") or {}
@@ -232,7 +235,7 @@ def parse(o: dict[str, Any]) -> dict[str, Any] | None:
     return h(o.get("payload") or o) if h else None
 
 
-def parse_line(s: str) -> dict[str, Any] | None:
+def parse_line(s: str) -> dict[str, Any] | None:  # loose: codex JSON, wave 2 gives it a real shape
     """One rollout JSONL line -> a typed record; {"kind": "bad", "raw": s}
     when the line isn't JSON at all (the stream keeps its own json.loads so
     its malformed-line audit contract stays where it was)."""
@@ -282,7 +285,10 @@ def subagent_fork_epoch(path: str) -> int | None:
         return None
 
 
-def is_child_bootstrap(rec: dict[str, Any] | None, fork_epoch: int | None) -> bool:
+def is_child_bootstrap(
+    rec: dict[str, Any] | None,  # loose: codex JSON, wave 2 gives it a real shape
+    fork_epoch: int | None,
+) -> bool:
     """True for the child's OWN bootstrap `task_started` (`at >= fork_epoch`) —
     the FIRST child-own record; the replayed-parent prefix is everything before
     it. `fork_epoch` None => never."""

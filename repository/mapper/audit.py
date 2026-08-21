@@ -23,14 +23,14 @@ from repository.model.sql import SqlValues
 CONTENT_LIMIT = 2000
 
 
-def text(value: object) -> str:
+def text(value: object) -> str:  # loose: stored value of no fixed kind, wave 2 gives it a real shape
     """Any caller value as one string. Never raises: this runs inside `except`."""
     if isinstance(value, str):
         return value
     return json.dumps(value, ensure_ascii=False, default=str)
 
 
-def truncated(value: object) -> str:
+def truncated(value: object) -> str:  # loose: stored value of no fixed kind, wave 2 gives it a real shape
     return text(value)[:CONTENT_LIMIT]
 
 

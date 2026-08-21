@@ -39,7 +39,12 @@ class AuditRecorder:
     def __init__(self, audit_write_repository: AuditWriteRepository) -> None:
         self.audit_write_repository = audit_write_repository
 
-    def error(self, session_or_log: str = "", func: str = "", context: object = None) -> None:
+    def error(
+        self,
+        session_or_log: str = "",
+        func: str = "",
+        context: object = None,  # loose: audit payload, wave 2 gives it a real shape
+    ) -> None:
         self.audit_write_repository.record_error(
             ApplicationErrorRecord(
                 session_id=SessionId(session_or_log),
@@ -52,7 +57,13 @@ class AuditRecorder:
             )
         )
 
-    def state_file(self, log: str, path: str, action: str, content: object = "") -> None:
+    def state_file(
+        self,
+        log: str,
+        path: str,
+        action: str,
+        content: object = "",  # loose: audit payload, wave 2 gives it a real shape
+    ) -> None:
         self.audit_write_repository.record_state_file(
             StateFileRecord(
                 session_id=SessionId(log),

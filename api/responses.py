@@ -9,11 +9,17 @@
 # contract, and this is the layer that knows the others.
 from __future__ import annotations
 
-from typing import Any
+from types import UnionType
+
+from pydantic import BaseModel
 
 from api.common.models.replies.error_response import ErrorResponse
 
-Documented = dict[int | str, dict[str, Any]]
+# A route's body model, or a `|` union of several — a control gesture answers
+# with one of five outcome models, so the union itself is the documented shape.
+ResponseModel = type[BaseModel] | UnionType
+
+Documented = dict[int | str, dict[str, ResponseModel | str]]
 
 
 def errors(statuses: dict[int, str]) -> Documented:
@@ -22,7 +28,7 @@ def errors(statuses: dict[int, str]) -> Documented:
             for status, description in statuses.items()}
 
 
-def with_body(model: Any, statuses: dict[int, str]) -> Documented:
+def with_body(model: ResponseModel, statuses: dict[int, str]) -> Documented:
     """Statuses answered with a route's OWN body model.
 
     A rejected control is a ControlOutcome and a refused launch is a

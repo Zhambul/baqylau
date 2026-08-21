@@ -12,7 +12,10 @@ from harness.impl.claude_code.canonical.support import event, model_reference
 from harness.models import RawEvent
 
 
-def translate_otel(raw_event: RawEvent, document: dict[str, Any]) -> list[CanonicalEvent[EventPayload]]:
+def translate_otel(
+    raw_event: RawEvent,
+    document: dict[str, Any],  # loose: claude code JSON, wave 2 gives it a real shape
+) -> list[CanonicalEvent[EventPayload]]:
     grouped: dict[tuple[str, str], dict[str, Decimal]] = {}
     for resource in document.get("resourceMetrics", []):
         for scope in resource.get("scopeMetrics", []):

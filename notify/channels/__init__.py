@@ -44,9 +44,14 @@ __all__ = [
 _RETRACT = {"telegram": telegram.retract_alert, "webpush": webpush.retract_alert}
 
 
-def retract(handle: dict[str, Any] | None, reason: str, badge: int = 0, *,
-            push_signing_key_repository: PushSigningKeyRepository | None = None,
-            push_subscription_repository: PushSubscriptionRepository | None = None) -> str:
+def retract(
+    handle: dict[str, Any] | None,  # loose: notification payload, wave 2 gives it a real shape
+    reason: str,
+    badge: int = 0,
+    *,
+    push_signing_key_repository: PushSigningKeyRepository | None = None,
+    push_subscription_repository: PushSubscriptionRepository | None = None,
+) -> str:
     """Take back one delivered alert. Returns an outcome from the vocabulary in
     alert.py; PENDING is the only one the caller must retry.
 

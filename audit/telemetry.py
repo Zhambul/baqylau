@@ -72,7 +72,7 @@ class BrowserTelemetryService:
         )
 
     def record_optimistic_action(self, optimistic_action_report: OptimisticActionReport) -> None:
-        content: dict[str, object] = {
+        content: dict[str, object] = {  # loose: audit payload, wave 2 gives it a real shape
             "session_id": str(optimistic_action_report.session_id),
             "action": optimistic_action_report.action,
             "phase": optimistic_action_report.phase,
@@ -86,7 +86,7 @@ class BrowserTelemetryService:
         self._record("browser-optimistic-action", content)
 
     def record_client_failure(self, client_failure_report: ClientFailureReport) -> None:
-        content: dict[str, object] = {
+        content: dict[str, object] = {  # loose: audit payload, wave 2 gives it a real shape
             "session_id": str(client_failure_report.session_id),
             "gesture": client_failure_report.gesture,
             "failure_kind": client_failure_report.failure_kind,
@@ -101,7 +101,7 @@ class BrowserTelemetryService:
 
     def record_events(self, browser_event_batch: BrowserEventBatch) -> None:
         for event in browser_event_batch.events:
-            content: dict[str, object] = {
+            content: dict[str, object] = {  # loose: audit payload, wave 2 gives it a real shape
                 "client_id": browser_event_batch.client_id,
                 "device_id": browser_event_batch.device_id,
                 "session_id": str(event.session_id) if event.session_id else "",
