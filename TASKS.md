@@ -30,6 +30,15 @@ to the bottom with their commit.
    closed set. Enforce with a gate: no new `Literal` string unions, no
    module-level `frozenset` of strings used as a vocabulary. Part of the same
    plan-then-approve batch as item 4.
+4c. **One method per command, no generic `execute(command)`** —
+   `PaneCommandService.execute` dispatches on a command string; it becomes a
+   distinct, typed method per command (toggle/grow/shrink/reset/setpct).
+   Same for `HarnessControlService.execute` and every other string-dispatch
+   service the sweep finds (grep: methods taking a command/kind/action string
+   and branching on it). Callers call the method; the string vocabulary
+   survives only at the HTTP boundary, where the route maps the wire word to
+   the one method it means. Same plan-then-approve batch as 4/4b — the enum
+   sweep and this one touch the same dispatchers.
 
 ## Queued bugs (reported 2026-08-21, diagnose then fix; sonnet agents)
 
