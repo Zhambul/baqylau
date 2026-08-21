@@ -17,6 +17,7 @@
 # Both rollout registers read this module: the event_msg one (events.py) to
 # unwrap a `<task>` prompt, the response_item one (items.py) for the whole test.
 import re
+from typing import Any
 
 # INPUT_WRAPPERS: a role=user `<tag>` that IS a real turn, not scaffolding —
 # codex delivers a subagent's task as `<task>…</task>`. Kept AND unwrapped to its
@@ -43,7 +44,7 @@ SYNTHETIC_PREFIXES = (
 _WRAP_RE = re.compile(r"^<([A-Za-z][A-Za-z0-9_ -]*)>")
 
 
-def _wrapper_tag(text):
+def _wrapper_tag(text: str) -> str:
     """The leading `<tag>` name of a wrapper block (lowercased, inner spaces kept
     — `<permissions instructions>` → 'permissions instructions'), or "". codex
     wraps every system injection AND the subagent task in one such tag."""
@@ -51,7 +52,7 @@ def _wrapper_tag(text):
     return m.group(1).strip().lower() if m else ""
 
 
-def plan_body(text):
+def plan_body(text: str) -> str:
     """The PLAN markdown inside a `<proposed_plan>…</proposed_plan>` assistant
     message, or "" when this text is not one. The one reader of PLAN_WRAPPER, so
     the parser and any later consumer agree on where the plan starts."""
@@ -65,7 +66,7 @@ def plan_body(text):
     return inner.strip()
 
 
-def strip_input_wrapper(text):
+def strip_input_wrapper(text: str) -> str:
     """A role=user INPUT wrapper (`<task>…</task>`) reduced to its inner text — the
     real prompt a subagent is spawned with; any other text is returned unchanged.
     The ONE owner of the unwrap, so both registers (event_msg + response_item) that
@@ -81,7 +82,7 @@ def strip_input_wrapper(text):
     return inner.strip()
 
 
-def is_synthetic(text, role=""):
+def is_synthetic(text: str, role: str = "") -> bool:
     """Is this `chat` text codex MACHINERY rather than a conversation turn?
     Structural (see the vocabulary block above), not an allowlist:
       * role developer/system      -> the system channel, always synthetic.
@@ -100,7 +101,7 @@ def is_synthetic(text, role=""):
     return bool(tag) and tag not in INPUT_WRAPPERS
 
 
-def empty_record():
+def empty_record() -> dict[str, Any]:
     """A record that says "recognised type, nothing in it" — NOT the same answer
     as None.
 

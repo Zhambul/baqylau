@@ -20,7 +20,7 @@ from repository.impl.sqlite.audit import SqliteAuditWriteRepository
 from terminal.panes import commands as pane_commands
 from harness.hooks.gateway import HookGatewayService, UnknownHookHarness
 from harness.impl import installed
-from engine.interpret.reactions import OperationOutputCanonicalEventReaction
+from engine.interpret.reactions import ShellOutputCanonicalEventReaction
 from harness.models import (
     AnswerQuestion,
     AttachmentReference,
@@ -51,11 +51,8 @@ from domain.codec import CanonicalEventCodec
 from domain.events import CanonicalEvent
 from domain.events import (
     ActorFinished,
-    ActorMessageSent,
     ActorNameChanged,
     ActorStarted,
-    AttentionRequested,
-    AttentionResolved,
     ActorAssignmentFinished,
     ActorAssignmentStarted,
     CompactionFinished,
@@ -66,23 +63,33 @@ from domain.events import (
     MessageCreated,
     EffortChanged,
     ModelChanged,
-    OperationFinished,
-    OperationInputProvided,
-    OperationProgressed,
-    OperationStarted,
-    OperationBackgrounded,
-    OperationOutputFinished,
+    PlanProposed,
+    PlanResolved,
+    QuestionAnswered,
+    QuestionAsked,
     ReasoningCreated,
+    SearchPerformed,
     SessionAccountChanged,
     SessionFinished,
     SessionStarted,
     SessionTitleChanged,
+    ShellBackgrounded,
+    ShellFinished,
+    ShellInputProvided,
+    ShellOutputFinished,
+    ShellProgressed,
+    ShellStarted,
+    SkillFinished,
+    SkillStarted,
     TaskChanged,
     TaskListChanged,
+    TurnFinished,
     TurnStarted,
     UsageReported,
+    WebFetched,
+    WorktreeChanged,
 )
-from domain.ids import ActorId, AssignmentId, CanonicalEventId, OperationId, RawEventId, SessionId, TaskId, TurnId
+from domain.ids import ActorId, AssignmentId, CanonicalEventId, RawEventId, SessionId, ShellId, TaskId, TurnId
 from domain.values import AccountReference, AttentionPrompt, ModelReference, TextContent
 from harness.impl.claude_code.canonical.translator import ClaudeCanonicalTranslator
 from harness.impl.claude_code.canonical.sources import (
@@ -111,22 +118,21 @@ from repository.impl.sqlite.databases import main_database
 from repository.impl.sqlite.raw_events import SqliteRawEventRepository
 from repository.impl.sqlite.usage import SqliteAccountUsageRepository
 from canonical_runtime import CanonicalRuntime
-from engine.interpret.translators import LivenessTranslator, OperationOutputTranslator
+from engine.interpret.translators import LivenessTranslator, ShellOutputTranslator
 from engine.interpret.loop import Interpreter
 from engine.interpret.reactions import (
     SessionUpsertCanonicalEventReaction,
 )
-from terminal.panes.reaction import PaneCanonicalEventReaction
 from harness.services.launcher import HarnessLauncherService
 from harness.services.telemetry import TelemetryGatewayService
 from harness.registry import HarnessRegistry
-from domain.events import OperationOutputLocated
+from domain.events import ShellOutputLocated
 
 
 class _QuietLiveness:
     """Liveness has its own contract tests; here it must not finish fixture sessions."""
 
-    def __init__(self, session):
+    def __init__(self, session, probe):
         self.source_identity = f"test:liveness:{session.session_id}"
 
     def read(self, after_position):
@@ -193,6 +199,31 @@ def raw_event(
         encoding="jsonl" if source_type != "hook" else "json",
         payload=json.dumps(document).encode(),
     )
+
+
+
+def stored_payloads(runtime, session_id, payload_type):
+    """Every fact of one kind a session accumulated, in the order it was accepted.
+
+    Read straight off the canonical log, because that is what a PLUGIN test is
+    about: the evidence became these facts. Folding them into something a reader
+    sees belongs to the read model, and has its own tests.
+    """
+    return [
+        item.event.payload
+        for item in runtime.store.page_from(0, 100_000)
+        if isinstance(item.event.payload, payload_type)
+    ]
+
+
+def shell_output_text(runtime, session_id, shell_id):
+    """One command's output as the facts spell it, honouring append and replace."""
+    text = ""
+    for payload in stored_payloads(runtime, session_id, ShellProgressed):
+        if payload.shell_id != shell_id or payload.stream != "output":
+            continue
+        text = text + payload.content.text if payload.mode == "append" else payload.content.text
+    return text
 
 
 def payloads(translation, payload_type):
@@ -273,17 +304,6 @@ def test_plugin_folder_descriptors_are_discovered_without_harness_branches():
     assert [plugin.info.name for plugin in installed()] == ["claude_code", "codex"]
 
 
-class InterpreterTerminal:
-    def close_session_panes(self, session_id):
-        return None
-
-    def session_panes_are_open(self, session_id):
-        return True
-
-    def open_session_panes(self, request):
-        raise AssertionError("panes must not open when they are already open")
-
-
 def _silent_audit():
     """An audit recorder that writes to this test's own audit database."""
     return AuditRecorder(SqliteAuditWriteRepository(audit_database()))
@@ -296,26 +316,22 @@ def interpreting_runtime(database_path):
         harnesses.register(plugin)
     harnesses.validate()
     runtime = CanonicalRuntime(str(database_path), harnesses=harnesses)
-    controls = RecordingControls()
-    reactions = (
-        SessionUpsertCanonicalEventReaction(runtime.sessions),
-        OperationOutputCanonicalEventReaction(runtime.operation_output, runtime.recorder),
-        PaneCanonicalEventReaction(
-            InterpreterTerminal(), runtime.sessions, _Widths([])
-        ),
-    )
     interpreter = Interpreter(
         runtime.sessions,
         harnesses,
         runtime.recorder,
-        runtime.operation_output,
+        runtime.shell_output,
         runtime.store,
         {
-            OUTPUT_LOCATION_SOURCE_TYPE: OperationOutputTranslator(),
+            OUTPUT_LOCATION_SOURCE_TYPE: ShellOutputTranslator(),
             LIVENESS_SOURCE_TYPE: LivenessTranslator(),
         },
-        reactions,
-        controls,
+        # The interpreter's own two, and nothing else: the pull phase reads the
+        # rows they write. Everything a fact CAUSES rides the reaction loop.
+        (
+            SessionUpsertCanonicalEventReaction(runtime.sessions),
+            ShellOutputCanonicalEventReaction(runtime.shell_output, runtime.recorder),
+        ),
         _silent_audit(),
         InterruptRegistry(),
     )
@@ -520,7 +536,7 @@ def test_claude_task_source_captures_full_updates_and_deletion(tmp_path, monkeyp
     assert source.read(position) == ()
     created = ClaudeCanonicalTranslator().translate(raw_events[0]).canonical_events[0].payload
     assert created == TaskChanged(
-        TaskId("1"), "1", "Run tests", "Run the focused suite", "pending", ActorId("worker-one")
+        TaskId("1"), "Run tests", "Run the focused suite", "pending", ActorId("worker-one")
     )
 
     task["status"] = "in_progress"
@@ -628,7 +644,7 @@ def test_codex_goal_and_plan_use_shared_goal_and_task_events():
     )
     assert [event.payload.subject for event in payloads(plan, TaskChanged)] == ["Inspect", "Implement"]
     assert [event.payload.state for event in payloads(plan, TaskChanged)] == ["completed", "in_progress"]
-    assert not payloads(plan, OperationStarted)
+    assert not payloads(plan, ShellStarted)
 
 
 def test_codex_goal_state_is_strict_and_clear_removes_the_goal():
@@ -980,9 +996,10 @@ def test_claude_launch_selections_reach_the_summary_from_the_hook_environment(mo
     assert model_changes[0].reason == "selected"
     assert model_changes[0].current.selection_id == "fable"
 
-    summary = runtime.queries().summary(SessionId("claude-session"))
-    assert summary.model.selection_id == "fable"
-    assert summary.effort == "high"
+    stored_models = stored_payloads(runtime, SessionId("claude-session"), ModelChanged)
+    stored_efforts = stored_payloads(runtime, SessionId("claude-session"), EffortChanged)
+    assert stored_models[0].current.selection_id == "fable"
+    assert stored_efforts[0].current == "high"
 
 
 def test_hook_without_native_identity_uses_the_exact_payload_identity(monkeypatch, tmp_path):
@@ -1033,8 +1050,8 @@ def test_claude_hook_returns_native_pretool_output_and_an_output_location(monkey
         "tool_input": {"command": "echo hello"},
     }
     expected = b'{"hookSpecificOutput":{"updatedInput":{}}}\n'
-    located = OperationOutputLocated(
-        operation_id=OperationId("pretool-one"),
+    located = ShellOutputLocated(
+        shell_id=ShellId("pretool-one"),
         source_path="/work/out",
         chunk_source_type="foreground_output",
         delete_source=True,
@@ -1186,7 +1203,7 @@ def test_claude_background_bash_locates_its_native_output_file(monkeypatch, tmp_
     directive = response.raw_events[-1]
     assert directive.source_type == "output_location"
     body = json.loads(directive.payload)
-    assert body["operation_id"] == "background-op-one"
+    assert body["shell_id"] == "background-op-one"
     assert body["source_path"] == str(output_path.resolve())
     assert body["delete_source"] is False
     # a background launch reports "finished" while output keeps flowing, so the
@@ -1229,14 +1246,9 @@ def test_claude_background_output_streams_into_the_operation(monkeypatch, tmp_pa
     interpreter.tick()  # pulls chunks
     interpreter.tick()  # translates them
 
-    cursor = runtime.store.latest_cursor()
-    operation = runtime.queries().operation_activity(
-        SessionId("session-one"),
-        ActorId("session-one:lead"),
-        OperationId("background-op-one"),
-        cursor,
-    )
-    assert "".join(part.text for part in operation.current_progress()) == "1\n2\n3\n"
+    assert shell_output_text(
+        runtime, SessionId("session-one"), ShellId("background-op-one")
+    ) == "1\n2\n3\n"
 
     # the session's end is the background following's end: tail captured, row
     # gone, the NATIVE file untouched
@@ -1253,17 +1265,13 @@ def test_claude_background_output_streams_into_the_operation(monkeypatch, tmp_pa
         None,
         SessionFinished("succeeded", None),
     )
-    OperationOutputCanonicalEventReaction(runtime.operation_output, runtime.recorder).react(finish)
-    assert runtime.operation_output.find_for_session(SessionId("session-one")) == ()
+    ShellOutputCanonicalEventReaction(runtime.shell_output, runtime.recorder).react(finish)
+    assert runtime.shell_output.find_for_session(SessionId("session-one")) == ()
     assert output_path.exists()
     interpreter.tick()
-    tail = runtime.queries().operation_activity(
-        SessionId("session-one"),
-        ActorId("session-one:lead"),
-        OperationId("background-op-one"),
-        runtime.store.latest_cursor(),
-    )
-    assert "".join(part.text for part in tail.current_progress()) == "1\n2\n3\n4\n"
+    assert shell_output_text(
+        runtime, SessionId("session-one"), ShellId("background-op-one")
+    ) == "1\n2\n3\n4\n"
 
 
 def test_a_command_backgrounded_mid_run_keeps_its_output_file_and_its_following(monkeypatch, tmp_path):
@@ -1275,7 +1283,7 @@ def test_a_command_backgrounded_mid_run_keeps_its_output_file_and_its_following(
     to — output gone, and no exception anywhere to notice it by.
     """
     monkeypatch.setenv("BAQYLAU_DATA_DIR", str(tmp_path / "data"))
-    session_id, operation_id = "session-one", "op-one"
+    session_id, shell_id = "session-one", "op-one"
     transcript_path = str(tmp_path / "session-one.jsonl")
     hook = {
         "session_id": session_id,
@@ -1284,7 +1292,7 @@ def test_a_command_backgrounded_mid_run_keeps_its_output_file_and_its_following(
         "hook_event_name": "PreToolUse",
         "hook_event_id": "pretool-one",
         "tool_name": "Bash",
-        "tool_use_id": operation_id,
+        "tool_use_id": shell_id,
         "tool_input": {"command": "sleep 30; echo done"},
     }
     gateway = claude_hooks.ClaudeHookGateway()
@@ -1295,10 +1303,10 @@ def test_a_command_backgrounded_mid_run_keeps_its_output_file_and_its_following(
         SessionId(session_id), ActorId(f"{session_id}:lead"), session_id, transcript_path, "/work",
     ))
     interpreter.tick()                                   # the directive starts the following
-    following = runtime.operation_output.find_for_session(SessionId(session_id))
+    following = runtime.shell_output.find_for_session(SessionId(session_id))
     assert len(following) == 1
     tee_path = following[0].source_path
-    assert following[0].until == "operation_finished"     # …as a foreground command
+    assert following[0].until == "shell_finished"        # …as a foreground command
     Path(tee_path).write_bytes(b"working\n")
     interpreter.tick()
     interpreter.tick()
@@ -1312,7 +1320,7 @@ def test_a_command_backgrounded_mid_run_keeps_its_output_file_and_its_following(
     }).encode())
     interpreter.tick()
 
-    survived = runtime.operation_output.find_for_session(SessionId(session_id))
+    survived = runtime.shell_output.find_for_session(SessionId(session_id))
     assert len(survived) == 1, "the following was ended by the launch's finish"
     assert survived[0].until == "session_finished"
     assert Path(tee_path).exists(), "the file the command is still writing to was unlinked"
@@ -1320,22 +1328,19 @@ def test_a_command_backgrounded_mid_run_keeps_its_output_file_and_its_following(
     Path(tee_path).write_bytes(b"working\ndone\n")        # the command runs on
     interpreter.tick()
     interpreter.tick()
-    operation = runtime.queries().operation_activity(
-        SessionId(session_id),
-        ActorId(f"{session_id}:lead"),
-        OperationId(operation_id),
-        runtime.store.latest_cursor(),
-    )
-    assert "".join(part.text for part in operation.current_progress()).endswith("done\n")
-    assert operation.state == "running"
-    assert operation.execution == "background"
+    assert shell_output_text(runtime, SessionId(session_id), ShellId(shell_id)).endswith("done\n")
+    # The command moved, and said so before it said finished — so nothing in the
+    # facts claims it ended.
+    backgrounded = stored_payloads(runtime, SessionId(session_id), ShellBackgrounded)
+    assert [fact.shell_id for fact in backgrounded] == [ShellId(shell_id)]
+    assert not stored_payloads(runtime, SessionId(session_id), ShellOutputFinished)
 
 
 def test_claude_foreground_output_is_canonical_append_progress():
     content = b"first line\nsecond line\n"
     translation = ClaudeCanonicalTranslator().translate(raw_event(
         {
-            "operation_id": "command-one",
+            "shell_id": "command-one",
             "ordinal": 3,
             "stream": "output",
             "content_base64": base64.b64encode(content).decode("ascii"),
@@ -1345,8 +1350,8 @@ def test_claude_foreground_output_is_canonical_append_progress():
         raw_event_id="foreground-one",
     ))
 
-    progress = payloads(translation, OperationProgressed)[0].payload
-    assert progress.operation_id == "command-one"
+    progress = payloads(translation, ShellProgressed)[0].payload
+    assert progress.shell_id == "command-one"
     assert progress.ordinal == 3
     assert progress.mode == "append"
     assert progress.content.text == content.decode()
@@ -1373,7 +1378,7 @@ def test_claude_background_launch_stub_is_not_progress(tmp_path):
         raw_event_id="background-stub",
     ))
 
-    assert not payloads(translation, OperationProgressed)
+    assert not payloads(translation, ShellProgressed)
     assert translation.decision == "ignored_nonsemantic"
 
 
@@ -1394,9 +1399,9 @@ def test_claude_foreground_prepare_rewrites_the_command_into_an_output_location(
     updated_command = native_output["hookSpecificOutput"]["updatedInput"]["command"]
     assert native_output["hookSpecificOutput"]["permissionDecision"] == "allow"
     assert "tee -a" in updated_command
-    assert prepared.located.operation_id == "command-one"
+    assert prepared.located.shell_id == "command-one"
     assert prepared.located.delete_source is True
-    assert prepared.located.until == "operation_finished"
+    assert prepared.located.until == "shell_finished"
     assert prepared.located.chunk_source_type == "foreground_output"
     assert prepared.located.source_path in updated_command
 
@@ -1427,20 +1432,14 @@ def test_claude_foreground_bytes_flow_through_raw_audit_into_operation_projectio
         "session-one", str(tmp_path / "session-one.jsonl"), str(tmp_path),
     ))
     interpreter.tick()  # translates the directive; the reaction starts the following
-    output_sources = runtime.operation_output.find_for_session(SessionId("session-one"))
+    output_sources = runtime.shell_output.find_for_session(SessionId("session-one"))
     assert len(output_sources) == 1
     Path(output_sources[0].source_path).write_bytes(b"hello\n")
     interpreter.tick()  # pulls the chunk and translates it
 
-    cursor = runtime.store.latest_cursor()
-    operation = runtime.queries().operation_activity(
-        SessionId("session-one"),
-        ActorId("session-one:lead"),
-        OperationId("command-one"),
-        cursor,
-    )
-    assert operation.state == "running"
-    assert operation.current_progress()[0].text == "hello\n"
+    assert shell_output_text(
+        runtime, SessionId("session-one"), ShellId("command-one")
+    ) == "hello\n"
     evidence = runtime.raw_event_audits.audits_for_session(SessionId("session-one"))
     foreground_evidence = [
         row for row in evidence if row.raw_event.source_type == "foreground_output"
@@ -1954,9 +1953,8 @@ def test_claude_teammate_hook_and_transcript_share_one_actor_identity(monkeypatc
     runtime.recorder.record(source.read(None))
     interpreter.tick()
 
-    actors = runtime.queries().actors(SessionId("session-one"))
-    teammate = next(actor for actor in actors if actor.actor_id == ActorId("worker-one"))
-    assert teammate.role == "teammate"
+    started = stored_payloads(runtime, SessionId("session-one"), ActorStarted)
+    assert [actor.role for actor in started if actor.name == "worker-one"] == ["teammate"]
 
 
 def test_codex_hook_maps_unique_compaction_lifecycle():
@@ -2321,11 +2319,9 @@ def test_claude_question_discussion_is_delivered_after_declining(monkeypatch, tm
         decision="discuss",
         discussion="change the approach",
     )
-    attention = AttentionRequested(
+    attention = QuestionAsked(
         "attention-one",
-        "question",
         (AttentionPrompt("question-one", None, "Continue?", False, ()),),
-        None,
     )
 
     outcome = application.registry.plugin("claude_code").controller.execute(
@@ -2358,11 +2354,9 @@ def test_codex_question_discussion_stays_in_the_native_dialog(monkeypatch, tmp_p
         decision="discuss",
         discussion="change the approach",
     )
-    attention = AttentionRequested(
+    attention = QuestionAsked(
         "attention-one",
-        "question",
         (AttentionPrompt("question-one", None, "Continue?", False, ()),),
-        None,
     )
 
     outcome = application.registry.plugin("codex").controller.execute(
@@ -2511,10 +2505,14 @@ def test_claude_prompt_and_codex_prompt_share_the_message_model():
             raw_event_id="codex-prompt",
         )
     )
-    assert isinstance(claude.canonical_events[0].payload, MessageCreated)
-    assert isinstance(codex.canonical_events[0].payload, MessageCreated)
-    assert claude.canonical_events[0].payload.role == codex.canonical_events[0].payload.role == "user"
-    assert claude.canonical_events[0].payload.phase == codex.canonical_events[0].payload.phase == "prompt"
+    claude_message = payloads(claude, MessageCreated)[0].payload
+    codex_message = payloads(codex, MessageCreated)[0].payload
+    assert claude_message.role == codex_message.role == "user"
+    assert claude_message.phase == codex_message.phase == "prompt"
+    # Claude Code announces no turn of its own, so the prompt opens one and the
+    # message rides it; codex names its own turns and needs no such help.
+    assert payloads(claude, TurnStarted)[0].payload.prompt_message_id == "claude-message"
+    assert [event.turn_id for event in claude.canonical_events] == ["claude-message"] * 2
 
 
 def test_claude_child_prompt_is_authored_by_the_parent_agent():
@@ -2573,8 +2571,11 @@ def test_claude_async_agent_launch_stays_running_until_task_notification():
     assert child_started.brief.text == "Get current weather in Bali"
     assert child_started.actor_name == "general-purpose"
     assert child_started.prompt.text == "Look up current weather and a short forecast."
-    assert payloads(launch_ack, OperationFinished)
-    assert not payloads(launch_ack, ActorAssignmentFinished)
+    # An async launch's result finishes nothing: the Agent tool returned, the
+    # assignment did not. There is no shell here either — an assignment is not a
+    # command — so the whole delivery says only that.
+    assert launch_ack.canonical_events == ()
+    assert launch_ack.decision == "ignored_nonsemantic"
 
 
 def test_claude_task_notification_finishes_actor_assignment_instead_of_creating_user_message():
@@ -2635,9 +2636,9 @@ def test_claude_background_completion_is_an_output_finish_not_an_agent_finish():
 
     assert not payloads(notification, ActorAssignmentFinished)
     assert not payloads(notification, MessageCreated)
-    finished = payloads(notification, OperationOutputFinished)
+    finished = payloads(notification, ShellOutputFinished)
     assert len(finished) == 1
-    assert finished[0].payload.operation_id == OperationId("background-op-one")
+    assert finished[0].payload.shell_id == ShellId("background-op-one")
     assert finished[0].payload.outcome == "succeeded"
 
 
@@ -2667,7 +2668,7 @@ def test_claude_background_completion_carries_the_jobs_own_outcome():
             source_type="transcript",
             raw_event_id=f"background-completion-{status}",
         ))
-        return payloads(translation, OperationOutputFinished)[0].payload.outcome
+        return payloads(translation, ShellOutputFinished)[0].payload.outcome
 
     assert outcome_for("completed") == "succeeded"
     assert outcome_for("failed") == "failed"
@@ -2693,19 +2694,19 @@ def _monitor_notification(uuid, body):
     )
 
 
-def _armed_monitor(translator, operation_id="monitor-op-one", task_id="bmfwjr03l"):
+def _armed_monitor(translator, shell_id="monitor-op-one", task_id="bmfwjr03l"):
     """A Monitor tool call returning, which is where its task id is announced."""
     translator.translate(raw_event(
         {
             "hook_event_name": "PostToolUse",
-            "tool_use_id": operation_id,
+            "tool_use_id": shell_id,
             "tool_name": "Monitor",
             "tool_input": {"command": "tail -f log", "description": "ticks"},
             "tool_response": {"taskId": task_id, "timeoutMs": 300000, "persistent": False},
         },
         harness="claude_code",
         source_type="hook",
-        raw_event_id=f"arm-{operation_id}",
+        raw_event_id=f"arm-{shell_id}",
     ))
 
 
@@ -2733,9 +2734,9 @@ def test_claude_monitor_events_are_progress_on_the_monitor_not_agent_finishes():
     for tick in ticks:
         assert not payloads(tick, ActorAssignmentFinished)
         assert not payloads(tick, MessageCreated)
-    progressed = [payloads(tick, OperationProgressed)[0] for tick in ticks]
+    progressed = [payloads(tick, ShellProgressed)[0] for tick in ticks]
     assert [entry.payload.content.text for entry in progressed] == ["tick-1", "tick-2", "tick-3"]
-    assert all(entry.payload.operation_id == OperationId("monitor-op-one") for entry in progressed)
+    assert all(entry.payload.shell_id == ShellId("monitor-op-one") for entry in progressed)
     # The "status" stream is what the monitors tab reads as an event rather than
     # as output, and the ordinals are what keep three events three rows: the
     # event id is built from the subject and the phase, so a shared phase would
@@ -2779,9 +2780,9 @@ def test_claude_monitor_ends_on_its_own_notification_not_on_its_arm():
     ))
 
     assert not payloads(ended, ActorAssignmentFinished)
-    finished = payloads(ended, OperationOutputFinished)
+    finished = payloads(ended, ShellOutputFinished)
     assert len(finished) == 1
-    assert finished[0].payload.operation_id == OperationId("monitor-op-one")
+    assert finished[0].payload.shell_id == ShellId("monitor-op-one")
     assert finished[0].payload.outcome == "succeeded"
 
 
@@ -2832,9 +2833,9 @@ def test_claude_command_backgrounded_mid_run_says_so_before_it_says_finished():
     ))
 
     kinds = [type(canonical.payload).__name__ for canonical in translation.canonical_events]
-    assert kinds.index("OperationBackgrounded") < kinds.index("OperationFinished")
-    backgrounded = payloads(translation, OperationBackgrounded)[0].payload
-    assert backgrounded.operation_id == OperationId("op-backgrounded")
+    assert kinds.index("ShellBackgrounded") < kinds.index("ShellFinished")
+    backgrounded = payloads(translation, ShellBackgrounded)[0].payload
+    assert backgrounded.shell_id == ShellId("op-backgrounded")
     assert backgrounded.native_id == "btk9y72c9"
 
 
@@ -2857,7 +2858,7 @@ def test_claude_background_launch_is_not_a_mid_run_backgrounding():
         raw_event_id="post-tool-use-native-background",
     ))
 
-    assert not payloads(translation, OperationBackgrounded)
+    assert not payloads(translation, ShellBackgrounded)
 
 
 def test_codex_exec_that_outlives_its_yield_is_announced_as_background_once():
@@ -2897,15 +2898,184 @@ def test_codex_exec_that_outlives_its_yield_is_announced_as_background_once():
         },
     }, 30))
 
-    backgrounded = payloads(first, OperationBackgrounded)
+    backgrounded = payloads(first, ShellBackgrounded)
     assert len(backgrounded) == 1
     assert backgrounded[0].payload.native_id == "4242"
-    assert not payloads(first, OperationFinished)
-    assert not payloads(second, OperationBackgrounded)
+    assert not payloads(first, ShellFinished)
+    assert not payloads(second, ShellBackgrounded)
 
 
-def test_claude_tool_reference_result_has_a_readable_output():
-    result = ClaudeCanonicalTranslator().translate(raw_event(
+def test_claude_skill_and_web_and_worktree_tools_have_their_own_facts():
+    """Four tool families that used to be one generic operation, each now saying
+    what it actually is. A skill has a life (it runs, it answers); a fetch and a
+    worktree move do not — they are one fact at result time."""
+    translator = ClaudeCanonicalTranslator()
+
+    def hook(document, raw_event_id):
+        return translator.translate(raw_event(
+            document, harness="claude_code", source_type="hook", raw_event_id=raw_event_id
+        ))
+
+    skill_start = hook({
+        "hook_event_name": "PreToolUse",
+        "tool_use_id": "skill-one",
+        "tool_name": "Skill",
+        "tool_input": {"skill": "audit-debug"},
+    }, "skill-start")
+    skill_finish = hook({
+        "hook_event_name": "PostToolUse",
+        "tool_use_id": "skill-one",
+        "tool_name": "Skill",
+        "tool_input": {"skill": "audit-debug"},
+        "tool_response": "the skill's report",
+    }, "skill-finish")
+    fetched = hook({
+        "hook_event_name": "PostToolUse",
+        "tool_use_id": "fetch-one",
+        "tool_name": "WebFetch",
+        "tool_input": {"url": "https://example.dev/docs"},
+        "tool_response": "the page",
+    }, "fetch")
+    entered = hook({
+        "hook_event_name": "PostToolUse",
+        "tool_use_id": "worktree-one",
+        "tool_name": "EnterWorktree",
+        "tool_input": {"branch": "wip"},
+        "tool_response": "entered",
+    }, "worktree")
+
+    started = payloads(skill_start, SkillStarted)[0].payload
+    assert (started.skill_id, started.name) == ("skill-one", "audit-debug")
+    # Claude collapses a Skill call's input to the bare name, so there is nothing
+    # left to show as arguments.
+    assert started.arguments is None
+    assert payloads(skill_finish, SkillFinished)[0].payload.result.text == "the skill's report"
+
+    assert payloads(fetched, WebFetched)[0].payload.url == "https://example.dev/docs"
+    assert payloads(fetched, WebFetched)[0].payload.result.text == "the page"
+    # No harness exposes a worktree path, so the call's own arguments ride along
+    # rather than a parsed field that would always be empty.
+    changed = payloads(entered, WorktreeChanged)[0].payload
+    assert changed.action == "entered"
+    assert changed.arguments.field("branch") == "wip"
+
+
+def test_claude_plan_is_proposed_and_then_resolved_with_what_the_person_decided():
+    translator = ClaudeCanonicalTranslator()
+    proposed = translator.translate(raw_event(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_use_id": "plan-one",
+            "tool_name": "ExitPlanMode",
+            "tool_input": {"plan": "1. Read it\n2. Change it"},
+        },
+        harness="claude_code",
+        source_type="hook",
+        raw_event_id="plan-proposed",
+    ))
+    changes_requested = translator.translate(raw_event(
+        {
+            "hook_event_name": "PostToolUseFailure",
+            "tool_use_id": "plan-one",
+            "tool_name": "ExitPlanMode",
+            "tool_input": {},
+            "tool_response": (
+                "The user doesn't want to proceed. To tell you how to proceed, "
+                "the user said:\nstart with the tests"
+            ),
+        },
+        harness="claude_code",
+        source_type="hook",
+        raw_event_id="plan-resolved",
+    ))
+
+    assert payloads(proposed, PlanProposed)[0].payload.plan.text == "1. Read it\n2. Change it"
+    resolved = payloads(changes_requested, PlanResolved)[0].payload
+    assert resolved.attention_id == "plan-one"
+    assert resolved.state == "changes_requested"
+    assert resolved.feedback == "start with the tests"
+    assert resolved.edited is False
+
+
+def test_claude_turn_opens_on_the_prompt_and_closes_on_the_stop_hook():
+    """Claude Code emits no turn boundary of its own — its Stop hook says a turn
+    ended and nothing says one began — so the prompt opens the turn and every
+    fact until the Stop rides it. Without this the feed has nothing to group by."""
+    translator = ClaudeCanonicalTranslator()
+    prompt = translator.translate(raw_event(
+        {"type": "user", "uuid": "prompt-one", "message": {"content": "fix it"}},
+        harness="claude_code",
+        source_type="transcript",
+        raw_event_id="prompt",
+    ))
+    during = translator.translate(raw_event(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_use_id": "tool-one",
+            "tool_name": "Bash",
+            "tool_input": {"command": "pwd"},
+        },
+        harness="claude_code",
+        source_type="hook",
+        raw_event_id="tool",
+    ))
+    injected = translator.translate(raw_event(
+        {"type": "user", "uuid": "prompt-two", "message": {"content": "and also this"}},
+        harness="claude_code",
+        source_type="transcript",
+        raw_event_id="injection",
+    ))
+    stop = translator.translate(raw_event(
+        {"hook_event_name": "Stop", "hook_event_id": "stop-one"},
+        harness="claude_code",
+        source_type="hook",
+        raw_event_id="stop",
+    ))
+    after = translator.translate(raw_event(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_use_id": "tool-two",
+            "tool_name": "Bash",
+            "tool_input": {"command": "ls"},
+        },
+        harness="claude_code",
+        source_type="hook",
+        raw_event_id="after",
+    ))
+
+    assert payloads(prompt, TurnStarted)[0].payload.prompt_message_id == "prompt-one"
+    assert during.canonical_events[0].turn_id == TurnId("prompt-one")
+    # An injection is part of the turn it interrupted, not a turn of its own.
+    assert payloads(injected, TurnStarted) == []
+    assert injected.canonical_events[0].turn_id == TurnId("prompt-one")
+    assert payloads(stop, TurnFinished)[0].turn_id == TurnId("prompt-one")
+    # …and nothing after the Stop belongs to the turn it closed.
+    assert after.canonical_events[0].turn_id is None
+
+
+def test_claude_search_is_one_fact_holding_both_its_query_and_its_result():
+    """A search has no life between asking and answering that anyone reads, so
+    the call alone is not a fact — it is remembered, and the result carries
+    both halves. The result text is rendered readably from its native blocks
+    (here a `tool_reference`, which is how ToolSearch answers)."""
+    translator = ClaudeCanonicalTranslator()
+    call = translator.translate(raw_event(
+        {
+            "type": "assistant",
+            "message": {
+                "content": [{
+                    "type": "tool_use",
+                    "id": "tool-search-one",
+                    "name": "ToolSearch",
+                    "input": {"query": "select:WebSearch", "max_results": 1},
+                }]
+            },
+        },
+        harness="claude_code",
+        source_type="transcript",
+        raw_event_id="tool-search",
+    ))
+    result = translator.translate(raw_event(
         {
             "type": "user",
             "uuid": "tool-result-one",
@@ -2922,30 +3092,12 @@ def test_claude_tool_reference_result_has_a_readable_output():
         raw_event_id="tool-result",
     ))
 
-    progress = payloads(result, OperationProgressed)[0].payload
-    assert progress.content.text == "→ loaded tool: WebSearch"
-
-
-def test_claude_tool_search_uses_its_query_as_the_operation_arguments():
-    translated = ClaudeCanonicalTranslator().translate(raw_event(
-        {
-            "type": "assistant",
-            "message": {
-                "content": [{
-                    "type": "tool_use",
-                    "id": "tool-search-one",
-                    "name": "ToolSearch",
-                    "input": {"query": "select:WebSearch", "max_results": 1},
-                }]
-            },
-        },
-        harness="claude_code",
-        source_type="transcript",
-        raw_event_id="tool-search",
-    ))
-
-    operation = payloads(translated, OperationStarted)[0].payload
-    assert operation.arguments == TextContent("select:WebSearch")
+    assert call.decision == "ignored_nonsemantic"
+    performed = payloads(result, SearchPerformed)[0].payload
+    assert performed.tool == "ToolSearch"
+    assert performed.query == TextContent("select:WebSearch")
+    assert performed.result.text == "→ loaded tool: WebSearch"
+    assert performed.outcome == "succeeded"
 
 
 def test_claude_child_actor_uses_the_task_description_from_its_sidecar(tmp_path):
@@ -3259,7 +3411,8 @@ def test_claude_otel_delivery_records_raw_and_canonical_audit(tmp_path):
     assert evidence[0].interpretation is not None
     assert evidence[0].interpretation.decision == "translated"
     assert len(evidence[0].interpretation.events) == 1
-    assert runtime.queries().usage(SessionId("session-one")).tokens.output_tokens == 9
+    reported = stored_payloads(runtime, SessionId("session-one"), UsageReported)
+    assert [usage.tokens.output_tokens for usage in reported] == [9]
 
 
 def test_claude_operation_execution_comes_from_native_tool_semantics():
@@ -3290,10 +3443,10 @@ def test_claude_operation_execution_comes_from_native_tool_semantics():
         raw_event_id="monitor",
     ))
 
-    assert payloads(background, OperationStarted)[0].payload.execution == "background"
-    assert payloads(background, OperationStarted)[0].payload.description == "Run tests"
-    assert payloads(background, OperationStarted)[0].payload.arguments.text == "make test"
-    assert payloads(monitor, OperationStarted)[0].payload.execution == "monitor"
+    assert payloads(background, ShellStarted)[0].payload.execution == "background"
+    assert payloads(background, ShellStarted)[0].payload.description == "Run tests"
+    assert payloads(background, ShellStarted)[0].payload.command.text == "make test"
+    assert payloads(monitor, ShellStarted)[0].payload.execution == "monitor"
 
 
 def test_codex_write_stdin_continues_the_original_operation():
@@ -3348,16 +3501,16 @@ def test_codex_write_stdin_continues_the_original_operation():
         },
     }, harness="codex", source_type="rollout", raw_event_id="command-finished", source_position="44"))
 
-    operation_id = payloads(started, OperationStarted)[0].payload.operation_id
-    assert operation_id == "command-one"
-    assert payloads(initial_output, OperationProgressed)[0].payload.operation_id == operation_id
-    input_payload = payloads(provided, OperationInputProvided)[0].payload
-    assert input_payload.operation_id == operation_id
+    shell_id = payloads(started, ShellStarted)[0].payload.shell_id
+    assert shell_id == "command-one"
+    assert payloads(initial_output, ShellProgressed)[0].payload.shell_id == shell_id
+    input_payload = payloads(provided, ShellInputProvided)[0].payload
+    assert input_payload.shell_id == shell_id
     assert input_payload.content.text == "yes\n"
     assert input_payload.closed is False
-    assert payloads(continued_output, OperationProgressed)[0].payload.operation_id == operation_id
-    finished_payload = payloads(finished, OperationFinished)[0].payload
-    assert finished_payload.operation_id == operation_id
+    assert payloads(continued_output, ShellProgressed)[0].payload.shell_id == shell_id
+    finished_payload = payloads(finished, ShellFinished)[0].payload
+    assert finished_payload.shell_id == shell_id
     assert finished_payload.result.text == "waiting\naccepted\n"
     # zero is a real exit code: a falsy-int coercion once dropped it and marked
     # the clean exit "failed" (session 01a009e1, 2026-08-16)
@@ -3403,7 +3556,7 @@ def test_codex_command_completion_outcome_follows_the_integer_exit_code():
         }, harness="codex", source_type="rollout",
             raw_event_id=f"command-finished-{suffix}", source_position="42"))
 
-        finished_payload = payloads(finished, OperationFinished)[0].payload
+        finished_payload = payloads(finished, ShellFinished)[0].payload
         assert finished_payload.exit_code == exit_code
         assert finished_payload.outcome == expected_outcome
 
@@ -3448,7 +3601,7 @@ def test_codex_empty_write_stdin_poll_is_raw_only_and_ctrl_c_is_input():
 
     assert poll.decision == "ignored_nonsemantic"
     assert poll.canonical_events == ()
-    assert payloads(interrupt, OperationInputProvided)[0].payload.content.text == "\x03"
+    assert payloads(interrupt, ShellInputProvided)[0].payload.content.text == "\x03"
 
 
 def test_codex_write_stdin_requires_a_known_process_session():
@@ -3519,7 +3672,7 @@ def test_codex_write_stdin_records_raw_and_canonical_audit(tmp_path):
     assert stdin_evidence.interpretation is not None
     assert stdin_evidence.interpretation.decision == "translated"
     assert isinstance(
-        stdin_evidence.interpretation.events[0].event.payload, OperationInputProvided
+        stdin_evidence.interpretation.events[0].event.payload, ShellInputProvided
     )
     poll_evidence = runtime.raw_event_audits.audit(RawEventId("poll"))
     assert poll_evidence is not None
@@ -3543,9 +3696,9 @@ def test_codex_plan_has_a_canonical_fact():
         raw_event_id="plan",
     ))
 
-    attention = payloads(plan, AttentionRequested)[0].payload
-    assert attention.attention_type == "plan"
-    assert attention.prompts[0].prompt == "1. Change it"
+    proposed = payloads(plan, PlanProposed)[0].payload
+    assert proposed.attention_id == "plan-one"
+    assert proposed.plan.text == "1. Change it"
 
 
 def test_codex_preliminary_patch_marker_is_nonsemantic():
@@ -3604,7 +3757,10 @@ def test_codex_current_file_change_emits_the_shared_file_facts():
     ]
     assert files[0].unified_diff == "@@ -1 +1 @@\n-old\n+new\n"
     assert files[1].content.text == "print('captured')\n"
-    assert isinstance(translated.canonical_events[-1].payload, OperationFinished)
+    # The patch itself is not a command and has no life of its own: the files it
+    # touched are the whole fact.
+    assert len(translated.canonical_events) == len(files)
+    assert {file.outcome for file in files} == {"succeeded"}
 
 
 def test_codex_exec_wrapped_apply_patch_does_not_render_an_empty_tool_block():
@@ -3686,14 +3842,18 @@ def test_codex_opaque_exec_output_does_not_create_a_finish_without_a_start():
 
 
 @pytest.mark.parametrize(
-    ("call_input", "expects_finish"),
+    ("call_input", "expected_facts"),
     (
-        ("const hits = ALL_TOOLS.filter(x => x.name); text(hits);", False),
-        ('text(await tools.view_image({path:"/tmp/image.png"}));', True),
+        # No `tools.<fn>(…)` at all: the output belongs to no call this
+        # vocabulary has a fact for, and inventing one is worse than none.
+        ("const hits = ALL_TOOLS.filter(x => x.name); text(hits);", 0),
+        # A file read, whose PATH is in the call the scan recovered — without
+        # it the result would be a fact about no file.
+        ('text(await tools.view_image({path:"/tmp/image.png"}));', 1),
     ),
 )
 def test_codex_output_recovers_its_call_pairing_across_a_restart(
-    tmp_path, call_input, expects_finish
+    tmp_path, call_input, expected_facts
 ):
     call = {
         "type": "response_item",
@@ -3722,11 +3882,11 @@ def test_codex_output_recovers_its_call_pairing_across_a_restart(
         source_position=str(len(call_line.encode())),
     ), source_name=str(rollout_path))
 
-    finished = payloads(
-        CodexCanonicalTranslator().translate(output), OperationFinished
-    )
+    translated = CodexCanonicalTranslator().translate(output)
 
-    assert bool(finished) is expects_finish
+    assert len(translated.canonical_events) == expected_facts
+    if expected_facts:
+        assert payloads(translated, FileAccessed)[0].payload.path == "/tmp/image.png"
 
 
 def test_codex_collaboration_lifecycle_uses_child_turn_as_assignment_identity(tmp_path):
@@ -3860,9 +4020,12 @@ def test_codex_collaboration_controls_map_only_semantic_actor_facts(tmp_path):
             },
         },
     }, "send-activity")
-    message = payloads(sent, ActorMessageSent)[0].payload
+    # An actor-to-actor message IS a message: the actor speaking, to a named
+    # recipient, carrying what the send_message call was given.
+    message = payloads(sent, MessageCreated)[0].payload
     assert message.recipient_actor_id == ActorId("child-one")
-    assert message.content is None
+    assert message.role == "assistant"
+    assert message.content.text == "encrypted"
 
     for call_id, activity in (
         ("spawn", "started"),
@@ -3939,9 +4102,12 @@ def test_codex_actor_message_correlation_survives_translator_restart(tmp_path):
 
     message = payloads(
         CodexCanonicalTranslator().translate(activity),
-        ActorMessageSent,
+        MessageCreated,
     )[0].payload
     assert message.recipient_actor_id == ActorId("child-one")
+    # The text comes from the call the backwards scan recovered, so a restart
+    # loses the correlation AND the words together, or neither.
+    assert message.content.text == "encrypted"
 
 
 def test_codex_child_abort_cancels_only_its_current_assignment():
@@ -3969,46 +4135,82 @@ def test_codex_child_abort_cancels_only_its_current_assignment():
     assert assignment.reason == "interrupted"
 
 
-def test_codex_web_tool_uses_shared_search_vocabulary():
+def test_codex_web_tool_uses_shared_search_vocabulary(tmp_path):
+    """One web tool covers search and fetch, and which one it was is decided by
+    the fields it was called with — so the call names the tool and the result
+    completes the fact."""
+    call = json.dumps({
+        "type": "response_item",
+        "payload": {
+            "type": "custom_tool_call",
+            "name": "exec",
+            "call_id": "web-one",
+            "input": (
+                'const result = await tools.web__run('
+                '{"search_query":"Bali weather"}); text(result);'
+            ),
+        },
+    }) + "\n"
+    rollout_path = tmp_path / "rollout.jsonl"
+    rollout_path.write_text(call)
+    translator = CodexCanonicalTranslator()
+    opened = translator.translate(replace(
+        raw_event(
+            json.loads(call),
+            harness="codex",
+            source_type="rollout",
+            raw_event_id="web-search",
+            source_position="0",
+        ),
+        source_name=str(rollout_path),
+    ))
+    answered = translator.translate(replace(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "call_id": "web-one",
+                    "output": "26C and sunny",
+                },
+            },
+            harness="codex",
+            source_type="rollout",
+            raw_event_id="web-search-result",
+            source_position=str(len(call.encode())),
+        ),
+        source_name=str(rollout_path),
+    ))
+
+    assert opened.canonical_events == ()
+    performed = payloads(answered, SearchPerformed)[0].payload
+    assert performed.tool == "WebSearch"
+    assert performed.query.text == "Bali weather"
+    assert performed.result.text == "26C and sunny"
+
+
+def test_codex_unmapped_tool_is_unknown_evidence_not_a_failure():
+    """An unmapped tool is a hole in this translator, not bad evidence: the
+    verdict says `ignored_unknown` so the audit can name it, and the rest of
+    the session carries on."""
     translation = CodexCanonicalTranslator().translate(raw_event(
         {
             "type": "response_item",
             "payload": {
                 "type": "custom_tool_call",
                 "name": "exec",
-                "call_id": "web-one",
-                "input": (
-                    'const result = await tools.web__run('
-                    '{"search_query":[{"q":"Bali weather"}]}); text(result);'
-                ),
+                "call_id": "unknown-one",
+                "input": "const result = await tools.unknown_tool({}); text(result);",
             },
         },
         harness="codex",
         source_type="rollout",
-        raw_event_id="web-search",
+        raw_event_id="unknown-tool",
     ))
 
-    operation = payloads(translation, OperationStarted)[0].payload
-    assert operation.category == "search"
-    assert operation.native_name == "WebSearch"
-
-
-def test_codex_unmapped_tool_fails_translation():
-    with pytest.raises(TranslationError, match="unmapped Codex tool"):
-        CodexCanonicalTranslator().translate(raw_event(
-            {
-                "type": "response_item",
-                "payload": {
-                    "type": "custom_tool_call",
-                    "name": "exec",
-                    "call_id": "unknown-one",
-                    "input": "const result = await tools.unknown_tool({}); text(result);",
-                },
-            },
-            harness="codex",
-            source_type="rollout",
-            raw_event_id="unknown-tool",
-        ))
+    assert translation.canonical_events == ()
+    assert translation.decision == "ignored_unknown"
+    assert "unmapped Codex tool" in translation.reason
 
 
 def test_codex_interrupt_detects_a_queued_turn_after_abort(tmp_path):
@@ -4033,8 +4235,8 @@ def test_claude_hook_and_transcript_produce_identical_tool_start_facts():
             {
                 "hook_event_name": "PreToolUse",
                 "tool_use_id": "tool-one",
-                "tool_name": "Read",
-                "tool_input": {"file_path": "/work/a.py"},
+                "tool_name": "Bash",
+                "tool_input": {"command": "pwd"},
             },
             harness="claude_code",
             source_type="hook",
@@ -4053,8 +4255,8 @@ def test_claude_hook_and_transcript_produce_identical_tool_start_facts():
                         {
                             "type": "tool_use",
                             "id": "tool-one",
-                            "name": "Read",
-                            "input": {"file_path": "/work/a.py"},
+                            "name": "Bash",
+                            "input": {"command": "pwd"},
                         }
                     ],
                 },
@@ -4066,8 +4268,64 @@ def test_claude_hook_and_transcript_produce_identical_tool_start_facts():
         )
     )
     codec = CanonicalEventCodec()
-    assert codec.encode(payloads(hook, OperationStarted)[0]) == codec.encode(payloads(transcript, OperationStarted)[0])
-    assert codec.encode(payloads(hook, FileAccessed)[0]) == codec.encode(payloads(transcript, FileAccessed)[0])
+    assert codec.encode(payloads(hook, ShellStarted)[0]) == codec.encode(payloads(transcript, ShellStarted)[0])
+
+
+def test_claude_file_facts_converge_from_either_evidence_stream():
+    """A file's path is in the call and its diff is in the result, so the fact is
+    built at result time from both. Either stream can carry it — the hook's own
+    response, or the transcript's `toolUseResult` sidecar — and both spellings
+    are the same fact."""
+    response = {"content": "print(1)\n"}
+    hook_translator = ClaudeCanonicalTranslator()
+    transcript_translator = ClaudeCanonicalTranslator()
+    call = {
+        "type": "assistant",
+        "uuid": "assistant-one",
+        "message": {
+            "id": "api-message",
+            "content": [
+                {"type": "tool_use", "id": "tool-one", "name": "Read", "input": {"file_path": "/work/a.py"}}
+            ],
+        },
+    }
+    for translator in (hook_translator, transcript_translator):
+        translator.translate(raw_event(
+            call, harness="claude_code", source_type="transcript", raw_event_id="start"
+        ))
+    hook = hook_translator.translate(raw_event(
+        {
+            "hook_event_name": "PostToolUse",
+            "tool_use_id": "tool-one",
+            "tool_name": "Read",
+            "tool_input": {"file_path": "/work/a.py"},
+            "tool_response": response,
+        },
+        harness="claude_code",
+        source_type="hook",
+        raw_event_id="hook-finish",
+    ))
+    transcript = transcript_translator.translate(raw_event(
+        {
+            "type": "user",
+            "uuid": "result-one",
+            "message": {
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "tool-one", "content": "print(1)\n"}
+                ]
+            },
+            "toolUseResult": response,
+        },
+        harness="claude_code",
+        source_type="transcript",
+        raw_event_id="transcript-finish",
+    ))
+
+    codec = CanonicalEventCodec()
+    assert codec.encode(payloads(hook, FileAccessed)[0]) == codec.encode(
+        payloads(transcript, FileAccessed)[0]
+    )
+    assert payloads(hook, FileAccessed)[0].payload.content.text == "print(1)\n"
 
 
 def test_claude_edit_completion_preserves_the_native_structured_patch():
@@ -4102,6 +4360,20 @@ def test_claude_edit_completion_preserves_the_native_structured_patch():
 
 def test_claude_hook_and_transcript_tool_finish_deduplicate_transactionally(tmp_path):
     translator = ClaudeCanonicalTranslator()
+    # The transcript's own tool_result names no tool, so the call it belongs to
+    # has to have been seen. It always has been: the request precedes its result
+    # in both streams.
+    translator.translate(raw_event(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_use_id": "tool-one",
+            "tool_name": "Bash",
+            "tool_input": {"command": "pwd"},
+        },
+        harness="claude_code",
+        source_type="hook",
+        raw_event_id="hook-start",
+    ))
     hook_raw = raw_event(
         {
             "hook_event_name": "PostToolUse",
@@ -4128,8 +4400,8 @@ def test_claude_hook_and_transcript_tool_finish_deduplicate_transactionally(tmp_
     )
     hook = translator.translate(hook_raw)
     transcript = translator.translate(transcript_raw)
-    hook_finished = payloads(hook, OperationFinished)[0]
-    transcript_finished = payloads(transcript, OperationFinished)[0]
+    hook_finished = payloads(hook, ShellFinished)[0]
+    transcript_finished = payloads(transcript, ShellFinished)[0]
     assert CanonicalEventCodec().encode(hook_finished) == CanonicalEventCodec().encode(transcript_finished)
 
     store = CanonicalRuntime(str(tmp_path / "main.db"))
@@ -4146,8 +4418,10 @@ def test_claude_hook_and_transcript_tool_finish_deduplicate_transactionally(tmp_
     store.record(hook_raw, "1", hook)
     accepted = store.record(transcript_raw, "1", transcript)
     assert hook_finished.event_id not in {event.event_id for event in accepted}
-    stored = store.store.page_after(SessionId("session-one"), 0, 10).events
-    finished = next(item for item in stored if item.event.event_id == hook_finished.event_id)
+    committed = store.store.page_from(0, 10)
+    assert hook_finished.event_id in {item.event.event_id for item in committed}
+    finished = store.store.find(hook_finished.event_id)
+    assert finished is not None
     assert RawEventId("transcript-finish") in finished.raw_event_ids
 
 
@@ -4179,10 +4453,10 @@ def test_claude_question_preserves_multiple_prompts_and_multiselect():
             raw_event_id="ask",
         )
     )
-    attention = payloads(translation, AttentionRequested)[0].payload
-    assert len(attention.prompts) == 2
-    assert attention.prompts[0].multiple is True
-    assert [choice.label for choice in attention.prompts[0].choices] == ["Python", "JavaScript"]
+    asked = payloads(translation, QuestionAsked)[0].payload
+    assert len(asked.questions) == 2
+    assert asked.questions[0].multiple is True
+    assert [choice.label for choice in asked.questions[0].choices] == ["Python", "JavaScript"]
 
 
 def test_claude_question_resolution_is_canonical_not_a_native_response_object():
@@ -4210,12 +4484,13 @@ def test_claude_question_resolution_is_canonical_not_a_native_response_object():
         )
     )
 
-    resolution = payloads(translation, AttentionResolved)[0].payload
+    answered = payloads(translation, QuestionAnswered)[0].payload
 
-    assert resolution.decision == "answered"
-    assert resolution.answers[0].prompt_id == "language"
-    assert resolution.answers[0].values == ("Python", "JavaScript")
-    assert not hasattr(resolution, "tool_response")
+    assert answered.answers[0].prompt_id == "language"
+    # Labels, not values: both harnesses answer with the label they were shown,
+    # so a second spelling of the same string was a mapping nobody needed.
+    assert answered.answers[0].labels == ("Python", "JavaScript")
+    assert not hasattr(answered, "tool_response")
 
 
 def test_claude_refused_question_resolves_from_the_transcript_not_a_missing_hook():
@@ -4260,11 +4535,13 @@ def test_claude_refused_question_resolves_from_the_transcript_not_a_missing_hook
         raw_event_id="ask-refused-result",
     ))
 
-    resolution = payloads(refusal, AttentionResolved)[0].payload
-    assert resolution.attention_id == "question-refused"
-    assert resolution.decision == "discussed"
-    assert resolution.outcome == "failed"
-    assert resolution.answers == ()
+    # A refusal answers nothing, and the harness's own word for the refusal
+    # (rejected, discussed) is deliberately not carried: every reader collapsed
+    # all of them to one line.
+    answered = payloads(refusal, QuestionAnswered)[0].payload
+    assert answered.attention_id == "question-refused"
+    assert answered.answers == ()
+    assert answered.feedback is None
 
 
 def test_claude_answered_question_leaves_the_transcript_result_to_the_hook():
@@ -4304,7 +4581,7 @@ def test_claude_answered_question_leaves_the_transcript_result_to_the_hook():
         raw_event_id="ask-answered-result",
     ))
 
-    assert payloads(result, AttentionResolved) == []
+    assert payloads(result, QuestionAnswered) == []
 
 
 def test_codex_session_turn_operation_usage_and_context_records():
@@ -4363,7 +4640,7 @@ def test_codex_session_turn_operation_usage_and_context_records():
     assert isinstance(session.canonical_events[0].payload, SessionStarted)
     assert isinstance(session.canonical_events[1].payload, ActorStarted)
     assert isinstance(turn.canonical_events[0].payload, TurnStarted)
-    assert isinstance(operation.canonical_events[0].payload, OperationStarted)
+    assert isinstance(operation.canonical_events[0].payload, ShellStarted)
     assert len(payloads(usage, UsageReported)) == 1
     assert len(payloads(usage, ContextReported)) == 1
 
@@ -4460,9 +4737,9 @@ def test_codex_question_uses_the_same_attention_prompt_model():
             raw_event_id="ask",
         )
     )
-    attention = payloads(translation, AttentionRequested)[0].payload
-    assert attention.prompts[0].prompt == "Continue?"
-    assert attention.prompts[0].choices[0].description == "Proceed"
+    asked = payloads(translation, QuestionAsked)[0].payload
+    assert asked.questions[0].prompt == "Continue?"
+    assert asked.questions[0].choices[0].description == "Proceed"
 
 
 # A `/command` turn is THREE user-shaped transcript records (measured, session

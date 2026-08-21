@@ -12,12 +12,15 @@ is most of the skill.
 ## Where the data is
 
 Both stores live under `~/.local/share/baqylau`, overridable with
-`$BAQYLAU_DATA_DIR`. `core/data.py` owns both paths. Open them **read-only**
+`$BAQYLAU_DATA_DIR` or the daemon's own `--data-dir` flag (which sets it).
+`core/data.py` owns both paths. A daemon started with `--port`/`--data-dir` is
+addressed the same way: `bin/baqylau-dashboard.py status --port N` reports on
+THAT one, which is how you triage a second daemon without touching the first. Open them **read-only**
 (`file:<path>?mode=ro`) so triage can never mutate the record being inspected.
 
 | store | path | what it answers |
 |---|---|---|
-| **main** | `<data>/main.db` | Everything the application owns and reads back: evidence and its interpretation, your unsent work, your preferences, terminal state, plan usage, uploads. Schema: `repository/impl/sqlite/schema.py`. |
+| **main** | `<data>/main.db` | Everything the application owns and reads back: evidence and its interpretation, **the read model every frontend draws from**, your unsent work, your preferences, terminal state, plan usage, uploads. Schema: `repository/impl/sqlite/schema.py`. |
 | **audit** | `<data>/audit.db` | Debug-only records of what the *machinery* did and where it degraded: swallowed exceptions, detached processes, control-plane gestures, browser telemetry. It remains separate so it is readable when `main.db` is the suspect. `BAQYLAU_AUDIT=0` disables it (`audit/record.py`). |
 
 **Nothing outside `repository/impl/sqlite/` opens a database.** The one module elsewhere
@@ -43,14 +46,30 @@ hooks · statusline · otel receiver  ──POST exact bytes──▶  the daemo
    /api/harnesses/<name>/hooks      ──▶ hook gateway      ─┐
    /api/harnesses/<name>/telemetry  ──▶ telemetry gateway ─┤
                                                            ├──append──▶ raw_events
-   interpreter: pulled sources (transcripts, rollouts, ────┘
-                output chunks, liveness)
+   INTERPRETER loop: pulled sources (transcripts, rollouts,┘
+                     output chunks, liveness)
                        │
    translate ──▶ interpretations + canonical_events + interpretation_events
                  (ONE transaction: CanonicalEventRepository.record_translation)
                        │
-   react ──▶ sessions (upsert) · operation_output · panes · plugin reactors
+                       │   ← the cursor is the seam between the two loops
+                       ▼
+   REACTION loop: page_from(reaction_progress.canonical_cursor)
+                       │
+       ├── side effects ──▶ sessions (upsert) · panes · interrupts ·
+       │                    plugin reactors · notifications
+       └── the WRITERS ──▶ session_data + session_data_actors + session_entries
+                           (ONE transaction: SessionDataRepository.apply,
+                            which also advances reaction_progress)
 ```
+
+**TWO loops, and the split is the first thing to establish when something is
+missing.** The interpreter translates evidence into facts and does nothing else
+(its only side work is the two things translation itself needs: the sessions
+upsert and shell-output following). Everything downstream of a fact — every side
+effect and the whole read model — runs on the reaction loop, which follows the
+canonical cursor independently. So "the feed is frozen" has two completely
+different causes now, and `reaction_progress` tells them apart in one query.
 
 - **`sessions` is NOT written at launch.** The row is born by the interpreter's
   session-upsert reaction from the session's own `session.started` FACT, and its two
@@ -81,15 +100,27 @@ hooks · statusline · otel receiver  ──POST exact bytes──▶  the daemo
   against the raw event it came from; a violation lands as `decision='translation_failed'`
   with the reason in `reason`, and the queue moves on.
 
-**Who drives what.** The `Interpreter` (`engine/interpret/loop.py`) is the ONE
-read-and-interpret loop: it expires stale output followings, pulls every unfinished
-session's sources, translates the backlog (hook evidence included — hooks do NOT
-translate), and reacts to committed facts. It runs as a thread inside the dashboard
-server process, every `TICK_INTERVAL_SECONDS` (0.25 s), with no session-count cap.
+**Who drives what.** Two threads inside the dashboard server process, each on its own
+0.25 s tick, with no session-count cap:
+
+- The `Interpreter` (`engine/interpret/loop.py`) expires stale output followings, pulls
+  every unfinished session's sources, and translates the backlog (hook evidence
+  included — hooks do NOT translate). It is deliberately unstallable: nothing a
+  reaction or a writer does can hold up ingestion.
+- The `ReactionLoop` (`engine/react/loop.py`) reads committed facts in COMMIT order
+  across all sessions from `reaction_progress.canonical_cursor`, runs the side-effect
+  reactions, folds each fact through the writers, and commits the read model and the new
+  cursor in one transaction. It also owns `rebuild()`, which replays every fact into a
+  cleared read model — writers only, no reactions, no listeners, so a rebuild never
+  reopens a pane or fires a notification for something that happened last week.
+
+A fact therefore reaches a screen one tick later than it used to. That is the accepted
+price of the split, and it means a one-tick lag is NOT a bug.
 
 **Every other process is a thin HTTP client** — hooks, the status-line shim, the OTLP
-receiver, the pane renderers, the keybinding and click handlers. None of them opens a
-database. (The status-line shim and the OTLP receiver used to write one directly; they
+receiver, the two panes, the keybinding and click handlers. None of them opens a
+database, and none of them imports anything of ours. (The panes RENDER now, which is new;
+what they still do not do is read a store.) (The status-line shim and the OTLP receiver used to write one directly; they
 POST to the telemetry endpoint now, which is why a stopped daemon loses rate-limit and
 metric captures rather than silently storing them.)
 
@@ -102,7 +133,7 @@ row (`func` = `<harness> hook (deliver)`, or `otel delivery (daemon unreachable)
 
 ## Schema
 
-### `main.db` — 25 tables
+### `main.db` — 29 tables
 
 **The evidence spine** (what a session did):
 
@@ -113,8 +144,29 @@ row (`func` = `<harness> hook (deliver)`, or `otel delivery (daemon unreachable)
 | `canonical_events` | one interpreted fact | **`cursor`** (monotonic), `event_id` (unique), `schema_version`, **`event_type`**, `session_id`, `actor_id`, `turn_id`, `parent_actor_id`, `harness`, **`occurred_at`** (NULLABLE), `terminal_window_id`, `harness_process_id`, `accepted_at`, `payload` (JSON) |
 | `interpretation_events` | one canonical event emitted by an interpretation | `event_id`, `raw_event_id`, `event_order`, **`storage_result`** ∈ `accepted` / `deduplicated` |
 | `sessions` | one observed session — a READ-MODEL, born from `session.started` | `session_id`, `lead_actor_id`, `harness`, `harness_session_id`, **`source_reference`** (the transcript/rollout path), `working_directory`, `terminal_window_id`, `harness_process_id`, `created_at` |
-| `operation_output` | one output file being followed | `session_id`, `operation_id`, `harness`, `actor_id`, `source_path`, `chunk_source_type`, `delete_source`, `initial_size`, `initial_modified_at`, `wait_for_source_change`, **`until`** ∈ `operation_finished` / `session_finished`, **`state`** ∈ `active` / `finishing`, `created_at` — removed once drained |
+| `shell_output` | one output file being followed | `session_id`, **`shell_id`**, `harness`, `actor_id`, `source_path`, `chunk_source_type`, `delete_source`, `initial_size`, `initial_modified_at`, `wait_for_source_change`, **`until`** ∈ `shell_finished` / `session_finished`, **`state`** ∈ `active` / `finishing`, `created_at` — removed once drained. (Was `operation_output`; the operation abstraction dissolved into per-kind events and only shells produce a followed file.) |
 | `schema_version` | the store itself (singleton, `id=1`) | `version`, `applied_at` — a mismatch refuses to open the file |
+
+**The read model** (what every frontend draws, and the ONLY thing they read). Written at
+push time by the writers behind `SessionDataRepository`; nothing folds at read time.
+
+| table | one row per | key columns |
+|---|---|---|
+| `session_data` | one session's own facts | `session_id` (PK), **`revision`**, `payload` (JSON `SessionFacts`) — title, state, working directory, account, goal, tasks |
+| `session_data_actors` | one ACTOR's facts | `session_id` + `actor_id` (PK), **`revision`**, `payload` (JSON `ActorFacts`) — model, effort, status, usage, context, background work, statistics. A session with a lead and three subagents has four rows, because a model and a scoreboard are things an ACTOR has |
+| `session_entries` | one immutable line of the feed | **`cursor`** (`INTEGER PRIMARY KEY AUTOINCREMENT`), `entry_id` (unique), `session_id`, **`entry_type`**, `actor_id`, `parent_actor_id`, `turn_id`, `occurred_at`, `summary`, `payload` (JSON body, the shape `entry_type` names) |
+| `reaction_progress` | the reaction loop's high-water mark (singleton, `id=1`) | **`canonical_cursor`**, `updated_at` — how far the loop has folded `canonical_events` |
+
+**One counter stamps both.** `session_data.revision`, `session_data_actors.revision` and
+`session_entries.cursor` come from a single monotonic counter inside one transaction, so
+"everything after cursor C" is ONE question with one answer across both kinds of change —
+which is what lets an SSE frame carry an aggregate update and three entries with a single
+id. A read's reported cursor is the MAX across the three tables, never the aggregate's own
+revision (that routinely lags the newest entry).
+
+**Content is embedded.** An entry's payload carries the text — a command and its output, a
+file's diff, a message's prose — so there is no content route and no second request. The
+`⧉copy` reference the old feed had is gone with it.
 
 **Your unsent work** (state the session never sees; four tables, one composer):
 
@@ -135,10 +187,14 @@ card returns when the list moves on) · `push_subscriptions` · `push_signing_ke
 `Decimal` never round-trips through a float) · `uploads` (the row beside each staged
 attachment — the bytes stay on disk because the harness is handed an `@path`).
 
-**Three opaque columns, and only three**: `canonical_events.payload` (a closed
-vocabulary the codec validates on both encode and decode), `raw_events.payload` (the
-verbatim bytes, which is the point), and `state_files.content` in the audit database.
-Everything else is a typed column — `test_no_key_value_table_exists` enforces it.
+**Six opaque columns, and only six**: `canonical_events.payload` (a closed vocabulary the
+codec validates on both encode and decode), `raw_events.payload` (the verbatim bytes,
+which is the point), `state_files.content` in the audit database (free-form by contract —
+recorded, never queried), and the three read-model payloads — `session_data.payload`,
+`session_data_actors.payload`, `session_entries.payload` — which are closed typed
+documents of `domain/sessiondata.py` and `domain/entries.py`, validated the same way the
+canonical payload is and versioned by the same schema version. Everything else is a typed
+column, and `test_no_key_value_table_exists` enforces it with exactly this list.
 
 **`source_type` vocabulary** (which observer produced the evidence). Pushed to the daemon
 over HTTP: `hook`, `teammate_hook`, `account`, `launch` (launch-time model/effort from the
@@ -149,16 +205,47 @@ Pulled by the interpreter: `transcript`, `rollout`, `tasks`, `task_list`,
 child/teammate variants `child_transcript`, `teammate_transcript`, `child_rollout`,
 `child_replay`, `sidecar_rollout`, `sidecar_replay`.
 
-**`event_type` vocabulary** (35, from `domain.events.EVENT_TYPES`):
-`session.started` / `.finished` / `.title_changed` / `.account_changed` /
-`.working_directory_changed` · `actor.started` / `.finished` / `.name_changed` /
-`.description_changed` / `.message_sent` / `.assignment_started` / `.assignment_finished` ·
+**`event_type` vocabulary** (41, from `domain.events.EVENT_TYPES`):
+`session.started` / `.finished` / `.title_changed` / `.account_changed` ·
+`actor.started` / `.finished` / `.name_changed` / `.description_changed` /
+`.assignment_started` / `.assignment_finished` ·
 `turn.started` / `.finished` / `.aborted` · `message.created` · `reasoning.created` ·
-`operation.started` / `.progressed` / `.finished` / `.input_provided` /
-`.output_located` / `.output_finished` · `file.accessed` ·
-`attention.requested` / `.resolved` · `compaction.started` / `.finished` ·
-`usage.reported` · `context.reported` · `model.changed` · `effort.changed` ·
-`goal.changed` · `task.changed` / `.list_changed`.
+`shell.started` / `.progressed` / `.input_provided` / `.finished` / `.output_located` /
+`.backgrounded` / `.output_finished` · `file.accessed` · `search.performed` ·
+`skill.started` / `.finished` · `web.fetched` · `worktree.changed` ·
+`question.asked` / `.answered` · `plan.proposed` / `.resolved` ·
+`compaction.started` / `.finished` · `usage.reported` · `context.reported` ·
+`model.changed` · `effort.changed` · `goal.changed` · `task.changed` / `.list_changed`.
+
+What CHANGED, because old notes and old rows in your head will not match:
+- The seven `operation.*` events split by KIND. A shell keeps the whole lifecycle
+  (`shell.*`); a file, a search, a fetch, a worktree move and a skill each report once, at
+  result time, because nothing ever rendered their "start". So `search.performed` is one
+  event, not a start and a finish.
+- `attention.requested` / `.resolved` became `question.asked` / `.answered` and
+  `plan.proposed` / `.resolved`. The never-emitted permission and confirmation kinds died
+  with them, and a resolution carries no verdict word — what a person answered IS the
+  answer.
+- `actor.message_sent` merged into `message.created`, which gained a nullable
+  `recipient_actor_id`. An actor-to-actor message is a message with a recipient, not a
+  tool call.
+- `session.working_directory_changed` is gone; a worktree move is `worktree.changed`.
+- `task.changed` lost its `label` (always a copy of the id or the index) and
+  `reasoning.created` lost its `summary` flag.
+
+**`entry_type` vocabulary** (24, from `domain.entries.ENTRY_TYPES`) — the FEED's own
+vocabulary, which is not the event vocabulary and does not try to be:
+`turn_started` / `turn_finished` · `message` · `reasoning` ·
+`shell_started` / `shell_output` / `shell_backgrounded` / `shell_finished` ·
+`file` · `search` · `web` · `worktree` · `skill_started` / `skill_finished` ·
+`question_asked` / `question_answered` · `plan_proposed` / `plan_resolved` ·
+`compaction_started` / `compaction_finished` ·
+`assignment_started` / `assignment_finished` · `model_change` / `effort_change`.
+
+Facts that describe STATE rather than a moment — usage, context, the goal, the task list,
+an actor starting — produce no entry at all: they change an aggregate row. So an event
+with no matching entry is usually correct, and the way to check is which writer claims it
+(`engine/sessiondata/`).
 
 **`occurred_at` is NULL by design.** It means "when the *source* said this happened".
 Sources carrying no clock of their own (hook payloads) honestly leave it unset; sources
@@ -194,15 +281,16 @@ reference, `content` = `opened` / `closed`, written by
 
 `errors.func` values worth knowing: `interpreter (tick)` / `(source read)` /
 `(source construction)` / `(resume positions)` / `(output expiry)` — the interpreter's
-own contained failures, each naming the step; `<harness> hook (deliver)` — a hook that
+own contained failures, each naming the step; **`reactions (<step>)`** — the reaction
+loop's, where `<step>` is `tick`, `session data` (a WRITER threw, so the read model did
+not advance for that fact), `harness lookup`, or the class name of the failing reaction
+or applied-actor listener; `<harness> hook (deliver)` — a hook that
 could not reach the daemon; `otel delivery (daemon unreachable)` — a metrics export
 with nowhere to go; `statusline capture` — a rate-limit report that never shipped.
 
-`streams.kind` values include **`pane-mirror`** / **`pane-scoreboard`** — one row
-per pane SSE connection (the pane processes are thin clients of the daemon;
-`end_reason` ∈ `client-gone` (a closed pane, a resize reconnect) / `error`
-(the render loop threw — its traceback is in `errors` under `pane <kind>
-stream`)).
+`streams.kind` no longer has pane rows. They were written by the daemon's own pane render
+loop, which is deleted — a pane is an independent client of `/sessionData` now and the
+daemon keeps no record of one. What remains in this table is the output tailers.
 
 **Only `control` and the `web-*`/notification rows carry the session in the `session_id`
 COLUMN.** The `browser-*` telemetry rows leave it empty and bury it in the JSON, so a
@@ -210,6 +298,18 @@ COLUMN.** The `browser-*` telemetry rows leave it empty and bury it in the JSON,
 `content LIKE '%<sid>%'` as well before concluding a gesture left no trace.
 
 ## Triage order
+
+0. **Find out WHICH loop is behind.** One query, and it decides everything after it:
+   ```sql
+   SELECT (SELECT max(cursor) FROM canonical_events) AS translated,
+          (SELECT canonical_cursor FROM reaction_progress) AS reacted,
+          (SELECT max(cursor) FROM session_entries) AS newest_entry;
+   ```
+   `translated` far ahead of `reacted` means the REACTION loop is behind or dead: facts
+   are arriving and nothing is folding them, so every frontend is frozen while the
+   evidence keeps growing. `reacted` level with `translated` and the feed still stale
+   means the interpreter stopped and there is nothing new to fold. A gap of a few is one
+   tick and is normal.
 
 1. **Establish the session EXISTS as a row, and which harness owns it.**
    `SELECT * FROM sessions WHERE session_id='<sid>'` — no row means no `session.started`
@@ -234,6 +334,11 @@ COLUMN.** The `browser-*` telemetry rows leave it empty and bury it in the JSON,
 4. **Ask whether the interpreter is alive** — the `max(observed_at)` per `source_type`
    query below. Pulled types stale while `hook`/`otel` are current = the interpreter
    thread stopped, machine-wide.
+   Then ask the same of the reaction loop: `reaction_progress.updated_at` is when it last
+   committed anything. Stale while `canonical_events.cursor` climbs is the reaction
+   thread dead, and its swallowed failures are `errors` rows with `func` LIKE
+   `reactions (%)` — the parenthesis names which step: `tick`, `session data` (a writer
+   threw), `harness lookup`, or the class name of the reaction or listener that failed.
 5. **Read the translation verdicts** for the session: an `ignored_unknown` or
    `translation_failed` run explains a *specific* thing missing while everything else
    flows.
@@ -248,11 +353,23 @@ COLUMN.** The `browser-*` telemetry rows leave it empty and bury it in the JSON,
 
 ### A session looks alive but its conversation stops (messages missing, feed frozen)
 
-**The headline shape, and the first thing to rule out.** The interpreter thread died (or
-its backlog wedged), so nothing turns canonical while hook and telemetry deliveries keep
-landing on the HTTP threads — which is exactly why the session still looks partly alive.
+**The headline shape, and the first thing to rule out.** It now has TWO independent
+causes, and step 0 of the triage order separates them before anything else:
 
-One query names it:
+- **The REACTION loop stopped.** `canonical_events` keeps growing, `reaction_progress`
+  does not. Translation is fine, every fact is safely stored, and NOTHING is folded — so
+  the feed, the list, the tab colours, the panes and the notifications all freeze
+  together while the evidence and the verdicts keep flowing. This is the shape that did
+  not exist before the split, and it is the one that looks least like a bug from the
+  store: run the triage-step-0 query, and if `reacted` is stuck, read `errors` for
+  `func LIKE 'reactions (%)'`. Nothing is lost — the loop resumes from its cursor and folds
+  the backlog on the next tick, and `python3 bin/baqylau-dashboard.py rebuild` replays
+  the whole read model from the facts if a writer bug corrupted it.
+- **The INTERPRETER stopped.** Nothing turns canonical while hook and telemetry
+  deliveries keep landing on the HTTP threads — which is exactly why the session still
+  looks partly alive. Both cursors sit still together.
+
+One query names the second:
 
 ```sql
 SELECT source_type, datetime(max(observed_at),'unixepoch','localtime')
@@ -272,6 +389,11 @@ backlog query from the triage order:
 - **backlog empty, pulled types stale** → pulling stopped: look for `errors` rows with
   `func` = `interpreter (source read)` / `interpreter (source construction)` /
   `interpreter (tick)`, and check the position-vs-file-size comparison per source.
+- **backlog empty, both cursors current, feed still stale** → not the daemon. The read
+  model has the rows (check `session_entries` for the session directly), so the loss is
+  between the route and the screen: a browser holding a stale cached SPA, or an SSE
+  connection that dropped without reconnecting. `GET /sessionData/<sid>/entries` answers
+  what the daemon would send.
 
 Their *absence*, together with frozen pulled sources, means the thread died some other
 way (or the server is running pre-fix code — it does **not** hot-reload; check
@@ -364,7 +486,25 @@ FROM errors WHERE func LIKE 'dashboard%' ORDER BY ts DESC LIMIT 10;
 
 ### One specific thing never appears, but everything else flows
 
-Not the scheduler — the **translator**. Read the verdicts:
+Two candidates now, and they are one query apart. Either the TRANSLATOR never made the
+fact, or a WRITER never turned the fact into a row. Ask the log first:
+
+```sql
+SELECT event_type, count(*) FROM canonical_events
+WHERE session_id='<sid>' GROUP BY 1 ORDER BY 2 DESC;
+```
+
+- **The fact is not there** → the translator. Read the verdicts below.
+- **The fact IS there and the feed lacks it** → the writer. Check whether the entry
+  exists (`SELECT entry_type, count(*) FROM session_entries WHERE session_id='<sid>'
+  GROUP BY 1`), remembering that state-shaped facts produce no entry by design (see the
+  `entry_type` list). If the entry is genuinely missing, the mapping in
+  `engine/sessiondata/entries.py` is where it is decided, and
+  `python3 bin/baqylau-dashboard.py rebuild` (daemon stopped) re-derives the whole read
+  model from the facts once the writer is fixed — no evidence is re-read and nothing is
+  lost.
+
+The translator's verdicts:
 
 ```sql
 SELECT t.decision, t.reason, count(*)
@@ -377,8 +517,8 @@ WHERE r.session_id='<sid>' GROUP BY 1,2 ORDER BY 3 DESC;
   too (harnesses emit plenty we do not model); only interesting when the *missing thing*
   matches it.
 - **`translation_failed`** with a `reason` — the actionable one. Real examples:
-  `unmapped Codex tool: write_stdin`, `Codex write_stdin targets finished operation:
-  <call_id>`. A tool absent from the dashboard whose reason says "unmapped" is a
+  `unmapped Codex tool: write_stdin`, `Codex write_stdin references unknown process
+  session: <id>`. A tool absent from the dashboard whose reason says "unmapped" is a
   translator gap, not an ingest failure — the evidence is safely in `raw_events` and will
   translate once the rule exists.
 
@@ -395,10 +535,59 @@ first assistant record). Triage: is the `launch` raw event there (`source_type
 = 'launch'`)? If not, the launch bypassed the dashboard launcher (a hand-typed
 `claude` carries no env), the running daemon predates the feature, or the
 SessionStart delivery itself was lost (see the hook-evidence shape). If it
-exists, read its translation verdict. Interleaved wrong-model values are a
-different shape: subagent actors report their own models; the summary
-projection filters `model.changed`/`effort.changed` to the LEAD actor, so
-check `actor_id` before blaming the projection.
+exists, read its translation verdict. Interleaved wrong-model values are NOT a
+shape any more, and this is worth knowing: a model belongs to an ACTOR, so a
+subagent's model lands on the subagent's row in `session_data_actors` and cannot
+overwrite the lead's. Read the two rows and see which one is wrong:
+`SELECT actor_id, payload FROM session_data_actors WHERE session_id='<sid>'`.
+
+### A subagent finished but its answer is missing (an empty assignment card)
+
+The assignment entry says `succeeded` and its `result` is empty, so the feed shows
+a finished agent that reported nothing. Observed once in eight live runs; the
+mechanism is known and the diagnosis is one query.
+
+**There is exactly ONE source for that text**, which is the first thing to know.
+The Agent tool's own `PostToolUse` hook carries `isAsync: true` /
+`status: "async_launched"` — the tool call returns the moment the agent is
+launched — so it is correctly ruled `ignored_nonsemantic` and produces no finish
+fact at all. The finish comes only from the parent transcript's
+`<task-notification>`, and the answer only from the `<result>` tag inside it.
+
+**And that channel may fire more than once for one agent**, which the harness
+says itself, inside the block: "A task-notification fires each time this agent
+stops with no live background children of its own. The user can send it another
+message and resume it, so the same task-id may notify more than once." Canonical
+identity is derived from the tool-use-id, so every notification for one agent
+collapses onto ONE event — and the store keeps the FIRST WRITER without comparing
+bodies. A first stop that carried no result text therefore decides the rendering
+permanently, and a later notification that did carry text is deduplicated away.
+
+Which of the two it was, in one query:
+
+```sql
+SELECT ie.raw_event_id, ie.storage_result, r.source_type
+FROM interpretation_events ie JOIN raw_events r USING(raw_event_id)
+WHERE ie.event_id = '<the assignment event_id>';
+```
+
+- **Two or more rows** → the collapse. A later observation carried the answer and
+  was discarded as a duplicate. Read the deduplicated raw event
+  (`bin/baqylau-raw-events-audit.py raw <id>`) to see the text that was lost;
+  nothing is gone from the evidence, only from the projection.
+- **One row** → the harness genuinely omitted `<result>` on the stop it reported.
+  Confirm by reading that raw event's notification block: if there is no
+  `<result>` tag, the answer was never sent and no amount of our machinery would
+  have had it.
+
+**The answer usually exists elsewhere either way**, which is what makes a backfill
+thinkable if this ever stops being rare: the child announces its own final message
+in its OWN transcript, so it is already stored as an `end_turn` message entry on
+the child actor, and the notification names an `<output-file>` holding the agent's
+output. Both were present in every run measured. No backfill is implemented, and
+deliberately so — one occurrence in eight is not enough to justify a second source
+of truth for the same field, and a wrong backfill would show an answer the parent
+never received.
 
 ### An event's content looks wrong / two sources disagree
 
@@ -463,31 +652,40 @@ Note the tunnel is a distinct failure domain from the bind: reproduce against
 
 ### A kitty pane is frozen, blank, or stuck on its startup banner
 
-The pane processes are thin SSE clients of the daemon — they render nothing
-themselves (`terminal/panes/streams.py` renders; `core/daemon/client.py` copies bytes).
-So a broken pane is one of three shapes, each with its own rows:
+**The panes render themselves now.** `client/terminal_pane.py` fetches
+`GET /sessionData/<sid>`, one entries page at that cursor, then follows
+`/sessionData/<sid>/stream`, and paints the ANSI itself (`client/_model.py` folds,
+`client/_render.py` draws). The daemon renders nothing for a pane and holds no per-pane
+state: no shared block model, no lock, no keep-warm timer. Two consequences for triage:
 
-- **The daemon is down or restarting.** No `streams` row with kind
-  `pane-mirror`/`pane-scoreboard` opened recently for the session, and the
-  `dashboard` stream row itself has ended. The pane retries every couple of
-  seconds and recovers on its own the moment `serve()` is back; this is the
-  designed single point of failure, not a pane bug.
-- **The stream keeps dying server-side.** `streams` rows for the session with
-  `end_reason='error'` accumulating at the client's reconnect cadence — read the
-  paired `errors` rows (`func` = `pane mirror stream` / `pane scoreboard
-  stream`). The render loop threw on the same input each retry; the traceback
-  names the projection or presenter at fault.
-- **The stream is open but silent.** A live `pane-*` `streams` row (no
-  `ended_at`) yet a stale pane means frames are flowing but empty — the shared
-  mirror model advances only when the canonical cursor moves, so this is the
-  frozen-feed headline shape above (interpreter dead), seen through a pane.
-  Check the backlog before suspecting the pane plumbing.
+- **There are no `streams` rows for panes any more.** The old `pane-mirror` /
+  `pane-scoreboard` rows came from the daemon's own render loop, which is deleted. Their
+  absence is not evidence of anything; do not go looking for them.
+- **A resize is a repaint, not a reconnect.** The pane redraws from the model it already
+  holds on SIGWINCH, and no width crosses the socket. A pane that is wrongly wrapped
+  after a resize is a client bug, not a stream problem.
 
-A pane stuck on `⬡ starting session…` means the daemon has no `sessions` row to anchor
-to yet, or the row has no `terminal_window_id`. Both are the same question — has a
-`session.started` fact been translated, and did the hook that carried it report a window?
-Check `SELECT session_id, terminal_window_id, harness_process_id FROM sessions WHERE
-session_id='<sid>'`; a NULL window is a headless launch, which correctly gets no panes.
+So a broken pane is one of three shapes:
+
+- **The daemon is down or restarting.** The pane retries every couple of seconds and
+  recovers on its own the moment `serve()` is back. Check
+  `bin/baqylau-dashboard.py status`. This is the designed single point of failure, not a
+  pane bug.
+- **The pane has nothing to draw.** Ask the daemon what it would send:
+  `curl -s localhost:8377/sessionData/<sid>/entries | head -c 400`. Empty or stale means
+  the read model is behind — the reaction-loop shape above — and the pane is an honest
+  window onto that. Check triage step 0 before suspecting the pane.
+- **The pane is drawing the wrong thing.** The fold and the paint are the client's, so
+  this is the one shape that is genuinely the pane's own: run it by hand and watch.
+  `python3 client/terminal_pane.py 127.0.0.1 8377 <sid> mirror` prints to your terminal,
+  and `tests/test_canonical_clients.py::test_the_pane_folds_a_command_and_paints_it_at_its_own_width`
+  is the check to extend if a command folds wrong.
+
+A pane that never opens at all is a different question and still the daemon's: panes are
+opened by `PaneCanonicalEventReaction` on the reaction loop, so a session with no
+`sessions` row, or a row with a NULL `terminal_window_id`, gets none. `SELECT session_id,
+terminal_window_id, harness_process_id FROM sessions WHERE session_id='<sid>'` — a NULL
+window is a headless launch, which correctly gets no panes.
 
 ### Usage / cost numbers look wrong
 

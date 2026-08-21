@@ -13,16 +13,27 @@ import pytest
 from engine.interpret.translators import (
     InterruptTranslator,
     LivenessTranslator,
-    OperationOutputTranslator,
+    ShellOutputTranslator,
 )
 from engine.interpret.interrupts import GRACE_SECONDS, PendingInterruptSource
-from engine.interpret.liveness import SessionLivenessSource
-from engine.interpret.output_source import OperationOutputRawEventSource
+from engine.interpret.liveness import ProcessProbe, SessionLivenessSource
+from engine.interpret.output_source import ShellOutputRawEventSource
 from engine.interpret.loop import Interpreter
+from engine.react.loop import ReactionLoop
+from engine.sessiondata.actors import (
+    ActorWriter,
+    ContextWriter,
+    StatisticsWriter,
+    StatusWriter,
+    UsageWriter,
+)
+from engine.sessiondata.entries import EntryWriter
+from engine.sessiondata.session import GoalWriter, SessionWriter, TaskWriter
+from repository.impl.sqlite.session_data import SqliteSessionDataRepository
 from app.raw_events_audit_cli import main as raw_event_audit_main
 from engine.interpret.reactions import (
     InterruptCanonicalEventReaction,
-    OperationOutputCanonicalEventReaction,
+    ShellOutputCanonicalEventReaction,
     SessionUpsertCanonicalEventReaction,
 )
 from terminal.panes.reaction import PaneCanonicalEventReaction
@@ -48,10 +59,10 @@ from domain.events import (
     ActorStarted,
     CanonicalEvent,
     MessageCreated,
-    OperationFinished,
-    OperationInputProvided,
-    OperationOutputFinished,
-    OperationOutputLocated,
+    ShellFinished,
+    ShellInputProvided,
+    ShellOutputFinished,
+    ShellOutputLocated,
     SessionFinished,
     SessionStarted,
     TurnAborted,
@@ -61,7 +72,7 @@ from domain.ids import (
     AssignmentId,
     CanonicalEventId,
     MessageId,
-    OperationId,
+    ShellId,
     RawEventId,
     SessionId,
     stable_event_id,
@@ -73,12 +84,9 @@ from repository.errors import EventIdentityConflict
 from repository.impl.sqlite.canonical_events import SqliteCanonicalEventRepository
 from repository.impl.sqlite.databases import main_database
 from repository.impl.sqlite.raw_event_audits import SqliteRawEventAuditRepository
-from repository.impl.sqlite.operation_output import SqliteOperationOutputRepository
+from repository.impl.sqlite.shell_output import SqliteShellOutputRepository
 from repository.impl.sqlite.raw_events import SqliteRawEventRepository
 from repository.impl.sqlite.sessions import SqliteSessionRepository
-from dashboard.render.items import DashboardPresenter
-from engine.projections import ActivityScope, SessionQueries
-from terminal.mirror.presenter import TerminalPresenter
 
 # The liveness source checks the CLI pid against the CLI's process name; the
 # suite's sessions carry the test process itself, so they read as alive.
@@ -252,6 +260,30 @@ class RecordingAudit(AuditRecorder):
                 for func, _context in self.errors]
 
 
+SESSION_DATA_WRITERS = (
+    SessionWriter(),
+    GoalWriter(),
+    TaskWriter(),
+    ActorWriter(),
+    StatusWriter(),
+    UsageWriter(),
+    ContextWriter(),
+    StatisticsWriter(),
+)
+
+
+def _provenance(store, committed):
+    """Which raw observations a committed fact was built from.
+
+    Two reads because they answer two questions: the reaction loop's page says
+    WHAT was committed and in what order, and the store says which evidence
+    converged on any one of those facts.
+    """
+    stored = store.find(committed.event.event_id)
+    assert stored is not None
+    return stored.raw_event_ids
+
+
 def build_interpreter(
     database_path, harnesses, *, terminal=None, controls=None, audit=None, interrupts=None
 ):
@@ -260,17 +292,16 @@ def build_interpreter(
     sessions = SqliteSessionRepository(database, harnesses)
     recorder = SqliteRawEventRepository(database)
     store = SqliteCanonicalEventRepository(database)
-    operation_output = SqliteOperationOutputRepository(database)
+    shell_output = SqliteShellOutputRepository(database)
     terminal = terminal if terminal is not None else NullTerminal()
     interrupts = interrupts if interrupts is not None else InterruptRegistry()
-    reactions = (
+    # The interpreter's own two: the pull phase reads the rows they write.
+    inputs = (
         SessionUpsertCanonicalEventReaction(sessions),
-        OperationOutputCanonicalEventReaction(operation_output, recorder),
-        PaneCanonicalEventReaction(terminal, sessions, _PaneWidths()),
-        InterruptCanonicalEventReaction(interrupts),
+        ShellOutputCanonicalEventReaction(shell_output, recorder),
     )
     core_translators = {
-        OUTPUT_LOCATION_SOURCE_TYPE: OperationOutputTranslator(),
+        OUTPUT_LOCATION_SOURCE_TYPE: ShellOutputTranslator(),
         LIVENESS_SOURCE_TYPE: LivenessTranslator(),
         INTERRUPT_SOURCE_TYPE: InterruptTranslator(),
     }
@@ -278,22 +309,60 @@ def build_interpreter(
         sessions,
         harnesses,
         recorder,
-        operation_output,
+        shell_output,
         store,
         core_translators,
-        reactions,
-        controls if controls is not None else NullControls(),
+        inputs,
         audit if audit is not None else RecordingAudit(),
         interrupts,
     )
-    return interpreter, sessions, recorder, store, operation_output
+    return interpreter, sessions, recorder, store, shell_output
+
+
+def build_reaction_loop(
+    database_path,
+    harnesses,
+    *,
+    terminal=None,
+    interrupts=None,
+    controls=None,
+    audit=None,
+):
+    """The other loop, over the same database: what a committed fact CAUSES.
+
+    A separate builder because it is a separate thread in the daemon — the
+    interpreter appends facts and this follows them, and a test that wants both
+    ticks both, in that order.
+    """
+    database = main_database(str(database_path))
+    sessions = SqliteSessionRepository(database, harnesses)
+    return ReactionLoop(
+        SqliteCanonicalEventRepository(database),
+        SqliteSessionDataRepository(database),
+        (
+            PaneCanonicalEventReaction(
+                terminal if terminal is not None else NullTerminal(),
+                sessions,
+                _PaneWidths(),
+            ),
+            InterruptCanonicalEventReaction(
+                interrupts if interrupts is not None else InterruptRegistry()
+            ),
+        ),
+        EntryWriter(),
+        SESSION_DATA_WRITERS,
+        (),
+        harnesses,
+        controls if controls is not None else NullControls(),
+        audit if audit is not None else RecordingAudit(),
+    )
 
 
 def registered_runtime(tmp_path, translation: TranslationResult | TranslationError, sources=()):
     database_path = str(tmp_path / "main.db")
     harnesses = HarnessRegistry()
     harnesses.register(example_plugin(translation, sources))
-    interpreter, sessions, recorder, store, _operation_output = build_interpreter(
+    interpreter, sessions, recorder, store, _shell_output = build_interpreter(
         database_path, harnesses
     )
     sessions.save("example", example_session())
@@ -347,14 +416,14 @@ def registered_runtime(tmp_path, translation: TranslationResult | TranslationErr
             {"reason": "process exited"},
         ),
         (
-            OperationInputProvided(
-                OperationId("operation-one"),
+            ShellInputProvided(
+                ShellId("operation-one"),
                 TextContent("yes\n"),
                 False,
             ),
-            "operation.input_provided",
+            "shell.input_provided",
             {
-                "operation_id": "operation-one",
+                "shell_id": "operation-one",
                 "content": {"media_type": "text/plain", "text": "yes\n"},
                 "closed": False,
             },
@@ -592,7 +661,7 @@ def test_the_session_is_born_by_the_reaction_to_its_own_started_fact(tmp_path):
         terminal_window_id="the-session-tab", harness_process_id=4242
     )
     harnesses.register(example_plugin(TranslationResult((started,), "translated")))
-    interpreter, sessions, recorder, store, _operation_output = build_interpreter(
+    interpreter, sessions, recorder, store, _shell_output = build_interpreter(
         database_path, harnesses
     )
     recorder.record((raw_observation("raw-announcing"),))
@@ -614,7 +683,7 @@ def test_facts_before_the_started_fact_commit_but_birth_no_session(tmp_path):
     database_path = str(tmp_path / "main.db")
     harnesses = HarnessRegistry()
     harnesses.register(example_plugin(TranslationResult((canonical_message(),), "translated")))
-    interpreter, sessions, recorder, store, _operation_output = build_interpreter(
+    interpreter, sessions, recorder, store, _shell_output = build_interpreter(
         database_path, harnesses
     )
     recorder.record((raw_observation("raw-early"),))
@@ -622,7 +691,7 @@ def test_facts_before_the_started_fact_commit_but_birth_no_session(tmp_path):
     interpreter.tick()
 
     assert sessions.find(SessionId("session-one")) is None
-    assert len(store.page_after(SessionId("session-one"), 0, 10).events) == 1
+    assert len(store.page_from(0, 10)) == 1
 
 
 def test_a_later_delivery_updates_the_live_columns_of_the_row(tmp_path):
@@ -660,7 +729,7 @@ def test_interpretation_commits_verdict_canonical_and_provenance_together(tmp_pa
     interpreter.tick()
 
     assert recorder.unverdicted(10) == ()
-    assert store.page_after(SessionId("session-one"), 0, 10).events[0].event == event
+    assert store.page_from(0, 10)[0].event == event
     connection = sqlite3.connect(store.database.path)
     assert connection.execute("SELECT count(*) FROM raw_events").fetchone()[0] == 1
     assert connection.execute("SELECT decision FROM interpretations").fetchone()[0] == "translated"
@@ -681,9 +750,12 @@ def test_replay_is_idempotent_and_a_second_observation_adds_provenance(tmp_path)
     recorder.record((raw_observation("raw-two"),))
     interpreter.tick()
 
-    stored = store.page_after(SessionId("session-one"), 0, 10).events
+    stored = store.page_from(0, 10)
     assert len(stored) == 1
-    assert stored[0].raw_event_ids == (RawEventId("raw-one"), RawEventId("raw-two"))
+    # Provenance is asked of the fact by id: the reaction loop's page carries
+    # what was committed, and which observations agreed on it is the store's own
+    # record of that fact.
+    assert _provenance(store, stored[0]) == (RawEventId("raw-one"), RawEventId("raw-two"))
     connection = sqlite3.connect(store.database.path)
     assert connection.execute(
         "SELECT storage_result FROM interpretation_events WHERE raw_event_id='raw-two'"
@@ -729,10 +801,10 @@ def test_re_observing_one_fact_is_idempotent_even_when_observers_disagree(tmp_pa
     assert [event.event_id for event in converged.deduplicated] == [
         CanonicalEventId("event-message")
     ]
-    stored = store.page_after(SessionId("session-one"), 0, 10).events
+    stored = store.page_from(0, 10)
     assert len(stored) == 1
     assert stored[0].event.payload.content.text == "hello"
-    assert stored[0].raw_event_ids == (RawEventId("raw-one"), RawEventId("raw-two"))
+    assert _provenance(store, stored[0]) == (RawEventId("raw-one"), RawEventId("raw-two"))
     # Nothing is lost: the disagreeing rendering survives as its own raw evidence.
     connection = sqlite3.connect(store.database.path)
     assert connection.execute(
@@ -792,7 +864,7 @@ def test_a_translator_bug_becomes_a_verdict_and_never_wedges_the_backlog(tmp_pat
             translator=BuggyTranslator(),
         )
     )
-    interpreter, sessions, recorder, store, _operation_output = build_interpreter(
+    interpreter, sessions, recorder, store, _shell_output = build_interpreter(
         database_path, harnesses
     )
     sessions.save("example", example_session())
@@ -877,7 +949,7 @@ def test_raw_event_audit_shows_the_uninterpreted_backlog(tmp_path):
     assert audit.interpretation is None
 
 
-def test_the_interpreter_pulls_translates_and_presents_in_one_tick(tmp_path):
+def test_the_interpreter_pulls_translates_and_commits_in_one_tick(tmp_path):
     event = canonical_message()
     raw_event = raw_observation("synthetic-raw")
     database_path = str(tmp_path / "main.db")
@@ -885,22 +957,16 @@ def test_the_interpreter_pulls_translates_and_presents_in_one_tick(tmp_path):
     harnesses.register(
         example_plugin(TranslationResult((event,), "translated"), (FixedReadSource((raw_event,)),))
     )
-    interpreter, sessions, _recorder, store, _operation_output = build_interpreter(
+    interpreter, sessions, _recorder, store, _shell_output = build_interpreter(
         database_path, harnesses
     )
     sessions.save("example", example_session())
 
     interpreter.tick()
 
-    activity = SessionQueries(store, sessions).activity_after(
-        SessionId("session-one"),
-        0,
-        ActivityScope(),
-        10,
-    ).activities[0]
-    assert DashboardPresenter().present(activity).item_id == "message:actor-lead:message-one"
-    terminal_update = TerminalPresenter().present(activity)
-    assert terminal_update.updated_blocks[0].block_id == "message:actor-lead:message-one"
+    committed = store.page_from(0, 10)
+    assert [item.event.event_id for item in committed] == [event.event_id]
+    assert committed[0].event.payload == event.payload
 
 
 def test_one_failing_source_neither_stops_its_siblings_nor_the_interpreter(tmp_path, monkeypatch):
@@ -928,7 +994,7 @@ def test_one_failing_source_neither_stops_its_siblings_nor_the_interpreter(tmp_p
             (BrokenSource(), FixedReadSource((raw_event,))),
         )
     )
-    interpreter, sessions, _recorder, store, _operation_output = build_interpreter(
+    interpreter, sessions, _recorder, store, _shell_output = build_interpreter(
         database_path, harnesses, audit=audited
     )
     sessions.save("example", example_session())
@@ -936,7 +1002,7 @@ def test_one_failing_source_neither_stops_its_siblings_nor_the_interpreter(tmp_p
     interpreter.tick()
 
     # The healthy sibling still drained, behind the broken one.
-    assert len(store.page_after(SessionId("session-one"), 0, 10).events) == 1
+    assert len(store.page_from(0, 10)) == 1
     assert audited.failures() == ["source read"]
     assert audited.errors[0][1]["source_identity"] == "broken"
 
@@ -990,7 +1056,7 @@ def test_a_pid_less_session_is_a_loud_audited_error_every_tick(tmp_path, monkeyp
     database_path = str(tmp_path / "main.db")
     harnesses = HarnessRegistry()
     harnesses.register(example_plugin(TranslationResult((), "ignored_nonsemantic")))
-    interpreter, sessions, _recorder, _store, _operation_output = build_interpreter(
+    interpreter, sessions, _recorder, _store, _shell_output = build_interpreter(
         database_path, harnesses, audit=audited
     )
     sessions.save("example", replace(example_session(), harness_process_id=None))
@@ -1005,7 +1071,7 @@ def test_a_dead_cli_process_becomes_one_session_finished_fact(tmp_path):
     database_path = str(tmp_path / "main.db")
     harnesses = HarnessRegistry()
     harnesses.register(example_plugin(TranslationResult((), "ignored_nonsemantic")))
-    interpreter, sessions, _recorder, store, _operation_output = build_interpreter(
+    interpreter, sessions, _recorder, store, _shell_output = build_interpreter(
         database_path, harnesses
     )
     # A pid that is certainly not a live process with our name.
@@ -1013,7 +1079,7 @@ def test_a_dead_cli_process_becomes_one_session_finished_fact(tmp_path):
 
     interpreter.tick()
 
-    events = store.page_after(SessionId("session-one"), 0, 10).events
+    events = store.page_from(0, 10)
     assert [type(stored.event.payload) for stored in events] == [SessionFinished]
     assert stored_reason(events[0]) == "process_exited"
     assert sessions.watchable() == ()
@@ -1035,7 +1101,7 @@ def test_the_liveness_source_verifies_the_process_is_still_the_cli():
     session = replace(example_session(), plugin=example_plugin(
         TranslationResult((), "ignored_nonsemantic")
     ))
-    alive = SessionLivenessSource(session)
+    alive = SessionLivenessSource(session, ProcessProbe())
     assert alive.read(None) == ()  # our own pid, our own process name: alive
 
     imposter = replace(
@@ -1045,11 +1111,28 @@ def test_the_liveness_source_verifies_the_process_is_still_the_cli():
             info=HarnessInfo("example", "Example", "1.0", SCHEMA_VERSION, "definitely-not-us"),
         ),
     )
-    raw_events = SessionLivenessSource(imposter).read(None)
+    raw_events = SessionLivenessSource(imposter, ProcessProbe()).read(None)
     assert [raw.source_type for raw in raw_events] == [LIVENESS_SOURCE_TYPE]
 
     with pytest.raises(ValueError, match="no harness process id"):
-        SessionLivenessSource(replace(session, harness_process_id=None))
+        SessionLivenessSource(replace(session, harness_process_id=None), ProcessProbe())
+
+
+def test_the_probe_pays_for_the_name_check_once(monkeypatch):
+    """After one verified name check, a probe is a signal-0 syscall — the sources
+    are rebuilt every tick, so the memory has to survive on the probe itself."""
+    session = replace(example_session(), plugin=example_plugin(
+        TranslationResult((), "ignored_nonsemantic")
+    ))
+    probe = ProcessProbe()
+    name_checks = []
+    monkeypatch.setattr(
+        "engine.interpret.liveness.process_alive",
+        lambda pid, name: name_checks.append(pid) or True,
+    )
+    assert SessionLivenessSource(session, probe).read(None) == ()
+    assert SessionLivenessSource(session, probe).read(None) == ()
+    assert len(name_checks) == 1
 
 
 def test_pending_interrupt_source_waits_out_the_grace_period_then_latches():
@@ -1087,9 +1170,10 @@ def test_an_uncorroborated_interrupt_eventually_clears_the_busy_state(tmp_path):
     harnesses = HarnessRegistry()
     harnesses.register(example_plugin(TranslationResult((), "ignored_nonsemantic")))
     registry = InterruptRegistry()
-    interpreter, sessions, _recorder, store, _operation_output = build_interpreter(
+    interpreter, sessions, _recorder, store, _shell_output = build_interpreter(
         database_path, harnesses, interrupts=registry
     )
+    reactions = build_reaction_loop(database_path, harnesses, interrupts=registry)
     sessions.save("example", example_session())
 
     interpreter.tick()  # sees no evidence yet: nothing to abort
@@ -1099,14 +1183,15 @@ def test_an_uncorroborated_interrupt_eventually_clears_the_busy_state(tmp_path):
 
     interpreter.tick()
 
-    events = store.page_after(SessionId("session-one"), 0, 10).events
+    events = store.page_from(0, 10)
     assert [type(stored.event.payload) for stored in events] == [TurnAborted]
-    # The reaction cleared the mark the moment the fact committed.
+    reactions.tick()
+    # The reaction cleared the mark once the fact was committed AND followed.
     assert registry.pending(SessionId("session-one")) is None
 
     # The latch: a later tick manufactures nothing further.
     interpreter.tick()
-    events_after = store.page_after(SessionId("session-one"), 0, 10).events
+    events_after = store.page_from(0, 10)
     assert len(events_after) == 1
 
 
@@ -1135,32 +1220,39 @@ def _pane_react_interpreter(tmp_path, *, window_id=None):
     harnesses = HarnessRegistry()
     harnesses.register(example_plugin(TranslationResult((started,), "translated")))
     terminal = RecordingTerminal()
-    interpreter, _sessions, recorder, _store, _operation_output = build_interpreter(
+    interpreter, _sessions, recorder, _store, _shell_output = build_interpreter(
         database_path, harnesses, terminal=terminal
     )
+    reactions = build_reaction_loop(database_path, harnesses, terminal=terminal)
     recorder.record((raw_observation("raw-start"),))
-    return interpreter, recorder, terminal
+    return interpreter, reactions, recorder, terminal
 
 
 def test_panes_open_at_the_window_the_announcing_delivery_recorded(tmp_path):
     """The envelope of the session.started fact carries the window the hook ran
-    in; the row is written first (reaction order), then the panes anchor to it."""
-    interpreter, recorder, terminal = _pane_react_interpreter(
+    in. Two loops, in order: the interpreter commits the fact and writes the
+    sessions row, and the reaction loop — following the same fact through the
+    canonical cursor — anchors the panes to it."""
+    interpreter, reactions, recorder, terminal = _pane_react_interpreter(
         tmp_path, window_id="the-session-tab"
     )
 
     interpreter.tick()
-    # A replayed observation deduplicates and must NOT reopen panes.
+    reactions.tick()
+    # A replayed observation deduplicates, so the reaction loop never sees it a
+    # second time and must NOT reopen panes.
     recorder.record((replace(raw_observation("raw-start-again"), source_position="1"),))
     interpreter.tick()
+    reactions.tick()
 
     assert terminal.calls == [("open", SessionId("session-one"), "the-session-tab")]
 
 
 def test_a_headless_session_gets_no_panes(tmp_path):
-    interpreter, _recorder, terminal = _pane_react_interpreter(tmp_path)
+    interpreter, reactions, _recorder, terminal = _pane_react_interpreter(tmp_path)
 
     interpreter.tick()
+    reactions.tick()
 
     assert terminal.calls == []
 
@@ -1182,10 +1274,10 @@ def test_output_location_directives_run_the_whole_foreground_lifecycle(tmp_path)
         10.0,
         None,
         None,
-        OperationFinished(OperationId("operation-1"), "succeeded", None, None),
+        ShellFinished(ShellId("operation-1"), "succeeded", None, None),
     )
     harnesses.register(example_plugin(TranslationResult((finished,), "translated")))
-    interpreter, sessions, recorder, store, operation_output = build_interpreter(
+    interpreter, sessions, recorder, store, shell_output = build_interpreter(
         database_path, harnesses
     )
     sessions.save("example", example_session())
@@ -1199,15 +1291,15 @@ def test_output_location_directives_run_the_whole_foreground_lifecycle(tmp_path)
         parent_actor_id=None,
         source_reference="fixture.jsonl",
     )
-    located = OperationOutputLocated(
-        operation_id=OperationId("operation-1"),
+    located = ShellOutputLocated(
+        shell_id=ShellId("operation-1"),
         source_path=str(output_path),
         chunk_source_type="tool_output",
         delete_source=True,
         initial_size=0,
         initial_modified_at=0,
         wait_for_source_change=False,
-        until="operation_finished",
+        until="shell_finished",
     )
     recorder.record((output_location_raw_event(context, "example", located),))
     interpreter.tick()  # translates the directive; the reaction starts the following
@@ -1220,19 +1312,19 @@ def test_output_location_directives_run_the_whole_foreground_lifecycle(tmp_path)
         )
     }
     assert "tool_output" in chunk_types
-    assert len(operation_output.find_for_session(SessionId("session-one"))) == 1
+    assert len(shell_output.find_for_session(SessionId("session-one"))) == 1
     committed_types = {
         type(stored.event.payload)
-        for stored in store.page_after(SessionId("session-one"), 0, 100).events
+        for stored in store.page_from(0, 100)
     }
-    assert OperationOutputLocated in committed_types
+    assert ShellOutputLocated in committed_types
 
     # The operation.finished fact (from the plugin translator) ends the following.
     recorder.record((raw_observation("raw-finish"),))
     interpreter.tick()
     interpreter.tick()
 
-    assert operation_output.find_for_session(SessionId("session-one")) == ()
+    assert shell_output.find_for_session(SessionId("session-one")) == ()
     assert not output_path.exists()
     assert recorder.unverdicted(10) == ()
 
@@ -1241,12 +1333,12 @@ def test_a_background_following_survives_operation_finished_until_the_session_en
     database_path = str(tmp_path / "main.db")
     sessions = SqliteSessionRepository(main_database(database_path))
     recorder = SqliteRawEventRepository(main_database(database_path))
-    operation_output = SqliteOperationOutputRepository(main_database(database_path))
-    reaction = OperationOutputCanonicalEventReaction(operation_output, recorder)
+    shell_output = SqliteShellOutputRepository(main_database(database_path))
+    reaction = ShellOutputCanonicalEventReaction(shell_output, recorder)
     output_path = tmp_path / "task.output"
     output_path.write_bytes(b"background bytes")
-    located = OperationOutputLocated(
-        operation_id=OperationId("operation-bg"),
+    located = ShellOutputLocated(
+        shell_id=ShellId("operation-bg"),
         source_path=str(output_path),
         chunk_source_type="tool_output",
         delete_source=False,
@@ -1258,14 +1350,14 @@ def test_a_background_following_survives_operation_finished_until_the_session_en
     reaction.react(replace(canonical_message(), payload=located))
     reaction.react(replace(
         canonical_message(),
-        payload=OperationFinished(OperationId("operation-bg"), "succeeded", None, None),
+        payload=ShellFinished(ShellId("operation-bg"), "succeeded", None, None),
     ))
-    assert len(operation_output.find_for_session(SessionId("session-one"))) == 1
+    assert len(shell_output.find_for_session(SessionId("session-one"))) == 1
 
     sessions.save("example", example_session())
     reaction.react(replace(canonical_message(), payload=SessionFinished("succeeded", None)))
 
-    assert operation_output.find_for_session(SessionId("session-one")) == ()
+    assert shell_output.find_for_session(SessionId("session-one")) == ()
     assert output_path.exists()  # the harness's own file is never deleted by us
     connection = sqlite3.connect(database_path)
     assert connection.execute(
@@ -1278,12 +1370,12 @@ def test_the_background_completion_fact_ends_the_following_early(tmp_path):
     following stops there instead of stat-ing the file until the session dies."""
     database_path = str(tmp_path / "main.db")
     recorder = SqliteRawEventRepository(main_database(database_path))
-    operation_output = SqliteOperationOutputRepository(main_database(database_path))
-    reaction = OperationOutputCanonicalEventReaction(operation_output, recorder)
+    shell_output = SqliteShellOutputRepository(main_database(database_path))
+    reaction = ShellOutputCanonicalEventReaction(shell_output, recorder)
     output_path = tmp_path / "task.output"
     output_path.write_bytes(b"background bytes")
-    located = OperationOutputLocated(
-        operation_id=OperationId("operation-bg"),
+    located = ShellOutputLocated(
+        shell_id=ShellId("operation-bg"),
         source_path=str(output_path),
         chunk_source_type="tool_output",
         delete_source=False,
@@ -1296,20 +1388,20 @@ def test_the_background_completion_fact_ends_the_following_early(tmp_path):
     # the launch-time operation.finished must NOT end a background following…
     reaction.react(replace(
         canonical_message(),
-        payload=OperationFinished(OperationId("operation-bg"), "succeeded", None, None),
+        payload=ShellFinished(ShellId("operation-bg"), "succeeded", None, None),
     ))
-    assert len(operation_output.find_for_session(SessionId("session-one"))) == 1
+    assert len(shell_output.find_for_session(SessionId("session-one"))) == 1
 
     # …but the completion notification's fact does
     reaction.react(replace(
         canonical_message(),
-        payload=OperationOutputFinished(OperationId("operation-bg")),
+        payload=ShellOutputFinished(ShellId("operation-bg")),
     ))
-    followings = operation_output.find_for_session(SessionId("session-one"))
+    followings = shell_output.find_for_session(SessionId("session-one"))
     assert len(followings) == 1  # one final drain still owed
-    raw_events = OperationOutputRawEventSource(followings[0], operation_output).read(None)
+    raw_events = ShellOutputRawEventSource(followings[0], shell_output).read(None)
     recorder.record(raw_events)
     assert raw_events[-1].source_position == "finished"
 
-    assert operation_output.find_for_session(SessionId("session-one")) == ()
+    assert shell_output.find_for_session(SessionId("session-one")) == ()
     assert output_path.exists()  # the harness's own file is never deleted by us

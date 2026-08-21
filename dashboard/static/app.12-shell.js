@@ -18,8 +18,8 @@ $statsbtn.onclick = () => { location.hash = "#/stats"; };
 
 /* ---------- global alerts toggle (header ◉/○, next to "+ session") ---------- */
 // The ONE master switch over EVERY dashboard notification — the cross-session
-// toasts / OS notifs AND the deferred Telegram / web-push alerts
-// (docs/dashboard.md *Global alerts toggle*). The state is server-side + durable
+// toasts / OS notifs AND the deferred Telegram / web-push alerts. The state
+// is server-side + durable
 // (dashboard/prefs.py `notify-enabled`), so it is cross-device / cross-session
 // and covers git worktrees; default ON. OFF overrides the per-session mutes.
 // Seeded and kept in sync by the complete global application snapshot.

@@ -5,15 +5,15 @@ from __future__ import annotations
 
 from harness.contract import CoreTranslator
 from harness.models import RawEvent, TranslationResult, canonical_event
-from domain.events import OperationOutputLocated, SessionFinished, TurnAborted
+from domain.events import SessionFinished, ShellOutputLocated, TurnAborted
 from domain.codec import decode_document
 
 
-class OperationOutputTranslator(CoreTranslator):
+class ShellOutputTranslator(CoreTranslator):
     """Output-location directive (recorded by a gateway) → the typed
-    `operation.output_located` fact.
+    `shell.output_located` fact.
 
-    The directive IS an `OperationOutputLocated`, written by
+    The directive IS a `ShellOutputLocated`, written by
     `harness/models/raw_events.py` and decoded here against that same
     declaration — including its `until` boundary, which is a two-value Literal
     the codec checks. Both halves used to be written by hand: a dict built from
@@ -21,9 +21,9 @@ class OperationOutputTranslator(CoreTranslator):
     validator for that Literal here."""
 
     def translate(self, raw_event: RawEvent) -> TranslationResult:
-        located = decode_document(OperationOutputLocated, raw_event.payload)
+        located = decode_document(ShellOutputLocated, raw_event.payload)
         return TranslationResult(
-            (canonical_event(raw_event, "operation", str(located.operation_id), "output_located", located),),
+            (canonical_event(raw_event, "shell", str(located.shell_id), "output_located", located),),
             "translated",
         )
 

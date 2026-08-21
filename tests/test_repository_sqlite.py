@@ -8,6 +8,7 @@ exercised through the thing that composes it is a store nobody tests.
 from __future__ import annotations
 
 import time
+from dataclasses import replace
 from decimal import Decimal
 from typing import Literal
 
@@ -19,18 +20,20 @@ from audit.models import (
     StateFileRecord,
     StreamOpened,
 )
+from domain.entries import MessageBody, SessionEntry, ShellStartedBody
 from domain.events import CanonicalEvent, MessageCreated, SessionFinished, SessionStarted
 from domain.ids import (
     ActorId,
     AttentionId,
     CanonicalEventId,
     MessageId,
-    OperationId,
+    ShellId,
     RawEventId,
     SessionId,
     TaskId,
 )
-from domain.operations import OperationOutputFollowing
+from domain.sessiondata import ActorFacts, SessionFacts
+from domain.shells import ShellOutputFollowing
 from domain.preferences import (
     NewSessionDraft,
     NewSessionPreferences,
@@ -54,7 +57,9 @@ from repository.impl.sqlite.audit import (
     SqliteAuditWriteRepository,
 )
 from repository.impl.sqlite.raw_event_audits import SqliteRawEventAuditRepository
-from repository.impl.sqlite.operation_output import SqliteOperationOutputRepository
+from repository.contract.session_data import SessionDataChanges
+from repository.impl.sqlite.session_data import SqliteSessionDataRepository
+from repository.impl.sqlite.shell_output import SqliteShellOutputRepository
 from repository.impl.sqlite.preferences import (
     SqliteHiddenDirectoryRepository,
     SqliteNewSessionRepository,
@@ -66,9 +71,8 @@ from repository.impl.sqlite.preferences import (
 )
 from repository.impl.sqlite.raw_events import SqliteRawEventRepository
 from repository.impl.sqlite.sessions import SqliteSessionRepository
-from repository.impl.sqlite.schema import MAIN_SCHEMA
+from repository.impl.sqlite.schema import MAIN_MIGRATIONS, MAIN_SCHEMA_VERSION
 from repository.impl.sqlite.terminal import (
-    SqliteContentViewRepository,
     SqlitePaneWidthRepository,
 )
 from repository.impl.sqlite.uploads import SqliteUploadRepository
@@ -150,57 +154,25 @@ def test_a_file_written_by_another_schema_version_refuses_to_open(tmp_path):
         second.initialize()
 
 
-def test_main_schema_v1_migrates_interpretation_audit_tables_without_losing_rows(tmp_path):
-    path = str(tmp_path / "main.db")
-    legacy_schema = MAIN_SCHEMA.replace("interpretations", "translation_records").replace(
-        "interpretation_events", "canonical_provenance"
-    )
-    legacy = SqliteDatabase(path, legacy_schema, 1)
-    legacy.initialize()
-    with legacy.write() as connection:
-        connection.execute(
-            "INSERT INTO raw_events(raw_event_id, session_id, harness, source_type, "
-            "source_identity, source_name, source_position, actor_id, observed_at, "
-            "encoding, payload) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-            ("raw-one", "session-one", "example", "hook", "source", "hook", "1", "actor", 1.0, "json", b"{}"),
-        )
-        connection.execute(
-            "INSERT INTO translation_records(raw_event_id, translator_version, decision, "
-            "reason, completed_at) VALUES(?,?,?,?,?)",
-            ("raw-one", "1", "translated", None, 2.0),
-        )
-        connection.execute(
-            "INSERT INTO canonical_events(event_id, schema_version, event_type, session_id, "
-            "actor_id, harness, accepted_at, payload) VALUES(?,?,?,?,?,?,?,?)",
-            ("event-one", 1, "message.created", "session-one", "actor", "example", 2.0, "{}"),
-        )
-        connection.execute(
-            "INSERT INTO canonical_provenance(event_id, raw_event_id, event_order, "
-            "storage_result) VALUES(?,?,?,?)",
-            ("event-one", "raw-one", 0, "accepted"),
-        )
+def test_the_main_schema_is_created_whole_with_no_migration_to_apply(tmp_path):
+    """Version 4 rewrote the canonical vocabulary, so no earlier row means
+    anything under it: the "migration" is deleting the file, and the DDL builds
+    the whole schema on first open. `MAIN_MIGRATIONS` is empty on purpose, and a
+    file from any other version is refused rather than adapted (see
+    `test_a_file_written_by_another_schema_version_refuses_to_open`)."""
+    assert MAIN_MIGRATIONS == {}
 
-    migrated = main_database(path)
-    migrated.initialize()
-    with migrated.read() as connection:
+    database = main_database(str(tmp_path / "main.db"))
+    database.initialize()
+
+    with database.read() as connection:
         version = connection.execute("SELECT version FROM schema_version WHERE id=1").fetchone()
-        interpretation = connection.execute("SELECT * FROM interpretations").fetchone()
-        event = connection.execute("SELECT * FROM interpretation_events").fetchone()
         tables = {
             row["name"]
             for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
         }
-
-    assert version["version"] == 2
-    assert interpretation["raw_event_id"] == "raw-one"
-    assert interpretation["decision"] == "translated"
-    assert (event["event_id"], event["raw_event_id"], event["storage_result"]) == (
-        "event-one",
-        "raw-one",
-        "accepted",
-    )
-    assert "translation_records" not in tables
-    assert "canonical_provenance" not in tables
+    assert version["version"] == MAIN_SCHEMA_VERSION
+    assert {"raw_events", "canonical_events", "interpretations", "shell_output"} <= tables
 
 
 def test_a_read_only_database_never_creates_the_file(tmp_path):
@@ -341,56 +313,58 @@ def test_a_re_observed_fact_adds_provenance_and_is_not_re_accepted(main):
     assert set(stored.raw_event_ids) == {RawEventId("raw-one"), RawEventId("raw-two")}
 
 
-def test_the_newest_cursor_per_session_comes_back_in_one_call(main):
+def test_the_reaction_loops_page_walks_every_session_in_commit_order(main):
+    """The ONE read over the fact log now, and the reason it is not per session.
+
+    Reactions happen in the order the world saw them, not per session, so the
+    loop reads across all of them from a single cursor and resumes from the last
+    one it saw. The five per-session paging methods this replaced existed for the
+    read-time folds, and there are none: what a session IS lives in the read
+    model, written once as the facts arrived.
+    """
     raw_events = SqliteRawEventRepository(main)
     canonical = SqliteCanonicalEventRepository(main)
-    raw_events.record([a_raw_event()])
-    canonical.record_translation(
-        a_raw_event(), "1", TranslationResult((a_started_event(),), "translated"), 1000.0
-    )
-    cursors = canonical.latest_session_cursors([SESSION, SessionId("missing")], None)
-    assert set(cursors) == {SESSION}
-
-
-def test_paging_walks_a_session_forwards_and_backwards(main):
-    raw_events = SqliteRawEventRepository(main)
-    canonical = SqliteCanonicalEventRepository(main)
-    for index in range(3):
+    other = SessionId("session-two")
+    for index, session_id in enumerate((SESSION, other, SESSION)):
         raw = a_raw_event(f"raw-{index}", str(index))
         raw_events.record([raw])
-        message = CanonicalEvent(
-            event_id=CanonicalEventId(f"event-{index}"),
-            session_id=SESSION,
-            actor_id=ACTOR,
-            turn_id=None,
-            parent_actor_id=None,
-            harness="example",
-            occurred_at=1000.0 + index,
-            terminal_window_id=None,
-            harness_process_id=None,
-            payload=MessageCreated(MessageId(f"m{index}"), "user", TextContent("hi"), "prompt", None),
-        )
         canonical.record_translation(
-            raw, "1", TranslationResult((message,), "translated"), 1000.0 + index
+            raw,
+            "1",
+            TranslationResult((CanonicalEvent(
+                event_id=CanonicalEventId(f"event-{index}"),
+                session_id=session_id,
+                actor_id=ACTOR,
+                turn_id=None,
+                parent_actor_id=None,
+                harness="example",
+                occurred_at=1000.0 + index,
+                terminal_window_id=None,
+                harness_process_id=None,
+                payload=MessageCreated(
+                    MessageId(f"m{index}"), "user", TextContent("hi"), "prompt", None
+                ),
+            ),), "translated"),
+            1000.0 + index,
         )
-    latest = canonical.latest_cursor()
-    assert latest is not None
-    through = canonical.page_through(SESSION, latest)
-    assert len(through.events) == 3
-    tail = canonical.page_tail(SESSION, latest, 2)
-    assert [event.event.event_id for event in tail.events] == [
+
+    whole = canonical.page_from(0, 10)
+    assert [committed.event.event_id for committed in whole] == [
+        CanonicalEventId("event-0"),
         CanonicalEventId("event-1"),
         CanonicalEventId("event-2"),
     ]
-    assert tail.has_more
-    after = canonical.page_after(SESSION, through.events[0].cursor, 10)
-    assert len(after.events) == 2
-    between = canonical.events_between(
-        SESSION, through.events[0].cursor, through.events[1].cursor
-    )
-    assert [event.event.event_id for event in between] == [CanonicalEventId("event-1")]
-    of_type = canonical.events_of_types(SESSION, ("message.created",), latest)
-    assert len(of_type) == 3
+    assert [committed.event.session_id for committed in whole] == [SESSION, other, SESSION]
+    # Cursors ascend, and resuming from one returns exactly what follows it.
+    cursors = [committed.cursor for committed in whole]
+    assert cursors == sorted(cursors)
+    assert [committed.event.event_id for committed in canonical.page_from(cursors[0], 10)] == [
+        CanonicalEventId("event-1"),
+        CanonicalEventId("event-2"),
+    ]
+    # The limit is the batch boundary, and it never skips: a smaller page is the
+    # same walk in more steps.
+    assert [committed.cursor for committed in canonical.page_from(0, 2)] == cursors[:2]
 
 
 # --- raw-event audit ----------------------------------------------------------
@@ -423,15 +397,15 @@ def test_uninterpreted_raw_event_audit_has_no_interpretation(main):
     assert one is not None and one.interpretation is None
 
 
-# --- operation output ---------------------------------------------------------
+# --- shell output -------------------------------------------------------------
 
 
 def a_following(
-    until: Literal["operation_finished", "session_finished"] = "operation_finished",
-) -> OperationOutputFollowing:
-    return OperationOutputFollowing(
+    until: Literal["shell_finished", "session_finished"] = "shell_finished",
+) -> ShellOutputFollowing:
+    return ShellOutputFollowing(
         session_id=SESSION,
-        operation_id=OperationId("op-one"),
+        shell_id=ShellId("op-one"),
         harness="example",
         actor_id=ACTOR,
         parent_actor_id=None,
@@ -448,26 +422,206 @@ def a_following(
 
 
 def test_a_following_round_trips_without_a_driver_row(main):
-    outputs = SqliteOperationOutputRepository(main)
+    outputs = SqliteShellOutputRepository(main)
     outputs.save(a_following())
     assert outputs.find_for_session(SESSION) == (a_following(),)
 
 
 def test_marking_finished_ends_only_a_foreground_following(main):
-    outputs = SqliteOperationOutputRepository(main)
+    outputs = SqliteShellOutputRepository(main)
     outputs.save(a_following(until="session_finished"))
-    outputs.mark_operation_finished(SESSION, OperationId("op-one"))
+    outputs.mark_shell_finished(SESSION, ShellId("op-one"))
     assert outputs.find_for_session(SESSION)[0].state == "active"
-    outputs.mark_finishing(SESSION, OperationId("op-one"))
+    outputs.mark_finishing(SESSION, ShellId("op-one"))
     assert outputs.find_for_session(SESSION)[0].finishing
 
 
 def test_expiry_returns_what_it_removed_so_the_caller_unlinks(main):
-    outputs = SqliteOperationOutputRepository(main)
+    outputs = SqliteShellOutputRepository(main)
     outputs.save(a_following())
     removed = outputs.remove_expired(2000.0)
     assert [following.source_path for following in removed] == ["/tmp/output"]
     assert outputs.find_for_session(SESSION) == ()
+
+
+# --- the read model -----------------------------------------------------------
+
+
+# One of each, and `replace` for the differences. A dict of defaults updated
+# with kwargs is the same builder untyped: every field arrives as `object`, so a
+# test could pass a string where a Literal belongs and nothing would say so.
+A_SESSION = SessionFacts(
+    session_id=SESSION,
+    harness="example",
+    state="running",
+    working_directory="/work",
+    started_at=1.0,
+    lead_actor_id=ActorId("lead"),
+)
+AN_ACTOR = ActorFacts(
+    session_id=SESSION,
+    actor_id=ActorId("lead"),
+    role="lead",
+    name="claude",
+    state="running",
+)
+
+
+def an_entry(entry_id: str) -> SessionEntry:
+    return SessionEntry(
+        entry_id=CanonicalEventId(entry_id),
+        session_id=SESSION,
+        actor_id=ActorId("lead"),
+        parent_actor_id=None,
+        turn_id=None,
+        occurred_at=1.0,
+        summary=None,
+        body=MessageBody(MessageId(entry_id), "user", "prompt", TextContent("go")),
+    )
+
+
+def test_one_counter_stamps_the_entries_and_the_aggregate_revisions_alike(main):
+    """The whole stream mechanism: an entry's cursor and an aggregate row's
+    revision come from ONE monotonic counter, so "everything after C" is a single
+    question with a single answer across both kinds of change."""
+    store = SqliteSessionDataRepository(main)
+
+    first = store.apply(SESSION, SessionDataChanges(session=A_SESSION, actors=(AN_ACTOR,)), 10)
+    second = store.apply(SESSION, SessionDataChanges(entry=an_entry("e1")), 11)
+    third = store.apply(SESSION, SessionDataChanges(actors=(replace(AN_ACTOR, status="working"),)), 12)
+
+    assert (first, second, third) == (1, 2, 3)
+    data = store.read(SESSION)
+    assert data.cursor == 3
+    assert store.entries_page(SESSION, limit=10).items[0].cursor == 2
+    # …and the mark moved with the rows, every time.
+    assert store.progress() == 12
+
+
+def test_an_aggregate_read_reports_the_high_water_mark_across_both_kinds(main):
+    """A stream must not start from the aggregate's own revision: it routinely
+    lags the newest entry, and starting there re-sends what the client has."""
+    store = SqliteSessionDataRepository(main)
+    store.apply(SESSION, SessionDataChanges(session=A_SESSION), 1)
+    store.apply(SESSION, SessionDataChanges(entry=an_entry("e1")), 2)
+
+    data = store.read(SESSION)
+    assert data.session.state == "running"
+    assert data.cursor == 2
+
+
+def test_the_counter_survives_a_restart_by_reading_what_is_already_there(main):
+    """A fresh process must not hand out a cursor a client already holds."""
+    first = SqliteSessionDataRepository(main)
+    first.apply(SESSION, SessionDataChanges(entry=an_entry("e1")), 1)
+    first.apply(SESSION, SessionDataChanges(entry=an_entry("e2")), 2)
+
+    restarted = SqliteSessionDataRepository(main)
+    assert restarted.apply(SESSION, SessionDataChanges(entry=an_entry("e3")), 3) == 3
+
+
+def test_an_entry_is_written_once_however_often_its_event_is_replayed(main):
+    store = SqliteSessionDataRepository(main)
+    store.apply(SESSION, SessionDataChanges(entry=an_entry("e1")), 1)
+    store.apply(SESSION, SessionDataChanges(entry=an_entry("e1")), 1)
+    assert len(store.entries_page(SESSION, limit=10).items) == 1
+
+
+def test_a_page_is_read_as_of_a_cursor_so_it_agrees_with_the_snapshot(main):
+    store = SqliteSessionDataRepository(main)
+    for ordinal in range(1, 6):
+        store.apply(SESSION, SessionDataChanges(entry=an_entry("e%d" % ordinal)), ordinal)
+
+    whole = store.entries_page(SESSION, limit=10)
+    assert [entry.entry_id for entry in whole.items] == ["e1", "e2", "e3", "e4", "e5"]
+    assert whole.has_more is False
+
+    snapshot = store.entries_page(SESSION, at=3, limit=10)
+    assert [entry.entry_id for entry in snapshot.items] == ["e1", "e2", "e3"]
+
+    newest = store.entries_page(SESSION, limit=2)
+    assert [entry.entry_id for entry in newest.items] == ["e4", "e5"]
+    assert (newest.oldest_cursor, newest.has_more) == (4, True)
+    older = store.entries_page(SESSION, before=newest.oldest_cursor, limit=2)
+    assert [entry.entry_id for entry in older.items] == ["e2", "e3"]
+
+
+def test_the_deltas_answer_only_what_changed_after_a_cursor(main):
+    store = SqliteSessionDataRepository(main)
+    store.apply(SESSION, SessionDataChanges(session=A_SESSION, actors=(AN_ACTOR,)), 1)
+    boundary = store.read(SESSION).cursor
+    store.apply(SESSION, SessionDataChanges(entry=an_entry("e1")), 2)
+    store.apply(SESSION, SessionDataChanges(actors=(replace(AN_ACTOR, status="working"),)), 3)
+
+    delta = store.delta(SESSION, boundary)
+    assert [entry.entry_id for entry in delta.entries] == ["e1"]
+    assert delta.session is None
+    assert [actor.status for actor in delta.actors] == ["working"]
+    # The cursor it reached, which is what a stream sends back: without it an
+    # aggregate-only change would be re-sent on every poll forever.
+    assert delta.cursor == 3
+    assert store.delta(SESSION, delta.cursor).empty
+
+    across = store.changed_after(boundary)
+    assert across.sessions == ()
+    assert [actor.actor_id for actor in across.actors] == [ActorId("lead")]
+    assert across.cursor == 3
+    assert store.changed_after(0).sessions[0].session_id == SESSION
+
+
+def test_an_entry_body_decodes_as_the_shape_its_own_type_names(main):
+    """The payload column is a closed typed document, not a blob: what comes back
+    is the body class the `entry_type` names, validated."""
+    store = SqliteSessionDataRepository(main)
+    store.apply(
+        SESSION,
+        SessionDataChanges(
+            entry=replace(
+                an_entry("e1"),
+                body=ShellStartedBody(ShellId("sh1"), TextContent("make test"), "background"),
+            )
+        ),
+        1,
+    )
+    stored = store.entries_page(SESSION, limit=10).items[0]
+    assert stored.entry_type == "shell_started"
+    assert stored.body == ShellStartedBody(ShellId("sh1"), TextContent("make test"), "background")
+
+
+def test_clearing_the_read_model_resets_the_cursor_space_it_handed_out(main):
+    """A rebuild starts the feed again from one. Leaving the AUTOINCREMENT mark
+    behind would start it above every cursor a client already holds, and every
+    poll would come back empty."""
+    store = SqliteSessionDataRepository(main)
+    store.apply(SESSION, SessionDataChanges(session=A_SESSION, entry=an_entry("e1")), 7)
+    store.clear()
+
+    assert store.read(SESSION) is None
+    assert store.visible() == ()
+    assert store.progress() == 0
+    assert store.apply(SESSION, SessionDataChanges(entry=an_entry("e1")), 1) == 1
+    assert store.entries_page(SESSION, limit=10).items[0].cursor == 1
+
+
+def test_the_list_view_reads_every_session_with_its_own_cursor(main):
+    store = SqliteSessionDataRepository(main)
+    other = SessionId("session-two")
+    store.apply(SESSION, SessionDataChanges(session=A_SESSION, actors=(AN_ACTOR,)), 1)
+    store.apply(
+        other,
+        SessionDataChanges(
+            session=replace(A_SESSION, session_id=other, title="Other"),
+            actors=(replace(AN_ACTOR, session_id=other),),
+        ),
+        2,
+    )
+    store.apply(SESSION, SessionDataChanges(entry=an_entry("e1")), 3)
+
+    listed = {data.session.session_id: data for data in store.visible()}
+    assert set(listed) == {SESSION, other}
+    assert listed[SESSION].cursor == 3
+    assert listed[other].session.title == "Other"
+    assert [actor.actor_id for actor in listed[other].actors] == [ActorId("lead")]
 
 
 # --- the session workspace ----------------------------------------------------
@@ -607,12 +761,10 @@ def test_a_pane_width_is_absent_until_remembered(main):
     assert widths.width_percent("/project") == 40
 
 
-def test_toggling_a_view_opens_it_and_toggling_again_closes_it(main):
-    views = SqliteContentViewRepository(main)
-    assert views.toggle("event:field", 1.0) is True
-    assert views.opened() == frozenset({"event:field"})
-    assert views.toggle("event:field", 2.0) is False
-    assert views.opened() == frozenset()
+# test_toggling_a_view_opens_it_and_toggling_again_closes_it lived here. Which
+# file views the mirror has expanded is the PANE's own state now: it holds every
+# byte it draws, so expanding one needs nothing from the daemon and the daemon
+# has no business remembering it.
 
 
 # --- usage --------------------------------------------------------------------

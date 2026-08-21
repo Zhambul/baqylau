@@ -21,6 +21,7 @@
 import json
 import os
 import time
+from typing import Any
 
 from core import env as EV
 
@@ -30,14 +31,19 @@ from core import env as EV
 TAIL_SCAN_BYTES = 256 * 1024
 
 
-def config_dir():
+def config_dir() -> str:
     """The USER-level Claude config dir: $CLAUDE_CONFIG_DIR when set (Claude's own
     override — settings/agents live THERE, not in ~/.claude, when it's in effect),
     else ~/.claude. The one place this default is encoded."""
     return os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
 
 
-def claude_dirs(start=None, nearest_only=False, env_pin=True, config=None):
+def claude_dirs(
+    start: str | None = None,
+    nearest_only: bool = False,
+    env_pin: bool = True,
+    config: str | None = None,
+) -> list[str]:
     """Every `.claude` directory to consult for project-level config (agents, settings),
     NEAREST-FIRST, always ending with the user config dir (config_dir()). Used instead
     of a bare os.getcwd() lookup, because a subagent/teammate frequently runs in a
@@ -103,7 +109,7 @@ KNOWN_1M = ("fable-5", "sonnet-5", "opus-5", "opus-4-6", "opus-4-7", "opus-4-8",
             "sonnet-4-6")
 
 
-def window(model):
+def window(model: str | None) -> int | None:
     """A model alias / id (with or without [1m]) -> its context window; None if
     empty (so a caller can fall through a precedence list)."""
     if not model:
@@ -120,7 +126,7 @@ def window(model):
     return 200_000                           # older / unknown pinned versions
 
 
-def context_window(*models):
+def context_window(*models: str | None) -> int:
     """The context window for the first of `models` that resolves (a precedence
     list, best-known-first); 200k when none do or the 1M kill-switch is set."""
     if DISABLE_1M:
@@ -132,7 +138,7 @@ def context_window(*models):
     return 200_000
 
 
-def context_used(usage):
+def context_used(usage: object) -> int:
     """The occupied context window from ONE assistant message's usage dict:
     every input token the model saw — fresh + just-cached + replayed-from-cache.
     output_tokens is excluded (what the model produced back, not context). 0
@@ -146,7 +152,7 @@ def context_used(usage):
             + int(usage.get("cache_read_input_tokens") or 0))
 
 
-def agent_meta(tpath, agent_id):
+def agent_meta(tpath: str, agent_id: str) -> dict[str, Any]:
     """The agent's meta.json sidecar (present at SubagentStart for teammates; may
     lag a beat for ordinary subagents, so retry briefly). Carries
     `customAgentType` — the DEFINITION's name, which for a teammate differs from
@@ -157,7 +163,8 @@ def agent_meta(tpath, agent_id):
     for _ in range(6):
         try:
             with open(p, encoding="utf-8") as fh:
-                return json.load(fh)
+                data = json.load(fh)
+            return data if isinstance(data, dict) else {}
         except (FileNotFoundError, json.JSONDecodeError):
             # Missing OR mid-write (a partial file json-fails) — both are the same
             # "not there yet" race, so both retry.
@@ -167,7 +174,7 @@ def agent_meta(tpath, agent_id):
     return {}
 
 
-def short_model(model):
+def short_model(model: str | None) -> str:
     """"claude-opus-4-8" -> "opus-4.8", "claude-haiku-4-5-20251001" -> "haiku-4.5",
     "claude-sonnet-5" -> "sonnet-5", alias "opus" -> "opus". [1m] is dropped (the
     window already shows in the ctx line)."""
@@ -194,7 +201,7 @@ def short_model(model):
 MODEL_LADDER = ("fable", "opus", "sonnet")
 
 
-def family(model):
+def family(model: str | None) -> str | None:
     """The model FAMILY word of a model id or alias ("claude-opus-4-8" → "opus",
     "sonnet[1m]" → "sonnet", alias "fable" → "fable"), or None when empty /
     unrecognised. The vocabulary matches the /model picker aliases AND

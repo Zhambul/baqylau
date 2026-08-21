@@ -14,7 +14,7 @@ from typing import Literal, TypeAlias
 from domain.events import (
     CanonicalEvent,
     EventPayload,
-    OperationOutputLocated,
+    ShellOutputLocated,
 )
 from domain.ids import (
     ActorId,
@@ -118,6 +118,22 @@ class TranslationError(ValueError):
         self.context = context
 
 
+class UnknownEvidence(ValueError):
+    """Evidence we can read but have no fact for — a tool nothing maps.
+
+    Raised rather than returned as nothing, because "deliberately not semantic"
+    and "never seen before" are different answers and only one of them is worth
+    looking at: this becomes the `ignored_unknown` verdict, visible in the audit
+    and absent from the feed. It replaces failing the whole record, which is
+    what an unmapped tool used to do.
+    """
+
+    def __init__(self, reason: str, *, context: str | None = None) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.context = context
+
+
 @dataclass(frozen=True)
 class RawEventSourceContext:
     session_id: SessionId
@@ -127,11 +143,11 @@ class RawEventSourceContext:
     source_reference: str
 
 
-# --- Operation output directives ----------------------------------------------
+# --- Shell output directives --------------------------------------------------
 #
 # A hook that makes a command's output observable cannot follow the file itself —
 # it must exit immediately. So the gateway records an output-location directive:
-# a raw event carrying the typed `OperationOutputLocated` payload. The core
+# a raw event carrying the typed `ShellOutputLocated` payload. The core
 # translator turns it into the fact, the reaction starts the following, and the
 # collect phase reads the file's chunks as their own evidence.
 
@@ -143,13 +159,13 @@ INTERRUPT_SOURCE_TYPE = "interrupt"
 def output_location_raw_event(
     context: RawEventSourceContext,
     harness: str,
-    located: OperationOutputLocated,
+    located: ShellOutputLocated,
     actor_id: ActorId | None = None,
     parent_actor_id: ActorId | None = None,
 ) -> RawEvent:
     return RawEvent(
         raw_event_id=RawEventId(
-            f"{harness}:output_location:{context.session_id}:{located.operation_id}"
+            f"{harness}:output_location:{context.session_id}:{located.shell_id}"
         ),
         harness=harness,
         source_type=OUTPUT_LOCATION_SOURCE_TYPE,
@@ -165,6 +181,6 @@ def output_location_raw_event(
         # raw event under its own identity, and a directive there would
         # masquerade as a read position.
         source_identity=(
-            f"{harness}:output_location:{context.session_id}:{located.operation_id}:directive"
+            f"{harness}:output_location:{context.session_id}:{located.shell_id}:directive"
         ),
     )

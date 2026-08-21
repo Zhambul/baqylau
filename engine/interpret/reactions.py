@@ -7,22 +7,22 @@ from dataclasses import replace
 
 from domain.events import (
     CanonicalEvent,
-    OperationBackgrounded,
-    OperationFinished,
-    OperationOutputFinished,
-    OperationOutputLocated,
     SessionFinished,
     SessionStarted,
+    ShellBackgrounded,
+    ShellFinished,
+    ShellOutputFinished,
+    ShellOutputLocated,
     TurnAborted,
     TurnFinished,
 )
-from domain.ids import OperationId, SessionId
-from domain.operations import OperationOutputFollowing
+from domain.ids import SessionId, ShellId
+from domain.shells import ShellOutputFollowing
 from engine.interpret import output_source
 from harness.contract import CanonicalEventReaction
 from harness.models import InterruptRegistry, Session
 from repository.contract.facts import RawEventRepository
-from repository.contract.operations import OperationOutputRepository
+from repository.contract.shell_output import ShellOutputRepository
 from repository.contract.sessions import SessionRepository
 
 
@@ -62,28 +62,28 @@ class SessionUpsertCanonicalEventReaction(CanonicalEventReaction):
         ))
 
 
-class OperationOutputCanonicalEventReaction(CanonicalEventReaction):
-    """The one-time moments in an operation's life: its output file becomes
-    known (start following), the operation finishes (stop a foreground
+class ShellOutputCanonicalEventReaction(CanonicalEventReaction):
+    """The one-time moments in a command's life: its output file becomes
+    known (start following), the command finishes (stop a foreground
     following), the harness announces a background job's true end (stop that
     following), the session finishes (drain everything). Output CHUNKS never
     pass through here — they are evidence, read by the collect phase."""
 
     def __init__(
         self,
-        operation_output: OperationOutputRepository,
+        shell_output: ShellOutputRepository,
         raw_events: RawEventRepository,
     ) -> None:
-        self.operation_output = operation_output
+        self.shell_output = shell_output
         self.raw_events = raw_events
 
     def react(self, canonical_event: CanonicalEvent) -> None:
         payload = canonical_event.payload
-        if isinstance(payload, OperationOutputLocated):
-            self.operation_output.save(
-                OperationOutputFollowing(
+        if isinstance(payload, ShellOutputLocated):
+            self.shell_output.save(
+                ShellOutputFollowing(
                     session_id=canonical_event.session_id,
-                    operation_id=payload.operation_id,
+                    shell_id=payload.shell_id,
                     harness=canonical_event.harness,
                     actor_id=canonical_event.actor_id,
                     parent_actor_id=canonical_event.parent_actor_id,
@@ -98,25 +98,25 @@ class OperationOutputCanonicalEventReaction(CanonicalEventReaction):
                     created_at=time.time(),
                 )
             )
-        elif isinstance(payload, OperationFinished):
-            # Ends foreground followings only (until='operation_finished');
-            # affects zero rows for operations that never had an output file.
-            self.operation_output.mark_operation_finished(
-                canonical_event.session_id, payload.operation_id
+        elif isinstance(payload, ShellFinished):
+            # Ends foreground followings only (until='shell_finished');
+            # affects zero rows for commands that never had an output file.
+            self.shell_output.mark_shell_finished(
+                canonical_event.session_id, payload.shell_id
             )
-        elif isinstance(payload, OperationBackgrounded):
+        elif isinstance(payload, ShellBackgrounded):
             # Keep reading the file the job is still writing to. Without this the
-            # `operation.finished` from the same evidence marks the row finishing,
+            # `shell.finished` from the same evidence marks the row finishing,
             # one drain later the row is removed and — for a tee file we made —
             # the file is UNLINKED under a running process.
-            self.operation_output.outlive_operation(
-                canonical_event.session_id, payload.operation_id
+            self.shell_output.outlive_shell(
+                canonical_event.session_id, payload.shell_id
             )
-        elif isinstance(payload, OperationOutputFinished):
+        elif isinstance(payload, ShellOutputFinished):
             # The background job's true end: stop following its file now
             # instead of stat-ing it for the rest of the session.
-            self.operation_output.mark_finishing(
-                canonical_event.session_id, payload.operation_id
+            self.shell_output.mark_finishing(
+                canonical_event.session_id, payload.shell_id
             )
         elif isinstance(payload, SessionFinished):
             self._drain_all(canonical_event.session_id)
@@ -124,22 +124,22 @@ class OperationOutputCanonicalEventReaction(CanonicalEventReaction):
     def _drain_all(self, session_id: SessionId) -> None:
         # A finished session leaves watchable(): read each remaining file to its
         # end, remove the row, and unlink the tee file when we created it.
-        followings = self.operation_output.find_for_session(session_id)
+        followings = self.shell_output.find_for_session(session_id)
         positions = self.raw_events.latest_positions([
-            output_source.operation_output_source_identity(
-                following.harness, following.session_id, following.operation_id
+            output_source.shell_output_source_identity(
+                following.harness, following.session_id, following.shell_id
             )
             for following in followings
         ])
         for following in followings:
-            source = output_source.OperationOutputRawEventSource(
-                following, self.operation_output
+            source = output_source.ShellOutputRawEventSource(
+                following, self.shell_output
             )
             raw_events = source.read(positions.get(source.source_identity))
             if raw_events:
                 self.raw_events.record(raw_events)
-            self.operation_output.remove(
-                session_id, OperationId(str(following.operation_id))
+            self.shell_output.remove(
+                session_id, ShellId(str(following.shell_id))
             )
             output_source.delete_source_file(following)
 

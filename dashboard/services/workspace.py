@@ -15,9 +15,9 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from typing import Protocol
 
 from audit.models import ApplicationError
-from domain.events import MessageCreated
 from domain.ids import AttentionId, SessionId
 from domain.preferences import DEFAULT_VIEW_MODE, ViewMode
 from domain.values import TextContent
@@ -30,17 +30,26 @@ from domain.workspace import (
     DialogState,
     QueuedMessage,
 )
-from engine.projections import SessionQueries
+from domain.entries import MessageBody, QuestionAskedBody
+from domain.sessiondata import SessionTask
+from domain.values import AttentionPrompt
+from repository.contract.session_data import SessionDataRepository
 from harness.models import TerminalSessionState
 from repository.contract.audit import AuditReadRepository
-from repository.contract.facts import CanonicalEventRepository
 from repository.contract.preferences import (
     NotificationSettingRepository,
     TaskDismissalRepository,
     ViewModeRepository,
 )
 from repository.contract.workspace import SessionWorkspaceRepository
-from dashboard.services.sessions import TerminalSessionReader
+
+
+class TerminalSessionReader(Protocol):
+    """The one thing this service asks a terminal: where the session is, if it
+    is anywhere. Declared here, like `app/services/resume.py` declares its own —
+    a two-line protocol is cheaper stated twice than imported across a tier."""
+
+    def state(self, session_id: SessionId) -> TerminalSessionState: ...
 
 # A finished task list is dismissed for most sessions eventually, so the table
 # is bounded by session; the prune runs inside the write that triggers it.
@@ -66,8 +75,7 @@ class SessionApplicationSnapshot:
 class SessionApplicationService:
     def __init__(
         self,
-        canonical_events: CanonicalEventRepository,
-        queries: SessionQueries,
+        read_model: SessionDataRepository,
         terminal: TerminalSessionReader,
         audit: AuditReadRepository,
         workspaces: SessionWorkspaceRepository,
@@ -76,8 +84,7 @@ class SessionApplicationService:
         dismissals: TaskDismissalRepository,
         clock=None,
     ) -> None:
-        self.canonical_events = canonical_events
-        self.queries = queries
+        self.read_model = read_model
         self.terminal = terminal
         self.audit = audit
         self.workspaces = workspaces
@@ -103,7 +110,7 @@ class SessionApplicationService:
         self.notifications.set_muted(session_id, muted)
 
     def set_tasks_hidden(self, session_id: SessionId, hidden: bool) -> None:
-        tasks = self.queries.tasks(session_id)
+        tasks = self._tasks(session_id)
         if hidden and (not tasks or any(task.state != "completed" for task in tasks)):
             raise ValueError("every task must be completed before hiding the task card")
         if not hidden:
@@ -145,14 +152,10 @@ class SessionApplicationService:
         answers: tuple[AnswerSelection, ...],
         origin: str,
     ) -> None:
-        pending = {
-            item.request.attention_id: item.request
-            for item in self.queries.attention(session_id).pending
-        }
-        request = pending.get(attention_id)
-        if request is None:
+        questions = self._pending_questions(session_id).get(attention_id)
+        if questions is None:
             raise ValueError("attention is no longer pending")
-        if len(answers) != len(request.prompts):
+        if len(answers) != len(questions):
             raise ValueError("answers must match the pending questions")
         self.workspaces.save_dialog_draft(
             session_id, DialogDraft(attention_id, answers, origin)
@@ -162,7 +165,7 @@ class SessionApplicationService:
 
     def snapshot(self, session_id: SessionId) -> SessionApplicationSnapshot:
         composer, dialog = self._state(session_id)
-        tasks = self.queries.tasks(session_id)
+        tasks = self._tasks(session_id)
         dismissed = self.dismissals.dismissed_task_ids(session_id)
         return SessionApplicationSnapshot(
             preferences=SessionPreferences(
@@ -196,25 +199,47 @@ class SessionApplicationService:
             )
             queue = ComposerQueue(messages, workspace.queue.origin) if messages else None
 
-        pending_attention_ids = {
-            item.request.attention_id for item in self.queries.attention(session_id).pending
-        }
+        pending_attention_ids = set(self._pending_questions(session_id))
         dialog_draft = workspace.dialog
         if dialog_draft is not None and dialog_draft.attention_id not in pending_attention_ids:
             dialog_draft = None
         return ComposerState(workspace.draft, queue), DialogState(dialog_draft)
 
+    def _tasks(self, session_id: SessionId) -> tuple[SessionTask, ...]:
+        data = self.read_model.read(session_id)
+        return () if data is None else data.session.tasks
+
+    def _pending_questions(
+        self, session_id: SessionId
+    ) -> dict[AttentionId, tuple[AttentionPrompt, ...]]:
+        """The questions still waiting on a person, by attention.
+
+        A plan is pending attention too, but it carries no questions to answer —
+        a dialog draft against one would have nothing to hold.
+        """
+        return {
+            entry.body.attention_id: entry.body.questions
+            for entry in self.read_model.pending_attention(session_id)
+            if isinstance(entry.body, QuestionAskedBody)
+        }
+
     def _delivered_prompts(self, session_id: SessionId) -> tuple[str, ...]:
+        """Every prompt this session has actually received.
+
+        Read from the feed, which is where a delivered prompt IS: a queued
+        message whose text already arrived was sent, and showing it as still
+        queued is how a person sends it twice.
+        """
         prompts = []
-        for stored in self.canonical_events.page_through(session_id, None).events:
-            payload = stored.event.payload
+        for entry in self.read_model.entries_of_types(session_id, ("message",)):
+            body = entry.body
             if (
-                isinstance(payload, MessageCreated)
-                and payload.role == "user"
-                and payload.phase == "prompt"
-                and isinstance(payload.content, TextContent)
+                isinstance(body, MessageBody)
+                and body.role == "user"
+                and body.phase == "prompt"
+                and isinstance(body.content, TextContent)
             ):
-                text = payload.content.text.strip()
+                text = body.content.text.strip()
                 if text:
                     prompts.append(text)
         return tuple(prompts)

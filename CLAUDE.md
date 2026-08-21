@@ -1,4 +1,5 @@
 # CLAUDE.md
+only use ASD-STE100 Simplified Technical English everywhere
 
 Guidance for Claude Code working in this repository.
 
@@ -24,6 +25,13 @@ python3 bin/baqylau-raw-events-audit.py session <sid>  # every raw event + inter
 python3 bin/baqylau-raw-events-audit.py raw <raw_id>   # one raw event, exact bytes
 
 python3 bin/baqylau-dashboard.py serve|start|stop|status
+python3 bin/baqylau-dashboard.py rebuild  # re-derive the read model from the fact log
+
+# A second daemon, beside your own: three flags, honoured by every command
+# (so `status`/`stop --port N` address that one and not yours). The flags win
+# over the matching env vars, which remain the defaults' source.
+python3 bin/baqylau-dashboard.py serve --port 8791 --data-dir /tmp/d --log /tmp/d/daemon.log
+python3 bin/baqylau-dashboard.py status --port 8791
 
 make test        # full suite
 make lint        # must stay clean (ruff, encodes docs/styleguide.md)
@@ -37,6 +45,7 @@ To debug a session bug, use the **`audit-debug` skill**
 (`.claude/skills/audit-debug/SKILL.md`) — it has the schema and the known bug shapes.
 
 Important!
+only use ASD-STE100 Simplified Technical English everywhere
 We care about design and simplicity
 Simplicity is not about simplest and quickest approach. Simplicity takes effort and redesign and refactoring and thinking about how in the future this code would be simple to read and to extend.
 If you are adding a new feature which does break the simplicity a redesign and refactoring is allowed.

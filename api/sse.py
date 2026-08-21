@@ -30,7 +30,7 @@ def sse_frame(event: str, payload: BaseModel, identity: int | None = None) -> st
     return "%sevent: %s\ndata: %s\n\n" % (prefix, event, payload.model_dump_json())
 
 
-async def off_loop(read: Callable[..., Frame], *arguments) -> Frame:
+async def off_loop(read: Callable[..., Frame], *arguments: object) -> Frame:
     """One synchronous store read, on a worker thread.
 
     THE POLL DESIGN DEPENDS ON THIS. Every frame in every stream comes from a
@@ -47,13 +47,3 @@ async def off_loop(read: Callable[..., Frame], *arguments) -> Frame:
     (api/config.py THREAD_POOL_TOKENS).
     """
     return await run_in_threadpool(read, *arguments)
-
-
-def stable_snapshot(snapshot: BaseModel) -> str:
-    """The change-detection encoding: a differing dump is a frame worth sending.
-
-    The model's own dump, so what is compared is exactly what would be sent —
-    the previous hand-rolled `json.dumps(..., sort_keys=True)` compared a
-    DIFFERENT encoding than the one on the wire.
-    """
-    return snapshot.model_dump_json()

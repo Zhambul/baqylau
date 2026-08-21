@@ -32,7 +32,12 @@ test-par: test
 # Lint (ruff — config in ruff.toml encodes docs/styleguide.md; CI-enforced)
 # plus the cross-module dead-code scan below and the type gate. Three gates,
 # one command.
-lint: deadcode typecheck
+# Typecheck FIRST, deliberately. Make runs prerequisites in order, and with
+# `deadcode` first a failing dead-code scan meant mypy never ran at all — the
+# type gate went quiet instead of red, and stayed quiet for a whole refactor
+# while 523 errors accumulated behind it. The cheapest gate is not the most
+# important one.
+lint: typecheck deadcode
 	$(PY) -m ruff check .
 
 # Static types (mypy — config in mypy.ini; CI-enforced). The tree is strict:

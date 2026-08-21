@@ -12,15 +12,14 @@ from harness.contract import (
     CanonicalEventReaction,
     CoreTranslator,
     HarnessRawEventSource,
-    HarnessReactorContext,
 )
 from harness.models import InterruptRegistry, RawEvent, Session, TranslationResult
 from harness.registry import HarnessRegistry
 from engine.interpret import output_source
 from engine.interpret.interrupts import PendingInterruptSource
-from engine.interpret.liveness import SessionLivenessSource
+from engine.interpret.liveness import ProcessProbe, SessionLivenessSource
 from repository.contract.facts import CanonicalEventRepository, RawEventRepository
-from repository.contract.operations import OperationOutputRepository
+from repository.contract.shell_output import ShellOutputRepository
 from repository.contract.sessions import SessionRepository
 
 TICK_INTERVAL_SECONDS = 0.25
@@ -71,6 +70,14 @@ class Interpreter:
     read-and-interpret side. The thread must outlive every failure it can
     observe — it is the ONE driver of pulling and translation, and nothing
     restarts it — so each step below is contained and audited, never fatal.
+
+    It translates and it feeds itself, and nothing else. The two `inputs` are
+    not reactions to a fact, they are TRANSLATION INPUTS: the pull phase reads
+    the rows they write — the sessions row that says a session is watchable, and
+    the follow list that says which output files to read — so they have to be
+    current before the next pull, on this thread. Everything a fact CAUSES
+    happens on the reaction loop, which follows the same facts through the
+    canonical cursor (`engine/react/loop.py`).
     """
 
     def __init__(
@@ -78,11 +85,10 @@ class Interpreter:
         sessions: SessionRepository,
         harnesses: HarnessRegistry,
         raw_events: RawEventRepository,
-        operation_output: OperationOutputRepository,
+        shell_output: ShellOutputRepository,
         canonical_events: CanonicalEventRepository,
         core_translators: Mapping[str, CoreTranslator],
-        reactions: tuple[CanonicalEventReaction, ...],
-        controls: HarnessReactorContext,
+        inputs: tuple[CanonicalEventReaction, ...],
         audit: AuditRecorder,
         interrupts: InterruptRegistry,
         clock: Callable[[], float] = time.time,
@@ -90,14 +96,16 @@ class Interpreter:
         self.sessions = sessions
         self.harnesses = harnesses
         self.raw_events = raw_events
-        self.operation_output = operation_output
+        self.shell_output = shell_output
         self.canonical_events = canonical_events
         self.core_translators = core_translators
-        self.reactions = reactions
-        self.controls = controls  # handed to harness reactors per call
+        self.inputs = inputs
         self.audit = audit
         self.interrupts = interrupts
         self.clock = clock
+        # The liveness sources are rebuilt every tick; the probe's verified-pid
+        # memory has to outlive them (engine/interpret/liveness.py ProcessProbe).
+        self.liveness = ProcessProbe()
 
     def _audit_failure(self, where: str, context: dict) -> None:
         """Record a swallowed interpreter failure, then carry on.
@@ -132,7 +140,7 @@ class Interpreter:
         # listed the followings, so asking what was being followed could unlink
         # a file.
         try:
-            output_source.expire(self.operation_output, self.clock())
+            output_source.expire(self.shell_output, self.clock())
         except Exception:
             self._audit_failure("output expiry", {})
 
@@ -149,10 +157,10 @@ class Interpreter:
                     raise ValueError(f"session has no attached harness plugin: {session.session_id}")
                 sources = (
                     *session.plugin.sources.for_session(session),
-                    *output_source.sources_for_session(self.operation_output, session.session_id),
+                    *output_source.sources_for_session(self.shell_output, session.session_id),
                     # ALWAYS built — no silent skip: a pid-less session raises,
                     # loudly, into the audit below.
-                    SessionLivenessSource(session),
+                    SessionLivenessSource(session, self.liveness),
                     PendingInterruptSource(session, self.interrupts),
                 )
             except Exception:
@@ -218,30 +226,16 @@ class Interpreter:
         outcome = self.canonical_events.record_translation(
             raw_event, plugin.info.plugin_version, translation, self.clock()
         )
-        for reaction in self.reactions:
-            # Reaction-outer, events-inner: each reaction finishes the batch
-            # before the next starts, so the sessions row is current before the
-            # pane reaction anchors to it.
+        for reaction in self.inputs:
+            # Reaction-outer, events-inner: each input finishes the batch before
+            # the next starts, so the sessions row is current before anything
+            # anchors to it.
             for canonical_event in outcome.accepted:
                 try:
                     reaction.react(canonical_event)
                 except Exception:
                     self._audit_failure(
                         type(reaction).__name__,
-                        {
-                            "session_id": str(canonical_event.session_id),
-                            "event_id": str(canonical_event.event_id),
-                        },
-                    )
-        for reactor in plugin.reactors:
-            # Then the harness's own reactors — dispatched by the event's
-            # harness, the control service handed over per call.
-            for canonical_event in outcome.accepted:
-                try:
-                    reactor.react(canonical_event, self.controls)
-                except Exception:
-                    self._audit_failure(
-                        type(reactor).__name__,
                         {
                             "session_id": str(canonical_event.session_id),
                             "event_id": str(canonical_event.event_id),

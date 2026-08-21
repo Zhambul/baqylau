@@ -1,5 +1,4 @@
-/* dashboard/static/sw.js — the Web Push service worker (docs/dashboard.md,
-   *Web push*). Served at the ROOT path /sw.js (not /static/) so its scope is
+/* dashboard/static/sw.js — the Web Push service worker. Served at the ROOT path /sw.js (not /static/) so its scope is
    the whole origin — the one reason the server has a bespoke /sw.js route.
 
    Deliberately minimal: it exists ONLY to receive a push while the installed
@@ -19,7 +18,7 @@ self.addEventListener("activate", (e) => e.waitUntil(self.clients.claim()));
 const tagFor = (sessionId) => "baqylau-" + (sessionId || "");
 
 // Close every notification this session's alert is showing. This is the
-// RETRACTION (docs/dashboard.md, *Alert retraction*): the server sends a
+// RETRACTION: the server sends a
 // `type:"resolve"` push once the session stops needing you, and the banner goes
 // away without you having touched it.
 //
@@ -50,8 +49,7 @@ self.addEventListener("push", (e) => {
   const sessionId = d.session_id || "";
   // update the app-icon badge to the needs-you count carried in the push, so
   // the icon is right even though the app is closed (the app itself keeps the
-  // badge live from the sessions snapshot while open). docs/dashboard.md
-  // *Installed-app polish*. Ahead of the type split: a resolve carries the
+  // badge live from the sessions snapshot while open). Ahead of the type split: a resolve carries the
   // decremented count, and fixing the icon is half of what it is for.
   if (typeof d.badge === "number" && "setAppBadge" in self.navigator) {
     (d.badge ? self.navigator.setAppBadge(d.badge) : self.navigator.clearAppBadge())

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from domain.events import CanonicalEvent, SessionFinished, SessionStarted
+from domain.events import CanonicalEvent, EventPayload, SessionFinished, SessionStarted
 from domain.ids import SessionId
 from harness.contract import CanonicalEventReaction
 from repository.contract.sessions import SessionRepository
@@ -24,7 +24,7 @@ class PaneCanonicalEventReaction(CanonicalEventReaction):
         self.sessions = sessions
         self.widths = widths
 
-    def react(self, canonical_event: CanonicalEvent) -> None:
+    def react(self, canonical_event: CanonicalEvent[EventPayload]) -> None:
         payload = canonical_event.payload
         if isinstance(payload, SessionFinished):
             self.terminal.close_session_panes(canonical_event.session_id)

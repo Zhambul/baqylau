@@ -26,8 +26,7 @@ from dashboard.config import PUBLIC_URL
 from dashboard.dictate import DEEPGRAM_LISTEN_URL
 
 # The listen(2) backlog. The socketserver-era default of FIVE reset a tunneled
-# page refresh's parallel burst of ~16 origin connections (docs/dashboard.md
-# *Cache-busting*); the bound socket keeps the raised value.
+# page refresh's parallel burst of ~16 origin connections; the bound socket keeps the raised value.
 REQUEST_QUEUE_SIZE = 128
 
 GZIP_MIN = 1024                    # compress a response body only at/above this size
@@ -108,7 +107,7 @@ SECURITY_HEADERS = {
 # origins, never replaces the local ones, and is NOT an exposure switch — the
 # bind stays 127.0.0.1; only an outbound connector on this machine can front
 # the port.
-def extra_origins(raw):
+def extra_origins(raw: str | None) -> set[str]:
     """BAQYLAU_DASHBOARD_ORIGINS → the set of extra allowed origins
     (comma-separated, whitespace-tolerant, empty entries dropped)."""
     return {origin.strip() for origin in (raw or "").split(",") if origin.strip()}

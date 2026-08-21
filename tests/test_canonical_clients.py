@@ -27,10 +27,12 @@ import gzip
 import http.client
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
 import threading
+import time
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -38,8 +40,11 @@ from pathlib import Path
 import pytest
 
 from conftest import REPOSITORY_ROOT
-from api.common import content as content_routes, hooks as hook_routes, telemetry as telemetry_routes
-from api.terminal import panes as pane_routes, streams as stream_routes, views as view_routes
+from api.hooks import routes as hook_routes
+from api.telemetry import harness as telemetry_routes
+from api.sessiondata import routes as session_data_routes, streams as session_data_streams
+from api.controls import routes as control_routes
+from api.terminal import panes as pane_routes
 from core import clients
 from core.daemon import contract
 from harness.hooks import headers
@@ -49,10 +54,11 @@ from harness.impl.claude_code.usage import live as claude_live_usage
 from harness.models import TELEMETRY_KIND_HEADER
 from terminal import adapter as terminal_adapter
 from terminal.impl.kitty import remote as kitty_remote
+from terminal.impl.pty import plugin as pty_plugin
 
 ROOT = Path(REPOSITORY_ROOT)
 CLIENT = ROOT / "client"
-SHARED = ("_wire.py", "_daemon.py")
+SHARED = ("_wire.py", "_daemon.py", "_model.py", "_render.py", "_handoff.py")
 
 # The inventory, held HERE rather than in the product: six of these files are
 # named only by configuration we do not own, and the two we launch are named by
@@ -179,16 +185,27 @@ def test_no_client_touches_the_store_the_audit_trail_or_the_application():
     audit row from their `except` blocks, which is what made
     `audit/record.py` — and through it the whole sqlite layer — part of
     nine foreign processes and gave audit.db ten writers.
+
+    `_handoff.py` is the ONE file allowed to touch a file, and only the
+    file-access markers are lifted for it — it may still not name a store, a
+    repository, the audit trail or the application. It exists because both pane
+    click gestures are frontend-only: the terminal launches a separate program
+    for a click, that program has no model and no daemon to ask, and the text it
+    needs is already on the pane's screen. So the two processes meet in the temp
+    directory. That is a local channel between two halves of one frontend, which
+    is what this rule was never about; the rule is that a client does not reach
+    OUR state, and a file of its own making is not our state.
     """
     forbidden = ("sqlite3", "repository", "audit", "app.providers",
-                 "build_application", "RawEvent", "main.db", "audit.db",
-                 "open(", ".write_text(", ".write_bytes(", "os.makedirs")
-    violations = [
-        f"{path.name} contains {marker}"
-        for path in sorted(CLIENT.glob("*.py"))
-        for marker in forbidden
-        if marker in path.read_text(encoding="utf-8")
-    ]
+                 "build_application", "RawEvent", "main.db", "audit.db")
+    touches_files = ("open(", ".write_text(", ".write_bytes(", "os.makedirs")
+    violations = []
+    for path in sorted(CLIENT.glob("*.py")):
+        source = path.read_text(encoding="utf-8")
+        markers = forbidden if path.name == "_handoff.py" else forbidden + touches_files
+        violations.extend(
+            f"{path.name} contains {marker}" for marker in markers if marker in source
+        )
     assert violations == []
 
 
@@ -264,15 +281,28 @@ def test_only_a_launcher_names_its_client_and_only_one_module_builds_the_path():
 # --- the wire ---------------------------------------------------------------
 
 
-def load_wire():
-    """`client/_wire.py` as a module, the way a client loads it: by file, with
-    the client directory on sys.path and nothing else about it known."""
+def load_shared(name):
+    """One of `client/`'s shared modules, the way a client loads it: by file,
+    with the client directory on sys.path and nothing else about it known.
+
+    Loaded ONCE per session and cached, which is not an optimisation: a second
+    execution makes a second `_model` module, and then a `ShellFold` built by one
+    is not an instance of the other's class. A pane process has exactly one of
+    each, and a test that has two is testing something that cannot happen.
+    """
     import importlib.util
 
-    specification = importlib.util.spec_from_file_location("_wire", CLIENT / "_wire.py")
+    if name in sys.modules:
+        return sys.modules[name]
+    specification = importlib.util.spec_from_file_location(name, CLIENT / ("%s.py" % name))
     module = importlib.util.module_from_spec(specification)
+    sys.modules[name] = module                    # `_render` imports `_model`
     specification.loader.exec_module(module)
     return module
+
+
+def load_wire():
+    return load_shared("_wire")
 
 
 def test_the_wire_matches_the_daemon():
@@ -300,19 +330,32 @@ def test_the_wire_matches_the_daemon():
     assert wire.ACCOUNT_LABEL_VARIABLE == account.LABEL_VARIABLE
     assert wire.PROBE_VARIABLE == claude_live_usage.PROBE_VARIABLE
     # One line per terminal we can drive: a client cannot import a plugin to ask
-    # which variable names the current window, so it carries the union.
-    assert set(wire.WINDOW_ID_VARIABLES) == {kitty_remote.WINDOW_ID_VARIABLE}
+    # which variable names the current window, so it carries the union. BOTH are
+    # pinned, because a terminal missing from this union is a terminal whose
+    # sessions have no window — and therefore no gesture that needs one.
+    assert set(wire.WINDOW_ID_VARIABLES) == {
+        kitty_remote.WINDOW_ID_VARIABLE, pty_plugin.WINDOW_ID_VARIABLE
+    }
 
+    # Routers, not modules: one module now declares two of them, because typing
+    # into a terminal is guarded and looking at one is not.
     served = {
         route.path
-        for module in (hook_routes, telemetry_routes, content_routes,
-                       pane_routes, stream_routes, view_routes)
-        for route in module.router.routes
+        for router in (hook_routes.router, telemetry_routes.router,
+                       pane_routes.router, control_routes.router,
+                       session_data_routes.router, session_data_streams.router)
+        for route in router.routes
     }
     assert wire.HOOK_PATH % "{harness}" in served
     assert wire.TELEMETRY_PATH % "{harness}" in served
-    assert wire.PANE_STREAM_PATH.split("?")[0] % ("{session_id}", "{kind}") in served
-    assert wire.VIEW_PATH in served
+    # The pane's three reads. Split on "?" because the constants carry their
+    # query template and a route does not.
+    for template, arguments in (
+        (wire.SESSION_DATA_PATH, ("{session_id}",)),
+        (wire.SESSION_ENTRIES_PATH, ("{session_id}", 0)),
+        (wire.SESSION_STREAM_PATH, ("{session_id}", 0)),
+    ):
+        assert (template % arguments).split("?")[0] in served
     assert set(wire.PANE_COMMAND_PATHS.values()) <= served
 
 
@@ -348,6 +391,10 @@ class _Capture:
     def __init__(self) -> None:
         self.deliveries: list[Delivery] = []
         self.reply = b"{}"
+        # A reply per path fragment, for the clients that read more than one
+        # resource: the pane asks for an aggregate and then a page of entries,
+        # and one `reply` cannot answer both.
+        self.replies: dict[str, bytes] = {}
         self.stream = ""
         self.port = 0
 
@@ -372,7 +419,14 @@ class _StubHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         self._record("GET")
-        if "/panes/" in self.path:
+        # A stream first: every other path is answered by fragment, and a
+        # stream's path is a resource's path with `/stream` on the end.
+        if "/stream" not in self.path:
+            for fragment, payload in self.server.capture.replies.items():
+                if fragment in self.path:
+                    self._answer(payload)
+                    return
+        if "/stream" in self.path or "/panes/" in self.path:
             frames = self.server.capture.stream.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
@@ -549,35 +603,172 @@ def test_the_keybinding_ships_only_its_environment(daemon):
     assert setpct["percent"] == 75
 
 
-def test_the_view_and_content_handlers_resolve_nothing_themselves(daemon, tmp_path):
-    daemon.reply = b"copied text"
+def test_the_copy_and_expand_handlers_reach_the_pane_and_not_the_daemon(daemon, tmp_path):
+    """Both click gestures are FRONTEND-ONLY, and this is what that means.
+
+    The pane holds every byte it draws — content is embedded in the entries it
+    was served — so a copy needs no route and an expansion needs no stored state.
+    The two programs the terminal launches for a click talk to the pane through a
+    local file (client/_handoff.py) and the daemon is not involved in either. The
+    stub daemon here is a WITNESS: it must record no delivery at all.
+    """
+    handoff = load_shared("_handoff")
+    session_id, kind = "session-one", "mirror"
     # A fake `pbcopy` on PATH: the real one would reach the machine's clipboard,
     # and a test may not.
     clipboard = tmp_path / "pbcopy"
     clipboard.write_text("#!/bin/sh\ncat > %s/copied\n" % tmp_path, encoding="utf-8")
     clipboard.chmod(0o755)
 
-    view = run_client(TERMINAL_VIEW, ["baqylau-view://event-9:command"],
-                      port=daemon.port)
-    content = run_client(
-        TERMINAL_CONTENT, ["baqylau-content://event-9:command"],
-        port=daemon.port,
-        environment={"PATH": "%s:%s" % (tmp_path, os.environ.get("PATH", ""))},
+    # From a clean slate: an expansion deliberately OUTLIVES the pane that drew
+    # it (the next pane on this session opens with the reader's own expansions in
+    # place), so a leftover file from an earlier run would answer for this one.
+    paths = [
+        handoff.pane_path(session_id, kind),
+        handoff.view_path(session_id, kind),
+        handoff.lock_path(session_id, kind),
+    ]
+    for path in paths:
+        Path(path).unlink(missing_ok=True)
+
+    # The pane's half of the channel, written the way the pane writes it.
+    handoff.publish(session_id, kind, {"sh:sh-1:out": "445 passed"})
+    try:
+        content = run_client(
+            TERMINAL_CONTENT,
+            ["baqylau-content://%s/%s/sh:sh-1:out" % (session_id, kind)],
+            port=daemon.port,
+            environment={"PATH": "%s:%s" % (tmp_path, os.environ.get("PATH", ""))},
+        )
+        view = run_client(
+            TERMINAL_VIEW,
+            ["baqylau-view://%s/%s/entry-9" % (session_id, kind)],
+            port=daemon.port,
+        )
+
+        assert (content.returncode, view.returncode) == (0, 0)
+        assert (tmp_path / "copied").read_bytes() == b"445 passed"
+        # The expansion is recorded where the PANE will read it…
+        assert handoff.opened(session_id, kind) == frozenset({"entry-9"})
+        # …and toggling the same entry again puts it back.
+        run_client(TERMINAL_VIEW, ["baqylau-view://%s/%s/entry-9" % (session_id, kind)],
+                   port=daemon.port)
+        assert handoff.opened(session_id, kind) == frozenset()
+        # Neither gesture asked the daemon anything.
+        assert daemon.deliveries == []
+    finally:
+        for path in paths:
+            Path(path).unlink(missing_ok=True)
+
+
+def test_a_pane_publishes_what_a_click_can_copy_and_redraws_what_a_click_expands():
+    """The pane's half of both gestures, without a process.
+
+    `copy_targets` is built from the MODEL rather than collected while painting,
+    so what a click can reach is exactly what the feed holds — and the expanded
+    set is an argument to the paint, so an expansion is a repaint and nothing
+    more.
+    """
+    model_module = load_shared("_model")
+    render = load_shared("_render")
+
+    model = model_module.SessionModel()
+    model.apply_snapshot({
+        "cursor": 1,
+        "session": {"session_id": "s", "lead_actor_id": "lead", "account": None},
+        "actors": [{"actor_id": "kid", "name": "Explore", "background": {}}],
+        "live": True,
+    })
+
+    def entry(entry_id, kind, body):
+        return {
+            "entry_id": entry_id, "type": kind, "cursor": int(entry_id),
+            "actor_id": "kid", "parent_actor_id": None, "turn_id": None,
+            "occurred_at": 1.0, "summary": None, "body": body,
+        }
+
+    model.apply_page({"items": [
+        entry("1", "shell_started", {
+            "shell_id": "sh-1", "command": {"text": "make test"}, "execution": "foreground",
+        }),
+        entry("2", "shell_output", {
+            "shell_id": "sh-1", "stream": "output", "mode": "append",
+            "content": {"text": "445 passed\n"},
+        }),
+        entry("3", "file", {
+            "path": "domain/entries.py", "action": "updated", "state": "succeeded",
+            "lines_added": 1, "lines_removed": 1,
+            "content": {"text": "-old line\n+new line\n"},
+        }),
+    ]})
+
+    # Both halves of the command, under the names a link carries.
+    assert render.copy_targets(model) == {
+        "sh:sh-1:cmd": "make test",
+        "sh:sh-1:out": "445 passed\n",
+    }
+
+    closed = render.mirror(model, 80, view=lambda entry_id: "view://" + entry_id)
+    assert "new line" not in closed, "a file is collapsed until somebody expands it"
+    assert "view://3" in closed, "and the line is the click target"
+
+    opened = render.mirror(
+        model, 80, view=lambda entry_id: "view://" + entry_id, opened=frozenset({"3"}),
     )
+    assert "new line" in opened and "old line" in opened
+    # The diff came from the ENTRY. There is no second request and no route left
+    # to make one to.
+    assert "make test" in opened
 
-    assert (view.returncode, content.returncode) == (0, 0)
-    assert json.loads(daemon.delivery("/views").body) == {"content_reference": "event-9:command"}
-    assert daemon.delivery("/api/content/").path == "/api/content/event-9%3Acommand"
-    assert (tmp_path / "copied").read_bytes() == b"copied text"
 
-
-def test_a_pane_copies_the_frames_the_daemon_renders(daemon, monkeypatch):
+def test_a_pane_renders_the_read_model_and_never_sends_a_width(daemon, monkeypatch):
     """A pane is told its address, its session and its kind — everything it
-    cannot observe — and paints nothing of its own."""
+    cannot observe — and draws everything else itself.
+
+    This is the whole shape of the redesign in one test: the daemon answers with
+    FACTS, and the ANSI is the client's. The width never crosses the socket,
+    which is what makes a resize a repaint instead of a reconnect.
+    """
     monkeypatch.setattr(clients, "PORT_NUMBER", daemon.port)
+    daemon.replies = {
+        "/sessionData/session-one/entries": json.dumps({
+            "items": [{
+                "entry_id": "e1", "type": "shell_started", "cursor": 4,
+                "actor_id": "lead", "parent_actor_id": None, "turn_id": None,
+                "occurred_at": 1.0, "summary": None,
+                "body": {
+                    "shell_id": "sh-1",
+                    "command": {"text": "make test", "media_type": "text/plain"},
+                    "execution": "foreground",
+                },
+            }],
+            "oldest_cursor": 4,
+            "has_more": False,
+        }).encode("utf-8"),
+        "/sessionData/session-one": json.dumps({
+            "cursor": 4,
+            "session": {
+                "session_id": "session-one", "harness": "claude_code", "title": None,
+                "state": "running", "working_directory": "/tmp", "started_at": 1.0,
+                "finished_at": None, "account": None, "lead_actor_id": "lead",
+                "goal": None, "tasks": [],
+            },
+            "actors": [],
+            "live": True,
+            "repository": None,
+        }).encode("utf-8"),
+    }
+    # One frame, then the connection ends: the command finishes, and what the
+    # pane draws has to reflect the frame rather than the page it started from.
     daemon.stream = (
-        'event: session\ndata: {"session_id": "session-one"}\n\n'
-        'event: frame\ndata: {"ansi": "HELLO"}\n\n'
+        'event: sessionData\ndata: '
+        + json.dumps({"entries": [{
+            "entry_id": "e2", "type": "shell_finished", "cursor": 5,
+            "actor_id": "lead", "parent_actor_id": None, "turn_id": None,
+            "occurred_at": 3.0, "summary": None,
+            "body": {"shell_id": "sh-1", "state": "failed", "exit_code": 2},
+        }]})
+        + "\n\n"
     )
     process = subprocess.Popen(
         clients.command(TERMINAL_PANE, "session-one", "mirror"),
@@ -585,14 +776,220 @@ def test_a_pane_copies_the_frames_the_daemon_renders(daemon, monkeypatch):
         env={**os.environ, "COLUMNS": "100", "LINES": "40"},
     )
     try:
-        assert process.stdout.read(5) == b"HELLO"
+        painted = _read_until(process, "failed (exit 2)")
     finally:
         process.terminate()
         process.wait(timeout=10)
-    # The width is the pane's own, and it is a query on the stream it opens
-    assert daemon.delivery("/panes/").path == (
-        "/api/sessions/session-one/panes/mirror/stream?width=100"
+
+    assert "make test" in painted                      # the page, drawn here
+    assert "failed (exit 2)" in painted                # and then the frame
+    assert "\x1b[" in painted                           # as ANSI, from this process
+    assert daemon.delivery("/sessionData/session-one/entries").path == (
+        "/sessionData/session-one/entries?at=4"
     )
+    assert daemon.delivery("/stream").path == (
+        "/sessionData/session-one/stream?after_cursor=4"
+    )
+    assert not [found for found in daemon.deliveries if "width" in found.path]
+
+
+def _read_until(process, marker, timeout=20.0):
+    """Everything the process has written by the time `marker` appears.
+
+    A paint is one flushed write, so `read1` hands them back whole; a fixed-size
+    `read` would block for a buffer the pane has no reason to fill.
+    """
+    painted = ""
+    deadline = time.monotonic() + timeout
+    while marker not in painted and time.monotonic() < deadline:
+        chunk = process.stdout.read1(65536)
+        if not chunk:
+            break
+        painted += chunk.decode("utf-8", "replace")
+    return painted
+
+
+def test_the_pane_folds_a_command_and_paints_it_at_its_own_width():
+    """The fold and the painter, directly.
+
+    Both are the client's now, and both are the kind of thing that is wrong for a
+    week before anyone notices by eye: an output chunk that replaces instead of
+    appending doubles a command's output, and a wrap that mis-counts a prefix
+    silently eats a column.
+    """
+    model_module = load_shared("_model")
+    render = load_shared("_render")
+
+    def entry(entry_id, kind, body, at=1.0):
+        return {
+            "entry_id": entry_id, "type": kind, "cursor": int(entry_id),
+            "actor_id": "lead", "parent_actor_id": None, "turn_id": None,
+            "occurred_at": at, "summary": None, "body": body,
+        }
+
+    model = model_module.SessionModel()
+    model.apply_snapshot({
+        "cursor": 1,
+        "session": {"session_id": "s", "lead_actor_id": "lead", "account": None},
+        "actors": [{"actor_id": "lead", "name": "Lead", "background": {}}],
+        "live": True,
+    })
+    model.apply_page({"items": [
+        entry("1", "shell_started", {
+            "shell_id": "sh", "command": {"text": "make test"}, "execution": "foreground",
+        }),
+        entry("2", "shell_output", {
+            "shell_id": "sh", "stream": "output", "mode": "append",
+            "content": {"text": "first\n"},
+        }),
+        entry("3", "shell_output", {
+            "shell_id": "sh", "stream": "output", "mode": "replace",
+            "content": {"text": "the whole output, all of it, arriving at once\n"},
+        }),
+        entry("4", "shell_finished", {"shell_id": "sh", "state": "succeeded", "exit_code": 0},
+              at=2.5),
+    ]})
+    # One block, not four: a command is its start, its chunks and its finish.
+    folded = list(model.feed())
+    assert len(folded) == 1
+    # Replaced, not appended: the first chunk is gone rather than prefixed.
+    assert folded[0].output == "the whole output, all of it, arriving at once\n"
+
+    narrow = render.mirror(model, 30)
+    wide = render.mirror(model, 100)
+    assert "the whole output, all of it, arriving at once" in wide
+    # The same model at two widths: the text is the same and the wrapping is not.
+    assert narrow.count("\n") > wide.count("\n")
+    assert max(len(line) for line in _visible_rows(narrow)) <= 30
+    # An overlapping page after a reconnect is applied twice and shows once.
+    model.apply_page({"items": [entry("2", "shell_output", {
+        "shell_id": "sh", "stream": "output", "mode": "append",
+        "content": {"text": "DOUBLED"},
+    })]})
+    assert "DOUBLED" not in render.mirror(model, 100)
+
+    # …and a prompt the harness DISCARDED stays gone across that same replay. Two
+    # prompts naming one parent means the older is dead; deleting it without
+    # remembering the decision would re-admit it as news on the next reconnect,
+    # and it would stay, because the survivor that condemned it is applied once.
+    def prompt(entry_id, reply_to):
+        return entry(entry_id, "message", {
+            "role": "user", "phase": "prompt",
+            "content": {"text": "ask " + entry_id}, "reply_to": reply_to,
+        })
+
+    # Asserted on the MODEL rather than on the paint, because the mirror hides
+    # the lead's own conversation on purpose (it is a window on the work, not a
+    # second copy of the chat you are having) — so a paint would say nothing
+    # about whether the entry is held.
+    def prompt_ids():
+        return [
+            item["entry_id"] for item in model.feed()
+            if not isinstance(item, model_module.ShellFold) and item["type"] == "message"
+        ]
+
+    model.apply_page({"items": [prompt("8", "parent-1"), prompt("9", "parent-1")]})
+    assert prompt_ids() == ["9"]
+    model.apply_page({"items": [prompt("8", "parent-1")]})
+    assert prompt_ids() == ["9"]
+
+
+# SGR colour, the screen-clearing pair, and OSC 8 hyperlinks — none of which
+# occupies a column. A width assertion has to be made after all three are gone,
+# and the link URI in particular is longer than the text it wraps.
+_INVISIBLE = re.compile(r"\x1b\[[0-9;]*[mHJ]|\x1b\]8;;[^\x1b]*\x1b\\")
+
+
+def _visible_rows(painted):
+    """The painted rows as a person sees their WIDTH: escape sequences occupy no
+    columns, so a width assertion has to be made after they are removed."""
+    return [_INVISIBLE.sub("", row) for row in painted.split("\n")]
+
+
+def test_the_mirror_draws_the_task_list_as_state_rather_than_as_history():
+    """The task list is AGGREGATE state, so it is a panel and not feed rows.
+
+    It used to be a line per change, from a `task.changed` event — which meant a
+    list of three items that moved twice read as six lines of history, none of
+    them the current list. Now the pane draws what the list IS, and the only thing
+    it keeps from the old form is that a completed item stops being work.
+    """
+    model_module = load_shared("_model")
+    render = load_shared("_render")
+
+    def task(task_id, subject, state):
+        return {
+            "task_id": task_id, "subject": subject, "description": None,
+            "state": state, "owner_actor_id": None,
+        }
+
+    model = model_module.SessionModel()
+    model.apply_snapshot({
+        "cursor": 1, "live": True, "actors": [],
+        "session": {
+            "session_id": "s", "lead_actor_id": "lead", "account": None,
+            "tasks": [
+                task("t1", "Rewrite the pane", "completed"),
+                task("t2", "Rework the e2e suite", "in_progress"),
+                task("t3", "Update the skill", "pending"),
+                task("t4", "Abandoned", "deleted"),
+            ],
+        },
+    })
+    painted = "\n".join(_visible_rows(render.mirror(model, 60)))
+
+    assert "tasks 1/3" in painted, "deleted tasks are not tasks, and done ones are a count"
+    assert "Rework the e2e suite" in painted and "Update the skill" in painted
+    assert "Rewrite the pane" not in painted, "a finished item is not work"
+    assert "Abandoned" not in painted
+
+    # A session with no list gets no panel at all — not an empty one.
+    empty = model_module.SessionModel()
+    empty.apply_snapshot({
+        "cursor": 1, "live": True, "actors": [],
+        "session": {"session_id": "s", "lead_actor_id": "lead", "account": None, "tasks": []},
+    })
+    assert "tasks" not in "\n".join(_visible_rows(render.mirror(empty, 60)))
+
+
+def test_the_scoreboard_clock_moves_between_frames_only_while_the_actor_is_active():
+    """The clock the daemon used to redraw once a second, now the pane's.
+
+    Frames arrive on CHANGE, and `active_seconds` is measured when the daemon
+    builds one — so on a working session that says nothing for a minute, a pane
+    that only ever showed the number it was sent would show a clock standing
+    still. `active` is what makes carrying it forward honest: the pane adds its
+    own elapsed time only while an interval is open, and an idle actor's clock
+    stays exactly where the daemon left it.
+    """
+    model_module = load_shared("_model")
+    render = load_shared("_render")
+
+    def scoreboard_with(active):
+        model = model_module.SessionModel()
+        model.apply_snapshot({
+            "cursor": 1,
+            "session": {"session_id": "s", "lead_actor_id": "lead", "account": None},
+            "actors": [{
+                "actor_id": "lead", "name": "Lead", "background": {},
+                "usage": {"tokens": {}, "cost_in_usd": None},
+                "statistics": {"active_seconds": 100.0, "active": active},
+            }],
+            "live": True,
+        })
+        return model, render
+
+    working, render = scoreboard_with(True)
+    assert "1m40s" in render.scoreboard(working, 80)
+    # Rewind the model's own frame mark rather than sleeping: the elapsed time is
+    # measured monotonically from when the frame landed, and a test may not spend
+    # thirty seconds proving it.
+    working._framed_at -= 30.0
+    assert "2m10s" in render.scoreboard(working, 80)
+
+    idle, render = scoreboard_with(False)
+    idle._framed_at -= 30.0
+    assert "1m40s" in render.scoreboard(idle, 80)
 
 
 def test_the_otlp_receiver_forwards_an_export_and_acknowledges_it(daemon, monkeypatch):
@@ -637,8 +1034,10 @@ USAGE = {
     "claude_statusline.py": ([], b'{"session_id":"s"}'),
     "codex_hook.py": ([], b'{"session_id":"s"}'),
     "terminal_keys.py": (["toggle"], b""),
-    "terminal_view.py": (["baqylau-view://event-9:command"], b""),
-    "terminal_content.py": (["baqylau-content://event-9:command"], b""),
+    # Session, pane kind, target — the two click handlers reach the PANE now, not
+    # the daemon, and with no pane running they must still say nothing.
+    "terminal_view.py": (["baqylau-view://session-one/mirror/entry-9"], b""),
+    "terminal_content.py": (["baqylau-content://session-one/mirror/sh:1:out"], b""),
 }
 
 

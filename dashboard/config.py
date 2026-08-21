@@ -28,14 +28,13 @@ STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 STATIC = {                         # whitelist — no path resolution on user input
     "index.html": "text/html; charset=utf-8",
     # the SPA is served as the ordered app.NN-*.js parts, admitted by shape in
-    # api/dashboard/static.py (_APP_PART) — no per-part whitelist entry.
+    # api/application/static.py (_APP_PART) — no per-part whitelist entry.
     "style.css": "text/css; charset=utf-8",
     # the Web Push service worker — served from the ROOT path (/sw.js, its own
     # route) so its scope is the whole origin, not just /static/ (a SW controls
-    # only paths under its own URL). docs/dashboard.md *Web push*.
+    # only paths under its own URL).
     "sw.js": "text/javascript; charset=utf-8",
-    # the installed-app manifest + home-screen icons (docs/dashboard.md
-    # *Installed-app polish*). The manifest is referenced from /static/ so it
+    # the installed-app manifest + home-screen icons. The manifest is referenced from /static/ so it
     # rides the normal static route; iOS reads the apple-touch-icon link.
     "manifest.webmanifest": "application/manifest+json; charset=utf-8",
     # the RASTER fallback favicon, served from the ROOT path (/favicon.ico, its
@@ -46,7 +45,6 @@ STATIC = {                         # whitelist — no path resolution on user in
     # out-rank the data-URI SVG in browsers that handle both, and the SVG is the
     # one that carries the dynamic red asking-you badge (app.01-attention.js
     # FAVICON_ASK). Auto-discovery is exactly fallback-only semantics.
-    # docs/dashboard.md *Favicon fallback*.
     "favicon.ico": "image/vnd.microsoft.icon",
     "apple-touch-icon.png": "image/png",
     "icon-180.png": "image/png",
@@ -57,7 +55,7 @@ STATIC = {                         # whitelist — no path resolution on user in
 
 
 # Off-device alerts, layered on the same red/green transitions the in-page toast
-# fires on (docs/dashboard.md, *Presence routing* / *Telegram alerts*). The
+# fires on. The
 # alert is ARMED on the transition and sent on the SAME tick unless PRESENCE
 # says you're already there. Browser-independent: it fires whether or not a page
 # is open, since reaching you when away is the point.
@@ -92,7 +90,7 @@ NOTIFICATION_SETTLE_SECONDS = EV.env_float("BAQYLAU_DASHBOARD_NOTIFICATION_SETTL
 # Master switch: "0" disables arming + sending entirely (the in-page toast is
 # unaffected). Default on.
 NOTIFY_TELEGRAM = (os.environ.get("BAQYLAU_DASHBOARD_NOTIFY_TELEGRAM") or "1") != "0"
-# The ON-DEVICE Web Push channel (docs/dashboard.md, *Web push*): the same
+# The ON-DEVICE Web Push channel: the same
 # presence-routed, mute-honoring alert as Telegram, delivered to a subscribed
 # browser (an installed iOS home-screen app, a desktop page) as a real system
 # notification. Layered on — INDEPENDENT of — Telegram: either channel arms the
@@ -116,7 +114,7 @@ ESCALATION_DELAY_SECONDS = EV.env_float("BAQYLAU_DASHBOARD_ESCALATION_DELAY_SECO
 # escalation wait) — the opt-out of the device-first/escalate model, e.g. you
 # always want the Telegram copy too. Default off.
 NOTIFY_TELEGRAM_ALWAYS = (os.environ.get("BAQYLAU_DASHBOARD_NOTIFY_TELEGRAM_ALWAYS") or "") == "1"
-# RETRACTION (docs/dashboard.md, *Alert retraction*). Once an alert has been
+# RETRACTION. Once an alert has been
 # DELIVERED, the watcher keeps watching the session; when the thing it told you
 # about stops being true — the tab left red/green, the session ended, you're
 # composing a reply — the alert is taken back: the Telegram message is deleted,

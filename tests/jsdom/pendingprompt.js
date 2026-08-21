@@ -1,6 +1,6 @@
 // Drives the real optimistic-prompt reconciler in app.08-composer.js. A prompt
-// sent after an earlier turn must lose its grey stand-in when the canonical
-// message arrives; canonical DashboardItem fields are the only accepted input.
+// sent after an earlier turn must lose its grey stand-in when the delivered
+// message arrives; feed ENTRIES are the only accepted input.
 "use strict";
 const fs = require("fs");
 const vm = require("vm");
@@ -13,6 +13,14 @@ const sandbox = {
   performance: { now: () => 0 },
   promptMatches: (real, sent) => !!sent && (real || "").endsWith(sent),
   hintAudit: () => {},
+  // The one shape question the reconciler asks, answered by the module that owns
+  // it in the browser (app.05-session.js).
+  deliveredPromptText: entry => {
+    const body = entry.body || {};
+    if (entry.type !== "message" || body.role !== "user" || body.phase !== "prompt")
+      return null;
+    return ((body.content && body.content.text) || "").trim();
+  },
   S: null,
 };
 sandbox.window = sandbox;
@@ -31,17 +39,22 @@ sandbox.S = { sessionView: { pending: [] } };
 pending("say hi");
 pending("run ls and say hi again");
 
+function promptEntry(text) {
+  return {
+    entry_id: "entry-" + text, type: "message", cursor: 1, actor_id: "actor-one",
+    body: {
+      message_id: "message-" + text, role: "user", phase: "prompt",
+      content: { text: text, media_type: "text/plain" },
+    },
+  };
+}
+
 // An earlier prompt is unrelated to the two outstanding stand-ins.
-sandbox.drainPending([{
-  item_type: "message", conversation_kind: "prompt", plain_text: "first message",
-}]);
+sandbox.drainPending([promptEntry("first message")]);
 const afterUnrelated = sandbox.S.sessionView.pending.map(item => item.text);
 
-// The second canonical prompt reconciles exactly one matching stand-in.
-sandbox.drainPending([{
-  item_type: "message", conversation_kind: "prompt",
-  plain_text: "run ls and say hi again",
-}]);
+// The second delivered prompt reconciles exactly one matching stand-in.
+sandbox.drainPending([promptEntry("run ls and say hi again")]);
 
 process.stdout.write(JSON.stringify({
   afterUnrelated,

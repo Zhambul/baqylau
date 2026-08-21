@@ -25,8 +25,7 @@ function initNotifBtn() {
    can wake, targeted at the device you most recently used (see *Device routing*)
    (dashboard/webpush.py sends; this registers the worker + manages the
    subscription). iOS exposes Notification/PushManager ONLY in an installed
-   standalone app, so on a plain Safari tab this all no-ops. docs/dashboard.md
-   *Web push*. */
+   standalone app, so on a plain Safari tab this all no-ops. */
 let swReg = null;
 const PUSH_SERVER_KEY_STORAGE = "baqylau-push-server-key";
 
@@ -94,7 +93,7 @@ async function initPush() {
 }
 
 /* ---------- stale-banner sweep --------------------------------------------
-   The client half of retraction (docs/dashboard.md, *Alert retraction*). The
+   The client half of retraction. The
    server takes an alert back by pushing a resolve to the service worker, but
    that push can be refused, dropped, or switched off (BAQYLAU_DASHBOARD_RESOLVE_PUSH),
    and the handles it needs live only in the running server's memory — a restart
@@ -122,8 +121,7 @@ async function sweepStale() {
 }
 
 /* ---------- installed-app polish (badge · wake lock) -------------------------
-   Extras that only make sense for the home-screen app (docs/dashboard.md
-   *Installed-app polish*). All feature-detected — a plain browser tab silently
+   Extras that only make sense for the home-screen app. All feature-detected — a plain browser tab silently
    gets none, and nothing here needs a standalone-mode test. */
 
 // The app-icon badge = how many LIVE sessions need you (red asking + green
@@ -311,8 +309,8 @@ function acctName(a) {
 }
 
 // A window's COLUMN SLOT — its DURATION in minutes, which is what the whole
-// strip is laid out by, so codex's weekly bar lands directly under Claude's
-// (docs/dashboard.md *Row alignment*). It cannot be the `key`: the same 10080
+// strip is laid out by, so codex's weekly bar lands directly under Claude's.
+// It cannot be the `key`: the same 10080
 // minutes is `seven_day` to Claude and `w10080` to codex, and keying on that
 // gave the two hosts two different columns for one duration. A window with no
 // readable duration can share a column with nothing, so it stands on its key.
@@ -370,8 +368,7 @@ function stripColumns(rows) {
 }
 
 // WHERE each part of a row sits in the strip-wide GRID — 1-based CSS
-// `grid-column` values, computed once for the whole strip (docs/dashboard.md
-// *Row alignment*):
+// `grid-column` values, computed once for the whole strip:
 //
 //   1                    the account NAME
 //   2                    the ⚠ logged-out badge — only when SOME row carries one
@@ -401,7 +398,7 @@ function place(node, col) {
 // `cols` is the strip-wide column layout (stripColumns), `tr` its track map
 // (stripTracks) and `anyOut` whether ANY row on the strip is logged out — all
 // computed once by renderAccounts, so every row places its cells in the same
-// tracks and the rows STACK (docs/dashboard.md *Row alignment*). A row missing a
+// tracks and the rows STACK. A row missing a
 // window from its own host still renders a ghost; a foreign-host-only window
 // emits no item because the grid already owns its track. A window whose reset
 // rolled over still reserves its reset column; a fine row still reserves the ⚠
@@ -414,7 +411,7 @@ function acctPill(a, cols, anyOut, tr) {
   // LOGGED OUT: the account's OAuth login was revoked/expired — a session on it
   // died on error='authentication_failed' (server flag a.logged_out, cleared on
   // the next successful session). Warn outright and up front: the usage bars are
-  // stale, and a launch here dies immediately. (docs/dashboard.md.)
+  // stale, and a launch here dies immediately.
   // The badge sits BEFORE the bars, so a healthy row keeps its slot (hidden, not
   // absent) or the one dead account would shove its own bars out of column.
   if (anyOut) {
@@ -440,7 +437,7 @@ function acctPill(a, cols, anyOut, tr) {
   // show at all (effective_usage drops a rolled-over one), so the column read
   // blank exactly where the duplicate would have been. Drop the reset column
   // for those windows entirely: it is dropped for the SAME key on every row,
-  // so the stack still aligns (docs/dashboard.md *Row alignment*). Which
+  // so the stack still aligns. Which
   // windows those are is the SERVER's call — the `scope` field of the usage
   // vocabulary (plugins.usage_strip), since only the host knows whether a
   // window is account-wide or a per-model cap under another one.

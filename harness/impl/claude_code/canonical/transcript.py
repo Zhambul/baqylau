@@ -9,7 +9,7 @@
 # sanctioned WRITE is set_session_title()'s `agent-name` naming-record append
 # (the dashboard's web rename). The presenter that consumes its records is
 # substream_render.Renderer.handle_line — the mirror's styled paint. An agent's
-# web view is that same mirror, scoped (docs/dashboard.md *Agent scope*), so
+# web view is that same mirror, scoped, so
 # there is no second rendering of these records anymore: the uncapped drill-down
 # timeline that used to live here — parsed per agent, styled nothing like the
 # mirror, and drifting from it — is gone, and only agent_usage() still reads a
@@ -46,8 +46,7 @@
 #       are indistinguishable from a
 #       real prompt WITHOUT this flag, which is why it is now carried rather
 #       than dropped: the dashboard's focus mode promises "your prompt", and a
-#       hook's feedback rendered as a YOU bubble is not it (docs/dashboard.md,
-#       *View modes*). session_title has always skipped isMeta rows for the same
+#       hook's feedback rendered as a YOU bubble is not it. session_title has always skipped isMeta rows for the same
 #       reason — this makes that fact reusable instead of re-read per consumer.
 #       `resumed` is the ONE flavour distinction on top of it: this injection
 #       RESUMED a turn Claude Code had already ENDED (see _RESUMES_TURN), so the
@@ -81,6 +80,7 @@ import html
 import json
 import os
 import re
+from typing import Any
 
 from harness.models import TitleWriteOutcome
 from repository.contract.titles import NativeSessionTitleRepository
@@ -112,12 +112,12 @@ BACKGROUND_SUMMARY_PREFIX = "Background command"
 MONITOR_SUMMARY_PREFIX = "Monitor"
 
 
-def _note_tag(xml, name):
+def _note_tag(xml: str, name: str) -> str | None:
     m = re.search(r'<%s>(.*?)</%s>' % (name, name), xml, re.S)
     return m.group(1).strip() if m else None
 
 
-def _task_notification(content):
+def _task_notification(content: str) -> dict[str, str | None]:
     """A <task-notification> block -> the one fact it carries.
 
     The single reader of this channel, so that a notification cannot be counted
@@ -163,7 +163,7 @@ def _task_notification(content):
     }
 
 
-def result_text(content):
+def result_text(content: Any) -> str:
     """Normalise a tool_result's content (str | block | block list) to text."""
     if isinstance(content, str):
         return content
@@ -214,7 +214,7 @@ _REMINDER_TAG = re.compile(r"</?system-reminder>\s*", re.I)
 LEAD_TEAMMATE_ID = "team-lead"
 
 
-def classify_user_text(text):
+def classify_user_text(text: str) -> tuple[str, str, str | None]:
     """("teammsg", sender, body) for a wrapped teammate message, else
     ("prompt", text, None). `text` is the raw user content string."""
     m = TEAMMSG.match(text)
@@ -229,7 +229,7 @@ def classify_user_text(text):
 _RECAP_HINT = re.compile(r"\s*\(disable recaps in /config\)\s*$")
 
 
-def _strip_recap_hint(text):
+def _strip_recap_hint(text: str) -> str:
     """A recap's `content` minus the trailing "(disable recaps in /config)"
     hint. An empty result stays empty (parse_line drops it)."""
     return _RECAP_HINT.sub("", text).strip()
@@ -258,7 +258,7 @@ _TEAM_ENVELOPE = re.compile(
     r'^\s*Another Claude session sent a message:\s*<teammate-message\b')
 
 
-def _injected(o, text=""):
+def _injected(o: dict[str, Any], text: str = "") -> bool:
     """Whether this user-shaped record was written by CLAUDE CODE rather than
     typed by the human — the `meta` flag on the prompt/results records below.
     Three structural marks plus one anchored text shape (`text`, the record's
@@ -303,7 +303,7 @@ def _injected(o, text=""):
 # turn that merely QUOTES the wording — this repo's own docs, a grep hit — has
 # something in front of it and stays an ordinary injection.
 #
-# WHY the distinction exists (docs/dashboard.md, *View modes*): the dashboard's
+# WHY the distinction exists: the dashboard's
 # focus mode keeps ONE reply per turn, the one it ends on. A Stop hook fires
 # BECAUSE the turn ended, so the reply in front of its feedback IS a final
 # answer — and a Stop hook that nudges every turn (the aggregator-adapters wiki
@@ -330,7 +330,7 @@ KINDS = ("bad", "compact", "recap", "prompt", "teammsg", "results",
          "actor_assignment_finished", "background_command_completed", "goal")
 
 
-def parse_line(s):
+def parse_line(s: str) -> dict[str, Any] | None:
     """One transcript JSONL line -> a typed record (see the module header)."""
     try:
         o = json.loads(s)
@@ -384,7 +384,8 @@ def parse_line(s):
             return {"kind": "prompt", "text": content,
                     "meta": _injected(o, content)}
         if isinstance(content, list):
-            blocks, texts = [], []
+            blocks: list[dict[str, Any]] = []
+            texts: list[str] = []
             for blk in content:
                 if not isinstance(blk, dict):
                     continue
@@ -407,18 +408,19 @@ def parse_line(s):
                         "meta": _injected(o, texts[0] if texts else "")}
         return None
     if t == "assistant":
-        blocks = []
+        assistant_blocks: list[tuple[str, Any]] = []
         if isinstance(content, list):
             for blk in content:
                 if not isinstance(blk, dict):
                     continue
                 if blk.get("type") == "text":
-                    blocks.append(("text", blk.get("text", "")))
+                    assistant_blocks.append(("text", blk.get("text", "")))
                 elif blk.get("type") == "tool_use":
-                    blocks.append(("tool", blk))
+                    assistant_blocks.append(("tool", blk))
         u = msg.get("usage")
         return {"kind": "assistant", "usage": u if isinstance(u, dict) else None,
-                "model": msg.get("model"), "id": msg.get("id"), "blocks": blocks}
+                "model": msg.get("model"), "id": msg.get("id"),
+                "blocks": assistant_blocks}
     if t == "attachment":
         # A message typed while a turn is running is QUEUED by Claude Code and,
         # when the turn boundary delivers it, recorded ONLY as this
@@ -504,7 +506,7 @@ _CMD_CAVEAT_RE = re.compile(r"^\s*<local-command-caveat>")
 _CMD_OPEN_RE = re.compile(r"^\s*<command-(?:message|name|args)>")
 
 
-def _command_envelope(s):
+def _command_envelope(s: str) -> tuple[str, str]:
     """`(name, args)` when `s` IS a slash-command envelope Claude Code wrote —
     ('', '') otherwise. The anchored gate on top of _command_parts: the envelope
     is the whole record and opens with one of its own tags, so a record with
@@ -524,7 +526,7 @@ TITLE_TAIL_B = 65536    # tail-window bytes session_title scans for the LAST nam
 #                         in a >64KB transcript is the one accepted gap
 
 
-def _command_parts(s):
+def _command_parts(s: str) -> tuple[str, str]:
     """`(name, args)` of the `<command-name>`/`<command-args>` wrapper in `s` —
     ('', '') when it carries no command name. The ONE owner of that derivation:
     the title ladder wants a single LINE of it and conversation() wants the args
@@ -547,7 +549,7 @@ def _command_parts(s):
     return name, (a.group(1).strip() if a else "")
 
 
-def _command_text(s):
+def _command_text(s: str) -> str:
     """The slash-command turn as the user TYPED it — `/foo` plus its argument
     verbatim, newlines and all — the text of parse_line's `slash_command` record
     and so of the prompt bubble the dashboard shows. '' when `s` is not a command
@@ -559,7 +561,7 @@ def _command_text(s):
     return ("%s %s" % (name, args)) if args else name
 
 
-def _jsonl_file(path):
+def _jsonl_file(path: str) -> bool:
     """A .jsonl that EXISTS ON DISK — the shared precondition of the two layout
     predicates below. A missing file is never ours: rename must never CREATE a
     transcript just to name it, and a path with nothing behind it tells the
@@ -567,14 +569,14 @@ def _jsonl_file(path):
     return bool(path) and path.endswith(".jsonl") and os.path.isfile(path)
 
 
-def _session_transcript(path):
+def _session_transcript(path: str) -> bool:
     """`…/projects/<hash>/<sid>.jsonl` — a Claude Code SESSION transcript. The
     ONE spelling of that layout (owns/renameable both go through it)."""
     return _jsonl_file(path) and os.path.basename(
         os.path.dirname(os.path.dirname(path))) == PROJECTS_DIR
 
 
-def _agent_transcript(path):
+def _agent_transcript(path: str) -> bool:
     """`…/projects/<hash>/<sid>/subagents/agent-<id>.jsonl` — a session
     transcript's per-AGENT sidecar (the agent_paths layout). Ours to parse, but
     not a session: nothing about it is renameable."""
@@ -598,7 +600,7 @@ RECORD_TYPES = frozenset((
 ))
 
 
-def _claude_head(path):
+def _claude_head(path: str) -> bool:
     """Does the file's HEAD hold a record only Claude Code writes? The content
     half of owns(), for a transcript that is ours but not where we expect (a
     relocated CLAUDE_CONFIG_DIR, a copied file, a fixture). Bounded to
@@ -621,7 +623,7 @@ def _claude_head(path):
     return False
 
 
-def owns(path):
+def owns(path: str) -> bool:
     """Is `path` a file this plugin SPEAKS — the `owns` provider behind
     plugins._first_path (the ownership gate on every path-keyed read fan-out)
     and plugins.owns_by (the dashboard's resume guard)? True for a session
@@ -644,7 +646,7 @@ def owns(path):
             or (_jsonl_file(path) and _claude_head(path)))
 
 
-def renameable(path):
+def renameable(path: str) -> bool:
     """Does this plugin own `path` as a RENAMEABLE Claude session transcript
     (`…/projects/<hash>/<sid>.jsonl`, present on disk)? The ONE gate both
     rename channels ask: `set_session_title` below, before appending the
@@ -658,7 +660,7 @@ def renameable(path):
     return _session_transcript(path)
 
 
-def set_session_title(path, name):
+def set_session_title(path: str, name: str) -> bool | None:
     """Append the `agent-name` naming record — the /rename channel `_title_records`
     parses back (docs/session-naming-findings.md §2) — to a Claude session
     transcript: the web rename's write half FOR A PARKED SESSION. True on

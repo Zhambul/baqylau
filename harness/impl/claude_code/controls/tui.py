@@ -8,8 +8,10 @@
 # not import the dashboard, where it used to sit (dashboard/control/launch.
 # type_command, moved here byte-identically when the gestures did).
 import time
+from collections.abc import Callable
 
 from harness.impl.claude_code.controls import clipboard_image
+from harness.impl.claude_code.controls.screen_driver import ScreenDriver
 
 # after the line-kill that clears whatever the box held, settle before pasting —
 # a paste into a just-cleared input drops leading bytes (measured; the mangle).
@@ -18,7 +20,7 @@ CLEAR_LINES_MAX = 50    # ceiling on the per-line kill loop: a corrupt/huge
 #                         stash must not become an unbounded keystroke storm.
 
 
-def type_command(fe, win, text):
+def type_command(fe: ScreenDriver, win: str, text: str) -> tuple[bool, bool]:
     """Put a SLASH COMMAND into a session's input box and submit it. Returns
     (ok, cleared_clipboard_image).
 
@@ -42,8 +44,7 @@ def type_command(fe, win, text):
     (the terminal's own submit convention), so it still submits.
 
     The clipboard-image guard comes with it: a bracketed paste makes Claude Code
-    attach whatever IMAGE is on the board (docs/dashboard.md *Clipboard-image
-    guard*), so no caller may paste without it — folding the two together here is
+    attach whatever IMAGE is on the board, so no caller may paste without it — folding the two together here is
     the point of the single owner. THIS host declares
     `paste_grabs_clipboard_image`; a host that doesn't pays no osascript.
 
@@ -80,19 +81,19 @@ SUBMIT_RETRY_DELAYS_S = (0.4, 0.8)
 SUBMISSION_MARKER_LENGTH = 24
 
 
-def _submission_marker(text) -> str:
+def _submission_marker(text: str) -> str:
     lines = str(text).strip().splitlines()
     if len(lines) != 1:
         return ""
     return lines[0][:SUBMISSION_MARKER_LENGTH].strip()
 
 
-def _submission_pending(fe, win, marker) -> bool:
+def _submission_pending(fe: ScreenDriver, win: str, marker: str) -> bool:
     """Is the message still sitting in the input box? Unreadable = assume sent."""
     try:
         from harness.impl.claude_code.probe import ClaudeCodeTerminalProbe  # noqa: PLC0415 — probe is optional; unreadable means assume sent
 
-        state = ClaudeCodeTerminalProbe().input_state(fe.terminal, str(win))
+        state = ClaudeCodeTerminalProbe().input_state(fe.terminal.viewport, str(win))
     except Exception:
         try:
             from audit import record  # noqa: PLC0415 — audit fallback inside the failure path
@@ -105,7 +106,12 @@ def _submission_pending(fe, win, marker) -> bool:
     return marker in typed
 
 
-def clear_input(fe, win, prev_text="", sleep=time.sleep):
+def clear_input(
+    fe: ScreenDriver,
+    win: str,
+    prev_text: str = "",
+    sleep: Callable[[float], None] = time.sleep,
+) -> int:
     """Kill whatever is in the input box, so the paste that follows REPLACES it
     instead of gluing onto it. Returns the number of lines killed.
 

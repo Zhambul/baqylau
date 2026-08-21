@@ -10,6 +10,8 @@
 # dispatches through it. An unknown type is not an error — the grammar is
 # VERSION-FRAGILE (verified drift across codex 0.95 → 0.144), so a missing key
 # means None, never an exception.
+from typing import Any
+
 from harness.impl.codex.canonical.vocabulary import empty_record, strip_input_wrapper
 
 # The PHASE codex stamps on an assistant message. `final_answer` is the one that
@@ -29,12 +31,14 @@ PHASE_FINAL = "final_answer"
 COVERED_ITEMS = ("UserMessage", "AgentMessage", "Reasoning")
 
 
-def _ev_token_count(p):
+def _ev_token_count(p: dict[str, Any]) -> dict[str, Any] | None:
     # Cumulative usage snapshot (info is null on rate-limit-only events).
     # `last_token_usage` + `model_context_window` ride along: the CUMULATIVE
     # total never resets across a compaction, so only the last turn's total
     # over the window measures ctx saturation.
-    info = p.get("info") if isinstance(p.get("info"), dict) else {}
+    info = p.get("info")
+    if not isinstance(info, dict):
+        info = {}
     u = info.get("total_token_usage")
     if not isinstance(u, dict):
         return None
@@ -45,7 +49,7 @@ def _ev_token_count(p):
             "window": win if isinstance(win, int) else None}
 
 
-def _ev_thread_goal_updated(p):
+def _ev_thread_goal_updated(p: dict[str, Any]) -> dict[str, Any] | None:
     goal = p.get("goal")
     if not isinstance(goal, dict):
         return None
@@ -57,11 +61,11 @@ def _ev_thread_goal_updated(p):
     }
 
 
-def _ev_thread_goal_cleared(p):
+def _ev_thread_goal_cleared(p: dict[str, Any]) -> dict[str, Any]:
     return {"kind": "goal", "objective": None, "status": "cleared", "reason": None}
 
 
-def rate_limits(p):
+def rate_limits(p: dict[str, Any]) -> dict[str, Any] | None:
     """A `token_count` payload's `rate_limits` block, normalized to codex's
     windows shape — {"planType", "windows": [{used_pct, window_mins,
     resets_at}]} — or None when the event carries none (the field is NULLABLE)
@@ -95,7 +99,7 @@ def rate_limits(p):
     return {"planType": rl.get("plan_type") or "", "windows": wins}
 
 
-def _patch_delta(ch):
+def _patch_delta(ch: dict[str, Any]) -> tuple[int, int]:
     """(added, removed) line counts for one patch_apply_end change entry."""
     t = ch.get("type")
     if t == "add":
@@ -111,7 +115,7 @@ def _patch_delta(ch):
     return add, rem
 
 
-def _file_change(item):
+def _file_change(item: dict[str, Any]) -> dict[str, Any]:
     """Normalize Codex's authoritative completed FileChange item."""
     files = []
     for path, ch in (item.get("changes") or {}).items():
@@ -136,11 +140,11 @@ def _file_change(item):
     }
 
 
-def _ev_context_compacted(p):
+def _ev_context_compacted(p: dict[str, Any]) -> dict[str, Any]:
     return {"kind": "compact"}
 
 
-def _ev_task_started(p):
+def _ev_task_started(p: dict[str, Any]) -> dict[str, Any]:
     # `turn_id` is codex's identity for the TURN this task is — the fact the
     # actor-assignment model is built on (core/childtask.py). A child rollout opens by
     # replaying the parent thread, so the task_started records BEFORE the child's
@@ -151,7 +155,7 @@ def _ev_task_started(p):
             "turn": p.get("turn_id") or ""}
 
 
-def _ev_task_complete(p):
+def _ev_task_complete(p: dict[str, Any]) -> dict[str, Any]:
     # …and the same turn id closing it, plus `last_agent_message`: codex's own
     # statement of what the turn ANSWERED. Kept because it is the FALLBACK result
     # text (harness/impl/codex/stream._ro_task_complete) for a run whose messages
@@ -163,7 +167,7 @@ def _ev_task_complete(p):
             "last": (p.get("last_agent_message") or "").strip()}
 
 
-def _ev_thread_settings_applied(p):
+def _ev_thread_settings_applied(p: dict[str, Any]) -> dict[str, Any]:
     """codex's PICKER state: a `thread_settings_applied` fires on EVERY /model
     change (model or reasoning level) — so it is FRESHER than `turn_context`,
     which is written only per-TURN. Its `thread_settings.model` +
@@ -176,7 +180,7 @@ def _ev_thread_settings_applied(p):
             "effort": (ts.get("reasoning_effort") or "").strip()}
 
 
-def _ev_item_completed(p):
+def _ev_item_completed(p: dict[str, Any]) -> dict[str, Any] | None:
     """codex's PLAN-mode plan: an `item_completed` whose `item.type == "Plan"`
     carries the full plan as markdown (`item.text`) with a stable id. This is
     the structured plan the dashboard renders as a plan card (docs/codex.md
@@ -206,8 +210,12 @@ def _ev_item_completed(p):
         if not isinstance(output, str):
             output = item.get("formatted_output")
         if not isinstance(output, str):
-            stdout = item.get("stdout") if isinstance(item.get("stdout"), str) else ""
-            stderr = item.get("stderr") if isinstance(item.get("stderr"), str) else ""
+            stdout = item.get("stdout")
+            if not isinstance(stdout, str):
+                stdout = ""
+            stderr = item.get("stderr")
+            if not isinstance(stderr, str):
+                stderr = ""
             output = stdout + stderr
         return {
             "kind": "command_completed",
@@ -237,29 +245,29 @@ def _ev_item_completed(p):
         else empty_record()
 
 
-def _ev_turn_aborted(p):
+def _ev_turn_aborted(p: dict[str, Any]) -> dict[str, Any]:
     return {"kind": "turn_aborted", "turn": p.get("turn_id") or ""}
 
 
-def _ev_user_message(p):
+def _ev_user_message(p: dict[str, Any]) -> dict[str, Any]:
     # Unwrap an INPUT wrapper here too so a `<task>` that also lands in the
     # event_msg register de-doubles with the response_item one to a single bubble.
     msg = strip_input_wrapper((p.get("message") or "").strip())
     return {"kind": "prompt", "text": msg} if msg else empty_record()
 
 
-def _ev_agent_reasoning(p):
+def _ev_agent_reasoning(p: dict[str, Any]) -> dict[str, Any]:
     txt = (p.get("text") or "").strip()
     return {"kind": "reasoning", "text": txt} if txt else empty_record()
 
 
-def _ev_agent_message(p):
+def _ev_agent_message(p: dict[str, Any]) -> dict[str, Any]:
     msg = (p.get("message") or "").strip()
     return {"kind": "message", "text": msg,
             "phase": (p.get("phase") or "").strip()} if msg else empty_record()
 
 
-def _ev_web_search_end(p):
+def _ev_web_search_end(p: dict[str, Any]) -> dict[str, Any] | None:
     """codex's web SEARCH in the event_msg register — and on cli 0.146 the ONLY
     place a search appears at all: the measured child rollout (019fb363-4028…)
     carries five `web_search_end` events and ZERO `web_search_call`

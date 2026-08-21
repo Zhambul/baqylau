@@ -11,8 +11,7 @@
 const MENU_BLUR_MS = 150;
 const HISTORY_FETCH = 40;
 
-/* The session view, optionally SCOPED to one agent (docs/dashboard.md *Agent
-   scope*). `agent` re-points the mirror, monitors and jobs at that agent — the
+/* The session view, optionally SCOPED to one agent. `agent` re-points the mirror, monitors and jobs at that agent — the
    same tabs, the same components, a different `?agent=` on every read — while
    errors stay session-wide (they have no agent dimension). Entering
    or leaving scope on the SAME session rebuilds the stream, because the feed's
@@ -27,6 +26,10 @@ function showSession(sessionId, tab, agent) {
     S.currentSessionId = sessionId;
     S.sessionView = { agent: agent,
               lastId: 0, mpos: 0, oldest: 0, stream: el("div", "stream"), stats: {},
+              // the aggregate as it stands, the commands being folded, and the
+              // attention entries the pending question is derived from
+              sessionFacts: null, actorRows: [], actorsById: {},
+              shells: new Map(), attentionEntries: [],
               agents: [], costs: null, contextWindow: null, compacting: null,
               running: {}, meta: null, es: null,
               timer: null, poll: null, itemNodes: new Map(), moreEl: null,
@@ -71,8 +74,18 @@ function resetStream() {
   sessionView.moreEl = null;
   sessionView.loadingOlder = false;
   sessionView.viewOpen = new Set(); sessionView.viewSeq = 0; sessionView.viewFill = 0;
+  // The folds go with the blocks they painted: a scope change repaints from zero
+  // and a fold pointing at a removed node would never repaint again.
+  sessionView.shells = new Map();
+  sessionView.attentionEntries = [];
   sessionView.stream.textContent = "";
 }
+
+/* ---------- SessionData, applied ------------------------------------------------
+   One aggregate in, the view's own state out. The shapes below are the chrome's
+   and the scoreboard's, unchanged — what changed is where each number comes
+   from: everything actor-specific is on an ACTOR now, and a session's own answer
+   is its LEAD actor's (or the one the ?agent= scope names). */
 
 function canonicalActorRow(actor) {
   return {
@@ -83,7 +96,7 @@ function canonicalActorRow(actor) {
     name: actor.name || actor.actor_id,
     desc: actor.description || actor.name || "",
     description: actor.description || "",
-    model: actor.model ? actor.model.native_id : "",
+    model: actor.model || "",
     effort: actor.effort || "",
     state: actor.state,
     active: actor.state === "running",
@@ -105,113 +118,164 @@ function canonicalUsageStats(usage) {
   };
 }
 
-function canonicalActivityStats(snapshot) {
-  const activity = snapshot.statistics || {};
-  return Object.assign(canonicalUsageStats(snapshot.usage), {
+// The actor this view is ABOUT: the one the ?agent= scope names, or the lead.
+function scopedActor(data) {
+  const wanted = (S.sessionView && S.sessionView.agent)
+    || (data.session || {}).lead_actor_id || "";
+  return (data.actors || []).find(actor => actor.actor_id === wanted) || null;
+}
+
+function canonicalActivityStats(data) {
+  const actor = scopedActor(data) || {};
+  const activity = actor.statistics || {};
+  return Object.assign(canonicalUsageStats(actor.usage), {
     commands: activity.shell_command_count || 0,
     failed: activity.failed_shell_command_count || 0,
     files: activity.file_count || 0,
     added: activity.lines_added || 0,
     removed: activity.lines_removed || 0,
     msg_delivered: activity.actor_message_count || 0,
-    start: snapshot.session && snapshot.session.started_at || 0,
+    start: (data.session || {}).started_at || 0,
   });
 }
 
-function canonicalSessionMeta(snapshot) {
-  const session = snapshot.session || {};
-  const actorId = (S.sessionView && S.sessionView.agent) || session.lead_actor_id || "";
-  const pendingAttention = ((snapshot.attention || {}).pending || [])
-    .find(item => !actorId || item.actor_id === actorId) || null;
-  const ask = pendingAttention && pendingAttention.attention_type !== "plan" ? {
-    attention_id: pendingAttention.attention_id,
-    tool_use_id: pendingAttention.attention_id,
-    questions: (pendingAttention.questions || []).map(question => ({
+// The pending question or plan, DERIVED from the feed: an asked entry whose
+// answer has not arrived. Nothing stores "still pending" — a flag would be a
+// second answer to the same question, and it could disagree with the feed the
+// person is looking at.
+function pendingAttentionEntries() {
+  const open = new Map();
+  for (const entry of (S.sessionView && S.sessionView.attentionEntries) || []) {
+    const id = (entry.body || {}).attention_id;
+    if (!id) continue;
+    if (entry.type === "question_asked" || entry.type === "plan_proposed") open.set(id, entry);
+    else open.delete(id);
+  }
+  return [...open.values()];
+}
+
+function canonicalAsk(entry) {
+  return {
+    attention_id: entry.body.attention_id,
+    tool_use_id: entry.body.attention_id,
+    questions: (entry.body.questions || []).map(question => ({
       id: question.question_id,
       header: question.title || "",
-      question: question.text,
+      question: question.question,
       multiSelect: !!question.multiple,
-      options: (question.options || []).map(option => ({
-        value: option.value,
-        label: option.label,
-        description: option.description || "",
+      // The label IS the value: both harnesses answer with the label they were
+      // shown, so a separate value was a mapping every client had to keep.
+      options: (question.choices || []).map(choice => ({
+        value: choice.label,
+        label: choice.label,
+        description: choice.description || "",
       })),
     })),
-  } : null;
-  const plan = pendingAttention && pendingAttention.attention_type === "plan" ? {
-    attention_id: pendingAttention.attention_id,
-    tool_use_id: pendingAttention.attention_id,
-    plan_id: pendingAttention.attention_id,
-    plan_html: pendingAttention.plan_html || "",
-  } : null;
+  };
+}
+
+function canonicalPlan(entry) {
   return {
+    attention_id: entry.body.attention_id,
+    tool_use_id: entry.body.attention_id,
+    plan_id: entry.body.attention_id,
+    plan_html: mdHtml((entry.body.plan || {}).text || ""),
+  };
+}
+
+function canonicalSessionMeta(data) {
+  const session = data.session || {};
+  const actor = scopedActor(data) || {};
+  const actorId = (S.sessionView && S.sessionView.agent) || session.lead_actor_id || "";
+  const pending = pendingAttentionEntries()
+    .filter(entry => !actorId || entry.actor_id === actorId);
+  const asked = pending.find(entry => entry.type === "question_asked") || null;
+  const proposed = pending.find(entry => entry.type === "plan_proposed") || null;
+  const meta = {
     harness: session.harness || "",
     title: session.title || "",
     workingDirectory: session.working_directory || "",
-    model: session.model ? session.model.native_id : "",
-    // the session's CURRENT model, as the last model.changed named it — the ✦
-    // button's label and picked entry. Distinct from contextWindow.model, which
-    // describes the window the ctx figure was MEASURED against and so only moves
-    // on the next assistant record (see setModelBtn).
-    model_short: session.model
-      ? (session.model.display_name || session.model.native_id) : "",
-    model_selection: session.model ? session.model.selection_id : null,
-    effort: session.effort || "",
+    // One display string is all a model is to a reader; the picker matches it
+    // against the catalog's display names.
+    model: actor.model || "",
+    model_short: actor.model || "",
+    effort: actor.effort || "",
     account: session.account ? {
       slug: session.account.account_id,
       label: session.account.display_name || session.account.account_id,
     } : {},
-    prompts: session.prompt_count || 0,
-    tasks: (snapshot.tasks || []).map(task => ({
+    prompts: (actor.statistics || {}).prompt_count || 0,
+    tasks: (session.tasks || []).map(task => ({
       id: task.task_id,
-      label: task.label,
+      label: task.task_id,
       subject: task.subject,
       description: task.description || "",
       status: task.state,
       owner_actor_id: task.owner_actor_id || null,
     })),
-    goal: snapshot.goal ? {
-      condition: snapshot.goal.objective,
-      met: snapshot.goal.state === "completed",
+    goal: session.goal ? {
+      condition: session.goal.objective,
+      met: !!session.goal.completed,
     } : null,
-    ask,
-    plan,
-    monitor_count: (snapshot.background_work || {}).monitor_count || 0,
-    job_count: (snapshot.background_work || {}).background_job_count || 0,
+    ask: asked ? canonicalAsk(asked) : null,
+    plan: proposed ? canonicalPlan(proposed) : null,
+    monitor_count: (actor.background || {}).monitor_count || 0,
+    job_count: (actor.background || {}).background_job_count || 0,
   };
+  // LIVENESS HAS ONE OWNER: this payload. `live` means a terminal window is
+  // attached, resolved server-side against the terminal — the one thing a
+  // frontend needs to know (never the window's own handle, which is not served).
+  // A payload that does not CARRY the fact may not write it: the refresh path
+  // rebuilds meta from a synthetic {session, actors} with no liveness in it, and
+  // writing `false` there would park a session that is running.
+  if ("live" in data) meta.live = sessionIsLive(data);
+  return meta;
 }
 
-function canonicalBackgroundOperation(operation) {
+/* ---------- the monitors and jobs panels ---------------------------------------
+   Folded from the same shell entries the feed draws, per the plan's client
+   contract: a monitor's ticks arrive on the `status` stream, a job's output on
+   `output`, and which of them is still running is the aggregate's answer
+   (`background.running_shell_ids`).
+
+   A monitor's END REASON is deliberately not carried anywhere — nothing displays
+   it — so a finished watch says finished and no more. */
+
+function backgroundCard(fold) {
+  const output = fold.output || "";
+  const ticks = (fold.status || "").split("\n").filter(line => line.trim());
   return {
-    task: operation.task,
-    agent_id: operation.actor_id || "",
-    group: operation.task,
-    command: operation.command || "",
-    cmd_html: operation.command_html || "",
-    description: operation.description || "",
-    live: !!operation.live,
-    started_at: operation.started_at,
-    ended_at: operation.ended_at,
-    end_reason: operation.end_reason || "",
-    output: operation.output || "",
-    lines: operation.line_count || 0,
+    task: fold.shellId,
+    agent_id: (fold.entry && fold.entry.actor_id) || "",
+    group: fold.shellId,
+    command: fold.command,
+    cmd_html: '<pre class="opl">' + escapeHtml(fold.command) + "</pre>",
+    description: (fold.entry && fold.entry.summary) || "",
+    live: shellIsRunning(fold.shellId),
+    started_at: fold.startedAt,
+    ended_at: fold.finishedAt,
+    end_reason: "",
+    output: output,
+    lines: output ? output.split("\n").length : 0,
     persistent: false,
     timeout_ms: null,
-    event_count: (operation.events || []).length,
+    event_count: ticks.length,
     events_truncated: false,
-    events: (operation.events || []).map(event => ({
-      event: event.event || "",
-      status: event.status || "",
-      summary: event.summary || "",
-      ts: event.timestamp,
-    })),
+    events: ticks.map(line => ({ event: line, status: "", summary: "", ts: null })),
   };
 }
 
-function applyCanonicalBackgroundWork(backgroundWork) {
-  if (!S.sessionView) return;
-  S.sessionView.monitors = (backgroundWork.monitors || []).map(canonicalBackgroundOperation);
-  S.sessionView.jobs = (backgroundWork.jobs || []).map(canonicalBackgroundOperation);
+function applyBackgroundPanels() {
+  const view = S.sessionView;
+  if (!view) return;
+  const monitors = [];
+  const jobs = [];
+  for (const fold of view.shells.values()) {
+    if (fold.execution === "monitor") monitors.push(backgroundCard(fold));
+    else if (fold.execution === "background" || fold.backgrounded) jobs.push(backgroundCard(fold));
+  }
+  view.monitors = monitors;
+  view.jobs = jobs;
 }
 
 function applySessionApplication(snapshot) {
@@ -224,9 +288,11 @@ function applySessionApplication(snapshot) {
   const errors = snapshot.errors || [];
   S.sessionView.errors = errors;
   updateErrCount(errors.length);
+  // Deliberately NOT a source of liveness, whatever this route may still answer
+  // with: it owns the drafts and the preferences, and a second owner of `live`
+  // is what made every live session's composer dead (the two disagreed, and
+  // which one you got depended on load order).
   S.sessionView.meta = Object.assign({}, S.sessionView.meta || {}, {
-    live: !!terminal.window_id,
-    terminal_window_id: terminal.window_id || "",
     suggestion: input.suggestion || "",
     typed_text: input.typed_text || "",
     view_mode: preferences.view_mode || "default",
@@ -241,17 +307,27 @@ function applySessionApplication(snapshot) {
   applyAskDraft(dialog.draft || null);
 }
 
-function applyCanonicalSnapshot(snapshot) {
-  if (!S.sessionView || !snapshot) return;
+function applyCanonicalSnapshot(data) {
+  if (!S.sessionView || !data || !data.session) return;
   const previous = S.sessionView.meta || {};
-  S.sessionView.meta = Object.assign({}, previous, canonicalSessionMeta(snapshot));
-  S.sessionView.meta.tab = snapshot.tab_state || "";
-  // A rename Claude Code makes itself (session.title_changed, origin "automatic")
-  // rides this same snapshot rather than a dedicated push — repaint the header
-  // span in place so it doesn't wait for the next full chrome rebuild (a live↔
-  // parked flip or window move). Skipped mid inline-rename (the input owns the
+  // The session's own facts, kept: a stream frame carries them only when they
+  // CHANGED, so the view has to hold the last ones it was told.
+  S.sessionView.sessionFacts = data.session;
+  // The actor rows, kept as they arrived: the fold that decides whether a
+  // command is still running reads `background.running_shell_ids` off them, and
+  // the bubbles join actor names against them.
+  S.sessionView.actorRows = data.actors || [];
+  S.sessionView.actorsById = {};
+  for (const actor of S.sessionView.actorRows)
+    S.sessionView.actorsById[actor.actor_id] = actor;
+  S.sessionView.meta = Object.assign({}, previous, canonicalSessionMeta(data));
+  S.sessionView.meta.tab = sessionTabState(data);
+  // A rename the harness makes itself (session.title_changed, origin
+  // "automatic") rides this same aggregate rather than a dedicated push —
+  // repaint the header span in place so it doesn't wait for the next full chrome
+  // rebuild (a live↔parked flip). Skipped mid inline-rename (the input owns the
   // span) and in agent scope (updateAgents' renderAgentScoreboard, called right
-  // after this in the "activity" handler, owns the span there).
+  // after this in the stream handler, owns the span there).
   if (S.sessionView.projEl && !S.sessionView.agentFocus
       && !S.sessionView.projEl.querySelector("input")
       && S.sessionView.meta.title !== previous.title) {
@@ -259,39 +335,28 @@ function applyCanonicalSnapshot(snapshot) {
       || directoryName(S.sessionView.meta.workingDirectory)
       || shortSid(S.currentSessionId);
   }
-  applyCanonicalBackgroundWork(snapshot.background_work || {});
-  S.sessionView.stats = canonicalActivityStats(snapshot);
-  const leadActorId = (snapshot.session || {}).lead_actor_id || "";
-  S.sessionView.agents = (snapshot.actors || [])
+  S.sessionView.stats = canonicalActivityStats(data);
+  const leadActorId = data.session.lead_actor_id || "";
+  S.sessionView.agents = (data.actors || [])
     .filter(actor => actor.actor_id !== leadActorId)
     .map(canonicalActorRow);
-  S.sessionView.costs = {
-    total_usd: snapshot.usage && snapshot.usage.cost_in_usd != null
-      ? Number(snapshot.usage.cost_in_usd) : null,
-  };
-  const actorId = S.sessionView.agent || ((snapshot.session || {}).lead_actor_id || "");
-  S.sessionView.contextWindow = actorId && snapshot.context && snapshot.context.by_actor
-    ? (() => {
-        const context = snapshot.context.by_actor[actorId];
-        if (!context) return null;
-        const used = context.used_tokens || 0;
-        const window = context.window_tokens || 0;
-        return {
-          used,
-          window,
-          pct: window ? Math.round(used * 100 / window) : 0,
-          model_short: context.model
-            ? (context.model.display_name || context.model.native_id) : "",
-          model_selection: context.model ? context.model.selection_id : null,
-        };
-      })() : null;
-  S.sessionView.compacting = snapshot.context
-    && (snapshot.context.compacting_actor_ids || []).includes(actorId)
-    ? { active: true } : null;
-  const backgroundWork = snapshot.background_work || {};
-  const monitorCount = backgroundWork.monitor_count || 0;
-  const backgroundCount = backgroundWork.background_job_count || 0;
-  const runningCount = (backgroundWork.running_operation_ids || []).length;
+  const usage = sessionUsage(data);
+  S.sessionView.costs = { total_usd: usage.cost_in_usd };
+  const actor = scopedActor(data);
+  const context = (actor && actor.context) || null;
+  S.sessionView.contextWindow = context && context.window_tokens
+    ? {
+        used: context.used_tokens || 0,
+        window: context.window_tokens || 0,
+        pct: Math.round((context.used_tokens || 0) * 100 / context.window_tokens),
+        model_short: (actor && actor.model) || "",
+      }
+    : null;
+  S.sessionView.compacting = context && context.compacting ? { active: true } : null;
+  const background = (actor && actor.background) || {};
+  const monitorCount = background.monitor_count || 0;
+  const backgroundCount = background.background_job_count || 0;
+  const runningCount = (background.running_shell_ids || []).length;
   S.sessionView.running = {
     operation: Math.max(0, runningCount - monitorCount - backgroundCount),
     background: backgroundCount,
@@ -312,6 +377,12 @@ function applyCanonicalCatalog(snapshot, catalog) {
   S.sessionView.meta.host_label = (host && host.label) || harness;
   const models = catalog.models || [];
   S.sessionView.meta.model_choices = models.map(option => option.model_id);
+  // id -> display name, which is how the picker finds the row the session is
+  // ON: the wire carries one model NAME now (the selection id went with the
+  // reference), so the match is name against name.
+  S.sessionView.meta.model_labels = {};
+  for (const option of models)
+    S.sessionView.meta.model_labels[option.model_id] = option.display_name || option.model_id;
   // Efforts belong to the MODEL, not the harness (ModelOption.efforts): codex's
   // gpt-5.6-luna has no Ultra while its siblings do, so one flat per-harness
   // list offered a level the picker would then refuse. Keep the map, and default
@@ -347,218 +418,271 @@ function applyCanonicalCatalog(snapshot, catalog) {
   };
 }
 
-function loadCanonicalSession(sessionId) {
-  const query = canonicalSessionQuery();
-  S.sessionView.stream.append(el("div", "waiting", "waiting for activity…"));
-  loadCanonicalSessionSnapshot(sessionId, query);
-  fetch("/api/sessions/" + encodeURIComponent(sessionId) + "/activity?block_count=100"
-        + (query ? "&" + query.slice(1) : ""))
-    .then(r => r.json())
-    .then(page => {
-      if (S.currentSessionId !== sessionId || !S.sessionView) return;
-      S.sessionView.lastId = page.latest_cursor || 0;
-      S.sessionView.oldest = page.has_more ? (page.oldest_cursor || 0) : 0;
-      appendItems(page.items || []);
-    })
-    .catch(() => { clog(sessionId, "backlog.fail", {}); })
-    .finally(() => { if (S.currentSessionId === sessionId) connectCanonicalSession(sessionId); });
-}
+/* ---------- opening a session --------------------------------------------------
+   Snapshot, then page, then stream — in that order and from ONE cursor. The
+   aggregate's `cursor` is the session's high-water mark across its entries and
+   its aggregate revisions, so the page taken `at` it and the stream opened from
+   it describe one instant: no entry twice, none missed. */
 
-function loadCanonicalSessionSnapshot(sessionId, query) {
+function loadCanonicalSession(sessionId) {
+  S.sessionView.stream.append(el("div", "waiting", "waiting for activity…"));
   let stage = "transport";
-  fetch("/api/sessions/" + encodeURIComponent(sessionId) + query)
+  fetch("/sessionData/" + encodeURIComponent(sessionId))
     .then(response => {
       stage = "response";
       if (!response.ok) {
-        const error = new Error("session metadata " + response.status);
+        const error = new Error("session data " + response.status);
         error.status = response.status;
         throw error;
       }
       stage = "decode";
       return response.json();
     })
-    .then(page => {
+    .then(data => {
       stage = "render";
-      if (S.currentSessionId !== sessionId || !S.sessionView) return;
-      const snapshot = page.canonical || {};
-      applyCanonicalSnapshot(snapshot);
-      applySessionApplication(page.application || {});
+      if (S.currentSessionId !== sessionId || !S.sessionView) return null;
+      applyCanonicalSnapshot(data);
       renderSessionChrome(S.sessionView.tab || "mirror");
-      applyViewMode();
-      if (S.sessionView.meta.suggestion) applySuggestion(S.sessionView.meta.suggestion);
-      const session = snapshot.session || {};
-      const catalogQuery = "?session_id=" + encodeURIComponent(sessionId)
-        + "&working_directory=" + encodeURIComponent(session.working_directory || "");
-      fetch("/api/harnesses/" + encodeURIComponent(session.harness) + "/catalog"
-            + catalogQuery)
-        .then(response => response.json())
-        // The per-session catalog and the installed-harness list are separate
-        // requests. On a cold page load the snapshot can win that race; without
-        // the harness row, applyCanonicalCatalog truthfully derives every
-        // control capability as false and the composer stays disabled even
-        // after the boot-time host request lands. Share/await that request
-        // before deriving caps so a missing row means unsupported, not merely
-        // "the other request has not finished yet".
-        .then(catalog => {
-          if (hostRow(session.harness)) return catalog;
-          return loadCanonicalHosts().then(() => catalog);
-        })
-        .then(catalog => {
-          if (S.currentSessionId !== sessionId || !S.sessionView) return;
-          applyCanonicalCatalog(snapshot, catalog);
-          renderSessionChrome(S.sessionView.tab || "mirror");
-        })
-        .catch(() => { clog(sessionId, "catalog.fail", {}); });
+      loadSessionCatalog(sessionId, data);
+      return loadEntryPage(sessionId, data.cursor);
+    })
+    .then(() => {
+      if (S.currentSessionId !== sessionId || !S.sessionView) return;
+      applySessionApplicationSnapshot(sessionId);
+      connectCanonicalSession(sessionId);
     })
     .catch(error => {
-      clog(sessionId, "meta.fail", {
+      failLoudly(sessionId, "session.load.fail", {
         stage,
         status: (error && error.status) || 0,
         error: String((error && error.message) || error || "").slice(0, 160),
       });
+      if (S.currentSessionId === sessionId) connectCanonicalSession(sessionId);
     });
 }
+
+// The newest page of the feed, as of the snapshot's cursor. `at` is what ties
+// the two together: without it the page could contain an entry the stream will
+// send again, or stop short of one it never will.
+function loadEntryPage(sessionId, cursor) {
+  return fetch("/sessionData/" + encodeURIComponent(sessionId)
+               + "/entries?limit=" + HISTORY_FETCH + "&at=" + (cursor | 0))
+    .then(response => response.json())
+    .then(page => {
+      if (S.currentSessionId !== sessionId || !S.sessionView) return;
+      S.sessionView.lastId = cursor | 0;
+      S.sessionView.oldest = page.has_more ? (page.oldest_cursor || 0) : 0;
+      rememberAttention(page.items || []);
+      // The page is oldest-first and the feed is newest-top, so it is applied
+      // the way a live tail would have arrived: one at a time, prepending.
+      appendEntries(page.items || []);
+      applyBackgroundPanels();
+      applyCanonicalSnapshotRefresh();
+    })
+    .catch(error => failLoudly(sessionId, "backlog.load.fail", { error: String(error) }));
+}
+
+// The attention entries, kept apart from the feed: the pending question or plan
+// is DERIVED from them, and the card that answers it must not have to walk the
+// DOM to find out what it is answering.
+function rememberAttention(entries) {
+  const known = S.sessionView.attentionEntries || [];
+  const attention = entries.filter(entry => [
+    "question_asked", "question_answered", "plan_proposed", "plan_resolved",
+  ].includes(entry.type));
+  if (!attention.length) return;
+  S.sessionView.attentionEntries = known.concat(attention)
+    .sort((left, right) => left.cursor - right.cursor);
+}
+
+// Re-derive what the aggregate alone cannot say: the pending attention comes
+// from the feed, so the meta that carries it is rebuilt once the entries are in.
+function applyCanonicalSnapshotRefresh() {
+  if (!S.sessionView || !S.sessionView.actorRows) return;
+  const data = {
+    session: S.sessionView.sessionFacts || {},
+    actors: S.sessionView.actorRows,
+  };
+  if (!data.session.session_id) return;
+  // MERGE, not replace: this data is SYNTHETIC — the facts it omits (liveness)
+  // must survive it, so canonicalSessionMeta writes only what it was given.
+  S.sessionView.meta = Object.assign({}, S.sessionView.meta, canonicalSessionMeta(data));
+  renderAsk();
+  renderPlan();
+}
+
+// What the BROWSER owns for this session — the draft, the queue, the density,
+// the muted flag — from the preferences store, which is a different thing from
+// the read model and has its own route.
+function applySessionApplicationSnapshot(sessionId) {
+  return fetch("/api/sessions/" + encodeURIComponent(sessionId) + "/application")
+    .then(response => response.json())
+    .then(snapshot => {
+      if (S.currentSessionId !== sessionId || !S.sessionView) return;
+      applySessionApplication(snapshot);
+      applyViewMode();
+      if (S.sessionView.meta.suggestion) applySuggestion(S.sessionView.meta.suggestion);
+    })
+    .catch(error => failLoudly(sessionId, "application.load.fail", { error: String(error) }));
+}
+
+function loadSessionCatalog(sessionId, data) {
+  const session = data.session || {};
+  const query = "?session_id=" + encodeURIComponent(sessionId)
+    + "&working_directory=" + encodeURIComponent(session.working_directory || "");
+  fetch("/api/harnesses/" + encodeURIComponent(session.harness) + "/catalog" + query)
+    .then(response => response.json())
+    // The per-session catalog and the installed-harness list are separate
+    // requests. On a cold page load the aggregate can win that race; without the
+    // harness row, applyCanonicalCatalog truthfully derives every control
+    // capability as false and the composer stays disabled even after the
+    // boot-time host request lands. Await that request before deriving caps so a
+    // missing row means unsupported, not merely "the other request has not
+    // finished yet".
+    .then(catalog => hostRow(session.harness) ? catalog : loadCanonicalHosts().then(() => catalog))
+    .then(catalog => {
+      if (S.currentSessionId !== sessionId || !S.sessionView) return;
+      applyCanonicalCatalog(data, catalog);
+      renderSessionChrome(S.sessionView.tab || "mirror");
+    })
+    .catch(error => failLoudly(sessionId, "catalog.load.fail", { error: String(error) }));
+}
+
+/* ---------- the session stream -------------------------------------------------
+   One frame per poll that found news, carrying everything found: the session
+   part when it changed, the actor rows that changed, and the new entries. The
+   frame's id is the cursor to resume from, and the browser sends it back on a
+   reconnect by itself. */
 
 function connectCanonicalSession(sessionId) {
   if (!S.sessionView || S.currentSessionId !== sessionId) return;
   if (S.sessionView.es) { try { S.sessionView.es.close(); } catch (error) { /* already closed */ } }
-  const actor = (S.sessionView.agent || "");
-  const query = "?after_cursor=" + (S.sessionView.lastId || 0)
-    + (actor ? "&actor_id=" + encodeURIComponent(actor) : "");
   const stream = new EventSource(
-    "/api/sessions/" + encodeURIComponent(sessionId) + "/stream" + query
+    "/sessionData/" + encodeURIComponent(sessionId)
+    + "/stream?after_cursor=" + (S.sessionView.lastId || 0)
   );
   S.sessionView.es = stream;
-  stream.addEventListener("activity", event => {
+  stream.addEventListener("sessionData", event => {
     if (!S.sessionView || S.currentSessionId !== sessionId) return;
-    const frame = JSON.parse(event.data);
-    S.sessionView.lastId = Math.max(S.sessionView.lastId || 0, frame.cursor || 0);
-    applyCanonicalSnapshot(frame.snapshot);
-    appendItems(frame.items || []);
-    updateStatsRow();
-    updateAgents();
-    updateRunning();
-    renderAsk();
-    renderPlan();
-    renderTasks();
-    renderGoal();
-    if (S.sessionView.tab === "monitors" || S.sessionView.monitorFocus) loadSection("monitors");
-    if (S.sessionView.tab === "jobs" || S.sessionView.jobFocus) loadSection("jobs");
-    if (S.sessionView.meta.suggestion) applySuggestion(S.sessionView.meta.suggestion);
+    applySessionDataFrame(JSON.parse(event.data) || {});
   });
-  stream.addEventListener("application", event => {
-    if (!S.sessionView || S.currentSessionId !== sessionId) return;
-    applySessionApplication(JSON.parse(event.data));
-    applyViewMode();
-    if (S.sessionView.meta.suggestion) applySuggestion(S.sessionView.meta.suggestion);
-  });
+}
+
+function applySessionDataFrame(frame) {
+  const view = S.sessionView;
+  if (frame.session) view.sessionFacts = frame.session;
+  if ((frame.actors || []).length) {
+    const rows = (view.actorRows || []).slice();
+    for (const actor of frame.actors) {
+      const existing = rows.findIndex(known => known.actor_id === actor.actor_id);
+      if (existing >= 0) rows[existing] = actor;
+      else rows.push(actor);
+    }
+    view.actorRows = rows;
+  }
+  if (frame.session || (frame.actors || []).length) {
+    applyCanonicalSnapshot({
+      session: view.sessionFacts || {},
+      actors: view.actorRows || [],
+    });
+  }
+  const entries = frame.entries || [];
+  if (entries.length) {
+    view.lastId = Math.max(view.lastId || 0, entries[entries.length - 1].cursor || 0);
+    rememberAttention(entries);
+    appendEntries(entries);
+  }
+  applyBackgroundPanels();
+  updateStatsRow();
+  updateAgents();
+  updateRunning();
+  renderAsk();
+  renderPlan();
+  renderTasks();
+  renderGoal();
+  if (view.tab === "monitors" || view.monitorFocus) loadSection("monitors");
+  if (view.tab === "jobs" || view.jobFocus) loadSection("jobs");
+  if (view.meta.suggestion) applySuggestion(view.meta.suggestion);
 }
 
 const RUN_TIMER_INTERVAL_MS = 1000;
 
-function dashboardNode(item) {
+/* ---------- one entry, one node ------------------------------------------------
+   The entry's markup comes from `entryDescriptor` (app.00b-entries.js), which is
+   pure and tested; everything here is the DOM half — the stamps the density pass
+   reads, the fold that keeps one node per command, and the click bindings.
+
+   Content is EMBEDDED in an entry now, so there is no content route and no
+   "fetch the full text" link: expanding a block shows what is already in hand.
+   Copying reads the node's own text for the same reason. */
+
+function entryNode(entry, descriptor) {
   const container = el("div");
-  container.innerHTML = item.html;
+  container.innerHTML = descriptor.markup;
   const node = container.firstElementChild;
   if (!node || node.nextElementSibling)
-    throw new Error("DashboardItem.html must contain one top-level node");
-  stampItem(node, item);
+    throw new Error("an entry must render as one top-level node");
+  stampEntry(node, entry, descriptor);
   if (node.classList.contains("blk"))
     node.dataset.open = S.sessionView.view === "verbose" ? "1" : "0";
-  bindCanonicalContent(node, item);
+  bindEntryContent(node);
   bindDashboardBlock(node);
   return node;
 }
 
-function canonicalContentUrl(reference) {
-  return "/api/content/" + encodeURIComponent(reference);
-}
-
-function canonicalContentLinks() {
-  const links = el("span", "cl");
-  const copy = el("a", "cc canonical-content", "⧉copy");
-  copy.dataset.contentAction = "copy";
-  const view = el("a", "cc canonical-content", "⧉view");
-  view.dataset.contentAction = "view";
-  links.append(copy, view);
-  return links;
-}
-
-function canonicalOperationContentLinks(item) {
-  const links = el("span", "cl");
-  for (const [label, reference] of [
-    ["⧉cmd", item.command_reference],
-    ["⧉out", item.output_reference],
-  ]) {
-    if (!reference) continue;
-    const copy = el("a", "cc canonical-content", label);
-    copy.dataset.contentAction = "copy";
-    copy.dataset.contentReference = reference;
-    links.append(copy);
+// Stamp one freshly-created stream child with everything the view-mode pass
+// reads off the DOM: its rail, the kind the run summaries count by, the
+// conversation kind focus mode narrows on, a monotonic key that names the node
+// for as long as it lives, and its recorded time.
+function stampEntry(node, entry, descriptor) {
+  node.dataset.itemGroup = descriptor.group;
+  node.dataset.summaryKind = descriptor.summaryKind;
+  if (descriptor.state === "failed" || descriptor.state === "cancelled")
+    node.dataset.bad = "1";
+  if (descriptor.linesAdded) node.dataset.add = String(descriptor.linesAdded);
+  if (descriptor.linesRemoved) node.dataset.rem = String(descriptor.linesRemoved);
+  if (descriptor.conversationKind) node.dataset.conversationKind = descriptor.conversationKind;
+  // WHICH TURN this bubble belongs to, and whether it is that turn's FINAL
+  // answer. The answer bubble anchors a late assignment completion
+  // (assignmentAnchor) — the one thing in the feed a later entry has to find.
+  if (entry.turn_id) node.dataset.turn = entry.turn_id;
+  if (descriptor.final) node.dataset.final = "1";
+  const body = entry.body || {};
+  if (body.assignment_id) {
+    node.dataset.actorAssignmentId = body.assignment_id;
+    node.dataset.actorAssignmentPhase =
+      entry.type === "assignment_finished" ? "finished" : "started";
+    node.dataset.summaryKindorId = body.assignment_id;
   }
-  return links;
+  if (body.message_id) node.dataset.messageId = body.message_id;
+  if (descriptor.state) node.dataset.state = descriptor.state;
+  if (entry.occurred_at) node.dataset.startedAt = String(entry.occurred_at);
+  node.dataset.viewKey = String(++S.sessionView.viewSeq);
+  node.dataset.summaryKindivityTime = String(entry.occurred_at || 0);
 }
 
-function bindCanonicalContent(node, item) {
+// Copy takes the node's own text. There is nothing to fetch: the content the
+// daemon used to serve on request is in the entry that drew this block.
+function bindEntryContent(node) {
   const links = node.querySelector(".blinks");
-  if (item.command_reference || item.output_reference) {
-    if (links) links.append(canonicalOperationContentLinks(item));
-    return;
-  }
-  if (item.content_reference) {
-    node.dataset.contentReference = item.content_reference;
-    if (item.file_path) node.dataset.filePath = item.file_path;
-    if (links) links.append(canonicalContentLinks());
-    if (item.item_type === "file") node.dataset.contentAction = "view";
-  }
-}
-
-function toggleCanonicalContent(node, text) {
-  const next = node.nextElementSibling;
-  if (next && next.classList.contains("view-block")) {
-    next.remove();
-    return;
-  }
-  const view = el("div", "view-block");
-  if (node.dataset.itemGroup === "files") view.innerHTML = text;
-  else view.append(pre(text));
-  node.insertAdjacentElement("afterend", view);
-}
-
-function canonicalViewUrl(node) {
-  const url = canonicalContentUrl(node.dataset.contentReference);
-  if (node.dataset.itemGroup !== "files") return url;
-  const view = node.dataset.summaryKind === "file_edit" ? "diff" : "source";
-  const query = new URLSearchParams({ view, path: node.dataset.filePath });
-  return url + "?" + query.toString();
+  if (!links) return;
+  const copy = el("a", "cc", "⧉copy");
+  copy.dataset.copyBlock = "1";
+  links.append(copy);
 }
 
 document.addEventListener("click", event => {
-  const actionNode = event.target.closest && event.target.closest("[data-content-action]");
-  if (!actionNode) return;
-  const itemNode = actionNode.closest("[data-content-reference]");
-  if (!itemNode) return;
-  // A whole-item action (the node carries data-content-action itself, like a
-  // file line) must yield to a nested link/button the click actually landed on.
-  const interactive = event.target.closest("a,button");
-  if (actionNode === itemNode && interactive && interactive !== actionNode) return;
+  const action = event.target.closest && event.target.closest("[data-copy-block]");
+  if (!action) return;
+  const block = action.closest(".blk") || action.closest("[data-item-group]");
+  if (!block) return;
   event.preventDefault();
-  const action = actionNode.dataset.contentAction;
-  fetch(action === "view"
-    ? canonicalViewUrl(itemNode)
-    : canonicalContentUrl(itemNode.dataset.contentReference))
-    .then(response => {
-      if (!response.ok) throw new Error("content request failed");
-      return response.text();
-    })
-    .then(text => {
-      if (action === "view") return toggleCanonicalContent(itemNode, text);
-      if (action !== "copy") throw new Error("unknown content action");
-      if (!navigator.clipboard) throw new Error("clipboard unavailable");
-      return navigator.clipboard.writeText(text).then(() =>
-        toast("done", "copied block", text.length + " chars"));
-    })
-    .catch(() => toast("ask", action + " failed", "try again"));
+  const body = block.querySelector(".bbody") || block;
+  const text = body.innerText || body.textContent || "";
+  if (!navigator.clipboard) { toast("ask", "copy failed", "clipboard unavailable"); return; }
+  navigator.clipboard.writeText(text)
+    .then(() => toast("done", "copied block", text.length + " chars"))
+    .catch(() => toast("ask", "copy failed", "try again"));
 });
 
 function bindDashboardBlock(node) {
@@ -572,8 +696,7 @@ function bindDashboardBlock(node) {
     node.dataset.open = node.dataset.open === "1" ? "0" : "1";
   };
 }
-// The BROWSER's half of the semantic actor-assignment order (docs/dashboard.md,
-// *Semantic actor-assignment order*). The server orders a child's completion and the
+// The BROWSER's half of the semantic actor-assignment order. The server orders a child's completion and the
 // parent turn's final answer whenever both are in ONE payload (read/mirror.
 // task_order, backlog and live delta alike) — but a completion whose answer went
 // out on an EARLIER tick arrives with that bubble already on screen, and the feed
@@ -587,44 +710,98 @@ function bindDashboardBlock(node) {
 // prepend exactly as before. A SCAN, not a selector: a turn id is opaque and
 // `querySelector` would need it escaped, where the top-level children are the
 // bubbles and there are at most a few thousand of them.
-function assignmentAnchor(it) {
-  if (it.actor_assignment_phase !== "finished" || !it.turn_id) return null;
+function assignmentAnchor(entry) {
+  if (entry.type !== "assignment_finished" || !entry.turn_id) return null;
   for (const elem of S.sessionView.stream.children)
     if (elem.dataset && elem.dataset.final === "1"
-        && elem.dataset.turn === it.turn_id) return elem;
+        && elem.dataset.turn === entry.turn_id) return elem;
   return null;
 }
 
-function appendItems(items) {
+/* ---------- the command fold ---------------------------------------------------
+   A command is ONE block built from several entries: its start, its output
+   chunks, and its finish. The client folds them because the alternative is the
+   daemon re-sending a growing output on every line — the churn this redesign
+   removed.
+
+   `S.sessionView.shells` holds one fold per shell_id, each with the node it
+   painted, so a chunk repaints exactly one block. A shell that is still in the
+   aggregate's `running_shell_ids` is drawn as running even though its launch
+   already reported "finished": a background job's launch finishes immediately
+   while its output keeps coming. */
+
+function shellIsRunning(shellId) {
+  for (const actor of S.sessionView.actorRows || [])
+    if ((actor.background && actor.background.running_shell_ids || []).includes(shellId))
+      return true;
+  return false;
+}
+
+function paintShell(fold, place) {
+  const descriptor = shellDescriptor(fold, shellIsRunning(fold.shellId));
+  const node = entryNode(fold.entry, descriptor);
+  if (fold.node && fold.node.isConnected) {
+    node.dataset.viewKey = fold.node.dataset.viewKey;
+    if (fold.node.dataset.userset) {
+      node.dataset.userset = fold.node.dataset.userset;
+      node.dataset.open = fold.node.dataset.open;
+    }
+    fold.node.replaceWith(node);
+  } else {
+    place(node);
+  }
+  fold.node = node;
+  return node;
+}
+
+// One entry into the feed. Returns the node it drew, or null when the entry
+// draws nothing — a turn marker, or a chunk of a command whose start this client
+// has not seen (a page that joined mid-command has no block to append to).
+function placeEntry(entry, place) {
+  const shellId = (entry.body || {}).shell_id;
+  if (shellId) {
+    const shells = S.sessionView.shells;
+    if (entry.type === "shell_started") {
+      const fold = newShellFold(entry);
+      fold.entry = entry;
+      shells.set(shellId, fold);
+      return paintShell(fold, place);
+    }
+    const fold = shells.get(shellId);
+    if (!fold) return null;
+    foldShellEntry(fold, entry);
+    return paintShell(fold, place);
+  }
+  const descriptor = entryDescriptor(entry, S.sessionView.actorsById || {});
+  if (descriptor === null) return null;
+  const node = entryNode(entry, descriptor);
+  place(node);
+  return node;
+}
+
+function appendEntries(entries) {
   const stream = S.sessionView.stream;
   const waiting = stream.querySelector(".waiting");
   if (waiting) waiting.remove();
-  for (const item of items) {
-    const node = dashboardNode(item);
-    const existing = S.sessionView.itemNodes.get(item.item_id);
-    if (existing && existing.isConnected) {
-      node.dataset.viewKey = existing.dataset.viewKey;
-      if (existing.dataset.userset) {
-        node.dataset.userset = existing.dataset.userset;
-        node.dataset.open = existing.dataset.open;
-      }
-      existing.replaceWith(node);
-    } else {
-      const anchor = assignmentAnchor(item);
-      if (anchor) stream.insertBefore(node, anchor.nextElementSibling);
-      else stream.prepend(node);
-    }
-    S.sessionView.itemNodes.set(item.item_id, node);
+  for (const entry of entries) {
+    const existing = S.sessionView.itemNodes.get(entry.entry_id);
+    if (existing && existing.isConnected) continue;   // immutable: already drawn
+    const node = placeEntry(entry, drawn => {
+      const anchor = assignmentAnchor(entry);
+      if (anchor) stream.insertBefore(drawn, anchor.nextElementSibling);
+      else stream.prepend(drawn);
+    });
+    if (node) S.sessionView.itemNodes.set(entry.entry_id, node);
   }
-  drainQueue(items);
-  drainPending(items);
-  dropSuperseded(items);
+  drainQueue(entries);
+  drainPending(entries);
+  dropSuperseded(entries);
   while (stream.childElementCount > 3000) {
     let last = stream.lastElementChild;
     if (last === S.sessionView.moreEl) last = last.previousElementSibling;  // the load-older
     if (!last) break;                          //   affordance stays pinned at the bottom
-    for (const [itemId, itemNode] of S.sessionView.itemNodes)
-      if (itemNode === last) S.sessionView.itemNodes.delete(itemId);
+    for (const [entryId, node] of S.sessionView.itemNodes)
+      if (node === last) S.sessionView.itemNodes.delete(entryId);
     last.remove();
   }
   tintAgentNotes();              // the notes' dots follow their agents' outcomes
@@ -641,10 +818,14 @@ function appendItems(items) {
 // in arrival order made the loaded stretch read bottom-up (oldest first) while
 // the live tail above it read top-down. Each item takes the position a live
 // top-prepend would have given it, keeping the whole feed monotonic.
-function appendOlder(items) {
+function appendOlder(entries) {
   const stream = S.sessionView.stream;
   const fragment = document.createDocumentFragment();
-  const nodes = items.map(dashboardNode);
+  const nodes = [];
+  for (const entry of entries) {
+    const node = placeEntry(entry, drawn => nodes.push(drawn));
+    if (node) S.sessionView.itemNodes.set(entry.entry_id, node);
+  }
   for (let index = nodes.length - 1; index >= 0; index--) fragment.append(nodes[index]);
   if (S.sessionView.moreEl) stream.insertBefore(fragment, S.sessionView.moreEl);
   else stream.append(fragment);
@@ -663,11 +844,36 @@ function appendOlder(items) {
 // (like history) — a compact scannable peek: command/file/agent blocks collapse
 // to their one-line summary, while conversation messages (ungrouped items) show
 // inline in full; a click on any block header expands it.
-function renderPreview(container, items) {
+function renderPreview(container, entries, actors) {
   container.textContent = "";
-  for (const item of items) container.append(dashboardNode(item));
+  // A standalone peek, so it folds its own commands rather than borrowing the
+  // open session's state: this container is not the live feed.
+  const shells = new Map();
+  for (const entry of entries) {
+    const shellId = (entry.body || {}).shell_id;
+    if (shellId) {
+      if (entry.type === "shell_started") {
+        const fold = newShellFold(entry);
+        fold.entry = entry;
+        shells.set(shellId, fold);
+      } else if (shells.has(shellId)) {
+        foldShellEntry(shells.get(shellId), entry);
+      } else {
+        continue;
+      }
+      const fold = shells.get(shellId);
+      const node = entryNode(fold.entry, shellDescriptor(fold, false));
+      if (fold.previewNode && fold.previewNode.isConnected) fold.previewNode.replaceWith(node);
+      else container.append(node);
+      fold.previewNode = node;
+      continue;
+    }
+    const descriptor = entryDescriptor(entry, actors || {});
+    if (descriptor === null) continue;
+    container.append(entryNode(entry, descriptor));
+  }
   if (!container.childElementCount)
-    container.append(el("div", "nspreview-empty", "no mirror history"));
+    container.append(el("div", "nspreview-empty", "no history yet"));
 }
 
 // The "load older" affordance: a button pinned at the BOTTOM of the feed (a
@@ -747,16 +953,20 @@ function loadOlder(want) {
   sessionView.loadingOlder = true;
   if (sessionView.moreEl) sessionView.moreEl.textContent = "loading…";
 
-  const step = () => fetch("/api/sessions/" + encodeURIComponent(sessionId)
-                           + "/activity?before_cursor=" + (sessionView.oldest | 0)
-                           + "&block_count=" + blocks
-                           + ((sessionView.agent || "")
-                             ? "&actor_id=" + encodeURIComponent(sessionView.agent) : ""))
+  // `before` pages further back from the oldest cursor this feed holds. Scope is
+  // applied HERE rather than by the server: an entry names its own actor, and a
+  // page filtered server-side would have to be a different page per scope.
+  const step = () => fetch("/sessionData/" + encodeURIComponent(sessionId)
+                           + "/entries?before=" + (sessionView.oldest | 0)
+                           + "&limit=" + blocks)
     .then(r => r.json())
     .then(d => {
       if (S.currentSessionId !== sessionId || !S.sessionView) return;         // navigated away mid-fetch
       tries++;
-      appendOlder(d.items || []);
+      const scope = sessionView.agent || "";
+      const items = (d.items || []).filter(entry => !scope || entry.actor_id === scope);
+      rememberAttention(items);
+      appendOlder(items);
       sessionView.oldest = d.has_more ? (d.oldest_cursor | 0) : 0;
       const gained = visibleCount() - start;
       if (gained >= target || (sessionView.oldest | 0) <= 0 || tries >= OLDER_TRIES) return;
@@ -765,52 +975,13 @@ function loadOlder(want) {
       return step();
     });
 
-  step().catch(() => {}).then(() => {
+  step().catch(error => {
+    failLoudly(sessionId, "feed.older.fail", { error: String(error) });
+  }).then(() => {
     if (S.currentSessionId !== sessionId || !S.sessionView) return;
     sessionView.loadingOlder = false;
     updateMoreBtn();
   });
-}
-
-/* ---------- stream item kinds ---------- */
-// Every top-level stream child carries a dashboard-owned kind. View modes use
-// this explicit field and never infer it from HTML, glyphs, or harness names.
-
-function dashboardItemGroup(item) {
-  if (["message", "reasoning", "attention"].includes(item.item_type)) return "messages";
-  if (item.item_type === "file") return "files";
-  if (item.item_type === "actor_assignment") return "agents";
-  return "commands";
-}
-
-// Stamp one freshly-created top-level stream child with everything the view-mode
-// pass reads off the DOM: its item kind, its served activity class + failure
-// flag, the conversation kind (focus mode narrows on it), a monotonic key that
-// names the item for as long as it lives, and its recorded activity time.
-function stampItem(node, item) {
-  node.dataset.itemGroup = dashboardItemGroup(item);
-  node.dataset.summaryKind = item.summary_kind;
-  if (item.state === "failed" || item.state === "cancelled") node.dataset.bad = "1";
-  if (item.lines_added) node.dataset.add = String(item.lines_added);
-  if (item.lines_removed) node.dataset.rem = String(item.lines_removed);
-  if (item.conversation_kind) node.dataset.conversationKind = item.conversation_kind;
-  // WHICH TURN this bubble belongs to, and whether it is that turn's FINAL answer
-  // The answer bubble anchors a late actor-assignment completion
-  // (assignmentAnchor) — the one thing in the feed a later item has to be
-  // able to find.
-  if (item.turn_id) node.dataset.turn = item.turn_id;
-  if (item.final) node.dataset.final = "1";
-  if (item.actor_assignment_id) {
-    node.dataset.actorAssignmentId = item.actor_assignment_id;
-    node.dataset.actorAssignmentPhase = item.actor_assignment_phase;
-  }
-  if (item.actor_assignment_id) node.dataset.summaryKindorId = item.actor_assignment_id;
-  if (item.message_id) node.dataset.messageId = item.message_id;
-  if (item.state) node.dataset.state = item.state;
-  if (item.started_at) node.dataset.startedAt = String(item.started_at);
-  if (item.finished_at) node.dataset.finishedAt = String(item.finished_at);
-  node.dataset.viewKey = String(++S.sessionView.viewSeq);
-  node.dataset.summaryKindivityTime = String(item.started_at || item.finished_at || 0);
 }
 
 // An agent note's DOT carries the OUTCOME, exactly like a collapsed run's `.vdot`:
@@ -907,8 +1078,7 @@ const VIEW_DEFAULT = "default";
 // headers and each agent's ⇢ prompt / ⇠ result card standing, while focus — one
 // line for the whole turn — folds them in with everything else.
 //
-// Nothing is ever dropped from the COUNTERS by a mode (there is no second axis;
-// see docs/dashboard.md *View modes* for the one that was tried and rejected):
+// Nothing is ever dropped from the COUNTERS by a mode:
 // what a mode collapses, its summary still accounts for.
 // A MONITOR folds in default too, asked for in those words ("also monitors should be
 // in the under summary in default mode"): a monitor is a watcher you set up once and
@@ -930,7 +1100,7 @@ const VIEW_FOLD = {
 };
 
 // THE SUMMARY VOCABULARY — Claude Code's own, extracted from the 2.1.220 binary
-// (docs/dashboard.md, *View modes* records the full table and how it was read):
+//:
 // [counter, active verb, done verb, singular unit, plural unit], in Claude
 // Code's own emission ORDER. Each fragment is "<verb> <n> <unit>"; the FIRST
 // fragment is capitalized and the rest are not; they join with ", "; and while
@@ -1007,7 +1177,7 @@ function viewCounter(elem) {
 // (measured over the two reported wiki sessions: every bookkeeping-only reply
 // was 1 block, every real answer 3-67). It is the ONE thing that separates the
 // two errand shapes, which are otherwise identical on every structural axis
-// there is (docs/dashboard.md, *Errand boundaries*), and it is asked of the
+// there is, and it is asked of the
 // RENDERED message because that is where "how much is here" lives.
 // The one-line summary of a run, as nodes: "Read 3 files, ran 2 shell commands"
 // (done) / "Reading 3 files, running 2 shell commands…" (still going). `counts`
@@ -1408,13 +1578,22 @@ function cmdsFor(workingDirectory, cache, key, sessionId, tool) {
     cache[key] = fetch("/api/harnesses/" + encodeURIComponent(harness)
                        + "/catalog?working_directory=" + encodeURIComponent(workingDirectory || "")
                        + (sessionId ? "&session_id=" + encodeURIComponent(sessionId) : ""))
-      .then(r => r.ok ? r.json() : { commands: [] })
+      .then(r => {
+        if (!r.ok) throw new Error("catalog " + r.status);
+        return r.json();
+      })
       .then(catalog => (catalog.commands || []).map(command => ({
         name: command.command,
         desc: command.description,
         min_prompts: command.minimum_prompt_count || 0,
       })))
-      .catch(() => []);
+      .catch(error => {
+        // Loud, and NOT cached: caching the failure would pin an empty menu
+        // until a full page reload. The next keystroke retries.
+        delete cache[key];
+        failLoudly(sessionId || "", "commands.load.fail", { error: String(error) });
+        return [];
+      });
   return cache[key];
 }
 
@@ -1652,7 +1831,9 @@ function saveQueue(sessionView) {
     sessionView.meta.composer_queue = items.length ? { items, origin: CLIENT_ID } : null;
   postJSON("/api/sessions/" + encodeURIComponent(S.currentSessionId)
            + "/application/composer-queue",
-           { items, origin: CLIENT_ID }).catch(() => {});
+           { items, origin: CLIENT_ID })
+    .catch(error => failLoudly(S.currentSessionId, "queue.save.fail",
+                               { error: (error && error.error) || String(error) }));
 }
 
 // A peer device's (or our own reload's) queue update arrived over SSE — adopt
@@ -1692,13 +1873,21 @@ function renderQueue() {
   });
 }
 
-function drainQueue(items) {
+// Whether one entry is a prompt somebody typed — the shape the three reconcilers
+// below all ask about, in one place.
+function deliveredPromptText(entry) {
+  const body = entry.body || {};
+  if (entry.type !== "message" || body.role !== "user" || body.phase !== "prompt") return null;
+  return ((body.content && body.content.text) || "").trim();
+}
+
+function drainQueue(entries) {
   const sessionView = S.sessionView;
   if (!sessionView || !sessionView.queue || !sessionView.queue.length) return;
   let hit = false;
-  for (const it of items) {
-    if (it.item_type !== "message" || it.conversation_kind !== "prompt") continue;
-    const real = (it.plain_text || "").trim();
+  for (const entry of entries) {
+    const real = deliveredPromptText(entry);
+    if (real === null) continue;
     // suffix match (promptMatches — the one rule, shared with drainPending and
     // mirrored server-side): the delivered prompt may carry attachment mentions
     // OR a terminal-restored draft in front of what we sent.
@@ -1713,18 +1902,18 @@ function drainQueue(items) {
 // so the next prompt arrives carrying the SAME data-par and the dead one is
 // simply orphaned. The server prunes that on any full read, but a live feed has
 // already painted the bubble, so drop it here the moment its replacement shows
-// up (docs/dashboard.md, *Discarded prompts*). Newest-top feed ⇒ the survivor
+// up. Newest-top feed ⇒ the survivor
 // is the first match in DOM order; only server-rendered bubbles carry data-par,
 // so the optimistic .pending / ⧗ .queued stand-ins are untouched.
-function dropSuperseded(items) {
+function dropSuperseded(entries) {
   const st = S.sessionView && S.sessionView.stream;
   if (!st) return;
-  for (const it of items) {
-    if (it.item_type !== "message" || it.conversation_kind !== "prompt"
-        || !it.reply_to_message_id) continue;
+  for (const entry of entries) {
+    const replyTo = (entry.body || {}).reply_to;
+    if (deliveredPromptText(entry) === null || !replyTo) continue;
     let live = false;
     for (const el of st.querySelectorAll(".msg.prompt[data-par]")) {
-      if (el.dataset.par !== it.reply_to_message_id) continue;
+      if (el.dataset.par !== replyTo) continue;
       if (!live) { live = true; continue; }        // keep the newest
       el.remove();
     }

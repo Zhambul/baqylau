@@ -13,8 +13,9 @@ from domain.ids import (
     CanonicalEventId,
     AssignmentId,
     MessageId,
-    OperationId,
     SessionId,
+    ShellId,
+    SkillId,
     TaskId,
     TurnId,
 )
@@ -22,21 +23,22 @@ from domain.values import (
     AccountReference,
     ActorRole,
     AttentionAnswer,
-    AttentionDecision,
     AttentionPrompt,
-    AttentionType,
     Content,
+    EffortChangeReason,
     ExecutionMode,
     FileAction,
     GoalState,
     MessagePhase,
     MessageRole,
+    ModelChangeReason,
     ModelReference,
-    OperationCategory,
     Outcome,
+    PlanState,
     ProgressStream,
     TitleOrigin,
     TokenUsage,
+    WorktreeAction,
 )
 
 
@@ -69,11 +71,6 @@ class SessionTitleChanged(EventPayload):
 
 
 @dataclass(frozen=True)
-class SessionWorkingDirectoryChanged(EventPayload):
-    working_directory: str
-
-
-@dataclass(frozen=True)
 class SessionAccountChanged(EventPayload):
     account: AccountReference
 
@@ -88,14 +85,14 @@ class SessionFinished(EventPayload):
 class ModelChanged(EventPayload):
     previous: ModelReference | None
     current: ModelReference
-    reason: Literal["selected", "automatic_fallback", "account_migration", "reported_by_harness"]
+    reason: ModelChangeReason
 
 
 @dataclass(frozen=True)
 class EffortChanged(EventPayload):
     previous: str | None
     current: str
-    reason: Literal["selected", "account_migration", "reported_by_harness"]
+    reason: EffortChangeReason
 
 
 @dataclass(frozen=True)
@@ -137,34 +134,40 @@ class TurnAborted(EventPayload):
 
 @dataclass(frozen=True)
 class MessageCreated(EventPayload):
+    """Anything anyone said, including one actor to another.
+
+    `recipient_actor_id` is what absorbed the old `actor.message_sent`: a
+    SendMessage is not a tool call, it is the actor speaking to a named peer.
+    """
+
     message_id: MessageId
     role: MessageRole
     content: Content
     phase: MessagePhase | None
     reply_to: MessageId | None
+    recipient_actor_id: ActorId | None = None
 
 
 @dataclass(frozen=True)
 class ReasoningCreated(EventPayload):
     reasoning_id: str
     content: Content
-    summary: bool
 
 
 @dataclass(frozen=True)
-class OperationStarted(EventPayload):
-    operation_id: OperationId
-    category: OperationCategory
-    native_name: str
+class ShellStarted(EventPayload):
+    """A command was launched. `description` is the harness's own one-line
+    account of it, where the harness offers one."""
+
+    shell_id: ShellId
+    command: Content
     execution: ExecutionMode
-    arguments: Content | None
     description: str | None
-    parent_operation_id: OperationId | None
 
 
 @dataclass(frozen=True)
-class OperationProgressed(EventPayload):
-    operation_id: OperationId
+class ShellProgressed(EventPayload):
+    shell_id: ShellId
     ordinal: int
     stream: ProgressStream
     content: Content
@@ -172,65 +175,65 @@ class OperationProgressed(EventPayload):
 
 
 @dataclass(frozen=True)
-class OperationInputProvided(EventPayload):
-    operation_id: OperationId
+class ShellInputProvided(EventPayload):
+    shell_id: ShellId
     content: Content | None
     closed: bool
 
 
 @dataclass(frozen=True)
-class OperationFinished(EventPayload):
-    operation_id: OperationId
+class ShellFinished(EventPayload):
+    shell_id: ShellId
     outcome: Outcome
     result: Content | None
     exit_code: int | None
 
 
 @dataclass(frozen=True)
-class OperationOutputLocated(EventPayload):
-    """The operation's output can be read from this file — emitted ONCE per
-    operation, when the location becomes known (not per chunk of output; the
+class ShellOutputLocated(EventPayload):
+    """The command's output can be read from this file — emitted ONCE per
+    command, when the location becomes known (not per chunk of output; the
     chunks are separate evidence, read later by the collect phase)."""
 
-    operation_id: OperationId
+    shell_id: ShellId
     source_path: str
     chunk_source_type: str
     delete_source: bool
     initial_size: int
     initial_modified_at: int
     wait_for_source_change: bool
-    until: Literal["operation_finished", "session_finished"]
+    until: Literal["shell_finished", "session_finished"]
 
 
 @dataclass(frozen=True)
-class OperationBackgrounded(EventPayload):
-    """This operation's `operation.finished` no longer means it ended.
+class ShellBackgrounded(EventPayload):
+    """This command's `shell.finished` no longer means it ended.
 
     One sentence, three consumers, each of which gets it wrong by default:
-      * the output following — `operation.finished` must stop ending it, or the
+      * the output following — `shell.finished` must stop ending it, or the
         file the job is still writing to is drained once and unlinked;
-      * the tab state — the session is `awaiting_background`, not idle;
-      * the activity — it is still running, and saying otherwise reports a
+      * the actor's status — the session is `awaiting_background`, not idle;
+      * the feed — it is still running, and saying otherwise reports a
         `succeeded` for work that has not happened yet.
 
-    Emitted when an operation that STARTED in the foreground moves to the
-    background mid-run — the case `OperationStarted.execution` cannot express,
+    Emitted when a command that STARTED in the foreground moves to the
+    background mid-run — the case `ShellStarted.execution` cannot express,
     because at start time nobody knew. Both harnesses report it only in the
     RESULT of the launching call, which is also why this fact must be committed
-    BEFORE the `operation.finished` derived from that same evidence.
+    BEFORE the `shell.finished` derived from that same evidence.
 
     `native_id` is the harness's own handle on the thing (the id a user or the
     model needs to interact with it again), or None where there isn't one.
     """
 
-    operation_id: OperationId
+    shell_id: ShellId
     native_id: str | None
 
 
 @dataclass(frozen=True)
-class OperationOutputFinished(EventPayload):
-    """The operation's output file is complete — the harness announced the
-    background job's true end, which its launch-time `operation.finished`
+class ShellOutputFinished(EventPayload):
+    """The command's output file is complete — the harness announced the
+    background job's true end, which its launch-time `shell.finished`
     (reported while output still flowed) could not. Ends the following early
     instead of waiting for the session to finish.
 
@@ -239,15 +242,18 @@ class OperationOutputFinished(EventPayload):
     announced an end without saying what kind.
     """
 
-    operation_id: OperationId
+    shell_id: ShellId
     outcome: Outcome | None = None
 
 
 @dataclass(frozen=True)
 class FileAccessed(EventPayload):
-    operation_id: OperationId | None
+    """One file touched, at the moment the touch RESOLVED — which is the only
+    moment both the path and what came back of it are known."""
+
     path: str
     action: FileAction
+    outcome: Outcome
     previous_path: str | None = None
     line_start: int | None = None
     line_end: int | None = None
@@ -255,6 +261,55 @@ class FileAccessed(EventPayload):
     lines_removed: int | None = None
     unified_diff: str | None = None
     content: Content | None = None
+
+
+@dataclass(frozen=True)
+class SearchPerformed(EventPayload):
+    """A search and what it found, as one fact: a search has no life between
+    its query and its result that anyone reads."""
+
+    tool: str
+    query: Content
+    result: Content | None
+    outcome: Outcome
+
+
+@dataclass(frozen=True)
+class SkillStarted(EventPayload):
+    """`arguments` is nullable because a harness may collapse the call to the
+    bare skill name and keep nothing else."""
+
+    skill_id: SkillId
+    name: str
+    arguments: Content | None
+
+
+@dataclass(frozen=True)
+class SkillFinished(EventPayload):
+    skill_id: SkillId
+    outcome: Outcome
+    result: Content | None
+
+
+@dataclass(frozen=True)
+class WebFetched(EventPayload):
+    """One page fetched. `url` is None when a harness reports the result of a
+    fetch without the call that made it."""
+
+    url: str | None
+    result: Content | None
+    outcome: Outcome
+
+
+@dataclass(frozen=True)
+class WorktreeChanged(EventPayload):
+    """A worktree was entered or left. No harness exposes a path for this
+    today, so the call's own arguments ride along verbatim rather than a
+    parsed field that would be empty."""
+
+    action: WorktreeAction
+    arguments: Content | None
+    outcome: Outcome
 
 
 @dataclass(frozen=True)
@@ -279,7 +334,6 @@ class ActorAssignmentFinished(EventPayload):
 @dataclass(frozen=True)
 class TaskChanged(EventPayload):
     task_id: TaskId
-    label: str
     subject: str
     description: str | None
     state: Literal["pending", "in_progress", "completed", "deleted"]
@@ -300,28 +354,36 @@ class GoalChanged(EventPayload):
 
 
 @dataclass(frozen=True)
-class ActorMessageSent(EventPayload):
-    message_id: MessageId
-    recipient_actor_id: ActorId
-    content: Content | None
+class QuestionAsked(EventPayload):
+    """The session is waiting on a person. Pending until its answer arrives."""
+
+    attention_id: AttentionId
+    questions: tuple[AttentionPrompt, ...]
 
 
 @dataclass(frozen=True)
-class AttentionRequested(EventPayload):
-    attention_id: AttentionId
-    attention_type: AttentionType
-    prompts: tuple[AttentionPrompt, ...]
-    operation_id: OperationId | None
+class QuestionAnswered(EventPayload):
+    """What was answered. The harnesses' own verdict words — answered,
+    rejected, discussed — are deliberately not carried: every reader that had
+    them collapsed all three to one line, and the answer itself says more."""
 
-
-@dataclass(frozen=True)
-class AttentionResolved(EventPayload):
     attention_id: AttentionId
-    decision: AttentionDecision
     answers: tuple[AttentionAnswer, ...]
     feedback: str | None
+
+
+@dataclass(frozen=True)
+class PlanProposed(EventPayload):
+    attention_id: AttentionId
+    plan: Content
+
+
+@dataclass(frozen=True)
+class PlanResolved(EventPayload):
+    attention_id: AttentionId
+    state: PlanState
+    feedback: str | None
     edited: bool
-    outcome: Outcome
 
 
 @dataclass(frozen=True)
@@ -373,7 +435,6 @@ class CanonicalEvent(Generic[EventPayloadType]):
 EVENT_TYPES: dict[type[EventPayload], str] = {
     SessionStarted: "session.started",
     SessionTitleChanged: "session.title_changed",
-    SessionWorkingDirectoryChanged: "session.working_directory_changed",
     SessionAccountChanged: "session.account_changed",
     SessionFinished: "session.finished",
     ModelChanged: "model.changed",
@@ -389,20 +450,26 @@ EVENT_TYPES: dict[type[EventPayload], str] = {
     TurnAborted: "turn.aborted",
     MessageCreated: "message.created",
     ReasoningCreated: "reasoning.created",
-    OperationStarted: "operation.started",
-    OperationInputProvided: "operation.input_provided",
-    OperationProgressed: "operation.progressed",
-    OperationFinished: "operation.finished",
-    OperationOutputLocated: "operation.output_located",
-    OperationBackgrounded: "operation.backgrounded",
-    OperationOutputFinished: "operation.output_finished",
+    ShellStarted: "shell.started",
+    ShellInputProvided: "shell.input_provided",
+    ShellProgressed: "shell.progressed",
+    ShellFinished: "shell.finished",
+    ShellOutputLocated: "shell.output_located",
+    ShellBackgrounded: "shell.backgrounded",
+    ShellOutputFinished: "shell.output_finished",
     FileAccessed: "file.accessed",
+    SearchPerformed: "search.performed",
+    SkillStarted: "skill.started",
+    SkillFinished: "skill.finished",
+    WebFetched: "web.fetched",
+    WorktreeChanged: "worktree.changed",
     TaskChanged: "task.changed",
     TaskListChanged: "task.list_changed",
     GoalChanged: "goal.changed",
-    ActorMessageSent: "actor.message_sent",
-    AttentionRequested: "attention.requested",
-    AttentionResolved: "attention.resolved",
+    QuestionAsked: "question.asked",
+    QuestionAnswered: "question.answered",
+    PlanProposed: "plan.proposed",
+    PlanResolved: "plan.resolved",
     UsageReported: "usage.reported",
     ContextReported: "context.reported",
     CompactionStarted: "compaction.started",

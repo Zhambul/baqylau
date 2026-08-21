@@ -1,6 +1,5 @@
 # notify/channels/telegram.py — the Telegram channel, whole: the transport
-# and the alert it carries (docs/dashboard.md, *Alert
-# retraction*).
+# and the alert it carries.
 #
 # The OFF-DEVICE sibling of webpush.py, and it exists for one reason the reused
 # `notify` skill could not serve: RETRACTION. The skill is spawned detached with
@@ -25,6 +24,8 @@
 # home and talk to the actual Bot API); BAQYLAU_DASHBOARD_TELEGRAM_TOKEN / _CHAT
 # supply the values directly. The token never appears in a response, an audit
 # row, or an error detail — the same rule dictate.py holds for the Deepgram key.
+from __future__ import annotations
+
 import json
 import os
 import urllib.error
@@ -32,9 +33,14 @@ import urllib.parse
 import urllib.request
 import threading
 import time
+from typing import Any
 
 from audit import record as A
 from notify.channels.alert import FAILED, GONE, NOTHING, OK, PENDING, alert_text
+from repository.contract.preferences import (
+    PushSigningKeyRepository,
+    PushSubscriptionRepository,
+)
 
 DEFAULT_CRED_DIR = "~/.config/telegram"
 TOKEN_NAME = "bot-token"
@@ -54,7 +60,7 @@ DELETE_WINDOW_SECONDS = 48 * 3600
 RETRACTION_RETRY_SECONDS = 30.0
 
 
-def _api_base():
+def _api_base() -> str:
     """The Bot API origin. Overridable (BAQYLAU_DASHBOARD_TELEGRAM_API) so a hermetic
     test can point the whole module at a local stub server — the seam that makes
     send/delete testable without patching module internals or touching the
@@ -63,19 +69,19 @@ def _api_base():
             or DEFAULT_API_BASE).rstrip("/")
 
 
-def cred_dir():
+def cred_dir() -> str:
     """Where `bot-token` and `chat-id` live. One knob for the pair, so a test
     (or a second install) relocates both with a single env var."""
     return os.path.expanduser(
         os.environ.get("BAQYLAU_DASHBOARD_TELEGRAM_DIR") or DEFAULT_CRED_DIR)
 
 
-def _read(path):
+def _read(path: str) -> str:
     with open(path, encoding="utf-8") as f:
         return f.read().strip()
 
 
-def _cred(env, name):
+def _cred(env: str, name: str) -> str:
     """One credential: the env override, else the single line in
     `cred_dir()/name`, else "" (feature off). Never raises — a missing,
     unreadable or non-UTF-8 file reads as absent, which HIDES the feature rather
@@ -89,15 +95,15 @@ def _cred(env, name):
         return ""
 
 
-def token():
+def token() -> str:
     return _cred("BAQYLAU_DASHBOARD_TELEGRAM_TOKEN", TOKEN_NAME)
 
 
-def chat_id():
+def chat_id() -> str:
     return _cred("BAQYLAU_DASHBOARD_TELEGRAM_CHAT", CHAT_NAME)
 
 
-def enabled():
+def enabled() -> bool:
     """Whether the dashboard can talk to the Bot API directly."""
     return bool(token() and chat_id())
 
@@ -110,13 +116,14 @@ class Result:
     caller must not treat it as a failure."""
     __slots__ = ("ok", "gone", "status", "error", "message_id", "chat")
 
-    def __init__(self, ok=False, gone=False, status=0, error="",
-                 message_id=None, chat=None):
+    def __init__(self, ok: bool = False, gone: bool = False, status: int = 0,
+                 error: str = "", message_id: int | None = None,
+                 chat: int | str | None = None) -> None:
         self.ok, self.gone, self.status, self.error = ok, gone, status, error
         self.message_id, self.chat = message_id, chat
 
 
-def _call(method, params):
+def _call(method: str, params: dict[str, object]) -> tuple[dict[str, Any] | None, Result | None]:
     """POST one Bot API method. Returns (payload_dict, Result-on-failure) —
     exactly one of the two is meaningful. Never raises."""
     tok = token()
@@ -127,7 +134,7 @@ def _call(method, params):
     try:
         req = urllib.request.Request(url, data=data, method="POST")
         with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_SECONDS) as resp:
-            body = json.loads(resp.read() or b"{}")
+            body: dict[str, Any] = json.loads(resp.read() or b"{}")
             status = resp.status
     except urllib.error.HTTPError as e:
         # The API reports its real reason in a JSON body even on a 4xx, and that
@@ -145,10 +152,11 @@ def _call(method, params):
         # message is already out of the chat, which is what we wanted.
         gone = status == 400 and "not found" in desc.lower()
         return None, Result(gone=gone, status=status, error=desc)
-    return body.get("result") or {}, None
+    result: dict[str, Any] = body.get("result") or {}
+    return result, None
 
 
-def send_message(text):
+def send_message(text: str) -> Result:
     """Send `text` to the configured chat. On success the Result carries the
     `message_id` + `chat` that `delete()` needs — the whole point of this module
     existing beside the fire-and-forget script. Synchronous network I/O, so
@@ -157,13 +165,13 @@ def send_message(text):
     if not chat:
         return Result(error="no chat")
     res, err = _call("sendMessage", {"chat_id": chat, "text": text})
-    if err is not None:
-        return err
+    if err is not None or res is None:
+        return err or Result(error="empty result")
     return Result(ok=True, status=200, message_id=res.get("message_id"),
                   chat=(res.get("chat") or {}).get("id", chat))
 
 
-def delete_message(chat, message_id):
+def delete_message(chat: int | str | None, message_id: int | None) -> Result:
     """Delete a message this bot sent (the retraction). `gone` counts as done —
     a message someone already cleared is a message that no longer needs you.
     Synchronous; callers run it off the watcher thread."""
@@ -178,7 +186,7 @@ def delete_message(chat, message_id):
 
 # ------------------------------------------------ the alert this channel carries
 
-def send_alert(entry, reason=None):
+def send_alert(entry: dict[str, str], reason: str | None = None) -> dict[str, Any] | None:
     """Send the deferred alert to Telegram. `reason` (in the audit row) says WHY
     it fired: `escalation` (the nudge after an on-device push you ignored),
     `no-device` (nobody was push-subscribed — the immediate fallback), or
@@ -196,14 +204,15 @@ def send_alert(entry, reason=None):
     # home. `msg_id` None + `done` False is exactly the PENDING state retract()
     # reads. Single assignments of small immutables, read by the one watcher
     # thread — the same "atomic enough" bargain presence.py's maps make.
-    h = {"ch": "telegram", "session_id": entry.get("session_id"), "kind": entry.get("kind"),
-         "chat": None, "msg_id": None, "done": False}
+    h: dict[str, Any] = {"ch": "telegram", "session_id": entry.get("session_id"),
+                         "kind": entry.get("kind"),
+                         "chat": None, "msg_id": None, "done": False}
     threading.Thread(target=_telegram_send_body, args=(h, msg, reason),
                      daemon=True).start()
     return h
 
 
-def _telegram_send_body(h, msg, reason):
+def _telegram_send_body(h: dict[str, Any], msg: str, reason: str | None) -> None:
     """The off-watcher send body: call the Bot API, record the id in the handle,
     audit. `done` is set LAST and unconditionally — it is what releases retract()
     from PENDING, so an exception path that skipped it would pin the record until
@@ -227,7 +236,9 @@ def _telegram_send_body(h, msg, reason):
     h["done"] = True
 
 
-def retract_alert(h, reason, badge=0, *, keys=None, subscriptions=None):
+def retract_alert(h: dict[str, Any], reason: str, badge: int = 0, *,
+                  keys: PushSigningKeyRepository | None = None,
+                  subscriptions: PushSubscriptionRepository | None = None) -> str:
     """Delete the message — OFF the watcher thread, for the same reason the send
     is: `delete_message` is a synchronous HTTPS round-trip with a 10 s timeout,
     and the 1 s scan loop cannot wear that. So the outcome is not known
@@ -257,7 +268,7 @@ def retract_alert(h, reason, badge=0, *, keys=None, subscriptions=None):
     return PENDING
 
 
-def _telegram_delete_body(h):
+def _telegram_delete_body(h: dict[str, Any]) -> None:
     """The off-watcher delete body: `outcome` is set on every path (it is what
     releases the retraction from PENDING), and a `gone` message counts as done —
     someone clearing the chat first is the outcome we wanted, not a failure."""

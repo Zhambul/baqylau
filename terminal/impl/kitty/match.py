@@ -8,23 +8,23 @@
 from terminal.models.panes import PaneAnchor
 
 
-def window(window_id):
+def window(window_id: str) -> str:
     """The WINDOW itself."""
     return f"id:{window_id}"
 
 
-def tab_of(window_id):
+def tab_of(window_id: str) -> str:
     """The TAB CONTAINING the window. kitty's tab-scoped commands (close-tab,
     set-tab-title, set-tab-color) match a tab by a window it holds."""
     return f"window_id:{window_id}"
 
 
-def tagged(name, value):
+def tagged(name: str, value: str) -> str:
     """Windows carrying a user-var tag."""
     return f"var:{name}={value}"
 
 
-def anchor(pane_anchor: PaneAnchor):
+def anchor(pane_anchor: PaneAnchor) -> str:
     """A `PaneAnchor` as the match expression `--next-to` takes."""
     if pane_anchor.window_id is not None:
         return window(pane_anchor.window_id)

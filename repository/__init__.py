@@ -13,7 +13,7 @@ application owns and reads back:
     interpretations           the interpreter
     canonical_events          the interpreter
     interpretation_events      the interpreter
-    operation_output          the interpreter's output reactions
+    shell_output              the interpreter's output reactions
     session_workspaces + composer_queue_items
       + dialog_answers + dialog_answer_selections
                               the session workspace repository
@@ -21,7 +21,7 @@ application owns and reads back:
       · hidden_directories · new_session_preferences · new_session_drafts
       · task_dismissals · push_subscriptions · push_signing_keys
                               one preference repository each
-    pane_widths · opened_views
+    pane_widths
                               the terminal repositories
     account_usage_snapshots + account_usage_windows
                               the usage repository

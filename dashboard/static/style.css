@@ -33,7 +33,7 @@
   --ask: #e06c75;
   --done: #98c379;
 
-  /* an expanded run's rail (docs/dashboard.md *View modes*): the accent at low
+  /* an expanded run's rail: the accent at low
      strength — traceable by eye, quiet enough not to compete with the blocks'
      own kind colours */
   --runrail: color-mix(in srgb, var(--accent, #6b9bd1) 55%, transparent);
@@ -137,13 +137,13 @@ button.ghost:hover { color: var(--text); box-shadow: var(--card-hover); }
 #fsbtn { font-size: 14px; padding: 3px 10px; line-height: 1.2; }
 /* the keep-awake toggle glows gold while the wake lock is held. Its sun is an
    inline SVG, not a ☀ glyph: U+2600 has the Emoji property, so Apple platforms
-   font-fall-back to the COLOUR emoji (docs/dashboard.md, *No emoji*). */
+   font-fall-back to the COLOUR emoji. */
 #wakebtn { font-size: 14px; padding: 3px 10px; line-height: 1.2; }
 #wakebtn .sunmark { width: 14px; height: 14px; display: block; }
 #wakebtn.on { color: var(--gold, #E9B949); box-shadow: var(--card-hover); }
 /* the global alerts master switch (◉ alerts / ○ alerts off, next to "+ session").
    ON is the neutral default (a plain ghost); OFF dims + strikes it so a silenced
-   dashboard reads at a glance (docs/dashboard.md, *Global alerts toggle*). */
+   dashboard reads at a glance. */
 #notifytoggle.off { color: var(--dim2); text-decoration: line-through; }
 #notifytoggle.off:hover { color: var(--dim); }
 /* LIST-PAGE-ONLY header chrome: ▦ stats, ◉ alerts (the GLOBAL master switch),
@@ -452,7 +452,7 @@ body.in-session.fs-on #fsbtn { display: revert; }
 .cbar.warn .cfill { background: var(--amber, #d1a35a); }
 .cbar.hot .cfill { background: var(--red, #b5484d); }
 
-/* COMPACTION IN PROGRESS (docs/dashboard.md, *Compaction on the ctx bar*) —
+/* COMPACTION IN PROGRESS —
    the bar BREATHES: its geometry is frozen at the current occupancy and only
    the fill's brightness moves, one slow 3s fade to ~70% and back.
 
@@ -526,8 +526,7 @@ body.in-session.fs-on #fsbtn { display: revert; }
 .tabs a:hover { color: var(--text); }
 .tabs .count { color: var(--dim2); margin-left: 6px; font-family: var(--mono); }
 /* "session-wide" beside the errors tab in agent scope — it has no agent
-   dimension, so the scope has to be said out loud (docs/dashboard.md
-   *Agent scope*). Pushed to the far end, deliberately quiet. */
+   dimension, so the scope has to be said out loud. Pushed to the far end, deliberately quiet. */
 .tabs .tabnote { margin-left: auto; align-self: center; color: var(--dim2);
   font-size: 11px; padding-right: 4px; }
 
@@ -548,7 +547,7 @@ body.in-session.fs-on #fsbtn { display: revert; }
 }
 .fcount { color: var(--dim2); font: 11px/1 var(--mono); flex: none; margin-left: auto; }
 /* the view-mode control (verbose · default · focus) — a segmented switch, so the
-   three read as ONE choice. docs/dashboard.md *View modes* */
+   three read as ONE choice. */
 .vmodes {
   display: inline-flex; flex: none; border-radius: var(--r);
   box-shadow: inset 0 0 0 1px var(--hair); overflow: hidden;
@@ -572,8 +571,7 @@ body.in-session #accounts { display: none; }
    (--acct-tracks, one `max-content` per column, written by renderAccounts) are
    measured across ALL the rows at once, so a duration's bar sits in the same
    track in each of them no matter how long that row's account name is, whether
-   it wears the ⚠ badge, or how many windows it reports (docs/dashboard.md *Row
-   alignment*). The rows were flex lines before this, each laying out its own
+   it wears the ⚠ badge, or how many windows it reports. The rows were flex lines before this, each laying out its own
    sequence of fixed-width parts; that only stacks while every part measures the
    same in every row, and it kept not doing so. Cells name their track
    explicitly (`grid-column`, app.01-attention.place), so the alignment does not
@@ -662,8 +660,7 @@ body.in-session #accounts { display: none; }
 .ubar .ureset { min-width: 17ch; flex: none; margin-left: 6px; }
 /* de-emphasise the "resets in" prefix; the duration keeps the ureset weight */
 .ubar .ureset .rlbl { color: var(--dim); }
-/* a window this account has no snapshot for (the other one does — the column
-   exists for the whole strip, docs/dashboard.md *Row alignment*): keep the box,
+/* a window this account has no snapshot for: keep the box,
    drop the ink */
 .ubar.ghost .ulabel, .ubar.ghost .upct { color: var(--dim2); }
 .ubar.ghost .utrack { opacity: .45; }
@@ -698,8 +695,7 @@ body.in-session #accounts { display: none; }
 .acctchip .ausage { color: var(--dim2); margin-left: 2px; }
 
 /* ---- the message composer (control plane) ------------------------------- */
-/* the pinned goal card — Claude Code's active `/goal` (docs/dashboard.md,
-   *Web goal*); --amber while working, --done (green) once achieved. Read-only
+/* the pinned goal card — Claude Code's active `/goal`; --amber while working, --done (green) once achieved. Read-only
    (no dialog to drive), pinned above the tasks card. */
 .goalwrap[hidden] { display: none; }
 .goalcard {
@@ -726,8 +722,7 @@ body.in-session #accounts { display: none; }
   max-height: 20vh; overflow-y: auto; white-space: pre-wrap;
 }
 
-/* the pinned tasks card — the session's native task list (docs/dashboard.md,
-   *Web tasks*); --amber, the mirror's task-line accent. Completed rows are
+/* the pinned tasks card — the session's native task list; --amber, the mirror's task-line accent. Completed rows are
    struck-through + dimmed, the in_progress row carries the accent. */
 .taskswrap[hidden] { display: none; }
 .taskscard {
@@ -777,8 +772,7 @@ body.in-session #accounts { display: none; }
 .taskrow.done .taskmark { color: var(--done); }
 .taskrow.done .tasksubj { text-decoration: line-through; opacity: .75; }
 
-/* the ask card — AskUserQuestion mirrored from the terminal dialog
-   (docs/dashboard.md, *Web ask*); --ask red, the asking-you accent */
+/* the ask card — AskUserQuestion mirrored from the terminal dialog; --ask red, the asking-you accent */
 .askwrap[hidden] { display: none; }
 .askcard {
   margin: 0 0 10px; padding: 10px 12px 12px;
@@ -798,8 +792,7 @@ body.in-session #accounts { display: none; }
 }
 .askchat:hover { color: var(--text); box-shadow: var(--card-hover); }
 /* Claude's prose lead-in to the question — the context the terse dialog omits.
-   Muted + capped height so a long framing message doesn't dominate the card
-   (docs/dashboard.md, *Web ask*). */
+   Muted + capped height so a long framing message doesn't dominate the card. */
 .askpreamble {
   max-height: 30vh; overflow-y: auto; margin: 2px 0 10px;
   padding: 8px 11px; border-radius: 8px;
@@ -879,8 +872,7 @@ body.in-session #accounts { display: none; }
 }
 .asksubmit:hover:not(:disabled) { box-shadow: var(--card-hover); }
 
-/* the plan card — ExitPlanMode approval mirrored from the terminal dialog
-   (docs/dashboard.md, *Web plan mode*); --gold, the plan/reasoning accent */
+/* the plan card — ExitPlanMode approval mirrored from the terminal dialog; --gold, the plan/reasoning accent */
 .planwrap[hidden] { display: none; }
 .plancard {
   margin: 0 0 10px; padding: 10px 12px 12px;
@@ -977,7 +969,7 @@ body.in-session #accounts { display: none; }
 .cinput::placeholder { color: var(--dim2); }
 /* a live ghost suggestion (the TUI's faint "suggested answer") reuses the
    placeholder slot — italic sets it apart from the static "message this…" hint;
-   → / Tab accepts it (docs/dashboard.md, *Web ghost suggestion*) */
+   → / Tab accepts it */
 .cinput.hasghost::placeholder { color: var(--dim); font-style: italic; }
 .cinput:disabled { color: var(--dim); background: transparent; box-shadow: var(--card); }
 .csend {
@@ -1022,7 +1014,7 @@ body.in-session #accounts { display: none; }
   50%      { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--exec) 15%, transparent); }
 }
 .micbtn.rec { color: var(--ask); animation: micpulse 1.6s ease-in-out infinite; }
-/* CAPTURING, socket not up yet (docs/dashboard.md *Instant-on mic*): the icon
+/* CAPTURING, socket not up yet: the icon
    is already .rec red because your voice IS being kept — the preroll is
    holding it — while the ring keeps the .wait blue that says the connection
    is still coming. Composed from the two states that already exist rather
@@ -1326,7 +1318,7 @@ body.modal-open { overflow: hidden; }
    ran 2 shell commands"). Deliberately QUIETER than the block cards it replaces
    — no card background, dim mono text — so a collapsed stream reads as a thin
    index of what happened and the blocks that stay expanded (edits, messages)
-   keep all the visual weight. docs/dashboard.md *View modes* */
+   keep all the visual weight. */
 /* `align-items: center`, not baseline (which it was): every one of these lines leads
    with a 7px DOT BOX, and a box has no text baseline to align to — it is synthesized
    from its bottom edge, so a baseline row put the dot at a different height in each of
@@ -1457,8 +1449,7 @@ body.modal-open { overflow: hidden; }
 .btail, .blinks { flex: none; }
 .blinks { margin-left: 4px; }
 /* the in-flight elapsed (`.chip.blive`) joins the register too: no outline, no accent and
-   no glyph — just the dim ticking figure where the final duration will land (the ⏱ it
-   used to lead with was an emoji-capable codepoint, docs/dashboard.md *No emoji*).
+   no glyph — just the dim ticking figure where the final duration will land.
    `display: inline` is the load-bearing part, not tidiness: as a `.chip` it is an
    inline-BLOCK with `overflow: hidden`, and per CSS such a box's baseline is its BOTTOM
    MARGIN EDGE rather than its text — so the box aligned while the digits inside rode
@@ -1491,7 +1482,7 @@ body.modal-open { overflow: hidden; }
 .ol { margin: 2px 0; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
 
 /* collapsible blocks (same-`g` items folded by the app), styled to match the
-   activity-timeline card look (docs/dashboard.md *Mirror card styling*): a roomy
+   activity-timeline card look: a roomy
    card whose header is a solid kind-coloured pill + a one-line summary, with the
    expanded body on a darker inset — the `.ent` treatment. NO disclosure
    triangle (the whole header is the click target, like an activity entry). This
@@ -1551,7 +1542,6 @@ body.modal-open { overflow: hidden; }
    any other activity and you can't tell where the expansion ends. So the summary
    becomes a group header and its blocks share a left rail: gaps closed so the
    rail is continuous, and rounded off at the oldest member.
-   docs/dashboard.md *View modes*
 
    ONE rail, at ONE x — the members are NOT indented (`margin: 0`, not the
    `0 0 0 13px` this shipped with). Indenting them drew a SECOND vertical line
@@ -1688,13 +1678,13 @@ body.modal-open { overflow: hidden; }
 .msg.prompt.pending .who { color: var(--dim); }
 /* the same optimistic-pending greying for the ask/plan cards (a decision in
    flight, kept until the SSE reconcile) and the session list-card (an
-   in-flight close) — docs/dashboard.md, *Optimistic UI & the web-hint audit* */
+   in-flight close). */
 .askcard.pending, .plancard.pending { opacity: .6; }
 .scard.closing { opacity: .5; }
 .scard.closing:hover { transform: none; }   /* it's leaving — no lift affordance */
 .chip2.closing { color: var(--text-soft); }
 
-/* full web rewind (docs/dashboard.md, *Web rewind*): every prompt bubble is a
+/* full web rewind: every prompt bubble is a
    checkpoint — ↶ reveals on hover (or all at once in picking mode, the idle
    ↶-button/double-Esc meaning), and the mode menu mirrors Claude Code's own
    confirm options */
@@ -1793,7 +1783,7 @@ body.modal-open { overflow: hidden; }
 /* an INJECTED user turn (⚙ SYSTEM — a Stop hook's feedback, a loaded skill's
    body, another session's teammate mail): the neutral slate of core/ops.py's
    SLATE, held back from the vivid hues because none of this is conversation.
-   Only verbose renders these at all (docs/dashboard.md, *View modes*), and the
+   Only verbose renders these at all, and the
    colour's job is to stop the eye reading a gold YOU bubble over machinery. */
 .msg.prompt.sys { border-left-color: color-mix(in srgb, var(--sys) 50%, transparent); }
 .msg.prompt.sys .who { color: color-mix(in srgb, var(--sys) 78%, transparent); }

@@ -45,13 +45,12 @@ function checkJump() {
   const j = S.jump;
   if (!j) return;
   if (Date.now() > j.until) { jumpFail(); return; }
-  // the launch's window id wins when known (r.live gates out a row from a
-  // previous terminal run whose window ids restarted from 1); then the
-  // resumed sessionId itself (its workingDirectory may differ from the launch dir); otherwise
-  // any workingDirectory-row that is brand-new or freshly parked→live
-  const row = (j.win && S.sessions.find(
-    item => sessionIsLive(item) && String(sessionWindowId(item)) === j.win))
-    || (j.resumeSid && S.sessions.find(
+  // The resumed sessionId first (its workingDirectory may differ from the launch
+  // dir), then any workingDirectory-row that is brand-new or freshly parked→live.
+  // The launch's WINDOW id used to win over both, and cannot any more: the
+  // window id is no longer served at all, so a launch is recognised by where it
+  // was launched and by being new.
+  const row = (j.resumeSid && S.sessions.find(
       item => sessionId(item) === j.resumeSid))
     || S.sessions.find(item => {
       const id = sessionId(item);
@@ -314,8 +313,7 @@ const nsRemember = (p) => {
   }).catch(() => {});                              // best-effort backend write
 };
 
-// The form's UNSENT first prompt is a DRAFT (docs/dashboard.md, *New-session
-// draft*) — the composer's `composer-draft` machinery for the one box that has
+// The form's UNSENT first prompt is a DRAFT — the composer's `composer-draft` machinery for the one box that has
 // no session to hang a per-session kv on yet, so it lives in the same durable
 // GLOBAL application state as nsLast(). Written debounced on
 // every edit AND flushed on close: an accidental Esc / backdrop click used to
@@ -518,7 +516,7 @@ function resumePreview(rowFor, focusList) {
     resumePreviewCleanup = close;                        // form-close safety net
     x.focus();                                           // so Esc/tab live in the popup
 
-    const render = (items) => { if (pvSid === sessionId && pvBack) renderPreview(body, items); };
+    const render = (items) => { if (pvSid === sessionId && pvBack) renderPreview(body, items, {}); };
     if (pvCache.has(sessionId)) {
       const items = pvCache.get(sessionId);
       // record the item COUNT, not just "shown" — an empty-but-successful preview
@@ -531,7 +529,7 @@ function resumePreview(rowFor, focusList) {
     // the recent mirror TAIL is /backlog (the newest TAIL_BLOCKS slice, the
     // mirror tab's own on-load call) — NOT /history, which returns blocks OLDER
     // than a cursor (before=0 → nothing: the "no mirror history" bug).
-    fetch("/api/sessions/" + encodeURIComponent(sessionId) + "/activity?block_count=100")
+    fetch("/sessionData/" + encodeURIComponent(sessionId) + "/entries?limit=100")
       .then(rp => rp.json())
       .then(d => {
         const items = (d && d.items) || [];
@@ -551,7 +549,7 @@ function resumePreview(rowFor, focusList) {
 }
 
 
-// The new-session resume picker (docs/dashboard.md *Resume picker*): a search
+// The new-session resume picker: a search
 // box + a scrollable list of a directory's recent sessions,
 // up to RESUMABLE_MAX), each row carrying the session's model/effort/account. It
 // replaces the old three-way "start from" dropdown's resume entries — no
@@ -627,7 +625,7 @@ function resumePicker() {
     const r = rows.find(x => x.session_id === sessionId);
     if (!r) return;
     // audit the pick so a "resumed with the wrong model/effort/account" report
-    // is reconstructible from the DB (docs/dashboard.md *Resume picker*): the sessionId
+    // is reconstructible from the DB: the sessionId
     // chosen + the model/effort/account it CARRIED (what onSelect reuses).
     clog(sessionId, "resume.pick", {
       model: (r.model && r.model.native_id) || "", effort: r.effort || "",
@@ -779,8 +777,7 @@ function nsConversation(F) {
 
   // conversation: FRESH (a new conversation, the default) or RESUME one of this
   // directory's recent sessions. The old three-way "start from" dropdown is split
-  // into a fresh toggle + a searchable, scrollable resume picker (resumePicker,
-  // docs/dashboard.md *Resume picker*): there is no `--continue` — resuming the
+  // into a fresh toggle + a searchable, scrollable resume picker: there is no `--continue` — resuming the
   // most-recent row IS "continue". A resumed conversation forks to a new sessionId; the
   // adopt machinery and the jump watch handle that on their own. The picker rows
   // carry each session's model/effort/account; selecting one
@@ -933,7 +930,6 @@ function nsPickers(F) {
   // placeholder's name for it, and the "/" menu's vocabulary. Populated from
   // /api/hosts (cached S.hosts); the row HIDES when only one host is launchable
   // — a single-tool machine sees the form exactly as before.
-  // docs/dashboard.md *Tool picker*.
   const [toolRow, tool] = pick("tool", []);
   toolRow.classList.add("nstoolrow");
   toolRow.style.display = "none";
@@ -953,9 +949,7 @@ function nsPickers(F) {
   // marker. No "default" option: the plain-claude login duplicates one of
   // these accounts. The row hides when there is no switcher (empty list → the
   // launch just runs plain claude).
-  // The DEFAULT selection burns PERISHABLE weekly quota first (objective (b) —
-  // maximise total work per week; core/sessionapi.sched_score, docs/dashboard.md
-  // *Default account*): among accounts not limit-blocked for the launch AND under
+  // The DEFAULT selection burns PERISHABLE weekly quota first: among accounts not limit-blocked for the launch AND under
   // the 5h session-safety gate (sched_ok), pick the highest sched_score — quota
   // still left whose 7d window resets soonest. Ties → registry order. It SKIPS
   // any account whose active limit-hit applies to the launch — an account-wide
@@ -1268,8 +1262,8 @@ function nsActions(F) {
     // read, a terminal window enumeration on a resume and finally the launch itself,
     // all before it answers. Gating the waiting room on that reply put a second of
     // DEAD AIR between the click and any feedback — the exact stretch the pending
-    // view exists to cover, so it was missing precisely when it was needed
-    // (docs/dashboard.md *The pending view*). Nothing in the response is needed to
+    // view exists to cover, so it was missing precisely when it was needed.
+    // Nothing in the response is needed to
     // MOUNT it: `win` only sharpens the jump watch (which falls back to the workingDirectory
     // heuristic) and arrives below, and the failure path rolls the form back.
     // Arming before the POST also takes the known/live baseline from before the

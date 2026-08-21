@@ -6,6 +6,8 @@ import asyncio
 import dataclasses
 import http.client
 import json
+import pathlib
+import re
 import socket
 import sqlite3
 import threading
@@ -18,20 +20,18 @@ from pydantic import TypeAdapter
 from api import config as api_config
 from api import dependencies
 from api.app import build_web_application
-from api.dashboard.models.controls.send_text_request import SendTextRequest
+from api.controls.models.send_text_request import SendTextRequest
 from api.server import build_server
 from app import providers
 from canonical_runtime import ProviderGraph
-from audit.models import ApplicationErrorRecord
+from conftest import REPOSITORY_ROOT
 from audit.recorder import AuditRecorder
 from audit.telemetry import BrowserTelemetryService
 from harness.models import RawEvent, Session, TranslationResult
-from dashboard.services.notices import DashboardNotificationState
-from dashboard.services.overview import GlobalApplicationService, NewSessionPreferences
 from notify.presence import Presence
-from domain.events import CanonicalEvent, EventPayload, MessageCreated, SessionStarted
+from domain.events import CanonicalEvent, MessageCreated, SessionStarted
 from domain.ids import ActorId, CanonicalEventId, MessageId, RawEventId, SessionId
-from domain.values import MessageRole, TextContent
+from domain.values import TextContent
 from repository.impl.sqlite.raw_event_audits import SqliteRawEventAuditRepository
 
 SESSION_ID = SessionId("session-one")
@@ -107,6 +107,10 @@ def _application():
             "1",
             TranslationResult((event,), "translated"),
         )
+    # The read model is what every read route answers from, and the reaction
+    # loop is what fills it — so a seeded graph runs the real pipeline once
+    # rather than writing rows the writers would never have written.
+    application.reaction_loop.tick()
     return application
 
 
@@ -215,145 +219,6 @@ def _post(server, path: str, body: dict):
     return response.status, response_body
 
 
-def test_plural_session_resources_use_the_canonical_snapshot_and_activity(tmp_path):
-    application = _application()
-    # The reader and the writer address the SAME file now, so the error can be
-    # recorded through the graph instead of by hand-making a table beside it.
-    application.audit_writes.record_error(
-        ApplicationErrorRecord(str(SESSION_ID), "dashboard", "render", "trace", "{}", 1, 12.5)
-    )
-    server, thread = _server(application)
-    try:
-        status, _content_type, body = _get(server, "/api/sessions")
-        assert status == 200
-        session_item = json.loads(body)[0]
-        assert session_item["session"]["session_id"] == "session-one"
-        assert "window_id" in session_item["terminal"]
-
-        status, _content_type, body = _get(server, "/api/sessions/session-one")
-        page_snapshot = json.loads(body)
-        assert status == 200
-        assert page_snapshot["canonical"]["cursor"] == 2
-        assert page_snapshot["canonical"]["session"]["working_directory"] == "/work"
-        assert "window_id" in page_snapshot["application"]["terminal"]
-        assert "memory" not in page_snapshot["application"]
-        assert page_snapshot["application"]["errors"] == [
-            {
-                "error_id": 1,
-                "timestamp": 12.5,
-                "component": "dashboard",
-                "action": "render",
-                "traceback": "trace",
-                "context": "{}",
-            }
-        ]
-
-        status, _content_type, body = _get(server, "/api/harnesses")
-        harnesses = {row["name"]: row for row in json.loads(body)}
-        assert status == 200
-        assert "supports_memory" not in harnesses["claude_code"]
-
-        status, _content_type, body = _get(
-            server, "/api/sessions/session-one/memory"
-        )
-        assert status == 404
-        assert json.loads(body)["error"] == "not found"
-
-        for legacy_path in (
-            "/api/session/session-one",
-            "/api/session/session-one/errors",
-            "/api/session/session-one/ops",
-            "/api/session/session-one/history",
-            "/api/session/session-one/backlog",
-            "/api/session/session-one/copy/group/out",
-            "/api/session/session-one/view/group",
-        ):
-            status, _content_type, _body = _get(server, legacy_path)
-            assert status == 404
-
-        status, _content_type, body = _get(
-            server,
-            "/api/sessions/session-one/activity?block_count=10",
-        )
-        page = json.loads(body)
-        assert status == 200
-        assert page["latest_cursor"] == 2
-        assert page["items"][0]["plain_text"] == "hello"
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=2)
-
-
-def test_dashboard_main_scope_shows_only_lead_activity_and_actor_scope_shows_the_actor(tmp_path):
-    application = _application()
-
-    def record_message(
-        event_id: str,
-        actor_id: ActorId,
-        parent_actor_id: ActorId | None,
-        role: MessageRole,
-        text: str,
-    ) -> None:
-        event: CanonicalEvent[EventPayload] = CanonicalEvent(
-            event_id=CanonicalEventId(event_id),
-            session_id=SESSION_ID,
-            actor_id=actor_id,
-            turn_id=None,
-            parent_actor_id=parent_actor_id,
-            harness="codex",
-            occurred_at=20.0,
-            terminal_window_id=None,
-            harness_process_id=None,
-            payload=MessageCreated(MessageId(event_id), role, TextContent(text), None, None),
-        )
-        _record(
-            application,
-            RawEvent(
-                RawEventId(f"raw-{event_id}"),
-                "codex",
-                "fixture",
-                "fixture",
-                event_id,
-                SESSION_ID,
-                actor_id,
-                parent_actor_id,
-                20.0,
-                "json",
-                b"{}",
-            ),
-            "1",
-            TranslationResult((event,), "translated"),
-        )
-
-    record_message("system-message", ACTOR_ID, None, "system", "instructions")
-    record_message("child-message", ActorId("child-one"), ACTOR_ID, "assistant", "child reply")
-    server, thread = _server(application)
-    try:
-        status, _content_type, body = _get(
-            server,
-            "/api/sessions/session-one/activity?block_count=10",
-        )
-        assert status == 200
-        assert [item["plain_text"] for item in json.loads(body)["items"]] == [
-            "hello",
-            "instructions",
-        ]
-
-        status, _content_type, body = _get(
-            server,
-            "/api/sessions/session-one/activity?block_count=10&actor_id=child-one",
-        )
-        assert status == 200
-        assert [item["plain_text"] for item in json.loads(body)["items"]] == [
-            "child reply",
-        ]
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=2)
-
-
 def test_read_only_mode_refuses_every_control_plane_post(tmp_path):
     """BAQYLAU_DASHBOARD_READONLY: remote eyes, no remote hands.
 
@@ -366,7 +231,7 @@ def test_read_only_mode_refuses_every_control_plane_post(tmp_path):
     read_only = dataclasses.replace(api_config.settings(), readonly=True)
     server, thread = _server(application, {dependencies.policy: read_only})
     try:
-        status, _content_type, _body = _get(server, "/api/sessions")
+        status, _content_type, _body = _get(server, "/sessionData")
         assert status == 200
 
         status, body = _post(
@@ -382,20 +247,6 @@ def test_read_only_mode_refuses_every_control_plane_post(tmp_path):
             {"window_id": "1", "working_directory": "/work"},
         )
         assert status == 403
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=2)
-
-
-def test_content_resource_resolves_a_canonical_field(tmp_path):
-    server, thread = _server(_application())
-    try:
-        reference = quote("message:content", safe="")
-        status, content_type, body = _get(server, f"/api/content/{reference}")
-        assert status == 200
-        assert content_type == "text/plain; charset=utf-8"
-        assert body == b"hello"
     finally:
         server.shutdown()
         server.server_close()
@@ -463,75 +314,6 @@ def test_resumable_sessions_come_from_canonical_session_summaries(tmp_path):
         thread.join(timeout=2)
 
 
-def test_session_stream_uses_the_canonical_cursor_as_the_sse_identity(tmp_path):
-    server, thread = _server(_application())
-    connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=2)
-    try:
-        connection.request("GET", "/api/sessions/session-one/stream?after_cursor=0")
-        response = connection.getresponse()
-        lines = [response.readline().decode().rstrip("\n") for _ in range(4)]
-
-        assert response.status == 200
-        assert lines[0] == "id: 2"
-        assert lines[1] == "event: activity"
-        frame = json.loads(lines[2].removeprefix("data: "))
-        assert frame["cursor"] == frame["snapshot"]["cursor"] == 2
-        assert frame["items"][0]["plain_text"] == "hello"
-    finally:
-        connection.close()
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=2)
-
-
-def test_session_stream_last_event_id_is_authoritative(tmp_path):
-    server, thread = _server(_application())
-    connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=2)
-    try:
-        connection.request(
-            "GET",
-            "/api/sessions/session-one/stream?after_cursor=2",
-            headers={"Last-Event-ID": "0"},
-        )
-        response = connection.getresponse()
-        lines = [response.readline().decode().rstrip("\n") for _ in range(4)]
-        assert lines[:2] == ["id: 2", "event: activity"]
-    finally:
-        connection.close()
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=2)
-
-
-def test_session_application_stream_updates_view_mode_without_activity(tmp_path):
-    application = _application()
-    application.session_application.set_view_mode(SESSION_ID, "focus")
-    server, thread = _server(application)
-    connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=2)
-    try:
-        connection.request("GET", "/api/sessions/session-one/stream?after_cursor=2")
-        response = connection.getresponse()
-        initial = [response.readline().decode().rstrip("\n") for _ in range(3)]
-        assert initial[0] == "event: application"
-        assert (
-            json.loads(initial[1].removeprefix("data: "))["preferences"]["view_mode"]
-            == "focus"
-        )
-
-        application.session_application.set_view_mode(SESSION_ID, "verbose")
-        changed = [response.readline().decode().rstrip("\n") for _ in range(3)]
-        assert changed[0] == "event: application"
-        assert (
-            json.loads(changed[1].removeprefix("data: "))["preferences"]["view_mode"]
-            == "verbose"
-        )
-    finally:
-        connection.close()
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=2)
-
-
 def test_session_application_routes_publish_complete_composer_state(tmp_path):
     application = _application()
     server, thread = _server(application)
@@ -560,9 +342,11 @@ def test_session_application_routes_publish_complete_composer_state(tmp_path):
         assert status == 200
         assert json.loads(body) == {"saved": True}
 
-        status, _content_type, body = _get(server, "/api/sessions/session-one")
+        # Read back from the route that serves the preferences store. Not
+        # /sessionData: none of this is a fact a harness reported.
+        status, _content_type, body = _get(server, "/api/sessions/session-one/application")
         assert status == 200
-        state = json.loads(body)["application"]
+        state = json.loads(body)
         assert state["composer"] == {
             "draft": {
                 "text": "half written",
@@ -576,68 +360,6 @@ def test_session_application_routes_publish_complete_composer_state(tmp_path):
         }
         assert state["dialog"] == {"draft": None}
     finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=2)
-
-
-def test_global_stream_sends_complete_current_application_snapshots(tmp_path):
-    application = _application()
-    state = DashboardNotificationState()
-    overview = GlobalApplicationService(
-        application.dashboard_sessions,
-        application.usage_state,
-        state,
-        application.new_sessions,
-        application.notification_settings,
-        application.hidden_directories,
-        application.push_subscriptions,
-        application.presence,
-    )
-    server, thread = _server(application, {providers.global_application: overview})
-    connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=2)
-    try:
-        connection.request("GET", "/api/stream")
-        response = connection.getresponse()
-
-        ready = [response.readline().decode().rstrip("\n") for _ in range(3)]
-        initial = [response.readline().decode().rstrip("\n") for _ in range(3)]
-        assert ready[0] == "event: ready"
-        assert initial[0] == "event: application"
-        initial_snapshot = json.loads(initial[1].removeprefix("data: "))
-        assert initial_snapshot["sessions"][0]["session"]["session_id"] == "session-one"
-        assert initial_snapshot["preferences"] == {
-            "new_session": {
-                "working_directory": None,
-                "harness": None,
-                "model": None,
-                "effort": None,
-            },
-            "new_session_drafts": [],
-            "hidden_directories": {},
-            "limits": {
-                "upload_bytes": initial_snapshot["preferences"]["limits"]["upload_bytes"],
-                "rename_characters": initial_snapshot["preferences"]["limits"]["rename_characters"],
-                "presence_seconds": initial_snapshot["preferences"]["limits"]["presence_seconds"],
-            },
-        }
-        assert initial_snapshot["preferences"]["limits"]["upload_bytes"] > 0
-        assert initial_snapshot["preferences"]["limits"]["rename_characters"] > 0
-        assert initial_snapshot["preferences"]["limits"]["presence_seconds"] > 0
-
-        state.publish_notification("session-one", "done", "work", "finished")
-        changed = [response.readline().decode().rstrip("\n") for _ in range(3)]
-        assert changed[0] == "event: application"
-        changed_snapshot = json.loads(changed[1].removeprefix("data: "))
-        assert changed_snapshot["notifications"]["latest"] == {
-            "revision": 1,
-            "session_id": "session-one",
-            "kind": "done",
-            "project": "work",
-            "title": "finished",
-        }
-    finally:
-        connection.close()
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
@@ -698,13 +420,17 @@ def test_global_application_routes_replace_field_specific_preferences_routes(
         assert status == 200
         assert "/parked" in json.loads(body)["hidden"]
 
-        snapshot = application.global_application.snapshot()
-        assert snapshot.preferences.new_session == NewSessionPreferences(
-            "/project", "codex", "gpt-5", "high"
-        )
-        assert snapshot.preferences.new_session_drafts[0].working_directory == "/project"
-        assert snapshot.preferences.new_session_drafts[0].text == "unfinished"
-        assert "/parked" in snapshot.preferences.hidden_directories
+        # Read back from the store the writes landed in: what a preference IS
+        # is a row, and the service that used to answer with all of them at once
+        # went with the read path it belonged to.
+        stored = application.new_sessions.preferences()
+        assert (stored.working_directory, stored.harness) == ("/project", "codex")
+        assert (stored.model, stored.effort) == ("gpt-5", "high")
+        drafts = application.new_sessions.drafts()
+        assert (drafts[0].working_directory, drafts[0].text) == ("/project", "unfinished")
+        assert "/parked" in {
+            entry.working_directory for entry in application.hidden_directories.hidden()
+        }
 
         status, body = _post(
             server,
@@ -1079,69 +805,6 @@ def _record_agent_message(application):
     )
 
 
-def test_pane_mirror_stream_announces_the_session_and_streams_frames(
-    tmp_path, monkeypatch
-):
-    monkeypatch.setenv("BAQYLAU_DATA_DIR", str(tmp_path / "data"))
-    application = _application()
-    _record_agent_message(application)
-    server, thread = _server(application)
-    connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=2)
-    try:
-        connection.request("GET", "/api/sessions/session-one/panes/mirror/stream?width=100")
-        response = connection.getresponse()
-        assert response.status == 200
-        assert _read_sse_event(response) == ("session", {"session_id": "session-one"})
-        event, frame = _read_sse_event(response)
-        assert event == "frame"
-        assert frame["ansi"].startswith("\033[H\033[2J\033[3J")
-        assert "hello from the agent" in frame["ansi"]
-    finally:
-        connection.close()
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=2)
-
-
-def test_pane_scoreboard_stream_renders_the_session_summary(tmp_path, monkeypatch):
-    monkeypatch.setenv("BAQYLAU_DATA_DIR", str(tmp_path / "data"))
-    server, thread = _server(_application())
-    connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=2)
-    try:
-        connection.request(
-            "GET", "/api/sessions/session-one/panes/scoreboard/stream?width=100"
-        )
-        response = connection.getresponse()
-        assert response.status == 200
-        assert _read_sse_event(response) == ("session", {"session_id": "session-one"})
-        event, frame = _read_sse_event(response)
-        assert event == "frame"
-        assert frame["ansi"].startswith("\033[H\033[2J\033[3J")
-    finally:
-        connection.close()
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=2)
-
-
-def test_pane_stream_rejects_a_missing_width_before_streaming(tmp_path):
-    server, thread = _server(_application())
-    try:
-        status, _content_type, body = _get(
-            server, "/api/sessions/session-one/panes/mirror/stream"
-        )
-        assert status == 400
-        assert "width" in json.loads(body)["error"]
-        status, _content_type, _body = _get(
-            server, "/api/sessions/session-one/panes/elsewhere/stream?width=80"
-        )
-        assert status == 404
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=2)
-
-
 def test_pane_command_route_carries_the_keypress_environment(tmp_path):
     from terminal.panes.commands import PaneCommandOutcome
 
@@ -1192,41 +855,36 @@ def test_pane_command_route_carries_the_keypress_environment(tmp_path):
         thread.join(timeout=2)
 
 
-def test_terminal_view_route_owns_the_open_closed_state(tmp_path):
-    application = _application()
-    views = application.content_views
+def test_the_background_gesture_is_a_control_and_declines_when_nothing_is_running(tmp_path):
+    """The gesture that replaced the key passthrough, and why it is a CONTROL.
 
+    Backgrounding is a keystroke the TUI only accepts once it offers to take one,
+    so the handler waits for that offer and reports honestly when it never comes.
+    That waiting is the harness's knowledge of its own screen, which is why this
+    is a gesture with a handler rather than a raw key a caller aims at a window:
+    every caller — a browser click and a test alike — gets the same reliability.
+    """
+    application = _application()
     server, thread = _server(application)
     try:
         status, body = _post(
-            server, "/api/terminal/views", {"content_reference": "event-one:field"}
+            server,
+            "/api/sessions/session-one/controls/background",
+            {"request_id": "req-1"},
         )
-        assert (status, json.loads(body)) == (200, {"opened": True})
-        assert views.opened() == frozenset({"event-one:field"})
-        status, body = _post(
-            server, "/api/terminal/views", {"content_reference": "event-one:field"}
+        # 409: the session is not live in this application, so the gesture is
+        # declined up front rather than attempted. A rejection here is a verdict.
+        assert status == 409, body
+        assert json.loads(body)["status"] == "rejected"
+
+        status, _body = _post(
+            server, "/api/sessions/session-one/controls/background", {}
         )
-        assert (status, json.loads(body)) == (200, {"opened": False})
-        assert views.opened() == frozenset()
+        assert status == 400, "a gesture with no request id is not addressable"
     finally:
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
-
-
-def test_mirror_frames_share_one_model_across_client_widths(tmp_path, monkeypatch):
-    monkeypatch.setenv("BAQYLAU_DATA_DIR", str(tmp_path / "data"))
-    application = _application()
-    _record_agent_message(application)
-
-    version, wide = application.pane_streams.mirror_frame(SESSION_ID, 120, None)
-    assert "hello from the agent" in wide
-    assert application.pane_streams.mirror_frame(SESSION_ID, 120, version) is None
-
-    narrow = application.pane_streams.mirror_frame(SESSION_ID, 40, None)
-    assert narrow is not None and narrow[0] == version
-    assert "hello from the agent" in narrow[1]
-    assert len(application.pane_streams._models) == 1
 
 
 def _post_hook(server, harness: str, payload: bytes, observed: dict | None = None):
@@ -1379,22 +1037,17 @@ def test_a_stream_poll_never_runs_on_the_event_loop(tmp_path):
             return read(*arguments)
         return observe
 
-    # The three reads the two browser streams poll on.
-    application.global_application.snapshot = watched(
-        application.global_application.snapshot
-    )
-    application.dashboard_stream.frame = watched(application.dashboard_stream.frame)
-    application.session_application.snapshot = watched(
-        application.session_application.snapshot
-    )
+    # The two reads the two streams poll on, and they are the same read model.
+    application.session_data.delta = watched(application.session_data.delta)
+    application.session_data.changed_after = watched(application.session_data.changed_after)
 
     server, thread = _server(application)
     connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=2)
     other = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=2)
     try:
-        connection.request("GET", "/api/stream")
+        connection.request("GET", "/sessionData/stream")
         connection.getresponse().readline()
-        other.request("GET", "/api/sessions/session-one/stream?after_cursor=0")
+        other.request("GET", "/sessionData/session-one/stream?after_cursor=0")
         other.getresponse().readline()
 
         assert where, "no poll was observed at all"
@@ -1419,15 +1072,21 @@ def test_a_body_whose_length_is_not_declared_is_refused_before_it_is_read(tmp_pa
     server, thread = _server(_application())
     try:
         status = _post_without_a_declared_length(
-            server, "/api/terminal/views", b'{"content_reference": "event-one:field"}'
+            server,
+            "/api/sessions/session-one/controls/background",
+            b'{"request_id": "req-1"}',
         )
         assert status == 411
 
         # ...and the same request, with its length declared, is served as always.
         status, body = _post(
-            server, "/api/terminal/views", {"content_reference": "event-one:field"}
+            server,
+            "/api/sessions/session-one/controls/background",
+            {"request_id": "req-1"},
         )
-        assert (status, json.loads(body)) == (200, {"opened": True})
+        # Served as always: the route's own verdict, in its own shape. A 409 is
+        # the gesture declining, which is a verdict and not an error.
+        assert (status, json.loads(body)["status"]) == (409, "rejected")
     finally:
         server.shutdown()
         server.server_close()
@@ -1448,10 +1107,10 @@ def test_an_internal_failure_is_a_500_and_an_audit_row_not_a_400(tmp_path, monke
     def explode():
         raise ValueError("/Users/someone/private/notes is not a directory")
 
-    monkeypatch.setattr(application.dashboard_sessions, "sessions", explode)
+    monkeypatch.setattr(application.session_data, "visible", explode)
     server, thread = _server(application)
     try:
-        status, headers, body = _get_response(server, "/api/sessions")
+        status, headers, body = _get_response(server, "/sessionData")
 
         assert status == 500
         assert json.loads(body) == {"error": "internal"}
@@ -1478,14 +1137,9 @@ def test_input_the_caller_really_did_get_wrong_is_still_a_400_with_its_reason(tm
     server, thread = _server(_application())
     try:
         # UnknownReference — a session id that names nothing.
-        status, _headers, body = _get_response(server, "/api/sessions/nosuchsession")
+        status, _headers, body = _get_response(server, "/sessionData/nosuchsession")
         assert status == 400
         assert "unknown session" in json.loads(body)["error"]
-
-        # MalformedRequest — a content reference that is not <event>:<field>.
-        status, _headers, body = _get_response(server, "/api/content/nocolonhere")
-        assert status == 400
-        assert json.loads(body)["error"] == "invalid content reference"
 
         # UnknownReference again, from the registry — and this one used to be a
         # 500, because HarnessRegistryError was a RuntimeError nothing handled.
@@ -1504,7 +1158,7 @@ def test_a_session_id_that_could_never_be_one_is_refused_at_the_boundary(tmp_pat
     the same thing as validated — the audit rows a stream writes about itself."""
     server, thread = _server(_application())
     try:
-        status, _headers, body = _get_response(server, "/api/sessions/not%20a%20session")
+        status, _headers, body = _get_response(server, "/sessionData/not%20a%20session")
         assert status == 400
         assert "session_id" in json.loads(body)["error"]
 
@@ -1576,8 +1230,9 @@ def test_every_declared_response_model_describes_the_bytes_actually_sent(tmp_pat
 
         # ...and the loop really did cover the read plane, rather than skipping
         # its way to a pass.
-        assert "/api/sessions" in checked
-        assert "/api/sessions/{session_id}" in checked
+        assert "/sessionData" in checked
+        assert "/sessionData/{session_id}" in checked
+        assert "/sessionData/{session_id}/entries" in checked
         assert "/api/harnesses/{harness}/catalog" in checked
         assert len(checked) >= 6, checked
     finally:
@@ -1602,9 +1257,9 @@ def test_the_published_schema_names_every_status_a_caller_must_handle(tmp_path):
         return entry["content"]["application/json"]["schema"]
 
     # Every route carries what the exception handlers can always produce...
-    for path, method in (("/api/sessions", "get"),
-                         ("/api/content/{content_reference}", "get"),
-                         ("/api/terminal/views", "post")):
+    for path, method in (("/sessionData", "get"),
+                         ("/sessionData/{session_id}/entries", "get"),
+                         ("/api/sessions/{session_id}/controls/background", "post")):
         assert {"400", "500"} <= set(answers(path, method)), (path, method)
         assert schema(answers(path, method)["400"]) == error_body
 
@@ -1618,7 +1273,7 @@ def test_the_published_schema_names_every_status_a_caller_must_handle(tmp_path):
     ]
 
     # The guard's four refusals, on a route that sits behind it.
-    guarded = answers("/api/terminal/views", "post")
+    guarded = answers("/api/sessions/{session_id}/controls/background", "post")
     assert {"403", "411", "413", "415"} <= set(guarded)
 
     # A gesture's real outcomes — all three carrying the gesture's OWN body,
@@ -1671,6 +1326,48 @@ def test_every_plane_carries_the_security_headers(tmp_path):
         _status, headers, _body = _get_response(server, "/static/style.css")
         assert headers["Cache-Control"] == "no-store"
         assert headers["X-Content-Type-Options"] == "nosniff"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_every_asset_the_document_references_is_served_as_its_own_type():
+    """The browser's boot, from the document outward.
+
+    index.html is the only list of sub-resources that matters, and it was NOT
+    the list the server admitted: the app parts pass by shape, and the shape
+    missed a lettered slot (app.00a-markup.js), so two real scripts 404ed —
+    with the framework's JSON error body, which a browser then refuses to
+    execute. Whatever the document asks for, the server owes.
+    """
+    server, thread = _server(_application())
+    try:
+        status, content_type, document = _get(server, "/")
+        assert status == 200
+        assert content_type == "text/html; charset=utf-8"
+        types = {".js": "text/javascript", ".css": "text/css", ".png": "image/png",
+                 ".webmanifest": "application/manifest+json"}
+        parts = set()
+        references = re.findall(rb"(?:src|href)=\"(/static/[^\"]+)\"", document)
+        # the parts, the stylesheet, the manifest and the touch icon
+        assert len(references) >= 18
+        for reference in references:
+            path = reference.decode()
+            name = path.split("?")[0].rsplit("/", 1)[1]
+            if name.endswith(".js"):
+                parts.add(name)
+                # every script URL carries this boot's cache-busting stamp
+                assert "?v=" in path, path
+            status, content_type, body = _get(server, path)
+            assert status == 200, path
+            assert body, path
+            suffix = "." + name.rsplit(".", 1)[1]
+            assert content_type.startswith(types[suffix]), (path, content_type)
+        # ...and the other direction: a part shipped but never referenced is
+        # dead weight the browser never runs.
+        static_dir = pathlib.Path(REPOSITORY_ROOT) / "dashboard" / "static"
+        assert parts == {part.name for part in static_dir.glob("app.*.js")}
     finally:
         server.shutdown()
         server.server_close()

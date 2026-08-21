@@ -1,7 +1,6 @@
 # harness/impl/claude_code/suggestion.py — read Claude Code's greyish "suggested
 # answer" ghost
-# text out of a live session's input box (docs/dashboard.md, *Web ghost
-# suggestion*). Sibling of askdialog.py/plandialog.py and the same philosophy:
+# text out of a live session's input box. Sibling of askdialog.py/plandialog.py and the same philosophy:
 # the suggestion exists ONLY as live TUI pixels — Claude Code fires no hook for
 # its own input-box suggestion — so the one way to surface it in the web
 # composer is to READ THE SCREEN.
@@ -38,7 +37,7 @@ _RULE_MIN = 10          # a divider rule is a line with at least this many `─`
 _SGR = re.compile(r"\x1b\[([0-9;:]*)m")   # an SGR escape (colours/intensity)
 
 
-def _apply_sgr(faint, params):
+def _apply_sgr(faint: bool, params: str) -> bool:
     """Fold one SGR escape's params into the running faint state. `""` (the
     bare `\\x1b[m`) and `0` reset; `2` sets faint; `22` clears it. Colour codes
     like `38:2:r:g:b` (a colon-joined field) leave intensity untouched."""
@@ -53,7 +52,7 @@ def _apply_sgr(faint, params):
     return faint
 
 
-def _faint_chars(s):
+def _faint_chars(s: str) -> list[tuple[str, bool]]:
     """Walk `s` yielding (char, faint) for each VISIBLE char, tracking the SGR
     intensity state and skipping every escape sequence (SGR updates the state;
     OSC 8 hyperlinks / other CSI are stepped over)."""
@@ -75,11 +74,11 @@ def _faint_chars(s):
     return out
 
 
-def _is_rule(line):
+def _is_rule(line: str) -> bool:
     return strip_ansi(line).count(_RULE) >= _RULE_MIN
 
 
-def _region(lines):
+def _region(lines: list[str]) -> list[str]:
     """The input-box lines: between the last two divider rules. Falls back to
     the last `❯`-prompt line (through the following rule, if any) when the box
     isn't cleanly framed. [] when no input box is on screen."""
@@ -99,7 +98,7 @@ def _region(lines):
     return lines[start:end]
 
 
-def _box_content(screen):
+def _box_content(screen: str) -> list[tuple[str, bool]]:
     """The input box's post-prompt `[(char, faint)]` list — the shared
     intermediate of `parse()` and `typed()`: the box region's visible chars with
     their SGR faint state, dropped through the first prompt marker (the box's
@@ -119,16 +118,16 @@ def _box_content(screen):
     return chars
 
 
-def norm(s):
+def norm(s: str) -> str:
     """Input-box text, whitespace-normalized — every run of whitespace (the
     box's own padding, and the line breaks a wrapped entry is captured with)
     collapsed to one space. The ONE normalization for box content: `parse`/
     `typed` return it, and post_interrupt's restore check compares a transcript
-    prompt against a box read through it (docs/dashboard.md, *Interrupt*)."""
+    prompt against a box read through it."""
     return re.sub(r"\s+", " ", s).strip()
 
 
-def parse(screen):
+def parse(screen: str) -> str | None:
     """The greyish suggested-answer text from an ANSI screen capture, or None.
     None means: no input box, an empty box, or REAL input (any non-whitespace
     content that is NOT faint — the user's own typed/queued line, never a
@@ -144,7 +143,7 @@ def parse(screen):
     return norm(raw) or None
 
 
-def typed(screen):
+def typed(screen: str) -> str | None:
     """The REAL (non-faint) text the user has put in the input box — their own
     typed or queued line — or None when the box is empty, absent, or holds only
     a faint GHOST suggestion. The complement of `parse()`: text this returns is
@@ -152,10 +151,10 @@ def typed(screen):
     detect the user composing a reply AT THE TERMINAL — the one trace that
     typing into the `❯` box leaves before submitting (it moves neither the tab
     nor the transcript), so the deferred Telegram alert can tell "still at the
-    keyboard" from "walked away" (docs/dashboard.md, *Telegram alerts*) — AND,
+    keyboard" from "walked away" — AND,
     since an early interrupt makes Claude Code hand the prompt BACK to this
     box, to tell a restore from a plain stop (post_interrupt's
-    `_restored_input`, docs/dashboard.md *Interrupt*)."""
+    `_restored_input`)."""
     chars = _box_content(screen)
     real = "".join(c for c, f in chars if not f and c != "\n").replace(NBSP, " ")
     return norm(real) or None

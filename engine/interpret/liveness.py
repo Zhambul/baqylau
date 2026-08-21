@@ -4,12 +4,41 @@ from __future__ import annotations
 
 import time
 
-from core.process import process_alive
+from core.process import process_alive, process_is_alive
 from domain.ids import RawEventId
 from harness.contract import HarnessRawEventSource
 from harness.models import LIVENESS_SOURCE_TYPE, RawEvent, Session
 from domain.codec import encode_document
 from harness.models.directives import ProcessExit
+
+
+class ProcessProbe:
+    """The per-tick liveness check, kept cheap.
+
+    The `ps` name check exists only to catch a pid recorded before a daemon
+    restart and reused while nobody was watching. Reuse requires a death this
+    probe would have seen, so the name is confirmed ONCE per source identity
+    and every later probe is a signal-0 syscall. Before this memory existed the
+    check was a `ps` SUBPROCESS per unfinished session per 0.25 s tick, and on
+    macOS every fork stalls the whole process on its malloc locks — measured as
+    0.3–1 s of latency on every HTTP request the daemon served. The memory
+    lives here, on the interpreter, because the sources themselves are rebuilt
+    every tick.
+    """
+
+    def __init__(self) -> None:
+        self._verified: set[str] = set()
+
+    def alive(self, identity: str, process_id: int, process_name: str) -> bool:
+        if identity in self._verified:
+            if process_is_alive(process_id):
+                return True
+            self._verified.discard(identity)
+            return False
+        if not process_alive(process_id, process_name):
+            return False
+        self._verified.add(identity)
+        return True
 
 
 class SessionLivenessSource(HarnessRawEventSource):
@@ -20,7 +49,7 @@ class SessionLivenessSource(HarnessRawEventSource):
     Position encoding: a latch — `exited` means the exit was already recorded.
     """
 
-    def __init__(self, session: Session) -> None:
+    def __init__(self, session: Session, probe: ProcessProbe) -> None:
         if session.harness_process_id is None:
             # Never swallowed: the failure lands in the source-construction
             # audit every tick until the pid arrives.
@@ -34,6 +63,7 @@ class SessionLivenessSource(HarnessRawEventSource):
             # now a named failure at the point the mistake is made.
             raise ValueError(f"session has no attached harness plugin: {session.session_id}")
         self.session = session
+        self.probe = probe
         # Held narrowed: the checks above are what make these safe, and
         # re-reading them off `self.session` below would discard that.
         self.plugin = session.plugin
@@ -46,7 +76,8 @@ class SessionLivenessSource(HarnessRawEventSource):
     def read(self, after_position: str | None) -> tuple[RawEvent, ...]:
         if after_position == "exited":
             return ()
-        if process_alive(
+        if self.probe.alive(
+            self.source_identity,
             self.harness_process_id,
             self.plugin.info.cli_process_name,
         ):

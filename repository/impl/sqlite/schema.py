@@ -11,25 +11,30 @@ source resumes from the `source_position` of the last raw event carrying its
 
 There is no key–value table. Nine preference entities that used to be JSON
 blobs under nine keys have nine tables with real primary keys; the queue, the
-dialog answers and the usage windows are rows rather than encoded lists. Three
+dialog answers and the usage windows are rows rather than encoded lists. Six
 opaque columns remain and each is deliberate: `canonical_events.payload` is the
 canonical fact body, closed and versioned by `domain/codec.py`;
 `raw_events.payload` is the verbatim bytes we observed, which is the whole point
 of keeping it; `state_files.content` is a free-form audit blob written by a
-facade whose contract is "record anything, never raise".
+facade whose contract is "record anything, never raise"; and the three read-model
+payloads (`session_data`, `session_data_actors`, `session_entries`) are closed
+typed documents of `domain/sessiondata.py` and `domain/entries.py`, validated on
+the way in and out by the same codec — a column per field would be a hundred
+columns, half of them null, and none of them queried.
 """
 
 from __future__ import annotations
 
-MAIN_SCHEMA_VERSION = 2
+MAIN_SCHEMA_VERSION = 4
 AUDIT_SCHEMA_VERSION = 1
 
-MAIN_MIGRATIONS: dict[int, tuple[str, ...]] = {
-    2: (
-        "ALTER TABLE translation_records RENAME TO interpretations",
-        "ALTER TABLE canonical_provenance RENAME TO interpretation_events",
-    ),
-}
+# Empty, and version 4 is why: the canonical vocabulary was rewritten, so no
+# stored fact of an earlier version means anything under the new one. The
+# "migration" is `rm <data_dir>/main.db*` and a fresh schema from the DDL below;
+# the entries for versions 2 and 3 went with the data they migrated. `audit.db`
+# is untouched, and the raw events allow re-translation if the history is ever
+# wanted back.
+MAIN_MIGRATIONS: dict[int, tuple[str, ...]] = {}
 
 
 _SCHEMA_VERSION_TABLE = """
@@ -130,9 +135,9 @@ CREATE TABLE IF NOT EXISTS interpretation_events(
     FOREIGN KEY(raw_event_id) REFERENCES raw_events(raw_event_id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS operation_output(
+CREATE TABLE IF NOT EXISTS shell_output(
     session_id TEXT NOT NULL,
-    operation_id TEXT NOT NULL,
+    shell_id TEXT NOT NULL,
     harness TEXT NOT NULL,
     actor_id TEXT NOT NULL,
     parent_actor_id TEXT,
@@ -142,10 +147,64 @@ CREATE TABLE IF NOT EXISTS operation_output(
     initial_size INTEGER NOT NULL,
     initial_modified_at INTEGER NOT NULL,
     wait_for_source_change INTEGER NOT NULL,
-    until TEXT NOT NULL CHECK(until IN ('operation_finished', 'session_finished')),
+    until TEXT NOT NULL CHECK(until IN ('shell_finished', 'session_finished')),
     state TEXT NOT NULL CHECK(state IN ('active', 'finishing')),
     created_at REAL NOT NULL,
-    PRIMARY KEY(session_id, operation_id)
+    PRIMARY KEY(session_id, shell_id)
+);
+
+-- === the read model ========================================================
+--
+-- What every frontend reads, and the only thing they read. Written at push time
+-- by the writers behind `SessionDataRepository`; `revision` and
+-- `session_entries.cursor` come from ONE counter, so "everything after cursor
+-- C" is a single question with a single answer across both kinds of change.
+
+CREATE TABLE IF NOT EXISTS session_data(
+    session_id TEXT PRIMARY KEY,
+    revision INTEGER NOT NULL,
+    payload TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS index_session_data_revision
+    ON session_data(revision);
+
+CREATE TABLE IF NOT EXISTS session_data_actors(
+    session_id TEXT NOT NULL,
+    actor_id TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    payload TEXT NOT NULL,
+    PRIMARY KEY(session_id, actor_id)
+);
+
+CREATE INDEX IF NOT EXISTS index_session_data_actors_revision
+    ON session_data_actors(session_id, revision);
+
+CREATE INDEX IF NOT EXISTS index_session_data_actors_global
+    ON session_data_actors(revision);
+
+CREATE TABLE IF NOT EXISTS session_entries(
+    cursor INTEGER PRIMARY KEY AUTOINCREMENT,
+    entry_id TEXT NOT NULL UNIQUE,
+    session_id TEXT NOT NULL,
+    entry_type TEXT NOT NULL,
+    actor_id TEXT NOT NULL,
+    parent_actor_id TEXT,
+    turn_id TEXT,
+    occurred_at REAL,
+    summary TEXT,
+    payload TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS index_session_entries_session
+    ON session_entries(session_id, cursor);
+
+-- The reaction loop's high-water mark against canonical_events; one row,
+-- typed, the same standing as schema_version — not a key-value table.
+CREATE TABLE IF NOT EXISTS reaction_progress(
+    id INTEGER PRIMARY KEY CHECK(id = 1),
+    canonical_cursor INTEGER NOT NULL,
+    updated_at REAL NOT NULL
 );
 
 -- === your unsent work on one session ======================================
@@ -250,10 +309,6 @@ CREATE TABLE IF NOT EXISTS pane_widths(
     width_percent INTEGER NOT NULL CHECK(width_percent BETWEEN 1 AND 99)
 );
 
-CREATE TABLE IF NOT EXISTS opened_views(
-    content_reference TEXT PRIMARY KEY,
-    opened_at REAL NOT NULL
-);
 
 -- === what a plan has left =================================================
 

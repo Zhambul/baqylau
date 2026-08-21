@@ -1,10 +1,10 @@
 // tests/jsdom/headeract.js — drives the REAL header action bar
 // (mountHeaderActions/chromeActions/chromeQuickCmds/gate in
 // dashboard/static/app.11-chrome.js) over the shared DOM shim, and prints one
-// JSON verdict object that test_l0_dashboard.py asserts on.
+// JSON verdict object that tests/test_dashboard_dom.py asserts on.
 //
 // Why this exists: the bar's whole point is that a button which doesn't apply
-// GREYS instead of vanishing (docs/dashboard.md *Header action bar*), so "is it
+// GREYS instead of vanishing, so "is it
 // clickable right now" is the feature. That answer is a matrix — live vs parked
 // × idle / running / a modal dialog waiting × how much conversation there is —
 // computed by three closures (`stopMode`, `quickMode`, the static gates) that a
@@ -102,8 +102,11 @@ function autoRename(meta, tab) {
            title: (btn && btn.title) || "" };
 }
 
-/* The ✦ model button's label and selected menu row come from separate canonical
-   model fields: model_short is presentation, model_selection is the catalog id. */
+/* The ✦ model button's label and its selected menu row come from ONE field now:
+   the session's model is a display NAME, and the catalog's id→name table
+   (`model_labels`) is how the picker finds the row that name belongs to. The
+   selection id the aggregate used to carry is gone — a model is one string to a
+   reader, and the ids that can be launched are the catalog's. */
 function modelBtn(meta, pending) {
   const sessionView = {
     meta: meta, agentFocus: null, agents: [], contextWindow: meta.ctx || null,
@@ -129,7 +132,7 @@ const CC_RW = [{ mode: "both", label: "restore code and conversation" },
 const CC_CAPS = { interrupt: true, close: true, rename: true,
                   rewind: true, migrate: true, compact: true,
                   model: true, effort: true, answer: true, plan: true };
-const LIVE = { live: true, terminal_window_id: "7", workingDirectory: "/w", prompts: 9,
+const LIVE = { live: true, workingDirectory: "/w", prompts: 9,
                quick_commands: CC_CMDS, rewind_modes: CC_RW,
                caps: CC_CAPS };
 // …and a session owned by a DIFFERENT host: it compacts and switches model or
@@ -149,10 +152,10 @@ const out = {
   fresh: bar({ ...LIVE, prompts: 1 }, ""),
   // no count to be had (a transcript no parser speaks) — never a reason to grey
   unknown: bar({ ...LIVE, prompts: null }, ""),
-  parked: bar({ ...LIVE, live: false, terminal_window_id: "" }, ""),
+  parked: bar({ ...LIVE, live: false }, ""),
   // a parked row with no directory recorded: ↻ resume has nowhere to go, so it
   // GREYS with the reason instead of not being built (the bar's own rule)
-  nodir: bar({ ...LIVE, live: false, terminal_window_id: "", workingDirectory: "" }, ""),
+  nodir: bar({ ...LIVE, live: false, workingDirectory: "" }, ""),
   // the other host, at ONE prompt: its ⊜ compact stays reachable (it declares
   // no floor — Claude Code's 2 was a client constant applied to everyone) while
   // ↶ rewind greys on the cap
@@ -162,7 +165,7 @@ const out = {
   autorename: {
     idle: autoRename(LIVE, ""),
     asking: autoRename(LIVE, "awaiting_attention"),
-    parked: autoRename({ ...LIVE, live: false, terminal_window_id: "" }, ""),
+    parked: autoRename({ ...LIVE, live: false }, ""),
     // an EMPTY conversation: bare /rename bounces ("no conversation context
     // yet"), so the button says so; an unknown count never greys (⊜'s rule)
     empty: autoRename({ ...LIVE, prompts: 0 }, ""),
@@ -173,41 +176,32 @@ const out = {
   },
   // The plugin supplies the catalog selection independently from display text.
   model: {
-    claude: modelBtn({ ...LIVE, ctx: { model: "claude-opus-4-8",
-                                       model_short: "opus-4.8",
-                                       model_selection: "opus" } }),
-    other: modelBtn({ ...OTHER, ctx: { model: "gpt-5.6-terra",
-                                       model_short: "gpt-5.6-terra",
-                                       model_selection: "gpt-5.6-terra" } }),
-    unlisted: modelBtn({ ...OTHER, ctx: { model: "gpt-5.4-codex",
-                                          model_short: "gpt-5.4-codex",
-                                          model_selection: null } }),
+    claude: modelBtn({ ...LIVE, model_labels: { opus: "opus-4.8" },
+                       ctx: { model_short: "opus-4.8" } }),
+    other: modelBtn({ ...OTHER, model_labels: { "gpt-5.6-terra": "gpt-5.6-terra" },
+                      ctx: { model_short: "gpt-5.6-terra" } }),
+    unlisted: modelBtn({ ...OTHER, model_labels: {},
+                         ctx: { model_short: "gpt-5.4-codex" } }),
     // a just-clicked switch shows optimistically until the probe CONFIRMS it —
     // by the host's rule, so Claude's `opus` row clears against a running
     // `opus-4.8` (an equality compare never would) and a stale one holds
-    pending_confirmed: modelBtn({ ...LIVE, ctx: { model: "claude-opus-4-8",
-                                                  model_short: "opus-4.8",
-                                                  model_selection: "opus" } },
+    pending_confirmed: modelBtn({ ...LIVE, model_labels: { opus: "opus-4.8" },
+                                  ctx: { model_short: "opus-4.8" } },
                                 "opus"),
-    pending_waiting: modelBtn({ ...LIVE, ctx: { model: "claude-opus-4-8",
-                                                model_short: "opus-4.8",
-                                                model_selection: "opus" } },
+    pending_waiting: modelBtn({ ...LIVE, model_labels: { opus: "opus-4.8" },
+                                ctx: { model_short: "opus-4.8" } },
                               "sonnet"),
     // A `/model` typed AT THE TERMINAL moves the session model at once, while
     // the ctx probe still describes the window the last assistant record was
     // measured against. The button follows the SWITCH, not the measurement —
     // otherwise it sits on the old model until the session next replies.
-    switched: modelBtn({ ...LIVE,
-                         model_short: "opus", model_selection: "opus",
-                         ctx: { model: "claude-sonnet-5",
-                                model_short: "sonnet-5",
-                                model_selection: "sonnet" } }),
+    switched: modelBtn({ ...LIVE, model_short: "opus",
+                         model_labels: { opus: "opus", sonnet: "sonnet-5" },
+                         ctx: { model_short: "sonnet-5" } }),
     // and the optimistic label clears against the same source
-    switched_clears_pending: modelBtn({ ...LIVE,
-                                        model_short: "opus", model_selection: "opus",
-                                        ctx: { model: "claude-sonnet-5",
-                                               model_short: "sonnet-5",
-                                               model_selection: "sonnet" } },
+    switched_clears_pending: modelBtn({ ...LIVE, model_short: "opus",
+                                        model_labels: { opus: "opus", sonnet: "sonnet-5" },
+                                        ctx: { model_short: "sonnet-5" } },
                                       "opus"),
   },
   // the bar is emptied when you leave the session view

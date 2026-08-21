@@ -1,42 +1,56 @@
 """What the dashboard says, read back the way the browser reads it.
 
-Every assertion in this suite goes through `/api/sessions…` — the same routes and
-the same rendered items the page draws, so an item asserted here is an item the
-browser would show. A later Playwright tier asserts the DOM those items become;
-it does not need a second way to find them.
+Every assertion in this suite goes through `/sessionData` — the same two
+resources the page is built from, the aggregate and the feed. There is no
+rendered item any more: the daemon serves facts and each frontend draws them, so
+what this suite asserts on is the fact, and the DOM those facts become is a
+later Playwright tier's business.
 
 Read back into the ROUTES' OWN RESPONSE MODELS, never into dicts. Every reader
-below returns a real type, so `item.state` is checked at the point it is written
-and a renamed field breaks the rig at the read rather than at a timeout twenty
-lines later — which is what `item.get("state")` on an untyped dict bought us:
-None, no error, and a scenario waiting out its clock for a state nobody was
-going to send. The adapters are built once, here, because they ARE the contract
-this suite reads.
+below returns a real type, so `entry.body.state` is checked at the point it is
+written and a renamed field breaks the rig at the read rather than at a timeout
+twenty lines later — which is what `item.get("state")` on an untyped dict bought
+us: None, no error, and a scenario waiting out its clock for a state nobody was
+going to send.
+
+Two things follow from the read model that this file is shaped by. Content is
+EMBEDDED, so a command's text and its output are in the entry and there is no
+second request to resolve them. And a command is several entries — a start, its
+output chunks, a finish — so the fold that makes them one thing is here, exactly
+as it is in the browser and in the pane: `shell()` below is this suite's copy of
+the same rule, and it is short because the rule is.
 
 The two verdict readers at the bottom have no route because nothing in the
 product asks for them over HTTP: they read `main.db` / `audit.db` through the
-repositories that own those tables, which is also how `bin/baqylau-raw-events-audit.py`
-reads them.
+repositories that own those tables, which is also how
+`bin/baqylau-raw-events-audit.py` reads them.
 """
 
 from __future__ import annotations
 
 import time
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
 from typing import TypeAlias, TypeVar
-from urllib.parse import quote
 
 from pydantic import TypeAdapter
 
-from api.dashboard.models.sessions.activity_item import ActivityItemResponse
-from api.dashboard.models.sessions.activity_page import ActivityPageResponse
-from api.dashboard.models.sessions.actor_summary import ActorSummaryResponse
-from api.dashboard.models.sessions.activity_statistics import ActivityStatisticsResponse
-from api.dashboard.models.sessions.background_work import BackgroundOperationResponse
-from api.dashboard.models.sessions.session_list_item import SessionListItemResponse
-from api.dashboard.models.sessions.session_snapshot_response import SessionSnapshotResponse
-from api.dashboard.models.sessions.session_summary import SessionSummaryResponse
-from api.common.models.values.model_reference import ModelReferenceResponse
+from api.sessiondata.models.entry import (
+    AssignmentFinishedBodyResponse,
+    AssignmentStartedBodyResponse,
+    EntryPageResponse,
+    EntryResponse,
+    MessageBodyResponse,
+    ShellBackgroundedBodyResponse,
+    ShellFinishedBodyResponse,
+    ShellOutputBodyResponse,
+    ShellStartedBodyResponse,
+)
+from api.sessiondata.models.session_data import (
+    ActorResponse,
+    SessionDataResponse,
+    SessionResponse,
+)
 from domain.ids import SessionId
 from repository.impl.sqlite.audit import SqliteAuditReadRepository
 from repository.impl.sqlite.databases import audit_database, main_database, read_only
@@ -47,16 +61,23 @@ from support.daemon import Daemon
 T = TypeVar("T")
 
 POLL_SECONDS = 0.5
+# One page holds a whole scenario's feed. Deliberately the route's maximum: a
+# scenario that needed paging would be asserting on a window rather than on a
+# session, and the assertion that a command is ABSENT (the subagent attribution
+# case) is only honest over the whole feed.
+ENTRY_LIMIT = 1000
 
 # One adapter per resource this suite reads: the model the route declares.
-SESSION_LIST = TypeAdapter(tuple[SessionListItemResponse, ...])
-SESSION_SNAPSHOT = TypeAdapter(SessionSnapshotResponse)
-ACTIVITY_PAGE = TypeAdapter(ActivityPageResponse)
+SESSION_DATA_LIST = TypeAdapter(tuple[SessionDataResponse, ...])
+SESSION_DATA = TypeAdapter(SessionDataResponse)
+ENTRY_PAGE = TypeAdapter(EntryPageResponse)
 
 # The verdicts that mean the interpreter did NOT understand what a harness said.
 # `ignored_nonsemantic` is not one of them: that is the interpreter recognising a
 # record and having nothing to say about it.
 UNINTERPRETED = ("ignored_unknown", "translation_failed")
+
+Entries: TypeAlias = Sequence[EntryResponse]
 
 
 def until(description: str | Callable[[], str], read: Callable[[], T | None], timeout: float) -> T:
@@ -79,10 +100,14 @@ def until(description: str | Callable[[], str], read: Callable[[], T | None], ti
         time.sleep(POLL_SECONDS)
 
 
+# --- the aggregate -----------------------------------------------------------
+
+
 def session_ids(daemon: Daemon) -> frozenset[str]:
     """Every session the daemon knows about — the "before" of a launch."""
     return frozenset(
-        row.session.session_id for row in daemon.read("/api/sessions", SESSION_LIST)
+        data.session.session_id
+        for data in daemon.read("/sessionData", SESSION_DATA_LIST)
     )
 
 
@@ -99,171 +124,300 @@ def session_started_in(
     allowed for, a scenario starting seconds after the previous one ended could
     bind to that one instead — and it did, silently, until a faster rig made the
     gap small enough to hit (a scenario spent three minutes waiting for a turn
-    to end in a session that had already finished). A launch response cannot
+    to end in a session that had already finished). The launch response cannot
     settle it either: the harness, not the launcher, chooses the session id and
     announces it only in its own first evidence.
+
+    Matched on the working directory the session reports NOW. The read model
+    keeps one directory per session and follows the harness if it moves, so a
+    scenario that changed directory mid-run would not be found this way — none
+    does, and the alternative was a second stored field nothing else wanted.
     """
     appeared = [
-        row.session for row in daemon.read("/api/sessions", SESSION_LIST)
-        if row.session.session_id not in known
-        and row.session.harness == harness
-        and row.session.initial_working_directory == workspace
+        data.session
+        for data in daemon.read("/sessionData", SESSION_DATA_LIST)
+        if data.session.session_id not in known
+        and data.session.harness == harness
+        and data.session.working_directory == workspace
     ]
     if not appeared:
         return None
-    return max(appeared, key=lambda session: session.started_at).session_id
+    return max(appeared, key=lambda found: found.started_at or 0.0).session_id
 
 
-def snapshot(daemon: Daemon, session_id: str) -> SessionSnapshotResponse:
-    """The session page's whole reply — both halves, as the browser gets it."""
-    return daemon.read(f"/api/sessions/{session_id}", SESSION_SNAPSHOT)
+def session_data(daemon: Daemon, session_id: str) -> SessionDataResponse:
+    """The whole aggregate, as both frontends receive it."""
+    return daemon.read(f"/sessionData/{session_id}", SESSION_DATA)
 
 
-def session(daemon: Daemon, session_id: str) -> SessionSummaryResponse | None:
-    """What the session IS. None until its first fact has been interpreted —
-    the row is born by the reaction to `session.started`, not by the launch."""
-    return snapshot(daemon, session_id).canonical.session
+def session(daemon: Daemon, session_id: str) -> SessionResponse:
+    """What the session IS. The route 400s until the session exists at all, so
+    every caller of this has already waited for it to be announced."""
+    return session_data(daemon, session_id).session
 
 
-def tab_state(daemon: Daemon, session_id: str) -> str | None:
-    """The session's own liveness verdict — the projection behind the tab colour
-    and the red/green alerts (`engine/projections/tabstate.py`). Asked instead of
-    scanning for a TurnFinished event so that "the turn ended" means here exactly
-    what it means to the product."""
-    return snapshot(daemon, session_id).canonical.tab_state
-
-
-def unverdicted_count(daemon: Daemon) -> int:
-    """Raw events the interpreter has recorded but not yet ruled on. Waiting for
-    this to reach zero is what makes the verdict checks below race-free."""
-    recorder = SqliteRawEventRepository(read_only(main_database(daemon.main_database_path)))
-    return len(recorder.unverdicted(100_000))
-
-
-def feed(
-    daemon: Daemon, session_id: str, actor_id: str | None = None
-) -> tuple[ActivityItemResponse, ...]:
-    """The activity of ONE actor in the session, oldest first — the browser's
-    backlog request, and with `actor_id` the request it makes when the reader
-    switches to a subagent's thread.
-
-    An actor is always named, even when it is the lead: the route defaults the
-    scope to the lead itself (api/dashboard/sessions.py `_scope`), so "the
-    session's feed" is the lead's feed. A subagent's work is not in it — which is
-    what makes a feed read at one actor evidence about attribution rather than
-    just about arrival.
-    """
-    query = f"?block_count=200&actor_id={quote(actor_id)}" if actor_id else "?block_count=200"
-    return daemon.read(f"/api/sessions/{session_id}/activity{query}", ACTIVITY_PAGE).items
-
-
-def actors(daemon: Daemon, session_id: str) -> tuple[ActorSummaryResponse, ...]:
+def actors(daemon: Daemon, session_id: str) -> tuple[ActorResponse, ...]:
     """Who is working in this session — the lead and every subagent under it, as
-    the actor switcher lists them (`actors` on the session snapshot)."""
-    return snapshot(daemon, session_id).canonical.actors
+    the actor switcher lists them."""
+    return session_data(daemon, session_id).actors
 
 
-def subagents(daemon: Daemon, session_id: str) -> list[ActorSummaryResponse]:
+def lead(daemon: Daemon, session_id: str) -> ActorResponse:
+    """The actor the session's own facts name as its lead.
+
+    Everything the old snapshot said about "the session" — its model, its
+    effort, its status, its counters — is an ACTOR's fact now, and for a session
+    with subagents the one that answers those questions is the lead.
+    """
+    data = session_data(daemon, session_id)
+    found = [
+        actor for actor in data.actors
+        if actor.actor_id == data.session.lead_actor_id
+    ]
+    assert found, f"session {session_id} has no row for its own lead actor"
+    return found[0]
+
+
+def status(daemon: Daemon, session_id: str) -> str | None:
+    """The lead's liveness verdict — what paints the tab colour and the red/green
+    alerts. Asked instead of scanning for a turn-finished entry so that "the turn
+    ended" means here exactly what it means to the product."""
+    return lead(daemon, session_id).status
+
+
+def subagents(daemon: Daemon, session_id: str) -> list[ActorResponse]:
     """Every actor that is not the lead. Identified by HAVING A PARENT rather
     than by its role: `child` and `teammate` are two kinds of subagent and a
     harness may add a third, while an actor nobody launched is the lead."""
     return [actor for actor in actors(daemon, session_id) if actor.parent_actor_id]
 
 
-Items: TypeAlias = Sequence[ActivityItemResponse]
+def shell_command_count(daemon: Daemon, session_id: str) -> int:
+    """The scorebar's own counter, summed across the actors that earned it.
+
+    Per-actor in the read model because that is where a harness reports it; the
+    scorebar's number is the session's, and the session's is the sum. Not a
+    recount of the feed: it is written by its own writer and it has its own way
+    of being wrong.
+    """
+    return sum(actor.statistics.shell_command_count for actor in actors(daemon, session_id))
 
 
-def assignments(items: Items) -> list[ActivityItemResponse]:
-    """The delegations in a feed — work this actor handed to another one."""
-    return [item for item in items if item.item_type == "actor_assignment"]
+def running_shell_ids(daemon: Daemon, session_id: str) -> frozenset[str]:
+    """Every command the aggregate still counts as running, across all actors.
+
+    This is what the jobs and monitors panels are rebuilt from. It is an id set
+    and nothing more — no command text, no output, no end reason — which is the
+    change: what a job IS lives in its entries, and only whether it is still
+    going lives here.
+    """
+    return frozenset(
+        shell_id
+        for actor in actors(daemon, session_id)
+        for shell_id in actor.background.running_shell_ids
+    )
 
 
-def prompts(items: Items) -> list[ActivityItemResponse]:
-    return [item for item in items if item.conversation_kind == "prompt"]
+def background_counts(daemon: Daemon, session_id: str) -> tuple[int, int]:
+    """How many monitors and how many background jobs this session has started,
+    ever — the two counters the panels' headings show."""
+    rows = actors(daemon, session_id)
+    return (
+        sum(actor.background.monitor_count for actor in rows),
+        sum(actor.background.background_job_count for actor in rows),
+    )
 
 
-def assistant_messages(items: Items) -> list[ActivityItemResponse]:
-    """The assistant's own bubbles, oldest first."""
+# --- the feed ----------------------------------------------------------------
+
+
+def entries(daemon: Daemon, session_id: str, actor_id: str | None = None) -> tuple[
+    EntryResponse, ...
+]:
+    """The session's feed, oldest first, optionally narrowed to one actor.
+
+    Filtered HERE rather than by the route, because the route does not filter:
+    one page is the whole session's feed and a frontend showing one actor's
+    thread picks it out. So does this — which keeps a feed read at one actor
+    evidence about attribution, since the thing being filtered is the entry's own
+    `actor_id` rather than a query the server might get wrong in our favour.
+    """
+    page = daemon.read(
+        f"/sessionData/{session_id}/entries?limit={ENTRY_LIMIT}", ENTRY_PAGE
+    )
+    if actor_id is None:
+        return page.items
+    return tuple(entry for entry in page.items if entry.actor_id == actor_id)
+
+
+def messages(items: Entries) -> list[tuple[EntryResponse, MessageBodyResponse]]:
+    """Every message entry, paired with its own body.
+
+    The pair is what makes the rest of this file typed. An entry's `type` and its
+    body class say the same thing, but only one of them is a thing a type checker
+    can follow — so the narrowing happens here, once, and every reader below
+    works on a body whose fields are known rather than on a union of twenty-four.
+    """
     return [
-        item for item in items
-        if item.item_type == "message" and item.conversation_kind == "message"
+        (entry, entry.body)
+        for entry in items
+        if isinstance(entry.body, MessageBodyResponse)
     ]
 
 
-def statistics(daemon: Daemon, session_id: str) -> ActivityStatisticsResponse:
-    """The counters the scorebar draws (commands, files, lines)."""
-    return snapshot(daemon, session_id).canonical.statistics
+def prompts(items: Entries) -> list[EntryResponse]:
+    """What a person sent. `phase == "prompt"` and not merely `role == "user"`:
+    a harness injects user-role messages of its own (a compaction recap, a
+    system reminder), and those are not something anybody typed."""
+    return [
+        entry for entry, body in messages(items)
+        if body.role == "user" and body.phase == "prompt"
+    ]
 
 
-def background_jobs(
-    daemon: Daemon, session_id: str
-) -> tuple[BackgroundOperationResponse, ...]:
-    """The session's background jobs, as the jobs tab lists them.
+def assistant_messages(items: Entries) -> list[EntryResponse]:
+    """The assistant's own bubbles, oldest first."""
+    return [
+        entry for entry, body in messages(items)
+        if body.role == "assistant" and body.recipient_actor_id is None
+    ]
 
-    Read from the session snapshot rather than the feed: a job is tracked APART
-    from the turn that started it (`background_work` on the snapshot), which is
-    the whole point of backgrounding one.
+
+def turn_enders(items: Entries) -> list[EntryResponse]:
+    """The assistant bubbles that are where the model STOPPED.
+
+    `phase == "end_turn"` is asserted per harness because each derives it from
+    its own field — Claude Code from the response's `stop_reason`, Codex from the
+    rollout item's `phase: "final_answer"` — and a release that renames either
+    one breaks it in exactly one harness.
     """
-    return snapshot(daemon, session_id).canonical.background_work.jobs
+    ending = {entry.entry_id for entry, body in messages(items) if body.phase == "end_turn"}
+    return [entry for entry in assistant_messages(items) if entry.entry_id in ending]
 
 
-def monitors(daemon: Daemon, session_id: str) -> tuple[BackgroundOperationResponse, ...]:
-    """The session's monitors, as the monitors tab lists them.
+def text(entry: EntryResponse) -> str:
+    """A message's own prose. Embedded, so this is a field read and not a fetch —
+    the ⧉copy link and the route behind it are both gone."""
+    return entry.body.content.text if isinstance(entry.body, MessageBodyResponse) else ""
 
-    The same shape as a background job and a different fact: a job is a command
-    whose output outlives its turn, a monitor is a watch ARMED to report events
-    until it is stopped. The dashboard keeps them in two lists off the same
-    snapshot, so a monitor filed as a job (or the reverse) is a visible failure.
+
+# --- commands, folded --------------------------------------------------------
+
+
+@dataclass
+class Shell:
+    """One command, folded from its entries the way every client folds it.
+
+    `mode == "replace"` is why the chunks cannot simply be concatenated — a
+    harness that reports its whole output at once sends one replacing chunk, and
+    appending it to what the file watch already streamed would double it. The
+    `status` stream is kept apart because that is where a MONITOR's ticks
+    arrive: a monitor's events and a command's stdout are two different claims
+    and a scenario asserts on one of them at a time.
     """
-    return snapshot(daemon, session_id).canonical.background_work.monitors
+
+    shell_id: str
+    command: str
+    execution: str
+    output: str = ""
+    status: str = ""
+    state: str | None = None
+    exit_code: int | None = None
+    backgrounded: bool = False
+    entry_ids: list[str] = field(default_factory=list)
 
 
-def shell_operations(items: Items) -> list[ActivityItemResponse]:
-    return [item for item in items if item.summary_kind == "shell"]
+SHELL_BODIES = (
+    ShellStartedBodyResponse,
+    ShellOutputBodyResponse,
+    ShellBackgroundedBodyResponse,
+    ShellFinishedBodyResponse,
+)
 
 
-def content(daemon: Daemon, reference: str) -> str:
-    """One content reference resolved — the request the feed's ⧉copy link makes."""
-    return daemon.get_text("/api/content/" + quote(reference, safe=""))
+def shells(items: Entries) -> list[Shell]:
+    """Every command in the feed, oldest first, each one whole."""
+    folded: dict[str, Shell] = {}
+    for entry in items:
+        body = entry.body
+        if not isinstance(body, SHELL_BODIES):
+            continue
+        if isinstance(body, ShellStartedBodyResponse):
+            folded[body.shell_id] = Shell(
+                shell_id=body.shell_id,
+                command=body.command.text,
+                execution=body.execution,
+            )
+        found = folded.get(body.shell_id)
+        if found is None:
+            continue                     # a command whose start is not in this page
+        found.entry_ids.append(entry.entry_id)
+        if isinstance(body, ShellOutputBodyResponse):
+            current = found.status if body.stream == "status" else found.output
+            value = body.content.text if body.mode == "replace" else current + body.content.text
+            if body.stream == "status":
+                found.status = value
+            else:
+                found.output = value
+        elif isinstance(body, ShellBackgroundedBodyResponse):
+            found.backgrounded = True
+        elif isinstance(body, ShellFinishedBodyResponse):
+            found.state = body.state
+            found.exit_code = body.exit_code
+            # The whole output at once, from a harness that streams none of it.
+            if body.result is not None and body.result.text:
+                found.output = body.result.text
+    return list(folded.values())
 
 
-def item_text(daemon: Daemon, item: ActivityItemResponse) -> str:
-    """An item's own text, whichever side of the ⧉ link the feed put it on. The
-    same two-step as operation_output, for the items whose payload is prose."""
-    if item.content_reference:
-        return content(daemon, item.content_reference)
-    return item.plain_text
+def shell(items: Entries, command: str) -> Shell | None:
+    """The folded command whose text contains `command`, latest first: a
+    scenario names the command it just asked for, and a workspace that ran the
+    same thing in an earlier scenario must not answer for it."""
+    for found in reversed(shells(items)):
+        if command in found.command:
+            return found
+    return None
 
 
-def operation_command(daemon: Daemon, item: ActivityItemResponse) -> str:
-    """What an operation RAN. Behind a content reference rather than in the item:
-    the feed shows a command's first line and fetches the rest on demand, so this
-    is the same two-step the browser does."""
-    return content(daemon, item.command_reference) if item.command_reference else ""
+# --- delegations -------------------------------------------------------------
 
 
-def operation_output(daemon: Daemon, item: ActivityItemResponse) -> str:
-    """What an operation PRINTED. `plain_text` already carries it for anything
-    short (dashboard/render/items/operations.py operation_text); the reference is
-    the path for output too large to inline."""
-    if item.output_reference:
-        return content(daemon, item.output_reference)
-    return item.plain_text
+@dataclass
+class Assignment:
+    """One delegation: what the lead asked for, and what came back.
 
-
-def turn_enders(items: Items) -> list[ActivityItemResponse]:
-    """The assistant bubbles the feed marks as where the model stopped.
-
-    `item["final"]` is the presenter's name for the canonical `phase ==
-    "end_turn"` (dashboard/render/items/messages.py). Asserted per harness because
-    each derives it from its own field — Claude Code from the response's
-    `stop_reason`, Codex from the rollout item's `phase: "final_answer"` — and a
-    release that renames either one breaks it in exactly one harness.
+    Two entries, like a command, and for the same reason — the start is the tool
+    call the lead made and the end is the AGENT's own report, arriving long
+    after the call returned.
     """
-    return [item for item in assistant_messages(items) if item.final]
+
+    assignment_id: str
+    assigned_actor_name: str | None
+    state: str | None = None
+    result: str = ""
 
 
-def model_matches(reported: ModelReferenceResponse | None, requested: str) -> bool:
+def assignments(items: Entries) -> list[Assignment]:
+    folded: dict[str, Assignment] = {}
+    for entry in items:
+        body = entry.body
+        if isinstance(body, AssignmentStartedBodyResponse):
+            folded[body.assignment_id] = Assignment(
+                assignment_id=body.assignment_id,
+                assigned_actor_name=body.assigned_actor_name,
+            )
+        elif isinstance(body, AssignmentFinishedBodyResponse):
+            found = folded.setdefault(
+                body.assignment_id,
+                Assignment(assignment_id=body.assignment_id, assigned_actor_name=None),
+            )
+            found.state = body.state
+            found.result = body.result.text if body.result is not None else ""
+    return list(folded.values())
+
+
+def model_matches(reported: str | None, requested: str) -> bool:
     """Whether the model the harness reported is the one that was asked for.
 
     Not equality: a launch selection is an alias or a family (`haiku`,
@@ -272,9 +426,19 @@ def model_matches(reported: ModelReferenceResponse | None, requested: str) -> bo
     it still fails when a launch silently lands on a different model, which is
     the drift worth catching.
     """
-    native = (reported.native_id if reported else "").lower()
+    native = (reported or "").lower()
     wanted = requested.lower()
     return bool(native) and (wanted in native or native in wanted)
+
+
+# --- the machinery's own verdicts, which have no route ----------------------
+
+
+def unverdicted_count(daemon: Daemon) -> int:
+    """Raw events the interpreter has recorded but not yet ruled on. Waiting for
+    this to reach zero is what makes the verdict checks below race-free."""
+    recorder = SqliteRawEventRepository(read_only(main_database(daemon.main_database_path)))
+    return len(recorder.unverdicted(100_000))
 
 
 def uninterpreted(daemon: Daemon, session_id: str) -> tuple[str, ...]:

@@ -17,7 +17,7 @@ from typing import Mapping, Protocol, Sequence
 
 from domain.ids import CanonicalEventId, RawEventId, SessionId
 from domain.records import (
-    CanonicalEventPage,
+    CommittedEvent,
     StoredCanonicalEvent,
     TranslationOutcome,
 )
@@ -91,33 +91,12 @@ class CanonicalEventRepository(Protocol):
         """Every session that has a `session.started` fact, most recent first."""
         ...
 
-    def latest_cursor(self) -> int | None: ...
+    def page_from(self, cursor: int, limit: int) -> tuple[CommittedEvent, ...]:
+        """Every session's facts after `cursor`, in the order they were accepted.
 
-    def latest_session_cursors(
-        self,
-        session_ids: Sequence[SessionId],
-        through_cursor: int | None,
-    ) -> Mapping[SessionId, int]:
-        """The newest cursor per session, in one query. Absent when a session
-        has no events at or below `through_cursor`."""
+        The reaction loop's whole input, and the one read that crosses sessions:
+        reactions happen in commit order, not per session, because the order two
+        sessions' facts arrived in is the order the world saw them.
+        """
         ...
 
-    def page_after(self, session_id: SessionId, cursor: int, limit: int) -> CanonicalEventPage: ...
-
-    def page_through(self, session_id: SessionId, cursor: int | None) -> CanonicalEventPage: ...
-
-    def page_tail(self, session_id: SessionId, cursor: int, limit: int) -> CanonicalEventPage: ...
-
-    def events_of_types(
-        self,
-        session_id: SessionId,
-        event_types: tuple[str, ...],
-        through_cursor: int,
-    ) -> tuple[StoredCanonicalEvent, ...]: ...
-
-    def events_between(
-        self,
-        session_id: SessionId,
-        after_cursor: int,
-        through_cursor: int,
-    ) -> tuple[StoredCanonicalEvent, ...]: ...

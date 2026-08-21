@@ -1,10 +1,9 @@
 // tests/jsdom/ctxbar.js — drives the REAL context-saturation bar renderer
 // (dashboard/static/app.04-list.js `contextBar`) over the shared DOM shim and
-// prints one JSON verdict object, which tests/test_l0_dash_probes.py asserts on.
+// prints one JSON verdict object, which tests/test_dashboard_dom.py asserts on.
 //
 // Why this exists: the bar grew two behaviours that are pure DOM logic and so
-// invisible to every server-side test (docs/dashboard.md, *Compaction on the
-// ctx bar*):
+// invisible to every server-side test:
 //
 //   * the COMPACTING state — the `compacting` class the CSS breathes from, and
 //     a label/detail that stop reporting a token count nobody can act on for

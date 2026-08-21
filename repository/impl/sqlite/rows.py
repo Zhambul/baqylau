@@ -11,7 +11,10 @@ import sqlite3
 from repository.model.audit import ErrorRow, SpawnRow, StateFileRow, StreamRow
 from repository.model.facts import (
     CanonicalEventRow,
-    OperationOutputRow,
+    SessionDataActorRow,
+    SessionDataRow,
+    SessionEntryRow,
+    ShellOutputRow,
     RawEventRow,
     SessionRow,
 )
@@ -88,10 +91,10 @@ def canonical_event(row: sqlite3.Row) -> CanonicalEventRow:
     )
 
 
-def operation_output(row: sqlite3.Row) -> OperationOutputRow:
-    return OperationOutputRow(
+def shell_output(row: sqlite3.Row) -> ShellOutputRow:
+    return ShellOutputRow(
         session_id=row["session_id"],
-        operation_id=row["operation_id"],
+        shell_id=row["shell_id"],
         harness=row["harness"],
         actor_id=row["actor_id"],
         parent_actor_id=row["parent_actor_id"],
@@ -277,3 +280,35 @@ def stream(row: sqlite3.Row) -> StreamRow:
     )
 
 
+
+
+def session_data(row: sqlite3.Row) -> SessionDataRow:
+    return SessionDataRow(
+        session_id=row["session_id"],
+        revision=row["revision"],
+        payload=row["payload"],
+    )
+
+
+def session_data_actor(row: sqlite3.Row) -> SessionDataActorRow:
+    return SessionDataActorRow(
+        session_id=row["session_id"],
+        actor_id=row["actor_id"],
+        revision=row["revision"],
+        payload=row["payload"],
+    )
+
+
+def session_entry(row: sqlite3.Row) -> SessionEntryRow:
+    return SessionEntryRow(
+        cursor=row["cursor"],
+        entry_id=row["entry_id"],
+        session_id=row["session_id"],
+        entry_type=row["entry_type"],
+        actor_id=row["actor_id"],
+        parent_actor_id=row["parent_actor_id"],
+        turn_id=row["turn_id"],
+        occurred_at=row["occurred_at"],
+        summary=row["summary"],
+        payload=row["payload"],
+    )

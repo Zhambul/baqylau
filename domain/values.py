@@ -8,20 +8,6 @@ from typing import Literal, TypeAlias
 
 from domain.stored import STORED
 
-OperationCategory: TypeAlias = Literal[
-    "shell",
-    "file_read",
-    "file_write",
-    "file_edit",
-    "search",
-    "network",
-    "workspace",
-    "media",
-    "skill",
-    "task",
-    "message",
-    "attention",
-]
 Outcome: TypeAlias = Literal["succeeded", "failed", "cancelled", "rejected", "unknown"]
 ActorRole: TypeAlias = Literal["lead", "child", "teammate", "sidecar"]
 ExecutionMode: TypeAlias = Literal["foreground", "background", "monitor"]
@@ -44,16 +30,24 @@ FileAction: TypeAlias = Literal["read", "created", "updated", "deleted", "rename
 # The rest of the closed sets a translator has to produce. Every one of these
 # was an inline Literal on its payload, which meant the mapping that built it
 # was typed `str` and checked nowhere.
-AttentionType: TypeAlias = Literal["permission", "question", "plan", "confirmation"]
-AttentionDecision: TypeAlias = Literal[
-    "answered",
-    "approved",
-    "changes_requested",
-    "rejected",
-    "confirmed",
-    "denied",
-    "discussed",
+#
+# How a proposed plan ended. A question's end carries no such verdict: what a
+# person answered is the answer itself, and the harnesses' own decision words
+# (answered / rejected / discussed) collapsed to one line in every reader that
+# ever had them.
+PlanState: TypeAlias = Literal["approved", "changes_requested", "rejected"]
+# Why a model or an effort level changed. Named because the translators keep the
+# last-seen value and build the change event from it (harness/models/
+# selections.py), so the reason travels as an argument and an argument that is
+# typed `str` is checked nowhere.
+ModelChangeReason: TypeAlias = Literal[
+    "selected",
+    "automatic_fallback",
+    "account_migration",
+    "reported_by_harness",
 ]
+EffortChangeReason: TypeAlias = Literal["selected", "account_migration", "reported_by_harness"]
+WorktreeAction: TypeAlias = Literal["entered", "exited"]
 ProgressStream: TypeAlias = Literal["output", "error", "status"]
 TitleOrigin: TypeAlias = Literal["custom", "automatic", "summary"]
 GoalState: TypeAlias = Literal[
@@ -188,9 +182,12 @@ class TokenUsage:
 
 @dataclass(frozen=True)
 class AttentionChoice:
+    """One selectable answer. The label IS the value: both harnesses send back
+    the label they were shown, so a second `value` field was a copy of the
+    first that every answer gesture had to keep mapping between."""
+
     __pydantic_config__ = STORED
 
-    value: str
     label: str
     description: str | None = None
 
@@ -211,4 +208,4 @@ class AttentionAnswer:
     __pydantic_config__ = STORED
 
     prompt_id: str
-    values: tuple[str, ...]
+    labels: tuple[str, ...]

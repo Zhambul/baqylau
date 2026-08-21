@@ -1,11 +1,10 @@
 // tests/jsdom/accounts.js — drives the REAL accounts strip renderer
 // (dashboard/static/app.01-attention.js `renderAccounts`/`acctPill`) over the
 // shared DOM shim and prints one JSON verdict object, which
-// tests/test_l0_dash_probes.py asserts on.
+// tests/test_dashboard_dom.py asserts on.
 //
 // Why this exists: the strip is READ AS A STACK — c1's 5h bar directly above
-// c2's, the two "resets in …" tails in one line (docs/dashboard.md *Row
-// alignment*). That is a property of the two rows TOGETHER, and nothing in a
+// c2's, the two "resets in …" tails in one line. That is a property of the two rows TOGETHER, and nothing in a
 // single row's source states it: the misalignments all came from a row that
 // legitimately had LESS to say (a rolled-over window whose reset the server
 // dropped, an account the model-window fetch never matched, the ⚠ badge only
@@ -171,8 +170,7 @@ step("live_shape", () => render([
              seven_day_fable: 56, seven_day_fable_reset: now + 89422 } },
 ]));
 
-// (2) The per-model window attached to ONE account only (the OAuth //usage
-// fetch matches a slug by its 7d epoch and can miss — docs/dashboard.md).
+// (2) The per-model window attached to ONE account only.
 step("model_window_on_one", () => render([
   { harness: "claude_code", account_id: "c1", display_name: "oboard",
     windows: [H5(60, now + 3600), D7(97, now + 10222), F7(32, now + 10222)],

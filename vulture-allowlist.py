@@ -38,6 +38,11 @@ LABEL_VARIABLE
 # because the last non-serialization reader of the NAME went away with the code
 # this refactor deleted. They belong here rather than in the shrink-only
 # baseline: a serialized field is a framework contract, not debt.
-file_path        # dashboard/render/items/item.py
-new_session_drafts  # dashboard/services/overview.py
+new_session_drafts  # dashboard/services/preferences.py
 error_id         # audit/models.py
+
+# anyio's capacity limiter: we ASSIGN the pool size the policy asked for and
+# anyio reads it back when it hands out worker threads (api/app.py's lifespan).
+# The only reference of ours is the assignment, which is what a framework
+# attribute looks like from inside our own graph.
+_.total_tokens

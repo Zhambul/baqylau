@@ -64,9 +64,9 @@ class CanonicalEventRow:
 
 
 @dataclass(frozen=True)
-class OperationOutputRow:
+class ShellOutputRow:
     session_id: str
-    operation_id: str
+    shell_id: str
     harness: str
     actor_id: str
     parent_actor_id: str | None
@@ -79,3 +79,32 @@ class OperationOutputRow:
     until: str
     state: str
     created_at: float
+
+
+@dataclass(frozen=True)
+class SessionDataRow:
+    session_id: str
+    revision: int
+    payload: str
+
+
+@dataclass(frozen=True)
+class SessionDataActorRow:
+    session_id: str
+    actor_id: str
+    revision: int
+    payload: str
+
+
+@dataclass(frozen=True)
+class SessionEntryRow:
+    cursor: int
+    entry_id: str
+    session_id: str
+    entry_type: str
+    actor_id: str
+    parent_actor_id: str | None
+    turn_id: str | None
+    occurred_at: float | None
+    summary: str | None
+    payload: str

@@ -12,8 +12,11 @@
 # application — but it is now a singleton with an owner rather than a global with
 # a comment, so a second application in one interpreter (the next test) does not
 # inherit the first one's beats.
+from __future__ import annotations
+
 import time
 from collections import OrderedDict
+from typing import TypedDict
 
 from core import env as EV
 from repository.contract.preferences import PushSubscriptionRepository
@@ -44,8 +47,8 @@ VIEW_LIFETIME_SECONDS = EV.env_float("BAQYLAU_DASHBOARD_VIEW_LIFETIME_SECONDS", 
 # would have to be POLLED under the reserved id below — nothing does that today,
 # and the terminal contract offers no such read until this lands. Once stamped
 # it is just another device here, and that is the whole point: ONE map,
-# one most-recently-seen pick, and the alert goes wherever you last were
-# (docs/dashboard.md *Presence routing*). This is how an alert routes to the ONE
+# one most-recently-seen pick, and the alert goes wherever you last were.
+# This is how an alert routes to the ONE
 # device you most recently used rather than fanning out to all: `route()` picks
 # the device with the newest beat. Never TTL-expired for that choice (we want the
 # LAST device you used even if a while ago); it's a monotonic-max pick, not a
@@ -64,8 +67,25 @@ VIEW_LIFETIME_SECONDS = EV.env_float("BAQYLAU_DASHBOARD_VIEW_LIFETIME_SECONDS", 
 DEVICE_SEEN_CAP = 64
 
 
-class RecentDevices(OrderedDict):
-    def __setitem__(self, key, value):
+class SubscriptionKeys(TypedDict):
+    """The wire form of one subscription's key material (RFC 8291 names)."""
+
+    p256dh: str
+    auth: str
+
+
+class RoutedSubscription(TypedDict):
+    """One push subscription as `route()` hands it to a channel: the wire JSON
+    a push service accepts, plus the device identity the audit rows name."""
+
+    endpoint: str
+    device: str
+    label: str | None
+    keys: SubscriptionKeys
+
+
+class RecentDevices(OrderedDict[str, float]):
+    def __setitem__(self, key: str, value: float) -> None:
         super().__setitem__(key, value)
         self.move_to_end(key)
         while len(self) > DEVICE_SEEN_CAP:
@@ -101,7 +121,7 @@ class Presence:
         self.seen_at = RecentDevices()
         self.away: set[str] = set()
 
-    def mark_viewing(self, session_id):
+    def mark_viewing(self, session_id: str) -> None:
         """Record a viewing heartbeat for `session_id` — presence is fresh for VIEW_LIFETIME_SECONDS.
 
         Also SWEEPS the expired entries, which is what keeps this dict bounded in a
@@ -121,7 +141,7 @@ class Presence:
         self.viewing[session_id] = now + VIEW_LIFETIME_SECONDS
 
 
-    def web_viewing(self, session_id):
+    def web_viewing(self, session_id: str) -> bool:
         """True when a browser reported viewing `session_id` within the last VIEW_LIFETIME_SECONDS
         (visible + focused + on that session). Read-only; also GC's the stale key."""
         if not session_id:
@@ -135,7 +155,7 @@ class Presence:
         return True
 
 
-    def mark_device(self, device):
+    def mark_device(self, device: str) -> None:
         """Record a presence beat from `device` (a browser's stable id). A beat is
         the opposite of `mark_away`, so it clears the away flag: the page only beats
         while visible + focused."""
@@ -144,7 +164,7 @@ class Presence:
             self.away.discard(device)
 
 
-    def mark_away(self, device, session_id=None):
+    def mark_away(self, device: str, session_id: str | None = None) -> None:
         """The page reports it has STOPPED being present — it lost focus or was
         hidden. The explicit end of a beat, and the fix for a gap the TTL cannot
         close on its own.
@@ -174,7 +194,7 @@ class Presence:
             self.viewing.pop(session_id, None)
 
 
-    def device_active(self):
+    def device_active(self) -> bool:
         """True when a BROWSER reported itself visible + focused within VIEW_LIFETIME_SECONDS —
         "you are on a browser RIGHT NOW", whichever view it shows.
 
@@ -195,14 +215,16 @@ class Presence:
                    for device_id, seen in list(self.seen_at.items()))
 
 
-    def last_seen(self, device):
+    def last_seen(self, device: str | None) -> float:
         """The last-seen monotonic for `device`, or -inf (never seen / no id)."""
         if not device:
             return float("-inf")
         return self.seen_at.get(device, float("-inf"))
 
 
-    def route(self, subscriptions: PushSubscriptionRepository):
+    def route(
+        self, subscriptions: PushSubscriptionRepository
+    ) -> tuple[str | None, list[RoutedSubscription], dict[str, object]]:
         """WHICH DEVICE you are most likely at right now, and what can reach it.
         Returns `(target, targets, decision)`:
 
@@ -223,7 +245,7 @@ class Presence:
 
         A subscribed device that never beat this run has `age_s:None` and remains
         selectable because it is still the last device the application knew."""
-        subs = [
+        subs: list[RoutedSubscription] = [
             {"endpoint": subscription.endpoint, "device": subscription.device_id,
              "label": subscription.device_label,
              "keys": {"p256dh": subscription.public_key,
@@ -232,7 +254,7 @@ class Presence:
         ]
         now = time.monotonic()
 
-        def cand(device_id, label=None):
+        def cand(device_id: str, label: str | None = None) -> dict[str, object]:
             seen = self.last_seen(device_id)
             return {"device": device_id, "label": label,
                     "age_s": (None if seen == float("-inf") else round(now - seen, 1))}
@@ -240,7 +262,8 @@ class Presence:
         term_seen = self.last_seen(TERMINAL)
         term = [cand(TERMINAL, "terminal")] if term_seen != float("-inf") else []
 
-        def decision(target, candidates, label=None):
+        def decision(target: str | None, candidates: list[dict[str, object]],
+                     label: str | None = None) -> dict[str, object]:
             return {"target": target, "target_label": label,
                     "subscription_count": len(subs), "candidates": candidates + term}
 

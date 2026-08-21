@@ -28,8 +28,8 @@ function buildAskCard() {
 // A preview-layout question (any option carries a `preview`) renders the TUI's
 // side-by-side dialog, which OMITS the numbered "Type something" free-text row
 // — so a TYPED answer can't be driven (askdialog._require_type_row). The card
-// routes typed answers on such asks through "Chat about this" instead
-// (docs/dashboard.md, *Web ask*).
+// routes typed answers on such asks through "Chat about this" instead.
+//
 // Does THIS question use the preview layout? Its options' previews are what
 // costs the TUI dialog its free-text row, so this is the per-question test
 // submitAsk escalates on. The ask-WIDE askHasPreview below is only for asking
@@ -77,16 +77,9 @@ function renderAsk() {
   chatB.onclick = () => submitAsk(ask, null, true);
   head.append(chatB);
   card.append(head);
-  // Claude's prose lead-in to the question (server-rendered md_html, escape-
-  // first like op HTML) — the "why", which the terse dialog omits; shown
-  // above the questions so the context rides ON the card, not just as a
-  // detached stream bubble (docs/dashboard.md, *Web ask*). Empty when Claude
-  // asked with no framing text.
-  if (ask.preamble_html) {
-    const pre = el("div", "askpreamble md");
-    pre.innerHTML = ask.preamble_html;
-    card.append(pre);
-  }
+  // The prose lead-in the daemon used to fold onto this card is gone with the
+  // fold: a question's "why" is the assistant message that precedes it, and it
+  // is already in the feed directly above. One fact, drawn once.
   const sub = el("button", "asksubmit",
                  qs.length > 1 ? "submit answers" : "submit answer");
   const syncSubmit = () => {
@@ -221,7 +214,8 @@ function saveAskDraft(ask, st) {
     postJSON("/api/sessions/" + encodeURIComponent(S.currentSessionId)
              + "/application/dialog-draft",
              { attention_id: ask.attention_id, origin: CLIENT_ID, answers })
-      .catch(() => {});                       // draft save is best-effort
+      .catch(error => failLoudly(S.currentSessionId, "dialog.draft.fail",
+                                 { error: (error && error.error) || String(error) }));
   }, ASK_DRAFT_DEBOUNCE_MS);
 }
 
@@ -255,8 +249,7 @@ function submitAsk(ask, answers, chat) {
   // dialog, so route it through "Chat about this" (now keyboard-reachable — the
   // _cursor_to two-❯ fix) and ride the typed text as `message`: the server
   // presses chat, waits for the dialog to close, then delivers the text as a
-  // message so the custom answer reaches the session (docs/dashboard.md, *Web
-  // ask*). Explicit "chat about this" (answers == null) is untouched.
+  // message so the custom answer reaches the session. Explicit "chat about this" (answers == null) is untouched.
   // the custom text counts as the answer only when it's ACTIVE: multiSelect
   // (additive) or single-select with no option chosen. A single-select option
   // wins → send other:"" so the (preserved-but-dormant) text can't override it
@@ -390,6 +383,8 @@ function renderPlan() {
   head.append(dis);
   card.append(head);
   const body = el("div", "planbody md");
+  // Rendered HERE, from the plan text the entry carries (canonicalPlan) — the
+  // markdown subset is app.00a-markup.js's and escapes at its leaf.
   body.innerHTML = plan.plan_html || "";
   card.append(body);
   const btns = el("div", "planbtns");
@@ -438,11 +433,7 @@ function renderPlan() {
   canonicalControl("read_plan_choices", {
     attention_id: plan.attention_id || plan.tool_use_id || plan.plan_id,
   })
-    .then(r => paintOpts((r.choices || []).map(choice => ({
-      digit: choice.value,
-      label: choice.label,
-      feedback: choice.description === "feedback",
-    }))))
+    .then(r => paintOpts(r.choices || []))
     .catch(e => {
       btns.textContent = "";
       btns.append(el("span", "plandim",
@@ -604,7 +595,7 @@ class DictatePCM extends AudioWorkletProcessor {
 registerProcessor("dictate-pcm", DictatePCM);`;
 let dictWorkletURL = null;
 
-// Dictation lag telemetry (docs/dashboard.md *Dictation lag*). "It's slow" was
+// Dictation lag telemetry. "It's slow" was
 // unanswerable from the DB: the server mints a token and never sees the stream,
 // so nothing on this machine knew whether the words were stuck in OUR socket or
 // still inside Deepgram. These sample the two separately onto the clientlog
@@ -612,7 +603,7 @@ let dictWorkletURL = null;
 const DICT_LAG_MS = 5000;         // one lag sample per 5s of dictation
 const DICT_BACKLOG_WARN_S = 3;    // queued audio that earns the one-shot toast
 
-// Instant-on (docs/dashboard.md *Instant-on mic*): capture starts the moment
+// Instant-on: capture starts the moment
 // the mic and the worklet are ready and everything said before the socket
 // opens is held here, so the press-to-speak gap stops being a gap.
 const DICT_PREROLL_MAX_S = 60;    // held audio cap — a safety valve, not a budget

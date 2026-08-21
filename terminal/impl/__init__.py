@@ -14,11 +14,12 @@
 # ("kitty", "pty" for the headless one, or "none" for the inert plugin) and
 # overrides detection.
 import os
+from collections.abc import Callable
 
 from terminal.contract import TerminalPlugin
 
 
-def _kitty():
+def _kitty() -> TerminalPlugin | None:
     """The kitty plugin when kitty's client binary resolves on this machine.
 
     Only the BINARY is checked, not a live socket: the daemon outlives kitty
@@ -32,7 +33,7 @@ def _kitty():
     return kitty_plugin() if find_kitten() else None
 
 
-DETECTORS = {"kitty": _kitty}
+DETECTORS: dict[str, Callable[[], TerminalPlugin | None]] = {"kitty": _kitty}
 
 
 def resolve() -> TerminalPlugin | None:

@@ -11,5 +11,5 @@
 
 Things that were here and belong elsewhere: alerts (a concern of their own, in
 `notify/`), the pasteboard (a machine fact, in `core/`), and the HTTP endpoints
-(`api/dashboard/`, which imports this package and not the reverse).
+(`api/application/`, which imports this package and not the reverse).
 """

@@ -40,7 +40,7 @@ from domain.events import (
 from domain.ids import ActorId, CanonicalEventId, SessionId, TurnId
 from domain.stored import STORED
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 
 
 class CanonicalCodecError(ValueError):

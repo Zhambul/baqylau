@@ -1,6 +1,6 @@
 // tests/jsdom/dictstart.js — drives the REAL dictation() startup state machine
 // (dashboard/static/app.08-composer.js, over the constants in app.07-dialogs.js)
-// and prints one JSON verdict object, which tests/test_l0_dash_probes.py
+// and prints one JSON verdict object, which tests/test_dashboard_dom.py
 // asserts on.
 //
 // Why this exists: "the mic takes a long time to be ready" was fixed by making

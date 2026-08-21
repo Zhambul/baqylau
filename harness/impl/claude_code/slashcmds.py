@@ -1,5 +1,5 @@
 # harness/impl/claude_code/slashcmds.py — slash-command discovery for the web
-# composer's "/" menu (docs/dashboard.md).
+# composer's "/" menu.
 #
 # The dashboard composer offers the same "/" autocomplete the Claude Code TUI
 # does. The TUI stays AUTHORITATIVE — the composer only TYPES the command into
@@ -60,7 +60,7 @@ BUILTINS = (
 _HEAD = 4096          # how much of a command/skill file the description scan reads
 
 
-def describe(path):
+def describe(path: str) -> str:
     """One display line for a command/skill file: the YAML frontmatter's
     `description:` when present, else the first non-empty body line (leading
     `#` heading marks stripped). Unreadable file -> '' (the entry still lists
@@ -90,11 +90,11 @@ def describe(path):
     return ""
 
 
-def _dir_label(cdir):
+def _dir_label(cdir: str) -> str:
     return "user" if cdir == config_dir() else "project"
 
 
-def slash_commands(cwd):
+def slash_commands(cwd: str | None) -> list[dict[str, str]]:
     """[{name, desc, src}, …] for a session rooted at `cwd`, sorted by name and
     name-deduped: built-ins first (the TUI resolves those names to itself no
     matter what a same-named custom file claims), then discovered entries in
@@ -102,9 +102,10 @@ def slash_commands(cwd):
     one of the same name). src: 'built-in' | 'project' | 'user' (+' skill').
     No cwd (a session with no recorded one) still gets built-ins + the
     user-level entries."""
-    out, seen = [], set()
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
 
-    def add(name, desc, src):
+    def add(name: str, desc: str, src: str) -> None:
         if name and name not in seen:
             seen.add(name)
             out.append({"name": name, "desc": desc, "src": src})

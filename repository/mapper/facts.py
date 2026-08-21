@@ -13,12 +13,12 @@ from domain.events import CanonicalEvent, EventPayload
 from domain.ids import (
     ActorId,
     CanonicalEventId,
-    OperationId,
+    ShellId,
     RawEventId,
     SessionId,
     TurnId,
 )
-from domain.operations import OperationOutputFollowing
+from domain.shells import ShellOutputFollowing
 from domain.records import (
     InterpretationEventRecord,
     StoredCanonicalEvent,
@@ -27,7 +27,7 @@ from domain.records import (
 from harness.models import RawEvent, Session
 from repository.model.facts import (
     CanonicalEventRow,
-    OperationOutputRow,
+    ShellOutputRow,
     RawEventRow,
     SessionRow,
 )
@@ -220,15 +220,15 @@ def interpretation_event_values(entry: InterpretationEventRecord) -> SqlValues:
     )
 
 
-# --- operation output ---------------------------------------------------------
+# --- shell output -------------------------------------------------------------
 
 
-def operation_output_following(row: OperationOutputRow) -> OperationOutputFollowing:
+def shell_output_following(row: ShellOutputRow) -> ShellOutputFollowing:
     until: str = row.until
     state: str = row.state
-    return OperationOutputFollowing(
+    return ShellOutputFollowing(
         session_id=SessionId(row.session_id),
-        operation_id=OperationId(row.operation_id),
+        shell_id=ShellId(row.shell_id),
         harness=row.harness,
         actor_id=ActorId(row.actor_id),
         parent_actor_id=(ActorId(row.parent_actor_id) if row.parent_actor_id is not None else None),
@@ -244,10 +244,10 @@ def operation_output_following(row: OperationOutputRow) -> OperationOutputFollow
     )
 
 
-def operation_output_values(following: OperationOutputFollowing) -> SqlValues:
+def shell_output_values(following: ShellOutputFollowing) -> SqlValues:
     return (
         str(following.session_id),
-        str(following.operation_id),
+        str(following.shell_id),
         following.harness,
         str(following.actor_id),
         str(following.parent_actor_id) if following.parent_actor_id is not None else None,

@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-"""Toggle an immutable canonical content view in the terminal mirror.
+"""Expand or collapse one file in the terminal mirror.
 
-    terminal_view.py baqylau-view://CONTENT_REFERENCE
+    terminal_view.py baqylau-view://SESSION/KIND/ENTRY
 
-The terminal's open-actions configuration names this file for the
-`baqylau-view` protocol, so a click on a reference in the mirror lands here. The
-daemon owns the open/closed state and its mirror models re-render on the change;
-this resolves nothing itself.
+The terminal's open-actions configuration names this file for the `baqylau-view`
+protocol, so a click on a file line in the pane lands here.
+
+Nothing is fetched and nothing is stored server-side. A file entry carries its
+own diff, so which files are expanded is the PANE's state: this program flips one
+entry in a local file and signals the pane to re-read it and repaint
+(`client/_handoff.py`). The daemon never knew and no longer needs to.
 """
 
 from __future__ import annotations
@@ -16,17 +19,26 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))  # my own directory
 
-import _daemon                                                   # noqa: E402
-import _wire                                                     # noqa: E402
+import _handoff                                                  # noqa: E402
 
 SCHEME = "baqylau-view://"
+USAGE = "usage: terminal_view.py baqylau-view://SESSION/KIND/ENTRY"
 
 
 def main(arguments: list[str]) -> int:
     if len(arguments) != 1 or not arguments[0].startswith(SCHEME):
-        print("usage: terminal_view.py baqylau-view://CONTENT_REFERENCE", file=sys.stderr)
+        print(USAGE, file=sys.stderr)
         return 2
-    _daemon.post_json(_wire.VIEW_PATH, {"content_reference": arguments[0][len(SCHEME):]})
+    parts = arguments[0][len(SCHEME):].split("/", 2)
+    if len(parts) != 3:
+        print(USAGE, file=sys.stderr)
+        return 2
+    session_id, kind, entry_id = parts
+    _handoff.toggle(session_id, kind, entry_id)
+    # A pane that is not running leaves the toggle recorded and nothing painted,
+    # which is the honest outcome: the next pane on this session opens with the
+    # reader's own expansions still in place.
+    _handoff.wake(session_id, kind)
     return 0
 
 

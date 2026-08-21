@@ -23,9 +23,15 @@
 # the call site, because the audit row's shape is per-channel (a Telegram
 # message id vs a push endpoint + device) and the watcher shouldn't have to
 # know either. Nothing here raises into the 1 s watcher loop.
+from typing import Any
+
 from audit import record as A
 from notify.channels import telegram, webpush
 from notify.channels.alert import FAILED, GONE, NOTHING, OK, PENDING, alert_text, push_tag
+from repository.contract.preferences import (
+    PushSigningKeyRepository,
+    PushSubscriptionRepository,
+)
 
 __all__ = [
     "FAILED", "GONE", "NOTHING", "OK", "PENDING",
@@ -38,7 +44,9 @@ __all__ = [
 _RETRACT = {"telegram": telegram.retract_alert, "webpush": webpush.retract_alert}
 
 
-def retract(handle, reason, badge=0, *, keys=None, subscriptions=None):
+def retract(handle: dict[str, Any] | None, reason: str, badge: int = 0, *,
+            keys: PushSigningKeyRepository | None = None,
+            subscriptions: PushSubscriptionRepository | None = None) -> str:
     """Take back one delivered alert. Returns an outcome from the vocabulary in
     alert.py; PENDING is the only one the caller must retry.
 

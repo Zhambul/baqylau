@@ -1,6 +1,6 @@
 // tests/jsdom/dictpcm.js — drives the REAL dictation worklet (the DICT_WORKLET
 // source in dashboard/static/app.07-dialogs.js) and prints one JSON verdict
-// object, which tests/test_l0_dash_probes.py asserts on.
+// object, which tests/test_dashboard_dom.py asserts on.
 //
 // Why this exists: the worklet is the one piece of this repo that is signal
 // processing, and every way it can be wrong is invisible to a grep and to

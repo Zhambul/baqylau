@@ -1,5 +1,5 @@
 # harness/impl/claude_code/controls/askdialog.py — drive Claude Code's AskUserQuestion dialog
-# from the web (docs/dashboard.md, *Web ask*). Sibling of rewindmenu.py and the same
+# from the web. Sibling of rewindmenu.py and the same
 # philosophy: the dialog exists only as live TUI pixels (the pending questions
 # are known from the PreToolUse stash — harness/impl/claude_code/ask_fmt.py — but
 # there is no API to answer them), so the one way to submit an answer is the
@@ -40,12 +40,15 @@
 #   - Esc ANYWHERE (and Enter on an EMPTY "Type something") declines the whole
 #     question set — which is why this driver never presses Escape.
 import time
+from collections.abc import Callable
+from typing import Any
 
 from harness.impl.claude_code.controls import askdialog_screen as askscreen
 from harness.impl.claude_code.controls import screen_driver as screendrive
 from harness.impl.claude_code.controls.askdialog_screen import (
-    CHAT_LABEL, SUBMIT_LABEL, current_question, dialog_open, review_open, rows,
+    CHAT_LABEL, SUBMIT_LABEL, Row, current_question, dialog_open, review_open, rows,
 )
+from harness.impl.claude_code.controls.screen_driver import ScreenDriver
 
 POLL_S = 0.15          # screen re-read beat while waiting for a dialog state
 STEP_TIMEOUT_S = 2.5   # a key press → its screen effect visible
@@ -67,7 +70,13 @@ class AskError(screendrive.StepError):
     Claude Code upgrade vs a blank/partial capture all look identical."""
 
 
-def cursor_to(fe, win, pred, sleep, what):
+def cursor_to(
+    fe: ScreenDriver,
+    win: str,
+    pred: Callable[[Row], bool],
+    sleep: Callable[[float], None],
+    what: str,
+) -> str:
     """Move the ❯ cursor onto the row matching `pred(row_dict)`. Normalizes to
     the top (up is a no-op there) then walks DOWN, screen-verified each step.
     Deliberately walk-based, NOT index arithmetic: the v2.1.215 dialog has rows
@@ -112,11 +121,11 @@ def cursor_to(fe, win, pred, sleep, what):
     raise AskError("cursor", "cursor never reached %s" % what)
 
 
-def _by_digit(d):
+def _by_digit(d: str) -> Callable[[Row], bool]:
     return lambda r: r["digit"] == d
 
 
-def _require_type_row(fe, win, type_digit):
+def _require_type_row(fe: ScreenDriver, win: str, type_digit: str) -> None:
     """Guard the typed-answer ('other') path: the free-text 'Type something'
     row is digit len(options)+1 in the PLAIN dialog, but the PREVIEW
     side-by-side layout omits it entirely (measured — a single-select
@@ -126,13 +135,19 @@ def _require_type_row(fe, win, type_digit):
     times looking for a row that never appears (the observed 'cursor never
     reached Type row' dead-walk, 2026-07-19). The web ask card routes typed
     answers on preview questions through 'Chat about this' instead, so the
-    driver should not normally reach here (docs/dashboard.md, *Web ask*)."""
+    driver should not normally reach here."""
     if not any(r["digit"] == type_digit for r in rows(fe.get_text(win) or "")):
         raise AskError("type", "no typed-answer row (preview-layout dialog) — "
                        "answer via 'Chat about this'")
 
 
-def _advance_multi(fe, win, questions, i, sleep):
+def _advance_multi(
+    fe: ScreenDriver,
+    win: str,
+    questions: list[dict[str, Any]],
+    i: int,
+    sleep: Callable[[float], None],
+) -> None:
     """Advance a multiSelect pane to the next tab via its OWN "Next"/"Submit"
     advance row (cursor-to-the-row + Enter), NOT a blind `right`.
 
@@ -160,7 +175,14 @@ def _advance_multi(fe, win, questions, i, sleep):
                        screen=screen)
 
 
-def _answer_question(fe, win, questions, i, ans, sleep):
+def _answer_question(
+    fe: ScreenDriver,
+    win: str,
+    questions: list[dict[str, Any]],
+    i: int,
+    ans: dict[str, Any],
+    sleep: Callable[[float], None],
+) -> None:
     """Apply one question's answer to the CURRENT pane. Leaves the dialog on
     the next tab: single-select Enter auto-advances; multiSelect toggles each
     box (Enter) then advances via its "Next"/"Submit" row (_advance_multi —
@@ -220,7 +242,14 @@ def _answer_question(fe, win, questions, i, ans, sleep):
     fe.send_key(win, "enter")                    # select + auto-advance
 
 
-def drive(fe, win, questions, answers, chat=False, sleep=time.sleep):
+def drive(
+    fe: ScreenDriver,
+    win: str,
+    questions: list[dict[str, Any]],
+    answers: list[dict[str, Any]],
+    chat: bool = False,
+    sleep: Callable[[float], None] = time.sleep,
+) -> dict[str, bool]:
     """Answer the OPEN AskUserQuestion dialog in window `win`. `questions` is
     the ask-pending stash (the PreToolUse tool_input.questions, verbatim);
     `answers` aligns with it: [{"selected": [labels…], "other": "text"}] per

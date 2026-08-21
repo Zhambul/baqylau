@@ -61,8 +61,9 @@ function chromeIdentity(sessionView, meta) {
   sessionView.badge = badge;
   setBadge(badge, meta.tab || "");
   l1.append(badge);
-  // "live" goes unsaid (state tint + badge carry it); parked still shows
-  if (!meta.live) l1.append(el("span", "chip2 parked", "parked"));
+  // "live" goes unsaid (state tint + badge carry it); parked still shows.
+  // KNOWN-parked only — an unresolved liveness is not a claim worth painting.
+  if (meta.live === false) l1.append(el("span", "chip2 parked", "parked"));
   if (meta.workingDirectory) {
     // just the directory name (basename) — the full path rides the tooltip
     const cwdChip = el("span", "sessionId", meta.workingDirectory.split("/").filter(Boolean).pop());
@@ -195,11 +196,11 @@ const NO_WINDOW = "this session is parked — there is no terminal to type into"
    the row on its destructive end, and resume is the parked-only counterpart. */
 function chromeActions(sessionView, meta) {
   const act = el("div", "actrow");
-  const windowed = !!(meta.live && meta.terminal_window_id);
+  // a window to type into — which is what `live` means: the server resolves
+  // liveness against the terminal, and never serves the window's own id.
+  const windowed = !!meta.live;
   // rename: deliberately OUTSIDE the live gate — it works for live AND parked
-  // sessions (the server appends the agent-name naming record to the
-  // transcript; a live terminal tab also retitles in place — docs/dashboard.md
-  // "Web rename")
+  // sessions
   const ren = el("button", "sstop actses", "✎ rename");
   ren.dataset.tip = "rename this session (resume picker + tab)";
   ren.onclick = () => startRenameHeader();
@@ -216,7 +217,7 @@ function chromeActions(sessionView, meta) {
   gate(mig, capOk(meta, "migrate"), CAP_OFF);   // the server 409s it too
   act.append(mig);
   // ◉ alerts / ○ muted: opt this session in/out of the DEFERRED Telegram
-  // alert (docs/dashboard.md *Telegram alerts*) — the off-device notification
+  // alert — the off-device notification
   // that fires when a chat sits red/green unattended past the grace window.
   // Deliberately OUTSIDE the live gate (like rename): the opt-out is a
   // dashboard pref, not session state, so it works live AND parked.
@@ -327,7 +328,9 @@ function chromeActions(sessionView, meta) {
   // (an old row whose directory was never recorded) has nowhere to launch, and
   // the form would open on an empty folder field. That used to be half of the
   // same `if`, i.e. a button that silently wasn't there.
-  if (!meta.live) {
+  // KNOWN-parked, like the composer's resume path: this button RELAUNCHES the
+  // conversation, so an unresolved liveness must not offer it.
+  if (meta.live === false) {
     const res = el("button", "sresume actses", "↻ resume");
     res.dataset.tip = "start a new tab resuming this conversation";
     res.onclick = () => openNewSession(meta.workingDirectory, S.currentSessionId);
@@ -340,12 +343,14 @@ function chromeActions(sessionView, meta) {
 
 /* The header bar's LEADING row: the quick commands — the model/effort pickers +
    compact, each typing the TUI's own slash command into the session
-   (docs/dashboard.md, *Web quick commands*). First because these are the knobs
+  . First because these are the knobs
    you reach for mid-conversation. Every one needs a window to type into, so on a
    parked session they are all greyed rather than absent (see gate()). */
 function chromeQuickCmds(sessionView, meta) {
   const act2 = el("div", "actrow");
-  const windowed = !!(meta.live && meta.terminal_window_id);
+  // a window to type into — which is what `live` means: the server resolves
+  // liveness against the terminal, and never serves the window's own id.
+  const windowed = !!meta.live;
   // compact: two-step confirm like close — a misclick summarizes the whole
   // conversation out from under you, so it arms first. Built first, APPENDED
   // last: the two pickers lead the row (see the append order below).
@@ -421,8 +426,7 @@ function chromeTabs(sessionView, meta, tab) {
   const scoped = sessionView.agent || "";
   const mk = (key, label, count) => {
     const a = el("a", key === tab ? "on" : "");
-    // in agent scope every tab stays in scope (docs/dashboard.md *Agent
-    // scope*) — the `agents` tab is the one that must not, since a list of the
+    // in agent scope every tab stays in scope — the `agents` tab is the one that must not, since a list of the
     // SESSION's agents is what you navigate between them with
     a.href = (scoped && key !== "agents")
       ? agentHref(S.currentSessionId, scoped, key)
@@ -584,8 +588,7 @@ function updateStatsRow() {
   paintCtxRow(sessionView.contextWindow);
 }
 
-/* Header-action visibility for the agent-focus state (docs/dashboard.md,
-   *Subagent scoreboard swap*). While a subagent scoreboard is showing, the
+/* Header-action visibility for the agent-focus state. While a subagent scoreboard is showing, the
    session-only actions (`.actses` — rename / migrate / rewind / close /
    resume / compact / model / effort) don't apply to a subagent, so they hide;
    ■ stop (`.actstop`) stays ONLY while the focused subagent is still running
@@ -615,7 +618,7 @@ function applyAgentActionVis() {
 }
 
 /* The scoreboard for a drilled-into subagent — replaces the session totals with
-   THAT agent's own numbers (docs/dashboard.md, *Subagent scoreboard swap*). It
+   THAT agent's own numbers. It
    resolves the freshest agent row from sessionView.agents each render (so an `agents`
    SSE that finishes the agent updates the status here too) and reads tokens/cost
    from the session payload's `agent_usage` (served whenever a `?agent=` scope is
@@ -660,8 +663,7 @@ function renderAgentScoreboard(sr, focus) {
 }
 
 /* The ctx-saturation row under the scoreboard — its own row, shown only while
-   there is an occupancy figure to show (docs/dashboard.md, *Context
-   saturation*). One owner for both scoreboards: the session's ctx comes from the
+   there is an occupancy figure to show. One owner for both scoreboards: the session's ctx comes from the
    `ctx` SSE event, a drilled-in agent's from its own record, and the row is
    REPLACED (not appended) on every repaint.
 
@@ -1025,7 +1027,7 @@ function detailInfo(item, pill, status, rows) {
   if (item.description) info.append(el("div", "mdesc", item.description));
   info.append(el("div", "lbl", item.source === "ws" ? "websocket" : "command"));
   if (item.cmd_html && item.source !== "ws") {
-    // server-rendered (escaped at its leaf, like every other served block)
+    // built by the fold that drew this card (backgroundCard), escaped at its leaf
     const box = el("div", "jcmd");
     box.innerHTML = item.cmd_html;
     info.append(box);
@@ -1201,7 +1203,7 @@ function resetBody() {
 }
 
 /* The agent-hierarchy breadcrumb in agent scope — the MAIN agent → this agent
-   (docs/dashboard.md, *Breadcrumbs*). Just the two nodes (the hierarchy is one
+  . Just the two nodes (the hierarchy is one
    level deep — a session's flat agent list): the main agent is a link back to
    its own mirror (#/s/<sessionId>), labelled by the session's title; the current
    agent is the highlighted end node. Icons: ◆ the main agent, ◇/◈ the
@@ -1257,7 +1259,7 @@ function renderErrorsInto(container) {
    so "no overlay" == the device is loading stale assets. */
 
 
-// ---- the pinned goal card (docs/dashboard.md, *Web goal*) -------------------
+// ---- the pinned goal card -------------------
 // A harness goal puts the session into autonomous mode toward an objective.
 // Canonical goal facts from the owning harness are projected into the session
 // snapshot and pushed over the existing application SSE stream. Pinned at the
@@ -1290,7 +1292,7 @@ function renderGoal() {
   wrap.append(card);
 }
 
-// ---- the pinned tasks card (docs/dashboard.md, *Web tasks*) -----------------
+// ---- the pinned tasks card -----------------
 // The session's canonical task list, pinned at the very top of the mirror tab.
 // Each harness owns its native task grammar and emits shared task facts; this
 // page reads only the shared snapshot. Read-only as far as the TASKS go: unlike ask/plan

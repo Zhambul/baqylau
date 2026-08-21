@@ -53,7 +53,7 @@ function migrateSession() {
 // mid round-trip would send Escape to the terminal twice).
 function interruptSession() {
   const meta = (S.sessionView && S.sessionView.meta) || {};
-  if (!S.currentSessionId || !meta.live || !meta.terminal_window_id) return Promise.resolve();
+  if (!S.currentSessionId || !meta.live) return Promise.resolve();
   // a red "asking you" tab means a MODAL DIALOG is open (ask/plan/permission).
   // An Esc there DECLINES the dialog, it doesn't interrupt a turn — sending one
   // once killed the answer the user was giving via the ask card. Respond
@@ -106,7 +106,7 @@ function interruptSession() {
 // Idle only — mid-turn there is nothing to rewind TO yet, and the server 409s.
 function rewindSession() {
   const meta = (S.sessionView && S.sessionView.meta) || {};
-  if (!S.currentSessionId || !meta.live || !meta.terminal_window_id) return;
+  if (!S.currentSessionId || !meta.live) return;
   // red "asking you" tab: a dialog is open — a rewind (/rewind) would land in
   // it and dismiss or corrupt it. Answer via the card instead.
   if (liveTab() === "awaiting_attention") {
@@ -174,7 +174,7 @@ function prefillComposer(restored) {
   sessionView.clearDraftNext = true;
 }
 
-/* ---------- quick commands (docs/dashboard.md, *Web quick commands*) ----------
+/* ---------- quick commands ----------
    The scoreboard's SECOND action row (under stop/cancel/rewind/close):
    compact + the model and effort pickers. Each sends one of the TUI's OWN
    slash commands through POST /command (fixed vocabulary server-side, never
@@ -270,12 +270,20 @@ function applyQuickSwitch(cmd, arg) {
   }
 }
 
-// The menu row the session is currently on is translated by its plugin and
-// carried as canonical model_selection. Presentation never parses native ids.
+// Which menu row the session is currently ON, as a catalog model id.
+//
+// Matched by DISPLAY NAME, because that is the only thing the wire carries about
+// a model now: the aggregate serves one name a reader can read, and the
+// selectable ids come from the harness catalog. The name is the join.
 function curModelFamily() {
   const sessionView = S.sessionView;
   if (sessionView && sessionView.pendingModel) return sessionView.pendingModel;
-  return curModelRef(sessionView).selection || "";
+  const current = shortModel(curModelRef(sessionView).short);
+  if (!current) return "";
+  const labels = (sessionView && sessionView.meta && sessionView.meta.model_labels) || {};
+  for (const [modelId, label] of Object.entries(labels))
+    if (label === current || modelId === current) return modelId;
+  return "";
 }
 
 // The session's current model for the ✦ button: the last `model.changed` (meta,
@@ -294,12 +302,10 @@ function curModelFamily() {
 // rather than waiting for it.
 function curModelRef(sessionView) {
   const meta = (sessionView && sessionView.meta) || null;
-  if (meta && meta.model_selection)
-    return { short: meta.model_short || meta.model, selection: meta.model_selection };
+  if (meta && (meta.model_short || meta.model))
+    return { short: meta.model_short || meta.model };
   const contextWindow = (sessionView && (sessionView.contextWindow || (meta && meta.contextWindow))) || null;
-  return contextWindow
-    ? { short: contextWindow.model_short, selection: contextWindow.model_selection }
-    : { short: "", selection: null };
+  return contextWindow ? { short: contextWindow.model_short } : { short: "" };
 }
 
 // The model button's label carries the session's CURRENT model (curModelRef —
@@ -318,7 +324,9 @@ function setModelBtn(btn) {
   const current = curModelRef(sessionView);
   const m = shortModel(current.short);
   if (sessionView && sessionView.pendingModel) {
-    if (current.selection === sessionView.pendingModel)
+    // The switch has landed once the session's own name matches the row that was
+    // clicked — the aggregate is the confirmation, as the ctx probe used to be.
+    if (curModelFamily() === sessionView.pendingModel && m)
       sessionView.pendingModel = null;
     else { btn.textContent = "✦ " + sessionView.pendingModel + " ▾"; return; }
   }
@@ -343,7 +351,7 @@ function setEffortBtn(btn) {
   btn.textContent = "✧ " + (meta.effort || "effort") + " ▾";
 }
 
-/* ---------- full web rewind (docs/dashboard.md, *Web rewind*) ---------- */
+/* ---------- full web rewind ---------- */
 // The feed's prompt bubbles ARE the checkpoint list: every user prompt is a
 // checkpoint in Claude Code, so "rewind to a specific message" is a click on
 // its bubble — a ↶ button each .msg.prompt carries (hover-revealed; pick mode
@@ -411,7 +419,7 @@ function openRewindMenu(bubble) {
 
 function doRewindTo(bubble, mode, menu) {
   const meta = (S.sessionView && S.sessionView.meta) || {};
-  if (!S.currentSessionId || !meta.live || !meta.terminal_window_id) return;
+  if (!S.currentSessionId || !meta.live) return;
   if (BUSY_TABS.includes(liveTab())) {
     toast("ask", "session is busy", "stop the turn first");
     return;
@@ -505,7 +513,7 @@ let escFired = 0;                    // when the busy fast path last fired
 const BUSY_TABS = ["thinking", "working", "executing", "awaiting_background"];
 function escGesture() {
   const meta = (S.sessionView && S.sessionView.meta) || {};
-  if (!S.currentSessionId || !meta.live || !meta.terminal_window_id) return;
+  if (!S.currentSessionId || !meta.live) return;
   // a modal dialog is open (red asking-you tab) — an Esc here would DECLINE the
   // ask/plan/permission dialog, not interrupt or rewind a turn. Swallow the
   // gesture entirely (no interrupt hold-timer, no rewind) so a stray keypress
@@ -640,7 +648,9 @@ function startRenameHeader() {
   const hostLbl = (sessionView.meta && sessionView.meta.host_label) || "the agent";
   auto.dataset.tip = "let " + hostLbl + " name this session (/rename)";
   const meta = sessionView.meta || {};
-  const windowed = !!(meta.live && meta.terminal_window_id);
+  // a window to type into — which is what `live` means: the server resolves
+  // liveness against the terminal, and never serves the window's own id.
+  const windowed = !!meta.live;
   const cap = capOk(meta, "rename") && cmdOffered(meta, "rename");
   const empty = tooThin(meta, "rename");
   gate(auto, cap && windowed && !empty && liveTab() !== "awaiting_attention",

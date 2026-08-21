@@ -199,13 +199,24 @@ def test_exactly_two_database_files_are_named():
 def test_no_key_value_table_exists():
     """Entities have identities. Nine JSON blobs under nine keys became nine tables.
 
-    Three opaque columns survive and each is deliberate: the canonical payload
-    is a closed vocabulary the codec validates on both encode and decode, the
-    raw payload is the verbatim bytes we observed, and a audit's content is
-    free-form by contract — recorded, never queried.
+    Six opaque columns survive and each is deliberate: the canonical payload is
+    a closed vocabulary the codec validates on both encode and decode, the raw
+    payload is the verbatim bytes we observed, an audit's content is free-form by
+    contract — recorded, never queried — and the three read-model payloads are
+    closed typed documents of `domain/sessiondata.py` and `domain/entries.py`,
+    validated the same way the canonical one is.
     """
     schema = (ROOT / "repository" / "impl" / "sqlite" / "schema.py").read_text(encoding="utf-8")
-    allowed_opaque = {"canonical_events.payload", "raw_events.payload", "state_files.content"}
+    allowed_opaque = {
+        "canonical_events.payload",
+        "raw_events.payload",
+        "state_files.content",
+        # The read model: closed typed documents, validated on both sides by the
+        # codec, versioned by the schema version — not a key-value store.
+        "session_data.payload",
+        "session_data_actors.payload",
+        "session_entries.payload",
+    }
     tables = re.findall(r"CREATE TABLE IF NOT EXISTS (\w+)\((.*?)\n\);", schema, re.S)
     violations = []
     for table, body in tables:
@@ -267,8 +278,6 @@ def test_the_harness_implementations_never_import_the_application():
             "terminal.contract", "terminal.models", "terminal.adapter", "terminal.launch",
             # the hook client runs OUTSIDE the daemon and observes its own window
             "terminal.impl",
-            # the projections a service folds a session's own facts with
-            "engine.projections",
         },
     )
 
@@ -395,18 +404,10 @@ def test_the_terminal_tier_imports_no_concrete_harness():
     )
 
 
-def test_the_render_tier_is_inert():
-    """`dashboard/render/` takes facts and returns markup. Nothing else.
-
-    No store, no service, no session, no `core` — which is what lets the file
-    view, the session page and a one-line test all call the same functions. A
-    renderer that grew a query would be a renderer only the daemon could run.
-    """
-    assert_imports(
-        "dashboard/render",
-        {"dashboard", "domain"},
-        allowed_modules={"engine.projections"},
-    )
+# test_the_render_tier_is_inert lived here. `dashboard/render/` is gone: the
+# markup is the browser's, built in JS from the entries the read model serves, so
+# there is no daemon-side render tier left to keep inert. What replaced the rule
+# is tests/test_dashboard_dom.py, which runs the real modules under `node`.
 
 
 def test_shared_code_imports_no_concrete_plugin_descriptor():
@@ -487,10 +488,15 @@ def test_harness_hook_and_pane_entries_do_not_come_back_to_bin():
 # endpoint (whose reply is the harness's own bytes), the file-content reader,
 # and the four streams (whose FRAMES are models — see api/sse.py — but whose
 # response is an open connection).
+# Handlers that answer something other than one of this layer's models: files,
+# a redirect, a raw YAML document, an SSE stream. Named by HANDLER, not by path,
+# so a route that moves package keeps its exemption and a route that changes
+# shape loses it. (`content` and `pane_stream` were here; the content route and
+# the daemon-side pane streams are both gone.)
 RAW_RESPONSE_ROUTES = {
     "index", "static", "service_worker", "favicon", "openapi_yaml",
-    "record_hook_delivery", "content",
-    "global_stream", "session_stream", "pane_stream",
+    "record_hook_delivery",
+    "global_stream", "session_stream",
 }
 
 
@@ -869,14 +875,15 @@ FILE_ACCESS_ALLOWLIST = {
     "harness/impl/codex/controls/controller.py":         "reads the rollout tail to confirm an interrupt landed",
     "harness/impl/__init__.py":                          "plugin discovery globs its own directory",
     # --- ours, and the one place we write bytes rather than rows ---------------
-    "api/dashboard/files.py":                   "stages an attachment; the harness is handed an @path",
+    "api/application/files.py":                 "stages an attachment; the harness is handed an @path",
     "engine/interpret/output_source.py":        "reads a followed output file, and unlinks the tee we made",
     "core/clipboard.py":                        "the host pasteboard",
     "core/repository.py":                       "reads a .git file to resolve a worktree",
     "core/process.py":                          "/proc-style process inspection",
     "terminal/impl/kitty/remote.py":            "finds the terminal's control SOCKET, not a file",
     "dashboard/paths.py":                       "resolves the uploads directory",
-    "api/dashboard/static.py":                  "serves the SPA's own files",
+    "dashboard/cli.py":                         "--log sends the daemon's own output to a file",
+    "api/application/static.py":                "serves the SPA's own files",
 }
 
 
@@ -964,13 +971,15 @@ def test_only_the_daemon_and_the_audit_cli_build_repositories():
 def test_terminal_storage_is_reached_through_a_service():
     """A route is not its own service, and a renderer does not open a database.
 
-    `api/terminal/views.py` used to call the storage module and write its own
-    audit row — the one route in the tree that was both. The pane stream used to
-    read the opened-view set from disk inside its frame loop.
+    Two things that used to be here are gone entirely. The view toggle took with
+    it the one route in the tree that was its own service — which files the mirror
+    has expanded is the PANE's state now, because a file entry carries its own
+    diff. And the live screen/keys passthrough went with it: everything a caller
+    used it for is a fact in the read model or a control gesture of its own, so
+    api/terminal/ is the pane keybindings and nothing else.
     """
-    for name in ("api/terminal/views.py", "api/terminal/panes.py",
-                 "terminal/panes/streams.py", "terminal/panes/commands.py",
-                 "terminal/panes/reaction.py"):
+    for name in ("api/terminal/panes.py",
+                 "terminal/panes/commands.py", "terminal/panes/reaction.py"):
         source = (ROOT / name).read_text(encoding="utf-8")
         # Not "names no repository": the pane reaction legitimately reads the
         # SESSION its panes anchor to. What it may not reach is the TERMINAL's
@@ -978,9 +987,8 @@ def test_terminal_storage_is_reached_through_a_service():
         # services above own.
         assert "repository.contract.terminal" not in source, f"{name} reaches pane storage"
         assert "repository.impl" not in source, f"{name} names an implementation"
-    for name in ("api/terminal/views.py", "api/terminal/panes.py"):
-        source = (ROOT / name).read_text(encoding="utf-8")
-        assert "repository." not in source, f"{name} is a route, not a service"
+    source = (ROOT / "api" / "terminal" / "panes.py").read_text(encoding="utf-8")
+    assert "repository." not in source, "api/terminal/panes.py is a route, not a service"
 
 
 # test_hook_entries_are_thin_clients_of_the_daemon lived here and named four
@@ -1129,15 +1137,13 @@ def test_claude_foreground_hook_has_no_legacy_drawing_or_state_dependency():
 
 def test_canonical_consumers_cannot_observe_or_checkpoint_native_sources():
     consumers = [
-        # The two pane processes were on this list. They import nothing of ours
-        # at all now, which is a stronger version of the same rule and is checked
-        # in tests/test_canonical_clients.py.
+        # The two pane processes were on this list, and so were the daemon-side
+        # renderers that fed them. Both are gone: a pane imports nothing of ours
+        # at all now, which is a stronger version of this rule and is checked in
+        # tests/test_canonical_clients.py.
         ROOT / "dashboard" / "services",
-        ROOT / "dashboard" / "render" / "items",
+        ROOT / "engine" / "sessiondata",
         *sorted((ROOT / "api").rglob("*.py")),
-        ROOT / "terminal" / "mirror" / "presenter.py",
-        ROOT / "terminal" / "mirror" / "renderer.py",
-        ROOT / "terminal" / "scoreboard.py",
     ]
     forbidden_fragments = (
         ".drain(",
@@ -1157,10 +1163,9 @@ def test_canonical_consumers_cannot_observe_or_checkpoint_native_sources():
 
 
 def test_canonical_sse_has_no_broker_or_application_event_registry():
-    source = (
-        (ROOT / "api" / "dashboard" / "streams.py").read_text(encoding="utf-8")
-        + (ROOT / "api" / "terminal" / "streams.py").read_text(encoding="utf-8")
-    )
+    # One file now: both surfaces are the same poll-and-diff loop over the read
+    # model, and the pane streams died with the daemon's renderer.
+    source = (ROOT / "api" / "sessiondata" / "streams.py").read_text(encoding="utf-8")
     assert "DashboardEventStream" not in source
     assert "subscribe" not in source
     assert "queue.Queue" not in source
@@ -1171,7 +1176,7 @@ def test_canonical_sse_has_no_broker_or_application_event_registry():
 def test_resume_and_sse_have_one_authoritative_path():
     launch_files = (
         ROOT / "harness" / "models" / "launch.py",
-        ROOT / "api" / "dashboard" / "controls.py",
+        ROOT / "api" / "controls" / "routes.py",
         ROOT / "dashboard" / "static" / "app.08-composer.js",
         ROOT / "dashboard" / "static" / "app.09-newsession.js",
         ROOT / "harness" / "impl" / "claude_code" / "launcher.py",
@@ -1276,7 +1281,7 @@ PROTOCOL_DECLARATION_EXEMPTIONS = {
     ("TerminalInputService", "TerminalSessionReader"):
         "the Protocol lives in dashboard/, which app/ may not import",
     ("ApplicationUsageState", "UsageReader"):
-        "the Protocol lives in dashboard/, which app/ may not import",
+        "the Protocol lives in dashboard/, which harness/ may not import",
 }
 
 

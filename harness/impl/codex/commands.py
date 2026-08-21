@@ -22,7 +22,7 @@ import os
 DESCRIPTION_READ_LIMIT = 4096
 
 
-def describe(path):
+def describe(path: str) -> str:
     """Read the display description from one Codex prompt file."""
     try:
         with open(path, encoding="utf-8", errors="replace") as prompt_file:
@@ -70,7 +70,7 @@ BUILTINS = (
 )
 
 
-def _prompts_dir():
+def _prompts_dir() -> str:
     """codex's user-prompts directory — $CODEX_HOME/prompts, else ~/.codex/
     prompts. The codex analog of a user-level .claude/commands dir."""
     home = os.environ.get("CODEX_HOME") or os.path.join(
@@ -78,7 +78,7 @@ def _prompts_dir():
     return os.path.join(home, "prompts")
 
 
-def slash_commands(working_directory):
+def slash_commands(working_directory: str) -> list[dict[str, str]]:
     """[{name, desc, src}, …] for a codex session, sorted by name and
     name-deduped: built-ins first (the TUI resolves those names to itself no
     matter what a same-named custom prompt claims), then codex's user prompts
@@ -88,9 +88,10 @@ def slash_commands(working_directory):
     prompt convention would layer in here exactly as Claude's project walk
     does."""
     del working_directory
-    commands, command_names = [], set()
+    commands: list[dict[str, str]] = []
+    command_names: set[str] = set()
 
-    def add(command_name, description, source):
+    def add(command_name: str, description: str, source: str) -> None:
         if command_name and command_name not in command_names:
             command_names.add(command_name)
             commands.append({"name": command_name, "desc": description, "src": source})

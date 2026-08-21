@@ -56,6 +56,8 @@
 # forces.
 import re
 import time
+from collections.abc import Callable
+from typing import Any, Protocol, TypedDict
 
 POLL_S = 0.15           # screen re-read beat while waiting for a dialog state
 STEP_TIMEOUT_S = 2.5    # a key press → its screen effect visible
@@ -85,18 +87,58 @@ _OPT = re.compile(r"^\s*(?P<cur>[›❯]\s+)?(?P<num>\d+)\.\s+"
                   r"(?P<label>.+?)(?:\s{2,}.*)?\s*$")
 
 
+class Driver(Protocol):
+    """The screen-driver vocabulary these dialog modules speak — satisfied by
+    controller._TerminalDriver (and structurally by the tests' fakes)."""
+
+    def get_text(self, window_id: str) -> str | None: ...
+    def send_key(self, window_id: str, *keys: str) -> bool: ...
+    def send_text(self, window_id: str, text: str) -> bool: ...
+    def paste_text(self, window_id: str, text: str) -> bool: ...
+
+
+class PromptChoice(TypedDict):
+    """One option of a pending question, as the pending_dialog stash carries it."""
+
+    label: str
+    description: str
+
+
+class Prompt(TypedDict, total=False):
+    """One pending question from the pending_dialog stash (verbatim)."""
+
+    id: str
+    header: str
+    question: str
+    options: list[PromptChoice]
+
+
+class OptionRow(TypedDict):
+    """One numbered option row as read off the live screen."""
+
+    num: str
+    label: str
+    cursor: bool
+
+
 class CodexAskError(Exception):
     """A step's expected screen state never appeared. `.step` names it for the
     audit row; the dialog is left EXACTLY as it was (never Escape-closed — codex's
     Esc aborts the turn), so a re-answer from the card normalizes and retries."""
 
-    def __init__(self, step, detail=""):
+    def __init__(self, step: str, detail: str = "") -> None:
         super().__init__(step + ((": " + detail) if detail else ""))
         self.step = step
         self.detail = detail
 
 
-def _poll(fe, win, pred, timeout, sleep):
+def _poll(
+    fe: Driver,
+    win: str,
+    pred: Callable[[str], bool],
+    timeout: float,
+    sleep: Callable[[float], None],
+) -> tuple[str, bool]:
     """Poll `win`'s screen until pred(screen) or `timeout`; (screen, held)."""
     deadline = time.monotonic() + timeout
     screen = fe.get_text(win) or ""
@@ -108,7 +150,7 @@ def _poll(fe, win, pred, timeout, sleep):
     return screen, True
 
 
-def dialog_open(screen):
+def dialog_open(screen: str) -> bool:
     """Is codex's question dialog on screen — its footer visible. Either footer
     counts: `tab to add notes | enter to submit …`, or the notes field's own
     `tab or esc to clear notes`, which replaces it while a note is being typed."""
@@ -116,28 +158,28 @@ def dialog_open(screen):
     return FOOT in s or NOTES_FOOT in s
 
 
-def notes_open(screen):
+def notes_open(screen: str) -> bool:
     """Is the `tab`-opened notes field focused — its footer visible. The one
     proof that typing will land in the note rather than in codex's composer."""
     return NOTES_FOOT in (screen or "")
 
 
-def confirm_open(screen):
+def confirm_open(screen: str) -> bool:
     """Is the `Submit with unanswered questions?` confirmation on screen. Raised
     by a submit that leaves any question unanswered (decline's normal ending, and
     a step `drive` resolves too rather than leaving the dialog hanging)."""
     return CONFIRM_HEAD in (screen or "")
 
 
-def current_question(screen):
+def current_question(screen: str) -> tuple[int, int] | None:
     """The (n, m) of the `Question N/M` header (1-based), or None."""
     m = _HEADER.search(screen or "")
     return (int(m.group(1)), int(m.group(2))) if m else None
 
 
-def rows(screen):
+def rows(screen: str) -> list[OptionRow]:
     """The numbered option rows in screen order: [{num, label, cursor}]."""
-    out = []
+    out: list[OptionRow] = []
     for ln in (screen or "").splitlines():
         m = _OPT.match(ln)
         if m:
@@ -147,7 +189,7 @@ def rows(screen):
     return out
 
 
-def _row_num(screen, label, prefix=""):
+def _row_num(screen: str, label: str, prefix: str = "") -> str:
     """The number of the row labelled `label` (exact), else the first row whose
     label starts with `prefix` (a narrow pane truncates the dim tail), else ""."""
     rs = rows(screen)
@@ -161,7 +203,7 @@ def _row_num(screen, label, prefix=""):
     return ""
 
 
-def none_row(screen, question):
+def none_row(screen: str, question: Prompt) -> str:
     """The number of codex's appended `None of the above` row — the free-text
     answer's target. Matched by LABEL first; failing that (a truncated pane, a
     reworded row) by POSITION, which codex fixes: exactly one row more than the
@@ -178,15 +220,15 @@ def none_row(screen, question):
     return ""
 
 
-def _cursor_row(screen):
+def _cursor_row(screen: str) -> OptionRow | None:
     return next((r for r in rows(screen) if r["cursor"]), None)
 
 
-def _cursor_to(fe, win, num, sleep):
+def _cursor_to(fe: Driver, win: str, num: str, sleep: Callable[[float], None]) -> None:
     """Move the `›` cursor onto option `num`: normalize UP to option 1 (up is a
     no-op there), then walk DOWN, screen-verified each step. Bail if `up` stops
     making progress (a trapped/edit row)."""
-    prev = object()
+    prev: object = object()
     for _ in range(NAV_STEPS):
         cur = _cursor_row(fe.get_text(win) or "")
         if cur is not None and cur["num"] == "1":
@@ -206,7 +248,7 @@ def _cursor_to(fe, win, num, sleep):
     raise CodexAskError("cursor", "cursor never reached option %s" % num)
 
 
-def _note(fe, win, text, sleep):
+def _note(fe: Driver, win: str, text: str, sleep: Callable[[float], None]) -> None:
     """`tab` into the notes field and type `text` (send_text presses Enter, which
     submits the question). The tab is VERIFIED — an unopened field would take the
     keystrokes as dialog navigation, and the Enter as a submit of whatever row the
@@ -219,7 +261,13 @@ def _note(fe, win, text, sleep):
         raise CodexAskError("notes", "notes not delivered")
 
 
-def _answer_one(fe, win, question, ans, sleep):
+def _answer_one(
+    fe: Driver,
+    win: str,
+    question: Prompt,
+    ans: dict[str, Any],
+    sleep: Callable[[float], None],
+) -> None:
     """Apply one question's answer to the CURRENT pane. The cursor is moved onto
     the target row FIRST in every case, because both submitting keys take it:
 
@@ -250,7 +298,7 @@ def _answer_one(fe, win, question, ans, sleep):
         fe.send_key(win, "enter")          # submit this question + advance
 
 
-def _confirm(fe, win, sleep):
+def _confirm(fe: Driver, win: str, sleep: Callable[[float], None]) -> None:
     """Resolve the `Submit with unanswered questions?` step if it is up: cursor
     onto `Proceed` and ENTER. A no-op when no confirmation appeared (every
     question answered), so both callers can end with it."""
@@ -266,7 +314,13 @@ def _confirm(fe, win, sleep):
                             "the unanswered-questions confirm stayed up")
 
 
-def drive(fe, win, questions, answers, sleep=time.sleep):
+def drive(
+    fe: Driver,
+    win: str,
+    questions: list[Prompt],
+    answers: list[dict[str, Any]],
+    sleep: Callable[[float], None] = time.sleep,
+) -> dict[str, bool]:
     """Answer codex's OPEN request_user_input dialog in window `win`. `questions`
     is the pending_dialog stash ([{id, header, question, options[{label,
     description}]}], verbatim); `answers` aligns with it ([{selected: [labels…],
@@ -313,7 +367,13 @@ def drive(fe, win, questions, answers, sleep=time.sleep):
     return {"submitted": True}
 
 
-def decline(fe, win, questions, message="", sleep=time.sleep):
+def decline(
+    fe: Driver,
+    win: str,
+    questions: list[Prompt],
+    message: str = "",
+    sleep: Callable[[float], None] = time.sleep,
+) -> dict[str, bool | int]:
     """The card's "chat about this" on codex: submit the dialog with as little
     answered as codex permits, so the turn resumes and the composer is yours.
 

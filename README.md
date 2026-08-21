@@ -106,9 +106,9 @@ repository/  the ONLY thing that opens a database. contract/ (21 Protocols,
              mapper/ (row <-> model object, pure), impl/sqlite/
 audit/       what the MACHINERY did — the record types, the free-function
              facade every process calls, and browser-reported telemetry
-engine/      the neutral middle: engine/interpret/ (the one thread that pulls,
-             translates, reacts), engine/projections/ (a fold per question),
-             engine/queries/
+engine/      the neutral middle: engine/interpret/ (the one loop that pulls and
+             translates), engine/react/ (the one that reacts and writes),
+             engine/sessiondata/ (a writer per aggregate, folded once on arrival)
 terminal/    the terminal concern, whole: contract + models, the panes it
              paints, and terminal/impl/<name>/ — one directory per terminal
              (kitty today), the only place a terminal's name appears
@@ -116,8 +116,9 @@ harness/     the harness concern, whole: contract + models, the hook channel,
              the services over one plugin, and harness/impl/<name>/ — one
              directory per agent tool (claude_code · codex), the only place a
              harness's name appears
-dashboard/   the web surface: static/ (the SPA), render/ (facts -> markup,
-             inert), services/ (one question, one answer), and its own config,
+dashboard/   the web surface: static/ (the SPA, which builds its own markup from
+             the facts it is served), services/ (one question, one answer),
+             and its own config,
              paths and CLI
 notify/      alerts about sessions: when one is owed you (notifier), whether
              you need telling (presence), and where it reaches you (channels/)

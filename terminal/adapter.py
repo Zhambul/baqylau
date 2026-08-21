@@ -16,8 +16,9 @@ would close a cycle.
 from __future__ import annotations
 
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from core import clients
 from domain.ids import SessionId
@@ -37,6 +38,9 @@ from terminal.models import (
     WindowInfo,
     WindowTagRequest,
 )
+
+if TYPE_CHECKING:
+    from repository.contract.sessions import SessionRepository
 
 # The scoreboard is a fixed five rows — the surface is five lines of session
 # statistics, so any other height is either clipped or padded with blank rows.
@@ -97,11 +101,7 @@ class SessionPaneRequest:
 
 
 class TerminalAdapter:
-    def __init__(self, plugin: TerminalPlugin, sessions) -> None:
-        # `sessions` is the session store, untyped on purpose: naming its type
-        # here would make `terminal/` import the layer above it, and declaring
-        # a Protocol for it would claim the store implements something it has
-        # never heard of. All this needs is `find`.
+    def __init__(self, plugin: TerminalPlugin, sessions: "SessionRepository") -> None:
         self._plugin = plugin
         self._sessions = sessions
 
@@ -113,6 +113,20 @@ class TerminalAdapter:
         if not window_id:
             return None
         return window_id if self._window(str(window_id)) is not None else None
+
+    def live_sessions(self, session_ids: Iterable[SessionId]) -> frozenset[SessionId]:
+        """The subset whose window is still on screen — `window_for_session`
+        for many sessions, paying for ONE window listing instead of one per
+        session. Listing the windows costs a subprocess in the real plugins,
+        and the session-list route asks about every visible session at once."""
+        on_screen = {window.window_id for window in self._plugin.metadata.windows()}
+        live = set()
+        for session_id in session_ids:
+            session = self._sessions.find(session_id)
+            window_id = session.terminal_window_id if session is not None else None
+            if window_id and str(window_id) in on_screen:
+                live.add(session_id)
+        return frozenset(live)
 
     def current_window(self) -> str | None:
         return self._plugin.metadata.current_window_id()
@@ -301,7 +315,7 @@ class TerminalAdapter:
             ))
         return self._combined(outcomes, "terminal pane close failed")
 
-    def _settle_scoreboard_height(self, session_id: SessionId):
+    def _settle_scoreboard_height(self, session_id: SessionId) -> SessionTerminalResult:
         for _attempt in range(SCOREBOARD_RESIZE_ATTEMPTS):
             scoreboard = self._tagged(SCOREBOARD_PANE_TAG, session_id)
             if scoreboard is None:

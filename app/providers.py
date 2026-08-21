@@ -30,27 +30,37 @@ from app.services.uploads import UploadService
 from core import data
 from core.repository import RepositoryQueries
 from dashboard import config as dashboard_config
-from dashboard.services.activity import DashboardActivityService
 from dashboard.services.notices import DashboardNotificationState
-from dashboard.services.overview import GlobalApplicationService
-from dashboard.services.sessions import DashboardSessionService
-from dashboard.services.streams import DashboardStreamService
+from dashboard.services.preferences import ApplicationPreferenceService
 from dashboard.services.workspace import SessionApplicationService
 from audit.recorder import AuditRecorder
 from audit.telemetry import BrowserTelemetryService
 from engine.interpret.loop import Interpreter
+from engine.react.loop import ReactionLoop
+from engine.sessiondata.actors import (
+    ActorWriter,
+    ContextWriter,
+    StatisticsWriter,
+    StatusWriter,
+    UsageWriter,
+)
+from engine.sessiondata.contract import (
+    AppliedActorListener,
+    SessionDataWriter,
+    SessionEntryWriter,
+)
+from engine.sessiondata.entries import EntryWriter
+from engine.sessiondata.session import GoalWriter, SessionWriter, TaskWriter
 from engine.interpret.reactions import (
     InterruptCanonicalEventReaction,
-    OperationOutputCanonicalEventReaction,
+    ShellOutputCanonicalEventReaction,
     SessionUpsertCanonicalEventReaction,
 )
 from engine.interpret.translators import (
     InterruptTranslator,
     LivenessTranslator,
-    OperationOutputTranslator,
+    ShellOutputTranslator,
 )
-from engine.projections import SessionQueries
-from engine.queries.content import CanonicalContentService
 from harness.contract import CanonicalEventReaction, CoreTranslator
 from harness.hooks.gateway import HookGatewayService
 from harness.impl import installed
@@ -76,7 +86,8 @@ from repository.contract.facts import (
     CanonicalEventRepository,
     RawEventRepository,
 )
-from repository.contract.operations import OperationOutputRepository
+from repository.contract.session_data import SessionDataRepository
+from repository.contract.shell_output import ShellOutputRepository
 from repository.contract.preferences import (
     HiddenDirectoryRepository,
     NewSessionRepository,
@@ -87,7 +98,7 @@ from repository.contract.preferences import (
     ViewModeRepository,
 )
 from repository.contract.sessions import SessionRepository
-from repository.contract.terminal import ContentViewRepository, PaneWidthRepository
+from repository.contract.terminal import PaneWidthRepository
 from repository.contract.uploads import UploadRepository
 from repository.contract.usage import AccountUsageRepository
 from repository.contract.workspace import SessionWorkspaceRepository
@@ -98,7 +109,8 @@ from repository.impl.sqlite.audit import (
     SqliteAuditReadRepository,
     SqliteAuditWriteRepository,
 )
-from repository.impl.sqlite.operation_output import SqliteOperationOutputRepository
+from repository.impl.sqlite.session_data import SqliteSessionDataRepository
+from repository.impl.sqlite.shell_output import SqliteShellOutputRepository
 from repository.impl.sqlite.preferences import (
     SqliteHiddenDirectoryRepository,
     SqliteNewSessionRepository,
@@ -111,7 +123,6 @@ from repository.impl.sqlite.preferences import (
 from repository.impl.sqlite.raw_events import SqliteRawEventRepository
 from repository.impl.sqlite.sessions import SqliteSessionRepository
 from repository.impl.sqlite.terminal import (
-    SqliteContentViewRepository,
     SqlitePaneWidthRepository,
 )
 from repository.impl.sqlite.uploads import SqliteUploadRepository
@@ -123,9 +134,8 @@ from terminal.impl import resolve as resolve_terminal
 from terminal.impl.null import null_plugin
 from terminal.panes.commands import PaneCommandService
 from terminal.panes.reaction import PaneCanonicalEventReaction
-from terminal.panes.streams import PaneStreamService
 from terminal.services.panes import PaneWidthService
-from terminal.services.views import ContentViewService
+from terminal.tabs import TabColorPainter
 
 # --- the two files ------------------------------------------------------------
 # One handle each, one initialize each. The paths are core/data.py's answer, so
@@ -211,11 +221,19 @@ RawEvents = Annotated[RawEventRepository, Depends(raw_events)]
 
 
 @singleton
-def operation_output(database: MainDb) -> OperationOutputRepository:
-    return SqliteOperationOutputRepository(database)
+def shell_output(database: MainDb) -> ShellOutputRepository:
+    return SqliteShellOutputRepository(database)
 
 
-OperationOutput = Annotated[OperationOutputRepository, Depends(operation_output)]
+ShellOutput = Annotated[ShellOutputRepository, Depends(shell_output)]
+
+
+@singleton
+def session_data(database: MainDb) -> SessionDataRepository:
+    return SqliteSessionDataRepository(database)
+
+
+SessionDataStore = Annotated[SessionDataRepository, Depends(session_data)]
 
 
 
@@ -292,14 +310,6 @@ PaneWidthStorage = Annotated[PaneWidthRepository, Depends(pane_width_storage)]
 
 
 @singleton
-def content_view_storage(database: MainDb) -> ContentViewRepository:
-    return SqliteContentViewRepository(database)
-
-
-ContentViewStorage = Annotated[ContentViewRepository, Depends(content_view_storage)]
-
-
-@singleton
 def account_usage(database: MainDb) -> AccountUsageRepository:
     return SqliteAccountUsageRepository(database)
 
@@ -369,22 +379,6 @@ PaneWidths = Annotated[PaneWidthService, Depends(pane_width_service)]
 
 
 @singleton
-def content_views(storage: ContentViewStorage, recorder: AuditWrites) -> ContentViewService:
-    return ContentViewService(storage, recorder)
-
-
-ContentViews = Annotated[ContentViewService, Depends(content_views)]
-
-
-@singleton
-def queries(events: CanonicalEvents, session_storage: Sessions) -> SessionQueries:
-    return SessionQueries(events, session_storage)
-
-
-Queries = Annotated[SessionQueries, Depends(queries)]
-
-
-@singleton
 def interrupt_registry() -> InterruptRegistry:
     return InterruptRegistry()
 
@@ -397,13 +391,13 @@ def controls(
     session_storage: Sessions,
     adapter: Terminal,
     plugin: InstalledTerminal,
-    session_queries: Queries,
+    read_model: SessionDataStore,
     usage: AccountUsage,
     audit: Recorder,
     interrupts: InterruptTracking,
 ) -> HarnessControlService:
     return HarnessControlService(
-        session_storage, adapter, plugin, session_queries, usage, audit, interrupts
+        session_storage, adapter, plugin, read_model, usage, audit, interrupts
     )
 
 
@@ -426,6 +420,7 @@ def usage_state(harnesses: Registry, usage: AccountUsage) -> ApplicationUsageSta
 UsageState = Annotated[ApplicationUsageState, Depends(usage_state)]
 
 
+
 @singleton
 def terminal_input(
     session_storage: Sessions, adapter: Terminal, plugin: InstalledTerminal
@@ -434,19 +429,6 @@ def terminal_input(
 
 
 TerminalInput = Annotated[TerminalInputService, Depends(terminal_input)]
-
-
-@singleton
-def dashboard_sessions(
-    events: CanonicalEvents,
-    session_queries: Queries,
-    reader: TerminalInput,
-    checkouts: Repositories,
-) -> DashboardSessionService:
-    return DashboardSessionService(events, session_queries, reader, checkouts)
-
-
-DashboardSessions = Annotated[DashboardSessionService, Depends(dashboard_sessions)]
 
 
 @singleton
@@ -469,13 +451,6 @@ def dashboard_notification_state() -> DashboardNotificationState:
 NotificationState = Annotated[DashboardNotificationState, Depends(dashboard_notification_state)]
 
 
-@singleton
-def content(events: CanonicalEvents, session_queries: Queries) -> CanonicalContentService:
-    return CanonicalContentService(events, session_queries)
-
-
-Content = Annotated[CanonicalContentService, Depends(content)]
-
 
 @singleton
 def hook_gateway(harnesses: Registry, raw: RawEvents) -> HookGatewayService:
@@ -496,29 +471,10 @@ TelemetryGateway = Annotated[TelemetryGatewayService, Depends(telemetry_gateway)
 
 
 @singleton
-def dashboard_activity(events: CanonicalEvents, session_queries: Queries) -> DashboardActivityService:
-    return DashboardActivityService(events, session_queries)
-
-
-DashboardActivity = Annotated[DashboardActivityService, Depends(dashboard_activity)]
-
-
-@singleton
-def dashboard_stream(
-    events: CanonicalEvents,
-    session_queries: Queries,
-    reader: TerminalInput,
+def application_preferences(
+    read_model: SessionDataStore,
+    adapter: Terminal,
     checkouts: Repositories,
-) -> DashboardStreamService:
-    return DashboardStreamService(events, session_queries, reader, checkouts)
-
-
-DashboardStream = Annotated[DashboardStreamService, Depends(dashboard_stream)]
-
-
-@singleton
-def global_application(
-    listing: DashboardSessions,
     usage: UsageState,
     notices: NotificationState,
     drafts: NewSessions,
@@ -526,19 +482,21 @@ def global_application(
     directories: HiddenDirectories,
     subscriptions: PushSubscriptions,
     signals: PresenceSignals,
-) -> GlobalApplicationService:
-    return GlobalApplicationService(
-        listing, usage, notices, drafts, settings, directories, subscriptions, signals
+) -> ApplicationPreferenceService:
+    return ApplicationPreferenceService(
+        read_model, adapter, checkouts, usage, notices, drafts, settings, directories,
+        subscriptions, signals
     )
 
 
-GlobalApplication = Annotated[GlobalApplicationService, Depends(global_application)]
+ApplicationPreferences = Annotated[
+    ApplicationPreferenceService, Depends(application_preferences)
+]
 
 
 @singleton
 def session_application(
-    events: CanonicalEvents,
-    session_queries: Queries,
+    read_model: SessionDataStore,
     reader: TerminalInput,
     audit_reader: AuditReads,
     workspace_storage: Workspaces,
@@ -547,8 +505,7 @@ def session_application(
     hidden_tasks: Dismissals,
 ) -> SessionApplicationService:
     return SessionApplicationService(
-        events,
-        session_queries,
+        read_model,
         reader,
         audit_reader,
         workspace_storage,
@@ -580,26 +537,9 @@ PaneCommands = Annotated[PaneCommandService, Depends(pane_commands)]
 
 
 @singleton
-def pane_streams(
-    events: CanonicalEvents,
-    session_queries: Queries,
-    session_storage: Sessions,
-    canonical_content: Content,
-    adapter: Terminal,
-    views: ContentViews,
-) -> PaneStreamService:
-    return PaneStreamService(
-        events, session_queries, session_storage, canonical_content, adapter, views
-    )
-
-
-PaneStreams = Annotated[PaneStreamService, Depends(pane_streams)]
-
-
-@singleton
 def core_translators() -> Mapping[str, CoreTranslator]:
     return {
-        OUTPUT_LOCATION_SOURCE_TYPE: OperationOutputTranslator(),
+        OUTPUT_LOCATION_SOURCE_TYPE: ShellOutputTranslator(),
         LIVENESS_SOURCE_TYPE: LivenessTranslator(),
         INTERRUPT_SOURCE_TYPE: InterruptTranslator(),
     }
@@ -609,18 +549,37 @@ CoreTranslators = Annotated[Mapping[str, CoreTranslator], Depends(core_translato
 
 
 @singleton
+def translation_inputs(
+    session_storage: Sessions,
+    output: ShellOutput,
+    raw: RawEvents,
+) -> tuple[CanonicalEventReaction, ...]:
+    """The two facts the interpreter's own next pull depends on.
+
+    Not reactions in the sense the reaction loop means: the pull phase READS the
+    rows these write — `sessions.watchable()` and the follow list — so they have
+    to be current before the next tick, on the interpreter's own thread. The
+    output following also unlinks the files that phase reads, which one thread
+    keeps safe.
+    """
+    return (
+        SessionUpsertCanonicalEventReaction(session_storage),
+        ShellOutputCanonicalEventReaction(output, raw),
+    )
+
+
+TranslationInputs = Annotated[tuple[CanonicalEventReaction, ...], Depends(translation_inputs)]
+
+
+@singleton
 def reactions(
     session_storage: Sessions,
-    output: OperationOutput,
-    raw: RawEvents,
     adapter: Terminal,
     widths: PaneWidths,
     interrupts: InterruptTracking,
 ) -> tuple[CanonicalEventReaction, ...]:
+    """What a committed fact CAUSES, in dependency order, on the reaction loop."""
     return (
-        # The sessions row exists and is current before the panes anchor to it.
-        SessionUpsertCanonicalEventReaction(session_storage),
-        OperationOutputCanonicalEventReaction(output, raw),
         PaneCanonicalEventReaction(adapter, session_storage, widths),
         InterruptCanonicalEventReaction(interrupts),
     )
@@ -630,15 +589,46 @@ Reactions = Annotated[tuple[CanonicalEventReaction, ...], Depends(reactions)]
 
 
 @singleton
+def entry_writer() -> SessionEntryWriter:
+    return EntryWriter()
+
+
+EntryWrites = Annotated[SessionEntryWriter, Depends(entry_writer)]
+
+
+@singleton
+def session_data_writers() -> tuple[SessionDataWriter, ...]:
+    """The aggregate's writers, in the order they fold.
+
+    Order matters in exactly one place: `ActorWriter` is the only one that
+    creates an actor row, and the four after it only ever update one that
+    exists — so it goes first, and a fact about an actor's usage in the same
+    event as its birth still lands.
+    """
+    return (
+        SessionWriter(),
+        GoalWriter(),
+        TaskWriter(),
+        ActorWriter(),
+        StatusWriter(),
+        UsageWriter(),
+        ContextWriter(),
+        StatisticsWriter(),
+    )
+
+
+SessionDataWriters = Annotated[tuple[SessionDataWriter, ...], Depends(session_data_writers)]
+
+
+@singleton
 def interpreter(
     session_storage: Sessions,
     harnesses: Registry,
     raw: RawEvents,
-    output: OperationOutput,
+    output: ShellOutput,
     events: CanonicalEvents,
     translators: CoreTranslators,
-    event_reactions: Reactions,
-    control_service: Controls,
+    inputs: TranslationInputs,
     audit: Recorder,
     interrupts: InterruptTracking,
 ) -> Interpreter:
@@ -649,25 +639,62 @@ def interpreter(
         output,
         events,
         translators,
-        event_reactions,
-        control_service,
+        inputs,
         audit,
         interrupts,
+    )
+
+
+@singleton
+def applied_listeners(
+    adapter: Terminal, session_storage: Sessions
+) -> tuple[AppliedActorListener, ...]:
+    """What a COMMITTED aggregate change causes, as opposed to what a fact does.
+
+    Wired here rather than inside the loop for the same reason the pane reaction
+    is: the engine drives a terminal it is handed and may not name one.
+    """
+    return (TabColorPainter(adapter, session_storage),)
+
+
+AppliedListeners = Annotated[tuple[AppliedActorListener, ...], Depends(applied_listeners)]
+
+
+@singleton
+def reaction_loop(
+    events: CanonicalEvents,
+    read_model: SessionDataStore,
+    event_reactions: Reactions,
+    entries: EntryWrites,
+    writers: SessionDataWriters,
+    listeners: AppliedListeners,
+    harnesses: Registry,
+    control_service: Controls,
+    audit: Recorder,
+) -> ReactionLoop:
+    return ReactionLoop(
+        events,
+        read_model,
+        event_reactions,
+        entries,
+        writers,
+        listeners,
+        harnesses,
+        control_service,
+        audit,
     )
 
 
 
 @singleton
 def insights(
-    events: CanonicalEvents,
-    session_queries: Queries,
+    read_model: SessionDataStore,
     reader: TerminalInput,
     audit_reader: AuditReads,
     checkouts: Repositories,
 ) -> ApplicationInsightsService:
     return ApplicationInsightsService(
-        events,
-        session_queries,
+        read_model,
         reader,
         audit_reader,
         checkouts,
@@ -680,14 +707,12 @@ Insights = Annotated[ApplicationInsightsService, Depends(insights)]
 
 @singleton
 def resumable_sessions(
-    events: CanonicalEvents,
-    session_queries: Queries,
+    read_model: SessionDataStore,
     reader: TerminalInput,
     checkouts: Repositories,
 ) -> ResumableSessionService:
     return ResumableSessionService(
-        events,
-        session_queries,
+        read_model,
         reader,
         checkouts,
         result_limit=dashboard_config.RESUMABLE_SESSION_LIMIT,

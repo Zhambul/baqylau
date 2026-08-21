@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import signal
 import socket
+from types import FrameType
 
 import uvicorn
+from fastapi import FastAPI
 
 from api import dependencies
 from api.app import build_web_application
@@ -19,7 +21,7 @@ from app import providers
 from app.injection import registry, resolve
 from core.daemon.contract import HOST_ADDRESS, PORT_NUMBER
 
-def build_server(web_application, graceful_shutdown_seconds: int = 3) -> uvicorn.Server:
+def build_server(web_application: FastAPI, graceful_shutdown_seconds: int = 3) -> uvicorn.Server:
     """One uvicorn server for an already-bound socket (passed to run()).
     Shared with the HTTP test fixture so the tests exercise the daemon's real
     engine configuration, not a lookalike."""
@@ -36,7 +38,7 @@ def build_server(web_application, graceful_shutdown_seconds: int = 3) -> uvicorn
     )
 
 
-def serve():
+def serve() -> int:
     """Run the server in THIS process (the `serve` CLI verb — `start` spawns
     it detached). Singleton: the port bind, and nothing else."""
     # The one registry this process has: the policy below, the routes' services
@@ -58,7 +60,7 @@ def serve():
             policy.graceful_shutdown_seconds,
         )
 
-        def absorb_signal(_signal_number, _frame):
+        def absorb_signal(_signal_number: int, _frame: FrameType | None) -> None:
             # uvicorn captures SIGTERM/SIGINT for its graceful shutdown, then
             # RE-RAISES the captured signal after run() to preserve kill
             # semantics — which would end the process before the cleanup below

@@ -10,11 +10,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import ClassVar, Literal, TypeAlias
 
-from domain.events import AttentionRequested
+from domain.events import PlanProposed, QuestionAsked
 from domain.ids import AttentionId, MessageId, SessionId
 from domain.values import (
     AccountReference,
-    AttentionChoice,
     ModelReference,
     StructuredContent,
 )
@@ -34,6 +33,7 @@ TitleWriteOutcome: TypeAlias = Literal[
 ControlName: TypeAlias = Literal[
     "send_text",
     "interrupt",
+    "background",
     "close_session",
     "rename_session",
     "auto_name_session",
@@ -61,7 +61,7 @@ class ControlContext:
     current_model: ModelReference | None
     current_effort: str | None
     current_account: AccountReference | None
-    pending_attention: AttentionRequested | None
+    pending_attention: QuestionAsked | PlanProposed | None
     # Every account's current plan usage, read ONCE by the service. A value,
     # not a repository: the harness contract names no storage.
     account_usage: tuple[AccountUsageSnapshot, ...] = ()
@@ -91,6 +91,18 @@ class SendText(ControlTarget):
 @dataclass(frozen=True)
 class Interrupt(ControlTarget):
     control_name: ClassVar[ControlName] = "interrupt"
+
+
+@dataclass(frozen=True)
+class Background(ControlTarget):
+    """Move the command that is running right now into the background.
+
+    Carries nothing: WHICH command is the harness's own answer — it is the one
+    its TUI is currently blocked on — and a caller that named one would be
+    guessing at a race it cannot see.
+    """
+
+    control_name: ClassVar[ControlName] = "background"
 
 
 @dataclass(frozen=True)
@@ -171,6 +183,7 @@ class DecidePlan(ControlTarget):
 ControlRequest: TypeAlias = (
     SendText
     | Interrupt
+    | Background
     | CloseSession
     | RenameSession
     | AutoNameSession
@@ -222,8 +235,24 @@ class MigrationResult(ControlResult):
 
 
 @dataclass(frozen=True)
+class PlanChoice:
+    """One decision offered by a harness's LIVE plan dialog.
+
+    Not an `AttentionChoice`, though it was one until the label became that
+    type's whole content: here the `digit` is the KEYSTROKE the dialog answers
+    to, which the browser has to send back, and it is nothing like a copy of the
+    label. `feedback` marks the row that opens the free-text box rather than
+    deciding anything.
+    """
+
+    digit: str
+    label: str
+    feedback: bool = False
+
+
+@dataclass(frozen=True)
 class PlanChoicesResult(ControlResult):
-    choices: tuple[AttentionChoice, ...] = ()
+    choices: tuple[PlanChoice, ...] = ()
 
 
 ControlOutcome: TypeAlias = (

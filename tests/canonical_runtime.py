@@ -4,15 +4,13 @@ from __future__ import annotations
 
 import time
 
-from app import providers
 from app.injection import Instances, registry, resolve
 from harness.models import RawEvent, TranslationResult
 from harness.registry import HarnessRegistry
-from engine.projections import SessionQueries
 from repository.impl.sqlite.canonical_events import SqliteCanonicalEventRepository
 from repository.impl.sqlite.databases import main_database
 from repository.impl.sqlite.raw_event_audits import SqliteRawEventAuditRepository
-from repository.impl.sqlite.operation_output import SqliteOperationOutputRepository
+from repository.impl.sqlite.shell_output import SqliteShellOutputRepository
 from repository.impl.sqlite.raw_events import SqliteRawEventRepository
 from repository.impl.sqlite.sessions import SqliteSessionRepository
 from repository.impl.sqlite.workspace import SqliteSessionWorkspaceRepository
@@ -25,12 +23,18 @@ class ProviderGraph:
     so a test names the node it seeds or asserts on and gets the SAME instance the
     routes get. The application under test is handed the registry, not this: the
     daemon has no object like this one, and that is the point.
+
+    Imported on the first ask, not at module import: the graph pulls in the
+    whole daemon, and the tests that only translate evidence — most of this
+    file's callers — need none of it.
     """
 
     def __init__(self, instances: Instances | None = None) -> None:
         self.instances: Instances = registry() if instances is None else instances
 
     def __getattr__(self, name):
+        from app import providers
+
         provider = getattr(providers, name, None)
         if provider is None:
             raise AttributeError("no provider named %r" % name)
@@ -52,7 +56,7 @@ class CanonicalRuntime:
         self.store = SqliteCanonicalEventRepository(self.database)
         self.recorder = SqliteRawEventRepository(self.database)
         self.sessions = SqliteSessionRepository(self.database, harnesses)
-        self.operation_output = SqliteOperationOutputRepository(self.database)
+        self.shell_output = SqliteShellOutputRepository(self.database)
         self.raw_event_audits = SqliteRawEventAuditRepository(self.database)
         self.workspaces = SqliteSessionWorkspaceRepository(self.database)
 
@@ -68,9 +72,6 @@ class CanonicalRuntime:
             raw_event, translator_version, translation, self.clock()
         )
         return outcome.accepted
-
-    def queries(self) -> SessionQueries:
-        return SessionQueries(self.store, self.sessions)
 
     def __getattr__(self, name):
         return getattr(self.store, name)

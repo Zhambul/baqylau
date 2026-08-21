@@ -75,7 +75,7 @@ import sys
 importlib.import_module(sys.argv[1])
 forbidden = {
     'core.ops', 'core.state', 'core.sessionapi', 'core.mdrender',
-    'dashboard.render.items', 'terminal.mirror.presenter', 'pygments', 'wenmode',
+    'api.sessiondata.mapper', 'engine.sessiondata.entries', 'pygments', 'wenmode',
 }
 loaded = sorted(forbidden.intersection(sys.modules))
 if loaded:

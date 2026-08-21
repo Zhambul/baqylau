@@ -6,15 +6,18 @@ import os
 import threading
 import time
 from dataclasses import dataclass
+from typing import Any
 
 from audit.recorder import AuditRecorder
+from core.repository import RepositoryQueries
 from dashboard import config
-from dashboard.services.sessions import DashboardSessionService
 from dashboard.services.notices import DashboardNotificationState
 from notify import channels
 from notify.presence import Presence
 from domain.ids import SessionId
-from engine.projections import SessionQueries, TabState
+from domain.sessiondata import ActorStatus, SessionData
+from repository.contract.session_data import SessionDataRepository
+from terminal.adapter import TerminalAdapter
 from repository.contract.preferences import (
     NotificationSettingRepository,
     PushSigningKeyRepository,
@@ -41,14 +44,14 @@ NOTIFICATION_KINDS = {
 @dataclass
 class PendingNotification:
     session_id: SessionId
-    state: TabState
+    state: ActorStatus
     kind: str
     project: str
     title: str
     due_at: float
     pushed: bool = False
 
-    def payload(self) -> dict:
+    def payload(self) -> dict[str, str]:
         return {
             "session_id": str(self.session_id),
             "state": self.state,
@@ -58,11 +61,34 @@ class PendingNotification:
         }
 
 
+@dataclass(frozen=True)
+class _Alertable:
+    """One attended session, as the notifier reads it: who it is, what it is
+    called, and the one word that decides whether to interrupt you."""
+
+    session_id: SessionId
+    title: str
+    project: str
+    status: ActorStatus | None
+
+
+def _lead_status(data: SessionData) -> ActorStatus | None:
+    """The session's own status, which is its LEAD actor's.
+
+    A tab shows a session and a session shows its lead: a subagent asking itself
+    a question is not the session asking you one.
+    """
+    for actor in data.actors:
+        if actor.actor_id == data.session.lead_actor_id:
+            return actor.status
+    return None
+
+
 @dataclass
 class DeliveredNotification:
     session_id: SessionId
-    state: TabState
-    handle: dict
+    state: ActorStatus
+    handle: dict[str, Any]
     delivered_at: float
 
 
@@ -71,8 +97,9 @@ class Notifier:
 
     def __init__(
         self,
-        sessions: DashboardSessionService,
-        queries: SessionQueries,
+        read_model: SessionDataRepository,
+        terminal: TerminalAdapter,
+        repositories: RepositoryQueries,
         notification_state: DashboardNotificationState,
         notification_settings: NotificationSettingRepository,
         push_subscriptions: PushSubscriptionRepository,
@@ -80,8 +107,9 @@ class Notifier:
         presence: Presence,
         audit: AuditRecorder,
     ) -> None:
-        self.sessions = sessions
-        self.queries = queries
+        self.read_model = read_model
+        self.terminal = terminal
+        self.repositories = repositories
         self.notification_state = notification_state
         self.notification_settings = notification_settings
         self.push_subscriptions = push_subscriptions
@@ -90,28 +118,33 @@ class Notifier:
         self.audit = audit
         # One query per pass, not one per armed session.
         self._muted: frozenset[SessionId] = frozenset()
-        self.previous_states: dict[SessionId, TabState | None] | None = None
+        self.previous_states: dict[SessionId, ActorStatus | None] | None = None
         self.pending: dict[SessionId, PendingNotification] = {}
         self.delivered: dict[SessionId, list[DeliveredNotification]] = {}
 
     def scan(self) -> None:
+        # ATTENDED sessions only: a notification is a nudge back to a window,
+        # and a parked session has none to nudge you to.
         items = tuple(
-            item
-            for item in self.sessions.sessions()
-            if item.terminal.window_id is not None
-        )
-        current_states = {
-            item.session.session_id: self.queries.tab_state(
-                item.session.session_id
+            _Alertable(
+                session_id=data.session.session_id,
+                title=data.session.title or "",
+                project=os.path.basename(
+                    self.repositories.project_directory(data.session.working_directory) or ""
+                )
+                or str(data.session.session_id),
+                status=_lead_status(data),
             )
-            for item in items
-        }
+            for data in self.read_model.visible()
+            if self.terminal.window_for_session(data.session.session_id) is not None
+        )
+        current_states = {item.session_id: item.status for item in items}
         self._muted = self.notification_settings.muted_session_ids()
         if self.previous_states is None:
             self.previous_states = current_states
             return
 
-        items_by_session = {item.session.session_id: item for item in items}
+        items_by_session = {item.session_id: item for item in items}
         now = time.monotonic()
         badge = self._attention_count(current_states)
         all_session_ids = set(self.previous_states) | set(current_states)
@@ -143,12 +176,12 @@ class Notifier:
         self.previous_states = current_states
         self._deliver_due(current_states, now)
 
-    def _schedule(self, item, state: TabState, kind: str, now: float) -> None:
-        session_id = item.session.session_id
+    def _schedule(self, item: _Alertable, state: ActorStatus, kind: str, now: float) -> None:
+        session_id = item.session_id
         if not self.notification_settings.alerting_enabled() or session_id in self._muted:
             return
-        project = os.path.basename(item.project_directory) or str(session_id)
-        title = item.session.title or ""
+        project = item.project
+        title = item.title
         self.notification_state.publish_notification(session_id, kind, project, title)
         delay = config.NOTIFICATION_DELAY_SECONDS
         if kind == "done":
@@ -164,7 +197,7 @@ class Notifier:
 
     def _deliver_due(
         self,
-        current_states: dict[SessionId, TabState | None],
+        current_states: dict[SessionId, ActorStatus | None],
         now: float,
     ) -> None:
         for session_id, notification in list(self.pending.items()):
@@ -252,7 +285,7 @@ class Notifier:
                     channels.telegram.send_alert(payload, reason),
                 )
 
-    def _track(self, notification: PendingNotification, handle: dict | None) -> None:
+    def _track(self, notification: PendingNotification, handle: dict[str, Any] | None) -> None:
         if handle is None:
             return
         self.delivered.setdefault(notification.session_id, []).append(
@@ -268,7 +301,7 @@ class Notifier:
     def _resolve(
         self,
         session_id: SessionId,
-        current: TabState | None,
+        current: ActorStatus | None,
         now: float,
         badge: int = 0,
     ) -> None:
@@ -347,7 +380,7 @@ class Notifier:
                 self.delivered.pop(session_id, None)
 
     @staticmethod
-    def _attention_count(states: dict[SessionId, TabState | None]) -> int:
+    def _attention_count(states: dict[SessionId, ActorStatus | None]) -> int:
         return sum(state in NOTIFICATION_KINDS for state in states.values())
 
     def run(self, stop: threading.Event) -> None:

@@ -17,6 +17,7 @@ from harness.models import (
     DecidePlan,
     DeliveryResult,
     Interrupt,
+    PlanChoice,
     PlanChoicesResult,
     ReadPlanChoices,
     RenameSession,
@@ -32,8 +33,7 @@ from terminal.models import (
     TabRenameRequest,
     TextSubmitRequest,
 )
-from domain.events import AttentionRequested
-from domain.values import AttentionChoice
+from domain.events import QuestionAsked
 from harness.impl.codex.canonical import rollout, title
 from harness.impl.codex.controls import dialog, modeldialog, plandialog
 
@@ -44,25 +44,25 @@ class _TerminalDriver:
     def __init__(self, terminal: TerminalPlugin) -> None:
         self.terminal = terminal
 
-    def get_text(self, window_id, extent="screen", ansi=False):
+    def get_text(self, window_id: str, extent: str = "screen", ansi: bool = False) -> str | None:
         del extent
         response = self.terminal.viewport.read_screen(
             ScreenReadRequest(str(window_id), ansi=ansi)
         )
         return response.text
 
-    def send_key(self, window_id, *keys):
+    def send_key(self, window_id: str, *keys: str) -> bool:
         return all(
             self.terminal.input.send_key(KeySendRequest(str(window_id), str(key))).succeeded
             for key in keys
         )
 
-    def send_text(self, window_id, text):
+    def send_text(self, window_id: str, text: str) -> bool:
         return self.terminal.input.submit_text(
             TextSubmitRequest(str(window_id), str(text), "type")
         ).succeeded
 
-    def paste_text(self, window_id, text):
+    def paste_text(self, window_id: str, text: str) -> bool:
         return self.terminal.input.submit_text(
             TextSubmitRequest(str(window_id), str(text), "paste")
         ).succeeded
@@ -111,7 +111,7 @@ def _rollout_abort_state(path: str, position: int) -> tuple[bool, bool]:
     # None marks a line that would not parse. The slot is KEPT rather than
     # skipped because abort_index is an index into this list, and dropping
     # unparseable lines would silently shift every position after one.
-    records: list[dict | None] = []
+    records: list[dict[str, object] | None] = []
     for line in lines:
         try:
             document = json.loads(line)
@@ -252,7 +252,7 @@ class SelectEffortHandler(ControlHandler):
         return ControlResult(request.request_id, "acknowledged")
 
 
-def _native_prompts(attention: AttentionRequested) -> list[dict]:
+def _native_prompts(attention: QuestionAsked) -> list[dialog.Prompt]:
     return [
         {
             "id": prompt.prompt_id,
@@ -263,7 +263,7 @@ def _native_prompts(attention: AttentionRequested) -> list[dict]:
                 for choice in prompt.choices
             ],
         }
-        for prompt in attention.prompts
+        for prompt in attention.questions
     ]
 
 
@@ -272,8 +272,8 @@ class AnswerQuestionHandler(ControlHandler):
         terminal = context.terminal
         if not isinstance(request, AnswerQuestion):
             raise TypeError("answer_question handler requires AnswerQuestion")
-        if context.pending_attention is None:
-            return ControlResult(request.request_id, "rejected", "attention request is not pending")
+        if not isinstance(context.pending_attention, QuestionAsked):
+            return ControlResult(request.request_id, "rejected", "no question is pending")
         window_id = context.terminal_window_id
         if window_id is None:
             return ControlResult(request.request_id, "rejected", "session is not live")
@@ -320,7 +320,7 @@ class ReadPlanChoicesHandler(ControlHandler):
             request.request_id,
             "acknowledged",
             choices=tuple(
-                AttentionChoice(str(row["digit"]), str(row["label"]))
+                PlanChoice(str(row["digit"]), str(row["label"]))
                 for row in rows
             ),
         )

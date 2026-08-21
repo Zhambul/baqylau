@@ -24,7 +24,12 @@ CALLER_HEADER = "X-Baqylau"
 
 HOOK_PATH = "/api/harnesses/%s/hooks"
 TELEMETRY_PATH = "/api/harnesses/%s/telemetry"
-PANE_STREAM_PATH = "/api/sessions/%s/panes/%s/stream?width=%d"
+# The pane's three reads, and the whole of what it needs: the aggregate, one
+# page of the feed as of the aggregate's cursor, and the stream from that same
+# cursor. No width on any of them — the pane wraps its own text now.
+SESSION_DATA_PATH = "/sessionData/%s"
+SESSION_ENTRIES_PATH = "/sessionData/%s/entries?at=%d"
+SESSION_STREAM_PATH = "/sessionData/%s/stream?after_cursor=%d"
 PANE_COMMAND_PATHS = {
     "toggle": "/api/terminal/panes/toggle",
     "grow": "/api/terminal/panes/grow",
@@ -32,8 +37,6 @@ PANE_COMMAND_PATHS = {
     "reset": "/api/terminal/panes/reset",
     "setpct": "/api/terminal/panes/set-percent",
 }
-VIEW_PATH = "/api/terminal/views"
-CONTENT_PATH = "/api/content/%s"
 
 # The identity channel: a hook delivery's BODY is the harness's exact stdin, so
 # everything the client observed AROUND itself rides beside it in headers.
@@ -58,7 +61,7 @@ LAUNCH_EFFORT_VARIABLE = "BAQYLAU_LAUNCH_EFFORT"
 # runs hooks like any other, and a client that shipped them would put a session
 # in the store that nobody started. Seeing this, a client does nothing.
 PROBE_VARIABLE = "BAQYLAU_USAGE_PROBE"
-WINDOW_ID_VARIABLES = ("KITTY_WINDOW_ID",)
+WINDOW_ID_VARIABLES = ("KITTY_WINDOW_ID", "BAQYLAU_PTY_WINDOW_ID")
 
 
 def window_id(environment: Mapping[str, str]) -> str:

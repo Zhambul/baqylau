@@ -8,8 +8,9 @@ get the polarity backwards.
 from __future__ import annotations
 
 from api.common.models.values.account_reference import AccountReferenceResponse
-from api.common.models.values.attention_choice import AttentionChoiceResponse
+from api.common.models.values.content import ContentResponse
 from api.common.models.values.model_reference import ModelReferenceResponse
+from api.common.models.values.plan_choice import PlanChoiceResponse
 from api.common.models.values.repository_status import RepositoryStatusResponse
 from api.common.models.values.terminal_state import (
     TerminalInputStateResponse,
@@ -22,8 +23,15 @@ from api.common.models.values.usage_row import (
     UsageWindowResponse,
 )
 from core.repository import RepositoryStatus
-from domain.values import AccountReference, AttentionChoice, ModelReference, TokenUsage
-from harness.models import TerminalSessionState, UsageRow
+from domain.values import (
+    AccountReference,
+    Content,
+    ModelReference,
+    StructuredContent,
+    TokenUsage,
+    content_text,
+)
+from harness.models import PlanChoice, TerminalSessionState, UsageRow
 
 
 def token_usage(usage: TokenUsage) -> TokenUsageResponse:
@@ -58,9 +66,22 @@ def maybe_account_reference(
     )
 
 
-def attention_choice(choice: AttentionChoice) -> AttentionChoiceResponse:
-    return AttentionChoiceResponse(
-        value=choice.value, label=choice.label, description=choice.description
+def content(value: Content) -> ContentResponse:
+    """Text and how to draw it. A structured document — a tool's own arguments
+    or answer, in a shape we do not define — is laid out as the plain text a
+    person reads, which is the only thing a client can do with it."""
+    if isinstance(value, StructuredContent):
+        return ContentResponse(text=content_text(value), media_type="text/plain")
+    return ContentResponse(text=value.text, media_type=value.media_type)
+
+
+def maybe_content(value: Content | None) -> ContentResponse | None:
+    return None if value is None else content(value)
+
+
+def plan_choice(choice: PlanChoice) -> PlanChoiceResponse:
+    return PlanChoiceResponse(
+        digit=choice.digit, label=choice.label, feedback=choice.feedback
     )
 
 

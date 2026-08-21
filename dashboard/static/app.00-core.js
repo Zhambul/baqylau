@@ -74,29 +74,20 @@ const S = {
                          // defaults, match rule and account/attach flags — the
                          // new-session form is built entirely out of it, and
                          // null means "not yet known", never "assume Claude"
-                         // (docs/dashboard.md, *Tool picker*)
+                         //
   nsDrafts: {},          // its UNSENT first prompts, {workingDirectory: {text, sequence}} — one
                          // per directory, cached so openNewSession and a directory switch
                          // seed the box synchronously; an accidental close must
                          // not lose a half-typed prompt, and two projects must
-                         // not share one (docs/dashboard.md, *New-session
-                         // draft*)
+                         // not share one
 };
 
 const ARCHIVE_S = 3 * 86400;   // sessions older than this fold into "archived"
 const ARM_MS = 4000;   // two-step-confirm window (card ✕ / header ✕ / compact)
-// A just-launched session's terminal pane isn't tagged claude_session=<sessionId> for a
-// moment, so /api/session reports live:true with a blank terminal_window_id — the
-// startup tag-race. showSession re-fetches meta until the window resolves so the
-// composer + ✕ close button don't stay stuck (docs/dashboard.md, *Launch tag-
-// race*). Bounded — a truly headless session never tags a window.
-const LAUNCH_RESOLVE_MS = 1000;
-const LAUNCH_RESOLVE_TRIES = 12;
 // Timeout for the ✕ close's fetch (closeSession → postJSON, the plain-fetch
 // channel proven to traverse the tunnel). < the 20s optPending watchdog so a
 // stalled close rejects visibly/retryably (→ close.fail + web-clientfail)
-// instead of hanging silently (docs/dashboard.md *Close via the plain-fetch
-// channel*).
+// instead of hanging silently.
 const CLOSE_POST_MS = 12000;
 
 // The SERVER's numbers that the page has to agree with, carried by
@@ -159,7 +150,7 @@ const IS_IPAD = /iPad/.test(navigator.userAgent)
 
 /* ---------- tiny DOM + fmt helpers ---------- */
 
-// NO EMOJI (docs/dashboard.md, *No emoji*): a few of the symbols this UI paints
+// NO EMOJI: a few of the symbols this UI paints
 // are EMOJI-CAPABLE codepoints (⚠ ⚙ ✉ ⏱ ▶ …) — text glyphs by default, but a
 // browser whose page fonts lack one falls back to the colour-emoji font (the ☀
 // wake button did exactly that, which is why its sun is now an inline SVG).
@@ -331,8 +322,8 @@ const ASK_DRAFT_DEBOUNCE_MS = 350;      // coalesce typing before persisting
 // This DEVICE's stable identity (unlike per-load CLIENT_ID) — persisted in
 // localStorage so it survives reloads and is the SAME across every tab on this
 // machine. Sent with the push subscription and the presence beat so the server
-// can route the on-device notification to the ONE device you're working on
-// (docs/dashboard.md *Device routing*). localStorage can throw (Safari private
+// can route the on-device notification to the ONE device you're working on.
+// localStorage can throw (Safari private
 // mode) → fall back to a per-load id.
 const DEVICE_ID = (() => {
   try {
@@ -395,17 +386,67 @@ function ago(ts) {
   if (s < 86400) return (s / 3600 | 0) + "h ago";
   return (s / 86400 | 0) + "d ago";
 }
+/* ---------- one session row ----------------------------------------------------
+   Every reader of a session goes through these, which is what let the whole page
+   move from the daemon's folded snapshot to SessionData without touching the
+   list, the attention badge or the chrome: the SHAPE changed here and nowhere
+   else.
+
+   A row is a `SessionDataResponse`: the session's stored facts, its actors, and
+   the two read-time truths (`live`, `repository`) the route measured when it
+   answered. Everything actor-specific — the status, the model, the scoreboard,
+   the usage — is on an ACTOR now, because that is where the harnesses report it,
+   and a session's own answer is its LEAD actor's. */
 function sessionId(row) { return row.session.session_id; }
 function sessionWorkingDirectory(row) { return row.session.working_directory || ""; }
-function sessionWindowId(row) { return row.terminal.window_id || ""; }
-function sessionIsLive(row) { return !!row.terminal.window_id; }
+// Liveness, not the handle: the window id is deliberately never served, because
+// a frontend needs to know whether a session is attended, not how.
+function sessionIsLive(row) { return !!row.live; }
 function sessionIsParked(row) { return row.session.state === "finished"; }
-function sessionTabState(row) { return row.tab_state || ""; }
+function sessionLeadActor(row) {
+  const lead = row.session.lead_actor_id;
+  return (row.actors || []).find(actor => actor.actor_id === lead) || null;
+}
+// The one word a list row and a tab colour are painted from.
+function sessionTabState(row) {
+  const lead = sessionLeadActor(row);
+  return (lead && lead.status) || "";
+}
+function sessionModel(row) {
+  const lead = sessionLeadActor(row);
+  return (lead && lead.model) || "";
+}
+function sessionStatistics(row) {
+  const lead = sessionLeadActor(row);
+  return (lead && lead.statistics) || {};
+}
+function sessionContext(row) {
+  const lead = sessionLeadActor(row);
+  return (lead && lead.context) || {};
+}
+// Tokens and money are per ACTOR, and a session spent what all of its actors
+// spent — so the row's total is a sum, not the lead's share.
+function sessionUsage(row) {
+  const total = {
+    input_tokens: 0, output_tokens: 0, cache_read_tokens: 0,
+    cache_write_tokens: 0, one_hour_cache_write_tokens: 0,
+  };
+  let cost = null;
+  for (const actor of row.actors || []) {
+    const tokens = (actor.usage && actor.usage.tokens) || {};
+    for (const key of Object.keys(total)) total[key] += tokens[key] || 0;
+    if (actor.usage && actor.usage.cost_in_usd != null)
+      cost = (cost || 0) + Number(actor.usage.cost_in_usd);
+  }
+  return { tokens: total, cost_in_usd: cost };
+}
 function lastActive(row) {
-  return row.session.finished_at || row.session.started_at || 0;
+  return row.last_activity_at || row.session.finished_at || row.session.started_at || 0;
 }
 function orderKey(row) { return row.session.started_at || lastActive(row); }
-function groupKey(row) { return row.project_directory; }
+// The working directory IS the grouping key: one directory, one project, one
+// group of sessions.
+function groupKey(row) { return sessionWorkingDirectory(row); }
 function directoryName(path) {
   return String(path || "").split("/").filter(Boolean).pop() || "";
 }

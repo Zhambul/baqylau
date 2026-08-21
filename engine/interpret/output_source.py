@@ -5,7 +5,7 @@ it must exit immediately. So the gateway records an output-location directive,
 the reaction starts a following, and THIS reads the file's chunks as their own
 raw events.
 
-It is not a repository and never was: it takes an `OperationOutputFollowing`
+It is not a repository and never was: it takes a `ShellOutputFollowing`
 value and owns the filesystem side — the reading, and the unlinking of a tee
 file we created. Both used to sit inside the store, which is how listing the
 followings acquired the power to delete a user's file.
@@ -18,26 +18,26 @@ import hashlib
 import os
 import time
 
-from domain.ids import OperationId, RawEventId, SessionId
-from domain.operations import OperationOutputFollowing
+from domain.ids import RawEventId, SessionId, ShellId
+from domain.shells import ShellOutputFollowing
 from harness.contract import HarnessRawEventSource
 from harness.models import RawEvent
-from repository.contract.operations import OperationOutputRepository
+from repository.contract.shell_output import ShellOutputRepository
 from domain.codec import encode_document
-from harness.models.directives import OperationOutputChunk
+from harness.models.directives import ShellOutputChunk
 
 READ_SIZE = 64 * 1024
 MAXIMUM_LIFETIME_SECONDS = 2 * 60 * 60
 FINISHED_POSITION = "finished"
 
 
-def operation_output_source_identity(
-    harness: str, session_id: SessionId, operation_id: OperationId
+def shell_output_source_identity(
+    harness: str, session_id: SessionId, shell_id: ShellId
 ) -> str:
-    return f"{harness}:operation_output:{session_id}:{operation_id}"
+    return f"{harness}:shell_output:{session_id}:{shell_id}"
 
 
-def delete_source_file(following: OperationOutputFollowing) -> None:
+def delete_source_file(following: ShellOutputFollowing) -> None:
     """Unlink the tee file, when we were the ones who made it."""
     if not following.delete_source:
         return
@@ -47,7 +47,7 @@ def delete_source_file(following: OperationOutputFollowing) -> None:
         pass
 
 
-class OperationOutputRawEventSource(HarnessRawEventSource):
+class ShellOutputRawEventSource(HarnessRawEventSource):
     """Generic chunk reader over one followed, growing file.
 
     Position encoding: the byte offset AFTER the last emitted chunk, or
@@ -59,13 +59,13 @@ class OperationOutputRawEventSource(HarnessRawEventSource):
 
     def __init__(
         self,
-        following: OperationOutputFollowing,
-        operation_output: OperationOutputRepository,
+        following: ShellOutputFollowing,
+        shell_output: ShellOutputRepository,
     ) -> None:
         self.following = following
-        self.operation_output = operation_output
-        self.source_identity = operation_output_source_identity(
-            following.harness, following.session_id, following.operation_id
+        self.shell_output = shell_output
+        self.source_identity = shell_output_source_identity(
+            following.harness, following.session_id, following.shell_id
         )
 
     def read(self, after_position: str | None) -> tuple[RawEvent, ...]:
@@ -94,7 +94,7 @@ class OperationOutputRawEventSource(HarnessRawEventSource):
                         break
                     raw_events.append(self._chunk(chunk_position, source.tell(), content))
         if following.finishing:
-            self.operation_output.remove(following.session_id, following.operation_id)
+            self.shell_output.remove(following.session_id, following.shell_id)
             delete_source_file(following)
             if raw_events:
                 last = raw_events[-1]
@@ -127,9 +127,9 @@ class OperationOutputRawEventSource(HarnessRawEventSource):
     def _chunk(self, start: int, end: int, content: bytes) -> RawEvent:
         following = self.following
         document = encode_document(
-            OperationOutputChunk(
+            ShellOutputChunk(
                 content_base64=base64.b64encode(content).decode("ascii"),
-                operation_id=following.operation_id,
+                shell_id=following.shell_id,
                 ordinal=start,
                 stream="output",
             )
@@ -152,18 +152,18 @@ class OperationOutputRawEventSource(HarnessRawEventSource):
 
 
 def sources_for_session(
-    operation_output: OperationOutputRepository,
+    shell_output: ShellOutputRepository,
     session_id: SessionId,
-) -> tuple[OperationOutputRawEventSource, ...]:
+) -> tuple[ShellOutputRawEventSource, ...]:
     """Every following of one session, as readers. A pure read: expiry is the
     interpreter's own call, made once a tick, not a side effect of listing."""
     return tuple(
-        OperationOutputRawEventSource(following, operation_output)
-        for following in operation_output.find_for_session(session_id)
+        ShellOutputRawEventSource(following, shell_output)
+        for following in shell_output.find_for_session(session_id)
     )
 
 
-def expire(operation_output: OperationOutputRepository, now: float) -> None:
+def expire(shell_output: ShellOutputRepository, now: float) -> None:
     """Drop followings that have outlived their ceiling, and unlink their files."""
-    for following in operation_output.remove_expired(now - MAXIMUM_LIFETIME_SECONDS):
+    for following in shell_output.remove_expired(now - MAXIMUM_LIFETIME_SECONDS):
         delete_source_file(following)

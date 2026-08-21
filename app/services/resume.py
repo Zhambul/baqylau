@@ -9,8 +9,7 @@ from core.repository import RepositoryQueries
 from harness.models import TerminalSessionState
 from domain.ids import SessionId
 from domain.values import AccountReference, ModelReference
-from repository.contract.facts import CanonicalEventRepository
-from engine.projections import SessionQueries
+from repository.contract.session_data import SessionDataRepository
 
 
 class TerminalSessionReader(Protocol):
@@ -32,14 +31,12 @@ class ResumableSession:
 class ResumableSessionService:
     def __init__(
         self,
-        canonical_events: CanonicalEventRepository,
-        sessions: SessionQueries,
+        read_model: SessionDataRepository,
         terminal: TerminalSessionReader,
         repositories: RepositoryQueries,
         result_limit: int,
     ) -> None:
-        self.canonical_events = canonical_events
-        self.sessions = sessions
+        self.read_model = read_model
         self.terminal = terminal
         self.repositories = repositories
         self.result_limit = result_limit
@@ -53,13 +50,17 @@ class ResumableSessionService:
         if not requested_directory:
             return ()
         search_text = (search or "").strip().lower()
-        cursor = self.canonical_events.latest_cursor()
         rows = []
-        for summary in self.sessions.sessions(cursor):
+        # Newest first, so a `result_limit` cut keeps the sessions somebody is
+        # most likely to want back.
+        for data in sorted(
+            self.read_model.visible(),
+            key=lambda item: item.last_activity_at or item.session.started_at or 0.0,
+            reverse=True,
+        ):
+            summary = data.session
             if (
-                self.repositories.canonical_directory(
-                    summary.initial_working_directory
-                )
+                self.repositories.canonical_directory(summary.working_directory)
                 != requested_directory
             ):
                 continue
@@ -67,24 +68,21 @@ class ResumableSessionService:
                 summary.title is None or search_text not in summary.title.lower()
             ):
                 continue
-            stored_events = self.canonical_events.page_through(summary.session_id, cursor).events
-            last_activity_at = max(
-                (
-                    stored.event.occurred_at
-                    if stored.event.occurred_at is not None
-                    else stored.accepted_at
-                )
-                for stored in stored_events
+            lead = next(
+                (actor for actor in data.actors if actor.actor_id == summary.lead_actor_id),
+                None,
             )
             rows.append(
                 ResumableSession(
                     session_id=summary.session_id,
                     title=summary.title,
-                    last_activity_at=last_activity_at,
+                    last_activity_at=(
+                        data.last_activity_at or summary.started_at or 0.0
+                    ),
                     active=self.terminal.state(summary.session_id).window_id is not None,
                     harness=summary.harness,
-                    model=summary.model,
-                    effort=summary.effort,
+                    model=lead.model if lead is not None else None,
+                    effort=lead.effort if lead is not None else None,
                     account=summary.account,
                 )
             )

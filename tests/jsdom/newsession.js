@@ -1,6 +1,6 @@
 // tests/jsdom/newsession.js — drives the REAL new-session form
 // (dashboard/static/app.09-newsession.js) over the shared DOM shim and prints
-// one JSON verdict object, which tests/test_l0_dash_viewmode.py asserts on.
+// one JSON verdict object, which tests/test_dashboard_dom.py asserts on.
 //
 // Why this exists: openNewSession builds the whole modal — seven field rows,
 // their cross-wiring, the draft machinery, the launch — and it is now split
@@ -99,14 +99,13 @@ const sandbox = {
   clog: (sessionId, name) => clientEvents.push({ sessionId, name }),
   toast: (kind, title) => toasts.push({ kind, title }), route: () => {},
   // the launch now arms the jump watch + tears the form down SYNCHRONOUSLY, on
-  // the click (the waiting room must not wait for the POST — docs/dashboard.md
-  // *The pending view*), so go() reaches these two other-part names before it
+  // the click, so go() reaches these two other-part names before it
   // ever posts; they were unreachable while all of that lived in the .then
   JUMP_TIMEOUT_MS: 120000, stopDictation: () => {},
   // the snapshot taken DURING the request is the point: a launch must have
   // already armed the jump watch and entered the waiting room by the time it
   // posts, since that is the only window in which the user is staring at
-  // something (docs/dashboard.md *The pending view*)
+  // something
   postJSON: (url, body) => {
     posted.push({ url, body, armed: !!sandbox.S.jump,
                   hash: sandbox.location.hash });

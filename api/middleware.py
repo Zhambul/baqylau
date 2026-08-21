@@ -12,6 +12,7 @@ from typing import Mapping
 
 from starlette.datastructures import MutableHeaders
 from starlette.middleware.gzip import GZipMiddleware
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 
 class SecurityHeaders:
@@ -33,16 +34,16 @@ class SecurityHeaders:
     handler's own decision would be a second, invisible owner of it.
     """
 
-    def __init__(self, app, headers: Mapping[str, str]) -> None:
+    def __init__(self, app: ASGIApp, headers: Mapping[str, str]) -> None:
         self.app = app
         self.headers = headers
 
-    async def __call__(self, scope, receive, send) -> None:
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
 
-        async def send_with_headers(message) -> None:
+        async def send_with_headers(message: Message) -> None:
             if message["type"] == "http.response.start":
                 headers = MutableHeaders(scope=message)
                 for name, value in self.headers.items():
@@ -58,11 +59,11 @@ class SelectiveGZip:
     the incremental frames the streams exist to deliver. An EventSource always
     sends `Accept: text/event-stream`, which is the routing fact used here."""
 
-    def __init__(self, app, minimum_size: int) -> None:
+    def __init__(self, app: ASGIApp, minimum_size: int) -> None:
         self.plain = app
         self.compressing = GZipMiddleware(app, minimum_size=minimum_size)
 
-    async def __call__(self, scope, receive, send) -> None:
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] == "http":
             headers = dict(scope.get("headers") or ())
             if b"text/event-stream" in headers.get(b"accept", b""):

@@ -5,6 +5,8 @@
 # match.py: the `ls` tree's JSON shape, the launch flags, the layout kitty
 # needs before a biased split works, the raw-socket fast paths.
 
+from typing import Any
+
 from terminal.contract import (
     TerminalInput,
     TerminalMetadata,
@@ -16,32 +18,46 @@ from terminal.contract import (
 from terminal.impl.kitty import match
 from terminal.impl.kitty.remote import TAB_COLOR_NONE, KittyRemote, current_window_id
 from terminal.models.panes import (
+    PaneCloseRequest,
     PaneCloseResponse,
+    PaneOpenRequest,
     PaneOpenResponse,
+    PaneResizeRequest,
     PaneResizeResponse,
+    WindowFocusRequest,
     WindowFocusResponse,
 )
-from terminal.models.input import KeySendResponse, TextSubmitResponse
-from terminal.models.metadata import WindowTagResponse
+from terminal.models.input import (
+    KeySendRequest,
+    KeySendResponse,
+    TextSubmitRequest,
+    TextSubmitResponse,
+)
+from terminal.models.metadata import WindowTagRequest, WindowTagResponse
 from terminal.models.tabs import (
+    TabCloseRequest,
     TabCloseResponse,
+    TabColorClearRequest,
     TabColorClearResponse,
+    TabColorSetRequest,
     TabColorSetResponse,
+    TabOpenRequest,
     TabOpenResponse,
+    TabRenameRequest,
     TabRenameResponse,
 )
-from terminal.models.values import WindowInfo
-from terminal.models.viewport import ScreenReadResponse
+from terminal.models.values import RGB, WindowInfo
+from terminal.models.viewport import ScreenReadRequest, ScreenReadResponse
 
 # The split line orientation, in kitty's launch vocabulary.
 SPLIT_LOCATIONS = {"vertical": "vsplit", "horizontal": "hsplit"}
 
 
-def _hex(color):
+def _hex(color: RGB) -> str:
     return f"#{color.red:02x}{color.green:02x}{color.blue:02x}"
 
 
-def _color_value(value):
+def _color_value(value: str) -> int | None:
     """One set-tab-color VALUE, kitten-CLI grammar → RC-payload wire form:
     "NONE" → None (JSON null), "#rrggbb" → the 24-bit RGB integer — exactly
     what the kitten client itself puts in the @kitty-cmd payload (captured
@@ -54,7 +70,7 @@ class KittyTabs(TerminalTabs):
     def __init__(self, remote: KittyRemote) -> None:
         self.remote = remote
 
-    def open_tab(self, request) -> TabOpenResponse:
+    def open_tab(self, request: TabOpenRequest) -> TabOpenResponse:
         # Deliberately NOT `--keep-focus`: when kitty is a background app (the
         # web dashboard's launch — the user is in a browser), kitty's
         # keep-focus path "restores" focus to the previous window via
@@ -79,18 +95,18 @@ class KittyTabs(TerminalTabs):
             return TabOpenResponse(False, None, "terminal launch failed")
         return TabOpenResponse(True, printed.strip() or None)
 
-    def close_tab(self, request) -> TabCloseResponse:
+    def close_tab(self, request: TabCloseRequest) -> TabCloseResponse:
         failed = self.remote.run("close-tab", "--match", match.tab_of(request.window_id))
         return TabCloseResponse(not failed, "terminal close failed" if failed else None)
 
-    def rename_tab(self, request) -> TabRenameResponse:
+    def rename_tab(self, request: TabRenameRequest) -> TabRenameResponse:
         # No raw-socket fast path, deliberately unlike set_tab_color: this is a
         # rare user action off the dashboard, not the blocking hook path.
         failed = self.remote.run("set-tab-title", "--match",
                                  match.tab_of(request.window_id), request.title)
         return TabRenameResponse(not failed, "terminal title failed" if failed else None)
 
-    def set_tab_color(self, request) -> TabColorSetResponse:
+    def set_tab_color(self, request: TabColorSetRequest) -> TabColorSetResponse:
         appearance = request.appearance
         failed = self._paint(request.window_id,
                              _hex(appearance.active_background),
@@ -99,11 +115,12 @@ class KittyTabs(TerminalTabs):
                              _hex(appearance.inactive_foreground))
         return TabColorSetResponse(not failed, "terminal tab paint failed" if failed else None)
 
-    def clear_tab_color(self, request) -> TabColorClearResponse:
+    def clear_tab_color(self, request: TabColorClearRequest) -> TabColorClearResponse:
         failed = self._paint(request.window_id, *(TAB_COLOR_NONE,) * 4)
         return TabColorClearResponse(not failed, "terminal tab clear failed" if failed else None)
 
-    def _paint(self, window_id, active_bg, active_fg, inactive_bg, inactive_fg):
+    def _paint(self, window_id: str, active_bg: str, active_fg: str,
+               inactive_bg: str, inactive_fg: str) -> int:
         """Colour the tab containing `window_id`; 0 when kitty acknowledged it.
 
         The colour goes on BOTH the active and inactive tab so a background
@@ -118,6 +135,7 @@ class KittyTabs(TerminalTabs):
         here would report paints that never landed — the stranded-colour bug
         class. Only a socket MISS (None) falls back; a definitive ok:false from
         kitty is the answer, not a reason to retry slower."""
+        colors: dict[str, int | None] | None
         try:
             colors = {"active_bg": _color_value(active_bg),
                       "active_fg": _color_value(active_fg),
@@ -137,11 +155,11 @@ class KittyTabs(TerminalTabs):
 
 
 class KittyPanes(TerminalPanes):
-    def __init__(self, remote: KittyRemote, metadata) -> None:
+    def __init__(self, remote: KittyRemote, metadata: TerminalMetadata) -> None:
         self.remote = remote
         self.metadata = metadata
 
-    def open_pane(self, request) -> PaneOpenResponse:
+    def open_pane(self, request: PaneOpenRequest) -> PaneOpenResponse:
         # A biased split only sizes correctly in the splits layout, and
         # arranging that is this layer's business. `--match window_id:`
         # re-layouts the tab holding the anchor: a daemon-origin call without
@@ -177,17 +195,17 @@ class KittyPanes(TerminalPanes):
             return PaneOpenResponse(False, None, "terminal pane launch failed")
         return PaneOpenResponse(True, printed.strip() or None)
 
-    def close_pane(self, request) -> PaneCloseResponse:
+    def close_pane(self, request: PaneCloseRequest) -> PaneCloseResponse:
         failed = self.remote.run("close-window", "--match", match.window(request.window_id))
         return PaneCloseResponse(not failed, "terminal pane close failed" if failed else None)
 
-    def resize_pane(self, request) -> PaneResizeResponse:
+    def resize_pane(self, request: PaneResizeRequest) -> PaneResizeResponse:
         failed = self.remote.run("resize-window", "--match", match.window(request.window_id),
                                  "--axis", request.axis,
                                  "--increment", str(request.cells))
         return PaneResizeResponse(not failed, "terminal pane resize failed" if failed else None)
 
-    def focus_window(self, request) -> WindowFocusResponse:
+    def focus_window(self, request: WindowFocusRequest) -> WindowFocusResponse:
         # An INNER-tab focus move: `action nth_window <i>` maps to
         # Tab.nth_window(i), and boss.combine dispatches a Tab action to the
         # MATCHED window's tab (window.tabref()), so it never touches the
@@ -205,7 +223,7 @@ class KittyPanes(TerminalPanes):
         failed = self.remote.run("action", "--match", match.tab_of(request.window_id), *action)
         return WindowFocusResponse(not failed, "terminal focus failed" if failed else None)
 
-    def _position_in_tab(self, window_id):
+    def _position_in_tab(self, window_id: str) -> int | None:
         """The window's index among its tab's windows, or None when it is gone."""
         windows = self.metadata.windows()
         tab_id = next((window.tab_id for window in windows
@@ -245,7 +263,7 @@ class KittyMetadata(TerminalMetadata):
                     ))
         return tuple(found)
 
-    def tag_window(self, request) -> WindowTagResponse:
+    def tag_window(self, request: WindowTagRequest) -> WindowTagResponse:
         assignments = [f"{name}={value}" for name, value in request.tags.items()]
         failed = self.remote.run("set-user-vars", "--match",
                                  match.window(request.window_id), *assignments)
@@ -259,12 +277,12 @@ class KittyInput(TerminalInput):
     def __init__(self, remote: KittyRemote) -> None:
         self.remote = remote
 
-    def submit_text(self, request) -> TextSubmitResponse:
+    def submit_text(self, request: TextSubmitRequest) -> TextSubmitResponse:
         delivered = self.remote.send_text(request.window_id, request.text,
                                           bracketed=request.mode == "paste")
         return TextSubmitResponse(delivered, None if delivered else "terminal input failed")
 
-    def send_key(self, request) -> KeySendResponse:
+    def send_key(self, request: KeySendRequest) -> KeySendResponse:
         # Real key EVENTS, encoded for the window's current keyboard mode
         # (send-text's raw bytes bypass the kitty keyboard protocol, so a TUI
         # never sees \x1b as Escape). rc 0 only says the call was accepted —
@@ -278,10 +296,10 @@ class KittyViewport(TerminalViewport):
     def __init__(self, remote: KittyRemote) -> None:
         self.remote = remote
 
-    def read_screen(self, request) -> ScreenReadResponse:
+    def read_screen(self, request: ScreenReadRequest) -> ScreenReadResponse:
         # Raw socket first (~0.4ms; it runs on every click-to-view toggle),
         # kitten subprocess as the fallback.
-        payload = {"match": match.window(request.window_id), "extent": "screen"}
+        payload: dict[str, Any] = {"match": match.window(request.window_id), "extent": "screen"}
         if request.ansi:
             payload["ansi"] = True
         response = self.remote.raw("get-text", payload, want_response=True)

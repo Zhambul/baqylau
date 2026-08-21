@@ -5,6 +5,8 @@ from __future__ import annotations
 import time
 
 from audit.recorder import AuditRecorder
+from domain.entries import PlanProposedBody, QuestionAskedBody
+from domain.events import PlanProposed, QuestionAsked
 from harness.contract import HarnessReactorContext
 from harness.models import (
     ControlContext,
@@ -14,7 +16,7 @@ from harness.models import (
     Interrupt,
     InterruptRegistry,
 )
-from engine.projections import SessionQueries
+from repository.contract.session_data import SessionDataRepository
 from repository.contract.sessions import SessionRepository
 from repository.contract.usage import AccountUsageRepository
 from terminal.adapter import TerminalAdapter
@@ -43,7 +45,12 @@ from terminal.contract import TerminalPlugin
 # rows, whose session lives inside the JSON — those are invisible to the obvious
 # `WHERE session_id = ?` triage query, which is how this gesture first read as
 # "no audit at all".
-def _audit_control(audit, request: ControlRequest, outcome, elapsed: float) -> None:
+def _audit_control(
+    audit: AuditRecorder,
+    request: ControlRequest,
+    outcome: ControlOutcome | None,
+    elapsed: float,
+) -> None:
     try:
         audit.state_file(
             str(request.session_id),
@@ -70,7 +77,7 @@ class HarnessControlService(HarnessReactorContext):
         sessions: SessionRepository,
         terminal: TerminalAdapter,
         plugin: TerminalPlugin,
-        queries: SessionQueries,
+        read_model: SessionDataRepository,
         account_usage: AccountUsageRepository,
         audit: AuditRecorder,
         interrupts: InterruptRegistry,
@@ -78,7 +85,7 @@ class HarnessControlService(HarnessReactorContext):
         self.sessions = sessions
         self.terminal = terminal
         self.plugin = plugin
-        self.queries = queries
+        self.read_model = read_model
         self.account_usage = account_usage
         self.audit = audit
         self.interrupts = interrupts
@@ -111,27 +118,43 @@ class HarnessControlService(HarnessReactorContext):
         plugin = session.plugin
         if plugin is None or plugin.controller is None:
             return ControlResult(request.request_id, "rejected", "unsupported control")
-        cursor = self.queries.canonical_events.latest_cursor() or 0
-        summary = self.queries.summary(request.session_id, cursor)
-        attention_id = getattr(request, "attention_id", None)
-        pending_attention = next(
-            (
-                pending.request
-                for pending in self.queries.attention(request.session_id, cursor).pending
-                if pending.request.attention_id == attention_id
-            ),
-            None,
-        )
+        # The read model, not a fold: what the session's state IS was decided
+        # when the facts arrived, and a gesture asking again would be asking a
+        # second time in a second way.
+        data = self.read_model.read(request.session_id)
+        lead = None
+        if data is not None:
+            lead = next(
+                (actor for actor in data.actors if actor.actor_id == data.session.lead_actor_id),
+                None,
+            )
         return plugin.controller.execute(
             request,
             ControlContext(
                 session=session,
                 terminal=self.plugin,
                 terminal_window_id=self.terminal.window_for_session(request.session_id),
-                current_model=summary.model if summary is not None else None,
-                current_effort=summary.effort if summary is not None else None,
-                current_account=summary.account if summary is not None else None,
-                pending_attention=pending_attention,
+                current_model=lead.model if lead is not None else None,
+                current_effort=lead.effort if lead is not None else None,
+                current_account=data.session.account if data is not None else None,
+                pending_attention=self._pending_attention(request),
                 account_usage=self.account_usage.snapshots(),
             ),
         )
+
+    def _pending_attention(self, request: ControlRequest) -> QuestionAsked | PlanProposed | None:
+        """The question or plan THIS gesture is answering, if it is still open.
+
+        A gesture names the attention it answers; anything else pending is
+        somebody else's, and answering the wrong dialog is worse than declining.
+        """
+        attention_id = getattr(request, "attention_id", None)
+        if attention_id is None:
+            return None
+        for entry in self.read_model.pending_attention(request.session_id):
+            body = entry.body
+            if isinstance(body, QuestionAskedBody) and body.attention_id == attention_id:
+                return QuestionAsked(body.attention_id, body.questions)
+            if isinstance(body, PlanProposedBody) and body.attention_id == attention_id:
+                return PlanProposed(body.attention_id, body.plan)
+        return None

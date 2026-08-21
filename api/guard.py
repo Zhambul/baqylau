@@ -14,6 +14,8 @@
 #
 # There is deliberately NO CORS middleware anywhere in api/: never answering a
 # preflight is part of the defense.
+from collections.abc import Callable, Mapping
+
 from fastapi import HTTPException, Request
 
 from app.providers import Recorder
@@ -35,7 +37,7 @@ def reject(audit: AuditRecorder, request: Request, code: int, why: str) -> HTTPE
     return HTTPException(code, why)
 
 
-def control_plane(maximum_bytes: int = POST_MAX):
+def control_plane(maximum_bytes: int = POST_MAX) -> Callable[[Request, Settings, AuditRecorder], None]:
     """The guard for one route, parameterized by its body cap. Use as
     `Depends(control_plane())`; the upload and hook-delivery routes pass their
     own caps. Runs before the body is parsed, so a rejected request costs no
@@ -78,7 +80,9 @@ def control_plane(maximum_bytes: int = POST_MAX):
     return guard
 
 
-def reject_input(audit: AuditRecorder, action, why, message, detail, code=400, log="", path=""):
+def reject_input(audit: AuditRecorder, action: str, why: str, message: str,
+                 detail: Mapping[str, object], code: int = 400,
+                 log: str = "", path: str = "") -> HTTPException:
     """Audit and reject malformed application input (the file routes' audited
     400s — a `state_files` row first, then the HTTP error)."""
     audit.state_file(log, path, action,
@@ -87,5 +91,5 @@ def reject_input(audit: AuditRecorder, action, why, message, detail, code=400, l
     return HTTPException(code, message)
 
 
-def valid_session_id(policy: Settings, value) -> bool:
+def valid_session_id(policy: Settings, value: str | None) -> bool:
     return bool(policy.session_id_pattern.match(value or ""))

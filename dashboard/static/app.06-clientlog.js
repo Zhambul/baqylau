@@ -15,11 +15,9 @@
 // audit module called back into the session module, none of the six functions
 // was session code (`pendingCard` is used only by the dialogs, `clientFail` by
 // four other files), and the file names lied about where the concern lived.
-//
-// docs/dashboard.md *Frontend audit (clientlog)*.
 
 // The frontend audit channel writes typed browser events through the application API.
-// rows, docs/dashboard.md *Frontend audit (clientlog)*). The server can only ever
+// rows). The server can only ever
 // see a control POST that ACTUALLY ARRIVED; a request the browser tried but that
 // never reached the handler (dropped by the tunnel, starved of a connection, queued
 // forever) is invisible server-side — the entire class of "still not closing" bugs
@@ -65,7 +63,7 @@ function flushClog() {
     const batch = CLOG.splice(0, CLOG.length);
     // `device` (the stable per-DEVICE id) rides every batch so ANY frontend
     // audit row is attributable to a device — the frontend side of the
-    // notification device-routing evidence (docs/dashboard.md *Device routing*).
+    // notification device-routing evidence.
     const payload = { client_id: CLIENT_ID, device_id: DEVICE_ID,
                       connection: connInfo(),
                       events: batch };
@@ -108,9 +106,7 @@ function sseMark(label, up, extra) {
 const STALE_HINT_MS = 20000;
 
 // Low-level optimistic-action audit beacon: ONE lifecycle transition of a
-// client action whose REAL confirmation arrives async over SSE (op = composer
-// bubble | close | answer | plan — docs/dashboard.md, *Optimistic UI & the
-// web-hint audit*). A stuck greyed state is invisible server-side without this.
+// client action whose REAL confirmation arrives async over SSE. A stuck greyed state is invisible server-side without this.
 // Best-effort, never surfaces to the user.
 function optAudit(sessionId, action, phase, t0, extra) {
   if (!sessionId) return;
@@ -162,7 +158,7 @@ function optPending(sessionId, action, id, note) {
 // each gesture's outcome BEFORE its HTTP response returns, so a lost response
 // (server restart, tunnel reset, dropped connection) rejects the fetch and
 // toasts a failure even when the send SUCCEEDED — invisible to the audit
-// otherwise (docs/dashboard.md, *Client-observed send failures*). `err` is a
+// otherwise. `err` is a
 // postJSON rejection: an HTTP-error body ({error}) → kind "http"; a raw
 // fetch TypeError (no .error) → kind "transport" (the audit-blind case). The
 // beacon rides the same tunnel that may have failed, so it's strictly
@@ -177,6 +173,24 @@ function clientFail(sessionId, gesture, err, chars) {
   postJSON("/api/sessions/" + encodeURIComponent(sessionId)
            + "/application/client-failures", body)
     .catch(() => {});   // a telemetry beacon must never surface to the user
+}
+
+// The ONE way a client-side failure is reported: in the console, in the audit
+// (clog), and on screen (toast). Never a silent recovery — a fallback hides
+// the real problem. The stream's "unknown row → re-read the whole list"
+// fallback hid a broken wire shape for weeks; this helper exists so no code
+// path is ever tempted to do that again. The toast is deduplicated per code
+// (one per 30 s) so a failing save inside a keystroke debounce cannot flood
+// the screen, while every occurrence still lands in the console and the audit.
+const _loudToastAt = Object.create(null);
+function failLoudly(sessionId, code, detail) {
+  console.error("[baqylau] " + code, detail || {});
+  clog(sessionId || "", code, detail || {});
+  const now = Date.now();
+  if (!_loudToastAt[code] || now - _loudToastAt[code] > 30000) {
+    _loudToastAt[code] = now;
+    toast("ask", code, String((detail && (detail.error || detail.msg)) || "").slice(0, 120));
+  }
 }
 
 // A snapshot of the page's connection health, stamped on every clog batch — the

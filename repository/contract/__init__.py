@@ -15,7 +15,7 @@ from repository.contract.facts import (
     RawEventRepository,
     RawEventAuditRepository,
 )
-from repository.contract.operations import OperationOutputRepository
+from repository.contract.shell_output import ShellOutputRepository
 from repository.contract.preferences import (
     HiddenDirectoryRepository,
     NewSessionRepository,
@@ -26,7 +26,7 @@ from repository.contract.preferences import (
     ViewModeRepository,
 )
 from repository.contract.sessions import SessionRepository
-from repository.contract.terminal import ContentViewRepository, PaneWidthRepository
+from repository.contract.terminal import PaneWidthRepository
 from repository.contract.titles import NativeSessionTitleRepository
 from repository.contract.uploads import UploadRepository
 from repository.contract.usage import AccountUsageRepository
@@ -35,14 +35,13 @@ from repository.contract.workspace import SessionWorkspaceRepository
 __all__ = [
     "AccountUsageRepository",
     "CanonicalEventRepository",
-    "ContentViewRepository",
     "AuditReadRepository",
     "AuditWriteRepository",
     "HiddenDirectoryRepository",
     "NativeSessionTitleRepository",
     "NewSessionRepository",
     "NotificationSettingRepository",
-    "OperationOutputRepository",
+    "ShellOutputRepository",
     "PaneWidthRepository",
     "PushSigningKeyRepository",
     "PushSubscriptionRepository",

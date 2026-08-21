@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from core.process import nearest_ancestor_named
+from harness.contract import HarnessPlugin
 from harness.models import HarnessHookRequest
 from harness.registry import HarnessRegistry, HarnessRegistryError
 from repository.contract.facts import RawEventRepository
@@ -42,7 +43,7 @@ class HookGatewayService:
         return response.reply
 
     @staticmethod
-    def _with_harness_process(plugin, request: HarnessHookRequest) -> HarnessHookRequest:
+    def _with_harness_process(plugin: HarnessPlugin, request: HarnessHookRequest) -> HarnessHookRequest:
         """The CLI pid, from the client's own pid and the plugin's process name.
 
         Walked HERE rather than in the hook process: it costs a `ps` per

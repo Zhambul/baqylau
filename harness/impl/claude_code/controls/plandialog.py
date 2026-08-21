@@ -1,5 +1,5 @@
 # harness/impl/claude_code/controls/plandialog.py — drive Claude Code's ExitPlanMode plan-approval
-# dialog from the web (docs/dashboard.md, *Web plan mode*). Third sibling of
+# dialog from the web. Third sibling of
 # rewindmenu.py / askdialog.py: the pending plan is known from the PreToolUse
 # stash (harness/impl/claude_code/ask_fmt.py, kv `plan-pending`), but the dialog's
 # OPTION LABELS are not — they vary with the session's permission mode ("Yes,

@@ -6,7 +6,7 @@
 # Empirical dialog facts this encodes. The KEY MODEL was re-measured live for
 # v2.1.215 (2026-07-19) — Claude Code overhauled the dialog and the old
 # digit-driven model (v2.1.214) broke every web answer with "question N never
-# became current"; the full before/after experiment log is in docs/dashboard.md:
+# became current". What that overhaul changed, measured before and after:
 #   - anatomy: a header-chip bar (`←  ☐ Pets  ☒ Drink  ✔ Submit  →`, one chip
 #     per question keyed off the `header` field; ☒ once answered), the current
 #     question's text, numbered option rows (`❯ 1. Apple`; multiSelect adds a
@@ -31,6 +31,7 @@
 #     appears after the last question unless the ask was a single
 #     single-select question.
 import re
+from typing import Any, TypedDict
 
 FOOT = "Enter to select"                 # question-pane open detector
 REVIEW = "Review your answers"           # review-pane detector
@@ -55,7 +56,16 @@ _ACTION_ROW = re.compile(r"^\s*(?P<cur>❯\s+)?"
                          r"(?P<label>Next|Submit|Chat about this)\s*$")
 
 
-def region(screen):
+class Row(TypedDict):
+    """One cursor-navigable dialog row as parsed off the screen (see rows())."""
+
+    digit: str
+    label: str
+    cursor: bool
+    check: bool | None
+
+
+def region(screen: str) -> str:
     """The dialog region: from the LAST header-chip bar (the only ☐/☒ on a
     terminal screen) to the end. "" when no dialog is on screen.
 
@@ -84,15 +94,15 @@ def region(screen):
     return ""
 
 
-def dialog_open(screen):
+def dialog_open(screen: str) -> bool:
     return FOOT in region(screen)
 
 
-def review_open(screen):
+def review_open(screen: str) -> bool:
     return REVIEW in region(screen)
 
 
-def rows(screen):
+def rows(screen: str) -> list[Row]:
     """Every CURSOR-NAVIGABLE row of the question pane, in screen order:
     [{digit, label, cursor, check(None|bool)}]. Numbered option/Type/Chat rows
     (their preview side-box, if any, is stripped from the label) plus the
@@ -100,7 +110,7 @@ def rows(screen):
     side-by-side layout's un-numbered "Chat about this" — carry digit "".
     Indented description lines and the "Notes: press n" hint don't match, so
     they drop out (they are not cursor stops)."""
-    out = []
+    out: list[Row] = []
     for ln in region(screen).splitlines():
         m = _ROW.match(ln)
         if m:
@@ -117,7 +127,7 @@ def rows(screen):
     return out
 
 
-def current_question(screen, questions):
+def current_question(screen: str, questions: list[dict[str, Any]]) -> int | None:
     """Which of the ask's questions the dialog currently shows, or None.
     Long question text WRAPS across screen lines (a 555-char question never
     matched the old exact line-set lookup — the live `question 1 never
@@ -135,7 +145,8 @@ def current_question(screen, questions):
     # contains j's text — which contains i's — and a first-match scan would
     # wrongly return i, so `drive`'s wait for j never resolves. The most
     # specific (longest) matching question is the one actually displayed.
-    best, best_len = None, -1
+    best: int | None = None
+    best_len = -1
     for i, q in enumerate(questions):
         text = "".join((q.get("question") or "").split())
         if text and text in flat and len(text) > best_len:
@@ -143,5 +154,5 @@ def current_question(screen, questions):
     return best
 
 
-def cursor_row(screen):
+def cursor_row(screen: str) -> Row | None:
     return next((r for r in rows(screen) if r["cursor"]), None)

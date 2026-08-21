@@ -8,8 +8,8 @@ import json
 import os
 from dataclasses import dataclass
 
-from domain.events import OperationOutputLocated
-from domain.ids import OperationId
+from domain.events import ShellOutputLocated
+from domain.ids import ShellId
 from harness.impl.claude_code import shell
 
 CHUNK_SOURCE_TYPE = "foreground_output"
@@ -24,7 +24,7 @@ BACKGROUND_OUTPUT_ROOT = "/tmp"
 @dataclass(frozen=True)
 class PreparedForegroundCommand:
     reply: bytes
-    located: OperationOutputLocated
+    located: ShellOutputLocated
 
 
 def _safe_identity(value: str) -> str:
@@ -43,8 +43,8 @@ def _directory(session_id: str) -> str:
     )
 
 
-def _tee_path(session_id: str, operation_id: str) -> str:
-    return os.path.join(_directory(session_id), _safe_identity(operation_id)) + ".out"
+def _tee_path(session_id: str, shell_id: str) -> str:
+    return os.path.join(_directory(session_id), _safe_identity(shell_id)) + ".out"
 
 
 def _updated_input(tool_input: dict, command: str) -> bytes:
@@ -66,23 +66,23 @@ def _updated_input(tool_input: dict, command: str) -> bytes:
     ).encode("utf-8")
 
 
-def background_output(document: dict) -> OperationOutputLocated | None:
+def background_output(document: dict) -> ShellOutputLocated | None:
     """The output location of a background command's native output file.
 
     Background commands are not rewritten (Claude Code redirects their output
     itself), so the location becomes known at the PostToolUse that reports the
     task id. The native file is Claude Code's — never deleted by us — and the
     following ends with the session (or the lifetime cap), never with the
-    operation, whose launch reports "finished" while output keeps flowing.
+    command, whose launch reports "finished" while output keeps flowing.
     """
     tool_input = document.get("tool_input") or {}
     if not tool_input.get("run_in_background"):
         return None
-    operation_id = str(document.get("tool_use_id") or "")
+    shell_id = str(document.get("tool_use_id") or "")
     session_id = str(document.get("session_id") or "")
     response = document.get("tool_response")
     task_id = str(response.get("backgroundTaskId") or "") if isinstance(response, dict) else ""
-    if not operation_id or not session_id or not task_id:
+    if not shell_id or not session_id or not task_id:
         return None
     pattern = os.path.join(
         BACKGROUND_OUTPUT_ROOT, "claude-*", "*", session_id, "tasks", f"{task_id}.output"
@@ -90,8 +90,8 @@ def background_output(document: dict) -> OperationOutputLocated | None:
     matches = sorted(glob.glob(pattern))
     if not matches:
         return None
-    return OperationOutputLocated(
-        operation_id=OperationId(operation_id),
+    return ShellOutputLocated(
+        shell_id=ShellId(shell_id),
         source_path=os.path.realpath(matches[0]),
         chunk_source_type=CHUNK_SOURCE_TYPE,
         delete_source=False,
@@ -115,13 +115,13 @@ def prepare(document: dict) -> PreparedForegroundCommand | None:
     if not command.strip() or tool_input.get("run_in_background"):
         return None
     session_id = str(document.get("session_id") or "")
-    operation_id = str(document.get("tool_use_id") or "")
-    if not session_id or not operation_id:
-        raise ValueError("Claude Code foreground command has no session or operation id")
+    shell_id = str(document.get("tool_use_id") or "")
+    if not session_id or not shell_id:
+        raise ValueError("Claude Code foreground command has no session or command id")
 
     redirect = shell.redirected_output(command, document.get("cwd"))
     if redirect is None:
-        source_path = _tee_path(session_id, operation_id)
+        source_path = _tee_path(session_id, shell_id)
         os.makedirs(os.path.dirname(source_path), mode=0o700, exist_ok=True)
         descriptor = os.open(
             source_path,
@@ -149,14 +149,14 @@ def prepare(document: dict) -> PreparedForegroundCommand | None:
 
     return PreparedForegroundCommand(
         _updated_input(tool_input, wrapped_command),
-        OperationOutputLocated(
-            operation_id=OperationId(operation_id),
+        ShellOutputLocated(
+            shell_id=ShellId(shell_id),
             source_path=source_path,
             chunk_source_type=CHUNK_SOURCE_TYPE,
             delete_source=delete_source,
             initial_size=initial_size,
             initial_modified_at=initial_modified_at,
             wait_for_source_change=wait_for_source_change,
-            until="operation_finished",
+            until="shell_finished",
         ),
     )

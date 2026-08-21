@@ -1,5 +1,5 @@
 # notify/channels/webpush.py — the Web Push channel, whole: the transport
-# and the alert it carries (docs/dashboard.md, *Web push*).
+# and the alert it carries.
 #
 # The ON-DEVICE analog of the deferred Telegram alert: an installed iOS
 # home-screen web app (or a desktop Chrome/Firefox page) can receive a real
@@ -18,6 +18,8 @@
 # path. The VAPID keypair is generated ONCE and persisted in the durable
 # store (keyed `vapid-keypair`), so every browser stays subscribed to the same
 # application-server key across restarts.
+from __future__ import annotations
+
 import base64
 import json
 import os
@@ -25,6 +27,7 @@ import struct
 import time
 import urllib.error
 import urllib.request
+from typing import Any
 from urllib.parse import urlparse
 
 import threading
@@ -33,6 +36,11 @@ from audit import record as A
 from dashboard import config
 from domain.preferences import PushSigningKeypair
 from notify.channels.alert import NOTHING, OK, alert_text, push_tag
+from notify.presence import RoutedSubscription
+from repository.contract.preferences import (
+    PushSigningKeyRepository,
+    PushSubscriptionRepository,
+)
 
 
 try:                                   # cryptography is the ONE hard dependency;
@@ -58,36 +66,40 @@ TOKEN_LIFETIME_SECONDS = 12 * 3600                  # VAPID token lifetime (Appl
 RECORD_SIZE = 4096                     # aes128gcm record size (rs) — our payloads are tiny
 
 
-def enabled():
+def enabled() -> bool:
     """Whether Web Push can be sent at all (the crypto backend is importable).
     False makes the whole feature invisible: `/api/push/config` reports it off
     and the Notifier never tries to send."""
     return _HAVE_CRYPTO
 
 
-def _b64u(b):
+def _b64u(b: bytes) -> str:
     """base64url without padding (the JOSE / RFC 8291 wire form)."""
     return base64.urlsafe_b64encode(b).rstrip(b"=").decode("ascii")
 
 
-def _b64u_dec(s):
+def _b64u_dec(s: str) -> bytes:
     """Decode pad-stripped base64url (a subscription's p256dh/auth keys)."""
     s = s + "=" * (-len(s) % 4)
     return base64.urlsafe_b64decode(s.encode("ascii"))
 
 
-def _load_keypair(keys):
+def _load_keypair(
+    keys: PushSigningKeyRepository | None,
+) -> tuple[ec.EllipticCurvePrivateKey | None, str | None]:
     """The persisted VAPID keypair as (private_key_obj, public_b64u), generated
     and stored on first use. One P-256 keypair per machine, stable across
     restarts so already-subscribed browsers keep matching — a rotated key would
     silently orphan every existing subscription. Returns (None, None) if crypto
     is unavailable / the store is unwritable (feature degrades off)."""
-    if not _HAVE_CRYPTO:
+    if not _HAVE_CRYPTO or keys is None:
         return None, None
     stored = keys.keypair()
     if stored is not None:
         try:
             priv = load_pem_private_key(stored.private_key_pem.encode("ascii"), password=None)
+            if not isinstance(priv, ec.EllipticCurvePrivateKey):
+                raise TypeError("stored key is not an EC private key")
             return priv, stored.public_key
         except Exception:
             # Corrupt stored record — regenerate below, but NOT silently: the
@@ -110,14 +122,14 @@ def _load_keypair(keys):
         return None, None
 
 
-def public_key(keys):
+def public_key(keys: PushSigningKeyRepository) -> str:
     """The VAPID public key (base64url uncompressed point) the browser passes as
     `applicationServerKey` when it subscribes — '' when the feature is off."""
     _, pub = _load_keypair(keys)
     return pub or ""
 
 
-def _vapid_header(endpoint, keys):
+def _vapid_header(endpoint: str, keys: PushSigningKeyRepository | None) -> str | None:
     """The `Authorization: vapid t=<jwt>, k=<pubkey>` header proving this server
     is the application server the subscription trusts (RFC 8292). The JWT's
     `aud` is the push service ORIGIN (scheme://host of the endpoint), signed
@@ -141,7 +153,7 @@ def _vapid_header(endpoint, keys):
     return "vapid t=%s, k=%s" % (token, pub)
 
 
-def _encrypt(payload, p256dh_b64u, auth_b64u):
+def _encrypt(payload: bytes, p256dh_b64u: str, auth_b64u: str) -> bytes:
     """Encrypt `payload` (bytes) for a subscription under the aes128gcm content
     encoding (RFC 8188) with the ECDH key agreement of RFC 8291. Returns the
     full message body (its own header carries the salt + our ephemeral public
@@ -178,11 +190,14 @@ class Result:
     (audited, kept — the push service may just be transiently unhappy)."""
     __slots__ = ("ok", "gone", "status", "error")
 
-    def __init__(self, ok=False, gone=False, status=0, error=""):
+    def __init__(self, ok: bool = False, gone: bool = False, status: int = 0,
+                 error: str = "") -> None:
         self.ok, self.gone, self.status, self.error = ok, gone, status, error
 
 
-def deliver(subscription, payload, keys, ttl=DELIVERY_LIFETIME_SECONDS):
+def deliver(subscription: RoutedSubscription, payload: dict[str, object],
+            keys: PushSigningKeyRepository | None,
+            ttl: int = DELIVERY_LIFETIME_SECONDS) -> Result:
     """Deliver `payload` (a dict, JSON-encoded) to one `subscription` (its wire
     JSON: {endpoint, keys:{p256dh, auth}}). Never raises — returns a Result.
     Synchronous network I/O, so callers run it OFF the watcher thread."""
@@ -190,7 +205,7 @@ def deliver(subscription, payload, keys, ttl=DELIVERY_LIFETIME_SECONDS):
         return Result(error="no crypto")
     try:
         endpoint = subscription["endpoint"]
-        subscription_keys = subscription.get("keys") or {}
+        subscription_keys = subscription["keys"]
         body = _encrypt(json.dumps(payload, ensure_ascii=False).encode("utf-8"),
                         subscription_keys["p256dh"], subscription_keys["auth"])
         auth = _vapid_header(endpoint, keys)
@@ -231,12 +246,13 @@ def deliver(subscription, payload, keys, ttl=DELIVERY_LIFETIME_SECONDS):
 
 # ------------------------------------------------ the alert this channel carries
 
-def send_alert(entry, subs, badge=0, *, keys=None, subscriptions=None):
+def send_alert(entry: dict[str, str], subs: list[RoutedSubscription], badge: int = 0, *,
+               keys: PushSigningKeyRepository | None = None,
+               subscriptions: PushSubscriptionRepository | None = None) -> dict[str, Any] | None:
     """Send the on-device alert as a Web Push to `subs` — the subscriptions of
     the ONE device the caller routed to (`presence.route`), NOT every
     subscription, so a session going done/asking buzzes the device you're
-    working on, not your iPad and Mac at once (docs/dashboard.md, *Web push* /
-    *Presence routing*). Dispatched on a detached daemon thread: the crypto +
+    working on, not your iPad and Mac at once. Dispatched on a detached daemon thread: the crypto +
     network round-trips must never stall the 1 s watcher. Best-effort + audited;
     a subscription the push service reports GONE (404/410) is pruned. No-op when
     the crypto backend is missing or `subs` is empty.
@@ -253,8 +269,8 @@ def send_alert(entry, subs, badge=0, *, keys=None, subscriptions=None):
         return None
     session_id = entry.get("session_id") or ""
     title, body, url = alert_text(entry)
-    payload = {"title": title, "body": body, "session_id": session_id,
-               "kind": entry.get("kind"), "url": url, "badge": badge}
+    payload: dict[str, object] = {"title": title, "body": body, "session_id": session_id,
+                                  "kind": entry.get("kind"), "url": url, "badge": badge}
     threading.Thread(target=_webpush_fanout,
                      args=(subs, payload, "send", keys, subscriptions),
                      daemon=True).start()
@@ -265,7 +281,9 @@ def send_alert(entry, subs, badge=0, *, keys=None, subscriptions=None):
             "subs": subs, "tag": push_tag(session_id)}
 
 
-def _webpush_fanout(subs, payload, action, keys, subscriptions):
+def _webpush_fanout(subs: list[RoutedSubscription], payload: dict[str, object], action: str,
+                    keys: PushSigningKeyRepository | None,
+                    subscriptions: PushSubscriptionRepository | None) -> None:
     """The detached fan-out body, shared by the alert and its retraction:
     deliver `payload` to each subscription, audit the outcome (with the target
     `device` — the on-device analog of the route decision), and prune the dead
@@ -279,7 +297,7 @@ def _webpush_fanout(subs, payload, action, keys, subscriptions):
             continue
         ep = sub.get("endpoint", "") if isinstance(sub, dict) else ""
         dev = sub.get("device") if isinstance(sub, dict) else None
-        if res.gone:
+        if res.gone and subscriptions is not None:
             subscriptions.remove(ep)
         A.state_file("", "", "web-push",
                      {"session_id": payload.get("session_id"), "kind": payload.get("kind"),
@@ -290,7 +308,9 @@ def _webpush_fanout(subs, payload, action, keys, subscriptions):
                       "device": dev, "endpoint": ep[:80]})
 
 
-def retract_alert(h, reason, badge=0, *, keys=None, subscriptions=None):
+def retract_alert(h: dict[str, Any], reason: str, badge: int = 0, *,
+                  keys: PushSigningKeyRepository | None = None,
+                  subscriptions: PushSubscriptionRepository | None = None) -> str:
     """Close the delivered banner by pushing a RESOLVE message to the same
     subscriptions; sw.js closes everything under the tag and shows nothing.
 
@@ -309,8 +329,8 @@ def retract_alert(h, reason, badge=0, *, keys=None, subscriptions=None):
     subs = h.get("subs") or []
     if not subs:
         return NOTHING
-    payload = {"type": "resolve", "session_id": h.get("session_id") or "",
-               "kind": h.get("kind"), "tag": h.get("tag"), "badge": badge}
+    payload: dict[str, object] = {"type": "resolve", "session_id": h.get("session_id") or "",
+                                  "kind": h.get("kind"), "tag": h.get("tag"), "badge": badge}
     threading.Thread(target=_webpush_fanout,
                      args=(subs, payload, "resolve", keys, subscriptions),
                      daemon=True).start()

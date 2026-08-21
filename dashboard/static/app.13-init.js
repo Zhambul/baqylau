@@ -84,9 +84,14 @@ initWakeBtn();   // ☀ keep-screen-awake toggle (installed-app polish)
 // shows an EMPTY picker rather than a fabricated default host — a launch that
 // names no tool is routed to the server's own default anyway.
 loadCanonicalHosts().catch(() => {});
-// The global application stream seeds sessions, usage, notifications, launch
-// preferences, drafts, hidden directories, and limits in one complete snapshot.
+// Two reads and one stream: `GET /sessionData` for the rows, `GET
+// /api/application` for what the page itself owns, and `/sessionData/stream` for
+// whatever changes afterwards.
 connectGlobal();
+// The two read-time fields — is a session attended, what does git say — are only
+// true when they were measured, so they are re-read when you come back to the
+// tab rather than polled while you are away.
+refreshWhenVisible();
 // A deep link from a Telegram/off-device notification lands as ?s=<sessionId> (a
 // query param, NOT a #fragment — Telegram's auto-linker drops the fragment, so
 // the sessionId must ride the query). Translate it into the hash route the router
@@ -113,7 +118,7 @@ setInterval(() => { if (!S.currentSessionId) renderList(true); }, LIST_REFRESH_M
 // --- presence heartbeat -------------------------------------------------------
 // Tell the server, while the page is VISIBLE + FOCUSED, (a) that THIS DEVICE is
 // in use right now (its stable DEVICE_ID), so the on-device notification routes
-// to the device you most recently used (docs/dashboard.md *Device routing*),
+// to the device you most recently used,
 // and (b) if you're inside a session, that you're LOOKING at it (S.currentSessionId), so the
 // deferred alert suppresses while you watch — the web analog of the terminal tab
 // being frontmost (*Telegram alerts*). Both ride ONE beat to /api/presence.
@@ -134,7 +139,7 @@ function presenceBeat() {
 // the gates above are instant, so from the moment you click into another app
 // this page stops toasting while the server keeps suppressing the off-device
 // push for up to a full TTL. That window swallowed alerts through no channel at
-// all (docs/dashboard.md *Presence ends when the page says so*). Only the page
+// all. Only the page
 // knows when it ended, so it reports it: blur and hide, best-effort, and a
 // `focus` beat is already wired below to re-establish presence at once.
 function presenceAway() {

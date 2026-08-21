@@ -35,16 +35,6 @@ class UnknownReference(ApplicationInputError, LookupError):
     """
 
 
-class MalformedRequest(ApplicationInputError, ValueError):
-    """The request is not well-formed enough to act on.
-
-    Not a schema rejection — pydantic answers those before a route runs
-    (api/app.py `_validation_error`). This is the part of well-formedness only
-    the application can judge: a content reference that is not `<event>:<field>`,
-    a view asked for without the path it needs.
-    """
-
-
 class UnsupportedRequest(ApplicationInputError, TypeError):
     """Well-formed, and the target exists — but it cannot be served this way.
 

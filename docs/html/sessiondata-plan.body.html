@@ -1,0 +1,1149 @@
+<!--doc
+title: SessionData: the push-based read model
+eyebrow: Design plan
+lede: One aggregate entity, one immutable feed served straight from the canonical log, one unified API for both frontends — and the full list of changes that gets us there.
+meta: Author: Claude, Updated: 2026-08-20, Scope: domain, harness, engine, repository, api, dashboard, terminal, client
+toc: yes
+width: wide
+-->
+
+<h2>Why this redesign</h2>
+
+<p>The current read path computes everything per request. Every dashboard tick folds the
+whole session's canonical events through <code>activities_of</code>
+(<code>engine/projections/activity.py</code>), then two presenters turn the result into
+pre-escaped HTML (<code>dashboard/render/</code>) and ANSI frames
+(<code>terminal/mirror/presenter.py</code>). The measurement in
+<code>docs/html/after-the-event.html</code> put one session-stream tick at 97.7&nbsp;ms
+against a 250&nbsp;ms budget on the largest session.</p>
+
+<div class="grid cols-3">
+  <div class="card stat danger"><span class="stat-value">97.7 ms</span><span class="stat-label">per session-stream tick today (largest session)</span></div>
+  <div class="card stat accent"><span class="stat-value">42,272</span><span class="stat-label">canonical events in the live store, 52 sessions</span></div>
+  <div class="card stat ok"><span class="stat-value">17 → 5</span><span class="stat-label">GET routes after the redesign</span></div>
+</div>
+
+<p>The redesign replaces the pull-based fold-per-request model with:</p>
+
+<ul>
+  <li><b>SessionData</b> — one small aggregate per session (state, actors, usage, context,
+    statistics, goal, tasks), written at event time by a reactor, read in one indexed query.</li>
+  <li><b>Entries</b> — the session feed, materialized at push time into its own table by the
+    same writer pipeline. Immutable, append-only, typed. The API reads only the read model,
+    never the canonical log.</li>
+  <li><b>Client-side rendering</b> — the daemon serves data only. The browser paints HTML,
+    the kitty client paints ANSI. <code>dashboard/render/</code> and
+    <code>terminal/mirror/</code> are deleted.</li>
+</ul>
+
+<div class="callout key">
+  <div class="callout-icon" aria-hidden="true">◆</div>
+  <div class="callout-body"><span class="callout-label">Key point:</span>
+    Everything the frontends see is materialized at push time: the writer pipeline turns
+    each canonical event into aggregate updates and, where the event is feed-worthy, one
+    immutable entry row. The API layer reads exactly two things — <code>session_data</code>
+    and <code>session_entries</code> — and never opens the canonical log. Canonical events
+    become internal evidence: the audit trail and the replay source.</div>
+</div>
+
+<div class="callout warn">
+  <div class="callout-icon" aria-hidden="true">▲</div>
+  <div class="callout-body"><span class="callout-label">Caution:</span>
+    <b>Backward compatibility is not a concern.</b> This is a decided constraint of the
+    project, not an open question. No old API route survives for old clients, no old event
+    row is migrated, no migration is written, and no dual-format period exists.
+    <code>MAIN_SCHEMA_VERSION</code> bumps to 4 with <b>no</b> <code>MAIN_MIGRATIONS</code>
+    entry; the deploy step deletes <code>&lt;data_dir&gt;/main.db</code> and the fresh DDL
+    creates everything. All history is discarded.</div>
+</div>
+
+<h2>Target architecture</h2>
+
+<figure class="diagram">
+  <svg viewBox="0 0 860 380" role="img" aria-labelledby="arch-title arch-desc">
+    <title id="arch-title">The write path and the read path after the redesign</title>
+    <desc id="arch-desc">Raw events flow through the interpreter into the canonical event
+      store; the interpreter does nothing else. A separate reaction loop follows the
+      canonical cursor and runs the side-effect reactions in order, ending with the writers that
+      materialize the read model: the session_data aggregate tables and the immutable
+      session_entries feed table. The API layer reads only the read model and serves it to
+      the browser dashboard and the kitty client over JSON and SSE. The canonical store
+      stays internal, as evidence and replay source.</desc>
+
+    <!-- row 0: ingestion -->
+    <rect class="n" x="20" y="20" width="160" height="54" rx="8"/>
+    <text class="t" x="100" y="41">Raw events</text>
+    <text class="t sub" x="100" y="58">harness JSONL</text>
+
+    <rect class="n accent" x="240" y="20" width="160" height="54" rx="8"/>
+    <text class="t" x="320" y="41">Interpreter</text>
+    <text class="t sub" x="320" y="58">translate, 0.25 s tick</text>
+
+    <rect class="n" x="460" y="20" width="160" height="54" rx="8"/>
+    <text class="t" x="540" y="41">canonical_events</text>
+    <text class="t sub" x="540" y="58">evidence + replay</text>
+
+    <!-- row 1: the aggregate write path -->
+    <rect class="n accent" x="240" y="114" width="160" height="54" rx="8"/>
+    <text class="t" x="320" y="135">Reaction loop</text>
+    <text class="t sub" x="320" y="152">follows the cursor</text>
+
+    <rect class="n" x="460" y="114" width="160" height="54" rx="8"/>
+    <text class="t" x="540" y="135">All reactions</text>
+    <text class="t sub" x="540" y="152">writers run last</text>
+
+    <rect class="n" x="680" y="114" width="160" height="54" rx="8"/>
+    <text class="t" x="760" y="135">Read model</text>
+    <text class="t sub" x="760" y="152">session_data + entries</text>
+
+    <!-- row 2: read path -->
+    <rect class="n accent" x="460" y="208" width="160" height="54" rx="8"/>
+    <text class="t" x="540" y="229">api/sessiondata</text>
+    <text class="t sub" x="540" y="246">3 GET + 2 SSE</text>
+
+    <rect class="n ok" x="680" y="208" width="160" height="54" rx="8"/>
+    <text class="t" x="760" y="229">Browser</text>
+    <text class="t sub" x="760" y="246">renders HTML</text>
+
+    <rect class="n ok" x="680" y="302" width="160" height="54" rx="8"/>
+    <text class="t" x="760" y="323">Kitty client</text>
+    <text class="t sub" x="760" y="340">renders ANSI</text>
+
+    <!-- edges -->
+    <path class="e" d="M180,47 H236"/>
+    <path class="e" d="M400,47 H456"/>
+    <path class="e" d="M500,74 V94 H320 V110"/>
+    <path class="e" d="M400,141 H456"/>
+    <path class="e accent" d="M620,141 H676"/>
+    <path class="e accent" d="M760,168 V186 H600 V204"/>
+    <path class="e ok" d="M620,235 H676"/>
+    <path class="e ok" d="M540,262 V329 H676"/>
+
+    <rect class="el-bg" x="586" y="126" width="84" height="16" rx="4"/>
+    <text class="el" x="628" y="135">materialize</text>
+    <rect class="el-bg" x="362" y="86" width="80" height="16" rx="4"/>
+    <text class="el" x="402" y="95">cursor poll</text>
+    <rect class="el-bg" x="622" y="270" width="90" height="16" rx="4"/>
+    <text class="el" x="667" y="279">JSON + SSE</text>
+  </svg>
+  <figcaption>One write pipeline materializes the whole read model. The API reads
+    <code>session_data</code> and <code>session_entries</code> only; the canonical store
+    stays internal.</figcaption>
+</figure>
+
+<p>The interpreter loop (<code>engine/interpret/loop.py</code>) keeps translation and its
+two <b>translation inputs</b>, and sheds everything else. <code>SessionUpsert</code> and
+the shell-output following are not reactions — the pull phase reads the rows they write
+(<code>sessions.watchable()</code>, the following table), so they stay on the interpreter
+thread, exactly as today. <b>Every genuine reaction moves to a separate reaction loop</b>
+— a new daemon worker that follows the canonical cursor through a progress row. Per
+event, in this fixed order: <code>Pane</code>, <code>Interrupt</code>, and a new
+<code>TabColorReaction</code> that paints the kitty tab on status transitions (today
+<code>terminal/panes/streams.py:151</code> drives <code>tab_appearance</code> from the
+read path, and that read path dies), then the harness reactors, then the
+<code>SessionDataWriter</code> list — <code>EntryWriter</code> first, the aggregate
+writers after. A reaction or writer failure lands in the audit store and processing
+continues, exactly today's policy.</p>
+
+<figure class="code">
+  <figcaption><span class="file">engine/sessiondata/contract.py</span><span class="lang">python — new</span></figcaption>
+  <pre><code>class SessionDataWriter(Protocol):
+    """One concern of the aggregate. Sees every accepted event, in order."""
+    def write(self, canonical_event: CanonicalEvent) -&gt; None: ...</code></pre>
+</figure>
+
+<p>The writers, each a small class over the SessionData repository:</p>
+
+<dl class="defs">
+  <dt>EntryWriter</dt><dd>Every feed-worthy event → one immutable row in <code>session_entries</code>: the typed body, the envelope fields, the summary. The only writer that appends; all others upsert.</dd>
+  <dt>SessionWriter</dt><dd>session.started / title_changed / account_changed / finished → the session row.</dd>
+  <dt>ActorWriter</dt><dd>actor.* / model.changed / effort.changed → the actor rows.</dd>
+  <dt>StatusWriter</dt><dd>The actor's <code>status</code>. This is a <b>rewrite against the new vocabulary</b>, not a port: the fold in <code>engine/projections/tabstate.py:56-85</code> branches on events the vocabulary removes. The complete mapping is Table 0 below, and it is the StatusWriter's specification.</dd>
+  <dt>UsageWriter</dt><dd>usage.reported → cumulative tokens and cost per actor.</dd>
+  <dt>ContextWriter</dt><dd>context.reported / compaction.* → window fill and the compacting flag.</dd>
+  <dt>StatisticsWriter</dt><dd>shell.finished / file.accessed / message events → the per-actor counters.</dd>
+  <dt>GoalWriter, TaskWriter</dt><dd>goal.changed / task.changed / task.list_changed → the session's goal and task list.</dd>
+</dl>
+
+<p>Every branch of today's tab-state fold (<code>engine/projections/tabstate.py:42-93</code>),
+mapped to its new-vocabulary input. Order matters: the last fact wins, and the branch
+order below is the branch order in the file. The writer keeps two per-actor sets, exactly
+as the fold does — running background shells (already exposed as
+<code>background.running_shell_ids</code>) and pending attention ids (an internal field on
+the actor row, so a restart resumes exactly):</p>
+
+<div class="table-wrap">
+  <table>
+    <caption>Table 0. Status transitions, transcribed from tabstate.py branch by branch</caption>
+    <thead><tr><th>Old branch (file line)</th><th>New event</th><th>Effect</th></tr></thead>
+    <tbody>
+      <tr><td><code>SessionStarted</code> (:42)</td><td><code>session.started</code></td><td><code>idle</code></td></tr>
+      <tr><td><code>SessionFinished</code> (:44)</td><td><code>session.finished</code></td><td>status cleared — the actor shows no state</td></tr>
+      <tr><td><code>TurnStarted</code> (:46)</td><td><code>turn.started</code></td><td><code>thinking</code></td></tr>
+      <tr><td><code>MessageCreated</code>, user prompt (:48)</td><td><code>message.created</code> (role user, phase prompt)</td><td><code>thinking</code></td></tr>
+      <tr><td><code>ReasoningCreated</code> (:54)</td><td><code>reasoning.created</code></td><td><code>working</code></td></tr>
+      <tr><td><code>OperationStarted</code>, category <code>attention</code> (:59)</td><td>covered by the question/plan rows below</td><td><code>awaiting_attention</code></td></tr>
+      <tr><td><code>OperationStarted</code>, category <code>shell</code>/<code>task</code> or background/monitor execution (:61)</td><td><code>shell.started</code>; <code>skill.started</code>; <code>task.changed</code>/<code>task.list_changed</code>. Background or monitor execution also adds the shell to the background set (:57)</td><td><code>executing</code></td></tr>
+      <tr><td><code>OperationStarted</code>, any other category (:66)</td><td>— (file and search have no start event; see the finish row)</td><td><code>working</code></td></tr>
+      <tr><td><code>OperationBackgrounded</code> (:68)</td><td><code>shell.backgrounded</code></td><td>adds to the background set. <b>No status change</b> — <code>awaiting_background</code> is only reached at turn end</td></tr>
+      <tr><td><code>OperationOutputFinished</code> (:70)</td><td><code>shell.output_finished</code></td><td>removes from the background set. No status change</td></tr>
+      <tr><td><code>OperationFinished</code> (:73)</td><td><code>shell.finished</code>, <code>skill.finished</code>, <code>file.accessed</code>, <code>search.performed</code></td><td><code>awaiting_attention</code> when attention is pending, else <code>working</code> — the branch that ends <code>executing</code>. Deliberately does not touch the background set (the file's own comment, :74-78)</td></tr>
+      <tr><td><code>AttentionRequested</code> (:80)</td><td><code>question.asked</code>, <code>plan.proposed</code></td><td>adds to the pending set; <code>awaiting_attention</code></td></tr>
+      <tr><td><code>AttentionResolved</code> (:83)</td><td><code>question.answered</code>, <code>plan.resolved</code></td><td>removes from the pending set; <code>working</code></td></tr>
+      <tr><td><code>CompactionStarted</code> (:86)</td><td><code>compaction.started</code></td><td><code>working</code></td></tr>
+      <tr><td><code>TurnFinished</code> / <code>TurnAborted</code> (:88)</td><td><code>turn.finished</code> / <code>turn.aborted</code></td><td><code>awaiting_background</code> when the background set is not empty, else <code>awaiting_response</code></td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>Two deliberate notes inside this table. First, <code>file.accessed</code> and
+<code>search.performed</code> arrive at result time in the new vocabulary, so they hit the
+finish branch only — today their start set <code>working</code> and their finish set it
+again, so the net behavior is identical. Second, task events keep <code>executing</code>,
+because that is what the <code>task</code> category sets today (:61) — mapping them to
+<code>working</code> would be a silent behavior change.</p>
+
+<div class="callout note">
+  <div class="callout-icon" aria-hidden="true">i</div>
+  <div class="callout-body"><span class="callout-label">Note:</span>
+    Divergence after a writer crash is accepted (decided explicitly). The insurance is one
+    replay: clear the three read-model tables, then re-run the writers over
+    <code>canonical_events</code> from cursor zero. It is the same code path, exposed as a
+    rebuild command inside <code>bin/baqylau-dashboard.py</code> — not a new bin script,
+    which the client boundary test forbids.</div>
+</div>
+
+<h2>Decision log</h2>
+
+<p>Every decision below was made in the design discussion, with the evidence that settled it:</p>
+
+<div class="table-wrap">
+  <table>
+    <caption>Table 1. Decisions and their grounds</caption>
+    <thead><tr><th>Decision</th><th>Ground</th></tr></thead>
+    <tbody>
+      <tr><td>Push-based aggregate; Activity and Presenter layers die</td><td>Unified API for both frontends; the fold-per-tick read path costs 97.7 ms on the largest session.</td></tr>
+      <tr><td>Entries are materialized at push time, like the aggregate</td><td>The API reads only the read model; the canonical log stays internal. Every entry is immutable, so materialization is a pure append, and the payload duplication is an accepted disk cost.</td></tr>
+      <tr><td>All rendering moves to the clients</td><td>The daemon returned pre-escaped HTML and ANSI frames; both are presentation and belong to the frontends.</td></tr>
+      <tr><td>Content is embedded, no separate content call</td><td>Largest single payload 168 KB, largest session 3.5 MB, everything on localhost. Paging bounds the first load.</td></tr>
+      <tr><td>Actor-specific state lives on the actor</td><td>Model, effort, status, usage, context, statistics — all reported per actor by the harnesses.</td></tr>
+      <tr><td>The operation abstraction dissolves</td><td>Live store: 3,965 shell, 1,054 file, 41 search, 19 network, 10 skill, 86 plumbing. The split is clean.</td></tr>
+      <tr><td>task / message / attention operation twins stop being emitted</td><td>Each has a semantic event (task.changed, message.created, question.asked) carrying the same fact.</td></tr>
+      <tr><td>attention splits into question and plan</td><td>No harness ever emits the declared <code>permission</code> or <code>confirmation</code> types.</td></tr>
+      <tr><td>Shell output streams as immutable chunk entries</td><td>Re-sending a growing output per line is churn; the client folds chunks per shell, a bounded fold.</td></tr>
+      <tr><td>No turn entry; the collapse line is client-side</td><td>Every entry carries <code>turn_id</code>; turn markers give the boundaries; the counting JS exists.</td></tr>
+      <tr><td>No stream coalescing rule</td><td>context.reported arrives once per model response, not per tick — and the 0.25 s SSE poll already batches everything between polls into one frame.</td></tr>
+      <tr><td>Side-effect reactions and writers leave the translator loop</td><td>The interpreter keeps translation plus its two translation inputs (the sessions upsert and the shell-output following — the pull phase reads their rows, and splitting them off would stall ingestion and race the output files). Panes, interrupts, tab colors, harness reactors, and the writers follow the canonical cursor on a separate loop.</td></tr>
+      <tr><td>One <code>state</code> field everywhere, never state + outcome</td><td>Duplication. Session state is <code>running | finished</code>; outcomes fold into per-type state sets.</td></tr>
+      <tr><td>Model is one display string</td><td>The picker gets selectable ids from the harness catalog endpoint, not from SessionData.</td></tr>
+      <tr><td>Answer choices carry labels only</td><td>The daemon stored the request and maps label → native value on submit.</td></tr>
+      <tr><td>All <code>reason</code> fields dropped from the API</td><td>Audit detail with no consumer. One flag survives: <code>automatic</code> on the model_change entry, for the fallback warning.</td></tr>
+      <tr><td>No backward compatibility</td><td>Waived explicitly. Raw events allow re-translation if history matters later.</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<h2>Phase 1 — the canonical vocabulary</h2>
+
+<p>The vocabulary in <code>domain/events.py</code> is rewritten. Old count 36, new count 41 —
+more names, but each is simpler, the generic operation lifecycle is gone, and the plumbing
+twins stop being stored at all. The fate of every old type:</p>
+
+<div class="table-wrap">
+  <table>
+    <caption>Table 2. Old vocabulary → new vocabulary</caption>
+    <thead><tr><th>Old event</th><th>Fate</th></tr></thead>
+    <tbody>
+      <tr><td><code>session.started / title_changed / account_changed / finished</code></td><td>Kept as they are.</td></tr>
+      <tr><td><code>session.working_directory_changed</code></td><td><b>Removed.</b> The directory comes from <code>session.started</code> and does not change.</td></tr>
+      <tr><td><code>model.changed</code></td><td>Kept — but the translator holds the last-seen model per actor and emits only on a real transition, with <code>previous</code> filled. The per-response repeats (6,642 stored rows today) stop being emitted at all. No store-identity trick: the store dedups by event id forever, which cannot represent A → B → A.</td></tr>
+      <tr><td><code>effort.changed</code></td><td>Kept, same translator-state treatment.</td></tr>
+      <tr><td><code>actor.started / name_changed / description_changed / finished</code></td><td>Kept.</td></tr>
+      <tr><td><code>actor.assignment_started / assignment_finished</code></td><td>Kept.</td></tr>
+      <tr><td><code>turn.started / finished / aborted</code></td><td>Kept — and the Claude Code translator <b>gains turn stamping</b>: today it emits only <code>turn.finished</code> (from the Stop hook) and never sets <code>turn_id</code> on any event (<code>harness/impl/claude_code/canonical/support.py:37-48</code>). Phase 1 makes it open a turn on the user prompt, emit <code>turn.started</code>, and stamp <code>turn_id</code> on every event until the turn closes. Without this, the client's turn grouping has nothing to group by.</td></tr>
+      <tr><td><code>message.created</code></td><td>Kept, gains nullable <code>recipient_actor_id</code>.</td></tr>
+      <tr><td><code>actor.message_sent</code></td><td><b>Merged</b> into <code>message.created</code> — this covers the SendMessage tool: an actor-to-actor message is a message with a <code>recipient_actor_id</code>, not a tool call.</td></tr>
+      <tr><td><code>reasoning.created</code></td><td>Kept; the unread <code>summary</code> flag is dropped.</td></tr>
+      <tr><td><code>operation.started / progressed / input_provided / finished / output_located / backgrounded / output_finished</code></td><td><b>Split.</b> Shell operations become <code>shell.*</code> (all seven lifecycle events, renamed). File, search, and skill operations become their own events below. Category <code>task</code> / <code>message</code> / <code>attention</code> operations are no longer emitted.</td></tr>
+      <tr><td><code>file.accessed</code></td><td>Kept; gains its own <code>outcome</code>; loses the operation link.</td></tr>
+      <tr><td>—</td><td><b>New:</b> <code>search.performed</code> — one event at result time: tool, query, result, outcome. Covers file search and WebSearch.</td></tr>
+      <tr><td>—</td><td><b>New:</b> <code>skill.started</code>, <code>skill.finished</code>.</td></tr>
+      <tr><td>—</td><td><b>New:</b> <code>web.fetched</code> — a WebFetch (the <code>network</code> category): url, result, outcome. One event at result time.</td></tr>
+      <tr><td>—</td><td><b>New:</b> <code>worktree.changed</code> — EnterWorktree / ExitWorktree (the <code>workspace</code> category): action entered|exited, the raw argument blob (no harness extracts a path today), outcome.</td></tr>
+      <tr><td>Category <code>media</code> operations (GenerateImage)</td><td><b>Ignored.</b> No image path is readable from the tool call today (<code>toolcalls.py:404-410</code> has no media entry), so there is nothing to put on a file event. Joins the ignored set below.</td></tr>
+      <tr><td>TaskStop, ListAgents, and any unmapped tool</td><td><b>Ignored.</b> The translator records the <code>ignored_unknown</code> verdict instead of raising <code>TranslationError</code> — visible in the audit, absent from the feed. Today an unmapped tool fails the whole raw record (<code>toolcalls.py:70</code>); with the generic operation verb gone, ignoring is the fallback.</td></tr>
+      <tr><td><code>attention.requested / resolved</code></td><td><b>Replaced</b> by <code>question.asked</code>, <code>question.answered</code>, <code>plan.proposed</code>, <code>plan.resolved</code>. The never-emitted <code>permission</code> and <code>confirmation</code> types die with them.</td></tr>
+      <tr><td><code>task.changed</code></td><td>Kept; the <code>label</code> field (always a copy of the id or index) is dropped.</td></tr>
+      <tr><td><code>task.list_changed / goal.changed</code></td><td>Kept.</td></tr>
+      <tr><td><code>usage.reported / context.reported</code></td><td>Kept. Both arrive once per model response, not per tick — measured in both translators.</td></tr>
+      <tr><td><code>compaction.started / finished</code></td><td>Kept.</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>Both translators are rewritten against this vocabulary:
+<code>harness/impl/claude_code/canonical/toolcalls.py</code> and <code>messages.py</code>,
+<code>harness/impl/codex/canonical/translator.py</code> and <code>items.py</code>. The
+output-following machinery renames with its events:
+<code>OperationOutputCanonicalEventReaction</code> and the <code>operation_output</code>
+table become shell-scoped. <code>MAIN_SCHEMA_VERSION</code> bumps.</p>
+
+<h2>Phase 2 — SessionData</h2>
+
+<h3>The aggregate</h3>
+
+<p><code>GET /sessionData/{id}</code> returns the whole aggregate. It contains no entries
+and no entry references — the feed is its own endpoint. Everything actor-specific sits on
+the actor:</p>
+
+<figure class="code">
+  <figcaption><span class="lang">json — GET /sessionData/{id}</span></figcaption>
+  <pre><code>{
+  "cursor": 4812,       // the session's high-water mark across entries AND aggregate
+                        // revisions, read in the same transaction — the stream starts here
+  "session": {
+    "session_id": "…",
+    "harness": "claude_code",
+    "title": "Fix the SSE reconnect bug",
+    "state": "running",                       // running | finished
+    "live": true,                             // read-time: a terminal window is attached; false = parked
+    "working_directory": "/Users/…/baqylau",  // also the list's grouping key
+    "repository": {"branch": "main", "dirty": true},   // read-time: git status, or null
+    "started_at": 1755590000.0,
+    "finished_at": null,
+    "account": {"account_id": "acc_01…", "display_name": "zhambyl@…"},
+    "lead_actor_id": "actor-1",
+    "goal": {"objective": "…", "completed": false},          // or null
+    "tasks": [
+      {"task_id": "…", "subject": "Fix the reconnect", "description": null,
+       "state": "in_progress", "owner_actor_id": "actor-1"}
+    ]
+  },
+  "actors": [
+    {
+      "actor_id": "actor-1",
+      "parent_actor_id": null,
+      "role": "lead",                          // lead | child | teammate | sidecar
+      "name": "Claude",
+      "description": null,                     // the subagent's task description
+      "state": "running",                      // running | finished
+      "started_at": 1755590000.0,
+      "finished_at": null,
+      "model": "Fable 5",
+      "effort": "high",
+      "status": "executing",                   // idle | thinking | working | executing |
+                                               //   awaiting_background | awaiting_attention |
+                                               //   awaiting_response
+      "usage": {
+        "tokens": {"input_tokens": 12000, "output_tokens": 4100,
+                   "cache_read_tokens": 310000, "cache_write_tokens": 9000,
+                   "one_hour_cache_write_tokens": 0},
+        "cost_in_usd": "1.42"
+      },
+      "context": {"used_tokens": 61000, "window_tokens": 200000, "compacting": false},
+      "background": {"running_shell_ids": ["sh-4"],
+                     "monitor_count": 0, "background_job_count": 1},
+      "statistics": {"prompt_count": 7,
+                     "shell_command_count": 12, "failed_shell_command_count": 1,
+                     "file_count": 4, "lines_added": 120, "lines_removed": 30,
+                     "actor_message_count": 2,
+                     "tool_counts": {"Read": 4, "Grep": 2},    // the scoreboard's counts row;
+                                                               // shells are NOT in it — they count
+                                                               // once, in shell_command_count (today's
+                                                               // work.py:73-88 behaviour, kept)
+                     "active_seconds": 1240}                    // the scoreboard's activity row
+    }
+  ]
+}</code></pre>
+</figure>
+
+<p>What is deliberately absent, and where it went:</p>
+
+<dl class="defs">
+  <dt>attention</dt><dd>Derived from entries: a <code>question_asked</code> or <code>plan_proposed</code> without its answered/resolved twin is pending. The list color still comes from <code>status</code>, so the list view loads no entries.</dd>
+  <dt>outcome, finish_reason, resumed_from, initial_working_directory</dt><dd>Dropped from the API. <code>working_directory</code> is the one directory field and the list's grouping key.</dd>
+  <dt>terminal window id</dt><dd>Never exposed. The frontend needs liveness, not the handle: <code>live</code> and <code>repository</code> are the two read-time fields — the route computes them from the <code>sessions</code> row, the terminal adapter, and git when it answers; they are not event-sourced and not stored in the read model.</dd>
+  <dt>automatic_model_change</dt><dd>Replaced by the always-true <code>model</code> field plus the <code>automatic</code> flag on the model_change entry.</dd>
+  <dt>usage.by_model, choice values, all reasons</dt><dd>No consumer. Dropped.</dd>
+</dl>
+
+<p>The repository side: a new contract <code>repository/contract/session_data.py</code> and
+a new implementation <code>repository/impl/sqlite/session_data.py</code>. The exact DDL is
+in "The SQL changes, complete" below.</p>
+
+<h3>The entries</h3>
+
+<p><code>GET /sessionData/{id}/entries?before=&amp;limit=</code> pages the feed, newest
+last, straight from <code>session_entries</code>. The <code>EntryWriter</code> built each
+row once, at push time. Every entry is immutable. The envelope:</p>
+
+<figure class="code">
+  <figcaption><span class="lang">json — the entry envelope</span></figcaption>
+  <pre><code>{
+  "entry_id": "…",           // stable id, from the source event
+  "type": "shell_output",
+  "cursor": 4810,            // the read model's own cursor; SSE event id; paging key
+  "actor_id": "actor-1",     // the client joins names via SessionData.actors
+  "parent_actor_id": null,
+  "turn_id": "turn-7",
+  "occurred_at": 1755590100.0,
+  "summary": null,           // harness description where one exists
+  "body": { }
+}</code></pre>
+</figure>
+
+<p>The twenty-four entry types and their bodies:</p>
+
+<figure class="code">
+  <figcaption><span class="lang">json — all entry bodies</span></figcaption>
+  <pre><code>// turn_started — the grouping marker; the client collapses between markers
+{}
+
+// turn_finished
+{"state": "finished"}                          // finished | aborted
+
+// message — user, assistant, or actor-to-actor
+{"message_id": "…", "role": "assistant",       // user|assistant|system|peer|parent
+ "phase": "end_turn",                          // prompt|intermediate|end_turn|synthetic|recap
+ "recipient_actor_id": null,
+ "content": "full text, embedded"}
+
+// reasoning
+{"reasoning_id": "…", "content": "full text"}
+
+// shell_started — summary carries the harness description
+{"shell_id": "sh-9", "command": "make test",
+ "execution": "foreground"}                    // foreground | background | monitor
+
+// shell_output — one chunk; the client folds chunks per shell_id
+{"shell_id": "sh-9", "stream": "output",       // output | error | status
+ "mode": "append",                             // append | replace
+ "content": "142 passed in 8.31s\n"}
+
+// shell_backgrounded — the command moved to the background mid-run
+{"shell_id": "sh-9"}
+
+// shell_finished — also emitted for a background job's true end
+{"shell_id": "sh-9", "state": "succeeded",     // succeeded | failed | cancelled
+ "exit_code": 0}                               // int | null — Claude Code NEVER fills it
+                                               // (toolcalls.py:284); only Codex does
+
+// file
+{"path": "api/sse.py",
+ "action": "updated",                          // read|created|updated|deleted|renamed
+ "previous_path": null,                        // set on rename
+ "lines_added": 12, "lines_removed": 3,
+ "content": "@@ -140,7 +140,9 @@ …",          // diff when updated; file text when created or read
+ "state": "succeeded"}                         // succeeded | failed
+
+// search — file search and WebSearch; tool tells which
+{"tool": "Grep", "query": "parent_operation_id",
+ "result": "full text",                        // null for Codex web search — it reports no result text
+ "state": "succeeded"}                         // succeeded | failed
+
+// web — a WebFetch; one immutable entry at result time
+{"url": "https://…",                           // null when Codex reports a result without the call
+ "result": "full text", "state": "succeeded"}  // succeeded | failed
+
+// worktree — EnterWorktree / ExitWorktree. No harness extracts a path today,
+// so the body carries the tool's raw argument blob, not a parsed path
+{"action": "entered",                          // entered | exited
+ "arguments": {"…": "raw tool input, as given"},
+ "state": "succeeded"}                         // succeeded | failed
+
+// skill_started — arguments is nullable: today Claude collapses a Skill call's
+// input to the bare skill-name string (toolcalls.py:91-93)
+{"skill_id": "…", "name": "audit-debug", "arguments": null}
+
+// skill_finished
+{"skill_id": "…", "state": "succeeded",        // succeeded | failed | cancelled
+ "result": "full text"}
+
+// question_asked — pending until its question_answered twin arrives
+{"attention_id": "att-3",
+ "questions": [{"question_id": "…", "title": null, "question": "Allow Bash?",
+                "multiple": false,
+                "choices": [{"label": "Yes", "description": null}]}]}
+
+// question_answered — deliberate drop: the harness's decision distinction
+// (answered | rejected | discussed) is not carried; today's renderer already
+// collapses all three to one line, so nothing visible is lost
+{"attention_id": "att-3",
+ "answers": [{"question_id": "…", "labels": ["Yes"]}],
+ "feedback": null}
+
+// plan_proposed
+{"attention_id": "att-4", "plan": "full plan text"}
+
+// plan_resolved
+{"attention_id": "att-4",
+ "state": "approved",                          // approved | changes_requested | rejected
+ "feedback": null, "edited": false}
+
+// compaction_started
+{"before_tokens": 155000}
+
+// compaction_finished
+{"before_tokens": 155000, "after_tokens": 40000}
+
+// assignment_started — summary carries the brief
+{"assignment_id": "…", "assigned_actor_name": "Explore", "prompt": "full text or null"}
+
+// assignment_finished
+{"assignment_id": "…", "state": "succeeded",   // succeeded | failed | cancelled
+ "result": "full text"}
+
+// model_change — automatic marks a harness fallback, for the warning badge
+{"previous": "Opus 5", "current": "Fable 5", "automatic": false}
+
+// effort_change
+{"previous": "medium", "current": "high"}</code></pre>
+</figure>
+
+<p>Events that produce no entry: <code>session.*</code>, <code>actor.started /
+name_changed / description_changed / finished</code>, <code>task.*</code>,
+<code>goal.changed</code>, <code>usage.reported</code>, <code>context.reported</code>,
+<code>shell.input_provided</code>, <code>shell.output_located</code>. They only feed the
+aggregate writers or the daemon's own machinery. The <code>EntryWriter</code> skips them.</p>
+
+<h3>The API surface</h3>
+
+<p>The read side collapses to five routes. All ~40 POST control and preference routes
+are unaffected, as are the harness catalog routes the pickers use:</p>
+
+<div class="table-wrap">
+  <table>
+    <caption>Table 3. The new read surface</caption>
+    <thead><tr><th>Route</th><th>Returns</th></tr></thead>
+    <tbody>
+      <tr><td><code>GET /sessionData</code></td><td>The SessionData of every visible session — the list view.</td></tr>
+      <tr><td><code>GET /sessionData/{id}</code></td><td>One session's aggregate: session + actors.</td></tr>
+      <tr><td><code>GET /sessionData/{id}/entries?at=&amp;before=&amp;limit=</code></td><td><code>{"items": […], "oldest_cursor": 120, "has_more": true}</code>. <code>at</code> reads the page as of the snapshot's cursor, so page and snapshot describe one instant.</td></tr>
+      <tr><td><code>GET /sessionData/{id}/stream</code></td><td>SSE: this session's SessionData deltas and new entries.</td></tr>
+      <tr><td><code>GET /sessionData/stream</code></td><td>SSE: SessionData deltas across all sessions — drives the list.</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<h3>The stream, end to end</h3>
+
+<p>One cursor space makes the whole mechanism. The writer thread stamps every write with
+the next value of one monotonic counter: an entry row gets it as its <code>cursor</code>,
+and a changed <code>session_data</code> or <code>session_data_actors</code> row stores it
+as its <code>revision</code>. So "everything after cursor <var>C</var>" is one question
+with one answer across both kinds of change.</p>
+
+<h4>Backend: from canonical commit to a committed read-model row</h4>
+
+<p>Two loops, decoupled by the canonical store itself. There is no queue between them —
+the canonical cursor is the handoff:</p>
+
+<ol class="procedure">
+  <li><span class="step-title">The translator loop translates and feeds itself</span>
+    <code>engine/interpret/loop.py</code> keeps <code>record_translation</code> plus the
+    two translation inputs: <code>SessionUpsertCanonicalEventReaction</code> (the pull
+    phase reads <code>sessions.watchable()</code>) and
+    <code>OperationOutputCanonicalEventReaction</code> (the pull phase reads the following
+    rows, and this reaction unlinks the files the pull phase reads — one thread keeps that
+    safe). Everything else leaves. The interpreter never touches a pane, an interrupt, or
+    the read model.</li>
+  <li><span class="step-title">The reaction loop follows the cursor</span>
+    The <code>"baqylau-reactions"</code> worker ticks every 0.25 s: read
+    <code>canonical_events WHERE cursor &gt; ?</code> (the progress row), process each
+    event in canonical order through the fixed sequence —
+    <code>PaneCanonicalEventReaction</code>, <code>InterruptCanonicalEventReaction</code>,
+    the harness reactors (with their controls context), then the writers. The tab paint
+    runs <b>after</b> <code>apply()</code>, fed the actor rows it just committed — a
+    status painter that ran before the StatusWriter would paint the previous event's
+    status. It is therefore not a <code>CanonicalEventReaction</code> but a small
+    applied-status listener in <code>terminal/</code>. Any exception becomes an
+    <code>audit.errors</code> row and the loop continues — today's policy, unchanged.</li>
+  <li><span class="step-title">All of one event's read-model rows commit as one
+    transaction</span>
+    The writers do not write. Each returns a change object — an entry to append, an
+    aggregate row to replace. The loop collects them and calls <b>one</b> repository
+    method, <code>apply(session_id, changes, canonical_cursor)</code>, which in one
+    transaction inserts the entry with <code>cursor = <var>R</var></code>, upserts the
+    aggregate rows with <code>revision = <var>R</var></code>, and advances
+    <code>reaction_progress</code>. One repository method, one transaction — the
+    repository rule holds, and an SSE poll can never observe half an event. A crash
+    replays from the progress row through the same <code>apply</code>, and the entry's
+    UNIQUE <code>entry_id</code> keeps the replayed insert idempotent.</li>
+  <li><span class="step-title">The progress row is the source of truth</span>
+    <code>reaction_progress</code> (DDL below) records the canonical cursor of the last
+    fully processed event. On daemon start the loop resumes from it. The rebuild command
+    <b>clears the three read-model tables first</b>, then runs this catch-up from zero,
+    <b>driven through the writers only</b>: side-effect reactions (panes, notifications,
+    OTel) must never replay history.</li>
+  <li><span class="step-title">Revision allocation survives restarts</span>
+    At start the counter initializes to
+    <code>MAX(session_entries.cursor, session_data.revision, session_data_actors.revision)</code>.
+    Entry rows are inserted with an explicit cursor value — SQLite accepts an explicit
+    value into an <code>INTEGER PRIMARY KEY AUTOINCREMENT</code> column and keeps the
+    sequence consistent — so entries and aggregate revisions come from one allocator and
+    the cursor space stays single.</li>
+</ol>
+
+<div class="callout note">
+  <div class="callout-icon" aria-hidden="true">i</div>
+  <div class="callout-body"><span class="callout-label">Note:</span>
+    The split adds at most one 0.25 s tick of latency to every reaction — pane opening,
+    interrupt clearing, notifications, and the read model alike. In exchange, translation
+    throughput no longer depends on any reaction, and a slow or failing reaction can never
+    stall the evidence pipeline.</div>
+</div>
+
+<h4>Backend: the SSE handler</h4>
+
+<p>Each connection is one async generator in <code>api/sessiondata/streams.py</code>,
+built on the existing <code>api/sse.py</code> helpers (<code>STREAM_POLL_SECONDS =
+0.25</code>, <code>STREAM_HEARTBEAT_SECONDS = 15.0</code>, <code>off_loop</code> for
+blocking reads). Per iteration it calls three repository methods on the threadpool —
+<code>entries_after(session_id, C)</code>, <code>data_after(session_id, C)</code>,
+<code>actors_after(session_id, C)</code>, each one transaction — assembles at most one
+frame from the api-owned response models, sets the frame id to the highest revision it
+read, and sleeps. No news for 15 s → a heartbeat comment. There is no broker and no
+per-client buffer: a slow client delays only its own generator, and its next poll simply
+returns a bigger batch. The global stream is the same generator without the entries
+query, using <code>changed_after(C)</code> across the two aggregate tables.</p>
+
+<h4>Frontend: connect, resume, apply</h4>
+
+<div class="flow">
+  <div class="node"><span class="node-title">Reaction loop</span><span class="node-sub">commits rows, stamps cursor</span></div>
+  <div class="arrow" aria-hidden="true">→</div>
+  <div class="node"><span class="node-title">Read model</span><span class="node-sub">entries + aggregate rows</span></div>
+  <div class="arrow" data-label="0.25 s poll" aria-hidden="true">→</div>
+  <div class="node accent"><span class="node-title">SSE handler</span><span class="node-sub">one frame per poll with news</span></div>
+  <div class="arrow" aria-hidden="true">→</div>
+  <div class="node ok"><span class="node-title">Client</span><span class="node-sub">applies, remembers the id</span></div>
+</div>
+
+<p>How a client connects, and what the handler does:</p>
+
+<ol class="procedure">
+  <li><span class="step-title">Snapshot first — one boundary, one cursor</span>
+    The client fetches <code>GET /sessionData/{id}</code>. Its top-level
+    <code>cursor</code> is the session's <b>high-water mark</b> —
+    <code>MAX</code> across the entry cursors and the aggregate revisions of this session,
+    computed inside the same repository read as the aggregate rows (one method, one
+    transaction). The client then fetches <code>/entries?at=<var>C</var></code>: the page
+    is read <em>as of</em> that cursor (<code>cursor &lt;= <var>C</var></code>), so the
+    page and the snapshot describe one instant. The aggregate's own <code>revision</code>
+    is not a stream boundary — it routinely lags the newest entry, and using it would
+    duplicate or drop entries.</li>
+  <li><span class="step-title">Open the stream from <var>C</var></span>
+    <code>GET /sessionData/{id}/stream</code> with <code>Last-Event-ID:
+    <var>C</var></code>. A reconnect after a network drop is the same request — the
+    browser's <code>EventSource</code> sends the header on its own.</li>
+  <li><span class="step-title">The handler loop, every 0.25 s</span>
+    Three indexed reads, off the event loop as today
+    (<code>api/sse.py:off_loop</code>):
+    <figure class="code">
+      <figcaption><span class="lang">sql — the whole poll</span></figcaption>
+      <pre><code>SELECT … FROM session_entries     WHERE session_id = ? AND cursor   &gt; ? ORDER BY cursor
+SELECT … FROM session_data        WHERE session_id = ? AND revision &gt; ?
+SELECT … FROM session_data_actors WHERE session_id = ? AND revision &gt; ?</code></pre>
+    </figure>
+    All three empty → no frame (a heartbeat comment goes out every 15 s, as today).
+    Otherwise the handler emits <b>one</b> frame carrying everything found, sets the
+    frame's <code>id</code> to the highest cursor it saw, and advances <var>C</var>.</li>
+  <li><span class="step-title">The client applies the frame</span>
+    Replace <code>session</code> if present; replace each actor object by
+    <code>actor_id</code>; append each entry in cursor order, <b>idempotently by
+    <code>entry_id</code></b> — an entry the client already holds is skipped, so an
+    overlapping frame can never show twice. Immutable entries mean append-or-skip is the
+    only feed operation.</li>
+</ol>
+
+<p>Properties that fall out of this design, for free:</p>
+
+<ul>
+  <li><b>Batching.</b> Ten context reports inside one poll window collapse into one actor
+    object in one frame — the last committed state wins. No coalescing rule exists;
+    the poll interval is the batch boundary.</li>
+  <li><b>Lossless resume.</b> The frame id is a database cursor, not a sequence number the
+    server invents. Whatever the client last saw, the next poll returns exactly what
+    committed after it — across a reconnect, a laptop sleep, or a daemon restart.</li>
+  <li><b>Consistency.</b> The writer commits in event order on one thread; the handler
+    reads committed rows only. A frame can never show an entry whose aggregate change is
+    older than the client's cursor.</li>
+  <li><b>No fan-out state.</b> Each connection is an independent loop over the same
+    indexed queries. No broker, no subscription registry, no per-client buffer — the
+    repo's existing SSE stance, kept.</li>
+</ul>
+
+<p>The global stream (<code>GET /sessionData/stream</code>) is the same loop without the
+entries query, across all sessions: <code>WHERE revision &gt; ?</code> on the two
+aggregate tables. It drives the session list and the tab colors.</p>
+
+<p>The session stream frame:</p>
+
+<figure class="code">
+  <figcaption><span class="lang">json — one SSE frame</span></figcaption>
+  <pre><code>id: 4815
+data: {
+  "session": { … },          // present only when the session part changed
+  "actors": [ … ],           // only the changed actor objects
+  "entries": [ … ]           // new entries after the client's cursor
+}</code></pre>
+</figure>
+
+<p>Transport stays the repo's deliberate design: the stream polls the read model every
+0.25&nbsp;s — no broker, no bus. The poll is <code>WHERE cursor &gt; ?</code> on the
+entries index plus the two aggregate rows, instead of a full fold, and it batches
+everything between two polls into one frame, which is all the coalescing the system
+needs.</p>
+
+<h3>The two clients</h3>
+
+<div class="compare">
+  <div class="bad"><span class="compare-title">Today</span>
+    <p>The daemon renders. <code>dashboard/render/</code> ships pre-escaped HTML items;
+    <code>terminal/mirror/presenter.py</code> + <code>terminal/panes/streams.py</code> ship
+    ANSI frames; <code>client/terminal_pane.py</code> copies bytes; a resize is a
+    reconnect.</p></div>
+  <div class="good"><span class="compare-title">After</span>
+    <p>The daemon serves SessionData and entries. The browser builds HTML from entries in
+    JS. <code>client/terminal_pane.py</code> consumes the same stream and paints ANSI
+    itself — a resize is a local repaint.</p></div>
+</div>
+
+<p>Client-side responsibilities, the same for both frontends:</p>
+
+<ul>
+  <li>Join <code>actor_id</code> to names and colors via <code>SessionData.actors</code>.</li>
+  <li>Fold <code>shell_output</code> chunks per <code>shell_id</code>, honoring append/replace per stream.</li>
+  <li>Group entries between <code>turn_started</code> / <code>turn_finished</code> markers and build the collapse line ("Ran 3 shell commands, read 2 files") from per-type counts — the JS for this exists in <code>app.05-session.js</code>.</li>
+  <li>Filter entry types per surface: the mirror drops reasoning and markers; the dashboard shows everything.</li>
+  <li>Derive pending attention: an asked/proposed entry without its resolution twin.</li>
+  <li>Rebuild the monitors and background-jobs panels by folding <code>shell_started</code> /
+    <code>shell_output</code> (the <code>status</code> stream carries monitor ticks) /
+    <code>shell_backgrounded</code> / <code>shell_finished</code> per <code>shell_id</code>.
+    A monitor's end reason is deliberately not carried — clients do not consume it.</li>
+</ul>
+
+<h2>What gets deleted</h2>
+
+<div class="table-wrap">
+  <table>
+    <caption>Table 4. Deletions, and what replaces each</caption>
+    <thead><tr><th>Deleted</th><th>Replaced by</th></tr></thead>
+    <tbody>
+      <tr><td><code>engine/projections/</code> — <code>activity.py</code>, <code>queries.py</code>, <code>pages.py</code>, <code>work.py</code>, <code>paging.py</code>, most of <code>models.py</code></td><td>The push-time writers. Nothing folds at read time.</td></tr>
+      <tr><td><code>dashboard/render/</code> — the item registry, <code>DashboardItem</code> and its ~21 metadata fields</td><td>Browser-side rendering from entries.</td></tr>
+      <tr><td><code>dashboard/services/streams.py</code>, <code>sessions.py</code> caches, <code>workspace.py</code> read paths</td><td><code>api/sessiondata/</code> routes reading two tables.</td></tr>
+      <tr><td><code>terminal/mirror/</code> — presenter, renderer, <code>_MirrorModel</code>; <code>terminal/panes/streams.py</code></td><td>The kitty client's own renderer over the entry stream.</td></tr>
+      <tr><td><code>api/dashboard/sessions.py</code>, <code>api/dashboard/streams.py</code>, <code>api/terminal/streams.py</code>, <code>api/common/content.py</code></td><td>The five routes of Table 3. Content is embedded, so the content route dies too.</td></tr>
+      <tr><td><code>domain/events.py</code> — the operation lifecycle, <code>attention.*</code>, <code>actor.message_sent</code>, <code>session.working_directory_changed</code></td><td>The phase 1 vocabulary of Table 2.</td></tr>
+      <tr><td><code>engine/queries/content.py</code></td><td>Nothing — its only consumer was the content route, and content is embedded.</td></tr>
+      <tr><td><code>dashboard/services/activity.py</code>, <code>models.py</code>, <code>overview.py</code>; <code>api/dashboard/mapper/activity.py</code>; <code>terminal/scoreboard.py</code></td><td>The client-side renderers. These import the deleted trees and go with them. <code>terminal/theme.py</code> is <b>not</b> deleted: <code>tab_appearance</code> feeds the new <code>TabColorReaction</code>, which keeps kitty tab colors alive daemon-side.</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>Several services keep their routes but lose their read source. They are rewritten onto
+the read model, not deleted:</p>
+
+<div class="table-wrap">
+  <table>
+    <caption>Table 4b. Services re-sourced onto the read model</caption>
+    <thead><tr><th>Service</th><th>Reads today</th><th>Reads after</th></tr></thead>
+    <tbody>
+      <tr><td><code>notify/notifier.py</code></td><td><code>SessionQueries.tab_state</code> and <code>DashboardSessionService</code> (both deleted); its construction in <code>api/lifecycle.py:53-67</code></td><td><code>session_data_actors.status</code> for triggers; the pending <code>question_asked</code>/<code>plan_proposed</code> entry for attention alerts. Same worker, new repository dependency.</td></tr>
+      <tr><td><code>harness/services/controls.py</code></td><td><code>SessionQueries.summary / attention / latest_cursor</code> for every gesture's <code>ControlContext</code></td><td>Actor rows (model, effort, account) and the pending attention entry, from the read-model repository. <code>ControlContext</code> retyped to the new models.</td></tr>
+      <tr><td><code>dashboard/services/workspace.py</code></td><td><code>SessionQueries</code>, <code>AttentionRequested</code> validation, <code>queries.tasks</code></td><td>Dialog-answer validation against the pending question entry; tasks from <code>session_data.tasks</code>.</td></tr>
+      <tr><td><code>app/services/insights.py</code></td><td><code>SessionQueries</code> + <code>EventPages</code> folds</td><td><code>session_data</code> + <code>session_data_actors</code> rows (usage, statistics are already aggregated there).</td></tr>
+      <tr><td><code>app/services/resume.py</code></td><td><code>SessionQueries</code> folds</td><td><code>session_data</code> rows (state, title, working directory).</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>What stays untouched: the watch/pull machinery, <code>record_translation</code> and the
+audit trail, the control routes themselves,
+<code>SessionUpsertCanonicalEventReaction</code> and the <code>sessions</code> table
+(control routing needs <code>harness_process_id</code>),
+<code>PaneCanonicalEventReaction</code>, and the architecture tests' invariants — no
+key–value table (the payload columns are typed models, versioned by the schema, not a KV
+store), only <code>repository/impl/sqlite</code> opens a database, every route answers
+with an api-owned model.</p>
+
+<h2>The SQL changes, complete</h2>
+
+<p>Everything lives in <code>repository/impl/sqlite/schema.py</code>. The current
+<code>MAIN_SCHEMA_VERSION</code> is 3; it becomes <b>4</b>, and <b>no migration is
+written</b>. The machinery in <code>repository/impl/sqlite/connection.py</code> raises a
+hard startup error on a version bump without a matching <code>MAIN_MIGRATIONS</code>
+entry — that error never fires, because the deploy step is:</p>
+
+<figure class="code">
+  <figcaption><span class="lang">bash — the whole "migration"</span></figcaption>
+  <pre><code>rm &lt;data_dir&gt;/main.db*</code></pre>
+</figure>
+
+<p>The daemon creates the version-4 schema from the DDL on first start. The old
+<code>MAIN_MIGRATIONS</code> entries for versions 2 and 3 are deleted with the data they
+migrated. <code>audit.db</code> is untouched. Preferences stored in <code>main.db</code>
+(notification settings, hidden directories, push subscriptions, pane widths, drafts) are
+lost with it — accepted, they are cheap to re-enter.</p>
+
+<p>New tables and indexes, exact DDL:</p>
+
+<figure class="code">
+  <figcaption><span class="file">repository/impl/sqlite/schema.py</span><span class="lang">sql — additions</span></figcaption>
+  <pre><code>CREATE TABLE IF NOT EXISTS session_data (
+    session_id TEXT PRIMARY KEY,
+    revision   INTEGER NOT NULL,
+    payload    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS index_session_data_revision
+    ON session_data(revision);
+
+CREATE TABLE IF NOT EXISTS session_data_actors (
+    session_id TEXT NOT NULL,
+    actor_id   TEXT NOT NULL,
+    revision   INTEGER NOT NULL,
+    payload    TEXT NOT NULL,
+    PRIMARY KEY (session_id, actor_id)
+);
+CREATE INDEX IF NOT EXISTS index_session_data_actors_revision
+    ON session_data_actors(session_id, revision);
+CREATE INDEX IF NOT EXISTS index_session_data_actors_global
+    ON session_data_actors(revision);
+
+CREATE TABLE IF NOT EXISTS session_entries (
+    cursor          INTEGER PRIMARY KEY AUTOINCREMENT,
+    entry_id        TEXT NOT NULL UNIQUE,
+    session_id      TEXT NOT NULL,
+    entry_type      TEXT NOT NULL,
+    actor_id        TEXT NOT NULL,
+    parent_actor_id TEXT,
+    turn_id         TEXT,
+    occurred_at     REAL,
+    summary         TEXT,
+    payload         TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS index_session_entries_session
+    ON session_entries(session_id, cursor);
+
+-- the reaction loop's high-water mark against canonical_events; one row,
+-- typed, same standing as schema_version — not a key-value table
+CREATE TABLE IF NOT EXISTS reaction_progress (
+    id               INTEGER PRIMARY KEY CHECK (id = 1),
+    canonical_cursor INTEGER NOT NULL,
+    updated_at       REAL NOT NULL
+);
+
+-- operation_output, renamed and re-keyed with its events (phase 1):
+CREATE TABLE IF NOT EXISTS shell_output (
+    session_id             TEXT NOT NULL,
+    shell_id               TEXT NOT NULL,
+    harness                TEXT NOT NULL,
+    actor_id               TEXT NOT NULL,
+    parent_actor_id        TEXT,
+    source_path            TEXT NOT NULL,
+    chunk_source_type      TEXT NOT NULL,
+    delete_source          INTEGER NOT NULL,
+    initial_size           INTEGER NOT NULL,
+    initial_modified_at    INTEGER NOT NULL,
+    wait_for_source_change INTEGER NOT NULL,
+    until TEXT NOT NULL CHECK (until IN ('shell_finished','session_finished')),
+    state TEXT NOT NULL CHECK (state IN ('active','finishing')),
+    created_at REAL NOT NULL,
+    PRIMARY KEY (session_id, shell_id)
+);</code></pre>
+</figure>
+
+<p>Column notes for the implementor:</p>
+
+<dl class="defs">
+  <dt>payload columns</dt><dd>JSON documents of typed models, versioned by the schema version — the same pattern as <code>canonical_events.payload</code>. The repository decodes them and returns models; the api layer never touches <code>json</code> (the <code>test_no_response_anywhere_is_a_hand_built_document</code> rule). The ruff TID251 allowlist is updated: the stale patterns for the deleted <code>dashboard/render/</code>, <code>terminal/mirror/</code>, and <code>api/common/content.py</code> are removed, and the new repository module is added. The schema docstring's opaque-column count and <code>test_no_key_value_table_exists</code> must name the new columns as deliberate.</dd>
+  <dt>revision / cursor</dt><dd>One counter, allocated by the writer thread per event (mechanics in "The stream, end to end"). Entry rows are inserted with the explicit cursor value; aggregate upserts stamp the same value as <code>revision</code>. At start the counter initializes from the maximum across the three tables.</dd>
+  <dt>entry_id</dt><dd>The source canonical <code>event_id</code>. UNIQUE makes the entry insert idempotent under replay: <code>INSERT OR IGNORE</code>.</dd>
+  <dt>reads the API layer performs</dt><dd>Exactly four statements, all covered by the indexes above: entries page (<code>WHERE session_id=? AND cursor&lt;? ORDER BY cursor DESC LIMIT ?</code>), entries delta (<code>WHERE session_id=? AND cursor&gt;?</code>), aggregate delta (<code>WHERE session_id=? AND revision&gt;?</code> on both tables), global delta (<code>WHERE revision&gt;?</code> on both tables).</dd>
+  <dt>canonical_events and its 3 indexes</dt><dd>Unchanged. Only the writer pipeline, the rebuild command, and the audit tools read it after this plan.</dd>
+</dl>
+
+<h2>The API file changes, complete</h2>
+
+<div class="table-wrap">
+  <table>
+    <caption>Table 5. Every api/ file: added, deleted, kept</caption>
+    <thead><tr><th>File</th><th>Routes today</th><th>Fate</th></tr></thead>
+    <tbody>
+      <tr><td><code>api/sessiondata/</code> (new)</td><td>—</td><td><b>Added:</b> <code>routes.py</code> (GET <code>/sessionData</code>, <code>/sessionData/{id}</code>, <code>/sessionData/{id}/entries</code>), <code>streams.py</code> (GET <code>/sessionData/stream</code>, <code>/sessionData/{id}/stream</code>), <code>models/</code> (the SessionData and entry response models the api layer owns).</td></tr>
+      <tr><td><code>api/dashboard/sessions.py</code></td><td>GET /api/sessions, /api/sessions/{id}, /api/sessions/{id}/activity</td><td><b>Deleted</b>, with its mapper/ and models/.</td></tr>
+      <tr><td><code>api/dashboard/streams.py</code></td><td>GET /api/stream, /api/sessions/{id}/stream</td><td><b>Deleted.</b></td></tr>
+      <tr><td><code>api/terminal/streams.py</code></td><td>GET /api/sessions/{id}/panes/{kind}/stream</td><td><b>Deleted.</b> The pane client consumes /sessionData instead.</td></tr>
+      <tr><td><code>api/common/content.py</code></td><td>GET /api/content/{ref}</td><td><b>Deleted.</b> Content is embedded in entries.</td></tr>
+      <tr><td><code>api/dashboard/controls.py</code></td><td>POST /api/sessions (launch) + 15 control gestures</td><td><b>Routes kept; the service below is re-sourced.</b> <code>harness/services/controls.py</code> builds <code>ControlContext</code> from the deleted projections today (<code>SessionQueries.summary/attention/latest_cursor</code>); it re-sources from the read model — actor rows for model/effort/account, the pending <code>question_asked</code>/<code>plan_proposed</code> entry for attention. <code>ControlContext.pending_attention</code> is retyped to the new question/plan models. On labels: both harnesses already set choice value = label, so the answer gesture sends labels natively and no value mapping exists; what the executor reads from the store is the pending question's structure, nothing more. The e2e rework adds no control gesture — key injection is a window-addressed terminal passthrough (see "The e2e suite, reworked"). The architecture allowlist (harness may reach engine only via <code>engine.projections</code>, <code>test_canonical_architecture.py:271</code> and <code>:408</code>) is re-pointed at the read-model contract.</td></tr>
+      <tr><td><code>api/dashboard/application.py</code>, <code>telemetry.py</code>, <code>files.py</code>, <code>catalog.py</code>, <code>static.py</code></td><td>preference POSTs, browser telemetry ingest, uploads/dictation, GET catalogs + insights + resumable-sessions, static files</td><td><b>Routes kept; three services below are re-sourced</b> (see Table 4b).</td></tr>
+      <tr><td><code>api/common/hooks.py</code>, <code>common/telemetry.py</code>, <code>common/health.py</code>, <code>terminal/panes.py</code>, <code>terminal/views.py</code></td><td>harness ingest, health, pane keybinding controls</td><td><b>Kept unchanged.</b></td></tr>
+      <tr><td><code>api/sse.py</code></td><td>—</td><td><b>Kept.</b> The 0.25 s poll, 15 s heartbeat, and <code>off_loop</code> threadpool helpers drive the two new streams.</td></tr>
+      <tr><td><code>app/providers.py</code></td><td>—</td><td>The <code>interpreter</code> provider loses its reactions dependency. <code>reactions()</code> (line 611) feeds a new reaction-loop provider instead, extended with the harness reactors and the writer list (writers last). New <code>@singleton</code> providers for the SessionData repository and the reaction loop, same shape as <code>sessions()</code> at line 344.</td></tr>
+      <tr><td><code>api/lifecycle.py</code></td><td>—</td><td><code>background_workers()</code> starts a fourth daemon worker, <code>"baqylau-reactions"</code>, running the reaction loop beside the interpreter, usage, and notifier threads, with the same stop-event teardown.</td></tr>
+      <tr><td><code>engine/interpret/loop.py</code></td><td>—</td><td>The react phase shrinks to the two translation inputs (sessions upsert, shell-output following), which stay. All other reaction dispatch moves to the new loop in <code>engine/sessiondata/</code> (or a sibling <code>engine/react/</code>).</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<h2>The client changes, complete</h2>
+
+<h3>Dashboard: all fourteen static JS files</h3>
+
+<div class="table-wrap">
+  <table>
+    <caption>Table 6. dashboard/static/app.*.js, file by file</caption>
+    <thead><tr><th>File</th><th>Lines</th><th>Change</th></tr></thead>
+    <tbody>
+      <tr><td><code>app.00-core.js</code></td><td>498</td><td><b>Kept, one removal:</b> the server-rendered-HTML-through-innerHTML path dies with <code>dashboard/render/</code>. All DOM is now client-built.</td></tr>
+      <tr><td><code>app.01-attention.js</code></td><td>603</td><td><b>Kept.</b> Push subscription unchanged. Pending-attention detection re-sources from entries: a <code>question_asked</code>/<code>plan_proposed</code> without its resolution twin.</td></tr>
+      <tr><td><code>app.02-router.js</code></td><td>166</td><td><b>Rewired:</b> <code>connectGlobal</code> (line 11) opens <code>/sessionData/stream</code> instead of <code>/api/stream</code>; the snapshot model becomes the SessionData list.</td></tr>
+      <tr><td><code>app.03-stats.js</code></td><td>282</td><td><b>Kept unchanged</b> — reads <code>/api/insights</code>, which stays.</td></tr>
+      <tr><td><code>app.04-list.js</code></td><td>468</td><td><b>Rewired:</b> the fetch at line 10 becomes <code>GET /sessionData</code>; the list renders from SessionData (state, status, model, statistics).</td></tr>
+      <tr><td><code>app.05-session.js</code></td><td>1732</td><td><b>Rewritten — the biggest JS change.</b> EventSource (line 428) → <code>/sessionData/{id}/stream</code>; the fetches at 354/369 → <code>/sessionData/{id}</code> + <code>/entries</code>; per-entry-type renderers replace item HTML; adds the shell-chunk fold and the turn-marker collapse (the counting code at lines 946–1013 survives); the polling <code>step()</code> at line 750 is deleted — the cursor stream replaces it.</td></tr>
+      <tr><td><code>app.06-clientlog.js</code></td><td>196</td><td><b>Kept unchanged</b> — its ingest routes stay.</td></tr>
+      <tr><td><code>app.07-dialogs.js</code></td><td>655</td><td><b>Rewired:</b> the ask card reads the pending <code>question_asked</code> entry; the answer POST (<code>answer-question</code>) sends labels.</td></tr>
+      <tr><td><code>app.08-composer.js</code></td><td>1141</td><td><b>Kept, one removal:</b> the telemetry payload's model <code>native_id</code> (line 771) goes — the actor carries one model name and nothing else.</td></tr>
+      <tr><td><code>app.09-newsession.js</code></td><td>1390</td><td><b>Two fetches rewired:</b> line 534 (<code>/activity</code>) → <code>/sessionData/{id}/entries</code>; catalogs and <code>/api/resumable-sessions</code> (709/864/908) unchanged.</td></tr>
+      <tr><td><code>app.10-control.js</code></td><td>699</td><td><b>Kept, one rewire:</b> <code>sessionControl()</code> and every gesture POST stay. The model and effort pickers (lines 297-302, with <code>app.05-session.js:158,285</code> and <code>app.04-list.js:276</code>) stop matching the current row by <code>selection_id</code> — they match by the one display name against the catalog's display names. Decided: one model name everywhere; the frontend adapts, not the schema.</td></tr>
+      <tr><td><code>app.11-chrome.js</code></td><td>1391</td><td><b>Rewired:</b> identity chips, live rows, and the tab strip re-source from SessionData actors (model, effort, status, usage, context) instead of SSE-patched presenter rows.</td></tr>
+      <tr><td><code>app.12-shell.js</code>, <code>app.13-init.js</code></td><td>135 + 178</td><td><b>Kept unchanged.</b></td></tr>
+    </tbody>
+  </table>
+</div>
+
+<h3>Kitty pane client</h3>
+
+<p>Today <code>client/terminal_pane.py</code> is 77 lines of pure byte copy: it opens
+<code>/api/sessions/{id}/panes/{kind}/stream?width=N</code> (the path template is
+<code>client/_wire.py:27</code>), writes each frame's ANSI to stdout, and treats a width
+change as a reconnect. After the change it is a renderer:</p>
+
+<ol class="procedure">
+  <li><span class="step-title">Connect</span>
+    Fetch <code>GET /sessionData/{id}</code> and one entries page (<code>at=</code> the
+    snapshot's cursor) through the existing <code>_daemon</code> helper, then open
+    <code>/sessionData/{id}/stream</code> from that same cursor. Entry application is
+    idempotent by <code>entry_id</code>, as in the browser. The reconnect loop, the 2 s
+    delay, and the 10 s stall guard stay as they are.</li>
+  <li><span class="step-title">Model</span>
+    New module <code>client/_model.py</code>: holds SessionData, folds entries — shell
+    chunks by <code>shell_id</code> honoring append/replace, turn grouping by the markers,
+    pending attention by unresolved twins. Applies each SSE frame incrementally.</li>
+  <li><span class="step-title">Render</span>
+    New module <code>client/_render.py</code>: <code>kind == "mirror"</code> paints the
+    feed blocks, <code>kind == "scoreboard"</code> paints the five status rows — both from
+    the model, at the current terminal width. This absorbs what
+    <code>terminal/mirror/</code>, <code>terminal/scoreboard.py</code>, and
+    <code>terminal/panes/streams.py</code> do daemon-side today.</li>
+  <li><span class="step-title">Resize</span>
+    A width change is a local repaint from the model — no reconnect, no width on the wire.
+    <code>PANE_STREAM_PATH</code> in <code>client/_wire.py</code> is replaced by the three
+    /sessionData paths.</li>
+</ol>
+
+<p>Boundaries that do not move: the client stays stdlib-only and imports nothing from the
+project (<code>tests/test_canonical_clients.py</code> enforces this — <code>_model</code>
+and <code>_render</code> join <code>_daemon</code> and <code>_wire</code> on the
+<code>SHARED</code> allowlist). The spawn is untouched: <code>terminal/adapter.py</code>
+and the kitty plugin keep launching <code>terminal_pane.py HOST PORT SESSION_ID KIND</code>;
+<code>PaneCanonicalEventReaction</code> and <code>terminal/panes/commands.py</code>
+(open/close/resize gestures) stay daemon-side.</p>
+
+<div class="callout warn">
+  <div class="callout-icon" aria-hidden="true">▲</div>
+  <div class="callout-body"><span class="callout-label">Caution:</span>
+    The true scope of this step is a reimplementation of roughly 1,000–1,500 lines, not a
+    move. The daemon-side presentation closure is ~990 lines (blocks, highlight, renderer,
+    presenter, scoreboard, theme) plus the diff and color models — none of it importable
+    by a stdlib-only client. And <code>terminal/mirror/highlight.py</code> imports
+    pygments, which is not stdlib: <b>the pane loses syntax highlighting</b>. Decided and
+    accepted.</div>
+</div>
+
+<h3>Test files touched</h3>
+
+<div class="table-wrap">
+  <table>
+    <caption>Table 7. Test impact</caption>
+    <thead><tr><th>File</th><th>Lines</th><th>Impact</th></tr></thead>
+    <tbody>
+      <tr><td><code>test_canonical_plugins.py</code></td><td>4638</td><td>Rewritten in phase 1 — every fixture asserts the new vocabulary.</td></tr>
+      <tr><td><code>test_canonical_projections.py</code></td><td>946</td><td>Replaced by writer tests: each SessionDataWriter, the EntryWriter mapping, the StatusWriter state machine.</td></tr>
+      <tr><td><code>test_canonical_presenters.py</code>, <code>test_dashboard_diff.py</code>, <code>test_terminal_diff.py</code></td><td>706 + 54 + 123</td><td>Deleted with the presenters.</td></tr>
+      <tr><td><code>test_frontend_parity.py</code> → <code>test_dashboard_dom.py</code></td><td>235 + 2.5k jsdom</td><td><b>Kept and renamed</b> — 14 of its 16 tests drive the DOM interactions the rewrite must not break; only the 2 content-route tests die. It is the browser layer's one executable check.</td></tr>
+      <tr><td><code>test_canonical_dashboard.py</code></td><td>1043</td><td>Replaced by /sessionData route + stream contract tests.</td></tr>
+      <tr><td><code>test_canonical_http.py</code></td><td>1677</td><td>Read-route sections replaced; control/preference sections kept.</td></tr>
+      <tr><td><code>test_canonical_clients.py</code></td><td>674</td><td>Extended: the model fold and the two renderers, the <code>SHARED</code> allowlist. Its module-level imports of <code>api.common.content</code> and <code>api.terminal.streams</code> (lines 41-42) break at collection when those files die — fixed in the same step.</td></tr>
+      <tr><td><code>test_repository_sqlite.py</code></td><td>752</td><td>Extended: the four new tables, the fresh-start version bump, cursor monotonicity, the one-transaction <code>apply</code>. Its imports of the operation-output names (lines 34, 58) break at collection on the rename — fixed in the same step.</td></tr>
+      <tr><td><code>test_canonical_architecture.py</code></td><td>1458</td><td>Updated, the full list: the payload columns named as deliberate; <code>test_canonical_sse_has_no_broker…</code> (line 1159) and <code>test_terminal_storage_is_reached…</code> (line 964) re-pointed off deleted files; <code>test_canonical_consumers_cannot_observe…</code> (line 1130) off the mirror files; the file-access allowlist (lines 875, 913); <code>RAW_RESPONSE_ROUTES</code> (line 490) gains the two new SSE handlers; the harness→engine allowlist (lines 271 and 408) re-pointed at the read-model contract; the json/TID251 allowlist cleaned of deleted patterns.</td></tr>
+      <tr><td><code>tests/e2e/*</code></td><td>~1.4k</td><td>Reworked per "The e2e suite, reworked": launches through <code>POST /api/sessions</code> with a pty-terminal daemon, interaction through <code>send-text</code> and the window-addressed key passthrough, assertions through /sessionData (Table 8). The scenarios and features stay; <code>support/harness.py</code> shrinks to gates and diagnostics.</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<h2>The e2e suite, reworked</h2>
+
+<p>Today the suite launches the real <code>claude</code>/<code>codex</code> CLI itself:
+the test process builds the same launch plan the daemon would
+(<code>tests/e2e/support/harness.py:143-158</code>) and spawns it in a pty plugin, while
+the daemon runs with <code>BAQYLAU_TERMINAL="none"</code>
+(<code>support/daemon.py:132-142</code>). <code>POST /api/sessions</code> — the launch
+route — is never exercised, and all interaction (prompts, the first-run trust gate, the
+ctrl+b backgrounding chord) goes through the test's private terminal handle. Two decided
+changes:</p>
+
+<ol class="procedure">
+  <li><span class="step-title">Every launch goes through the API</span>
+    The daemon runs with <code>BAQYLAU_TERMINAL="pty"</code> (the plugin exists,
+    <code>terminal/impl/pty</code>), so it owns the harness's terminal. The test calls
+    <code>POST /api/sessions</code> with harness, model, effort, and working directory —
+    the same launch the dashboard's new-session form performs. <code>support/harness.py</code>
+    loses its launch half (<code>_registry</code>, <code>prepare</code>,
+    <code>launch_tab_request</code>); session discovery keeps its shape — poll the list
+    until the new id appears, because the harness still chooses its own session id
+    (<code>observe.py:96-104</code> stays true).</li>
+  <li><span class="step-title">Every interaction goes through the API</span>
+    Prompts use the existing <code>send-text</code> control. The two raw-key interactions
+    lose their private pty handle when the daemon owns the terminal, so the terminal
+    passthrough gains a pair, addressed by <b>window</b> id — because the trust gate fires
+    before the session exists (a session row is born from the first canonical event, and
+    the harness emits none until the gate is answered), and the window id is what the
+    launch response returns:
+    <code>GET /api/terminal/windows/{window_id}/screen</code> and
+    <code>POST /api/terminal/windows/{window_id}/keys</code> (a key chord list, delivered
+    through the terminal adapter). The trust gate becomes <code>keys: ["enter"]</code>;
+    the backgrounding scenario becomes <code>keys: ["ctrl+b"]</code>, gated by the screen
+    read (<code>OFFER_MARKER</code>, <code>harness.py:56</code>). A third, read-only
+    diagnostic form exists by session — <code>GET /api/sessions/{id}/terminal/screen</code>
+    — because a person debugging holds a session id; key injection stays window-only. All
+    three are explicitly live-terminal passthroughs for tests and diagnostics, not
+    read-model routes, and no harness file is involved.</li>
+</ol>
+
+<p>Every <code>observe.py</code> read maps onto the new API:</p>
+
+<div class="table-wrap">
+  <table>
+    <caption>Table 8. e2e assertion reads, old route → new source</caption>
+    <thead><tr><th>Read today (observe.py)</th><th>Reads after</th></tr></thead>
+    <tbody>
+      <tr><td><code>GET /api/sessions</code> (:85, :107) — session discovery</td><td><code>GET /sessionData</code></td></tr>
+      <tr><td><code>GET /api/sessions/{id}</code> (:119) — session, tab_state, actors, statistics, background_work</td><td><code>GET /sessionData/{id}</code>: <code>session</code>, <code>actors[].status</code>, <code>actors[].statistics</code>, <code>actors[].background</code></td></tr>
+      <tr><td><code>GET /api/sessions/{id}/activity?block_count=200&amp;actor_id=…</code> (:157) — the feed and per-actor attribution</td><td><code>GET /sessionData/{id}/entries</code>, filtered client-side by <code>actor_id</code> and entry type (message, shell_*, assignment_*)</td></tr>
+      <tr><td><code>GET /api/content/{ref}</code> (:227) — command and output text</td><td>Gone — content is embedded: the shell entry's <code>command</code> and folded <code>output</code>, the assignment entry's <code>result</code></td></tr>
+      <tr><td><code>GET /api/health</code> (daemon.py:32)</td><td>Unchanged</td></tr>
+      <tr><td>Direct read-only DB checks — unverdicted raw events, audit errors (:139, :284, :296)</td><td>Unchanged — machinery verdicts have no route, deliberately</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>Per-scenario notes: the greeting's final-answer assertion reads the last assistant
+message entry with <code>phase == "end_turn"</code>; the shell scenario reads the shell
+entry's state and folded output; the subagent attribution asserts the shell entry carries
+the subagent's <code>actor_id</code> and the lead's entry list lacks it; the monitor and
+background scenarios read <code>actors[].background</code> plus the shell entries. The
+polling style (<code>observe.until</code>, 0.5 s) stays — the suite does not adopt SSE.
+The gain is real coverage: the launch route, the send-text control, and the terminal
+passthroughs, untested by e2e today, sit on the tested path of all five scenarios.</p>
+
+<h2>Implementation order</h2>
+
+<p>Eight steps. A red suite between steps is accepted (decided explicitly) — the gate is
+one green run at the last step, not per step. And plainer still: the daemon itself may
+not boot between steps 1 and 3 — the old projections, render items, and
+<code>ControlContext</code> import the deleted payload types at module level, and their
+retype lands in step 3. Accepted (decided explicitly). There is no old/new coexistence
+promise; whatever still imports may keep serving, and whatever does not is dead until its
+step.</p>
+
+<ol class="procedure">
+  <li><span class="step-title">Rewrite the canonical vocabulary</span>
+    <code>domain/events.py</code>, <code>domain/values.py</code> (drop
+    <code>OperationCategory</code>, dead attention types), both translators, the
+    output-following rename, translator-state dedup for <code>model.changed</code> /
+    <code>effort.changed</code>, and turn stamping in the Claude Code translator
+    (<code>turn.started</code> plus <code>turn_id</code> on every event, per Table 2). <code>MAIN_SCHEMA_VERSION</code> 3 → 4, no migration, old
+    migration entries deleted, the <code>shell_output</code> DDL from "The SQL changes,
+    complete"; the developer deletes <code>main.db</code> once.</li>
+  <li><span class="step-title">Split the loops and build the read model</span>
+    Strip the react phase from <code>engine/interpret/loop.py</code>; the new
+    <code>"baqylau-reactions"</code> loop follows the canonical cursor through the
+    <code>reaction_progress</code> row and runs the side-effect reactions (pane,
+    interrupt, tab color) and the harness reactors; the two translation inputs (sessions
+    upsert, shell-output following) stay on the interpreter thread. Then the read model: new repository contract + sqlite implementation, the
+    <code>SessionDataWriter</code> protocol, <code>EntryWriter</code> and the eight
+    aggregate writers appended last on the same loop. A rebuild command that replays
+    <code>canonical_events</code> through the writers only — never through the
+    side-effect reactions.</li>
+  <li><span class="step-title">Build the new API</span>
+    <code>api/sessiondata/</code>: the three GET routes, the two SSE streams, the response
+    models. Every route reads <code>session_data</code>, <code>session_data_actors</code>,
+    and <code>session_entries</code> — nothing else. In the same step, re-source the
+    Table 4b services (notifier, control context, workspace, insights, resume) onto the
+    read model. This step also retypes <code>ControlContext</code> and the dialog
+    controllers — the daemon boots again here.</li>
+  <li><span class="step-title">Rewrite the dashboard frontend</span>
+    Point the JS at <code>/sessionData</code>; build the HTML renderers per entry type;
+    move the collapse, filtering, and attention-derivation logic onto entries.</li>
+  <li><span class="step-title">Rewrite the kitty client</span>
+    <code>client/terminal_pane.py</code> plus the new <code>_model.py</code> and
+    <code>_render.py</code>, per "Kitty pane client" above. A resize repaints from local
+    state.</li>
+  <li><span class="step-title">Rework the e2e suite</span>
+    Per "The e2e suite, reworked": the pty terminal for the daemon, launches through
+    <code>POST /api/sessions</code>, the window-addressed key/screen passthroughs and the session screen
+    passthrough, <code>observe.py</code> re-pointed per Table 8.</li>
+  <li><span class="step-title">Delete the old read path</span>
+    Everything in Table 4, plus their tests. Update the architecture tests for the new
+    layering.</li>
+  <li><span class="step-title">Verify</span>
+    <figure class="code">
+      <figcaption><span class="lang">bash</span></figcaption>
+      <pre><code>make test &amp;&amp; make lint</code></pre>
+    </figure>
+  </li>
+</ol>
+
+<h2>Performance, before and after</h2>
+
+<div class="compare">
+  <div class="bad"><span class="compare-title">Before — measured</span>
+    <p>97.7 ms per session-stream tick on the largest session (7,180 events): eleven folds
+    over the whole event page, three of them identical. Cold first read 481 ms. Every SSE
+    consumer repeats the folds daemon-side.</p></div>
+  <div class="good"><span class="compare-title">After — by construction</span>
+    <p>One indexed <code>WHERE cursor &gt; ?</code> read per tick plus two small-table
+    reads, all against the materialized read model — the API never opens the canonical
+    log. Status and statistics were computed once, at write time; chunk folding and
+    collapse move to the client, bounded by what is on screen.</p></div>
+</div>
+
+<h2>Open risks</h2>
+
+<ul>
+  <li><b>The scale of steps 4 and 5.</b> The dashboard layer is ~3.1k lines plus the static
+    JS; the terminal layer ~3.8k. These are rewrites, not edits.</li>
+  <li><b>The test suite.</b> ~14.7k lines across 20 files touch the layers this changes.
+    Step 1 alone reshapes every translator test.</li>
+  <li><b>The status logic is a rewrite, not a port.</b> Table 0 is its specification;
+    <code>StatusWriter</code> is the one writer with real state-machine logic and needs
+    its own tests, verified branch by branch against
+    <code>engine/projections/tabstate.py</code> before that file dies.</li>
+  <li><b>All history is discarded.</b> <code>main.db</code> is deleted at deploy;
+    preferences go with it. Accepted, decided.</li>
+  <li><b>Payloads are stored twice.</b> Feed-worthy payloads live in
+    <code>canonical_events</code> and again in <code>session_entries</code> — a few MB per
+    session on local disk. Accepted; a missed entry write is repaired by the rebuild
+    replay.</li>
+  <li><b>Replay must distinguish writers from side effects.</b> The rebuild command and
+    any catch-up from an old progress cursor drive the writers; the pane, interrupt,
+    notification, and OTel reactions must be excluded from historic replay, or old
+    sessions reopen panes. The loop needs an explicit "live versus replay" boundary, and
+    a test for it.</li>
+  <li><b>Every reaction gains up to 0.25 s of latency.</b> Pane opening and interrupt
+    clearing now ride the reaction loop's tick. Accepted as the price of an unstallable
+    translator; if a gesture ever feels slow, the interpreter can set a wake event the
+    loop waits on instead of sleeping.</li>
+</ul>

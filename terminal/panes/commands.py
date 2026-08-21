@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from audit.recorder import AuditRecorder
+from domain.ids import SessionId
 from terminal.services.panes import PaneWidthService
 from terminal.adapter import TerminalAdapter
 
@@ -70,7 +71,7 @@ class PaneCommandService:
     def _execute(
         self,
         command: str,
-        session_id,
+        session_id: SessionId,
         working_directory: str,
         columns: int | None,
         percent: int | None,
@@ -102,7 +103,7 @@ class PaneCommandService:
                 self._widths.remember_width(working_directory, width_percent)
         return PaneCommandOutcome(True, result.succeeded, result.reason)
 
-    def _remember_current_width(self, session_id, working_directory: str) -> None:
+    def _remember_current_width(self, session_id: SessionId, working_directory: str) -> None:
         geometry = self._terminal.activity_pane_geometry(session_id)
         if geometry is None:
             return

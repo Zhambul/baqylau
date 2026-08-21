@@ -6,9 +6,7 @@
 function showList() {
   leaveSession();
   renderList();
-  if (!S.sessions.length)
-    fetch("/api/sessions").then(r => r.json())
-      .then(applyCanonicalSessions);
+  if (!S.sessions.length) loadSessionDataList();
 }
 
 function applyCanonicalSessions(sessions) {
@@ -241,7 +239,7 @@ function sessionCard(row) {
   else if (S.closing.has(sessionId(row))) {           // optimistic close in flight
     a.classList.add("closing");                // greyed until the sessions poll parks it
     corner.append(el("span", "chip2 closing", "closing…"));
-  } else if (sessionWindowId(row))
+  } else if (sessionIsLive(row))
     corner.append(cardClose(sessionId(row)));
   if (corner.childNodes.length) a.append(corner);
   const r = el("div", "row");
@@ -249,31 +247,32 @@ function sessionCard(row) {
   badge.dataset.tab = sessionTabState(row) || "";
   badge.append(el("span", "st"), tnode(TAB_LABEL[sessionTabState(row) || ""] || sessionTabState(row)));
   r.append(badge);
-  const commandCount = row.statistics.shell_command_count || 0;
+  const commandCount = sessionStatistics(row).shell_command_count || 0;
   if (commandCount) r.append(seg(commandCount + " cmds"));
-  const tokens = row.usage.tokens;
+  const usage = sessionUsage(row);
+  const tokens = usage.tokens;
   const tokenCount = tokens.input_tokens + tokens.output_tokens
     + tokens.cache_read_tokens + tokens.cache_write_tokens
     + tokens.one_hour_cache_write_tokens;
   if (tokenCount) r.append(seg(kfmt(tokenCount) + " tok"));
-  if (row.usage.cost_in_usd != null)
-    r.append(segc(usd(Number(row.usage.cost_in_usd)), "cost"));
+  if (usage.cost_in_usd != null)
+    r.append(segc(usd(Number(usage.cost_in_usd)), "cost"));
   // recency, not age: started_at here read as staleness — a live session an
   // hour into its work showed "1h ago" while actively streaming
   if (lastActive(row)) r.append(seg(ago(lastActive(row))));
   if (row.repository) r.append(gitChip(row.repository));
   a.append(r);
-  const context = row.context.by_actor[row.session.lead_actor_id];
-  if (context) {
+  const context = sessionContext(row);
+  if (context.window_tokens) {
     const usedTokens = context.used_tokens || 0;
     const windowTokens = context.window_tokens || 0;
     a.append(contextBar({
       used: usedTokens,
       window: windowTokens,
       pct: windowTokens ? Math.round(usedTokens * 100 / windowTokens) : 0,
-      model_short: context.model
-        ? (context.model.display_name || context.model.native_id) : "",
-      model_selection: context.model ? context.model.selection_id : null,
+      // The context window belongs to a MODEL, and the model is one display
+      // name now — the id the picker would send back comes from the catalog.
+      model_short: sessionModel(row),
     }, false, { key: sessionId(row) }));
   }
   return a;
@@ -389,8 +388,7 @@ function contextWidthFor(key, pct) {
 //
 // `opts.comp` = the session's `compacting` record ({since, trigger}) → the bar
 // BREATHES: the geometry is frozen at the current occupancy and only the fill's
-// brightness moves, a slow 3s fade (docs/dashboard.md, *Compaction on the ctx
-// bar*). Everything that says WHAT is happening is static — the violet tint,
+// brightness moves, a slow 3s fade. Everything that says WHAT is happening is static — the violet tint,
 // the ⟳, the "compacting…" detail — so the motion has to carry nothing but
 // "still going", and the quietest thing that can say that is light.
 // `opts.key` identifies the bar across repaints so the post-compaction drop
@@ -443,21 +441,14 @@ function updateHeadFromList() {
   // on a real change — not every per-tick tab change (that reflows the header
   // each second) — and not while drilled into a subagent (renderSessionChrome
   // clears agentFocus; the ← session rebuild picks it up on the way back) or mid
-  // inline-rename. The window compare is gated on sessionIsLive(row): for a LIVE row the
-  // list now serves the SAME live-RESOLVED terminal_window_id meta does (aligned in
-  // sessions_payload — both blank until the pane is tagged, then the same id),
-  // so this compare is apples-to-apples and only a REAL window move (or the
-  // tag-race resolving blank→id, once) rebuilds the header. It used to serve the
-  // RAW audit id, so the two disagreed across the tag-race and this fought
-  // loadMeta every tick, flickering the action row (fixed 2026-07-24). A parked
-  // row still carries the raw id, but winMoved is gated on sessionIsLive(row) so it's
-  // never compared.
+  // inline-rename. LIVENESS is the whole comparison now: the window id used to
+  // ride along, and a MOVE between windows rebuilt the header too — but the id
+  // is deliberately never served any more (a frontend needs to know whether a
+  // session is attended, not the handle it is attended through), so a move is
+  // invisible here and costs one stale header until something else redraws it.
   const m = S.sessionView.meta;
-  const winMoved = sessionIsLive(row)
-    && (m && m.terminal_window_id || "") !== (sessionWindowId(row) || "");
-  if (m && (!!m.live !== !!sessionIsLive(row) || winMoved)) {
+  if (m && !!m.live !== !!sessionIsLive(row)) {
     m.live = sessionIsLive(row);
-    m.terminal_window_id = sessionWindowId(row);
     m.parked = sessionIsParked(row);
     const renaming = S.sessionView.projEl && S.sessionView.projEl.querySelector("input");
     if (!S.sessionView.agentFocus && !S.sessionView.monitorFocus && !S.sessionView.jobFocus && !renaming)

@@ -34,7 +34,7 @@ TITLE_HEAD_LINES = 200   # rollout head lines the first-prompt fallback scans
 CONNECT_TIMEOUT_SECONDS = 2.0
 
 
-def _state_database():
+def _state_database() -> str:
     """The newest codex `state_<N>.sqlite` index (highest N), or "" — resolved
     defensively because the numbered name drifts across codex versions."""
     candidates = glob.glob(os.path.join(_CODEX_DIR, "state_*.sqlite"))
@@ -50,7 +50,7 @@ def _state_database():
     return plain if os.path.isfile(plain) else ""
 
 
-def _thread_uuid(path):
+def _thread_uuid(path: str) -> str:
     """The thread uuid a rollout path names (== the session id for a standalone
     host), or "" — read out of the `rollout-<ts>-<uuid>.jsonl` filename."""
     match = _UUID.search(os.path.basename(path or ""))

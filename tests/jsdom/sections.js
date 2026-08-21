@@ -1,7 +1,7 @@
 // tests/jsdom/sections.js — drives the REAL secondary-tab engine
 // (the SECTIONS table + loadSection/renderSectionGrid/showSection/… in
 // dashboard/static/app.11-chrome.js) over the shared DOM shim, and prints one
-// JSON verdict object that test_l0_dashboard.py asserts on.
+// JSON verdict object that tests/test_dashboard_dom.py asserts on.
 //
 // It verifies both canonical snapshot-backed sections still render their
 // existing cards, order, empty labels, breadcrumbs, and badges. It also proves

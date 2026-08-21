@@ -24,7 +24,7 @@ FAILED = "failed"       # the service said no; the alert is still out there
 NOTHING = "nothing"     # the send never landed anything — nothing to take back
 
 
-def alert_text(entry):
+def alert_text(entry: dict[str, str]) -> tuple[str, str, str]:
     """The alert pieces both channels build the same way from one `entry`: the
     🔴/🟢 headline (project + needs-you/is-done), the detail line (the session
     title, or a kind-specific fallback), and the ?s=<session_id> deep link. Returns the
@@ -45,7 +45,7 @@ def alert_text(entry):
     return head, detail, url
 
 
-def push_tag(session_id):
+def push_tag(session_id: str) -> str:
     """The notification tag a pushed alert is shown under — the ONE encoding of
     it, shared by the sender, the retraction and the service worker (sw.js
     builds the same string). It is what makes a repeat alert REPLACE its

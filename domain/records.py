@@ -32,11 +32,28 @@ class StoredCanonicalEvent:
 
 
 @dataclass(frozen=True)
-class CanonicalEventPage:
-    events: tuple[StoredCanonicalEvent, ...]
+class CommittedEvent:
+    """One accepted fact, as the reaction loop reads it.
+
+    The fact, when we recorded it, and its place in the one order everything
+    after it depends on. Deliberately NOT a `StoredCanonicalEvent`: that one
+    also carries the raw evidence its fact was derived from, which the audit
+    needs and a reaction never does — and reading it would mean a second query
+    per page, across sessions, for provenance nobody looks at.
+    """
+
     cursor: int
-    latest_cursor: int | None
-    has_more: bool
+    accepted_at: float
+    event: CanonicalEvent[EventPayload]
+
+    @property
+    def happened_at(self) -> float:
+        """When it happened, or failing that when we heard about it.
+
+        `occurred_at` is nullable BY DESIGN — it is what the source said, and
+        sources that carry no clock leave it empty. Every fold that measures or
+        orders needs one number, and this is that number."""
+        return self.event.occurred_at if self.event.occurred_at is not None else self.accepted_at
 
 
 @dataclass(frozen=True)

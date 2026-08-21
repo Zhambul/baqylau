@@ -31,7 +31,7 @@
 #
 # There was a third — an uncapped drill-down timeline behind plugins.activity()
 # — and it is gone with that fan-out: a codex run's web view is the mirror it
-# already paints, scoped (docs/dashboard.md *Agent scope*).
+# already paints, scoped.
 #
 # TWO REGISTERS, deliberately not unified (docs/codex.md *Two registers*): a
 # codex rollout says most things TWICE — once as an `event_msg` (codex's own
@@ -82,6 +82,7 @@
 import json
 import os
 from datetime import datetime
+from typing import Any
 
 from harness.impl.codex.canonical.events import EVENTS
 from harness.impl.codex.canonical.items import RESPONSES
@@ -100,7 +101,7 @@ from harness.impl.codex.canonical.items import RESPONSES
 # `rollout-*.jsonl` elsewhere from being claimed.
 
 
-def owns(path):
+def owns(path: str) -> bool:
     """Is `path` a codex rollout this plugin SPEAKS — the `owns` provider behind
     plugins._first_path (the ownership gate on every path-keyed read fan-out) and
     plugins.owns_by / host_of (the dashboard's host attribution)? True for a
@@ -119,7 +120,7 @@ def owns(path):
 
 # --- the TOP-LEVEL register (neither event_msg nor response_item) ----------------
 
-def _turn_context(p):
+def _turn_context(p: dict[str, Any]) -> dict[str, Any]:
     # `reasoning_effort` moved under collaboration_mode.settings in 0.14x; the
     # bare top-level `effort` is the older (and still emitted) spelling.
     eff = (((p.get("collaboration_mode") or {}).get("settings") or {})
@@ -128,7 +129,7 @@ def _turn_context(p):
             "effort": eff}
 
 
-def _top_compacted(p):
+def _top_compacted(p: dict[str, Any]) -> dict[str, Any]:
     # The TOP-LEVEL compaction record (distinct from the event_msg
     # `context_compacted` notice the mirror paints as ⟳): it is the boundary
     # itself, and `message` is usually "" because the summary is encrypted.
@@ -142,7 +143,7 @@ def _top_compacted(p):
             "previous_window_id": p.get("previous_window_id")}
 
 
-def _top_world_state(p):
+def _top_world_state(p: dict[str, Any]) -> dict[str, Any]:
     # A large periodic state snapshot (open files, shell sessions, todos).
     # Explicitly ignored: nothing in it is renderable.
     #
@@ -176,7 +177,7 @@ _ENVELOPE_TS = ("task_started", "task_complete", "exec", "exec_result",
                 "message")
 
 
-def _stamp(rec, o):
+def _stamp(rec: dict[str, Any] | None, o: dict[str, Any]) -> dict[str, Any] | None:
     if rec is not None and rec["kind"] in _ENVELOPE_TS:
         rec["ts"] = o.get("timestamp")
     return rec
@@ -212,26 +213,26 @@ KINDS = frozenset({
 })
 
 
-def parse(o):
+def parse(o: dict[str, Any]) -> dict[str, Any] | None:
     """One decoded rollout object -> a typed record (module header) or None."""
     t = o.get("type")
     p = o.get("payload") or {}
     if t == "event_msg":
-        h = EVENTS.get(p.get("type"))
+        h = EVENTS.get(p.get("type") or "")
         return _stamp(h(p), o) if h else None
     if t == "response_item":
-        h = RESPONSES.get(p.get("type"))
+        h = RESPONSES.get(p.get("type") or "")
         # response_item too: exec / exec_result carry the envelope timestamp so a
         # standalone exec block can time itself (_stamp is a no-op for the rest).
         return _stamp(h(p), o) if h else None
-    h = _TOP.get(t)
+    h = _TOP.get(t or "")
     # A top-level record's fields sit under `payload` in the enveloped
     # spelling and at the top level in the older bare-item one — hand the
     # handler whichever mapping actually holds them.
     return h(o.get("payload") or o) if h else None
 
 
-def parse_line(s):
+def parse_line(s: str) -> dict[str, Any] | None:
     """One rollout JSONL line -> a typed record; {"kind": "bad", "raw": s}
     when the line isn't JSON at all (the stream keeps its own json.loads so
     its malformed-line audit contract stays where it was)."""
@@ -257,7 +258,7 @@ def parse_line(s):
 # `actor.assignment_started` (measured, session 01a00a31-3a90: the started card
 # never painted). Everything before it is the replayed prefix.
 
-def subagent_fork_epoch(path):
+def subagent_fork_epoch(path: str) -> int | None:
     """int(the child `session_meta` timestamp) for a SUBAGENT rollout, else None
     (a normal rollout / unreadable head). A subagent rollout's first session_meta
     has `thread_source == "subagent"` (or a `source.subagent.thread_spawn`)."""
@@ -281,11 +282,11 @@ def subagent_fork_epoch(path):
         return None
 
 
-def is_child_bootstrap(rec, fork_epoch):
+def is_child_bootstrap(rec: dict[str, Any] | None, fork_epoch: int | None) -> bool:
     """True for the child's OWN bootstrap `task_started` (`at >= fork_epoch`) —
     the FIRST child-own record; the replayed-parent prefix is everything before
     it. `fork_epoch` None => never."""
-    return (fork_epoch is not None and bool(rec)
+    return (fork_epoch is not None and rec is not None
             and rec.get("kind") == "task_started"
             and (rec.get("at") or 0) >= fork_epoch)
 
@@ -299,7 +300,7 @@ BRIEF_MAX_LINES = 500
 BRIEF_MAX_B = 4 << 20
 
 
-def subagent_body_offset(path):
+def subagent_body_offset(path: str) -> int:
     """Byte offset of the first CHILD-OWN record in a subagent rollout — the
     child's bootstrap task_started itself (its turn/assignment start), skipping
     the replayed-parent prefix before it. 0 for a normal rollout OR when the

@@ -1,12 +1,12 @@
-"""Canonical tab states mapped to the established terminal color palette."""
+"""Canonical actor statuses mapped to the established terminal color palette."""
 
+from domain.sessiondata import ActorStatus
 from terminal.models import RGB, TabAppearance
-from engine.projections import TabState
 
 LIGHT_TEXT = RGB(230, 233, 239)
 INACTIVE_TEXT = RGB(192, 196, 204)
 
-TAB_APPEARANCES: dict[TabState, TabAppearance] = {
+TAB_APPEARANCES: dict[ActorStatus, TabAppearance] = {
     "idle": TabAppearance(RGB(92, 99, 112), LIGHT_TEXT, RGB(51, 55, 63), INACTIVE_TEXT),
     "thinking": TabAppearance(RGB(198, 120, 221), RGB(26, 6, 32), RGB(74, 43, 82), INACTIVE_TEXT),
     "working": TabAppearance(RGB(198, 120, 221), RGB(26, 6, 32), RGB(74, 43, 82), INACTIVE_TEXT),
@@ -32,5 +32,5 @@ TAB_APPEARANCES: dict[TabState, TabAppearance] = {
 }
 
 
-def tab_appearance(state: TabState) -> TabAppearance:
+def tab_appearance(state: ActorStatus) -> TabAppearance:
     return TAB_APPEARANCES[state]

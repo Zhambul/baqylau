@@ -5,8 +5,9 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
-from domain.events import CanonicalEvent
-from domain.values import ModelReference, StructuredContent, TextContent
+from domain.events import CanonicalEvent, EventPayload
+from domain.ids import TurnId
+from domain.values import Content, ModelReference, StructuredContent, TextContent
 from harness.impl.claude_code import model
 from harness.models import RawEvent, canonical_event
 
@@ -19,7 +20,7 @@ def model_reference(native_id: str) -> ModelReference:
     )
 
 
-def timestamp(value) -> float | None:
+def timestamp(value: object) -> float | None:
     if isinstance(value, (int, float)):
         return float(value)
     if not isinstance(value, str) or not value:
@@ -30,7 +31,7 @@ def timestamp(value) -> float | None:
         return None
 
 
-def content(value, *, markdown: bool = False):
+def content(value: object, *, markdown: bool = False) -> Content:
     if isinstance(value, (dict, list)):
         return StructuredContent(json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True))
     return TextContent(str(value or ""), "text/markdown" if markdown else "text/plain")
@@ -41,8 +42,15 @@ def event(
     subject_type: str,
     subject_id: str,
     phase: str,
-    payload,
+    payload: EventPayload,
     *,
+    turn_id: TurnId | None = None,
     occurred_at: float | None = None,
-) -> CanonicalEvent:
-    return canonical_event(raw_event, subject_type, subject_id, phase, payload, occurred_at=occurred_at)
+) -> CanonicalEvent[EventPayload]:
+    """One fact. `turn_id` is for the two events that name a turn themselves;
+    everything else is stamped with the open turn on its way out of the
+    translator (`ClaudeCanonicalTranslator.translate`)."""
+    return canonical_event(
+        raw_event, subject_type, subject_id, phase, payload,
+        turn_id=turn_id, occurred_at=occurred_at,
+    )

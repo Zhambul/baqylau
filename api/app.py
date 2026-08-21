@@ -8,6 +8,7 @@
 # only about the registry they hand in.
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -18,18 +19,20 @@ from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from api import config
-from api.common import content, health, hooks
-from api.common import telemetry as harness_telemetry
-from api.dashboard import application as dashboard_application
-from api.dashboard import catalog, controls, files, sessions, static, telemetry
-from api.dashboard import streams as dashboard_streams
+from api.application import catalog, files, preferences, static
+from api.common import health
+from api.controls import routes as controls
+from api.hooks import routes as hooks
+from api.telemetry import browser as browser_telemetry
+from api.telemetry import harness as harness_telemetry
 from api import dependencies
 from api.lifecycle import background_workers
 from api.middleware import SecurityHeaders, SelectiveGZip
 from api.common.models.replies.error_response import ErrorResponse
 from api.responses import EVERY_ROUTE
-from api.terminal import panes, views
-from api.terminal import streams as terminal_streams
+from api.sessiondata import routes as session_data_routes
+from api.sessiondata import streams as session_data_streams
+from api.terminal import panes
 from app import providers
 from app.injection import Instances, registry, resolve
 from domain.errors import ApplicationInputError
@@ -40,7 +43,7 @@ _FRAMEWORK_NOT_FOUND = "Not Found"
 
 
 @asynccontextmanager
-async def _lifespan(web: FastAPI):
+async def _lifespan(web: FastAPI) -> AsyncIterator[None]:
     # Sync route handlers share the anyio worker-thread pool; SSE is async and
     # costs no thread, so this cap only has to absorb request bursts.
     policy = resolve(web.state.instances, dependencies.policy)
@@ -172,18 +175,19 @@ def build_web_application(
     web.include_router(health.router)
     web.include_router(hooks.router)
     web.include_router(harness_telemetry.router)
-    web.include_router(content.router)
-    web.include_router(terminal_streams.router)
     web.include_router(panes.router)
-    web.include_router(views.router)
-    web.include_router(dashboard_streams.router)
+    # The read surface: three GETs and two streams, over the read model only.
+    # The streams go FIRST, deliberately: `/sessionData/stream` and
+    # `/sessionData/{session_id}` both match the same path, and the first router
+    # registered wins.
+    web.include_router(session_data_streams.router)
+    web.include_router(session_data_routes.router)
     web.include_router(controls.router)
-    web.include_router(dashboard_application.router)
-    web.include_router(dashboard_application.guarded)
-    web.include_router(telemetry.router)
+    web.include_router(preferences.router)
+    web.include_router(preferences.guarded)
+    web.include_router(browser_telemetry.router)
     web.include_router(files.router)
     web.include_router(catalog.router)
-    web.include_router(sessions.router)
     web.include_router(static.router)
 
     _publish_openapi_without_the_422(web)

@@ -12,27 +12,27 @@ from domain.events import (
     CanonicalEvent,
     CompactionFinished,
     ContextReported,
-    EffortChanged,
     EventPayload,
     GoalChanged,
     MessageCreated,
-    ModelChanged,
-    OperationFinished,
-    OperationOutputFinished,
-    OperationProgressed,
     ReasoningCreated,
     SessionAccountChanged,
     SessionStarted,
     SessionTitleChanged,
+    ShellOutputFinished,
+    ShellProgressed,
     TaskChanged,
+    TurnStarted,
 )
-from domain.ids import ActorId, AssignmentId, MessageId, OperationId, TaskId
+from domain.ids import ActorId, AssignmentId, MessageId, ShellId, TaskId, TurnId
 from domain.values import AccountReference, MessagePhase, MessageRole, Outcome, TitleOrigin
 from harness.impl.claude_code import model
 from harness.impl.claude_code.canonical import transcript
 from harness.impl.claude_code.canonical.support import content, event, model_reference, timestamp
 from harness.impl.claude_code.canonical.toolcalls import BACKGROUND_LAUNCH_STUB, ToolCallSemantics
+from harness.impl.claude_code.canonical.turns import TurnSemantics
 from harness.models import RawEvent, TranslationError
+from harness.models.selections import SelectionSemantics
 
 
 # How a background command ENDED, from the `<status>` on the completion
@@ -55,7 +55,11 @@ def background_outcome(status: object) -> Outcome | None:
     return BACKGROUND_OUTCOMES.get(str(status or "").strip().lower(), "unknown") if status else None
 
 
-def launch_selections(raw_event: RawEvent, document: dict) -> list[CanonicalEvent]:
+def launch_selections(
+    raw_event: RawEvent,
+    document: dict,
+    selections: SelectionSemantics,
+) -> list[CanonicalEvent]:
     """The launch observation the gateway recorded from the hook's inherited
     environment: the `--model`/`--effort` the launcher started the CLI with.
 
@@ -69,23 +73,49 @@ def launch_selections(raw_event: RawEvent, document: dict) -> list[CanonicalEven
     events = []
     model_selection = document.get("model")
     if isinstance(model_selection, str) and model_selection:
-        events.append(event(
-            raw_event,
-            "model",
-            subject_id,
+        changed = selections.model(
+            raw_event.session_id,
+            raw_event.actor_id,
+            model_reference(model_selection),
             "selected",
-            ModelChanged(None, model_reference(model_selection), "selected"),
-        ))
+        )
+        if changed is not None:
+            events.append(event(raw_event, "model", subject_id, "selected", changed))
     effort_selection = document.get("effort")
     if isinstance(effort_selection, str) and effort_selection:
-        events.append(event(
-            raw_event,
-            "effort",
-            subject_id,
-            "selected",
-            EffortChanged(None, effort_selection, "selected"),
-        ))
+        chosen = selections.effort(
+            raw_event.session_id, raw_event.actor_id, effort_selection, "selected"
+        )
+        if chosen is not None:
+            events.append(event(raw_event, "effort", subject_id, "selected", chosen))
     return events
+
+
+def prompt_turn(
+    raw_event: RawEvent,
+    turns: TurnSemantics,
+    native_identity: str,
+    occurred_at: float | None,
+) -> list[CanonicalEvent]:
+    """The turn this prompt opens, if it opens one.
+
+    The prompt's own identity is the turn's: nothing else in Claude Code's
+    evidence names a turn, and the prompt is what the turn answers.
+    """
+    turn_id = TurnId(native_identity)
+    if not turns.begin(raw_event, turn_id):
+        return []
+    return [
+        event(
+            raw_event,
+            "turn",
+            str(turn_id),
+            "started",
+            TurnStarted(MessageId(native_identity)),
+            turn_id=turn_id,
+            occurred_at=occurred_at,
+        )
+    ]
 
 
 def slash_command(
@@ -93,17 +123,18 @@ def slash_command(
     record: dict,
     native_identity: str,
     occurred_at: float | None,
+    turns: TurnSemantics,
+    selections: SelectionSemantics,
 ) -> list[CanonicalEvent]:
     """A `/command` turn: the SESSION-STATE event the command asked for,
     where there is one, otherwise a prompt bubble holding what the human
     typed.
 
     `/model`/`/effort` with a valid selection emit ONLY the state event —
-    the dashboard's own model/effort-change block (engine/projections/
-    activity.py) is what shows the switch, so a second, redundant prompt
-    bubble echoing "/model opus" would just duplicate it. Every other
+    the model-change entry is what shows the switch, so a second, redundant
+    prompt bubble echoing "/model opus" would just duplicate it. Every other
     slash command (and a bare `/model`/`/effort`, or one with more than
-    one argument token — not a selection) has no such block, so it still
+    one argument token — not a selection) has no such entry, so it still
     gets the typed-text bubble.
 
     The state event is emitted from the ARGUMENT, which is a selection ALIAS
@@ -118,19 +149,26 @@ def slash_command(
     """
     name = record["name"].lstrip("/").strip().lower()
     selection = record["args"].strip()
-    if selection and len(selection.split()) == 1:
-        if name == "model":
-            payload: EventPayload = ModelChanged(None, model_reference(selection), "selected")
-            return [
-                event(raw_event, name, native_identity, "selected", payload, occurred_at=occurred_at)
-            ]
-        if name == "effort":
-            payload = EffortChanged(None, selection, "selected")
-            return [
-                event(raw_event, name, native_identity, "selected", payload, occurred_at=occurred_at)
-            ]
+    if selection and len(selection.split()) == 1 and name in ("model", "effort"):
+        payload: EventPayload | None = (
+            selections.model(
+                raw_event.session_id, raw_event.actor_id, model_reference(selection), "selected"
+            )
+            if name == "model"
+            else selections.effort(
+                raw_event.session_id, raw_event.actor_id, selection, "selected"
+            )
+        )
+        # A `/model x` that selects what is already selected settles nothing,
+        # and the typed text is not a prompt either — the command was still
+        # about the state, not a thing to say.
+        if payload is None:
+            return []
+        return [
+            event(raw_event, name, native_identity, "selected", payload, occurred_at=occurred_at)
+        ]
     role: MessageRole = "parent" if raw_event.parent_actor_id is not None else "user"
-    return [
+    events = [
         event(
             raw_event,
             "message",
@@ -140,6 +178,9 @@ def slash_command(
             occurred_at=occurred_at,
         )
     ]
+    if role == "user":
+        events = prompt_turn(raw_event, turns, native_identity, occurred_at) + events
+    return events
 
 
 def transcript_metadata(raw_event: RawEvent, document: dict) -> list[CanonicalEvent]:
@@ -257,7 +298,6 @@ def task_event(raw_event: RawEvent, task: dict) -> CanonicalEvent:
     owner = str(task.get("owner") or "").strip()
     payload = TaskChanged(
         task_id,
-        str(task_id),
         str(task.get("subject") or ""),
         str(task.get("description") or "").strip() or None,
         state,
@@ -271,6 +311,8 @@ def translate_transcript(
     document: dict,
     record: dict,
     toolcalls: ToolCallSemantics,
+    turns: TurnSemantics,
+    selections: SelectionSemantics,
     *,
     actor_started: bool,
 ) -> list[CanonicalEvent]:
@@ -294,47 +336,54 @@ def translate_transcript(
         payload: EventPayload = MessageCreated(
             MessageId(native_identity), role, content(record["text"]), phase, None
         )
-        return [event(raw_event, "message", native_identity, "created", payload, occurred_at=occurred_at)]
+        created = event(raw_event, "message", native_identity, "created", payload, occurred_at=occurred_at)
+        if role != "user":
+            # A synthetic or parent-authored prompt is machinery or a brief; a
+            # turn belongs to the person who asked for one.
+            return [created]
+        return [*prompt_turn(raw_event, turns, native_identity, occurred_at), created]
     if kind == "slash_command":
-        return slash_command(raw_event, record, native_identity, occurred_at)
+        return slash_command(
+            raw_event, record, native_identity, occurred_at, turns, selections
+        )
     if kind == "goal":
         payload = GoalChanged(record.get("objective"), record["state"], record.get("reason"))
         return [event(raw_event, "goal", native_identity, "changed", payload, occurred_at=occurred_at)]
     if kind == "background_command_completed":
-        operation_id = OperationId(str(record.get("operation_id") or ""))
-        if not operation_id:
+        shell_id = ShellId(str(record.get("operation_id") or ""))
+        if not shell_id:
             raise TranslationError(
-                "Claude Code background completion has no operation id",
+                "Claude Code background completion has no command id",
                 context=raw_event.source_position,
             )
         # The JOB's outcome, which the notification carries and this translation
         # used to drop — leaving the dashboard to report the LAUNCH's outcome, so a
         # background command that exited non-zero read as succeeded.
-        payload = OperationOutputFinished(operation_id, background_outcome(record.get("status")))
+        payload = ShellOutputFinished(shell_id, background_outcome(record.get("status")))
         return [event(
             raw_event,
-            "operation",
-            str(operation_id),
+            "shell",
+            str(shell_id),
             "output_finished",
             payload,
             occurred_at=occurred_at,
         )]
     if kind == "monitor_event":
         # One line the watched command printed. Recorded as progress on the
-        # armed operation — the same shape a command's output takes — under the
-        # "status" stream, which is what the monitors tab reads as an EVENT
-        # rather than as output (dashboard/services/sessions.py).
+        # armed command — the same shape a command's output takes — under the
+        # "status" stream, which is what a monitors panel reads as an EVENT
+        # rather than as output.
         task_id = str(record.get("task") or "")
-        armed = toolcalls.monitor_operation(task_id)
+        armed = toolcalls.monitor_shell(task_id)
         if armed is None:
             # A monitor armed before this translation began — a daemon restarted
-            # mid-watch. The event belongs to an operation we cannot name, and
-            # inventing one would put a phantom monitor on the tab. Dropped;
+            # mid-watch. The event belongs to a command we cannot name, and
+            # inventing one would put a phantom monitor on the panel. Dropped;
             # the watch's own end still lands, because that notification names
             # its tool_use_id outright.
             return []
         ordinal = toolcalls.next_monitor_ordinal(task_id)
-        payload = OperationProgressed(
+        payload = ShellProgressed(
             armed,
             ordinal,
             "status",
@@ -343,7 +392,7 @@ def translate_transcript(
         )
         return [event(
             raw_event,
-            "operation",
+            "shell",
             str(armed),
             f"progress:status:{ordinal}",
             payload,
@@ -351,20 +400,20 @@ def translate_transcript(
         )]
     if kind == "monitor_ended":
         # The watch itself ending, which is NOT its arm returning: the arm's
-        # `operation.finished` arrived turns ago and the projection deliberately
+        # `shell.finished` arrived turns ago and the status writer deliberately
         # ignores it for a monitor. This is the same fact a background job's
         # completion is, so it is the same event.
-        operation_id = OperationId(str(record.get("operation_id") or ""))
-        if not str(operation_id):
+        shell_id = ShellId(str(record.get("operation_id") or ""))
+        if not str(shell_id):
             raise TranslationError(
-                "Claude Code monitor end has no operation id",
+                "Claude Code monitor end has no command id",
                 context=raw_event.source_position,
             )
-        payload = OperationOutputFinished(operation_id, background_outcome(record.get("status")))
+        payload = ShellOutputFinished(shell_id, background_outcome(record.get("status")))
         return [event(
             raw_event,
-            "operation",
-            str(operation_id),
+            "shell",
+            str(shell_id),
             "output_finished",
             payload,
             occurred_at=occurred_at,
@@ -477,7 +526,6 @@ def translate_transcript(
                 payload = ReasoningCreated(
                     block_identity,
                     content(block.get("thinking"), markdown=True),
-                    False,
                 )
                 events.append(
                     event(
@@ -494,16 +542,23 @@ def translate_transcript(
         model_id = record.get("model")
         model_reference_value = model_reference(model_id) if model_id else None
         if model_reference_value is not None:
-            events.append(
-                event(
-                    raw_event,
-                    "model",
-                    message_identity,
-                    "reported",
-                    ModelChanged(None, model_reference_value, "reported_by_harness"),
-                    occurred_at=occurred_at,
-                )
+            reported = selections.model(
+                raw_event.session_id,
+                raw_event.actor_id,
+                model_reference_value,
+                "reported_by_harness",
             )
+            if reported is not None:
+                events.append(
+                    event(
+                        raw_event,
+                        "model",
+                        message_identity,
+                        "reported",
+                        reported,
+                        occurred_at=occurred_at,
+                    )
+                )
         usage = record.get("usage")
         if isinstance(usage, dict) and model_reference_value is not None:
             events.append(
@@ -523,33 +578,27 @@ def translate_transcript(
         return events
     if kind == "results":
         events = []
-        for block in record.get("blocks") or ():
-            operation_id = OperationId(str(block.get("tool_use_id") or native_identity))
-            if str(operation_id) in toolcalls.task_tool_ids:
-                continue
-            result_content = block.get("content")
-            result_text = transcript.result_text(result_content)
+        blocks = list(record.get("blocks") or ())
+        # The line's `toolUseResult` sidecar carries what only the native
+        # response document holds — a diff's structured patch, a background
+        # launch's task id. It belongs to the line, so it can only be attributed
+        # when the line holds exactly one result.
+        sidecar = record.get("tur") if len(blocks) == 1 else None
+        for block in blocks:
+            call_id = str(block.get("tool_use_id") or native_identity)
+            result_text = transcript.result_text(block.get("content"))
             # A background launch's tool_result is boilerplate ("Command
             # running in background with ID … Output is being written to …"),
             # and its REPLACE mode would wipe any watch chunk that committed
             # first. The real output arrives through the file watch.
             if result_text.startswith(BACKGROUND_LAUNCH_STUB):
                 continue
-            progress = OperationProgressed(
-                operation_id,
-                0,
-                "output",
-                content(result_text),
-                "replace",
+            failed = bool(block.get("is_error"))
+            events.extend(
+                toolcalls.tool_result(raw_event, call_id, result_text, failed, sidecar)
             )
-            events.append(
-                event(raw_event, "operation", str(operation_id), "progress:0", progress)
-            )
-            outcome = "failed" if block.get("is_error") else "succeeded"
-            finished = OperationFinished(operation_id, outcome, None, None)
-            events.append(event(raw_event, "operation", str(operation_id), "finished", finished))
-            if outcome == "failed" and str(operation_id) in toolcalls.attention_tool_ids:
-                events.append(toolcalls.attention_declined(raw_event, operation_id, result_text))
+            if failed and toolcalls.pending_attention(call_id):
+                events.append(toolcalls.attention_declined(raw_event, call_id, result_text))
         for text_index, result_text in enumerate(record.get("texts") or ()):
             text_identity = f"{native_identity}:text:{text_index}"
             payload = MessageCreated(

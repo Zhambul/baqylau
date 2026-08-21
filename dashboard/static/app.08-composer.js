@@ -46,7 +46,7 @@ function dictation(ta, getCwd, getHarness, sessionId) {
     if (workingDirectory) tokBody.working_directory = workingDirectory;
 
     // THREE independent legs, all started here inside the click's gesture
-    // chain, none waiting on another (docs/dashboard.md *Instant-on mic*).
+    // chain, none waiting on another.
     // What used to be a CHAIN — mic+token, then the socket handshake, then the
     // worklet compile — meant the mic went live only after a tunnel round trip,
     // our server's own call to Deepgram, AND a wss handshake from the device
@@ -87,7 +87,7 @@ function dictation(ta, getCwd, getHarness, sessionId) {
       prefix: ta.value.slice(0, at), suffix: ta.value.slice(at),
       committed: "", interim: "", skipFinal: false, painting: false,
       stopping: false, closed: false, lastPainted: null,
-      // lag accounting (docs/dashboard.md *Dictation lag*): `sent` counts the
+      // lag accounting: `sent` counts the
       // audio HANDED TO the socket, `proc` the audio Deepgram has told us it
       // transcribed (its Results carry the segment's own audio clock). The
       // difference splits cleanly in two, which is the whole point — see lag().
@@ -395,7 +395,9 @@ function saveComposerDraft(sessionView, sessionId) {
     // reorder, 2026-07-19). The server keeps only the highest sequence.
     postJSON("/api/sessions/" + encodeURIComponent(sessionId)
              + "/application/composer-draft",
-             { text, origin: CLIENT_ID, sequence: Date.now() }).catch(() => {});
+             { text, origin: CLIENT_ID, sequence: Date.now() })
+      .catch(error => failLoudly(sessionId, "draft.save.fail",
+                                 { error: (error && error.error) || String(error) }));
   }, ASK_DRAFT_DEBOUNCE_MS);
 }
 
@@ -409,7 +411,9 @@ function clearComposerDraft(sessionView, sessionId) {
   // even if an earlier save's POST lands after it (see saveComposerDraft)
   postJSON("/api/sessions/" + encodeURIComponent(sessionId)
            + "/application/composer-draft",
-           { text: "", origin: CLIENT_ID, sequence: Date.now() }).catch(() => {});
+           { text: "", origin: CLIENT_ID, sequence: Date.now() })
+    .catch(error => failLoudly(sessionId, "draft.clear.fail",
+                               { error: (error && error.error) || String(error) }));
 }
 
 // A peer device's composer draft arrived over SSE. Adopt it into the box — but
@@ -439,8 +443,7 @@ function applyComposerDraft(draft) {
 }
 
 // A live input-box ghost suggestion arrived over SSE — the faint "suggested
-// answer" Claude Code pre-fills when a turn settles (docs/dashboard.md, *Web
-// ghost suggestion*). We surface it as the composer's grey placeholder, shown
+// answer" Claude Code pre-fills when a turn settles. We surface it as the composer's grey placeholder, shown
 // only while the box is empty, accepted with → / Tab (the composer keydown), the
 // iPad "use hint" button (no → / Tab on the on-screen keyboard), or replaced the
 // instant the user types (a non-empty textarea hides its placeholder natively).
@@ -480,7 +483,7 @@ function syncSuggestion(ta) {
    picker), uploads its bytes to /api/upload, and the server stages it on disk
    and hands back an absolute path. On send, those paths ride the message as
    leading `@path` mentions — the TUI-native way to attach a file — so Claude
-   Code itself reads/attaches them (docs/dashboard.md, *Web attachments*). */
+   Code itself reads/attaches them. */
 // The upload cap is the SERVER's (config.UPLOAD_MAX, carried in the global
 // application snapshot) — read at attach time, so current state wins.
 
@@ -758,8 +761,7 @@ function recallHistory(sessionView, ta, up) {
   return true;
 }
 
-// The PARKED composer's send — "resume & send" (docs/dashboard.md *Resume &
-// send*): relaunch the conversation through /api/sessions/new with the message
+// The PARKED composer's send — "resume & send": relaunch the conversation through /api/sessions/new with the message
 // riding the launch ARGV, under the session's own account. Never typed into a
 // half-started TUI, so there is no readiness race.
 function composerResume(C, text, atts) {
@@ -768,7 +770,9 @@ function composerResume(C, text, atts) {
     harness: meta.harness,
     working_directory: meta.workingDirectory,
     initial_text: text || null,
-    model_id: meta.model || null,
+    // The catalog's id, not the display name the aggregate carries: a launch
+    // names a model the harness can be started with.
+    model_id: curModelFamily() || null,
     effort: meta.effort || null,
     account_id: meta.account && meta.account.slug || null,
     resume_session_id: S.currentSessionId,
@@ -885,16 +889,25 @@ function buildComposer() {
   // receive one, so the box is dead rather than a POST the server 409s; for both
   // hosts today the cap is True, so this changes nothing yet. capOk degrades
   // OPEN (an older payload / mid-load is not a denial), same as the header bar.
-  const canSend = !!(meta.live && meta.terminal_window_id && capOk(meta, "send"));
-  // RESUME MODE (docs/dashboard.md *Resume & send*): a parked session's
+  // `live` IS "a terminal window is attached" — the server resolves it against
+  // the terminal at read time, and the window's own id is deliberately never
+  // served (a frontend needs to know whether a session is attended, not the
+  // handle it is attended through). Gating on an id as well left every live
+  // session's composer dead.
+  const canSend = !!(meta.live && capOk(meta, "send"));
+  // RESUME MODE: a parked session's
   // composer stays fully usable — typing, "/" menu, dictation — and the one
   // send button (relabeled "resume & send") is the single door from parked
   // to live: it relaunches the conversation through the existing
   // /api/sessions/new resume+prompt path, the message riding the LAUNCH
   // ARGV (never typed into a half-started TUI — no readiness race), under
-  // the session's own account. Headless-live stays disabled — those aren't
-  // asleep, they just have no window; resume is the wrong medicine.
-  const canResume = !meta.live && !!meta.workingDirectory;
+  // the session's own account.
+  //
+  // KNOWN-parked, not "not known live": until /sessionData answers, liveness is
+  // UNDEFINED, and a button that RELAUNCHES a session must never appear on
+  // uncertainty — one press during that sub-second would restart a session that
+  // was running the whole time. Unknown renders the disabled box instead.
+  const canResume = meta.live === false && !!meta.workingDirectory;
   const usable = canSend || canResume;
   ta.disabled = !usable;
   ta.placeholder = canSend
@@ -905,8 +918,8 @@ function buildComposer() {
                  : "message this parked session — sending resumes it  "
                    + "(Enter to resume & send)")
       : !capOk(meta, "send") ? "this session's tool can't be messaged from here"
-      : (meta.live ? "no terminal window — can't message a headless session"
-                   : "session is not live");
+      // not live, and no directory to resume it in — nothing left to offer
+      : "session is not live";
   // remember the composer's OWN placeholder — a live ghost suggestion borrows
   // the placeholder slot while the box is empty, and this is what it restores
   ta.dataset.defph = ta.placeholder;
@@ -1126,12 +1139,12 @@ function settlePending(pend, phase, extra) {
   hintAudit(pend, phase, extra);
 }
 
-function drainPending(items) {
+function drainPending(entries) {
   const sessionView = S.sessionView;
   if (!sessionView || !sessionView.pending || !sessionView.pending.length) return;
-  for (const it of items) {
-    if (it.item_type !== "message" || it.conversation_kind !== "prompt") continue;
-    const real = (it.plain_text || "").trim();
+  for (const entry of entries) {
+    const real = deliveredPromptText(entry);
+    if (real === null) continue;
     // suffix match (promptMatches — the one rule, shared with drainQueue and
     // mirrored server-side): the delivered prompt may carry attachment mentions
     // OR a terminal-restored draft in front of what we sent.

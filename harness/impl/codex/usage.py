@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import time
+from typing import Any
 
 REQUEST_TIMEOUT_SECONDS = 6.0
 CACHE_SECONDS = 120.0
@@ -16,7 +17,7 @@ BINARY_DIRECTORIES = (
     "~/.local/bin",
 )
 
-_cached_rate_limits: tuple[float, dict | None] | None = None
+_cached_rate_limits: tuple[float, dict[str, Any] | None] | None = None
 
 
 def subprocess_environment() -> dict[str, str]:
@@ -35,7 +36,7 @@ def subprocess_environment() -> dict[str, str]:
     return environment
 
 
-def request_rate_limits() -> dict | None:
+def request_rate_limits() -> dict[str, Any] | None:
     try:
         process = subprocess.Popen(
             ["codex", "app-server"],
@@ -84,7 +85,7 @@ def request_rate_limits() -> dict | None:
         process.terminate()
 
 
-def normalize_rate_limits(response: dict | None) -> dict | None:
+def normalize_rate_limits(response: dict[str, Any] | None) -> dict[str, Any] | None:
     rate_limits = response.get("rateLimits") if isinstance(response, dict) else None
     if not isinstance(rate_limits, dict):
         return None
@@ -107,7 +108,7 @@ def normalize_rate_limits(response: dict | None) -> dict | None:
     return {"plan": rate_limits.get("planType") or "", "windows": tuple(windows)}
 
 
-def read_rate_limits() -> dict | None:
+def read_rate_limits() -> dict[str, Any] | None:
     global _cached_rate_limits
     now = time.time()
     if _cached_rate_limits is not None and _cached_rate_limits[0] > now:

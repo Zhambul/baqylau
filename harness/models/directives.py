@@ -18,20 +18,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from domain.ids import OperationId, SessionId
+from domain.ids import SessionId, ShellId
 from domain.stored import STORED
 from domain.values import ProgressStream
 
 
 @dataclass(frozen=True)
-class OperationOutputChunk:
+class ShellOutputChunk:
     """One slice of a followed output file. Base64 because the bytes are a
     terminal's, and no encoding may be assumed of them until they are rendered."""
 
     __pydantic_config__ = STORED
 
     content_base64: str
-    operation_id: OperationId
+    shell_id: ShellId
     ordinal: int
     stream: ProgressStream
 

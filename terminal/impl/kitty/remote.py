@@ -14,6 +14,7 @@ import stat
 import subprocess
 import shutil
 import time
+from typing import Any
 
 # The variable kitty exports into every process it starts in a window. Named
 # rather than inlined because a stdlib-only client observes its own window from
@@ -53,7 +54,7 @@ RC_ST = b"\x1b\\"
 TAB_COLOR_NONE = "NONE"
 
 
-def find_kitten():
+def find_kitten() -> str | None:
     """Locate the kitten binary: $KITTY_KITTEN_BIN override, PATH, then the macOS
     app bundle. None when kitty isn't installed."""
     k = os.environ.get("KITTY_KITTEN_BIN")
@@ -66,14 +67,14 @@ def find_kitten():
     return bundle if os.access(bundle, os.X_OK) else None
 
 
-def _is_socket(p):
+def _is_socket(p: str) -> bool:
     try:
         return stat.S_ISSOCK(os.stat(p).st_mode)
     except OSError:
         return False
 
 
-def resolve_listen_on():
+def resolve_listen_on() -> str:
     """The controlling kitty instance's socket when $KITTY_LISTEN_ON is absent
     (a keymap-driven `launch --type=background` child does NOT inherit it):
     listen_on `unix:/tmp/kitty` yields `/tmp/kitty-<kitty-pid>`, and that kitty
@@ -97,7 +98,7 @@ def resolve_listen_on():
     return ""
 
 
-def current_window_id():
+def current_window_id() -> str:
     """The kitty window this process runs in, or "".
 
     The one place $KITTY_WINDOW_ID is read inside the application; every other
@@ -113,19 +114,21 @@ class KittyRemote:
     bootstrap would go permanently dead the first time kitty restarted.
     """
 
-    def __init__(self, listen=None, kitten=None):
+    def __init__(self, listen: str | None = None, kitten: str | None = None) -> None:
         self._pinned_listen = listen
-        self.kitten = kitten if kitten is not None else find_kitten()
+        self.kitten: str | None = kitten if kitten is not None else find_kitten()
 
     @property
-    def listen(self):
+    def listen(self) -> str:
         if self._pinned_listen is not None:
             return self._pinned_listen
         return resolve_listen_on()
 
     # --- the kitten client ---------------------------------------------------
-    def run(self, *args):
+    def run(self, *args: str) -> int:
         """A silenced `kitten @ …` call; the exit code (1 on any failure)."""
+        if self.kitten is None:
+            return 1
         try:
             return subprocess.run([self.kitten, "@", "--to", self.listen, *args],
                                   stdout=subprocess.DEVNULL,
@@ -134,8 +137,10 @@ class KittyRemote:
         except Exception:
             return 1
 
-    def capture(self, *args, timeout=KITTEN_TIMEOUT_SECONDS):
+    def capture(self, *args: str, timeout: float = KITTEN_TIMEOUT_SECONDS) -> str | None:
         """A `kitten @ …` call whose stdout is the answer, or None on failure."""
+        if self.kitten is None:
+            return None
         try:
             r = subprocess.run([self.kitten, "@", "--to", self.listen, *args],
                                capture_output=True, timeout=timeout)
@@ -145,17 +150,18 @@ class KittyRemote:
             return None
         return r.stdout.decode("utf-8", "replace")
 
-    def ls(self):
+    def ls(self) -> list[dict[str, Any]]:
         """Parsed `kitten @ ls` (the OS-window/tab/window tree), or [] on failure."""
         out = self.capture("ls", timeout=KITTEN_QUERY_TIMEOUT_SECONDS)
         if out is None:
             return []
         try:
-            return json.loads(out)
+            tree = json.loads(out)
         except ValueError:
             return []
+        return tree if isinstance(tree, list) else []
 
-    def app_focused(self, tree=None):
+    def app_focused(self, tree: list[dict[str, Any]] | None = None) -> bool:
         """True when ANY kitty OS window is focused — i.e. kitty is the frontmost
         app on this desktop right now. The gate for a pane launch's
         --keep-focus: kitty's keep-focus "restore the previous window" path
@@ -171,7 +177,7 @@ class KittyRemote:
         except Exception:
             return False
 
-    def send_text(self, win, text, bracketed=False):
+    def send_text(self, win: str, text: str, bracketed: bool = False) -> bool:
         """`kitten @ send-text --stdin` to window `win`: the text goes over STDIN
         precisely so it is never a shell argument NOR a kitten escape vector —
         `--stdin` sends the bytes verbatim, no `\\n`/`\\x1b` interpretation. The
@@ -183,6 +189,8 @@ class KittyRemote:
         reads it as ONE atomic paste — needed for the cancel-edit resend, where
         a raw send into an input whose state just changed drops the leading
         bytes (measured). The CR stays OUTSIDE the paste, so it still submits."""
+        if self.kitten is None:
+            return False
         try:
             argv = [self.kitten, "@", "--to", self.listen, "send-text",
                     "--match", f"id:{win}", "--stdin"]
@@ -201,7 +209,7 @@ class KittyRemote:
         except Exception:
             return False
 
-    def get_text(self, win_id, extent="screen", ansi=False):
+    def get_text(self, win_id: str, extent: str = "screen", ansi: bool = False) -> str | None:
         """`kitten @ get-text` for a window, or None on failure. extent="screen"
         is the VISIBLE viewport — verified live: a window scrolled up returns the
         scrolled-to rows, not the live screen's bottom — which is what lets the
@@ -212,8 +220,8 @@ class KittyRemote:
         return self.capture(*argv, timeout=KITTEN_QUERY_TIMEOUT_SECONDS)
 
     # --- the raw socket ------------------------------------------------------
-    def raw(self, cmd, payload, want_response=False,
-            timeout=REMOTE_CONTROL_SOCKET_TIMEOUT_SECONDS):
+    def raw(self, cmd: str, payload: dict[str, Any], want_response: bool = False,
+            timeout: float = REMOTE_CONTROL_SOCKET_TIMEOUT_SECONDS) -> dict[str, Any] | bool | None:
         """A remote-control command over a RAW unix-socket write of the
         @kitty-cmd DCS — sub-millisecond vs the ~30-100ms kitten subprocess
         spawn. The wire bytes are exactly what the kitten client sends
@@ -251,7 +259,8 @@ class KittyRemote:
                     buf += b
             finally:
                 s.close()
-            return json.loads(buf[buf.index(RC_CMD_KEY) + len(RC_CMD_KEY):
-                                  buf.index(RC_ST)])
+            response = json.loads(buf[buf.index(RC_CMD_KEY) + len(RC_CMD_KEY):
+                                      buf.index(RC_ST)])
+            return response if isinstance(response, dict) else None
         except Exception:
             return None

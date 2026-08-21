@@ -1,7 +1,7 @@
 # harness/impl/claude_code/controls/rewindmenu.py — drive Claude Code's OWN rewind menu from
 # the web.
 #
-# The dashboard's full rewind support (docs/dashboard.md, *Web rewind*)
+# The dashboard's full rewind support
 # deliberately REUSES Claude Code's interactive checkpoint menu instead of
 # re-implementing restore: conversation state lives only inside the live TUI
 # process (a rewind writes NOTHING to the transcript until the next send forks
@@ -31,9 +31,12 @@
 # "Rewind" header are cursor lines.
 import re
 import time
+from collections.abc import Callable
+from typing import TypedDict
 
 from harness.impl.claude_code.controls import screen_driver as screendrive
 from harness.impl.claude_code.controls import tui
+from harness.impl.claude_code.controls.screen_driver import ScreenDriver
 
 # One entry per selectable restore option: the requested `mode` (the POST
 # body's vocabulary) → the menu label it must match. Labels are matched
@@ -71,7 +74,7 @@ SCAN_MAX = 100         # hard step bound — Claude Code caps checkpoints at 100
 KEY_GAP_S = 0.05       # beat between blind repeated `up` presses
 
 
-def first_line(text):
+def first_line(text: str) -> str:
     """The menu's view of a prompt: its first non-empty line, stripped."""
     for ln in (text or "").splitlines():
         if ln.strip():
@@ -79,7 +82,7 @@ def first_line(text):
     return ""
 
 
-def entry_matches(entry, target):
+def entry_matches(entry: str, target: str) -> bool:
     """True when a checkpoint-menu entry names `target` (a full prompt text).
     The entry is the prompt's first line, possibly truncated with a trailing
     ellipsis — so compare the truncation as a PREFIX of the target's first
@@ -93,7 +96,7 @@ def entry_matches(entry, target):
     return e == t
 
 
-def menu_region(screen):
+def menu_region(screen: str) -> str:
     """The visible text from the LAST checkpoint-menu header down, or "" when
     no menu is on screen. Anchoring at the last header skips scrollback (old
     prompt echoes, even a previously captured menu) above the live one.
@@ -111,7 +114,7 @@ def menu_region(screen):
     return screen[max(0, hits[-1].start() - 1):] if hits else ""
 
 
-def menu_open(screen):
+def menu_open(screen: str) -> bool:
     """True when the checkpoint list (first menu) is on screen. The footer
     match is case-insensitive — see MENU_FOOT: its chord label is one of three
     runtime formats and only the tail is stable."""
@@ -120,12 +123,12 @@ def menu_open(screen):
             and CONFIRM_HEADER not in region)
 
 
-def confirm_open(screen):
+def confirm_open(screen: str) -> bool:
     """True when the numbered confirm menu (second menu) is on screen."""
     return CONFIRM_HEADER in menu_region(screen)
 
 
-def cursor_entry(screen):
+def cursor_entry(screen: str) -> str:
     """The text of the ❯-cursor line inside the menu region ("" when absent).
     Menu cursor lines are INDENTED ("  ❯ …"); scrollback prompt echoes start
     at column 0, so they never match."""
@@ -133,11 +136,11 @@ def cursor_entry(screen):
     return m[-1].strip() if m else ""
 
 
-def confirm_options(screen):
+def confirm_options(screen: str) -> dict[str, str]:
     """The confirm menu's numbered options as {label-lowercased: digit-str}.
     Tolerates the cursor mark and the scroll indicators (↑/↓) the TUI puts
     before a boundary row."""
-    out = {}
+    out: dict[str, str] = {}
     for digit, label in re.findall(
             r"^\s*(?:[❯↑↓]\s*)*(\d+)\.\s+(.*?)\s*$", menu_region(screen), re.M):
         out[label.lower()] = digit
@@ -149,7 +152,15 @@ class MenuError(screendrive.StepError):
     audit row; the driver has already pressed Escape to close any open menu."""
 
 
-def _bail(fe, win, sleep):
+class RewindOutcome(TypedDict):
+    """What a successful drive() reports back to its caller."""
+
+    steps: int
+    digit: str
+    degraded: bool
+
+
+def _bail(fe: ScreenDriver, win: str, sleep: Callable[[float], None]) -> None:
     """Close whatever menu is open — Escape once per open level, verified."""
     for _ in range(2):
         screen = fe.get_text(win) or ""
@@ -159,7 +170,13 @@ def _bail(fe, win, sleep):
         sleep(POLL_S)
 
 
-def _scan(fe, win, target, key, sleep):
+def _scan(
+    fe: ScreenDriver,
+    win: str,
+    target: str,
+    key: str,
+    sleep: Callable[[float], None],
+) -> tuple[bool, int]:
     """Walk the checkpoint list one `key` ("up"/"down") press at a time until
     the cursor entry matches `target`, the cursor stops moving (list edge),
     the menu vanishes, or SCAN_MAX. Returns (matched, steps_taken)."""
@@ -179,7 +196,14 @@ def _scan(fe, win, target, key, sleep):
     return False, steps
 
 
-def drive(fe, win, target, mode, ups=0, sleep=time.sleep):
+def drive(
+    fe: ScreenDriver,
+    win: str,
+    target: str,
+    mode: str,
+    ups: int = 0,
+    sleep: Callable[[float], None] = time.sleep,
+) -> RewindOutcome:
     """Rewind session window `win` to the checkpoint for prompt `target`
     (full text), restoring per `mode` (a MODE_LABELS key). `ups` is the
     page's jump hint — the target's `up`-press distance from the cursor's

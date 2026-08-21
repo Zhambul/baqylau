@@ -16,11 +16,11 @@ DEFAULT_PORT = 4319
 DEFAULT_GRACE_SECONDS = 900
 
 
-def port():
+def port() -> int:
     """The receiver's listen port: CLAUDE_OTEL_PORT, else 4319."""
     return EV.env_int("CLAUDE_OTEL_PORT", DEFAULT_PORT)
 
 
-def grace_seconds():
+def grace_seconds() -> int:
     """The receiver's idle timeout: CLAUDE_OTEL_GRACE_S, else 900 s."""
     return EV.env_int("CLAUDE_OTEL_GRACE_S", DEFAULT_GRACE_SECONDS)

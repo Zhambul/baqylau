@@ -15,6 +15,7 @@
 import ast
 import json
 import re
+from typing import Any
 
 from harness.impl.codex.canonical.vocabulary import (
     empty_record,
@@ -66,7 +67,7 @@ _JS_PLAN_STATUS = re.compile(
 )
 
 
-def js_tool_call(js):
+def js_tool_call(js: str) -> tuple[str, str]:
     """(name, args) of the `tools.<fn>(…)` call in a `custom_tool_call` name=exec
     JS input — ("", "") when there is none.
 
@@ -109,7 +110,7 @@ def js_tool_call(js):
     return m.group(1), args.strip()
 
 
-def _plan_tasks(arguments):
+def _plan_tasks(arguments: str | dict[str, Any]) -> list[Any] | None:
     if isinstance(arguments, dict):
         plan = arguments.get("plan")
         return plan if isinstance(plan, list) else None
@@ -117,8 +118,10 @@ def _plan_tasks(arguments):
         decoded = json.loads(arguments)
     except (TypeError, json.JSONDecodeError):
         decoded = None
-    if isinstance(decoded, dict) and isinstance(decoded.get("plan"), list):
-        return decoded["plan"]
+    if isinstance(decoded, dict):
+        decoded_plan = decoded.get("plan")
+        if isinstance(decoded_plan, list):
+            return decoded_plan
     matches = list(_JS_PLAN_STEP.finditer(arguments or ""))
     if not matches:
         return None
@@ -137,7 +140,7 @@ def _plan_tasks(arguments):
     return tasks
 
 
-def _exec_cmd_from_js(js):
+def _exec_cmd_from_js(js: str) -> str:
     """The SHELL command out of a `custom_tool_call` name=exec JS `input`, or ''
     when the call is not a shell one — `tools.exec_command({cmd:…})` yields its
     cmd, anything else is a different tool and belongs to js_tool_call above (the
@@ -154,7 +157,7 @@ def _exec_cmd_from_js(js):
     return " ".join(str(x) for x in v) if isinstance(v, list) else str(v)
 
 
-def _exec_output_body(txt):
+def _exec_output_body(txt: str) -> str:
     """A custom-exec output stripped of codex's `…Output:\\n` status preamble, so
     the block body is the command's real output (uniform with a Claude command);
     the whole text is still what the exit is scanned from."""
@@ -162,7 +165,7 @@ def _exec_output_body(txt):
     return txt[i + len(_OUTPUT_MARK):].lstrip("\n") if i >= 0 else txt
 
 
-def content_text(c):
+def content_text(c: str | list[Any] | None) -> str:
     """A response_item content list -> its text. The items are
     {"type": "input_text"|"output_text", "text": …}; older versions (and the
     custom-tool outputs) sometimes hand a bare string instead."""
@@ -177,7 +180,7 @@ def content_text(c):
     return "\n".join(parts).strip()
 
 
-def _args(p):
+def _args(p: dict[str, Any]) -> dict[str, Any]:
     """A function_call's `arguments` (a JSON *string*) -> a dict; {} when the
     version at hand wrote something else or the line was truncated."""
     try:
@@ -187,12 +190,12 @@ def _args(p):
     return a if isinstance(a, dict) else {}
 
 
-def _rsp_web_search_call(p):
+def _rsp_web_search_call(p: dict[str, Any]) -> dict[str, Any] | None:
     q = (p.get("action") or {}).get("query") or ""
     return {"kind": "search", "query": q} if q else None
 
 
-def _rsp_function_call_output(p):
+def _rsp_function_call_output(p: dict[str, Any]) -> dict[str, Any] | None:
     # The OLDER exec channel's output. Same normalisation as the custom-tool one:
     # the exit is scanned from the FULL head (the `Chunk ID…\nWall time…\nProcess
     # exited with code N\n…Output:\n` preamble codex 0.14x prints leads it), THEN
@@ -209,7 +212,7 @@ def _rsp_function_call_output(p):
             "output": _exec_output_body(out), "call_id": p.get("call_id") or ""}
 
 
-def _rsp_message(p):
+def _rsp_message(p: dict[str, Any]) -> dict[str, Any]:
     # The response_item register (module header): the conversation as the
     # model API records it — assistant/user/developer, and the ONLY place a
     # post-abort or queued prompt appears. Deliberately NOT kind "message"/
@@ -242,14 +245,14 @@ def _rsp_message(p):
             "turn": metadata.get("turn_id") or ""}
 
 
-def _rsp_reasoning(p):
+def _rsp_reasoning(p: dict[str, Any]) -> dict[str, Any]:
     # summary is a list of {"type": "summary_text", "text": …}; it is empty
     # whenever the think was stored as `encrypted_content` instead.
     txt = content_text(p.get("summary"))
     return {"kind": "think", "text": txt} if txt else empty_record()
 
 
-def _rsp_custom_tool_call(p):
+def _rsp_custom_tool_call(p: dict[str, Any]) -> dict[str, Any] | None:
     # codex ≥ 0.13x runs BOTH apply_patch and exec through custom tools:
     #   name="exec"       -> an exec record (cmd out of the JS input) — the
     #                        0.14x+ command channel (see _JS_CMD above).
@@ -295,7 +298,7 @@ def _rsp_custom_tool_call(p):
     return None
 
 
-def _rsp_custom_tool_call_output(p):
+def _rsp_custom_tool_call_output(p: dict[str, Any]) -> dict[str, Any] | None:
     # The output carries no tool name, so this is the exec/patch OUTPUT for
     # whatever `custom_tool_call` opened this call_id — an `exec_result` in both
     # cases, paired by call_id in the renderer: an exec's closes its command
@@ -347,7 +350,7 @@ def _rsp_custom_tool_call_output(p):
             "output": body, "call_id": p.get("call_id") or ""}
 
 
-def _call_exec(p, args):
+def _call_exec(p: dict[str, Any], args: dict[str, Any]) -> dict[str, Any] | None:
     cmd = args.get("cmd") or args.get("command") or ""
     if isinstance(cmd, list):
         cmd = " ".join(str(x) for x in cmd)
@@ -356,7 +359,7 @@ def _call_exec(p, args):
     return {"kind": "exec", "cmd": cmd, "call_id": p.get("call_id") or ""}
 
 
-def _call_stdin(p, args):
+def _call_stdin(p: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
     # The backgrounded-exec continuation poll: codex writes into a running
     # exec session and reads more of its output. Its function_call_output is
     # an ordinary `exec_result` — this record exists so that output is not
@@ -364,7 +367,7 @@ def _call_stdin(p, args):
     return _stdin_record(p.get("call_id") or "", args)
 
 
-def _stdin_record(call_id, arguments):
+def _stdin_record(call_id: str, arguments: str | dict[str, Any]) -> dict[str, Any]:
     """Normalize only the measured write_stdin argument shape.
 
     Current custom-tool rollouts contain either JSON or a JavaScript object
@@ -398,7 +401,7 @@ def _stdin_record(call_id, arguments):
     }
 
 
-def _call_ask(p, args):
+def _call_ask(p: dict[str, Any], args: dict[str, Any]) -> dict[str, Any] | None:
     # codex's EXPERIMENTAL question tool (plan mode in practice) — the schema
     # is Claude's AskUserQuestion in codex spelling.
     out = []
@@ -425,8 +428,8 @@ _CALL = {"exec_command": _call_exec, "shell": _call_exec,
          "write_stdin": _call_stdin, "request_user_input": _call_ask}
 
 
-def _rsp_function_call(p):
-    h = _CALL.get(p.get("name"))
+def _rsp_function_call(p: dict[str, Any]) -> dict[str, Any] | None:
+    h = _CALL.get(p.get("name") or "")
     if h:
         return h(p, _args(p))
     if p.get("name") in {

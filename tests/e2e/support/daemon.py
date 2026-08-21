@@ -1,18 +1,28 @@
 """The daemon under test: the real `serve` process, on its own port and databases.
 
-Deliberately NOT an in-process application. `python3 bin/baqylau-dashboard.py
-serve` is what runs on the machine, and a rig that composed the routes itself
-would be testing a different program than the one that breaks. The port bind IS
-the daemon's singleton guard, so a free port is claimed per run — the
-developer's own daemon on 8377 keeps running, untouched, beside it.
+Deliberately NOT an in-process application, and deliberately not a private way
+of starting one. The command below is the command a person types —
 
-Both databases move together because `core/data.py` owns that answer: one
-`BAQYLAU_DATA_DIR` relocates `main.db`, `audit.db` and the uploads directory.
+    python3 bin/baqylau-dashboard.py serve --port N --data-dir DIR --log FILE
+
+— so what this suite exercises is the launch path the machine uses, and a rig
+that composed the routes itself, or reached for environment variables the CLI
+does not document, would be testing a different program than the one that breaks.
+The port bind IS the daemon's singleton guard, so a free port is claimed per run
+and the developer's own daemon on 8377 keeps running untouched beside it.
+
+Three things still ride the ENVIRONMENT rather than the command line, because
+they describe the world the daemon finds itself in rather than how this launch is
+parameterised: which terminal exists (`BAQYLAU_TERMINAL`), and whether the two
+notification channels are configured. A person does not type those either — they
+live in a shell profile or a service unit — so passing them here is the same
+thing a person's environment does, not a private channel.
 """
 
 from __future__ import annotations
 
 import http.client
+import json
 import os
 import signal
 import socket
@@ -25,6 +35,7 @@ from typing import TypeVar
 from pydantic import TypeAdapter, ValidationError
 
 from api.common.models.replies.health_response import HealthResponse
+from core.daemon.contract import POST_HEADER
 from support.environment import child_environment
 
 Decoded = TypeVar("Decoded")
@@ -89,8 +100,32 @@ class Daemon:
         except ValidationError as error:
             raise AssertionError(f"GET {path} did not answer its own contract: {error}") from error
 
+    def post(self, path: str, document: dict[str, object]) -> tuple[int, str]:
+        """One control-plane POST, with the status: a REFUSAL is a verdict here,
+        not an error, so the caller decides what a 409 means rather than being
+        handed an exception.
+
+        Carries the same caller-proof header a client does (`client/_wire.py`),
+        because `api/guard.py` rejects a mutating request without it — this suite
+        talks to the control plane exactly the way the browser and the hooks do.
+        """
+        body = json.dumps(document).encode("utf-8")
+        connection = http.client.HTTPConnection(
+            "127.0.0.1", self.port, timeout=READ_TIMEOUT_SECONDS
+        )
+        try:
+            connection.request("POST", path, body, {
+                "Content-Type": "application/json",
+                POST_HEADER: "1",
+            })
+            response = connection.getresponse()
+            return response.status, response.read().decode("utf-8", "replace")
+        finally:
+            connection.close()
+
     def get_text(self, path: str) -> str:
-        """One GET, undecoded — /api/content answers text/plain, not JSON."""
+        """One GET, undecoded — for the routes that answer something other than
+        one of the models `read` validates against."""
         connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=READ_TIMEOUT_SECONDS)
         try:
             connection.request("GET", path)
@@ -121,28 +156,39 @@ class Daemon:
 
 
 def start(repository_root: str, data_directory: str, port: int) -> Daemon:
-    """Spawn the daemon and return once its health route answers."""
+    """Spawn the daemon and return once its health route answers.
+
+    Every per-run difference is a FLAG, so this list is the command line and
+    nothing is hidden in the environment that the CLI would rather have been
+    told: the port it binds, the directory both databases live in, and the file
+    its own output goes to.
+    """
     os.makedirs(data_directory, exist_ok=True)
     log_path = os.path.join(data_directory, "daemon.log")
     entry = os.path.join(repository_root, "bin", "baqylau-dashboard.py")
-    log = open(log_path, "wb")                                     # noqa: SIM115 — owned by the process, closed with it
     process = subprocess.Popen(
-        [sys.executable, entry, "serve"],
+        [
+            sys.executable, entry, "serve",
+            "--port", str(port),
+            "--data-dir", data_directory,
+            "--log", log_path,
+        ],
         cwd=repository_root,
         env=child_environment(
-            BAQYLAU_DATA_DIR=data_directory,
-            BAQYLAU_DASHBOARD_PORT=port,
-            # No terminal: this suite owns the pseudo-terminal the harness runs
-            # in (support/harness.py), so the daemon must not try to open tabs
-            # or paint panes in a kitty that may not even be running.
-            BAQYLAU_TERMINAL="none",
+            # The daemon owns the harness's terminal, and it is a REAL one:
+            # pseudo-terminals rather than kitty tabs, which is what lets this
+            # run headless. Every launch and every keystroke in this suite
+            # therefore goes through the product's own launch route and terminal
+            # adapter — the path a person's launch takes — instead of a private
+            # handle the test opened for itself.
+            BAQYLAU_TERMINAL="pty",
             # A test run must not reach the developer's phone.
             BAQYLAU_DASHBOARD_NOTIFY_TELEGRAM="0",
             BAQYLAU_DASHBOARD_NOTIFY_WEBPUSH="0",
         ),
         stdin=subprocess.DEVNULL,
-        stdout=log,
-        stderr=subprocess.STDOUT,
+        # No redirect of our own: `--log` is the daemon's answer to where its
+        # output goes, and two mechanisms for one question is one too many.
         start_new_session=True,
     )
     daemon = Daemon(port=port, data_directory=data_directory, log_path=log_path, process=process)

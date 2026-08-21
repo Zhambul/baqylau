@@ -1,5 +1,5 @@
 # harness/impl/claude_code/controls/confirmdialog.py — auto-answer the switch-confirm menu that
-# /model and /effort can open (docs/dashboard.md, *Web quick commands*).
+# /model and /effort can open.
 # Sibling of rewindmenu.py/askdialog.py in philosophy — every key press is
 # preceded by READING THE SCREEN back — but deliberately not unified with
 # either: this dialog is a bare two-option Yes/No menu with none of their
@@ -20,8 +20,11 @@
 # prose or the bare composer prompt (a column-0 `❯` with no `N.` after it).
 import re
 import time
+from collections.abc import Callable
+from typing import NotRequired, TypedDict
 
 from harness.impl.claude_code.controls import screen_driver as screendrive
+from harness.impl.claude_code.controls.screen_driver import ScreenDriver
 
 OPEN_TIMEOUT_S = 4.0   # paste delivered → menu visible (slash-cmd latency);
 #                        no menu inside this window = the switch applied
@@ -40,7 +43,14 @@ class ConfirmError(screendrive.StepError):
     user's decision surface — never Escape it away)."""
 
 
-def find_menu(screen):
+class ConfirmOutcome(TypedDict):
+    """confirm()'s report: whether a menu appeared, and which digit said Yes."""
+
+    dialog: bool
+    digit: NotRequired[str]
+
+
+def find_menu(screen: str) -> str | None:
     """The Yes option's digit when the screen tail shows a switch-confirm
     menu, else None: numbered options with the ❯ cursor on one of them, one
     label leading with "Yes" and one with "No"."""

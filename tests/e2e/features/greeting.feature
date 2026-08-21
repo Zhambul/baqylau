@@ -2,8 +2,7 @@
 Feature: a plain turn reaches the dashboard
 
   Scenario Outline: the harness answers with one word
-    Given a <harness> session on <model> at <effort> effort
-    When I ask 'Only say "Hi" and nothing more'
+    Given a <harness> session on <model> at <effort> effort with prompt 'Only say "Hi" and nothing more'
     Then the turn ends within 3 minutes
     And the session reports the model <model>
     And the session reports <effort> effort

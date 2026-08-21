@@ -1,6 +1,6 @@
 // tests/jsdom/asksubmit.js — drives the REAL submitAsk (dashboard/static/
 // app.07-dialogs.js) over the shared DOM shim and prints one JSON verdict
-// object, which tests/test_l0_dash_dialogs.py asserts on.
+// object, which tests/test_dashboard_dom.py asserts on.
 //
 // Why this exists: submitAsk decides what the ask card actually SENDS, and it
 // can silently send less than you answered. It shipped a bug where one typed

@@ -17,10 +17,3 @@ class PaneWidthRepository(Protocol):
     def remember_width(self, working_directory: str, width_percent: int) -> None: ...
 
 
-class ContentViewRepository(Protocol):
-    def opened(self) -> frozenset[str]: ...
-
-    def toggle(self, content_reference: str, toggled_at: float) -> bool:
-        """Flip one view open or closed in a single transaction; True when it
-        is now open."""
-        ...

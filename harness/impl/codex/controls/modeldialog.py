@@ -35,8 +35,9 @@
 # behaviour), and the ✧ button keeps the CURRENT model (its `(current)` row) and
 # changes only the level.
 import time
+from collections.abc import Callable
 
-from harness.impl.codex.controls.dialog import (STEP_TIMEOUT_S, _cursor_to, _poll, rows)
+from harness.impl.codex.controls.dialog import (Driver, STEP_TIMEOUT_S, _cursor_to, _poll, rows)
 
 # step headers + the shared footer (disjoint from the ask "to submit" / plan
 # "Implement this plan?" detectors)
@@ -69,13 +70,13 @@ class CodexModelError(Exception):
     for the audit; the picker is left as-is (Esc only steps BACK, so we never
     blind-Esc it) for a retry."""
 
-    def __init__(self, step, detail=""):
+    def __init__(self, step: str, detail: str = "") -> None:
         super().__init__(step + ((": " + detail) if detail else ""))
         self.step = step
         self.detail = detail
 
 
-def _norm(label):
+def _norm(label: str) -> str:
     """A picker row label stripped for EQUALITY matching — lowercased, with the
     `(current)`/`(default)` markers removed. So `gpt-5.6-sol (current)` matches
     the model `gpt-5.6-sol`, and `Extra high (default)` matches `Extra high`."""
@@ -85,7 +86,7 @@ def _norm(label):
     return s.strip()
 
 
-def _await(fe, win, needle, sleep):
+def _await(fe: Driver, win: str, needle: str, sleep: Callable[[float], None]) -> str:
     screen, ok = _poll(fe, win, lambda s: needle in (s or ""), STEP_TIMEOUT_S,
                        sleep)
     if not ok:
@@ -93,7 +94,7 @@ def _await(fe, win, needle, sleep):
     return screen
 
 
-def _goto(fe, win, num, sleep):
+def _goto(fe: Driver, win: str, num: str, sleep: Callable[[float], None]) -> None:
     """Move the `›` cursor onto row `num`, mapping dialog._cursor_to's error into
     a CodexModelError so the gesture's one except clause owns it."""
     try:
@@ -102,7 +103,7 @@ def _goto(fe, win, num, sleep):
         raise CodexModelError("cursor", str(e)) from e
 
 
-def _pick(fe, win, header, want, sleep):
+def _pick(fe: Driver, win: str, header: str, want: str, sleep: Callable[[float], None]) -> None:
     """On the picker step whose header contains `header`, move the `›` cursor to
     the row whose normalized label EQUALS `want` (or, when `want` is "", accept
     the pre-selected row) and ENTER. `want` may also be a marker like `(current)`
@@ -119,7 +120,13 @@ def _pick(fe, win, header, want, sleep):
     fe.send_key(win, "enter")
 
 
-def _pick_level(fe, win, want, sleep, strict=True):
+def _pick_level(
+    fe: Driver,
+    win: str,
+    want: str,
+    sleep: Callable[[float], None],
+    strict: bool = True,
+) -> None:
     """The level step, with the INDIRECTION the top level sits behind. Measured
     on 0.147.0/gpt-5.6-luna: Low / Medium (default) / High / Extra high, plus a
     `More reasoning…` row opening an `Advanced Reasoning` sub-step holding Max
@@ -164,7 +171,13 @@ def _pick_level(fe, win, want, sleep, strict=True):
     fe.send_key(win, "enter")
 
 
-def set_model_effort(fe, win, model="", effort="", sleep=time.sleep):
+def set_model_effort(
+    fe: Driver,
+    win: str,
+    model: str = "",
+    effort: str | None = "",
+    sleep: Callable[[float], None] = time.sleep,
+) -> dict[str, bool]:
     """Drive the /model picker. `model` = a codex model id (✦ — changes model,
     accepts that model's DEFAULT effort); `effort` = a token in EFFORT_CHOICES
     (✧ — keeps the CURRENT model, changes only the level). Exactly one is set by

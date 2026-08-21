@@ -8,7 +8,7 @@ import json
 import os
 import re
 import time
-from typing import Literal
+from typing import Any, Literal
 
 from domain.ids import ActorId, RawEventId
 from harness.contract import HarnessRawEventSource, HarnessRawEventSources
@@ -24,7 +24,7 @@ def harness_session_id(path: str) -> str:
     return match.group(1) if match else os.path.splitext(os.path.basename(path))[0]
 
 
-def session_metadata(path: str) -> dict:
+def session_metadata(path: str) -> dict[str, Any]:
     try:
         with open(path, encoding="utf-8") as source:
             for _ in range(5):
@@ -39,7 +39,7 @@ def session_metadata(path: str) -> dict:
     return {}
 
 
-def _parent_thread_id(metadata: dict) -> str | None:
+def _parent_thread_id(metadata: dict[str, Any]) -> str | None:
     source = metadata.get("source")
     spawn = (
         ((source.get("subagent") or {}).get("thread_spawn") or {})

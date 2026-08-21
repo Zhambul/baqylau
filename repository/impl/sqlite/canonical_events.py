@@ -9,14 +9,13 @@ connection.
 from __future__ import annotations
 
 import sqlite3
-from typing import Mapping, Sequence
 
 from domain.codec import CanonicalEventCodec
 from domain.events import CanonicalEvent, EventPayload
 from domain.ids import CanonicalEventId, RawEventId, SessionId
 from domain.records import (
-    CanonicalEventPage,
     CanonicalStorageResult,
+    CommittedEvent,
     InterpretationEventRecord,
     StoredCanonicalEvent,
     TranslationOutcome,
@@ -135,154 +134,22 @@ class SqliteCanonicalEventRepository(CanonicalEventRepository):
             ).fetchall()
         return tuple(SessionId(row["session_id"]) for row in found)
 
-    def latest_cursor(self) -> int | None:
-        with self.database.read() as connection:
-            return self._latest_cursor(connection)
-
-    def latest_session_cursors(
-        self,
-        session_ids: Sequence[SessionId],
-        through_cursor: int | None,
-    ) -> Mapping[SessionId, int]:
-        if not session_ids:
-            return {}
-        placeholders = ",".join("?" for _session_id in session_ids)
-        parameters: list[object] = [str(session_id) for session_id in session_ids]
-        bound = ""
-        if through_cursor is not None:
-            bound = "AND cursor<=? "
-            parameters.append(through_cursor)
-        with self.database.read() as connection:
-            found = connection.execute(
-                "SELECT session_id, MAX(cursor) AS latest_cursor FROM canonical_events "
-                f"WHERE session_id IN ({placeholders}) {bound}"
-                "GROUP BY session_id",
-                tuple(parameters),
-            ).fetchall()
-        return {
-            SessionId(row["session_id"]): int(row["latest_cursor"])
-            for row in found
-            if row["latest_cursor"] is not None
-        }
-
-    def page_after(self, session_id: SessionId, cursor: int, limit: int) -> CanonicalEventPage:
+    def page_from(self, cursor: int, limit: int) -> tuple[CommittedEvent, ...]:
         if limit <= 0:
             raise ValueError("event page limit must be positive")
         with self.database.read() as connection:
             found = connection.execute(
-                "SELECT * FROM canonical_events WHERE session_id=? AND cursor>? "
-                "ORDER BY cursor LIMIT ?",
-                (str(session_id), cursor, limit + 1),
+                "SELECT * FROM canonical_events WHERE cursor>? ORDER BY cursor LIMIT ?",
+                (cursor, limit),
             ).fetchall()
-            latest_cursor = self._latest_cursor(connection)
-            has_more = len(found) > limit
-            events = self._stored_events(connection, found[:limit])
-        page_cursor = events[-1].cursor if events else cursor
-        return CanonicalEventPage(events, page_cursor, latest_cursor, has_more)
-
-    def page_through(self, session_id: SessionId, cursor: int | None) -> CanonicalEventPage:
-        with self.database.read() as connection:
-            if cursor is None:
-                found = connection.execute(
-                    "SELECT * FROM canonical_events WHERE session_id=? ORDER BY cursor",
-                    (str(session_id),),
-                ).fetchall()
-            else:
-                found = connection.execute(
-                    "SELECT * FROM canonical_events WHERE session_id=? AND cursor<=? "
-                    "ORDER BY cursor",
-                    (str(session_id), cursor),
-                ).fetchall()
-            latest_cursor = self._latest_cursor(connection)
-            events = self._stored_events(connection, found)
-        page_cursor = events[-1].cursor if events else (cursor or 0)
-        return CanonicalEventPage(events, page_cursor, latest_cursor, False)
-
-    def page_tail(self, session_id: SessionId, cursor: int, limit: int) -> CanonicalEventPage:
-        if limit <= 0:
-            raise ValueError("event tail limit must be positive")
-        with self.database.read() as connection:
-            found = connection.execute(
-                "SELECT * FROM canonical_events WHERE session_id=? AND cursor<=? "
-                "ORDER BY cursor DESC LIMIT ?",
-                (str(session_id), cursor, limit + 1),
-            ).fetchall()
-            has_more = len(found) > limit
-            selected = found[:limit]
-            selected.reverse()
-            events = self._stored_events(connection, selected)
-            latest_cursor = self._latest_cursor(connection)
-        page_cursor = events[-1].cursor if events else cursor
-        return CanonicalEventPage(events, page_cursor, latest_cursor, has_more)
-
-    def events_of_types(
-        self,
-        session_id: SessionId,
-        event_types: tuple[str, ...],
-        through_cursor: int,
-    ) -> tuple[StoredCanonicalEvent, ...]:
-        if not event_types:
-            return ()
-        placeholders = ",".join("?" for _event_type in event_types)
-        with self.database.read() as connection:
-            found = connection.execute(
-                "SELECT * FROM canonical_events WHERE session_id=? "
-                f"AND event_type IN ({placeholders}) AND cursor<=? ORDER BY cursor",
-                (str(session_id), *event_types, through_cursor),
-            ).fetchall()
-            return self._stored_events(connection, found)
-
-    def events_between(
-        self,
-        session_id: SessionId,
-        after_cursor: int,
-        through_cursor: int,
-    ) -> tuple[StoredCanonicalEvent, ...]:
-        with self.database.read() as connection:
-            found = connection.execute(
-                "SELECT * FROM canonical_events WHERE session_id=? "
-                "AND cursor>? AND cursor<=? ORDER BY cursor",
-                (str(session_id), after_cursor, through_cursor),
-            ).fetchall()
-            return self._stored_events(connection, found)
-
-    # --- internals -------------------------------------------------------------
-
-    @staticmethod
-    def _latest_cursor(connection: sqlite3.Connection) -> int | None:
-        row = connection.execute(
-            "SELECT MAX(cursor) AS latest_cursor FROM canonical_events"
-        ).fetchone()
-        latest: int | None = row["latest_cursor"]
-        return latest
-
-    def _stored_events(
-        self,
-        connection: sqlite3.Connection,
-        found: list[sqlite3.Row],
-    ) -> tuple[StoredCanonicalEvent, ...]:
-        if not found:
-            return ()
-        # One interpretation-event query for the whole cursor range, not one per event.
-        interpretation_events = connection.execute(
-            "SELECT interpretation_events.event_id, interpretation_events.raw_event_id "
-            "FROM interpretation_events "
-            "JOIN canonical_events ON canonical_events.event_id=interpretation_events.event_id "
-            "WHERE canonical_events.session_id=? "
-            "AND canonical_events.cursor>=? AND canonical_events.cursor<=? "
-            "ORDER BY interpretation_events.event_id, interpretation_events.raw_event_id",
-            (found[0]["session_id"], found[0]["cursor"], found[-1]["cursor"]),
-        ).fetchall()
-        raw_event_ids: dict[str, list[RawEventId]] = {}
-        for entry in interpretation_events:
-            raw_event_ids.setdefault(entry["event_id"], []).append(
-                RawEventId(entry["raw_event_id"])
-            )
         return tuple(
-            mapper.stored_canonical_event(
-                rows.canonical_event(row),
-                tuple(raw_event_ids.get(row["event_id"], ())),
-                self.codec,
+            CommittedEvent(
+                cursor=row["cursor"],
+                accepted_at=row["accepted_at"],
+                event=self.codec.event(
+                    mapper.canonical_envelope(rows.canonical_event(row), self.codec)
+                ),
             )
             for row in found
         )
+

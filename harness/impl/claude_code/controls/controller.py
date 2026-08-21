@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 
 from harness.contract import ControlHandler, HarnessController
 from harness.models import (
+    Background,
     AnswerQuestion,
     ApplyRewind,
     AutoNameSession,
@@ -22,6 +24,7 @@ from harness.models import (
     MigrateAccount,
     MigrationResult,
     OpenRewind,
+    PlanChoice,
     PlanChoicesResult,
     ReadPlanChoices,
     RenameSession,
@@ -38,8 +41,7 @@ from terminal.models import (
     TabCloseRequest,
     TextSubmitRequest,
 )
-from domain.events import AttentionRequested
-from domain.values import AttentionChoice
+from domain.events import QuestionAsked
 from harness.impl.claude_code import account
 from harness.impl.claude_code.canonical import transcript
 from harness.impl.claude_code.controls import askdialog, confirmdialog, plandialog, rewindmenu, tui
@@ -183,6 +185,67 @@ class InterruptHandler(ControlHandler):
         )
 
 
+# What Claude Code prints when a running command can be moved to the background,
+# with all whitespace removed — a TUI lays its words out on a grid, so the
+# spacing between them is the emulator's decision and not the program's.
+#
+# This marker is the ONLY honest signal that the gesture will do anything.
+# Measured in claude-code 2.1.233: the handler for the chord is registered and
+# this hint is printed TOGETHER, 2000 ms into a foreground command. A chord sent
+# before that lands in the composer as text, and is indistinguishable from one the
+# harness received and ignored.
+BACKGROUND_OFFER_MARKER = "runinbackground"
+BACKGROUND_CHORD = "ctrl+b"
+# Long enough to cover the harness's own 2 s delay with room for a slow screen
+# read; short enough that a command which will never offer it (one that already
+# finished, one the TUI is not blocked on) answers the caller promptly.
+BACKGROUND_OFFER_TIMEOUT_SECONDS = 6.0
+BACKGROUND_POLL_SECONDS = 0.2
+
+WHITESPACE = re.compile(r"\s+")
+
+
+def _flattened(screen: str | None) -> str:
+    return WHITESPACE.sub("", (screen or "").lower())
+
+
+class BackgroundHandler(ControlHandler):
+    """Move the running command into the background, once the TUI will take it.
+
+    Waits for the harness's own offer before pressing, which is the whole
+    substance of this handler: the gesture is a keystroke, and a keystroke sent a
+    second too early is silently swallowed into the composer. Waiting here rather
+    than at the caller is what makes the gesture reliable for every caller —
+    a browser click and a test both.
+    """
+
+    def __call__(self, request: ControlRequest, context: ControlContext) -> DeliveryResult:
+        if not isinstance(request, Background):
+            raise TypeError("background handler requires Background")
+        terminal = context.terminal
+        window_id = context.terminal_window_id
+        if window_id is None:
+            return DeliveryResult(request.request_id, "rejected", "session is not live")
+        deadline = time.monotonic() + BACKGROUND_OFFER_TIMEOUT_SECONDS
+        while BACKGROUND_OFFER_MARKER not in _flattened(_screen_text(terminal, window_id)):
+            if time.monotonic() >= deadline:
+                return DeliveryResult(
+                    request.request_id,
+                    "rejected",
+                    "no command is offering to be backgrounded",
+                )
+            time.sleep(BACKGROUND_POLL_SECONDS)
+        delivered = terminal.input.send_key(
+            KeySendRequest(window_id, BACKGROUND_CHORD)
+        ).succeeded
+        return DeliveryResult(
+            request.request_id,
+            "acknowledged" if delivered else "indeterminate",
+            None if delivered else "backgrounding chord was not delivered",
+            queued=False,
+        )
+
+
 class CloseSessionHandler(ControlHandler):
     def __call__(self, request: ControlRequest, context: ControlContext) -> ControlResult:
         terminal = context.terminal
@@ -309,7 +372,7 @@ class SelectEffortHandler(ControlHandler):
         return _command(request, context, f"/effort {request.effort}", confirm=True)
 
 
-def _native_prompts(attention: AttentionRequested) -> list[dict]:
+def _native_prompts(attention: QuestionAsked) -> list[dict]:
     return [
         {
             "id": prompt.prompt_id,
@@ -321,7 +384,7 @@ def _native_prompts(attention: AttentionRequested) -> list[dict]:
                 for choice in prompt.choices
             ],
         }
-        for prompt in attention.prompts
+        for prompt in attention.questions
     ]
 
 
@@ -330,8 +393,8 @@ class AnswerQuestionHandler(ControlHandler):
         terminal = context.terminal
         if not isinstance(request, AnswerQuestion):
             raise TypeError("answer_question handler requires AnswerQuestion")
-        if context.pending_attention is None:
-            return ControlResult(request.request_id, "rejected", "attention request is not pending")
+        if not isinstance(context.pending_attention, QuestionAsked):
+            return ControlResult(request.request_id, "rejected", "no question is pending")
         window_id = context.terminal_window_id
         if window_id is None:
             return ControlResult(request.request_id, "rejected", "session is not live")
@@ -376,7 +439,7 @@ class ReadPlanChoicesHandler(ControlHandler):
             request.request_id,
             "acknowledged",
             choices=tuple(
-                AttentionChoice(str(row["digit"]), str(row["label"]), "feedback" if row["feedback"] else None)
+                PlanChoice(str(row["digit"]), str(row["label"]), bool(row["feedback"]))
                 for row in rows
             ),
         )
@@ -410,6 +473,7 @@ class DecidePlanHandler(ControlHandler):
 controller = HarnessController({
     "send_text": SendTextHandler(),
     "interrupt": InterruptHandler(),
+    "background": BackgroundHandler(),
     "close_session": CloseSessionHandler(),
     "rename_session": RenameSessionHandler(),
     "auto_name_session": AutoNameSessionHandler(),

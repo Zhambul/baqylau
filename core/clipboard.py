@@ -1,5 +1,5 @@
 # core/clipboard.py — read the LOCAL machine's pasteboard for copied FILE
-# PATHS (docs/dashboard.md, *Web attachments* → *Promise-only files*). The ONE
+# PATHS. The ONE
 # owner of the "what files are on the clipboard" fact.
 #
 # Why this exists at all. Copying a file in an app that offers it as a PROMISE

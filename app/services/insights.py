@@ -13,8 +13,7 @@ from core.repository import RepositoryQueries
 from harness.models import TerminalSessionState
 from domain.ids import SessionId
 from domain.values import TokenUsage
-from repository.contract.facts import CanonicalEventRepository
-from engine.projections import SessionQueries
+from repository.contract.session_data import SessionDataRepository
 
 
 class TerminalSessionReader(Protocol):
@@ -91,16 +90,14 @@ class _SessionInsight:
 class ApplicationInsightsService:
     def __init__(
         self,
-        canonical_events: CanonicalEventRepository,
-        sessions: SessionQueries,
+        read_model: SessionDataRepository,
         terminal: TerminalSessionReader,
         audit: AuditReadRepository,
         repositories: RepositoryQueries,
         top_project_count: int,
         clock: Callable[[], float] = time.time,
     ) -> None:
-        self.canonical_events = canonical_events
-        self.sessions = sessions
+        self.read_model = read_model
         self.terminal = terminal
         self.audit = audit
         self.repositories = repositories
@@ -109,22 +106,31 @@ class ApplicationInsightsService:
 
     def snapshot(self) -> ApplicationInsights:
         generated_at = self.clock()
-        cursor = self.canonical_events.latest_cursor()
         error_counts = self.audit.error_counts()
         rows = []
-        for summary in self.sessions.sessions(cursor):
-            usage = self.sessions.usage(summary.session_id, cursor)
+        for data in self.read_model.visible():
+            summary = data.session
+            if summary.started_at is None:
+                # Every count below is a count PER DAY, and a session with no
+                # start has no day to be counted in.
+                continue
             rows.append(
                 _SessionInsight(
                     session_id=summary.session_id,
                     working_directory=self.repositories.project_directory(
-                        summary.initial_working_directory
+                        summary.working_directory
                     ),
                     started_at=summary.started_at,
                     finished=summary.state == "finished",
                     active=self.terminal.state(summary.session_id).window_id is not None,
-                    token_count=_token_count(usage.tokens),
-                    cost_in_usd=float(usage.cost_in_usd or 0),
+                    # Summed across the actors: usage is reported per actor, and
+                    # a session's cost is what all of them spent.
+                    token_count=sum(
+                        _token_count(actor.usage.tokens) for actor in data.actors
+                    ),
+                    cost_in_usd=sum(
+                        float(actor.usage.cost_in_usd or 0) for actor in data.actors
+                    ),
                     error_count=error_counts.get(summary.session_id, 0),
                 )
             )

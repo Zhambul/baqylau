@@ -1,5 +1,4 @@
-# dashboard/dictate.py — the Deepgram side of web dictation (docs/dashboard.md,
-# *Web dictation*). The ONE owner of the dictation vocabulary: the key/keyterms
+# dashboard/dictate.py — the Deepgram side of web dictation. The ONE owner of the dictation vocabulary: the key/keyterms
 # file locations, the grant call, and the fully-assembled live-listen URL.
 #
 # The browser talks to Deepgram DIRECTLY over WebSocket — the stdlib dashboard
@@ -35,7 +34,7 @@ LANGUAGE = "en"
 # one: the worklet resamples (hardware already at or below 16k passes through),
 # because native-rate PCM is 768 kbps of sustained uplink and an iPad over the
 # tunnel could not hold that up — the send queue backed up and the native history
-# fell further behind with every sentence (docs/dashboard.md *Dictation lag*).
+# fell further behind with every sentence.
 # The range stays a sanity bound, not a config: the client is trusted to
 # declare what it sends, but anything outside hardware reality is a bogus
 # request. The rate is audited on every mint, so a regression to native-rate
@@ -112,10 +111,7 @@ def ws_url(sample_rate, terms=()):
     """The full live-listen URL the browser connects to, every parameter
     server-decided: nova-3 + interim results (the whole point — text lands in
     the textarea as you speak), smart_format for punctuation, raw linear16
-    PCM at the rate the client says it will SEND (AudioWorklet output,
-    resampled to the model rate — MediaRecorder is rejected in
-    docs/dashboard.md: iPad Safari emits mp4/AAC, which Deepgram streaming
-    refuses), one keyterm= per vocabulary term — the caller passes
+    PCM at the rate the client says it will SEND, one keyterm= per vocabulary term — the caller passes
     the keyterms() result so the merged list is read once and the audit
     count matches what actually rode the URL."""
     base = os.environ.get("BAQYLAU_DICTATION_LISTEN_URL") or DEEPGRAM_LISTEN_URL
