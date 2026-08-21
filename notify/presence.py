@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import time
 from collections import OrderedDict
+from dataclasses import dataclass, field
 from typing import TypedDict
 
 from core import env as EV
@@ -83,6 +84,30 @@ class RoutedSubscription(TypedDict):
     device: str
     label: str | None
     keys: SubscriptionKeys
+
+
+@dataclass(frozen=True, kw_only=True)
+class RouteCandidate:
+    """One device `route()` weighed, for the `notify-route` audit row: which
+    device, its human label (None for a browser that never sent one), and how
+    long ago it last beat — None for a subscribed device that never beat this
+    run."""
+
+    device: str
+    label: str | None
+    age_s: float | None
+
+
+@dataclass(frozen=True, kw_only=True)
+class RouteDecision:
+    """The `notify-route` audit row's own shape: the winner, EVERY candidate
+    weighed to reach it (so "why did the iPad and not my Mac buzz" is
+    answerable from the DB), and how many subscriptions existed at all."""
+
+    target: str | None
+    target_label: str | None
+    subscription_count: int
+    candidates: list[RouteCandidate] = field(default_factory=list)
 
 
 class RecentDevices(OrderedDict[str, float]):
@@ -226,7 +251,7 @@ class Presence:
     def route(
         self,
         push_subscription_repository: PushSubscriptionRepository,
-    ) -> tuple[str | None, list[RoutedSubscription], dict[str, object]]:  # loose: routing decision
+    ) -> tuple[str | None, list[RoutedSubscription], RouteDecision]:
         """WHICH DEVICE you are most likely at right now, and what can reach it.
         Returns `(target, targets, decision)`:
 
@@ -259,21 +284,21 @@ class Presence:
         def cand(
             device_id: DeviceId,
             label: str | None = None,
-        ) -> dict[str, object]:  # loose: notification payload, wave 2 gives it a real shape
+        ) -> RouteCandidate:
             seen = self.last_seen(device_id)
-            return {"device": device_id, "label": label,
-                    "age_s": (None if seen == float("-inf") else round(now - seen, 1))}
+            return RouteCandidate(device=device_id, label=label,
+                                  age_s=(None if seen == float("-inf") else round(now - seen, 1)))
 
         term_seen = self.last_seen(TERMINAL)
         term = [cand(DeviceId(TERMINAL), "terminal")] if term_seen != float("-inf") else []
 
         def decision(
             target: str | None,
-            candidates: list[dict[str, object]],  # loose: notification payload, wave 2 gives it a real shape
+            candidates: list[RouteCandidate],
             label: str | None = None,
-        ) -> dict[str, object]:  # loose: notification payload, wave 2 gives it a real shape
-            return {"target": target, "target_label": label,
-                    "subscription_count": len(subs), "candidates": candidates + term}
+        ) -> RouteDecision:
+            return RouteDecision(target=target, target_label=label,
+                                 subscription_count=len(subs), candidates=candidates + term)
 
         best = max((subscription["device"] for subscription in subs),
                    key=self.last_seen, default=None)

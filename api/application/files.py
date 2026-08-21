@@ -10,8 +10,10 @@ import os
 import re
 import time
 import uuid
+from typing import cast
 
 from fastapi import APIRouter, HTTPException
+from pydantic import JsonValue
 
 from collections.abc import Mapping
 
@@ -148,8 +150,8 @@ def clipboard_files(
     # otherwise unanswerable), and a mismatch records what was asked for so a
     # phone-vs-host clipboard divergence is visible as such.
     audit.state_file("", "", "web-clipboard",
-                 {"session_id": session_id, "names": names, "matched": len(matched),
-                  "paths": matched})
+                 {"session_id": session_id, "names": cast(list[JsonValue], names),
+                  "matched": len(matched), "paths": cast(list[JsonValue], matched)})
     return ClipboardMatchesResponse(paths=tuple(matched))
 
 

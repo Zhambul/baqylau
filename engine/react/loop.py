@@ -27,6 +27,8 @@ import time
 from collections.abc import Mapping
 from typing import Callable, Final
 
+from pydantic import JsonValue
+
 from audit.recorder import AuditRecorder
 from domain.entries import (
     EntryBody,
@@ -250,7 +252,7 @@ class ReactionLoop:
     def _audit_failure(
         self,
         where: str,
-        context: dict[str, object],  # loose: audit payload, wave 2 gives it a real shape
+        context: dict[str, JsonValue],
     ) -> None:
         """Record a swallowed failure, then carry on. Guarded, so a broken
         auditor can never take down the loop it exists to explain."""
@@ -291,7 +293,7 @@ class ReactionLoop:
 
 def _context(
     canonical_event: CanonicalEvent[EventPayload],
-) -> dict[str, object]:  # loose: audit payload, wave 2 gives it a real shape
+) -> dict[str, JsonValue]:
     return {
         "session_id": str(canonical_event.session_id),
         "event_id": str(canonical_event.event_id),

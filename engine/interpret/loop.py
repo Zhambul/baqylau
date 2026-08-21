@@ -6,6 +6,8 @@ import threading
 import time
 from typing import Callable, Mapping
 
+from pydantic import JsonValue
+
 from domain.events import CanonicalEvent, EventPayload
 from audit.recorder import AuditRecorder
 from harness.contract import (
@@ -110,7 +112,7 @@ class Interpreter:
     def _audit_failure(
         self,
         where: str,
-        context: dict[str, object],  # loose: audit payload, wave 2 gives it a real shape
+        context: dict[str, JsonValue],
     ) -> None:
         """Record a swallowed interpreter failure, then carry on.
 

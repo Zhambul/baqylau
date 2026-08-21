@@ -12,6 +12,7 @@ import inspect
 from typing import cast
 
 import pytest
+from pydantic import TypeAdapter
 
 from conftest import REPOSITORY_ROOT  # noqa: F401  (path setup for the imports below)
 from fake_terminal import FakeTerminal, window
@@ -25,7 +26,7 @@ from terminal.contract import (
 )
 from terminal.impl import resolve
 from terminal.impl.kitty.plugin import kitty_plugin
-from terminal.impl.kitty.remote import KittyRemote
+from terminal.impl.kitty.remote import KittyOSWindow, KittyRemote
 from terminal.impl.null import null_plugin
 from terminal.impl.pty.plugin import pty_plugin
 from terminal.models import (
@@ -72,7 +73,13 @@ class FakeRemote:
         return self.printed
 
     def ls(self):
-        return self.tree
+        # `tree` is the plain-dict fixture data every test writes; the real
+        # KittyRemote.ls() answers typed `KittyOSWindow` rows, so this parses
+        # the fixture the same way — the fake stays a stand-in for the real
+        # contract, not a looser one.
+        if self.tree is None:
+            return None
+        return TypeAdapter(list[KittyOSWindow]).validate_python(self.tree)
 
     def app_focused(self, tree=None):
         return False
@@ -253,8 +260,8 @@ def test_a_tab_colour_is_a_validated_colour_until_the_implementation_sees_it():
     # the raw fast path is tried first, and only the implementation ever knows
     # what a colour looks like on the wire
     assert remote.raw_calls[0][0] == "set-tab-color"
-    assert remote.raw_calls[0][1]["colors"]["active_bg"] == 0xC678DD
-    assert remote.raw_calls[0][1]["match"] == "window_id:7"
+    assert remote.raw_calls[0][1].colors["active_bg"] == 0xC678DD
+    assert remote.raw_calls[0][1].match == "window_id:7"
     with pytest.raises(ValueError):
         RGB(256, 0, 0)
 

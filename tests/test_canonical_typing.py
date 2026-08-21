@@ -161,10 +161,11 @@ def test_a_type_ignore_names_the_error_it_silences():
 # does; a bare `tuple` does not, because a fixed-length tuple with unstated
 # element types is a narrower, less common shape than the other three.
 #
-# This is wave 1 of the owner's "absolute type safety" decision: it PINS
-# today's loose spots in LOOSE_ANNOTATION_ALLOWED without redesigning the
-# parsing code that produces most of them. Wave 2 is the parsing rewrite,
-# and it empties this list — the list only ever shrinks.
+# This was wave 1 of the owner's "absolute type safety" decision: it PINNED
+# the loose spots of the day in LOOSE_ANNOTATION_ALLOWED without redesigning
+# the parsing code that produced most of them. Wave 2 was that redesign, and
+# it emptied the list. It stays empty: an entry may return only with a
+# justified reason, the same as the day it was seeded.
 #
 # An entry needs two things, not one: the allowlist entry below, AND a
 # `# loose: <reason>` comment on the offending line. Either alone is not
@@ -187,57 +188,7 @@ LOOSE_ANNOTATION_PACKAGES = (
     "terminal",
 )
 
-LOOSE_ANNOTATION_ALLOWED: set[str] = {
-    'api/app.py:_publish_openapi_without_the_422.document.return',
-    'api/sse.py:off_loop.arguments',
-    'app/injection.py:_dependency_of.annotation',
-    'app/injection.py:singleton.provider.dependencies',
-    'app/raw_events_audit_cli.py:_document.return',
-    'app/raw_events_audit_cli.py:_print.document',
-    'audit/record.py:error.context',
-    'audit/record.py:state_file.content',
-    'audit/recorder.py:AuditRecorder.error.context',
-    'audit/recorder.py:AuditRecorder.state_file.content',
-    'audit/telemetry.py:BrowserTelemetryService.record_client_failure.content',
-    'audit/telemetry.py:BrowserTelemetryService.record_events.content',
-    'audit/telemetry.py:BrowserTelemetryService.record_optimistic_action.content',
-    'core/clients.py:command.arguments',
-    'engine/interpret/loop.py:Interpreter._audit_failure.context',
-    'engine/react/loop.py:ReactionLoop._audit_failure.context',
-    'engine/react/loop.py:_context.return',
-    'notify/channels/__init__.py:retract.handle',
-    'notify/channels/telegram.py:_call.body',
-    'notify/channels/telegram.py:_call.params',
-    'notify/channels/telegram.py:_call.result',
-    'notify/channels/telegram.py:_call.return',
-    'notify/channels/telegram.py:_telegram_delete_body.h',
-    'notify/channels/telegram.py:_telegram_send_body.h',
-    'notify/channels/telegram.py:retract_alert.h',
-    'notify/channels/telegram.py:send_alert.h',
-    'notify/channels/telegram.py:send_alert.return',
-    'notify/channels/webpush.py:_webpush_fanout.payload',
-    'notify/channels/webpush.py:deliver.payload',
-    'notify/channels/webpush.py:retract_alert.h',
-    'notify/channels/webpush.py:retract_alert.payload',
-    'notify/channels/webpush.py:send_alert.payload',
-    'notify/channels/webpush.py:send_alert.return',
-    'notify/notifier.py:DeliveredNotification.handle',
-    'notify/notifier.py:Notifier._track.handle',
-    'notify/presence.py:Presence.route.cand.return',
-    'notify/presence.py:Presence.route.decision.candidates',
-    'notify/presence.py:Presence.route.decision.return',
-    'notify/presence.py:Presence.route.return',
-    'repository/impl/sqlite/session_data.py:SqliteSessionDataRepository.entries_page.arguments',
-    'repository/mapper/audit.py:text.value',
-    'repository/mapper/audit.py:truncated.value',
-    'repository/mapper/documents.py:encode_document.value',
-    'repository/mapper/facts.py:_event_adapter.event',
-    'terminal/impl/kitty/plugin.py:KittyViewport.read_screen.payload',
-    'terminal/impl/kitty/remote.py:KittyRemote.app_focused.tree',
-    'terminal/impl/kitty/remote.py:KittyRemote.ls.return',
-    'terminal/impl/kitty/remote.py:KittyRemote.raw.payload',
-    'terminal/impl/kitty/remote.py:KittyRemote.raw.return',
-}
+LOOSE_ANNOTATION_ALLOWED: frozenset[str] = frozenset()
 
 
 def _loose_annotation_paths() -> list[pathlib.Path]:

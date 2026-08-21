@@ -9,12 +9,13 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TypeVar
+from typing import ParamSpec, TypeVar
 
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
 Frame = TypeVar("Frame")
+StoreReadParams = ParamSpec("StoreReadParams")
 
 STREAM_POLL_SECONDS = 0.25
 STREAM_HEARTBEAT_SECONDS = 15.0
@@ -31,8 +32,9 @@ def sse_frame(event: str, payload: BaseModel, identity: int | None = None) -> st
 
 
 async def off_loop(
-    read: Callable[..., Frame],
-    *arguments: object,  # loose: generic forwarding of a store read's own arguments
+    read: Callable[StoreReadParams, Frame],
+    *arguments: StoreReadParams.args,
+    **keywords: StoreReadParams.kwargs,
 ) -> Frame:
     """One synchronous store read, on a worker thread.
 
@@ -49,4 +51,4 @@ async def off_loop(
     stream still costs no thread — the property the design was claiming all along
     (api/config.py THREAD_POOL_TOKENS).
     """
-    return await run_in_threadpool(read, *arguments)
+    return await run_in_threadpool(read, *arguments, **keywords)

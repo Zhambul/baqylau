@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any
 
 from audit.recorder import AuditRecorder
 from core.repository import RepositoryQueries
 from dashboard import config
 from dashboard.services.notices import DashboardNotificationState
 from notify import channels
+from notify.channels import NotificationHandle
 from notify.presence import Presence
 from domain.ids import SessionId
 from domain.sessiondata import ActorStatus, SessionData
@@ -88,7 +89,7 @@ def _lead_status(session_data: SessionData) -> ActorStatus | None:
 class DeliveredNotification:
     session_id: SessionId
     state: ActorStatus
-    handle: dict[str, Any]  # loose: notification payload, wave 2 gives it a real shape
+    handle: NotificationHandle
     delivered_at: float
 
 
@@ -242,7 +243,7 @@ class Notifier:
                 "",
                 "notification-route",
                 dict(
-                    decision,
+                    dataclasses.asdict(decision),
                     session_id=str(session_id),
                     kind=notification.kind,
                 ),
@@ -288,7 +289,7 @@ class Notifier:
     def _track(
         self,
         pending_notification: PendingNotification,
-        handle: dict[str, Any] | None,  # loose: notification payload, wave 2 gives it a real shape
+        handle: NotificationHandle | None,
     ) -> None:
         if handle is None:
             return
@@ -349,8 +350,8 @@ class Notifier:
             "notify-retract",
             {
                 "session_id": str(delivered_notification.session_id),
-                "channel": delivered_notification.handle.get("ch"),
-                "kind": delivered_notification.handle.get("kind"),
+                "channel": delivered_notification.handle.ch,
+                "kind": delivered_notification.handle.kind,
                 "reason": reason,
                 "outcome": outcome,
                 "age_seconds": round(max(0.0, age), 3),

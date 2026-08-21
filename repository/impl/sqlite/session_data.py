@@ -201,7 +201,7 @@ class SqliteSessionDataRepository(SessionDataRepository):
     ) -> EntryPage:
         ceiling = "AND cursor <= ?" if at is not None else ""
         floor = "AND cursor < ?" if before is not None else ""
-        arguments: list[object] = [str(session_id)]  # loose: heterogeneous SQL bind parameters
+        arguments: list[str | int] = [str(session_id)]
         if at is not None:
             arguments.append(at)
         if before is not None:

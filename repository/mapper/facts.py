@@ -17,7 +17,7 @@ decoder — with nothing holding any of the four to the others.
 from __future__ import annotations
 
 from functools import cache
-from typing import Any
+from typing import Any, cast
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -178,7 +178,12 @@ def _event_adapter(event_type: str) -> TypeAdapter[Any]:
     identity columns are never serialized together — they are typed SQL
     columns, and only the payload is ever turned into bytes.
     """
-    event: Any = CanonicalEvent  # loose: generic TypeAdapter over a registered payload type
+    # `CanonicalEvent[X]` where X is a `type[EventPayload]` read out of a dict
+    # at RUNTIME is not a shape mypy can check: subscripting a generic class
+    # needs the type argument to be a static literal, and this one is chosen
+    # by a string looked up per call. `cast` says so once, here, instead of
+    # widening the whole function's annotation to paper over it.
+    event = cast(Any, CanonicalEvent)
     return TypeAdapter(event[PAYLOAD_TYPES[event_type]])
 
 

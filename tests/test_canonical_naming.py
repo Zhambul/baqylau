@@ -94,6 +94,11 @@ ID_GATE_ALLOWED = {
     # Declared (a real, corpus-observed hook field) but read by nothing here —
     # the same "not worth a NewType" shape as codex's item_id/limit_id above.
     "harness/impl/claude_code/canonical/records.py:prompt_id",
+    # Telegram's OWN chat identifier (the Bot API's `chat_id`, an int OR a
+    # string `@channelusername`) — a vendor concept with no domain
+    # equivalent, the same shape as codex's client_id/model_provider_id
+    # above.
+    "notify/channels/telegram.py:chat_id",
 }
 
 

@@ -41,6 +41,13 @@ LABEL_VARIABLE
 new_session_drafts  # dashboard/services/preferences.py
 error_id         # audit/models.py
 
+# `notify/presence.py`'s RouteDecision/RouteCandidate: read whole by
+# `dataclasses.asdict(decision)` (notify/notifier.py, the `notify-route`
+# audit row) rather than by field name, so vulture never sees the read.
+age_s               # RouteCandidate
+target_label        # RouteDecision
+subscription_count  # RouteDecision
+
 # anyio's capacity limiter: we ASSIGN the pool size the policy asked for and
 # anyio reads it back when it hands out worker threads (api/app.py's lifespan).
 # The only reference of ours is the assignment, which is what a framework

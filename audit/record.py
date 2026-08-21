@@ -27,6 +27,8 @@ from __future__ import annotations
 
 from threading import Lock
 
+from pydantic import JsonValue
+
 from audit.models import StreamHandle
 from audit.recorder import AuditRecorder
 from domain.ids import ActorId, TaskId
@@ -65,7 +67,7 @@ def enabled() -> bool:
 def error(
     session_or_log: str = "",
     func: str = "",
-    context: object = None,  # loose: audit payload, wave 2 gives it a real shape
+    context: JsonValue = None,
 ) -> None:
     recorder().error(session_or_log, func, context)
 
@@ -74,7 +76,7 @@ def state_file(
     log: str,
     path: str,
     action: str,
-    content: object = "",  # loose: audit payload, wave 2 gives it a real shape
+    content: JsonValue = "",
 ) -> None:
     recorder().state_file(log, path, action, content)
 

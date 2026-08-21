@@ -10,11 +10,11 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Any
 
 import anyio.to_thread
 import yaml
 from fastapi import FastAPI, Request, Response
+from pydantic import JsonValue
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -138,7 +138,7 @@ def _publish_openapi_without_the_422(web: FastAPI) -> None:
     """
     generate = web.openapi
 
-    def document() -> dict[str, Any]:  # loose: wave 1 debt, wave 2 gives it a real shape
+    def document() -> dict[str, JsonValue]:
         if web.openapi_schema is None:
             schema = generate()
             for operations in schema.get("paths", {}).values():

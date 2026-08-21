@@ -9,7 +9,7 @@ document, with nothing holding the two halves together.
 
 from __future__ import annotations
 
-from typing import Any, TypeVar
+from typing import TypeVar
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -22,8 +22,11 @@ class StoredDocumentError(ValueError):
     never a valid instance of the shape asked for."""
 
 
-def encode_document(value: object) -> bytes:  # loose: stored value of no fixed kind, wave 2 gives it a real shape
-    adapter: TypeAdapter[Any] = TypeAdapter(type(value))
+def encode_document(value: DocumentType) -> bytes:
+    """`value`'s own runtime type IS the shape to validate and dump against —
+    the whole reason this takes a type parameter instead of `object`: the
+    adapter it builds is for exactly the caller's type, not a generic one."""
+    adapter: TypeAdapter[DocumentType] = TypeAdapter(type(value))
     return adapter.dump_json(value)
 
 

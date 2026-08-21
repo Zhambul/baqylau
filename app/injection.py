@@ -24,7 +24,17 @@ module's. Real annotation objects sidestep the question entirely.
 
 import functools
 import inspect
-from typing import Annotated, Any, Callable, TypeVar, get_args, get_origin, get_type_hints
+from typing import (
+    Annotated,
+    Any,
+    Callable,
+    Concatenate,
+    ParamSpec,
+    TypeVar,
+    get_args,
+    get_origin,
+    get_type_hints,
+)
 
 from fastapi import Request
 from fastapi.params import Depends
@@ -34,6 +44,17 @@ from fastapi.params import Depends
 Instances = dict[Any, Any]
 
 T = TypeVar("T")
+P = ParamSpec("P")
+
+
+class TypeHint:
+    """One provider parameter's own type-hint value: a class, `X | Y`, a
+    generic alias, or an `Annotated[...]` wrapper. `typing` itself has no
+    sharper name for this — `get_type_hints` is stubbed to return
+    `dict[str, Any]` — so this exists only so a reader of `_dependency_of`
+    sees WHAT crosses the boundary instead of the bare admission that
+    anything might. Never instantiated: every real value handed in already
+    satisfies it, because `Any` satisfies everything."""
 
 
 def registry() -> Instances:
@@ -41,7 +62,7 @@ def registry() -> Instances:
     return {}
 
 
-def singleton(build: Callable[..., T]) -> Callable[..., T]:
+def singleton(build: Callable[P, T]) -> Callable[Concatenate[Request, P], T]:
     """One instance per application, built on first use, memoised on the app.
 
     The returned provider takes a `Request` on top of what `build` declares —
@@ -57,11 +78,12 @@ def singleton(build: Callable[..., T]) -> Callable[..., T]:
     @functools.wraps(build)
     def provider(
         request: Request,
-        **dependencies: Any,  # loose: generic dependency kernel, a provider's shape is not fixed here
+        *args: P.args,
+        **dependencies: P.kwargs,
     ) -> T:
         instances: Instances = request.app.state.instances
         if build not in instances:
-            instances[build] = build(**dependencies)
+            instances[build] = build(*args, **dependencies)
         value: T = instances[build]
         return value
 
@@ -69,7 +91,10 @@ def singleton(build: Callable[..., T]) -> Callable[..., T]:
     # the same object in the same slot.
     provider.__signature__ = signature.replace(parameters=parameters)  # type: ignore[attr-defined]
     provider.build = build  # type: ignore[attr-defined]
-    return provider
+    # `functools.wraps` types its result as wrapping `build`'s OWN signature
+    # (`P`), not `provider`'s declared `[Request, **P]` — it exists here for
+    # the runtime `__name__`/`__doc__`/`__wrapped__` copy, not for typing.
+    return provider  # type: ignore[return-value]
 
 
 def resolve(instances: Instances, provider: Callable[..., T]) -> T:
@@ -95,11 +120,11 @@ def resolve(instances: Instances, provider: Callable[..., T]) -> T:
 
 def _dependency_of(
     name: str,
-    annotation: Any,  # loose: generic dependency kernel, a provider's shape is not fixed here
+    type_hint: TypeHint,
 ) -> Callable[..., Any]:
     """The provider an `Annotated[T, Depends(provider)]` parameter names."""
-    if get_origin(annotation) is Annotated:
-        for extra in get_args(annotation)[1:]:
+    if get_origin(type_hint) is Annotated:
+        for extra in get_args(type_hint)[1:]:
             if isinstance(extra, Depends) and extra.dependency is not None:
                 return extra.dependency
-    raise TypeError("parameter %r declares no provider: %r" % (name, annotation))
+    raise TypeError("parameter %r declares no provider: %r" % (name, type_hint))

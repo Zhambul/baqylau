@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 
+from pydantic import JsonValue
+
 from audit.models import (
     ApplicationError,
     ApplicationErrorRecord,
@@ -19,18 +21,20 @@ from repository.model.audit import ErrorRow
 from repository.model.sql import SqlValues
 
 # A audit context is arbitrary caller data. It is recorded, never queried,
-# so it is bounded rather than shaped.
+# so it is bounded rather than shaped. `JsonValue` (not `object`) is the real
+# shape: every caller passes something that is ABOUT to become the JSON this
+# writes, and `json.dumps` below rejects anything that is not.
 CONTENT_LIMIT = 2000
 
 
-def text(value: object) -> str:  # loose: stored value of no fixed kind, wave 2 gives it a real shape
+def text(value: JsonValue) -> str:
     """Any caller value as one string. Never raises: this runs inside `except`."""
     if isinstance(value, str):
         return value
     return json.dumps(value, ensure_ascii=False, default=str)
 
 
-def truncated(value: object) -> str:  # loose: stored value of no fixed kind, wave 2 gives it a real shape
+def truncated(value: JsonValue) -> str:
     return text(value)[:CONTENT_LIMIT]
 
 

@@ -5,8 +5,6 @@
 # match.py: the `ls` tree's JSON shape, the launch flags, the layout kitty
 # needs before a biased split works, the raw-socket fast paths.
 
-from typing import Any
-
 from terminal.models.values import TabId, WindowId
 from terminal.contract import (
     TerminalInput,
@@ -17,7 +15,14 @@ from terminal.contract import (
     TerminalViewport,
 )
 from terminal.impl.kitty import match
-from terminal.impl.kitty.remote import TAB_COLOR_NONE, KittyRemote, current_window_id
+from terminal.impl.kitty.remote import (
+    TAB_COLOR_NONE,
+    GetTextRcPayload,
+    KittyRcResponse,
+    KittyRemote,
+    SetTabColorRcPayload,
+    current_window_id,
+)
 from terminal.models.panes import (
     PaneCloseRequest,
     PaneCloseResponse,
@@ -145,11 +150,12 @@ class KittyTabs(TerminalTabs):
         except (ValueError, AttributeError):   # unparseable value: let kitten
             colors = None                      # produce its own rc
         if colors is not None:
-            response = self.kitty_remote.raw("set-tab-color",
-                                       {"match": match.tab_of(window_id), "colors": colors},
-                                       want_response=True)
-            if isinstance(response, dict):
-                return 0 if response.get("ok") else 1
+            response = self.kitty_remote.raw(
+                "set-tab-color",
+                SetTabColorRcPayload(match=match.tab_of(window_id), colors=colors),
+                want_response=True)
+            if isinstance(response, KittyRcResponse):
+                return 0 if response.ok else 1
         return self.kitty_remote.run("set-tab-color", "--match", match.tab_of(window_id),
                                f"active_bg={active_bg}", f"active_fg={active_fg}",
                                f"inactive_bg={inactive_bg}", f"inactive_fg={inactive_fg}")
@@ -255,22 +261,22 @@ class KittyMetadata(TerminalMetadata):
             return self._last_windows
         found = []
         for operating_system_window in tree:
-            for tab in operating_system_window.get("tabs") or []:
-                windows = tab.get("windows") or []
+            for tab in operating_system_window.tabs or []:
+                windows = tab.windows or []
                 for position, window in enumerate(windows):
                     found.append(WindowInfo(
-                        window_id=WindowId(str(window.get("id"))),
-                        tab_id=TabId(str(tab.get("id"))),
-                        tags=dict(window.get("user_vars") or {}),
-                        columns=int(window.get("columns") or 0),
-                        lines=int(window.get("lines") or 0),
+                        window_id=WindowId(str(window.id)),
+                        tab_id=TabId(str(tab.id)),
+                        tags=dict(window.user_vars or {}),
+                        columns=int(window.columns or 0),
+                        lines=int(window.lines or 0),
                         is_first_in_tab=position == 0,
-                        tab_is_active=bool(tab.get("is_active")),
+                        tab_is_active=bool(tab.is_active),
                         # kitty's tab `is_focused` already means "active AND
                         # its OS window holds keyboard focus" — verified
                         # empirically against a web-launched tab with kitty
                         # backgrounded, which reads active but not focused.
-                        tab_is_focused=bool(tab.get("is_focused")),
+                        tab_is_focused=bool(tab.is_focused),
                     ))
         self._last_windows = tuple(found)
         return self._last_windows
@@ -312,13 +318,11 @@ class KittyViewport(TerminalViewport):
     def read_screen(self, screen_read_request: ScreenReadRequest) -> ScreenReadResponse:
         # Raw socket first (~0.4ms; it runs on every click-to-view toggle),
         # kitten subprocess as the fallback.
-        payload: dict[str, Any] = {  # loose: kitty's own JSON reply, wave 2 gives it a real shape
-            "match": match.window(screen_read_request.window_id), "extent": "screen"}
-        if screen_read_request.ansi:
-            payload["ansi"] = True
+        payload = GetTextRcPayload(match=match.window(screen_read_request.window_id),
+                                   extent="screen", ansi=screen_read_request.ansi)
         response = self.kitty_remote.raw("get-text", payload, want_response=True)
-        if isinstance(response, dict) and response.get("ok") and isinstance(response.get("data"), str):
-            return ScreenReadResponse(True, response["data"])
+        if isinstance(response, KittyRcResponse) and response.ok and response.data is not None:
+            return ScreenReadResponse(True, response.data)
         text = self.kitty_remote.get_text(screen_read_request.window_id, ansi=screen_read_request.ansi)
         if text is None:
             return ScreenReadResponse(False, None, "terminal screen read failed")

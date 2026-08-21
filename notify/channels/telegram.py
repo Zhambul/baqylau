@@ -26,21 +26,101 @@
 # row, or an error detail — the same rule dictate.py holds for the Deepgram key.
 from __future__ import annotations
 
-import json
+import dataclasses
 import os
 import urllib.error
 import urllib.parse
 import urllib.request
 import threading
 import time
-from typing import Any
+from dataclasses import dataclass
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict
 
 from audit import record as A
+from domain.ids import SessionId
 from notify.channels.alert import FAILED, GONE, NOTHING, OK, PENDING, alert_text
 from repository.contract.preferences import (
     PushSigningKeyRepository,
     PushSubscriptionRepository,
 )
+
+# Telegram's own JSON, read back — GENUINELY open (`extra="ignore"`): a Bot
+# API `Message`/`Chat` carries dozens of fields (from, date, entities, ...)
+# this module never reads one of. What it DOES read is declared below; an
+# unexpected TYPE on one of those still fails (a str where an int was
+# promised raises `ValidationError`), which is the failure this module's
+# `except Exception` already turns into an audited, swallowed Result — never
+# a silent wrong value.
+FOREIGN = ConfigDict(extra="ignore", frozen=True)
+
+
+class TelegramChat(BaseModel):
+    model_config = FOREIGN
+    id: int | str
+
+
+class TelegramMessage(BaseModel):
+    """The `result` of a successful `sendMessage` — the one Bot API reply this
+    module keeps anything from (the retraction handle)."""
+
+    model_config = FOREIGN
+    message_id: int
+    chat: TelegramChat
+
+
+class TelegramApiResponse(BaseModel):
+    """The Bot API's own reply shape, `{ok, description?, result?}`, shared by
+    every method this module calls. `result` is a `Message` for
+    `sendMessage`, or a bare `true` for `deleteMessage` — the Bot API's own
+    contract, not a shape this codebase chose."""
+
+    model_config = FOREIGN
+    ok: bool
+    description: str | None = None
+    result: TelegramMessage | bool | None = None
+
+
+@dataclass(frozen=True)
+class SendMessageParams:
+    """The `sendMessage` request body we build."""
+
+    chat_id: str
+    text: str
+
+
+@dataclass(frozen=True)
+class DeleteMessageParams:
+    """The `deleteMessage` request body we build."""
+
+    chat_id: int | str
+    message_id: int
+
+
+TelegramCallParams = SendMessageParams | DeleteMessageParams
+
+
+@dataclass
+class TelegramHandle:
+    """The retraction handle `send_alert` hands back: what it takes to find
+    the message again (`chat`/`msg_id`, set by the send thread) and where a
+    retraction currently stands (`done`/`outcome`/`retry_at`/`deleting`, all
+    read and written by the two off-watcher threads — see `retract_alert`).
+    Mutable on purpose: it IS the shared state those threads and the
+    watcher's poll all read and write, the same "atomic enough" single-field
+    bargain `notify/presence.py`'s maps make."""
+
+    ch: Literal["telegram"] = "telegram"
+    session_id: SessionId | None = None
+    kind: str | None = None
+    chat: int | str | None = None
+    msg_id: int | None = None
+    done: bool = False
+    outcome: str | None = None
+    retry_at: float = 0.0
+    deleting: bool = False
+
 
 DEFAULT_CRED_DIR = "~/.config/telegram"
 TOKEN_NAME = "bot-token"
@@ -125,38 +205,40 @@ class Result:
 
 def _call(
     method: str,
-    params: dict[str, object],  # loose: notification payload, wave 2 gives it a real shape
-) -> tuple[dict[str, Any] | None, Result | None]:  # loose: notification payload, wave 2 gives it a real shape
-    """POST one Bot API method. Returns (payload_dict, Result-on-failure) —
-    exactly one of the two is meaningful. Never raises."""
+    params: TelegramCallParams,
+) -> tuple[TelegramMessage | bool | None, Result | None]:
+    """POST one Bot API method. Returns (result, Result-on-failure) — exactly
+    one of the two is meaningful. Never raises: a reply that does not match
+    `TelegramApiResponse` (bad JSON, a field of the wrong type) is caught by
+    the same `except Exception` a network failure is, and comes back as an
+    ordinary failed Result — audited by the caller, never silent."""
     tok = token()
     if not tok:
         return None, Result(error="no token")
     url = "%s/bot%s/%s" % (_api_base(), tok, method)
-    data = urllib.parse.urlencode(params).encode()
+    data = urllib.parse.urlencode(dataclasses.asdict(params)).encode()
     try:
         req = urllib.request.Request(url, data=data, method="POST")
         with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_SECONDS) as resp:
-            body: dict[str, Any] = json.loads(resp.read() or b"{}")  # loose: telegram JSON
+            body = TelegramApiResponse.model_validate_json(resp.read() or b"{}")
             status = resp.status
     except urllib.error.HTTPError as e:
         # The API reports its real reason in a JSON body even on a 4xx, and that
         # body is the only way to tell "already deleted" (a benign 400) from a
         # genuine failure — so it is parsed rather than discarded.
         try:
-            body, status = json.loads(e.read() or b"{}"), e.code
+            body, status = TelegramApiResponse.model_validate_json(e.read() or b"{}"), e.code
         except Exception:
             return None, Result(status=e.code, error=str(e))
     except Exception as e:
         return None, Result(error=str(e))
-    if not body.get("ok"):
-        desc = str(body.get("description") or "")
+    if not body.ok:
+        desc = body.description or ""
         # 400 "message to delete not found" / "message can't be deleted" — the
         # message is already out of the chat, which is what we wanted.
         gone = status == 400 and "not found" in desc.lower()
         return None, Result(gone=gone, status=status, error=desc)
-    result: dict[str, Any] = body.get("result") or {}  # loose: notification payload, wave 2 gives it a real shape
-    return result, None
+    return body.result, None
 
 
 def send_message(text: str) -> Result:
@@ -167,11 +249,10 @@ def send_message(text: str) -> Result:
     chat = chat_id()
     if not chat:
         return Result(error="no chat")
-    res, err = _call("sendMessage", {"chat_id": chat, "text": text})
-    if err is not None or res is None:
+    res, err = _call("sendMessage", SendMessageParams(chat_id=chat, text=text))
+    if err is not None or not isinstance(res, TelegramMessage):
         return err or Result(error="empty result")
-    return Result(ok=True, status=200, message_id=res.get("message_id"),
-                  chat=(res.get("chat") or {}).get("id", chat))
+    return Result(ok=True, status=200, message_id=res.message_id, chat=res.chat.id)
 
 
 def delete_message(chat: int | str | None, message_id: int | None) -> Result:
@@ -180,8 +261,7 @@ def delete_message(chat: int | str | None, message_id: int | None) -> Result:
     Synchronous; callers run it off the watcher thread."""
     if not (chat and message_id):
         return Result(error="no handle")
-    res, err = _call("deleteMessage",
-                     {"chat_id": chat, "message_id": message_id})
+    _res, err = _call("deleteMessage", DeleteMessageParams(chat_id=chat, message_id=message_id))
     if err is not None:
         return err
     return Result(ok=True, status=200, message_id=message_id, chat=chat)
@@ -192,7 +272,7 @@ def delete_message(chat: int | str | None, message_id: int | None) -> Result:
 def send_alert(
     entry: dict[str, str],
     reason: str | None = None,
-) -> dict[str, Any] | None:  # loose: notification payload, wave 2 gives it a real shape
+) -> TelegramHandle | None:
     """Send the deferred alert to Telegram. `reason` (in the audit row) says WHY
     it fired: `escalation` (the nudge after an on-device push you ignored),
     `no-device` (nobody was push-subscribed — the immediate fallback), or
@@ -208,18 +288,18 @@ def send_alert(
     # The handle is created NOW and filled by the sender thread, because the
     # watcher must not block on a round-trip and a retraction can beat the send
     # home. `msg_id` None + `done` False is exactly the PENDING state retract()
-    # reads. Single assignments of small immutables, read by the one watcher
-    # thread — the same "atomic enough" bargain presence.py's maps make.
-    h: dict[str, Any] = {"ch": "telegram", "session_id": entry.get("session_id"),  # loose: telegram handle
-                         "kind": entry.get("kind"),
-                         "chat": None, "msg_id": None, "done": False}
-    threading.Thread(target=_telegram_send_body, args=(h, msg, reason),
+    # reads.
+    raw_session_id = entry.get("session_id")
+    telegram_handle = TelegramHandle(
+        session_id=SessionId(raw_session_id) if raw_session_id is not None else None,
+        kind=entry.get("kind"))
+    threading.Thread(target=_telegram_send_body, args=(telegram_handle, msg, reason),
                      daemon=True).start()
-    return h
+    return telegram_handle
 
 
 def _telegram_send_body(
-    h: dict[str, Any],  # loose: notification payload, wave 2 gives it a real shape
+    telegram_handle: TelegramHandle,
     msg: str,
     reason: str | None,
 ) -> None:
@@ -230,24 +310,24 @@ def _telegram_send_body(
     try:
         res = send_message(msg)
     except Exception:
-        A.error("", "dashboard telegram notify", {"session_id": h.get("session_id")})
-        h["done"] = True
+        A.error("", "dashboard telegram notify", {"session_id": telegram_handle.session_id})
+        telegram_handle.done = True
         return
     if res.ok:
-        h["chat"], h["msg_id"] = res.chat, res.message_id
+        telegram_handle.chat, telegram_handle.msg_id = res.chat, res.message_id
     A.state_file("", "", "telegram-notify",
-                 {"session_id": h.get("session_id"), "kind": h.get("kind"), "reason": reason,
+                 {"session_id": telegram_handle.session_id, "kind": telegram_handle.kind, "reason": reason,
                   "ok": res.ok, "status": res.status, "error": res.error,
                   # the retraction contract, recorded at the send: an alert with
                   # retractable=False can never be taken back, and this row is
                   # the only place that says so.
                   "retractable": bool(res.ok and res.message_id),
                   "message_id": res.message_id})
-    h["done"] = True
+    telegram_handle.done = True
 
 
 def retract_alert(
-    h: dict[str, Any],  # loose: notification payload, wave 2 gives it a real shape
+    telegram_handle: TelegramHandle,
     reason: str,
     badge: int = 0,
     *,
@@ -264,43 +344,41 @@ def retract_alert(
     still reports what actually happened at the HTTP boundary, rather than an optimistic
     guess made before the call returned."""
     del reason, badge, push_signing_key_repository, push_subscription_repository  # a Bot API message needs none
-    if not h.get("done"):
+    if not telegram_handle.done:
         return PENDING                     # the SEND hasn't landed yet
-    outcome = h.get("outcome")
-    if outcome in (OK, GONE):
-        return str(outcome)                # the delete thread finished
-    if outcome == FAILED:
-        if time.monotonic() < h.get("retry_at", 0):
+    if telegram_handle.outcome in (OK, GONE):
+        return str(telegram_handle.outcome)              # the delete thread finished
+    if telegram_handle.outcome == FAILED:
+        if time.monotonic() < telegram_handle.retry_at:
             return PENDING
-        h.pop("outcome", None)
-        h.pop("deleting", None)
-    if not (h.get("chat") and h.get("msg_id")):
+        telegram_handle.outcome, telegram_handle.deleting = None, False
+    if not (telegram_handle.chat and telegram_handle.msg_id):
         return NOTHING                     # the send failed — nothing is out there
-    if not h.get("deleting"):              # spawn once, however often we're asked
-        h["deleting"] = True
-        threading.Thread(target=_telegram_delete_body, args=(h,),
+    if not telegram_handle.deleting:                     # spawn once, however often we're asked
+        telegram_handle.deleting = True
+        threading.Thread(target=_telegram_delete_body, args=(telegram_handle,),
                          daemon=True).start()
     return PENDING
 
 
-def _telegram_delete_body(h: dict[str, Any]) -> None:  # loose: notification payload, wave 2 gives it a real shape
+def _telegram_delete_body(telegram_handle: TelegramHandle) -> None:
     """The off-watcher delete body: `outcome` is set on every path (it is what
     releases the retraction from PENDING), and a `gone` message counts as done —
     someone clearing the chat first is the outcome we wanted, not a failure."""
     try:
-        res = delete_message(h["chat"], h["msg_id"])
+        res = delete_message(telegram_handle.chat, telegram_handle.msg_id)
     except Exception:
-        A.error("", "dashboard telegram retract", {"session_id": h.get("session_id")})
-        h["retry_at"] = time.monotonic() + RETRACTION_RETRY_SECONDS
-        h["outcome"] = FAILED
+        A.error("", "dashboard telegram retract", {"session_id": telegram_handle.session_id})
+        telegram_handle.retry_at = time.monotonic() + RETRACTION_RETRY_SECONDS
+        telegram_handle.outcome = FAILED
         A.state_file(
             "",
             "",
             "telegram-retract",
             {
-                "session_id": h.get("session_id"),
-                "kind": h.get("kind"),
-                "message_id": h.get("msg_id"),
+                "session_id": telegram_handle.session_id,
+                "kind": telegram_handle.kind,
+                "message_id": telegram_handle.msg_id,
                 "outcome": FAILED,
                 "status": 0,
                 "error": "exception",
@@ -309,16 +387,16 @@ def _telegram_delete_body(h: dict[str, Any]) -> None:  # loose: notification pay
         return
     outcome = OK if res.ok else (GONE if res.gone else FAILED)
     if outcome == FAILED:
-        h["retry_at"] = time.monotonic() + RETRACTION_RETRY_SECONDS
-    h["outcome"] = outcome
+        telegram_handle.retry_at = time.monotonic() + RETRACTION_RETRY_SECONDS
+    telegram_handle.outcome = outcome
     A.state_file(
         "",
         "",
         "telegram-retract",
         {
-            "session_id": h.get("session_id"),
-            "kind": h.get("kind"),
-            "message_id": h.get("msg_id"),
+            "session_id": telegram_handle.session_id,
+            "kind": telegram_handle.kind,
+            "message_id": telegram_handle.msg_id,
             "outcome": outcome,
             "status": res.status,
             "error": res.error,

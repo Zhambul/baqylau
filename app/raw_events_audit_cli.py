@@ -13,6 +13,8 @@ import base64
 import json
 import sys
 
+from pydantic import JsonValue
+
 from domain.ids import RawEventId, SessionId
 from harness.models import RawEventAudit
 from repository.contract.facts import RawEventAuditRepository
@@ -23,7 +25,7 @@ from repository.mapper import facts as mapper
 
 def _document(
     raw_event_audit: RawEventAudit,
-) -> dict[str, object]:  # loose: raw JSON from the audit CLI, wave 2 gives it a real shape
+) -> dict[str, JsonValue]:
     raw_event = raw_event_audit.raw_event
     interpretation = raw_event_audit.interpretation
     return {
@@ -54,7 +56,7 @@ def _document(
     }
 
 
-def _print(document: object) -> None:  # loose: raw JSON from the audit CLI, wave 2 gives it a real shape
+def _print(document: JsonValue) -> None:
     print(json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True))
 
 

@@ -17,6 +17,8 @@ import sys
 import time
 import traceback
 
+from pydantic import JsonValue
+
 from audit.models import (
     ApplicationErrorRecord,
     SpawnRecord,
@@ -43,7 +45,7 @@ class AuditRecorder:
         self,
         session_or_log: str = "",
         func: str = "",
-        context: object = None,  # loose: audit payload, wave 2 gives it a real shape
+        context: JsonValue = None,
     ) -> None:
         self.audit_write_repository.record_error(
             ApplicationErrorRecord(
@@ -62,7 +64,7 @@ class AuditRecorder:
         log: str,
         path: str,
         action: str,
-        content: object = "",  # loose: audit payload, wave 2 gives it a real shape
+        content: JsonValue = "",
     ) -> None:
         self.audit_write_repository.record_state_file(
             StateFileRecord(

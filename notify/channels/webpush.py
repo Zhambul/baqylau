@@ -21,13 +21,15 @@
 from __future__ import annotations
 
 import base64
+import dataclasses
 import json
 import os
 import struct
 import time
 import urllib.error
 import urllib.request
-from typing import Any
+from dataclasses import dataclass
+from typing import Literal
 from urllib.parse import urlparse
 
 import threading
@@ -42,6 +44,49 @@ from repository.contract.preferences import (
     PushSigningKeyRepository,
     PushSubscriptionRepository,
 )
+
+
+@dataclass(frozen=True)
+class WebPushAlertPayload:
+    """The push body for a fresh alert — `static/sw.js` shows it verbatim
+    (title/body/badge), and reads `session_id`/`kind` back into its own
+    click-through and the resolve push's tag."""
+
+    title: str
+    body: str
+    session_id: SessionId
+    kind: str | None
+    url: str
+    badge: int
+
+
+@dataclass(frozen=True)
+class WebPushResolvePayload:
+    """The push body that closes a delivered alert — `type` is what
+    `static/sw.js` branches on to resolve rather than show a notification."""
+
+    session_id: SessionId
+    kind: str | None
+    tag: str
+    badge: int
+    type: Literal["resolve"] = "resolve"
+
+
+WebPushPayload = WebPushAlertPayload | WebPushResolvePayload
+
+
+@dataclass
+class WebPushHandle:
+    """The retraction handle `send_alert` hands back: the subscriptions the
+    alert actually went to (a resolve push must reach those, never whichever
+    device is most-recently-used by the time it fires) and the tag they were
+    shown under."""
+
+    ch: Literal["webpush"] = "webpush"
+    session_id: SessionId = SessionId("")
+    kind: str | None = None
+    subs: list[RoutedSubscription] = dataclasses.field(default_factory=list)
+    tag: str = ""
 
 
 try:                                   # cryptography is the ONE hard dependency;
@@ -198,11 +243,11 @@ class Result:
 
 def deliver(
     routed_subscription: RoutedSubscription,
-    payload: dict[str, object],  # loose: notification payload, wave 2 gives it a real shape
+    payload: WebPushPayload,
     push_signing_key_repository: PushSigningKeyRepository | None,
     ttl: int = DELIVERY_LIFETIME_SECONDS,
 ) -> Result:
-    """Deliver `payload` (a dict, JSON-encoded) to one `subscription` (its JSON
+    """Deliver `payload`, JSON-encoded, to one `subscription` (its JSON
     document: {endpoint, keys:{p256dh, auth}}). Never raises — returns a Result.
     Synchronous network I/O, so callers run it OFF the watcher thread."""
     if not _HAVE_CRYPTO:
@@ -210,7 +255,7 @@ def deliver(
     try:
         endpoint = routed_subscription["endpoint"]
         subscription_keys = routed_subscription["keys"]
-        body = _encrypt(json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        body = _encrypt(json.dumps(dataclasses.asdict(payload), ensure_ascii=False).encode("utf-8"),
                         subscription_keys["p256dh"], subscription_keys["auth"])
         auth = _vapid_header(endpoint, push_signing_key_repository)
         if not auth:
@@ -257,7 +302,7 @@ def send_alert(
     *,
     push_signing_key_repository: PushSigningKeyRepository | None = None,
     push_subscription_repository: PushSubscriptionRepository | None = None,
-) -> dict[str, Any] | None:  # loose: notification payload, wave 2 gives it a real shape
+) -> WebPushHandle | None:
     """Send the on-device alert as a Web Push to `subs` — the subscriptions of
     the ONE device the caller routed to (`presence.route`), NOT every
     subscription, so a session going done/asking buzzes the device you're
@@ -276,23 +321,23 @@ def send_alert(
     to", the signal that holds Telegram back to the escalation nudge."""
     if not (enabled() and subs):
         return None
-    session_id = entry.get("session_id") or ""
+    session_id = SessionId(entry.get("session_id") or "")
     title, body, url = alert_text(entry)
-    payload: dict[str, object] = {"title": title, "body": body, "session_id": session_id,  # loose: push payload
-                                  "kind": entry.get("kind"), "url": url, "badge": badge}
+    payload = WebPushAlertPayload(title=title, body=body, session_id=session_id,
+                                  kind=entry.get("kind"), url=url, badge=badge)
     threading.Thread(target=_webpush_fanout,
                      args=(subs, payload, "send", push_signing_key_repository, push_subscription_repository),
                      daemon=True).start()
     # The subscriptions are the handle: a resolve push has to reach the devices
     # the alert actually went to, NOT whichever device is most-recently-used by
     # then — the banner is on the former.
-    return {"ch": "webpush", "session_id": session_id, "kind": entry.get("kind"),
-            "subs": subs, "tag": push_tag(SessionId(session_id))}
+    return WebPushHandle(session_id=session_id, kind=entry.get("kind"),
+                         subs=subs, tag=push_tag(session_id))
 
 
 def _webpush_fanout(
     subs: list[RoutedSubscription],
-    payload: dict[str, object],  # loose: notification payload, wave 2 gives it a real shape
+    payload: WebPushPayload,
     action: str,
     push_signing_key_repository: PushSigningKeyRepository | None,
     push_subscription_repository: PushSubscriptionRepository | None,
@@ -306,23 +351,23 @@ def _webpush_fanout(
             res = deliver(sub, payload, push_signing_key_repository)
         except Exception:
             A.error("", "dashboard webpush %s" % action,
-                    {"session_id": payload.get("session_id")})
+                    {"session_id": payload.session_id})
             continue
         ep = sub.get("endpoint", "") if isinstance(sub, dict) else ""
         dev = sub.get("device") if isinstance(sub, dict) else None
         if res.gone and push_subscription_repository is not None:
             push_subscription_repository.remove(ep)
         A.state_file("", "", "web-push",
-                     {"session_id": payload.get("session_id"), "kind": payload.get("kind"),
+                     {"session_id": payload.session_id, "kind": payload.kind,
                       "action": action, "status": res.status,
                       "ok": res.ok, "gone": res.gone,
                       "error": res.error,
-                      "badge": payload.get("badge"),
+                      "badge": payload.badge,
                       "device": dev, "endpoint": ep[:80]})
 
 
 def retract_alert(
-    h: dict[str, Any],  # loose: notification payload, wave 2 gives it a real shape
+    web_push_handle: WebPushHandle,
     reason: str,
     badge: int = 0,
     *,
@@ -344,11 +389,11 @@ def retract_alert(
     a bit later", never to a wrong badge."""
     if not config.RESOLVE_PUSH:
         return NOTHING
-    subs = h.get("subs") or []
+    subs = web_push_handle.subs
     if not subs:
         return NOTHING
-    payload: dict[str, object] = {"type": "resolve", "session_id": h.get("session_id") or "",  # loose: push payload
-                                  "kind": h.get("kind"), "tag": h.get("tag"), "badge": badge}
+    payload = WebPushResolvePayload(session_id=web_push_handle.session_id, kind=web_push_handle.kind,
+                                    tag=web_push_handle.tag, badge=badge)
     threading.Thread(target=_webpush_fanout,
                      args=(subs, payload, "resolve", push_signing_key_repository, push_subscription_repository),
                      daemon=True).start()

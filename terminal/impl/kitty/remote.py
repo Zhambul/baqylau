@@ -7,6 +7,7 @@
 # Everything here is best-effort and silent — a failed call returns rc 1 / [] /
 # None and never raises, because every caller above is a hook or a render loop
 # that must not fail on a terminal that went away.
+import dataclasses
 import glob
 import json
 import os
@@ -14,9 +15,64 @@ import stat
 import subprocess
 import shutil
 import time
-from typing import Any
+
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from terminal.models.values import WindowId
+
+# kitty's own JSON, read back — GENUINELY open (`extra="ignore"`): an `ls`
+# tree and an `@kitty-cmd` reply both carry many fields (title, pid, cwd,
+# foreground_processes, ...) this module never reads one of. Declared as far
+# as reality allows: the fields `windows()`/`app_focused()`/`raw()`'s callers
+# actually read.
+FOREIGN = ConfigDict(extra="ignore", frozen=True)
+
+
+class KittyWindowInfo(BaseModel):
+    model_config = FOREIGN
+    id: int | str | None = None
+    columns: int | None = None
+    lines: int | None = None
+    user_vars: dict[str, str] | None = None
+
+
+class KittyTab(BaseModel):
+    model_config = FOREIGN
+    id: int | str | None = None
+    is_active: bool | None = None
+    is_focused: bool | None = None
+    windows: list[KittyWindowInfo] | None = None
+
+
+class KittyOSWindow(BaseModel):
+    model_config = FOREIGN
+    is_focused: bool | None = None
+    tabs: list[KittyTab] | None = None
+
+
+class KittyRcResponse(BaseModel):
+    """A `@kitty-cmd` reply — `ok` and, for `get-text` only, `data`; every
+    other command answers with `ok` alone."""
+
+    model_config = FOREIGN
+    ok: bool = False
+    data: str | None = None
+
+
+@dataclasses.dataclass(frozen=True)
+class SetTabColorRcPayload:
+    match: str
+    colors: dict[str, int | None]
+
+
+@dataclasses.dataclass(frozen=True)
+class GetTextRcPayload:
+    match: str
+    extent: str
+    ansi: bool = False
+
+
+KittyRcPayload = SetTabColorRcPayload | GetTextRcPayload
 
 # The variable kitty exports into every process it starts in a window. Named
 # rather than inlined because a stdlib-only client observes its own window from
@@ -152,9 +208,10 @@ class KittyRemote:
             return None
         return r.stdout.decode("utf-8", "replace")
 
-    def ls(self) -> list[dict[str, Any]] | None:  # loose: kitty's own JSON reply, wave 2 gives it a real shape
+    def ls(self) -> list[KittyOSWindow] | None:
         """Parsed `kitten @ ls` (the OS-window/tab/window tree), or `None` when
-        the query itself failed (a timeout, a dropped socket, bad output).
+        the query itself failed (a timeout, a dropped socket, bad output —
+        including output that no longer matches the shape declared above).
 
         `None` is not `[]`: a caller who needs to tell "kitty reports zero
         windows" apart from "kitty could not be asked right now" can. Getting
@@ -166,14 +223,13 @@ class KittyRemote:
         if out is None:
             return None
         try:
-            tree = json.loads(out)
-        except ValueError:
+            return TypeAdapter(list[KittyOSWindow]).validate_json(out)
+        except ValidationError:
             return None
-        return tree if isinstance(tree, list) else None
 
     def app_focused(
         self,
-        tree: list[dict[str, Any]] | None = None,  # loose: kitty's own JSON reply, wave 2 gives it a real shape
+        tree: list[KittyOSWindow] | None = None,
     ) -> bool:
         """True when ANY kitty OS window is focused — i.e. kitty is the frontmost
         app on this desktop right now. The gate for a pane launch's
@@ -186,7 +242,7 @@ class KittyRemote:
         stealing) — unlike `windows()`, a focus probe has no earlier answer
         worth repeating, so its failure default stays "not focused"."""
         try:
-            return any(osw.get("is_focused")
+            return any(osw.is_focused
                        for osw in ((self.ls() if tree is None else tree) or []))
         except Exception:
             return False
@@ -237,10 +293,10 @@ class KittyRemote:
     def raw(
         self,
         cmd: str,
-        payload: dict[str, Any],  # loose: kitty's own JSON reply, wave 2 gives it a real shape
+        payload: KittyRcPayload,
         want_response: bool = False,
         timeout: float = REMOTE_CONTROL_SOCKET_TIMEOUT_SECONDS,
-    ) -> dict[str, Any] | bool | None:  # loose: kitty's own JSON reply, wave 2 gives it a real shape
+    ) -> KittyRcResponse | bool | None:
         """A remote-control command over a RAW unix-socket write of the
         @kitty-cmd DCS — sub-millisecond vs the ~30-100ms kitten subprocess
         spawn. The raw bytes are exactly what the kitten client sends
@@ -250,8 +306,8 @@ class KittyRemote:
         toggle, the tab paint runs on the BLOCKING hook path several times per
         turn, and the scroll runs INSIDE its DEC 2026 freeze bracket, where a
         subprocess outlives kitty's render-freeze window and exposes the
-        intermediate frame (the toggle flicker). Returns the parsed response
-        dict, True (fire-and-forget success), or None on any failure — callers
+        intermediate frame (the toggle flicker). Returns the parsed response,
+        True (fire-and-forget success), or None on any failure — callers
         fall back to the subprocess path."""
         listen = self.listen or ""
         path = listen[5:] if listen.startswith("unix:") else listen
@@ -261,7 +317,7 @@ class KittyRemote:
         # module — a top-level socket import would be paid by all of them.
         import socket  # noqa: PLC0415
         obj = {"cmd": cmd, "version": KITTY_RC_VERSION,
-               "no_response": not want_response, "payload": payload}
+               "no_response": not want_response, "payload": dataclasses.asdict(payload)}
         try:
             s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             try:
@@ -278,8 +334,7 @@ class KittyRemote:
                     buf += b
             finally:
                 s.close()
-            response = json.loads(buf[buf.index(RC_CMD_KEY) + len(RC_CMD_KEY):
-                                      buf.index(RC_ST)])
-            return response if isinstance(response, dict) else None
+            reply = buf[buf.index(RC_CMD_KEY) + len(RC_CMD_KEY):buf.index(RC_ST)]
+            return KittyRcResponse.model_validate_json(reply)
         except Exception:
             return None
