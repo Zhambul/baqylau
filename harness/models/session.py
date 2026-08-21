@@ -19,7 +19,7 @@ class Session:
     The row is born by the reaction to the session's own `session.started` fact;
     nothing upstream of the store ever requires one. Identity columns are written
     once; the two LIVE columns (`terminal_window_id`, `harness_process_id`) are
-    kept current from the envelope of every later hook-borne fact, because a
+    kept current from the stored event of every later hook-borne fact, because a
     resumed session shows up in a new window with a new process. `plugin` is
     attachment, not identity: the server-side `SessionStore` hands out sessions
     with it set, recorder processes leave it None.

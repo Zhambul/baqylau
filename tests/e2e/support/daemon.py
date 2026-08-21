@@ -104,7 +104,7 @@ class Daemon:
         not an error, so the caller decides what a 409 means rather than being
         handed an exception.
 
-        Carries the same caller-proof header a client does (`client/_wire.py`),
+        Carries the same caller-proof header a client does (`client/_http.py`),
         because `api/guard.py` rejects a mutating request without it — this suite
         talks to the control plane exactly the way the browser and the hooks do.
         """

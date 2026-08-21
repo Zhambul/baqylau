@@ -3,7 +3,7 @@
 `terminal/contract.py` is keyed on window ids and knows nothing about sessions.
 This is where the two meet: every gesture the rest of the system wants is
 phrased about a SESSION ("open that session's panes", "paint its tab"), and
-resolving one to a window is an EVIDENCE lookup, not an interrogation — the
+resolving one to a window is a RAW EVENT lookup, not an interrogation — the
 session row already carries the window its own hook delivery observed, kept
 current through every later fact. The terminal is asked only whether that
 window is still on screen, because a row can outlive its window.
@@ -40,7 +40,7 @@ from terminal.models import (
 )
 # The terminal's own window id (`terminal/models/`), distinct from the domain
 # fact of the same name: `terminal/` may depend on nothing outside itself, so
-# this module — the one place a session's EVIDENCE (`WindowId` above) meets a
+# this module — the one place a session's RAW EVENT (`WindowId` above) meets a
 # live terminal window — converts explicitly at the boundary rather than
 # reusing one NewType across it.
 from terminal.models.values import WindowId as NativeWindowId

@@ -81,7 +81,7 @@ def launch_selections(
     resolved native id arrives only on the first assistant record, as
     `reported_by_harness`. Without this event the selectors sit empty until
     then — and for the effort, forever: Claude Code never echoes it in any
-    evidence stream."""
+    raw event stream."""
     subject_id = f"launch:{raw_event.source_position}"
     events = []
     model_selection = document.get("model")
@@ -113,7 +113,7 @@ def prompt_turn(
     """The turn this prompt opens, if it opens one.
 
     The prompt's own identity is the turn's: nothing else in Claude Code's
-    evidence names a turn, and the prompt is what the turn answers.
+    raw events name a turn, and the prompt is what the turn answers.
     """
     turn_id = TurnId(native_identity)
     if not turn_semantics.begin(raw_event, turn_id):

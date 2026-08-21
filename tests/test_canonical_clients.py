@@ -58,7 +58,7 @@ from terminal.impl.pty import plugin as pty_plugin
 
 ROOT = Path(REPOSITORY_ROOT)
 CLIENT = ROOT / "client"
-SHARED = ("_wire.py", "_daemon.py", "_model.py", "_render.py", "_handoff.py")
+SHARED = ("_http.py", "_daemon.py", "_model.py", "_render.py", "_handoff.py")
 
 # The inventory, held HERE rather than in the product: six of these files are
 # named only by configuration we do not own, and the two we launch are named by
@@ -220,7 +220,7 @@ def test_no_module_of_ours_imports_a_client():
     for package in OUR_PACKAGES:
         for path in sorted((ROOT / package).rglob("*.py")):
             for imported in imported_names(path):
-                if imported.split(".")[0] in {"client", "_wire", "_daemon"}:
+                if imported.split(".")[0] in {"client", "_http", "_daemon"}:
                     importers.append(path.relative_to(ROOT).as_posix())
     assert importers == []
 
@@ -278,7 +278,7 @@ def test_only_a_launcher_names_its_client_and_only_one_module_builds_the_path():
     assert violations == []
 
 
-# --- the wire ---------------------------------------------------------------
+# --- the HTTP boundary -------------------------------------------------------
 
 
 def load_shared(name):
@@ -301,38 +301,38 @@ def load_shared(name):
     return module
 
 
-def load_wire():
-    return load_shared("_wire")
+def load_http():
+    return load_shared("_http")
 
 
-def test_the_wire_matches_the_daemon():
+def test_the_http_module_matches_the_daemon():
     """The one duplication this design accepts, pinned.
 
-    `client/_wire.py` is our side of the HTTP contract and it is a COPY: a client
+    `client/_http.py` is our side of the HTTP contract and it is a COPY: a client
     that imported the daemon's constants would import the daemon. So the copy is
     checked against the modules that read it — and every path against the routes
     the server actually serves, which is the half a hand-written constant cannot
     keep true on its own.
     """
-    wire = load_wire()
-    assert (wire.HOST, wire.PORT) == (contract.HOST_ADDRESS, contract.PORT_NUMBER)
-    assert wire.TERMINAL_WINDOW_HEADER == headers.TERMINAL_WINDOW_HEADER
-    assert wire.CLIENT_PROCESS_HEADER == headers.CLIENT_PROCESS_HEADER
-    assert wire.ACCOUNT_ID_HEADER == headers.ACCOUNT_ID_HEADER
-    assert wire.ACCOUNT_NAME_HEADER == headers.ACCOUNT_NAME_HEADER
-    assert wire.LAUNCH_MODEL_HEADER == headers.LAUNCH_MODEL_HEADER
-    assert wire.LAUNCH_EFFORT_HEADER == headers.LAUNCH_EFFORT_HEADER
-    assert wire.TELEMETRY_KIND_HEADER == TELEMETRY_KIND_HEADER
-    assert wire.LAUNCH_MODEL_VARIABLE == claude_launcher.LAUNCH_MODEL_VARIABLE
-    assert wire.LAUNCH_EFFORT_VARIABLE == claude_launcher.LAUNCH_EFFORT_VARIABLE
-    assert wire.ACCOUNT_SLUG_VARIABLE == account.SLUG_VARIABLE
-    assert wire.ACCOUNT_LABEL_VARIABLE == account.LABEL_VARIABLE
-    assert wire.PROBE_VARIABLE == claude_live_usage.PROBE_VARIABLE
+    http_module = load_http()
+    assert (http_module.HOST, http_module.PORT) == (contract.HOST_ADDRESS, contract.PORT_NUMBER)
+    assert http_module.TERMINAL_WINDOW_HEADER == headers.TERMINAL_WINDOW_HEADER
+    assert http_module.CLIENT_PROCESS_HEADER == headers.CLIENT_PROCESS_HEADER
+    assert http_module.ACCOUNT_ID_HEADER == headers.ACCOUNT_ID_HEADER
+    assert http_module.ACCOUNT_NAME_HEADER == headers.ACCOUNT_NAME_HEADER
+    assert http_module.LAUNCH_MODEL_HEADER == headers.LAUNCH_MODEL_HEADER
+    assert http_module.LAUNCH_EFFORT_HEADER == headers.LAUNCH_EFFORT_HEADER
+    assert http_module.TELEMETRY_KIND_HEADER == TELEMETRY_KIND_HEADER
+    assert http_module.LAUNCH_MODEL_VARIABLE == claude_launcher.LAUNCH_MODEL_VARIABLE
+    assert http_module.LAUNCH_EFFORT_VARIABLE == claude_launcher.LAUNCH_EFFORT_VARIABLE
+    assert http_module.ACCOUNT_SLUG_VARIABLE == account.SLUG_VARIABLE
+    assert http_module.ACCOUNT_LABEL_VARIABLE == account.LABEL_VARIABLE
+    assert http_module.PROBE_VARIABLE == claude_live_usage.PROBE_VARIABLE
     # One line per terminal we can drive: a client cannot import a plugin to ask
     # which variable names the current window, so it carries the union. BOTH are
     # pinned, because a terminal missing from this union is a terminal whose
     # sessions have no window — and therefore no gesture that needs one.
-    assert set(wire.WINDOW_ID_VARIABLES) == {
+    assert set(http_module.WINDOW_ID_VARIABLES) == {
         kitty_remote.WINDOW_ID_VARIABLE, pty_plugin.WINDOW_ID_VARIABLE
     }
 
@@ -345,17 +345,17 @@ def test_the_wire_matches_the_daemon():
                        session_data_routes.router, session_data_streams.router)
         for route in router.routes
     }
-    assert wire.HOOK_PATH % "{harness}" in served
-    assert wire.TELEMETRY_PATH % "{harness}" in served
+    assert http_module.HOOK_PATH % "{harness}" in served
+    assert http_module.TELEMETRY_PATH % "{harness}" in served
     # The pane's three reads. Split on "?" because the constants carry their
     # query template and a route does not.
     for template, arguments in (
-        (wire.SESSION_DATA_PATH, ("{session_id}",)),
-        (wire.SESSION_ENTRIES_PATH, ("{session_id}", 0)),
-        (wire.SESSION_STREAM_PATH, ("{session_id}", 0)),
+        (http_module.SESSION_DATA_PATH, ("{session_id}",)),
+        (http_module.SESSION_ENTRIES_PATH, ("{session_id}", 0)),
+        (http_module.SESSION_STREAM_PATH, ("{session_id}", 0)),
     ):
         assert (template % arguments).split("?")[0] in served
-    assert set(wire.PANE_COMMAND_PATHS.values()) <= served
+    assert set(http_module.PANE_COMMAND_PATHS.values()) <= served
 
 
 def test_the_published_client_paths_are_an_api():

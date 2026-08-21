@@ -52,7 +52,7 @@ class HarnessRawEventSource(Protocol):
     produced that was recorded — or None on first read. Its encoding is the
     source's own business (a byte offset, a state latch, a snapshot digest); the
     only contract is that `read` returns everything AFTER it, and that a source
-    advances past input only by emitting it as evidence.
+    advances past input only by emitting it as a raw event.
     """
 
     source_identity: str
@@ -98,13 +98,13 @@ class HarnessTelemetryGateway(Protocol):
 
 
 class HarnessTranslator(Protocol):
-    """Translates the harness's own evidence: hook payloads and native files."""
+    """Translates the harness's own raw events: hook payloads and native files."""
 
     def translate(self, raw_event: RawEvent) -> TranslationResult: ...
 
 
 class CoreTranslator(Protocol):
-    """Translates evidence our own machinery produces, identically for every
+    """Translates raw events our own machinery produces, identically for every
     harness. One small class per core source_type."""
 
     def translate(self, raw_event: RawEvent) -> TranslationResult: ...

@@ -25,8 +25,8 @@ TabId = NewType("TabId", str)
 # this layer knows that mechanism, or that one terminal calls it variables.
 #
 # The session key is a LIVENESS cross-check, not the session→window mapping:
-# that mapping is evidence (`Session.terminal_window_id`, kept current from the
-# envelope of every hook-borne fact). The two pane keys are load-bearing: the
+# that mapping is a raw event (`Session.terminal_window_id`, kept current from the
+# stored event of every hook-borne fact). The two pane keys are load-bearing: the
 # mirror and scoreboard panes are daemon-created, so nothing else records them
 # and the terminal must be able to find them again after a daemon restart.
 SESSION_WINDOW_TAG = "baqylau_session"

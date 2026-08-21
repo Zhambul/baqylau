@@ -1,4 +1,4 @@
-"""Typed operational evidence reported by dashboard clients."""
+"""Typed operational raw events reported by dashboard clients."""
 
 from __future__ import annotations
 

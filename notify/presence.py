@@ -69,14 +69,14 @@ DEVICE_SEEN_CAP = 64
 
 
 class SubscriptionKeys(TypedDict):
-    """The wire form of one subscription's key material (RFC 8291 names)."""
+    """The byte form of one subscription's key material (RFC 8291 names)."""
 
     p256dh: str
     auth: str
 
 
 class RoutedSubscription(TypedDict):
-    """One push subscription as `route()` hands it to a channel: the wire JSON
+    """One push subscription as `route()` hands it to a channel: the JSON
     a push service accepts, plus the device identity the audit rows name."""
 
     endpoint: str

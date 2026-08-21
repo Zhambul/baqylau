@@ -378,7 +378,7 @@ function applyCanonicalCatalog(snapshot, catalog) {
   const models = catalog.models || [];
   S.sessionView.meta.model_choices = models.map(option => option.model_id);
   // id -> display name, which is how the picker finds the row the session is
-  // ON: the wire carries one model NAME now (the selection id went with the
+  // ON: the HTTP boundary carries one model NAME now (the selection id went with the
   // reference), so the match is name against name.
   S.sessionView.meta.model_labels = {};
   for (const option of models)
@@ -1372,7 +1372,7 @@ function applyViewMode() {
   // shape, as `statsSig` for the header.
   const plan = [];
   // Every item the mode DROPS — today only an INJECTED prompt (a hook's feedback,
-  // a loaded skill, teammate mail's envelope): not conversation, and counted into
+  // a loaded skill, teammate mail's wrapper): not conversation, and counted into
   // nothing. Tracked as one list rather than only the ones falling outside a run,
   // because a hidden item is hidden WHEREVER it lands: trailing a run, inside a
   // collapsed run's span, or inside an EXPANDED one. That last case is why this
@@ -1558,7 +1558,7 @@ function buildViewBar() {
 // authoritative — sending just types the command into the terminal and Claude
 // Code's own palette executes it. The menu drops BELOW its host box (never up
 // over the stats row); `host` must be position:relative.
-// Wiring contract: the helper listens to input/blur itself; the caller keeps
+// Composition contract: the helper listens to input/blur itself; the caller keeps
 // its own oninput (autoGrow) and calls sm.key(e) FIRST in onkeydown — a true
 // return means the menu consumed the key.
 

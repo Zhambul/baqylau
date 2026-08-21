@@ -1,4 +1,4 @@
-"""Pushed telemetry: evidence a harness reports out-of-band.
+"""Pushed telemetry: raw events a harness reports out-of-band.
 
 The twin of the hook channel. A hook delivery is the harness's own stdin at a
 lifecycle moment; a telemetry delivery is a side channel a harness exposes —
@@ -38,7 +38,7 @@ class HarnessTelemetryRequest:
 @dataclass(frozen=True)
 class HarnessTelemetryResponse:
     """What the delivery meant. Both halves are optional: a metrics export is
-    evidence, a rate-limit report is a usage snapshot, and an unrecognised
+    raw event, a rate-limit report is a usage snapshot, and an unrecognised
     delivery is neither."""
 
     raw_events: tuple[RawEvent, ...] = ()

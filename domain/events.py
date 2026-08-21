@@ -13,6 +13,7 @@ from domain.ids import (
     CanonicalEventId,
     AssignmentId,
     MessageId,
+    RawEventId,
     ReasoningId,
     SessionId,
     ShellId,
@@ -197,7 +198,7 @@ class ShellFinished(EventPayload):
 class ShellOutputLocated(EventPayload):
     """The command's output can be read from this file — emitted ONCE per
     command, when the location becomes known (not per chunk of output; the
-    chunks are separate evidence, read later by the collect phase)."""
+    chunks are separate raw events, read later by the collect phase)."""
 
     shell_id: ShellId
     source_path: str
@@ -224,7 +225,7 @@ class ShellBackgrounded(EventPayload):
     background mid-run — the case `ShellStarted.execution` cannot express,
     because at start time nobody knew. Both harnesses report it only in the
     RESULT of the launching call, which is also why this fact must be committed
-    BEFORE the `shell.finished` derived from that same evidence.
+    BEFORE the `shell.finished` derived from that same raw event.
 
     `native_id` is the harness's own handle on the thing (the id a user or the
     model needs to interact with it again), or None where there isn't one.
@@ -424,6 +425,16 @@ EventPayloadType = TypeVar("EventPayloadType", bound=EventPayload)
 
 @dataclass(frozen=True)
 class CanonicalEvent(Generic[EventPayloadType]):
+    """One canonical fact. The identity and content a translator produces, plus
+    three fields the STORE fills in once the fact is accepted: `cursor`,
+    `accepted_at`, and (only where a reader asked for it) `raw_event_ids`.
+
+    One class end to end, rather than a second one the store wraps it in: a
+    freshly translated event and a stored one used to be different types with
+    the same twelve names, and the difference was never anything a reader
+    could act on.
+    """
+
     event_id: CanonicalEventId
     session_id: SessionId
     actor_id: ActorId
@@ -434,6 +445,32 @@ class CanonicalEvent(Generic[EventPayloadType]):
     terminal_window_id: WindowId | None
     harness_process_id: int | None
     payload: EventPayloadType
+    # None until the store accepts this event; set from the `canonical_events`
+    # row on every read.
+    cursor: int | None = None
+    accepted_at: float | None = None
+    # Which raw events this fact was derived from. Filled only by the audit
+    # read (`RawEventAuditRepository`); a range read over `canonical_events`
+    # leaves it empty rather than paying for a second query per page.
+    raw_event_ids: tuple[RawEventId, ...] = ()
+
+    __pydantic_config__ = STORED
+
+    @property
+    def happened_at(self) -> float:
+        """When it happened, or failing that when we heard about it.
+
+        `occurred_at` is nullable BY DESIGN — it is what the source said, and
+        sources that carry no clock leave it empty. Every fold that measures or
+        orders needs one number, and this is that number. Raises if this event
+        was never stored: an event with no `accepted_at` has no place in any
+        order, and a caller asking for one has a bug, not a missing value.
+        """
+        if self.occurred_at is not None:
+            return self.occurred_at
+        if self.accepted_at is not None:
+            return self.accepted_at
+        raise ValueError("an event that is not stored has no happened_at")
 
 
 EVENT_TYPES: dict[type[EventPayload], str] = {
@@ -481,3 +518,8 @@ EVENT_TYPES: dict[type[EventPayload], str] = {
 }
 
 PAYLOAD_TYPES: dict[str, type[EventPayload]] = {event_type: payload for payload, event_type in EVENT_TYPES.items()}
+
+# Bumped whenever a stored shape's fields change in a way an old row cannot
+# read. A harness registers with the version it was built against; a mismatch
+# fails at boot rather than at the first row nobody can decode.
+SCHEMA_VERSION = 18

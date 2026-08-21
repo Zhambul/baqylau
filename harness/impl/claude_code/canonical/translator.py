@@ -6,9 +6,9 @@ import base64
 import json
 from dataclasses import replace
 
-from domain.codec import CanonicalCodecError, decode_document
 from domain.events import ShellProgressed, TaskListChanged
 from domain.ids import TaskId, TaskListId
+from repository.mapper.documents import StoredDocumentError, decode_document
 from harness.contract import HarnessTranslator
 from harness.impl.claude_code.canonical import transcript
 from harness.impl.claude_code.canonical.hooks import translate_hook
@@ -23,7 +23,7 @@ from harness.impl.claude_code.canonical.otel import translate_otel
 from harness.impl.claude_code.canonical.support import content, event
 from harness.impl.claude_code.canonical.toolcalls import ToolCallSemantics
 from harness.impl.claude_code.canonical.turns import TurnSemantics
-from harness.models import RawEvent, TranslationError, TranslationResult, UnknownEvidence
+from harness.models import RawEvent, TranslationError, TranslationResult, UnknownRawEvent
 from harness.models.directives import ShellOutputChunk
 from harness.models.selections import SelectionSemantics
 
@@ -37,7 +37,7 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
     def translate(self, raw_event: RawEvent) -> TranslationResult:
         try:
             return self._stamped(raw_event, self._translate(raw_event))
-        except UnknownEvidence as unknown:
+        except UnknownRawEvent as unknown:
             return TranslationResult((), "ignored_unknown", unknown.reason)
 
     def _stamped(self, raw_event: RawEvent, translation_result: TranslationResult) -> TranslationResult:
@@ -82,7 +82,7 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
             try:
                 chunk = decode_document(ShellOutputChunk, raw_event.payload)
                 output_content = base64.b64decode(chunk.content_base64, validate=True)
-            except (CanonicalCodecError, TypeError, ValueError) as error:
+            except (StoredDocumentError, TypeError, ValueError) as error:
                 raise TranslationError("malformed foreground output") from error
             progress = ShellProgressed(
                 chunk.shell_id,

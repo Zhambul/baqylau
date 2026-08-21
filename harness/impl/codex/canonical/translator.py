@@ -8,7 +8,7 @@ import re
 from typing import Any, Literal, TypeAlias
 
 from harness.contract import HarnessTranslator
-from harness.models import RawEvent, TranslationError, TranslationResult, UnknownEvidence
+from harness.models import RawEvent, TranslationError, TranslationResult, UnknownRawEvent
 from domain.events import (
     ActorAssignmentFinished,
     ActorAssignmentStarted,
@@ -89,7 +89,7 @@ CodexToolKind: TypeAlias = Literal["search", "web", "file", "ignored"]
 def _codex_tool(native_name: str, arguments: str | dict[str, Any] | None) -> tuple[CodexToolKind, str]:
     """Map Codex transport names onto the canonical vocabulary.
 
-    A name with no fact behind it raises `UnknownEvidence`: the delivery is
+    A name with no fact behind it raises `UnknownRawEvent`: the delivery is
     verdicted `ignored_unknown` — visible in the audit, absent from the feed —
     rather than failing the whole record.
     """
@@ -115,14 +115,14 @@ def _codex_tool(native_name: str, arguments: str | dict[str, Any] | None) -> tup
             return "web", "WebFetch"
         # A time lookup is neither a search nor a fetch: it has no query, no url
         # and no reader.
-        raise UnknownEvidence("unmapped Codex web action")
+        raise UnknownRawEvent("unmapped Codex web action")
     mapping: dict[str, tuple[CodexToolKind, str]] = {
         "view_image": ("file", "ReadImage"),
         "image_gen__imagegen": ("ignored", "GenerateImage"),
     }
     mapped = mapping.get(native_name)
     if mapped is None:
-        raise UnknownEvidence(f"unmapped Codex tool: {native_name or '<missing>'}")
+        raise UnknownRawEvent(f"unmapped Codex tool: {native_name or '<missing>'}")
     return mapped
 
 
@@ -161,7 +161,7 @@ def _tool_fields(arguments: str | dict[str, Any] | None) -> dict[str, Any]:
 
 def _search_query(arguments: str | dict[str, Any] | None) -> Content:
     """What was searched for. The whole argument blob is the fallback: a query
-    nobody can read is still better evidence than an empty one."""
+    nobody can read is still a better raw event than an empty one."""
     fields = _tool_fields(arguments)
     for name in _SEARCH_QUERY_FIELDS:
         value = fields.get(name)
@@ -320,7 +320,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
     def translate(self, raw_event: RawEvent) -> TranslationResult:
         try:
             return self._translate(raw_event)
-        except UnknownEvidence as unknown:
+        except UnknownRawEvent as unknown:
             return TranslationResult((), "ignored_unknown", unknown.reason)
 
     def _translate(self, raw_event: RawEvent) -> TranslationResult:
@@ -635,7 +635,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 return []
             raise TranslationError(f"unknown Codex actor activity: {activity!r}")
         if kind == "unmapped_tool":
-            raise UnknownEvidence(f"unmapped Codex tool: {record.get('name') or '<missing>'}")
+            raise UnknownRawEvent(f"unmapped Codex tool: {record.get('name') or '<missing>'}")
         if kind == "goal":
             native_state = str(record.get("status") or "")
             # Typed so the table itself is checked: every value here has to be

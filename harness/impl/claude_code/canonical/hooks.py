@@ -34,7 +34,7 @@ def effort_report(
     (PreToolUse, PostToolUse, Stop, SubagentStop), when the current model
     supports the effort parameter. `launch_selections()` and a typed `/effort`
     both only ever see the LEAD actor; a subagent gets neither, so this is the
-    only evidence its own effort is ever observed from.
+    only raw event its own effort is ever observed from.
 
     Every one of those hooks reports it, so all but the first report the level
     that is already known — a change event with nothing changed. Only a real

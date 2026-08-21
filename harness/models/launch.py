@@ -40,7 +40,7 @@ class HarnessLaunchPlan:
     arguments: tuple[str, ...]
     title: str
     # Environment the launched CLI (and so its hook processes) must carry —
-    # launch-time facts travel with the process to be observed as evidence.
+    # launch-time facts travel with the process to be observed as raw events.
     environment: tuple[tuple[str, str], ...] = ()
 
 

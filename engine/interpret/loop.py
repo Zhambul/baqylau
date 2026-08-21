@@ -1,4 +1,4 @@
-"""The one interpreter: pull raw evidence, translate it, react to committed facts."""
+"""The one interpreter: pull raw events, translate them, react to committed facts."""
 
 from __future__ import annotations
 
@@ -27,11 +27,11 @@ TRANSLATION_BATCH_SIZE = 500
 
 
 class TranslationConsistencyError(ValueError):
-    """A translation does not agree with the evidence it came from."""
+    """A translation does not agree with the raw event it came from."""
 
 
 def checked(raw_event: RawEvent, translation_result: TranslationResult) -> TranslationResult:
-    """Refuse a translation whose events disagree with their own evidence.
+    """Refuse a translation whose events disagree with their own raw event.
 
     These five rules compare a canonical event against the raw event it came
     from, which makes them a rule about TRANSLATING, not about storing — they
@@ -42,22 +42,22 @@ def checked(raw_event: RawEvent, translation_result: TranslationResult) -> Trans
     """
     try:
         for event in translation_result.canonical_events:
-            _check_envelope(raw_event, event)
+            _check_consistency(raw_event, event)
     except TranslationConsistencyError as error:
         return TranslationResult((), "translation_failed", f"inconsistent canonical output: {error}")
     return translation_result
 
 
-def _check_envelope(raw_event: RawEvent, event: CanonicalEvent[EventPayload]) -> None:
+def _check_consistency(raw_event: RawEvent, event: CanonicalEvent[EventPayload]) -> None:
     if event.session_id != raw_event.session_id:
         raise TranslationConsistencyError("canonical event does not belong to its raw event session")
     if event.harness != raw_event.harness:
-        raise TranslationConsistencyError("canonical event harness does not match its raw evidence")
+        raise TranslationConsistencyError("canonical event harness does not match its raw event")
     if event.actor_id != raw_event.actor_id:
-        raise TranslationConsistencyError("canonical event actor does not match its raw evidence")
+        raise TranslationConsistencyError("canonical event actor does not match its raw event")
     if event.parent_actor_id != raw_event.parent_actor_id:
         raise TranslationConsistencyError(
-            "canonical event parent actor does not match its raw evidence"
+            "canonical event parent actor does not match its raw event"
         )
     if event.parent_actor_id == event.actor_id:
         raise TranslationConsistencyError("an actor cannot be its own parent")
@@ -66,7 +66,7 @@ def _check_envelope(raw_event: RawEvent, event: CanonicalEvent[EventPayload]) ->
 class Interpreter:
     """One process, one thread, one method: `tick()`.
 
-    Everything outside this class only APPENDS evidence; everything here is the
+    Everything outside this class only APPENDS raw events; everything here is the
     read-and-interpret side. The thread must outlive every failure it can
     observe — it is the ONE driver of pulling and translation, and nothing
     restarts it — so each step below is contained and audited, never fatal.
@@ -144,7 +144,7 @@ class Interpreter:
         except Exception:
             self._audit_failure("output expiry", {})
 
-    # --- pull: turn the outside world into recorded evidence -------------------
+    # --- pull: turn the outside world into recorded raw events -----------------
 
     def _pull(self) -> None:
         for session in self.session_repository.watchable():

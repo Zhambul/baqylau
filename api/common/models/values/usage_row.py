@@ -1,5 +1,5 @@
 # One account's plan limits, as its harness reports them — the fuel gauges on
-# the list page. Percentages and scores are Decimals, on the wire as strings.
+# the list page. Percentages and scores are Decimals, at the HTTP boundary as strings.
 from decimal import Decimal
 from typing import Literal
 

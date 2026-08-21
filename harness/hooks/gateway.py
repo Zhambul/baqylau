@@ -1,6 +1,6 @@
 """Record pushed hook deliveries — the daemon-side half of the hook channel.
 
-The one recorder of hook evidence: a delivery arrives over HTTP, the harness's
+The one recorder of hook raw events: a delivery arrives over HTTP, the harness's
 `HarnessHookGateway` turns it into raw events, and they are appended here. It
 records only — translation stays with the interpreter's next tick.
 

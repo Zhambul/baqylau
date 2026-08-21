@@ -1,12 +1,12 @@
-# client/_wire.py — the daemon's HTTP door, as the clients see it.
+# client/_http.py — the daemon's HTTP door, as the clients see it.
 #
 # Every address, path, header name and environment-variable name the programs in
 # this directory use. It is a COPY of the daemon's own vocabulary, deliberately:
 # a client that imported the daemon's constants would import the daemon, and the
 # one property this directory has is that nothing in it knows the application
 # exists. The copy is pinned —
-# tests/test_canonical_clients.py::test_the_wire_matches_the_daemon fails the
-# moment any value here drifts from the module that reads it.
+# tests/test_canonical_clients.py::test_the_http_module_matches_the_daemon fails
+# the moment any value here drifts from the module that reads it.
 #
 # Import-pure: one env read and literals.
 from __future__ import annotations
@@ -65,7 +65,7 @@ def window_id(environment: Mapping[str, str]) -> str:
 
     The ORIGIN of every window fact in the system: a client runs INSIDE the
     session's own window, so it is the only thing that can observe which one
-    that is. Everything downstream receives the answer as evidence.
+    that is. Everything downstream receives the answer as a raw event.
     """
     for name in WINDOW_ID_VARIABLES:
         value = (environment.get(name) or "").strip()

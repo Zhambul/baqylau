@@ -54,7 +54,7 @@ from harness.models.raw_events import (
     TranslationDecision,
     TranslationError,
     TranslationResult,
-    UnknownEvidence,
+    UnknownRawEvent,
     canonical_event,
     output_location_raw_event,
 )
@@ -145,7 +145,7 @@ __all__ = [
     "TranslationDecision",
     "TranslationError",
     "TranslationResult",
-    "UnknownEvidence",
+    "UnknownRawEvent",
     "UsageBlock",
     "UsageRow",
     "UsageWindow",

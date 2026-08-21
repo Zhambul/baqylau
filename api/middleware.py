@@ -4,7 +4,7 @@
 # security headers every reply carries, and the compression exemption the event
 # streams need. They are ASGI middleware rather than route dependencies because
 # a route is exactly the thing they must not have to know about — including the
-# static server, the two evidence-plane endpoints that answer in a harness's own
+# static server, the two raw-event-plane endpoints that answer in a harness's own
 # bytes, and the error handlers.
 from __future__ import annotations
 

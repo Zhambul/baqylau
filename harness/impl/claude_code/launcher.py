@@ -8,7 +8,7 @@ from harness.models import HarnessLaunchPlan, LaunchRejected, LaunchRequest
 from harness.impl.claude_code import account
 
 # The launch-time selections, riding the CLI's environment the way the account
-# already does: Claude Code never echoes the effort in any evidence stream and
+# already does: Claude Code never echoes the effort in any raw event stream and
 # reports the model only on its first assistant record, so the environment the
 # hook process inherits is the one place a launch selection survives to be
 # observed. Owned here (the one writer); the hook entry reads them back.
@@ -41,7 +41,7 @@ class ClaudeCodeLauncher(HarnessLauncher):
             arguments.append(prompt)
         # Launching is just running the CLI: the tab opens in a login shell, so
         # the account alias resolves exactly as it does when typed by hand. The
-        # session announces itself through its own hook evidence.
+        # session announces itself through its own hook raw event.
         return HarnessLaunchPlan(
             command=account_alias or "claude",
             arguments=tuple(arguments),

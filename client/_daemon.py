@@ -15,14 +15,14 @@ from collections.abc import Iterator
 import http.client
 import json
 
-import _wire
+import _http
 
 TIMEOUT_SECONDS = 2.0
 CONTENT_TYPE_JSON = "application/json"
 
 
 def _connection(host: str, port: int, timeout: float) -> http.client.HTTPConnection:
-    return http.client.HTTPConnection(host or _wire.HOST, port or _wire.PORT, timeout=timeout)
+    return http.client.HTTPConnection(host or _http.HOST, port or _http.PORT, timeout=timeout)
 
 
 def post(

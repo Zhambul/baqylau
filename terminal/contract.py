@@ -114,7 +114,7 @@ class TerminalMetadata(Protocol):
     def current_window_id(self) -> WindowId | None:
         """This process's own window, from the terminal's environment.
 
-        The ORIGIN of all window evidence: only a process running INSIDE a
+        The origin of all window facts: only a process running INSIDE a
         window can observe which one it is. The hook client ships the answer as
         a header, and that is where a session's recorded window comes from.
         """

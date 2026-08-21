@@ -17,7 +17,7 @@ ExecutionMode: TypeAlias = Literal["foreground", "background", "monitor"]
 # lists; spelled inline on the payload they would only ever be checked at the
 # constructor call.
 MessageRole: TypeAlias = Literal["user", "assistant", "system", "peer", "parent"]
-# `end_turn` names what the evidence says — the message a model STOPPED on, which
+# `end_turn` names what the raw event says — the message a model STOPPED on, which
 # every harness reports on the response itself — rather than what a reader might
 # hope it means. It is deliberately NOT "the one answer of a turn": a turn that an
 # injection resumes stops more than once, and each of those messages ended a

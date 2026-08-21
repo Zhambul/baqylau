@@ -4,7 +4,7 @@
 # ROUTE DOES rather than by which frontend happened to ask for it first — two
 # frontends read the same read model and drive the same gestures, so a package
 # named after either was a package that lied:
-#   api/hooks/       — the evidence plane's one write endpoint: harness hook
+#   api/hooks/       — the raw event plane's one write endpoint: harness hook
 #                      deliveries, recorded verbatim
 #   api/telemetry/   — the other two ingests, one module each because they carry
 #                      different things from different senders: harness.py (an

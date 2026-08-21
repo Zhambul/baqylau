@@ -178,3 +178,49 @@ def test_an_id_is_a_typed_id_not_a_bare_str():
                         f"from domain/ids.py"
                     )
     assert violations == []
+
+
+# --- Gate 3: banned words -----------------------------------------------------
+#
+# A vocabulary the owner has retired, because each word named a thing this tree
+# no longer has (a hand-written codec, an "envelope" that is a plain stored
+# event, a "wire" that is the HTTP boundary) or invited one back (a bare
+# "wiring" for what `app/injection.py` calls composition, a "provenance" no
+# reader outside a lookup table would use). Grow-only: a word retired here may
+# never come back off the list, only new words may join it.
+BANNED_WORDS = ("envelope", "evidence", "wire", "wiring", "provenance")
+
+# Scanned wider than the two naming gates above: `bin/` and `client/` carry
+# prose and identifiers too, and the browser half of this codebase is JS, not
+# Python.
+BANNED_WORD_PACKAGES = PACKAGES + ("bin", "client")
+
+
+def _banned_word_pattern(word: str) -> re.Pattern[str]:
+    # Underscore is deliberately NOT a boundary character: `client/_wire.py`
+    # and `_ENVELOPE_TS` must be caught exactly like the plain word in prose.
+    return re.compile(rf"(?<![A-Za-z0-9]){re.escape(word)}(?![A-Za-z0-9])", re.IGNORECASE)
+
+
+def _banned_word_files() -> list[pathlib.Path]:
+    paths = []
+    for package in BANNED_WORD_PACKAGES:
+        for path in sorted((ROOT / package).rglob("*.py")):
+            if "__pycache__" not in path.parts:
+                paths.append(path)
+    paths.extend(sorted((ROOT / "dashboard" / "static").glob("*.js")))
+    return paths
+
+
+def test_no_banned_word_appears_in_code_comments_or_file_names():
+    violations = []
+    for path in _banned_word_files():
+        relative = path.relative_to(ROOT)
+        for word in BANNED_WORDS:
+            pattern = _banned_word_pattern(word)
+            if pattern.search(path.name):
+                violations.append(f"{relative} — file name contains {word!r}")
+            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                if pattern.search(line):
+                    violations.append(f"{relative}:{number}: {word!r}")
+    assert violations == []

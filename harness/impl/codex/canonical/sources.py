@@ -1,4 +1,4 @@
-"""Codex raw evidence discovery: rollout files, read as observations."""
+"""Codex raw event discovery: rollout files, read as observations."""
 
 from __future__ import annotations
 

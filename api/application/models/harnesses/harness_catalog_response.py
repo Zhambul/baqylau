@@ -7,7 +7,7 @@
 # `catalog.models`): the route BUILDS one of these from the two sources rather
 # than nesting either under a key. This model once declared
 # `catalog: HarnessCatalogSnapshot` and so described a nesting that has never
-# been on the wire — undetectable while the route hand-built its reply, which
+# been at the HTTP boundary — undetectable while the route hand-built its reply, which
 # FastAPI never validates against the declared model.
 from pydantic import BaseModel
 

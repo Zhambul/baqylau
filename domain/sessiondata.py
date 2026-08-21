@@ -157,7 +157,7 @@ class ActorFacts:
     finished_at: float | None = None
     # The whole reference, not just the name a reader sees: relaunching a session
     # on the same model needs the harness's own id for it, and the display name
-    # is not one. What the wire carries is the name (api/sessiondata/mapper.py).
+    # is not one. What the HTTP boundary carries is the name (api/sessiondata/mapper.py).
     model: ModelReference | None = None
     effort: str | None = None
     status: ActorStatus | None = None

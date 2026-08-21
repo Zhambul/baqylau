@@ -195,8 +195,8 @@ def _ev_item_completed(p: dict[str, Any]) -> dict[str, Any] | None:
     another register, and which makes a deliberate decision indistinguishable
     from real drift. Only the item types actually MEASURED as duplicates are
     named; every other type still falls through to None, so the first
-    item_completed carrying something new (a todo, a web search) trips the wire
-    instead of disappearing into this branch."""
+    item_completed carrying something new (a todo, a web search) trips this
+    check instead of disappearing into this branch."""
     item = p.get("item") or {}
     if item.get("type") in COVERED_ITEMS:
         return {"kind": "covered_item"}

@@ -3,15 +3,15 @@
 The mirror of `repository/mapper/facts.py` for the three read-model tables: the
 identity columns are read as themselves, and the payload column is decoded
 against the shape its own `entry_type` names — the same discriminator-then-shape
-pass the canonical codec makes.
+pass the canonical mapper makes.
 """
 
 from __future__ import annotations
 
-from domain.codec import CanonicalCodecError, decode_document
 from domain.entries import BODY_TYPES, EntryBody, SessionEntry
 from domain.ids import ActorId, CanonicalEventId, SessionId, TurnId
 from domain.sessiondata import ActorFacts, SessionFacts
+from repository.mapper.documents import StoredDocumentError, decode_document
 from repository.model.facts import SessionDataActorRow, SessionDataRow, SessionEntryRow
 
 
@@ -31,7 +31,7 @@ def session_entry(session_entry_row: SessionEntryRow) -> SessionEntry:
         (body for name, body in BODY_TYPES.items() if name == session_entry_row.entry_type), None
     )
     if body_type is None:
-        raise CanonicalCodecError(f"unknown entry type: {session_entry_row.entry_type!r}")
+        raise StoredDocumentError(f"unknown entry type: {session_entry_row.entry_type!r}")
     return SessionEntry(
         entry_id=CanonicalEventId(session_entry_row.entry_id),
         session_id=SessionId(session_entry_row.session_id),

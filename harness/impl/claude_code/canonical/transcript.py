@@ -37,7 +37,7 @@
 #       Seen carrying `Stop hook feedback: …` (a Stop hook's
 #       blocking output), a loaded skill's whole SKILL.md body, `Continue from
 #       where you left off.` (a resume nudge), the `<local-command-caveat>`
-#       envelope, `[Request interrupted by user…]` (the cancel annotation),
+#       wrapper, `[Request interrupted by user…]` (the cancel annotation),
 #       the post-/compact summary (`This session is being continued from a
 #       previous conversation…`), and TEAMMATE MAIL (`Another Claude session sent
 #       a message:` wrapping a peer's <teammate-message> — the one shape with no
@@ -122,7 +122,7 @@ def _task_notification(content: str) -> dict[str, str | None]:
 
     The single reader of this channel, so that a notification cannot be counted
     as two different things. The order of the tests is the order of how specific
-    the evidence is: a background completion and a monitor event are each marked
+    the raw event is: a background completion and a monitor event are each marked
     by something structural (their summary prefix, an <event> tag), and an
     agent's completion is what is left — it is the only one of the four with no
     mark of its own, so it cannot be recognised, only defaulted to."""
@@ -235,7 +235,7 @@ def _strip_recap_hint(text: str) -> str:
     return _RECAP_HINT.sub("", text).strip()
 
 
-# The TEAMMATE-MAIL ENVELOPE — Claude Code delivering another session's message
+# The TEAMMATE-MAIL WRAPPER — Claude Code delivering another session's message
 # as a user turn of ITS OWN making: a framing sentence, the peer's
 # <teammate-message> block(s), then Claude Code's own trailing "This came from
 # another Claude session … that's permission laundering" instruction. Nothing in
@@ -245,16 +245,16 @@ def _strip_recap_hint(text: str) -> str:
 # structural flag whatsoever (measured on the corpus: type "user", `isMeta`
 # absent, `userType` "external", `isSidechain` false — byte-for-byte the shape of
 # a typed prompt). So the pattern is ANCHORED at the start of the content: a
-# message that merely QUOTES an envelope — a paste asking "why is this in my
+# message that merely QUOTES a wrapper — a paste asking "why is this in my
 # transcript?", this repo's own docs about it — has something in front of it and
 # stays a prompt. That is the same false-positive class _injected refuses to court
 # for the interrupt marker; an anchor is what makes text safe to read here.
 #
-# The bare `<teammate-message>…` form (no envelope) is NOT this: classify_user_text
+# The bare `<teammate-message>…` form (no wrapper) is NOT this: classify_user_text
 # already turns it into a `teammsg` record with its own ✉ sender bubble. A wording
 # change in the framing sentence degrades to today's behaviour (a YOU bubble), not
 # to a crash.
-_TEAM_ENVELOPE = re.compile(
+_TEAM_WRAPPER = re.compile(
     r'^\s*Another Claude session sent a message:\s*<teammate-message\b')
 
 
@@ -262,7 +262,7 @@ def _injected(o: dict[str, Any], text: str = "") -> bool:
     """Whether this user-shaped record was written by CLAUDE CODE rather than
     typed by the human — the `meta` flag on the prompt/results records below.
     Three structural marks plus one anchored text shape (`text`, the record's
-    content when it is a plain string — see _TEAM_ENVELOPE):
+    content when it is a plain string — see _TEAM_WRAPPER):
 
       isMeta               a Stop hook's blocking feedback, a loaded skill's
                            whole SKILL.md body, the `Continue from where you
@@ -285,16 +285,16 @@ def _injected(o: dict[str, Any], text: str = "") -> bool:
     growth that merely QUOTES the marker — a Read of a doc that mentions it, a
     grep hit, a conversation about it — is textually identical to the real
     thing, and the marker can appear anywhere in a record. The id-bearing/boolean
-    fields cannot be quoted. The teammate envelope has no such field to read and
-    is instead pinned to the START of the content (see _TEAM_ENVELOPE)."""
+    fields cannot be quoted. The teammate wrapper has no such field to read and
+    is instead pinned to the START of the content (see _TEAM_WRAPPER)."""
     return bool(o.get("isMeta") or o.get("interruptedMessageId")
                 or o.get("isCompactSummary")
-                or (text and _TEAM_ENVELOPE.match(text)))
+                or (text and _TEAM_WRAPPER.match(text)))
 
 
 # The injections that RESUME a turn Claude Code had already ENDED — as opposed to
 # the ones it writes MID-turn. Anchored at the start of the content, for exactly
-# the reason _TEAM_ENVELOPE is: the record carries no structural flag (measured —
+# the reason _TEAM_WRAPPER is: the record carries no structural flag (measured —
 # a Stop hook's feedback and a loaded skill's body are byte-for-byte the same
 # user/isMeta shape, same `promptId`, and the only structural tell is on a
 # DIFFERENT record: the `hook_blocking_error` attachment / `stop_hook_summary`
@@ -367,11 +367,11 @@ def parse_line(s: str) -> dict[str, Any] | None:
             if kind == "teammsg":
                 return {"kind": "teammsg", "sender": a, "body": b}
             # The three records of a `/command` turn (see _CMD_STDOUT_RE): the
-            # envelope becomes ONE record carrying what the human typed, and the
+            # wrapper becomes ONE record carrying what the human typed, and the
             # caveat + the command's echoed stdout are dropped. Ordered before
             # the prompt return because that is the only thing they could
             # otherwise become.
-            cmd_name, cmd_args = _command_envelope(content)
+            cmd_name, cmd_args = _command_wrapper(content)
             if cmd_name:
                 return {"kind": "slash_command", "name": cmd_name, "args": cmd_args,
                         "text": _command_text(content)}
@@ -379,8 +379,8 @@ def parse_line(s: str) -> dict[str, Any] | None:
                 return None
             # isMeta = Claude Code injected this user turn (see the header) —
             # carried so consumers can tell it from something the human typed.
-            # The content goes in too: the teammate-mail envelope is injected
-            # with no structural flag to show it (see _TEAM_ENVELOPE).
+            # The content goes in too: the teammate-mail wrapper is injected
+            # with no structural flag to show it (see _TEAM_WRAPPER).
             return {"kind": "prompt", "text": content,
                     "meta": _injected(o, content)}
         if isinstance(content, list):
@@ -403,7 +403,7 @@ def parse_line(s: str) -> dict[str, Any] | None:
                 return {"kind": "results", "blocks": blocks,
                         "tur": o.get("toolUseResult"), "texts": texts,
                         # the leading text block, for the one text-read mark
-                        # (_TEAM_ENVELOPE): an envelope arriving in list form
+                        # (_TEAM_WRAPPER): a wrapper arriving in list form
                         # would be that block, and the mark is anchored anyway
                         "meta": _injected(o, texts[0] if texts else "")}
         return None
@@ -490,15 +490,15 @@ _CMD_ARGS_RE = re.compile(r"<command-args>\s*([^<]*?)\s*</command-args>")
 
 # A `/command` turn is written as THREE user-shaped records, not one (measured on
 # this repo's own `/model opus` turn, session 6a23d1c5): the `<local-command-caveat>`
-# isMeta injection, the `<command-name>` envelope, and the command's echoed
+# isMeta injection, the `<command-name>` wrapper, and the command's echoed
 # `<local-command-stdout>`. Only the first carries a structural flag, so without
 # these two marks the other two each became a `message.created` with role "user"
 # — the user saw one system block and TWO "you" bubbles for one keystroke.
 #
-# Both are ANCHORED at the start of the content, for the reason _TEAM_ENVELOPE is:
-# a message that merely QUOTES an envelope — a paste asking about it, this repo's
+# Both are ANCHORED at the start of the content, for the reason _TEAM_WRAPPER is:
+# a message that merely QUOTES a wrapper — a paste asking about it, this repo's
 # own docs, a grep hit — has something in front of it and stays a prompt. The same
-# anchor gates the envelope itself (_command_envelope): _command_parts SEARCHES for
+# anchor gates the wrapper itself (_command_wrapper): _command_parts SEARCHES for
 # the name tag, which is right for a title fallback but would silently swallow a
 # pasted message's text into a fake command bubble.
 _CMD_STDOUT_RE = re.compile(r"^\s*<local-command-stdout>")
@@ -506,9 +506,9 @@ _CMD_CAVEAT_RE = re.compile(r"^\s*<local-command-caveat>")
 _CMD_OPEN_RE = re.compile(r"^\s*<command-(?:message|name|args)>")
 
 
-def _command_envelope(s: str) -> tuple[str, str]:
-    """`(name, args)` when `s` IS a slash-command envelope Claude Code wrote —
-    ('', '') otherwise. The anchored gate on top of _command_parts: the envelope
+def _command_wrapper(s: str) -> tuple[str, str]:
+    """`(name, args)` when `s` IS a slash-command wrapper Claude Code wrote —
+    ('', '') otherwise. The anchored gate on top of _command_parts: the wrapper
     is the whole record and opens with one of its own tags, so a record with
     prose in front of the tag is a human's prompt about a command, not one."""
     if not _CMD_OPEN_RE.match(s):
@@ -605,7 +605,7 @@ def _claude_head(path: str) -> bool:
     half of owns(), for a transcript that is ours but not where we expect (a
     relocated CLAUDE_CONFIG_DIR, a copied file, a fixture). Bounded to
     CLAIM_HEAD_B and torn-line safe — an unparseable line is simply not
-    evidence. False on any OSError: unreadable is not ours to claim."""
+    raw event. False on any OSError: unreadable is not ours to claim."""
     try:
         with open(path, "rb") as fh:
             head = fh.read(CLAIM_HEAD_B)

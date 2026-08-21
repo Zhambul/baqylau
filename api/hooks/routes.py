@@ -1,4 +1,4 @@
-# api/hooks/routes.py — the evidence plane's one write endpoint: pushed
+# api/hooks/routes.py — the raw event plane's one write endpoint: pushed
 # hook deliveries. The body is the hook's exact stdin bytes and is recorded,
 # never parsed here; the reply rides the HTTP response back to the harness.
 from __future__ import annotations

@@ -267,7 +267,7 @@ function applyQuickSwitch(cmd, arg) {
 
 // Which menu row the session is currently ON, as a catalog model id.
 //
-// Matched by DISPLAY NAME, because that is the only thing the wire carries about
+// Matched by DISPLAY NAME, because that is the only thing the HTTP boundary carries about
 // a model now: the aggregate serves one name a reader can read, and the
 // selectable ids come from the harness catalog. The name is the join.
 function curModelFamily() {

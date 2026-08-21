@@ -52,8 +52,8 @@ def assert_imports(package: str, allowed_roots: set[str], allowed_modules: froze
 
 
 # The one third-party name domain/ may say. It used to say none, and the price
-# was domain/codec.py: 120 lines walking `get_type_hints` to resolve unions,
-# check Literals and decide that a Decimal is a string — a hand-written
+# was a hand-written serializer: 120 lines walking `get_type_hints` to resolve
+# unions, check Literals and decide that a Decimal is a string — a hand-written
 # reimplementation of exactly this library, which the daemon already runs and
 # which the api layer already depends on for the same job.
 DOMAIN_DEPENDENCIES = {"pydantic"}
@@ -698,10 +698,10 @@ def test_no_canonical_payload_carries_a_presentation_field():
     canonical schema is append-only, so the field could never be taken back out.
 
     This is a property of twelve dataclass DECLARATIONS, and it used to be
-    checked by a loop in `CanonicalEventCodec.__init__` — reflection over every
-    registered payload, re-run on every codec ever constructed, to answer a
-    question that cannot change while the process is running. It belongs in the
-    suite that reads the tree, and this is that suite.
+    checked by a loop over every registered payload, re-run on every stored
+    event ever built, to answer a question that cannot change while the
+    process is running. It belongs in the suite that reads the tree, and this
+    is that suite.
     """
     forbidden = frozenset({
         "ansi", "bubbled", "chrome", "css", "glyph", "gutter",

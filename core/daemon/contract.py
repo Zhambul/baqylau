@@ -5,7 +5,7 @@
 # request-body caps. `core/clients.py` reads the address from here when it builds
 # the argv for a client we launch, because a client imports nothing of ours —
 # the copy of this vocabulary on the client side of the door is
-# `client/_wire.py`, pinned to this file by tests/test_canonical_clients.py.
+# `client/_http.py`, pinned to this file by tests/test_canonical_clients.py.
 #
 # The HOOK delivery's own vocabulary — the identity headers a hook process
 # stamps and its body cap — is harness vocabulary and lives with the channel it
@@ -21,6 +21,6 @@ PORT_NUMBER = EV.env_int("BAQYLAU_DASHBOARD_PORT", 8377)
 
 # The composer-attachment upload endpoint carries base64-encoded bytes, so it
 # gets its OWN, larger cap — ~14 MiB admits a base64-inflated 10 MB image (the
-# per-image ceiling) with headroom for the JSON envelope. Every other POST
+# per-image ceiling) with headroom for the JSON document. Every other POST
 # stays at the tiny POST_MAX default.
 UPLOAD_MAX = 14 * 1024 * 1024

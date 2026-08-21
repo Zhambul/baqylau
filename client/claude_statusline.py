@@ -24,7 +24,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))  # my own directory
 
 import _daemon                                                   # noqa: E402
-import _wire                                                     # noqa: E402
+import _http                                                     # noqa: E402
 
 HARNESS = "claude_code"
 # The status line must never be held up: a wedged daemon costs this pause per
@@ -46,14 +46,14 @@ def capture(raw: bytes) -> None:
             return
         body = dict(
             document,
-            _account_id=os.environ.get(_wire.ACCOUNT_SLUG_VARIABLE, ""),
-            _account_name=os.environ.get(_wire.ACCOUNT_LABEL_VARIABLE, ""),
+            _account_id=os.environ.get(_http.ACCOUNT_SLUG_VARIABLE, ""),
+            _account_name=os.environ.get(_http.ACCOUNT_LABEL_VARIABLE, ""),
             _ts=document.get("_ts") or time.time(),
         )
         _daemon.post(
-            _wire.TELEMETRY_PATH % HARNESS,
+            _http.TELEMETRY_PATH % HARNESS,
             json.dumps(body, ensure_ascii=False).encode("utf-8"),
-            {_wire.TELEMETRY_KIND_HEADER: "statusline"},
+            {_http.TELEMETRY_KIND_HEADER: "statusline"},
             timeout=DELIVERY_TIMEOUT_SECONDS,
         )
     except Exception:

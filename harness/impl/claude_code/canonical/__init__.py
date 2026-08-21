@@ -1,1 +1,1 @@
-"""Claude Code's own evidence: its transcript files, read and translated."""
+"""Claude Code's own raw events: its transcript files, read and translated."""

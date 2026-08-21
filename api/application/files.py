@@ -63,7 +63,7 @@ def _claimed_session_id(policy: Policy, value: str | None) -> str:
 
 @router.post("/api/application/uploads",
              responses={**errors({
-                 413: "Decoded bytes over UPLOAD_MAX — the base64 envelope passed, the file did not.",
+                 413: "Decoded bytes over UPLOAD_MAX — the base64 document passed, the file did not.",
                  500: "The bytes could not be written; no row was recorded.",
              })})
 def upload(
@@ -75,7 +75,7 @@ def upload(
 
     Transport is JSON+base64, NOT multipart: it keeps the whole browser-vector
     defense (same-origin + custom header + read-only switch) with no boundary
-    parser; the price is a base64 envelope, which UPLOAD_MAX budgets for. The
+    parser; the price is a base64 document, which UPLOAD_MAX budgets for. The
     bytes land under the application data directory, outside any repository
     working tree, in a per-session subdir."""
     session_id = _claimed_session_id(policy, upload_request.session_id)
@@ -109,7 +109,7 @@ def upload(
         # Raised, not returned: this route is declared to answer with an
         # UploadResponse, and every other rejection in it raises. _http_error
         # renders an HTTPException as the same {"error": ...} body at the same
-        # status, so the wire response is unchanged.
+        # status, so the HTTP response is unchanged.
         raise HTTPException(500, "could not store upload") from error
     # The bytes stay on disk because the harness is handed an `@path`; the ROW
     # is what makes them attributable and prunable.

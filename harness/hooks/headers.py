@@ -5,7 +5,7 @@
 # These headers are that channel, and they have exactly two readers each: a hook
 # client in `client/` stamps them, the hook-delivery endpoint reads them
 # (api/hooks/routes.py). The client's copy of these names lives in
-# client/_wire.py and is pinned to this file by tests/test_canonical_clients.py —
+# client/_http.py and is pinned to this file by tests/test_canonical_clients.py —
 # a client may not import the application.
 #
 # They live here rather than in core/daemon/contract.py because they are HARNESS

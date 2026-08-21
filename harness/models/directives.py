@@ -1,16 +1,16 @@
-"""The engine's own synthetic evidence, as documents.
+"""The engine's own synthetic raw events, as documents.
 
 Three raw-event payloads that nothing outside this tree ever produces: a chunk
 of a followed output file, the observation that a CLI process is gone, and the
-mark left by an interrupt no native evidence corroborated. They are OURS on
+mark left by an interrupt no native raw event corroborated. They are OURS on
 both ends — written by `engine/interpret/`, read by a translator — and each was
 a dict literal at the writer and a field-by-field read at the reader, with
 nothing but agreement between two files holding the shape together.
 
 Declared here, beside the source-type constants that name them
 (`harness/models/raw_events.py`), because both ends may import this and neither
-may import the other. Encoded and decoded by `domain.codec`, which is the one
-thing in the tree that turns an object into bytes.
+may import the other. Encoded and decoded by `repository/mapper/documents.py`,
+the one place in the tree that turns an object into bytes.
 """
 
 from __future__ import annotations
@@ -49,7 +49,7 @@ class ProcessExit:
 @dataclass(frozen=True)
 class InterruptMark:
     """An acknowledged interrupt whose grace period passed with nothing in the
-    harness's own evidence confirming it."""
+    harness's own raw event confirming it."""
 
     __pydantic_config__ = STORED
 

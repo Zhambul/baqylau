@@ -246,7 +246,7 @@ def retract_alert(h: dict[str, Any], reason: str, badge: int = 0, *,
     delete and answers PENDING, a later one reads what the thread left. The
     caller already retries PENDING (it must, for the in-flight send), so this
     needs no new machinery — and the `notify-retract` row it eventually writes
-    still reports what actually happened on the wire, rather than an optimistic
+    still reports what actually happened at the HTTP boundary, rather than an optimistic
     guess made before the call returned."""
     del reason, badge, push_signing_key_repository, push_subscription_repository  # a Bot API message needs none
     if not h.get("done"):

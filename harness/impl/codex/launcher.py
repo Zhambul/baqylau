@@ -28,7 +28,7 @@ class CodexLauncher(HarnessLauncher):
         if prompt.strip():
             arguments.append(prompt)
         # Launching is just running the CLI; the session announces itself
-        # through its own hook evidence.
+        # through its own hook raw events.
         return HarnessLaunchPlan(
             command="codex",
             arguments=tuple(arguments),

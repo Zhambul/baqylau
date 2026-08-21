@@ -13,7 +13,7 @@ class SessionRepository(Protocol):
 
     The one writer is the interpreter's session-upsert reaction, which derives
     birth from the session's own `session.started` fact and keeps the two live
-    columns current from later evidence.
+    columns current from later raw events.
     """
 
     def save(self, harness: str, session: Session) -> None:
@@ -25,7 +25,7 @@ class SessionRepository(Protocol):
     def watchable(self) -> tuple[Session, ...]:
         """Every session without a committed finish, most recently observed first.
 
-        No count limit by design: liveness is an evidence question, never a
+        No count limit by design: liveness is a raw event question, never a
         quota. Reads `canonical_events` and `raw_events` in correlated
         subqueries — a deliberate cross-table read within one database, kept as
         one statement because the interpreter asks for it four times a second.

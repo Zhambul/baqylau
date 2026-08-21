@@ -1,7 +1,7 @@
 """What a live session's own TUI is showing right now.
 
 The one reader of a harness's `terminal_probe`: it resolves the session's
-window from evidence, then lets the harness read its own input line off that
+window from a raw event, then lets the harness read its own input line off that
 window's screen. A session that is not on screen simply has no input state.
 """
 

@@ -99,7 +99,7 @@ def session_application(
 
 
 def global_application(application_preferences: ApplicationPreferences) -> GlobalApplicationResponse:
-    """The page's own state on the wire. Beside the per-session mapper above
+    """The page's own state at the HTTP boundary. Beside the per-session mapper above
     rather than in a file of its own: without the session rows it needs nothing
     the read model owns."""
     latest = application_preferences.notifications.latest

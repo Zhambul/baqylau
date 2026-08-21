@@ -1,8 +1,8 @@
 """Row shapes for the two usage tables.
 
 `used_percent` is TEXT, not REAL: it becomes a `Decimal`, and a float round trip
-would lose the exactness the display depends on. Same reason the canonical codec
-encodes a cost as a string.
+would lose the exactness the display depends on. Same reason the canonical
+mapper encodes a cost as a string.
 """
 
 from __future__ import annotations

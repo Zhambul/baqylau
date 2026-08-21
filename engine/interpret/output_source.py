@@ -1,4 +1,4 @@
-"""Reading one followed, growing output file as evidence.
+"""Reading one followed, growing output file as raw events.
 
 A hook that makes a command's output observable cannot follow the file itself —
 it must exit immediately. So the gateway records an output-location directive,
@@ -23,7 +23,7 @@ from domain.shells import ShellOutputFollowing
 from harness.contract import HarnessRawEventSource
 from harness.models import RawEvent
 from repository.contract.shell_output import ShellOutputRepository
-from domain.codec import encode_document
+from repository.mapper.documents import encode_document
 from harness.models.directives import ShellOutputChunk
 
 READ_SIZE = 64 * 1024
@@ -54,7 +54,7 @@ class ShellOutputRawEventSource(HarnessRawEventSource):
     `finished` once a finishing following has been drained. Chunk boundaries are
     arbitrary slices of a growing file, so the position must be the chunk's END
     — resuming from a start offset would re-read different bytes under a
-    different identity and duplicate evidence.
+    different identity and a duplicate raw event.
     """
 
     def __init__(

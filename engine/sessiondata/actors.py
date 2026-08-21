@@ -95,7 +95,7 @@ class ActorWriter(SessionDataWriter):
                 parent_actor_id=event.parent_actor_id,
                 started_at=committed_event.happened_at,
             )
-            # An actor announced twice — two evidence streams both saying so —
+            # An actor announced twice — two raw event streams both saying so —
             # keeps everything already folded about it and only reopens.
             return aggregate_state.with_actor(
                 born

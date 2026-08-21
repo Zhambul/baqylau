@@ -1,7 +1,7 @@
 """A command's output file, while we are still following it.
 
 One row of the follow list, as a value rather than as a database row. The
-reader that turns the file into evidence takes one of these; it used to take a
+reader that turns the file into a raw event takes one of these; it used to take a
 live `sqlite3.Row`, which is why it could not be built in a test without a
 database.
 """

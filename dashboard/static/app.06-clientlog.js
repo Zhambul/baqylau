@@ -63,7 +63,7 @@ function flushClog() {
     const batch = CLOG.splice(0, CLOG.length);
     // `device` (the stable per-DEVICE id) rides every batch so ANY frontend
     // audit row is attributable to a device — the frontend side of the
-    // notification device-routing evidence.
+    // notification device-routing raw event.
     const payload = { client_id: CLIENT_ID, device_id: DEVICE_ID,
                       connection: connInfo(),
                       events: batch };
@@ -98,7 +98,7 @@ function sseMark(label, up, extra) {
 // (app.07-dialogs.js). Each is client-only, so the SERVER cannot see it — a
 // stuck greyed state (shown, never reconciled) leaves no trace by default.
 //
-// Each transition becomes typed operational evidence: `shown` on create, `reconciled` on the swap
+// Each transition becomes a typed operational raw event: `shown` on create, `reconciled` on the swap
 // (carrying wait_ms — the latency), `dropped` on a failure, and `stale` from a
 // watchdog when a stand-in outlives STALE_HINT_MS unreconciled (THE bug
 // signal). Audit-only, best-effort, never blocks or toasts.
@@ -178,7 +178,7 @@ function clientFail(sessionId, gesture, err, chars) {
 // The ONE way a client-side failure is reported: in the console, in the audit
 // (clog), and on screen (toast). Never a silent recovery — a fallback hides
 // the real problem. The stream's "unknown row → re-read the whole list"
-// fallback hid a broken wire shape for weeks; this helper exists so no code
+// fallback hid a broken HTTP-boundary shape for weeks; this helper exists so no code
 // path is ever tempted to do that again. The toast is deduplicated per code
 // (one per 30 s) so a failing save inside a keystroke debounce cannot flood
 // the screen, while every occurrence still lands in the console and the audit.
@@ -194,7 +194,7 @@ function failLoudly(sessionId, code, detail) {
 }
 
 // A snapshot of the page's connection health, stamped on every clog batch — the
-// evidence for the connection-starvation theory (the page's long-lived SSE
+// raw event for the connection-starvation theory (the page's long-lived SSE
 // EventSource streams eating the HTTP/1.1 pool). `es` is the count of SSE streams
 // we hold open right now (global always + the session view's own + the agent
 // drill-down's), `conn` whether the global stream is currently connected, `online`

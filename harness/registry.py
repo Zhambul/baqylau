@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from harness.contract import HarnessPlugin
-from domain.codec import SCHEMA_VERSION
+from domain.events import SCHEMA_VERSION
 from domain.errors import UnknownReference
 
 

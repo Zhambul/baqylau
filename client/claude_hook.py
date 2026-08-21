@@ -22,27 +22,27 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))  # my own directory
 
 import _daemon                                                   # noqa: E402
-import _wire                                                     # noqa: E402
+import _http                                                     # noqa: E402
 
 HARNESS = "claude_code"
 
 
 def main() -> None:
     payload = sys.stdin.buffer.read()
-    # The daemon's own read-only probe of this harness: its hooks are not
-    # evidence of anybody's session, so they are read and dropped.
-    if os.environ.get(_wire.PROBE_VARIABLE):
+    # The daemon's own read-only probe of this harness: its hooks are not a
+    # raw event of anybody's session, so they are read and dropped.
+    if os.environ.get(_http.PROBE_VARIABLE):
         return
-    reply = _daemon.post(_wire.HOOK_PATH % HARNESS, payload, {
-        _wire.TERMINAL_WINDOW_HEADER: _wire.window_id(os.environ),
+    reply = _daemon.post(_http.HOOK_PATH % HARNESS, payload, {
+        _http.TERMINAL_WINDOW_HEADER: _http.window_id(os.environ),
         # Our OWN pid, not the CLI's: the daemon walks up from here while this
         # process is still blocked on the response, so the ancestry it reads is
         # provably alive — and this client stays free of a `ps` fork.
-        _wire.CLIENT_PROCESS_HEADER: str(os.getpid()),
-        _wire.ACCOUNT_ID_HEADER: os.environ.get(_wire.ACCOUNT_SLUG_VARIABLE, ""),
-        _wire.ACCOUNT_NAME_HEADER: os.environ.get(_wire.ACCOUNT_LABEL_VARIABLE, ""),
-        _wire.LAUNCH_MODEL_HEADER: os.environ.get(_wire.LAUNCH_MODEL_VARIABLE, ""),
-        _wire.LAUNCH_EFFORT_HEADER: os.environ.get(_wire.LAUNCH_EFFORT_VARIABLE, ""),
+        _http.CLIENT_PROCESS_HEADER: str(os.getpid()),
+        _http.ACCOUNT_ID_HEADER: os.environ.get(_http.ACCOUNT_SLUG_VARIABLE, ""),
+        _http.ACCOUNT_NAME_HEADER: os.environ.get(_http.ACCOUNT_LABEL_VARIABLE, ""),
+        _http.LAUNCH_MODEL_HEADER: os.environ.get(_http.LAUNCH_MODEL_VARIABLE, ""),
+        _http.LAUNCH_EFFORT_HEADER: os.environ.get(_http.LAUNCH_EFFORT_VARIABLE, ""),
     })
     if reply:
         sys.stdout.buffer.write(reply)

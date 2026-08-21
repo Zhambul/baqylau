@@ -1,4 +1,4 @@
-"""Command-line inspection of exact raw evidence and canonical interpretations.
+"""Command-line inspection of exact raw events and canonical interpretations.
 
 The ONE thing outside the daemon that builds repositories in-process, because
 it is the tool you run when the daemon is the suspect. It opens READ-ONLY: the
@@ -13,17 +13,15 @@ import base64
 import json
 import sys
 
-from domain.codec import CanonicalEventCodec
 from domain.ids import RawEventId, SessionId
 from harness.models import RawEventAudit
 from repository.contract.facts import RawEventAuditRepository
 from repository.impl.sqlite.databases import main_database, read_only
 from repository.impl.sqlite.raw_event_audits import SqliteRawEventAuditRepository
+from repository.mapper import facts as mapper
 
 
-def _document(
-    canonical_event_codec: CanonicalEventCodec, raw_event_audit: RawEventAudit
-) -> dict[str, object]:
+def _document(raw_event_audit: RawEventAudit) -> dict[str, object]:
     raw_event = raw_event_audit.raw_event
     interpretation = raw_event_audit.interpretation
     return {
@@ -47,7 +45,7 @@ def _document(
                 "accepted_at": canonical.accepted_at,
                 "event_order": canonical.event_order,
                 "storage_result": canonical.storage_result,
-                "event": json.loads(canonical_event_codec.encode(canonical.event)),
+                "event": json.loads(mapper.encode_canonical_event(canonical.event)),
             }
             for canonical in (interpretation.events if interpretation else ())
         ],
@@ -77,17 +75,16 @@ def main(arguments: list[str] | None = None) -> int:
     audits = raw_event_audit_repository()
     if audits is None:
         return 1
-    codec = CanonicalEventCodec()
     command, identity = arguments
     if command == "raw":
         audit = audits.audit(RawEventId(identity))
         if audit is None:
             print(f"raw event does not exist: {identity}", file=sys.stderr)
             return 1
-        _print(_document(codec, audit))
+        _print(_document(audit))
         return 0
     _print([
-        _document(codec, audit)
+        _document(audit)
         for audit in audits.audits_for_session(SessionId(identity))
     ])
     return 0

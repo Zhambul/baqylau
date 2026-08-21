@@ -74,7 +74,7 @@ function groupSessions(rows) {
 // A directory the ✕ hid (S.hidden holds its hide time) stays hidden only while
 // NONE of its sessions started after that time — the moment a newer session
 // appears (a fresh launch, terminal or dashboard, or a resume that re-stamps
-// started_at) it re-shows. Purely client-side over the wire rows' started_at;
+// started_at) it re-shows. Purely client-side over the HTTP-boundary rows' started_at;
 // the server only stores the {key: hidden_at} stamp.
 function dirHidden(key, rows) {
   const t = S.hidden[key];

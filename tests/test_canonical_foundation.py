@@ -51,8 +51,10 @@ from harness.models import (
     TranslationResult,
     output_location_raw_event,
 )
-from domain.codec import SCHEMA_VERSION, CanonicalCodecError, CanonicalEventCodec
+from repository.mapper import facts as mapper
+from repository.mapper.documents import StoredDocumentError, encode_document
 from domain.events import (
+    SCHEMA_VERSION,
     ActorAssignmentFinished,
     ActorAssignmentStarted,
     ActorFinished,
@@ -446,7 +448,7 @@ def test_actor_lifecycle_payload_contract(payload, event_type, expected_payload)
         payload=payload,
     )
 
-    encoded = json.loads(CanonicalEventCodec().encode(event))
+    encoded = json.loads(mapper.encode_canonical_event(event))
 
     assert encoded["event_type"] == event_type
     assert encoded["payload"] == expected_payload
@@ -544,32 +546,34 @@ def test_harness_registry_rejects_multiple_launch_defaults():
 
 
 def test_codec_round_trip_is_deterministic_and_structured_content_is_canonical():
-    codec = CanonicalEventCodec()
     event = canonical_message()
-    assert codec.decode(codec.encode(event)) == event
-    assert codec.encode(codec.decode(codec.encode(event))) == codec.encode(event)
+    assert mapper.decode_canonical_event(mapper.encode_canonical_event(event)) == event
+    assert (
+        mapper.encode_canonical_event(mapper.decode_canonical_event(mapper.encode_canonical_event(event)))
+        == mapper.encode_canonical_event(event)
+    )
     assert StructuredContent('{ "z": 1, "a": [true] }').json_text == '{"a":[true],"z":1}'
 
 
 def test_codec_round_trips_the_observation_location_on_the_envelope():
-    codec = CanonicalEventCodec()
     event = replace(
         canonical_message(), terminal_window_id="window-9", harness_process_id=1234
     )
-    decoded = codec.decode(codec.encode(event))
+    decoded = mapper.decode_canonical_event(mapper.encode_canonical_event(event))
     assert decoded.terminal_window_id == "window-9"
     assert decoded.harness_process_id == 1234
 
 
 def test_codec_rejects_unknown_schema_and_envelope_fields():
-    codec = CanonicalEventCodec()
-    document = codec.encode(canonical_message()).decode()
-    with pytest.raises(CanonicalCodecError, match="schema version"):
-        codec.decode(document.replace(f'"schema_version":{SCHEMA_VERSION}', '"schema_version":999'))
-    # ...and names the offending field, because the envelope is now a
+    document = mapper.encode_canonical_event(canonical_message()).decode()
+    with pytest.raises(StoredDocumentError, match="schema version"):
+        mapper.decode_canonical_event(
+            document.replace(f'"schema_version":{SCHEMA_VERSION}', '"schema_version":999')
+        )
+    # ...and names the offending field, because the stored document is now a
     # declaration rather than a set of strings compared against a dict.
-    with pytest.raises(CanonicalCodecError, match=r"CanonicalEnvelope\nglyph"):
-        codec.decode(document[:-1] + ',"glyph":"x"}')
+    with pytest.raises(StoredDocumentError, match=r"CanonicalEventDocument\nglyph"):
+        mapper.decode_canonical_event(document[:-1] + ',"glyph":"x"}')
 
 
 def test_codec_decodes_rows_written_before_a_defaulted_field_existed():
@@ -577,7 +581,6 @@ def test_codec_decodes_rows_written_before_a_defaulted_field_existed():
     # optional on decode, so stored events survive the field's introduction
     # without a rewrite. Fields without a default stay required, and extra
     # payload fields stay rejected.
-    codec = CanonicalEventCodec()
     event = CanonicalEvent(
         event_id=CanonicalEventId("event-one"),
         session_id=SessionId("session-one"),
@@ -592,30 +595,29 @@ def test_codec_decodes_rows_written_before_a_defaulted_field_existed():
             AssignmentId("assignment-one"), TextContent("Get Bali weather")
         ),
     )
-    document = json.loads(codec.encode(event))
+    document = json.loads(mapper.encode_canonical_event(event))
     del document["payload"]["actor_name"]
     del document["payload"]["prompt"]
 
-    decoded = codec.decode(json.dumps(document))
+    decoded = mapper.decode_canonical_event(json.dumps(document))
 
     assert decoded.payload.actor_name is None
     assert decoded.payload.prompt is None
     document["payload"]["glyph"] = "x"
-    with pytest.raises(CanonicalCodecError, match=r"payload\.glyph"):
-        codec.decode(json.dumps(document))
+    with pytest.raises(StoredDocumentError, match=r"payload\.glyph"):
+        mapper.decode_canonical_event(json.dumps(document))
     del document["payload"]["glyph"]
     del document["payload"]["brief"]
-    with pytest.raises(CanonicalCodecError, match="Field required"):
-        codec.decode(json.dumps(document))
+    with pytest.raises(StoredDocumentError, match="Field required"):
+        mapper.decode_canonical_event(json.dumps(document))
 
 
 def test_codec_rejects_an_invalid_payload_before_storage():
-    codec = CanonicalEventCodec()
     event = canonical_message()
     invalid_payload = replace(event.payload, role="tool")
 
-    with pytest.raises(CanonicalCodecError, match="role"):
-        codec.encode(replace(event, payload=invalid_payload))
+    with pytest.raises(StoredDocumentError, match="role"):
+        mapper.encode_canonical_event(replace(event, payload=invalid_payload))
 
 
 def test_stable_event_id_names_the_same_fact_and_distinguishes_its_phase():
@@ -1296,7 +1298,9 @@ def test_output_location_directives_run_the_whole_foreground_lifecycle(tmp_path)
         wait_for_source_change=False,
         until="shell_finished",
     )
-    recorder.record((output_location_raw_event(context, "example", located),))
+    recorder.record((
+        output_location_raw_event(context, "example", located, payload=encode_document(located)),
+    ))
     interpreter.tick()  # translates the directive; the reaction starts the following
     interpreter.tick()  # pulls the first chunks
 

@@ -12,7 +12,7 @@ decided daemon-side (`harness/impl/claude_code/otel/gateway.py`).
 The daemon spawns it and passes every number it needs, so the launcher's
 already-listening pre-check and this bind can no longer disagree. An export the
 daemon does not accept is dropped in silence; OTLP counters are re-exported on
-the next interval, so this is the cheapest evidence in the tree to miss.
+the next interval, so this is the cheapest raw event in the tree to miss.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))  # my own directory
 
 import _daemon                                                   # noqa: E402
-import _wire                                                     # noqa: E402
+import _http                                                     # noqa: E402
 
 HARNESS = "claude_code"
 DELIVERY_TIMEOUT_SECONDS = 5.0
@@ -36,8 +36,8 @@ ACKNOWLEDGEMENT = b"{}"
 
 # The daemon's address and the idle clock, module state rather than attributes
 # hung on the server: this process serves one thing and lives for one purpose.
-DAEMON_HOST = _wire.HOST
-DAEMON_PORT = _wire.PORT
+DAEMON_HOST = _http.HOST
+DAEMON_PORT = _http.PORT
 LAST_DELIVERY_AT = time.time()
 
 
@@ -46,9 +46,9 @@ def deliver(body: bytes) -> bool:
     if not body:
         return False
     return _daemon.post(
-        _wire.TELEMETRY_PATH % HARNESS,
+        _http.TELEMETRY_PATH % HARNESS,
         body,
-        {_wire.TELEMETRY_KIND_HEADER: "otlp"},
+        {_http.TELEMETRY_KIND_HEADER: "otlp"},
         host=DAEMON_HOST,
         port=DAEMON_PORT,
         timeout=DELIVERY_TIMEOUT_SECONDS,
@@ -76,7 +76,7 @@ class Receiver(BaseHTTPRequestHandler):
 def serve(listen_port: int, grace_seconds: float) -> None:
     global LAST_DELIVERY_AT
     try:
-        server = HTTPServer((_wire.HOST, listen_port), Receiver)
+        server = HTTPServer((_http.HOST, listen_port), Receiver)
     except OSError:
         return                                  # someone else got there first
     LAST_DELIVERY_AT = time.time()

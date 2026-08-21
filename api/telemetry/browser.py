@@ -1,4 +1,4 @@
-# api/telemetry/browser.py — the browser's operational-evidence sinks:
+# api/telemetry/browser.py — the browser's operational-raw-event sinks:
 # frontend-audit event batches, optimistic-UI lifecycles, failed gestures.
 from __future__ import annotations
 

@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import sqlite3
 
-from domain.codec import CanonicalEventCodec
 from domain.ids import RawEventId, SessionId
 from domain.records import (
     CanonicalStorageResult,
@@ -26,13 +25,8 @@ from repository.mapper import facts as mapper
 
 
 class SqliteRawEventAuditRepository(RawEventAuditRepository):
-    def __init__(
-        self,
-        sqlite_database: SqliteDatabase,
-        canonical_event_codec: CanonicalEventCodec | None = None,
-    ) -> None:
+    def __init__(self, sqlite_database: SqliteDatabase) -> None:
         self.sqlite_database = sqlite_database
-        self.canonical_event_codec = canonical_event_codec or CanonicalEventCodec()
 
     def audit(self, raw_event_id: RawEventId) -> RawEventAudit | None:
         with self.sqlite_database.read() as connection:
@@ -97,7 +91,7 @@ class SqliteRawEventAuditRepository(RawEventAuditRepository):
                     events=tuple(
                         InterpretationAuditEvent(
                             event=mapper.stored_canonical_event(
-                                rows.canonical_event(row), (), self.canonical_event_codec
+                                rows.canonical_event(row), ()
                             ).event,
                             accepted_at=row["accepted_at"],
                             event_order=row["event_order"],

@@ -161,7 +161,7 @@ def _top_world_state(p: dict[str, Any]) -> dict[str, Any]:
 _TOP = {"turn_context": _turn_context, "compacted": _top_compacted,
         "world_state": _top_world_state}
 
-# Record kinds that carry the ENVELOPE's `timestamp` as a separate `ts` string.
+# Record kinds that carry the RECORD's `timestamp` as a separate `ts` string.
 # Three families: the task lifecycle records whose OWN timestamp field is absent
 # in many codex versions (task_started/task_complete), the exec pair — a codex
 # exec record carries no duration of its own, so the standalone command block
@@ -171,14 +171,14 @@ _TOP = {"turn_context": _turn_context, "compacted": _top_compacted,
 # (harness/impl/codex/stream.py paints the ⇠ card there, ~100ms before task_complete),
 # so without it the card's `· 23.0s` would be measured to `time.time()` and a
 # rollout being replayed from disk would report the age of the file. `ts` is
-# always the ISO envelope string, never folded into the numeric `at` a task
+# always the ISO record string, never folded into the numeric `at` a task
 # duration subtracts.
-_ENVELOPE_TS = ("task_started", "task_complete", "exec", "exec_result",
-                "message")
+_RECORD_TS = ("task_started", "task_complete", "exec", "exec_result",
+              "message")
 
 
 def _stamp(rec: dict[str, Any] | None, o: dict[str, Any]) -> dict[str, Any] | None:
-    if rec is not None and rec["kind"] in _ENVELOPE_TS:
+    if rec is not None and rec["kind"] in _RECORD_TS:
         rec["ts"] = o.get("timestamp")
     return rec
 
@@ -222,7 +222,7 @@ def parse(o: dict[str, Any]) -> dict[str, Any] | None:
         return _stamp(h(p), o) if h else None
     if t == "response_item":
         h = RESPONSES.get(p.get("type") or "")
-        # response_item too: exec / exec_result carry the envelope timestamp so a
+        # response_item too: exec / exec_result carry the record's own timestamp so a
         # standalone exec block can time itself (_stamp is a no-op for the rest).
         return _stamp(h(p), o) if h else None
     h = _TOP.get(t or "")

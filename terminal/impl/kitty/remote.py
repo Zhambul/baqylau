@@ -1,8 +1,8 @@
 # terminal/impl/kitty/remote.py — the transport to a running kitty.
 #
 # Talking to kitty happens over the socket in $KITTY_LISTEN_ON, either through
-# the `kitten` client or, on the hot paths, as a raw write of the same wire
-# bytes the client sends. Never the TTY: hooks run with no controlling terminal.
+# the `kitten` client or, on the hot paths, as a raw write of the same bytes
+# the client sends. Never the TTY: hooks run with no controlling terminal.
 #
 # Everything here is best-effort and silent — a failed call returns rc 1 / [] /
 # None and never raises, because every caller above is a hook or a render loop
@@ -21,7 +21,7 @@ from terminal.models.values import WindowId
 # The variable kitty exports into every process it starts in a window. Named
 # rather than inlined because a stdlib-only client observes its own window from
 # INSIDE it and cannot import a plugin to ask: its copy of this name
-# (`client/_wire.py`) is pinned to this one by the suite.
+# (`client/_http.py`) is pinned to this one by the suite.
 WINDOW_ID_VARIABLE = "KITTY_WINDOW_ID"
 
 # Timeout for mutating `kitten @` calls (run): kitten has its own client-side
@@ -42,10 +42,10 @@ REMOTE_CONTROL_SOCKET_TIMEOUT_SECONDS = 0.5
 # (timing-dependent → intermittent). The gap makes the CR arrive as its own
 # stdin read = an unambiguous Enter keypress.
 SEND_ENTER_DELAY_SECONDS = 0.15
-# The remote-control protocol version stamped into every @kitty-cmd envelope
+# The remote-control protocol version stamped into every @kitty-cmd command
 # (what a current kitten client sends; kitty accepts any version <= its own).
 KITTY_RC_VERSION = [0, 26, 0]
-# The @kitty-cmd wire framing: ESC P (DCS) + key + {json} + ESC \ (ST). The
+# The @kitty-cmd socket framing: ESC P (DCS) + key + {json} + ESC \ (ST). The
 # reply, when requested, is framed the same way — locate its payload by the
 # key, not the DCS introducer (the reply may arrive mid-buffer).
 RC_CMD_KEY = b"@kitty-cmd"
@@ -226,7 +226,7 @@ class KittyRemote:
             timeout: float = REMOTE_CONTROL_SOCKET_TIMEOUT_SECONDS) -> dict[str, Any] | bool | None:
         """A remote-control command over a RAW unix-socket write of the
         @kitty-cmd DCS — sub-millisecond vs the ~30-100ms kitten subprocess
-        spawn. The wire bytes are exactly what the kitten client sends
+        spawn. The raw bytes are exactly what the kitten client sends
         (captured live): ESC P @kitty-cmd {json} ESC \\, with the reply (when
         requested) framed the same way. Speed is load-bearing for the mirror
         renderer AND the hook path: get-text runs on every click-to-view

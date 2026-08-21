@@ -10,7 +10,7 @@ one translator serves every session in the process.
 
 Two deliberate limits. A prompt that arrives while a turn is open does not open
 a second one: an injection is part of the turn it interrupted. And a turn that
-ends without a Stop — an interrupt whose acknowledgement no harness evidence
+ends without a Stop — an interrupt whose acknowledgement no harness raw event
 ever confirmed, whose `turn.aborted` is produced by the engine rather than by
 this translator — stays open here; the facts after it ride a turn that is over.
 """

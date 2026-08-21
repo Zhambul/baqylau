@@ -2,7 +2,7 @@
 
 The floor of the harness contract: one observation as recorded bytes, the
 decision a translator reached about it, and the two constructors that keep
-event identity and envelope stamping in one place.
+event identity and stored-event stamping in one place.
 """
 
 from __future__ import annotations
@@ -26,7 +26,6 @@ from domain.ids import (
     stable_event_id,
 )
 from domain.records import InterpretationAudit
-from domain.codec import encode_document
 
 TranslationDecision: TypeAlias = Literal["translated", "ignored_unknown", "ignored_nonsemantic"]
 RecordedTranslationDecision: TypeAlias = TranslationDecision | Literal["translation_failed"]
@@ -50,7 +49,7 @@ class RawEvent:
     # recorded raw event carrying its identity. Pushed observers (hooks) have no
     # resume and may leave it at their source_type.
     source_identity: str = ""
-    # Set only on hook evidence, None everywhere else. Flat and typed: a hook
+    # Set only on a hook's raw event, None everywhere else. Flat and typed: a hook
     # delivery is the one observation made from INSIDE the session's terminal
     # window and process tree, so what it saw around itself rides its row.
     terminal_window_id: WindowId | None = None
@@ -91,7 +90,7 @@ def canonical_event(
     occurred_at: float | None = None,
 ) -> CanonicalEvent[EventPayload]:
     """One fact from one observation: the identity converges across sources and
-    the envelope carries where the observation was made from."""
+    the stored event carries where the observation was made from."""
     return CanonicalEvent(
         event_id=stable_event_id(
             harness=raw_event.harness,
@@ -120,8 +119,8 @@ class TranslationError(ValueError):
         self.context = context
 
 
-class UnknownEvidence(ValueError):
-    """Evidence we can read but have no fact for — a tool nothing maps.
+class UnknownRawEvent(ValueError):
+    """A raw event we can read but have no fact for — a tool nothing maps.
 
     Raised rather than returned as nothing, because "deliberately not semantic"
     and "never seen before" are different answers and only one of them is worth
@@ -151,7 +150,7 @@ class RawEventSourceContext:
 # it must exit immediately. So the gateway records an output-location directive:
 # a raw event carrying the typed `ShellOutputLocated` payload. The core
 # translator turns it into the fact, the reaction starts the following, and the
-# collect phase reads the file's chunks as their own evidence.
+# collect phase reads the file's chunks as their own raw events.
 
 OUTPUT_LOCATION_SOURCE_TYPE = "output_location"
 LIVENESS_SOURCE_TYPE = "liveness"
@@ -162,6 +161,7 @@ def output_location_raw_event(
     raw_event_source_context: RawEventSourceContext,
     harness: str,
     shell_output_located: ShellOutputLocated,
+    payload: bytes,
     actor_id: ActorId | None = None,
     parent_actor_id: ActorId | None = None,
 ) -> RawEvent:
@@ -178,7 +178,7 @@ def output_location_raw_event(
         parent_actor_id=parent_actor_id if actor_id else raw_event_source_context.parent_actor_id,
         observed_at=time.time(),
         encoding="json",
-        payload=encode_document(shell_output_located),
+        payload=payload,
         # NOT the chunk source's identity: the chunk reader resumes from the last
         # raw event under its own identity, and a directive there would
         # masquerade as a read position.

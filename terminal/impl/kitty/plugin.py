@@ -59,7 +59,7 @@ def _hex(rgb: RGB) -> str:
 
 
 def _color_value(value: str) -> int | None:
-    """One set-tab-color VALUE, kitten-CLI grammar → RC-payload wire form:
+    """One set-tab-color VALUE, kitten-CLI grammar → RC-payload form:
     "NONE" → None (JSON null), "#rrggbb" → the 24-bit RGB integer — exactly
     what the kitten client itself puts in the @kitty-cmd payload (captured
     live: `active_bg=#ff00aa` travels as `"active_bg": 16711850`,

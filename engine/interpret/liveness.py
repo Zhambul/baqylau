@@ -8,7 +8,7 @@ from core.process import process_alive, process_is_alive
 from domain.ids import RawEventId
 from harness.contract import HarnessRawEventSource
 from harness.models import LIVENESS_SOURCE_TYPE, RawEvent, Session
-from domain.codec import encode_document
+from repository.mapper.documents import encode_document
 from harness.models.directives import ProcessExit
 
 

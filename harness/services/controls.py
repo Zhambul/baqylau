@@ -96,7 +96,7 @@ class HarnessControlService(HarnessReactorContext):
             raise
         _audit_control(self.audit, request, outcome, time.monotonic() - started)
         # An interrupt the harness acknowledged but did not corroborate in its
-        # own evidence: nothing else will ever tell the interpreter this turn
+        # own raw event: nothing else will ever tell the interpreter this turn
         # ended, so mark it for the registry's fallback fact. A harness whose
         # translator will read a native abort record on its own next pass
         # sets `corroborated=True` and is never marked.

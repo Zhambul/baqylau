@@ -1,7 +1,7 @@
-"""The neutral middle: evidence in, facts out, read models over the facts.
+"""The neutral middle: raw events in, facts out, read models over the facts.
 
     store/        where facts live — one database, one owner per table
-    interpret/    the one thread that pulls evidence, translates, and reacts
+    interpret/    the one thread that pulls raw events, translates, and reacts
     projections/  semantic read models folded from committed facts
     queries/      reads that need nothing but the facts
 

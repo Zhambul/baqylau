@@ -7,19 +7,19 @@ the interpreter's session-upsert reaction (birth and upkeep derive from
 committed facts), `raw_events` by any recorder, and the interpretation tables
 only by the interpreter. Positions are not stored anywhere separate: a pulled
 source resumes from the `source_position` of the last raw event carrying its
-`source_identity`, so recorded progress can never drift from the evidence.
+`source_identity`, so recorded progress can never drift from the raw events.
 
 There is no key–value table. Nine preference entities that used to be JSON
 blobs under nine keys have nine tables with real primary keys; the queue, the
 dialog answers and the usage windows are rows rather than encoded lists. Six
 opaque columns remain and each is deliberate: `canonical_events.payload` is the
-canonical fact body, closed and versioned by `domain/codec.py`;
+canonical fact body, closed and versioned by `repository/mapper/facts.py`;
 `raw_events.payload` is the verbatim bytes we observed, which is the whole point
 of keeping it; `state_files.content` is a free-form audit blob written by a
 facade whose contract is "record anything, never raise"; and the three read-model
 payloads (`session_data`, `session_data_actors`, `session_entries`) are closed
 typed documents of `domain/sessiondata.py` and `domain/entries.py`, validated on
-the way in and out by the same codec — a column per field would be a hundred
+the way in and out the same way — a column per field would be a hundred
 columns, half of them null, and none of them queried.
 """
 
@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS schema_version(
 
 
 MAIN_SCHEMA = _SCHEMA_VERSION_TABLE + """
--- === evidence and canonical facts =========================================
+-- === raw events and canonical facts =======================================
 
 CREATE TABLE IF NOT EXISTS sessions(
     session_id TEXT PRIMARY KEY,

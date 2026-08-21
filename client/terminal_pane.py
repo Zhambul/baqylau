@@ -34,7 +34,7 @@ import _daemon                                                   # noqa: E402
 import _handoff                                                  # noqa: E402
 import _model                                                    # noqa: E402
 import _render                                                   # noqa: E402
-import _wire                                                     # noqa: E402
+import _http                                                     # noqa: E402
 
 RECONNECT_DELAY_SECONDS = 2.0
 # The scoreboard shows a running clock, and a clock has to be redrawn to move.
@@ -190,12 +190,12 @@ def connect(pane: Pane, host: str, port: int, session_id: str) -> bool:
     moment and the stream opened from that cursor picks up exactly where the page
     stops — no gap to fill and no overlap to reconcile.
     """
-    snapshot = _document(_wire.SESSION_DATA_PATH % session_id, host, port)
+    snapshot = _document(_http.SESSION_DATA_PATH % session_id, host, port)
     if snapshot is None:
         return False
     pane.model.apply_snapshot(snapshot)
     page = _document(
-        _wire.SESSION_ENTRIES_PATH % (session_id, pane.model.cursor), host, port
+        _http.SESSION_ENTRIES_PATH % (session_id, pane.model.cursor), host, port
     )
     if page is not None:
         pane.model.apply_page(page)
@@ -207,7 +207,7 @@ def follow(pane: Pane, host: str, port: int, session_id: str) -> None:
     reconnect."""
     event = ""
     for line in _daemon.lines(
-        _wire.SESSION_STREAM_PATH % (session_id, pane.model.cursor),
+        _http.SESSION_STREAM_PATH % (session_id, pane.model.cursor),
         host,
         port,
         STREAM_STALL_SECONDS,

@@ -23,6 +23,7 @@ from harness.models import (
 from domain.ids import ActorId, RawEventId, SessionId
 from harness.impl.claude_code.hooks import foreground
 from harness.impl.claude_code import account, model
+from repository.mapper.documents import encode_document
 
 HARNESS = "claude_code"
 CLI_PROCESS_NAME = "claude"
@@ -86,7 +87,7 @@ class ClaudeHookGateway(HarnessHookGateway):
             # The launch-time selections, observed from the CLI's environment.
             # SessionStart is the one delivery that marks a launch; the native
             # event id keys the observation, so a resume that re-asserts the
-            # same environment converges on the same evidence.
+            # same environment converges on the same raw event.
             selections = {
                 "model": harness_hook_request.launch_model or None,
                 "effort": harness_hook_request.launch_effort or None,
@@ -124,7 +125,9 @@ class ClaudeHookGateway(HarnessHookGateway):
             if prepared is not None:
                 reply = prepared.reply
                 raw_events.append(
-                    output_location_raw_event(context, HARNESS, prepared.located)
+                    output_location_raw_event(
+                        context, HARNESS, prepared.located, payload=encode_document(prepared.located)
+                    )
                 )
         elif hook_name in {"PostToolUse", "PostToolUseFailure"} \
                 and document.get("tool_name") == "Bash":
@@ -134,5 +137,9 @@ class ClaudeHookGateway(HarnessHookGateway):
                 # nameable) once the task id exists, at PostToolUse. Its launch
                 # reports "finished" while output keeps flowing, so the
                 # directive says until="session_finished".
-                raw_events.append(output_location_raw_event(context, HARNESS, background))
+                raw_events.append(
+                    output_location_raw_event(
+                        context, HARNESS, background, payload=encode_document(background)
+                    )
+                )
         return HarnessHookResponse(tuple(raw_events), reply)

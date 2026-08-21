@@ -1,7 +1,7 @@
-"""Tracking for an interrupt no native evidence has corroborated yet.
+"""Tracking for an interrupt no native raw event has corroborated yet.
 
 An interrupt is a screen heuristic (an escape key sent, the screen stopped
-changing) — some harnesses' evidence streams carry no record distinguishing
+changing) — some harnesses' raw event streams carry no record distinguishing
 a turn cut short from one that finished on its own, so nothing canonical
 ever settles the turn. `HarnessControlService` marks this registry exactly
 when a control's `DeliveryResult` says `acknowledged` but not `corroborated`;

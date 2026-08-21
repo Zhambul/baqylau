@@ -1,15 +1,36 @@
-"""Row DTO to model object, for the evidence and fact tables.
+"""Row DTO to model object, for the raw event and fact tables.
 
 Pure functions: no I/O, no SQL, no clock, no driver. Everything that used to be
 inline tuple-building and hand-rolled row reading inside the store classes lives
 here, once — the row-to-`RawEvent` mapping in particular existed twice, in the
-canonical store and again in the evidence queries.
+canonical store and again in the raw event queries.
+
+The canonical event's stored form lives here too: the identity columns, the
+schema version that decides how to read them, and the payload — the twelve
+names a canonical fact is split across when it is stored, and put back
+together when it is read. Declared once. The same twelve names used to be
+written out four times: a dict literal on the way out, a set of strings to
+check on the way in, a column split in this file, and a re-assembly to hand a
+stored row back to a decoder — with nothing holding any of the four to the
+others.
 """
 
 from __future__ import annotations
 
-from domain.codec import CanonicalEnvelope, CanonicalEventCodec
-from domain.events import CanonicalEvent, EventPayload
+from dataclasses import dataclass
+from functools import cache
+from typing import Any, Generic
+
+from pydantic import ConfigDict, TypeAdapter, ValidationError
+
+from domain.events import (
+    SCHEMA_VERSION,
+    CanonicalEvent,
+    EVENT_TYPES,
+    PAYLOAD_TYPES,
+    EventPayload,
+    EventPayloadType,
+)
 from domain.ids import (
     ActorId,
     CanonicalEventId,
@@ -17,6 +38,7 @@ from domain.ids import (
     RawEventId,
     SessionId,
     TurnId,
+    WindowId,
 )
 from domain.shells import ShellOutputFollowing
 from domain.records import (
@@ -24,7 +46,9 @@ from domain.records import (
     StoredCanonicalEvent,
     InterpretationRecord,
 )
+from domain.stored import STORED
 from harness.models import RawEvent, Session
+from repository.mapper.documents import StoredDocumentError
 from repository.model.facts import (
     CanonicalEventRow,
     ShellOutputRow,
@@ -62,7 +86,7 @@ def session_values(harness: str, session: Session, created_at: float) -> SqlValu
     )
 
 
-# --- raw evidence -------------------------------------------------------------
+# --- raw events ----------------------------------------------------------------
 
 
 def raw_event(raw_event_row: RawEventRow) -> RawEvent:
@@ -134,61 +158,214 @@ def raw_identity(raw_event: RawEvent) -> SqlValues:
 # --- canonical facts ----------------------------------------------------------
 
 
-def canonical_event_values(
-    event: CanonicalEvent[EventPayload],
-    accepted_at: float,
-    canonical_event_codec: CanonicalEventCodec,
-) -> SqlValues:
-    """The envelope, split across the columns that hold it.
+@dataclass(frozen=True)
+class CanonicalEventDocument(Generic[EventPayloadType]):
+    """One canonical event as it is STORED: the identity columns, the schema
+    version that decides how to read them, and the payload.
 
-    The codec both builds the envelope and VALIDATES it, so asking for one here
-    is what refuses a payload that does not match its declared shape.
+    Declared once, so the twelve names below have one place to drift from
+    instead of four.
+    """
+
+    actor_id: ActorId
+    event_id: CanonicalEventId
+    event_type: str
+    harness: str
+    harness_process_id: int | None
+    occurred_at: float | None
+    parent_actor_id: ActorId | None
+    payload: EventPayloadType
+    schema_version: int
+    session_id: SessionId
+    terminal_window_id: WindowId | None
+    turn_id: TurnId | None
+
+    __pydantic_config__ = STORED
+
+
+@dataclass(frozen=True)
+class _StoredEventType:
+    """Which payload a stored document holds — the one field that has to be
+    read before the rest can be, since it is what says how to read the rest.
+
+    A declaration with `extra="ignore"`, so reading it is a validation like
+    every other and this module needs no `json` of its own.
+    """
+
+    __pydantic_config__ = ConfigDict(extra="ignore")
+
+    event_type: str
+
+
+_EVENT_TYPE = TypeAdapter(_StoredEventType)
+
+
+def _stored_event_type(encoded: bytes | str) -> str:
+    try:
+        event_type = _EVENT_TYPE.validate_json(encoded).event_type
+    except ValidationError as error:
+        raise StoredDocumentError("stored canonical event names no event type") from error
+    if event_type not in PAYLOAD_TYPES:
+        raise StoredDocumentError(f"unknown canonical event type: {event_type!r}")
+    return event_type
+
+
+def _event_type(event_payload: EventPayload) -> str:
+    """The registered name of a payload's type — the discriminator the stored
+    document carries, and the key everything below is cached on."""
+    try:
+        return EVENT_TYPES[type(event_payload)]
+    except KeyError as error:
+        raise StoredDocumentError(
+            f"unregistered canonical payload: {type(event_payload).__name__}"
+        ) from error
+
+
+@cache
+def _document_adapter(event_type: str) -> TypeAdapter[Any]:
+    """The validator/serializer for one event type's stored document. Cached
+    because building a schema is not free and there are exactly as many of
+    these as there are registered event types.
+
+    Keyed on the event type rather than the class, because the event type is
+    what the stored document actually says.
+    """
+    document: Any = CanonicalEventDocument
+    return TypeAdapter(document[PAYLOAD_TYPES[event_type]])
+
+
+@cache
+def _payload_adapter(event_type: str) -> TypeAdapter[Any]:
+    """The same, for the column that holds only the payload."""
+    return TypeAdapter(PAYLOAD_TYPES[event_type])
+
+
+def canonical_event_document(canonical_event: CanonicalEvent[EventPayload]) -> CanonicalEventDocument[EventPayload]:
+    """The event as it will be stored, VALIDATED."""
+    event_type = _event_type(canonical_event.payload)
+    document = CanonicalEventDocument(
+        actor_id=canonical_event.actor_id,
+        event_id=canonical_event.event_id,
+        event_type=event_type,
+        harness=canonical_event.harness,
+        harness_process_id=canonical_event.harness_process_id,
+        occurred_at=canonical_event.occurred_at,
+        parent_actor_id=canonical_event.parent_actor_id,
+        payload=canonical_event.payload,
+        schema_version=SCHEMA_VERSION,
+        session_id=canonical_event.session_id,
+        terminal_window_id=canonical_event.terminal_window_id,
+        turn_id=canonical_event.turn_id,
+    )
+    try:
+        _document_adapter(event_type).validate_python(document)
+    except ValidationError as error:
+        raise StoredDocumentError(f"invalid canonical event: {error}") from error
+    return document
+
+
+def canonical_event(canonical_event_document: CanonicalEventDocument[EventPayload]) -> CanonicalEvent[EventPayload]:
+    """A stored document back into the event it holds."""
+    if canonical_event_document.schema_version != SCHEMA_VERSION:
+        raise StoredDocumentError(
+            f"unsupported canonical schema version: {canonical_event_document.schema_version!r}"
+        )
+    return CanonicalEvent(
+        event_id=canonical_event_document.event_id,
+        session_id=canonical_event_document.session_id,
+        actor_id=canonical_event_document.actor_id,
+        turn_id=canonical_event_document.turn_id,
+        parent_actor_id=canonical_event_document.parent_actor_id,
+        harness=canonical_event_document.harness,
+        occurred_at=canonical_event_document.occurred_at,
+        terminal_window_id=canonical_event_document.terminal_window_id,
+        harness_process_id=canonical_event_document.harness_process_id,
+        payload=canonical_event_document.payload,
+    )
+
+
+def encode_canonical_event(canonical_event: CanonicalEvent[EventPayload]) -> bytes:
+    return _document_adapter(_event_type(canonical_event.payload)).dump_json(
+        canonical_event_document(canonical_event)
+    )
+
+
+def decode_canonical_event(encoded: bytes | str) -> CanonicalEvent[EventPayload]:
+    # The payload's type is what a SIBLING field says it is, so the event
+    # type is read first and the document validates already parameterized by
+    # it — the whole document in one pass, against one declaration.
+    event_type = _stored_event_type(encoded)
+    try:
+        document: CanonicalEventDocument[EventPayload] = _document_adapter(event_type).validate_json(encoded)
+    except ValidationError as error:
+        raise StoredDocumentError(f"invalid stored canonical event: {error}") from error
+    return canonical_event(document)
+
+
+def payload_json(canonical_event: CanonicalEvent[EventPayload]) -> str:
+    """Just the payload, for the column that holds it beside the identity
+    ones."""
+    adapter = _payload_adapter(_event_type(canonical_event.payload))
+    return adapter.dump_json(canonical_event.payload).decode("utf-8")
+
+
+def payload(event_type: str, encoded_payload: str) -> EventPayload:
+    """A stored payload column back into the object it holds."""
+    if event_type not in PAYLOAD_TYPES:
+        raise StoredDocumentError(f"unknown canonical event type: {event_type!r}")
+    try:
+        decoded: EventPayload = _payload_adapter(event_type).validate_json(encoded_payload)
+    except ValidationError as error:
+        raise StoredDocumentError(f"invalid canonical payload: {error}") from error
+    return decoded
+
+
+def canonical_event_values(canonical_event: CanonicalEvent[EventPayload], accepted_at: float) -> SqlValues:
+    """The stored document, split across the columns that hold it.
+
+    Building one is what refuses a payload that does not match its declared
+    shape, before it reaches storage.
 
     This used to encode the whole event to JSON and parse it straight back to
     reach its own fields, keying into the resulting dict twelve times.
     """
-    envelope = canonical_event_codec.envelope(event)
+    document = canonical_event_document(canonical_event)
     return (
-        str(envelope.event_id),
-        envelope.schema_version,
-        envelope.event_type,
-        str(envelope.session_id),
-        str(envelope.actor_id),
-        str(envelope.turn_id) if envelope.turn_id is not None else None,
-        str(envelope.parent_actor_id) if envelope.parent_actor_id is not None else None,
-        envelope.harness,
-        envelope.occurred_at,
-        envelope.terminal_window_id,
-        envelope.harness_process_id,
+        str(document.event_id),
+        document.schema_version,
+        document.event_type,
+        str(document.session_id),
+        str(document.actor_id),
+        str(document.turn_id) if document.turn_id is not None else None,
+        str(document.parent_actor_id) if document.parent_actor_id is not None else None,
+        document.harness,
+        document.occurred_at,
+        document.terminal_window_id,
+        document.harness_process_id,
         accepted_at,
-        canonical_event_codec.payload_json(event),
+        payload_json(canonical_event),
     )
 
 
 def stored_canonical_event(
     canonical_event_row: CanonicalEventRow,
     raw_event_ids: tuple[RawEventId, ...],
-    canonical_event_codec: CanonicalEventCodec,
 ) -> StoredCanonicalEvent:
     return StoredCanonicalEvent(
         cursor=canonical_event_row.cursor,
         accepted_at=canonical_event_row.accepted_at,
-        event=canonical_event_codec.event(
-            canonical_envelope(canonical_event_row, canonical_event_codec)
-        ),
+        event=canonical_event(row_canonical_event_document(canonical_event_row)),
         raw_event_ids=raw_event_ids,
     )
 
 
-def canonical_envelope(
-    canonical_event_row: CanonicalEventRow, canonical_event_codec: CanonicalEventCodec
-) -> CanonicalEnvelope[EventPayload]:
-    """A stored row back into the envelope its columns are.
+def row_canonical_event_document(canonical_event_row: CanonicalEventRow) -> CanonicalEventDocument[EventPayload]:
+    """A stored row back into the document its columns are.
 
     Straight across, no bytes in between: the read used to re-serialize the row
-    into a JSON document purely so that `decode` could parse it again.
+    into a JSON document purely so that a decoder could parse it again.
     """
-    return CanonicalEnvelope(
+    return CanonicalEventDocument(
         actor_id=ActorId(canonical_event_row.actor_id),
         event_id=CanonicalEventId(canonical_event_row.event_id),
         event_type=canonical_event_row.event_type,
@@ -200,9 +377,7 @@ def canonical_envelope(
             if canonical_event_row.parent_actor_id is not None
             else None
         ),
-        payload=canonical_event_codec.payload(
-            canonical_event_row.event_type, canonical_event_row.payload
-        ),
+        payload=payload(canonical_event_row.event_type, canonical_event_row.payload),
         schema_version=canonical_event_row.schema_version,
         session_id=SessionId(canonical_event_row.session_id),
         terminal_window_id=canonical_event_row.terminal_window_id,

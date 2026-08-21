@@ -3,7 +3,7 @@
 Built once, at push time, by `engine/sessiondata/entries.py`, and never touched
 again — every entry is immutable, so materializing one is a pure append and
 reading the feed is one indexed range scan. The canonical log stays behind them
-as evidence and as the replay source.
+as raw events and as the replay source.
 
 An entry is NOT its canonical event. The event says what happened in the words
 the translators produce; the entry says what a reader is shown, which drops
@@ -95,7 +95,7 @@ class EntryBody:
 @dataclass(frozen=True)
 class TurnStartedBody(EntryBody):
     """The grouping marker. Carries nothing: a turn's identity is on the
-    envelope, and everything between two markers belongs to it."""
+    stored event, and everything between two markers belongs to it."""
 
 
 @dataclass(frozen=True)

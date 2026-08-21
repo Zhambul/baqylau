@@ -22,13 +22,13 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))  # my own directory
 
 import _daemon                                                   # noqa: E402
-import _wire                                                     # noqa: E402
+import _http                                                     # noqa: E402
 
 
 def request_body(arguments: list[str]) -> dict[str, object]:
     command = arguments[0]
     body: dict[str, object] = {
-        "window_id": _wire.window_id(os.environ),
+        "window_id": _http.window_id(os.environ),
         "working_directory": os.getcwd(),
     }
     if command in ("grow", "shrink") and len(arguments) > 1:
@@ -41,13 +41,13 @@ def request_body(arguments: list[str]) -> dict[str, object]:
 
 
 def main(arguments: list[str]) -> int:
-    if not arguments or arguments[0] not in _wire.PANE_COMMAND_PATHS:
+    if not arguments or arguments[0] not in _http.PANE_COMMAND_PATHS:
         print(
             "usage: terminal_keys.py toggle|grow|shrink|reset|setpct [number]",
             file=sys.stderr,
         )
         return 2
-    _daemon.post_json(_wire.PANE_COMMAND_PATHS[arguments[0]], request_body(arguments))
+    _daemon.post_json(_http.PANE_COMMAND_PATHS[arguments[0]], request_body(arguments))
     return 0
 
 

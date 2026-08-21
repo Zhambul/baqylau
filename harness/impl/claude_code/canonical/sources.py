@@ -1,4 +1,4 @@
-"""Claude Code raw evidence discovery: transcript and task files, read as observations."""
+"""Claude Code raw event discovery: transcript and task files, read as observations."""
 
 from __future__ import annotations
 

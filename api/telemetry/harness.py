@@ -1,4 +1,4 @@
-# api/telemetry/harness.py — the evidence plane's second write endpoint: pushed
+# api/telemetry/harness.py — the raw event plane's second write endpoint: pushed
 # telemetry. Like the hook endpoint beside it, the body is exact bytes and is
 # recorded, never parsed here; unlike it, there is no reply to hand back.
 from __future__ import annotations

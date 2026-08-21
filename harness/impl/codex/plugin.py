@@ -2,7 +2,7 @@
 
 from harness.contract import HarnessPlugin
 from harness.models import EffortOption, HarnessInfo, ModelOption
-from domain.codec import SCHEMA_VERSION
+from domain.events import SCHEMA_VERSION
 from domain.ids import ModelId
 from harness.impl.codex.canonical.translator import CodexCanonicalTranslator
 from harness.impl.codex.canonical.sources import CodexRawEventSources

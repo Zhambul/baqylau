@@ -32,7 +32,7 @@ def data_directory() -> str:
 
 
 def main_database_path() -> str:
-    """Facts, evidence, preferences, terminal state, usage, uploads."""
+    """Facts, raw events, preferences, terminal state, usage, uploads."""
     return os.path.join(data_directory(), MAIN_DATABASE_NAME)
 
 

@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import sqlite3
 
-from domain.codec import CanonicalEventCodec
 from domain.events import CanonicalEvent, EventPayload
 from domain.ids import CanonicalEventId, RawEventId, SessionId
 from domain.records import (
@@ -35,13 +34,8 @@ _INSERT_COLUMNS = (
 
 
 class SqliteCanonicalEventRepository(CanonicalEventRepository):
-    def __init__(
-        self,
-        sqlite_database: SqliteDatabase,
-        canonical_event_codec: CanonicalEventCodec | None = None,
-    ) -> None:
+    def __init__(self, sqlite_database: SqliteDatabase) -> None:
         self.sqlite_database = sqlite_database
-        self.canonical_event_codec = canonical_event_codec or CanonicalEventCodec()
 
     # --- the one write ---------------------------------------------------------
 
@@ -104,7 +98,7 @@ class SqliteCanonicalEventRepository(CanonicalEventRepository):
         connection.execute(
             f"INSERT INTO canonical_events({_INSERT_COLUMNS}) "
             "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            mapper.canonical_event_values(event, accepted_at, self.canonical_event_codec),
+            mapper.canonical_event_values(event, accepted_at),
         )
         return "accepted"
 
@@ -125,7 +119,6 @@ class SqliteCanonicalEventRepository(CanonicalEventRepository):
         return mapper.stored_canonical_event(
             rows.canonical_event(row),
             tuple(RawEventId(entry["raw_event_id"]) for entry in interpretation_events),
-            self.canonical_event_codec,
         )
 
     def session_ids(self) -> tuple[SessionId, ...]:
@@ -150,9 +143,7 @@ class SqliteCanonicalEventRepository(CanonicalEventRepository):
             CommittedEvent(
                 cursor=row["cursor"],
                 accepted_at=row["accepted_at"],
-                event=self.canonical_event_codec.event(
-                    mapper.canonical_envelope(rows.canonical_event(row), self.canonical_event_codec)
-                ),
+                event=mapper.canonical_event(mapper.row_canonical_event_document(rows.canonical_event(row))),
             )
             for row in found
         )

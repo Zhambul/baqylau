@@ -105,7 +105,7 @@ async def _application_input_error(_request: Request, error: Exception) -> Respo
     invariant check anywhere below a route — "send_text handler requires
     SendText", a translator disagreeing with itself, a repository refusing a
     limit — was answered as the caller's fault: a 400, no `errors` row, and the
-    internal message on the wire. Those now fall through to `_internal_error`,
+    internal message at the HTTP boundary. Those now fall through to `_internal_error`,
     which is a 500 and an audit row, and the sites that really did mean "your
     request" say so by type.
     """

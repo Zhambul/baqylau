@@ -1,4 +1,4 @@
-# Read model -> wire. The api layer's own decision about what is exposed.
+# Read model -> the HTTP boundary. The api layer's own decision about what is exposed.
 #
 # Two things happen here that happen nowhere else. The writers' internal memory
 # — the pending-attention set, the path set, the four title candidates — is

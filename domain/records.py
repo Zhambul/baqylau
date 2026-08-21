@@ -37,9 +37,9 @@ class CommittedEvent:
 
     The fact, when we recorded it, and its place in the one order everything
     after it depends on. Deliberately NOT a `StoredCanonicalEvent`: that one
-    also carries the raw evidence its fact was derived from, which the audit
+    also carries the raw events its fact was derived from, which the audit
     needs and a reaction never does — and reading it would mean a second query
-    per page, across sessions, for provenance nobody looks at.
+    per page, across sessions, for an origin nobody looks at.
     """
 
     cursor: int

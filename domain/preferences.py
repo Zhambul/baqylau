@@ -1,6 +1,6 @@
 """What YOU chose: cross-session, cross-device, and true only for you.
 
-Nothing here is a fact about a session — those are folded from evidence and are
+Nothing here is a fact about a session — those are folded from raw events and are
 the same for everyone. These are yours, and a fresh machine simply has none of
 them.
 

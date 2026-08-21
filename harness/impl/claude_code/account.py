@@ -16,7 +16,7 @@ VALID_ACCOUNT_ID = re.compile(r"^[A-Za-z0-9._-]+$")
 
 # The two variables the account switcher exports into a launched CLI's
 # environment. Nothing in the daemon reads them — a CLIENT observes its own
-# environment and forwards both values raw (client/_wire.py) — but they are named
+# environment and forwards both values raw (client/_http.py) — but they are named
 # here, beside the validation they feed, so the client's copy can be pinned to
 # this one (tests/test_canonical_clients.py).
 SLUG_VARIABLE = "CLAUDE_SUBSCRIPTION_SLUG"

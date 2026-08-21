@@ -40,7 +40,7 @@ class ShellOutputRepository(Protocol):
         moved to the background mid-run.
 
         Re-arms `state` as well as `until`, because the two facts come from the
-        SAME evidence: if the finish is applied first the row is already
+        SAME raw event: if the finish is applied first the row is already
         `finishing`, and one drain later the file the job is still writing to is
         unlinked. Translators emit `shell.backgrounded` first so that does not
         happen; re-arming is what makes the order a preference rather than a

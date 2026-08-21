@@ -4,7 +4,7 @@ The second of the daemon's two loops, and the one that does everything a fact
 CAUSES. It is decoupled from translation by the canonical store itself — there
 is no queue between them, only the cursor: the interpreter appends facts, this
 follows them, and neither waits on the other. A reaction that is slow or broken
-can no longer stall the evidence pipeline, which is the whole reason for the
+can no longer stall the raw event pipeline, which is the whole reason for the
 split.
 
 Per event, in order: the side-effect reactions, the harness's own reactors, the

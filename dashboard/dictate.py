@@ -30,7 +30,7 @@ GRANT_TIMEOUT_SECONDS = 5.0    # the grant is one small HTTPS POST; fail fast so
 #                          Deepgram outage can't hold a server thread long
 MODEL = "nova-3"         # keyterm prompting requires nova-3
 LANGUAGE = "en"
-# The browser sends the rate it will actually PUT ON THE WIRE, which since
+# The browser sends the rate it will actually SEND AT THE HTTP BOUNDARY, which since
 # 2026-07-27 is Deepgram's own 16 kHz model rate, not the AudioContext's native
 # one: the worklet resamples (hardware already at or below 16k passes through),
 # because native-rate PCM is 768 kbps of sustained uplink and an iPad over the

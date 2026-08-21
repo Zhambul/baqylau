@@ -31,8 +31,8 @@ class SessionUpsertCanonicalEventReaction(CanonicalEventReaction):
     """The one writer of the sessions table.
 
     Birth: the session's own `session.started` fact carries the identity in its
-    payload and the location in its envelope. Upkeep: any later fact whose
-    envelope carries values refreshes the live columns — a resume in a new
+    payload and the location in its stored event. Upkeep: any later fact whose
+    stored event carries values refreshes the live columns — a resume in a new
     window updates the row with the first fact its first delivery commits.
     """
 
@@ -68,7 +68,7 @@ class ShellOutputCanonicalEventReaction(CanonicalEventReaction):
     known (start following), the command finishes (stop a foreground
     following), the harness announces a background job's true end (stop that
     following), the session finishes (drain everything). Output CHUNKS never
-    pass through here — they are evidence, read by the collect phase."""
+    pass through here — they are raw events, read by the collect phase."""
 
     def __init__(
         self,
@@ -107,7 +107,7 @@ class ShellOutputCanonicalEventReaction(CanonicalEventReaction):
             )
         elif isinstance(payload, ShellBackgrounded):
             # Keep reading the file the job is still writing to. Without this the
-            # `shell.finished` from the same evidence marks the row finishing,
+            # `shell.finished` from the same raw event marks the row finishing,
             # one drain later the row is removed and — for a tee file we made —
             # the file is UNLINKED under a running process.
             self.shell_output.outlive_shell(

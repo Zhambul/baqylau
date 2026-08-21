@@ -34,7 +34,7 @@ router = APIRouter()
 
 # The route names an api MODEL as its return type and returns one, so the
 # published schema and the bytes are the same statement. The harness layer's own
-# result dataclasses never reach the wire: `control_outcome` maps one to the
+# result dataclasses never reach the HTTP boundary: `control_outcome` maps one to the
 # api model that mirrors it, and nothing here builds a dict.
 LAUNCH_STATUS = {"started": 202, "rejected": 409}
 CONTROL_STATUS = {"acknowledged": 200, "indeterminate": 202, "rejected": 409}

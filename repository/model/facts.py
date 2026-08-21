@@ -1,4 +1,4 @@
-"""Row shapes for the evidence and fact tables.
+"""Row shapes for the raw event and fact tables.
 
 One frozen dataclass per table, fields named and ordered exactly as the columns
 are, typed as SQLite sees them: `bytes` for BLOB, `int` for the 0/1 booleans,

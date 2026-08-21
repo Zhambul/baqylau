@@ -2,7 +2,7 @@
 
 The message you are still typing, the ones you queued behind it, the option you
 highlighted in a dialog. Not a fact about the session: a fact about you, which
-is why it is stored rather than folded from evidence.
+is why it is stored rather than folded from raw events.
 
 These shapes lived inside the dashboard service that also wrote their SQL. They
 are here so the repository can hand them back and the service can stay a

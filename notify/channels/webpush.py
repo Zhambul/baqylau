@@ -75,7 +75,7 @@ def enabled() -> bool:
 
 
 def _b64u(b: bytes) -> str:
-    """base64url without padding (the JOSE / RFC 8291 wire form)."""
+    """base64url without padding (the JOSE / RFC 8291 byte form)."""
     return base64.urlsafe_b64encode(b).rstrip(b"=").decode("ascii")
 
 
@@ -199,8 +199,8 @@ class Result:
 def deliver(routed_subscription: RoutedSubscription, payload: dict[str, object],
             push_signing_key_repository: PushSigningKeyRepository | None,
             ttl: int = DELIVERY_LIFETIME_SECONDS) -> Result:
-    """Deliver `payload` (a dict, JSON-encoded) to one `subscription` (its wire
-    JSON: {endpoint, keys:{p256dh, auth}}). Never raises — returns a Result.
+    """Deliver `payload` (a dict, JSON-encoded) to one `subscription` (its JSON
+    document: {endpoint, keys:{p256dh, auth}}). Never raises — returns a Result.
     Synchronous network I/O, so callers run it OFF the watcher thread."""
     if not _HAVE_CRYPTO:
         return Result(error="no crypto")
@@ -335,4 +335,4 @@ def retract_alert(h: dict[str, Any], reason: str, badge: int = 0, *,
     threading.Thread(target=_webpush_fanout,
                      args=(subs, payload, "resolve", push_signing_key_repository, push_subscription_repository),
                      daemon=True).start()
-    return OK                              # dispatched; the thread audits the wire
+    return OK                              # dispatched; the thread audits the send

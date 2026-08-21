@@ -1,1 +1,1 @@
-"""Codex's own evidence: its rollout files, read and translated."""
+"""Codex's own raw events: its rollout files, read and translated."""

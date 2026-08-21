@@ -46,7 +46,7 @@ from terminal.models import (
     SESSION_WINDOW_TAG,
 )
 from core.daemon.contract import HOST_ADDRESS, PORT_NUMBER
-from domain.codec import CanonicalEventCodec
+from repository.mapper import facts as mapper
 from domain.events import CanonicalEvent
 from domain.events import (
     ActorFinished,
@@ -1790,7 +1790,7 @@ def test_claude_hook_and_child_transcript_deduplicate_actor_start():
     hook_start = ClaudeCanonicalTranslator().translate(hook).canonical_events[0]
     transcript_start = ClaudeCanonicalTranslator().translate(transcript_record).canonical_events[0]
 
-    assert CanonicalEventCodec().encode(hook_start) == CanonicalEventCodec().encode(transcript_start)
+    assert mapper.encode_canonical_event(hook_start) == mapper.encode_canonical_event(transcript_start)
 
 
 def test_claude_subagent_stop_hook_finishes_the_actor():
@@ -1879,7 +1879,7 @@ def test_claude_later_teammate_message_reuses_the_canonical_actor_start():
     first_start = translator.translate(first_record).canonical_events[0]
     later_start = translator.translate(later_message).canonical_events[0]
 
-    assert CanonicalEventCodec().encode(first_start) == CanonicalEventCodec().encode(later_start)
+    assert mapper.encode_canonical_event(first_start) == mapper.encode_canonical_event(later_start)
 
 
 def test_claude_lead_start_uses_the_first_root_record_with_a_working_directory():
@@ -1912,9 +1912,8 @@ def test_claude_lead_start_uses_the_first_root_record_with_a_working_directory()
     ))
 
     assert plumbing.decision == "ignored_nonsemantic"
-    codec = CanonicalEventCodec()
-    assert [codec.encode(event) for event in root_record.canonical_events[:2]] == [
-        codec.encode(event) for event in hook.canonical_events
+    assert [mapper.encode_canonical_event(event) for event in root_record.canonical_events[:2]] == [
+        mapper.encode_canonical_event(event) for event in hook.canonical_events
     ]
 
 
@@ -2020,14 +2019,13 @@ def test_codex_session_start_hook_matches_rollout_metadata(tmp_path, monkeypatch
         source_name=str(rollout_path),
     ))
 
-    codec = CanonicalEventCodec()
     assert hook.decision == "translated"
     # the rollout record carries its own timestamp; the identities and payloads converge
     assert [event.event_id for event in hook.canonical_events] == [
         event.event_id for event in rollout.canonical_events
     ]
-    assert [codec.payload_json(event) for event in hook.canonical_events] == [
-        codec.payload_json(event) for event in rollout.canonical_events
+    assert [mapper.payload_json(event) for event in hook.canonical_events] == [
+        mapper.payload_json(event) for event in rollout.canonical_events
     ]
 
 
@@ -4235,8 +4233,9 @@ def test_claude_hook_and_transcript_produce_identical_tool_start_facts():
             observed_at=200.0,
         )
     )
-    codec = CanonicalEventCodec()
-    assert codec.encode(payloads(hook, ShellStarted)[0]) == codec.encode(payloads(transcript, ShellStarted)[0])
+    assert mapper.encode_canonical_event(payloads(hook, ShellStarted)[0]) == mapper.encode_canonical_event(
+        payloads(transcript, ShellStarted)[0]
+    )
 
 
 def test_claude_file_facts_converge_from_either_evidence_stream():
@@ -4289,8 +4288,7 @@ def test_claude_file_facts_converge_from_either_evidence_stream():
         raw_event_id="transcript-finish",
     ))
 
-    codec = CanonicalEventCodec()
-    assert codec.encode(payloads(hook, FileAccessed)[0]) == codec.encode(
+    assert mapper.encode_canonical_event(payloads(hook, FileAccessed)[0]) == mapper.encode_canonical_event(
         payloads(transcript, FileAccessed)[0]
     )
     assert payloads(hook, FileAccessed)[0].payload.content.text == "print(1)\n"
@@ -4370,7 +4368,7 @@ def test_claude_hook_and_transcript_tool_finish_deduplicate_transactionally(tmp_
     transcript = translator.translate(transcript_raw)
     hook_finished = payloads(hook, ShellFinished)[0]
     transcript_finished = payloads(transcript, ShellFinished)[0]
-    assert CanonicalEventCodec().encode(hook_finished) == CanonicalEventCodec().encode(transcript_finished)
+    assert mapper.encode_canonical_event(hook_finished) == mapper.encode_canonical_event(transcript_finished)
 
     store = CanonicalRuntime(str(tmp_path / "main.db"))
     store.register(

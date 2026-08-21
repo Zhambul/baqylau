@@ -34,7 +34,7 @@ function dictation(ta, getCwd, getHarness, sessionId) {
     // Safari creates gesture-less contexts suspended and keeps them so
     const audioContext = new AudioContext();
     if (audioContext.state === "suspended") audioContext.resume();
-    // What we will actually PUT ON THE WIRE — not what the hardware runs at.
+    // What we will actually SEND AT THE HTTP BOUNDARY — not what the hardware runs at.
     // The worklet resamples to DICT_RATE (see DICT_WORKLET: native-rate PCM
     // saturated an iPad's uplink and the lag then grew with every sentence);
     // hardware already at or below it passes through untouched. This is the
@@ -96,7 +96,7 @@ function dictation(ta, getCwd, getHarness, sessionId) {
       // (both ms from the press), and whether stop() beat the socket
       armed: 0, opened: 0, closeOnOpen: false,
     };
-    const bps = outRate * 2;   // linear16 mono: bytes of wire per second of audio
+    const bps = outRate * 2;   // linear16 mono: bytes sent per second of audio
 
     // THE PREROLL. Audio captured before the socket is ready waits here instead
     // of being dropped on the floor, and goes out in one burst the instant the
@@ -140,7 +140,7 @@ function dictation(ta, getCwd, getHarness, sessionId) {
     const paint = () => {
       // Once we're STOPPING, never RESURRECT text into a box that something
       // else rewrote after our last paint: `dic.stop()` sends CloseStream and
-      // Deepgram flushes its final transcript ASYNC (~1s later, over the wire),
+      // Deepgram flushes its final transcript ASYNC (~1s later, over HTTP),
       // which lands after the composer's send already cleared the box — a bare
       // paint would refill the just-sent box AND (via the input event below)
       // re-persist the draft. Same guard finish() uses; scoped to stopping so
@@ -589,7 +589,7 @@ function attachTray(getSid, onChange) {
   };
 }
 
-// Wire the attach picker, clipboard paste (screenshots), and drag-drop onto a tray.
+// Connect the attach picker, clipboard paste (screenshots), and drag-drop onto a tray.
 // `ta` is the paste target (textarea); `zone` the drop target (composer wrap /
 // prompt box); enabled() gates every path (a parked/headless box takes none).
 // Returns the picker button to place in the UI (the hidden <input> rides with

@@ -30,12 +30,12 @@ class HarnessInfo:
     supports_accounts: bool = False
     # Whether a launch MUST carry a first message. True for a harness that
     # announces its session only once the first TURN begins — its session-start
-    # evidence lands with the first prompt, never at startup. Launched with an
+    # raw event lands with the first prompt, never at startup. Launched with an
     # empty prompt such a CLI comes up, waits at its own input and tells us
     # nothing: the session exists in the terminal and NOWHERE here. So the launch
     # is declined at the door (harness.services.launcher) rather than leaving the
     # dashboard waiting for a session that cannot arrive. A harness whose
-    # session-start evidence fires at startup leaves this False and launches bare.
+    # session-start raw event fires at startup leaves this False and launches bare.
     requires_initial_message: bool = False
     models: tuple[ModelOption, ...] = ()
     rewind_modes: tuple[RewindModeOption, ...] = ()

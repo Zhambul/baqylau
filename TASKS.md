@@ -5,7 +5,24 @@ to the bottom with their commit.
 
 ## In flight
 
-(nothing — next: owner approval for the 4/4b/4c batch, then bugs 5–8)
+9. **Dissolve the codec, banned words, harness type** — owner approved.
+   Wave 1 (agent running): ONE event class. `CanonicalEvent` gains
+   store-assigned `cursor`/`accepted_at`/`raw_event_ids` (defaults) and
+   `happened_at`; `StoredCanonicalEvent` and `CommittedEvent` deleted from
+   `domain/records.py` and their NAMES banned. No document class anywhere:
+   `repository/mapper/facts.py` holds functions only (validate at write,
+   version-check at read, payload column adapters); `documents.py` holds
+   `encode_document`/`decode_document`/`StoredDocumentError`;
+   `SCHEMA_VERSION` to `domain/events.py`; `domain/codec.py` deleted;
+   `output_location_raw_event` takes `payload: bytes` (gateway encodes).
+   Banned words gone from all code and comments — envelope, evidence, wire,
+   wiring, provenance (sentences rewritten in plain words, no fixed
+   synonyms); `client/_wire.py`→`client/_http.py`; new gate test
+   (grow-only ban list + banned identifiers, .py + dashboard JS + file
+   names, comments included).
+   Wave 2 (after wave 1 commits): `HarnessName` NewType in `domain/ids.py`,
+   every `harness: str` converted outside api/, gate added. A closed enum is
+   impossible: shared code may not contain a harness's name.
 
 ## Queued (approved direction, plan needs owner approval before implementation)
 
@@ -51,14 +68,6 @@ to the bottom with their commit.
    mark), and only adopt sessions the list has already answered for.
 8. **Nothing expands on the web dashboard** (Update entries, shell entries) —
    reproduce with the console open; likely a JS regression from the restore.
-
-## Awaiting owner decision
-
-9. **Codec** — answered "why do we need it": the store needs the envelope
-   declaration, write-time validation, the version gate, and
-   discriminator-first decode; it is all pydantic already. Options: leave in
-   domain/codec.py, or move into repository/mapper. No action until the owner
-   picks.
 
 ## Done
 

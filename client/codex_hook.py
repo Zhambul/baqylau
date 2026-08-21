@@ -19,16 +19,16 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))  # my own directory
 
 import _daemon                                                   # noqa: E402
-import _wire                                                     # noqa: E402
+import _http                                                     # noqa: E402
 
 HARNESS = "codex"
 
 
 def main() -> None:
     payload = sys.stdin.buffer.read()
-    reply = _daemon.post(_wire.HOOK_PATH % HARNESS, payload, {
-        _wire.TERMINAL_WINDOW_HEADER: _wire.window_id(os.environ),
-        _wire.CLIENT_PROCESS_HEADER: str(os.getpid()),
+    reply = _daemon.post(_http.HOOK_PATH % HARNESS, payload, {
+        _http.TERMINAL_WINDOW_HEADER: _http.window_id(os.environ),
+        _http.CLIENT_PROCESS_HEADER: str(os.getpid()),
     })
     if reply:
         sys.stdout.buffer.write(reply)

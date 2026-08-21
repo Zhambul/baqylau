@@ -1,6 +1,6 @@
-"""The fallback finish signal for an interrupt no native evidence corroborates.
+"""The fallback finish signal for an interrupt no native raw event corroborates.
 
-Some harnesses' evidence streams carry no record that distinguishes a turn
+Some harnesses' raw event streams carry no record that distinguishes a turn
 cut short by an interrupt from one that finished on its own, so a session's
 busy state can get stuck after an otherwise-successful interrupt. See
 `harness.models.InterruptRegistry` for who marks it and why.
@@ -13,14 +13,14 @@ import time
 from domain.ids import RawEventId
 from harness.contract import HarnessRawEventSource
 from harness.models import INTERRUPT_SOURCE_TYPE, InterruptRegistry, RawEvent, Session
-from domain.codec import encode_document
+from repository.mapper.documents import encode_document
 from harness.models.directives import InterruptMark
 
-# How long a marked interrupt waits for the harness's OWN evidence to settle
+# How long a marked interrupt waits for the harness's OWN raw event to settle
 # the turn on its own before the fallback fires. Long enough that an ordinary
 # end-of-turn record — which lands within a tick or two of the harness
 # actually quitting — always wins; short enough that a session which truly
-# got no further evidence still clears within a few seconds rather than
+# got no further raw event still clears within a few seconds rather than
 # staying "busy" indefinitely.
 GRACE_SECONDS = 3.0
 
@@ -29,7 +29,7 @@ class PendingInterruptSource(HarnessRawEventSource):
     """Built by the interpreter for every unfinished session, same as
     `SessionLivenessSource`. Emits nothing until the registry has a pending
     mark AND `GRACE_SECONDS` has passed with no newer mark superseding it —
-    the wait is what lets genuine harness evidence win the race."""
+    the wait is what lets a genuine harness raw event win the race."""
 
     def __init__(self, session: Session, interrupt_registry: InterruptRegistry) -> None:
         if session.plugin is None:

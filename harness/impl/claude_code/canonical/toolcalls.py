@@ -57,10 +57,10 @@ from domain.values import (
     WorktreeAction,
 )
 from harness.impl.claude_code.canonical.support import content, event
-from harness.models import RawEvent, UnknownEvidence
+from harness.models import RawEvent, UnknownRawEvent
 
 # The tool_result boilerplate Claude Code emits when a Bash command is launched
-# in the background. Its shell.finished still converges from the hook evidence;
+# in the background. Its shell.finished still converges from the hook's raw event;
 # only this text is suppressed.
 BACKGROUND_LAUNCH_STUB = "Command running in background with ID:"
 
@@ -141,7 +141,7 @@ FILE_ACTIONS: dict[str, FileAction] = {
 def tool_kind(native_name: str) -> ToolKind:
     kind = TOOL_KINDS.get(native_name)
     if kind is None:
-        raise UnknownEvidence(f"unmapped Claude Code tool: {native_name or '<missing>'}")
+        raise UnknownRawEvent(f"unmapped Claude Code tool: {native_name or '<missing>'}")
     return kind
 
 
@@ -171,7 +171,7 @@ def structured_patch(path: str, tool_response: dict[str, Any]) -> tuple[str | No
 
 
 def result_content(tool_response: object) -> Content | None:
-    """What a call answered, whatever shape the evidence held it in.
+    """What a call answered, whatever shape the raw event held it in.
 
     A hook reports the native response document, the transcript reports the
     text of the same answer; both are readable and both converge on one fact,
@@ -246,7 +246,7 @@ class ToolCallSemantics:
         self.monitor_tasks: dict[ShellNativeId, str] = {}
         self.monitor_event_counts: dict[ShellNativeId, int] = {}
 
-    # --- what a call was, across the two evidence streams ---------------------
+    # --- what a call was, across the two raw event streams ------------------
 
     def remember(self, call_id: CallId, native_name: str, arguments: dict[str, Any]) -> None:
         self.calls[call_id] = (native_name, arguments)
@@ -260,7 +260,7 @@ class ToolCallSemantics:
         remembered_name, remembered_arguments = self.calls.get(call_id, ("", {}))
         name = native_name or remembered_name
         if not name:
-            raise UnknownEvidence(f"Claude Code tool result names no call: {call_id or '<missing>'}")
+            raise UnknownRawEvent(f"Claude Code tool result names no call: {call_id or '<missing>'}")
         return name, arguments if arguments else remembered_arguments
 
     def known(self, call_id: CallId) -> bool:
@@ -569,7 +569,7 @@ class ToolCallSemantics:
     ) -> CanonicalEvent[EventPayload]:
         """The resolution of an attention the user REFUSED. A refused tool call never
         runs, so Claude Code fires no PostToolUse and `tool_finished` — the only other
-        emitter — never sees it; the transcript's tool_result is the sole evidence the
+        emitter — never sees it; the transcript's tool_result is the sole raw event the
         request ended. It names no tool, hence the remembered call. Refusal carries
         no answers, so nothing is lost if the hook path also reports the same fact:
         both derive the resolution from the same text and converge on one event."""
@@ -607,7 +607,7 @@ class ToolCallSemantics:
             lines_added=lines_added,
             lines_removed=lines_removed,
             unified_diff=unified_diff,
-            # The file's own text, where the evidence carries it: what Write
+            # The file's own text, where the raw event carries it: what Write
             # wrote, or what Read read back. An edit's text is its diff.
             content=content(content_value) if content_value and unified_diff is None else None,
         )

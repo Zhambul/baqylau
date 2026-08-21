@@ -2,7 +2,7 @@
 
 Three ways a request can be answerable-with-a-reason, and nothing else in this
 file. Every one of them is the caller's to fix, which is what makes the message
-each carries safe to put on the wire — the api/ layer renders any of them as its
+each carries safe to put at the HTTP boundary — the api/ layer renders any of them as its
 400 (api/app.py).
 
 THE DISTINCTION THAT MATTERS is against a bare `ValueError`, `KeyError` or
@@ -11,7 +11,7 @@ them are invariant checks on code we wrote — "send_text handler requires
 SendText", "session has no attached harness plugin", a translator disagreeing
 with itself. An HTTP layer that mapped the BUILTIN types to 400 answered every
 one of those internal bugs with "bad input": no `errors` row, no 500, and the
-internal message on the wire. Raising one of these instead is how a call site
+internal message at the HTTP boundary. Raising one of these instead is how a call site
 says "I mean it"; everything else stays a bug and is audited as one.
 
 They subclass the builtin whose SHAPE they have (the same thing

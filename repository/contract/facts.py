@@ -1,4 +1,4 @@
-"""Evidence, verdicts and facts: the four tables the interpreter turns.
+"""Raw events, verdicts and facts: the four tables the interpreter turns.
 
 Three protocols, one per aggregate:
 
@@ -36,7 +36,7 @@ class RawEventRepository(Protocol):
     def find(self, raw_event_id: RawEventId) -> RawEvent | None: ...
 
     def unverdicted(self, limit: int) -> tuple[RawEvent, ...]:
-        """The backlog, in arrival order: evidence with no verdict yet.
+        """The backlog, in arrival order: raw events with no verdict yet.
 
         No registration filter: facts may precede their session — a session's
         first hook delivery translates into the `session.started` fact that
@@ -49,7 +49,7 @@ class RawEventRepository(Protocol):
 
         A pulled source resumes from the `source_position` of the last raw
         event carrying its identity, so recorded progress can never drift from
-        the evidence. Bulk because the interpreter asks for every source it is
+        the raw events. Bulk because the interpreter asks for every source it is
         about to read, on every tick.
         """
         ...

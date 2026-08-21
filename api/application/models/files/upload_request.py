@@ -1,4 +1,4 @@
-# One composer attachment as a JSON+base64 envelope (no multipart on purpose).
+# One composer attachment as a JSON+base64 document (no multipart on purpose).
 from pydantic import BaseModel
 
 

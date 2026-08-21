@@ -23,10 +23,10 @@ _.row_factory
 _.__signature__
 
 # The account pair a launched CLI carries in its environment. Read by a program
-# that CANNOT import this one — `client/_wire.py`, which imports nothing of ours
+# that CANNOT import this one — `client/_http.py`, which imports nothing of ours
 # by design — so the only reference inside the import graph is the module that
 # owns the concept and validates what comes back.
-# tests/test_canonical_clients.py::test_the_wire_matches_the_daemon pins the two
+# tests/test_canonical_clients.py::test_the_http_module_matches_the_daemon pins the two
 # copies to each other, so this is a contract with a reader, not dead code.
 SLUG_VARIABLE
 LABEL_VARIABLE

@@ -1,4 +1,4 @@
-"""Translators for evidence our own machinery produces, one per core source type."""
+"""Translators for raw events our own machinery produces, one per core source type."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from __future__ import annotations
 from harness.contract import CoreTranslator
 from harness.models import RawEvent, TranslationResult, canonical_event
 from domain.events import SessionFinished, ShellOutputLocated, TurnAborted
-from domain.codec import decode_document
+from repository.mapper.documents import decode_document
 
 
 class ShellOutputTranslator(CoreTranslator):
@@ -16,7 +16,7 @@ class ShellOutputTranslator(CoreTranslator):
     The directive IS a `ShellOutputLocated`, written by
     `harness/models/raw_events.py` and decoded here against that same
     declaration — including its `until` boundary, which is a two-value Literal
-    the codec checks. Both halves used to be written by hand: a dict built from
+    the mapper checks. Both halves used to be written by hand: a dict built from
     `asdict` at the writer, and eight `document[...]` reads plus a bespoke
     validator for that Literal here."""
 
@@ -42,13 +42,13 @@ class LivenessTranslator(CoreTranslator):
 
 
 class InterruptTranslator(CoreTranslator):
-    """Interrupt raw event (an acknowledged interrupt no native evidence
+    """Interrupt raw event (an acknowledged interrupt no native raw event
     corroborated within its grace period, see `engine/interpret/interrupts.py`)
     → `turn.aborted`. `subject_id` is the mark's own timestamp, so each
     interrupt occurrence is its own fact rather than colliding with the last."""
 
     def translate(self, raw_event: RawEvent) -> TranslationResult:
-        aborted = TurnAborted("interrupt acknowledged; no harness evidence confirmed it")
+        aborted = TurnAborted("interrupt acknowledged; no harness raw event confirmed it")
         return TranslationResult(
             (canonical_event(raw_event, "turn", raw_event.source_position, "aborted", aborted),),
             "translated",

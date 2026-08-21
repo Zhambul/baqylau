@@ -12,7 +12,7 @@ from terminal.services.panes import PaneWidthService
 
 class PaneCanonicalEventReaction(CanonicalEventReaction):
     """The terminal display: open the session's panes at the window its own
-    evidence recorded, close them when the session finishes."""
+    raw event recorded, close them when the session finishes."""
 
     def __init__(
         self,

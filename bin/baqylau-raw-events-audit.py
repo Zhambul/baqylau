@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Inspect raw harness evidence and its canonical interpretations."""
+"""Inspect raw harness events and their canonical interpretations."""
 
 import os
 import sys

@@ -46,7 +46,7 @@ ControlName: TypeAlias = Literal[
 @dataclass(frozen=True)
 class ControlContext:
     # `terminal_window_id` is resolved ONCE, by the service, from the session's
-    # own evidence and checked against what the terminal reports — a controller
+    # own raw event and checked against what the terminal reports — a controller
     # never asks a terminal where a session is. None means the session is not
     # on screen, which most gestures must decline.
     session: Session
@@ -193,7 +193,7 @@ class ControlResult:
 class DeliveryResult(ControlResult):
     queued: bool = False
     restored_text: str = ""
-    # An interrupt whose harness confirmed the abort in its OWN evidence (a
+    # An interrupt whose harness confirmed the abort in its OWN raw event (a
     # native record the ordinary translator will read independently) sets
     # this. Unset, an "acknowledged" interrupt is only a screen heuristic —
     # nothing canonical says the turn ended — and the service falls back to

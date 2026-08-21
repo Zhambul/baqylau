@@ -76,7 +76,7 @@ NO_ANSI = "the pty terminal reads plain screens only"
 # Every window fact in the system originates in the launched process: a hook runs
 # inside the session's own window and is the only thing that can observe which
 # one that is, so it reads this from its environment and ships the answer as
-# evidence (`client/_wire.py` WINDOW_ID_VARIABLES, which carries one name per
+# a raw event (`client/_http.py` WINDOW_ID_VARIABLES, which carries one name per
 # terminal we can drive). A terminal that exported nothing left every session's
 # window unknown, and with it every gesture that needs one — send-text,
 # interrupt, backgrounding — declining with "session is not live" forever.

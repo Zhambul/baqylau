@@ -19,7 +19,7 @@ class ControlResultResponse(BaseModel):
 class DeliveryResultResponse(ControlResultResponse):
     """send-text and interrupt. `queued` is the server's verdict that the text
     landed mid-turn; `corroborated` marks an interrupt the harness confirmed in
-    its own evidence rather than one read off its screen."""
+    its own raw events rather than one read off its screen."""
 
     queued: bool
     restored_text: str

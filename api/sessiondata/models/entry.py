@@ -1,8 +1,8 @@
-# The feed, as both frontends receive it: one envelope and twenty-four bodies.
+# The feed, as both frontends receive it: one stored event and twenty-four bodies.
 #
 # All in one module, like the control outcomes: this is ONE closed vocabulary,
 # and a reader deciding what to draw needs to see the whole of it at once. The
-# discriminator is `type` on the ENVELOPE rather than inside each body, because
+# discriminator is `type` on the STORED EVENT rather than inside each body, because
 # an entry's kind is a fact about the entry, not a field of what it holds.
 from typing import Literal, TypeAlias
 

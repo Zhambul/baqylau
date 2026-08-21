@@ -17,7 +17,6 @@ import time
 from collections.abc import Sequence
 from threading import Lock
 
-from domain.codec import encode_document
 from domain.entries import (
     ATTENTION_ENTRY_TYPES,
     ENTRY_TYPES,
@@ -26,6 +25,7 @@ from domain.entries import (
 )
 from domain.ids import SessionId
 from domain.sessiondata import ActorFacts, SessionData, SessionFacts
+from repository.mapper.documents import encode_document
 from repository.contract.session_data import (
     AggregateDelta,
     EntryPage,

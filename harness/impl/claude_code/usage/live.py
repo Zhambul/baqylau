@@ -78,7 +78,7 @@ DISCARDED_VARIABLES = (
 CONFIG_DIRECTORY_VARIABLE = "CLAUDE_CONFIG_DIR"
 # Set on the probe so our own hook client recognises the session as ours and
 # ships nothing: a reader must not manufacture sessions in the store it reads.
-# The name is copied in client/_wire.py and pinned by tests/test_canonical_clients.py.
+# The name is copied in client/_http.py and pinned by tests/test_canonical_clients.py.
 PROBE_VARIABLE = "BAQYLAU_USAGE_PROBE"
 
 # A model bucket is a weekly window, so it is keyed like one: `seven_day_fable`
