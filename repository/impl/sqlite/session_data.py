@@ -44,8 +44,8 @@ _ENTRY_COLUMNS = (
 
 
 class SqliteSessionDataRepository(SessionDataRepository):
-    def __init__(self, database: SqliteDatabase) -> None:
-        self.database = database
+    def __init__(self, sqlite_database: SqliteDatabase) -> None:
+        self.sqlite_database = sqlite_database
         self._revision_lock = Lock()
         self._revision: int | None = None
 
@@ -54,16 +54,16 @@ class SqliteSessionDataRepository(SessionDataRepository):
     def apply(
         self,
         session_id: SessionId,
-        changes: SessionDataChanges,
+        session_data_changes: SessionDataChanges,
         canonical_cursor: int,
     ) -> int:
         # An event that changes nothing still moves the mark, but it does not
         # burn a revision: a cursor with no row behind it is a client's poll that
         # returns nothing, every time, forever.
-        revision = 0 if changes.empty else self._next_revision()
-        with self.database.write() as connection:
-            if changes.entry is not None:
-                entry = changes.entry
+        revision = 0 if session_data_changes.empty else self._next_revision()
+        with self.sqlite_database.write() as connection:
+            if session_data_changes.entry is not None:
+                entry = session_data_changes.entry
                 connection.execute(
                     f"INSERT OR IGNORE INTO session_entries({_ENTRY_COLUMNS}) "
                     "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -80,7 +80,7 @@ class SqliteSessionDataRepository(SessionDataRepository):
                         encode_document(entry.body).decode("utf-8"),
                     ),
                 )
-            if changes.session is not None:
+            if session_data_changes.session is not None:
                 connection.execute(
                     "INSERT INTO session_data(session_id, revision, payload) VALUES(?, ?, ?) "
                     "ON CONFLICT(session_id) DO UPDATE SET revision=excluded.revision, "
@@ -88,10 +88,10 @@ class SqliteSessionDataRepository(SessionDataRepository):
                     (
                         str(session_id),
                         revision,
-                        encode_document(changes.session).decode("utf-8"),
+                        encode_document(session_data_changes.session).decode("utf-8"),
                     ),
                 )
-            for actor in changes.actors:
+            for actor in session_data_changes.actors:
                 connection.execute(
                     "INSERT INTO session_data_actors(session_id, actor_id, revision, payload) "
                     "VALUES(?, ?, ?, ?) ON CONFLICT(session_id, actor_id) DO UPDATE SET "
@@ -112,14 +112,14 @@ class SqliteSessionDataRepository(SessionDataRepository):
         return revision
 
     def progress(self) -> int:
-        with self.database.read() as connection:
+        with self.sqlite_database.read() as connection:
             found = connection.execute(
                 "SELECT canonical_cursor FROM reaction_progress WHERE id=1"
             ).fetchone()
         return int(found["canonical_cursor"]) if found is not None else 0
 
     def clear(self) -> None:
-        with self.database.write() as connection:
+        with self.sqlite_database.write() as connection:
             for table in ("session_entries", "session_data_actors", "session_data"):
                 connection.execute(f"DELETE FROM {table}")
             connection.execute("DELETE FROM reaction_progress")
@@ -138,7 +138,7 @@ class SqliteSessionDataRepository(SessionDataRepository):
             return self._revision
 
     def _highest_revision(self) -> int:
-        with self.database.read() as connection:
+        with self.sqlite_database.read() as connection:
             found = connection.execute(
                 "SELECT MAX(value) AS value FROM ("
                 "SELECT MAX(cursor) AS value FROM session_entries "
@@ -150,7 +150,7 @@ class SqliteSessionDataRepository(SessionDataRepository):
     # --- the read side -------------------------------------------------------
 
     def read(self, session_id: SessionId) -> SessionData | None:
-        with self.database.read() as connection:
+        with self.sqlite_database.read() as connection:
             session_row = connection.execute(
                 "SELECT * FROM session_data WHERE session_id=?", (str(session_id),)
             ).fetchone()
@@ -168,7 +168,7 @@ class SqliteSessionDataRepository(SessionDataRepository):
         return _aggregate(session_row, actor_rows, newest["cursor"], newest["occurred_at"])
 
     def visible(self) -> tuple[SessionData, ...]:
-        with self.database.read() as connection:
+        with self.sqlite_database.read() as connection:
             session_rows = connection.execute("SELECT * FROM session_data").fetchall()
             actor_rows = connection.execute(
                 "SELECT * FROM session_data_actors ORDER BY session_id, actor_id"
@@ -206,7 +206,7 @@ class SqliteSessionDataRepository(SessionDataRepository):
             arguments.append(at)
         if before is not None:
             arguments.append(before)
-        with self.database.read() as connection:
+        with self.sqlite_database.read() as connection:
             # One more than asked for: whether there is another page is the same
             # question as whether the row after this page exists.
             found = connection.execute(
@@ -231,7 +231,7 @@ class SqliteSessionDataRepository(SessionDataRepository):
         if not entry_types:
             return ()
         names = ",".join("?" for _name in entry_types)
-        with self.database.read() as connection:
+        with self.sqlite_database.read() as connection:
             found = connection.execute(
                 f"SELECT * FROM session_entries WHERE session_id=? AND entry_type IN ({names}) "
                 "ORDER BY cursor",
@@ -243,7 +243,7 @@ class SqliteSessionDataRepository(SessionDataRepository):
         return pending_attention(self.entries_of_types(session_id, ATTENTION_ENTRY_TYPES))
 
     def delta(self, session_id: SessionId, cursor: int) -> SessionDelta:
-        with self.database.read() as connection:
+        with self.sqlite_database.read() as connection:
             entry_rows = connection.execute(
                 "SELECT * FROM session_entries WHERE session_id=? AND cursor > ? ORDER BY cursor",
                 (str(session_id), cursor),
@@ -269,7 +269,7 @@ class SqliteSessionDataRepository(SessionDataRepository):
         )
 
     def changed_after(self, cursor: int) -> AggregateDelta:
-        with self.database.read() as connection:
+        with self.sqlite_database.read() as connection:
             session_rows = connection.execute(
                 "SELECT * FROM session_data WHERE revision > ? ORDER BY revision", (cursor,)
             ).fetchall()

@@ -37,12 +37,12 @@ def shell_output_source_identity(
     return f"{harness}:shell_output:{session_id}:{shell_id}"
 
 
-def delete_source_file(following: ShellOutputFollowing) -> None:
+def delete_source_file(shell_output_following: ShellOutputFollowing) -> None:
     """Unlink the tee file, when we were the ones who made it."""
-    if not following.delete_source:
+    if not shell_output_following.delete_source:
         return
     try:
-        os.remove(following.source_path)
+        os.remove(shell_output_following.source_path)
     except FileNotFoundError:
         pass
 
@@ -59,13 +59,15 @@ class ShellOutputRawEventSource(HarnessRawEventSource):
 
     def __init__(
         self,
-        following: ShellOutputFollowing,
-        shell_output: ShellOutputRepository,
+        shell_output_following: ShellOutputFollowing,
+        shell_output_repository: ShellOutputRepository,
     ) -> None:
-        self.following = following
-        self.shell_output = shell_output
+        self.following = shell_output_following
+        self.shell_output_repository = shell_output_repository
         self.source_identity = shell_output_source_identity(
-            following.harness, following.session_id, following.shell_id
+            shell_output_following.harness,
+            shell_output_following.session_id,
+            shell_output_following.shell_id,
         )
 
     def read(self, after_position: str | None) -> tuple[RawEvent, ...]:
@@ -94,7 +96,7 @@ class ShellOutputRawEventSource(HarnessRawEventSource):
                         break
                     raw_events.append(self._chunk(chunk_position, source.tell(), content))
         if following.finishing:
-            self.shell_output.remove(following.session_id, following.shell_id)
+            self.shell_output_repository.remove(following.session_id, following.shell_id)
             delete_source_file(following)
             if raw_events:
                 last = raw_events[-1]
@@ -152,18 +154,20 @@ class ShellOutputRawEventSource(HarnessRawEventSource):
 
 
 def sources_for_session(
-    shell_output: ShellOutputRepository,
+    shell_output_repository: ShellOutputRepository,
     session_id: SessionId,
 ) -> tuple[ShellOutputRawEventSource, ...]:
     """Every following of one session, as readers. A pure read: expiry is the
     interpreter's own call, made once a tick, not a side effect of listing."""
     return tuple(
-        ShellOutputRawEventSource(following, shell_output)
-        for following in shell_output.find_for_session(session_id)
+        ShellOutputRawEventSource(following, shell_output_repository)
+        for following in shell_output_repository.find_for_session(session_id)
     )
 
 
-def expire(shell_output: ShellOutputRepository, now: float) -> None:
+def expire(shell_output_repository: ShellOutputRepository, now: float) -> None:
     """Drop followings that have outlived their ceiling, and unlink their files."""
-    for following in shell_output.remove_expired(now - MAXIMUM_LIFETIME_SECONDS):
+    for following in shell_output_repository.remove_expired(
+        now - MAXIMUM_LIFETIME_SECONDS
+    ):
         delete_source_file(following)

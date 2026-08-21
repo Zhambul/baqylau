@@ -49,7 +49,7 @@ class SessionLivenessSource(HarnessRawEventSource):
     Position encoding: a latch — `exited` means the exit was already recorded.
     """
 
-    def __init__(self, session: Session, probe: ProcessProbe) -> None:
+    def __init__(self, session: Session, process_probe: ProcessProbe) -> None:
         if session.harness_process_id is None:
             # Never swallowed: the failure lands in the source-construction
             # audit every tick until the pid arrives.
@@ -63,7 +63,7 @@ class SessionLivenessSource(HarnessRawEventSource):
             # now a named failure at the point the mistake is made.
             raise ValueError(f"session has no attached harness plugin: {session.session_id}")
         self.session = session
-        self.probe = probe
+        self.process_probe = process_probe
         # Held narrowed: the checks above are what make these safe, and
         # re-reading them off `self.session` below would discard that.
         self.plugin = session.plugin
@@ -76,7 +76,7 @@ class SessionLivenessSource(HarnessRawEventSource):
     def read(self, after_position: str | None) -> tuple[RawEvent, ...]:
         if after_position == "exited":
             return ()
-        if self.probe.alive(
+        if self.process_probe.alive(
             self.source_identity,
             self.harness_process_id,
             self.plugin.info.cli_process_name,

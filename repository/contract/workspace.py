@@ -16,7 +16,7 @@ from domain.workspace import ComposerDraft, ComposerQueue, DialogDraft, SessionW
 class SessionWorkspaceRepository(Protocol):
     def find(self, session_id: SessionId) -> SessionWorkspace | None: ...
 
-    def save_composer_draft(self, session_id: SessionId, draft: ComposerDraft) -> bool:
+    def save_composer_draft(self, session_id: SessionId, composer_draft: ComposerDraft) -> bool:
         """Save the newest browser draft; False for an older concurrent write.
 
         The compare and the write are one transaction: two request threads each
@@ -25,10 +25,10 @@ class SessionWorkspaceRepository(Protocol):
         """
         ...
 
-    def save_composer_queue(self, session_id: SessionId, queue: ComposerQueue) -> None:
+    def save_composer_queue(self, session_id: SessionId, composer_queue: ComposerQueue) -> None:
         """Replace the whole queue in one transaction."""
         ...
 
-    def save_dialog_draft(self, session_id: SessionId, draft: DialogDraft) -> None:
+    def save_dialog_draft(self, session_id: SessionId, dialog_draft: DialogDraft) -> None:
         """Replace the whole half-made answer set in one transaction."""
         ...

@@ -90,17 +90,17 @@ class _SessionInsight:
 class ApplicationInsightsService:
     def __init__(
         self,
-        read_model: SessionDataRepository,
-        terminal: TerminalSessionReader,
-        audit: AuditReadRepository,
-        repositories: RepositoryQueries,
+        session_data_repository: SessionDataRepository,
+        terminal_session_reader: TerminalSessionReader,
+        audit_read_repository: AuditReadRepository,
+        repository_queries: RepositoryQueries,
         top_project_count: int,
         clock: Callable[[], float] = time.time,
     ) -> None:
-        self.read_model = read_model
-        self.terminal = terminal
-        self.audit = audit
-        self.repositories = repositories
+        self.read_model = session_data_repository
+        self.terminal = terminal_session_reader
+        self.audit = audit_read_repository
+        self.repositories = repository_queries
         self.top_project_count = top_project_count
         self.clock = clock
 
@@ -233,11 +233,11 @@ class ApplicationInsightsService:
         )
 
 
-def _token_count(tokens: TokenUsage) -> int:
+def _token_count(token_usage: TokenUsage) -> int:
     return (
-        tokens.input_tokens
-        + tokens.output_tokens
-        + tokens.cache_read_tokens
-        + tokens.cache_write_tokens
-        + tokens.one_hour_cache_write_tokens
+        token_usage.input_tokens
+        + token_usage.output_tokens
+        + token_usage.cache_read_tokens
+        + token_usage.cache_write_tokens
+        + token_usage.one_hour_cache_write_tokens
     )

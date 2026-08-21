@@ -34,59 +34,59 @@ def truncated(value: object) -> str:
     return text(value)[:CONTENT_LIMIT]
 
 
-def application_error(row: ErrorRow) -> ApplicationError:
+def application_error(error_row: ErrorRow) -> ApplicationError:
     return ApplicationError(
-        error_id=int(row.id),
-        timestamp=float(row.ts),
-        component=row.script or "",
-        action=row.func or "",
-        traceback=row.traceback or "",
-        context=row.context or "",
+        error_id=int(error_row.id),
+        timestamp=float(error_row.ts),
+        component=error_row.script or "",
+        action=error_row.func or "",
+        traceback=error_row.traceback or "",
+        context=error_row.context or "",
     )
 
 
-def error_values(record: ApplicationErrorRecord) -> SqlValues:
+def error_values(application_error_record: ApplicationErrorRecord) -> SqlValues:
     return (
-        record.timestamp,
-        record.session_id,
-        record.script,
-        record.function,
-        record.traceback,
-        record.context,
-        record.process_id,
+        application_error_record.timestamp,
+        application_error_record.session_id,
+        application_error_record.script,
+        application_error_record.function,
+        application_error_record.traceback,
+        application_error_record.context,
+        application_error_record.process_id,
     )
 
 
-def state_file_values(record: StateFileRecord) -> SqlValues:
+def state_file_values(state_file_record: StateFileRecord) -> SqlValues:
     return (
-        record.timestamp,
-        record.session_id,
-        record.path,
-        record.action,
-        record.content,
-        record.script,
-        record.process_id,
+        state_file_record.timestamp,
+        state_file_record.session_id,
+        state_file_record.path,
+        state_file_record.action,
+        state_file_record.content,
+        state_file_record.script,
+        state_file_record.process_id,
     )
 
 
-def spawn_values(record: SpawnRecord) -> SqlValues:
+def spawn_values(spawn_record: SpawnRecord) -> SqlValues:
     return (
-        record.timestamp,
-        record.session_id,
-        record.parent_script,
-        record.child_process_id,
-        record.argv,
-        record.purpose,
+        spawn_record.timestamp,
+        spawn_record.session_id,
+        spawn_record.parent_script,
+        spawn_record.child_process_id,
+        spawn_record.argv,
+        spawn_record.purpose,
     )
 
 
-def stream_values(record: StreamOpened) -> SqlValues:
+def stream_values(stream_opened: StreamOpened) -> SqlValues:
     return (
-        record.session_id,
-        record.kind,
-        record.agent_id,
-        record.task_id,
-        record.source_path,
-        record.process_id,
-        record.started_at,
+        stream_opened.session_id,
+        stream_opened.kind,
+        stream_opened.agent_id,
+        stream_opened.task_id,
+        stream_opened.source_path,
+        stream_opened.process_id,
+        stream_opened.started_at,
     )

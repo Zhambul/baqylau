@@ -19,7 +19,7 @@ from domain.shells import ShellOutputFollowing
 
 
 class ShellOutputRepository(Protocol):
-    def save(self, following: ShellOutputFollowing) -> None:
+    def save(self, shell_output_following: ShellOutputFollowing) -> None:
         """Insert-or-ignore: the fact may be re-observed, the following is one."""
         ...
 

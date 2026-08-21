@@ -30,7 +30,7 @@ class TranslationConsistencyError(ValueError):
     """A translation does not agree with the evidence it came from."""
 
 
-def checked(raw_event: RawEvent, translation: TranslationResult) -> TranslationResult:
+def checked(raw_event: RawEvent, translation_result: TranslationResult) -> TranslationResult:
     """Refuse a translation whose events disagree with their own evidence.
 
     These five rules compare a canonical event against the raw event it came
@@ -41,11 +41,11 @@ def checked(raw_event: RawEvent, translation: TranslationResult) -> TranslationR
     by a second write.
     """
     try:
-        for event in translation.canonical_events:
+        for event in translation_result.canonical_events:
             _check_envelope(raw_event, event)
     except TranslationConsistencyError as error:
         return TranslationResult((), "translation_failed", f"inconsistent canonical output: {error}")
-    return translation
+    return translation_result
 
 
 def _check_envelope(raw_event: RawEvent, event: CanonicalEvent[EventPayload]) -> None:
@@ -82,26 +82,26 @@ class Interpreter:
 
     def __init__(
         self,
-        sessions: SessionRepository,
-        harnesses: HarnessRegistry,
-        raw_events: RawEventRepository,
-        shell_output: ShellOutputRepository,
-        canonical_events: CanonicalEventRepository,
+        session_repository: SessionRepository,
+        harness_registry: HarnessRegistry,
+        raw_event_repository: RawEventRepository,
+        shell_output_repository: ShellOutputRepository,
+        canonical_event_repository: CanonicalEventRepository,
         core_translators: Mapping[str, CoreTranslator],
         inputs: tuple[CanonicalEventReaction, ...],
-        audit: AuditRecorder,
-        interrupts: InterruptRegistry,
+        audit_recorder: AuditRecorder,
+        interrupt_registry: InterruptRegistry,
         clock: Callable[[], float] = time.time,
     ) -> None:
-        self.sessions = sessions
-        self.harnesses = harnesses
-        self.raw_events = raw_events
-        self.shell_output = shell_output
-        self.canonical_events = canonical_events
+        self.session_repository = session_repository
+        self.harness_registry = harness_registry
+        self.raw_event_repository = raw_event_repository
+        self.shell_output_repository = shell_output_repository
+        self.canonical_event_repository = canonical_event_repository
         self.core_translators = core_translators
         self.inputs = inputs
-        self.audit = audit
-        self.interrupts = interrupts
+        self.audit_recorder = audit_recorder
+        self.interrupt_registry = interrupt_registry
         self.clock = clock
         # The liveness sources are rebuilt every tick; the probe's verified-pid
         # memory has to outlive them (engine/interpret/liveness.py ProcessProbe).
@@ -114,7 +114,7 @@ class Interpreter:
         exists to explain.
         """
         try:
-            self.audit.error(
+            self.audit_recorder.error(
                 str(context.get("session_id", "")), f"interpreter ({where})", context
             )
         except Exception:
@@ -140,14 +140,14 @@ class Interpreter:
         # listed the followings, so asking what was being followed could unlink
         # a file.
         try:
-            output_source.expire(self.shell_output, self.clock())
+            output_source.expire(self.shell_output_repository, self.clock())
         except Exception:
             self._audit_failure("output expiry", {})
 
     # --- pull: turn the outside world into recorded evidence -------------------
 
     def _pull(self) -> None:
-        for session in self.sessions.watchable():
+        for session in self.session_repository.watchable():
             try:
                 if session.plugin is None:
                     # Same contract as the pid check inside
@@ -157,11 +157,11 @@ class Interpreter:
                     raise ValueError(f"session has no attached harness plugin: {session.session_id}")
                 sources = (
                     *session.plugin.sources.for_session(session),
-                    *output_source.sources_for_session(self.shell_output, session.session_id),
+                    *output_source.sources_for_session(self.shell_output_repository, session.session_id),
                     # ALWAYS built — no silent skip: a pid-less session raises,
                     # loudly, into the audit below.
                     SessionLivenessSource(session, self.liveness),
-                    PendingInterruptSource(session, self.interrupts),
+                    PendingInterruptSource(session, self.interrupt_registry),
                 )
             except Exception:
                 self._audit_failure("source construction", {"session_id": str(session.session_id)})
@@ -177,7 +177,7 @@ class Interpreter:
         # machine has dozens of sources and this runs four times a second.
         identities = [getattr(source, "source_identity", "") for source in sources]
         try:
-            positions = self.raw_events.latest_positions([name for name in identities if name])
+            positions = self.raw_event_repository.latest_positions([name for name in identities if name])
         except Exception:
             self._audit_failure("resume positions", {"session_id": str(session.session_id)})
             return
@@ -187,32 +187,32 @@ class Interpreter:
     def _pull_source(
         self,
         session: Session,
-        source: HarnessRawEventSource,
+        harness_raw_event_source: HarnessRawEventSource,
         after_position: str | None,
     ) -> None:
         # One unhappy source must never stop its siblings, nor the next session's.
         try:
-            raw_events = source.read(after_position)
+            raw_events = harness_raw_event_source.read(after_position)
             if raw_events:
-                self.raw_events.record(raw_events)
+                self.raw_event_repository.record(raw_events)
         except Exception:
             self._audit_failure(
                 "source read",
                 {
                     "session_id": str(session.session_id),
-                    "source_identity": getattr(source, "source_identity", ""),
-                    "source": type(source).__name__,
+                    "source_identity": getattr(harness_raw_event_source, "source_identity", ""),
+                    "source": type(harness_raw_event_source).__name__,
                 },
             )
 
     # --- translate: meaning decided, stored once, reacted to -------------------
 
     def _translate(self) -> None:
-        for raw_event in self.raw_events.unverdicted(TRANSLATION_BATCH_SIZE):
+        for raw_event in self.raw_event_repository.unverdicted(TRANSLATION_BATCH_SIZE):
             self._translate_one(raw_event)
 
     def _translate_one(self, raw_event: RawEvent) -> None:
-        plugin = self.harnesses.plugin(raw_event.harness)
+        plugin = self.harness_registry.plugin(raw_event.harness)
         translator = self.core_translators.get(raw_event.source_type, plugin.translator)
         try:
             translation = translator.translate(raw_event)
@@ -223,7 +223,7 @@ class Interpreter:
             )
         else:
             translation = checked(raw_event, translation)
-        outcome = self.canonical_events.record_translation(
+        outcome = self.canonical_event_repository.record_translation(
             raw_event, plugin.info.plugin_version, translation, self.clock()
         )
         for reaction in self.inputs:

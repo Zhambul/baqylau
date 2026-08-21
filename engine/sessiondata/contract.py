@@ -37,9 +37,9 @@ class AggregateState:
     def actor(self, actor_id: ActorId) -> ActorFacts | None:
         return dict(self.actors).get(actor_id)
 
-    def with_actor(self, actor: ActorFacts) -> AggregateState:
+    def with_actor(self, actor_facts: ActorFacts) -> AggregateState:
         actors = dict(self.actors)
-        actors[actor.actor_id] = actor
+        actors[actor_facts.actor_id] = actor_facts
         return replace(self, actors=actors)
 
     def with_actors(self, actors: Mapping[ActorId, ActorFacts]) -> AggregateState:
@@ -51,7 +51,9 @@ class AggregateState:
 class SessionDataWriter(Protocol):
     """One concern of the aggregate. Sees every accepted event, in order."""
 
-    def write(self, canonical_event: CommittedEvent, state: AggregateState) -> AggregateState:
+    def write(
+        self, committed_event: CommittedEvent, aggregate_state: AggregateState
+    ) -> AggregateState:
         ...
 
 
@@ -62,7 +64,7 @@ class SessionEntryWriter(Protocol):
     produces is ever revised, so there is no state for it to carry.
     """
 
-    def entry(self, canonical_event: CommittedEvent) -> SessionEntry | None:
+    def entry(self, committed_event: CommittedEvent) -> SessionEntry | None:
         ...
 
 

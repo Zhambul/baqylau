@@ -35,9 +35,13 @@ _INSERT_COLUMNS = (
 
 
 class SqliteCanonicalEventRepository(CanonicalEventRepository):
-    def __init__(self, database: SqliteDatabase, codec: CanonicalEventCodec | None = None) -> None:
-        self.database = database
-        self.codec = codec or CanonicalEventCodec()
+    def __init__(
+        self,
+        sqlite_database: SqliteDatabase,
+        canonical_event_codec: CanonicalEventCodec | None = None,
+    ) -> None:
+        self.sqlite_database = sqlite_database
+        self.canonical_event_codec = canonical_event_codec or CanonicalEventCodec()
 
     # --- the one write ---------------------------------------------------------
 
@@ -45,7 +49,7 @@ class SqliteCanonicalEventRepository(CanonicalEventRepository):
         self,
         raw_event: RawEvent,
         translator_version: str,
-        translation: TranslationResult,
+        translation_result: TranslationResult,
         completed_at: float,
     ) -> TranslationOutcome:
         accepted: list[CanonicalEvent[EventPayload]] = []
@@ -53,18 +57,18 @@ class SqliteCanonicalEventRepository(CanonicalEventRepository):
         record = InterpretationRecord(
             raw_event_id=raw_event.raw_event_id,
             translator_version=translator_version,
-            decision=translation.decision,
-            reason=translation.reason,
+            decision=translation_result.decision,
+            reason=translation_result.reason,
             completed_at=completed_at,
         )
-        with self.database.write() as connection:
+        with self.sqlite_database.write() as connection:
             connection.execute(
                 "INSERT INTO interpretations("
                 "raw_event_id, translator_version, decision, reason, completed_at"
                 ") VALUES(?, ?, ?, ?, ?)",
                 mapper.interpretation_record_values(record),
             )
-            for event_order, event in enumerate(translation.canonical_events):
+            for event_order, event in enumerate(translation_result.canonical_events):
                 storage_result = self._append(connection, event, completed_at)
                 connection.execute(
                     "INSERT INTO interpretation_events("
@@ -100,14 +104,14 @@ class SqliteCanonicalEventRepository(CanonicalEventRepository):
         connection.execute(
             f"INSERT INTO canonical_events({_INSERT_COLUMNS}) "
             "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            mapper.canonical_event_values(event, accepted_at, self.codec),
+            mapper.canonical_event_values(event, accepted_at, self.canonical_event_codec),
         )
         return "accepted"
 
     # --- reads -----------------------------------------------------------------
 
     def find(self, event_id: CanonicalEventId) -> StoredCanonicalEvent | None:
-        with self.database.read() as connection:
+        with self.sqlite_database.read() as connection:
             row = connection.execute(
                 "SELECT * FROM canonical_events WHERE event_id=?", (str(event_id),)
             ).fetchone()
@@ -121,11 +125,11 @@ class SqliteCanonicalEventRepository(CanonicalEventRepository):
         return mapper.stored_canonical_event(
             rows.canonical_event(row),
             tuple(RawEventId(entry["raw_event_id"]) for entry in interpretation_events),
-            self.codec,
+            self.canonical_event_codec,
         )
 
     def session_ids(self) -> tuple[SessionId, ...]:
-        with self.database.read() as connection:
+        with self.sqlite_database.read() as connection:
             found = connection.execute(
                 "SELECT session_id FROM canonical_events "
                 "WHERE event_type='session.started' "
@@ -137,7 +141,7 @@ class SqliteCanonicalEventRepository(CanonicalEventRepository):
     def page_from(self, cursor: int, limit: int) -> tuple[CommittedEvent, ...]:
         if limit <= 0:
             raise ValueError("event page limit must be positive")
-        with self.database.read() as connection:
+        with self.sqlite_database.read() as connection:
             found = connection.execute(
                 "SELECT * FROM canonical_events WHERE cursor>? ORDER BY cursor LIMIT ?",
                 (cursor, limit),
@@ -146,8 +150,8 @@ class SqliteCanonicalEventRepository(CanonicalEventRepository):
             CommittedEvent(
                 cursor=row["cursor"],
                 accepted_at=row["accepted_at"],
-                event=self.codec.event(
-                    mapper.canonical_envelope(rows.canonical_event(row), self.codec)
+                event=self.canonical_event_codec.event(
+                    mapper.canonical_envelope(rows.canonical_event(row), self.canonical_event_codec)
                 ),
             )
             for row in found

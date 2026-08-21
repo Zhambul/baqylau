@@ -79,11 +79,13 @@ class ActorWriter(SessionDataWriter):
     def __init__(self, model_naming: ModelNaming | None = None) -> None:
         self.model_naming = model_naming or ModelNaming()
 
-    def write(self, canonical_event: CommittedEvent, state: AggregateState) -> AggregateState:
-        event = canonical_event.event
+    def write(
+        self, committed_event: CommittedEvent, aggregate_state: AggregateState
+    ) -> AggregateState:
+        event = committed_event.event
         payload = event.payload
         if isinstance(payload, ActorStarted):
-            existing = state.actor(event.actor_id)
+            existing = aggregate_state.actor(event.actor_id)
             born = ActorFacts(
                 session_id=event.session_id,
                 actor_id=event.actor_id,
@@ -91,40 +93,40 @@ class ActorWriter(SessionDataWriter):
                 name=payload.name,
                 state="running",
                 parent_actor_id=event.parent_actor_id,
-                started_at=canonical_event.happened_at,
+                started_at=committed_event.happened_at,
             )
             # An actor announced twice — two evidence streams both saying so —
             # keeps everything already folded about it and only reopens.
-            return state.with_actor(
+            return aggregate_state.with_actor(
                 born
                 if existing is None
                 else replace(existing, state="running", finished_at=None)
             )
-        actor = state.actor(event.actor_id)
+        actor = aggregate_state.actor(event.actor_id)
         if actor is None:
-            return state
+            return aggregate_state
         if isinstance(payload, ActorNameChanged):
-            return state.with_actor(replace(actor, name=payload.name))
+            return aggregate_state.with_actor(replace(actor, name=payload.name))
         if isinstance(payload, ActorDescriptionChanged):
-            return state.with_actor(replace(actor, description=payload.description))
+            return aggregate_state.with_actor(replace(actor, description=payload.description))
         if isinstance(payload, (ActorFinished, ActorAssignmentFinished)):
-            return state.with_actor(
-                replace(actor, state="finished", finished_at=canonical_event.happened_at)
+            return aggregate_state.with_actor(
+                replace(actor, state="finished", finished_at=committed_event.happened_at)
             )
         if isinstance(payload, ActorAssignmentStarted):
-            return state.with_actor(replace(actor, state="running", finished_at=None))
+            return aggregate_state.with_actor(replace(actor, state="running", finished_at=None))
         if isinstance(payload, ModelChanged):
             if payload.current.native_id == "<synthetic>":
-                return state  # a machine-injected record, not a model
+                return aggregate_state  # a machine-injected record, not a model
 
             # The display settles HERE, through the harness's one namer, so an
             # unrefined alias ("sonnet") and its later native id show the same
             # name — and a rebuild re-settles history too.
             named = self.model_naming.named(event.harness, payload.current)
-            return state.with_actor(replace(actor, model=named))
+            return aggregate_state.with_actor(replace(actor, model=named))
         if isinstance(payload, EffortChanged):
-            return state.with_actor(replace(actor, effort=payload.current))
-        return state
+            return aggregate_state.with_actor(replace(actor, effort=payload.current))
+        return aggregate_state
 
 
 class StatusWriter(SessionDataWriter):
@@ -144,21 +146,23 @@ class StatusWriter(SessionDataWriter):
     what ends background work.
     """
 
-    def write(self, canonical_event: CommittedEvent, state: AggregateState) -> AggregateState:
-        event = canonical_event.event
+    def write(
+        self, committed_event: CommittedEvent, aggregate_state: AggregateState
+    ) -> AggregateState:
+        event = committed_event.event
         payload = event.payload
         if isinstance(payload, SessionFinished):
             # The session is over: nobody is doing anything, and every actor
             # should say so rather than keep the last thing it was doing.
-            return state.with_actors(
+            return aggregate_state.with_actors(
                 {
                     actor_id: replace(actor, status=None)
-                    for actor_id, actor in dict(state.actors).items()
+                    for actor_id, actor in dict(aggregate_state.actors).items()
                 }
             )
-        actor = state.actor(event.actor_id)
+        actor = aggregate_state.actor(event.actor_id)
         if actor is None:
-            return state
+            return aggregate_state
         if isinstance(payload, SessionStarted) or (
             isinstance(payload, ActorStarted) and actor.status is None
         ):
@@ -166,27 +170,27 @@ class StatusWriter(SessionDataWriter):
             # is what `idle` says. Both facts are here because they arrive in
             # either order and either one can be the first this actor sees: a
             # lead is born right after its session, a subagent long after.
-            return state.with_actor(replace(actor, status="idle"))
+            return aggregate_state.with_actor(replace(actor, status="idle"))
         if isinstance(payload, TurnStarted) or _is_prompt(payload):
-            return state.with_actor(replace(actor, status="thinking"))
+            return aggregate_state.with_actor(replace(actor, status="thinking"))
         if isinstance(payload, ReasoningCreated):
-            return state.with_actor(replace(actor, status="working"))
+            return aggregate_state.with_actor(replace(actor, status="working"))
         if isinstance(payload, ShellStarted):
-            return state.with_actor(_shell_started(actor, payload))
+            return aggregate_state.with_actor(_shell_started(actor, payload))
         if isinstance(payload, (SkillStarted, TaskChanged, TaskListChanged)):
             # A task tool is work being done, the same as a command: this is
             # what the `task` category set before the categories dissolved.
-            return state.with_actor(replace(actor, status="executing"))
+            return aggregate_state.with_actor(replace(actor, status="executing"))
         if isinstance(payload, ShellBackgrounded):
             # Background work gained, status untouched: `awaiting_background` is
             # reached at the END of a turn, not the moment a job moves.
-            return state.with_actor(
+            return aggregate_state.with_actor(
                 _with_background(actor, payload.shell_id, counts_as_job=True)
             )
         if isinstance(payload, ShellOutputFinished):
-            return state.with_actor(_without_background(actor, payload.shell_id))
+            return aggregate_state.with_actor(_without_background(actor, payload.shell_id))
         if isinstance(payload, (QuestionAsked, PlanProposed)):
-            return state.with_actor(
+            return aggregate_state.with_actor(
                 replace(
                     actor,
                     status="awaiting_attention",
@@ -196,7 +200,7 @@ class StatusWriter(SessionDataWriter):
                 )
             )
         if isinstance(payload, (QuestionAnswered, PlanResolved)):
-            return state.with_actor(
+            return aggregate_state.with_actor(
                 replace(
                     actor,
                     status="working",
@@ -208,9 +212,9 @@ class StatusWriter(SessionDataWriter):
                 )
             )
         if isinstance(payload, CompactionStarted):
-            return state.with_actor(replace(actor, status="working"))
+            return aggregate_state.with_actor(replace(actor, status="working"))
         if _is_finished_work(payload):
-            return state.with_actor(
+            return aggregate_state.with_actor(
                 replace(
                     actor,
                     status=(
@@ -221,7 +225,7 @@ class StatusWriter(SessionDataWriter):
                 )
             )
         if isinstance(payload, (TurnFinished, TurnAborted)):
-            return state.with_actor(
+            return aggregate_state.with_actor(
                 replace(
                     actor,
                     status=(
@@ -231,46 +235,49 @@ class StatusWriter(SessionDataWriter):
                     ),
                 )
             )
-        return state
+        return aggregate_state
 
 
-def _is_prompt(payload: EventPayload) -> bool:
+def _is_prompt(event_payload: EventPayload) -> bool:
     return (
-        isinstance(payload, MessageCreated)
-        and payload.role == "user"
-        and payload.phase == "prompt"
+        isinstance(event_payload, MessageCreated)
+        and event_payload.role == "user"
+        and event_payload.phase == "prompt"
     )
 
 
-def _is_finished_work(payload: EventPayload) -> bool:
+def _is_finished_work(event_payload: EventPayload) -> bool:
     """Work that ended and was not background. Every one of these was one
     `operation.finished` before the operation abstraction dissolved, and the
     file and search ones arrive only at result time now — which is the same
     branch they used to land on twice."""
     return isinstance(
-        payload,
+        event_payload,
         (ShellFinished, SkillFinished, FileAccessed, SearchPerformed, WebFetched, WorktreeChanged),
     )
 
 
-def _shell_started(actor: ActorFacts, payload: ShellStarted) -> ActorFacts:
-    if payload.execution == "foreground":
-        return replace(actor, status="executing")
+def _shell_started(actor_facts: ActorFacts, shell_started: ShellStarted) -> ActorFacts:
+    if shell_started.execution == "foreground":
+        return replace(actor_facts, status="executing")
     counted = replace(
-        actor.background,
-        monitor_count=actor.background.monitor_count + (payload.execution == "monitor"),
+        actor_facts.background,
+        monitor_count=(
+            actor_facts.background.monitor_count + (shell_started.execution == "monitor")
+        ),
         background_job_count=(
-            actor.background.background_job_count + (payload.execution == "background")
+            actor_facts.background.background_job_count
+            + (shell_started.execution == "background")
         ),
     )
     return replace(
-        _with_background(replace(actor, background=counted), payload.shell_id),
+        _with_background(replace(actor_facts, background=counted), shell_started.shell_id),
         status="executing",
     )
 
 
 def _with_background(
-    actor: ActorFacts,
+    actor_facts: ActorFacts,
     shell_id: ShellId,
     *,
     counts_as_job: bool = False,
@@ -280,11 +287,11 @@ def _with_background(
     `counts_as_job` is for the command that MOVED there mid-run: nothing counted
     it at launch, because at launch nobody knew.
     """
-    background = actor.background
+    background = actor_facts.background
     if shell_id in background.running_shell_ids:
-        return actor
+        return actor_facts
     return replace(
-        actor,
+        actor_facts,
         background=replace(
             background,
             running_shell_ids=(*background.running_shell_ids, shell_id),
@@ -293,14 +300,14 @@ def _with_background(
     )
 
 
-def _without_background(actor: ActorFacts, shell_id: ShellId) -> ActorFacts:
+def _without_background(actor_facts: ActorFacts, shell_id: ShellId) -> ActorFacts:
     return replace(
-        actor,
+        actor_facts,
         background=replace(
-            actor.background,
+            actor_facts.background,
             running_shell_ids=tuple(
                 running
-                for running in actor.background.running_shell_ids
+                for running in actor_facts.background.running_shell_ids
                 if running != shell_id
             ),
         ),
@@ -321,17 +328,19 @@ class UsageWriter(SessionDataWriter):
     treating them alike is how a session's cost silently doubles.
     """
 
-    def write(self, canonical_event: CommittedEvent, state: AggregateState) -> AggregateState:
-        payload = canonical_event.event.payload
+    def write(
+        self, committed_event: CommittedEvent, aggregate_state: AggregateState
+    ) -> AggregateState:
+        payload = committed_event.event.payload
         if not isinstance(payload, UsageReported):
-            return state
-        actor = state.actor(canonical_event.event.actor_id)
+            return aggregate_state
+        actor = aggregate_state.actor(committed_event.event.actor_id)
         if actor is None:
-            return state
+            return aggregate_state
         usage = actor.usage
         tokens = payload.tokens if payload.cumulative else usage.tokens + payload.tokens
         cost = _cost(usage.cost_in_usd, payload.cost_in_usd, payload.cumulative)
-        return state.with_actor(replace(actor, usage=ActorUsage(tokens, cost)))
+        return aggregate_state.with_actor(replace(actor, usage=ActorUsage(tokens, cost)))
 
 
 def _cost(
@@ -349,13 +358,15 @@ def _cost(
 class ContextWriter(SessionDataWriter):
     """How full the window is, and whether it is being emptied."""
 
-    def write(self, canonical_event: CommittedEvent, state: AggregateState) -> AggregateState:
-        payload = canonical_event.event.payload
-        actor = state.actor(canonical_event.event.actor_id)
+    def write(
+        self, committed_event: CommittedEvent, aggregate_state: AggregateState
+    ) -> AggregateState:
+        payload = committed_event.event.payload
+        actor = aggregate_state.actor(committed_event.event.actor_id)
         if actor is None:
-            return state
+            return aggregate_state
         if isinstance(payload, ContextReported):
-            return state.with_actor(
+            return aggregate_state.with_actor(
                 replace(
                     actor,
                     context=ActorContext(
@@ -366,11 +377,11 @@ class ContextWriter(SessionDataWriter):
                 )
             )
         if isinstance(payload, CompactionStarted):
-            return state.with_actor(
+            return aggregate_state.with_actor(
                 replace(actor, context=replace(actor.context, compacting=True))
             )
         if isinstance(payload, CompactionFinished):
-            return state.with_actor(
+            return aggregate_state.with_actor(
                 replace(
                     actor,
                     context=replace(
@@ -384,7 +395,7 @@ class ContextWriter(SessionDataWriter):
                     ),
                 )
             )
-        return state
+        return aggregate_state
 
 
 class StatisticsWriter(SessionDataWriter):
@@ -396,73 +407,78 @@ class StatisticsWriter(SessionDataWriter):
     would mean writing a row per second.
     """
 
-    def write(self, canonical_event: CommittedEvent, state: AggregateState) -> AggregateState:
-        event = canonical_event.event
+    def write(
+        self, committed_event: CommittedEvent, aggregate_state: AggregateState
+    ) -> AggregateState:
+        event = committed_event.event
         payload = event.payload
-        actor = state.actor(event.actor_id)
+        actor = aggregate_state.actor(event.actor_id)
         if actor is None:
-            return state
+            return aggregate_state
         statistics = _counted(actor.statistics, payload)
-        statistics = _timed(statistics, canonical_event)
+        statistics = _timed(statistics, committed_event)
         if statistics == actor.statistics:
-            return state
-        return state.with_actor(replace(actor, statistics=statistics))
+            return aggregate_state
+        return aggregate_state.with_actor(replace(actor, statistics=statistics))
 
 
-def _counted(statistics: ActorStatistics, payload: EventPayload) -> ActorStatistics:
-    if _is_prompt(payload):
-        return replace(statistics, prompt_count=statistics.prompt_count + 1)
-    if isinstance(payload, MessageCreated) and payload.recipient_actor_id is not None:
+def _counted(actor_statistics: ActorStatistics, event_payload: EventPayload) -> ActorStatistics:
+    if _is_prompt(event_payload):
+        return replace(actor_statistics, prompt_count=actor_statistics.prompt_count + 1)
+    if isinstance(event_payload, MessageCreated) and event_payload.recipient_actor_id is not None:
         return replace(
-            statistics, actor_message_count=statistics.actor_message_count + 1
+            actor_statistics, actor_message_count=actor_statistics.actor_message_count + 1
         )
-    if isinstance(payload, ShellStarted):
-        return replace(statistics, shell_command_count=statistics.shell_command_count + 1)
-    if isinstance(payload, ShellFinished):
-        if payload.outcome == "succeeded":
-            return statistics
+    if isinstance(event_payload, ShellStarted):
         return replace(
-            statistics,
-            failed_shell_command_count=statistics.failed_shell_command_count + 1,
+            actor_statistics, shell_command_count=actor_statistics.shell_command_count + 1
         )
-    if isinstance(payload, FileAccessed):
-        return _file_counted(statistics, payload)
-    if isinstance(payload, SearchPerformed):
-        return _tool_counted(statistics, payload.tool)
-    if isinstance(payload, WebFetched):
-        return _tool_counted(statistics, "WebFetch")
-    if isinstance(payload, WorktreeChanged):
+    if isinstance(event_payload, ShellFinished):
+        if event_payload.outcome == "succeeded":
+            return actor_statistics
+        return replace(
+            actor_statistics,
+            failed_shell_command_count=actor_statistics.failed_shell_command_count + 1,
+        )
+    if isinstance(event_payload, FileAccessed):
+        return _file_counted(actor_statistics, event_payload)
+    if isinstance(event_payload, SearchPerformed):
+        return _tool_counted(actor_statistics, event_payload.tool)
+    if isinstance(event_payload, WebFetched):
+        return _tool_counted(actor_statistics, "WebFetch")
+    if isinstance(event_payload, WorktreeChanged):
         return _tool_counted(
-            statistics, "EnterWorktree" if payload.action == "entered" else "ExitWorktree"
+            actor_statistics,
+            "EnterWorktree" if event_payload.action == "entered" else "ExitWorktree",
         )
-    if isinstance(payload, SkillStarted):
-        return _tool_counted(statistics, "Skill")
-    return statistics
+    if isinstance(event_payload, SkillStarted):
+        return _tool_counted(actor_statistics, "Skill")
+    return actor_statistics
 
 
-def _file_counted(statistics: ActorStatistics, payload: FileAccessed) -> ActorStatistics:
-    paths = statistics.file_paths_internal
-    if payload.path not in paths:
-        paths = (*paths, payload.path)
+def _file_counted(actor_statistics: ActorStatistics, file_accessed: FileAccessed) -> ActorStatistics:
+    paths = actor_statistics.file_paths_internal
+    if file_accessed.path not in paths:
+        paths = (*paths, file_accessed.path)
     return _tool_counted(
         replace(
-            statistics,
+            actor_statistics,
             file_paths_internal=paths,
             file_count=len(paths),
-            lines_added=statistics.lines_added + (payload.lines_added or 0),
-            lines_removed=statistics.lines_removed + (payload.lines_removed or 0),
+            lines_added=actor_statistics.lines_added + (file_accessed.lines_added or 0),
+            lines_removed=actor_statistics.lines_removed + (file_accessed.lines_removed or 0),
         ),
-        FILE_TOOLS[payload.action],
+        FILE_TOOLS[file_accessed.action],
     )
 
 
-def _tool_counted(statistics: ActorStatistics, tool: str) -> ActorStatistics:
-    counts = dict(statistics.tool_counts)
+def _tool_counted(actor_statistics: ActorStatistics, tool: str) -> ActorStatistics:
+    counts = dict(actor_statistics.tool_counts)
     counts[tool] = counts.get(tool, 0) + 1
-    return replace(statistics, tool_counts=tuple(sorted(counts.items())))
+    return replace(actor_statistics, tool_counts=tuple(sorted(counts.items())))
 
 
-def _timed(statistics: ActorStatistics, canonical_event: CommittedEvent) -> ActorStatistics:
+def _timed(actor_statistics: ActorStatistics, committed_event: CommittedEvent) -> ActorStatistics:
     """One interval at a time: it opens when the actor has something to do and
     closes when the turn it was doing ends.
 
@@ -470,17 +486,17 @@ def _timed(statistics: ActorStatistics, canonical_event: CommittedEvent) -> Acto
     sees — its session starting, itself starting, or a prompt arriving mid-run.
     Whichever comes first opens it, and the rest are already inside it.
     """
-    payload = canonical_event.event.payload
-    at = canonical_event.happened_at
-    if statistics.active_since_internal is None:
+    payload = committed_event.event.payload
+    at = committed_event.happened_at
+    if actor_statistics.active_since_internal is None:
         if isinstance(payload, (SessionStarted, ActorStarted)) or _is_prompt(payload):
-            return replace(statistics, active_since_internal=at)
-        return statistics
+            return replace(actor_statistics, active_since_internal=at)
+        return actor_statistics
     if isinstance(payload, (TurnFinished, TurnAborted, SessionFinished)):
         return replace(
-            statistics,
-            active_seconds=statistics.active_seconds
-            + max(0.0, at - statistics.active_since_internal),
+            actor_statistics,
+            active_seconds=actor_statistics.active_seconds
+            + max(0.0, at - actor_statistics.active_since_internal),
             active_since_internal=None,
         )
-    return statistics
+    return actor_statistics

@@ -34,39 +34,41 @@ class SessionWriter(SessionDataWriter):
     """The session's own row: born at `session.started`, and its identity,
     title, account and lifecycle from then on."""
 
-    def write(self, canonical_event: CommittedEvent, state: AggregateState) -> AggregateState:
-        event = canonical_event.event
+    def write(
+        self, committed_event: CommittedEvent, aggregate_state: AggregateState
+    ) -> AggregateState:
+        event = committed_event.event
         payload = event.payload
         if isinstance(payload, SessionStarted):
-            born = _born(canonical_event)
-            if state.session is None:
-                return replace(state, session=born)
+            born = _born(committed_event)
+            if aggregate_state.session is None:
+                return replace(aggregate_state, session=born)
             # A session that starts again is the same session RESUMED: the
             # lifecycle reopens, and everything already folded about the work —
             # its title, its goal, its tasks — stands.
             return replace(
-                state,
+                aggregate_state,
                 session=replace(
-                    state.session,
+                    aggregate_state.session,
                     state="running",
                     finished_at=None,
                     working_directory=(
-                        born.working_directory or state.session.working_directory
+                        born.working_directory or aggregate_state.session.working_directory
                     ),
                 ),
             )
-        session = state.session
+        session = aggregate_state.session
         if session is None:
-            return state
+            return aggregate_state
         if isinstance(payload, SessionTitleChanged):
-            return replace(state, session=_titled(session, payload))
+            return replace(aggregate_state, session=_titled(session, payload))
         if isinstance(payload, SessionAccountChanged):
-            return replace(state, session=replace(session, account=payload.account))
+            return replace(aggregate_state, session=replace(session, account=payload.account))
         if isinstance(payload, SessionFinished):
             return replace(
-                state,
+                aggregate_state,
                 session=replace(
-                    session, state="finished", finished_at=canonical_event.happened_at
+                    session, state="finished", finished_at=committed_event.happened_at
                 ),
             )
         if (
@@ -74,12 +76,12 @@ class SessionWriter(SessionDataWriter):
             and _is_prompt(payload)
             and session.prompt_title_internal is None
         ):
-            return replace(state, session=_prompt_titled(session, payload))
-        return state
+            return replace(aggregate_state, session=_prompt_titled(session, payload))
+        return aggregate_state
 
 
-def _born(canonical_event: CommittedEvent) -> SessionFacts:
-    event = canonical_event.event
+def _born(committed_event: CommittedEvent) -> SessionFacts:
+    event = committed_event.event
     payload = event.payload
     assert isinstance(payload, SessionStarted)
     return SessionFacts(
@@ -87,51 +89,53 @@ def _born(canonical_event: CommittedEvent) -> SessionFacts:
         harness=event.harness,
         state="running",
         working_directory=payload.working_directory,
-        started_at=canonical_event.happened_at,
+        started_at=committed_event.happened_at,
         lead_actor_id=event.actor_id,
         account=payload.account,
         automatic_title_internal=payload.title,
     )
 
 
-def _is_prompt(payload: EventPayload) -> bool:
+def _is_prompt(event_payload: EventPayload) -> bool:
     return (
-        isinstance(payload, MessageCreated)
-        and payload.role == "user"
-        and payload.phase == "prompt"
+        isinstance(event_payload, MessageCreated)
+        and event_payload.role == "user"
+        and event_payload.phase == "prompt"
     )
 
 
-def _titled(session: SessionFacts, payload: SessionTitleChanged) -> SessionFacts:
-    title = payload.title or None
-    if payload.origin == "custom":
-        session = replace(session, custom_title_internal=title)
-    elif payload.origin == "automatic":
-        session = replace(session, automatic_title_internal=title)
+def _titled(session_facts: SessionFacts, session_title_changed: SessionTitleChanged) -> SessionFacts:
+    title = session_title_changed.title or None
+    if session_title_changed.origin == "custom":
+        session_facts = replace(session_facts, custom_title_internal=title)
+    elif session_title_changed.origin == "automatic":
+        session_facts = replace(session_facts, automatic_title_internal=title)
     else:
-        session = replace(session, summary_title_internal=title)
-    return _retitled(session)
+        session_facts = replace(session_facts, summary_title_internal=title)
+    return _retitled(session_facts)
 
 
-def _prompt_titled(session: SessionFacts, payload: MessageCreated) -> SessionFacts:
-    if not isinstance(payload.content, TextContent):
-        return session
-    lines = payload.content.text.strip().splitlines()
+def _prompt_titled(session_facts: SessionFacts, message_created: MessageCreated) -> SessionFacts:
+    if not isinstance(message_created.content, TextContent):
+        return session_facts
+    lines = message_created.content.text.strip().splitlines()
     if not lines:
-        return session
-    return _retitled(replace(session, prompt_title_internal=lines[0][:PROMPT_TITLE_LIMIT]))
+        return session_facts
+    return _retitled(
+        replace(session_facts, prompt_title_internal=lines[0][:PROMPT_TITLE_LIMIT])
+    )
 
 
-def _retitled(session: SessionFacts) -> SessionFacts:
+def _retitled(session_facts: SessionFacts) -> SessionFacts:
     """One precedence, in one place: what a person chose beats what the harness
     named, which beats a summary of it, which beats the first thing asked."""
     return replace(
-        session,
+        session_facts,
         title=(
-            session.custom_title_internal
-            or session.automatic_title_internal
-            or session.summary_title_internal
-            or session.prompt_title_internal
+            session_facts.custom_title_internal
+            or session_facts.automatic_title_internal
+            or session_facts.summary_title_internal
+            or session_facts.prompt_title_internal
         ),
     )
 
@@ -143,16 +147,18 @@ class GoalWriter(SessionDataWriter):
     goal, and of the rest only `completed` changes what a reader does.
     """
 
-    def write(self, canonical_event: CommittedEvent, state: AggregateState) -> AggregateState:
-        payload = canonical_event.event.payload
-        if not isinstance(payload, GoalChanged) or state.session is None:
-            return state
+    def write(
+        self, committed_event: CommittedEvent, aggregate_state: AggregateState
+    ) -> AggregateState:
+        payload = committed_event.event.payload
+        if not isinstance(payload, GoalChanged) or aggregate_state.session is None:
+            return aggregate_state
         if payload.state == "cleared":
-            return replace(state, session=replace(state.session, goal=None))
+            return replace(aggregate_state, session=replace(aggregate_state.session, goal=None))
         return replace(
-            state,
+            aggregate_state,
             session=replace(
-                state.session,
+                aggregate_state.session,
                 goal=SessionGoal(payload.objective, payload.state == "completed"),
             ),
         )
@@ -166,44 +172,48 @@ class TaskWriter(SessionDataWriter):
     is gone from it, even though its own last state still stands.
     """
 
-    def write(self, canonical_event: CommittedEvent, state: AggregateState) -> AggregateState:
-        payload = canonical_event.event.payload
-        session = state.session
+    def write(
+        self, committed_event: CommittedEvent, aggregate_state: AggregateState
+    ) -> AggregateState:
+        payload = committed_event.event.payload
+        session = aggregate_state.session
         if session is None:
-            return state
+            return aggregate_state
         if isinstance(payload, TaskChanged):
-            return replace(state, session=_task_changed(session, payload))
+            return replace(aggregate_state, session=_task_changed(session, payload))
         if isinstance(payload, TaskListChanged):
             return replace(
-                state,
+                aggregate_state,
                 session=_ordered(replace(session, task_order_internal=payload.task_ids)),
             )
-        return state
+        return aggregate_state
 
 
-def _task_changed(session: SessionFacts, payload: TaskChanged) -> SessionFacts:
+def _task_changed(session_facts: SessionFacts, task_changed: TaskChanged) -> SessionFacts:
     task = SessionTask(
-        task_id=payload.task_id,
-        subject=payload.subject,
-        description=payload.description,
-        state=payload.state,
-        owner_actor_id=payload.owner_actor_id,
+        task_id=task_changed.task_id,
+        subject=task_changed.subject,
+        description=task_changed.description,
+        state=task_changed.state,
+        owner_actor_id=task_changed.owner_actor_id,
     )
-    known = {existing.task_id: existing for existing in session.tasks}
+    known = {existing.task_id: existing for existing in session_facts.tasks}
     known[task.task_id] = task
-    order = session.task_order_internal or tuple(known)
+    order = session_facts.task_order_internal or tuple(known)
     if task.task_id not in order:
         # A task nothing has listed yet still belongs to the session: the
         # membership fact and the task's own fact arrive in either order.
         order = (*order, task.task_id)
-    return _ordered(replace(session, tasks=tuple(known.values()), task_order_internal=order))
+    return _ordered(
+        replace(session_facts, tasks=tuple(known.values()), task_order_internal=order)
+    )
 
 
-def _ordered(session: SessionFacts) -> SessionFacts:
+def _ordered(session_facts: SessionFacts) -> SessionFacts:
     """`tasks` in the order the list declared, and holding only what it names."""
-    known = {task.task_id: task for task in session.tasks}
-    order = session.task_order_internal or tuple(known)
+    known = {task.task_id: task for task in session_facts.tasks}
+    order = session_facts.task_order_internal or tuple(known)
     return replace(
-        session,
+        session_facts,
         tasks=tuple(known[task_id] for task_id in order if task_id in known),
     )

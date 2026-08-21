@@ -13,7 +13,7 @@ from domain.uploads import StoredUpload
 
 
 class UploadRepository(Protocol):
-    def record(self, upload: StoredUpload) -> None: ...
+    def record(self, stored_upload: StoredUpload) -> None: ...
 
     def remove_expired(self, created_before: float) -> tuple[StoredUpload, ...]:
         """Drop rows older than the cutoff and return them, so the caller can

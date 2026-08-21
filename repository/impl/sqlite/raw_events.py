@@ -25,13 +25,13 @@ _INSERT_COLUMNS = (
 
 
 class SqliteRawEventRepository(RawEventRepository):
-    def __init__(self, database: SqliteDatabase) -> None:
-        self.database = database
+    def __init__(self, sqlite_database: SqliteDatabase) -> None:
+        self.sqlite_database = sqlite_database
 
     def record(self, raw_events: Sequence[RawEvent]) -> None:
         if not raw_events:
             return
-        with self.database.write() as connection:
+        with self.sqlite_database.write() as connection:
             for raw_event in raw_events:
                 existing = connection.execute(
                     f"SELECT {_IDENTITY_COLUMNS} FROM raw_events WHERE raw_event_id=?",
@@ -50,7 +50,7 @@ class SqliteRawEventRepository(RawEventRepository):
                 )
 
     def find(self, raw_event_id: RawEventId) -> RawEvent | None:
-        with self.database.read() as connection:
+        with self.sqlite_database.read() as connection:
             row = connection.execute(
                 "SELECT * FROM raw_events WHERE raw_event_id=?", (str(raw_event_id),)
             ).fetchone()
@@ -59,7 +59,7 @@ class SqliteRawEventRepository(RawEventRepository):
     def unverdicted(self, limit: int) -> tuple[RawEvent, ...]:
         if limit <= 0:
             raise ValueError("backlog limit must be positive")
-        with self.database.read() as connection:
+        with self.sqlite_database.read() as connection:
             found = connection.execute(
                 "SELECT raw_events.* FROM raw_events "
                 "LEFT JOIN interpretations USING(raw_event_id) "
@@ -73,7 +73,7 @@ class SqliteRawEventRepository(RawEventRepository):
         if not source_identities:
             return {}
         placeholders = ",".join("?" for _identity in source_identities)
-        with self.database.read() as connection:
+        with self.sqlite_database.read() as connection:
             # MAX(id) picks the last recorded event per source, and the join
             # reads that row's position. One query for every source the
             # interpreter is about to poll, instead of one query each.

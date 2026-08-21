@@ -37,12 +37,15 @@ def audit_database(path: str | None = None) -> SqliteDatabase:
     )
 
 
-def read_only(database: SqliteDatabase) -> SqliteDatabase:
+def read_only(sqlite_database: SqliteDatabase) -> SqliteDatabase:
     """The same file, opened so it cannot be created, migrated or written.
 
     What the forensic CLI gets: the tool you run when the store is the suspect
     must not be able to alter it.
     """
     return SqliteDatabase(
-        database.path, database.schema, database.schema_version, READ_ONLY_PRAGMAS
+        sqlite_database.path,
+        sqlite_database.schema,
+        sqlite_database.schema_version,
+        READ_ONLY_PRAGMAS,
     )

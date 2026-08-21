@@ -15,19 +15,19 @@ from repository.mapper import uploads as mapper
 
 
 class SqliteUploadRepository(UploadRepository):
-    def __init__(self, database: SqliteDatabase) -> None:
-        self.database = database
+    def __init__(self, sqlite_database: SqliteDatabase) -> None:
+        self.sqlite_database = sqlite_database
 
-    def record(self, upload: StoredUpload) -> None:
-        with self.database.write() as connection:
+    def record(self, stored_upload: StoredUpload) -> None:
+        with self.sqlite_database.write() as connection:
             connection.execute(
                 "INSERT INTO uploads(upload_id, session_id, name, media_type, byte_size, "
                 "stored_path, created_at) VALUES(?, ?, ?, ?, ?, ?, ?)",
-                mapper.upload_values(upload),
+                mapper.upload_values(stored_upload),
             )
 
     def remove_expired(self, created_before: float) -> tuple[StoredUpload, ...]:
-        with self.database.write() as connection:
+        with self.sqlite_database.write() as connection:
             found = connection.execute(
                 "SELECT * FROM uploads WHERE created_at < ?", (created_before,)
             ).fetchall()

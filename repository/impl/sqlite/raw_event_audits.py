@@ -26,12 +26,16 @@ from repository.mapper import facts as mapper
 
 
 class SqliteRawEventAuditRepository(RawEventAuditRepository):
-    def __init__(self, database: SqliteDatabase, codec: CanonicalEventCodec | None = None) -> None:
-        self.database = database
-        self.codec = codec or CanonicalEventCodec()
+    def __init__(
+        self,
+        sqlite_database: SqliteDatabase,
+        canonical_event_codec: CanonicalEventCodec | None = None,
+    ) -> None:
+        self.sqlite_database = sqlite_database
+        self.canonical_event_codec = canonical_event_codec or CanonicalEventCodec()
 
     def audit(self, raw_event_id: RawEventId) -> RawEventAudit | None:
-        with self.database.read() as connection:
+        with self.sqlite_database.read() as connection:
             raw = connection.execute(
                 "SELECT raw_events.*, interpretations.translator_version, "
                 "interpretations.decision, interpretations.reason, "
@@ -53,7 +57,7 @@ class SqliteRawEventAuditRepository(RawEventAuditRepository):
         return self._audit(raw, canonical)
 
     def audits_for_session(self, session_id: SessionId) -> tuple[RawEventAudit, ...]:
-        with self.database.read() as connection:
+        with self.sqlite_database.read() as connection:
             raw_rows = connection.execute(
                 "SELECT raw_events.*, interpretations.translator_version, "
                 "interpretations.decision, interpretations.reason, "
@@ -93,7 +97,7 @@ class SqliteRawEventAuditRepository(RawEventAuditRepository):
                     events=tuple(
                         InterpretationAuditEvent(
                             event=mapper.stored_canonical_event(
-                                rows.canonical_event(row), (), self.codec
+                                rows.canonical_event(row), (), self.canonical_event_codec
                             ).event,
                             accepted_at=row["accepted_at"],
                             event_order=row["event_order"],

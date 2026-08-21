@@ -31,15 +31,15 @@ class PendingInterruptSource(HarnessRawEventSource):
     mark AND `GRACE_SECONDS` has passed with no newer mark superseding it —
     the wait is what lets genuine harness evidence win the race."""
 
-    def __init__(self, session: Session, registry: InterruptRegistry) -> None:
+    def __init__(self, session: Session, interrupt_registry: InterruptRegistry) -> None:
         if session.plugin is None:
             raise ValueError(f"session has no attached harness plugin: {session.session_id}")
         self.session = session
-        self.registry = registry
+        self.interrupt_registry = interrupt_registry
         self.source_identity = f"{session.plugin.info.name}:interrupt:{session.session_id}"
 
     def read(self, after_position: str | None) -> tuple[RawEvent, ...]:
-        marked_at = self.registry.pending(self.session.session_id)
+        marked_at = self.interrupt_registry.pending(self.session.session_id)
         if marked_at is None:
             return ()
         position = f"{marked_at:.6f}"

@@ -55,26 +55,26 @@ class ReactionLoop:
 
     def __init__(
         self,
-        canonical_events: CanonicalEventRepository,
-        session_data: SessionDataRepository,
+        canonical_event_repository: CanonicalEventRepository,
+        session_data_repository: SessionDataRepository,
         reactions: tuple[CanonicalEventReaction, ...],
-        entry_writer: SessionEntryWriter,
+        session_entry_writer: SessionEntryWriter,
         writers: tuple[SessionDataWriter, ...],
         listeners: tuple[AppliedActorListener, ...],
-        harnesses: HarnessRegistry,
-        controls: HarnessReactorContext,
-        audit: AuditRecorder,
+        harness_registry: HarnessRegistry,
+        harness_reactor_context: HarnessReactorContext,
+        audit_recorder: AuditRecorder,
         clock: Callable[[], float] = time.time,
     ) -> None:
-        self.canonical_events = canonical_events
-        self.session_data = session_data
+        self.canonical_events = canonical_event_repository
+        self.session_data = session_data_repository
         self.reactions = reactions
-        self.entry_writer = entry_writer
+        self.entry_writer = session_entry_writer
         self.writers = writers
         self.listeners = listeners
-        self.harnesses = harnesses
-        self.controls = controls  # handed to harness reactors per call
-        self.audit = audit
+        self.harnesses = harness_registry
+        self.controls = harness_reactor_context  # handed to harness reactors per call
+        self.audit = audit_recorder
         self.clock = clock
 
     def run(self, stop_event: threading.Event) -> None:
@@ -125,29 +125,29 @@ class ReactionLoop:
 
     # --- the side effects ----------------------------------------------------
 
-    def _react(self, committed: CommittedEvent) -> None:
-        event = committed.event
+    def _react(self, committed_event: CommittedEvent) -> None:
+        event = committed_event.event
         for reaction in self.reactions:
             try:
                 reaction.react(event)
             except Exception:
-                self._audit_failure(type(reaction).__name__, _context(committed))
+                self._audit_failure(type(reaction).__name__, _context(committed_event))
         try:
             reactors = self.harnesses.plugin(event.harness).reactors
         except Exception:
-            self._audit_failure("harness lookup", _context(committed))
+            self._audit_failure("harness lookup", _context(committed_event))
             return
         for reactor in reactors:
             try:
                 reactor.react(event, self.controls)
             except Exception:
-                self._audit_failure(type(reactor).__name__, _context(committed))
+                self._audit_failure(type(reactor).__name__, _context(committed_event))
 
     # --- the read model ------------------------------------------------------
 
     def _materialize(
         self,
-        committed: CommittedEvent,
+        committed_event: CommittedEvent,
         states: dict[SessionId, AggregateState],
         listeners: tuple[AppliedActorListener, ...],
     ) -> None:
@@ -157,30 +157,30 @@ class ReactionLoop:
         the same transaction as the rows, so the next tick sees this event again
         — and its entry insert is idempotent, so seeing it twice is harmless.
         """
-        session_id = committed.event.session_id
+        session_id = committed_event.event.session_id
         try:
             before = states.get(session_id) or _state(self.session_data, session_id)
             after = before
             for writer in self.writers:
-                after = writer.write(committed, after)
+                after = writer.write(committed_event, after)
             changes = SessionDataChanges(
-                entry=self.entry_writer.entry(committed),
+                entry=self.entry_writer.entry(committed_event),
                 session=after.session if after.session != before.session else None,
                 actors=_changed_actors(before, after),
             )
-            self.session_data.apply(session_id, changes, committed.cursor)
+            self.session_data.apply(session_id, changes, committed_event.cursor)
             states[session_id] = after
         except Exception:
-            self._audit_failure("session data", _context(committed))
+            self._audit_failure("session data", _context(committed_event))
             return
-        self._announce(listeners, session_id, changes.actors, committed)
+        self._announce(listeners, session_id, changes.actors, committed_event)
 
     def _announce(
         self,
         listeners: tuple[AppliedActorListener, ...],
         session_id: SessionId,
         actors: tuple[ActorFacts, ...],
-        committed: CommittedEvent,
+        committed_event: CommittedEvent,
     ) -> None:
         """Tell the listeners what committed. After the transaction, deliberately:
         an aggregate change does not exist until it is durable, and a listener
@@ -192,7 +192,7 @@ class ReactionLoop:
             try:
                 listener.applied(session_id, actors)
             except Exception:
-                self._audit_failure(type(listener).__name__, _context(committed))
+                self._audit_failure(type(listener).__name__, _context(committed_event))
 
     def _audit_failure(self, where: str, context: dict[str, object]) -> None:
         """Record a swallowed failure, then carry on. Guarded, so a broken
@@ -205,16 +205,18 @@ class ReactionLoop:
             pass
 
 
-def _context(committed: CommittedEvent) -> dict[str, object]:
+def _context(committed_event: CommittedEvent) -> dict[str, object]:
     return {
-        "session_id": str(committed.event.session_id),
-        "event_id": str(committed.event.event_id),
-        "cursor": committed.cursor,
+        "session_id": str(committed_event.event.session_id),
+        "event_id": str(committed_event.event.event_id),
+        "cursor": committed_event.cursor,
     }
 
 
-def _state(session_data: SessionDataRepository, session_id: SessionId) -> AggregateState:
-    stored = session_data.read(session_id)
+def _state(
+    session_data_repository: SessionDataRepository, session_id: SessionId
+) -> AggregateState:
+    stored = session_data_repository.read(session_id)
     if stored is None:
         return AggregateState()
     return AggregateState(
@@ -224,11 +226,11 @@ def _state(session_data: SessionDataRepository, session_id: SessionId) -> Aggreg
 
 
 def _changed_actors(
-    before: AggregateState, after: AggregateState
+    before_aggregate_state: AggregateState, after_aggregate_state: AggregateState
 ) -> tuple[ActorFacts, ...]:
-    known = dict(before.actors)
+    known = dict(before_aggregate_state.actors)
     return tuple(
         actor
-        for actor_id, actor in dict(after.actors).items()
+        for actor_id, actor in dict(after_aggregate_state.actors).items()
         if known.get(actor_id) != actor
     )

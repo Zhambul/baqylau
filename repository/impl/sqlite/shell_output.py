@@ -22,19 +22,19 @@ _COLUMNS = (
 
 
 class SqliteShellOutputRepository(ShellOutputRepository):
-    def __init__(self, database: SqliteDatabase) -> None:
-        self.database = database
+    def __init__(self, sqlite_database: SqliteDatabase) -> None:
+        self.sqlite_database = sqlite_database
 
-    def save(self, following: ShellOutputFollowing) -> None:
-        with self.database.write() as connection:
+    def save(self, shell_output_following: ShellOutputFollowing) -> None:
+        with self.sqlite_database.write() as connection:
             connection.execute(
                 f"INSERT OR IGNORE INTO shell_output({_COLUMNS}) "
                 "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                mapper.shell_output_values(following),
+                mapper.shell_output_values(shell_output_following),
             )
 
     def find_for_session(self, session_id: SessionId) -> tuple[ShellOutputFollowing, ...]:
-        with self.database.read() as connection:
+        with self.sqlite_database.read() as connection:
             found = connection.execute(
                 "SELECT * FROM shell_output WHERE session_id=? "
                 "ORDER BY created_at, shell_id",
@@ -45,7 +45,7 @@ class SqliteShellOutputRepository(ShellOutputRepository):
         )
 
     def mark_shell_finished(self, session_id: SessionId, shell_id: ShellId) -> None:
-        with self.database.write() as connection:
+        with self.sqlite_database.write() as connection:
             connection.execute(
                 "UPDATE shell_output SET state='finishing' "
                 "WHERE session_id=? AND shell_id=? AND until='shell_finished'",
@@ -53,7 +53,7 @@ class SqliteShellOutputRepository(ShellOutputRepository):
             )
 
     def mark_finishing(self, session_id: SessionId, shell_id: ShellId) -> None:
-        with self.database.write() as connection:
+        with self.sqlite_database.write() as connection:
             connection.execute(
                 "UPDATE shell_output SET state='finishing' "
                 "WHERE session_id=? AND shell_id=?",
@@ -61,7 +61,7 @@ class SqliteShellOutputRepository(ShellOutputRepository):
             )
 
     def outlive_shell(self, session_id: SessionId, shell_id: ShellId) -> None:
-        with self.database.write() as connection:
+        with self.sqlite_database.write() as connection:
             connection.execute(
                 "UPDATE shell_output SET until='session_finished', state='active' "
                 "WHERE session_id=? AND shell_id=?",
@@ -69,14 +69,14 @@ class SqliteShellOutputRepository(ShellOutputRepository):
             )
 
     def remove(self, session_id: SessionId, shell_id: ShellId) -> None:
-        with self.database.write() as connection:
+        with self.sqlite_database.write() as connection:
             connection.execute(
                 "DELETE FROM shell_output WHERE session_id=? AND shell_id=?",
                 (str(session_id), str(shell_id)),
             )
 
     def remove_expired(self, created_before: float) -> tuple[ShellOutputFollowing, ...]:
-        with self.database.write() as connection:
+        with self.sqlite_database.write() as connection:
             found = connection.execute(
                 "SELECT * FROM shell_output WHERE created_at < ?", (created_before,)
             ).fetchall()

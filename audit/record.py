@@ -84,8 +84,8 @@ def stream_start(
 
 
 def stream_end(
-    handle: StreamHandle | None,
+    stream_handle: StreamHandle | None,
     end_reason: str,
     lines_emitted: int | None = None,
 ) -> None:
-    recorder().stream_end(handle, end_reason, lines_emitted)
+    recorder().stream_end(stream_handle, end_reason, lines_emitted)

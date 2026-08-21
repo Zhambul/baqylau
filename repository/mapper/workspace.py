@@ -25,42 +25,46 @@ from repository.model.sql import SqlValues
 
 
 def session_workspace(
-    row: SessionWorkspaceRow,
+    session_workspace_row: SessionWorkspaceRow,
     queue_items: tuple[ComposerQueueItemRow, ...],
     answers: tuple[DialogAnswerRow, ...],
     selections: tuple[DialogAnswerSelectionRow, ...],
 ) -> SessionWorkspace:
     return SessionWorkspace(
-        session_id=SessionId(row.session_id),
-        draft=_draft(row),
-        queue=_queue(row, queue_items),
-        dialog=_dialog(row, answers, selections),
+        session_id=SessionId(session_workspace_row.session_id),
+        draft=_draft(session_workspace_row),
+        queue=_queue(session_workspace_row, queue_items),
+        dialog=_dialog(session_workspace_row, answers, selections),
     )
 
 
-def _draft(row: SessionWorkspaceRow) -> ComposerDraft | None:
-    if not row.composer_text.strip():
+def _draft(session_workspace_row: SessionWorkspaceRow) -> ComposerDraft | None:
+    if not session_workspace_row.composer_text.strip():
         return None
-    return ComposerDraft(row.composer_text, row.composer_origin, row.composer_sequence)
+    return ComposerDraft(
+        session_workspace_row.composer_text,
+        session_workspace_row.composer_origin,
+        session_workspace_row.composer_sequence,
+    )
 
 
 def _queue(
-    row: SessionWorkspaceRow,
+    session_workspace_row: SessionWorkspaceRow,
     queue_items: tuple[ComposerQueueItemRow, ...],
 ) -> ComposerQueue | None:
     messages = tuple(
         QueuedMessage(item.text)
         for item in sorted(queue_items, key=lambda item: item.position)
     )
-    return ComposerQueue(messages, row.queue_origin) if messages else None
+    return ComposerQueue(messages, session_workspace_row.queue_origin) if messages else None
 
 
 def _dialog(
-    row: SessionWorkspaceRow,
+    session_workspace_row: SessionWorkspaceRow,
     answers: tuple[DialogAnswerRow, ...],
     selections: tuple[DialogAnswerSelectionRow, ...],
 ) -> DialogDraft | None:
-    if row.dialog_attention_id is None:
+    if session_workspace_row.dialog_attention_id is None:
         return None
     by_prompt: dict[int, list[DialogAnswerSelectionRow]] = {}
     for selection in selections:
@@ -78,35 +82,39 @@ def _dialog(
         )
         for answer in sorted(answers, key=lambda answer: answer.prompt_index)
     )
-    return DialogDraft(AttentionId(row.dialog_attention_id), selected, row.dialog_origin)
+    return DialogDraft(
+        AttentionId(session_workspace_row.dialog_attention_id),
+        selected,
+        session_workspace_row.dialog_origin,
+    )
 
 
 def queue_item_values(
     session_id: SessionId,
-    queue: ComposerQueue,
+    composer_queue: ComposerQueue,
 ) -> tuple[SqlValues, ...]:
     return tuple(
         (str(session_id), position, message.text)
-        for position, message in enumerate(queue.items)
+        for position, message in enumerate(composer_queue.items)
     )
 
 
 def dialog_answer_values(
     session_id: SessionId,
-    draft: DialogDraft,
+    dialog_draft: DialogDraft,
 ) -> tuple[SqlValues, ...]:
     return tuple(
         (str(session_id), prompt_index, answer.other)
-        for prompt_index, answer in enumerate(draft.answers)
+        for prompt_index, answer in enumerate(dialog_draft.answers)
     )
 
 
 def dialog_selection_values(
     session_id: SessionId,
-    draft: DialogDraft,
+    dialog_draft: DialogDraft,
 ) -> tuple[SqlValues, ...]:
     return tuple(
         (str(session_id), prompt_index, selection_index, value)
-        for prompt_index, answer in enumerate(draft.answers)
+        for prompt_index, answer in enumerate(dialog_draft.answers)
         for selection_index, value in enumerate(answer.selected)
     )

@@ -25,12 +25,12 @@ class SqliteSessionRepository(SessionRepository):
     its `.plugin`. Recorder-side callers construct it without one and get
     plugin-less sessions, which is all a recorder may need."""
 
-    def __init__(self, database: SqliteDatabase, harnesses: HarnessRegistry | None = None) -> None:
-        self.database = database
-        self.harnesses = harnesses
+    def __init__(self, sqlite_database: SqliteDatabase, harness_registry: HarnessRegistry | None = None) -> None:
+        self.sqlite_database = sqlite_database
+        self.harness_registry = harness_registry
 
     def save(self, harness: str, session: Session) -> None:
-        with self.database.write() as connection:
+        with self.sqlite_database.write() as connection:
             connection.execute(
                 f"INSERT INTO sessions({_COLUMNS}) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(session_id) DO UPDATE SET "
@@ -40,14 +40,14 @@ class SqliteSessionRepository(SessionRepository):
             )
 
     def find(self, session_id: SessionId) -> Session | None:
-        with self.database.read() as connection:
+        with self.sqlite_database.read() as connection:
             row = connection.execute(
                 "SELECT * FROM sessions WHERE session_id=?", (str(session_id),)
             ).fetchone()
         return self._session(row) if row is not None else None
 
     def watchable(self) -> tuple[Session, ...]:
-        with self.database.read() as connection:
+        with self.sqlite_database.read() as connection:
             found = connection.execute(
                 "SELECT sessions.* FROM sessions "
                 "WHERE NOT EXISTS ("
@@ -63,6 +63,6 @@ class SqliteSessionRepository(SessionRepository):
 
     def _session(self, row: sqlite3.Row) -> Session:
         session = mapper.session(rows.session(row))
-        if self.harnesses is None:
+        if self.harness_registry is None:
             return session
-        return replace(session, plugin=self.harnesses.plugin(row["harness"]))
+        return replace(session, plugin=self.harness_registry.plugin(row["harness"]))

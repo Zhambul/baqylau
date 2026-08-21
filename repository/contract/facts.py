@@ -73,7 +73,7 @@ class CanonicalEventRepository(Protocol):
         self,
         raw_event: RawEvent,
         translator_version: str,
-        translation: TranslationResult,
+        translation_result: TranslationResult,
         completed_at: float,
     ) -> TranslationOutcome:
         """Write the interpretation and its events in one transaction.

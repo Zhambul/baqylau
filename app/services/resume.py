@@ -31,14 +31,14 @@ class ResumableSession:
 class ResumableSessionService:
     def __init__(
         self,
-        read_model: SessionDataRepository,
-        terminal: TerminalSessionReader,
-        repositories: RepositoryQueries,
+        session_data_repository: SessionDataRepository,
+        terminal_session_reader: TerminalSessionReader,
+        repository_queries: RepositoryQueries,
         result_limit: int,
     ) -> None:
-        self.read_model = read_model
-        self.terminal = terminal
-        self.repositories = repositories
+        self.read_model = session_data_repository
+        self.terminal = terminal_session_reader
+        self.repositories = repository_queries
         self.result_limit = result_limit
 
     def sessions_for(

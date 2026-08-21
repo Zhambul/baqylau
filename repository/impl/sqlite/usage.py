@@ -15,29 +15,32 @@ from repository.mapper import usage as mapper
 
 
 class SqliteAccountUsageRepository(AccountUsageRepository):
-    def __init__(self, database: SqliteDatabase) -> None:
-        self.database = database
+    def __init__(self, sqlite_database: SqliteDatabase) -> None:
+        self.sqlite_database = sqlite_database
 
-    def record(self, snapshot: AccountUsageSnapshot) -> None:
-        with self.database.write() as connection:
+    def record(self, account_usage_snapshot: AccountUsageSnapshot) -> None:
+        with self.sqlite_database.write() as connection:
             connection.execute(
                 "INSERT INTO account_usage_snapshots(harness, account_id, display_name, captured_at) "
                 "VALUES(?, ?, ?, ?) ON CONFLICT(harness, account_id) DO UPDATE SET "
                 "display_name=excluded.display_name, captured_at=excluded.captured_at",
-                mapper.snapshot_values(snapshot),
+                mapper.snapshot_values(account_usage_snapshot),
             )
             connection.execute(
                 "DELETE FROM account_usage_windows WHERE harness=? AND account_id=?",
-                (snapshot.harness, snapshot.account_id or mapper.NO_ACCOUNT),
+                (
+                    account_usage_snapshot.harness,
+                    account_usage_snapshot.account_id or mapper.NO_ACCOUNT,
+                ),
             )
             connection.executemany(
                 "INSERT INTO account_usage_windows("
                 "harness, account_id, window_key, used_percent, resets_at) VALUES(?, ?, ?, ?, ?)",
-                mapper.window_values(snapshot),
+                mapper.window_values(account_usage_snapshot),
             )
 
     def snapshots(self) -> tuple[AccountUsageSnapshot, ...]:
-        with self.database.read() as connection:
+        with self.sqlite_database.read() as connection:
             snapshot_rows = connection.execute(
                 "SELECT * FROM account_usage_snapshots ORDER BY captured_at DESC"
             ).fetchall()

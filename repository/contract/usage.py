@@ -8,7 +8,7 @@ from harness.models import AccountUsageSnapshot
 
 
 class AccountUsageRepository(Protocol):
-    def record(self, snapshot: AccountUsageSnapshot) -> None:
+    def record(self, account_usage_snapshot: AccountUsageSnapshot) -> None:
         """Upsert the account row and replace its windows, in one transaction.
 
         Keyed by account rather than by session: nothing reads a session's own

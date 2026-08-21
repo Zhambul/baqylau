@@ -3395,7 +3395,7 @@ def test_claude_otel_delivery_records_raw_and_canonical_audit(tmp_path):
     # decides what they meant, so the gateway is what this exercises. Two
     # deliveries of the same export converge on one raw event, as before.
     telemetry = TelemetryGatewayService(
-        runtime.sessions.harnesses,
+        runtime.sessions.harness_registry,
         runtime.recorder,
         runtime.sessions,
         SqliteAccountUsageRepository(runtime.database),

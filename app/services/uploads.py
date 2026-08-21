@@ -25,16 +25,16 @@ UPLOAD_LIFETIME_SECONDS = 7 * 24 * 60 * 60
 class UploadService:
     def __init__(
         self,
-        uploads: UploadRepository,
-        audit: AuditWriteRepository | None = None,
+        upload_repository: UploadRepository,
+        audit_write_repository: AuditWriteRepository | None = None,
         clock: Callable[[], float] = time.time,
     ) -> None:
-        self.uploads = uploads
-        self.audit = audit
+        self.uploads = upload_repository
+        self.audit = audit_write_repository
         self.clock = clock
 
-    def record(self, upload: StoredUpload) -> None:
-        self.uploads.record(upload)
+    def record(self, stored_upload: StoredUpload) -> None:
+        self.uploads.record(stored_upload)
 
     def prune(self) -> int:
         """Drop expired rows and unlink their files. Returns how many went."""

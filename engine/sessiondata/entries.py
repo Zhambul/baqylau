@@ -94,8 +94,8 @@ class EntryWriter(SessionEntryWriter):
     def __init__(self, model_naming: ModelNaming | None = None) -> None:
         self.model_naming = model_naming or ModelNaming()
 
-    def entry(self, canonical_event: CommittedEvent) -> SessionEntry | None:
-        event = canonical_event.event
+    def entry(self, committed_event: CommittedEvent) -> SessionEntry | None:
+        event = committed_event.event
         body = _body(event.payload, event.harness, self.model_naming)
         if body is None:
             return None
@@ -108,122 +108,122 @@ class EntryWriter(SessionEntryWriter):
             # Always a number: a feed shows when things happened, and a source
             # that carries no clock of its own would otherwise leave a hole in
             # the middle of a conversation.
-            occurred_at=canonical_event.happened_at,
+            occurred_at=committed_event.happened_at,
             summary=_summary(event.payload),
             body=body,
         )
 
 
-def _summary(payload: EventPayload) -> str | None:
+def _summary(event_payload: EventPayload) -> str | None:
     """The harness's own words about the fact, where it offered any."""
-    if isinstance(payload, ShellStarted):
-        return payload.description
-    if isinstance(payload, ActorAssignmentStarted):
-        return content_text(payload.brief) or None
+    if isinstance(event_payload, ShellStarted):
+        return event_payload.description
+    if isinstance(event_payload, ActorAssignmentStarted):
+        return content_text(event_payload.brief) or None
     return None
 
 
-def _body(payload: EventPayload, harness: str, model_naming: ModelNaming) -> EntryBody | None:
-    if isinstance(payload, TurnStarted):
+def _body(event_payload: EventPayload, harness: str, model_naming: ModelNaming) -> EntryBody | None:
+    if isinstance(event_payload, TurnStarted):
         return TurnStartedBody()
-    if isinstance(payload, TurnFinished):
+    if isinstance(event_payload, TurnFinished):
         return TurnFinishedBody("finished")
-    if isinstance(payload, TurnAborted):
+    if isinstance(event_payload, TurnAborted):
         return TurnFinishedBody("aborted")
-    if isinstance(payload, MessageCreated):
+    if isinstance(event_payload, MessageCreated):
         return MessageBody(
-            payload.message_id,
-            payload.role,
-            payload.phase,
-            payload.content,
-            payload.recipient_actor_id,
-            payload.reply_to,
+            event_payload.message_id,
+            event_payload.role,
+            event_payload.phase,
+            event_payload.content,
+            event_payload.recipient_actor_id,
+            event_payload.reply_to,
         )
-    if isinstance(payload, ReasoningCreated):
-        return ReasoningBody(payload.reasoning_id, payload.content)
-    if isinstance(payload, ShellStarted):
-        return ShellStartedBody(payload.shell_id, payload.command, payload.execution)
-    if isinstance(payload, ShellProgressed):
+    if isinstance(event_payload, ReasoningCreated):
+        return ReasoningBody(event_payload.reasoning_id, event_payload.content)
+    if isinstance(event_payload, ShellStarted):
+        return ShellStartedBody(event_payload.shell_id, event_payload.command, event_payload.execution)
+    if isinstance(event_payload, ShellProgressed):
         return ShellOutputBody(
-            payload.shell_id, payload.stream, payload.mode, payload.content
+            event_payload.shell_id, event_payload.stream, event_payload.mode, event_payload.content
         )
-    if isinstance(payload, ShellBackgrounded):
-        return ShellBackgroundedBody(payload.shell_id)
-    if isinstance(payload, ShellFinished):
+    if isinstance(event_payload, ShellBackgrounded):
+        return ShellBackgroundedBody(event_payload.shell_id)
+    if isinstance(event_payload, ShellFinished):
         return ShellFinishedBody(
-            payload.shell_id, run_state(payload.outcome), payload.exit_code, payload.result
+            event_payload.shell_id, run_state(event_payload.outcome), event_payload.exit_code, event_payload.result
         )
-    if isinstance(payload, FileAccessed):
+    if isinstance(event_payload, FileAccessed):
         return FileBody(
-            payload.path,
-            payload.action,
-            file_state(payload.outcome),
-            payload.previous_path,
-            payload.lines_added,
-            payload.lines_removed,
+            event_payload.path,
+            event_payload.action,
+            file_state(event_payload.outcome),
+            event_payload.previous_path,
+            event_payload.lines_added,
+            event_payload.lines_removed,
             # A changed file is shown as its diff, a created or read one as its
             # text. Both arrive on the fact; which one reads as "the content"
             # depends on what happened to it.
-            payload.content if payload.unified_diff is None else _diff(payload),
+            event_payload.content if event_payload.unified_diff is None else _diff(event_payload),
         )
-    if isinstance(payload, SearchPerformed):
+    if isinstance(event_payload, SearchPerformed):
         return SearchBody(
-            payload.tool, payload.query, file_state(payload.outcome), payload.result
+            event_payload.tool, event_payload.query, file_state(event_payload.outcome), event_payload.result
         )
-    if isinstance(payload, WebFetched):
-        return WebBody(payload.url, file_state(payload.outcome), payload.result)
-    if isinstance(payload, WorktreeChanged):
+    if isinstance(event_payload, WebFetched):
+        return WebBody(event_payload.url, file_state(event_payload.outcome), event_payload.result)
+    if isinstance(event_payload, WorktreeChanged):
         return WorktreeBody(
-            payload.action, file_state(payload.outcome), payload.arguments
+            event_payload.action, file_state(event_payload.outcome), event_payload.arguments
         )
-    if isinstance(payload, SkillStarted):
-        return SkillStartedBody(payload.skill_id, payload.name, payload.arguments)
-    if isinstance(payload, SkillFinished):
+    if isinstance(event_payload, SkillStarted):
+        return SkillStartedBody(event_payload.skill_id, event_payload.name, event_payload.arguments)
+    if isinstance(event_payload, SkillFinished):
         return SkillFinishedBody(
-            payload.skill_id, run_state(payload.outcome), payload.result
+            event_payload.skill_id, run_state(event_payload.outcome), event_payload.result
         )
-    if isinstance(payload, QuestionAsked):
-        return QuestionAskedBody(payload.attention_id, payload.questions)
-    if isinstance(payload, QuestionAnswered):
+    if isinstance(event_payload, QuestionAsked):
+        return QuestionAskedBody(event_payload.attention_id, event_payload.questions)
+    if isinstance(event_payload, QuestionAnswered):
         return QuestionAnsweredBody(
-            payload.attention_id, payload.answers, payload.feedback
+            event_payload.attention_id, event_payload.answers, event_payload.feedback
         )
-    if isinstance(payload, PlanProposed):
-        return PlanProposedBody(payload.attention_id, payload.plan)
-    if isinstance(payload, PlanResolved):
+    if isinstance(event_payload, PlanProposed):
+        return PlanProposedBody(event_payload.attention_id, event_payload.plan)
+    if isinstance(event_payload, PlanResolved):
         return PlanResolvedBody(
-            payload.attention_id, payload.state, payload.feedback, payload.edited
+            event_payload.attention_id, event_payload.state, event_payload.feedback, event_payload.edited
         )
-    if isinstance(payload, CompactionStarted):
-        return CompactionStartedBody(payload.before_tokens)
-    if isinstance(payload, CompactionFinished):
-        return CompactionFinishedBody(payload.before_tokens, payload.after_tokens)
-    if isinstance(payload, ActorAssignmentStarted):
+    if isinstance(event_payload, CompactionStarted):
+        return CompactionStartedBody(event_payload.before_tokens)
+    if isinstance(event_payload, CompactionFinished):
+        return CompactionFinishedBody(event_payload.before_tokens, event_payload.after_tokens)
+    if isinstance(event_payload, ActorAssignmentStarted):
         return AssignmentStartedBody(
-            payload.assignment_id, payload.actor_name, payload.prompt
+            event_payload.assignment_id, event_payload.actor_name, event_payload.prompt
         )
-    if isinstance(payload, ActorAssignmentFinished):
+    if isinstance(event_payload, ActorAssignmentFinished):
         return AssignmentFinishedBody(
-            payload.assignment_id, run_state(payload.outcome), payload.result
+            event_payload.assignment_id, run_state(event_payload.outcome), event_payload.result
         )
-    if isinstance(payload, ModelChanged):
-        if not _is_a_switch(payload):
+    if isinstance(event_payload, ModelChanged):
+        if not _is_a_switch(event_payload):
             return None
         return ModelChangeBody(
-            model_naming.display(harness, payload.current),
-            model_naming.display(harness, payload.previous)
-            if payload.previous is not None
+            model_naming.display(harness, event_payload.current),
+            model_naming.display(harness, event_payload.previous)
+            if event_payload.previous is not None
             else None,
-            payload.reason == "automatic_fallback",
+            event_payload.reason == "automatic_fallback",
         )
-    if isinstance(payload, EffortChanged):
-        if payload.previous is None or payload.previous == payload.current:
+    if isinstance(event_payload, EffortChanged):
+        if event_payload.previous is None or event_payload.previous == event_payload.current:
             return None
-        return EffortChangeBody(payload.current, payload.previous)
+        return EffortChangeBody(event_payload.current, event_payload.previous)
     return None
 
 
-def _is_a_switch(payload: ModelChanged) -> bool:
+def _is_a_switch(model_changed: ModelChanged) -> bool:
     """Whether this fact is a person or a harness CHANGING the model, as opposed
     to reporting one for the first time or spelling it more precisely.
 
@@ -244,7 +244,7 @@ def _is_a_switch(payload: ModelChanged) -> bool:
     sides carry one, because that is the identity of the CHOICE; native ids are
     the fallback for the sources that report no selection at all.
     """
-    previous, current = payload.previous, payload.current
+    previous, current = model_changed.previous, model_changed.current
     if previous is None:
         return False
     # A source may stamp machine-injected records with the pseudo-model
@@ -257,11 +257,11 @@ def _is_a_switch(payload: ModelChanged) -> bool:
     return previous.native_id != current.native_id
 
 
-def _diff(payload: FileAccessed) -> TextContent:
+def _diff(file_accessed: FileAccessed) -> TextContent:
     """A diff is text somebody reads, so it travels as content rather than as a
     field of its own — which is what lets the entry body have ONE content field
     instead of two that are never both filled."""
-    return TextContent(payload.unified_diff or "", "text/plain")
+    return TextContent(file_accessed.unified_diff or "", "text/plain")
 
 
 

@@ -60,13 +60,13 @@ class SqliteDatabase:
         path: str,
         schema: str,
         schema_version: int,
-        pragmas: SqlitePragmas = DEFAULT_PRAGMAS,
+        sqlite_pragmas: SqlitePragmas = DEFAULT_PRAGMAS,
         migrations: Mapping[int, tuple[str, ...]] | None = None,
     ) -> None:
         self.path = os.path.abspath(path)
         self.schema = schema
         self.schema_version = schema_version
-        self.pragmas = pragmas
+        self.sqlite_pragmas = sqlite_pragmas
         self.migrations = migrations or {}
         # An Event, not a bool: the fast path is a read the type checker
         # cannot narrow, which is exactly right — another thread may set it
@@ -77,18 +77,18 @@ class SqliteDatabase:
     # --- opening ---------------------------------------------------------------
 
     def _connect(self) -> sqlite3.Connection:
-        if self.pragmas.read_only:
+        if self.sqlite_pragmas.read_only:
             connection = sqlite3.connect(
                 f"file:{self.path}?mode=ro",
                 uri=True,
-                timeout=self.pragmas.timeout_seconds,
+                timeout=self.sqlite_pragmas.timeout_seconds,
             )
         else:
-            connection = sqlite3.connect(self.path, timeout=self.pragmas.timeout_seconds)
+            connection = sqlite3.connect(self.path, timeout=self.sqlite_pragmas.timeout_seconds)
         connection.row_factory = sqlite3.Row
-        if self.pragmas.foreign_keys:
+        if self.sqlite_pragmas.foreign_keys:
             connection.execute("PRAGMA foreign_keys=ON")
-        connection.execute(f"PRAGMA busy_timeout={self.pragmas.busy_timeout_milliseconds}")
+        connection.execute(f"PRAGMA busy_timeout={self.sqlite_pragmas.busy_timeout_milliseconds}")
         return connection
 
     def exists(self) -> bool:
@@ -103,7 +103,7 @@ class SqliteDatabase:
                 return          # a peer thread won the lock and did the work
             # A forensic reader never creates, migrates or writes the thing it
             # is inspecting: there is nothing to apply and nothing to verify.
-            if not self.pragmas.read_only:
+            if not self.sqlite_pragmas.read_only:
                 self._apply_schema()
             self._initialized.set()
 
@@ -111,8 +111,8 @@ class SqliteDatabase:
         os.makedirs(os.path.dirname(self.path), mode=0o700, exist_ok=True)
         connection = self._connect()
         try:
-            if self.pragmas.journal_mode:
-                connection.execute(f"PRAGMA journal_mode={self.pragmas.journal_mode}")
+            if self.sqlite_pragmas.journal_mode:
+                connection.execute(f"PRAGMA journal_mode={self.sqlite_pragmas.journal_mode}")
             stored_version = self._stored_version(connection)
             if stored_version is not None:
                 self._migrate(connection, stored_version)
@@ -121,8 +121,8 @@ class SqliteDatabase:
             connection.commit()
         finally:
             connection.close()
-        if self.pragmas.file_mode is not None:
-            os.chmod(self.path, self.pragmas.file_mode)
+        if self.sqlite_pragmas.file_mode is not None:
+            os.chmod(self.path, self.sqlite_pragmas.file_mode)
 
     def _verify_version(self, connection: sqlite3.Connection) -> None:
         row = connection.execute("SELECT version FROM schema_version WHERE id=1").fetchone()

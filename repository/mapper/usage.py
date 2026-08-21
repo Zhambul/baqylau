@@ -19,14 +19,14 @@ NO_ACCOUNT = ""
 
 
 def account_usage_snapshot(
-    row: AccountUsageSnapshotRow,
+    account_usage_snapshot_row: AccountUsageSnapshotRow,
     windows: tuple[AccountUsageWindowRow, ...],
 ) -> AccountUsageSnapshot:
     return AccountUsageSnapshot(
-        harness=row.harness,
-        account_id=row.account_id or None,
-        display_name=row.display_name,
-        captured_at=row.captured_at,
+        harness=account_usage_snapshot_row.harness,
+        account_id=account_usage_snapshot_row.account_id or None,
+        display_name=account_usage_snapshot_row.display_name,
+        captured_at=account_usage_snapshot_row.captured_at,
         windows=tuple(
             UsageWindowSample(
                 key=window.window_key,
@@ -38,23 +38,23 @@ def account_usage_snapshot(
     )
 
 
-def snapshot_values(snapshot: AccountUsageSnapshot) -> SqlValues:
+def snapshot_values(account_usage_snapshot: AccountUsageSnapshot) -> SqlValues:
     return (
-        snapshot.harness,
-        snapshot.account_id or NO_ACCOUNT,
-        snapshot.display_name,
-        snapshot.captured_at,
+        account_usage_snapshot.harness,
+        account_usage_snapshot.account_id or NO_ACCOUNT,
+        account_usage_snapshot.display_name,
+        account_usage_snapshot.captured_at,
     )
 
 
-def window_values(snapshot: AccountUsageSnapshot) -> tuple[SqlValues, ...]:
+def window_values(account_usage_snapshot: AccountUsageSnapshot) -> tuple[SqlValues, ...]:
     return tuple(
         (
-            snapshot.harness,
-            snapshot.account_id or NO_ACCOUNT,
+            account_usage_snapshot.harness,
+            account_usage_snapshot.account_id or NO_ACCOUNT,
             window.key,
             str(window.used_percent),
             window.resets_at,
         )
-        for window in snapshot.windows
+        for window in account_usage_snapshot.windows
     )

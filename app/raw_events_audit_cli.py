@@ -21,9 +21,11 @@ from repository.impl.sqlite.databases import main_database, read_only
 from repository.impl.sqlite.raw_event_audits import SqliteRawEventAuditRepository
 
 
-def _document(codec: CanonicalEventCodec, audit: RawEventAudit) -> dict[str, object]:
-    raw_event = audit.raw_event
-    interpretation = audit.interpretation
+def _document(
+    canonical_event_codec: CanonicalEventCodec, raw_event_audit: RawEventAudit
+) -> dict[str, object]:
+    raw_event = raw_event_audit.raw_event
+    interpretation = raw_event_audit.interpretation
     return {
         "raw_event_id": str(raw_event.raw_event_id),
         "session_id": str(raw_event.session_id),
@@ -45,7 +47,7 @@ def _document(codec: CanonicalEventCodec, audit: RawEventAudit) -> dict[str, obj
                 "accepted_at": canonical.accepted_at,
                 "event_order": canonical.event_order,
                 "storage_result": canonical.storage_result,
-                "event": json.loads(codec.encode(canonical.event)),
+                "event": json.loads(canonical_event_codec.encode(canonical.event)),
             }
             for canonical in (interpretation.events if interpretation else ())
         ],

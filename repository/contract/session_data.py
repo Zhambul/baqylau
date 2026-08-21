@@ -95,7 +95,7 @@ class SessionDataRepository(Protocol):
     def apply(
         self,
         session_id: SessionId,
-        changes: SessionDataChanges,
+        session_data_changes: SessionDataChanges,
         canonical_cursor: int,
     ) -> int:
         """One event's read-model rows and the progress mark, in ONE transaction.

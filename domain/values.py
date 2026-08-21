@@ -168,14 +168,14 @@ class TokenUsage:
         if any(value < 0 for value in values):
             raise ValueError("token counts cannot be negative")
 
-    def __add__(self, other: TokenUsage) -> TokenUsage:
+    def __add__(self, token_usage: TokenUsage) -> TokenUsage:
         return TokenUsage(
-            input_tokens=self.input_tokens + other.input_tokens,
-            output_tokens=self.output_tokens + other.output_tokens,
-            cache_read_tokens=self.cache_read_tokens + other.cache_read_tokens,
-            cache_write_tokens=self.cache_write_tokens + other.cache_write_tokens,
+            input_tokens=self.input_tokens + token_usage.input_tokens,
+            output_tokens=self.output_tokens + token_usage.output_tokens,
+            cache_read_tokens=self.cache_read_tokens + token_usage.cache_read_tokens,
+            cache_write_tokens=self.cache_write_tokens + token_usage.cache_write_tokens,
             one_hour_cache_write_tokens=(
-                self.one_hour_cache_write_tokens + other.one_hour_cache_write_tokens
+                self.one_hour_cache_write_tokens + token_usage.one_hour_cache_write_tokens
             ),
         )
 

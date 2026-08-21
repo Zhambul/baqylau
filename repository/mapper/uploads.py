@@ -8,25 +8,25 @@ from repository.model.uploads import UploadRow
 from repository.model.sql import SqlValues
 
 
-def stored_upload(row: UploadRow) -> StoredUpload:
+def stored_upload(upload_row: UploadRow) -> StoredUpload:
     return StoredUpload(
-        upload_id=row.upload_id,
-        session_id=SessionId(row.session_id) if row.session_id else None,
-        name=row.name,
-        media_type=row.media_type,
-        byte_size=row.byte_size,
-        stored_path=row.stored_path,
-        created_at=row.created_at,
+        upload_id=upload_row.upload_id,
+        session_id=SessionId(upload_row.session_id) if upload_row.session_id else None,
+        name=upload_row.name,
+        media_type=upload_row.media_type,
+        byte_size=upload_row.byte_size,
+        stored_path=upload_row.stored_path,
+        created_at=upload_row.created_at,
     )
 
 
-def upload_values(upload: StoredUpload) -> SqlValues:
+def upload_values(stored_upload: StoredUpload) -> SqlValues:
     return (
-        upload.upload_id,
-        str(upload.session_id) if upload.session_id else "",
-        upload.name,
-        upload.media_type,
-        upload.byte_size,
-        upload.stored_path,
-        upload.created_at,
+        stored_upload.upload_id,
+        str(stored_upload.session_id) if stored_upload.session_id else "",
+        stored_upload.name,
+        stored_upload.media_type,
+        stored_upload.byte_size,
+        stored_upload.stored_path,
+        stored_upload.created_at,
     )

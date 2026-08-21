@@ -101,14 +101,14 @@ def _stored_event_type(encoded: bytes | str) -> str:
     return event_type
 
 
-def _event_type(payload: EventPayload) -> str:
+def _event_type(event_payload: EventPayload) -> str:
     """The registered name of a payload's type — the discriminator the stored
     document carries, and the key everything below is cached on."""
     try:
-        return EVENT_TYPES[type(payload)]
+        return EVENT_TYPES[type(event_payload)]
     except KeyError as error:
         raise CanonicalCodecError(
-            f"unregistered canonical payload: {type(payload).__name__}"
+            f"unregistered canonical payload: {type(event_payload).__name__}"
         ) from error
 
 

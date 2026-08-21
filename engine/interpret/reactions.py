@@ -36,8 +36,8 @@ class SessionUpsertCanonicalEventReaction(CanonicalEventReaction):
     window updates the row with the first fact its first delivery commits.
     """
 
-    def __init__(self, sessions: SessionRepository) -> None:
-        self.sessions = sessions
+    def __init__(self, session_repository: SessionRepository) -> None:
+        self.sessions = session_repository
 
     def react(self, canonical_event: CanonicalEvent[EventPayload]) -> None:
         payload = canonical_event.payload
@@ -72,11 +72,11 @@ class ShellOutputCanonicalEventReaction(CanonicalEventReaction):
 
     def __init__(
         self,
-        shell_output: ShellOutputRepository,
-        raw_events: RawEventRepository,
+        shell_output_repository: ShellOutputRepository,
+        raw_event_repository: RawEventRepository,
     ) -> None:
-        self.shell_output = shell_output
-        self.raw_events = raw_events
+        self.shell_output = shell_output_repository
+        self.raw_events = raw_event_repository
 
     def react(self, canonical_event: CanonicalEvent[EventPayload]) -> None:
         payload = canonical_event.payload
@@ -152,8 +152,8 @@ class InterruptCanonicalEventReaction(CanonicalEventReaction):
     settles normally would still carry a stale mark, and a slower second
     interrupt could see it and think the first one is still pending."""
 
-    def __init__(self, interrupts: InterruptRegistry) -> None:
-        self.interrupts = interrupts
+    def __init__(self, interrupt_registry: InterruptRegistry) -> None:
+        self.interrupts = interrupt_registry
 
     def react(self, canonical_event: CanonicalEvent[EventPayload]) -> None:
         payload = canonical_event.payload

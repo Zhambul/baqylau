@@ -498,7 +498,7 @@ ApplicationPreferences = Annotated[
 @singleton
 def session_application(
     read_model: SessionDataStore,
-    reader: TerminalInput,
+    terminal_input: TerminalInput,
     audit_reader: AuditReads,
     workspace_storage: Workspaces,
     modes: ViewModes,
@@ -507,7 +507,7 @@ def session_application(
 ) -> SessionApplicationService:
     return SessionApplicationService(
         read_model,
-        reader,
+        terminal_input,
         audit_reader,
         workspace_storage,
         modes,
@@ -704,13 +704,13 @@ def reaction_loop(
 @singleton
 def insights(
     read_model: SessionDataStore,
-    reader: TerminalInput,
+    terminal_input: TerminalInput,
     audit_reader: AuditReads,
     checkouts: Repositories,
 ) -> ApplicationInsightsService:
     return ApplicationInsightsService(
         read_model,
-        reader,
+        terminal_input,
         audit_reader,
         checkouts,
         top_project_count=dashboard_config.INSIGHTS_PROJECT_LIMIT,
@@ -723,12 +723,12 @@ Insights = Annotated[ApplicationInsightsService, Depends(insights)]
 @singleton
 def resumable_sessions(
     read_model: SessionDataStore,
-    reader: TerminalInput,
+    terminal_input: TerminalInput,
     checkouts: Repositories,
 ) -> ResumableSessionService:
     return ResumableSessionService(
         read_model,
-        reader,
+        terminal_input,
         checkouts,
         result_limit=dashboard_config.RESUMABLE_SESSION_LIMIT,
     )

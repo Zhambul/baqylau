@@ -25,19 +25,19 @@ class AuditWriteRepository(Protocol):
     """Every method swallows storage failures: a broken auditor must never take
     down the thing it exists to explain."""
 
-    def record_error(self, error: ApplicationErrorRecord) -> None: ...
+    def record_error(self, application_error_record: ApplicationErrorRecord) -> None: ...
 
-    def record_state_file(self, state_file: StateFileRecord) -> None: ...
+    def record_state_file(self, state_file_record: StateFileRecord) -> None: ...
 
-    def record_spawn(self, spawn: SpawnRecord) -> None: ...
+    def record_spawn(self, spawn_record: SpawnRecord) -> None: ...
 
-    def open_stream(self, stream: StreamOpened) -> StreamHandle | None:
+    def open_stream(self, stream_opened: StreamOpened) -> StreamHandle | None:
         """None when the audit is off, or when the row could not be written."""
         ...
 
     def close_stream(
         self,
-        handle: StreamHandle | None,
+        stream_handle: StreamHandle | None,
         end_reason: str,
         lines_emitted: int | None,
     ) -> None:

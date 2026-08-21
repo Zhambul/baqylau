@@ -35,11 +35,11 @@ def script_name() -> str:
 class AuditRecorder:
     """What the machinery did, written where the daemon can read it back."""
 
-    def __init__(self, writes: AuditWriteRepository) -> None:
-        self.writes = writes
+    def __init__(self, audit_write_repository: AuditWriteRepository) -> None:
+        self.audit_write_repository = audit_write_repository
 
     def error(self, session_or_log: str = "", func: str = "", context: object = None) -> None:
-        self.writes.record_error(
+        self.audit_write_repository.record_error(
             ApplicationErrorRecord(
                 session_id=session_or_log,
                 script=script_name(),
@@ -52,7 +52,7 @@ class AuditRecorder:
         )
 
     def state_file(self, log: str, path: str, action: str, content: object = "") -> None:
-        self.writes.record_state_file(
+        self.audit_write_repository.record_state_file(
             StateFileRecord(
                 session_id=log,
                 path=path,
@@ -65,7 +65,7 @@ class AuditRecorder:
         )
 
     def spawn(self, log: str, child_pid: int, argv: list[str], purpose: str = "") -> None:
-        self.writes.record_spawn(
+        self.audit_write_repository.record_spawn(
             SpawnRecord(
                 session_id=log,
                 parent_script=script_name(),
@@ -84,7 +84,7 @@ class AuditRecorder:
         task_id: str = "",
         src_path: str = "",
     ) -> StreamHandle | None:
-        return self.writes.open_stream(
+        return self.audit_write_repository.open_stream(
             StreamOpened(
                 session_id=log,
                 kind=kind,
@@ -98,8 +98,8 @@ class AuditRecorder:
 
     def stream_end(
         self,
-        handle: StreamHandle | None,
+        stream_handle: StreamHandle | None,
         end_reason: str,
         lines_emitted: int | None = None,
     ) -> None:
-        self.writes.close_stream(handle, end_reason, lines_emitted)
+        self.audit_write_repository.close_stream(stream_handle, end_reason, lines_emitted)

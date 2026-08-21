@@ -39,39 +39,39 @@ def audit_enabled() -> bool:
 
 
 class SqliteAuditWriteRepository(AuditWriteRepository):
-    def __init__(self, database: SqliteDatabase) -> None:
-        self.database = database
+    def __init__(self, sqlite_database: SqliteDatabase) -> None:
+        self.sqlite_database = sqlite_database
 
-    def record_error(self, error: ApplicationErrorRecord) -> None:
+    def record_error(self, application_error_record: ApplicationErrorRecord) -> None:
         self._insert(
             "INSERT INTO errors(ts, session_id, script, func, traceback, context, pid) "
             "VALUES(?,?,?,?,?,?,?)",
-            mapper.error_values(error),
+            mapper.error_values(application_error_record),
         )
 
-    def record_state_file(self, state_file: StateFileRecord) -> None:
+    def record_state_file(self, state_file_record: StateFileRecord) -> None:
         self._insert(
             "INSERT INTO state_files(ts, session_id, path, action, content, script, pid) "
             "VALUES(?,?,?,?,?,?,?)",
-            mapper.state_file_values(state_file),
+            mapper.state_file_values(state_file_record),
         )
 
-    def record_spawn(self, spawn: SpawnRecord) -> None:
+    def record_spawn(self, spawn_record: SpawnRecord) -> None:
         self._insert(
             "INSERT INTO spawns(ts, session_id, parent_script, child_pid, argv, purpose) "
             "VALUES(?,?,?,?,?,?)",
-            mapper.spawn_values(spawn),
+            mapper.spawn_values(spawn_record),
         )
 
-    def open_stream(self, stream: StreamOpened) -> StreamHandle | None:
+    def open_stream(self, stream_opened: StreamOpened) -> StreamHandle | None:
         if not audit_enabled():
             return None
         try:
-            with self.database.write() as connection:
+            with self.sqlite_database.write() as connection:
                 cursor = connection.execute(
                     "INSERT INTO streams(session_id, kind, agent_id, task_id, src_path, "
                     "pid, started_at) VALUES(?,?,?,?,?,?,?)",
-                    mapper.stream_values(stream),
+                    mapper.stream_values(stream_opened),
                 )
                 # lastrowid is Optional in the DB-API: it is set after this
                 # INSERT, but int() on the None branch would raise, and this
@@ -82,22 +82,22 @@ class SqliteAuditWriteRepository(AuditWriteRepository):
 
     def close_stream(
         self,
-        handle: StreamHandle | None,
+        stream_handle: StreamHandle | None,
         end_reason: str,
         lines_emitted: int | None,
     ) -> None:
-        if handle is None:
+        if stream_handle is None:
             return
         self._insert(
             "UPDATE streams SET ended_at=?, end_reason=?, lines_emitted=? WHERE id=?",
-            (time.time(), end_reason, lines_emitted, handle.stream_id),
+            (time.time(), end_reason, lines_emitted, stream_handle.stream_id),
         )
 
     def _insert(self, statement: str, values: SqlValues) -> None:
         if not audit_enabled():
             return
         try:
-            with self.database.write() as connection:
+            with self.sqlite_database.write() as connection:
                 connection.execute(statement, values)
         except (sqlite3.Error, OSError):
             # A broken auditor must never take down the thing it exists to
@@ -106,22 +106,22 @@ class SqliteAuditWriteRepository(AuditWriteRepository):
 
 
 class SqliteAuditReadRepository(AuditReadRepository):
-    def __init__(self, database: SqliteDatabase) -> None:
-        self.database = database
+    def __init__(self, sqlite_database: SqliteDatabase) -> None:
+        self.sqlite_database = sqlite_database
 
     def errors_for_session(self, session_id: SessionId) -> tuple[ApplicationError, ...]:
-        if not self.database.exists():
+        if not self.sqlite_database.exists():
             return ()
-        with self.database.read() as connection:
+        with self.sqlite_database.read() as connection:
             found = connection.execute(
                 "SELECT * FROM errors WHERE session_id=? ORDER BY id", (str(session_id),)
             ).fetchall()
         return tuple(mapper.application_error(rows.error(row)) for row in found)
 
     def error_counts(self) -> Mapping[SessionId, int]:
-        if not self.database.exists():
+        if not self.sqlite_database.exists():
             return {}
-        with self.database.read() as connection:
+        with self.sqlite_database.read() as connection:
             found = connection.execute(
                 "SELECT session_id, COUNT(*) AS error_count FROM errors "
                 "WHERE session_id != '' GROUP BY session_id"
