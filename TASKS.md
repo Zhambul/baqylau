@@ -5,7 +5,7 @@ to the bottom with their commit.
 
 ## In flight
 
-4d (running). **Remove MigrateAccount completely** — see below.
+(nothing — next: owner approval for the 4/4b/4c batch, then bugs 5–8)
 
 ## Queued (approved direction, plan needs owner approval before implementation)
 
@@ -32,14 +32,6 @@ to the bottom with their commit.
    survives only at the HTTP boundary, where the route maps the wire word to
    the one method it means. Same plan-then-approve batch as 4/4b — the enum
    sweep and this one touch the same dispatchers.
-
-4d. (running) **Remove MigrateAccount completely** — the `migrate_account` control and
-   everything that exists only for it: the api/controls request model and
-   route, the harness control implementation, `migration_target`/alias
-   machinery in claude_code/account.py that only serves migration, the
-   `account_migration` reason in ModelChangeReason/EffortChangeReason, the
-   frontend button/menu entry, and the tests that cover it. A straight
-   removal, no replacement.
 
 ## Queued bugs (reported 2026-08-21, diagnose then fix; sonnet agents)
 
@@ -70,6 +62,7 @@ to the bottom with their commit.
 
 ## Done
 
+- MigrateAccount removed, SCHEMA_VERSION 18, store rotated — `f2dd3f6`.
 - Rename sweeps A+B (465→560 sites, both waves) — `3fddea7`, `37d2d37`.
 - Typed-id sweep (15 new NewTypes, gate 2 green) — `19be80b`.
 
