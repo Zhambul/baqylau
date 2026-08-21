@@ -23,8 +23,12 @@ Bugs 5–8, in order, one sonnet agent at a time. Bug 5 is running.
    annotations everywhere, NO foreign-document allowlist: the translators
    parse hook/transcript/rollout records into declared models and FAIL FAST
    on shape mismatch (a `translation_failed` verdict is the intended
-   behavior). Major: plan first, owner approves, then sonnet agents per
-   harness.
+   behavior). Owner re-asked 2026-08-21 with the example
+   `def parse_line(s: str) -> dict[str, Any] | None`. Wave order:
+   4-gate FIRST — an AST gate test banning `Any`/`object`/`dict[...]`
+   annotations in production packages, with a shrink-only allowlist seeded
+   from today's violations; the parsing rewrite then empties it. Unknown
+   field in a foreign record = FAIL (owner decision above).
 4b. **Enums, not string vocabularies** — every `frozenset({"toggle", ...})`
    command set and every `Literal["...", "..."]` union becomes an enum
    (`StrEnum`, so stored JSON and the wire stay byte-identical). Covers
