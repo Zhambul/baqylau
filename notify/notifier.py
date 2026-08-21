@@ -72,14 +72,14 @@ class _Alertable:
     status: ActorStatus | None
 
 
-def _lead_status(data: SessionData) -> ActorStatus | None:
+def _lead_status(session_data: SessionData) -> ActorStatus | None:
     """The session's own status, which is its LEAD actor's.
 
     A tab shows a session and a session shows its lead: a subagent asking itself
     a question is not the session asking you one.
     """
-    for actor in data.actors:
-        if actor.actor_id == data.session.lead_actor_id:
+    for actor in session_data.actors:
+        if actor.actor_id == session_data.session.lead_actor_id:
             return actor.status
     return None
 
@@ -97,25 +97,25 @@ class Notifier:
 
     def __init__(
         self,
-        read_model: SessionDataRepository,
-        terminal: TerminalAdapter,
-        repositories: RepositoryQueries,
-        notification_state: DashboardNotificationState,
-        notification_settings: NotificationSettingRepository,
-        push_subscriptions: PushSubscriptionRepository,
-        push_signing_keys: PushSigningKeyRepository,
+        session_data_repository: SessionDataRepository,
+        terminal_adapter: TerminalAdapter,
+        repository_queries: RepositoryQueries,
+        dashboard_notification_state: DashboardNotificationState,
+        notification_setting_repository: NotificationSettingRepository,
+        push_subscription_repository: PushSubscriptionRepository,
+        push_signing_key_repository: PushSigningKeyRepository,
         presence: Presence,
-        audit: AuditRecorder,
+        audit_recorder: AuditRecorder,
     ) -> None:
-        self.read_model = read_model
-        self.terminal = terminal
-        self.repositories = repositories
-        self.notification_state = notification_state
-        self.notification_settings = notification_settings
-        self.push_subscriptions = push_subscriptions
-        self.push_signing_keys = push_signing_keys
+        self.read_model = session_data_repository
+        self.terminal = terminal_adapter
+        self.repositories = repository_queries
+        self.notification_state = dashboard_notification_state
+        self.notification_settings = notification_setting_repository
+        self.push_subscriptions = push_subscription_repository
+        self.push_signing_keys = push_signing_key_repository
         self.presence = presence
-        self.audit = audit
+        self.audit = audit_recorder
         # One query per pass, not one per armed session.
         self._muted: frozenset[SessionId] = frozenset()
         self.previous_states: dict[SessionId, ActorStatus | None] | None = None
@@ -176,12 +176,12 @@ class Notifier:
         self.previous_states = current_states
         self._deliver_due(current_states, now)
 
-    def _schedule(self, item: _Alertable, state: ActorStatus, kind: str, now: float) -> None:
-        session_id = item.session_id
+    def _schedule(self, _alertable: _Alertable, state: ActorStatus, kind: str, now: float) -> None:
+        session_id = _alertable.session_id
         if not self.notification_settings.alerting_enabled() or session_id in self._muted:
             return
-        project = item.project
-        title = item.title
+        project = _alertable.project
+        title = _alertable.title
         self.notification_state.publish_notification(session_id, kind, project, title)
         delay = config.NOTIFICATION_DELAY_SECONDS
         if kind == "done":
@@ -253,8 +253,8 @@ class Notifier:
                     payload,
                     subscriptions,
                     self._attention_count(current_states),
-                    keys=self.push_signing_keys,
-                    subscriptions=self.push_subscriptions,
+                    push_signing_key_repository=self.push_signing_keys,
+                    push_subscription_repository=self.push_subscriptions,
                 )
             if push_handle is not None:
                 self._track(notification, push_handle)
@@ -285,13 +285,13 @@ class Notifier:
                     channels.telegram.send_alert(payload, reason),
                 )
 
-    def _track(self, notification: PendingNotification, handle: dict[str, Any] | None) -> None:
+    def _track(self, pending_notification: PendingNotification, handle: dict[str, Any] | None) -> None:
         if handle is None:
             return
-        self.delivered.setdefault(notification.session_id, []).append(
+        self.delivered.setdefault(pending_notification.session_id, []).append(
             DeliveredNotification(
-                notification.session_id,
-                notification.state,
+                pending_notification.session_id,
+                pending_notification.state,
                 handle,
                 time.monotonic(),
             )
@@ -320,8 +320,8 @@ class Notifier:
                 notification.handle,
                 "state-changed",
                 badge=badge,
-                keys=self.push_signing_keys,
-                subscriptions=self.push_subscriptions,
+                push_signing_key_repository=self.push_signing_keys,
+                push_subscription_repository=self.push_subscriptions,
             )
             if outcome in (channels.PENDING, channels.FAILED):
                 remaining.append(notification)
@@ -334,7 +334,7 @@ class Notifier:
 
     def _audit_retraction(
         self,
-        notification: DeliveredNotification,
+        delivered_notification: DeliveredNotification,
         outcome: str,
         age: float,
         reason: str = "state-changed",
@@ -344,9 +344,9 @@ class Notifier:
             "",
             "notify-retract",
             {
-                "session_id": str(notification.session_id),
-                "channel": notification.handle.get("ch"),
-                "kind": notification.handle.get("kind"),
+                "session_id": str(delivered_notification.session_id),
+                "channel": delivered_notification.handle.get("ch"),
+                "kind": delivered_notification.handle.get("kind"),
                 "reason": reason,
                 "outcome": outcome,
                 "age_seconds": round(max(0.0, age), 3),

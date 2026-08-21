@@ -26,7 +26,7 @@ class ScreenDriver(Protocol):
 
 
 def poll_until(
-    terminal: ScreenDriver,
+    screen_driver: ScreenDriver,
     window_id: str,
     predicate: Callable[[str], object],
     timeout: float,
@@ -34,12 +34,12 @@ def poll_until(
     poll: float = POLL_SECONDS,
 ) -> tuple[str, bool]:
     deadline = time.monotonic() + timeout
-    screen = terminal.get_text(window_id) or ""
+    screen = screen_driver.get_text(window_id) or ""
     while not predicate(screen):
         if time.monotonic() >= deadline:
             return screen, False
         sleep(poll)
-        screen = terminal.get_text(window_id) or ""
+        screen = screen_driver.get_text(window_id) or ""
     return screen, True
 
 

@@ -22,9 +22,9 @@ class UsageSource(Protocol):
 
 
 class HarnessUsageService(UsageSource):
-    def __init__(self, registry: HarnessRegistry, usage: AccountUsageRepository) -> None:
-        self.registry = registry
-        self.usage = usage
+    def __init__(self, harness_registry: HarnessRegistry, account_usage_repository: AccountUsageRepository) -> None:
+        self.registry = harness_registry
+        self.usage = account_usage_repository
 
     def read(self) -> tuple[UsageRow, ...]:
         rows: list[UsageRow] = []
@@ -41,8 +41,8 @@ class HarnessUsageService(UsageSource):
 class ApplicationUsageState:
     """The application's current usage rows, refreshed outside request handling."""
 
-    def __init__(self, source: UsageSource) -> None:
-        self.source = source
+    def __init__(self, usage_source: UsageSource) -> None:
+        self.source = usage_source
         self._lock = threading.Lock()
         self._rows: tuple[UsageRow, ...] = ()
 

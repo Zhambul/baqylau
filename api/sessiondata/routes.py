@@ -52,7 +52,7 @@ def session_data_list(
         mapper.session_data(
             data,
             live=data.session.session_id in live,
-            repository=repository(data.session.working_directory),
+            repository_status=repository(data.session.working_directory),
         )
         for data in visible
     )
@@ -69,7 +69,7 @@ def session_data(
     return mapper.session_data(
         data,
         live=_live(terminal, data.session.session_id),
-        repository=repositories.status(data.session.working_directory),
+        repository_status=repositories.status(data.session.working_directory),
     )
 
 
@@ -92,8 +92,8 @@ def session_entries(
     )
 
 
-def _found(read_model: SessionDataRepository, session_id: SessionId) -> SessionData:
-    data = read_model.read(session_id)
+def _found(session_data_repository: SessionDataRepository, session_id: SessionId) -> SessionData:
+    data = session_data_repository.read(session_id)
     if data is None:
         # By type, not a bare KeyError: this is the caller naming a session that
         # does not exist, and it is the reason the 400 handler exists at all.
@@ -101,10 +101,10 @@ def _found(read_model: SessionDataRepository, session_id: SessionId) -> SessionD
     return data
 
 
-def _live(terminal: TerminalAdapter, session_id: SessionId) -> bool:
+def _live(terminal_adapter: TerminalAdapter, session_id: SessionId) -> bool:
     """Whether a terminal window is attached right now.
 
     The window id itself is never exposed — a frontend needs to know whether the
     session is attended, not the handle it is attended through.
     """
-    return terminal.window_for_session(session_id) is not None
+    return terminal_adapter.window_for_session(session_id) is not None

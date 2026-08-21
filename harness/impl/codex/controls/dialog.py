@@ -133,7 +133,7 @@ class CodexAskError(Exception):
 
 
 def _poll(
-    fe: Driver,
+    driver: Driver,
     win: str,
     pred: Callable[[str], bool],
     timeout: float,
@@ -141,12 +141,12 @@ def _poll(
 ) -> tuple[str, bool]:
     """Poll `win`'s screen until pred(screen) or `timeout`; (screen, held)."""
     deadline = time.monotonic() + timeout
-    screen = fe.get_text(win) or ""
+    screen = driver.get_text(win) or ""
     while not pred(screen):
         if time.monotonic() >= deadline:
             return screen, False
         sleep(POLL_S)
-        screen = fe.get_text(win) or ""
+        screen = driver.get_text(win) or ""
     return screen, True
 
 
@@ -203,7 +203,7 @@ def _row_num(screen: str, label: str, prefix: str = "") -> str:
     return ""
 
 
-def none_row(screen: str, question: Prompt) -> str:
+def none_row(screen: str, prompt: Prompt) -> str:
     """The number of codex's appended `None of the above` row — the free-text
     answer's target. Matched by LABEL first; failing that (a truncated pane, a
     reworded row) by POSITION, which codex fixes: exactly one row more than the
@@ -213,7 +213,7 @@ def none_row(screen: str, question: Prompt) -> str:
     num = _row_num(screen, NONE_LABEL, NONE_PREFIX)
     if num:
         return num
-    n = len((question or {}).get("options") or ())
+    n = len((prompt or {}).get("options") or ())
     rs = rows(screen)
     if n and len(rs) == n + 1 and rs[-1]["num"] == str(n + 1):
         return rs[-1]["num"]
@@ -224,47 +224,47 @@ def _cursor_row(screen: str) -> OptionRow | None:
     return next((r for r in rows(screen) if r["cursor"]), None)
 
 
-def _cursor_to(fe: Driver, win: str, num: str, sleep: Callable[[float], None]) -> None:
+def _cursor_to(driver: Driver, win: str, num: str, sleep: Callable[[float], None]) -> None:
     """Move the `›` cursor onto option `num`: normalize UP to option 1 (up is a
     no-op there), then walk DOWN, screen-verified each step. Bail if `up` stops
     making progress (a trapped/edit row)."""
     prev: object = object()
     for _ in range(NAV_STEPS):
-        cur = _cursor_row(fe.get_text(win) or "")
+        cur = _cursor_row(driver.get_text(win) or "")
         if cur is not None and cur["num"] == "1":
             break
         key = None if cur is None else cur["num"]
         if key == prev:
             break
         prev = key
-        fe.send_key(win, "up")
+        driver.send_key(win, "up")
         sleep(POLL_S)
     for _ in range(NAV_STEPS):
-        cur = _cursor_row(fe.get_text(win) or "")
+        cur = _cursor_row(driver.get_text(win) or "")
         if cur is not None and cur["num"] == num:
             return
-        fe.send_key(win, "down")
+        driver.send_key(win, "down")
         sleep(POLL_S)
     raise CodexAskError("cursor", "cursor never reached option %s" % num)
 
 
-def _note(fe: Driver, win: str, text: str, sleep: Callable[[float], None]) -> None:
+def _note(driver: Driver, win: str, text: str, sleep: Callable[[float], None]) -> None:
     """`tab` into the notes field and type `text` (send_text presses Enter, which
     submits the question). The tab is VERIFIED — an unopened field would take the
     keystrokes as dialog navigation, and the Enter as a submit of whatever row the
     cursor happens to sit on."""
-    fe.send_key(win, "tab")
-    _, ok = _poll(fe, win, notes_open, STEP_TIMEOUT_S, sleep)
+    driver.send_key(win, "tab")
+    _, ok = _poll(driver, win, notes_open, STEP_TIMEOUT_S, sleep)
     if not ok:
         raise CodexAskError("notes", "notes field never opened")
-    if not fe.send_text(win, text):
+    if not driver.send_text(win, text):
         raise CodexAskError("notes", "notes not delivered")
 
 
 def _answer_one(
-    fe: Driver,
+    driver: Driver,
     win: str,
-    question: Prompt,
+    prompt: Prompt,
     ans: dict[str, Any],
     sleep: Callable[[float], None],
 ) -> None:
@@ -278,44 +278,44 @@ def _answer_one(
       · an option AND text     → the same, on the chosen option — codex's dialog
                                  natively carries a note beside a pick.
     """
-    labels = [o.get("label") or "" for o in (question.get("options") or [])]
+    labels = [o.get("label") or "" for o in (prompt.get("options") or [])]
     selected = [s for s in (ans.get("selected") or []) if s in labels]
     other = (ans.get("other") or "").strip()
     if selected:
         num = str(1 + labels.index(selected[0]))
     elif other:
-        num = none_row(fe.get_text(win) or "", question)
+        num = none_row(driver.get_text(win) or "", prompt)
         if not num:
             raise CodexAskError("noneof",
                                 "no %r row for a free-text answer" % NONE_LABEL)
     else:
         raise CodexAskError("options",
-                            "no answer for %r" % (question.get("question") or "")[:60])
-    _cursor_to(fe, win, num, sleep)
+                            "no answer for %r" % (prompt.get("question") or "")[:60])
+    _cursor_to(driver, win, num, sleep)
     if other:
-        _note(fe, win, other, sleep)
+        _note(driver, win, other, sleep)
     else:
-        fe.send_key(win, "enter")          # submit this question + advance
+        driver.send_key(win, "enter")          # submit this question + advance
 
 
-def _confirm(fe: Driver, win: str, sleep: Callable[[float], None]) -> None:
+def _confirm(driver: Driver, win: str, sleep: Callable[[float], None]) -> None:
     """Resolve the `Submit with unanswered questions?` step if it is up: cursor
     onto `Proceed` and ENTER. A no-op when no confirmation appeared (every
     question answered), so both callers can end with it."""
-    screen = fe.get_text(win) or ""
+    screen = driver.get_text(win) or ""
     if not confirm_open(screen):
         return
     num = _row_num(screen, PROCEED_LABEL) or "1"
-    _cursor_to(fe, win, num, sleep)
-    fe.send_key(win, "enter")
-    _, ok = _poll(fe, win, lambda s: not confirm_open(s), STEP_TIMEOUT_S, sleep)
+    _cursor_to(driver, win, num, sleep)
+    driver.send_key(win, "enter")
+    _, ok = _poll(driver, win, lambda s: not confirm_open(s), STEP_TIMEOUT_S, sleep)
     if not ok:
         raise CodexAskError("confirm",
                             "the unanswered-questions confirm stayed up")
 
 
 def drive(
-    fe: Driver,
+    driver: Driver,
     win: str,
     questions: list[Prompt],
     answers: list[dict[str, Any]],
@@ -328,7 +328,7 @@ def drive(
     order (forward-only), letting each answer advance the pane. Raises
     CodexAskError with the dialog LEFT OPEN on any unverified step; returns
     {"submitted": True}."""
-    screen, ok = _poll(fe, win, dialog_open, STEP_TIMEOUT_S, sleep)
+    screen, ok = _poll(driver, win, dialog_open, STEP_TIMEOUT_S, sleep)
     if not ok:
         raise CodexAskError("open", "no question dialog on screen")
     if len(answers) != len(questions):
@@ -336,7 +336,7 @@ def drive(
                             % (len(questions), len(answers)))
     last = -1
     for _ in range(len(questions) + 1):     # bounded; each pass advances one q
-        screen = fe.get_text(win) or ""
+        screen = driver.get_text(win) or ""
         if confirm_open(screen) or not dialog_open(screen):
             break                            # submitted out
         cur = current_question(screen)
@@ -349,13 +349,13 @@ def drive(
                                 "dialog did not advance past question %d" % n)
         if not (0 <= i < len(answers)):
             raise CodexAskError("answers", "no answer for question %d" % n)
-        _answer_one(fe, win, questions[i], answers[i], sleep)
+        _answer_one(driver, win, questions[i], answers[i], sleep)
         # confirm the answer advanced the pane (or closed the dialog) before
         # looking for the next question
         def answer_landed(s: str, n: int = n) -> bool:
             return ((current_question(s) or (0,))[0] != n
                     or not dialog_open(s) or confirm_open(s))
-        _, ok = _poll(fe, win, answer_landed, STEP_TIMEOUT_S, sleep)
+        _, ok = _poll(driver, win, answer_landed, STEP_TIMEOUT_S, sleep)
         if not ok:
             raise CodexAskError("advance",
                                 "dialog did not advance past question %d" % n)
@@ -363,12 +363,12 @@ def drive(
     # every question was answered, so this is normally a no-op — but a codex that
     # counts an answer differently must not leave the confirmation hanging with
     # the user's whole submission stuck behind it.
-    _confirm(fe, win, sleep)
+    _confirm(driver, win, sleep)
     return {"submitted": True}
 
 
 def decline(
-    fe: Driver,
+    driver: Driver,
     win: str,
     questions: list[Prompt],
     message: str = "",
@@ -393,7 +393,7 @@ def decline(
 
     Raises CodexAskError with the dialog LEFT OPEN on any unverified step; returns
     {"submitted": True, "unanswered": <count>}."""
-    screen, ok = _poll(fe, win, dialog_open, STEP_TIMEOUT_S, sleep)
+    screen, ok = _poll(driver, win, dialog_open, STEP_TIMEOUT_S, sleep)
     if not ok:
         raise CodexAskError("open", "no question dialog on screen")
     cur = current_question(screen)
@@ -404,10 +404,10 @@ def decline(
     for _ in range(m):
         if n >= m:
             break
-        fe.send_key(win, "right")
+        driver.send_key(win, "right")
         def moved_on(s: str, n: int = n) -> bool:
             return (current_question(s) or (n,))[0] != n
-        screen, ok = _poll(fe, win, moved_on, STEP_TIMEOUT_S, sleep)
+        screen, ok = _poll(driver, win, moved_on, STEP_TIMEOUT_S, sleep)
         if not ok:
             raise CodexAskError("navigate",
                                 "dialog did not move past question %d" % n)
@@ -416,20 +416,20 @@ def decline(
         raise CodexAskError("navigate",
                             "never reached question %d of %d" % (m, m))
     q = questions[m - 1] if 0 <= m - 1 < len(questions) else {}
-    num = none_row(fe.get_text(win) or "", q)
+    num = none_row(driver.get_text(win) or "", q)
     if not num:
         raise CodexAskError("noneof", "no %r row to decline with" % NONE_LABEL)
-    _cursor_to(fe, win, num, sleep)
+    _cursor_to(driver, win, num, sleep)
     if (message or "").strip():
-        _note(fe, win, message.strip(), sleep)
+        _note(driver, win, message.strip(), sleep)
     else:
-        fe.send_key(win, "enter")
-    _, ok = _poll(fe, win, lambda s: confirm_open(s) or not dialog_open(s),
+        driver.send_key(win, "enter")
+    _, ok = _poll(driver, win, lambda s: confirm_open(s) or not dialog_open(s),
                   STEP_TIMEOUT_S, sleep)
     if not ok:
         raise CodexAskError("advance", "dialog did not submit")
-    _confirm(fe, win, sleep)
-    _, ok = _poll(fe, win, lambda s: not dialog_open(s) and not confirm_open(s),
+    _confirm(driver, win, sleep)
+    _, ok = _poll(driver, win, lambda s: not dialog_open(s) and not confirm_open(s),
                   STEP_TIMEOUT_S, sleep)
     if not ok:
         raise CodexAskError("close", "the question dialog stayed on screen")

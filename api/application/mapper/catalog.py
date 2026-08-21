@@ -18,7 +18,7 @@ from harness.models import HarnessCatalogSnapshot, ModelOption, RewindModeOption
 
 
 def harness_catalog(
-    catalog: HarnessCatalogSnapshot,
+    harness_catalog_snapshot: HarnessCatalogSnapshot,
     models: tuple[ModelOption, ...],
     rewind_modes: tuple[RewindModeOption, ...],
 ) -> HarnessCatalogResponse:
@@ -29,7 +29,7 @@ def harness_catalog(
                 description=command.description,
                 minimum_prompt_count=command.minimum_prompt_count,
             )
-            for command in catalog.commands
+            for command in harness_catalog_snapshot.commands
         ),
         models=tuple(
             ModelOptionResponse(

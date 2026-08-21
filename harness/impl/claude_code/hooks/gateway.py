@@ -29,9 +29,9 @@ CLI_PROCESS_NAME = "claude"
 
 
 class ClaudeHookGateway(HarnessHookGateway):
-    def handle(self, request: HarnessHookRequest) -> HarnessHookResponse:
+    def handle(self, harness_hook_request: HarnessHookRequest) -> HarnessHookResponse:
         """Everything one hook delivery says, as raw events, plus the stdout reply."""
-        payload = request.payload
+        payload = harness_hook_request.payload
         document = json.loads(payload)
         if not isinstance(document, dict):
             raise ValueError("Claude Code hook payload must be an object")
@@ -50,7 +50,7 @@ class ClaudeHookGateway(HarnessHookGateway):
         # The client forwarded its environment's two account values raw; what a
         # valid account id looks like is decided here.
         account_id, account_display_name = account.normalize(
-            request.account_id, request.account_display_name
+            harness_hook_request.account_id, harness_hook_request.account_display_name
         )
         source_type = "hook"
         if (
@@ -76,20 +76,20 @@ class ClaudeHookGateway(HarnessHookGateway):
                 encoding="json",
                 payload=payload,
                 source_identity=f"claude_code:hook:{session_id}",
-                terminal_window_id=request.terminal_window_id,
-                harness_process_id=request.harness_process_id,
+                terminal_window_id=harness_hook_request.terminal_window_id,
+                harness_process_id=harness_hook_request.harness_process_id,
                 account_id=account_id,
                 account_display_name=account_display_name,
             )
         ]
-        if hook_name == "SessionStart" and (request.launch_model or request.launch_effort):
+        if hook_name == "SessionStart" and (harness_hook_request.launch_model or harness_hook_request.launch_effort):
             # The launch-time selections, observed from the CLI's environment.
             # SessionStart is the one delivery that marks a launch; the native
             # event id keys the observation, so a resume that re-asserts the
             # same environment converges on the same evidence.
             selections = {
-                "model": request.launch_model or None,
-                "effort": request.launch_effort or None,
+                "model": harness_hook_request.launch_model or None,
+                "effort": harness_hook_request.launch_effort or None,
             }
             raw_events.append(
                 RawEvent(

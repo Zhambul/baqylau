@@ -128,65 +128,65 @@ class PtyWindows:
 
 
 class PtyTabs(TerminalTabs):
-    def __init__(self, store: PtyWindows) -> None:
-        self.store = store
+    def __init__(self, pty_windows: PtyWindows) -> None:
+        self.pty_windows = pty_windows
 
-    def open_tab(self, request: TabOpenRequest) -> TabOpenResponse:
+    def open_tab(self, tab_open_request: TabOpenRequest) -> TabOpenResponse:
         # The request's title is not applied, for the reason TabOpenRequest gives
         # for leaving it to the program — and there is nothing here to show it.
-        window = self.store.launch(
-            request.command, request.working_directory, request.environment
+        window = self.pty_windows.launch(
+            tab_open_request.command, tab_open_request.working_directory, tab_open_request.environment
         )
         if window is None:
             return TabOpenResponse(False, None, "pty launch failed")
         return TabOpenResponse(True, window.window_id)
 
-    def close_tab(self, request: TabCloseRequest) -> TabCloseResponse:
-        closed = self.store.close(request.window_id)
+    def close_tab(self, tab_close_request: TabCloseRequest) -> TabCloseResponse:
+        closed = self.pty_windows.close(tab_close_request.window_id)
         return TabCloseResponse(closed, None if closed else NO_WINDOW)
 
-    def rename_tab(self, request: TabRenameRequest) -> TabRenameResponse:
+    def rename_tab(self, tab_rename_request: TabRenameRequest) -> TabRenameResponse:
         return TabRenameResponse(False, NO_CHROME)
 
-    def set_tab_color(self, request: TabColorSetRequest) -> TabColorSetResponse:
+    def set_tab_color(self, tab_color_set_request: TabColorSetRequest) -> TabColorSetResponse:
         return TabColorSetResponse(False, NO_CHROME)
 
-    def clear_tab_color(self, request: TabColorClearRequest) -> TabColorClearResponse:
+    def clear_tab_color(self, tab_color_clear_request: TabColorClearRequest) -> TabColorClearResponse:
         return TabColorClearResponse(False, NO_CHROME)
 
 
 class PtyPanes(TerminalPanes):
-    def __init__(self, store: PtyWindows) -> None:
-        self.store = store
+    def __init__(self, pty_windows: PtyWindows) -> None:
+        self.pty_windows = pty_windows
 
-    def open_pane(self, request: PaneOpenRequest) -> PaneOpenResponse:
+    def open_pane(self, pane_open_request: PaneOpenRequest) -> PaneOpenResponse:
         return PaneOpenResponse(False, None, NO_SPLITS)
 
-    def close_pane(self, request: PaneCloseRequest) -> PaneCloseResponse:
-        closed = self.store.close(request.window_id)
+    def close_pane(self, pane_close_request: PaneCloseRequest) -> PaneCloseResponse:
+        closed = self.pty_windows.close(pane_close_request.window_id)
         return PaneCloseResponse(closed, None if closed else NO_WINDOW)
 
-    def resize_pane(self, request: PaneResizeRequest) -> PaneResizeResponse:
+    def resize_pane(self, pane_resize_request: PaneResizeRequest) -> PaneResizeResponse:
         # The one pane operation a pty really has: a window size is a property
         # of the tty, and a program watching SIGWINCH reflows for it.
-        window = self.store.get(request.window_id)
+        window = self.pty_windows.get(pane_resize_request.window_id)
         if window is None:
             return PaneResizeResponse(False, NO_WINDOW)
         columns, lines = window.screen.columns, window.screen.lines
-        if request.axis == "horizontal":
-            columns = max(1, columns + request.cells)
+        if pane_resize_request.axis == "horizontal":
+            columns = max(1, columns + pane_resize_request.cells)
         else:
-            lines = max(1, lines + request.cells)
+            lines = max(1, lines + pane_resize_request.cells)
         resized = window.resize(columns, lines)
         return PaneResizeResponse(resized, None if resized else "pty resize failed")
 
-    def focus_window(self, request: WindowFocusRequest) -> WindowFocusResponse:
+    def focus_window(self, window_focus_request: WindowFocusRequest) -> WindowFocusResponse:
         return WindowFocusResponse(False, NO_FOCUS)
 
 
 class PtyMetadata(TerminalMetadata):
-    def __init__(self, store: PtyWindows) -> None:
-        self.store = store
+    def __init__(self, pty_windows: PtyWindows) -> None:
+        self.pty_windows = pty_windows
 
     def windows(self) -> tuple[WindowInfo, ...]:
         """Every open window, each alone in a tab of its own — which is what a
@@ -211,17 +211,17 @@ class PtyMetadata(TerminalMetadata):
                 # the user is looking at is on screen.
                 tab_is_focused=False,
             )
-            for window in self.store.windows.values()
+            for window in self.pty_windows.windows.values()
             if window.process.poll() is None
         )
 
-    def tag_window(self, request: WindowTagRequest) -> WindowTagResponse:
-        window = self.store.get(request.window_id)
+    def tag_window(self, window_tag_request: WindowTagRequest) -> WindowTagResponse:
+        window = self.pty_windows.get(window_tag_request.window_id)
         if window is None:
             return WindowTagResponse(False, NO_WINDOW)
         # Stored IN the window, so a tag has exactly the window's lifetime —
         # the property the contract asks of this operation.
-        window.tags.update({str(name): str(value) for name, value in request.tags.items()})
+        window.tags.update({str(name): str(value) for name, value in window_tag_request.tags.items()})
         return WindowTagResponse(True)
 
     def current_window_id(self) -> str | None:
@@ -230,52 +230,52 @@ class PtyMetadata(TerminalMetadata):
 
 
 class PtyInput(TerminalInput):
-    def __init__(self, store: PtyWindows) -> None:
-        self.store = store
+    def __init__(self, pty_windows: PtyWindows) -> None:
+        self.pty_windows = pty_windows
 
-    def submit_text(self, request: TextSubmitRequest) -> TextSubmitResponse:
-        window = self.store.get(request.window_id)
+    def submit_text(self, text_submit_request: TextSubmitRequest) -> TextSubmitResponse:
+        window = self.pty_windows.get(text_submit_request.window_id)
         if window is None:
             return TextSubmitResponse(False, NO_WINDOW)
-        payload = request.text.encode("utf-8")
-        if request.mode == "paste":
+        payload = text_submit_request.text.encode("utf-8")
+        if text_submit_request.mode == "paste":
             payload = keys.BRACKETED_PASTE_START + payload + keys.BRACKETED_PASTE_END
         # The Enter stays a separate keystroke, so it submits rather than
         # becoming a newline in the draft (TextSubmitRequest).
         delivered = window.write(payload) and window.write(keys.NAMED_KEYS["enter"])
         return TextSubmitResponse(delivered, None if delivered else "pty input failed")
 
-    def send_key(self, request: KeySendRequest) -> KeySendResponse:
-        window = self.store.get(request.window_id)
+    def send_key(self, key_send_request: KeySendRequest) -> KeySendResponse:
+        window = self.pty_windows.get(key_send_request.window_id)
         if window is None:
             return KeySendResponse(False, NO_WINDOW)
-        payload = keys.chord(request.key)
+        payload = keys.chord(key_send_request.key)
         if payload is None:
-            return KeySendResponse(False, f"the pty terminal cannot send {request.key!r}")
+            return KeySendResponse(False, f"the pty terminal cannot send {key_send_request.key!r}")
         delivered = window.write(payload)
         return KeySendResponse(delivered, None if delivered else "pty key input failed")
 
 
 class PtyViewport(TerminalViewport):
-    def __init__(self, store: PtyWindows) -> None:
-        self.store = store
+    def __init__(self, pty_windows: PtyWindows) -> None:
+        self.pty_windows = pty_windows
 
-    def read_screen(self, request: ScreenReadRequest) -> ScreenReadResponse:
-        if request.ansi:
+    def read_screen(self, screen_read_request: ScreenReadRequest) -> ScreenReadResponse:
+        if screen_read_request.ansi:
             return ScreenReadResponse(False, None, NO_ANSI)
-        window = self.store.get(request.window_id)
+        window = self.pty_windows.get(screen_read_request.window_id)
         if window is None:
             return ScreenReadResponse(False, None, NO_WINDOW)
         return ScreenReadResponse(True, window.display())
 
 
-def pty_plugin(windows: PtyWindows | None = None) -> TerminalPlugin:
-    windows = windows if windows is not None else PtyWindows()
+def pty_plugin(pty_windows: PtyWindows | None = None) -> TerminalPlugin:
+    pty_windows = pty_windows if pty_windows is not None else PtyWindows()
     return TerminalPlugin(
         name="pty",
-        tabs=PtyTabs(windows),
-        panes=PtyPanes(windows),
-        metadata=PtyMetadata(windows),
-        input=PtyInput(windows),
-        viewport=PtyViewport(windows),
+        tabs=PtyTabs(pty_windows),
+        panes=PtyPanes(pty_windows),
+        metadata=PtyMetadata(pty_windows),
+        input=PtyInput(pty_windows),
+        viewport=PtyViewport(pty_windows),
     )

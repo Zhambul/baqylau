@@ -78,7 +78,7 @@ class HarnessHookGateway(Protocol):
     synchronous reply channel returns b"". Rejecting a malformed delivery is
     `raise ValueError`."""
 
-    def handle(self, request: HarnessHookRequest) -> HarnessHookResponse: ...
+    def handle(self, harness_hook_request: HarnessHookRequest) -> HarnessHookResponse: ...
 
 
 class HarnessTelemetryGateway(Protocol):
@@ -91,8 +91,8 @@ class HarnessTelemetryGateway(Protocol):
 
     def handle(
         self,
-        request: HarnessTelemetryRequest,
-        context: TelemetryContext,
+        harness_telemetry_request: HarnessTelemetryRequest,
+        telemetry_context: TelemetryContext,
     ) -> HarnessTelemetryResponse: ...
 
 
@@ -130,7 +130,7 @@ class HarnessCanonicalEventReactor(Protocol):
     the event's harness, so implementations carry no harness check."""
 
     def react(
-        self, canonical_event: CanonicalEvent[EventPayload], controls: HarnessReactorContext
+        self, canonical_event: CanonicalEvent[EventPayload], harness_reactor_context: HarnessReactorContext
     ) -> None: ...
 
 
@@ -153,7 +153,7 @@ class ControlHandler(Protocol):
     def __call__(
         self,
         request: ControlRequest,
-        context: ControlContext,
+        control_context: ControlContext,
     ) -> ControlOutcome: ...
 
 
@@ -164,20 +164,20 @@ class HarnessController:
     def execute(
         self,
         request: ControlRequest,
-        context: ControlContext,
+        control_context: ControlContext,
     ) -> ControlOutcome:
         handler = self.handlers.get(request.control_name)
         if handler is None:
             return ControlResult(request_id=request.request_id, status="rejected", reason="unsupported control")
-        return handler(request, context)
+        return handler(request, control_context)
 
 
 class HarnessLauncher(Protocol):
-    def prepare(self, request: LaunchRequest) -> HarnessLaunchPlan: ...
+    def prepare(self, launch_request: LaunchRequest) -> HarnessLaunchPlan: ...
 
 
 class HarnessCatalog(Protocol):
-    def read(self, context: QueryContext) -> HarnessCatalogSnapshot: ...
+    def read(self, query_context: QueryContext) -> HarnessCatalogSnapshot: ...
 
 
 class HarnessUsage(Protocol):
@@ -188,11 +188,11 @@ class HarnessUsage(Protocol):
     else does, and a harness that queries live needs nothing from it.
     """
 
-    def read(self, usage: AccountUsageRepository) -> tuple[UsageRow, ...]: ...
+    def read(self, account_usage_repository: AccountUsageRepository) -> tuple[UsageRow, ...]: ...
 
 
 class HarnessTerminalProbe(Protocol):
-    def input_state(self, viewport: TerminalViewport, window_id: str) -> TerminalInputState | None: ...
+    def input_state(self, terminal_viewport: TerminalViewport, window_id: str) -> TerminalInputState | None: ...
 
 
 @dataclass(frozen=True)

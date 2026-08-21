@@ -223,7 +223,7 @@ class Presence:
 
 
     def route(
-        self, subscriptions: PushSubscriptionRepository
+        self, push_subscription_repository: PushSubscriptionRepository
     ) -> tuple[str | None, list[RoutedSubscription], dict[str, object]]:
         """WHICH DEVICE you are most likely at right now, and what can reach it.
         Returns `(target, targets, decision)`:
@@ -250,7 +250,7 @@ class Presence:
              "label": subscription.device_label,
              "keys": {"p256dh": subscription.public_key,
                       "auth": subscription.authentication_secret}}
-            for subscription in subscriptions.subscriptions()
+            for subscription in push_subscription_repository.subscriptions()
         ]
         now = time.monotonic()
 

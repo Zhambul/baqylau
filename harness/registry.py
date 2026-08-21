@@ -20,31 +20,32 @@ class HarnessRegistry:
     def __init__(self) -> None:
         self._plugins: dict[str, HarnessPlugin] = {}
 
-    def register(self, plugin: HarnessPlugin) -> None:
-        name = plugin.info.name.strip()
+    def register(self, harness_plugin: HarnessPlugin) -> None:
+        name = harness_plugin.info.name.strip()
         if not name:
             raise HarnessRegistryError("harness name cannot be empty")
-        if name != plugin.info.name:
+        if name != harness_plugin.info.name:
             raise HarnessRegistryError("harness name cannot have surrounding whitespace")
         if name in self._plugins:
             raise HarnessRegistryError(f"duplicate harness: {name}")
-        if plugin.info.canonical_version != SCHEMA_VERSION:
+        if harness_plugin.info.canonical_version != SCHEMA_VERSION:
             raise HarnessRegistryError(
-                f"harness {name!r} uses canonical version {plugin.info.canonical_version}, expected {SCHEMA_VERSION}"
+                f"harness {name!r} uses canonical version {harness_plugin.info.canonical_version}, "
+                f"expected {SCHEMA_VERSION}"
             )
-        if plugin.info.supports_attachments and plugin.launcher is None:
+        if harness_plugin.info.supports_attachments and harness_plugin.launcher is None:
             raise HarnessRegistryError(
                 f"harness {name!r} advertises attachments without a launcher"
             )
-        if plugin.info.default_for_launch and plugin.launcher is None:
+        if harness_plugin.info.default_for_launch and harness_plugin.launcher is None:
             raise HarnessRegistryError(
                 f"harness {name!r} is the launch default but has no launcher"
             )
-        if plugin.info.default_for_launch and any(
+        if harness_plugin.info.default_for_launch and any(
             registered.info.default_for_launch for registered in self._plugins.values()
         ):
             raise HarnessRegistryError("multiple harnesses are marked as the launch default")
-        self._plugins[name] = plugin
+        self._plugins[name] = harness_plugin
 
     def validate(self) -> None:
         launchable = [plugin for plugin in self._plugins.values() if plugin.launcher is not None]

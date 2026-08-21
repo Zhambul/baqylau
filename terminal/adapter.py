@@ -101,8 +101,8 @@ class SessionPaneRequest:
 
 
 class TerminalAdapter:
-    def __init__(self, plugin: TerminalPlugin, sessions: "SessionRepository") -> None:
-        self._plugin = plugin
+    def __init__(self, terminal_plugin: TerminalPlugin, sessions: "SessionRepository") -> None:
+        self._plugin = terminal_plugin
         self._sessions = sessions
 
     # --- session ⇄ window ---------------------------------------------------
@@ -145,29 +145,29 @@ class TerminalAdapter:
     def session_panes_are_open(self, session_id: SessionId) -> bool:
         return self._tagged(ACTIVITY_PANE_TAG, session_id) is not None
 
-    def open_session_panes(self, request: SessionPaneRequest) -> SessionTerminalResult:
+    def open_session_panes(self, session_pane_request: SessionPaneRequest) -> SessionTerminalResult:
         """The mirror and scoreboard panes, as one gesture.
 
         Idempotent by rediscovery: a pane that is already open is found by its
         tag and left alone, so a toggle survives a daemon restart.
         """
-        session_id = str(request.session_id)
-        anchor_window_id = request.anchor_window_id
+        session_id = str(session_pane_request.session_id)
+        anchor_window_id = session_pane_request.anchor_window_id
         outcomes: list[TerminalOutcome] = [self._plugin.metadata.tag_window(
             WindowTagRequest(anchor_window_id, {SESSION_WINDOW_TAG: session_id})
         )]
-        if self._tagged(ACTIVITY_PANE_TAG, request.session_id) is None:
+        if self._tagged(ACTIVITY_PANE_TAG, session_pane_request.session_id) is None:
             outcomes.append(self._plugin.panes.open_pane(PaneOpenRequest(
                 command=self._pane_command("mirror", session_id),
                 working_directory="",
                 title=MIRROR_PANE_TITLE,
                 split="vertical",
-                size_percent=request.activity_width_percent,
+                size_percent=session_pane_request.activity_width_percent,
                 anchor=PaneAnchor(window_id=anchor_window_id),
                 same_tab_as=anchor_window_id,
                 tags={ACTIVITY_PANE_TAG: session_id},
             )))
-        if self._tagged(SCOREBOARD_PANE_TAG, request.session_id) is None:
+        if self._tagged(SCOREBOARD_PANE_TAG, session_pane_request.session_id) is None:
             outcomes.append(self._plugin.panes.open_pane(PaneOpenRequest(
                 command=self._pane_command("scoreboard", session_id),
                 working_directory="",
@@ -180,14 +180,14 @@ class TerminalAdapter:
                 same_tab_as=anchor_window_id,
                 tags={SCOREBOARD_PANE_TAG: session_id},
             )))
-            outcomes.append(self._settle_scoreboard_height(request.session_id))
+            outcomes.append(self._settle_scoreboard_height(session_pane_request.session_id))
         # Hand inner focus back to the host pane the splits took it from, which
         # restores the host's window title as the visible tab title.
         outcomes.append(self._plugin.panes.focus_window(WindowFocusRequest(anchor_window_id)))
         # Named before the fold, not inside it: a pane process that died on
         # startup is the most useful thing we can say, and `_combined` reports
         # one reason for the whole composite.
-        alive = self._confirm_panes_alive(request.session_id)
+        alive = self._confirm_panes_alive(session_pane_request.session_id)
         if not alive.succeeded:
             return alive
         return self._combined(outcomes, "terminal pane setup failed")
@@ -256,12 +256,12 @@ class TerminalAdapter:
     def paint_session_tab(
         self,
         session_id: SessionId,
-        appearance: TabAppearance,
+        tab_appearance: TabAppearance,
     ) -> SessionTerminalResult:
         window_id = self.window_for_session(session_id)
         if window_id is None:
             return SessionTerminalResult(False, "session has no terminal window")
-        response = self._plugin.tabs.set_tab_color(TabColorSetRequest(window_id, appearance))
+        response = self._plugin.tabs.set_tab_color(TabColorSetRequest(window_id, tab_appearance))
         return SessionTerminalResult(response.succeeded, response.reason)
 
     def clear_session_tab(self, session_id: SessionId) -> SessionTerminalResult:

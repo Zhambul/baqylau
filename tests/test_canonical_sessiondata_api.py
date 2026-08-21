@@ -135,7 +135,7 @@ def test_the_snapshot_carries_the_facts_the_world_state_and_one_cursor():
     )
 
     response = mapper.session_data(
-        data, live=True, repository=RepositoryStatus("main", None, True)
+        data, live=True, repository_status=RepositoryStatus("main", None, True)
     )
 
     assert response.cursor == 4812
@@ -229,7 +229,7 @@ def test_the_writers_own_memory_never_reaches_a_client():
             cursor=1,
         ),
         live=False,
-        repository=None,
+        repository_status=None,
     )
 
     encoded = response.model_dump_json()
@@ -508,7 +508,7 @@ def test_the_wire_shapes_survive_a_round_trip_through_the_store(tmp_path):
     )
 
     data = read_model.read(SESSION)
-    response = mapper.session_data(data, live=True, repository=None, now=time.time())
+    response = mapper.session_data(data, live=True, repository_status=None, now=time.time())
     page = mapper.entry_page(read_model.entries_page(SESSION, limit=10))
 
     assert response.session.title == "Fix the SSE reconnect bug"

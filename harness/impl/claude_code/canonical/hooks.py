@@ -28,7 +28,7 @@ from harness.models.selections import SelectionSemantics
 def effort_report(
     raw_event: RawEvent,
     document: dict[str, Any],
-    selections: SelectionSemantics,
+    selection_semantics: SelectionSemantics,
 ) -> list[CanonicalEvent[EventPayload]]:
     """The active effort level Claude Code reports on hooks that fire mid-turn
     (PreToolUse, PostToolUse, Stop, SubagentStop), when the current model
@@ -44,7 +44,7 @@ def effort_report(
         level = level.get("level")
     if not isinstance(level, str) or not level:
         return []
-    changed = selections.effort(
+    changed = selection_semantics.effort(
         raw_event.session_id, raw_event.actor_id, level, "reported_by_harness"
     )
     if changed is None:
@@ -62,7 +62,7 @@ def effort_report(
 
 def turn_finished(
     raw_event: RawEvent,
-    turns: TurnSemantics,
+    turn_semantics: TurnSemantics,
     native_identity: str,
     outcome: Outcome,
 ) -> CanonicalEvent[EventPayload]:
@@ -70,7 +70,7 @@ def turn_finished(
     so the one Stop per turn is one fact; a Stop with no turn open — the daemon
     started mid-turn — falls back to the hook's own identity rather than
     colliding with the last one."""
-    turn_id = turns.close(raw_event)
+    turn_id = turn_semantics.close(raw_event)
     return event(
         raw_event,
         "turn",
@@ -84,9 +84,9 @@ def turn_finished(
 def translate_hook(
     raw_event: RawEvent,
     document: dict[str, Any],
-    toolcalls: ToolCallSemantics,
-    turns: TurnSemantics,
-    selections: SelectionSemantics,
+    tool_call_semantics: ToolCallSemantics,
+    turn_semantics: TurnSemantics,
+    selection_semantics: SelectionSemantics,
 ) -> list[CanonicalEvent[EventPayload]]:
     hook_name = document.get("hook_event_name") or ""
     native_identity = str(document.get("hook_event_id") or document.get("uuid") or raw_event.source_position)
@@ -97,11 +97,11 @@ def translate_hook(
         return [event(raw_event, "session", str(raw_event.session_id), "finished", payload)]
     if hook_name == "Stop":
         return [
-            turn_finished(raw_event, turns, native_identity, "succeeded"),
-            *effort_report(raw_event, document, selections),
+            turn_finished(raw_event, turn_semantics, native_identity, "succeeded"),
+            *effort_report(raw_event, document, selection_semantics),
         ]
     if hook_name == "StopFailure":
-        events = [turn_finished(raw_event, turns, native_identity, "failed")]
+        events = [turn_finished(raw_event, turn_semantics, native_identity, "failed")]
         if document.get("error") == "rate_limit":
             events.append(event(
                 raw_event,
@@ -113,13 +113,13 @@ def translate_hook(
         return events
     if hook_name == "PreToolUse":
         return [
-            *toolcalls.tool_started(raw_event, document),
-            *effort_report(raw_event, document, selections),
+            *tool_call_semantics.tool_started(raw_event, document),
+            *effort_report(raw_event, document, selection_semantics),
         ]
     if hook_name in ("PostToolUse", "PostToolUseFailure"):
         return [
-            *toolcalls.tool_finished(raw_event, document, hook_name == "PostToolUseFailure"),
-            *effort_report(raw_event, document, selections),
+            *tool_call_semantics.tool_finished(raw_event, document, hook_name == "PostToolUseFailure"),
+            *effort_report(raw_event, document, selection_semantics),
         ]
     if hook_name == "SubagentStart":
         actor_id = raw_event.actor_id
@@ -154,7 +154,7 @@ def translate_hook(
         # regardless, straight from the child's own process.
         return [
             event(raw_event, "actor", str(raw_event.actor_id), "finished", ActorFinished(None)),
-            *effort_report(raw_event, document, selections),
+            *effort_report(raw_event, document, selection_semantics),
         ]
     if hook_name in ("TaskCreated", "TaskCompleted"):
         return []

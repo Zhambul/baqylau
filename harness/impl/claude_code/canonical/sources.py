@@ -28,12 +28,12 @@ class ClaudeTranscriptRawEventSource(HarnessRawEventSource):
 
     def __init__(
         self,
-        context: RawEventSourceContext,
+        raw_event_source_context: RawEventSourceContext,
         actor_role: Literal["child", "teammate"] | None = None,
     ) -> None:
-        self.context = context
+        self.context = raw_event_source_context
         self.actor_role = actor_role
-        self.source_path = os.path.realpath(context.source_reference)
+        self.source_path = os.path.realpath(raw_event_source_context.source_reference)
         source_hash = hashlib.sha256(self.source_path.encode("utf-8")).hexdigest()
         self.source_identity = f"claude_code:transcript:{source_hash}"
 

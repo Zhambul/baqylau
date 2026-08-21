@@ -28,19 +28,19 @@ PANE_RESPONSES = with_body(PaneCommandResponse, {
 
 
 def _execute(
-    panes: PaneCommandService,
+    pane_command_service: PaneCommandService,
     command: str,
-    body: PaneGestureRequest,
+    pane_gesture_request: PaneGestureRequest,
     response: Response,
     columns: int | None = None,
     percent: int | None = None,
 ) -> PaneCommandResponse:
     """The status is set ON the injected response, so the handler can return the
     reply model itself rather than a hand-serialized copy of it."""
-    outcome = panes.execute(
+    outcome = pane_command_service.execute(
         command,
-        body.window_id,
-        body.working_directory,
+        pane_gesture_request.window_id,
+        pane_gesture_request.working_directory,
         columns=columns,
         percent=percent,
     )
@@ -50,34 +50,34 @@ def _execute(
 
 @router.post("/api/terminal/panes/toggle", responses=PANE_RESPONSES)
 def toggle_panes(
-    body: TogglePanesRequest, panes: PaneCommands, response: Response
+    toggle_panes_request: TogglePanesRequest, panes: PaneCommands, response: Response
 ) -> PaneCommandResponse:
-    return _execute(panes, "toggle", body, response)
+    return _execute(panes, "toggle", toggle_panes_request, response)
 
 
 @router.post("/api/terminal/panes/grow", responses=PANE_RESPONSES)
 def grow_pane(
-    body: GrowPaneRequest, panes: PaneCommands, response: Response
+    grow_pane_request: GrowPaneRequest, panes: PaneCommands, response: Response
 ) -> PaneCommandResponse:
-    return _execute(panes, "grow", body, response, columns=body.columns)
+    return _execute(panes, "grow", grow_pane_request, response, columns=grow_pane_request.columns)
 
 
 @router.post("/api/terminal/panes/shrink", responses=PANE_RESPONSES)
 def shrink_pane(
-    body: ShrinkPaneRequest, panes: PaneCommands, response: Response
+    shrink_pane_request: ShrinkPaneRequest, panes: PaneCommands, response: Response
 ) -> PaneCommandResponse:
-    return _execute(panes, "shrink", body, response, columns=body.columns)
+    return _execute(panes, "shrink", shrink_pane_request, response, columns=shrink_pane_request.columns)
 
 
 @router.post("/api/terminal/panes/reset", responses=PANE_RESPONSES)
 def reset_pane(
-    body: ResetPaneRequest, panes: PaneCommands, response: Response
+    reset_pane_request: ResetPaneRequest, panes: PaneCommands, response: Response
 ) -> PaneCommandResponse:
-    return _execute(panes, "reset", body, response)
+    return _execute(panes, "reset", reset_pane_request, response)
 
 
 @router.post("/api/terminal/panes/set-percent", responses=PANE_RESPONSES)
 def set_pane_percent(
-    body: SetPanePercentRequest, panes: PaneCommands, response: Response
+    set_pane_percent_request: SetPanePercentRequest, panes: PaneCommands, response: Response
 ) -> PaneCommandResponse:
-    return _execute(panes, "setpct", body, response, percent=body.percent)
+    return _execute(panes, "setpct", set_pane_percent_request, response, percent=set_pane_percent_request.percent)

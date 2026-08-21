@@ -8,7 +8,7 @@ from harness.impl.codex import commands
 
 
 class CodexCatalog(HarnessCatalog):
-    def read(self, context: QueryContext) -> HarnessCatalogSnapshot:
+    def read(self, query_context: QueryContext) -> HarnessCatalogSnapshot:
         return HarnessCatalogSnapshot(
             commands=tuple(
                 CommandOption(
@@ -16,6 +16,6 @@ class CodexCatalog(HarnessCatalog):
                     description=row.get("desc") or "",
                     minimum_prompt_count=0,
                 )
-                for row in commands.slash_commands(context.working_directory or "")
+                for row in commands.slash_commands(query_context.working_directory or "")
             ),
         )

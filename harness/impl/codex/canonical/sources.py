@@ -79,14 +79,14 @@ class CodexRolloutRawEventSource(HarnessRawEventSource):
 
     def __init__(
         self,
-        context: RawEventSourceContext,
+        raw_event_source_context: RawEventSourceContext,
         child_body_position: int | None = None,
         actor_relation: Literal["child", "sidecar"] | None = None,
     ) -> None:
-        self.context = context
+        self.context = raw_event_source_context
         self.child_body_position = child_body_position
         self.actor_relation = actor_relation
-        self.source_path = os.path.realpath(context.source_reference)
+        self.source_path = os.path.realpath(raw_event_source_context.source_reference)
         source_hash = hashlib.sha256(self.source_path.encode("utf-8")).hexdigest()
         self.source_identity = f"codex:rollout:{source_hash}"
 

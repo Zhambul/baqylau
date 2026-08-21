@@ -54,17 +54,17 @@ CONTROL_RESPONSES = with_body(ControlOutcomeResponse, {
 
 @router.post("/api/sessions", status_code=202, responses=LAUNCH_RESPONSES)
 def launch(
-    body: LaunchSessionRequest, launcher: Launcher, response: Response
+    launch_session_request: LaunchSessionRequest, launcher: Launcher, response: Response
 ) -> LaunchResponse:
-    result = launcher.launch(body.harness, body.request())
+    result = launcher.launch(launch_session_request.harness, launch_session_request.request())
     response.status_code = LAUNCH_STATUS[result.status]
     return mapper.launch(result)
 
 
 def _execute(
-    controls: HarnessControlService,
+    harness_control_service: HarnessControlService,
     session_id: str,
-    body: ControlRequestBody,
+    control_request_body: ControlRequestBody,
     response: Response,
 ) -> ControlOutcomeResponse:
     """One gesture: the request model builds its harness dataclass, the
@@ -73,7 +73,7 @@ def _execute(
     The status is set ON the injected response rather than by wrapping the body
     in one, which is what lets the handler return the outcome ITSELF.
     """
-    outcome = controls.execute(body.request(SessionId(session_id)))
+    outcome = harness_control_service.execute(control_request_body.request(SessionId(session_id)))
     response.status_code = CONTROL_STATUS[outcome.status]
     return mapper.control_outcome(outcome)
 
@@ -81,23 +81,23 @@ def _execute(
 @router.post("/api/sessions/{session_id}/controls/send-text",
              responses=CONTROL_RESPONSES)
 def send_text(
-    session_id: SessionIdPath, body: SendTextRequest, controls: Controls, response: Response
+    session_id: SessionIdPath, send_text_request: SendTextRequest, controls: Controls, response: Response
 ) -> ControlOutcomeResponse:
-    return _execute(controls, session_id, body, response)
+    return _execute(controls, session_id, send_text_request, response)
 
 
 @router.post("/api/sessions/{session_id}/controls/interrupt",
              responses=CONTROL_RESPONSES)
 def interrupt(
-    session_id: SessionIdPath, body: InterruptRequest, controls: Controls, response: Response
+    session_id: SessionIdPath, interrupt_request: InterruptRequest, controls: Controls, response: Response
 ) -> ControlOutcomeResponse:
-    return _execute(controls, session_id, body, response)
+    return _execute(controls, session_id, interrupt_request, response)
 
 
 @router.post("/api/sessions/{session_id}/controls/background",
              responses=CONTROL_RESPONSES)
 def background(
-    session_id: SessionIdPath, body: BackgroundRequest, controls: Controls, response: Response
+    session_id: SessionIdPath, background_request: BackgroundRequest, controls: Controls, response: Response
 ) -> ControlOutcomeResponse:
     """Move the command the harness is blocked on into the background.
 
@@ -106,100 +106,100 @@ def background(
     harness's own offer before pressing anything, so an acknowledgement means the
     keystroke reached a program that was ready to receive it.
     """
-    return _execute(controls, session_id, body, response)
+    return _execute(controls, session_id, background_request, response)
 
 
 @router.post("/api/sessions/{session_id}/controls/close-session",
              responses=CONTROL_RESPONSES)
 def close_session(
-    session_id: SessionIdPath, body: CloseSessionRequest, controls: Controls, response: Response
+    session_id: SessionIdPath, close_session_request: CloseSessionRequest, controls: Controls, response: Response
 ) -> ControlOutcomeResponse:
-    return _execute(controls, session_id, body, response)
+    return _execute(controls, session_id, close_session_request, response)
 
 
 @router.post("/api/sessions/{session_id}/controls/rename-session",
              responses=CONTROL_RESPONSES)
 def rename_session(
-    session_id: SessionIdPath, body: RenameSessionRequest, controls: Controls, response: Response
+    session_id: SessionIdPath, rename_session_request: RenameSessionRequest, controls: Controls, response: Response
 ) -> ControlOutcomeResponse:
-    return _execute(controls, session_id, body, response)
+    return _execute(controls, session_id, rename_session_request, response)
 
 
 @router.post("/api/sessions/{session_id}/controls/auto-name-session",
              responses=CONTROL_RESPONSES)
 def auto_name_session(
-    session_id: SessionIdPath, body: AutoNameSessionRequest, controls: Controls, response: Response
+    session_id: SessionIdPath, auto_name_session_request: AutoNameSessionRequest, controls: Controls, response: Response
 ) -> ControlOutcomeResponse:
-    return _execute(controls, session_id, body, response)
+    return _execute(controls, session_id, auto_name_session_request, response)
 
 
 @router.post("/api/sessions/{session_id}/controls/open-rewind",
              responses=CONTROL_RESPONSES)
 def open_rewind(
-    session_id: SessionIdPath, body: OpenRewindRequest, controls: Controls, response: Response
+    session_id: SessionIdPath, open_rewind_request: OpenRewindRequest, controls: Controls, response: Response
 ) -> ControlOutcomeResponse:
-    return _execute(controls, session_id, body, response)
+    return _execute(controls, session_id, open_rewind_request, response)
 
 
 @router.post("/api/sessions/{session_id}/controls/apply-rewind",
              responses=CONTROL_RESPONSES)
 def apply_rewind(
-    session_id: SessionIdPath, body: ApplyRewindRequest, controls: Controls, response: Response
+    session_id: SessionIdPath, apply_rewind_request: ApplyRewindRequest, controls: Controls, response: Response
 ) -> ControlOutcomeResponse:
-    return _execute(controls, session_id, body, response)
+    return _execute(controls, session_id, apply_rewind_request, response)
 
 
 @router.post("/api/sessions/{session_id}/controls/migrate-account",
              responses=CONTROL_RESPONSES)
 def migrate_account(
-    session_id: SessionIdPath, body: MigrateAccountRequest, controls: Controls, response: Response
+    session_id: SessionIdPath, migrate_account_request: MigrateAccountRequest, controls: Controls, response: Response
 ) -> ControlOutcomeResponse:
-    return _execute(controls, session_id, body, response)
+    return _execute(controls, session_id, migrate_account_request, response)
 
 
 @router.post("/api/sessions/{session_id}/controls/compact",
              responses=CONTROL_RESPONSES)
 def compact(
-    session_id: SessionIdPath, body: CompactRequest, controls: Controls, response: Response
+    session_id: SessionIdPath, compact_request: CompactRequest, controls: Controls, response: Response
 ) -> ControlOutcomeResponse:
-    return _execute(controls, session_id, body, response)
+    return _execute(controls, session_id, compact_request, response)
 
 
 @router.post("/api/sessions/{session_id}/controls/select-model",
              responses=CONTROL_RESPONSES)
 def select_model(
-    session_id: SessionIdPath, body: SelectModelRequest, controls: Controls, response: Response
+    session_id: SessionIdPath, select_model_request: SelectModelRequest, controls: Controls, response: Response
 ) -> ControlOutcomeResponse:
-    return _execute(controls, session_id, body, response)
+    return _execute(controls, session_id, select_model_request, response)
 
 
 @router.post("/api/sessions/{session_id}/controls/select-effort",
              responses=CONTROL_RESPONSES)
 def select_effort(
-    session_id: SessionIdPath, body: SelectEffortRequest, controls: Controls, response: Response
+    session_id: SessionIdPath, select_effort_request: SelectEffortRequest, controls: Controls, response: Response
 ) -> ControlOutcomeResponse:
-    return _execute(controls, session_id, body, response)
+    return _execute(controls, session_id, select_effort_request, response)
 
 
 @router.post("/api/sessions/{session_id}/controls/answer-question",
              responses=CONTROL_RESPONSES)
 def answer_question(
-    session_id: SessionIdPath, body: AnswerQuestionRequest, controls: Controls, response: Response
+    session_id: SessionIdPath, answer_question_request: AnswerQuestionRequest, controls: Controls, response: Response
 ) -> ControlOutcomeResponse:
-    return _execute(controls, session_id, body, response)
+    return _execute(controls, session_id, answer_question_request, response)
 
 
 @router.post("/api/sessions/{session_id}/controls/read-plan-choices",
              responses=CONTROL_RESPONSES)
 def read_plan_choices(
-    session_id: SessionIdPath, body: ReadPlanChoicesRequest, controls: Controls, response: Response
+    session_id: SessionIdPath, read_plan_choices_request: ReadPlanChoicesRequest, controls: Controls, response: Response
 ) -> ControlOutcomeResponse:
-    return _execute(controls, session_id, body, response)
+    return _execute(controls, session_id, read_plan_choices_request, response)
 
 
 @router.post("/api/sessions/{session_id}/controls/decide-plan",
              responses=CONTROL_RESPONSES)
 def decide_plan(
-    session_id: SessionIdPath, body: DecidePlanRequest, controls: Controls, response: Response
+    session_id: SessionIdPath, decide_plan_request: DecidePlanRequest, controls: Controls, response: Response
 ) -> ControlOutcomeResponse:
-    return _execute(controls, session_id, body, response)
+    return _execute(controls, session_id, decide_plan_request, response)

@@ -36,20 +36,20 @@ from core import clipboard
 from dashboard import dictate, paths
 
 
-def reject_input(audit: AuditRecorder, action: str, why: str, message: str,
+def reject_input(audit_recorder: AuditRecorder, action: str, why: str, message: str,
                  detail: Mapping[str, object], code: int = 400,
                  log: str = "", path: str = "") -> HTTPException:
     """Audit and reject malformed application input: a `state_files` row first,
     then the HTTP error. Input validation, which survived the guard's removal
     because it is about the BODY, not about who sent it."""
-    audit.state_file(log, path, action,
+    audit_recorder.state_file(log, path, action,
                      dict({"ok": False, "why": why},
                           **{key: repr(value) for key, value in detail.items()}))
     return HTTPException(code, message)
 
 
-def valid_session_id(policy: Settings, value: str | None) -> bool:
-    return bool(policy.session_id_pattern.match(value or ""))
+def valid_session_id(settings: Settings, value: str | None) -> bool:
+    return bool(settings.session_id_pattern.match(value or ""))
 
 router = APIRouter()
 
@@ -67,7 +67,7 @@ def _claimed_session_id(policy: Policy, value: str | None) -> str:
                  500: "The bytes could not be written; no row was recorded.",
              })})
 def upload(
-    body: UploadRequest, uploads: Uploads, policy: Policy, audit: Recorder
+    upload_request: UploadRequest, uploads: Uploads, policy: Policy, audit: Recorder
 ) -> UploadResponse:
     """Stage a composer ATTACHMENT (an image/screenshot the browser pasted,
     dropped, or picked, or any other file) on disk, and hand back the ABSOLUTE
@@ -78,14 +78,14 @@ def upload(
     parser; the price is a base64 envelope, which UPLOAD_MAX budgets for. The
     bytes land under the application data directory, outside any repository
     working tree, in a per-session subdir."""
-    session_id = _claimed_session_id(policy, body.session_id)
+    session_id = _claimed_session_id(policy, upload_request.session_id)
     # basename only — strip any path component a hostile name carries, and
     # fall back to a neutral stem so an empty/dotfile name can't produce a
     # bare-uuid or hidden file.
-    safe_name = _UNSAFE_NAME_CHARACTERS.sub("_", os.path.basename(body.name)).lstrip(".")
+    safe_name = _UNSAFE_NAME_CHARACTERS.sub("_", os.path.basename(upload_request.name)).lstrip(".")
     safe_name = safe_name[:ATTACHMENT_NAME_LIMIT] or "attachment"
     try:
-        file_bytes = base64.b64decode(body.data, validate=True)
+        file_bytes = base64.b64decode(upload_request.data, validate=True)
     except (binascii.Error, ValueError):
         raise reject_input(audit, "web-upload", "bad base64", "invalid base64",
                            {"name": safe_name}) from None
@@ -118,20 +118,20 @@ def upload(
             upload_id=os.path.basename(path),
             session_id=SessionId(session_id) if session_id else None,
             name=safe_name,
-            media_type=body.mime,
+            media_type=upload_request.mime,
             byte_size=len(file_bytes),
             stored_path=path,
             created_at=time.time(),
         )
     )
-    return UploadResponse(path=path, name=safe_name, mime=body.mime,
-                          is_image=body.mime in policy.image_mimes)
+    return UploadResponse(path=path, name=safe_name, mime=upload_request.mime,
+                          is_image=upload_request.mime in policy.image_mimes)
 
 
 @router.post("/api/application/clipboard-files",
              )
 def clipboard_files(
-    body: ClipboardFilesRequest, policy: Policy, audit: Recorder
+    clipboard_files_request: ClipboardFilesRequest, policy: Policy, audit: Recorder
 ) -> ClipboardMatchesResponse:
     """Resolve the FULL PATHS of files the browser just pasted as zero-byte
     promises. The page cannot answer this itself: a pasted `File` carries a
@@ -141,8 +141,8 @@ def clipboard_files(
     when their basenames are exactly what the caller reported, so a remote
     device can never be handed an unrelated host path. A miss is a 200 with
     `paths: []` — "the clipboard moved on" is an ordinary outcome."""
-    session_id = _claimed_session_id(policy, body.session_id)
-    names = [os.path.basename(name) for name in body.names[:clipboard.FILES_MAX]]
+    session_id = _claimed_session_id(policy, clipboard_files_request.session_id)
+    names = [os.path.basename(name) for name in clipboard_files_request.names[:clipboard.FILES_MAX]]
     matched = clipboard.match(names)
     # The paths ARE the audit here ("it pasted the wrong file" is
     # otherwise unanswerable), and a mismatch records what was asked for so a
@@ -158,7 +158,7 @@ def clipboard_files(
                  501: "No Deepgram key is configured on this host — the page toasts this one.",
                  502: "Deepgram refused to mint the grant.",
              })})
-def dictation_token(body: DictationTokenRequest, audit: Recorder) -> DictationGrantResponse:
+def dictation_token(dictation_token_request: DictationTokenRequest, audit: Recorder) -> DictationGrantResponse:
     """Mint a short-lived Deepgram grant for the browser's DIRECT wss
     connection (this server never sees audio; its whole role is this trade:
     on-disk API key → ~30s single-purpose JWT). The mic is always offered —
@@ -166,16 +166,17 @@ def dictation_token(body: DictationTokenRequest, audit: Recorder) -> DictationGr
     501 the page toasts. Every attempt is a `web-dictate` state_files row (no
     session id — the new-session form dictates too); the API key never
     appears in a response or an audit row."""
-    if not (dictate.SAMPLE_RATE_MIN <= body.sample_rate <= dictate.SAMPLE_RATE_MAX):
+    if not (dictate.SAMPLE_RATE_MIN <= dictation_token_request.sample_rate <= dictate.SAMPLE_RATE_MAX):
         audit.state_file("", "", "web-dictate",
-                     {"ok": False, "why": "bad-rate", "rate": repr(body.sample_rate)[:40]})
+                     {"ok": False, "why": "bad-rate", "rate": repr(dictation_token_request.sample_rate)[:40]})
         raise HTTPException(400, "bad sample_rate")
     if not dictate.available():
         audit.state_file("", "", "web-dictate", {"ok": False, "why": "no-key"})
         raise HTTPException(501, "no deepgram key configured")
     # An omitted directory requests global terms. A supplied directory is
     # exact application input and must still exist.
-    if body.working_directory is not None and not os.path.isdir(body.working_directory):
+    working_directory = dictation_token_request.working_directory
+    if working_directory is not None and not os.path.isdir(working_directory):
         raise HTTPException(400, "working_directory must be an existing directory")
     try:
         grant = dictate.grant()
@@ -186,8 +187,8 @@ def dictation_token(body: DictationTokenRequest, audit: Recorder) -> DictationGr
         raise HTTPException(502, "token grant failed") from error
     terms = dictate.keyterms()
     audit.state_file("", "", "web-dictate",
-                 {"ok": True, "rate": body.sample_rate,
-                  "working_directory": body.working_directory, "keyterms": len(terms)})
+                 {"ok": True, "rate": dictation_token_request.sample_rate,
+                  "working_directory": dictation_token_request.working_directory, "keyterms": len(terms)})
     return DictationGrantResponse(token=grant["access_token"],
                                   expires_in=grant.get("expires_in"),
-                                  ws_url=dictate.ws_url(body.sample_rate, terms))
+                                  ws_url=dictate.ws_url(dictation_token_request.sample_rate, terms))

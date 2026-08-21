@@ -17,13 +17,13 @@ from terminal.contract import TerminalViewport
 class TerminalInputService:
     def __init__(
         self,
-        sessions: SessionRepository,
-        terminal: TerminalAdapter,
-        viewport: TerminalViewport,
+        session_repository: SessionRepository,
+        terminal_adapter: TerminalAdapter,
+        terminal_viewport: TerminalViewport,
     ) -> None:
-        self.sessions = sessions
-        self.terminal = terminal
-        self.viewport = viewport
+        self.sessions = session_repository
+        self.terminal = terminal_adapter
+        self.viewport = terminal_viewport
 
     def read(self, session_id: SessionId) -> TerminalInputState | None:
         return self.state(session_id).input_state

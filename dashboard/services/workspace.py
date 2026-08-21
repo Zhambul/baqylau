@@ -76,22 +76,22 @@ class SessionApplicationSnapshot:
 class SessionApplicationService:
     def __init__(
         self,
-        read_model: SessionDataRepository,
-        terminal: TerminalSessionReader,
-        audit: AuditReadRepository,
-        workspaces: SessionWorkspaceRepository,
-        view_modes: ViewModeRepository,
-        notifications: NotificationSettingRepository,
-        dismissals: TaskDismissalRepository,
+        session_data_repository: SessionDataRepository,
+        terminal_session_reader: TerminalSessionReader,
+        audit_read_repository: AuditReadRepository,
+        session_workspace_repository: SessionWorkspaceRepository,
+        view_mode_repository: ViewModeRepository,
+        notification_setting_repository: NotificationSettingRepository,
+        task_dismissal_repository: TaskDismissalRepository,
         clock: Callable[[], float] | None = None,
     ) -> None:
-        self.read_model = read_model
-        self.terminal = terminal
-        self.audit = audit
-        self.workspaces = workspaces
-        self.view_modes = view_modes
-        self.notifications = notifications
-        self.dismissals = dismissals
+        self.session_data_repository = session_data_repository
+        self.terminal_session_reader = terminal_session_reader
+        self.audit_read_repository = audit_read_repository
+        self.session_workspace_repository = session_workspace_repository
+        self.view_mode_repository = view_mode_repository
+        self.notification_setting_repository = notification_setting_repository
+        self.task_dismissal_repository = task_dismissal_repository
         self.clock = clock or time.time
 
     # --- what you chose -------------------------------------------------------
@@ -100,24 +100,24 @@ class SessionApplicationService:
         if view_mode == DEFAULT_VIEW_MODE:
             # The default is stored as an ABSENCE, so the table stays the small
             # set of sessions someone actually switched.
-            self.view_modes.clear_view_mode(session_id)
+            self.view_mode_repository.clear_view_mode(session_id)
             return
         if view_mode not in ("verbose", "focus"):
             raise ValueError(f"unknown view mode: {view_mode}")
         mode: ViewMode = view_mode  # type: ignore[assignment]
-        self.view_modes.set_view_mode(session_id, mode)
+        self.view_mode_repository.set_view_mode(session_id, mode)
 
     def set_notifications_muted(self, session_id: SessionId, muted: bool) -> None:
-        self.notifications.set_muted(session_id, muted)
+        self.notification_setting_repository.set_muted(session_id, muted)
 
     def set_tasks_hidden(self, session_id: SessionId, hidden: bool) -> None:
         tasks = self._tasks(session_id)
         if hidden and (not tasks or any(task.state != "completed" for task in tasks)):
             raise ValueError("every task must be completed before hiding the task card")
         if not hidden:
-            self.dismissals.restore(session_id)
+            self.task_dismissal_repository.restore(session_id)
             return
-        self.dismissals.dismiss(
+        self.task_dismissal_repository.dismiss(
             session_id,
             [task.task_id for task in tasks],
             self.clock(),
@@ -134,9 +134,7 @@ class SessionApplicationService:
         sequence: float,
     ) -> bool:
         """Save the newest browser draft; return False for an older concurrent write."""
-        return self.workspaces.save_composer_draft(
-            session_id, ComposerDraft(text, origin, sequence)
-        )
+        return self.session_workspace_repository.save_composer_draft(session_id, ComposerDraft(text, origin, sequence))
 
     def save_composer_queue(
         self,
@@ -144,7 +142,7 @@ class SessionApplicationService:
         messages: tuple[QueuedMessage, ...],
         origin: str,
     ) -> None:
-        self.workspaces.save_composer_queue(session_id, ComposerQueue(messages, origin))
+        self.session_workspace_repository.save_composer_queue(session_id, ComposerQueue(messages, origin))
 
     def save_dialog_draft(
         self,
@@ -158,35 +156,31 @@ class SessionApplicationService:
             raise ValueError("attention is no longer pending")
         if len(answers) != len(questions):
             raise ValueError("answers must match the pending questions")
-        self.workspaces.save_dialog_draft(
-            session_id, DialogDraft(attention_id, answers, origin)
-        )
+        self.session_workspace_repository.save_dialog_draft(session_id, DialogDraft(attention_id, answers, origin))
 
     # --- the whole page's state in one answer ---------------------------------
 
     def snapshot(self, session_id: SessionId) -> SessionApplicationSnapshot:
         composer, dialog = self._state(session_id)
         tasks = self._tasks(session_id)
-        dismissed = self.dismissals.dismissed_task_ids(session_id)
+        dismissed = self.task_dismissal_repository.dismissed_task_ids(session_id)
         return SessionApplicationSnapshot(
             preferences=SessionPreferences(
-                view_mode=self.view_modes.view_mode(session_id) or DEFAULT_VIEW_MODE,
-                notifications_muted=session_id in self.notifications.muted_session_ids(),
+                view_mode=self.view_mode_repository.view_mode(session_id) or DEFAULT_VIEW_MODE,
+                notifications_muted=session_id in self.notification_setting_repository.muted_session_ids(),
                 # The dismissal covers exactly the list it was made against, so
                 # a new task — or a completed one re-opened — brings the card
                 # back on its own.
-                tasks_hidden=(
-                    bool(tasks) and dismissed == {task.task_id for task in tasks}
-                ),
+                tasks_hidden=(bool(tasks) and dismissed == {task.task_id for task in tasks}),
             ),
             composer=composer,
             dialog=dialog,
-            terminal=self.terminal.state(session_id),
-            errors=self.audit.errors_for_session(session_id),
+            terminal=self.terminal_session_reader.state(session_id),
+            errors=self.audit_read_repository.errors_for_session(session_id),
         )
 
     def _state(self, session_id: SessionId) -> tuple[ComposerState, DialogState]:
-        workspace = self.workspaces.find(session_id)
+        workspace = self.session_workspace_repository.find(session_id)
         if workspace is None:
             return ComposerState(None, None), DialogState(None)
 
@@ -207,12 +201,10 @@ class SessionApplicationService:
         return ComposerState(workspace.draft, queue), DialogState(dialog_draft)
 
     def _tasks(self, session_id: SessionId) -> tuple[SessionTask, ...]:
-        data = self.read_model.read(session_id)
+        data = self.session_data_repository.read(session_id)
         return () if data is None else data.session.tasks
 
-    def _pending_questions(
-        self, session_id: SessionId
-    ) -> dict[AttentionId, tuple[AttentionPrompt, ...]]:
+    def _pending_questions(self, session_id: SessionId) -> dict[AttentionId, tuple[AttentionPrompt, ...]]:
         """The questions still waiting on a person, by attention.
 
         A plan is pending attention too, but it carries no questions to answer —
@@ -220,7 +212,7 @@ class SessionApplicationService:
         """
         return {
             entry.body.attention_id: entry.body.questions
-            for entry in self.read_model.pending_attention(session_id)
+            for entry in self.session_data_repository.pending_attention(session_id)
             if isinstance(entry.body, QuestionAskedBody)
         }
 
@@ -232,7 +224,7 @@ class SessionApplicationService:
         queued is how a person sends it twice.
         """
         prompts = []
-        for entry in self.read_model.entries_of_types(session_id, ("message",)):
+        for entry in self.session_data_repository.entries_of_types(session_id, ("message",)):
             body = entry.body
             if (
                 isinstance(body, MessageBody)

@@ -59,7 +59,7 @@ def background_outcome(status: object) -> Outcome | None:
 def launch_selections(
     raw_event: RawEvent,
     document: dict[str, Any],
-    selections: SelectionSemantics,
+    selection_semantics: SelectionSemantics,
 ) -> list[CanonicalEvent[EventPayload]]:
     """The launch observation the gateway recorded from the hook's inherited
     environment: the `--model`/`--effort` the launcher started the CLI with.
@@ -74,7 +74,7 @@ def launch_selections(
     events = []
     model_selection = document.get("model")
     if isinstance(model_selection, str) and model_selection:
-        changed = selections.model(
+        changed = selection_semantics.model(
             raw_event.session_id,
             raw_event.actor_id,
             model_reference(model_selection),
@@ -84,7 +84,7 @@ def launch_selections(
             events.append(event(raw_event, "model", subject_id, "selected", changed))
     effort_selection = document.get("effort")
     if isinstance(effort_selection, str) and effort_selection:
-        chosen = selections.effort(
+        chosen = selection_semantics.effort(
             raw_event.session_id, raw_event.actor_id, effort_selection, "selected"
         )
         if chosen is not None:
@@ -94,7 +94,7 @@ def launch_selections(
 
 def prompt_turn(
     raw_event: RawEvent,
-    turns: TurnSemantics,
+    turn_semantics: TurnSemantics,
     native_identity: str,
     occurred_at: float | None,
 ) -> list[CanonicalEvent[EventPayload]]:
@@ -104,7 +104,7 @@ def prompt_turn(
     evidence names a turn, and the prompt is what the turn answers.
     """
     turn_id = TurnId(native_identity)
-    if not turns.begin(raw_event, turn_id):
+    if not turn_semantics.begin(raw_event, turn_id):
         return []
     return [
         event(
@@ -124,8 +124,8 @@ def slash_command(
     record: dict[str, Any],
     native_identity: str,
     occurred_at: float | None,
-    turns: TurnSemantics,
-    selections: SelectionSemantics,
+    turn_semantics: TurnSemantics,
+    selection_semantics: SelectionSemantics,
 ) -> list[CanonicalEvent[EventPayload]]:
     """A `/command` turn: the SESSION-STATE event the command asked for,
     where there is one, otherwise a prompt bubble holding what the human
@@ -152,11 +152,11 @@ def slash_command(
     selection = record["args"].strip()
     if selection and len(selection.split()) == 1 and name in ("model", "effort"):
         payload: EventPayload | None = (
-            selections.model(
+            selection_semantics.model(
                 raw_event.session_id, raw_event.actor_id, model_reference(selection), "selected"
             )
             if name == "model"
-            else selections.effort(
+            else selection_semantics.effort(
                 raw_event.session_id, raw_event.actor_id, selection, "selected"
             )
         )
@@ -180,7 +180,7 @@ def slash_command(
         )
     ]
     if role == "user":
-        events = prompt_turn(raw_event, turns, native_identity, occurred_at) + events
+        events = prompt_turn(raw_event, turn_semantics, native_identity, occurred_at) + events
     return events
 
 
@@ -311,9 +311,9 @@ def translate_transcript(
     raw_event: RawEvent,
     document: dict[str, Any],
     record: dict[str, Any],
-    toolcalls: ToolCallSemantics,
-    turns: TurnSemantics,
-    selections: SelectionSemantics,
+    tool_call_semantics: ToolCallSemantics,
+    turn_semantics: TurnSemantics,
+    selection_semantics: SelectionSemantics,
     *,
     actor_started: bool,
 ) -> list[CanonicalEvent[EventPayload]]:
@@ -342,10 +342,10 @@ def translate_transcript(
             # A synthetic or parent-authored prompt is machinery or a brief; a
             # turn belongs to the person who asked for one.
             return [created]
-        return [*prompt_turn(raw_event, turns, native_identity, occurred_at), created]
+        return [*prompt_turn(raw_event, turn_semantics, native_identity, occurred_at), created]
     if kind == "slash_command":
         return slash_command(
-            raw_event, record, native_identity, occurred_at, turns, selections
+            raw_event, record, native_identity, occurred_at, turn_semantics, selection_semantics
         )
     if kind == "goal":
         payload = GoalChanged(record.get("objective"), record["state"], record.get("reason"))
@@ -375,7 +375,7 @@ def translate_transcript(
         # "status" stream, which is what a monitors panel reads as an EVENT
         # rather than as output.
         task_id = str(record.get("task") or "")
-        armed = toolcalls.monitor_shell(task_id)
+        armed = tool_call_semantics.monitor_shell(task_id)
         if armed is None:
             # A monitor armed before this translation began — a daemon restarted
             # mid-watch. The event belongs to a command we cannot name, and
@@ -383,7 +383,7 @@ def translate_transcript(
             # the watch's own end still lands, because that notification names
             # its tool_use_id outright.
             return []
-        ordinal = toolcalls.next_monitor_ordinal(task_id)
+        ordinal = tool_call_semantics.next_monitor_ordinal(task_id)
         payload = ShellProgressed(
             armed,
             ordinal,
@@ -539,7 +539,7 @@ def translate_transcript(
                     )
                 )
             elif block_type == "tool_use":
-                events.extend(toolcalls.tool_started(raw_event, block))
+                events.extend(tool_call_semantics.tool_started(raw_event, block))
         model_id = record.get("model")
         # "<synthetic>" is the transcript's marker on machine-injected
         # assistant records (interrupt notices, hook output). It names no model
@@ -550,7 +550,7 @@ def translate_transcript(
             else None
         )
         if model_reference_value is not None:
-            reported = selections.model(
+            reported = selection_semantics.model(
                 raw_event.session_id,
                 raw_event.actor_id,
                 model_reference_value,
@@ -603,10 +603,10 @@ def translate_transcript(
                 continue
             failed = bool(block.get("is_error"))
             events.extend(
-                toolcalls.tool_result(raw_event, call_id, result_text, failed, sidecar)
+                tool_call_semantics.tool_result(raw_event, call_id, result_text, failed, sidecar)
             )
-            if failed and toolcalls.pending_attention(call_id):
-                events.append(toolcalls.attention_declined(raw_event, call_id, result_text))
+            if failed and tool_call_semantics.pending_attention(call_id):
+                events.append(tool_call_semantics.attention_declined(raw_event, call_id, result_text))
         for text_index, result_text in enumerate(record.get("texts") or ()):
             text_identity = f"{native_identity}:text:{text_index}"
             payload = MessageCreated(

@@ -87,15 +87,15 @@ def global_stream(
 
 
 async def _session_frames(
-    read_model: SessionDataRepository,
-    audit: AuditRecorder,
+    session_data_repository: SessionDataRepository,
+    audit_recorder: AuditRecorder,
     session_id: SessionId,
     cursor: int,
 ) -> AsyncIterator[str]:
     try:
         heartbeat_at = asyncio.get_running_loop().time()
         while True:
-            delta = await off_loop(read_model.delta, session_id, cursor)
+            delta = await off_loop(session_data_repository.delta, session_id, cursor)
             now = asyncio.get_running_loop().time()
             if not delta.empty:
                 # The frame's id is the highest revision the read SAW, which is
@@ -125,19 +125,19 @@ async def _session_frames(
         # An SSE stream drives the whole view; it must not die silently. The
         # audit row is the trace, the error frame is the client's signal, and the
         # connection ends so the client reconnects.
-        audit.error(str(session_id), "session data stream", {"session_id": str(session_id)})
+        audit_recorder.error(str(session_id), "session data stream", {"session_id": str(session_id)})
         yield sse_frame("error", ErrorFrame(error="stream failed"))
 
 
 async def _global_frames(
-    read_model: SessionDataRepository,
-    audit: AuditRecorder,
+    session_data_repository: SessionDataRepository,
+    audit_recorder: AuditRecorder,
     cursor: int,
 ) -> AsyncIterator[str]:
     try:
         heartbeat_at = asyncio.get_running_loop().time()
         while True:
-            delta = await off_loop(read_model.changed_after, cursor)
+            delta = await off_loop(session_data_repository.changed_after, cursor)
             now = asyncio.get_running_loop().time()
             if not delta.empty:
                 yield sse_frame(
@@ -157,5 +157,5 @@ async def _global_frames(
     except (asyncio.CancelledError, GeneratorExit):
         raise
     except Exception:
-        audit.error("", "session data stream", {"path": "/sessionData/stream"})
+        audit_recorder.error("", "session data stream", {"path": "/sessionData/stream"})
         yield sse_frame("error", ErrorFrame(error="stream failed"))

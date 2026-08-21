@@ -25,13 +25,13 @@ router = APIRouter()
 
 @router.post("/api/application/browser-events")
 def record_browser_events(
-    body: BrowserEventsRequest, telemetry: BrowserTelemetry
+    browser_events_request: BrowserEventsRequest, telemetry: BrowserTelemetry
 ) -> RecordedResponse:
     telemetry.record_events(
         BrowserEventBatch(
-            body.client_id,
-            body.device_id,
-            body.connection,
+            browser_events_request.client_id,
+            browser_events_request.device_id,
+            browser_events_request.connection,
             tuple(
                 BrowserEvent(
                     SessionId(event.session_id) if event.session_id else None,
@@ -39,7 +39,7 @@ def record_browser_events(
                     event.timestamp,
                     event.details,
                 )
-                for event in body.events
+                for event in browser_events_request.events
             ),
         )
     )
@@ -48,16 +48,16 @@ def record_browser_events(
 
 @router.post("/api/sessions/{session_id}/application/optimistic-actions")
 def record_optimistic_action(
-    session_id: SessionIdPath, body: OptimisticActionRequest, telemetry: BrowserTelemetry
+    session_id: SessionIdPath, optimistic_action_request: OptimisticActionRequest, telemetry: BrowserTelemetry
 ) -> RecordedResponse:
     telemetry.record_optimistic_action(
         OptimisticActionReport(
             SessionId(session_id),
-            body.action,
-            body.phase,
-            body.character_count,
-            body.elapsed_milliseconds,
-            body.reason or None,
+            optimistic_action_request.action,
+            optimistic_action_request.phase,
+            optimistic_action_request.character_count,
+            optimistic_action_request.elapsed_milliseconds,
+            optimistic_action_request.reason or None,
         )
     )
     return RecordedResponse()
@@ -65,16 +65,16 @@ def record_optimistic_action(
 
 @router.post("/api/sessions/{session_id}/application/client-failures")
 def record_client_failure(
-    session_id: SessionIdPath, body: ClientFailureRequest, telemetry: BrowserTelemetry
+    session_id: SessionIdPath, client_failure_request: ClientFailureRequest, telemetry: BrowserTelemetry
 ) -> RecordedResponse:
     telemetry.record_client_failure(
         ClientFailureReport(
             SessionId(session_id),
-            body.gesture,
-            body.failure_kind,
-            body.error,
-            body.status_code,
-            body.character_count,
+            client_failure_request.gesture,
+            client_failure_request.failure_kind,
+            client_failure_request.error,
+            client_failure_request.status_code,
+            client_failure_request.character_count,
         )
     )
     return RecordedResponse()

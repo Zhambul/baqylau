@@ -102,8 +102,8 @@ def rows(screen: str) -> list[Row]:
     return out
 
 
-def _open_rows(fe: ScreenDriver, win: str) -> list[Row]:
-    screen = fe.get_text(win) or ""
+def _open_rows(screen_driver: ScreenDriver, win: str) -> list[Row]:
+    screen = screen_driver.get_text(win) or ""
     if not dialog_open(screen):
         raise PlanError("open", "no plan dialog on screen")
     rs = rows(screen)
@@ -112,35 +112,35 @@ def _open_rows(fe: ScreenDriver, win: str) -> list[Row]:
     return rs
 
 
-def options(fe: ScreenDriver, win: str) -> list[Option]:
+def options(screen_driver: ScreenDriver, win: str) -> list[Option]:
     """The live decision options, for the page's buttons — labels vary with
     the session's permission mode, so they can only come from the screen."""
     return [{"digit": r["digit"], "label": r["label"],
-             "feedback": r["feedback"]} for r in _open_rows(fe, win)]
+             "feedback": r["feedback"]} for r in _open_rows(screen_driver, win)]
 
 
 def decide(
-    fe: ScreenDriver, win: str, digit: str, label: str, sleep: Callable[[float], None] = time.sleep,
+    screen_driver: ScreenDriver, win: str, digit: str, label: str, sleep: Callable[[float], None] = time.sleep,
 ) -> Decided:
     """Press decision row `digit` after verifying the screen still shows
     `label` on it (the dialog may have been replaced since the page fetched
     its options). Feedback rows are refused — use feedback()."""
-    rs = _open_rows(fe, win)
+    rs = _open_rows(screen_driver, win)
     row = next((r for r in rs if r["digit"] == str(digit)), None)
     if row is None or row["label"] != label:
         raise PlanError("option", "row %s is not %r any more" % (digit, label))
     if row["feedback"]:
         raise PlanError("option", "the feedback row takes text, not a click")
-    fe.send_key(win, str(digit))
+    screen_driver.send_key(win, str(digit))
     _, ok = screendrive.poll_until(
-        fe, win, lambda s: not dialog_open(s), SUBMIT_TIMEOUT_S, sleep)
+        screen_driver, win, lambda s: not dialog_open(s), SUBMIT_TIMEOUT_S, sleep)
     if not ok:
         raise PlanError("submit", "dialog still open after the decision")
     return {"decided": label}
 
 
 def feedback(
-    fe: ScreenDriver, win: str, text: str, sleep: Callable[[float], None] = time.sleep,
+    screen_driver: ScreenDriver, win: str, text: str, sleep: Callable[[float], None] = time.sleep,
 ) -> Fedback:
     """Reject the plan with feedback: focus the "Tell Claude what to change"
     row (its digit only focuses — measured), type the text inline, Enter
@@ -149,27 +149,27 @@ def feedback(
     text = " ".join((text or "").split())
     if not text:
         raise PlanError("feedback", "empty feedback")
-    rs = _open_rows(fe, win)
+    rs = _open_rows(screen_driver, win)
     row = next((r for r in rs if r["feedback"]), None)
     if row is None:
         raise PlanError("feedback", "no feedback row on screen")
-    fe.send_key(win, row["digit"])
+    screen_driver.send_key(win, row["digit"])
     sleep(POLL_S)
-    if not fe.send_text(win, text):
+    if not screen_driver.send_text(win, text):
         raise PlanError("feedback", "text not delivered")
     _, ok = screendrive.poll_until(
-        fe, win, lambda s: not dialog_open(s), SUBMIT_TIMEOUT_S, sleep)
+        screen_driver, win, lambda s: not dialog_open(s), SUBMIT_TIMEOUT_S, sleep)
     if not ok:
         raise PlanError("submit", "dialog still open after the feedback")
     return {"feedback": True}
 
 
-def dismiss(fe: ScreenDriver, win: str, sleep: Callable[[float], None] = time.sleep) -> Dismissed:
+def dismiss(screen_driver: ScreenDriver, win: str, sleep: Callable[[float], None] = time.sleep) -> Dismissed:
     """Esc — reject the plan and keep planning (the TUI's own dismiss)."""
-    _open_rows(fe, win)
-    fe.send_key(win, "escape")
+    _open_rows(screen_driver, win)
+    screen_driver.send_key(win, "escape")
     _, ok = screendrive.poll_until(
-        fe, win, lambda s: not dialog_open(s), STEP_TIMEOUT_S, sleep)
+        screen_driver, win, lambda s: not dialog_open(s), STEP_TIMEOUT_S, sleep)
     if not ok:
         raise PlanError("submit", "dialog still open after Escape")
     return {"dismissed": True}

@@ -52,8 +52,8 @@ from harness.impl.claude_code.probe import ClaudeCodeTerminalProbe
 class _TerminalDriver:
     """Expose the small driver vocabulary used by Claude Code's screen modules."""
 
-    def __init__(self, terminal: TerminalPlugin) -> None:
-        self.terminal = terminal
+    def __init__(self, terminal_plugin: TerminalPlugin) -> None:
+        self.terminal = terminal_plugin
 
     def get_text(self, window_id: str, extent: str = "screen", ansi: bool = False) -> str | None:
         del extent
@@ -79,8 +79,8 @@ class _TerminalDriver:
         ).succeeded
 
 
-def _screen_text(terminal: TerminalPlugin, window_id: str) -> str | None:
-    return terminal.viewport.read_screen(ScreenReadRequest(window_id)).text
+def _screen_text(terminal_plugin: TerminalPlugin, window_id: str) -> str | None:
+    return terminal_plugin.viewport.read_screen(ScreenReadRequest(window_id)).text
 
 
 def _result(request: ControlRequest, succeeded: bool, reason: str) -> ControlResult:
@@ -93,13 +93,13 @@ def _result(request: ControlRequest, succeeded: bool, reason: str) -> ControlRes
 
 def _command(
     request: ControlRequest,
-    context: ControlContext,
+    control_context: ControlContext,
     text: str,
     *,
     confirm: bool = False,
 ) -> ControlResult:
-    terminal = context.terminal
-    window_id = context.terminal_window_id
+    terminal = control_context.terminal
+    window_id = control_context.terminal_window_id
     if window_id is None:
         return ControlResult(request.request_id, "rejected", "session is not live")
     succeeded, _cleared_image = tui.type_command(_TerminalDriver(terminal), window_id, text)
@@ -127,12 +127,12 @@ class SendTextHandler(ControlHandler):
     def __call__(
         self,
         request: ControlRequest,
-        context: ControlContext,
+        control_context: ControlContext,
     ) -> DeliveryResult:
-        terminal = context.terminal
+        terminal = control_context.terminal
         if not isinstance(request, SendText):
             raise TypeError("send_text handler requires SendText")
-        window_id = context.terminal_window_id
+        window_id = control_context.terminal_window_id
         if window_id is None:
             return DeliveryResult(request.request_id, "rejected", "session is not live")
         driver = _TerminalDriver(terminal)
@@ -154,12 +154,12 @@ class InterruptHandler(ControlHandler):
     def __call__(
         self,
         request: ControlRequest,
-        context: ControlContext,
+        control_context: ControlContext,
     ) -> DeliveryResult:
-        terminal = context.terminal
+        terminal = control_context.terminal
         if not isinstance(request, Interrupt):
             raise TypeError("interrupt handler requires Interrupt")
-        window_id = context.terminal_window_id
+        window_id = control_context.terminal_window_id
         if window_id is None:
             return DeliveryResult(request.request_id, "rejected", "session is not live")
         previous = _screen_text(terminal, window_id)
@@ -220,11 +220,11 @@ class BackgroundHandler(ControlHandler):
     a browser click and a test both.
     """
 
-    def __call__(self, request: ControlRequest, context: ControlContext) -> DeliveryResult:
+    def __call__(self, request: ControlRequest, control_context: ControlContext) -> DeliveryResult:
         if not isinstance(request, Background):
             raise TypeError("background handler requires Background")
-        terminal = context.terminal
-        window_id = context.terminal_window_id
+        terminal = control_context.terminal
+        window_id = control_context.terminal_window_id
         if window_id is None:
             return DeliveryResult(request.request_id, "rejected", "session is not live")
         deadline = time.monotonic() + BACKGROUND_OFFER_TIMEOUT_SECONDS
@@ -248,11 +248,11 @@ class BackgroundHandler(ControlHandler):
 
 
 class CloseSessionHandler(ControlHandler):
-    def __call__(self, request: ControlRequest, context: ControlContext) -> ControlResult:
-        terminal = context.terminal
+    def __call__(self, request: ControlRequest, control_context: ControlContext) -> ControlResult:
+        terminal = control_context.terminal
         if not isinstance(request, CloseSession):
             raise TypeError("close_session handler requires CloseSession")
-        window_id = context.terminal_window_id
+        window_id = control_context.terminal_window_id
         if window_id is None:
             return ControlResult(request.request_id, "rejected", "session is not live")
         result = terminal.tabs.close_tab(TabCloseRequest(window_id))
@@ -260,40 +260,40 @@ class CloseSessionHandler(ControlHandler):
 
 
 class RenameSessionHandler(ControlHandler):
-    def __call__(self, request: ControlRequest, context: ControlContext) -> ControlResult:
-        session = context.session
+    def __call__(self, request: ControlRequest, control_context: ControlContext) -> ControlResult:
+        session = control_context.session
         if not isinstance(request, RenameSession):
             raise TypeError("rename_session handler requires RenameSession")
-        if context.terminal_window_id is None:
+        if control_context.terminal_window_id is None:
             outcome = transcript.titles.set_title(session.source_reference, request.name)
             if outcome == "unsupported":
                 return ControlResult(request.request_id, "rejected", "session source is not renameable")
             if outcome == "unavailable":
                 return ControlResult(request.request_id, "indeterminate", "native title store is unavailable")
             return ControlResult(request.request_id, "acknowledged")
-        return _command(request, context, f"/rename {request.name}")
+        return _command(request, control_context, f"/rename {request.name}")
 
 
 class AutoNameSessionHandler(ControlHandler):
-    def __call__(self, request: ControlRequest, context: ControlContext) -> ControlResult:
+    def __call__(self, request: ControlRequest, control_context: ControlContext) -> ControlResult:
         if not isinstance(request, AutoNameSession):
             raise TypeError("auto_name_session handler requires AutoNameSession")
-        return _command(request, context, "/rename")
+        return _command(request, control_context, "/rename")
 
 
 class OpenRewindHandler(ControlHandler):
-    def __call__(self, request: ControlRequest, context: ControlContext) -> ControlResult:
+    def __call__(self, request: ControlRequest, control_context: ControlContext) -> ControlResult:
         if not isinstance(request, OpenRewind):
             raise TypeError("open_rewind handler requires OpenRewind")
-        return _command(request, context, "/rewind")
+        return _command(request, control_context, "/rewind")
 
 
 class ApplyRewindHandler(ControlHandler):
-    def __call__(self, request: ControlRequest, context: ControlContext) -> RewindResult:
-        terminal = context.terminal
+    def __call__(self, request: ControlRequest, control_context: ControlContext) -> RewindResult:
+        terminal = control_context.terminal
         if not isinstance(request, ApplyRewind):
             raise TypeError("apply_rewind handler requires ApplyRewind")
-        window_id = context.terminal_window_id
+        window_id = control_context.terminal_window_id
         if window_id is None:
             return RewindResult(request.request_id, "rejected", "session is not live")
         try:
@@ -316,29 +316,29 @@ class ApplyRewindHandler(ControlHandler):
 
 
 class MigrateAccountHandler(ControlHandler):
-    def __call__(self, request: ControlRequest, context: ControlContext) -> MigrationResult:
+    def __call__(self, request: ControlRequest, control_context: ControlContext) -> MigrationResult:
         if not isinstance(request, MigrateAccount):
             raise TypeError("migrate_account handler requires MigrateAccount")
-        if context.current_account is None:
+        if control_context.current_account is None:
             return MigrationResult(request.request_id, "rejected", "current account is unknown")
         target = account.migration_target(
-            context.current_account.account_id, context.account_usage
+            control_context.current_account.account_id, control_context.account_usage
         )
         if target is None:
             return MigrationResult(request.request_id, "rejected", "no other account is available")
-        session = context.session
-        window_id = context.terminal_window_id
+        session = control_context.session
+        window_id = control_context.terminal_window_id
         if window_id is None:
             return MigrationResult(request.request_id, "rejected", "session is not live")
-        closed = context.terminal.tabs.close_tab(TabCloseRequest(window_id))
+        closed = control_context.terminal.tabs.close_tab(TabCloseRequest(window_id))
         if not closed.succeeded:
             return MigrationResult(request.request_id, "indeterminate", closed.reason)
         arguments = ["--resume", str(session.session_id)]
-        if context.current_model is not None:
-            arguments.extend(("--model", context.current_model.native_id))
+        if control_context.current_model is not None:
+            arguments.extend(("--model", control_context.current_model.native_id))
         # Launching is just running the CLI under the target account's alias;
         # the resumed session announces itself through its own hook evidence.
-        launched = context.terminal.tabs.open_tab(launch_tab_request(
+        launched = control_context.terminal.tabs.open_tab(launch_tab_request(
             session.working_directory or "",
             (target["alias"], *arguments),
             title="Claude Code",
@@ -353,27 +353,27 @@ class MigrateAccountHandler(ControlHandler):
 
 
 class CompactHandler(ControlHandler):
-    def __call__(self, request: ControlRequest, context: ControlContext) -> ControlResult:
+    def __call__(self, request: ControlRequest, control_context: ControlContext) -> ControlResult:
         if not isinstance(request, Compact):
             raise TypeError("compact handler requires Compact")
-        return _command(request, context, "/compact")
+        return _command(request, control_context, "/compact")
 
 
 class SelectModelHandler(ControlHandler):
-    def __call__(self, request: ControlRequest, context: ControlContext) -> ControlResult:
+    def __call__(self, request: ControlRequest, control_context: ControlContext) -> ControlResult:
         if not isinstance(request, SelectModel):
             raise TypeError("select_model handler requires SelectModel")
-        return _command(request, context, f"/model {request.model_id}", confirm=True)
+        return _command(request, control_context, f"/model {request.model_id}", confirm=True)
 
 
 class SelectEffortHandler(ControlHandler):
-    def __call__(self, request: ControlRequest, context: ControlContext) -> ControlResult:
+    def __call__(self, request: ControlRequest, control_context: ControlContext) -> ControlResult:
         if not isinstance(request, SelectEffort):
             raise TypeError("select_effort handler requires SelectEffort")
-        return _command(request, context, f"/effort {request.effort}", confirm=True)
+        return _command(request, control_context, f"/effort {request.effort}", confirm=True)
 
 
-def _native_prompts(attention: QuestionAsked) -> list[dict[str, Any]]:
+def _native_prompts(question_asked: QuestionAsked) -> list[dict[str, Any]]:
     return [
         {
             "id": prompt.prompt_id,
@@ -385,18 +385,18 @@ def _native_prompts(attention: QuestionAsked) -> list[dict[str, Any]]:
                 for choice in prompt.choices
             ],
         }
-        for prompt in attention.questions
+        for prompt in question_asked.questions
     ]
 
 
 class AnswerQuestionHandler(ControlHandler):
-    def __call__(self, request: ControlRequest, context: ControlContext) -> ControlResult:
-        terminal = context.terminal
+    def __call__(self, request: ControlRequest, control_context: ControlContext) -> ControlResult:
+        terminal = control_context.terminal
         if not isinstance(request, AnswerQuestion):
             raise TypeError("answer_question handler requires AnswerQuestion")
-        if not isinstance(context.pending_attention, QuestionAsked):
+        if not isinstance(control_context.pending_attention, QuestionAsked):
             return ControlResult(request.request_id, "rejected", "no question is pending")
-        window_id = context.terminal_window_id
+        window_id = control_context.terminal_window_id
         if window_id is None:
             return ControlResult(request.request_id, "rejected", "session is not live")
         answers = json.loads(request.answers.json_text) if request.answers is not None else []
@@ -407,7 +407,7 @@ class AnswerQuestionHandler(ControlHandler):
             askdialog.drive(
                 driver,
                 window_id,
-                _native_prompts(context.pending_attention),
+                _native_prompts(control_context.pending_attention),
                 answers,
                 chat=request.decision == "discuss",
             )
@@ -424,12 +424,12 @@ class ReadPlanChoicesHandler(ControlHandler):
     def __call__(
         self,
         request: ControlRequest,
-        context: ControlContext,
+        control_context: ControlContext,
     ) -> PlanChoicesResult:
-        terminal = context.terminal
+        terminal = control_context.terminal
         if not isinstance(request, ReadPlanChoices):
             raise TypeError("read_plan_choices handler requires ReadPlanChoices")
-        window_id = context.terminal_window_id
+        window_id = control_context.terminal_window_id
         if window_id is None:
             return PlanChoicesResult(request.request_id, "rejected", "session is not live")
         try:
@@ -447,11 +447,11 @@ class ReadPlanChoicesHandler(ControlHandler):
 
 
 class DecidePlanHandler(ControlHandler):
-    def __call__(self, request: ControlRequest, context: ControlContext) -> ControlResult:
-        terminal = context.terminal
+    def __call__(self, request: ControlRequest, control_context: ControlContext) -> ControlResult:
+        terminal = control_context.terminal
         if not isinstance(request, DecidePlan):
             raise TypeError("decide_plan handler requires DecidePlan")
-        window_id = context.terminal_window_id
+        window_id = control_context.terminal_window_id
         if window_id is None:
             return ControlResult(request.request_id, "rejected", "session is not live")
         driver = _TerminalDriver(terminal)

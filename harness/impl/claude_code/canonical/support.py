@@ -47,7 +47,7 @@ def event(
     subject_type: str,
     subject_id: str,
     phase: str,
-    payload: EventPayload,
+    event_payload: EventPayload,
     *,
     turn_id: TurnId | None = None,
     occurred_at: float | None = None,
@@ -56,6 +56,6 @@ def event(
     everything else is stamped with the open turn on its way out of the
     translator (`ClaudeCanonicalTranslator.translate`)."""
     return canonical_event(
-        raw_event, subject_type, subject_id, phase, payload,
+        raw_event, subject_type, subject_id, phase, event_payload,
         turn_id=turn_id, occurred_at=occurred_at,
     )

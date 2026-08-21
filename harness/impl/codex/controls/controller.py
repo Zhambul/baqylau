@@ -41,8 +41,8 @@ from harness.impl.codex.controls import dialog, modeldialog, plandialog
 class _TerminalDriver:
     """Expose the small driver vocabulary used by Codex's screen modules."""
 
-    def __init__(self, terminal: TerminalPlugin) -> None:
-        self.terminal = terminal
+    def __init__(self, terminal_plugin: TerminalPlugin) -> None:
+        self.terminal = terminal_plugin
 
     def get_text(self, window_id: str, extent: str = "screen", ansi: bool = False) -> str | None:
         del extent
@@ -76,11 +76,11 @@ def _result(request: ControlRequest, succeeded: bool, reason: str) -> ControlRes
     )
 
 
-def _submit(request: ControlRequest, context: ControlContext, text: str) -> ControlResult:
-    window_id = context.terminal_window_id
+def _submit(request: ControlRequest, control_context: ControlContext, text: str) -> ControlResult:
+    window_id = control_context.terminal_window_id
     if window_id is None:
         return ControlResult(request.request_id, "rejected", "session is not live")
-    result = context.terminal.input.submit_text(TextSubmitRequest(window_id, text, "paste"))
+    result = control_context.terminal.input.submit_text(TextSubmitRequest(window_id, text, "paste"))
     return _result(request, result.succeeded, result.reason or "terminal text was not delivered")
 
 
@@ -88,7 +88,7 @@ class SendTextHandler(ControlHandler):
     def __call__(
         self,
         request: ControlRequest,
-        context: ControlContext,
+        control_context: ControlContext,
     ) -> DeliveryResult:
         if not isinstance(request, SendText):
             raise TypeError("send_text handler requires SendText")
@@ -96,7 +96,7 @@ class SendTextHandler(ControlHandler):
             return DeliveryResult(request.request_id, "rejected", "Codex draft replacement is unsupported")
         attachment_text = " ".join(attachment.local_path for attachment in request.attachments)
         message = attachment_text + ("\n" if attachment_text and request.text else "") + request.text
-        result = _submit(request, context, message)
+        result = _submit(request, control_context, message)
         return DeliveryResult(result.request_id, result.status, result.reason, queued=False)
 
 
@@ -135,13 +135,13 @@ class InterruptHandler(ControlHandler):
     def __call__(
         self,
         request: ControlRequest,
-        context: ControlContext,
+        control_context: ControlContext,
     ) -> DeliveryResult:
-        session = context.session
-        terminal = context.terminal
+        session = control_context.session
+        terminal = control_context.terminal
         if not isinstance(request, Interrupt):
             raise TypeError("interrupt handler requires Interrupt")
-        window_id = context.terminal_window_id
+        window_id = control_context.terminal_window_id
         if window_id is None:
             return DeliveryResult(request.request_id, "rejected", "session is not live")
         try:
@@ -174,11 +174,11 @@ class InterruptHandler(ControlHandler):
 
 
 class CloseSessionHandler(ControlHandler):
-    def __call__(self, request: ControlRequest, context: ControlContext) -> ControlResult:
-        terminal = context.terminal
+    def __call__(self, request: ControlRequest, control_context: ControlContext) -> ControlResult:
+        terminal = control_context.terminal
         if not isinstance(request, CloseSession):
             raise TypeError("close_session handler requires CloseSession")
-        window_id = context.terminal_window_id
+        window_id = control_context.terminal_window_id
         if window_id is None:
             return ControlResult(request.request_id, "rejected", "session is not live")
         result = terminal.tabs.close_tab(TabCloseRequest(window_id))
@@ -186,39 +186,39 @@ class CloseSessionHandler(ControlHandler):
 
 
 class RenameSessionHandler(ControlHandler):
-    def __call__(self, request: ControlRequest, context: ControlContext) -> ControlResult:
-        session = context.session
-        terminal = context.terminal
+    def __call__(self, request: ControlRequest, control_context: ControlContext) -> ControlResult:
+        session = control_context.session
+        terminal = control_context.terminal
         if not isinstance(request, RenameSession):
             raise TypeError("rename_session handler requires RenameSession")
-        if context.terminal_window_id is None:
+        if control_context.terminal_window_id is None:
             outcome = title.titles.set_title(session.source_reference, request.name)
             if outcome == "unsupported":
                 return ControlResult(request.request_id, "rejected", "session source is not renameable")
             if outcome == "unavailable":
                 return ControlResult(request.request_id, "indeterminate", "native title store is unavailable")
             return ControlResult(request.request_id, "acknowledged")
-        result = _submit(request, context, f"/rename {request.name}")
+        result = _submit(request, control_context, f"/rename {request.name}")
         if result.status == "acknowledged":
-            window_id = context.terminal_window_id
+            window_id = control_context.terminal_window_id
             if window_id is not None:
                 terminal.tabs.rename_tab(TabRenameRequest(window_id, request.name))
         return result
 
 
 class CompactHandler(ControlHandler):
-    def __call__(self, request: ControlRequest, context: ControlContext) -> ControlResult:
+    def __call__(self, request: ControlRequest, control_context: ControlContext) -> ControlResult:
         if not isinstance(request, Compact):
             raise TypeError("compact handler requires Compact")
-        return _submit(request, context, "/compact")
+        return _submit(request, control_context, "/compact")
 
 
 class SelectModelHandler(ControlHandler):
-    def __call__(self, request: ControlRequest, context: ControlContext) -> ControlResult:
+    def __call__(self, request: ControlRequest, control_context: ControlContext) -> ControlResult:
         if not isinstance(request, SelectModel):
             raise TypeError("select_model handler requires SelectModel")
-        terminal = context.terminal
-        window_id = context.terminal_window_id
+        terminal = control_context.terminal
+        window_id = control_context.terminal_window_id
         if window_id is None:
             return ControlResult(request.request_id, "rejected", "session is not live")
         try:
@@ -226,7 +226,7 @@ class SelectModelHandler(ControlHandler):
                 _TerminalDriver(terminal),
                 window_id,
                 model=request.model_id,
-                effort=context.current_effort,
+                effort=control_context.current_effort,
             )
         except modeldialog.CodexModelError as error:
             return ControlResult(request.request_id, "indeterminate", str(error))
@@ -234,11 +234,11 @@ class SelectModelHandler(ControlHandler):
 
 
 class SelectEffortHandler(ControlHandler):
-    def __call__(self, request: ControlRequest, context: ControlContext) -> ControlResult:
+    def __call__(self, request: ControlRequest, control_context: ControlContext) -> ControlResult:
         if not isinstance(request, SelectEffort):
             raise TypeError("select_effort handler requires SelectEffort")
-        terminal = context.terminal
-        window_id = context.terminal_window_id
+        terminal = control_context.terminal
+        window_id = control_context.terminal_window_id
         if window_id is None:
             return ControlResult(request.request_id, "rejected", "session is not live")
         try:
@@ -252,7 +252,7 @@ class SelectEffortHandler(ControlHandler):
         return ControlResult(request.request_id, "acknowledged")
 
 
-def _native_prompts(attention: QuestionAsked) -> list[dialog.Prompt]:
+def _native_prompts(question_asked: QuestionAsked) -> list[dialog.Prompt]:
     return [
         {
             "id": prompt.prompt_id,
@@ -263,18 +263,18 @@ def _native_prompts(attention: QuestionAsked) -> list[dialog.Prompt]:
                 for choice in prompt.choices
             ],
         }
-        for prompt in attention.questions
+        for prompt in question_asked.questions
     ]
 
 
 class AnswerQuestionHandler(ControlHandler):
-    def __call__(self, request: ControlRequest, context: ControlContext) -> ControlResult:
-        terminal = context.terminal
+    def __call__(self, request: ControlRequest, control_context: ControlContext) -> ControlResult:
+        terminal = control_context.terminal
         if not isinstance(request, AnswerQuestion):
             raise TypeError("answer_question handler requires AnswerQuestion")
-        if not isinstance(context.pending_attention, QuestionAsked):
+        if not isinstance(control_context.pending_attention, QuestionAsked):
             return ControlResult(request.request_id, "rejected", "no question is pending")
-        window_id = context.terminal_window_id
+        window_id = control_context.terminal_window_id
         if window_id is None:
             return ControlResult(request.request_id, "rejected", "session is not live")
         answers = json.loads(request.answers.json_text) if request.answers is not None else []
@@ -285,14 +285,14 @@ class AnswerQuestionHandler(ControlHandler):
                 dialog.decline(
                     _TerminalDriver(terminal),
                     window_id,
-                    _native_prompts(context.pending_attention),
+                    _native_prompts(control_context.pending_attention),
                     request.discussion or "",
                 )
             else:
                 dialog.drive(
                     _TerminalDriver(terminal),
                     window_id,
-                    _native_prompts(context.pending_attention),
+                    _native_prompts(control_context.pending_attention),
                     answers,
                 )
         except dialog.CodexAskError as error:
@@ -304,12 +304,12 @@ class ReadPlanChoicesHandler(ControlHandler):
     def __call__(
         self,
         request: ControlRequest,
-        context: ControlContext,
+        control_context: ControlContext,
     ) -> PlanChoicesResult:
-        terminal = context.terminal
+        terminal = control_context.terminal
         if not isinstance(request, ReadPlanChoices):
             raise TypeError("read_plan_choices handler requires ReadPlanChoices")
-        window_id = context.terminal_window_id
+        window_id = control_context.terminal_window_id
         if window_id is None:
             return PlanChoicesResult(request.request_id, "rejected", "session is not live")
         try:
@@ -327,13 +327,13 @@ class ReadPlanChoicesHandler(ControlHandler):
 
 
 class DecidePlanHandler(ControlHandler):
-    def __call__(self, request: ControlRequest, context: ControlContext) -> ControlResult:
-        terminal = context.terminal
+    def __call__(self, request: ControlRequest, control_context: ControlContext) -> ControlResult:
+        terminal = control_context.terminal
         if not isinstance(request, DecidePlan):
             raise TypeError("decide_plan handler requires DecidePlan")
         if request.feedback is not None:
             return ControlResult(request.request_id, "rejected", "Codex plan decisions do not accept feedback")
-        window_id = context.terminal_window_id
+        window_id = control_context.terminal_window_id
         if window_id is None:
             return ControlResult(request.request_id, "rejected", "session is not live")
         driver = _TerminalDriver(terminal)

@@ -77,13 +77,13 @@ def option_rows(screen: str) -> list[OptionRow]:
     return rows(_picker_region(screen))
 
 
-def options(fe: Driver, win: str) -> list[dict[str, str]]:
+def options(driver: Driver, win: str) -> list[dict[str, str]]:
     """The APPROVE options on the live picker as [{digit, label}] — every
     decision row EXCEPT the keep-planning row (which the card offers as its own
     'keep planning' button, mapped to dismiss). Read-only: no key is pressed.
     Raises CodexPlanError('open') when the picker isn't up (the plan resolved in
     the terminal — the card self-heals on the next read)."""
-    screen, ok = _poll(fe, win, picker_open, STEP_TIMEOUT_S, time.sleep)
+    screen, ok = _poll(driver, win, picker_open, STEP_TIMEOUT_S, time.sleep)
     if not ok:
         raise CodexPlanError("open", "no plan-decision picker on screen")
     out: list[dict[str, str]] = []
@@ -94,24 +94,24 @@ def options(fe: Driver, win: str) -> list[dict[str, str]]:
     return out
 
 
-def _decide_row(fe: Driver, win: str, num: str, sleep: Callable[[float], None]) -> None:
+def _decide_row(driver: Driver, win: str, num: str, sleep: Callable[[float], None]) -> None:
     """Move the `›` cursor onto option `num` and ENTER, then verify the picker is
     GONE (the decision took). Raises CodexPlanError otherwise."""
-    screen, ok = _poll(fe, win, picker_open, STEP_TIMEOUT_S, sleep)
+    screen, ok = _poll(driver, win, picker_open, STEP_TIMEOUT_S, sleep)
     if not ok:
         raise CodexPlanError("open", "no plan-decision picker on screen")
     try:
-        _cursor_to(fe, win, num, sleep)
+        _cursor_to(driver, win, num, sleep)
     except CodexAskError as e:
         raise CodexPlanError("cursor", e.detail or str(e)) from e
-    fe.send_key(win, "enter")
-    _, gone = _poll(fe, win, lambda s: not picker_open(s), STEP_TIMEOUT_S, sleep)
+    driver.send_key(win, "enter")
+    _, gone = _poll(driver, win, lambda s: not picker_open(s), STEP_TIMEOUT_S, sleep)
     if not gone:
         raise CodexPlanError("submit", "picker still on screen after enter")
 
 
 def decide(
-    fe: Driver,
+    driver: Driver,
     win: str,
     digit: str,
     label: str,
@@ -122,7 +122,7 @@ def decide(
     uses, but keyed on the LABEL not the digit so codex reordering the rows can't
     press the wrong one; `digit` is advisory). Label drift ⇒ CodexPlanError, and
     nothing is pressed. Returns {"decided": True}."""
-    screen = fe.get_text(win) or ""
+    screen = driver.get_text(win) or ""
     if not picker_open(screen):
         raise CodexPlanError("open", "no plan-decision picker on screen")
     want = (label or "").strip().lower()
@@ -131,19 +131,19 @@ def decide(
     if match is None:
         raise CodexPlanError("label", "no row matching %r on screen (digit %s)"
                              % (label, digit))
-    _decide_row(fe, win, match["num"], sleep)
+    _decide_row(driver, win, match["num"], sleep)
     return {"decided": True}
 
 
-def dismiss(fe: Driver, win: str, sleep: Callable[[float], None] = time.sleep) -> dict[str, bool]:
+def dismiss(driver: Driver, win: str, sleep: Callable[[float], None] = time.sleep) -> dict[str, bool]:
     """KEEP PLANNING: pick the 'No, stay in Plan mode' row (an explicit choice,
     not an Esc — Esc only steps BACK). Returns {"dismissed": True}."""
-    screen, ok = _poll(fe, win, picker_open, STEP_TIMEOUT_S, sleep)
+    screen, ok = _poll(driver, win, picker_open, STEP_TIMEOUT_S, sleep)
     if not ok:
         raise CodexPlanError("open", "no plan-decision picker on screen")
     row = next((r for r in option_rows(screen)
                 if KEEP_PLANNING in r["label"].lower()), None)
     if row is None:
         raise CodexPlanError("dismiss", "no keep-planning row on screen")
-    _decide_row(fe, win, row["num"], sleep)
+    _decide_row(driver, win, row["num"], sleep)
     return {"dismissed": True}

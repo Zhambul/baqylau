@@ -68,7 +68,7 @@ def find_menu(screen: str) -> str | None:
     return yes if (yes and no) else None
 
 
-def confirm(fe: ScreenDriver, win: str,
+def confirm(screen_driver: ScreenDriver, win: str,
             sleep: Callable[[float], None] = time.sleep) -> ConfirmOutcome:
     """Watch window `win` for the switch-confirm menu a just-pasted /model or
     /effort may open; press its own Yes digit, verified. Returns
@@ -76,7 +76,7 @@ def confirm(fe: ScreenDriver, win: str,
     {"dialog": True, "digit": d} once the answered menu closes; raises
     ConfirmError when the menu stays open after Yes."""
     screen, ok = screendrive.poll_until(
-        fe, win, find_menu, OPEN_TIMEOUT_S, sleep)
+        screen_driver, win, find_menu, OPEN_TIMEOUT_S, sleep)
     if not ok:
         return {"dialog": False}
     digit = find_menu(screen)
@@ -85,9 +85,9 @@ def confirm(fe: ScreenDriver, win: str,
         # the switch applied on its own. Pressing a key here would land in
         # the composer.
         return {"dialog": False}
-    fe.send_key(win, digit)
+    screen_driver.send_key(win, digit)
     _, ok = screendrive.poll_until(
-        fe, win, lambda s: not find_menu(s), STEP_TIMEOUT_S, sleep)
+        screen_driver, win, lambda s: not find_menu(s), STEP_TIMEOUT_S, sleep)
     if not ok:
         raise ConfirmError("close", "confirm menu still open after Yes")
     return {"dialog": True, "digit": digit}

@@ -46,13 +46,13 @@ from terminal.contract import TerminalPlugin
 # `WHERE session_id = ?` triage query, which is how this gesture first read as
 # "no audit at all".
 def _audit_control(
-    audit: AuditRecorder,
+    audit_recorder: AuditRecorder,
     request: ControlRequest,
     outcome: ControlOutcome | None,
     elapsed: float,
 ) -> None:
     try:
-        audit.state_file(
+        audit_recorder.state_file(
             str(request.session_id),
             "",
             "control",
@@ -74,21 +74,21 @@ def _audit_control(
 class HarnessControlService(HarnessReactorContext):
     def __init__(
         self,
-        sessions: SessionRepository,
-        terminal: TerminalAdapter,
-        plugin: TerminalPlugin,
-        read_model: SessionDataRepository,
-        account_usage: AccountUsageRepository,
-        audit: AuditRecorder,
-        interrupts: InterruptRegistry,
+        session_repository: SessionRepository,
+        terminal_adapter: TerminalAdapter,
+        terminal_plugin: TerminalPlugin,
+        session_data_repository: SessionDataRepository,
+        account_usage_repository: AccountUsageRepository,
+        audit_recorder: AuditRecorder,
+        interrupt_registry: InterruptRegistry,
     ) -> None:
-        self.sessions = sessions
-        self.terminal = terminal
-        self.plugin = plugin
-        self.read_model = read_model
-        self.account_usage = account_usage
-        self.audit = audit
-        self.interrupts = interrupts
+        self.sessions = session_repository
+        self.terminal = terminal_adapter
+        self.plugin = terminal_plugin
+        self.read_model = session_data_repository
+        self.account_usage = account_usage_repository
+        self.audit = audit_recorder
+        self.interrupts = interrupt_registry
 
     def execute(self, request: ControlRequest) -> ControlOutcome:
         started = time.monotonic()

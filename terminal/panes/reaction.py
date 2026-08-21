@@ -16,13 +16,13 @@ class PaneCanonicalEventReaction(CanonicalEventReaction):
 
     def __init__(
         self,
-        terminal: TerminalAdapter,
-        sessions: SessionRepository,
-        widths: PaneWidthService,
+        terminal_adapter: TerminalAdapter,
+        session_repository: SessionRepository,
+        pane_width_service: PaneWidthService,
     ) -> None:
-        self.terminal = terminal
-        self.sessions = sessions
-        self.widths = widths
+        self.terminal = terminal_adapter
+        self.sessions = session_repository
+        self.widths = pane_width_service
 
     def react(self, canonical_event: CanonicalEvent[EventPayload]) -> None:
         payload = canonical_event.payload

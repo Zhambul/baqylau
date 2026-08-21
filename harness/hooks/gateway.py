@@ -26,11 +26,11 @@ class UnknownHookHarness(LookupError):
 
 
 class HookGatewayService:
-    def __init__(self, registry: HarnessRegistry, raw_events: RawEventRepository) -> None:
-        self.registry = registry
-        self.raw_events = raw_events
+    def __init__(self, harness_registry: HarnessRegistry, raw_event_repository: RawEventRepository) -> None:
+        self.registry = harness_registry
+        self.raw_events = raw_event_repository
 
-    def record(self, harness: str, request: HarnessHookRequest) -> bytes:
+    def record(self, harness: str, harness_hook_request: HarnessHookRequest) -> bytes:
         """One delivery in, its synchronous reply out (b"" when there is none)."""
         try:
             plugin = self.registry.plugin(harness)
@@ -38,24 +38,26 @@ class HookGatewayService:
             raise UnknownHookHarness(str(error)) from error
         if plugin.hooks is None:
             raise UnknownHookHarness(f"harness accepts no hook deliveries: {harness}")
-        response = plugin.hooks.handle(self._with_harness_process(plugin, request))
+        response = plugin.hooks.handle(self._with_harness_process(plugin, harness_hook_request))
         self.raw_events.record(response.raw_events)
         return response.reply
 
     @staticmethod
-    def _with_harness_process(plugin: HarnessPlugin, request: HarnessHookRequest) -> HarnessHookRequest:
+    def _with_harness_process(
+        harness_plugin: HarnessPlugin, harness_hook_request: HarnessHookRequest
+    ) -> HarnessHookRequest:
         """The CLI pid, from the client's own pid and the plugin's process name.
 
         Walked HERE rather than in the hook process: it costs a `ps` per
         ancestry level, and the harness is blocked on the delivery while it runs
         — which is also what makes the chain safe to read this late.
         """
-        if request.harness_process_id is not None or request.client_process_id is None:
-            return request
+        if harness_hook_request.harness_process_id is not None or harness_hook_request.client_process_id is None:
+            return harness_hook_request
         return replace(
-            request,
+            harness_hook_request,
             harness_process_id=nearest_ancestor_named(
-                plugin.info.cli_process_name,
-                from_process_id=request.client_process_id,
+                harness_plugin.info.cli_process_name,
+                from_process_id=harness_hook_request.client_process_id,
             ),
         )

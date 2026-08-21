@@ -102,21 +102,23 @@ def windows(document: dict[str, Any]) -> tuple[UsageWindowSample, ...]:
 class ClaudeTelemetryGateway(HarnessTelemetryGateway):
     def handle(
         self,
-        request: HarnessTelemetryRequest,
-        context: TelemetryContext,
+        harness_telemetry_request: HarnessTelemetryRequest,
+        telemetry_context: TelemetryContext,
     ) -> HarnessTelemetryResponse:
-        if request.kind == OTLP_KIND:
-            return HarnessTelemetryResponse(raw_events=self._metrics(request.payload, context))
-        if request.kind == STATUSLINE_KIND:
-            return HarnessTelemetryResponse(usage=self._usage(request.payload))
+        if harness_telemetry_request.kind == OTLP_KIND:
+            return HarnessTelemetryResponse(
+                raw_events=self._metrics(harness_telemetry_request.payload, telemetry_context)
+            )
+        if harness_telemetry_request.kind == STATUSLINE_KIND:
+            return HarnessTelemetryResponse(usage=self._usage(harness_telemetry_request.payload))
         return HarnessTelemetryResponse()
 
     @staticmethod
-    def _metrics(payload: bytes, context: TelemetryContext) -> tuple[RawEvent, ...]:
+    def _metrics(payload: bytes, telemetry_context: TelemetryContext) -> tuple[RawEvent, ...]:
         document = json.loads(payload)
         raw_events = []
         for session_id in _session_ids(document):
-            session = context.find_session(session_id)
+            session = telemetry_context.find_session(session_id)
             if session is None:
                 continue
             digest = hashlib.sha256(str(session_id).encode() + b"\0" + payload).hexdigest()

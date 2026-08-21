@@ -40,7 +40,7 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
         except UnknownEvidence as unknown:
             return TranslationResult((), "ignored_unknown", unknown.reason)
 
-    def _stamped(self, raw_event: RawEvent, result: TranslationResult) -> TranslationResult:
+    def _stamped(self, raw_event: RawEvent, translation_result: TranslationResult) -> TranslationResult:
         """Every fact of an open turn carries it.
 
         Stamped HERE, once, rather than by each of the forty places that build a
@@ -49,13 +49,13 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
         are left alone.
         """
         turn_id = self._turns.current(raw_event)
-        if turn_id is None or not result.canonical_events:
-            return result
+        if turn_id is None or not translation_result.canonical_events:
+            return translation_result
         stamped = tuple(
             canonical if canonical.turn_id is not None else replace(canonical, turn_id=turn_id)
-            for canonical in result.canonical_events
+            for canonical in translation_result.canonical_events
         )
-        return replace(result, canonical_events=stamped)
+        return replace(translation_result, canonical_events=stamped)
 
     def _translate(self, raw_event: RawEvent) -> TranslationResult:
         try:

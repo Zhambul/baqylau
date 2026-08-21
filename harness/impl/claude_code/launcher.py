@@ -16,26 +16,26 @@ LAUNCH_EFFORT_VARIABLE = "BAQYLAU_LAUNCH_EFFORT"
 
 
 class ClaudeCodeLauncher(HarnessLauncher):
-    def prepare(self, request: LaunchRequest) -> HarnessLaunchPlan:
-        account_alias = account.alias_for(request.account_id or "")
+    def prepare(self, launch_request: LaunchRequest) -> HarnessLaunchPlan:
+        account_alias = account.alias_for(launch_request.account_id or "")
         if account_alias is None:
             raise LaunchRejected("unknown Claude Code account")
         attachment_text = " ".join(
             f"@{attachment.local_path}"
-            for attachment in request.attachments
+            for attachment in launch_request.attachments
         )
-        initial_text = request.initial_text or ""
+        initial_text = launch_request.initial_text or ""
         prompt = attachment_text + ("\n" + initial_text if attachment_text and initial_text else initial_text)
         arguments: list[str] = []
         environment: list[tuple[str, str]] = []   # name/value pairs, not flat argv
-        if request.resume_session_id is not None:
-            arguments.extend(("--resume", str(request.resume_session_id)))
-        if request.model_id:
-            arguments.extend(("--model", request.model_id))
-            environment.append((LAUNCH_MODEL_VARIABLE, request.model_id))
-        if request.effort:
-            arguments.extend(("--effort", request.effort))
-            environment.append((LAUNCH_EFFORT_VARIABLE, request.effort))
+        if launch_request.resume_session_id is not None:
+            arguments.extend(("--resume", str(launch_request.resume_session_id)))
+        if launch_request.model_id:
+            arguments.extend(("--model", launch_request.model_id))
+            environment.append((LAUNCH_MODEL_VARIABLE, launch_request.model_id))
+        if launch_request.effort:
+            arguments.extend(("--effort", launch_request.effort))
+            environment.append((LAUNCH_EFFORT_VARIABLE, launch_request.effort))
         if prompt.strip():
             arguments.append(prompt)
         # Launching is just running the CLI: the tab opens in a login shell, so

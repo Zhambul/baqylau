@@ -30,9 +30,9 @@ class TabColorPainter(AppliedActorListener):
     because it asked ITSELF something is not the session asking you anything.
     """
 
-    def __init__(self, terminal: TerminalAdapter, sessions: SessionRepository) -> None:
-        self._terminal = terminal
-        self._sessions = sessions
+    def __init__(self, terminal_adapter: TerminalAdapter, session_repository: SessionRepository) -> None:
+        self._terminal = terminal_adapter
+        self._sessions = session_repository
         self._painted: dict[SessionId, ActorStatus | None] = {}
 
     def applied(self, session_id: SessionId, actors: Sequence[ActorFacts]) -> None:

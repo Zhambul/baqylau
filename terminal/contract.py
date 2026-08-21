@@ -56,7 +56,7 @@ from terminal.models.viewport import (
 
 
 class TerminalTabs(Protocol):
-    def open_tab(self, request: TabOpenRequest) -> TabOpenResponse:
+    def open_tab(self, tab_open_request: TabOpenRequest) -> TabOpenResponse:
         """A new tab running the request's command.
 
         May select the new tab inside the terminal, but must NOT make the
@@ -64,34 +64,34 @@ class TerminalTabs(Protocol):
         caller is a web request whose user is in a browser.
         """
 
-    def close_tab(self, request: TabCloseRequest) -> TabCloseResponse:
+    def close_tab(self, tab_close_request: TabCloseRequest) -> TabCloseResponse:
         """Close the whole tab containing the window — the session's own window
         and the panes split off it. The processes get SIGHUP and exit."""
 
-    def rename_tab(self, request: TabRenameRequest) -> TabRenameResponse:
+    def rename_tab(self, tab_rename_request: TabRenameRequest) -> TabRenameResponse:
         """Explicitly title the tab containing the window. An explicit title is
         sticky: it stops following the active window's title, which may be
         owned by a harness's own title publisher. Use it only where the owning
         plugin declares that the terminal is the title writer."""
 
-    def set_tab_color(self, request: TabColorSetRequest) -> TabColorSetResponse:
+    def set_tab_color(self, tab_color_set_request: TabColorSetRequest) -> TabColorSetResponse:
         """Colour the tab containing the window, active AND inactive, so a
         background session stays visible."""
 
-    def clear_tab_color(self, request: TabColorClearRequest) -> TabColorClearResponse:
+    def clear_tab_color(self, tab_color_clear_request: TabColorClearRequest) -> TabColorClearResponse:
         """Revert the tab containing the window to the theme default."""
 
 
 class TerminalPanes(Protocol):
-    def open_pane(self, request: PaneOpenRequest) -> PaneOpenResponse:
+    def open_pane(self, pane_open_request: PaneOpenRequest) -> PaneOpenResponse:
         """Split a new pane next to the anchor. Arranging whatever layout the
         split needs is the implementation's business, not the caller's."""
 
-    def close_pane(self, request: PaneCloseRequest) -> PaneCloseResponse: ...
+    def close_pane(self, pane_close_request: PaneCloseRequest) -> PaneCloseResponse: ...
 
-    def resize_pane(self, request: PaneResizeRequest) -> PaneResizeResponse: ...
+    def resize_pane(self, pane_resize_request: PaneResizeRequest) -> PaneResizeResponse: ...
 
-    def focus_window(self, request: WindowFocusRequest) -> WindowFocusResponse:
+    def focus_window(self, window_focus_request: WindowFocusRequest) -> WindowFocusResponse:
         """Move focus INSIDE the tab, without raising the application. With
         `WindowInfo.is_first_in_tab` to name the host, this is how focus is
         handed back after a pane took it."""
@@ -108,7 +108,7 @@ class TerminalMetadata(Protocol):
         detection, and the pane width arithmetic.
         """
 
-    def tag_window(self, request: WindowTagRequest) -> WindowTagResponse:
+    def tag_window(self, window_tag_request: WindowTagRequest) -> WindowTagResponse:
         """The write half of the tag read in `windows()`."""
 
     def current_window_id(self) -> str | None:
@@ -121,12 +121,12 @@ class TerminalMetadata(Protocol):
 
 
 class TerminalInput(Protocol):
-    def submit_text(self, request: TextSubmitRequest) -> TextSubmitResponse: ...
-    def send_key(self, request: KeySendRequest) -> KeySendResponse: ...
+    def submit_text(self, text_submit_request: TextSubmitRequest) -> TextSubmitResponse: ...
+    def send_key(self, key_send_request: KeySendRequest) -> KeySendResponse: ...
 
 
 class TerminalViewport(Protocol):
-    def read_screen(self, request: ScreenReadRequest) -> ScreenReadResponse: ...
+    def read_screen(self, screen_read_request: ScreenReadRequest) -> ScreenReadResponse: ...
 
 @dataclass(frozen=True)
 class TerminalPlugin:

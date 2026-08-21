@@ -12,10 +12,10 @@ from terminal.models import ScreenReadRequest
 class ClaudeCodeTerminalProbe(HarnessTerminalProbe):
     def input_state(
         self,
-        viewport: TerminalViewport,
+        terminal_viewport: TerminalViewport,
         window_id: str,
     ) -> TerminalInputState | None:
-        screen = viewport.read_screen(ScreenReadRequest(window_id, ansi=True))
+        screen = terminal_viewport.read_screen(ScreenReadRequest(window_id, ansi=True))
         if screen.text is None:
             return None
         return TerminalInputState(

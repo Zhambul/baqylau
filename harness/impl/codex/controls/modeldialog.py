@@ -86,42 +86,42 @@ def _norm(label: str) -> str:
     return s.strip()
 
 
-def _await(fe: Driver, win: str, needle: str, sleep: Callable[[float], None]) -> str:
-    screen, ok = _poll(fe, win, lambda s: needle in (s or ""), STEP_TIMEOUT_S,
+def _await(driver: Driver, win: str, needle: str, sleep: Callable[[float], None]) -> str:
+    screen, ok = _poll(driver, win, lambda s: needle in (s or ""), STEP_TIMEOUT_S,
                        sleep)
     if not ok:
         raise CodexModelError("step", "%r never appeared" % needle)
     return screen
 
 
-def _goto(fe: Driver, win: str, num: str, sleep: Callable[[float], None]) -> None:
+def _goto(driver: Driver, win: str, num: str, sleep: Callable[[float], None]) -> None:
     """Move the `›` cursor onto row `num`, mapping dialog._cursor_to's error into
     a CodexModelError so the gesture's one except clause owns it."""
     try:
-        _cursor_to(fe, win, num, sleep)
+        _cursor_to(driver, win, num, sleep)
     except Exception as e:                   # dialog._cursor_to's CodexAskError
         raise CodexModelError("cursor", str(e)) from e
 
 
-def _pick(fe: Driver, win: str, header: str, want: str, sleep: Callable[[float], None]) -> None:
+def _pick(driver: Driver, win: str, header: str, want: str, sleep: Callable[[float], None]) -> None:
     """On the picker step whose header contains `header`, move the `›` cursor to
     the row whose normalized label EQUALS `want` (or, when `want` is "", accept
     the pre-selected row) and ENTER. `want` may also be a marker like `(current)`
     matched as a substring."""
-    _await(fe, win, header, sleep)
+    _await(driver, win, header, sleep)
     if want:
-        screen = fe.get_text(win) or ""
+        screen = driver.get_text(win) or ""
         w = want.lower()
         row = next((r for r in rows(screen)
                     if _norm(r["label"]) == w or w in r["label"].lower()), None)
         if row is None:
             raise CodexModelError("row", "no %r under %r" % (want, header))
-        _goto(fe, win, row["num"], sleep)
-    fe.send_key(win, "enter")
+        _goto(driver, win, row["num"], sleep)
+    driver.send_key(win, "enter")
 
 
 def _pick_level(
-    fe: Driver,
+    driver: Driver,
     win: str,
     want: str,
     sleep: Callable[[float], None],
@@ -140,39 +140,39 @@ def _pick_level(
     strict=True (an EXPLICIT ✧ effort) raises; strict=False (a ✦ model switch
     PRESERVING the old level) accepts the new model's DEFAULT instead — a preserve
     must never fail the switch just because the target model can't do that level."""
-    _await(fe, win, LEVEL_STEP, sleep)
+    _await(driver, win, LEVEL_STEP, sleep)
     if not want:
-        fe.send_key(win, "enter")            # accept the model's default level
+        driver.send_key(win, "enter")            # accept the model's default level
         return
     w = want.lower()
-    screen = fe.get_text(win) or ""
+    screen = driver.get_text(win) or ""
     row = next((r for r in rows(screen) if _norm(r["label"]) == w), None)
     if row is not None:                      # listed directly on this model
-        _goto(fe, win, row["num"], sleep)
-        fe.send_key(win, "enter")
+        _goto(driver, win, row["num"], sleep)
+        driver.send_key(win, "enter")
         return
     # not listed — open 'More reasoning…' and pick it in the Advanced sub-step
     more = next((r for r in rows(screen) if MORE in r["label"].lower()), None)
     if more is None:
         # this model has no such level and no Advanced sub-step
         if not strict:
-            fe.send_key(win, "enter")        # best-effort preserve → its default
+            driver.send_key(win, "enter")        # best-effort preserve → its default
             return
         raise CodexModelError("row", "no %r (nor a More-reasoning row) under %r"
                               % (want, LEVEL_STEP))
-    _goto(fe, win, more["num"], sleep)
-    fe.send_key(win, "enter")
-    _await(fe, win, ADVANCED, sleep)
-    screen = fe.get_text(win) or ""
+    _goto(driver, win, more["num"], sleep)
+    driver.send_key(win, "enter")
+    _await(driver, win, ADVANCED, sleep)
+    screen = driver.get_text(win) or ""
     row = next((r for r in rows(screen) if _norm(r["label"]) == w), None)
     if row is None:
         raise CodexModelError("row", "no %r under %r" % (want, ADVANCED))
-    _goto(fe, win, row["num"], sleep)
-    fe.send_key(win, "enter")
+    _goto(driver, win, row["num"], sleep)
+    driver.send_key(win, "enter")
 
 
 def set_model_effort(
-    fe: Driver,
+    driver: Driver,
     win: str,
     model: str = "",
     effort: str | None = "",
@@ -184,10 +184,10 @@ def set_model_effort(
     a given gesture. Opens the picker itself (paste `/model`), which lands
     STRAIGHT on the model step, then model→level, verified. Returns
     {"set": True}; raises CodexModelError on any unverified step."""
-    if not fe.paste_text(win, "/model"):
+    if not driver.paste_text(win, "/model"):
         raise CodexModelError("open", "/model paste refused")
     # Step 1 — the model: the chosen one (✦), else keep the current (✧).
-    _pick(fe, win, MODEL_STEP, model or CURRENT, sleep)
+    _pick(driver, win, MODEL_STEP, model or CURRENT, sleep)
     # Step 2 — the reasoning level: the chosen one (✧), else the model's default
     # (✦ accepts the pre-selected row with a bare Enter). Handles the `More
     # reasoning…` sub-step the top level sits behind. When a MODEL is
@@ -195,8 +195,8 @@ def set_model_effort(
     # model that lacks the old level gets its default, never a failed switch);
     # when only the effort is set it is an EXPLICIT ✧ choice (strict).
     want = EFFORT_LABEL.get(effort, "") if effort else ""
-    _pick_level(fe, win, want, sleep, strict=not model)
-    _, gone = _poll(fe, win, lambda s: FOOT not in (s or ""), STEP_TIMEOUT_S,
+    _pick_level(driver, win, want, sleep, strict=not model)
+    _, gone = _poll(driver, win, lambda s: FOOT not in (s or ""), STEP_TIMEOUT_S,
                     sleep)
     if not gone:
         raise CodexModelError("submit", "picker still open after the level")

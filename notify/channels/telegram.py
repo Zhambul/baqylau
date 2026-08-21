@@ -237,8 +237,8 @@ def _telegram_send_body(h: dict[str, Any], msg: str, reason: str | None) -> None
 
 
 def retract_alert(h: dict[str, Any], reason: str, badge: int = 0, *,
-                  keys: PushSigningKeyRepository | None = None,
-                  subscriptions: PushSubscriptionRepository | None = None) -> str:
+                  push_signing_key_repository: PushSigningKeyRepository | None = None,
+                  push_subscription_repository: PushSubscriptionRepository | None = None) -> str:
     """Delete the message — OFF the watcher thread, for the same reason the send
     is: `delete_message` is a synchronous HTTPS round-trip with a 10 s timeout,
     and the 1 s scan loop cannot wear that. So the outcome is not known
@@ -248,7 +248,7 @@ def retract_alert(h: dict[str, Any], reason: str, badge: int = 0, *,
     needs no new machinery — and the `notify-retract` row it eventually writes
     still reports what actually happened on the wire, rather than an optimistic
     guess made before the call returned."""
-    del reason, badge, keys, subscriptions  # a Bot API message needs none
+    del reason, badge, push_signing_key_repository, push_subscription_repository  # a Bot API message needs none
     if not h.get("done"):
         return PENDING                     # the SEND hasn't landed yet
     outcome = h.get("outcome")

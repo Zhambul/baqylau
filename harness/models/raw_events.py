@@ -83,7 +83,7 @@ def canonical_event(
     subject_type: str,
     subject_id: str,
     phase: str,
-    payload: EventPayload,
+    event_payload: EventPayload,
     *,
     turn_id: TurnId | None = None,
     occurred_at: float | None = None,
@@ -107,7 +107,7 @@ def canonical_event(
         occurred_at=occurred_at,
         terminal_window_id=raw_event.terminal_window_id,
         harness_process_id=raw_event.harness_process_id,
-        payload=payload,
+        payload=event_payload,
     )
 
 
@@ -157,30 +157,30 @@ INTERRUPT_SOURCE_TYPE = "interrupt"
 
 
 def output_location_raw_event(
-    context: RawEventSourceContext,
+    raw_event_source_context: RawEventSourceContext,
     harness: str,
-    located: ShellOutputLocated,
+    shell_output_located: ShellOutputLocated,
     actor_id: ActorId | None = None,
     parent_actor_id: ActorId | None = None,
 ) -> RawEvent:
     return RawEvent(
         raw_event_id=RawEventId(
-            f"{harness}:output_location:{context.session_id}:{located.shell_id}"
+            f"{harness}:output_location:{raw_event_source_context.session_id}:{shell_output_located.shell_id}"
         ),
         harness=harness,
         source_type=OUTPUT_LOCATION_SOURCE_TYPE,
-        source_name=located.source_path,
+        source_name=shell_output_located.source_path,
         source_position="located",
-        session_id=context.session_id,
-        actor_id=actor_id or context.actor_id,
-        parent_actor_id=parent_actor_id if actor_id else context.parent_actor_id,
+        session_id=raw_event_source_context.session_id,
+        actor_id=actor_id or raw_event_source_context.actor_id,
+        parent_actor_id=parent_actor_id if actor_id else raw_event_source_context.parent_actor_id,
         observed_at=time.time(),
         encoding="json",
-        payload=encode_document(located),
+        payload=encode_document(shell_output_located),
         # NOT the chunk source's identity: the chunk reader resumes from the last
         # raw event under its own identity, and a directive there would
         # masquerade as a read position.
         source_identity=(
-            f"{harness}:output_location:{context.session_id}:{located.shell_id}:directive"
+            f"{harness}:output_location:{raw_event_source_context.session_id}:{shell_output_located.shell_id}:directive"
         ),
     )

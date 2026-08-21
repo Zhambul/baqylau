@@ -53,33 +53,33 @@ NO_TERMINAL = "no terminal available"
 
 
 class NullTabs(TerminalTabs):
-    def open_tab(self, request: TabOpenRequest) -> TabOpenResponse:
+    def open_tab(self, tab_open_request: TabOpenRequest) -> TabOpenResponse:
         return TabOpenResponse(False, None, NO_TERMINAL)
 
-    def close_tab(self, request: TabCloseRequest) -> TabCloseResponse:
+    def close_tab(self, tab_close_request: TabCloseRequest) -> TabCloseResponse:
         return TabCloseResponse(False, NO_TERMINAL)
 
-    def rename_tab(self, request: TabRenameRequest) -> TabRenameResponse:
+    def rename_tab(self, tab_rename_request: TabRenameRequest) -> TabRenameResponse:
         return TabRenameResponse(False, NO_TERMINAL)
 
-    def set_tab_color(self, request: TabColorSetRequest) -> TabColorSetResponse:
+    def set_tab_color(self, tab_color_set_request: TabColorSetRequest) -> TabColorSetResponse:
         return TabColorSetResponse(False, NO_TERMINAL)
 
-    def clear_tab_color(self, request: TabColorClearRequest) -> TabColorClearResponse:
+    def clear_tab_color(self, tab_color_clear_request: TabColorClearRequest) -> TabColorClearResponse:
         return TabColorClearResponse(False, NO_TERMINAL)
 
 
 class NullPanes(TerminalPanes):
-    def open_pane(self, request: PaneOpenRequest) -> PaneOpenResponse:
+    def open_pane(self, pane_open_request: PaneOpenRequest) -> PaneOpenResponse:
         return PaneOpenResponse(False, None, NO_TERMINAL)
 
-    def close_pane(self, request: PaneCloseRequest) -> PaneCloseResponse:
+    def close_pane(self, pane_close_request: PaneCloseRequest) -> PaneCloseResponse:
         return PaneCloseResponse(False, NO_TERMINAL)
 
-    def resize_pane(self, request: PaneResizeRequest) -> PaneResizeResponse:
+    def resize_pane(self, pane_resize_request: PaneResizeRequest) -> PaneResizeResponse:
         return PaneResizeResponse(False, NO_TERMINAL)
 
-    def focus_window(self, request: WindowFocusRequest) -> WindowFocusResponse:
+    def focus_window(self, window_focus_request: WindowFocusRequest) -> WindowFocusResponse:
         return WindowFocusResponse(False, NO_TERMINAL)
 
 
@@ -87,7 +87,7 @@ class NullMetadata(TerminalMetadata):
     def windows(self) -> tuple[WindowInfo, ...]:
         return ()
 
-    def tag_window(self, request: WindowTagRequest) -> WindowTagResponse:
+    def tag_window(self, window_tag_request: WindowTagRequest) -> WindowTagResponse:
         return WindowTagResponse(False, NO_TERMINAL)
 
     def current_window_id(self) -> str | None:
@@ -95,15 +95,15 @@ class NullMetadata(TerminalMetadata):
 
 
 class NullInput(TerminalInput):
-    def submit_text(self, request: TextSubmitRequest) -> TextSubmitResponse:
+    def submit_text(self, text_submit_request: TextSubmitRequest) -> TextSubmitResponse:
         return TextSubmitResponse(False, NO_TERMINAL)
 
-    def send_key(self, request: KeySendRequest) -> KeySendResponse:
+    def send_key(self, key_send_request: KeySendRequest) -> KeySendResponse:
         return KeySendResponse(False, NO_TERMINAL)
 
 
 class NullViewport(TerminalViewport):
-    def read_screen(self, request: ScreenReadRequest) -> ScreenReadResponse:
+    def read_screen(self, screen_read_request: ScreenReadRequest) -> ScreenReadResponse:
         return ScreenReadResponse(False, None, NO_TERMINAL)
 
 def null_plugin() -> TerminalPlugin:

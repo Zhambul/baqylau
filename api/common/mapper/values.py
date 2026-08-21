@@ -34,35 +34,41 @@ from domain.values import (
 from harness.models import PlanChoice, TerminalSessionState, UsageRow
 
 
-def token_usage(usage: TokenUsage) -> TokenUsageResponse:
+def token_usage(token_usage: TokenUsage) -> TokenUsageResponse:
     return TokenUsageResponse(
-        input_tokens=usage.input_tokens,
-        output_tokens=usage.output_tokens,
-        cache_read_tokens=usage.cache_read_tokens,
-        cache_write_tokens=usage.cache_write_tokens,
-        one_hour_cache_write_tokens=usage.one_hour_cache_write_tokens,
+        input_tokens=token_usage.input_tokens,
+        output_tokens=token_usage.output_tokens,
+        cache_read_tokens=token_usage.cache_read_tokens,
+        cache_write_tokens=token_usage.cache_write_tokens,
+        one_hour_cache_write_tokens=token_usage.one_hour_cache_write_tokens,
     )
 
 
-def model_reference(model: ModelReference) -> ModelReferenceResponse:
+def model_reference(model_reference: ModelReference) -> ModelReferenceResponse:
     return ModelReferenceResponse(
-        native_id=model.native_id,
-        display_name=model.display_name,
-        selection_id=model.selection_id,
+        native_id=model_reference.native_id,
+        display_name=model_reference.display_name,
+        selection_id=model_reference.selection_id,
     )
 
 
-def maybe_model_reference(model: ModelReference | None) -> ModelReferenceResponse | None:
-    return model_reference(model) if model is not None else None
+def maybe_model_reference(
+    candidate_model_reference: ModelReference | None,
+) -> ModelReferenceResponse | None:
+    return (
+        model_reference(candidate_model_reference)
+        if candidate_model_reference is not None
+        else None
+    )
 
 
 def maybe_account_reference(
-    account: AccountReference | None,
+    account_reference: AccountReference | None,
 ) -> AccountReferenceResponse | None:
-    if account is None:
+    if account_reference is None:
         return None
     return AccountReferenceResponse(
-        account_id=account.account_id, display_name=account.display_name
+        account_id=account_reference.account_id, display_name=account_reference.display_name
     )
 
 
@@ -79,42 +85,42 @@ def maybe_content(value: Content | None) -> ContentResponse | None:
     return None if value is None else content(value)
 
 
-def plan_choice(choice: PlanChoice) -> PlanChoiceResponse:
+def plan_choice(plan_choice: PlanChoice) -> PlanChoiceResponse:
     return PlanChoiceResponse(
-        digit=choice.digit, label=choice.label, feedback=choice.feedback
+        digit=plan_choice.digit, label=plan_choice.label, feedback=plan_choice.feedback
     )
 
 
-def terminal_state(state: TerminalSessionState) -> TerminalStateResponse:
+def terminal_state(terminal_session_state: TerminalSessionState) -> TerminalStateResponse:
     return TerminalStateResponse(
-        window_id=state.window_id,
+        window_id=terminal_session_state.window_id,
         input_state=(
-            None if state.input_state is None
+            None if terminal_session_state.input_state is None
             else TerminalInputStateResponse(
-                typed_text=state.input_state.typed_text,
-                suggestion=state.input_state.suggestion,
+                typed_text=terminal_session_state.input_state.typed_text,
+                suggestion=terminal_session_state.input_state.suggestion,
             )
         ),
     )
 
 
 def maybe_repository_status(
-    status: RepositoryStatus | None,
+    repository_status: RepositoryStatus | None,
 ) -> RepositoryStatusResponse | None:
-    if status is None:
+    if repository_status is None:
         return None
     return RepositoryStatusResponse(
-        branch=status.branch, worktree=status.worktree, dirty=status.dirty
+        branch=repository_status.branch, worktree=repository_status.worktree, dirty=repository_status.dirty
     )
 
 
-def usage_row(row: UsageRow) -> UsageRowResponse:
+def usage_row(usage_row: UsageRow) -> UsageRowResponse:
     return UsageRowResponse(
-        harness=row.harness,
-        account_id=row.account_id,
-        display_name=row.display_name,
-        switchable=row.switchable,
-        plan=row.plan,
+        harness=usage_row.harness,
+        account_id=usage_row.account_id,
+        display_name=usage_row.display_name,
+        switchable=usage_row.switchable,
+        plan=usage_row.plan,
         windows=tuple(
             UsageWindowResponse(
                 key=window.key,
@@ -125,17 +131,17 @@ def usage_row(row: UsageRow) -> UsageRowResponse:
                 scope=window.scope,
                 model_id=window.model_id,
             )
-            for window in row.windows
+            for window in usage_row.windows
         ),
-        scheduling_score=row.scheduling_score,
-        scheduling_allowed=row.scheduling_allowed,
+        scheduling_score=usage_row.scheduling_score,
+        scheduling_allowed=usage_row.scheduling_allowed,
         limit=(
-            None if row.limit is None
+            None if usage_row.limit is None
             else UsageBlockResponse(
-                model_id=row.limit.model_id,
-                message=row.limit.message,
-                resets_at=row.limit.resets_at,
+                model_id=usage_row.limit.model_id,
+                message=usage_row.limit.message,
+                resets_at=usage_row.limit.resets_at,
             )
         ),
-        authentication_error=row.authentication_error,
+        authentication_error=usage_row.authentication_error,
     )

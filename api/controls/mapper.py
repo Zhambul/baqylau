@@ -29,9 +29,11 @@ from harness.models import (
 )
 
 
-def launch(result: LaunchResult) -> LaunchResponse:
+def launch(launch_result: LaunchResult) -> LaunchResponse:
     return LaunchResponse(
-        status=result.status, window_id=result.window_id, reason=result.reason
+        status=launch_result.status,
+        window_id=launch_result.window_id,
+        reason=launch_result.reason,
     )
 
 

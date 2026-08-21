@@ -112,34 +112,34 @@ class BrowserPresence:
 class ApplicationPreferenceService:
     def __init__(
         self,
-        read_model: SessionDataRepository,
-        terminal: TerminalAdapter,
-        repositories: RepositoryQueries,
-        usage: UsageReader,
-        state: DashboardNotificationState,
-        new_sessions: NewSessionRepository,
-        notifications: NotificationSettingRepository,
-        directories: HiddenDirectoryRepository,
-        subscriptions: PushSubscriptionRepository,
+        session_data_repository: SessionDataRepository,
+        terminal_adapter: TerminalAdapter,
+        repository_queries: RepositoryQueries,
+        usage_reader: UsageReader,
+        dashboard_notification_state: DashboardNotificationState,
+        new_session_repository: NewSessionRepository,
+        notification_setting_repository: NotificationSettingRepository,
+        hidden_directory_repository: HiddenDirectoryRepository,
+        push_subscription_repository: PushSubscriptionRepository,
         presence: Presence,
         clock: Callable[[], float] = time.time,
     ) -> None:
-        self.read_model = read_model
-        self.terminal = terminal
-        self.repositories = repositories
-        self.usage = usage
-        self.state = state
-        self.new_sessions = new_sessions
-        self.notifications = notifications
-        self.directories = directories
-        self.subscriptions = subscriptions
+        self.session_data_repository = session_data_repository
+        self.terminal_adapter = terminal_adapter
+        self.repository_queries = repository_queries
+        self.usage_reader = usage_reader
+        self.dashboard_notification_state = dashboard_notification_state
+        self.new_session_repository = new_session_repository
+        self.notification_setting_repository = notification_setting_repository
+        self.hidden_directory_repository = hidden_directory_repository
+        self.push_subscription_repository = push_subscription_repository
         self.presence = presence
         self.clock = clock
 
     def snapshot(self) -> ApplicationPreferences:
         """What the page owns, read back. No session rows: those are the read
         model's, and they arrive on /sessionData."""
-        new_session = self.new_sessions.preferences()
+        new_session = self.new_session_repository.preferences()
         return ApplicationPreferences(
             new_session=NewSessionPreferences(
                 working_directory=new_session.working_directory if new_session else None,
@@ -153,11 +153,10 @@ class ApplicationPreferenceService:
                     text=draft.text,
                     sequence=draft.sequence,
                 )
-                for draft in self.new_sessions.drafts()
+                for draft in self.new_session_repository.drafts()
             ),
             hidden_directories={
-                entry.working_directory: entry.hidden_at
-                for entry in self.directories.hidden()
+                entry.working_directory: entry.hidden_at for entry in self.hidden_directory_repository.hidden()
             },
             limits=DashboardLimits(
                 upload_bytes=daemon_contract.UPLOAD_MAX,
@@ -165,14 +164,14 @@ class ApplicationPreferenceService:
                 presence_seconds=presence.VIEW_LIFETIME_SECONDS,
             ),
             notifications=GlobalNotificationState(
-                enabled=self.notifications.alerting_enabled(),
-                latest=self.state.notification(),
+                enabled=self.notification_setting_repository.alerting_enabled(),
+                latest=self.dashboard_notification_state.notification(),
             ),
-            usage_rows=self.usage.usage_rows(),
+            usage_rows=self.usage_reader.usage_rows(),
         )
 
     def set_notifications_enabled(self, enabled: bool) -> None:
-        self.notifications.set_alerting_enabled(enabled)
+        self.notification_setting_repository.set_alerting_enabled(enabled)
 
     def save_new_session_preferences(
         self,
@@ -181,7 +180,7 @@ class ApplicationPreferenceService:
         model: str | None,
         effort: str | None,
     ) -> None:
-        self.new_sessions.save_preferences(
+        self.new_session_repository.save_preferences(
             StoredNewSessionPreferences(
                 working_directory=working_directory or None,
                 harness=harness or None,
@@ -196,7 +195,7 @@ class ApplicationPreferenceService:
         text: str,
         sequence: float,
     ) -> bool:
-        written = self.new_sessions.save_draft(
+        written = self.new_session_repository.save_draft(
             StoredNewSessionDraft(
                 working_directory,
                 text if text.strip() else "",
@@ -211,46 +210,45 @@ class ApplicationPreferenceService:
         # are working in; hiding it would take the row out from under them.
         live = [
             data
-            for data in self.read_model.visible()
-            if self.repositories.project_directory(data.session.working_directory)
-            == working_directory
-            and self.terminal.window_for_session(data.session.session_id) is not None
+            for data in self.session_data_repository.visible()
+            if self.repository_queries.project_directory(data.session.working_directory) == working_directory
+            and self.terminal_adapter.window_for_session(data.session.session_id) is not None
         ]
         if live:
             raise ValueError("cannot hide a directory with an active session")
-        self.directories.hide(working_directory, self.clock())
-        return {entry.working_directory: entry.hidden_at for entry in self.directories.hidden()}
+        self.hidden_directory_repository.hide(working_directory, self.clock())
+        return {entry.working_directory: entry.hidden_at for entry in self.hidden_directory_repository.hidden()}
 
     def register_push_subscription(
         self,
-        subscription: BrowserPushSubscription,
+        browser_push_subscription: BrowserPushSubscription,
     ) -> None:
         # One browser installation (DEVICE_ID) has one current PushManager
         # subscription. A VAPID rotation forces a new endpoint; remove the old
         # endpoint for this same installation so routing does not keep sending
         # to a subscription Apple has permanently rejected.
-        for existing in self.subscriptions.subscriptions():
+        for existing in self.push_subscription_repository.subscriptions():
             if (
-                existing.device_id == subscription.device_id
-                and existing.endpoint != subscription.endpoint
+                existing.device_id == browser_push_subscription.device_id
+                and existing.endpoint != browser_push_subscription.endpoint
             ):
-                self.subscriptions.remove(existing.endpoint)
-        self.subscriptions.upsert(
+                self.push_subscription_repository.remove(existing.endpoint)
+        self.push_subscription_repository.upsert(
             PushSubscription(
-                endpoint=subscription.endpoint,
-                public_key=subscription.public_key,
-                authentication_secret=subscription.authentication_secret,
-                device_id=subscription.device_id,
-                device_label=subscription.device_label,
+                endpoint=browser_push_subscription.endpoint,
+                public_key=browser_push_subscription.public_key,
+                authentication_secret=browser_push_subscription.authentication_secret,
+                device_id=browser_push_subscription.device_id,
+                device_label=browser_push_subscription.device_label,
                 created_at=self.clock(),
             )
         )
 
-    def report_presence(self, report: BrowserPresence) -> None:
-        session_id = str(report.session_id) if report.session_id is not None else None
-        if report.away:
-            self.presence.mark_away(report.device_id, session_id)
+    def report_presence(self, browser_presence: BrowserPresence) -> None:
+        session_id = str(browser_presence.session_id) if browser_presence.session_id is not None else None
+        if browser_presence.away:
+            self.presence.mark_away(browser_presence.device_id, session_id)
             return
-        self.presence.mark_device(report.device_id)
+        self.presence.mark_device(browser_presence.device_id)
         if session_id:
             self.presence.mark_viewing(session_id)

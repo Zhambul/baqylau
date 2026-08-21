@@ -68,36 +68,36 @@ from repository.contract.session_data import EntryPage
 
 
 def session_data(
-    data: SessionData,
+    session_data: SessionData,
     *,
     live: bool,
-    repository: RepositoryStatus | None,
+    repository_status: RepositoryStatus | None,
     now: float | None = None,
 ) -> SessionDataResponse:
     return SessionDataResponse(
-        cursor=data.cursor,
-        session=session(data.session),
-        actors=tuple(actor(row, now=now) for row in data.actors),
+        cursor=session_data.cursor,
+        session=session(session_data.session),
+        actors=tuple(actor(row, now=now) for row in session_data.actors),
         live=live,
-        repository=values.maybe_repository_status(repository),
+        repository=values.maybe_repository_status(repository_status),
     )
 
 
-def session(facts: SessionFacts) -> SessionResponse:
+def session(session_facts: SessionFacts) -> SessionResponse:
     return SessionResponse(
-        session_id=str(facts.session_id),
-        harness=facts.harness,
-        title=facts.title,
-        state=facts.state,
-        working_directory=facts.working_directory,
-        started_at=facts.started_at,
-        finished_at=facts.finished_at,
-        account=values.maybe_account_reference(facts.account),
-        lead_actor_id=str(facts.lead_actor_id),
+        session_id=str(session_facts.session_id),
+        harness=session_facts.harness,
+        title=session_facts.title,
+        state=session_facts.state,
+        working_directory=session_facts.working_directory,
+        started_at=session_facts.started_at,
+        finished_at=session_facts.finished_at,
+        account=values.maybe_account_reference(session_facts.account),
+        lead_actor_id=str(session_facts.lead_actor_id),
         goal=(
             None
-            if facts.goal is None
-            else GoalResponse(objective=facts.goal.objective, completed=facts.goal.completed)
+            if session_facts.goal is None
+            else GoalResponse(objective=session_facts.goal.objective, completed=session_facts.goal.completed)
         ),
         tasks=tuple(
             TaskResponse(
@@ -107,50 +107,50 @@ def session(facts: SessionFacts) -> SessionResponse:
                 state=task.state,
                 owner_actor_id=None if task.owner_actor_id is None else str(task.owner_actor_id),
             )
-            for task in facts.tasks
+            for task in session_facts.tasks
         ),
     )
 
 
-def actor(facts: ActorFacts, *, now: float | None = None) -> ActorResponse:
-    statistics = facts.statistics
+def actor(actor_facts: ActorFacts, *, now: float | None = None) -> ActorResponse:
+    statistics = actor_facts.statistics
     open_interval = (
         0.0
         if statistics.active_since_internal is None
         else max(0.0, (now if now is not None else time.time()) - statistics.active_since_internal)
     )
     return ActorResponse(
-        session_id=str(facts.session_id),
-        actor_id=str(facts.actor_id),
-        parent_actor_id=None if facts.parent_actor_id is None else str(facts.parent_actor_id),
-        role=facts.role,
-        name=facts.name,
-        description=facts.description,
-        state=facts.state,
-        started_at=facts.started_at,
-        finished_at=facts.finished_at,
+        session_id=str(actor_facts.session_id),
+        actor_id=str(actor_facts.actor_id),
+        parent_actor_id=None if actor_facts.parent_actor_id is None else str(actor_facts.parent_actor_id),
+        role=actor_facts.role,
+        name=actor_facts.name,
+        description=actor_facts.description,
+        state=actor_facts.state,
+        started_at=actor_facts.started_at,
+        finished_at=actor_facts.finished_at,
         # One display string, which is all a model is to a reader; the picker
         # gets its selectable ids from the harness catalog, not from here.
-        model=None if facts.model is None else (
-            facts.model.display_name or facts.model.native_id
+        model=None if actor_facts.model is None else (
+            actor_facts.model.display_name or actor_facts.model.native_id
         ),
-        effort=facts.effort,
-        status=facts.status,
+        effort=actor_facts.effort,
+        status=actor_facts.status,
         usage=ActorUsageResponse(
-            tokens=values.token_usage(facts.usage.tokens),
+            tokens=values.token_usage(actor_facts.usage.tokens),
             # A string, because a decimal is money and a float is not: JSON has
             # one number type and it rounds.
-            cost_in_usd=None if facts.usage.cost_in_usd is None else str(facts.usage.cost_in_usd),
+            cost_in_usd=None if actor_facts.usage.cost_in_usd is None else str(actor_facts.usage.cost_in_usd),
         ),
         context=ActorContextResponse(
-            used_tokens=facts.context.used_tokens,
-            window_tokens=facts.context.window_tokens,
-            compacting=facts.context.compacting,
+            used_tokens=actor_facts.context.used_tokens,
+            window_tokens=actor_facts.context.window_tokens,
+            compacting=actor_facts.context.compacting,
         ),
         background=ActorBackgroundResponse(
-            running_shell_ids=tuple(str(shell_id) for shell_id in facts.background.running_shell_ids),
-            monitor_count=facts.background.monitor_count,
-            background_job_count=facts.background.background_job_count,
+            running_shell_ids=tuple(str(shell_id) for shell_id in actor_facts.background.running_shell_ids),
+            monitor_count=actor_facts.background.monitor_count,
+            background_job_count=actor_facts.background.background_job_count,
         ),
         statistics=ActorStatisticsResponse(
             prompt_count=statistics.prompt_count,
@@ -169,115 +169,115 @@ def actor(facts: ActorFacts, *, now: float | None = None) -> ActorResponse:
     )
 
 
-def entry_page(page: EntryPage) -> EntryPageResponse:
+def entry_page(entry_page: EntryPage) -> EntryPageResponse:
     return EntryPageResponse(
-        items=tuple(entry(item) for item in page.items),
-        oldest_cursor=page.oldest_cursor,
-        has_more=page.has_more,
+        items=tuple(entry(item) for item in entry_page.items),
+        oldest_cursor=entry_page.oldest_cursor,
+        has_more=entry_page.has_more,
     )
 
 
-def entry(item: SessionEntry) -> EntryResponse:
+def entry(session_entry: SessionEntry) -> EntryResponse:
     return EntryResponse(
-        entry_id=str(item.entry_id),
-        type=item.entry_type,
-        cursor=item.cursor,
-        actor_id=str(item.actor_id),
-        parent_actor_id=None if item.parent_actor_id is None else str(item.parent_actor_id),
-        turn_id=None if item.turn_id is None else str(item.turn_id),
-        occurred_at=item.occurred_at,
-        summary=item.summary,
-        body=entry_body(item.body),
+        entry_id=str(session_entry.entry_id),
+        type=session_entry.entry_type,
+        cursor=session_entry.cursor,
+        actor_id=str(session_entry.actor_id),
+        parent_actor_id=None if session_entry.parent_actor_id is None else str(session_entry.parent_actor_id),
+        turn_id=None if session_entry.turn_id is None else str(session_entry.turn_id),
+        occurred_at=session_entry.occurred_at,
+        summary=session_entry.summary,
+        body=entry_body(session_entry.body),
     )
 
 
-def entry_body(body: EntryBody) -> EntryBodyResponse:
+def entry_body(entry_body: EntryBody) -> EntryBodyResponse:
     """One mapping per kind, and the exhaustiveness is the point: a body with no
     mapping is a kind nobody decided how to draw, and it fails here rather than
     reaching a client as an empty object."""
-    if isinstance(body, bodies.TurnStartedBody):
+    if isinstance(entry_body, bodies.TurnStartedBody):
         return TurnStartedBodyResponse()
-    if isinstance(body, bodies.TurnFinishedBody):
-        return TurnFinishedBodyResponse(state=body.state)
-    if isinstance(body, bodies.MessageBody):
+    if isinstance(entry_body, bodies.TurnFinishedBody):
+        return TurnFinishedBodyResponse(state=entry_body.state)
+    if isinstance(entry_body, bodies.MessageBody):
         return MessageBodyResponse(
-            message_id=str(body.message_id),
-            role=body.role,
-            phase=body.phase,
-            content=values.content(body.content),
+            message_id=str(entry_body.message_id),
+            role=entry_body.role,
+            phase=entry_body.phase,
+            content=values.content(entry_body.content),
             recipient_actor_id=(
-                None if body.recipient_actor_id is None else str(body.recipient_actor_id)
+                None if entry_body.recipient_actor_id is None else str(entry_body.recipient_actor_id)
             ),
-            reply_to=None if body.reply_to is None else str(body.reply_to),
+            reply_to=None if entry_body.reply_to is None else str(entry_body.reply_to),
         )
-    if isinstance(body, bodies.ReasoningBody):
+    if isinstance(entry_body, bodies.ReasoningBody):
         return ReasoningBodyResponse(
-            reasoning_id=body.reasoning_id, content=values.content(body.content)
+            reasoning_id=entry_body.reasoning_id, content=values.content(entry_body.content)
         )
-    if isinstance(body, bodies.ShellStartedBody):
+    if isinstance(entry_body, bodies.ShellStartedBody):
         return ShellStartedBodyResponse(
-            shell_id=str(body.shell_id),
-            command=values.content(body.command),
-            execution=body.execution,
+            shell_id=str(entry_body.shell_id),
+            command=values.content(entry_body.command),
+            execution=entry_body.execution,
         )
-    if isinstance(body, bodies.ShellOutputBody):
+    if isinstance(entry_body, bodies.ShellOutputBody):
         return ShellOutputBodyResponse(
-            shell_id=str(body.shell_id),
-            stream=body.stream,
-            mode=body.mode,
-            content=values.content(body.content),
+            shell_id=str(entry_body.shell_id),
+            stream=entry_body.stream,
+            mode=entry_body.mode,
+            content=values.content(entry_body.content),
         )
-    if isinstance(body, bodies.ShellBackgroundedBody):
-        return ShellBackgroundedBodyResponse(shell_id=str(body.shell_id))
-    if isinstance(body, bodies.ShellFinishedBody):
+    if isinstance(entry_body, bodies.ShellBackgroundedBody):
+        return ShellBackgroundedBodyResponse(shell_id=str(entry_body.shell_id))
+    if isinstance(entry_body, bodies.ShellFinishedBody):
         return ShellFinishedBodyResponse(
-            shell_id=str(body.shell_id),
-            state=body.state,
-            exit_code=body.exit_code,
-            result=values.maybe_content(body.result),
+            shell_id=str(entry_body.shell_id),
+            state=entry_body.state,
+            exit_code=entry_body.exit_code,
+            result=values.maybe_content(entry_body.result),
         )
-    if isinstance(body, bodies.FileBody):
+    if isinstance(entry_body, bodies.FileBody):
         return FileBodyResponse(
-            path=body.path,
-            action=body.action,
-            state=body.state,
-            previous_path=body.previous_path,
-            lines_added=body.lines_added,
-            lines_removed=body.lines_removed,
-            content=values.maybe_content(body.content),
+            path=entry_body.path,
+            action=entry_body.action,
+            state=entry_body.state,
+            previous_path=entry_body.previous_path,
+            lines_added=entry_body.lines_added,
+            lines_removed=entry_body.lines_removed,
+            content=values.maybe_content(entry_body.content),
         )
-    if isinstance(body, bodies.SearchBody):
+    if isinstance(entry_body, bodies.SearchBody):
         return SearchBodyResponse(
-            tool=body.tool,
-            query=values.content(body.query),
-            state=body.state,
-            result=values.maybe_content(body.result),
+            tool=entry_body.tool,
+            query=values.content(entry_body.query),
+            state=entry_body.state,
+            result=values.maybe_content(entry_body.result),
         )
-    if isinstance(body, bodies.WebBody):
+    if isinstance(entry_body, bodies.WebBody):
         return WebBodyResponse(
-            url=body.url, state=body.state, result=values.maybe_content(body.result)
+            url=entry_body.url, state=entry_body.state, result=values.maybe_content(entry_body.result)
         )
-    if isinstance(body, bodies.WorktreeBody):
+    if isinstance(entry_body, bodies.WorktreeBody):
         return WorktreeBodyResponse(
-            action=body.action,
-            state=body.state,
-            arguments=values.maybe_content(body.arguments),
+            action=entry_body.action,
+            state=entry_body.state,
+            arguments=values.maybe_content(entry_body.arguments),
         )
-    if isinstance(body, bodies.SkillStartedBody):
+    if isinstance(entry_body, bodies.SkillStartedBody):
         return SkillStartedBodyResponse(
-            skill_id=str(body.skill_id),
-            name=body.name,
-            arguments=values.maybe_content(body.arguments),
+            skill_id=str(entry_body.skill_id),
+            name=entry_body.name,
+            arguments=values.maybe_content(entry_body.arguments),
         )
-    if isinstance(body, bodies.SkillFinishedBody):
+    if isinstance(entry_body, bodies.SkillFinishedBody):
         return SkillFinishedBodyResponse(
-            skill_id=str(body.skill_id),
-            state=body.state,
-            result=values.maybe_content(body.result),
+            skill_id=str(entry_body.skill_id),
+            state=entry_body.state,
+            result=values.maybe_content(entry_body.result),
         )
-    if isinstance(body, bodies.QuestionAskedBody):
+    if isinstance(entry_body, bodies.QuestionAskedBody):
         return QuestionAskedBodyResponse(
-            attention_id=str(body.attention_id),
+            attention_id=str(entry_body.attention_id),
             questions=tuple(
                 QuestionResponse(
                     question_id=question.prompt_id,
@@ -291,51 +291,51 @@ def entry_body(body: EntryBody) -> EntryBodyResponse:
                         for choice in question.choices
                     ),
                 )
-                for question in body.questions
+                for question in entry_body.questions
             ),
         )
-    if isinstance(body, bodies.QuestionAnsweredBody):
+    if isinstance(entry_body, bodies.QuestionAnsweredBody):
         return QuestionAnsweredBodyResponse(
-            attention_id=str(body.attention_id),
+            attention_id=str(entry_body.attention_id),
             answers=tuple(
                 QuestionAnswerResponse(question_id=answer.prompt_id, labels=answer.labels)
-                for answer in body.answers
+                for answer in entry_body.answers
             ),
-            feedback=body.feedback,
+            feedback=entry_body.feedback,
         )
-    if isinstance(body, bodies.PlanProposedBody):
+    if isinstance(entry_body, bodies.PlanProposedBody):
         return PlanProposedBodyResponse(
-            attention_id=str(body.attention_id), plan=values.content(body.plan)
+            attention_id=str(entry_body.attention_id), plan=values.content(entry_body.plan)
         )
-    if isinstance(body, bodies.PlanResolvedBody):
+    if isinstance(entry_body, bodies.PlanResolvedBody):
         return PlanResolvedBodyResponse(
-            attention_id=str(body.attention_id),
-            state=body.state,
-            feedback=body.feedback,
-            edited=body.edited,
+            attention_id=str(entry_body.attention_id),
+            state=entry_body.state,
+            feedback=entry_body.feedback,
+            edited=entry_body.edited,
         )
-    if isinstance(body, bodies.CompactionStartedBody):
-        return CompactionStartedBodyResponse(before_tokens=body.before_tokens)
-    if isinstance(body, bodies.CompactionFinishedBody):
+    if isinstance(entry_body, bodies.CompactionStartedBody):
+        return CompactionStartedBodyResponse(before_tokens=entry_body.before_tokens)
+    if isinstance(entry_body, bodies.CompactionFinishedBody):
         return CompactionFinishedBodyResponse(
-            before_tokens=body.before_tokens, after_tokens=body.after_tokens
+            before_tokens=entry_body.before_tokens, after_tokens=entry_body.after_tokens
         )
-    if isinstance(body, bodies.AssignmentStartedBody):
+    if isinstance(entry_body, bodies.AssignmentStartedBody):
         return AssignmentStartedBodyResponse(
-            assignment_id=str(body.assignment_id),
-            assigned_actor_name=body.assigned_actor_name,
-            prompt=values.maybe_content(body.prompt),
+            assignment_id=str(entry_body.assignment_id),
+            assigned_actor_name=entry_body.assigned_actor_name,
+            prompt=values.maybe_content(entry_body.prompt),
         )
-    if isinstance(body, bodies.AssignmentFinishedBody):
+    if isinstance(entry_body, bodies.AssignmentFinishedBody):
         return AssignmentFinishedBodyResponse(
-            assignment_id=str(body.assignment_id),
-            state=body.state,
-            result=values.maybe_content(body.result),
+            assignment_id=str(entry_body.assignment_id),
+            state=entry_body.state,
+            result=values.maybe_content(entry_body.result),
         )
-    if isinstance(body, bodies.ModelChangeBody):
+    if isinstance(entry_body, bodies.ModelChangeBody):
         return ModelChangeBodyResponse(
-            current=body.current, previous=body.previous, automatic=body.automatic
+            current=entry_body.current, previous=entry_body.previous, automatic=entry_body.automatic
         )
-    if isinstance(body, bodies.EffortChangeBody):
-        return EffortChangeBodyResponse(current=body.current, previous=body.previous)
-    raise TypeError(f"unmapped entry body: {type(body).__name__}")
+    if isinstance(entry_body, bodies.EffortChangeBody):
+        return EffortChangeBodyResponse(current=entry_body.current, previous=entry_body.previous)
+    raise TypeError(f"unmapped entry body: {type(entry_body).__name__}")

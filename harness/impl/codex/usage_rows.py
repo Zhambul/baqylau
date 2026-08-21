@@ -13,8 +13,8 @@ WINDOW_LABELS = {300: "5h", 10080: "7d"}
 
 
 class CodexUsage(HarnessUsage):
-    def read(self, usage: AccountUsageRepository) -> tuple[UsageRow, ...]:
-        del usage          # codex asks its own CLI live; nothing is cached
+    def read(self, account_usage_repository: AccountUsageRepository) -> tuple[UsageRow, ...]:
+        del account_usage_repository  # codex asks its own CLI live; nothing is cached
         rate_limits = native_usage.read_rate_limits()
         if rate_limits is None:
             return ()

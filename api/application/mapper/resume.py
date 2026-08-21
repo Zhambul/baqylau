@@ -7,14 +7,14 @@ from api.application.models.resume.resumable_session_response import ResumableSe
 from app.services.resume import ResumableSession
 
 
-def resumable_session(session: ResumableSession) -> ResumableSessionResponse:
+def resumable_session(resumable_session: ResumableSession) -> ResumableSessionResponse:
     return ResumableSessionResponse(
-        session_id=session.session_id,
-        title=session.title,
-        last_activity_at=session.last_activity_at,
-        active=session.active,
-        harness=session.harness,
-        model=values.maybe_model_reference(session.model),
-        effort=session.effort,
-        account=values.maybe_account_reference(session.account),
+        session_id=resumable_session.session_id,
+        title=resumable_session.title,
+        last_activity_at=resumable_session.last_activity_at,
+        active=resumable_session.active,
+        harness=resumable_session.harness,
+        model=values.maybe_model_reference(resumable_session.model),
+        effort=resumable_session.effort,
+        account=values.maybe_account_reference(resumable_session.account),
     )

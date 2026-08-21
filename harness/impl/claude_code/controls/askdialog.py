@@ -71,7 +71,7 @@ class AskError(screendrive.StepError):
 
 
 def cursor_to(
-    fe: ScreenDriver,
+    screen_driver: ScreenDriver,
     win: str,
     pred: Callable[[Row], bool],
     sleep: Callable[[float], None],
@@ -103,20 +103,20 @@ def cursor_to(
     stuck normalize is harmless — just cut it short."""
     prev = object()
     for _ in range(NAV_STEPS):               # normalize to the first row
-        cur = askscreen.cursor_row(fe.get_text(win) or "")
+        cur = askscreen.cursor_row(screen_driver.get_text(win) or "")
         if cur is not None and cur.get("digit") == "1":
             break
         key = None if cur is None else (cur["digit"], cur["label"])
         if key == prev:                      # up made no progress (trapped row)
             break
         prev = key
-        fe.send_key(win, "up")
+        screen_driver.send_key(win, "up")
         sleep(POLL_S)
     for _ in range(NAV_STEPS):
-        screen = fe.get_text(win) or ""
+        screen = screen_driver.get_text(win) or ""
         if any(r["cursor"] and pred(r) for r in rows(screen)):
             return screen
-        fe.send_key(win, "down")
+        screen_driver.send_key(win, "down")
         sleep(POLL_S)
     raise AskError("cursor", "cursor never reached %s" % what)
 
@@ -125,7 +125,7 @@ def _by_digit(d: str) -> Callable[[Row], bool]:
     return lambda r: r["digit"] == d
 
 
-def _require_type_row(fe: ScreenDriver, win: str, type_digit: str) -> None:
+def _require_type_row(screen_driver: ScreenDriver, win: str, type_digit: str) -> None:
     """Guard the typed-answer ('other') path: the free-text 'Type something'
     row is digit len(options)+1 in the PLAIN dialog, but the PREVIEW
     side-by-side layout omits it entirely (measured — a single-select
@@ -136,13 +136,13 @@ def _require_type_row(fe: ScreenDriver, win: str, type_digit: str) -> None:
     reached Type row' dead-walk, 2026-07-19). The web ask card routes typed
     answers on preview questions through 'Chat about this' instead, so the
     driver should not normally reach here."""
-    if not any(r["digit"] == type_digit for r in rows(fe.get_text(win) or "")):
+    if not any(r["digit"] == type_digit for r in rows(screen_driver.get_text(win) or "")):
         raise AskError("type", "no typed-answer row (preview-layout dialog) — "
                        "answer via 'Chat about this'")
 
 
 def _advance_multi(
-    fe: ScreenDriver,
+    screen_driver: ScreenDriver,
     win: str,
     questions: list[dict[str, Any]],
     i: int,
@@ -161,10 +161,10 @@ def _advance_multi(
     the explicit "Next"/"Submit" row leaves the text field first, so it works
     whether or not custom text was typed; then Enter is the dialog's designed
     advance. Screen-verified: the pane must actually leave question `i`."""
-    cursor_to(fe, win, lambda r: r["label"] in ("Next", "Submit"), sleep,
+    cursor_to(screen_driver, win, lambda r: r["label"] in ("Next", "Submit"), sleep,
               "advance row")
-    fe.send_key(win, "enter")
-    screen, ok = screendrive.poll_until(fe, win,
+    screen_driver.send_key(win, "enter")
+    screen, ok = screendrive.poll_until(screen_driver, win,
                        lambda s: current_question(s, questions) != i
                        or review_open(s)
                        or not dialog_open(s),
@@ -176,7 +176,7 @@ def _advance_multi(
 
 
 def _answer_question(
-    fe: ScreenDriver,
+    screen_driver: ScreenDriver,
     win: str,
     questions: list[dict[str, Any]],
     i: int,
@@ -199,51 +199,51 @@ def _answer_question(
         # against the checkbox the screen actually shows (the user may have
         # pre-toggled some in the terminal), and only flip the ones that differ
         for j, label in enumerate(labels):
-            row = next((r for r in rows(fe.get_text(win) or "")
+            row = next((r for r in rows(screen_driver.get_text(win) or "")
                         if r["digit"] == str(j + 1)), None)
             if row is None:
                 raise AskError("options", "row %d not on screen" % (j + 1))
             if bool(row["check"]) != (label in selected):
-                cursor_to(fe, win, _by_digit(str(j + 1)), sleep,
+                cursor_to(screen_driver, win, _by_digit(str(j + 1)), sleep,
                           "option %d" % (j + 1))
-                fe.send_key(win, "enter")        # toggle
+                screen_driver.send_key(win, "enter")        # toggle
                 sleep(KEY_GAP_S)
         if other:
-            _require_type_row(fe, win, type_digit)
-            cursor_to(fe, win, _by_digit(type_digit), sleep, "Type row")
-            if not fe.send_text(win, other):     # types inline + CR
+            _require_type_row(screen_driver, win, type_digit)
+            cursor_to(screen_driver, win, _by_digit(type_digit), sleep, "Type row")
+            if not screen_driver.send_text(win, other):     # types inline + CR
                 raise AskError("type", "other text not delivered")
             sleep(POLL_S)
             # the CR may or may not have checked the custom row; ensure it is
-            checked = any(r["check"] for r in rows(fe.get_text(win) or "")
+            checked = any(r["check"] for r in rows(screen_driver.get_text(win) or "")
                           if r["label"].startswith(other[:24]))
             if not checked:
-                fe.send_key(win, "enter")
+                screen_driver.send_key(win, "enter")
             _, ok = screendrive.poll_until(
-                fe, win,
+                screen_driver, win,
                 lambda s: any(r["check"] for r in rows(s)
                               if r["label"].startswith(other[:24])),
                 STEP_TIMEOUT_S, sleep)
             if not ok:
                 raise AskError("type", "custom option never checked")
-        _advance_multi(fe, win, questions, i, sleep)   # → next tab / review
+        _advance_multi(screen_driver, win, questions, i, sleep)   # → next tab / review
         return
     if other:
-        _require_type_row(fe, win, type_digit)
-        cursor_to(fe, win, _by_digit(type_digit), sleep, "Type row")
-        if not fe.send_text(win, other):         # type + CR selects + advances
+        _require_type_row(screen_driver, win, type_digit)
+        cursor_to(screen_driver, win, _by_digit(type_digit), sleep, "Type row")
+        if not screen_driver.send_text(win, other):         # type + CR selects + advances
             raise AskError("type", "other text not delivered")
         return
     if not selected:
         raise AskError("options", "no answer for %r"
                        % (q.get("question") or "")[:60])
     tgt = str(1 + labels.index(selected[0]))
-    cursor_to(fe, win, _by_digit(tgt), sleep, "option " + tgt)
-    fe.send_key(win, "enter")                    # select + auto-advance
+    cursor_to(screen_driver, win, _by_digit(tgt), sleep, "option " + tgt)
+    screen_driver.send_key(win, "enter")                    # select + auto-advance
 
 
 def drive(
-    fe: ScreenDriver,
+    screen_driver: ScreenDriver,
     win: str,
     questions: list[dict[str, Any]],
     answers: list[dict[str, Any]],
@@ -263,7 +263,7 @@ def drive(
     # transient blank/partial get_text bailed immediately with step:open even
     # though the dialog was genuinely up (session 0247ebb2, 2026-07-21: a still
     # -open, never-answered ask failed here on a freshly-resumed window).
-    screen, ok = screendrive.poll_until(fe, win,
+    screen, ok = screendrive.poll_until(screen_driver, win,
                        lambda s: dialog_open(s) or review_open(s),
                        STEP_TIMEOUT_S, sleep)
     if not ok:
@@ -271,10 +271,10 @@ def drive(
     if chat:
         if not any(r["label"] == CHAT_LABEL for r in rows(screen)):
             raise AskError("chat", "no 'Chat about this' row on screen")
-        cursor_to(fe, win, lambda r: r["label"] == CHAT_LABEL, sleep,
+        cursor_to(screen_driver, win, lambda r: r["label"] == CHAT_LABEL, sleep,
                   "Chat row")
-        fe.send_key(win, "enter")
-        _, ok = screendrive.poll_until(fe, win,
+        screen_driver.send_key(win, "enter")
+        _, ok = screendrive.poll_until(screen_driver, win,
                       lambda s: not dialog_open(s) and not review_open(s),
                       STEP_TIMEOUT_S, sleep)
         if not ok:
@@ -299,7 +299,7 @@ def drive(
     # answered forward (earlier ones keep whatever already set them).
     last = -1
     for _ in range(len(questions) + 1):     # bounded; each pass advances one q
-        screen = fe.get_text(win) or ""
+        screen = screen_driver.get_text(win) or ""
         if review_open(screen) or not dialog_open(screen):
             break                            # reached review / submitted out
         i = current_question(screen, questions)
@@ -310,13 +310,13 @@ def drive(
             raise AskError("advance",
                            "dialog did not advance past question %d" % (i + 1),
                            screen=screen)
-        _answer_question(fe, win, questions, i, answers[i], sleep)
+        _answer_question(screen_driver, win, questions, i, answers[i], sleep)
         # confirm the answer advanced the pane before looking for the next one
         # (single-select auto-advance has no explicit verify of its own)
         def answer_landed(s: str, i: int = i) -> bool:
             return (current_question(s, questions) != i
                     or review_open(s) or not dialog_open(s))
-        screen, ok = screendrive.poll_until(fe, win, answer_landed,
+        screen, ok = screendrive.poll_until(screen_driver, win, answer_landed,
                                             STEP_TIMEOUT_S, sleep)
         if not ok:
             raise AskError("advance",
@@ -330,7 +330,7 @@ def drive(
     # Submit below budgets SUBMIT_TIMEOUT_S for, so this dual-purpose wait needs
     # that longer budget too (a single single-select whose round-trip took
     # 2.5-4.0 s spuriously raised "neither review pane nor submit happened").
-    screen, ok = screendrive.poll_until(fe, win,
+    screen, ok = screendrive.poll_until(screen_driver, win,
                        lambda s: review_open(s)
                        or (not dialog_open(s) and not review_open(s)),
                        SUBMIT_TIMEOUT_S, sleep)
@@ -338,10 +338,10 @@ def drive(
         raise AskError("review", "neither review pane nor submit happened",
                        screen=screen)
     if review_open(screen):
-        cursor_to(fe, win, lambda r: r["label"] == SUBMIT_LABEL, sleep,
+        cursor_to(screen_driver, win, lambda r: r["label"] == SUBMIT_LABEL, sleep,
                   "Submit answers")
-        fe.send_key(win, "enter")
-        _, ok = screendrive.poll_until(fe, win,
+        screen_driver.send_key(win, "enter")
+        _, ok = screendrive.poll_until(screen_driver, win,
                       lambda s: not dialog_open(s) and not review_open(s),
                       SUBMIT_TIMEOUT_S, sleep)
         if not ok:

@@ -20,7 +20,7 @@ CLEAR_LINES_MAX = 50    # ceiling on the per-line kill loop: a corrupt/huge
 #                         stash must not become an unbounded keystroke storm.
 
 
-def type_command(fe: ScreenDriver, win: str, text: str) -> tuple[bool, bool]:
+def type_command(screen_driver: ScreenDriver, win: str, text: str) -> tuple[bool, bool]:
     """Put a SLASH COMMAND into a session's input box and submit it. Returns
     (ok, cleared_clipboard_image).
 
@@ -58,18 +58,18 @@ def type_command(fe: ScreenDriver, win: str, text: str) -> tuple[bool, bool]:
     pastes collapse into Claude Code's placeholder and cannot be verified; they
     keep the optimistic contract."""
     clip = clipboard_image.clear_image()
-    if not fe.paste_text(win, text):
+    if not screen_driver.paste_text(win, text):
         return False, clip
     marker = _submission_marker(text)
     if not marker:
         return True, clip
     time.sleep(SUBMIT_SETTLE_S)
     for delay in SUBMIT_RETRY_DELAYS_S:
-        if not _submission_pending(fe, win, marker):
+        if not _submission_pending(screen_driver, win, marker):
             return True, clip
-        fe.send_key(win, "enter")
+        screen_driver.send_key(win, "enter")
         time.sleep(delay)
-    return not _submission_pending(fe, win, marker), clip
+    return not _submission_pending(screen_driver, win, marker), clip
 
 
 # After the paste's own CR, give the TUI a beat before reading the box back; then
@@ -88,12 +88,12 @@ def _submission_marker(text: str) -> str:
     return lines[0][:SUBMISSION_MARKER_LENGTH].strip()
 
 
-def _submission_pending(fe: ScreenDriver, win: str, marker: str) -> bool:
+def _submission_pending(screen_driver: ScreenDriver, win: str, marker: str) -> bool:
     """Is the message still sitting in the input box? Unreadable = assume sent."""
     try:
         from harness.impl.claude_code.probe import ClaudeCodeTerminalProbe  # noqa: PLC0415 — probe is optional; unreadable means assume sent
 
-        state = ClaudeCodeTerminalProbe().input_state(fe.terminal.viewport, str(win))
+        state = ClaudeCodeTerminalProbe().input_state(screen_driver.terminal.viewport, str(win))
     except Exception:
         try:
             from audit import record  # noqa: PLC0415 — audit fallback inside the failure path
@@ -107,7 +107,7 @@ def _submission_pending(fe: ScreenDriver, win: str, marker: str) -> bool:
 
 
 def clear_input(
-    fe: ScreenDriver,
+    screen_driver: ScreenDriver,
     win: str,
     prev_text: str = "",
     sleep: Callable[[float], None] = time.sleep,
@@ -126,8 +126,8 @@ def clear_input(
     lines = prev_text.count("\n") + 1 if prev_text else 1
     for i in range(min(lines, CLEAR_LINES_MAX)):
         if i:
-            fe.send_key(win, "backspace")
-        fe.send_key(win, "ctrl+u")
-        fe.send_key(win, "ctrl+k")
+            screen_driver.send_key(win, "backspace")
+        screen_driver.send_key(win, "ctrl+u")
+        screen_driver.send_key(win, "ctrl+k")
     sleep(CLEAR_GAP_S)
     return lines

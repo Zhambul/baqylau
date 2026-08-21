@@ -57,24 +57,24 @@ def window_shape(key: str) -> tuple[str, int, Literal["account", "model"], str |
     return key.replace("_", " "), UNKNOWN_WINDOW_MINUTES, "model", key
 
 
-def _order(sample: UsageWindowSample) -> tuple[int, str]:
+def _order(usage_window_sample: UsageWindowSample) -> tuple[int, str]:
     """Account-wide windows first in their canonical order, then model caps by
     key — so the strip reads short-window-first and each cap follows the window
     it belongs to."""
-    if sample.key in WINDOWS:
-        return list(WINDOWS).index(sample.key), ""
-    return len(WINDOWS), sample.key
+    if usage_window_sample.key in WINDOWS:
+        return list(WINDOWS).index(usage_window_sample.key), ""
+    return len(WINDOWS), usage_window_sample.key
 
 
 def merge(
-    snapshot: AccountUsageSnapshot | None,
+    account_usage_snapshot: AccountUsageSnapshot | None,
     live_usage: live.LiveUsage | None,
 ) -> tuple[UsageWindowSample, ...]:
     """Every window either source knows, each at its freshest reading."""
     readings: dict[str, tuple[float, UsageWindowSample]] = {}
     sources = []
-    if snapshot is not None:
-        sources.append((snapshot.captured_at, snapshot.windows))
+    if account_usage_snapshot is not None:
+        sources.append((account_usage_snapshot.captured_at, account_usage_snapshot.windows))
     if live_usage is not None:
         sources.append((live_usage.captured_at, live_usage.windows))
     for captured_at, samples in sources:
@@ -86,10 +86,10 @@ def merge(
 
 
 class ClaudeCodeUsage(HarnessUsage):
-    def read(self, usage: AccountUsageRepository) -> tuple[UsageRow, ...]:
+    def read(self, account_usage_repository: AccountUsageRepository) -> tuple[UsageRow, ...]:
         snapshots = {
             snapshot.account_id: snapshot
-            for snapshot in usage.snapshots()
+            for snapshot in account_usage_repository.snapshots()
             if snapshot.harness == HARNESS
         }
         accounts = account.registry()
@@ -107,10 +107,10 @@ class ClaudeCodeUsage(HarnessUsage):
     @staticmethod
     def _row(
         account_record: AccountRecord,
-        snapshot: AccountUsageSnapshot | None,
+        account_usage_snapshot: AccountUsageSnapshot | None,
         live_usage: live.LiveUsage | None,
     ) -> UsageRow:
-        samples = merge(snapshot, live_usage)
+        samples = merge(account_usage_snapshot, live_usage)
         windows = []
         for sample in samples:
             label, minutes, scope, model = window_shape(sample.key)

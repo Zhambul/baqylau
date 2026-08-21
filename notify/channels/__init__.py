@@ -45,8 +45,8 @@ _RETRACT = {"telegram": telegram.retract_alert, "webpush": webpush.retract_alert
 
 
 def retract(handle: dict[str, Any] | None, reason: str, badge: int = 0, *,
-            keys: PushSigningKeyRepository | None = None,
-            subscriptions: PushSubscriptionRepository | None = None) -> str:
+            push_signing_key_repository: PushSigningKeyRepository | None = None,
+            push_subscription_repository: PushSubscriptionRepository | None = None) -> str:
     """Take back one delivered alert. Returns an outcome from the vocabulary in
     alert.py; PENDING is the only one the caller must retry.
 
@@ -61,7 +61,13 @@ def retract(handle: dict[str, Any] | None, reason: str, badge: int = 0, *,
     if fn is None:
         return NOTHING
     try:
-        return fn(handle, reason, badge, keys=keys, subscriptions=subscriptions)
+        return fn(
+            handle,
+            reason,
+            badge,
+            push_signing_key_repository=push_signing_key_repository,
+            push_subscription_repository=push_subscription_repository,
+        )
     except Exception:
         A.error("", "notify retract", {"session_id": handle.get("session_id")})
         return FAILED

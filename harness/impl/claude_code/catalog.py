@@ -10,7 +10,7 @@ COMMAND_PROMPT_FLOORS = {"compact": 2, "rename": 1}
 
 
 class ClaudeCodeCatalog(HarnessCatalog):
-    def read(self, context: QueryContext) -> HarnessCatalogSnapshot:
+    def read(self, query_context: QueryContext) -> HarnessCatalogSnapshot:
         return HarnessCatalogSnapshot(
             commands=tuple(
                 CommandOption(
@@ -18,6 +18,6 @@ class ClaudeCodeCatalog(HarnessCatalog):
                     description=row.get("desc") or "",
                     minimum_prompt_count=COMMAND_PROMPT_FLOORS.get(row["name"], 0),
                 )
-                for row in slashcmds.slash_commands(context.working_directory or "")
+                for row in slashcmds.slash_commands(query_context.working_directory or "")
             ),
         )

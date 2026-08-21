@@ -15,7 +15,7 @@ from harness.impl.claude_code.otel import launch as otel
 
 class ClaudeOtelCanonicalEventReactor(HarnessCanonicalEventReactor):
     def react(
-        self, canonical_event: CanonicalEvent[EventPayload], controls: HarnessReactorContext
+        self, canonical_event: CanonicalEvent[EventPayload], harness_reactor_context: HarnessReactorContext
     ) -> None:
         if isinstance(canonical_event.payload, SessionStarted):
             otel.start()

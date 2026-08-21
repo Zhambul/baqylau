@@ -34,8 +34,8 @@ def resize_columns() -> int:
 
 
 class PaneWidthService:
-    def __init__(self, widths: PaneWidthRepository) -> None:
-        self.widths = widths
+    def __init__(self, pane_width_repository: PaneWidthRepository) -> None:
+        self.widths = pane_width_repository
 
     def width_percent(self, working_directory: str) -> int:
         """The remembered width for this project, else the configured default."""

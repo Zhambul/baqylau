@@ -28,8 +28,8 @@ class UnknownTelemetryHarness(LookupError):
 
 
 class _SessionLookup(TelemetryContext):
-    def __init__(self, sessions: SessionRepository) -> None:
-        self.sessions = sessions
+    def __init__(self, session_repository: SessionRepository) -> None:
+        self.sessions = session_repository
 
     def find_session(self, session_id: SessionId) -> Session | None:
         return self.sessions.find(session_id)
@@ -38,17 +38,17 @@ class _SessionLookup(TelemetryContext):
 class TelemetryGatewayService:
     def __init__(
         self,
-        registry: HarnessRegistry,
-        raw_events: RawEventRepository,
-        sessions: SessionRepository,
-        usage: AccountUsageRepository,
+        harness_registry: HarnessRegistry,
+        raw_event_repository: RawEventRepository,
+        session_repository: SessionRepository,
+        account_usage_repository: AccountUsageRepository,
     ) -> None:
-        self.registry = registry
-        self.raw_events = raw_events
-        self.usage = usage
-        self.context = _SessionLookup(sessions)
+        self.registry = harness_registry
+        self.raw_events = raw_event_repository
+        self.usage = account_usage_repository
+        self.context = _SessionLookup(session_repository)
 
-    def record(self, harness: str, request: HarnessTelemetryRequest) -> int:
+    def record(self, harness: str, harness_telemetry_request: HarnessTelemetryRequest) -> int:
         """One delivery in, the number of facts it produced out."""
         try:
             plugin = self.registry.plugin(harness)
@@ -56,7 +56,7 @@ class TelemetryGatewayService:
             raise UnknownTelemetryHarness(str(error)) from error
         if plugin.telemetry is None:
             raise UnknownTelemetryHarness(f"harness accepts no telemetry: {harness}")
-        response = plugin.telemetry.handle(request, self.context)
+        response = plugin.telemetry.handle(harness_telemetry_request, self.context)
         if response.raw_events:
             self.raw_events.record(response.raw_events)
         if response.usage is not None:

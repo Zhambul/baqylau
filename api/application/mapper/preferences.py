@@ -34,56 +34,56 @@ from domain.ids import SessionId
 from domain.workspace import ComposerState, DialogState
 
 
-def composer_state(composer: ComposerState) -> ComposerStateResponse:
+def composer_state(composer_state: ComposerState) -> ComposerStateResponse:
     return ComposerStateResponse(
         draft=(
-            None if composer.draft is None
+            None if composer_state.draft is None
             else ComposerDraftResponse(
-                text=composer.draft.text,
-                origin=composer.draft.origin,
-                sequence=composer.draft.sequence,
+                text=composer_state.draft.text,
+                origin=composer_state.draft.origin,
+                sequence=composer_state.draft.sequence,
             )
         ),
         queue=(
-            None if composer.queue is None
+            None if composer_state.queue is None
             else ComposerQueueResponse(
                 items=tuple(
-                    QueuedMessageResponse(text=item.text) for item in composer.queue.items
+                    QueuedMessageResponse(text=item.text) for item in composer_state.queue.items
                 ),
-                origin=composer.queue.origin,
+                origin=composer_state.queue.origin,
             )
         ),
     )
 
 
-def dialog_state(dialog: DialogState) -> DialogStateResponse:
+def dialog_state(dialog_state: DialogState) -> DialogStateResponse:
     return DialogStateResponse(
         draft=(
-            None if dialog.draft is None
+            None if dialog_state.draft is None
             else DialogDraftResponse(
-                attention_id=dialog.draft.attention_id,
+                attention_id=dialog_state.draft.attention_id,
                 answers=tuple(
                     AnswerSelectionResponse(selected=answer.selected, other=answer.other)
-                    for answer in dialog.draft.answers
+                    for answer in dialog_state.draft.answers
                 ),
-                origin=dialog.draft.origin,
+                origin=dialog_state.draft.origin,
             )
         ),
     )
 
 
 def session_application(
-    snapshot: SessionApplicationSnapshot,
+    session_application_snapshot: SessionApplicationSnapshot,
 ) -> SessionApplicationResponse:
     return SessionApplicationResponse(
         preferences=SessionPreferencesResponse(
-            view_mode=snapshot.preferences.view_mode,
-            notifications_muted=snapshot.preferences.notifications_muted,
-            tasks_hidden=snapshot.preferences.tasks_hidden,
+            view_mode=session_application_snapshot.preferences.view_mode,
+            notifications_muted=session_application_snapshot.preferences.notifications_muted,
+            tasks_hidden=session_application_snapshot.preferences.tasks_hidden,
         ),
-        composer=composer_state(snapshot.composer),
-        dialog=dialog_state(snapshot.dialog),
-        terminal=values.terminal_state(snapshot.terminal),
+        composer=composer_state(session_application_snapshot.composer),
+        dialog=dialog_state(session_application_snapshot.dialog),
+        terminal=values.terminal_state(session_application_snapshot.terminal),
         errors=tuple(
             ApplicationErrorResponse(
                 error_id=error.error_id,
@@ -93,20 +93,20 @@ def session_application(
                 traceback=error.traceback,
                 context=error.context,
             )
-            for error in snapshot.errors
+            for error in session_application_snapshot.errors
         ),
     )
 
 
-def global_application(snapshot: ApplicationPreferences) -> GlobalApplicationResponse:
+def global_application(application_preferences: ApplicationPreferences) -> GlobalApplicationResponse:
     """The page's own state on the wire. Beside the per-session mapper above
     rather than in a file of its own: without the session rows it needs nothing
     the read model owns."""
-    latest = snapshot.notifications.latest
+    latest = application_preferences.notifications.latest
     return GlobalApplicationResponse(
-        usage_rows=tuple(values.usage_row(row) for row in snapshot.usage_rows),
+        usage_rows=tuple(values.usage_row(row) for row in application_preferences.usage_rows),
         notifications=GlobalNotificationStateResponse(
-            enabled=snapshot.notifications.enabled,
+            enabled=application_preferences.notifications.enabled,
             latest=(
                 None if latest is None
                 else NotificationNoticeResponse(
@@ -120,10 +120,10 @@ def global_application(snapshot: ApplicationPreferences) -> GlobalApplicationRes
         ),
         preferences=GlobalPreferencesResponse(
             new_session=NewSessionPreferencesResponse(
-                working_directory=snapshot.new_session.working_directory,
-                harness=snapshot.new_session.harness,
-                model=snapshot.new_session.model,
-                effort=snapshot.new_session.effort,
+                working_directory=application_preferences.new_session.working_directory,
+                harness=application_preferences.new_session.harness,
+                model=application_preferences.new_session.model,
+                effort=application_preferences.new_session.effort,
             ),
             new_session_drafts=tuple(
                 NewSessionDraftResponse(
@@ -131,13 +131,13 @@ def global_application(snapshot: ApplicationPreferences) -> GlobalApplicationRes
                     text=draft.text,
                     sequence=draft.sequence,
                 )
-                for draft in snapshot.new_session_drafts
+                for draft in application_preferences.new_session_drafts
             ),
-            hidden_directories=dict(snapshot.hidden_directories),
+            hidden_directories=dict(application_preferences.hidden_directories),
             limits=DashboardLimitsResponse(
-                upload_bytes=snapshot.limits.upload_bytes,
-                rename_characters=snapshot.limits.rename_characters,
-                presence_seconds=snapshot.limits.presence_seconds,
+                upload_bytes=application_preferences.limits.upload_bytes,
+                rename_characters=application_preferences.limits.rename_characters,
+                presence_seconds=application_preferences.limits.presence_seconds,
             ),
         ),
     )

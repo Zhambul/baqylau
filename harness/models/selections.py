@@ -37,7 +37,7 @@ class SelectionSemantics:
         self,
         session_id: SessionId,
         actor_id: ActorId,
-        current: ModelReference,
+        model_reference: ModelReference,
         reason: ModelChangeReason,
     ) -> ModelChanged | None:
         """The switch this observation reports, or None when it reports no switch.
@@ -48,10 +48,10 @@ class SelectionSemantics:
         """
         key = self._key(session_id, actor_id)
         previous = self._models.get(key)
-        if previous is not None and previous.native_id == current.native_id:
+        if previous is not None and previous.native_id == model_reference.native_id:
             return None
-        self._models[key] = current
-        return ModelChanged(previous, current, reason)
+        self._models[key] = model_reference
+        return ModelChanged(previous, model_reference, reason)
 
     def effort(
         self,

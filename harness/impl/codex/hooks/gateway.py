@@ -20,8 +20,8 @@ CLI_PROCESS_NAME = "codex"
 
 
 class CodexHookGateway(HarnessHookGateway):
-    def handle(self, request: HarnessHookRequest) -> HarnessHookResponse:
-        payload = request.payload
+    def handle(self, harness_hook_request: HarnessHookRequest) -> HarnessHookResponse:
+        payload = harness_hook_request.payload
         document = json.loads(payload)
         if not isinstance(document, dict):
             raise ValueError("Codex hook payload must be an object")
@@ -50,10 +50,10 @@ class CodexHookGateway(HarnessHookGateway):
                 encoding="json",
                 payload=payload,
                 source_identity=f"codex:hook:{session_id}",
-                terminal_window_id=request.terminal_window_id,
-                harness_process_id=request.harness_process_id,
-                account_id=request.account_id,
-                account_display_name=request.account_display_name,
+                terminal_window_id=harness_hook_request.terminal_window_id,
+                harness_process_id=harness_hook_request.harness_process_id,
+                account_id=harness_hook_request.account_id,
+                account_display_name=harness_hook_request.account_display_name,
             ),
         )
         return HarnessHookResponse(raw_events, b"")

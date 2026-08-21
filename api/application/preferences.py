@@ -67,8 +67,8 @@ def push_configuration(signing_keys: PushSigningKeys) -> PushConfigurationRespon
 # is five routes over the read model and two over this store — this one and the
 # per-session one below.
 @router.get("/api/application")
-def application_state(preferences: ApplicationPreferences) -> GlobalApplicationResponse:
-    return mapper.global_application(preferences.snapshot())
+def application_state(application_preferences: ApplicationPreferences) -> GlobalApplicationResponse:
+    return mapper.global_application(application_preferences.snapshot())
 
 
 # Browser-owned per-session state, served from the PREFERENCES store and
@@ -85,66 +85,75 @@ def session_application(
 
 @guarded.post("/api/application/notifications")
 def set_global_notifications(
-    body: GlobalNotificationsRequest, preferences: ApplicationPreferences
+    global_notifications_request: GlobalNotificationsRequest,
+    application_preferences: ApplicationPreferences,
 ) -> SavedResponse:
-    preferences.set_notifications_enabled(body.enabled)
+    application_preferences.set_notifications_enabled(global_notifications_request.enabled)
     return SavedResponse()
 
 
 @guarded.post("/api/application/new-session-preferences")
 def save_new_session_preferences(
-    body: NewSessionPreferencesRequest, preferences: ApplicationPreferences
+    new_session_preferences_request: NewSessionPreferencesRequest,
+    application_preferences: ApplicationPreferences,
 ) -> SavedResponse:
-    preferences.save_new_session_preferences(
-        working_directory=body.working_directory or None,
-        harness=body.harness or None,
-        model=body.model or None,
-        effort=body.effort or None,
+    application_preferences.save_new_session_preferences(
+        working_directory=new_session_preferences_request.working_directory or None,
+        harness=new_session_preferences_request.harness or None,
+        model=new_session_preferences_request.model or None,
+        effort=new_session_preferences_request.effort or None,
     )
     return SavedResponse()
 
 
 @guarded.post("/api/application/new-session-drafts")
 def save_new_session_draft(
-    body: NewSessionDraftRequest, preferences: ApplicationPreferences
+    new_session_draft_request: NewSessionDraftRequest,
+    application_preferences: ApplicationPreferences,
 ) -> SavedResponse:
-    saved = preferences.save_new_session_draft(
-        body.working_directory, body.text, body.sequence
+    saved = application_preferences.save_new_session_draft(
+        new_session_draft_request.working_directory,
+        new_session_draft_request.text,
+        new_session_draft_request.sequence,
     )
     return SavedResponse(saved=saved)
 
 
 @guarded.post("/api/application/hidden-directories")
 def hide_directory(
-    body: HideDirectoryRequest, preferences: ApplicationPreferences
+    hide_directory_request: HideDirectoryRequest,
+    application_preferences: ApplicationPreferences,
 ) -> HiddenDirectoriesResponse:
-    hidden = preferences.hide_directory(body.working_directory)
+    hidden = application_preferences.hide_directory(hide_directory_request.working_directory)
     return HiddenDirectoriesResponse(hidden=hidden)
 
 
 @guarded.post("/api/application/push-subscriptions")
 def register_push_subscription(
-    body: PushSubscriptionRequest, preferences: ApplicationPreferences
+    push_subscription_request: PushSubscriptionRequest,
+    application_preferences: ApplicationPreferences,
 ) -> SavedResponse:
-    preferences.register_push_subscription(
+    application_preferences.register_push_subscription(
         BrowserPushSubscription(
-            body.subscription.endpoint,
-            body.subscription.keys.p256dh,
-            body.subscription.keys.auth,
-            body.device_id,
-            body.device_label or None,
+            push_subscription_request.subscription.endpoint,
+            push_subscription_request.subscription.keys.p256dh,
+            push_subscription_request.subscription.keys.auth,
+            push_subscription_request.device_id,
+            push_subscription_request.device_label or None,
         )
     )
     return SavedResponse()
 
 
 @guarded.post("/api/application/presence")
-def report_presence(body: PresenceRequest, preferences: ApplicationPreferences) -> SavedResponse:
-    preferences.report_presence(
+def report_presence(
+    presence_request: PresenceRequest, application_preferences: ApplicationPreferences
+) -> SavedResponse:
+    application_preferences.report_presence(
         BrowserPresence(
-            body.device_id,
-            SessionId(body.session_id) if body.session_id else None,
-            body.away,
+            presence_request.device_id,
+            SessionId(presence_request.session_id) if presence_request.session_id else None,
+            presence_request.away,
         )
     )
     return SavedResponse()
@@ -152,59 +161,62 @@ def report_presence(body: PresenceRequest, preferences: ApplicationPreferences) 
 
 @guarded.post("/api/sessions/{session_id}/application/composer-draft")
 def save_composer_draft(
-    session_id: SessionIdPath, body: ComposerDraftRequest, workspace: SessionApplication
+    session_id: SessionIdPath, composer_draft_request: ComposerDraftRequest, workspace: SessionApplication
 ) -> SavedResponse:
     saved = workspace.save_composer_draft(
-        SessionId(session_id), body.text, body.origin, body.sequence
+        SessionId(session_id),
+        composer_draft_request.text,
+        composer_draft_request.origin,
+        composer_draft_request.sequence,
     )
     return SavedResponse(saved=saved)
 
 
 @guarded.post("/api/sessions/{session_id}/application/composer-queue")
 def save_composer_queue(
-    session_id: SessionIdPath, body: ComposerQueueRequest, workspace: SessionApplication
+    session_id: SessionIdPath, composer_queue_request: ComposerQueueRequest, workspace: SessionApplication
 ) -> SavedResponse:
     messages = tuple(
-        QueuedMessage(item.text) for item in body.items if item.text.strip()
+        QueuedMessage(item.text) for item in composer_queue_request.items if item.text.strip()
     )
     workspace.save_composer_queue(
-        SessionId(session_id), messages, body.origin
+        SessionId(session_id), messages, composer_queue_request.origin
     )
     return SavedResponse()
 
 
 @guarded.post("/api/sessions/{session_id}/application/dialog-draft")
 def save_dialog_draft(
-    session_id: SessionIdPath, body: DialogDraftRequest, workspace: SessionApplication
+    session_id: SessionIdPath, dialog_draft_request: DialogDraftRequest, workspace: SessionApplication
 ) -> SavedResponse:
     selections = tuple(
-        AnswerSelection(answer.selected, answer.other) for answer in body.answers
+        AnswerSelection(answer.selected, answer.other) for answer in dialog_draft_request.answers
     )
     workspace.save_dialog_draft(
-        SessionId(session_id), AttentionId(body.attention_id), selections, body.origin
+        SessionId(session_id), AttentionId(dialog_draft_request.attention_id), selections, dialog_draft_request.origin
     )
     return SavedResponse()
 
 
 @guarded.post("/api/sessions/{session_id}/application/view-mode")
 def set_view_mode(
-    session_id: SessionIdPath, body: ViewModeRequest, workspace: SessionApplication
+    session_id: SessionIdPath, view_mode_request: ViewModeRequest, workspace: SessionApplication
 ) -> SavedResponse:
-    workspace.set_view_mode(SessionId(session_id), body.view_mode)
+    workspace.set_view_mode(SessionId(session_id), view_mode_request.view_mode)
     return SavedResponse()
 
 
 @guarded.post("/api/sessions/{session_id}/application/notifications-muted")
 def set_notifications_muted(
-    session_id: SessionIdPath, body: NotificationsMutedRequest, workspace: SessionApplication
+    session_id: SessionIdPath, notifications_muted_request: NotificationsMutedRequest, workspace: SessionApplication
 ) -> SavedResponse:
-    workspace.set_notifications_muted(SessionId(session_id), body.muted)
+    workspace.set_notifications_muted(SessionId(session_id), notifications_muted_request.muted)
     return SavedResponse()
 
 
 @guarded.post("/api/sessions/{session_id}/application/tasks-hidden")
 def set_tasks_hidden(
-    session_id: SessionIdPath, body: TasksHiddenRequest, workspace: SessionApplication
+    session_id: SessionIdPath, tasks_hidden_request: TasksHiddenRequest, workspace: SessionApplication
 ) -> SavedResponse:
-    workspace.set_tasks_hidden(SessionId(session_id), body.hidden)
+    workspace.set_tasks_hidden(SessionId(session_id), tasks_hidden_request.hidden)
     return SavedResponse()

@@ -28,11 +28,14 @@ class PaneCommandOutcome:
 
 class PaneCommandService:
     def __init__(
-        self, terminal: TerminalAdapter, widths: PaneWidthService, audit: AuditRecorder
+        self,
+        terminal_adapter: TerminalAdapter,
+        pane_width_service: PaneWidthService,
+        audit_recorder: AuditRecorder,
     ) -> None:
-        self._terminal = terminal
-        self._widths = widths
-        self._audit = audit
+        self._terminal = terminal_adapter
+        self._widths = pane_width_service
+        self._audit = audit_recorder
 
     def execute(
         self,

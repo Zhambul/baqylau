@@ -160,18 +160,18 @@ class RewindOutcome(TypedDict):
     degraded: bool
 
 
-def _bail(fe: ScreenDriver, win: str, sleep: Callable[[float], None]) -> None:
+def _bail(screen_driver: ScreenDriver, win: str, sleep: Callable[[float], None]) -> None:
     """Close whatever menu is open — Escape once per open level, verified."""
     for _ in range(2):
-        screen = fe.get_text(win) or ""
+        screen = screen_driver.get_text(win) or ""
         if not menu_region(screen):
             return
-        fe.send_key(win, "escape")
+        screen_driver.send_key(win, "escape")
         sleep(POLL_S)
 
 
 def _scan(
-    fe: ScreenDriver,
+    screen_driver: ScreenDriver,
     win: str,
     target: str,
     key: str,
@@ -182,22 +182,22 @@ def _scan(
     the menu vanishes, or SCAN_MAX. Returns (matched, steps_taken)."""
     steps = 0
     while steps <= SCAN_MAX:
-        screen = fe.get_text(win) or ""
+        screen = screen_driver.get_text(win) or ""
         entry = cursor_entry(screen)
         if entry_matches(entry, target):
             return True, steps
         if not menu_open(screen):
             return False, steps
-        fe.send_key(win, key)
+        screen_driver.send_key(win, key)
         steps += 1
         sleep(POLL_S)
-        if cursor_entry(fe.get_text(win) or "") == entry:   # edge — stopped
+        if cursor_entry(screen_driver.get_text(win) or "") == entry:   # edge — stopped
             return False, steps
     return False, steps
 
 
 def drive(
-    fe: ScreenDriver,
+    screen_driver: ScreenDriver,
     win: str,
     target: str,
     mode: str,
@@ -218,19 +218,19 @@ def drive(
     # the input line may hold a draft — /rewind appended to it would send
     # garbage instead of the command; kill line both ways first (harmless
     # when empty — the composer-send clear_draft precedent)
-    fe.send_key(win, "ctrl+u")
-    fe.send_key(win, "ctrl+k")
+    screen_driver.send_key(win, "ctrl+u")
+    screen_driver.send_key(win, "ctrl+k")
     sleep(POLL_S)
     # a bracketed paste, never raw keystrokes: with editorMode vim the box is
     # MODAL and the Escapes that preceded this (an interrupt, a bail) leave it
     # in NORMAL mode, where "/rewind" is vim COMMANDS — the menu never opens and
     # the tail lands in the conversation (tui.type_command has the measurement)
-    ok, _clip = tui.type_command(fe, win, "/rewind")
+    ok, _clip = tui.type_command(screen_driver, win, "/rewind")
     if not ok:
         raise MenuError("send", "/rewind not delivered")
-    screen, ok = screendrive.poll_until(fe, win, menu_open, OPEN_TIMEOUT_S, sleep)
+    screen, ok = screendrive.poll_until(screen_driver, win, menu_open, OPEN_TIMEOUT_S, sleep)
     if not ok:
-        _bail(fe, win, sleep)
+        _bail(screen_driver, win, sleep)
         # carry the SCREEN we gave up on (StepError.screen, as askdialog does):
         # "the menu never appeared" is indistinguishable, from the audit alone,
         # between a menu that truly never opened and one that opened while our
@@ -241,21 +241,21 @@ def drive(
     # top, and if the hint overshot (the page counted dead-branch bubbles the
     # menu doesn't list), come back down through the whole list
     for _ in range(max(0, min(int(ups), SCAN_MAX))):
-        fe.send_key(win, "up")
+        screen_driver.send_key(win, "up")
         sleep(KEY_GAP_S)
     sleep(POLL_S)
-    matched, steps = _scan(fe, win, target, "up", sleep)
+    matched, steps = _scan(screen_driver, win, target, "up", sleep)
     if not matched:
-        found, down = _scan(fe, win, target, "down", sleep)
+        found, down = _scan(screen_driver, win, target, "down", sleep)
         steps += down
         if not found:
-            _bail(fe, win, sleep)
+            _bail(screen_driver, win, sleep)
             raise MenuError("find", "checkpoint not found: %r" %
                             first_line(target)[:80])
-    fe.send_key(win, "enter")
-    screen, ok = screendrive.poll_until(fe, win, confirm_open, STEP_TIMEOUT_S, sleep)
+    screen_driver.send_key(win, "enter")
+    screen, ok = screendrive.poll_until(screen_driver, win, confirm_open, STEP_TIMEOUT_S, sleep)
     if not ok:
-        _bail(fe, win, sleep)
+        _bail(screen_driver, win, sleep)
         raise MenuError("confirm", "confirm menu never appeared")
     opts = confirm_options(screen)
     unchanged = CODE_UNCHANGED in menu_region(screen)
@@ -270,15 +270,15 @@ def drive(
         digit = opts.get(MODE_LABELS["conversation"])
         degraded = bool(digit)
     if not digit:
-        _bail(fe, win, sleep)
+        _bail(screen_driver, win, sleep)
         raise MenuError("option", "%r not offered here%s" % (
             MODE_LABELS[mode],
             " — no code changes to revert at that checkpoint"
             if unchanged else ""))
-    fe.send_key(win, digit)
-    screen, ok = screendrive.poll_until(fe, win, lambda s: not menu_region(s),
+    screen_driver.send_key(win, digit)
+    screen, ok = screendrive.poll_until(screen_driver, win, lambda s: not menu_region(s),
                        STEP_TIMEOUT_S, sleep)
     if not ok:
-        _bail(fe, win, sleep)
+        _bail(screen_driver, win, sleep)
         raise MenuError("close", "menu still open after selecting")
     return {"steps": steps, "digit": digit, "degraded": degraded}

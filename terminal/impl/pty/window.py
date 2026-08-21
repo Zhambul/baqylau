@@ -130,13 +130,13 @@ def open_window(
     return window
 
 
-def _drain(window: PtyWindow) -> None:
+def _drain(pty_window: PtyWindow) -> None:
     while True:
         try:
-            chunk = os.read(window.descriptor, READ_SIZE)
+            chunk = os.read(pty_window.descriptor, READ_SIZE)
         except OSError:                      # the pty closed with the process
             return
         if not chunk:
             return
-        with window.lock:
-            window.stream.feed(chunk)
+        with pty_window.lock:
+            pty_window.stream.feed(chunk)
