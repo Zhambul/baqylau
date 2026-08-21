@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from domain.ids import DeviceId, SessionId
+from domain.ids import DeviceId, HarnessName, SessionId
 
 
 @dataclass(frozen=True)
@@ -23,7 +23,7 @@ class HiddenDirectoryRow:
 class NewSessionPreferenceRow:
     id: int
     working_directory: str | None
-    harness: str | None
+    harness: HarnessName | None
     model: str | None
     effort: str | None
 

@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from core.process import nearest_ancestor_named
+from domain.ids import HarnessName
 from harness.contract import HarnessPlugin
 from harness.models import HarnessHookRequest
 from harness.registry import HarnessRegistry, HarnessRegistryError
@@ -30,7 +31,7 @@ class HookGatewayService:
         self.registry = harness_registry
         self.raw_events = raw_event_repository
 
-    def record(self, harness: str, harness_hook_request: HarnessHookRequest) -> bytes:
+    def record(self, harness: HarnessName, harness_hook_request: HarnessHookRequest) -> bytes:
         """One delivery in, its synchronous reply out (b"" when there is none)."""
         try:
             plugin = self.registry.plugin(harness)

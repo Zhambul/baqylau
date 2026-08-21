@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Literal, TypeAlias
 
-from domain.ids import ActorId, AttentionId, SessionId, ShellId, TaskId
+from domain.ids import ActorId, AttentionId, HarnessName, SessionId, ShellId, TaskId
 from domain.stored import STORED
 from domain.values import AccountReference, ActorRole, ModelReference, TokenUsage
 
@@ -68,7 +68,7 @@ class SessionFacts:
     __pydantic_config__ = STORED
 
     session_id: SessionId
-    harness: str
+    harness: HarnessName
     state: LifecycleState
     working_directory: str
     started_at: float | None

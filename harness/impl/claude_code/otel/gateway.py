@@ -17,7 +17,7 @@ import re
 import time
 from typing import Any
 
-from domain.ids import RawEventId, SessionId
+from domain.ids import HarnessName, RawEventId, SessionId
 from harness.contract import HarnessTelemetryGateway
 from harness.impl.claude_code import account
 from harness.models import (
@@ -30,7 +30,7 @@ from harness.models import (
 )
 from decimal import Decimal
 
-HARNESS = "claude_code"
+HARNESS = HarnessName("claude_code")
 OTLP_KIND = "otlp"
 STATUSLINE_KIND = "statusline"
 

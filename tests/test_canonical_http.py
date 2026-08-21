@@ -27,7 +27,7 @@ from audit.telemetry import BrowserTelemetryService
 from harness.models import RawEvent, Session, TranslationResult
 from notify.presence import Presence
 from domain.events import CanonicalEvent, MessageCreated, SessionStarted
-from domain.ids import ActorId, CanonicalEventId, MessageId, RawEventId, SessionId
+from domain.ids import ActorId, CanonicalEventId, HarnessName, MessageId, RawEventId, SessionId
 from domain.values import TextContent
 from repository.impl.sqlite.raw_event_audits import SqliteRawEventAuditRepository
 
@@ -44,7 +44,7 @@ def _event(event_id: str, payload):
         actor_id=ACTOR_ID,
         turn_id=None,
         parent_actor_id=None,
-        harness="codex",
+        harness=HarnessName("codex"),
         occurred_at=10.0,
         terminal_window_id=None,
         harness_process_id=None,

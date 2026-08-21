@@ -93,6 +93,7 @@ from domain.ids import (
     ActorId,
     AssignmentId,
     CanonicalEventId,
+    HarnessName,
     RawEventId,
     SessionId,
     ShellId,
@@ -190,7 +191,7 @@ def _deliver_hook(gateway, payload: bytes, **observed) -> bytes:
 def raw_event(
     document,
     *,
-    harness: str,
+    harness: HarnessName,
     source_type: str,
     raw_event_id: str,
     source_position: str = "10",

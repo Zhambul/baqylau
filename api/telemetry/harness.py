@@ -9,6 +9,7 @@ from fastapi.concurrency import run_in_threadpool
 from api.common.models.fields import HarnessNamePath
 from api.common.models.replies.recorded_response import RecordedResponse
 from app.providers import TelemetryGateway, Recorder
+from domain.ids import HarnessName
 from harness.models import TELEMETRY_KIND_HEADER, HarnessTelemetryRequest
 from harness.services.telemetry import UnknownTelemetryHarness
 from repository.errors import RepositoryError
@@ -40,7 +41,7 @@ async def record_telemetry_delivery(
         # to the store, and this handler is `async` (it awaits the raw body), so
         # a direct call would do that write on the event loop and stall every
         # open stream with it.
-        await run_in_threadpool(gateway.record, harness, delivery)
+        await run_in_threadpool(gateway.record, HarnessName(harness), delivery)
     except UnknownTelemetryHarness as error:
         audit.error("", "telemetry delivery", {"harness": harness, "error": str(error)})
         return RecordedResponse(recorded=False)

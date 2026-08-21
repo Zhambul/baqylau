@@ -5,6 +5,7 @@ from __future__ import annotations
 from harness.contract import HarnessPlugin
 from domain.events import SCHEMA_VERSION
 from domain.errors import UnknownReference
+from domain.ids import HarnessName
 
 
 class HarnessRegistryError(UnknownReference):
@@ -18,10 +19,10 @@ class HarnessRegistryError(UnknownReference):
 
 class HarnessRegistry:
     def __init__(self) -> None:
-        self._plugins: dict[str, HarnessPlugin] = {}
+        self._plugins: dict[HarnessName, HarnessPlugin] = {}
 
     def register(self, harness_plugin: HarnessPlugin) -> None:
-        name = harness_plugin.info.name.strip()
+        name = HarnessName(harness_plugin.info.name.strip())
         if not name:
             raise HarnessRegistryError("harness name cannot be empty")
         if name != harness_plugin.info.name:
@@ -53,7 +54,7 @@ class HarnessRegistry:
         if launchable and not defaults:
             raise HarnessRegistryError("no launchable harness is marked as the launch default")
 
-    def plugin(self, harness: str) -> HarnessPlugin:
+    def plugin(self, harness: HarnessName) -> HarnessPlugin:
         try:
             return self._plugins[harness]
         except KeyError as error:

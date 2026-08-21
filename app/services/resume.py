@@ -7,7 +7,7 @@ from typing import Protocol
 
 from core.repository import RepositoryQueries
 from harness.models import TerminalSessionState
-from domain.ids import SessionId
+from domain.ids import HarnessName, SessionId
 from domain.values import AccountReference, ModelReference
 from repository.contract.session_data import SessionDataRepository
 
@@ -22,7 +22,7 @@ class ResumableSession:
     title: str | None
     last_activity_at: float
     active: bool
-    harness: str
+    harness: HarnessName
     model: ModelReference | None
     effort: str | None
     account: AccountReference | None

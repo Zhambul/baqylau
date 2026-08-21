@@ -18,7 +18,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Literal
 
-from domain.ids import AccountId, ModelId
+from domain.ids import AccountId, HarnessName, ModelId
 from harness.contract import HarnessUsage
 from harness.models import AccountUsageSnapshot, UsageRow, UsageWindow, UsageWindowSample
 from repository.contract.usage import AccountUsageRepository
@@ -26,7 +26,7 @@ from harness.impl.claude_code import account
 from harness.impl.claude_code.account import AccountRecord
 from harness.impl.claude_code.usage import live
 
-HARNESS = "claude_code"
+HARNESS = HarnessName("claude_code")
 # The account-wide windows. A per-model cap is one of these keys with the model
 # appended — `seven_day_fable` is the weekly Fable bucket under the weekly bar —
 # which is what lets one vocabulary carry both.

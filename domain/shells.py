@@ -11,14 +11,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from domain.ids import ActorId, SessionId, ShellId
+from domain.ids import ActorId, HarnessName, SessionId, ShellId
 
 
 @dataclass(frozen=True)
 class ShellOutputFollowing:
     session_id: SessionId
     shell_id: ShellId
-    harness: str
+    harness: HarnessName
     actor_id: ActorId
     parent_actor_id: ActorId | None
     source_path: str

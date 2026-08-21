@@ -35,10 +35,15 @@ QuestionId = NewType("QuestionId", str)
 # model's native id either, despite the same field name.
 ShellNativeId = NewType("ShellNativeId", str)
 
+# A NewType, not an enum: the set of harnesses is OPEN — each plugin declares
+# its own name, and shared code may not list them (a closed enum would name
+# every concrete harness in a shared package).
+HarnessName = NewType("HarnessName", str)
+
 
 def stable_event_id(
     *,
-    harness: str,
+    harness: HarnessName,
     session_id: SessionId,
     actor_id: ActorId,
     subject_type: str,

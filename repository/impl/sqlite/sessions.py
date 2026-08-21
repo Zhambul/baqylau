@@ -6,7 +6,7 @@ import sqlite3
 import time
 from dataclasses import replace
 
-from domain.ids import SessionId
+from domain.ids import HarnessName, SessionId
 from harness.models import Session
 from harness.registry import HarnessRegistry
 from repository.contract.sessions import SessionRepository
@@ -29,7 +29,7 @@ class SqliteSessionRepository(SessionRepository):
         self.sqlite_database = sqlite_database
         self.harness_registry = harness_registry
 
-    def save(self, harness: str, session: Session) -> None:
+    def save(self, harness: HarnessName, session: Session) -> None:
         with self.sqlite_database.write() as connection:
             connection.execute(
                 f"INSERT INTO sessions({_COLUMNS}) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?) "
@@ -65,4 +65,4 @@ class SqliteSessionRepository(SessionRepository):
         session = mapper.session(rows.session(row))
         if self.harness_registry is None:
             return session
-        return replace(session, plugin=self.harness_registry.plugin(row["harness"]))
+        return replace(session, plugin=self.harness_registry.plugin(HarnessName(row["harness"])))

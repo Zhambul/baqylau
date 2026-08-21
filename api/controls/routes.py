@@ -27,7 +27,7 @@ from api.controls import mapper
 from api.controls.models.control_outcome_response import ControlOutcomeResponse
 from api.controls.models.launch_response import LaunchResponse
 from api.responses import with_body
-from domain.ids import SessionId
+from domain.ids import HarnessName, SessionId
 from harness.services.controls import HarnessControlService
 
 router = APIRouter()
@@ -55,7 +55,9 @@ CONTROL_RESPONSES = with_body(ControlOutcomeResponse, {
 def launch(
     launch_session_request: LaunchSessionRequest, launcher: Launcher, response: Response
 ) -> LaunchResponse:
-    result = launcher.launch(launch_session_request.harness, launch_session_request.request())
+    result = launcher.launch(
+        HarnessName(launch_session_request.harness), launch_session_request.request()
+    )
     response.status_code = LAUNCH_STATUS[result.status]
     return mapper.launch(result)
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from domain.ids import SessionId
+from domain.ids import HarnessName, SessionId
 from harness.models import Session
 
 
@@ -16,7 +16,7 @@ class SessionRepository(Protocol):
     columns current from later raw events.
     """
 
-    def save(self, harness: str, session: Session) -> None:
+    def save(self, harness: HarnessName, session: Session) -> None:
         """Upsert: identity columns written once, live columns overwritten."""
         ...
 

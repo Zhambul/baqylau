@@ -7,7 +7,7 @@ free-form JSON and every reader had to prove its own shape.
 
 from __future__ import annotations
 
-from domain.ids import SessionId
+from domain.ids import HarnessName, SessionId
 from domain.preferences import (
     HiddenDirectory,
     NewSessionDraft,
@@ -43,7 +43,11 @@ def new_session_preferences(
 ) -> NewSessionPreferences:
     return NewSessionPreferences(
         working_directory=new_session_preference_row.working_directory or None,
-        harness=new_session_preference_row.harness or None,
+        harness=(
+            HarnessName(new_session_preference_row.harness)
+            if new_session_preference_row.harness
+            else None
+        ),
         model=new_session_preference_row.model or None,
         effort=new_session_preference_row.effort or None,
     )

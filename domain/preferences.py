@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, TypeAlias
 
-from domain.ids import DeviceId
+from domain.ids import DeviceId, HarnessName
 
 
 # Which of the harness TUI's three native history densities a session's web
@@ -41,7 +41,7 @@ class NewSessionPreferences:
     """The launch form's last picks."""
 
     working_directory: str | None
-    harness: str | None
+    harness: HarnessName | None
     model: str | None
     effort: str | None
 

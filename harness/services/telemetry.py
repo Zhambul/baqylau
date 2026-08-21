@@ -11,7 +11,7 @@ rather than a second and third writer of the store.
 
 from __future__ import annotations
 
-from domain.ids import SessionId
+from domain.ids import HarnessName, SessionId
 from harness.models import (
     HarnessTelemetryRequest,
     Session,
@@ -48,7 +48,7 @@ class TelemetryGatewayService:
         self.usage = account_usage_repository
         self.context = _SessionLookup(session_repository)
 
-    def record(self, harness: str, harness_telemetry_request: HarnessTelemetryRequest) -> int:
+    def record(self, harness: HarnessName, harness_telemetry_request: HarnessTelemetryRequest) -> int:
         """One delivery in, the number of facts it produced out."""
         try:
             plugin = self.registry.plugin(harness)

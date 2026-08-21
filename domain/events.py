@@ -12,6 +12,7 @@ from domain.ids import (
     AttentionId,
     CanonicalEventId,
     AssignmentId,
+    HarnessName,
     MessageId,
     RawEventId,
     ReasoningId,
@@ -440,7 +441,7 @@ class CanonicalEvent(Generic[EventPayloadType]):
     actor_id: ActorId
     turn_id: TurnId | None
     parent_actor_id: ActorId | None
-    harness: str
+    harness: HarnessName
     occurred_at: float | None
     terminal_window_id: WindowId | None
     harness_process_id: int | None

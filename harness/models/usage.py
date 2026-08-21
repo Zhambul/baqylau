@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Literal
 
-from domain.ids import AccountId, ModelId
+from domain.ids import AccountId, HarnessName, ModelId
 
 
 @dataclass(frozen=True)
@@ -44,7 +44,7 @@ class UsageWindowSample:
 class AccountUsageSnapshot:
     """The current plan-limit picture for one account of one harness."""
 
-    harness: str
+    harness: HarnessName
     account_id: AccountId | None
     display_name: str
     captured_at: float
@@ -53,7 +53,7 @@ class AccountUsageSnapshot:
 
 @dataclass(frozen=True)
 class UsageRow:
-    harness: str
+    harness: HarnessName
     account_id: AccountId | None
     display_name: str
     switchable: bool

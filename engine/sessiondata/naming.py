@@ -15,6 +15,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 
+from domain.ids import HarnessName
 from domain.values import ModelReference
 
 
@@ -28,13 +29,13 @@ class ModelNaming:
     ) -> None:
         self.display_by_harness = dict(display_by_harness or {})
 
-    def display(self, harness: str, model_reference: ModelReference) -> str:
+    def display(self, harness: HarnessName, model_reference: ModelReference) -> str:
         namer = self.display_by_harness.get(harness)
         if namer is not None:
             return namer(model_reference)
         return model_reference.display_name or model_reference.native_id
 
-    def named(self, harness: str, model_reference: ModelReference) -> ModelReference:
+    def named(self, harness: HarnessName, model_reference: ModelReference) -> ModelReference:
         """The same reference with its display settled — what the actor row
         stores, so every reader downstream shows the one name."""
         return replace(

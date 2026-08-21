@@ -31,6 +31,7 @@ from domain.events import (
 from domain.ids import (
     ActorId,
     CanonicalEventId,
+    HarnessName,
     ShellId,
     RawEventId,
     SessionId,
@@ -66,7 +67,7 @@ def session(session_row: SessionRow) -> Session:
     )
 
 
-def session_values(harness: str, session: Session, created_at: float) -> SqlValues:
+def session_values(harness: HarnessName, session: Session, created_at: float) -> SqlValues:
     return (
         str(session.session_id),
         str(session.lead_actor_id),
@@ -86,7 +87,7 @@ def session_values(harness: str, session: Session, created_at: float) -> SqlValu
 def raw_event(raw_event_row: RawEventRow) -> RawEvent:
     return RawEvent(
         raw_event_id=RawEventId(raw_event_row.raw_event_id),
-        harness=raw_event_row.harness,
+        harness=HarnessName(raw_event_row.harness),
         source_type=raw_event_row.source_type,
         source_name=raw_event_row.source_name,
         source_position=raw_event_row.source_position,
@@ -271,7 +272,7 @@ def row_canonical_event(
             if canonical_event_row.parent_actor_id is not None
             else None
         ),
-        harness=canonical_event_row.harness,
+        harness=HarnessName(canonical_event_row.harness),
         occurred_at=canonical_event_row.occurred_at,
         terminal_window_id=canonical_event_row.terminal_window_id,
         harness_process_id=canonical_event_row.harness_process_id,
@@ -315,7 +316,7 @@ def shell_output_following(shell_output_row: ShellOutputRow) -> ShellOutputFollo
     return ShellOutputFollowing(
         session_id=SessionId(shell_output_row.session_id),
         shell_id=ShellId(shell_output_row.shell_id),
-        harness=shell_output_row.harness,
+        harness=HarnessName(shell_output_row.harness),
         actor_id=ActorId(shell_output_row.actor_id),
         parent_actor_id=(
             ActorId(shell_output_row.parent_actor_id)

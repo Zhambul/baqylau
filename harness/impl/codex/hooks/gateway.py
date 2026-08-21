@@ -13,9 +13,9 @@ import time
 
 from harness.contract import HarnessHookGateway
 from harness.models import HarnessHookRequest, HarnessHookResponse, RawEvent
-from domain.ids import ActorId, RawEventId, SessionId
+from domain.ids import ActorId, HarnessName, RawEventId, SessionId
 
-HARNESS = "codex"
+HARNESS = HarnessName("codex")
 CLI_PROCESS_NAME = "codex"
 
 

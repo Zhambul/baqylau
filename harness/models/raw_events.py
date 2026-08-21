@@ -19,6 +19,7 @@ from domain.events import (
 from domain.ids import (
     AccountId,
     ActorId,
+    HarnessName,
     RawEventId,
     SessionId,
     TurnId,
@@ -34,7 +35,7 @@ RecordedTranslationDecision: TypeAlias = TranslationDecision | Literal["translat
 @dataclass(frozen=True)
 class RawEvent:
     raw_event_id: RawEventId
-    harness: str
+    harness: HarnessName
     source_type: str
     source_name: str
     source_position: str
@@ -159,7 +160,7 @@ INTERRUPT_SOURCE_TYPE = "interrupt"
 
 def output_location_raw_event(
     raw_event_source_context: RawEventSourceContext,
-    harness: str,
+    harness: HarnessName,
     shell_output_located: ShellOutputLocated,
     payload: bytes,
     actor_id: ActorId | None = None,

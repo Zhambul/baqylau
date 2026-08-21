@@ -9,7 +9,7 @@ from fastapi.concurrency import run_in_threadpool
 from api.common.models.fields import HarnessNamePath
 from api.responses import errors
 from app.providers import HookGateway, Recorder
-from domain.ids import AccountId, WindowId
+from domain.ids import AccountId, HarnessName, WindowId
 from harness.hooks.gateway import UnknownHookHarness
 from harness.models import HarnessHookRequest
 from harness.hooks.headers import (
@@ -68,7 +68,7 @@ async def record_hook_delivery(
             launch_model=request.headers.get(LAUNCH_MODEL_HEADER) or None,
             launch_effort=request.headers.get(LAUNCH_EFFORT_HEADER) or None,
         )
-        output = await run_in_threadpool(gateway.record, harness, delivery)
+        output = await run_in_threadpool(gateway.record, HarnessName(harness), delivery)
     except UnknownHookHarness as error:
         # Raised, not built: every refusal this server sends is rendered by the
         # one handler in api/app.py, from the one ErrorResponse model.

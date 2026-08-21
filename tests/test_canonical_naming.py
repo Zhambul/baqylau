@@ -1,4 +1,4 @@
-"""Two naming gates, enforced by AST inspection.
+"""Naming gates, enforced by AST inspection.
 
 Gate 1 — a parameter is named after its class. A parameter whose annotation is
 one of OUR classes must carry that class's full name in snake case, either
@@ -12,9 +12,15 @@ field whose name ends in `_id` must use a NewType from `domain/ids.py` (or a
 package's own id type). A bare `str` lets any string flow into any id slot,
 and the type checker cannot catch the swap.
 
+Gate 4 (below Gate 3, the banned-words gate) — a harness's name is a typed
+`HarnessName`, never a bare `str`, for the same reason as Gate 2: a parameter
+or dataclass field named exactly `harness` or ending `_harness` must not be
+annotated bare `str`.
+
 Scope: the production packages. `tests/` is not swept (same ratchet stance as
-mypy.ini). `api/` is exempt from Gate 2 only: the wire is strings by design,
-and its mappers are exactly where typed ids become strings.
+mypy.ini). `api/` is exempt from Gates 2 and 4 only: the HTTP boundary carries
+strings by design, and its mappers are exactly where a typed id or a typed
+harness name becomes one.
 """
 
 from __future__ import annotations
@@ -175,6 +181,59 @@ def test_an_id_is_a_typed_id_not_a_bare_str():
                     violations.append(
                         f"{relative}:{statement.lineno} "
                         f"{node.name}.{field_name}: str — use a NewType "
+                        f"from domain/ids.py"
+                    )
+    assert violations == []
+
+
+# Gate 4 shares Gate 2's exemption: api/ is the HTTP boundary, and its mappers
+# are where a typed harness name is turned into a plain string.
+HARNESS_GATE_PACKAGES = ID_GATE_PACKAGES
+
+# A parameter or field that holds a harness name but truly cannot be typed.
+# Each line is a deliberate, justified exception; this list only ever shrinks.
+HARNESS_GATE_ALLOWED: set[str] = set()
+
+
+def _is_harness_named(name: str) -> bool:
+    return name == "harness" or name.endswith("_harness")
+
+
+def test_a_harness_name_is_a_typed_harness_name_not_a_bare_str():
+    violations = []
+    for path in _module_paths():
+        if path.relative_to(ROOT).parts[0] not in HARNESS_GATE_PACKAGES:
+            continue
+        relative = str(path.relative_to(ROOT))
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for function, argument in _annotated_parameters(tree):
+            if not _is_harness_named(argument.arg):
+                continue
+            if f"{relative}:{argument.arg}" in HARNESS_GATE_ALLOWED:
+                continue
+            if _is_bare_str(argument.annotation):
+                violations.append(
+                    f"{relative}:{function.lineno} "
+                    f"{function.name}({argument.arg}: str) — use HarnessName "
+                    f"from domain/ids.py"
+                )
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef):
+                continue
+            for statement in node.body:
+                if not isinstance(statement, ast.AnnAssign):
+                    continue
+                if not isinstance(statement.target, ast.Name):
+                    continue
+                field_name = statement.target.id
+                if not _is_harness_named(field_name):
+                    continue
+                if f"{relative}:{field_name}" in HARNESS_GATE_ALLOWED:
+                    continue
+                if _is_bare_str(statement.annotation):
+                    violations.append(
+                        f"{relative}:{statement.lineno} "
+                        f"{node.name}.{field_name}: str — use HarnessName "
                         f"from domain/ids.py"
                     )
     assert violations == []

@@ -14,6 +14,7 @@ from domain.ids import (
     ActorId,
     AccountId,
     CanonicalEventId,
+    HarnessName,
     HarnessSessionId,
     RawEventId,
     SessionId,
@@ -27,7 +28,7 @@ from domain.ids import (
 class SessionRow:
     session_id: SessionId
     lead_actor_id: ActorId
-    harness: str
+    harness: HarnessName
     harness_session_id: HarnessSessionId
     source_reference: str
     working_directory: str | None
@@ -41,7 +42,7 @@ class RawEventRow:
     id: int
     raw_event_id: RawEventId
     session_id: SessionId
-    harness: str
+    harness: HarnessName
     source_type: str
     source_identity: str
     source_name: str
@@ -67,7 +68,7 @@ class CanonicalEventRow:
     actor_id: ActorId
     turn_id: TurnId | None
     parent_actor_id: ActorId | None
-    harness: str
+    harness: HarnessName
     occurred_at: float | None
     terminal_window_id: WindowId | None
     harness_process_id: int | None
@@ -79,7 +80,7 @@ class CanonicalEventRow:
 class ShellOutputRow:
     session_id: SessionId
     shell_id: ShellId
-    harness: str
+    harness: HarnessName
     actor_id: ActorId
     parent_actor_id: ActorId | None
     source_path: str

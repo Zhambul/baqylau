@@ -19,7 +19,7 @@ from api.application.models.insights.application_insights_response import (
 from api.application.models.resume.resumable_session_response import ResumableSessionResponse
 from app.providers import Catalog, Insights, Registry, ResumableSessions
 from harness.models import QueryContext
-from domain.ids import SessionId
+from domain.ids import HarnessName, SessionId
 
 router = APIRouter()
 
@@ -56,13 +56,14 @@ def catalog(
         session_id=SessionId(session_id) if session_id else None,
         working_directory=working_directory,
     )
+    harness_name = HarnessName(harness)
     # The menu payload is composed here, from the two places its parts honestly
     # live: the STATIC vocabulary on the plugin's HarnessInfo (built once, as a
     # literal) and the per-directory part from the catalogue. The contract
     # keeps them apart; this endpoint is where the browser wants them together.
-    info = registry.plugin(harness).info
+    info = registry.plugin(harness_name).info
     return catalog_mapper.harness_catalog(
-        harnesses_catalog.read(harness, context), info.models, info.rewind_modes
+        harnesses_catalog.read(harness_name, context), info.models, info.rewind_modes
     )
 
 

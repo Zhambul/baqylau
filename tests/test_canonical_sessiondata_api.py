@@ -31,6 +31,7 @@ from domain.ids import (
     ActorId,
     AttentionId,
     CanonicalEventId,
+    HarnessName,
     MessageId,
     ModelId,
     SelectionId,
@@ -76,7 +77,7 @@ LEAD = ActorId("session-one:lead")
 # what these tests check IS the mapping.
 FACTS = SessionFacts(
     session_id=SESSION,
-    harness="claude_code",
+    harness=HarnessName("claude_code"),
     state="running",
     working_directory="/work/baqylau",
     started_at=1755590000.0,

@@ -47,7 +47,7 @@ from app.providers import ApplicationPreferences, PushSigningKeys, SessionApplic
 from notify.channels import webpush
 from dashboard.services.preferences import BrowserPresence, BrowserPushSubscription
 from domain.workspace import AnswerSelection, QueuedMessage
-from domain.ids import AttentionId, DeviceId, SessionId
+from domain.ids import AttentionId, DeviceId, HarnessName, SessionId
 
 router = APIRouter()
 guarded = APIRouter()
@@ -99,7 +99,11 @@ def save_new_session_preferences(
 ) -> SavedResponse:
     application_preferences.save_new_session_preferences(
         working_directory=new_session_preferences_request.working_directory or None,
-        harness=new_session_preferences_request.harness or None,
+        harness=(
+            HarnessName(new_session_preferences_request.harness)
+            if new_session_preferences_request.harness
+            else None
+        ),
         model=new_session_preferences_request.model or None,
         effort=new_session_preferences_request.effort or None,
     )

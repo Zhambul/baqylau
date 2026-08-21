@@ -74,6 +74,7 @@ from domain.ids import (
     ActorId,
     AssignmentId,
     CanonicalEventId,
+    HarnessName,
     HarnessSessionId,
     MessageId,
     ShellId,
@@ -94,6 +95,8 @@ from repository.impl.sqlite.raw_event_audits import SqliteRawEventAuditRepositor
 from repository.impl.sqlite.shell_output import SqliteShellOutputRepository
 from repository.impl.sqlite.raw_events import SqliteRawEventRepository
 from repository.impl.sqlite.sessions import SqliteSessionRepository
+
+EXAMPLE_HARNESS = HarnessName("example")
 
 # The liveness source checks the CLI pid against the CLI's process name; the
 # suite's sessions carry the test process itself, so they read as alive.
@@ -181,7 +184,7 @@ def canonical_message(
     event_id: str = "event-message",
     session_id: str = "session-one",
     actor_id: str = "actor-lead",
-    harness: str = "example",
+    harness: HarnessName = EXAMPLE_HARNESS,
     text: str = "hello",
 ) -> CanonicalEvent:
     return CanonicalEvent(
@@ -216,7 +219,7 @@ def session_started_event(
         ActorId("actor-lead"),
         None,
         None,
-        "example",
+        HarnessName("example"),
         10.0,
         terminal_window_id,
         harness_process_id,
@@ -224,7 +227,9 @@ def session_started_event(
     )
 
 
-def raw_observation(raw_event_id: str, *, harness: str = "example", payload: bytes = b'{"kind":"message"}'):
+def raw_observation(
+    raw_event_id: str, *, harness: HarnessName = EXAMPLE_HARNESS, payload: bytes = b'{"kind":"message"}'
+):
     return RawEvent(
         raw_event_id=RawEventId(raw_event_id),
         harness=harness,

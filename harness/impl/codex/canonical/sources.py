@@ -10,11 +10,12 @@ import re
 import time
 from typing import Any, Literal
 
-from domain.ids import ActorId, HarnessSessionId, RawEventId
+from domain.ids import ActorId, HarnessName, HarnessSessionId, RawEventId
 from harness.contract import HarnessRawEventSource, HarnessRawEventSources
 from harness.impl.codex.canonical import rollout
 from harness.models import RawEvent, RawEventSourceContext, Session
 
+HARNESS = HarnessName("codex")
 ROLLOUT_NAME = re.compile(r"rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-(.+)\.jsonl$")
 EVENT_BATCH_SIZE = 100
 
@@ -109,7 +110,7 @@ class CodexRolloutRawEventSource(HarnessRawEventSource):
                     break
                 raw_events.append(RawEvent(
                     raw_event_id=RawEventId(f"{self.source_identity}:{line_position}"),
-                    harness="codex",
+                    harness=HARNESS,
                     source_type=self._source_type(line_position),
                     source_name=self.source_path,
                     source_position=str(line_position),

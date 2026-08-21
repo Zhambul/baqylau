@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from domain.ids import WindowId
+from domain.ids import HarnessName, WindowId
 from harness.models import LaunchRejected, LaunchRequest, LaunchResult
 from harness.registry import HarnessRegistry
 from terminal.adapter import TerminalAdapter
@@ -21,7 +21,7 @@ class HarnessLauncherService:
         self.terminal = terminal_adapter
         self.tabs = terminal_tabs
 
-    def launch(self, harness: str, launch_request: LaunchRequest) -> LaunchResult:
+    def launch(self, harness: HarnessName, launch_request: LaunchRequest) -> LaunchResult:
         plugin = self.registry.plugin(harness)
         if plugin.launcher is None:
             return LaunchResult("rejected", reason="unsupported launch")

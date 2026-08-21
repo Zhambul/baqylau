@@ -18,7 +18,7 @@ from core.daemon import contract as daemon_contract
 from core.repository import RepositoryQueries
 from dashboard import config
 from dashboard.services.notices import DashboardNotificationNotice, DashboardNotificationState
-from domain.ids import DeviceId, SessionId
+from domain.ids import DeviceId, HarnessName, SessionId
 from domain.preferences import (
     NewSessionDraft as StoredNewSessionDraft,
     NewSessionPreferences as StoredNewSessionPreferences,
@@ -64,7 +64,7 @@ class DashboardLimits:
 @dataclass(frozen=True)
 class NewSessionPreferences:
     working_directory: str | None
-    harness: str | None
+    harness: HarnessName | None
     model: str | None
     effort: str | None
 
@@ -176,7 +176,7 @@ class ApplicationPreferenceService:
     def save_new_session_preferences(
         self,
         working_directory: str | None,
-        harness: str | None,
+        harness: HarnessName | None,
         model: str | None,
         effort: str | None,
     ) -> None:

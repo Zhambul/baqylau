@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 
 from app.injection import Instances, registry, resolve
+from domain.ids import HarnessName
 from harness.models import RawEvent, TranslationResult
 from harness.registry import HarnessRegistry
 from repository.impl.sqlite.canonical_events import SqliteCanonicalEventRepository
@@ -60,7 +61,7 @@ class CanonicalRuntime:
         self.raw_event_audits = SqliteRawEventAuditRepository(self.database)
         self.workspaces = SqliteSessionWorkspaceRepository(self.database)
 
-    def register(self, harness: str, session) -> None:
+    def register(self, harness: HarnessName, session) -> None:
         self.sessions.save(harness, session)
 
     def record(self, raw_event: RawEvent, translator_version: str, translation: TranslationResult):

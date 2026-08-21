@@ -26,6 +26,7 @@ from domain.ids import (
     ActorId,
     AttentionId,
     CanonicalEventId,
+    HarnessName,
     HarnessSessionId,
     MessageId,
     ShellId,
@@ -83,6 +84,7 @@ from repository.impl.sqlite.workspace import SqliteSessionWorkspaceRepository
 
 SESSION = SessionId("session-one")
 ACTOR = ActorId("actor-one")
+HARNESS = HarnessName("example")
 
 
 @pytest.fixture
@@ -108,7 +110,7 @@ def a_session(
 def a_raw_event(identity: str = "raw-one", position: str = "1") -> RawEvent:
     return RawEvent(
         raw_event_id=RawEventId(identity),
-        harness="example",
+        harness=HARNESS,
         source_type="hook",
         source_name="source",
         source_position=position,
@@ -129,7 +131,7 @@ def a_started_event(event_id: str = "event-one") -> CanonicalEvent:
         actor_id=ACTOR,
         turn_id=None,
         parent_actor_id=None,
-        harness="example",
+        harness=HARNESS,
         occurred_at=1000.0,
         terminal_window_id=None,
         harness_process_id=None,
@@ -185,7 +187,7 @@ def test_a_read_only_database_never_creates_the_file(tmp_path):
 
 def test_a_failed_write_rolls_the_whole_transaction_back(main):
     sessions = SqliteSessionRepository(main)
-    sessions.save("example", a_session())
+    sessions.save(HARNESS, a_session())
     with pytest.raises(RuntimeError), main.write() as connection:
         connection.execute("DELETE FROM sessions")
         raise RuntimeError("boom")
@@ -197,8 +199,8 @@ def test_a_failed_write_rolls_the_whole_transaction_back(main):
 
 def test_a_session_upsert_writes_identity_once_and_refreshes_the_live_columns(main):
     sessions = SqliteSessionRepository(main)
-    sessions.save("example", a_session())
-    sessions.save("example", a_session(terminal_window_id=WindowId("7"), harness_process_id=42))
+    sessions.save(HARNESS, a_session())
+    sessions.save(HARNESS, a_session(terminal_window_id=WindowId("7"), harness_process_id=42))
     stored = sessions.find(SESSION)
     assert stored is not None
     assert (stored.terminal_window_id, stored.harness_process_id) == ("7", 42)
@@ -209,7 +211,7 @@ def test_a_finished_session_leaves_the_watchable_set(main):
     sessions = SqliteSessionRepository(main)
     canonical = SqliteCanonicalEventRepository(main)
     raw_events = SqliteRawEventRepository(main)
-    sessions.save("example", a_session())
+    sessions.save(HARNESS, a_session())
     assert [session.session_id for session in sessions.watchable()] == [SESSION]
 
     raw_events.record([a_raw_event()])
@@ -219,7 +221,7 @@ def test_a_finished_session_leaves_the_watchable_set(main):
         actor_id=ACTOR,
         turn_id=None,
         parent_actor_id=None,
-        harness="example",
+        harness=HARNESS,
         occurred_at=1001.0,
         terminal_window_id=None,
         harness_process_id=None,
@@ -253,7 +255,7 @@ def test_resume_positions_come_back_for_every_source_in_one_call(main):
     raw_events.record([a_raw_event("raw-one", "1")])
     second = RawEvent(
         raw_event_id=RawEventId("raw-two"),
-        harness="example",
+        harness=HARNESS,
         source_type="hook",
         source_name="source",
         source_position="9",
@@ -339,7 +341,7 @@ def test_the_reaction_loops_page_walks_every_session_in_commit_order(main):
                 actor_id=ACTOR,
                 turn_id=None,
                 parent_actor_id=None,
-                harness="example",
+                harness=HARNESS,
                 occurred_at=1000.0 + index,
                 terminal_window_id=None,
                 harness_process_id=None,
@@ -408,7 +410,7 @@ def a_following(
     return ShellOutputFollowing(
         session_id=SESSION,
         shell_id=ShellId("op-one"),
-        harness="example",
+        harness=HARNESS,
         actor_id=ACTOR,
         parent_actor_id=None,
         source_path="/tmp/output",
@@ -454,7 +456,7 @@ def test_expiry_returns_what_it_removed_so_the_caller_unlinks(main):
 # test could pass a string where a Literal belongs and nothing would say so.
 A_SESSION = SessionFacts(
     session_id=SESSION,
-    harness="example",
+    harness=HARNESS,
     state="running",
     working_directory="/work",
     started_at=1.0,
@@ -714,8 +716,8 @@ def test_a_stale_new_session_draft_is_rejected_and_the_map_is_pruned(main):
 def test_new_session_preferences_round_trip(main):
     new_sessions = SqliteNewSessionRepository(main)
     assert new_sessions.preferences() is None
-    new_sessions.save_preferences(NewSessionPreferences("/project", "example", "opus", "high"))
-    assert new_sessions.preferences() == NewSessionPreferences("/project", "example", "opus", "high")
+    new_sessions.save_preferences(NewSessionPreferences("/project", HARNESS, "opus", "high"))
+    assert new_sessions.preferences() == NewSessionPreferences("/project", HARNESS, "opus", "high")
 
 
 def test_task_dismissals_store_the_id_set_and_prune_by_session(main):
@@ -776,7 +778,7 @@ def test_a_usage_snapshot_replaces_its_windows(main):
     usage = SqliteAccountUsageRepository(main)
     usage.record(
         AccountUsageSnapshot(
-            "example",
+            HARNESS,
             "account-one",
             "One",
             10.0,
@@ -785,7 +787,7 @@ def test_a_usage_snapshot_replaces_its_windows(main):
     )
     usage.record(
         AccountUsageSnapshot(
-            "example",
+            HARNESS,
             "account-one",
             "One",
             20.0,
@@ -800,7 +802,7 @@ def test_a_usage_snapshot_replaces_its_windows(main):
 
 def test_an_account_less_snapshot_round_trips_as_none(main):
     usage = SqliteAccountUsageRepository(main)
-    usage.record(AccountUsageSnapshot("example", None, "default", 1.0, ()))
+    usage.record(AccountUsageSnapshot(HARNESS, None, "default", 1.0, ()))
     assert usage.snapshots()[0].account_id is None
 
 

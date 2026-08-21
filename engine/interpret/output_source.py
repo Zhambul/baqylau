@@ -18,7 +18,7 @@ import hashlib
 import os
 import time
 
-from domain.ids import RawEventId, SessionId, ShellId
+from domain.ids import HarnessName, RawEventId, SessionId, ShellId
 from domain.shells import ShellOutputFollowing
 from harness.contract import HarnessRawEventSource
 from harness.models import RawEvent
@@ -32,7 +32,7 @@ FINISHED_POSITION = "finished"
 
 
 def shell_output_source_identity(
-    harness: str, session_id: SessionId, shell_id: ShellId
+    harness: HarnessName, session_id: SessionId, shell_id: ShellId
 ) -> str:
     return f"{harness}:shell_output:{session_id}:{shell_id}"
 

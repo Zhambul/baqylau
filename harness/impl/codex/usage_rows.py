@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+from domain.ids import HarnessName
 from harness.contract import HarnessUsage
 from harness.impl.codex import usage as native_usage
 from repository.contract.usage import AccountUsageRepository
 from harness.models import UsageRow, UsageWindow
 
+HARNESS = HarnessName("codex")
 WINDOW_LABELS = {300: "5h", 10080: "7d"}
 
 
@@ -35,7 +37,7 @@ class CodexUsage(HarnessUsage):
             for window in rate_limits["windows"]
         )
         return (UsageRow(
-            harness="codex",
+            harness=HARNESS,
             account_id=None,
             display_name=f"codex · {plan}" if plan else "codex",
             switchable=False,

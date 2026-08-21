@@ -69,6 +69,7 @@ from domain.ids import (
     AssignmentId,
     AttentionId,
     CanonicalEventId,
+    HarnessName,
     MessageId,
     RawEventId,
     SessionId,
@@ -133,7 +134,7 @@ def committed(
         actor_id=actor_id,
         turn_id=turn_id,
         parent_actor_id=parent_actor_id,
-        harness="example",
+        harness=HarnessName("example"),
         occurred_at=occurred_at,
         terminal_window_id=None,
         harness_process_id=None,
@@ -881,7 +882,7 @@ def _record(database, events, payloads) -> None:
     for cursor, payload in enumerate(payloads, start=1):
         raw_event = RawEvent(
             raw_event_id=RawEventId(f"raw-{cursor}"),
-            harness="example",
+            harness=HarnessName("example"),
             source_type="fixture",
             source_name="fixture.jsonl",
             source_position=str(cursor),

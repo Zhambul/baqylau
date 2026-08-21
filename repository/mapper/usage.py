@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+from domain.ids import HarnessName
 from harness.models import AccountUsageSnapshot, UsageWindowSample
 from repository.model.usage import AccountUsageSnapshotRow, AccountUsageWindowRow
 from repository.model.sql import SqlValues
@@ -23,7 +24,7 @@ def account_usage_snapshot(
     windows: tuple[AccountUsageWindowRow, ...],
 ) -> AccountUsageSnapshot:
     return AccountUsageSnapshot(
-        harness=account_usage_snapshot_row.harness,
+        harness=HarnessName(account_usage_snapshot_row.harness),
         account_id=account_usage_snapshot_row.account_id or None,
         display_name=account_usage_snapshot_row.display_name,
         captured_at=account_usage_snapshot_row.captured_at,

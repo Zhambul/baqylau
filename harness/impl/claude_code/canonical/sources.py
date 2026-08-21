@@ -9,11 +9,13 @@ import os
 import time
 from typing import Literal
 
-from domain.ids import ActorId, RawEventId
+from domain.ids import ActorId, HarnessName, RawEventId
 from harness.contract import HarnessRawEventSource, HarnessRawEventSources
 from harness.impl.claude_code import model
 from harness.impl.claude_code.canonical import transcript
 from harness.models import RawEvent, RawEventSourceContext, Session
+
+HARNESS = HarnessName("claude_code")
 
 
 class ClaudeTranscriptRawEventSource(HarnessRawEventSource):
@@ -57,7 +59,7 @@ class ClaudeTranscriptRawEventSource(HarnessRawEventSource):
                 actor_id, parent_actor_id = self._actor_context(line)
                 raw_events.append(RawEvent(
                     raw_event_id=RawEventId(f"{self.source_identity}:{line_position}"),
-                    harness="claude_code",
+                    harness=HARNESS,
                     source_type=(f"{self.actor_role}_transcript" if self.actor_role else "transcript"),
                     source_name=self.source_path,
                     source_position=str(line_position),
@@ -134,7 +136,7 @@ class ClaudeTaskRawEventSource(HarnessRawEventSource):
             digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
             raw_events.append(RawEvent(
                 raw_event_id=RawEventId(f"{self.source_identity}:{task['id']}:{digest}"),
-                harness="claude_code",
+                harness=HARNESS,
                 source_type="tasks",
                 source_name=self.task_directory,
                 source_position=f"{task['id']}:{digest}",
@@ -159,7 +161,7 @@ class ClaudeTaskRawEventSource(HarnessRawEventSource):
         revision = hashlib.sha256(f"{after_position or ''}::{snapshot_digest}".encode("utf-8")).hexdigest()
         raw_events.append(RawEvent(
             raw_event_id=RawEventId(f"{self.source_identity}:list:{revision}"),
-            harness="claude_code",
+            harness=HARNESS,
             source_type="task_list",
             source_name=self.task_directory,
             source_position=position,

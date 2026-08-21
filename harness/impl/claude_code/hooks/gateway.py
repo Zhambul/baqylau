@@ -20,12 +20,12 @@ from harness.models import (
     RawEventSourceContext,
     output_location_raw_event,
 )
-from domain.ids import ActorId, RawEventId, SessionId
+from domain.ids import ActorId, HarnessName, RawEventId, SessionId
 from harness.impl.claude_code.hooks import foreground
 from harness.impl.claude_code import account, model
 from repository.mapper.documents import encode_document
 
-HARNESS = "claude_code"
+HARNESS = HarnessName("claude_code")
 CLI_PROCESS_NAME = "claude"
 
 

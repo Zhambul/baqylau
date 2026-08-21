@@ -73,6 +73,7 @@ from domain.events import (
     WorktreeChanged,
 )
 from engine.sessiondata.naming import ModelNaming
+from domain.ids import HarnessName
 from domain.values import Outcome, TextContent, content_text
 from engine.sessiondata.contract import SessionEntryWriter
 
@@ -123,7 +124,7 @@ def _summary(event_payload: EventPayload) -> str | None:
     return None
 
 
-def _body(event_payload: EventPayload, harness: str, model_naming: ModelNaming) -> EntryBody | None:
+def _body(event_payload: EventPayload, harness: HarnessName, model_naming: ModelNaming) -> EntryBody | None:
     if isinstance(event_payload, TurnStarted):
         return TurnStartedBody()
     if isinstance(event_payload, TurnFinished):
