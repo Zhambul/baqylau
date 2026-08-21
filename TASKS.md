@@ -11,6 +11,13 @@ Bug 8 could NOT be reproduced at HEAD: every expand path was verified in
 a real Chromium, and a new test clicks a real block open and closed. The
 report stays open until the owner retries after a hard reload; if it
 returns, we need the session id, the entry type, and the browser console.
+Audit follow-ups (owner ordered): (a) frontend tripwires — agent running
+(feed.block.toggle.fail, feed.block.unbound, global onerror net);
+(b) daemon path — fold-time check: a body-carrying entry type folded with
+an empty body writes an audit errors row naming session, entry id, entry
+type and source event. Route exceptions and reaction steps are ALREADY
+audited (api/app.py:120, engine/react/loop.py); the empty-body shape is
+the one gap. Starts when an agent slot frees.
 
 ## Owner decisions, recorded 2026-08-21
 
