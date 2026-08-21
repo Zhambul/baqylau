@@ -200,7 +200,11 @@ function hostChoices(kind) {
     return Array.isArray(list) ? list.map(v => [v, v]) : [];
   }
   const list = Array.isArray(meta[kind + "_choices"]) ? meta[kind + "_choices"] : null;
-  return list ? list.map(v => [v, v]) : [];
+  if (!list) return [];
+  // the model rows show the ONE display name; the VALUE stays the alias the
+  // harness's /model command takes
+  const labels = (kind === "model" && meta.model_labels) || {};
+  return list.map(v => [v, labels[v] || v]);
 }
 
 function closeQuickMenu() {

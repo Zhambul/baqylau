@@ -59,6 +59,7 @@ from domain.sessiondata import (
 )
 from domain.values import FileAction
 from engine.sessiondata.contract import AggregateState, SessionDataWriter
+from engine.sessiondata.naming import ModelNaming
 
 # Which tool name a file access counts as on the scoreboard. A file fact has no
 # tool of its own — every harness spells the tools differently — so the ACTION
@@ -74,6 +75,9 @@ FILE_TOOLS: dict[FileAction, str] = {
 
 class ActorWriter(SessionDataWriter):
     """Who the actors are: their birth, their names, and whether they are done."""
+
+    def __init__(self, model_naming: ModelNaming | None = None) -> None:
+        self.model_naming = model_naming or ModelNaming()
 
     def write(self, canonical_event: CommittedEvent, state: AggregateState) -> AggregateState:
         event = canonical_event.event
@@ -110,7 +114,11 @@ class ActorWriter(SessionDataWriter):
         if isinstance(payload, ActorAssignmentStarted):
             return state.with_actor(replace(actor, state="running", finished_at=None))
         if isinstance(payload, ModelChanged):
-            return state.with_actor(replace(actor, model=payload.current))
+            # The display settles HERE, through the harness's one namer, so an
+            # unrefined alias ("sonnet") and its later native id show the same
+            # name — and a rebuild re-settles history too.
+            named = self.model_naming.named(event.harness, payload.current)
+            return state.with_actor(replace(actor, model=named))
         if isinstance(payload, EffortChanged):
             return state.with_actor(replace(actor, effort=payload.current))
         return state

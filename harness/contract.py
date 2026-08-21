@@ -15,8 +15,10 @@ form.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Callable
 from typing import Mapping, Protocol
 
+from domain.values import ModelReference
 from harness.models.catalog import HarnessCatalogSnapshot, QueryContext
 from harness.models.controls import (
     ControlContext,
@@ -206,5 +208,9 @@ class HarnessPlugin:
     controller: HarnessController | None = None
     launcher: HarnessLauncher | None = None
     catalog: HarnessCatalog | None = None
+    # THE display name of one of this harness's models — the single owner the
+    # catalog, the actor rows and the feed entries all answer through. None
+    # means the honest default: the display the source gave, or the native id.
+    model_display: Callable[[ModelReference], str] | None = None
     usage: HarnessUsage | None = None
     terminal_probe: HarnessTerminalProbe | None = None

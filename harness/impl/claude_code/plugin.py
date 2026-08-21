@@ -7,6 +7,7 @@ from harness.impl.claude_code.canonical.translator import ClaudeCanonicalTransla
 from harness.impl.claude_code.canonical.sources import ClaudeRawEventSources
 from harness.impl.claude_code.hooks.gateway import CLI_PROCESS_NAME, ClaudeHookGateway
 from harness.impl.claude_code.otel.gateway import ClaudeTelemetryGateway
+from harness.impl.claude_code import model
 from harness.impl.claude_code.catalog import ClaudeCodeCatalog
 from harness.impl.claude_code.controls.controller import controller
 from harness.impl.claude_code.launcher import ClaudeCodeLauncher
@@ -30,7 +31,14 @@ EFFORTS = tuple(
     EffortOption(effort, effort, effort == DEFAULT_EFFORT) for effort in EFFORT_VALUES
 )
 MODELS = tuple(
-    ModelOption(model_id, model_id, model_id == DEFAULT_MODEL_ID, EFFORTS)
+    # value = the alias the harness's /model takes; label = the ONE display
+    # name (model.ALIAS_DISPLAY), so the picker says what the actor row says.
+    ModelOption(
+        model_id,
+        model.ALIAS_DISPLAY.get(model_id, model_id),
+        model_id == DEFAULT_MODEL_ID,
+        EFFORTS,
+    )
     for model_id in MODEL_IDS
 )
 REWIND_MODES = tuple(
@@ -63,6 +71,7 @@ plugin = HarnessPlugin(
     reactors=(ClaudeOtelCanonicalEventReactor(),),
     controller=controller,
     catalog=ClaudeCodeCatalog(),
+    model_display=model.display_model,
     usage=usage_reader,
     launcher=ClaudeCodeLauncher(),
     terminal_probe=ClaudeCodeTerminalProbe(),

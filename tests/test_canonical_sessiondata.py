@@ -334,6 +334,37 @@ def test_a_model_with_no_display_name_still_records_its_native_id():
     assert state.actor(LEAD).model.native_id == "gpt-5.4"
 
 
+def test_the_harness_namer_settles_the_display_at_fold_time():
+    """ONE model name everywhere: an alias-only reference (the launch, before
+    the harness reports the resolved id) must already show the name the
+    resolved id will show — the exact bug where one actor said "sonnet" while
+    its refined neighbour said "sonnet-5"."""
+    from engine.sessiondata.naming import ModelNaming
+    from harness.impl.claude_code.model import display_model
+
+    writer = ActorWriter(ModelNaming({"example": display_model}))
+    state = AggregateState()
+    for payload in (
+        *alive(),
+        ModelChanged(None, ModelReference("sonnet", None, "sonnet"), "selected"),
+    ):
+        state = writer.write(committed(payload), state)
+    assert state.actor(LEAD).model.display_name == "sonnet-5"
+
+
+def test_the_claude_namer_speaks_one_vocabulary():
+    from harness.impl.claude_code.model import display_model
+    from harness.impl.claude_code.plugin import MODELS
+
+    assert display_model(ModelReference("claude-sonnet-5", None, "sonnet")) == "sonnet-5"
+    assert display_model(ModelReference("sonnet", None, "sonnet")) == "sonnet-5"
+    assert display_model(ModelReference("claude-haiku-4-5-20251001", None, None)) == "haiku-4.5"
+    # the PICKER offers the same strings, keyed by the alias the harness takes
+    assert {option.model_id: option.display_name for option in MODELS} == {
+        "fable": "fable-5", "opus": "opus-5", "sonnet": "sonnet-5", "haiku": "haiku-4.5",
+    }
+
+
 def test_nothing_but_the_actor_writer_invents_an_actor():
     """A fact about an actor nobody announced is a fact about a name we cannot
     describe; the row waits for the announcement rather than guessing."""

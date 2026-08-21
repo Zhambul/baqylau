@@ -24,6 +24,7 @@ import time
 from typing import Any
 
 from core import env as EV
+from domain.values import ModelReference
 
 # How much of a transcript's tail session_model() scans for the last assistant
 # turn: the latest turn is near the end, so a bounded read stays cheap even on
@@ -199,6 +200,30 @@ def short_model(model: str | None) -> str:
 # deliberately NOT a rung: the floor is Sonnet. The ONE owner of the
 # model-downgrade order (docs/styleguide.md single-owner table).
 MODEL_LADDER = ("fable", "opus", "sonnet")
+
+
+# The picker aliases -> the generation they mean TODAY. The same drift profile
+# as MODEL_LADDER above (a new generation updates both), and the reason it is a
+# table here rather than knowledge scattered across the catalog, the writers
+# and the frontend: display_model() below is the ONE answer to "what is this
+# model called", and every surface asks it.
+ALIAS_DISPLAY = {
+    "fable": "fable-5",
+    "opus": "opus-5",
+    "sonnet": "sonnet-5",
+    "haiku": "haiku-4.5",
+}
+
+
+def display_model(model_reference: ModelReference) -> str:
+    """The one name a person sees for this model, on every surface.
+
+    A resolved id shortens ("claude-sonnet-5" -> "sonnet-5"). A bare picker
+    alias ("sonnet") names the generation it launches today, so an actor whose
+    harness has not yet reported the resolved id still shows the same name it
+    will show after the report."""
+    short = short_model(model_reference.native_id)
+    return ALIAS_DISPLAY.get(short, short) or model_reference.native_id
 
 
 def family(model: str | None) -> str | None:

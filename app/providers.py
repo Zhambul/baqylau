@@ -44,6 +44,7 @@ from engine.sessiondata.actors import (
     StatusWriter,
     UsageWriter,
 )
+from engine.sessiondata.naming import ModelNaming
 from engine.sessiondata.contract import (
     AppliedActorListener,
     SessionDataWriter,
@@ -589,15 +590,29 @@ Reactions = Annotated[tuple[CanonicalEventReaction, ...], Depends(reactions)]
 
 
 @singleton
-def entry_writer() -> SessionEntryWriter:
-    return EntryWriter()
+def model_naming(harness_registry: Registry) -> ModelNaming:
+    """One namer per harness, for the writers: the reason a model shows the
+    SAME name in the picker, on the actor row and in the feed."""
+    return ModelNaming({
+        plugin.info.name: plugin.model_display
+        for plugin in harness_registry.plugins()
+        if plugin.model_display is not None
+    })
+
+
+Naming = Annotated[ModelNaming, Depends(model_naming)]
+
+
+@singleton
+def entry_writer(naming: Naming) -> SessionEntryWriter:
+    return EntryWriter(naming)
 
 
 EntryWrites = Annotated[SessionEntryWriter, Depends(entry_writer)]
 
 
 @singleton
-def session_data_writers() -> tuple[SessionDataWriter, ...]:
+def session_data_writers(naming: Naming) -> tuple[SessionDataWriter, ...]:
     """The aggregate's writers, in the order they fold.
 
     Order matters in exactly one place: `ActorWriter` is the only one that
@@ -609,7 +624,7 @@ def session_data_writers() -> tuple[SessionDataWriter, ...]:
         SessionWriter(),
         GoalWriter(),
         TaskWriter(),
-        ActorWriter(),
+        ActorWriter(naming),
         StatusWriter(),
         UsageWriter(),
         ContextWriter(),

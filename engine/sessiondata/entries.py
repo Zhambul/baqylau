@@ -72,6 +72,7 @@ from domain.events import (
     WorktreeChanged,
 )
 from domain.records import CommittedEvent
+from engine.sessiondata.naming import ModelNaming
 from domain.values import Outcome, TextContent, content_text
 from engine.sessiondata.contract import SessionEntryWriter
 
@@ -90,9 +91,12 @@ def file_state(outcome: Outcome) -> FileState:
 
 
 class EntryWriter(SessionEntryWriter):
+    def __init__(self, model_naming: ModelNaming | None = None) -> None:
+        self.model_naming = model_naming or ModelNaming()
+
     def entry(self, canonical_event: CommittedEvent) -> SessionEntry | None:
         event = canonical_event.event
-        body = _body(event.payload)
+        body = _body(event.payload, event.harness, self.model_naming)
         if body is None:
             return None
         return SessionEntry(
@@ -119,7 +123,7 @@ def _summary(payload: EventPayload) -> str | None:
     return None
 
 
-def _body(payload: EventPayload) -> EntryBody | None:
+def _body(payload: EventPayload, harness: str, model_naming: ModelNaming) -> EntryBody | None:
     if isinstance(payload, TurnStarted):
         return TurnStartedBody()
     if isinstance(payload, TurnFinished):
@@ -206,8 +210,8 @@ def _body(payload: EventPayload) -> EntryBody | None:
         if not _is_a_switch(payload):
             return None
         return ModelChangeBody(
-            _model_name(payload.current.display_name, payload.current.native_id),
-            _model_name(payload.previous.display_name, payload.previous.native_id)
+            model_naming.display(harness, payload.current),
+            model_naming.display(harness, payload.previous)
             if payload.previous is not None
             else None,
             payload.reason == "automatic_fallback",
@@ -255,8 +259,4 @@ def _diff(payload: FileAccessed) -> TextContent:
     return TextContent(payload.unified_diff or "", "text/plain")
 
 
-def _model_name(display_name: str | None, native_id: str) -> str:
-    """One display string, which is all a model is to a reader. The native id is
-    the fallback because a model nobody named is still better shown by its id
-    than not at all."""
-    return display_name or native_id
+

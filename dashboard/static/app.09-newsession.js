@@ -849,8 +849,10 @@ const hostList = () => (Array.isArray(S.hosts) ? S.hosts : []);
 const hostRow = (t) => hostList().find(h => h && h.name === t) || null;
 // one host's ✦/✧ options as dropdown() pairs — [] for a host that declares none
 const hostOpts = (t, kind) => {
-  const list = (hostRow(t) || {})[kind + "_choices"];
-  return Array.isArray(list) ? list.map(v => [v, v]) : [];
+  const row = hostRow(t) || {};
+  const list = row[kind + "_choices"];
+  const labels = (kind === "model" && row.model_labels) || {};
+  return Array.isArray(list) ? list.map(v => [v, labels[v] || v]) : [];
 };
 // the tool a launch that names none picks: the registry's own DEFAULT host (the
 // `default` flag), so this page never spells a host name to mean "the usual one"
@@ -874,6 +876,11 @@ function canonicalHostRows(harnesses) {
       launchable: !!harness.launchable,
       default: !!harness.default_for_launch,
       model_choices: models.map(option => option.model_id),
+      // id -> the ONE display name (the same string the actor rows show), so
+      // the launch picker never says "sonnet" where the session says "sonnet-5"
+      model_labels: Object.fromEntries(
+        models.map(option => [option.model_id, option.display_name || option.model_id])
+      ),
       effort_choices: efforts.map(option => option.value),
       model_efforts: Object.fromEntries(
         models.map(option => [
