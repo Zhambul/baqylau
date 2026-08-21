@@ -21,6 +21,10 @@ the one gap. Starts when an agent slot frees.
 
 ## Owner decisions, recorded 2026-08-21
 
+- EVERY wave ends with the e2e suites and their failures FIXED before the
+  wave counts as done: `make test`, the kitty smoke test
+  (CLAUDE_E2E_KITTY=1, marker `kitty`), and the live `make test-drift`.
+
 - Order: bugs 5–8 first, then the 4/4b/4c batch.
 - Item 4 extra fields: FAIL on any unknown field in a foreign record
   (strictest; a vendor update stops translation with `translation_failed`
