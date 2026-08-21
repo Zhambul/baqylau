@@ -46,7 +46,10 @@ function showSession(sessionId, tab, agent) {
               // flash the wrong density. `viewOpen` holds the runs the user
               // expanded, `viewSeq` names items, `viewFill` bounds the auto-load
               view: VIEW_DEFAULT, viewOpen: new Set(), viewSeq: 0,
-              viewTimer: null, viewFill: 0 };
+              viewTimer: null, viewFill: 0,
+              // entry ids already reported by reportUnboundBlocks — so a stuck
+              // block says so ONCE, not on every frame it stays stuck.
+              unboundReported: new Set() };
     loadCanonicalSession(sessionId);
   } else if ((S.sessionView.agent || "") !== agent) {
     // SCOPE CHANGE on the same session (into an agent, between agents, or back
@@ -78,6 +81,7 @@ function resetStream() {
   // and a fold pointing at a removed node would never repaint again.
   sessionView.shells = new Map();
   sessionView.attentionEntries = [];
+  sessionView.unboundReported = new Set();
   sessionView.stream.textContent = "";
 }
 
@@ -654,7 +658,7 @@ function entryNode(entry, descriptor) {
   if (node.classList.contains("blk"))
     node.dataset.open = S.sessionView.view === "verbose" ? "1" : "0";
   bindEntryContent(node);
-  bindDashboardBlock(node);
+  bindDashboardBlock(node, entry);
   return node;
 }
 
@@ -713,15 +717,44 @@ document.addEventListener("click", event => {
     .catch(() => toast("ask", "copy failed", "try again"));
 });
 
-function bindDashboardBlock(node) {
+// A silent click is a bug with no trace: the header LOOKED clickable and
+// nothing happened. Every way that can occur is loud instead — a distinct
+// code per way, so the audit says WHICH failure it was, not just that one
+// happened. A working click reports NOTHING: the noise budget is anomalies
+// only, and readers reading a normal session cannot make that ambiguous.
+function bindDashboardBlock(node, entry) {
   if (!node.classList.contains("blk")) return;
   const header = node.querySelector(".bhead");
   const body = node.querySelector(".bbody");
   if (!header || !body) throw new Error("dashboard block is missing its header or body");
   header.onclick = event => {
-    if (event.target.closest("a") || !body.childElementCount) return;
-    node.dataset.userset = "1";
-    node.dataset.open = node.dataset.open === "1" ? "0" : "1";
+    try {
+      if (event.target.closest("a")) return;
+      // The body is re-read HERE, not the one closed over at bind time: some
+      // other pass may have replaced `.bbody`'s content since (a live chunk
+      // repaint), and a click acting on a DETACHED node would flip `data-open`
+      // while the reader's own screen never moves.
+      const liveBody = node.querySelector(".bbody");
+      if (!liveBody) {
+        failLoudly(S.currentSessionId, "feed.block.toggle.no_body",
+                   { entry_id: entry.entry_id, entry_type: entry.type });
+        return;
+      }
+      if (!liveBody.childElementCount) return;   // nothing to reveal — not a failure
+      const before = node.dataset.open;
+      const wanted = before === "1" ? "0" : "1";
+      node.dataset.userset = "1";
+      node.dataset.open = wanted;
+      if (node.dataset.open !== wanted) {
+        failLoudly(S.currentSessionId, "feed.block.toggle.stuck",
+                   { entry_id: entry.entry_id, entry_type: entry.type, from: before, wanted });
+      }
+    } catch (error) {
+      failLoudly(S.currentSessionId, "feed.block.toggle.fail", {
+        entry_id: entry.entry_id, entry_type: entry.type,
+        error: String((error && error.message) || error),
+      });
+    }
   };
 }
 // The BROWSER's half of the semantic actor-assignment order. The server orders a child's completion and the
@@ -836,6 +869,32 @@ function appendEntries(entries) {
   applyViewMode();               // re-cut the collapsed runs over the final DOM
   ensureElapsedTimer();
   updateShownCount();
+  reportUnboundBlocks(entries);
+}
+
+// The invariant a click depends on, checked once the DOM this pass drew is
+// final: an entry that painted as a collapsible block (`.blk`) has its
+// header AND body in place, with the header's click handler actually bound.
+// A miss here is a render regression, not a user mistake, so it is reported
+// under the ENTRY's own id — once, however many times this pass runs again
+// while the entry sits unfixed on screen (`unboundReported`), so a reader
+// scrolling a broken feed does not flood the audit with the same fact.
+function reportUnboundBlocks(entries) {
+  const sessionView = S.sessionView;
+  if (!sessionView) return;
+  const reported = sessionView.unboundReported
+    || (sessionView.unboundReported = new Set());
+  for (const entry of entries) {
+    if (reported.has(entry.entry_id)) continue;
+    const node = sessionView.itemNodes.get(entry.entry_id);
+    if (!node || !node.classList.contains("blk")) continue;   // not a block
+    const header = node.querySelector(".bhead");
+    const body = node.querySelector(".bbody");
+    if (header && body && typeof header.onclick === "function") continue;
+    reported.add(entry.entry_id);
+    failLoudly(S.currentSessionId, "feed.block.unbound",
+               { entry_id: entry.entry_id, entry_type: entry.type });
+  }
 }
 
 // The lazy-backlog downward path (item 3): a chunk of OLDER items (server order
@@ -860,6 +919,7 @@ function appendOlder(entries) {
   tintAgentNotes();              // history's notes carry their outcome too
   applyViewMode();
   updateShownCount();
+  reportUnboundBlocks(entries);
 }
 
 // Render a self-contained mirror snapshot into an ARBITRARY container (the

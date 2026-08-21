@@ -1,12 +1,14 @@
 // tests/jsdom/expand.js — drives the REAL block-expand click handler
-// (dashboard/static/app.05-session.js `bindDashboardBlock`) over the shared DOM
-// shim and prints one JSON verdict object, which tests/test_dashboard_dom.py
-// asserts on.
+// (dashboard/static/app.05-session.js `bindDashboardBlock`) and the render-time
+// invariant check (`reportUnboundBlocks`) over the shared DOM shim, and prints
+// one JSON verdict object, which tests/test_dashboard_dom.py asserts on.
 //
 // Why this exists: a feed block's body shows or hides through one attribute,
 // `data-open`, set by a click on its header. Nothing but a real click on the
 // real header, on a real block built by the real renderer, can tell "the click
-// works" from "the click handler was never attached".
+// works" from "the click handler was never attached" — and nothing but the
+// real audit call can tell "a broken click reports itself" from "a broken
+// click vanishes without a trace".
 //
 // Usage: node tests/jsdom/expand.js <markup.js> <entries.js> <session.js>
 // SKIPPED when `node` is absent, like every harness here (docs/testing.md).
@@ -15,6 +17,11 @@ const fs = require("fs");
 const vm = require("vm");
 
 const { El, domGlobals } = require("./domshim");
+
+// Every `failLoudly` call this run makes, in order — the one thing every
+// scenario below reads back. A real `toast`/`clog` pair would only hide what
+// code fired; the audit call itself is the fact under test.
+const loudCalls = [];
 
 const sandbox = {
   console, Date, Math, Set, Map, JSON, String, Number,
@@ -53,6 +60,9 @@ const sandbox = {
   shortSid: value => value,
   navigator: { clipboard: null },
   toast: () => {},
+  failLoudly: (sessionId, code, detail) => {
+    loudCalls.push({ sessionId, code, detail: detail || {} });
+  },
   S: null,
 };
 sandbox.window = sandbox;
@@ -85,10 +95,12 @@ function scene() {
     viewFill: 0, oldest: 0, itemNodes: new Map(), meta: {},
     loadingOlder: false, moreEl: null, agents: [], queue: [],
     shells: new Map(), actorRows: [], actorsById: {}, attentionEntries: [],
+    unboundReported: new Set(),
   } };
   return sandbox.S.sessionView;
 }
 
+/* ---------- 1. the ordinary click: opens, closes, reports nothing --------- */
 const sessionView = scene();
 sandbox.appendEntries(shell());
 const block = sessionView.stream.children.find(child => child.classList.contains("blk"));
@@ -98,6 +110,26 @@ header.onclick({ target: header });
 const afterFirstClick = block.dataset.open;
 header.onclick({ target: header });
 const afterSecondClick = block.dataset.open;
+const normalClickLoudCalls = loudCalls.slice();
+
+/* ---------- 2. a throwing click reports feed.block.toggle.fail ------------ */
+loudCalls.length = 0;
+const throwingEvent = { get target() { throw new Error("boom"); } };
+header.onclick(throwingEvent);
+const toggleFailure = loudCalls[0] || null;
+
+/* ---------- 3. a block missing its body reports feed.block.unbound, once - */
+loudCalls.length = 0;
+const corruptScene = scene();
+sandbox.appendEntries(shell());
+const corruptBlock = corruptScene.stream.children.find(c => c.classList.contains("blk"));
+corruptBlock.querySelector(".bbody").remove();   // simulate the render regression
+const finishEntry = { entry_id: "finish", type: "shell_finished" };
+sandbox.reportUnboundBlocks([finishEntry]);
+const unboundFirstPass = loudCalls.slice();
+loudCalls.length = 0;                             // isolate the SECOND call's own report
+sandbox.reportUnboundBlocks([finishEntry]);       // same entry again: no repeat
+const unboundSecondPass = loudCalls.slice();
 
 process.stdout.write(JSON.stringify({
   hasHeader: !!header,
@@ -105,4 +137,8 @@ process.stdout.write(JSON.stringify({
   before,
   afterFirstClick,
   afterSecondClick,
+  normalClickLoudCalls,
+  toggleFailure,
+  unboundFirstPass,
+  unboundSecondPass,
 }));
