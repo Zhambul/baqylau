@@ -40,6 +40,7 @@ from domain.entries import (
     SkillStartedBody,
     TurnFinishedBody,
     TurnStartedBody,
+    TurnState,
     WebBody,
     WorktreeBody,
 )
@@ -74,7 +75,7 @@ from domain.events import (
 )
 from engine.sessiondata.naming import ModelNaming
 from domain.ids import HarnessName
-from domain.values import Outcome, TextContent, content_text
+from domain.values import MediaType, Outcome, TextContent, content_text
 from engine.sessiondata.contract import SessionEntryWriter
 
 
@@ -82,13 +83,13 @@ def run_state(outcome: Outcome) -> RunState:
     """A feed shows three ends, not five. `rejected` is a refusal to run, which
     is a failure to whoever was waiting for it, and `unknown` is the honest
     answer to "did it work?" only where somebody can act on it — nobody can."""
-    if outcome == "cancelled":
-        return "cancelled"
-    return "succeeded" if outcome == "succeeded" else "failed"
+    if outcome == Outcome.CANCELLED:
+        return RunState.CANCELLED
+    return RunState.SUCCEEDED if outcome == Outcome.SUCCEEDED else RunState.FAILED
 
 
 def file_state(outcome: Outcome) -> FileState:
-    return "succeeded" if outcome == "succeeded" else "failed"
+    return FileState.SUCCEEDED if outcome == Outcome.SUCCEEDED else FileState.FAILED
 
 
 class EntryWriter(SessionEntryWriter):
@@ -128,9 +129,9 @@ def _body(event_payload: EventPayload, harness: HarnessName, model_naming: Model
     if isinstance(event_payload, TurnStarted):
         return TurnStartedBody()
     if isinstance(event_payload, TurnFinished):
-        return TurnFinishedBody("finished")
+        return TurnFinishedBody(TurnState.FINISHED)
     if isinstance(event_payload, TurnAborted):
-        return TurnFinishedBody("aborted")
+        return TurnFinishedBody(TurnState.ABORTED)
     if isinstance(event_payload, MessageCreated):
         return MessageBody(
             event_payload.message_id,
@@ -262,7 +263,7 @@ def _diff(file_accessed: FileAccessed) -> TextContent:
     """A diff is text somebody reads, so it travels as content rather than as a
     field of its own — which is what lets the entry body have ONE content field
     instead of two that are never both filled."""
-    return TextContent(file_accessed.unified_diff or "", "text/plain")
+    return TextContent(file_accessed.unified_diff or "", MediaType.TEXT_PLAIN)
 
 
 

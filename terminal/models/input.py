@@ -3,16 +3,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from enum import StrEnum
 
 from terminal.models.values import WindowId
+
+
+class TextSubmitMode(StrEnum):
+    TYPE = "type"
+    PASTE = "paste"
 
 
 @dataclass(frozen=True)
 class TextSubmitRequest:
     """Deliver `text` to a window, followed by Enter.
 
-    `mode="paste"` delivers it as ONE atomic bracketed paste. A typed delivery
+    `mode=PASTE` delivers it as ONE atomic bracketed paste. A typed delivery
     is read as fast individual keystrokes, and a TUI whose input just changed
     state (right after a cancel cleared its draft) drops the leading bytes; a
     paste is read whole. The Enter stays a separate keystroke either way, so it
@@ -21,7 +26,7 @@ class TextSubmitRequest:
 
     window_id: WindowId
     text: str
-    mode: Literal["type", "paste"]
+    mode: TextSubmitMode
 
 
 @dataclass(frozen=True)

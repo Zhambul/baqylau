@@ -55,9 +55,11 @@ from domain.sessiondata import (
     ActorContext,
     ActorFacts,
     ActorStatistics,
+    ActorStatus,
     ActorUsage,
+    LifecycleState,
 )
-from domain.values import FileAction
+from domain.values import ExecutionMode, FileAction, MessagePhase, MessageRole, Outcome, WorktreeAction
 from engine.sessiondata.contract import AggregateState, SessionDataWriter
 from engine.sessiondata.naming import ModelNaming
 
@@ -65,11 +67,11 @@ from engine.sessiondata.naming import ModelNaming
 # tool of its own — every harness spells the tools differently — so the ACTION
 # is the name, which is what a reader is counting anyway.
 FILE_TOOLS: dict[FileAction, str] = {
-    "read": "Read",
-    "created": "Write",
-    "updated": "Edit",
-    "deleted": "Delete",
-    "renamed": "Move",
+    FileAction.READ: "Read",
+    FileAction.CREATED: "Write",
+    FileAction.UPDATED: "Edit",
+    FileAction.DELETED: "Delete",
+    FileAction.RENAMED: "Move",
 }
 
 
@@ -91,7 +93,7 @@ class ActorWriter(SessionDataWriter):
                 actor_id=event.actor_id,
                 role=payload.role,
                 name=payload.name,
-                state="running",
+                state=LifecycleState.RUNNING,
                 parent_actor_id=event.parent_actor_id,
                 started_at=canonical_event.happened_at,
             )
@@ -100,7 +102,7 @@ class ActorWriter(SessionDataWriter):
             return aggregate_state.with_actor(
                 born
                 if existing is None
-                else replace(existing, state="running", finished_at=None)
+                else replace(existing, state=LifecycleState.RUNNING, finished_at=None)
             )
         actor = aggregate_state.actor(event.actor_id)
         if actor is None:
@@ -111,10 +113,10 @@ class ActorWriter(SessionDataWriter):
             return aggregate_state.with_actor(replace(actor, description=payload.description))
         if isinstance(payload, (ActorFinished, ActorAssignmentFinished)):
             return aggregate_state.with_actor(
-                replace(actor, state="finished", finished_at=canonical_event.happened_at)
+                replace(actor, state=LifecycleState.FINISHED, finished_at=canonical_event.happened_at)
             )
         if isinstance(payload, ActorAssignmentStarted):
-            return aggregate_state.with_actor(replace(actor, state="running", finished_at=None))
+            return aggregate_state.with_actor(replace(actor, state=LifecycleState.RUNNING, finished_at=None))
         if isinstance(payload, ModelChanged):
             if payload.current.native_id == "<synthetic>":
                 return aggregate_state  # a machine-injected record, not a model
@@ -170,17 +172,17 @@ class StatusWriter(SessionDataWriter):
             # is what `idle` says. Both facts are here because they arrive in
             # either order and either one can be the first this actor sees: a
             # lead is born right after its session, a subagent long after.
-            return aggregate_state.with_actor(replace(actor, status="idle"))
+            return aggregate_state.with_actor(replace(actor, status=ActorStatus.IDLE))
         if isinstance(payload, TurnStarted) or _is_prompt(payload):
-            return aggregate_state.with_actor(replace(actor, status="thinking"))
+            return aggregate_state.with_actor(replace(actor, status=ActorStatus.THINKING))
         if isinstance(payload, ReasoningCreated):
-            return aggregate_state.with_actor(replace(actor, status="working"))
+            return aggregate_state.with_actor(replace(actor, status=ActorStatus.WORKING))
         if isinstance(payload, ShellStarted):
             return aggregate_state.with_actor(_shell_started(actor, payload))
         if isinstance(payload, (SkillStarted, TaskChanged, TaskListChanged)):
             # A task tool is work being done, the same as a command: this is
             # what the `task` category set before the categories dissolved.
-            return aggregate_state.with_actor(replace(actor, status="executing"))
+            return aggregate_state.with_actor(replace(actor, status=ActorStatus.EXECUTING))
         if isinstance(payload, ShellBackgrounded):
             # Background work gained, status untouched: `awaiting_background` is
             # reached at the END of a turn, not the moment a job moves.
@@ -193,7 +195,7 @@ class StatusWriter(SessionDataWriter):
             return aggregate_state.with_actor(
                 replace(
                     actor,
-                    status="awaiting_attention",
+                    status=ActorStatus.AWAITING_ATTENTION,
                     pending_attention_internal=_added(
                         actor.pending_attention_internal, payload.attention_id
                     ),
@@ -203,7 +205,7 @@ class StatusWriter(SessionDataWriter):
             return aggregate_state.with_actor(
                 replace(
                     actor,
-                    status="working",
+                    status=ActorStatus.WORKING,
                     pending_attention_internal=tuple(
                         pending
                         for pending in actor.pending_attention_internal
@@ -212,15 +214,15 @@ class StatusWriter(SessionDataWriter):
                 )
             )
         if isinstance(payload, CompactionStarted):
-            return aggregate_state.with_actor(replace(actor, status="working"))
+            return aggregate_state.with_actor(replace(actor, status=ActorStatus.WORKING))
         if _is_finished_work(payload):
             return aggregate_state.with_actor(
                 replace(
                     actor,
                     status=(
-                        "awaiting_attention"
+                        ActorStatus.AWAITING_ATTENTION
                         if actor.pending_attention_internal
-                        else "working"
+                        else ActorStatus.WORKING
                     ),
                 )
             )
@@ -229,9 +231,9 @@ class StatusWriter(SessionDataWriter):
                 replace(
                     actor,
                     status=(
-                        "awaiting_background"
+                        ActorStatus.AWAITING_BACKGROUND
                         if actor.background.running_shell_ids
-                        else "awaiting_response"
+                        else ActorStatus.AWAITING_RESPONSE
                     ),
                 )
             )
@@ -241,8 +243,8 @@ class StatusWriter(SessionDataWriter):
 def _is_prompt(event_payload: EventPayload) -> bool:
     return (
         isinstance(event_payload, MessageCreated)
-        and event_payload.role == "user"
-        and event_payload.phase == "prompt"
+        and event_payload.role == MessageRole.USER
+        and event_payload.phase == MessagePhase.PROMPT
     )
 
 
@@ -258,21 +260,21 @@ def _is_finished_work(event_payload: EventPayload) -> bool:
 
 
 def _shell_started(actor_facts: ActorFacts, shell_started: ShellStarted) -> ActorFacts:
-    if shell_started.execution == "foreground":
-        return replace(actor_facts, status="executing")
+    if shell_started.execution == ExecutionMode.FOREGROUND:
+        return replace(actor_facts, status=ActorStatus.EXECUTING)
     counted = replace(
         actor_facts.background,
         monitor_count=(
-            actor_facts.background.monitor_count + (shell_started.execution == "monitor")
+            actor_facts.background.monitor_count + (shell_started.execution == ExecutionMode.MONITOR)
         ),
         background_job_count=(
             actor_facts.background.background_job_count
-            + (shell_started.execution == "background")
+            + (shell_started.execution == ExecutionMode.BACKGROUND)
         ),
     )
     return replace(
         _with_background(replace(actor_facts, background=counted), shell_started.shell_id),
-        status="executing",
+        status=ActorStatus.EXECUTING,
     )
 
 
@@ -434,7 +436,7 @@ def _counted(actor_statistics: ActorStatistics, event_payload: EventPayload) -> 
             actor_statistics, shell_command_count=actor_statistics.shell_command_count + 1
         )
     if isinstance(event_payload, ShellFinished):
-        if event_payload.outcome == "succeeded":
+        if event_payload.outcome == Outcome.SUCCEEDED:
             return actor_statistics
         return replace(
             actor_statistics,
@@ -449,7 +451,7 @@ def _counted(actor_statistics: ActorStatistics, event_payload: EventPayload) -> 
     if isinstance(event_payload, WorktreeChanged):
         return _tool_counted(
             actor_statistics,
-            "EnterWorktree" if event_payload.action == "entered" else "ExitWorktree",
+            "EnterWorktree" if event_payload.action == WorktreeAction.ENTERED else "ExitWorktree",
         )
     if isinstance(event_payload, SkillStarted):
         return _tool_counted(actor_statistics, "Skill")

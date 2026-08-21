@@ -22,6 +22,7 @@ from domain.ids import WindowId
 from domain.values import ModelReference
 from harness.models.catalog import HarnessCatalogSnapshot, QueryContext
 from harness.models.controls import (
+    ControlAcknowledgement,
     ControlContext,
     ControlName,
     ControlOutcome,
@@ -169,7 +170,11 @@ class HarnessController:
     ) -> ControlOutcome:
         handler = self.handlers.get(request.control_name)
         if handler is None:
-            return ControlResult(request_id=request.request_id, status="rejected", reason="unsupported control")
+            return ControlResult(
+                request_id=request.request_id,
+                status=ControlAcknowledgement.REJECTED,
+                reason="unsupported control",
+            )
         return handler(request, control_context)
 
 

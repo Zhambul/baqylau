@@ -9,15 +9,22 @@ reached about one raw observation, and the outcome of writing a batch of them.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, TypeAlias
+from enum import StrEnum
 
 from domain.events import CanonicalEvent, EventPayload
 from domain.ids import CanonicalEventId, RawEventId
 
-CanonicalStorageResult: TypeAlias = Literal["accepted", "deduplicated"]
-RecordedTranslationDecision: TypeAlias = Literal[
-    "translated", "ignored_unknown", "ignored_nonsemantic", "translation_failed"
-]
+
+class CanonicalStorageResult(StrEnum):
+    ACCEPTED = "accepted"
+    DEDUPLICATED = "deduplicated"
+
+
+class RecordedTranslationDecision(StrEnum):
+    TRANSLATED = "translated"
+    IGNORED_UNKNOWN = "ignored_unknown"
+    IGNORED_NONSEMANTIC = "ignored_nonsemantic"
+    TRANSLATION_FAILED = "translation_failed"
 
 
 @dataclass(frozen=True)

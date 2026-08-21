@@ -4,9 +4,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Literal
+from enum import StrEnum
 
 from domain.ids import AccountId, HarnessName, ModelId
+
+
+class UsageWindowScope(StrEnum):
+    """What the strip lays a window out by: an `ACCOUNT` window gets its own
+    reset column, a `MODEL` one is a cap under the account window of the same
+    duration and rides in the block beside it."""
+
+    ACCOUNT = "account"
+    MODEL = "model"
 
 
 @dataclass(frozen=True)
@@ -16,7 +25,7 @@ class UsageWindow:
     used_percent: Decimal
     resets_at: float | None
     duration_minutes: int | None
-    scope: Literal["account", "model"]
+    scope: UsageWindowScope
     model_id: ModelId | None
 
 

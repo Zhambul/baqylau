@@ -4,11 +4,22 @@
 # and a reader deciding what to draw needs to see the whole of it at once. The
 # discriminator is `type` on the STORED EVENT rather than inside each body, because
 # an entry's kind is a fact about the entry, not a field of what it holds.
-from typing import Literal, TypeAlias
+from typing import TypeAlias
 
 from pydantic import BaseModel
 
 from api.common.models.values.content import ContentResponse
+from domain.entries import EntryTypeName, FileState, RunState, TurnState
+from domain.values import (
+    ExecutionMode,
+    FileAction,
+    MessagePhase,
+    MessageRole,
+    OutputMode,
+    PlanState,
+    ProgressStream,
+    WorktreeAction,
+)
 
 
 class TurnStartedBodyResponse(BaseModel):
@@ -17,13 +28,13 @@ class TurnStartedBodyResponse(BaseModel):
 
 
 class TurnFinishedBodyResponse(BaseModel):
-    state: Literal["finished", "aborted"]
+    state: TurnState
 
 
 class MessageBodyResponse(BaseModel):
     message_id: str
-    role: Literal["user", "assistant", "system", "peer", "parent"]
-    phase: Literal["prompt", "intermediate", "end_turn", "synthetic", "recap"] | None
+    role: MessageRole
+    phase: MessagePhase | None
     content: ContentResponse
     recipient_actor_id: str | None
     # The prompt this one replaced, when a harness re-parented around a discarded
@@ -39,7 +50,7 @@ class ReasoningBodyResponse(BaseModel):
 class ShellStartedBodyResponse(BaseModel):
     shell_id: str
     command: ContentResponse
-    execution: Literal["foreground", "background", "monitor"]
+    execution: ExecutionMode
 
 
 class ShellOutputBodyResponse(BaseModel):
@@ -47,8 +58,8 @@ class ShellOutputBodyResponse(BaseModel):
     stream — a bounded fold over what is on screen."""
 
     shell_id: str
-    stream: Literal["output", "error", "status"]
-    mode: Literal["append", "replace"]
+    stream: ProgressStream
+    mode: OutputMode
     content: ContentResponse
 
 
@@ -62,15 +73,15 @@ class ShellFinishedBodyResponse(BaseModel):
     replacing chunk — which is what it is."""
 
     shell_id: str
-    state: Literal["succeeded", "failed", "cancelled"]
+    state: RunState
     exit_code: int | None
     result: ContentResponse | None
 
 
 class FileBodyResponse(BaseModel):
     path: str
-    action: Literal["read", "created", "updated", "deleted", "renamed"]
-    state: Literal["succeeded", "failed"]
+    action: FileAction
+    state: FileState
     previous_path: str | None
     lines_added: int | None
     lines_removed: int | None
@@ -80,19 +91,19 @@ class FileBodyResponse(BaseModel):
 class SearchBodyResponse(BaseModel):
     tool: str
     query: ContentResponse
-    state: Literal["succeeded", "failed"]
+    state: FileState
     result: ContentResponse | None
 
 
 class WebBodyResponse(BaseModel):
     url: str | None
-    state: Literal["succeeded", "failed"]
+    state: FileState
     result: ContentResponse | None
 
 
 class WorktreeBodyResponse(BaseModel):
-    action: Literal["entered", "exited"]
-    state: Literal["succeeded", "failed"]
+    action: WorktreeAction
+    state: FileState
     arguments: ContentResponse | None
 
 
@@ -104,7 +115,7 @@ class SkillStartedBodyResponse(BaseModel):
 
 class SkillFinishedBodyResponse(BaseModel):
     skill_id: str
-    state: Literal["succeeded", "failed", "cancelled"]
+    state: RunState
     result: ContentResponse | None
 
 
@@ -149,7 +160,7 @@ class PlanProposedBodyResponse(BaseModel):
 
 class PlanResolvedBodyResponse(BaseModel):
     attention_id: str
-    state: Literal["approved", "changes_requested", "rejected"]
+    state: PlanState
     feedback: str | None
     edited: bool
 
@@ -171,7 +182,7 @@ class AssignmentStartedBodyResponse(BaseModel):
 
 class AssignmentFinishedBodyResponse(BaseModel):
     assignment_id: str
-    state: Literal["succeeded", "failed", "cancelled"]
+    state: RunState
     result: ContentResponse | None
 
 
@@ -216,32 +227,7 @@ EntryBodyResponse: TypeAlias = (
     | EffortChangeBodyResponse
 )
 
-EntryType: TypeAlias = Literal[
-    "turn_started",
-    "turn_finished",
-    "message",
-    "reasoning",
-    "shell_started",
-    "shell_output",
-    "shell_backgrounded",
-    "shell_finished",
-    "file",
-    "search",
-    "web",
-    "worktree",
-    "skill_started",
-    "skill_finished",
-    "question_asked",
-    "question_answered",
-    "plan_proposed",
-    "plan_resolved",
-    "compaction_started",
-    "compaction_finished",
-    "assignment_started",
-    "assignment_finished",
-    "model_change",
-    "effort_change",
-]
+EntryType: TypeAlias = EntryTypeName
 
 
 class EntryResponse(BaseModel):

@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, Mapping
+from enum import StrEnum
+from typing import Mapping
 
 from terminal.models.values import WindowId
+
+
+class SplitAxis(StrEnum):
+    VERTICAL = "vertical"
+    HORIZONTAL = "horizontal"
 
 
 @dataclass(frozen=True)
@@ -42,7 +48,7 @@ class PaneOpenRequest:
     title: str
     # The SPLIT LINE's orientation: "vertical" puts the new pane beside the
     # anchor, "horizontal" stacks it under the anchor.
-    split: Literal["vertical", "horizontal"]
+    split: SplitAxis
     size_percent: int                    # the new pane's share of the split axis
     anchor: PaneAnchor
     same_tab_as: str
@@ -75,7 +81,7 @@ class PaneCloseResponse:
 @dataclass(frozen=True)
 class PaneResizeRequest:
     window_id: WindowId
-    axis: Literal["horizontal", "vertical"]
+    axis: SplitAxis
     cells: int                           # grow (+) / shrink (−)
 
 

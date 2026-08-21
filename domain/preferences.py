@@ -11,16 +11,22 @@ at every read. They are types now, and each has a table with a real primary key.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, TypeAlias
+from enum import StrEnum
 
 from domain.ids import DeviceId, HarnessName
 
 
-# Which of the harness TUI's three native history densities a session's web
-# mirror is rendered at, in CONTROL order — the segmented control reads densest
-# to sparsest, which is why the default is not the first entry.
-ViewMode: TypeAlias = Literal["verbose", "default", "focus"]
-DEFAULT_VIEW_MODE: ViewMode = "default"
+class ViewMode(StrEnum):
+    """Which of the harness TUI's three native history densities a session's
+    web mirror is rendered at, in CONTROL order — the segmented control reads
+    densest to sparsest, which is why the default is not the first entry."""
+
+    VERBOSE = "verbose"
+    DEFAULT = "default"
+    FOCUS = "focus"
+
+
+DEFAULT_VIEW_MODE: ViewMode = ViewMode.DEFAULT
 
 
 @dataclass(frozen=True)

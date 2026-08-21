@@ -8,7 +8,7 @@ from pydantic import JsonValue
 
 from domain.events import CanonicalEvent, EventPayload, UsageReported
 from domain.ids import ModelId
-from domain.values import TokenUsage
+from domain.values import TokenUsage, UsageScope
 from harness.impl.claude_code.canonical import records
 from harness.impl.claude_code.canonical.support import event, model_reference
 from harness.models import RawEvent
@@ -72,7 +72,7 @@ def translate_otel(
             continue
         model = model_reference(ModelId(model_id)) if model_id else None
         payload = UsageReported(
-            "session",
+            UsageScope.SESSION,
             str(raw_event.session_id),
             model,
             None,

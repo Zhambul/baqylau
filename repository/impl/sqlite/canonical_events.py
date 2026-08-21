@@ -92,13 +92,13 @@ class SqliteCanonicalEventRepository(CanonicalEventRepository):
             # Nothing is lost by not comparing the bodies — the later rendering
             # is fully recoverable from its own raw event, stored verbatim and
             # linked by the interpretation-event row written beside this.
-            return "deduplicated"
+            return CanonicalStorageResult.DEDUPLICATED
         connection.execute(
             f"INSERT INTO canonical_events({_INSERT_COLUMNS}) "
             "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             mapper.canonical_event_values(event, accepted_at),
         )
-        return "accepted"
+        return CanonicalStorageResult.ACCEPTED
 
     # --- reads -----------------------------------------------------------------
 

@@ -8,10 +8,13 @@ import time
 
 from harness.contract import ControlHandler, HarnessController
 from harness.models import (
+    AnswerDecision,
     AnswerQuestion,
     CloseSession,
     Compact,
+    ControlAcknowledgement,
     ControlContext,
+    ControlName,
     ControlRequest,
     ControlResult,
     DecidePlan,
@@ -31,6 +34,7 @@ from terminal.models import (
     ScreenReadRequest,
     TabCloseRequest,
     TabRenameRequest,
+    TextSubmitMode,
     TextSubmitRequest,
 )
 from domain.events import QuestionAsked
@@ -67,19 +71,19 @@ class _TerminalDriver:
 
     def send_text(self, window_id: WindowId, text: str) -> bool:
         return self.terminal.input.submit_text(
-            TextSubmitRequest(NativeWindowId(str(window_id)), str(text), "type")
+            TextSubmitRequest(NativeWindowId(str(window_id)), str(text), TextSubmitMode.TYPE)
         ).succeeded
 
     def paste_text(self, window_id: WindowId, text: str) -> bool:
         return self.terminal.input.submit_text(
-            TextSubmitRequest(NativeWindowId(str(window_id)), str(text), "paste")
+            TextSubmitRequest(NativeWindowId(str(window_id)), str(text), TextSubmitMode.PASTE)
         ).succeeded
 
 
 def _result(request: ControlRequest, succeeded: bool, reason: str) -> ControlResult:
     return ControlResult(
         request.request_id,
-        "acknowledged" if succeeded else "indeterminate",
+        ControlAcknowledgement.ACKNOWLEDGED if succeeded else ControlAcknowledgement.INDETERMINATE,
         None if succeeded else reason,
     )
 
@@ -87,9 +91,9 @@ def _result(request: ControlRequest, succeeded: bool, reason: str) -> ControlRes
 def _submit(request: ControlRequest, control_context: ControlContext, text: str) -> ControlResult:
     window_id = control_context.terminal_window_id
     if window_id is None:
-        return ControlResult(request.request_id, "rejected", "session is not live")
+        return ControlResult(request.request_id, ControlAcknowledgement.REJECTED, "session is not live")
     result = control_context.terminal.input.submit_text(
-        TextSubmitRequest(NativeWindowId(str(window_id)), text, "paste")
+        TextSubmitRequest(NativeWindowId(str(window_id)), text, TextSubmitMode.PASTE)
     )
     return _result(request, result.succeeded, result.reason or "terminal text was not delivered")
 
@@ -103,7 +107,9 @@ class SendTextHandler(ControlHandler):
         if not isinstance(request, SendText):
             raise TypeError("send_text handler requires SendText")
         if request.replace_terminal_draft:
-            return DeliveryResult(request.request_id, "rejected", "Codex draft replacement is unsupported")
+            return DeliveryResult(
+                request.request_id, ControlAcknowledgement.REJECTED, "Codex draft replacement is unsupported"
+            )
         attachment_text = " ".join(attachment.local_path for attachment in request.attachments)
         message = attachment_text + ("\n" if attachment_text and request.text else "") + request.text
         result = _submit(request, control_context, message)
@@ -153,7 +159,7 @@ class InterruptHandler(ControlHandler):
             raise TypeError("interrupt handler requires Interrupt")
         window_id = control_context.terminal_window_id
         if window_id is None:
-            return DeliveryResult(request.request_id, "rejected", "session is not live")
+            return DeliveryResult(request.request_id, ControlAcknowledgement.REJECTED, "session is not live")
         try:
             position = os.path.getsize(session.source_reference)
         except OSError:
@@ -176,11 +182,11 @@ class InterruptHandler(ControlHandler):
                         # its next tick and turn it canonical on its own —
                         # no fallback needed.
                         return DeliveryResult(
-                            request.request_id, "acknowledged", queued=queued, corroborated=True
+                            request.request_id, ControlAcknowledgement.ACKNOWLEDGED, queued=queued, corroborated=True
                         )
         return DeliveryResult(
             request.request_id,
-            "indeterminate" if delivered else "rejected",
+            ControlAcknowledgement.INDETERMINATE if delivered else ControlAcknowledgement.REJECTED,
             "turn_aborted was not observed" if delivered else "interrupt key was not delivered",
         )
 
@@ -192,7 +198,7 @@ class CloseSessionHandler(ControlHandler):
             raise TypeError("close_session handler requires CloseSession")
         window_id = control_context.terminal_window_id
         if window_id is None:
-            return ControlResult(request.request_id, "rejected", "session is not live")
+            return ControlResult(request.request_id, ControlAcknowledgement.REJECTED, "session is not live")
         result = terminal.tabs.close_tab(TabCloseRequest(NativeWindowId(str(window_id))))
         return _result(request, result.succeeded, result.reason or "terminal tab was not closed")
 
@@ -206,12 +212,16 @@ class RenameSessionHandler(ControlHandler):
         if control_context.terminal_window_id is None:
             outcome = title.titles.set_title(session.source_reference, request.name)
             if outcome == "unsupported":
-                return ControlResult(request.request_id, "rejected", "session source is not renameable")
+                return ControlResult(
+                    request.request_id, ControlAcknowledgement.REJECTED, "session source is not renameable"
+                )
             if outcome == "unavailable":
-                return ControlResult(request.request_id, "indeterminate", "native title store is unavailable")
-            return ControlResult(request.request_id, "acknowledged")
+                return ControlResult(
+                    request.request_id, ControlAcknowledgement.INDETERMINATE, "native title store is unavailable"
+                )
+            return ControlResult(request.request_id, ControlAcknowledgement.ACKNOWLEDGED)
         result = _submit(request, control_context, f"/rename {request.name}")
-        if result.status == "acknowledged":
+        if result.status == ControlAcknowledgement.ACKNOWLEDGED:
             window_id = control_context.terminal_window_id
             if window_id is not None:
                 terminal.tabs.rename_tab(TabRenameRequest(NativeWindowId(str(window_id)), request.name))
@@ -232,7 +242,7 @@ class SelectModelHandler(ControlHandler):
         terminal = control_context.terminal
         window_id = control_context.terminal_window_id
         if window_id is None:
-            return ControlResult(request.request_id, "rejected", "session is not live")
+            return ControlResult(request.request_id, ControlAcknowledgement.REJECTED, "session is not live")
         try:
             modeldialog.set_model_effort(
                 _TerminalDriver(terminal),
@@ -241,8 +251,8 @@ class SelectModelHandler(ControlHandler):
                 effort=control_context.current_effort,
             )
         except modeldialog.CodexModelError as error:
-            return ControlResult(request.request_id, "indeterminate", str(error))
-        return ControlResult(request.request_id, "acknowledged")
+            return ControlResult(request.request_id, ControlAcknowledgement.INDETERMINATE, str(error))
+        return ControlResult(request.request_id, ControlAcknowledgement.ACKNOWLEDGED)
 
 
 class SelectEffortHandler(ControlHandler):
@@ -252,7 +262,7 @@ class SelectEffortHandler(ControlHandler):
         terminal = control_context.terminal
         window_id = control_context.terminal_window_id
         if window_id is None:
-            return ControlResult(request.request_id, "rejected", "session is not live")
+            return ControlResult(request.request_id, ControlAcknowledgement.REJECTED, "session is not live")
         try:
             modeldialog.set_model_effort(
                 _TerminalDriver(terminal),
@@ -260,8 +270,8 @@ class SelectEffortHandler(ControlHandler):
                 effort=request.effort,
             )
         except modeldialog.CodexModelError as error:
-            return ControlResult(request.request_id, "indeterminate", str(error))
-        return ControlResult(request.request_id, "acknowledged")
+            return ControlResult(request.request_id, ControlAcknowledgement.INDETERMINATE, str(error))
+        return ControlResult(request.request_id, ControlAcknowledgement.ACKNOWLEDGED)
 
 
 def _native_prompts(question_asked: QuestionAsked) -> list[dialog.Prompt]:
@@ -285,15 +295,17 @@ class AnswerQuestionHandler(ControlHandler):
         if not isinstance(request, AnswerQuestion):
             raise TypeError("answer_question handler requires AnswerQuestion")
         if not isinstance(control_context.pending_attention, QuestionAsked):
-            return ControlResult(request.request_id, "rejected", "no question is pending")
+            return ControlResult(request.request_id, ControlAcknowledgement.REJECTED, "no question is pending")
         window_id = control_context.terminal_window_id
         if window_id is None:
-            return ControlResult(request.request_id, "rejected", "session is not live")
+            return ControlResult(request.request_id, ControlAcknowledgement.REJECTED, "session is not live")
         answers = json.loads(request.answers.json_text) if request.answers is not None else []
         if not isinstance(answers, list):
-            return ControlResult(request.request_id, "rejected", "question answers must be an array")
+            return ControlResult(
+                request.request_id, ControlAcknowledgement.REJECTED, "question answers must be an array"
+            )
         try:
-            if request.decision == "discuss":
+            if request.decision == AnswerDecision.DISCUSS:
                 dialog.decline(
                     _TerminalDriver(terminal),
                     window_id,
@@ -308,8 +320,8 @@ class AnswerQuestionHandler(ControlHandler):
                     answers,
                 )
         except dialog.CodexAskError as error:
-            return ControlResult(request.request_id, "indeterminate", str(error))
-        return ControlResult(request.request_id, "acknowledged")
+            return ControlResult(request.request_id, ControlAcknowledgement.INDETERMINATE, str(error))
+        return ControlResult(request.request_id, ControlAcknowledgement.ACKNOWLEDGED)
 
 
 class ReadPlanChoicesHandler(ControlHandler):
@@ -323,14 +335,14 @@ class ReadPlanChoicesHandler(ControlHandler):
             raise TypeError("read_plan_choices handler requires ReadPlanChoices")
         window_id = control_context.terminal_window_id
         if window_id is None:
-            return PlanChoicesResult(request.request_id, "rejected", "session is not live")
+            return PlanChoicesResult(request.request_id, ControlAcknowledgement.REJECTED, "session is not live")
         try:
             rows = plandialog.options(_TerminalDriver(terminal), window_id)
         except plandialog.CodexPlanError as error:
-            return PlanChoicesResult(request.request_id, "indeterminate", str(error))
+            return PlanChoicesResult(request.request_id, ControlAcknowledgement.INDETERMINATE, str(error))
         return PlanChoicesResult(
             request.request_id,
-            "acknowledged",
+            ControlAcknowledgement.ACKNOWLEDGED,
             choices=tuple(
                 PlanChoice(str(row["digit"]), str(row["label"]))
                 for row in rows
@@ -344,10 +356,12 @@ class DecidePlanHandler(ControlHandler):
         if not isinstance(request, DecidePlan):
             raise TypeError("decide_plan handler requires DecidePlan")
         if request.feedback is not None:
-            return ControlResult(request.request_id, "rejected", "Codex plan decisions do not accept feedback")
+            return ControlResult(
+                request.request_id, ControlAcknowledgement.REJECTED, "Codex plan decisions do not accept feedback"
+            )
         window_id = control_context.terminal_window_id
         if window_id is None:
-            return ControlResult(request.request_id, "rejected", "session is not live")
+            return ControlResult(request.request_id, ControlAcknowledgement.REJECTED, "session is not live")
         driver = _TerminalDriver(terminal)
         try:
             if request.decision == "dismiss":
@@ -356,22 +370,22 @@ class DecidePlanHandler(ControlHandler):
                 rows = plandialog.options(driver, window_id)
                 row = next((row for row in rows if str(row["digit"]) == request.decision), None)
                 if row is None:
-                    return ControlResult(request.request_id, "rejected", "unknown plan decision")
+                    return ControlResult(request.request_id, ControlAcknowledgement.REJECTED, "unknown plan decision")
                 plandialog.decide(driver, window_id, row["digit"], row["label"])
         except plandialog.CodexPlanError as error:
-            return ControlResult(request.request_id, "indeterminate", str(error))
-        return ControlResult(request.request_id, "acknowledged")
+            return ControlResult(request.request_id, ControlAcknowledgement.INDETERMINATE, str(error))
+        return ControlResult(request.request_id, ControlAcknowledgement.ACKNOWLEDGED)
 
 
 controller = HarnessController({
-    "send_text": SendTextHandler(),
-    "interrupt": InterruptHandler(),
-    "close_session": CloseSessionHandler(),
-    "rename_session": RenameSessionHandler(),
-    "compact": CompactHandler(),
-    "select_model": SelectModelHandler(),
-    "select_effort": SelectEffortHandler(),
-    "answer_question": AnswerQuestionHandler(),
-    "read_plan_choices": ReadPlanChoicesHandler(),
-    "decide_plan": DecidePlanHandler(),
+    ControlName.SEND_TEXT: SendTextHandler(),
+    ControlName.INTERRUPT: InterruptHandler(),
+    ControlName.CLOSE_SESSION: CloseSessionHandler(),
+    ControlName.RENAME_SESSION: RenameSessionHandler(),
+    ControlName.COMPACT: CompactHandler(),
+    ControlName.SELECT_MODEL: SelectModelHandler(),
+    ControlName.SELECT_EFFORT: SelectEffortHandler(),
+    ControlName.ANSWER_QUESTION: AnswerQuestionHandler(),
+    ControlName.READ_PLAN_CHOICES: ReadPlanChoicesHandler(),
+    ControlName.DECIDE_PLAN: DecidePlanHandler(),
 })

@@ -6,6 +6,8 @@ from __future__ import annotations
 from harness.contract import CoreTranslator
 from harness.models import RawEvent, TranslationResult, canonical_event
 from domain.events import SessionFinished, ShellOutputLocated, TurnAborted
+from domain.records import RecordedTranslationDecision
+from domain.values import Outcome
 from repository.mapper.documents import decode_document
 
 
@@ -15,16 +17,16 @@ class ShellOutputTranslator(CoreTranslator):
 
     The directive IS a `ShellOutputLocated`, written by
     `harness/models/raw_events.py` and decoded here against that same
-    declaration — including its `until` boundary, which is a two-value Literal
-    the mapper checks. Both halves used to be written by hand: a dict built from
-    `asdict` at the writer, and eight `document[...]` reads plus a bespoke
-    validator for that Literal here."""
+    declaration — including its `until` boundary, which is a `ShellFollowUntil`
+    enum the mapper checks. Both halves used to be written by hand: a dict built
+    from `asdict` at the writer, and eight `document[...]` reads plus a bespoke
+    validator for that enum here."""
 
     def translate(self, raw_event: RawEvent) -> TranslationResult:
         located = decode_document(ShellOutputLocated, raw_event.payload)
         return TranslationResult(
             (canonical_event(raw_event, "shell", str(located.shell_id), "output_located", located),),
-            "translated",
+            RecordedTranslationDecision.TRANSLATED,
         )
 
 
@@ -34,10 +36,10 @@ class LivenessTranslator(CoreTranslator):
     clean exit and a kill converge on one fact."""
 
     def translate(self, raw_event: RawEvent) -> TranslationResult:
-        finished = SessionFinished("unknown", "process_exited")
+        finished = SessionFinished(Outcome.UNKNOWN, "process_exited")
         return TranslationResult(
             (canonical_event(raw_event, "session", str(raw_event.session_id), "finished", finished),),
-            "translated",
+            RecordedTranslationDecision.TRANSLATED,
         )
 
 
@@ -51,5 +53,5 @@ class InterruptTranslator(CoreTranslator):
         aborted = TurnAborted("interrupt acknowledged; no harness raw event confirmed it")
         return TranslationResult(
             (canonical_event(raw_event, "turn", raw_event.source_position, "aborted", aborted),),
-            "translated",
+            RecordedTranslationDecision.TRANSLATED,
         )

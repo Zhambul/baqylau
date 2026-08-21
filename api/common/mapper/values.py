@@ -26,6 +26,7 @@ from core.repository import RepositoryStatus
 from domain.values import (
     AccountReference,
     Content,
+    MediaType,
     ModelReference,
     StructuredContent,
     TokenUsage,
@@ -77,7 +78,7 @@ def content(value: Content) -> ContentResponse:
     or answer, in a shape we do not define — is laid out as the plain text a
     person reads, which is the only thing a client can do with it."""
     if isinstance(value, StructuredContent):
-        return ContentResponse(text=content_text(value), media_type="text/plain")
+        return ContentResponse(text=content_text(value), media_type=MediaType.TEXT_PLAIN)
     return ContentResponse(text=value.text, media_type=value.media_type)
 
 

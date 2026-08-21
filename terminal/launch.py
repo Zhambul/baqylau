@@ -14,6 +14,9 @@ import shlex
 
 from terminal.models import TabOpenRequest
 
+# The two login shells this launch convention knows how to invoke. Not a
+# vocabulary of ours: these are other programs' names (the user's own login
+# shell, read from $SHELL), recognised rather than defined here.
 SUPPORTED_LOGIN_SHELLS = frozenset({"bash", "zsh"})
 ENVIRONMENT_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 

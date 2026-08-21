@@ -8,7 +8,8 @@ union below is the whole vocabulary a harness may be asked to perform.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import ClassVar, Literal, TypeAlias
+from enum import StrEnum
+from typing import ClassVar, TypeAlias
 
 from domain.events import PlanProposed, QuestionAsked
 from domain.ids import AttentionId, MessageId, ModelId, RequestId, SessionId, WindowId
@@ -16,31 +17,50 @@ from domain.values import StructuredContent
 from harness.models.session import Session
 from terminal.contract import TerminalPlugin
 
-# What writing a session's NATIVE title did — the parked-rename path, which
-# reaches a store the harness owns rather than the terminal. Was a `True /
-# False / None` tri-state whose three meanings were documented only in prose.
-TitleWriteOutcome: TypeAlias = Literal[
-    "renamed",      # the harness's own store now carries the new name
-    "unsupported",  # this source is not one this harness can rename
-    "unavailable",  # the store or the row is missing; the caller reports a failure
-]
 
-ControlName: TypeAlias = Literal[
-    "send_text",
-    "interrupt",
-    "background",
-    "close_session",
-    "rename_session",
-    "auto_name_session",
-    "open_rewind",
-    "apply_rewind",
-    "compact",
-    "select_model",
-    "select_effort",
-    "answer_question",
-    "read_plan_choices",
-    "decide_plan",
-]
+class TitleWriteOutcome(StrEnum):
+    """What writing a session's NATIVE title did — the parked-rename path,
+    which reaches a store the harness owns rather than the terminal. Was a
+    `True / False / None` tri-state whose three meanings were documented
+    only in prose."""
+
+    RENAMED = "renamed"            # the harness's own store now carries the new name
+    UNSUPPORTED = "unsupported"    # this source is not one this harness can rename
+    UNAVAILABLE = "unavailable"    # the store or the row is missing; the caller reports a failure
+
+
+class AnswerDecision(StrEnum):
+    ANSWER = "answer"
+    DISCUSS = "discuss"
+
+
+class ControlAcknowledgement(StrEnum):
+    ACKNOWLEDGED = "acknowledged"
+    REJECTED = "rejected"
+    INDETERMINATE = "indeterminate"
+
+
+class ConfirmationOutcome(StrEnum):
+    CONFIRMED = "confirmed"
+    NOT_NEEDED = "not_needed"
+    FAILED = "failed"
+
+
+class ControlName(StrEnum):
+    SEND_TEXT = "send_text"
+    INTERRUPT = "interrupt"
+    BACKGROUND = "background"
+    CLOSE_SESSION = "close_session"
+    RENAME_SESSION = "rename_session"
+    AUTO_NAME_SESSION = "auto_name_session"
+    OPEN_REWIND = "open_rewind"
+    APPLY_REWIND = "apply_rewind"
+    COMPACT = "compact"
+    SELECT_MODEL = "select_model"
+    SELECT_EFFORT = "select_effort"
+    ANSWER_QUESTION = "answer_question"
+    READ_PLAN_CHOICES = "read_plan_choices"
+    DECIDE_PLAN = "decide_plan"
 
 
 @dataclass(frozen=True)
@@ -71,7 +91,7 @@ class AttachmentReference:
 
 @dataclass(frozen=True)
 class SendText(ControlTarget):
-    control_name: ClassVar[ControlName] = "send_text"
+    control_name: ClassVar[ControlName] = ControlName.SEND_TEXT
     text: str
     attachments: tuple[AttachmentReference, ...] = ()
     replace_terminal_draft: bool = False
@@ -79,7 +99,7 @@ class SendText(ControlTarget):
 
 @dataclass(frozen=True)
 class Interrupt(ControlTarget):
-    control_name: ClassVar[ControlName] = "interrupt"
+    control_name: ClassVar[ControlName] = ControlName.INTERRUPT
 
 
 @dataclass(frozen=True)
@@ -91,33 +111,33 @@ class Background(ControlTarget):
     guessing at a race it cannot see.
     """
 
-    control_name: ClassVar[ControlName] = "background"
+    control_name: ClassVar[ControlName] = ControlName.BACKGROUND
 
 
 @dataclass(frozen=True)
 class CloseSession(ControlTarget):
-    control_name: ClassVar[ControlName] = "close_session"
+    control_name: ClassVar[ControlName] = ControlName.CLOSE_SESSION
 
 
 @dataclass(frozen=True)
 class RenameSession(ControlTarget):
-    control_name: ClassVar[ControlName] = "rename_session"
+    control_name: ClassVar[ControlName] = ControlName.RENAME_SESSION
     name: str
 
 
 @dataclass(frozen=True)
 class AutoNameSession(ControlTarget):
-    control_name: ClassVar[ControlName] = "auto_name_session"
+    control_name: ClassVar[ControlName] = ControlName.AUTO_NAME_SESSION
 
 
 @dataclass(frozen=True)
 class OpenRewind(ControlTarget):
-    control_name: ClassVar[ControlName] = "open_rewind"
+    control_name: ClassVar[ControlName] = ControlName.OPEN_REWIND
 
 
 @dataclass(frozen=True)
 class ApplyRewind(ControlTarget):
-    control_name: ClassVar[ControlName] = "apply_rewind"
+    control_name: ClassVar[ControlName] = ControlName.APPLY_REWIND
     target_message_id: MessageId
     target_text: str
     newer_prompt_count: int
@@ -126,39 +146,39 @@ class ApplyRewind(ControlTarget):
 
 @dataclass(frozen=True)
 class Compact(ControlTarget):
-    control_name: ClassVar[ControlName] = "compact"
+    control_name: ClassVar[ControlName] = ControlName.COMPACT
 
 
 @dataclass(frozen=True)
 class SelectModel(ControlTarget):
-    control_name: ClassVar[ControlName] = "select_model"
+    control_name: ClassVar[ControlName] = ControlName.SELECT_MODEL
     model_id: ModelId
 
 
 @dataclass(frozen=True)
 class SelectEffort(ControlTarget):
-    control_name: ClassVar[ControlName] = "select_effort"
+    control_name: ClassVar[ControlName] = ControlName.SELECT_EFFORT
     effort: str
 
 
 @dataclass(frozen=True)
 class AnswerQuestion(ControlTarget):
-    control_name: ClassVar[ControlName] = "answer_question"
+    control_name: ClassVar[ControlName] = ControlName.ANSWER_QUESTION
     attention_id: AttentionId
-    decision: Literal["answer", "discuss"]
+    decision: AnswerDecision
     answers: StructuredContent | None = None
     discussion: str | None = None
 
 
 @dataclass(frozen=True)
 class ReadPlanChoices(ControlTarget):
-    control_name: ClassVar[ControlName] = "read_plan_choices"
+    control_name: ClassVar[ControlName] = ControlName.READ_PLAN_CHOICES
     attention_id: AttentionId
 
 
 @dataclass(frozen=True)
 class DecidePlan(ControlTarget):
-    control_name: ClassVar[ControlName] = "decide_plan"
+    control_name: ClassVar[ControlName] = ControlName.DECIDE_PLAN
     attention_id: AttentionId
     decision: str
     feedback: str | None = None
@@ -185,7 +205,7 @@ ControlRequest: TypeAlias = (
 @dataclass(frozen=True)
 class ControlResult:
     request_id: RequestId
-    status: Literal["acknowledged", "rejected", "indeterminate"]
+    status: ControlAcknowledgement
     reason: str | None = None
 
 
@@ -203,7 +223,7 @@ class DeliveryResult(ControlResult):
 
 @dataclass(frozen=True)
 class CommandResult(ControlResult):
-    confirmation: Literal["confirmed", "not_needed", "failed"] | None = None
+    confirmation: ConfirmationOutcome | None = None
 
 
 @dataclass(frozen=True)

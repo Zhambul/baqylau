@@ -12,6 +12,7 @@ from pydantic import JsonValue
 
 from domain.events import ShellOutputLocated
 from domain.ids import SessionId, ShellId
+from domain.values import ShellFollowUntil
 from harness.impl.claude_code import shell
 
 CHUNK_SOURCE_TYPE = "foreground_output"
@@ -106,7 +107,7 @@ def background_output(
         initial_size=0,
         initial_modified_at=0,
         wait_for_source_change=False,
-        until="session_finished",
+        until=ShellFollowUntil.SESSION_FINISHED,
     )
 
 
@@ -171,6 +172,6 @@ def prepare(
             initial_size=initial_size,
             initial_modified_at=initial_modified_at,
             wait_for_source_change=wait_for_source_change,
-            until="shell_finished",
+            until=ShellFollowUntil.SHELL_FINISHED,
         ),
     )

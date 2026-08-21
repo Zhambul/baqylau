@@ -67,11 +67,11 @@ class CodexThreadTitleRepository(NativeSessionTitleRepository):
 
     def set_title(self, source_reference: str, title: str) -> TitleWriteOutcome:
         if not self.renameable(source_reference):
-            return "unsupported"
+            return TitleWriteOutcome.UNSUPPORTED
         database = _state_database()
         thread_uuid = _thread_uuid(source_reference)
         if not database or not thread_uuid:
-            return "unavailable"
+            return TitleWriteOutcome.UNAVAILABLE
         try:
             connection = sqlite3.connect(database, timeout=CONNECT_TIMEOUT_SECONDS)
             try:
@@ -85,8 +85,8 @@ class CodexThreadTitleRepository(NativeSessionTitleRepository):
             # An index codex renamed, moved, or changed the shape of. The
             # caller reports a failed rename; it must not see a driver
             # exception from another product's file.
-            return "unavailable"
-        return "renamed" if cursor.rowcount else "unavailable"
+            return TitleWriteOutcome.UNAVAILABLE
+        return TitleWriteOutcome.RENAMED if cursor.rowcount else TitleWriteOutcome.UNAVAILABLE
 
 
 titles = CodexThreadTitleRepository()

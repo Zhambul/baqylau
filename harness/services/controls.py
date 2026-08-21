@@ -9,6 +9,7 @@ from domain.entries import PlanProposedBody, QuestionAskedBody
 from domain.events import PlanProposed, QuestionAsked
 from harness.contract import HarnessReactorContext
 from harness.models import (
+    ControlAcknowledgement,
     ControlContext,
     ControlOutcome,
     ControlRequest,
@@ -102,7 +103,7 @@ class HarnessControlService(HarnessReactorContext):
         # sets `corroborated=True` and is never marked.
         if (
             isinstance(request, Interrupt)
-            and outcome.status == "acknowledged"
+            and outcome.status == ControlAcknowledgement.ACKNOWLEDGED
             and not getattr(outcome, "corroborated", False)
         ):
             self.interrupts.mark(request.session_id)
@@ -111,10 +112,10 @@ class HarnessControlService(HarnessReactorContext):
     def _execute(self, request: ControlRequest) -> ControlOutcome:
         session = self.sessions.find(request.session_id)
         if session is None:
-            return ControlResult(request.request_id, "rejected", "unknown session")
+            return ControlResult(request.request_id, ControlAcknowledgement.REJECTED, "unknown session")
         plugin = session.plugin
         if plugin is None or plugin.controller is None:
-            return ControlResult(request.request_id, "rejected", "unsupported control")
+            return ControlResult(request.request_id, ControlAcknowledgement.REJECTED, "unsupported control")
         # The read model, not a fold: what the session's state IS was decided
         # when the facts arrived, and a gesture asking again would be asking a
         # second time in a second way.

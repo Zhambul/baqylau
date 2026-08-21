@@ -9,7 +9,7 @@ from pydantic import JsonValue
 
 from domain.events import CanonicalEvent, EventPayload
 from domain.ids import ModelId, SelectionId, TurnId
-from domain.values import Content, ModelReference, StructuredContent, TextContent
+from domain.values import Content, MediaType, ModelReference, StructuredContent, TextContent
 from harness.impl.claude_code import model
 from harness.models import RawEvent, canonical_event
 
@@ -46,7 +46,7 @@ def content(
 ) -> Content:
     if isinstance(value, (dict, list)):
         return StructuredContent(json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True))
-    return TextContent(str(value or ""), "text/markdown" if markdown else "text/plain")
+    return TextContent(str(value or ""), MediaType.TEXT_MARKDOWN if markdown else MediaType.TEXT_PLAIN)
 
 
 def event(

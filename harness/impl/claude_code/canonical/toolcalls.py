@@ -11,7 +11,7 @@ arguments are remembered until the result arrives.
 from __future__ import annotations
 
 import json
-from typing import Literal, TypeAlias
+from enum import StrEnum
 
 from pydantic import JsonValue
 
@@ -54,8 +54,12 @@ from domain.values import (
     Content,
     ExecutionMode,
     FileAction,
+    MessagePhase,
+    MessageRole,
     Outcome,
+    OutputMode,
     PlanState,
+    ProgressStream,
     WorktreeAction,
 )
 from harness.impl.claude_code.canonical import records
@@ -67,57 +71,57 @@ from harness.models import RawEvent, UnknownRawEvent
 # only this text is suppressed.
 BACKGROUND_LAUNCH_STUB = "Command running in background with ID:"
 
-ToolKind: TypeAlias = Literal[
-    "shell",
-    "file",
-    "search",
-    "web",
-    "worktree",
-    "skill",
-    "assignment",
-    "message",
-    "question",
-    "plan",
-    "ignored",
-]
+class ToolKind(StrEnum):
+    SHELL = "shell"
+    FILE = "file"
+    SEARCH = "search"
+    WEB = "web"
+    WORKTREE = "worktree"
+    SKILL = "skill"
+    ASSIGNMENT = "assignment"
+    MESSAGE = "message"
+    QUESTION = "question"
+    PLAN = "plan"
+    IGNORED = "ignored"
 
-# What each tool IS. The `ignored` entries are named rather than left to fall
+
+# What each tool IS. The `IGNORED` entries are named rather than left to fall
 # through: a task tool's fact arrives as `task.changed` from the task source, a
 # generated image exposes no readable path to put on a file fact, and the two
 # agent-plumbing calls carry nothing anybody reads. An unlisted name is drift.
 TOOL_KINDS: dict[str, ToolKind] = {
-    "Bash": "shell",
-    "Monitor": "shell",
-    "exec_command": "shell",
-    "read_command": "shell",
-    "py": "shell",
-    "mcp__node_repl__js": "shell",
-    "Read": "file",
-    "Write": "file",
-    "Edit": "file",
-    "MultiEdit": "file",
-    "NotebookEdit": "file",
-    "Grep": "search",
-    "Glob": "search",
-    "WebSearch": "search",
-    "ToolSearch": "search",
-    "WebFetch": "web",
-    "EnterWorktree": "worktree",
-    "ExitWorktree": "worktree",
-    "Skill": "skill",
-    "Task": "assignment",
-    "Agent": "assignment",
-    "SendMessage": "message",
-    "AskUserQuestion": "question",
-    "ExitPlanMode": "plan",
-    "TaskCreate": "ignored",
-    "TaskUpdate": "ignored",
-    "TaskGet": "ignored",
-    "TaskList": "ignored",
-    "TaskStop": "ignored",
-    "ListAgents": "ignored",
-    "GenerateImage": "ignored",
-    "image_gen__imagegen": "ignored",
+    "Bash": ToolKind.SHELL,
+    "Monitor": ToolKind.SHELL,
+    "exec_command": ToolKind.SHELL,
+    "read_command": ToolKind.SHELL,
+    "py": ToolKind.SHELL,
+    "mcp__node_repl__js": ToolKind.SHELL,
+    "Read": ToolKind.FILE,
+    "Write": ToolKind.FILE,
+    "Edit": ToolKind.FILE,
+    "MultiEdit": ToolKind.FILE,
+    "NotebookEdit": ToolKind.FILE,
+    "Grep": ToolKind.SEARCH,
+    "Glob": ToolKind.SEARCH,
+    "WebSearch": ToolKind.SEARCH,
+    "ToolSearch": ToolKind.SEARCH,
+    "WebFetch": ToolKind.WEB,
+    "EnterWorktree": ToolKind.WORKTREE,
+    "ExitWorktree": ToolKind.WORKTREE,
+    "Skill": ToolKind.SKILL,
+    "Task": ToolKind.ASSIGNMENT,
+    "Agent": ToolKind.ASSIGNMENT,
+    "SendMessage": ToolKind.MESSAGE,
+    "AskUserQuestion": ToolKind.QUESTION,
+    "ExitPlanMode": ToolKind.PLAN,
+    "TaskCreate": ToolKind.IGNORED,
+    "TaskUpdate": ToolKind.IGNORED,
+    "TaskGet": ToolKind.IGNORED,
+    "TaskList": ToolKind.IGNORED,
+    "TaskStop": ToolKind.IGNORED,
+    "ListAgents": ToolKind.IGNORED,
+    "GenerateImage": ToolKind.IGNORED,
+    "image_gen__imagegen": ToolKind.IGNORED,
 }
 
 # Which field of a search tool's input holds what was searched for.
@@ -129,15 +133,15 @@ SEARCH_QUERY_FIELDS = ("pattern", "query")
 # document, which only the hook delivery carries, so those two facts stay the
 # hook's — exactly the division of labour the generic operation finish had.
 TRANSCRIPT_RESULT_KINDS: frozenset[ToolKind] = frozenset(
-    {"shell", "file", "search", "web", "worktree", "skill"}
+    {ToolKind.SHELL, ToolKind.FILE, ToolKind.SEARCH, ToolKind.WEB, ToolKind.WORKTREE, ToolKind.SKILL}
 )
 
 FILE_ACTIONS: dict[str, FileAction] = {
-    "Read": "read",
-    "Write": "created",
-    "Edit": "updated",
-    "MultiEdit": "updated",
-    "NotebookEdit": "updated",
+    "Read": FileAction.READ,
+    "Write": FileAction.CREATED,
+    "Edit": FileAction.UPDATED,
+    "MultiEdit": FileAction.UPDATED,
+    "NotebookEdit": FileAction.UPDATED,
 }
 
 
@@ -221,7 +225,7 @@ def plan_resolution(
         edited = bool(
             isinstance(tool_response, records.ToolResponse) and tool_response.planWasEdited
         )
-        return "approved", None, edited
+        return PlanState.APPROVED, None, edited
     if isinstance(tool_response, str):
         text = tool_response
     elif tool_response is None:
@@ -231,8 +235,8 @@ def plan_resolution(
     marker = "the user said:"
     marker_position = text.find(marker)
     if marker_position >= 0:
-        return "changes_requested", text[marker_position + len(marker):].strip(), False
-    return "rejected", None, False
+        return PlanState.CHANGES_REQUESTED, text[marker_position + len(marker):].strip(), False
+    return PlanState.REJECTED, None, False
 
 
 class ToolCallSemantics:
@@ -319,19 +323,19 @@ class ToolCallSemantics:
         arguments = call.tool_input if call.tool_input is not None else call.input
         arguments = arguments if arguments is not None else {}
         self.remember(call_id, native_name, arguments)
-        if kind == "shell":
+        if kind == ToolKind.SHELL:
             return [self._shell_started(raw_event, call_id, native_name, arguments)]
-        if kind == "skill":
+        if kind == ToolKind.SKILL:
             return [self._skill_started(raw_event, call_id, arguments)]
-        if kind == "assignment":
+        if kind == ToolKind.ASSIGNMENT:
             return [self._assignment_started(raw_event, call_id, arguments)]
-        if kind == "message":
+        if kind == ToolKind.MESSAGE:
             return [self._actor_message(raw_event, call_id, arguments)]
-        if kind == "question":
+        if kind == ToolKind.QUESTION:
             attention_id = AttentionId(call_id)
             payload: EventPayload = QuestionAsked(attention_id, self.questions(arguments))
             return [event(raw_event, "question", str(attention_id), "asked", payload)]
-        if kind == "plan":
+        if kind == ToolKind.PLAN:
             attention_id = AttentionId(call_id)
             plan_arguments = records.PlanArguments.model_validate(arguments)
             payload = PlanProposed(attention_id, content(plan_arguments.plan or "", markdown=True))
@@ -350,11 +354,11 @@ class ToolCallSemantics:
         shell = records.ShellArguments.model_validate(arguments)
         shell_id = ShellId(call_id)
         if native_name == "Monitor":
-            execution: ExecutionMode = "monitor"
+            execution: ExecutionMode = ExecutionMode.MONITOR
         elif native_name == "Bash" and shell.run_in_background:
-            execution = "background"
+            execution = ExecutionMode.BACKGROUND
         else:
-            execution = "foreground"
+            execution = ExecutionMode.FOREGROUND
         command = shell.command
         payload = ShellStarted(
             shell_id,
@@ -411,9 +415,9 @@ class ToolCallSemantics:
         message_id = MessageId(call_id)
         payload = MessageCreated(
             message_id,
-            "assistant",
+            MessageRole.ASSISTANT,
             content(message.content or message.message, markdown=True),
-            "intermediate",
+            MessagePhase.INTERMEDIATE,
             None,
             recipient,
         )
@@ -444,41 +448,41 @@ class ToolCallSemantics:
             call.tool_input,
         )
         kind = tool_kind(native_name)
-        if kind in ("ignored", "message"):
+        if kind in (ToolKind.IGNORED, ToolKind.MESSAGE):
             return []
         tool_response = (
             call.tool_response
             if isinstance(call.tool_response, records.ToolResponse)
             else records.ToolResponse()
         )
-        outcome: Outcome = "failed" if failed else "succeeded"
+        outcome: Outcome = Outcome.FAILED if failed else Outcome.SUCCEEDED
         raw_tool_response: JsonValue = (
             call.tool_response.model_dump(exclude_none=True)
             if isinstance(call.tool_response, records.ToolResponse)
             else call.tool_response
         )
         answered = result if result is not None else result_content(raw_tool_response)
-        if kind == "shell":
+        if kind == ToolKind.SHELL:
             return self._shell_finished(raw_event, call_id, native_name, arguments, tool_response, outcome)
-        if kind == "skill":
+        if kind == ToolKind.SKILL:
             skill_id = SkillId(call_id)
             payload: EventPayload = SkillFinished(skill_id, outcome, answered)
             return [event(raw_event, "skill", str(skill_id), "finished", payload)]
-        if kind == "assignment":
+        if kind == ToolKind.ASSIGNMENT:
             return self._assignment_finished(raw_event, call_id, tool_response, outcome)
-        if kind == "question":
+        if kind == ToolKind.QUESTION:
             attention_id = AttentionId(call_id)
             question_arguments = records.QuestionArguments.model_validate(arguments)
             payload = QuestionAnswered(attention_id, attention_answers(question_arguments), None)
             return [event(raw_event, "question", str(attention_id), "answered", payload)]
-        if kind == "plan":
+        if kind == ToolKind.PLAN:
             attention_id = AttentionId(call_id)
             state, feedback, edited = plan_resolution(call.tool_response, failed)
             payload = PlanResolved(attention_id, state, feedback, edited)
             return [event(raw_event, "plan", str(attention_id), "resolved", payload)]
-        if kind == "file":
+        if kind == ToolKind.FILE:
             return self.file_facts(raw_event, call_id, native_name, arguments, tool_response, outcome)
-        if kind == "search":
+        if kind == ToolKind.SEARCH:
             search_arguments = records.SearchArguments.model_validate(arguments)
             query = next(
                 (
@@ -490,12 +494,12 @@ class ToolCallSemantics:
             )
             payload = SearchPerformed(native_name, content(query), answered, outcome)
             return [event(raw_event, "search", call_id, "performed", payload)]
-        if kind == "web":
+        if kind == ToolKind.WEB:
             url = records.WebFetchArguments.model_validate(arguments).url
             payload = WebFetched(str(url) if url else None, answered, outcome)
             return [event(raw_event, "web", call_id, "fetched", payload)]
         records.WorktreeArguments.model_validate(arguments)  # shape-check only
-        action: WorktreeAction = "entered" if native_name == "EnterWorktree" else "exited"
+        action: WorktreeAction = WorktreeAction.ENTERED if native_name == "EnterWorktree" else WorktreeAction.EXITED
         payload = WorktreeChanged(action, content(arguments) if arguments else None, outcome)
         return [event(raw_event, "worktree", call_id, "changed", payload)]
 
@@ -521,7 +525,7 @@ class ToolCallSemantics:
         if kind not in TRANSCRIPT_RESULT_KINDS:
             return []
         events: list[CanonicalEvent[EventPayload]] = []
-        if kind == "shell":
+        if kind == ToolKind.SHELL:
             shell_id = ShellId(call_id)
             # REPLACE, and ordinal zero: this is the whole output as the harness
             # recorded it, not one more slice of a file being followed.
@@ -530,7 +534,7 @@ class ToolCallSemantics:
                 "shell",
                 str(shell_id),
                 "progress:0",
-                ShellProgressed(shell_id, 0, "output", content(result_text), "replace"),
+                ShellProgressed(shell_id, 0, ProgressStream.OUTPUT, content(result_text), OutputMode.REPLACE),
             ))
         native: dict[str, JsonValue] = {"tool_use_id": str(call_id), "tool_response": tool_response}
         events.extend(
@@ -543,7 +547,7 @@ class ToolCallSemantics:
         if not self.known(call_id):
             return False
         native_name, _arguments = self.recall(call_id, None, None)
-        return tool_kind(native_name) in ("question", "plan")
+        return tool_kind(native_name) in (ToolKind.QUESTION, ToolKind.PLAN)
 
     def _shell_finished(
         self,

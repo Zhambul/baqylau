@@ -4,61 +4,165 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Literal, TypeAlias
+from enum import StrEnum
+from typing import TypeAlias
 
 from domain.ids import AccountId, ModelId, QuestionId, SelectionId
 from domain.stored import STORED
 
-Outcome: TypeAlias = Literal["succeeded", "failed", "cancelled", "rejected", "unknown"]
-ActorRole: TypeAlias = Literal["lead", "child", "teammate", "sidecar"]
-ExecutionMode: TypeAlias = Literal["foreground", "background", "monitor"]
-# Who said it, and where the saying sits in a turn. Named because the harness
-# translators BUILD both out of native JSON and are checked against these same
-# lists; spelled inline on the payload they would only ever be checked at the
-# constructor call.
-MessageRole: TypeAlias = Literal["user", "assistant", "system", "peer", "parent"]
-# `end_turn` names what the raw event says — the message a model STOPPED on, which
-# every harness reports on the response itself — rather than what a reader might
-# hope it means. It is deliberately NOT "the one answer of a turn": a turn that an
-# injection resumes stops more than once, and each of those messages ended a
-# response. A presenter that wants "the turn's final answer" derives it; the fact
-# recorded here is the stop.
-MessagePhase: TypeAlias = Literal["prompt", "intermediate", "end_turn", "synthetic", "recap"]
-# What a file was done to, and where a goal stands. Same reason as the two
-# above: the translators map a native vocabulary onto these, and the mapping
-# table is the thing that has to be checked.
-FileAction: TypeAlias = Literal["read", "created", "updated", "deleted", "renamed"]
+
+class Outcome(StrEnum):
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    REJECTED = "rejected"
+    UNKNOWN = "unknown"
+
+
+class ActorRole(StrEnum):
+    LEAD = "lead"
+    CHILD = "child"
+    TEAMMATE = "teammate"
+    SIDECAR = "sidecar"
+
+
+class ExecutionMode(StrEnum):
+    FOREGROUND = "foreground"
+    BACKGROUND = "background"
+    MONITOR = "monitor"
+
+
+class MessageRole(StrEnum):
+    """Who said it, and where the saying sits in a turn. Named because the
+    harness translators BUILD both out of native JSON and are checked against
+    these same lists; spelled inline on the payload they would only ever be
+    checked at the constructor call."""
+
+    USER = "user"
+    ASSISTANT = "assistant"
+    SYSTEM = "system"
+    PEER = "peer"
+    PARENT = "parent"
+
+
+class MessagePhase(StrEnum):
+    """`end_turn` names what the raw event says — the message a model STOPPED
+    on, which every harness reports on the response itself — rather than what
+    a reader might hope it means. It is deliberately NOT "the one answer of a
+    turn": a turn that an injection resumes stops more than once, and each of
+    those messages ended a response. A presenter that wants "the turn's final
+    answer" derives it; the fact recorded here is the stop."""
+
+    PROMPT = "prompt"
+    INTERMEDIATE = "intermediate"
+    END_TURN = "end_turn"
+    SYNTHETIC = "synthetic"
+    RECAP = "recap"
+
+
+class FileAction(StrEnum):
+    """What a file was done to. The translators map a native vocabulary onto
+    this, and the mapping table is the thing that has to be checked."""
+
+    READ = "read"
+    CREATED = "created"
+    UPDATED = "updated"
+    DELETED = "deleted"
+    RENAMED = "renamed"
+
+
 # The rest of the closed sets a translator has to produce. Every one of these
 # was an inline Literal on its payload, which meant the mapping that built it
 # was typed `str` and checked nowhere.
-#
-# How a proposed plan ended. A question's end carries no such verdict: what a
-# person answered is the answer itself, and the harnesses' own decision words
-# (answered / rejected / discussed) collapsed to one line in every reader that
-# ever had them.
-PlanState: TypeAlias = Literal["approved", "changes_requested", "rejected"]
-# Why a model or an effort level changed. Named because the translators keep the
-# last-seen value and build the change event from it (harness/models/
-# selections.py), so the reason travels as an argument and an argument that is
-# typed `str` is checked nowhere.
-ModelChangeReason: TypeAlias = Literal[
-    "selected",
-    "automatic_fallback",
-    "reported_by_harness",
-]
-EffortChangeReason: TypeAlias = Literal["selected", "reported_by_harness"]
-WorktreeAction: TypeAlias = Literal["entered", "exited"]
-ProgressStream: TypeAlias = Literal["output", "error", "status"]
-TitleOrigin: TypeAlias = Literal["custom", "automatic", "summary"]
-GoalState: TypeAlias = Literal[
-    "active",
-    "paused",
-    "blocked",
-    "usage_limited",
-    "budget_limited",
-    "completed",
-    "cleared",
-]
+
+
+class PlanState(StrEnum):
+    """How a proposed plan ended. A question's end carries no such verdict:
+    what a person answered is the answer itself, and the harnesses' own
+    decision words (answered / rejected / discussed) collapsed to one line in
+    every reader that ever had them."""
+
+    APPROVED = "approved"
+    CHANGES_REQUESTED = "changes_requested"
+    REJECTED = "rejected"
+
+
+class ModelChangeReason(StrEnum):
+    """Why a model changed. Named because the translators keep the last-seen
+    value and build the change event from it (harness/models/selections.py),
+    so the reason travels as an argument and an argument that is typed `str`
+    is checked nowhere."""
+
+    SELECTED = "selected"
+    AUTOMATIC_FALLBACK = "automatic_fallback"
+    REPORTED_BY_HARNESS = "reported_by_harness"
+
+
+class EffortChangeReason(StrEnum):
+    SELECTED = "selected"
+    REPORTED_BY_HARNESS = "reported_by_harness"
+
+
+class WorktreeAction(StrEnum):
+    ENTERED = "entered"
+    EXITED = "exited"
+
+
+class ProgressStream(StrEnum):
+    OUTPUT = "output"
+    ERROR = "error"
+    STATUS = "status"
+
+
+class TitleOrigin(StrEnum):
+    CUSTOM = "custom"
+    AUTOMATIC = "automatic"
+    SUMMARY = "summary"
+
+
+class GoalState(StrEnum):
+    ACTIVE = "active"
+    PAUSED = "paused"
+    BLOCKED = "blocked"
+    USAGE_LIMITED = "usage_limited"
+    BUDGET_LIMITED = "budget_limited"
+    COMPLETED = "completed"
+    CLEARED = "cleared"
+
+
+class OutputMode(StrEnum):
+    """How a chunk of streamed output joins what came before it."""
+
+    APPEND = "append"
+    REPLACE = "replace"
+
+
+class ShellFollowUntil(StrEnum):
+    """When a followed output file stops being followed."""
+
+    SHELL_FINISHED = "shell_finished"
+    SESSION_FINISHED = "session_finished"
+
+
+class TaskState(StrEnum):
+    PENDING = "pending"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    DELETED = "deleted"
+
+
+class UsageScope(StrEnum):
+    """What one usage report's numbers are for."""
+
+    SESSION = "session"
+    ACTOR = "actor"
+    TURN = "turn"
+    OPERATION = "operation"
+
+
+class MediaType(StrEnum):
+    TEXT_PLAIN = "text/plain"
+    TEXT_MARKDOWN = "text/markdown"
 
 
 @dataclass(frozen=True)
@@ -83,7 +187,7 @@ class TextContent:
     __pydantic_config__ = STORED
 
     text: str
-    media_type: Literal["text/plain", "text/markdown"] = "text/plain"
+    media_type: MediaType = MediaType.TEXT_PLAIN
 
 
 @dataclass(frozen=True)

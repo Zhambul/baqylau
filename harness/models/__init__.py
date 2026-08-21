@@ -15,6 +15,7 @@ from harness.models.catalog import (
     RewindModeOption,
 )
 from harness.models.controls import (
+    AnswerDecision,
     AnswerQuestion,
     ApplyRewind,
     AttachmentReference,
@@ -23,6 +24,8 @@ from harness.models.controls import (
     CloseSession,
     CommandResult,
     Compact,
+    ConfirmationOutcome,
+    ControlAcknowledgement,
     ControlContext,
     ControlName,
     ControlOutcome,
@@ -43,6 +46,7 @@ from harness.models.controls import (
     SendText,
     TitleWriteOutcome,
 )
+from domain.records import RecordedTranslationDecision
 from harness.models.raw_events import (
     INTERRUPT_SOURCE_TYPE,
     LIVENESS_SOURCE_TYPE,
@@ -50,8 +54,6 @@ from harness.models.raw_events import (
     RawEvent,
     RawEventAudit,
     RawEventSourceContext,
-    RecordedTranslationDecision,
-    TranslationDecision,
     TranslationError,
     TranslationResult,
     UnknownRawEvent,
@@ -73,6 +75,7 @@ from harness.models.launch import (
     LaunchRejected,
     LaunchRequest,
     LaunchResult,
+    LaunchStatus,
 )
 from harness.models.probe import TerminalInputState, TerminalSessionState
 from harness.models.session import Session
@@ -82,10 +85,12 @@ from harness.models.usage import (
     UsageRow,
     UsageWindow,
     UsageWindowSample,
+    UsageWindowScope,
 )
 
 __all__ = [
     "AccountUsageSnapshot",
+    "AnswerDecision",
     "AnswerQuestion",
     "ApplyRewind",
     "AttachmentReference",
@@ -94,6 +99,8 @@ __all__ = [
     "CommandOption",
     "CommandResult",
     "Compact",
+    "ConfirmationOutcome",
+    "ControlAcknowledgement",
     "ControlContext",
     "ControlName",
     "ControlOutcome",
@@ -120,6 +127,7 @@ __all__ = [
     "LaunchRejected",
     "LaunchRequest",
     "LaunchResult",
+    "LaunchStatus",
     "ModelOption",
     "OUTPUT_LOCATION_SOURCE_TYPE",
     "OpenRewind",
@@ -142,7 +150,6 @@ __all__ = [
     "TelemetryContext",
     "TerminalSessionState",
     "TitleWriteOutcome",
-    "TranslationDecision",
     "TranslationError",
     "TranslationResult",
     "UnknownRawEvent",
@@ -150,6 +157,7 @@ __all__ = [
     "UsageRow",
     "UsageWindow",
     "UsageWindowSample",
+    "UsageWindowScope",
     "canonical_event",
     "output_location_raw_event",
 ]

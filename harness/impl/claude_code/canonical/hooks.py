@@ -16,7 +16,7 @@ from domain.events import (
     SessionFinished,
     TurnFinished,
 )
-from domain.values import ActorRole, Outcome
+from domain.values import ActorRole, EffortChangeReason, GoalState, Outcome
 from harness.impl.claude_code.canonical import records
 from harness.impl.claude_code.canonical.messages import session_events
 from harness.impl.claude_code.canonical.support import event
@@ -46,7 +46,7 @@ def effort_report(
     if not isinstance(level, str) or not level:
         return []
     changed = selection_semantics.effort(
-        raw_event.session_id, raw_event.actor_id, level, "reported_by_harness"
+        raw_event.session_id, raw_event.actor_id, level, EffortChangeReason.REPORTED_BY_HARNESS
     )
     if changed is None:
         return []
@@ -95,22 +95,22 @@ def translate_hook(
     if hook_name == "SessionStart":
         return session_events(raw_event, document)
     if hook_name == "SessionEnd":
-        payload: EventPayload = SessionFinished("succeeded", hook.reason or None)
+        payload: EventPayload = SessionFinished(Outcome.SUCCEEDED, hook.reason or None)
         return [event(raw_event, "session", str(raw_event.session_id), "finished", payload)]
     if hook_name == "Stop":
         return [
-            turn_finished(raw_event, turn_semantics, native_identity, "succeeded"),
+            turn_finished(raw_event, turn_semantics, native_identity, Outcome.SUCCEEDED),
             *effort_report(raw_event, hook, selection_semantics),
         ]
     if hook_name == "StopFailure":
-        events = [turn_finished(raw_event, turn_semantics, native_identity, "failed")]
+        events = [turn_finished(raw_event, turn_semantics, native_identity, Outcome.FAILED)]
         if hook.error == "rate_limit":
             events.append(event(
                 raw_event,
                 "goal",
                 native_identity,
                 "changed",
-                GoalChanged(None, "usage_limited", "rate_limit"),
+                GoalChanged(None, GoalState.USAGE_LIMITED, "rate_limit"),
             ))
         return events
     if hook_name == "PreToolUse":
@@ -125,7 +125,7 @@ def translate_hook(
         ]
     if hook_name == "SubagentStart":
         actor_id = raw_event.actor_id
-        role: ActorRole = "teammate" if raw_event.source_type == "teammate_hook" else "child"
+        role: ActorRole = ActorRole.TEAMMATE if raw_event.source_type == "teammate_hook" else ActorRole.CHILD
         events = [
             event(
                 raw_event,

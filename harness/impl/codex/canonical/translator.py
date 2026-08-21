@@ -5,12 +5,14 @@ from __future__ import annotations
 import json
 import os
 import re
-from typing import Literal, TypeAlias
+from enum import StrEnum
+from typing import Literal
 
 from pydantic import JsonValue
 
 from harness.contract import HarnessTranslator
 from harness.models import RawEvent, TranslationError, TranslationResult, UnknownRawEvent
+from domain.records import RecordedTranslationDecision
 from domain.events import (
     ActorAssignmentFinished,
     ActorAssignmentStarted,
@@ -61,12 +63,19 @@ from domain.values import (
     AttentionChoice,
     AttentionPrompt,
     Content,
+    EffortChangeReason,
+    ExecutionMode,
     FileAction,
     GoalState,
+    ModelChangeReason,
     MessagePhase,
     MessageRole,
     Outcome,
+    OutputMode,
+    ProgressStream,
+    TaskState,
     TokenUsage,
+    UsageScope,
 )
 from harness.impl.codex.canonical import rollout
 from harness.impl.codex.canonical.events import PHASE_FINAL
@@ -121,10 +130,14 @@ from harness.impl.codex.canonical.support import (
 from harness.models.selections import SelectionSemantics
 
 
-# What one of Codex's non-shell tool calls IS. `ignored` is named rather than
+# What one of Codex's non-shell tool calls IS. `IGNORED` is named rather than
 # left to fall through: a generated image exposes no readable path to put on a
 # file fact, so there is nothing to record about it.
-CodexToolKind: TypeAlias = Literal["search", "web", "file", "ignored"]
+class CodexToolKind(StrEnum):
+    SEARCH = "search"
+    WEB = "web"
+    FILE = "file"
+    IGNORED = "ignored"
 
 
 def _codex_tool(native_name: str, arguments: str | None) -> tuple[CodexToolKind, str]:
@@ -139,15 +152,15 @@ def _codex_tool(native_name: str, arguments: str | None) -> tuple[CodexToolKind,
         if not fields:
             raise TranslationError("Codex web tool arguments are not an object")
         if any(field in fields for field in ("search_query", "image_query", "weather", "finance", "sports")):
-            return "search", "WebSearch"
+            return CodexToolKind.SEARCH, "WebSearch"
         if any(field in fields for field in ("open", "click", "find", "screenshot")):
-            return "web", "WebFetch"
+            return CodexToolKind.WEB, "WebFetch"
         # A time lookup is neither a search nor a fetch: it has no query, no url
         # and no reader.
         raise UnknownRawEvent("unmapped Codex web action")
     mapping: dict[str, tuple[CodexToolKind, str]] = {
-        "view_image": ("file", "ReadImage"),
-        "image_gen__imagegen": ("ignored", "GenerateImage"),
+        "view_image": (CodexToolKind.FILE, "ReadImage"),
+        "image_gen__imagegen": (CodexToolKind.IGNORED, "GenerateImage"),
     }
     mapped = mapping.get(native_name)
     if mapped is None:
@@ -400,7 +413,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
         try:
             return self._translate(raw_event)
         except UnknownRawEvent as unknown:
-            return TranslationResult((), "ignored_unknown", unknown.reason)
+            return TranslationResult((), RecordedTranslationDecision.IGNORED_UNKNOWN, unknown.reason)
 
     def _translate(self, raw_event: RawEvent) -> TranslationResult:
         try:
@@ -415,28 +428,34 @@ class CodexCanonicalTranslator(HarnessTranslator):
             if raw_event.parent_actor_id is not None:
                 return TranslationResult(
                     (),
-                    "ignored_nonsemantic",
+                    RecordedTranslationDecision.IGNORED_NONSEMANTIC,
                     "subagent delivery; its activity arrives through the lead's rollout",
                 )
             events = self._translate_hook(raw_event, document)
             if events:
-                return TranslationResult(tuple(events), "translated")
-            return TranslationResult((), "ignored_nonsemantic", "hook carries no unique canonical activity")
+                return TranslationResult(tuple(events), RecordedTranslationDecision.TRANSLATED)
+            return TranslationResult(
+                (), RecordedTranslationDecision.IGNORED_NONSEMANTIC, "hook carries no unique canonical activity"
+            )
 
         if raw_event.source_type in ("child_replay", "sidecar_replay"):
             return TranslationResult(
                 (),
-                "ignored_nonsemantic",
+                RecordedTranslationDecision.IGNORED_NONSEMANTIC,
                 "parent history replayed in child rollout",
             )
 
         if document.get("type") == "session_meta":
             if raw_event.source_position != "0":
-                return TranslationResult((), "ignored_nonsemantic", "replayed session metadata")
+                return TranslationResult(
+                    (), RecordedTranslationDecision.IGNORED_NONSEMANTIC, "replayed session metadata"
+                )
             raw_metadata = document.get("payload")
             metadata = SessionMetaPayload.model_validate(raw_metadata if isinstance(raw_metadata, dict) else {})
             if raw_event.parent_actor_id is not None:
-                role: ActorRole = "sidecar" if raw_event.source_type == "sidecar_rollout" else "child"
+                role: ActorRole = (
+                    ActorRole.SIDECAR if raw_event.source_type == "sidecar_rollout" else ActorRole.CHILD
+                )
                 metadata_source = metadata.source if isinstance(metadata.source, SessionMetaSource) else None
                 spawn = (
                     metadata_source.subagent.thread_spawn
@@ -452,26 +471,30 @@ class CodexCanonicalTranslator(HarnessTranslator):
                     ActorStarted(actor_name, role),
                     occurred_at=timestamp(metadata.timestamp),
                 )
-                return TranslationResult((actor_started,), "translated")
+                return TranslationResult((actor_started,), RecordedTranslationDecision.TRANSLATED)
             return TranslationResult(
                 tuple(self._session_started_events(
                     raw_event,
                     metadata.cwd or "",
                     os.path.realpath(raw_event.source_name),
                 )),
-                "translated",
+                RecordedTranslationDecision.TRANSLATED,
             )
 
         record = rollout.parse(document)
         if record is None:
-            return TranslationResult((), "ignored_unknown", f"unhandled Codex record {document.get('type')!r}")
+            return TranslationResult(
+                (), RecordedTranslationDecision.IGNORED_UNKNOWN, f"unhandled Codex record {document.get('type')!r}"
+            )
         if isinstance(record, BadRecord):
             raise TranslationError("malformed Codex rollout record", context=raw_event.source_position)
 
         events = self._translate_record(raw_event, document, record)
         if not events:
-            return TranslationResult((), "ignored_nonsemantic", f"nonsemantic Codex record {record.kind!r}")
-        return TranslationResult(tuple(events), "translated")
+            return TranslationResult(
+                (), RecordedTranslationDecision.IGNORED_NONSEMANTIC, f"nonsemantic Codex record {record.kind!r}"
+            )
+        return TranslationResult(tuple(events), RecordedTranslationDecision.TRANSLATED)
 
     def _translate_hook(
         self,
@@ -529,7 +552,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 "actor",
                 str(raw_event.actor_id),
                 "started",
-                ActorStarted("codex", "lead"),
+                ActorStarted("codex", ActorRole.LEAD),
                 occurred_at=occurred_at,
             ),
         ]
@@ -602,7 +625,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
                     "turn",
                     str(turn_id),
                     "finished",
-                    TurnFinished(None, "succeeded"),
+                    TurnFinished(None, Outcome.SUCCEEDED),
                     turn_id,
                     occurred_at,
                 )
@@ -616,7 +639,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
                         "actor_assignment",
                         str(assignment_id),
                         "finished",
-                        ActorAssignmentFinished(assignment_id, "succeeded", result, None),
+                        ActorAssignmentFinished(assignment_id, Outcome.SUCCEEDED, result, None),
                         turn_id,
                         occurred_at,
                     )
@@ -632,7 +655,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
                     "actor_assignment",
                     str(assignment_id),
                     "finished",
-                    ActorAssignmentFinished(assignment_id, "cancelled", None, "interrupted"),
+                    ActorAssignmentFinished(assignment_id, Outcome.CANCELLED, None, "interrupted"),
                     turn_id,
                     occurred_at,
                 ))
@@ -642,26 +665,26 @@ class CodexCanonicalTranslator(HarnessTranslator):
             # a payload that accepts a closed set. The normalisation below
             # already rejects an unknown role — the annotation is what makes
             # that rejection checkable instead of incidental.
-            role: MessageRole = "user" if isinstance(record, PromptRecord) else "assistant"
+            role: MessageRole = MessageRole.USER if isinstance(record, PromptRecord) else MessageRole.ASSISTANT
             if isinstance(record, ChatRecord):
                 if record.role == "user":
-                    role = "user"
+                    role = MessageRole.USER
                 elif record.role == "assistant":
-                    role = "assistant"
+                    role = MessageRole.ASSISTANT
                 elif record.role == "system":
-                    role = "system"
+                    role = MessageRole.SYSTEM
             synthetic = record.synthetic if isinstance(record, ChatRecord) else False
             if synthetic:
-                role = "system"
-            phase: MessagePhase | None = "synthetic" if synthetic else None
+                role = MessageRole.SYSTEM
+            phase: MessagePhase | None = MessagePhase.SYNTHETIC if synthetic else None
             if isinstance(record, PromptRecord) and not synthetic:
-                phase = "prompt"
-            elif role == "user" and phase is None:
-                phase = "prompt"
+                phase = MessagePhase.PROMPT
+            elif role == MessageRole.USER and phase is None:
+                phase = MessagePhase.PROMPT
             elif isinstance(record, (MessageRecord, ChatRecord)) and record.phase == PHASE_FINAL:
-                phase = "end_turn"
-            elif role == "assistant":
-                phase = "intermediate"
+                phase = MessagePhase.END_TURN
+            elif role == MessageRole.ASSISTANT:
+                phase = MessagePhase.INTERMEDIATE
             message_id = MessageId(native_identity)
             message_content = content(record.text, markdown=role == "assistant")
             payload: EventPayload = MessageCreated(message_id, role, message_content, phase, None)
@@ -714,9 +737,9 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 spoken = call_arguments.message or call_arguments.content or ""
                 payload = MessageCreated(
                     message_id,
-                    "assistant",
+                    MessageRole.ASSISTANT,
                     content(spoken, markdown=True),
-                    "intermediate",
+                    MessagePhase.INTERMEDIATE,
                     None,
                     ActorId(record.actor_id),
                 )
@@ -740,19 +763,19 @@ class CodexCanonicalTranslator(HarnessTranslator):
             # a state GoalChanged accepts, and a typo in one of them used to
             # travel all the way into a stored fact.
             states: dict[str, GoalState] = {
-                "active": "active",
-                "paused": "paused",
-                "blocked": "blocked",
-                "usageLimited": "usage_limited",
-                "budgetLimited": "budget_limited",
-                "complete": "completed",
-                "cleared": "cleared",
+                "active": GoalState.ACTIVE,
+                "paused": GoalState.PAUSED,
+                "blocked": GoalState.BLOCKED,
+                "usageLimited": GoalState.USAGE_LIMITED,
+                "budgetLimited": GoalState.BUDGET_LIMITED,
+                "complete": GoalState.COMPLETED,
+                "cleared": GoalState.CLEARED,
             }
             state = states.get(native_state)
             if state is None:
                 raise TranslationError(f"unknown Codex goal state: {native_state or '<missing>'}")
             objective = (record.objective or "").strip() or None
-            if state != "cleared" and objective is None:
+            if state != GoalState.CLEARED and objective is None:
                 raise TranslationError("Codex goal has no objective")
             payload = GoalChanged(objective, state, (record.reason or "").strip() or None)
             return [event(
@@ -778,13 +801,13 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 subject = (plan_task.step or "").strip()
                 if not subject:
                     raise TranslationError("Codex plan task has no step")
-                task_state: Literal["pending", "in_progress", "completed"]
+                task_state: TaskState
                 if plan_task.status == "pending":
-                    task_state = "pending"
+                    task_state = TaskState.PENDING
                 elif plan_task.status == "in_progress":
-                    task_state = "in_progress"
+                    task_state = TaskState.IN_PROGRESS
                 elif plan_task.status == "completed":
-                    task_state = "completed"
+                    task_state = TaskState.COMPLETED
                 else:
                     raise TranslationError(f"unknown Codex plan task state: {plan_task.status!r}")
                 task_id = TaskId(f"{raw_event.actor_id}:plan:{task_index}")
@@ -825,7 +848,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 _codex_tool(record.name, record.args)
                 return []
             shell_id = ShellId(call_id)
-            payload = ShellStarted(shell_id, content(record.cmd), "foreground", None)
+            payload = ShellStarted(shell_id, content(record.cmd), ExecutionMode.FOREGROUND, None)
             return [event(raw_event, "shell", str(shell_id), "started", payload, occurred_at=occurred_at)]
         if isinstance(record, StdinRecord):
             process_id = record.process_id
@@ -872,9 +895,9 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 payload = ShellProgressed(
                     continued_shell,
                     ordinal,
-                    "output",
+                    ProgressStream.OUTPUT,
                     content(output),
-                    "append",
+                    OutputMode.APPEND,
                 )
                 return [event(
                     raw_event,
@@ -922,11 +945,11 @@ class CodexCanonicalTranslator(HarnessTranslator):
                         "shell",
                         str(shell_id),
                         f"progress:{ordinal}",
-                        ShellProgressed(shell_id, ordinal, "output", content(output), "append"),
+                        ShellProgressed(shell_id, ordinal, ProgressStream.OUTPUT, content(output), OutputMode.APPEND),
                         occurred_at=occurred_at,
                     ))
                 return running_events
-            outcome: Outcome = "succeeded" if process_exit_code in (None, 0) else "failed"
+            outcome: Outcome = Outcome.SUCCEEDED if process_exit_code in (None, 0) else Outcome.FAILED
             payload = ShellFinished(shell_id, outcome, content(record.output), process_exit_code)
             self._finished_shells.add((source_key, shell_id))
             return [
@@ -949,7 +972,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 return []
             shell_id = completed_shell_id
             process_exit_code = exit_code(record.exit)
-            outcome = "succeeded" if process_exit_code == 0 else "failed"
+            outcome = Outcome.SUCCEEDED if process_exit_code == 0 else Outcome.FAILED
             self._finished_shells.add((source_key, shell_id))
             payload = ShellFinished(shell_id, outcome, content(record.output), process_exit_code)
             return [event(
@@ -963,7 +986,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
         if isinstance(record, SearchRecord):
             # Codex reports the query and nothing of what came back, so the
             # result is honestly absent rather than an empty string.
-            payload = SearchPerformed("web_search", content(record.query), None, "succeeded")
+            payload = SearchPerformed("web_search", content(record.query), None, Outcome.SUCCEEDED)
             return [event(
                 raw_event,
                 "search",
@@ -975,17 +998,17 @@ class CodexCanonicalTranslator(HarnessTranslator):
         if isinstance(record, PatchRecord):
             outcome = outcome_of(record.success)
             action_by_change: dict[str, FileAction] = {
-                "add": "created",
-                "delete": "deleted",
-                "move": "renamed",
-                "update": "updated",
+                "add": FileAction.CREATED,
+                "delete": FileAction.DELETED,
+                "move": FileAction.RENAMED,
+                "update": FileAction.UPDATED,
             }
             events = []
             for file_order, file_record in enumerate(record.files):
                 path = file_record.path
                 payload = FileAccessed(
                     path=path,
-                    action=action_by_change.get(file_record.change or "", "updated"),
+                    action=action_by_change.get(file_record.change or "", FileAction.UPDATED),
                     outcome=outcome,
                     previous_path=file_record.previous_path,
                     lines_added=file_record.added,
@@ -1017,7 +1040,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
                     "usage",
                     native_identity,
                     "reported",
-                    UsageReported("session", str(raw_event.session_id), None, None, tokens, True, None),
+                    UsageReported(UsageScope.SESSION, str(raw_event.session_id), None, None, tokens, True, None),
                     occurred_at=occurred_at,
                 )
             ]
@@ -1044,7 +1067,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
                     raw_event.session_id,
                     raw_event.actor_id,
                     model_reference(ModelId(record.model)),
-                    "reported_by_harness",
+                    ModelChangeReason.REPORTED_BY_HARNESS,
                 )
                 if changed is not None:
                     events.append(event(
@@ -1060,7 +1083,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
                     raw_event.session_id,
                     raw_event.actor_id,
                     record.effort,
-                    "reported_by_harness",
+                    EffortChangeReason.REPORTED_BY_HARNESS,
                 )
                 if chosen is not None:
                     events.append(event(
@@ -1138,18 +1161,20 @@ class CodexCanonicalTranslator(HarnessTranslator):
         that opened it, the outcome and the text from the record that closed it.
         """
         kind, native_name = _codex_tool(tool_record.name, tool_record.args)
-        if kind == "ignored":
+        if kind == CodexToolKind.IGNORED:
             return []
         arguments = tool_record.args
         output = exec_result_record.output
-        outcome: Outcome = "failed" if exit_code(exec_result_record.exit) not in (None, 0) else "succeeded"
+        outcome: Outcome = (
+            Outcome.FAILED if exit_code(exec_result_record.exit) not in (None, 0) else Outcome.SUCCEEDED
+        )
         answered = content(output) if output else None
-        if kind == "search":
+        if kind == CodexToolKind.SEARCH:
             payload: EventPayload = SearchPerformed(
                 native_name, _search_query(arguments), answered, outcome
             )
             return [event(raw_event, "search", call_id, "performed", payload, occurred_at=occurred_at)]
-        if kind == "web":
+        if kind == CodexToolKind.WEB:
             payload = WebFetched(_web_url(arguments), answered, outcome)
             return [event(raw_event, "web", call_id, "fetched", payload, occurred_at=occurred_at)]
         path = _tool_path(arguments)
@@ -1157,5 +1182,5 @@ class CodexCanonicalTranslator(HarnessTranslator):
             # No path is readable from the call, and a file fact whose path was
             # invented is worse than no fact.
             return []
-        payload = FileAccessed(path=path, action="read", outcome=outcome)
+        payload = FileAccessed(path=path, action=FileAction.READ, outcome=outcome)
         return [event(raw_event, "file", f"{call_id}:read:{path}", "accessed", payload, occurred_at=occurred_at)]

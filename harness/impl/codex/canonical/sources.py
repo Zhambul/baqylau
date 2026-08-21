@@ -8,9 +8,8 @@ import json
 import os
 import re
 import time
-from typing import Literal
-
 from domain.ids import ActorId, HarnessName, HarnessSessionId, RawEventId
+from domain.values import ActorRole
 from harness.contract import HarnessRawEventSource, HarnessRawEventSources
 from harness.impl.codex.canonical import rollout
 from harness.impl.codex.canonical.records import SessionMetaPayload, SessionMetaSource
@@ -90,11 +89,11 @@ class CodexRolloutRawEventSource(HarnessRawEventSource):
         self,
         raw_event_source_context: RawEventSourceContext,
         child_body_position: int | None = None,
-        actor_relation: Literal["child", "sidecar"] | None = None,
+        actor_role: ActorRole | None = None,
     ) -> None:
         self.context = raw_event_source_context
         self.child_body_position = child_body_position
-        self.actor_relation = actor_relation
+        self.actor_role = actor_role
         self.source_path = os.path.realpath(raw_event_source_context.source_reference)
         source_hash = hashlib.sha256(self.source_path.encode("utf-8")).hexdigest()
         self.source_identity = f"codex:rollout:{source_hash}"
@@ -137,8 +136,8 @@ class CodexRolloutRawEventSource(HarnessRawEventSource):
             self.child_body_position is not None
             and 0 < line_position < self.child_body_position
         ):
-            return f"{self.actor_relation}_replay"
-        return f"{self.actor_relation}_rollout" if self.actor_relation else "rollout"
+            return f"{self.actor_role}_replay"
+        return f"{self.actor_role}_rollout" if self.actor_role else "rollout"
 
 
 class CodexRawEventSources(HarnessRawEventSources):
@@ -187,7 +186,7 @@ class CodexRawEventSources(HarnessRawEventSources):
                         source_reference=child_path,
                     ),
                     child_body_position,
-                    "child" if owns_lead_session else "sidecar",
+                    ActorRole.CHILD if owns_lead_session else ActorRole.SIDECAR,
                 )
             )
         return tuple(sources)

@@ -21,7 +21,7 @@ from domain.events import (
     TaskChanged,
     TaskListChanged,
 )
-from domain.sessiondata import SessionFacts, SessionGoal, SessionTask
+from domain.sessiondata import LifecycleState, SessionFacts, SessionGoal, SessionTask
 from domain.values import TextContent
 from engine.sessiondata.contract import AggregateState, SessionDataWriter
 
@@ -50,7 +50,7 @@ class SessionWriter(SessionDataWriter):
                 aggregate_state,
                 session=replace(
                     aggregate_state.session,
-                    state="running",
+                    state=LifecycleState.RUNNING,
                     finished_at=None,
                     working_directory=(
                         born.working_directory or aggregate_state.session.working_directory
@@ -68,7 +68,7 @@ class SessionWriter(SessionDataWriter):
             return replace(
                 aggregate_state,
                 session=replace(
-                    session, state="finished", finished_at=canonical_event.happened_at
+                    session, state=LifecycleState.FINISHED, finished_at=canonical_event.happened_at
                 ),
             )
         if (
@@ -87,7 +87,7 @@ def _born(canonical_event: CanonicalEvent[EventPayload]) -> SessionFacts:
     return SessionFacts(
         session_id=event.session_id,
         harness=event.harness,
-        state="running",
+        state=LifecycleState.RUNNING,
         working_directory=payload.working_directory,
         started_at=canonical_event.happened_at,
         lead_actor_id=event.actor_id,

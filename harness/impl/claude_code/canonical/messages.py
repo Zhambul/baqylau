@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Literal, cast
 
 from pydantic import JsonValue
 
@@ -40,7 +39,20 @@ from domain.ids import (
     TaskId,
     TurnId,
 )
-from domain.values import AccountReference, GoalState, MessagePhase, MessageRole, Outcome, TitleOrigin
+from domain.values import (
+    AccountReference,
+    ActorRole,
+    EffortChangeReason,
+    GoalState,
+    MessagePhase,
+    MessageRole,
+    ModelChangeReason,
+    Outcome,
+    OutputMode,
+    ProgressStream,
+    TaskState,
+    TitleOrigin,
+)
 from harness.impl.claude_code import model
 from harness.impl.claude_code.canonical import records, transcript
 from harness.impl.claude_code.canonical.support import SYNTHETIC_MODEL_ID, content, event, model_reference, timestamp
@@ -59,15 +71,15 @@ from harness.models.selections import SelectionSemantics
 # assumed good: reporting a job as succeeded is the one answer that cannot be
 # walked back by looking at it.
 BACKGROUND_OUTCOMES: dict[str, Outcome] = {
-    "completed": "succeeded",
-    "failed": "failed",
-    "killed": "cancelled",
-    "stopped": "cancelled",
+    "completed": Outcome.SUCCEEDED,
+    "failed": Outcome.FAILED,
+    "killed": Outcome.CANCELLED,
+    "stopped": Outcome.CANCELLED,
 }
 
 
 def background_outcome(status: JsonValue) -> Outcome | None:
-    return BACKGROUND_OUTCOMES.get(str(status or "").strip().lower(), "unknown") if status else None
+    return BACKGROUND_OUTCOMES.get(str(status or "").strip().lower(), Outcome.UNKNOWN) if status else None
 
 
 def launch_selections(
@@ -93,14 +105,14 @@ def launch_selections(
             raw_event.session_id,
             raw_event.actor_id,
             model_reference(ModelId(model_selection)),
-            "selected",
+            ModelChangeReason.SELECTED,
         )
         if changed is not None:
             events.append(event(raw_event, "model", subject_id, "selected", changed))
     effort_selection = launch.effort
     if isinstance(effort_selection, str) and effort_selection:
         chosen = selection_semantics.effort(
-            raw_event.session_id, raw_event.actor_id, effort_selection, "selected"
+            raw_event.session_id, raw_event.actor_id, effort_selection, EffortChangeReason.SELECTED
         )
         if chosen is not None:
             events.append(event(raw_event, "effort", subject_id, "selected", chosen))
@@ -168,11 +180,12 @@ def slash_command(
     if selection and len(selection.split()) == 1 and name in ("model", "effort"):
         payload: EventPayload | None = (
             selection_semantics.model(
-                raw_event.session_id, raw_event.actor_id, model_reference(ModelId(selection)), "selected"
+                raw_event.session_id, raw_event.actor_id, model_reference(ModelId(selection)),
+                ModelChangeReason.SELECTED,
             )
             if name == "model"
             else selection_semantics.effort(
-                raw_event.session_id, raw_event.actor_id, selection, "selected"
+                raw_event.session_id, raw_event.actor_id, selection, EffortChangeReason.SELECTED
             )
         )
         # A `/model x` that selects what is already selected settles nothing,
@@ -183,18 +196,20 @@ def slash_command(
         return [
             event(raw_event, name, native_identity, "selected", payload, occurred_at=occurred_at)
         ]
-    role: MessageRole = "parent" if raw_event.parent_actor_id is not None else "user"
+    role: MessageRole = MessageRole.PARENT if raw_event.parent_actor_id is not None else MessageRole.USER
     events = [
         event(
             raw_event,
             "message",
             native_identity,
             "created",
-            MessageCreated(MessageId(native_identity), role, content(record["text"]), "prompt", None),
+            MessageCreated(
+                MessageId(native_identity), role, content(record["text"]), MessagePhase.PROMPT, None
+            ),
             occurred_at=occurred_at,
         )
     ]
-    if role == "user":
+    if role == MessageRole.USER:
         events = prompt_turn(raw_event, turn_semantics, native_identity, occurred_at) + events
     return events
 
@@ -211,13 +226,13 @@ def transcript_metadata(
     title_record = records.TitleRecord.model_validate(document)
     if record_type == "agent-name":
         title = str(title_record.agentName or "").strip()
-        origin: TitleOrigin = "custom"
+        origin: TitleOrigin = TitleOrigin.CUSTOM
     elif record_type == "ai-title":
         title = str(title_record.aiTitle or "").strip()
-        origin = "automatic"
+        origin = TitleOrigin.AUTOMATIC
     else:
         title = str(title_record.summary or "").strip()
-        origin = "summary"
+        origin = TitleOrigin.SUMMARY
     if not title:
         return []
     return [
@@ -253,7 +268,7 @@ def session_events(
                 "started",
                 ActorStarted(
                     str(raw_event.actor_id),
-                    "teammate" if raw_event.source_type == "teammate_transcript" else "child",
+                    ActorRole.TEAMMATE if raw_event.source_type == "teammate_transcript" else ActorRole.CHILD,
                 ),
             )
         ]
@@ -292,7 +307,7 @@ def session_events(
             "actor",
             str(lead_actor_id),
             "started",
-            ActorStarted("claude", "lead"),
+            ActorStarted("claude", ActorRole.LEAD),
         ),
     ]
     if raw_event.account_id is not None or raw_event.account_display_name is not None:
@@ -317,14 +332,13 @@ def task_event(
     if not task_id:
         raise TranslationError("Claude Code task has no id", context=raw_event.source_position)
     native_state = task.status
-    if native_state not in ("pending", "in_progress", "completed", "deleted"):
+    try:
+        state = TaskState(native_state or "")
+    except ValueError:
         raise TranslationError(
             f"unknown Claude Code task state: {native_state!r}",
             context=raw_event.source_position,
-        )
-    state = cast(
-        Literal["pending", "in_progress", "completed", "deleted"], native_state
-    )
+        ) from None
     owner = str(task.owner or "").strip()
     payload = TaskChanged(
         task_id,
@@ -359,19 +373,19 @@ def translate_transcript(
     occurred_at = timestamp(document.get("timestamp"))
     if kind == "prompt":
         synthetic = bool(record.get("meta"))
-        phase: MessagePhase = "synthetic" if synthetic else "prompt"
+        phase: MessagePhase = MessagePhase.SYNTHETIC if synthetic else MessagePhase.PROMPT
         role: MessageRole = (
-            "system"
+            MessageRole.SYSTEM
             if synthetic
-            else "parent"
+            else MessageRole.PARENT
             if raw_event.parent_actor_id is not None
-            else "user"
+            else MessageRole.USER
         )
         payload: EventPayload = MessageCreated(
             MessageId(native_identity), role, content(record["text"]), phase, None
         )
         created = event(raw_event, "message", native_identity, "created", payload, occurred_at=occurred_at)
-        if role != "user":
+        if role != MessageRole.USER:
             # A synthetic or parent-authored prompt is machinery or a brief; a
             # turn belongs to the person who asked for one.
             return [created]
@@ -384,9 +398,9 @@ def translate_transcript(
         objective = record.get("objective")
         reason = record.get("reason")
         # The state string is ours (built by parse_line/_task_notification,
-        # never read back off Claude Code's own JSON), so the Literal it
-        # promises is a fact about THIS module, not a foreign claim.
-        state = cast(GoalState, record["state"])
+        # never read back off Claude Code's own JSON), so the enum member it
+        # constructs is a fact about THIS module, not a foreign claim.
+        state = GoalState(str(record["state"]))
         payload = GoalChanged(
             str(objective) if objective is not None else None,
             state,
@@ -430,9 +444,9 @@ def translate_transcript(
         payload = ShellProgressed(
             armed,
             ordinal,
-            "status",
+            ProgressStream.STATUS,
             content(str(record.get("event") or "")),
-            "append",
+            OutputMode.APPEND,
         )
         return [event(
             raw_event,
@@ -465,7 +479,11 @@ def translate_transcript(
     if kind == "actor_assignment_finished":
         assignment_id = AssignmentId(str(record["assignment_id"]))
         status = str(record["status"])
-        outcome: Outcome = "failed" if status == "failed" else "cancelled" if status == "cancelled" else "succeeded"
+        outcome: Outcome = (
+            Outcome.FAILED if status == "failed"
+            else Outcome.CANCELLED if status == "cancelled"
+            else Outcome.SUCCEEDED
+        )
         result = record.get("result")
         payload = ActorAssignmentFinished(
             assignment_id,
@@ -489,7 +507,9 @@ def translate_transcript(
                 "Claude Code teammate message has no sender",
                 context=raw_event.source_position,
             )
-        payload = MessageCreated(MessageId(native_identity), "peer", content(record["body"]), None, None)
+        payload = MessageCreated(
+            MessageId(native_identity), MessageRole.PEER, content(record["body"]), None, None
+        )
         events = []
         if raw_event.parent_actor_id is not None and not actor_started:
             events.append(event(
@@ -497,7 +517,7 @@ def translate_transcript(
                 "actor",
                 str(raw_event.actor_id),
                 "started",
-                ActorStarted(str(raw_event.actor_id), "teammate"),
+                ActorStarted(str(raw_event.actor_id), ActorRole.TEAMMATE),
                 occurred_at=None,
             ))
         events.append(
@@ -551,9 +571,11 @@ def translate_transcript(
                 block_identity = f"{message_identity}:{block_index}"
                 payload = MessageCreated(
                     MessageId(block_identity),
-                    "assistant",
+                    MessageRole.ASSISTANT,
                     content(block.get("text"), markdown=True),
-                    "end_turn" if ends_turn and block_index == last_text_index else "intermediate",
+                    MessagePhase.END_TURN
+                    if ends_turn and block_index == last_text_index
+                    else MessagePhase.INTERMEDIATE,
                     None,
                 )
                 events.append(
@@ -598,7 +620,7 @@ def translate_transcript(
                 raw_event.session_id,
                 raw_event.actor_id,
                 model_reference_value,
-                "reported_by_harness",
+                ModelChangeReason.REPORTED_BY_HARNESS,
             )
             if reported is not None:
                 events.append(
@@ -658,9 +680,9 @@ def translate_transcript(
             text_identity = f"{native_identity}:text:{text_index}"
             payload = MessageCreated(
                 MessageId(text_identity),
-                "system" if record.get("meta") else "user",
+                MessageRole.SYSTEM if record.get("meta") else MessageRole.USER,
                 content(result_text),
-                "synthetic" if record.get("meta") else "prompt",
+                MessagePhase.SYNTHETIC if record.get("meta") else MessagePhase.PROMPT,
                 None,
             )
             events.append(event(raw_event, "message", text_identity, "created", payload))
@@ -674,9 +696,9 @@ def translate_transcript(
     if kind == "recap":
         payload = MessageCreated(
             MessageId(native_identity),
-            "system",
+            MessageRole.SYSTEM,
             content(record["text"], markdown=True),
-            "recap",
+            MessagePhase.RECAP,
             None,
         )
         return [event(raw_event, "message", native_identity, "created", payload, occurred_at=occurred_at)]

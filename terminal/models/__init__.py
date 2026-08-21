@@ -9,6 +9,7 @@ about windows, not about sessions or harnesses.
 from terminal.models.input import (
     KeySendRequest,
     KeySendResponse,
+    TextSubmitMode,
     TextSubmitRequest,
     TextSubmitResponse,
 )
@@ -21,6 +22,7 @@ from terminal.models.panes import (
     PaneOpenResponse,
     PaneResizeRequest,
     PaneResizeResponse,
+    SplitAxis,
     WindowFocusRequest,
     WindowFocusResponse,
 )
@@ -67,6 +69,7 @@ __all__ = [
     "SESSION_WINDOW_TAG",
     "ScreenReadRequest",
     "ScreenReadResponse",
+    "SplitAxis",
     "TabAppearance",
     "TabCloseRequest",
     "TabCloseResponse",
@@ -78,6 +81,7 @@ __all__ = [
     "TabOpenResponse",
     "TabRenameRequest",
     "TabRenameResponse",
+    "TextSubmitMode",
     "TextSubmitRequest",
     "TextSubmitResponse",
     "ViewportScrollRequest",

@@ -636,6 +636,11 @@ CLAIM_HEAD_B = 8192   # head bytes owns() reads when the LAYOUT doesn't settle i
 # codex rollout's records are session_meta/response_item/turn_context/event_msg
 # and its inner `payload.type` is never read here, so the two vocabularies
 # cannot collide.
+#
+# Not a vocabulary of OURS for the enum sweep (TASKS.md item 4b): these are
+# Claude Code's OWN transcript record type tags, read verbatim off its JSON —
+# the same role the `type` Literal tags in records.py play for the same
+# harness, and those stay Literals for the same reason.
 RECORD_TYPES = frozenset((
     "summary", "user", "assistant", "system", "attachment",
     "queue-operation", "agent-name", "ai-title", "file-history-snapshot",
@@ -740,12 +745,12 @@ class TranscriptTitleRepository(NativeSessionTitleRepository):
 
     def set_title(self, source_reference: str, title: str) -> TitleWriteOutcome:
         if not self.renameable(source_reference):
-            return "unsupported"
+            return TitleWriteOutcome.UNSUPPORTED
         try:
             written = set_session_title(source_reference, title)
         except OSError:
-            return "unavailable"
-        return "renamed" if written else "unavailable"
+            return TitleWriteOutcome.UNAVAILABLE
+        return TitleWriteOutcome.RENAMED if written else TitleWriteOutcome.UNAVAILABLE
 
 
 titles = TranscriptTitleRepository()

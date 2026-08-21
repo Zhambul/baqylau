@@ -9,9 +9,15 @@ database.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from enum import StrEnum
 
 from domain.ids import ActorId, HarnessName, SessionId, ShellId
+from domain.values import ShellFollowUntil
+
+
+class ShellFollowState(StrEnum):
+    ACTIVE = "active"
+    FINISHING = "finishing"
 
 
 @dataclass(frozen=True)
@@ -27,10 +33,10 @@ class ShellOutputFollowing:
     initial_size: int
     initial_modified_at: int
     wait_for_source_change: bool
-    until: Literal["shell_finished", "session_finished"]
-    state: Literal["active", "finishing"]
+    until: ShellFollowUntil
+    state: ShellFollowState
     created_at: float
 
     @property
     def finishing(self) -> bool:
-        return self.state == "finishing"
+        return self.state == ShellFollowState.FINISHING

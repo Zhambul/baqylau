@@ -16,11 +16,10 @@ was the only channel.
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Literal
-
 from domain.ids import AccountId, HarnessName, ModelId
 from harness.contract import HarnessUsage
 from harness.models import AccountUsageSnapshot, UsageRow, UsageWindow, UsageWindowSample
+from harness.models.usage import UsageWindowScope
 from repository.contract.usage import AccountUsageRepository
 from harness.impl.claude_code import account
 from harness.impl.claude_code.account import AccountRecord
@@ -37,7 +36,7 @@ WINDOWS: dict[str, tuple[str, int]] = {
 UNKNOWN_WINDOW_MINUTES = 7 * 24 * 60
 
 
-def window_shape(key: str) -> tuple[str, int, Literal["account", "model"], ModelId | None]:
+def window_shape(key: str) -> tuple[str, int, UsageWindowScope, ModelId | None]:
     """One window key as (label, duration, scope, model).
 
     Scope is what the strip lays itself out by: an `account` window gets its own
@@ -46,16 +45,16 @@ def window_shape(key: str) -> tuple[str, int, Literal["account", "model"], Model
     """
     if key in WINDOWS:
         label, minutes = WINDOWS[key]
-        return label, minutes, "account", None
+        return label, minutes, UsageWindowScope.ACCOUNT, None
     for base, (label, minutes) in WINDOWS.items():
         prefix = f"{base}_"
         if key.startswith(prefix) and len(key) > len(prefix):
             model = ModelId(key[len(prefix):].replace("_", " "))
-            return f"{label} {model}", minutes, "model", model
+            return f"{label} {model}", minutes, UsageWindowScope.MODEL, model
     # A window neither source has sent before still renders, because the harness
     # may add one without telling us: model-scoped by assumption, since every
     # account-wide window we know of is named above.
-    return key.replace("_", " "), UNKNOWN_WINDOW_MINUTES, "model", ModelId(key)
+    return key.replace("_", " "), UNKNOWN_WINDOW_MINUTES, UsageWindowScope.MODEL, ModelId(key)
 
 
 def _order(usage_window_sample: UsageWindowSample) -> tuple[int, str]:

@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from enum import StrEnum
 
 from domain.ids import AccountId, ModelId, SessionId, WindowId
 from harness.models.controls import AttachmentReference
+
+
+class LaunchStatus(StrEnum):
+    STARTED = "started"
+    REJECTED = "rejected"
 
 
 @dataclass(frozen=True)
@@ -29,7 +34,7 @@ class LaunchRequest:
 
 @dataclass(frozen=True)
 class LaunchResult:
-    status: Literal["started", "rejected"]
+    status: LaunchStatus
     window_id: WindowId | None = None
     reason: str | None = None
 

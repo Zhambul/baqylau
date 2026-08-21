@@ -44,7 +44,9 @@ from domain.sessiondata import (
     ActorContext,
     ActorFacts,
     ActorStatistics,
+    ActorStatus,
     ActorUsage,
+    LifecycleState,
     SessionData,
     SessionFacts,
     SessionGoal,
@@ -52,6 +54,7 @@ from domain.sessiondata import (
 )
 from domain.values import (
     AccountReference,
+    ActorRole,
     AttentionAnswer,
     AttentionChoice,
     AttentionPrompt,
@@ -78,7 +81,7 @@ LEAD = ActorId("session-one:lead")
 FACTS = SessionFacts(
     session_id=SESSION,
     harness=HarnessName("claude_code"),
-    state="running",
+    state=LifecycleState.RUNNING,
     working_directory="/work/baqylau",
     started_at=1755590000.0,
     lead_actor_id=LEAD,
@@ -88,10 +91,10 @@ FACTS = SessionFacts(
 ACTOR = ActorFacts(
     session_id=SESSION,
     actor_id=LEAD,
-    role="lead",
+    role=ActorRole.LEAD,
     name="Claude",
-    state="running",
-    status="executing",
+    state=LifecycleState.RUNNING,
+    status=ActorStatus.EXECUTING,
     model=ModelReference(ModelId("claude-fable-5"), "Fable 5", SelectionId("fable")),
     effort="high",
 )

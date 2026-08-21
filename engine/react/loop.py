@@ -65,13 +65,13 @@ REACTION_BATCH_SIZE = 500
 # left out here is allowed to carry nothing: a marker, a note, or a start
 # with no finish yet (`domain/entries.py` names the body of each).
 EMPTY_BODY_SUSPECT: Final[Mapping[EntryTypeName, str]] = {
-    "message": "content",         # the message itself
-    "reasoning": "content",       # the thinking a reader expands to read
-    "shell_output": "content",    # the chunk that IS the entry
-    "shell_finished": "result",   # the output a non-streaming harness attaches to its finish
-    "file": "content",            # the diff, or the file's text
-    "search": "result",           # what the search found
-    "web": "result",              # what the fetch returned
+    EntryTypeName.MESSAGE: "content",         # the message itself
+    EntryTypeName.REASONING: "content",       # the thinking a reader expands to read
+    EntryTypeName.SHELL_OUTPUT: "content",    # the chunk that IS the entry
+    EntryTypeName.SHELL_FINISHED: "result",   # the output a non-streaming harness attaches to its finish
+    EntryTypeName.FILE: "content",            # the diff, or the file's text
+    EntryTypeName.SEARCH: "result",           # what the search found
+    EntryTypeName.WEB: "result",              # what the fetch returned
 }
 
 

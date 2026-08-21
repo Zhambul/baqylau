@@ -31,6 +31,7 @@ from terminal.impl.pty.window import PtyWindow, open_window
 from terminal.models.input import (
     KeySendRequest,
     KeySendResponse,
+    TextSubmitMode,
     TextSubmitRequest,
     TextSubmitResponse,
 )
@@ -42,6 +43,7 @@ from terminal.models.panes import (
     PaneOpenResponse,
     PaneResizeRequest,
     PaneResizeResponse,
+    SplitAxis,
     WindowFocusRequest,
     WindowFocusResponse,
 )
@@ -174,7 +176,7 @@ class PtyPanes(TerminalPanes):
         if window is None:
             return PaneResizeResponse(False, NO_WINDOW)
         columns, lines = window.screen.columns, window.screen.lines
-        if pane_resize_request.axis == "horizontal":
+        if pane_resize_request.axis == SplitAxis.HORIZONTAL:
             columns = max(1, columns + pane_resize_request.cells)
         else:
             lines = max(1, lines + pane_resize_request.cells)
@@ -239,7 +241,7 @@ class PtyInput(TerminalInput):
         if window is None:
             return TextSubmitResponse(False, NO_WINDOW)
         payload = text_submit_request.text.encode("utf-8")
-        if text_submit_request.mode == "paste":
+        if text_submit_request.mode == TextSubmitMode.PASTE:
             payload = keys.BRACKETED_PASTE_START + payload + keys.BRACKETED_PASTE_END
         # The Enter stays a separate keystroke, so it submits rather than
         # becoming a newline in the draft (TextSubmitRequest).

@@ -3,16 +3,19 @@
 # extra. The api layer keeps its own copy so a field the controllers add is a
 # deliberate change to the browser contract rather than an automatic one.
 #
-from typing import Literal, TypeAlias
+from typing import TypeAlias
 
 from pydantic import BaseModel
 
 from api.common.models.values.plan_choice import PlanChoiceResponse
+from harness.models import ConfirmationOutcome, ControlAcknowledgement
+
+
 class ControlResultResponse(BaseModel):
     """The verdict every gesture answers with, and all that most of them do."""
 
     request_id: str
-    status: Literal["acknowledged", "rejected", "indeterminate"]
+    status: ControlAcknowledgement
     reason: str | None
 
 
@@ -27,7 +30,7 @@ class DeliveryResultResponse(ControlResultResponse):
 
 
 class CommandResultResponse(ControlResultResponse):
-    confirmation: Literal["confirmed", "not_needed", "failed"] | None
+    confirmation: ConfirmationOutcome | None
 
 
 class RewindResultResponse(ControlResultResponse):

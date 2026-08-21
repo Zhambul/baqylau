@@ -10,7 +10,6 @@ from __future__ import annotations
 import time
 from dataclasses import replace
 from decimal import Decimal
-from typing import Literal
 
 import pytest
 
@@ -35,8 +34,8 @@ from domain.ids import (
     TaskId,
     WindowId,
 )
-from domain.sessiondata import ActorFacts, SessionFacts
-from domain.shells import ShellOutputFollowing
+from domain.sessiondata import ActorFacts, LifecycleState, SessionFacts
+from domain.shells import ShellFollowState, ShellOutputFollowing
 from domain.preferences import (
     NewSessionDraft,
     NewSessionPreferences,
@@ -44,7 +43,7 @@ from domain.preferences import (
     PushSubscription,
 )
 from domain.uploads import StoredUpload
-from domain.values import TextContent
+from domain.values import ActorRole, MessagePhase, MessageRole, ShellFollowUntil, TextContent
 from domain.workspace import AnswerSelection, ComposerDraft, ComposerQueue, DialogDraft, QueuedMessage
 from harness.models import AccountUsageSnapshot, RawEvent, Session, TranslationResult, UsageWindowSample
 from repository.errors import EventIdentityConflict, SchemaVersionMismatch
@@ -405,7 +404,7 @@ def test_uninterpreted_raw_event_audit_has_no_interpretation(main):
 
 
 def a_following(
-    until: Literal["shell_finished", "session_finished"] = "shell_finished",
+    until: ShellFollowUntil = ShellFollowUntil.SHELL_FINISHED,
 ) -> ShellOutputFollowing:
     return ShellOutputFollowing(
         session_id=SESSION,
@@ -420,7 +419,7 @@ def a_following(
         initial_modified_at=0,
         wait_for_source_change=False,
         until=until,
-        state="active",
+        state=ShellFollowState.ACTIVE,
         created_at=1000.0,
     )
 
@@ -433,9 +432,9 @@ def test_a_following_round_trips_without_a_driver_row(main):
 
 def test_marking_finished_ends_only_a_foreground_following(main):
     outputs = SqliteShellOutputRepository(main)
-    outputs.save(a_following(until="session_finished"))
+    outputs.save(a_following(until=ShellFollowUntil.SESSION_FINISHED))
     outputs.mark_shell_finished(SESSION, ShellId("op-one"))
-    assert outputs.find_for_session(SESSION)[0].state == "active"
+    assert outputs.find_for_session(SESSION)[0].state == ShellFollowState.ACTIVE
     outputs.mark_finishing(SESSION, ShellId("op-one"))
     assert outputs.find_for_session(SESSION)[0].finishing
 
@@ -457,7 +456,7 @@ def test_expiry_returns_what_it_removed_so_the_caller_unlinks(main):
 A_SESSION = SessionFacts(
     session_id=SESSION,
     harness=HARNESS,
-    state="running",
+    state=LifecycleState.RUNNING,
     working_directory="/work",
     started_at=1.0,
     lead_actor_id=ActorId("lead"),
@@ -465,9 +464,9 @@ A_SESSION = SessionFacts(
 AN_ACTOR = ActorFacts(
     session_id=SESSION,
     actor_id=ActorId("lead"),
-    role="lead",
+    role=ActorRole.LEAD,
     name="claude",
-    state="running",
+    state=LifecycleState.RUNNING,
 )
 
 
@@ -480,7 +479,7 @@ def an_entry(entry_id: str) -> SessionEntry:
         turn_id=None,
         occurred_at=1.0,
         summary=None,
-        body=MessageBody(MessageId(entry_id), "user", "prompt", TextContent("go")),
+        body=MessageBody(MessageId(entry_id), MessageRole.USER, MessagePhase.PROMPT, TextContent("go")),
     )
 
 

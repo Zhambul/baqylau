@@ -177,7 +177,7 @@ class Notifier:
         self.previous_states = current_states
         self._deliver_due(current_states, now)
 
-    def _schedule(self, _alertable: _Alertable, state: ActorStatus, kind: str, now: float) -> None:
+    def _schedule(self, _alertable: _Alertable, actor_status: ActorStatus, kind: str, now: float) -> None:
         session_id = _alertable.session_id
         if not self.notification_settings.alerting_enabled() or session_id in self._muted:
             return
@@ -189,7 +189,7 @@ class Notifier:
             delay = max(delay, config.NOTIFICATION_SETTLE_SECONDS)
         self.pending[session_id] = PendingNotification(
             session_id,
-            state,
+            actor_status,
             kind,
             project,
             title,
@@ -306,7 +306,7 @@ class Notifier:
     def _resolve(
         self,
         session_id: SessionId,
-        current: ActorStatus | None,
+        current_actor_status: ActorStatus | None,
         now: float,
         badge: int = 0,
     ) -> None:
@@ -314,7 +314,7 @@ class Notifier:
         delivered = self.delivered.get(session_id) or []
         remaining = []
         for notification in delivered:
-            if notification.state == current:
+            if notification.state == current_actor_status:
                 remaining.append(notification)
                 continue
             age = now - notification.delivered_at

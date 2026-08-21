@@ -31,6 +31,7 @@ from terminal.models import (
     PaneResizeRequest,
     SCOREBOARD_PANE_TAG,
     SESSION_WINDOW_TAG,
+    SplitAxis,
     TabAppearance,
     TabColorClearRequest,
     TabColorSetRequest,
@@ -170,7 +171,7 @@ class TerminalAdapter:
                 command=self._pane_command("mirror", session_pane_request.session_id),
                 working_directory="",
                 title=MIRROR_PANE_TITLE,
-                split="vertical",
+                split=SplitAxis.VERTICAL,
                 size_percent=session_pane_request.activity_width_percent,
                 anchor=PaneAnchor(window_id=anchor_window_id),
                 same_tab_as=anchor_window_id,
@@ -181,7 +182,7 @@ class TerminalAdapter:
                 command=self._pane_command("scoreboard", session_pane_request.session_id),
                 working_directory="",
                 title=SCOREBOARD_PANE_TITLE,
-                split="horizontal",
+                split=SplitAxis.HORIZONTAL,
                 size_percent=SCOREBOARD_SIZE_PERCENT,
                 # The scoreboard sits under the MIRROR, not under the session's
                 # own window — it shares the mirror's column.
@@ -228,7 +229,7 @@ class TerminalAdapter:
         if activity is None:
             return SessionTerminalResult(False, "activity pane is not open")
         response = self._plugin.panes.resize_pane(
-            PaneResizeRequest(activity.window_id, "horizontal", columns)
+            PaneResizeRequest(activity.window_id, SplitAxis.HORIZONTAL, columns)
         )
         return SessionTerminalResult(response.succeeded, response.reason)
 
@@ -336,7 +337,7 @@ class TerminalAdapter:
             if row_difference == 0:
                 return SessionTerminalResult(True)
             response = self._plugin.panes.resize_pane(
-                PaneResizeRequest(scoreboard.window_id, "vertical", row_difference)
+                PaneResizeRequest(scoreboard.window_id, SplitAxis.VERTICAL, row_difference)
             )
             if not response.succeeded:
                 return SessionTerminalResult(False, response.reason)

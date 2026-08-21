@@ -6,7 +6,7 @@ from datetime import datetime
 
 from domain.events import CanonicalEvent, EventPayload
 from domain.ids import ModelId, SelectionId, TurnId
-from domain.values import Content, ModelReference, Outcome, TextContent
+from domain.values import Content, MediaType, ModelReference, Outcome, TextContent
 from harness.models import RawEvent, canonical_event
 
 
@@ -36,7 +36,7 @@ def exit_code(value: str | int | None) -> int | None:
 
 
 def content(value: str | None, *, markdown: bool = False) -> Content:
-    return TextContent(value or "", "text/markdown" if markdown else "text/plain")
+    return TextContent(value or "", MediaType.TEXT_MARKDOWN if markdown else MediaType.TEXT_PLAIN)
 
 
 def event(
@@ -55,4 +55,4 @@ def event(
 
 
 def outcome_of(succeeded: bool) -> Outcome:
-    return "succeeded" if succeeded else "failed"
+    return Outcome.SUCCEEDED if succeeded else Outcome.FAILED

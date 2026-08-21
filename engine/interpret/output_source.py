@@ -20,6 +20,7 @@ import time
 
 from domain.ids import HarnessName, RawEventId, SessionId, ShellId
 from domain.shells import ShellOutputFollowing
+from domain.values import ProgressStream
 from harness.contract import HarnessRawEventSource
 from harness.models import RawEvent
 from repository.contract.shell_output import ShellOutputRepository
@@ -133,7 +134,7 @@ class ShellOutputRawEventSource(HarnessRawEventSource):
                 content_base64=base64.b64encode(content).decode("ascii"),
                 shell_id=following.shell_id,
                 ordinal=start,
-                stream="output",
+                stream=ProgressStream.OUTPUT,
             )
         )
         content_hash = hashlib.sha256(content).hexdigest()

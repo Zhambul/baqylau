@@ -233,6 +233,12 @@ def _stamp(rec: RolloutRecord | None, o: dict[str, JsonValue]) -> RolloutRecord 
 # rendered/ignored kind to be a real member here — so adding a parser kind fails
 # the suite until someone decides render-vs-ignore. `bad` is parse_line's
 # non-JSON record.
+#
+# Not a vocabulary of OURS for the enum sweep (TASKS.md item 4b): every member
+# names a record SHAPE this translator recognises, the same role the `kind`/
+# `type` Literal tags in records.py play — and those stay Literals for the
+# same reason. A closed set of record shapes, not a verdict this codebase
+# hands out.
 KINDS = frozenset({
     "turn_context", "usage", "patch", "compact", "task_started",
     "task_complete", "turn_aborted", "prompt", "reasoning", "message",

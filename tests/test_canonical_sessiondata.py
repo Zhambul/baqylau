@@ -80,7 +80,21 @@ from domain.ids import (
     TurnId,
 )
 from domain.sessiondata import ActorStatus
-from domain.values import AccountReference, ModelReference, TextContent, TokenUsage
+from domain.values import (
+    AccountReference,
+    ActorRole,
+    ExecutionMode,
+    FileAction,
+    GoalState,
+    ModelReference,
+    Outcome,
+    ShellFollowUntil,
+    TaskState,
+    TextContent,
+    TokenUsage,
+    UsageScope,
+)
+from domain.records import RecordedTranslationDecision
 from engine.react.loop import ReactionLoop
 from engine.sessiondata.actors import (
     ActorWriter,
@@ -178,7 +192,7 @@ def started() -> SessionStarted:
 
 def alive() -> tuple[EventPayload, ...]:
     """The two facts every session begins with."""
-    return (started(), ActorStarted("claude", "lead"))
+    return (started(), ActorStarted("claude", ActorRole.LEAD))
 
 
 def status_after(*payloads: EventPayload) -> ActorStatus | None:
@@ -234,7 +248,7 @@ def test_a_finished_session_says_when_and_a_resumed_one_keeps_its_work():
     finished = fold(
         *alive(),
         SessionTitleChanged("Chosen", "custom"),
-        GoalChanged("ship it", "active", None),
+        GoalChanged("ship it", GoalState.ACTIVE, None),
         committed(SessionFinished("succeeded", None), cursor=9, occurred_at=500.0),
     ).session
     assert (finished.state, finished.finished_at) == ("finished", 500.0)
@@ -242,7 +256,7 @@ def test_a_finished_session_says_when_and_a_resumed_one_keeps_its_work():
     resumed = fold(
         *alive(),
         SessionTitleChanged("Chosen", "custom"),
-        GoalChanged("ship it", "active", None),
+        GoalChanged("ship it", GoalState.ACTIVE, None),
         SessionFinished("succeeded", None),
         started(),
     ).session
@@ -272,7 +286,7 @@ def test_a_cleared_goal_is_no_goal_and_a_complete_one_says_so():
     assert fold(*alive(), GoalChanged("ship it", "completed", None)).session.goal.completed is True
     assert fold(
         *alive(),
-        GoalChanged("ship it", "active", None),
+        GoalChanged("ship it", GoalState.ACTIVE, None),
         GoalChanged(None, "cleared", None),
     ).session.goal is None
 
@@ -400,9 +414,9 @@ def test_an_assistant_message_is_not_a_prompt():
 @pytest.mark.parametrize(
     "payload",
     (
-        ShellStarted(ShellId("sh1"), TextContent("make test"), "foreground", None),
+        ShellStarted(ShellId("sh1"), TextContent("make test"), ExecutionMode.FOREGROUND, None),
         SkillStarted(SkillId("k1"), "audit-debug", None),
-        TaskChanged(TaskId("t1"), "Read it", None, "in_progress", LEAD),
+        TaskChanged(TaskId("t1"), "Read it", None, TaskState.IN_PROGRESS, LEAD),
         TaskListChanged(TaskListId("list"), (TaskId("t1"),)),
     ),
 )
@@ -415,15 +429,15 @@ def test_work_being_done_is_executing(payload):
 @pytest.mark.parametrize(
     "payload",
     (
-        ShellFinished(ShellId("sh1"), "succeeded", None, 0),
-        FileAccessed("/work/a.py", "updated", "succeeded"),
-        SearchPerformed("Grep", TextContent("q"), None, "succeeded"),
-        WebFetched("https://x.dev", None, "succeeded"),
+        ShellFinished(ShellId("sh1"), Outcome.SUCCEEDED, None, 0),
+        FileAccessed("/work/a.py", FileAction.UPDATED, Outcome.SUCCEEDED),
+        SearchPerformed("Grep", TextContent("q"), None, Outcome.SUCCEEDED),
+        WebFetched("https://x.dev", None, Outcome.SUCCEEDED),
     ),
 )
 def test_work_that_ended_is_working_again(payload):
     assert status_after(
-        ShellStarted(ShellId("sh1"), TextContent("make test"), "foreground", None),
+        ShellStarted(ShellId("sh1"), TextContent("make test"), ExecutionMode.FOREGROUND, None),
         payload,
     ) == "working"
 
@@ -434,12 +448,12 @@ def test_an_unanswered_question_outlives_the_work_that_finished_after_it():
     assert status_after(QuestionAsked(AttentionId("a1"), ())) == "awaiting_attention"
     assert status_after(
         QuestionAsked(AttentionId("a1"), ()),
-        ShellFinished(ShellId("sh1"), "succeeded", None, 0),
+        ShellFinished(ShellId("sh1"), Outcome.SUCCEEDED, None, 0),
     ) == "awaiting_attention"
     assert status_after(
         QuestionAsked(AttentionId("a1"), ()),
         QuestionAnswered(AttentionId("a1"), (), None),
-        ShellFinished(ShellId("sh1"), "succeeded", None, 0),
+        ShellFinished(ShellId("sh1"), Outcome.SUCCEEDED, None, 0),
     ) == "working"
 
 
@@ -484,7 +498,7 @@ def test_a_background_job_ends_on_its_own_notification_not_on_its_launch():
 def test_a_command_backgrounded_mid_run_becomes_background_work_and_counts_as_a_job():
     state = fold(
         *alive(),
-        ShellStarted(ShellId("sh1"), TextContent("make test"), "foreground", None),
+        ShellStarted(ShellId("sh1"), TextContent("make test"), ExecutionMode.FOREGROUND, None),
         ShellBackgrounded(ShellId("sh1"), "b18"),
     )
     background = state.actor(LEAD).background
@@ -561,7 +575,7 @@ def test_the_scoreboard_counts_distinct_files_and_names_a_tool_per_action():
         FileAccessed("/work/a.py", "updated", "succeeded", lines_added=1, lines_removed=0),
         FileAccessed("/work/b.py", "read", "succeeded"),
         SearchPerformed("Grep", TextContent("shell_id"), None, "succeeded"),
-        WebFetched("https://x.dev", None, "succeeded"),
+        WebFetched("https://x.dev", None, Outcome.SUCCEEDED),
     )
     statistics = state.actor(LEAD).statistics
     assert statistics.file_count == 2
@@ -572,7 +586,7 @@ def test_the_scoreboard_counts_distinct_files_and_names_a_tool_per_action():
 def test_commands_are_counted_once_and_their_failures_separately():
     state = fold(
         *alive(),
-        ShellStarted(ShellId("sh1"), TextContent("make test"), "foreground", None),
+        ShellStarted(ShellId("sh1"), TextContent("make test"), ExecutionMode.FOREGROUND, None),
         ShellFinished(ShellId("sh1"), "failed", None, 1),
         ShellStarted(ShellId("sh2"), TextContent("make lint"), "foreground", None),
         ShellFinished(ShellId("sh2"), "succeeded", None, 0),
@@ -599,7 +613,7 @@ def test_active_seconds_measures_closed_intervals_and_leaves_the_open_one_to_the
     asks, so what is stored is only what has definitely elapsed."""
     state = fold(
         committed(started(), cursor=1, occurred_at=100.0),
-        committed(ActorStarted("claude", "lead"), cursor=2, occurred_at=100.0),
+        committed(ActorStarted("claude", ActorRole.LEAD), cursor=2, occurred_at=100.0),
         committed(TurnFinished(None, "succeeded"), cursor=3, occurred_at=130.0),
         committed(
             MessageCreated(MessageId("m1"), "user", TextContent("again"), "prompt", None),
@@ -617,7 +631,7 @@ def test_a_fact_with_no_clock_of_its_own_is_timed_by_when_we_recorded_it():
     column would be subtracting None."""
     state = fold(
         committed(started(), cursor=1, accepted_at=100.0),
-        committed(ActorStarted("claude", "lead"), cursor=2, accepted_at=100.0),
+        committed(ActorStarted("claude", ActorRole.LEAD), cursor=2, accepted_at=100.0),
         committed(TurnFinished(None, "succeeded"), cursor=3, accepted_at=142.0),
     )
     assert state.actor(LEAD).statistics.active_seconds == 42.0
@@ -676,14 +690,14 @@ def test_an_actor_to_actor_message_is_a_message_with_a_recipient():
     "payload",
     (
         SessionStarted("/work", "ref", None, None, None, None, None),
-        ActorStarted("claude", "lead"),
+        ActorStarted("claude", ActorRole.LEAD),
         ActorFinished(None),
-        TaskChanged(TaskId("t1"), "Read it", None, "pending", None),
+        TaskChanged(TaskId("t1"), "Read it", None, TaskState.PENDING, None),
         TaskListChanged(TaskListId("list"), ()),
-        GoalChanged("ship it", "active", None),
-        UsageReported("actor", "lead", None, None, TokenUsage(1), True, None),
+        GoalChanged("ship it", GoalState.ACTIVE, None),
+        UsageReported(UsageScope.ACTOR, "lead", None, None, TokenUsage(1), True, None),
         ContextReported(1, 2, None),
-        ShellOutputLocated(ShellId("sh1"), "/tmp/o", "chunk", False, 0, 0, False, "shell_finished"),
+        ShellOutputLocated(ShellId("sh1"), "/tmp/o", "chunk", False, 0, 0, False, ShellFollowUntil.SHELL_FINISHED),
     ),
 )
 def test_plumbing_and_aggregate_facts_produce_no_entry(payload):
@@ -897,7 +911,7 @@ def _record(database, events, payloads) -> None:
         events.record_translation(
             raw_event,
             "1",
-            TranslationResult((committed(payload, cursor=cursor),), "translated"),
+            TranslationResult((committed(payload, cursor=cursor),), RecordedTranslationDecision.TRANSLATED),
             time.time(),
         )
 

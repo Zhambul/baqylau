@@ -9,6 +9,7 @@ from typing import Callable, Mapping
 from pydantic import JsonValue
 
 from domain.events import CanonicalEvent, EventPayload
+from domain.records import RecordedTranslationDecision
 from audit.recorder import AuditRecorder
 from harness.contract import (
     CanonicalEventReaction,
@@ -46,7 +47,9 @@ def checked(raw_event: RawEvent, translation_result: TranslationResult) -> Trans
         for event in translation_result.canonical_events:
             _check_consistency(raw_event, event)
     except TranslationConsistencyError as error:
-        return TranslationResult((), "translation_failed", f"inconsistent canonical output: {error}")
+        return TranslationResult(
+            (), RecordedTranslationDecision.TRANSLATION_FAILED, f"inconsistent canonical output: {error}"
+        )
     return translation_result
 
 
@@ -225,7 +228,7 @@ class Interpreter:
         except Exception as error:
             # Any translator problem is a decision, not a crash: the queue moves on.
             translation = TranslationResult(
-                (), "translation_failed", f"{type(error).__name__}: {error}"
+                (), RecordedTranslationDecision.TRANSLATION_FAILED, f"{type(error).__name__}: {error}"
             )
         else:
             translation = checked(raw_event, translation)

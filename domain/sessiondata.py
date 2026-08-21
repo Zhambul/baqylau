@@ -20,26 +20,31 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import Literal, TypeAlias
+from enum import StrEnum
 
 from domain.ids import ActorId, AttentionId, HarnessName, SessionId, ShellId, TaskId
 from domain.stored import STORED
-from domain.values import AccountReference, ActorRole, ModelReference, TokenUsage
+from domain.values import AccountReference, ActorRole, ModelReference, TaskState, TokenUsage
 
-# What an actor is doing, in the one word a tab colour and a list row need.
-# Ordered as the fold reaches them, not by severity: `idle` is a session that
-# has started and nothing more, `awaiting_response` a turn that ended.
-ActorStatus: TypeAlias = Literal[
-    "idle",
-    "thinking",
-    "working",
-    "executing",
-    "awaiting_background",
-    "awaiting_attention",
-    "awaiting_response",
-]
-LifecycleState: TypeAlias = Literal["running", "finished"]
-TaskState: TypeAlias = Literal["pending", "in_progress", "completed", "deleted"]
+
+class ActorStatus(StrEnum):
+    """What an actor is doing, in the one word a tab colour and a list row
+    need. Ordered as the fold reaches them, not by severity: `IDLE` is a
+    session that has started and nothing more, `AWAITING_RESPONSE` a turn
+    that ended."""
+
+    IDLE = "idle"
+    THINKING = "thinking"
+    WORKING = "working"
+    EXECUTING = "executing"
+    AWAITING_BACKGROUND = "awaiting_background"
+    AWAITING_ATTENTION = "awaiting_attention"
+    AWAITING_RESPONSE = "awaiting_response"
+
+
+class LifecycleState(StrEnum):
+    RUNNING = "running"
+    FINISHED = "finished"
 
 
 @dataclass(frozen=True)

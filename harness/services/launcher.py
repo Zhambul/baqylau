@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from domain.ids import HarnessName, WindowId
 from harness.models import LaunchRejected, LaunchRequest, LaunchResult
+from harness.models.launch import LaunchStatus
 from harness.registry import HarnessRegistry
 from terminal.adapter import TerminalAdapter
 from terminal.contract import TerminalTabs
@@ -24,7 +25,7 @@ class HarnessLauncherService:
     def launch(self, harness: HarnessName, launch_request: LaunchRequest) -> LaunchResult:
         plugin = self.registry.plugin(harness)
         if plugin.launcher is None:
-            return LaunchResult("rejected", reason="unsupported launch")
+            return LaunchResult(LaunchStatus.REJECTED, reason="unsupported launch")
         # The one door every launch route comes through, so the one place the
         # "announces itself only at the first turn" harnesses are held to a first
         # message (HarnessInfo.requires_initial_message). Declined here rather
@@ -32,7 +33,7 @@ class HarnessLauncherService:
         # observation needs, not about the argv the harness builds.
         if plugin.info.requires_initial_message and not launch_request.carries_first_message:
             return LaunchResult(
-                "rejected",
+                LaunchStatus.REJECTED,
                 reason=(
                     f"{plugin.info.display_name} needs a first message — it appears "
                     "here only once one is sent"
@@ -41,11 +42,11 @@ class HarnessLauncherService:
         if launch_request.resume_session_id is not None:
             window_id = self.terminal.window_for_session(launch_request.resume_session_id)
             if window_id is not None:
-                return LaunchResult("rejected", reason="session is already live")
+                return LaunchResult(LaunchStatus.REJECTED, reason="session is already live")
         try:
             plan = plugin.launcher.prepare(launch_request)
         except LaunchRejected as error:
-            return LaunchResult("rejected", reason=str(error))
+            return LaunchResult(LaunchStatus.REJECTED, reason=str(error))
         terminal_result = self.tabs.open_tab(launch_tab_request(
             launch_request.working_directory,
             (plan.command, *plan.arguments),
@@ -53,7 +54,7 @@ class HarnessLauncherService:
             environment=plan.environment,
         ))
         if not terminal_result.succeeded:
-            return LaunchResult("rejected", reason=terminal_result.reason)
+            return LaunchResult(LaunchStatus.REJECTED, reason=terminal_result.reason)
         if terminal_result.window_id is None:
-            return LaunchResult("rejected", reason="terminal did not identify the launched window")
-        return LaunchResult("started", window_id=WindowId(str(terminal_result.window_id)))
+            return LaunchResult(LaunchStatus.REJECTED, reason="terminal did not identify the launched window")
+        return LaunchResult(LaunchStatus.STARTED, window_id=WindowId(str(terminal_result.window_id)))

@@ -1,9 +1,10 @@
 # One account's plan limits, as its harness reports them — the fuel gauges on
 # the list page. Percentages and scores are Decimals, at the HTTP boundary as strings.
 from decimal import Decimal
-from typing import Literal
 
 from pydantic import BaseModel
+
+from harness.models import UsageWindowScope
 
 
 class UsageWindowResponse(BaseModel):
@@ -12,7 +13,7 @@ class UsageWindowResponse(BaseModel):
     used_percent: Decimal
     resets_at: float | None
     duration_minutes: int | None
-    scope: Literal["account", "model"]
+    scope: UsageWindowScope
     model_id: str | None
 
 

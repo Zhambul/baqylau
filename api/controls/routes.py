@@ -28,6 +28,7 @@ from api.controls.models.control_outcome_response import ControlOutcomeResponse
 from api.controls.models.launch_response import LaunchResponse
 from api.responses import with_body
 from domain.ids import HarnessName, SessionId
+from harness.models import ControlAcknowledgement, LaunchStatus
 from harness.services.controls import HarnessControlService
 
 router = APIRouter()
@@ -36,8 +37,12 @@ router = APIRouter()
 # published schema and the bytes are the same statement. The harness layer's own
 # result dataclasses never reach the HTTP boundary: `control_outcome` maps one to the
 # api model that mirrors it, and nothing here builds a dict.
-LAUNCH_STATUS = {"started": 202, "rejected": 409}
-CONTROL_STATUS = {"acknowledged": 200, "indeterminate": 202, "rejected": 409}
+LAUNCH_STATUS = {LaunchStatus.STARTED: 202, LaunchStatus.REJECTED: 409}
+CONTROL_STATUS = {
+    ControlAcknowledgement.ACKNOWLEDGED: 200,
+    ControlAcknowledgement.INDETERMINATE: 202,
+    ControlAcknowledgement.REJECTED: 409,
+}
 
 # ...and the STATUS is the outcome's, so the schema has to name all three or it
 # describes a plane that always succeeds. Every one of them carries the SAME body

@@ -11,13 +11,17 @@ from pydantic import ValidationError
 from harness.contract import ControlHandler, HarnessController
 from harness.models import (
     Background,
+    AnswerDecision,
     AnswerQuestion,
     ApplyRewind,
     AutoNameSession,
     CloseSession,
     CommandResult,
     Compact,
+    ConfirmationOutcome,
+    ControlAcknowledgement,
     ControlContext,
+    ControlName,
     ControlRequest,
     ControlResult,
     DecidePlan,
@@ -38,6 +42,7 @@ from terminal.models import (
     KeySendRequest,
     ScreenReadRequest,
     TabCloseRequest,
+    TextSubmitMode,
     TextSubmitRequest,
 )
 from domain.events import QuestionAsked
@@ -74,12 +79,12 @@ class _TerminalDriver:
 
     def send_text(self, window_id: WindowId, text: str) -> bool:
         return self.terminal.input.submit_text(
-            TextSubmitRequest(NativeWindowId(str(window_id)), str(text), "type")
+            TextSubmitRequest(NativeWindowId(str(window_id)), str(text), TextSubmitMode.TYPE)
         ).succeeded
 
     def paste_text(self, window_id: WindowId, text: str) -> bool:
         return self.terminal.input.submit_text(
-            TextSubmitRequest(NativeWindowId(str(window_id)), str(text), "paste")
+            TextSubmitRequest(NativeWindowId(str(window_id)), str(text), TextSubmitMode.PASTE)
         ).succeeded
 
 
@@ -92,7 +97,7 @@ def _screen_text(terminal_plugin: TerminalPlugin, window_id: WindowId) -> str | 
 def _result(request: ControlRequest, succeeded: bool, reason: str) -> ControlResult:
     return ControlResult(
         request.request_id,
-        "acknowledged" if succeeded else "indeterminate",
+        ControlAcknowledgement.ACKNOWLEDGED if succeeded else ControlAcknowledgement.INDETERMINATE,
         None if succeeded else reason,
     )
 
@@ -107,25 +112,25 @@ def _command(
     terminal = control_context.terminal
     window_id = control_context.terminal_window_id
     if window_id is None:
-        return ControlResult(request.request_id, "rejected", "session is not live")
+        return ControlResult(request.request_id, ControlAcknowledgement.REJECTED, "session is not live")
     succeeded, _cleared_image = tui.type_command(_TerminalDriver(terminal), window_id, text)
     if not succeeded:
         return _result(request, False, "terminal command was not delivered")
     if not confirm:
-        return CommandResult(request.request_id, "acknowledged")
+        return CommandResult(request.request_id, ControlAcknowledgement.ACKNOWLEDGED)
     try:
         confirmation = confirmdialog.confirm(_TerminalDriver(terminal), window_id)
     except confirmdialog.ConfirmError as error:
         return CommandResult(
             request.request_id,
-            "indeterminate",
+            ControlAcknowledgement.INDETERMINATE,
             reason=str(error),
-            confirmation="failed",
+            confirmation=ConfirmationOutcome.FAILED,
         )
     return CommandResult(
         request.request_id,
-        "acknowledged",
-        confirmation="confirmed" if confirmation["dialog"] else "not_needed",
+        ControlAcknowledgement.ACKNOWLEDGED,
+        confirmation=ConfirmationOutcome.CONFIRMED if confirmation["dialog"] else ConfirmationOutcome.NOT_NEEDED,
     )
 
 
@@ -140,7 +145,7 @@ class SendTextHandler(ControlHandler):
             raise TypeError("send_text handler requires SendText")
         window_id = control_context.terminal_window_id
         if window_id is None:
-            return DeliveryResult(request.request_id, "rejected", "session is not live")
+            return DeliveryResult(request.request_id, ControlAcknowledgement.REJECTED, "session is not live")
         driver = _TerminalDriver(terminal)
         if request.replace_terminal_draft:
             input_state = ClaudeCodeTerminalProbe().input_state(terminal.viewport, window_id)
@@ -150,7 +155,7 @@ class SendTextHandler(ControlHandler):
         succeeded, _cleared_image = tui.type_command(driver, window_id, message)
         return DeliveryResult(
             request.request_id,
-            "acknowledged" if succeeded else "indeterminate",
+            ControlAcknowledgement.ACKNOWLEDGED if succeeded else ControlAcknowledgement.INDETERMINATE,
             None if succeeded else "terminal message was not delivered",
             queued=False,
         )
@@ -167,10 +172,12 @@ class InterruptHandler(ControlHandler):
             raise TypeError("interrupt handler requires Interrupt")
         window_id = control_context.terminal_window_id
         if window_id is None:
-            return DeliveryResult(request.request_id, "rejected", "session is not live")
+            return DeliveryResult(request.request_id, ControlAcknowledgement.REJECTED, "session is not live")
         previous = _screen_text(terminal, window_id)
         if not terminal.input.send_key(KeySendRequest(NativeWindowId(str(window_id)), "escape")).succeeded:
-            return DeliveryResult(request.request_id, "indeterminate", "interrupt key was not delivered")
+            return DeliveryResult(
+                request.request_id, ControlAcknowledgement.INDETERMINATE, "interrupt key was not delivered"
+            )
         stopped: bool | None = None
         for _attempt in range(4):
             time.sleep(0.15)
@@ -186,7 +193,7 @@ class InterruptHandler(ControlHandler):
         input_state = ClaudeCodeTerminalProbe().input_state(terminal.viewport, window_id)
         return DeliveryResult(
             request.request_id,
-            "acknowledged" if stopped is not False else "indeterminate",
+            ControlAcknowledgement.ACKNOWLEDGED if stopped is not False else ControlAcknowledgement.INDETERMINATE,
             None if stopped is not False else "session remained active after interrupt",
             restored_text=input_state.typed_text if input_state and input_state.typed_text else "",
         )
@@ -232,13 +239,13 @@ class BackgroundHandler(ControlHandler):
         terminal = control_context.terminal
         window_id = control_context.terminal_window_id
         if window_id is None:
-            return DeliveryResult(request.request_id, "rejected", "session is not live")
+            return DeliveryResult(request.request_id, ControlAcknowledgement.REJECTED, "session is not live")
         deadline = time.monotonic() + BACKGROUND_OFFER_TIMEOUT_SECONDS
         while BACKGROUND_OFFER_MARKER not in _flattened(_screen_text(terminal, window_id)):
             if time.monotonic() >= deadline:
                 return DeliveryResult(
                     request.request_id,
-                    "rejected",
+                    ControlAcknowledgement.REJECTED,
                     "no command is offering to be backgrounded",
                 )
             time.sleep(BACKGROUND_POLL_SECONDS)
@@ -247,7 +254,7 @@ class BackgroundHandler(ControlHandler):
         ).succeeded
         return DeliveryResult(
             request.request_id,
-            "acknowledged" if delivered else "indeterminate",
+            ControlAcknowledgement.ACKNOWLEDGED if delivered else ControlAcknowledgement.INDETERMINATE,
             None if delivered else "backgrounding chord was not delivered",
             queued=False,
         )
@@ -260,7 +267,7 @@ class CloseSessionHandler(ControlHandler):
             raise TypeError("close_session handler requires CloseSession")
         window_id = control_context.terminal_window_id
         if window_id is None:
-            return ControlResult(request.request_id, "rejected", "session is not live")
+            return ControlResult(request.request_id, ControlAcknowledgement.REJECTED, "session is not live")
         result = terminal.tabs.close_tab(TabCloseRequest(NativeWindowId(str(window_id))))
         return _result(request, result.succeeded, result.reason or "terminal tab was not closed")
 
@@ -273,10 +280,14 @@ class RenameSessionHandler(ControlHandler):
         if control_context.terminal_window_id is None:
             outcome = transcript.titles.set_title(session.source_reference, request.name)
             if outcome == "unsupported":
-                return ControlResult(request.request_id, "rejected", "session source is not renameable")
+                return ControlResult(
+                    request.request_id, ControlAcknowledgement.REJECTED, "session source is not renameable"
+                )
             if outcome == "unavailable":
-                return ControlResult(request.request_id, "indeterminate", "native title store is unavailable")
-            return ControlResult(request.request_id, "acknowledged")
+                return ControlResult(
+                    request.request_id, ControlAcknowledgement.INDETERMINATE, "native title store is unavailable"
+                )
+            return ControlResult(request.request_id, ControlAcknowledgement.ACKNOWLEDGED)
         return _command(request, control_context, f"/rename {request.name}")
 
 
@@ -301,7 +312,7 @@ class ApplyRewindHandler(ControlHandler):
             raise TypeError("apply_rewind handler requires ApplyRewind")
         window_id = control_context.terminal_window_id
         if window_id is None:
-            return RewindResult(request.request_id, "rejected", "session is not live")
+            return RewindResult(request.request_id, ControlAcknowledgement.REJECTED, "session is not live")
         try:
             result = rewindmenu.drive(
                 _TerminalDriver(terminal),
@@ -311,11 +322,11 @@ class ApplyRewindHandler(ControlHandler):
                 ups=request.newer_prompt_count + 1,
             )
         except rewindmenu.MenuError as error:
-            return RewindResult(request.request_id, "indeterminate", str(error))
+            return RewindResult(request.request_id, ControlAcknowledgement.INDETERMINATE, str(error))
         restored = request.target_text if request.mode in {"conversation", "both"} else ""
         return RewindResult(
             request.request_id,
-            "acknowledged",
+            ControlAcknowledgement.ACKNOWLEDGED,
             restored_text=restored,
             degraded=bool(result["degraded"]),
         )
@@ -366,17 +377,21 @@ class AnswerQuestionHandler(ControlHandler):
         if not isinstance(request, AnswerQuestion):
             raise TypeError("answer_question handler requires AnswerQuestion")
         if not isinstance(control_context.pending_attention, QuestionAsked):
-            return ControlResult(request.request_id, "rejected", "no question is pending")
+            return ControlResult(request.request_id, ControlAcknowledgement.REJECTED, "no question is pending")
         window_id = control_context.terminal_window_id
         if window_id is None:
-            return ControlResult(request.request_id, "rejected", "session is not live")
+            return ControlResult(request.request_id, ControlAcknowledgement.REJECTED, "session is not live")
         raw_answers = json.loads(request.answers.json_text) if request.answers is not None else []
         if not isinstance(raw_answers, list):
-            return ControlResult(request.request_id, "rejected", "question answers must be an array")
+            return ControlResult(
+                request.request_id, ControlAcknowledgement.REJECTED, "question answers must be an array"
+            )
         try:
             answers = [askdialog.AnswerDraft.model_validate(a) for a in raw_answers]
         except ValidationError as error:
-            return ControlResult(request.request_id, "rejected", f"malformed question answer: {error}")
+            return ControlResult(
+                request.request_id, ControlAcknowledgement.REJECTED, f"malformed question answer: {error}"
+            )
         driver = _TerminalDriver(terminal)
         try:
             askdialog.drive(
@@ -384,15 +399,17 @@ class AnswerQuestionHandler(ControlHandler):
                 window_id,
                 _native_prompts(control_context.pending_attention),
                 answers,
-                chat=request.decision == "discuss",
+                chat=request.decision == AnswerDecision.DISCUSS,
             )
         except askdialog.AskError as error:
-            return ControlResult(request.request_id, "indeterminate", str(error))
-        if request.decision == "discuss" and request.discussion:
+            return ControlResult(request.request_id, ControlAcknowledgement.INDETERMINATE, str(error))
+        if request.decision == AnswerDecision.DISCUSS and request.discussion:
             succeeded, _cleared_image = tui.type_command(driver, window_id, request.discussion)
             if not succeeded:
-                return ControlResult(request.request_id, "indeterminate", "discussion text was not delivered")
-        return ControlResult(request.request_id, "acknowledged")
+                return ControlResult(
+                    request.request_id, ControlAcknowledgement.INDETERMINATE, "discussion text was not delivered"
+                )
+        return ControlResult(request.request_id, ControlAcknowledgement.ACKNOWLEDGED)
 
 
 class ReadPlanChoicesHandler(ControlHandler):
@@ -406,14 +423,14 @@ class ReadPlanChoicesHandler(ControlHandler):
             raise TypeError("read_plan_choices handler requires ReadPlanChoices")
         window_id = control_context.terminal_window_id
         if window_id is None:
-            return PlanChoicesResult(request.request_id, "rejected", "session is not live")
+            return PlanChoicesResult(request.request_id, ControlAcknowledgement.REJECTED, "session is not live")
         try:
             rows = plandialog.options(_TerminalDriver(terminal), window_id)
         except plandialog.PlanError as error:
-            return PlanChoicesResult(request.request_id, "indeterminate", str(error))
+            return PlanChoicesResult(request.request_id, ControlAcknowledgement.INDETERMINATE, str(error))
         return PlanChoicesResult(
             request.request_id,
-            "acknowledged",
+            ControlAcknowledgement.ACKNOWLEDGED,
             choices=tuple(
                 PlanChoice(str(row["digit"]), str(row["label"]), bool(row["feedback"]))
                 for row in rows
@@ -428,7 +445,7 @@ class DecidePlanHandler(ControlHandler):
             raise TypeError("decide_plan handler requires DecidePlan")
         window_id = control_context.terminal_window_id
         if window_id is None:
-            return ControlResult(request.request_id, "rejected", "session is not live")
+            return ControlResult(request.request_id, ControlAcknowledgement.REJECTED, "session is not live")
         driver = _TerminalDriver(terminal)
         try:
             if request.feedback is not None:
@@ -439,26 +456,26 @@ class DecidePlanHandler(ControlHandler):
                 rows = plandialog.options(driver, window_id)
                 row = next((row for row in rows if str(row["digit"]) == request.decision), None)
                 if row is None:
-                    return ControlResult(request.request_id, "rejected", "unknown plan decision")
+                    return ControlResult(request.request_id, ControlAcknowledgement.REJECTED, "unknown plan decision")
                 plandialog.decide(driver, window_id, row["digit"], row["label"])
         except plandialog.PlanError as error:
-            return ControlResult(request.request_id, "indeterminate", str(error))
-        return ControlResult(request.request_id, "acknowledged")
+            return ControlResult(request.request_id, ControlAcknowledgement.INDETERMINATE, str(error))
+        return ControlResult(request.request_id, ControlAcknowledgement.ACKNOWLEDGED)
 
 
 controller = HarnessController({
-    "send_text": SendTextHandler(),
-    "interrupt": InterruptHandler(),
-    "background": BackgroundHandler(),
-    "close_session": CloseSessionHandler(),
-    "rename_session": RenameSessionHandler(),
-    "auto_name_session": AutoNameSessionHandler(),
-    "open_rewind": OpenRewindHandler(),
-    "apply_rewind": ApplyRewindHandler(),
-    "compact": CompactHandler(),
-    "select_model": SelectModelHandler(),
-    "select_effort": SelectEffortHandler(),
-    "answer_question": AnswerQuestionHandler(),
-    "read_plan_choices": ReadPlanChoicesHandler(),
-    "decide_plan": DecidePlanHandler(),
+    ControlName.SEND_TEXT: SendTextHandler(),
+    ControlName.INTERRUPT: InterruptHandler(),
+    ControlName.BACKGROUND: BackgroundHandler(),
+    ControlName.CLOSE_SESSION: CloseSessionHandler(),
+    ControlName.RENAME_SESSION: RenameSessionHandler(),
+    ControlName.AUTO_NAME_SESSION: AutoNameSessionHandler(),
+    ControlName.OPEN_REWIND: OpenRewindHandler(),
+    ControlName.APPLY_REWIND: ApplyRewindHandler(),
+    ControlName.COMPACT: CompactHandler(),
+    ControlName.SELECT_MODEL: SelectModelHandler(),
+    ControlName.SELECT_EFFORT: SelectEffortHandler(),
+    ControlName.ANSWER_QUESTION: AnswerQuestionHandler(),
+    ControlName.READ_PLAN_CHOICES: ReadPlanChoicesHandler(),
+    ControlName.DECIDE_PLAN: DecidePlanHandler(),
 })

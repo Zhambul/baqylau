@@ -18,7 +18,7 @@ from domain.events import (
     TurnFinished,
 )
 from domain.ids import HarnessSessionId, SessionId, ShellId
-from domain.shells import ShellOutputFollowing
+from domain.shells import ShellFollowState, ShellOutputFollowing
 from engine.interpret import output_source
 from harness.contract import CanonicalEventReaction
 from harness.models import InterruptRegistry, Session
@@ -95,7 +95,7 @@ class ShellOutputCanonicalEventReaction(CanonicalEventReaction):
                     initial_modified_at=payload.initial_modified_at,
                     wait_for_source_change=payload.wait_for_source_change,
                     until=payload.until,
-                    state="active",
+                    state=ShellFollowState.ACTIVE,
                     created_at=time.time(),
                 )
             )

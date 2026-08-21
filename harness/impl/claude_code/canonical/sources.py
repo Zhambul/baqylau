@@ -7,9 +7,9 @@ import hashlib
 import json
 import os
 import time
-from typing import Literal
 
 from domain.ids import ActorId, HarnessName, RawEventId
+from domain.values import ActorRole
 from harness.contract import HarnessRawEventSource, HarnessRawEventSources
 from harness.impl.claude_code import model
 from harness.impl.claude_code.canonical import transcript
@@ -31,7 +31,7 @@ class ClaudeTranscriptRawEventSource(HarnessRawEventSource):
     def __init__(
         self,
         raw_event_source_context: RawEventSourceContext,
-        actor_role: Literal["child", "teammate"] | None = None,
+        actor_role: ActorRole | None = None,
     ) -> None:
         self.context = raw_event_source_context
         self.actor_role = actor_role
@@ -205,10 +205,10 @@ class ClaudeRawEventSources(HarnessRawEventSources):
                         source_reference=child_path,
                     ),
                     (
-                        "teammate"
+                        ActorRole.TEAMMATE
                         if model.agent_meta(session.source_reference, ActorId(actor_name)).taskKind
                         == "in_process_teammate"
-                        else "child"
+                        else ActorRole.CHILD
                     ),
                 )
             )

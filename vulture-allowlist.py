@@ -261,3 +261,26 @@ worktreeCleanlyRemoved              # AgentMetaFile
 worktreePath                        # AgentMetaFile
 activeForm                          # TaskFile
 blockedBy                           # TaskFile
+
+# --- StrEnum members reached only by validation/serialization -------------------
+# A closed vocabulary's member is a complete listing of what a stored value or a
+# wire field may BE, not a set of branches our own code has to take — pydantic
+# constructs the member from a stored or posted string, and a member nothing
+# ever branches on by name is still a real, round-tripped value. Framework
+# contract, not debt, the same reasoning as the response-model fields above.
+AUTOMATIC_FALLBACK                  # domain/values.py ModelChangeReason
+ERROR                               # domain/values.py ProgressStream
+ACTOR                               # domain/values.py UsageScope
+TURN                                # domain/values.py UsageScope
+OPERATION                           # domain/values.py UsageScope
+VERBOSE                             # domain/preferences.py ViewMode
+FOCUS                               # domain/preferences.py ViewMode
+ANSWER                              # AnswerDecision, OptimisticActionKind (harness/models/controls.py, api/telemetry)
+TRANSPORT                           # api/telemetry/models/client_failure_request.py ClientFailureKind
+HTTP                                # api/telemetry/models/client_failure_request.py ClientFailureKind
+COMPOSER                            # api/telemetry/models/optimistic_action_request.py OptimisticActionKind
+CLOSE                               # api/telemetry/models/optimistic_action_request.py OptimisticActionKind
+SHOWN                               # api/telemetry/models/optimistic_action_request.py OptimisticActionPhase
+RECONCILED                          # api/telemetry/models/optimistic_action_request.py OptimisticActionPhase
+DROPPED                             # api/telemetry/models/optimistic_action_request.py OptimisticActionPhase
+STALE                               # api/telemetry/models/optimistic_action_request.py OptimisticActionPhase

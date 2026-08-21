@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Generic, Literal, TypeVar
+from typing import Generic, TypeVar
 
 from domain.stored import STORED
 from domain.ids import (
@@ -40,10 +40,14 @@ from domain.values import (
     ModelChangeReason,
     ModelReference,
     Outcome,
+    OutputMode,
     PlanState,
     ProgressStream,
+    ShellFollowUntil,
+    TaskState,
     TitleOrigin,
     TokenUsage,
+    UsageScope,
     WorktreeAction,
 )
 
@@ -177,7 +181,7 @@ class ShellProgressed(EventPayload):
     ordinal: int
     stream: ProgressStream
     content: Content
-    mode: Literal["append", "replace"]
+    mode: OutputMode
 
 
 @dataclass(frozen=True)
@@ -208,7 +212,7 @@ class ShellOutputLocated(EventPayload):
     initial_size: int
     initial_modified_at: int
     wait_for_source_change: bool
-    until: Literal["shell_finished", "session_finished"]
+    until: ShellFollowUntil
 
 
 @dataclass(frozen=True)
@@ -342,7 +346,7 @@ class TaskChanged(EventPayload):
     task_id: TaskId
     subject: str
     description: str | None
-    state: Literal["pending", "in_progress", "completed", "deleted"]
+    state: TaskState
     owner_actor_id: ActorId | None
 
 
@@ -394,7 +398,7 @@ class PlanResolved(EventPayload):
 
 @dataclass(frozen=True)
 class UsageReported(EventPayload):
-    scope: Literal["session", "actor", "turn", "operation"]
+    scope: UsageScope
     subject_id: str
     model: ModelReference | None
     account: AccountReference | None

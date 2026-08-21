@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Literal, TypeAlias
+from enum import StrEnum
 
 from domain.ids import (
     ActorId,
@@ -42,46 +42,63 @@ from domain.values import (
     FileAction,
     MessagePhase,
     MessageRole,
+    OutputMode,
     PlanState,
     ProgressStream,
     WorktreeAction,
 )
 
-# How a thing that runs ended. One word for every kind, in place of the
-# `outcome` + `reason` pair the canonical events carry: a feed shows the state,
-# and nothing displayed the reason.
-# The kinds a feed has, as the name that travels with a stored row. Typed
-# rather than `str` so the api layer's own copy of this vocabulary is CHECKED
-# against it: two lists that must agree, and a type error the moment they do not.
-EntryTypeName: TypeAlias = Literal[
-    "turn_started",
-    "turn_finished",
-    "message",
-    "reasoning",
-    "shell_started",
-    "shell_output",
-    "shell_backgrounded",
-    "shell_finished",
-    "file",
-    "search",
-    "web",
-    "worktree",
-    "skill_started",
-    "skill_finished",
-    "question_asked",
-    "question_answered",
-    "plan_proposed",
-    "plan_resolved",
-    "compaction_started",
-    "compaction_finished",
-    "assignment_started",
-    "assignment_finished",
-    "model_change",
-    "effort_change",
-]
-RunState: TypeAlias = Literal["succeeded", "failed", "cancelled"]
-TurnState: TypeAlias = Literal["finished", "aborted"]
-FileState: TypeAlias = Literal["succeeded", "failed"]
+
+class EntryTypeName(StrEnum):
+    """The kinds a feed has, as the name that travels with a stored row.
+    Typed rather than `str` so the api layer's own copy of this vocabulary is
+    CHECKED against it: two lists that must agree, and a type error the
+    moment they do not."""
+
+    TURN_STARTED = "turn_started"
+    TURN_FINISHED = "turn_finished"
+    MESSAGE = "message"
+    REASONING = "reasoning"
+    SHELL_STARTED = "shell_started"
+    SHELL_OUTPUT = "shell_output"
+    SHELL_BACKGROUNDED = "shell_backgrounded"
+    SHELL_FINISHED = "shell_finished"
+    FILE = "file"
+    SEARCH = "search"
+    WEB = "web"
+    WORKTREE = "worktree"
+    SKILL_STARTED = "skill_started"
+    SKILL_FINISHED = "skill_finished"
+    QUESTION_ASKED = "question_asked"
+    QUESTION_ANSWERED = "question_answered"
+    PLAN_PROPOSED = "plan_proposed"
+    PLAN_RESOLVED = "plan_resolved"
+    COMPACTION_STARTED = "compaction_started"
+    COMPACTION_FINISHED = "compaction_finished"
+    ASSIGNMENT_STARTED = "assignment_started"
+    ASSIGNMENT_FINISHED = "assignment_finished"
+    MODEL_CHANGE = "model_change"
+    EFFORT_CHANGE = "effort_change"
+
+
+class RunState(StrEnum):
+    """How a thing that runs ended. One word for every kind, in place of the
+    `outcome` + `reason` pair the canonical events carry: a feed shows the
+    state, and nothing displayed the reason."""
+
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class TurnState(StrEnum):
+    FINISHED = "finished"
+    ABORTED = "aborted"
+
+
+class FileState(StrEnum):
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
 
 
 @dataclass(frozen=True)
@@ -138,7 +155,7 @@ class ShellOutputBody(EntryBody):
 
     shell_id: ShellId
     stream: ProgressStream
-    mode: Literal["append", "replace"]
+    mode: OutputMode
     content: Content
 
 
@@ -261,7 +278,7 @@ class AssignmentStartedBody(EntryBody):
 @dataclass(frozen=True)
 class AssignmentFinishedBody(EntryBody):
     assignment_id: AssignmentId
-    state: RunState = "succeeded"
+    state: RunState = RunState.SUCCEEDED
     result: Content | None = None
 
 
@@ -282,30 +299,30 @@ class EffortChangeBody(EntryBody):
 
 
 ENTRY_TYPES: dict[type[EntryBody], EntryTypeName] = {
-    TurnStartedBody: "turn_started",
-    TurnFinishedBody: "turn_finished",
-    MessageBody: "message",
-    ReasoningBody: "reasoning",
-    ShellStartedBody: "shell_started",
-    ShellOutputBody: "shell_output",
-    ShellBackgroundedBody: "shell_backgrounded",
-    ShellFinishedBody: "shell_finished",
-    FileBody: "file",
-    SearchBody: "search",
-    WebBody: "web",
-    WorktreeBody: "worktree",
-    SkillStartedBody: "skill_started",
-    SkillFinishedBody: "skill_finished",
-    QuestionAskedBody: "question_asked",
-    QuestionAnsweredBody: "question_answered",
-    PlanProposedBody: "plan_proposed",
-    PlanResolvedBody: "plan_resolved",
-    CompactionStartedBody: "compaction_started",
-    CompactionFinishedBody: "compaction_finished",
-    AssignmentStartedBody: "assignment_started",
-    AssignmentFinishedBody: "assignment_finished",
-    ModelChangeBody: "model_change",
-    EffortChangeBody: "effort_change",
+    TurnStartedBody: EntryTypeName.TURN_STARTED,
+    TurnFinishedBody: EntryTypeName.TURN_FINISHED,
+    MessageBody: EntryTypeName.MESSAGE,
+    ReasoningBody: EntryTypeName.REASONING,
+    ShellStartedBody: EntryTypeName.SHELL_STARTED,
+    ShellOutputBody: EntryTypeName.SHELL_OUTPUT,
+    ShellBackgroundedBody: EntryTypeName.SHELL_BACKGROUNDED,
+    ShellFinishedBody: EntryTypeName.SHELL_FINISHED,
+    FileBody: EntryTypeName.FILE,
+    SearchBody: EntryTypeName.SEARCH,
+    WebBody: EntryTypeName.WEB,
+    WorktreeBody: EntryTypeName.WORKTREE,
+    SkillStartedBody: EntryTypeName.SKILL_STARTED,
+    SkillFinishedBody: EntryTypeName.SKILL_FINISHED,
+    QuestionAskedBody: EntryTypeName.QUESTION_ASKED,
+    QuestionAnsweredBody: EntryTypeName.QUESTION_ANSWERED,
+    PlanProposedBody: EntryTypeName.PLAN_PROPOSED,
+    PlanResolvedBody: EntryTypeName.PLAN_RESOLVED,
+    CompactionStartedBody: EntryTypeName.COMPACTION_STARTED,
+    CompactionFinishedBody: EntryTypeName.COMPACTION_FINISHED,
+    AssignmentStartedBody: EntryTypeName.ASSIGNMENT_STARTED,
+    AssignmentFinishedBody: EntryTypeName.ASSIGNMENT_FINISHED,
+    ModelChangeBody: EntryTypeName.MODEL_CHANGE,
+    EffortChangeBody: EntryTypeName.EFFORT_CHANGE,
 }
 
 BODY_TYPES: dict[EntryTypeName, type[EntryBody]] = {
@@ -314,10 +331,10 @@ BODY_TYPES: dict[EntryTypeName, type[EntryBody]] = {
 
 
 ATTENTION_ENTRY_TYPES: tuple[EntryTypeName, ...] = (
-    "question_asked",
-    "question_answered",
-    "plan_proposed",
-    "plan_resolved",
+    EntryTypeName.QUESTION_ASKED,
+    EntryTypeName.QUESTION_ANSWERED,
+    EntryTypeName.PLAN_PROPOSED,
+    EntryTypeName.PLAN_RESOLVED,
 )
 
 

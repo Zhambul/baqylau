@@ -10,13 +10,20 @@ one application graph.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 
 from audit.recorder import AuditRecorder
 from domain.ids import SessionId, WindowId
 from terminal.services.panes import PaneWidthService
 from terminal.adapter import TerminalAdapter
 
-COMMANDS = frozenset({"toggle", "grow", "shrink", "reset", "setpct"})
+
+class PaneCommand(StrEnum):
+    TOGGLE = "toggle"
+    GROW = "grow"
+    SHRINK = "shrink"
+    RESET = "reset"
+    SETPCT = "setpct"
 
 
 @dataclass(frozen=True)
@@ -39,14 +46,12 @@ class PaneCommandService:
 
     def execute(
         self,
-        command: str,
+        pane_command: PaneCommand,
         window_id: WindowId | None,
         working_directory: str,
         columns: int | None = None,
         percent: int | None = None,
     ) -> PaneCommandOutcome:
-        if command not in COMMANDS:
-            raise ValueError(f"unknown pane command: {command}")
         if not working_directory:
             raise ValueError("working_directory is required")
         session_id = self._terminal.session_for_window(window_id or None)
@@ -55,14 +60,14 @@ class PaneCommandService:
             # binding is global and simply does nothing there.
             PaneCommandOutcome(False, True)
             if session_id is None
-            else self._execute(command, session_id, working_directory, columns, percent)
+            else self._execute(pane_command, session_id, working_directory, columns, percent)
         )
         self._audit.state_file(
             "",
             working_directory,
             "pane-command",
             {
-                "command": command,
+                "command": pane_command,
                 "window_id": window_id or "",
                 "session_id": str(session_id or ""),
                 "ok": outcome.succeeded,
@@ -73,29 +78,29 @@ class PaneCommandService:
 
     def _execute(
         self,
-        command: str,
+        pane_command: PaneCommand,
         session_id: SessionId,
         working_directory: str,
         columns: int | None,
         percent: int | None,
     ) -> PaneCommandOutcome:
-        if command == "toggle":
+        if pane_command == PaneCommand.TOGGLE:
             result = self._terminal.toggle_session_panes(
                 session_id,
                 self._widths.width_percent(working_directory),
             )
-        elif command in ("grow", "shrink"):
+        elif pane_command in (PaneCommand.GROW, PaneCommand.SHRINK):
             step = self._widths.resize_columns() if columns is None else columns
             if step <= 0:
                 raise ValueError("pane resize columns must be positive")
             result = self._terminal.resize_activity_pane(
                 session_id,
-                step if command == "grow" else -step,
+                step if pane_command == PaneCommand.GROW else -step,
             )
             if result.succeeded:
                 self._remember_current_width(session_id, working_directory)
         else:
-            if command == "setpct":
+            if pane_command == PaneCommand.SETPCT:
                 if percent is None:
                     raise ValueError("setpct requires a percentage")
                 width_percent = percent

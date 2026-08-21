@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Literal, TypeAlias
 
 from domain.events import (
     CanonicalEvent,
@@ -26,10 +25,7 @@ from domain.ids import (
     WindowId,
     stable_event_id,
 )
-from domain.records import InterpretationAudit
-
-TranslationDecision: TypeAlias = Literal["translated", "ignored_unknown", "ignored_nonsemantic"]
-RecordedTranslationDecision: TypeAlias = TranslationDecision | Literal["translation_failed"]
+from domain.records import InterpretationAudit, RecordedTranslationDecision
 
 
 @dataclass(frozen=True)
@@ -74,9 +70,9 @@ class TranslationResult:
     reason: str | None = None
 
     def __post_init__(self) -> None:
-        if self.decision == "translated" and not self.canonical_events:
+        if self.decision == RecordedTranslationDecision.TRANSLATED and not self.canonical_events:
             raise ValueError("translated observations must produce at least one canonical event")
-        if self.decision != "translated" and self.canonical_events:
+        if self.decision != RecordedTranslationDecision.TRANSLATED and self.canonical_events:
             raise ValueError("ignored observations cannot produce canonical events")
 
 

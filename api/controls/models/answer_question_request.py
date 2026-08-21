@@ -7,14 +7,12 @@
 # `[{"selected": [...], "other": "..."}]` and had no way to say so. It is the
 # same shape the dialog DRAFT already declared (AnswerSelectionBody), and it is
 # declared here now: a malformed answer is a 400 at the boundary.
-from typing import Literal
-
 from pydantic import RootModel
 
 from api.common.models.fields import RequiredText
 from api.application.models.preferences.dialog_draft_request import AnswerSelectionBody
 from api.controls.models.control_request import ControlRequestBody
-from harness.models import AnswerQuestion, ControlRequest
+from harness.models import AnswerDecision, AnswerQuestion, ControlRequest
 from domain.ids import AttentionId, RequestId, SessionId
 from domain.values import StructuredContent
 
@@ -26,7 +24,7 @@ class AnswerDocument(RootModel[tuple[AnswerSelectionBody, ...]]):
 
 class AnswerQuestionRequest(ControlRequestBody):
     attention_id: RequiredText
-    decision: Literal["answer", "discuss"]
+    decision: AnswerDecision
     answers: tuple[AnswerSelectionBody, ...] | None = None
     discussion: str | None = None
 

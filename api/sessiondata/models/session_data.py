@@ -4,23 +4,17 @@
 # harnesses report it: a session with a lead and three subagents has four
 # models, four statuses and four scoreboards, and one of each on the session
 # would have to pick a winner.
-from typing import Literal, TypeAlias
+from typing import TypeAlias
 
 from pydantic import BaseModel
 
 from api.common.models.values.account_reference import AccountReferenceResponse
 from api.common.models.values.repository_status import RepositoryStatusResponse
 from api.common.models.values.token_usage import TokenUsageResponse
+from domain.sessiondata import ActorStatus, LifecycleState
+from domain.values import ActorRole, TaskState
 
-ActorStatusResponse: TypeAlias = Literal[
-    "idle",
-    "thinking",
-    "working",
-    "executing",
-    "awaiting_background",
-    "awaiting_attention",
-    "awaiting_response",
-]
+ActorStatusResponse: TypeAlias = ActorStatus
 
 
 class GoalResponse(BaseModel):
@@ -32,7 +26,7 @@ class TaskResponse(BaseModel):
     task_id: str
     subject: str
     description: str | None
-    state: Literal["pending", "in_progress", "completed", "deleted"]
+    state: TaskState
     owner_actor_id: str | None
 
 
@@ -48,7 +42,7 @@ class SessionResponse(BaseModel):
     session_id: str
     harness: str
     title: str | None
-    state: Literal["running", "finished"]
+    state: LifecycleState
     working_directory: str
     started_at: float | None
     finished_at: float | None
@@ -114,10 +108,10 @@ class ActorResponse(BaseModel):
     session_id: str
     actor_id: str
     parent_actor_id: str | None
-    role: Literal["lead", "child", "teammate", "sidecar"]
+    role: ActorRole
     name: str
     description: str | None
-    state: Literal["running", "finished"]
+    state: LifecycleState
     started_at: float | None
     finished_at: float | None
     model: str | None

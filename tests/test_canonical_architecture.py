@@ -295,7 +295,7 @@ def test_the_terminal_contract_and_models_import_nothing_of_ours():
     for path in boundary:
         for _path, imported in imports_under_path(path):
             root = imported.split(".", 1)[0]
-            if root not in {"terminal", "dataclasses", "typing", "__future__"}:
+            if root not in {"terminal", "dataclasses", "enum", "typing", "__future__"}:
                 foreign.append(f"{path.relative_to(ROOT)} imports {imported}")
     assert foreign == []
 
@@ -1403,23 +1403,36 @@ def test_the_protocol_declaration_exemptions_are_all_still_real():
 # name. A typo registers a handler nothing will ever call, in silence.
 
 
-def _control_names() -> set[str]:
+def _control_name_values() -> dict[str, str]:
+    """Every `ControlName` member, as member-name -> its string value.
+
+    `ControlName` is a `StrEnum` class now, not a `Literal` type alias — each
+    member is an `Assign` in the class body, `MEMBER = "value"`.
+    """
     tree = ast.parse((ROOT / "harness" / "models" / "controls.py").read_text(encoding="utf-8"))
     for node in ast.walk(tree):
-        if isinstance(node, ast.AnnAssign) and getattr(node.target, "id", None) == "ControlName":
-            # AnnAssign.value is optional (a bare `x: int` has none); ControlName
-            # is an assignment, so reaching here means it has one.
-            assert node.value is not None
-            return {
-                element.value
-                for element in ast.walk(node.value)
-                if isinstance(element, ast.Constant) and isinstance(element.value, str)
-            }
+        if isinstance(node, ast.ClassDef) and node.name == "ControlName":
+            values = {}
+            for statement in node.body:
+                if (
+                    isinstance(statement, ast.Assign)
+                    and len(statement.targets) == 1
+                    and isinstance(statement.targets[0], ast.Name)
+                    and isinstance(statement.value, ast.Constant)
+                    and isinstance(statement.value.value, str)
+                ):
+                    values[statement.targets[0].id] = statement.value.value
+            return values
     raise AssertionError("ControlName is missing")
+
+
+def _control_names() -> set[str]:
+    return set(_control_name_values().values())
 
 
 def _registered_handlers():
     """(where, control_name, handler_class_name, declared_bases) per registration."""
+    control_name_values = _control_name_values()
     for path in (ROOT / "harness" / "impl").rglob("*.py"):
         if "__pycache__" in path.parts:
             continue
@@ -1438,7 +1451,17 @@ def _registered_handlers():
                 for key, value in zip(mapping.keys, mapping.values):
                     where = f"{path.relative_to(ROOT)}:{key.lineno}"
                     name = getattr(getattr(value, "func", None), "id", None)
-                    yield where, key.value, name, classes.get(name)
+                    # A key is either the old bare string or `ControlName.MEMBER`
+                    # (an Attribute whose `.attr` names the member) — resolved to
+                    # the same string either way, so a rename of the enum's
+                    # member names is still checked against the real vocabulary.
+                    if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                        control_name = key.value
+                    elif isinstance(key, ast.Attribute):
+                        control_name = control_name_values.get(key.attr, key.attr)
+                    else:
+                        control_name = ast.unparse(key)
+                    yield where, control_name, name, classes.get(name)
 
 
 def test_every_registered_control_handler_declares_the_protocol():

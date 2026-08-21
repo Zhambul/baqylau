@@ -84,7 +84,7 @@ from domain.ids import (
     WindowId,
     stable_event_id,
 )
-from domain.values import StructuredContent, TextContent
+from domain.values import ActorRole, MediaType, MessagePhase, MessageRole, Outcome, StructuredContent, TextContent
 from repository.model.facts import CanonicalEventRow
 from audit.recorder import AuditRecorder
 from harness.registry import HarnessRegistry, HarnessRegistryError
@@ -199,9 +199,9 @@ def canonical_message(
         harness_process_id=None,
         payload=MessageCreated(
             message_id=MessageId("message-one"),
-            role="user",
+            role=MessageRole.USER,
             content=TextContent(text),
-            phase="prompt",
+            phase=MessagePhase.PROMPT,
             reply_to=None,
         ),
     )
@@ -385,7 +385,7 @@ def registered_runtime(tmp_path, translation: TranslationResult | TranslationErr
     ("payload", "event_type", "expected_payload"),
     (
         (
-            ActorStarted("weather researcher", "child"),
+            ActorStarted("weather researcher", ActorRole.CHILD),
             "actor.started",
             {"name": "weather researcher", "role": "child"},
         ),
@@ -394,7 +394,7 @@ def registered_runtime(tmp_path, translation: TranslationResult | TranslationErr
                 AssignmentId("assignment-one"),
                 TextContent("Get Bali weather"),
                 actor_name="researcher",
-                prompt=TextContent("Look up the weather in Bali.", "text/markdown"),
+                prompt=TextContent("Look up the weather in Bali.", MediaType.TEXT_MARKDOWN),
             ),
             "actor.assignment_started",
             {
@@ -410,7 +410,7 @@ def registered_runtime(tmp_path, translation: TranslationResult | TranslationErr
         (
             ActorAssignmentFinished(
                 AssignmentId("assignment-one"),
-                "succeeded",
+                Outcome.SUCCEEDED,
                 TextContent("Sunny"),
                 None,
             ),
