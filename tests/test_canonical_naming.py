@@ -62,6 +62,21 @@ ID_GATE_ALLOWED = {
     "harness/impl/claude_code/canonical/support.py:subject_id",
     "harness/impl/codex/canonical/support.py:subject_id",
     "harness/models/raw_events.py:subject_id",
+    # codex's OWN compaction-window id, distinct from domain WindowId (a
+    # TERMINAL window) — a naming collision, not the same concept. Unread by
+    # any canonical logic (rollout.py module header): carried for a future
+    # reader, not worth a NewType for a field nothing consumes yet.
+    "harness/impl/codex/canonical/records.py:window_id",
+    "harness/impl/codex/canonical/records.py:previous_window_id",
+    # A hook delivery's own id (SessionStart/PreCompact/PostCompact) — used
+    # only as a last-resort native_identity fallback string, the same role
+    # raw_event.source_position plays; not a domain concept.
+    "harness/impl/codex/canonical/records.py:hook_event_id",
+    # The codex CommandExecution item's own id — declared (it is a real
+    # field) but never read by any canonical logic, the same as the original
+    # dict literal carried it unread. Not worth a NewType for a value with no
+    # reader.
+    "harness/impl/codex/canonical/records.py:item_id",
 }
 
 

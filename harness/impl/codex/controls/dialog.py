@@ -57,7 +57,7 @@
 import re
 import time
 from collections.abc import Callable
-from typing import Any, Protocol, TypedDict
+from typing import Protocol, TypedDict
 
 from domain.ids import WindowId
 
@@ -121,6 +121,15 @@ class OptionRow(TypedDict):
     num: str
     label: str
     cursor: bool
+
+
+class Answer(TypedDict, total=False):
+    """One question's answer, as the control API's `AnswerQuestion.answers`
+    JSON decodes to — `{selected: [labels...], other: text}` per question,
+    aligned by position with the pending_dialog `Prompt` list."""
+
+    selected: list[str]
+    other: str
 
 
 class CodexAskError(Exception):
@@ -226,11 +235,20 @@ def _cursor_row(screen: str) -> OptionRow | None:
     return next((r for r in rows(screen) if r["cursor"]), None)
 
 
+class _NoPreviousCursor:
+    """A sentinel distinct from every `OptionRow["num"]` value AND from None
+    (the "no cursor row visible" reading) — `_cursor_to` below needs a THIRD
+    state, "haven't looked yet", so its first comparison can never fire."""
+
+
+_NO_PREVIOUS_CURSOR = _NoPreviousCursor()
+
+
 def _cursor_to(driver: Driver, win: WindowId, num: str, sleep: Callable[[float], None]) -> None:
     """Move the `›` cursor onto option `num`: normalize UP to option 1 (up is a
     no-op there), then walk DOWN, screen-verified each step. Bail if `up` stops
     making progress (a trapped/edit row)."""
-    prev: object = object()  # loose: codex JSON, wave 2 gives it a real shape
+    prev: str | None | _NoPreviousCursor = _NO_PREVIOUS_CURSOR
     for _ in range(NAV_STEPS):
         cur = _cursor_row(driver.get_text(win) or "")
         if cur is not None and cur["num"] == "1":
@@ -267,7 +285,7 @@ def _answer_one(
     driver: Driver,
     win: WindowId,
     prompt: Prompt,
-    ans: dict[str, Any],  # loose: codex JSON, wave 2 gives it a real shape
+    answer: Answer,
     sleep: Callable[[float], None],
 ) -> None:
     """Apply one question's answer to the CURRENT pane. The cursor is moved onto
@@ -281,8 +299,8 @@ def _answer_one(
                                  natively carries a note beside a pick.
     """
     labels = [o.get("label") or "" for o in (prompt.get("options") or [])]
-    selected = [s for s in (ans.get("selected") or []) if s in labels]
-    other = (ans.get("other") or "").strip()
+    selected = [s for s in (answer.get("selected") or []) if s in labels]
+    other = (answer.get("other") or "").strip()
     if selected:
         num = str(1 + labels.index(selected[0]))
     elif other:
@@ -320,7 +338,7 @@ def drive(
     driver: Driver,
     win: WindowId,
     questions: list[Prompt],
-    answers: list[dict[str, Any]],  # loose: codex JSON, wave 2 gives it a real shape
+    answers: list[Answer],
     sleep: Callable[[float], None] = time.sleep,
 ) -> dict[str, bool]:
     """Answer codex's OPEN request_user_input dialog in window `win`. `questions`

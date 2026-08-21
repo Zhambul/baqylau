@@ -20,21 +20,21 @@ class CodexUsage(HarnessUsage):
         rate_limits = native_usage.read_rate_limits()
         if rate_limits is None:
             return ()
-        plan = rate_limits["plan"]
+        plan = rate_limits.plan
         windows = tuple(
             UsageWindow(
-                key=f"minutes_{window['duration_minutes']}",
+                key=f"minutes_{window.duration_minutes}",
                 label=WINDOW_LABELS.get(
-                    window["duration_minutes"],
-                    f"{window['duration_minutes']}m",
+                    window.duration_minutes,
+                    f"{window.duration_minutes}m",
                 ),
-                used_percent=Decimal(str(window["used_percent"])),
-                resets_at=window["resets_at"],
-                duration_minutes=window["duration_minutes"],
+                used_percent=Decimal(str(window.used_percent)),
+                resets_at=float(window.resets_at) if window.resets_at is not None else None,
+                duration_minutes=window.duration_minutes,
                 scope="account",
                 model_id=None,
             )
-            for window in rate_limits["windows"]
+            for window in rate_limits.windows
         )
         return (UsageRow(
             harness=HARNESS,

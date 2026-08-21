@@ -17,7 +17,8 @@
 # Both rollout registers read this module: the event_msg one (events.py) to
 # unwrap a `<task>` prompt, the response_item one (items.py) for the whole test.
 import re
-from typing import Any
+
+from harness.impl.codex.canonical.records import EmptyRecord
 
 # INPUT_WRAPPERS: a role=user `<tag>` that IS a real turn, not scaffolding —
 # codex delivers a subagent's task as `<task>…</task>`. Kept AND unwrapped to its
@@ -101,7 +102,7 @@ def is_synthetic(text: str, role: str = "") -> bool:
     return bool(tag) and tag not in INPUT_WRAPPERS
 
 
-def empty_record() -> dict[str, Any]:  # loose: codex JSON, wave 2 gives it a real shape
+def empty_record() -> EmptyRecord:
     """A record that says "recognised type, nothing in it" — NOT the same answer
     as None.
 
@@ -114,10 +115,8 @@ def empty_record() -> dict[str, Any]:  # loose: codex JSON, wave 2 gives it a re
     answer None: it would report a shape we understand perfectly as drift, and
     real drift would stop standing out.
 
-    A fresh dict per call: records are mutated downstream (rollout._stamp).
-
     NOT for a record whose REQUIRED field is missing (a `CommandExecution` with
     no `process_id`). That is a field that moved, which is exactly the drift the
     unknown verdict is for.
     """
-    return {"kind": "empty"}
+    return EmptyRecord()

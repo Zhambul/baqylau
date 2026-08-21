@@ -6,7 +6,9 @@ import json
 import os
 import subprocess
 import time
-from typing import Any
+from dataclasses import dataclass
+
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 REQUEST_TIMEOUT_SECONDS = 6.0
 CACHE_SECONDS = 120.0
@@ -17,7 +19,49 @@ BINARY_DIRECTORIES = (
     "~/.local/bin",
 )
 
-_cached_rate_limits: tuple[float, dict[str, Any] | None] | None = None  # loose: codex JSON
+# The app-server's JSON-RPC response to `account/rateLimits/read` — a
+# DIFFERENT foreign source from the rollout file (canonical/records.py owns
+# that one): a live subprocess reply, not a stored document, so a shape
+# mismatch here degrades to "no usage row" (read_rate_limits returns None)
+# rather than a stored `translation_failed` — there is nothing recorded to
+# fail. `extra="forbid"` still applies: an unrecognised field is exactly as
+# much a sign the app-server's contract moved as a rollout field would be.
+_RATE_LIMITS_FOREIGN = ConfigDict(extra="forbid", frozen=True)
+
+
+class RateLimitWindowResult(BaseModel):
+    model_config = _RATE_LIMITS_FOREIGN
+    usedPercent: float | int | None = None
+    windowDurationMins: float | int | None = None
+    resetsAt: float | int | None = None
+
+
+class RateLimitsResult(BaseModel):
+    model_config = _RATE_LIMITS_FOREIGN
+    primary: RateLimitWindowResult | None = None
+    secondary: RateLimitWindowResult | None = None
+    planType: str | None = None
+
+
+class AccountRateLimitsResponse(BaseModel):
+    model_config = _RATE_LIMITS_FOREIGN
+    rateLimits: RateLimitsResult | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
+class NormalizedRateLimitWindow:
+    used_percent: float | int
+    duration_minutes: int
+    resets_at: float | int | None
+
+
+@dataclass(frozen=True, kw_only=True)
+class NormalizedRateLimits:
+    plan: str
+    windows: tuple[NormalizedRateLimitWindow, ...]
+
+
+_cached_rate_limits: tuple[float, NormalizedRateLimits | None] | None = None
 
 
 def subprocess_environment() -> dict[str, str]:
@@ -36,7 +80,7 @@ def subprocess_environment() -> dict[str, str]:
     return environment
 
 
-def request_rate_limits() -> dict[str, Any] | None:  # loose: codex app-server JSON, wave 2 gives it a real shape
+def request_rate_limits() -> AccountRateLimitsResponse | None:
     try:
         process = subprocess.Popen(
             ["codex", "app-server"],
@@ -77,7 +121,12 @@ def request_rate_limits() -> dict[str, Any] | None:  # loose: codex app-server J
                 continue
             if response.get("id") == 2:
                 result = response.get("result")
-                return result if isinstance(result, dict) else None
+                if not isinstance(result, dict):
+                    return None
+                try:
+                    return AccountRateLimitsResponse.model_validate(result)
+                except ValidationError:
+                    return None
         return None
     finally:
         if process.stdin is not None:
@@ -86,31 +135,32 @@ def request_rate_limits() -> dict[str, Any] | None:  # loose: codex app-server J
 
 
 def normalize_rate_limits(
-    response: dict[str, Any] | None,  # loose: codex app-server JSON, wave 2 gives it a real shape
-) -> dict[str, Any] | None:  # loose: codex app-server JSON, wave 2 gives it a real shape
-    rate_limits = response.get("rateLimits") if isinstance(response, dict) else None
-    if not isinstance(rate_limits, dict):
+    account_rate_limits_response: AccountRateLimitsResponse | None,
+) -> NormalizedRateLimits | None:
+    rate_limits = (
+        account_rate_limits_response.rateLimits if account_rate_limits_response is not None else None
+    )
+    if rate_limits is None:
         return None
     windows = []
-    for slot_name in ("primary", "secondary"):
-        window = rate_limits.get(slot_name)
-        if not isinstance(window, dict):
+    for window in (rate_limits.primary, rate_limits.secondary):
+        if window is None:
             continue
-        used_percent = window.get("usedPercent")
-        duration_minutes = window.get("windowDurationMins")
-        if not isinstance(used_percent, (int, float)) or not isinstance(duration_minutes, (int, float)):
+        used_percent = window.usedPercent
+        duration_minutes = window.windowDurationMins
+        if used_percent is None or duration_minutes is None:
             continue
-        windows.append({
-            "used_percent": used_percent,
-            "duration_minutes": int(duration_minutes),
-            "resets_at": window.get("resetsAt"),
-        })
+        windows.append(NormalizedRateLimitWindow(
+            used_percent=used_percent,
+            duration_minutes=int(duration_minutes),
+            resets_at=window.resetsAt,
+        ))
     if not windows:
         return None
-    return {"plan": rate_limits.get("planType") or "", "windows": tuple(windows)}
+    return NormalizedRateLimits(plan=rate_limits.planType or "", windows=tuple(windows))
 
 
-def read_rate_limits() -> dict[str, Any] | None:  # loose: codex app-server JSON, wave 2 gives it a real shape
+def read_rate_limits() -> NormalizedRateLimits | None:
     global _cached_rate_limits
     now = time.time()
     if _cached_rate_limits is not None and _cached_rate_limits[0] > now:

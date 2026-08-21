@@ -8,11 +8,12 @@ import json
 import os
 import re
 import time
-from typing import Any, Literal
+from typing import Literal
 
 from domain.ids import ActorId, HarnessName, HarnessSessionId, RawEventId
 from harness.contract import HarnessRawEventSource, HarnessRawEventSources
 from harness.impl.codex.canonical import rollout
+from harness.impl.codex.canonical.records import SessionMetaPayload, SessionMetaSource
 from harness.models import RawEvent, RawEventSourceContext, Session
 
 HARNESS = HarnessName("codex")
@@ -25,7 +26,12 @@ def harness_session_id(path: str) -> str:
     return match.group(1) if match else os.path.splitext(os.path.basename(path))[0]
 
 
-def session_metadata(path: str) -> dict[str, Any]:  # loose: codex JSON, wave 2 gives it a real shape
+def session_metadata(path: str) -> SessionMetaPayload | None:
+    """The rollout's own `session_meta` record, DECLARED (records.py) and
+    validated — None when the file has none in its first few lines (a
+    fresh/atypical rollout) or can't be read, distinct from a session_meta
+    that validated to an entirely-default payload (lead_rollout tells them
+    apart: no metadata at all is never a lead rollout)."""
     try:
         with open(path, encoding="utf-8") as source:
             for _ in range(5):
@@ -33,22 +39,24 @@ def session_metadata(path: str) -> dict[str, Any]:  # loose: codex JSON, wave 2 
                 if not line:
                     break
                 document = json.loads(line)
-                if document.get("type") == "session_meta":
-                    return document.get("payload") or {}
+                if isinstance(document, dict) and document.get("type") == "session_meta":
+                    payload = document.get("payload")
+                    return SessionMetaPayload.model_validate(payload if isinstance(payload, dict) else {})
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return {}
-    return {}
+        return None
+    return None
 
 
-def _parent_thread_id(metadata: dict[str, Any]) -> str | None:  # loose: codex JSON, wave 2 gives it a real shape
-    source = metadata.get("source")
-    spawn = (
-        ((source.get("subagent") or {}).get("thread_spawn") or {})
-        if isinstance(source, dict)
-        else {}
+def _parent_thread_id(session_meta_payload: SessionMetaPayload | None) -> str | None:
+    if session_meta_payload is None:
+        return None
+    source = (
+        session_meta_payload.source
+        if isinstance(session_meta_payload.source, SessionMetaSource) else None
     )
-    parent = spawn.get("parent_thread_id") or metadata.get("parent_thread_id")
-    return str(parent).strip() if parent else None
+    spawn = source.subagent.thread_spawn if source and source.subagent else None
+    parent = (spawn.parent_thread_id if spawn else None) or session_meta_payload.parent_thread_id
+    return parent.strip() if parent else None
 
 
 def _rollout_paths() -> tuple[str, ...]:
@@ -64,9 +72,9 @@ def lead_rollout(path: str) -> bool:
     if not os.path.isfile(path) or not ROLLOUT_NAME.search(os.path.basename(path)):
         return False
     metadata = session_metadata(path)
-    if not metadata:
+    if metadata is None:
         return False
-    return metadata.get("thread_source") != "subagent" and not metadata.get("parent_thread_id")
+    return metadata.thread_source != "subagent" and not metadata.parent_thread_id
 
 
 class CodexRolloutRawEventSource(HarnessRawEventSource):

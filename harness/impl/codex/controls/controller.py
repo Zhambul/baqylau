@@ -41,6 +41,7 @@ from domain.ids import WindowId
 # terminal contract request.
 from terminal.models.values import WindowId as NativeWindowId
 from harness.impl.codex.canonical import rollout, title
+from harness.impl.codex.canonical.records import PromptRecord, RolloutRecord, TaskStartedRecord, TurnAbortedRecord
 from harness.impl.codex.controls import dialog, modeldialog, plandialog
 
 
@@ -120,21 +121,21 @@ def _rollout_abort_state(path: str, position: int) -> tuple[bool, bool]:
     # None marks a line that would not parse. The slot is KEPT rather than
     # skipped because abort_index is an index into this list, and dropping
     # unparseable lines would silently shift every position after one.
-    records: list[dict[str, object] | None] = []  # loose: codex JSON, wave 2 gives it a real shape
+    records: list[RolloutRecord | None] = []
     for line in lines:
         try:
             document = json.loads(line)
         except (UnicodeDecodeError, json.JSONDecodeError):
             records.append(None)
             continue
-        record = rollout.parse(document)
+        record = rollout.parse(document) if isinstance(document, dict) else None
         records.append(record)
-        if abort_index is None and record and record.get("kind") == "turn_aborted":
+        if abort_index is None and isinstance(record, TurnAbortedRecord):
             abort_index = len(records) - 1
     if abort_index is None:
         return False, False
     queued = any(
-        record and record.get("kind") in ("task_started", "prompt")
+        isinstance(record, (TaskStartedRecord, PromptRecord))
         for record in records[abort_index + 1:]
     )
     return True, queued

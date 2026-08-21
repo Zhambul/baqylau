@@ -47,6 +47,24 @@ error_id         # audit/models.py
 # attribute looks like from inside our own graph.
 _.total_tokens
 
+# pydantic's own config attribute (harness/impl/codex/canonical/records.py,
+# harness/impl/codex/usage.py): pydantic's metaclass reads `model_config` off
+# every BaseModel subclass to build its validator. We only ever ASSIGN it —
+# the same "framework attribute" shape as `_.total_tokens` above.
+_.model_config
+
+# --- FOREIGN payload fields validated but never read -----------------------
+# harness/impl/codex/canonical/records.py / usage.py declare codex's OWN JSON
+# shapes with `extra="forbid"` so an unrecognised field fails translation
+# (TASKS.md, the owner's 2026-08-21 decision) — which means every field codex
+# actually sends must be declared, not only the ones our own logic reads. Each
+# name below is a REAL field of a foreign record with no reader today: kept
+# for the day one exists, not debt to pay down.
+window_minutes    # records.py RateLimitWindow
+plan_type         # records.py RateLimitsBlock
+originator        # records.py SessionMetaPayload
+item_id           # records.py CommandCompletedRecord (the codex item's own id)
+
 # A TypedDict field read only through dict-literal construction and ["check"]
 # subscripts (askdialog_screen.rows / its dialog callers) — the ANNOTATION is
 # the only bare-name mention, which is what an unused variable looks like to

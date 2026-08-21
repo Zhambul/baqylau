@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import json
 from datetime import datetime
-from typing import Any
 
 from domain.events import CanonicalEvent, EventPayload
 from domain.ids import ModelId, SelectionId, TurnId
-from domain.values import Content, ModelReference, Outcome, StructuredContent, TextContent
+from domain.values import Content, ModelReference, Outcome, TextContent
 from harness.models import RawEvent, canonical_event
 
 
@@ -16,10 +14,10 @@ def model_reference(native_id: ModelId) -> ModelReference:
     return ModelReference(native_id, native_id, SelectionId(native_id))
 
 
-def timestamp(value: object) -> float | None:  # loose: codex JSON, wave 2 gives it a real shape
+def timestamp(value: str | int | float | None) -> float | None:
     if isinstance(value, (int, float)):
         return float(value)
-    if not isinstance(value, str) or not value:
+    if not value:
         return None
     try:
         return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
@@ -27,20 +25,18 @@ def timestamp(value: object) -> float | None:  # loose: codex JSON, wave 2 gives
         return None
 
 
-def exit_code(record: dict[str, Any]) -> int | None:  # loose: codex JSON, wave 2 gives it a real shape
-    """The record's exit status, honest about zero: `0` is a real exit code
+def exit_code(value: str | int | None) -> int | None:
+    """A record's exit status, honest about zero: `0` is a real exit code
     (a falsy-int coercion once turned a clean exit into outcome "failed")."""
     # Parsed from the same string the guard tests, rather than from the raw
     # value: the two were separate expressions, so nothing connected "this
     # renders as digits" to "this converts to an int".
-    text = str(record.get("exit"))
+    text = str(value)
     return int(text) if text.lstrip("-").isdigit() else None
 
 
-def content(value: object, *, markdown: bool = False) -> Content:  # loose: codex JSON, wave 2 gives it a real shape
-    if isinstance(value, (dict, list)):
-        return StructuredContent(json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True))
-    return TextContent(str(value or ""), "text/markdown" if markdown else "text/plain")
+def content(value: str | None, *, markdown: bool = False) -> Content:
+    return TextContent(value or "", "text/markdown" if markdown else "text/plain")
 
 
 def event(

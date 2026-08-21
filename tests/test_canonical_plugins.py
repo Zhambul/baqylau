@@ -12,6 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from pydantic import ValidationError
 
 from canonical_runtime import ProviderGraph
 from audit.recorder import AuditRecorder
@@ -3152,6 +3153,69 @@ def test_codex_deliberate_ignores_are_nonsemantic_and_only_drift_stays_unknown()
     # moved, which is the one thing the unknown verdict is for.
     assert verdict(item_completed({"type": "CommandExecution", "id": "item-three"})) \
         == "ignored_unknown"
+
+
+def test_codex_unknown_field_on_a_known_record_fails_translation_naming_it():
+    """The owner's strictest-stance decision (TASKS.md, 2026-08-21): a KNOWN
+    record kind carrying a field records.py has not declared is schema drift,
+    not tolerance. `translate()` raises exactly like the existing "unknown
+    Codex goal state" tripwire above — the interpreter loop
+    (engine/interpret/loop.py) is what turns any exception into the stored
+    `translation_failed` verdict, with pydantic's own `extra_forbidden`
+    message naming the field."""
+    with pytest.raises(ValidationError, match="a_field_records_py_has_never_declared"):
+        CodexCanonicalTranslator().translate(raw_event(
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "task_started",
+                    "turn_id": "turn-one",
+                    "a_field_records_py_has_never_declared": "surprise",
+                },
+            },
+            harness="codex",
+            source_type="rollout",
+            raw_event_id="codex-unknown-field",
+        ))
+
+
+def test_codex_wrong_typed_field_on_a_known_record_fails_translation():
+    """Same decision, the other half of "shape mismatch": a declared field
+    present with the WRONG type is exactly as much drift as a missing one or
+    an extra one — `turn_id` is a string in every measured rollout, never a
+    list."""
+    with pytest.raises(ValidationError, match="turn_id"):
+        CodexCanonicalTranslator().translate(raw_event(
+            {
+                "type": "event_msg",
+                "payload": {"type": "task_started", "turn_id": ["not", "a", "string"]},
+            },
+            harness="codex",
+            source_type="rollout",
+            raw_event_id="codex-wrong-type",
+        ))
+
+
+def test_codex_unknown_record_kind_stays_ignored_not_failed():
+    """The distinction the owner's decision draws (TASKS.md, 2026-08-21): an
+    UNRECOGNISED `payload.type` string is the grammar growing (verified drift
+    across codex 0.95 -> 0.144), not a shape mismatch within a type this
+    codebase claims to know — `ignored_unknown`, never `translation_failed`,
+    however unfamiliar its payload looks."""
+    translated = CodexCanonicalTranslator().translate(raw_event(
+        {
+            "type": "event_msg",
+            "payload": {
+                "type": "a_record_kind_codex_has_not_shipped_yet",
+                "whatever_fields_it_someday_carries": True,
+            },
+        },
+        harness="codex",
+        source_type="rollout",
+        raw_event_id="codex-unknown-kind",
+    ))
+    assert translated.decision == "ignored_unknown"
+    assert translated.canonical_events == ()
 
 
 def test_native_instruction_wrappers_are_canonical_system_messages():

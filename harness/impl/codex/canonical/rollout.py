@@ -79,13 +79,31 @@
 # bottom (subagent_fork_epoch / subagent_body_offset): a subagent rollout's
 # replayed-parent PREFIX is a fact about the file's shape, not about one record,
 # so it cannot be answered from a parsed line — each is bounded and fails open.
+import dataclasses
 import json
 import os
 from datetime import datetime
-from typing import Any
+from typing import Callable
+
+from pydantic import JsonValue
 
 from harness.impl.codex.canonical.events import EVENTS
 from harness.impl.codex.canonical.items import RESPONSES
+from harness.impl.codex.canonical.records import (
+    BadRecord,
+    CompactBoundaryRecord,
+    CompactedPayload,
+    ExecRecord,
+    ExecResultRecord,
+    MessageRecord,
+    RolloutRecord,
+    TaskCompleteRecord,
+    TaskStartedRecord,
+    TurnContextPayload,
+    TurnContextRecord,
+    WorldStatePayload,
+    WorldStateRecord,
+)
 
 # The canonical codex ROLLOUT path layout (docs/codex.md): a `rollout-*.jsonl`
 # file under a `.../sessions/YYYY/MM/DD/` tree (`~/.codex/sessions/…` in
@@ -120,30 +138,33 @@ def owns(path: str) -> bool:
 
 # --- the TOP-LEVEL register (neither event_msg nor response_item) ----------------
 
-def _turn_context(p: dict[str, Any]) -> dict[str, Any]:  # loose: codex JSON, wave 2 gives it a real shape
+def _turn_context(raw: dict[str, JsonValue]) -> TurnContextRecord:
     # `reasoning_effort` moved under collaboration_mode.settings in 0.14x; the
     # bare top-level `effort` is the older (and still emitted) spelling.
-    eff = (((p.get("collaboration_mode") or {}).get("settings") or {})
-           .get("reasoning_effort") or p.get("effort") or "").strip()
-    return {"kind": "turn_context", "model": (p.get("model") or "").strip(),
-            "effort": eff}
+    p = TurnContextPayload.model_validate(raw)
+    settings_effort = p.collaboration_mode.settings.reasoning_effort if (
+        p.collaboration_mode and p.collaboration_mode.settings
+    ) else None
+    effort = (settings_effort or p.effort or "").strip()
+    return TurnContextRecord(model=(p.model or "").strip(), effort=effort)
 
 
-def _top_compacted(p: dict[str, Any]) -> dict[str, Any]:  # loose: codex JSON, wave 2 gives it a real shape
+def _top_compacted(raw: dict[str, JsonValue]) -> CompactBoundaryRecord:
     # The TOP-LEVEL compaction record (distinct from the event_msg
     # `context_compacted` notice the mirror paints as ⟳): it is the boundary
     # itself, and `message` is usually "" because the summary is encrypted.
     # `replacement_history` — the entire rewritten conversation — is
     # deliberately NOT carried, only its length: a record shape must not be a
     # megabyte.
-    hist = p.get("replacement_history")
-    return {"kind": "compact_boundary", "message": p.get("message") or "",
-            "replaced": len(hist) if isinstance(hist, list) else 0,
-            "window_id": p.get("window_id"),
-            "previous_window_id": p.get("previous_window_id")}
+    p = CompactedPayload.model_validate(raw)
+    hist = p.replacement_history
+    return CompactBoundaryRecord(
+        message=p.message or "", replaced=len(hist) if hist is not None else 0,
+        window_id=p.window_id, previous_window_id=p.previous_window_id,
+    )
 
 
-def _top_world_state(p: dict[str, Any]) -> dict[str, Any]:  # loose: codex JSON, wave 2 gives it a real shape
+def _top_world_state(raw: dict[str, JsonValue]) -> WorldStateRecord:
     # A large periodic state snapshot (open files, shell sessions, todos).
     # Explicitly ignored: nothing in it is renderable.
     #
@@ -155,11 +176,14 @@ def _top_world_state(p: dict[str, Any]) -> dict[str, Any]:  # loose: codex JSON,
     # existed to prevent. The kind produces no canonical events, so the verdict
     # is `ignored_nonsemantic` with this kind named in its reason: recognised,
     # and carrying nothing.
-    return {"kind": "world_state"}
+    WorldStatePayload.model_validate(raw)
+    return WorldStateRecord()
 
 
-_TOP = {"turn_context": _turn_context, "compacted": _top_compacted,
-        "world_state": _top_world_state}
+_TOP: dict[str, Callable[[dict[str, JsonValue]], RolloutRecord]] = {
+    "turn_context": _turn_context, "compacted": _top_compacted,
+    "world_state": _top_world_state,
+}
 
 # Record kinds that carry the RECORD's `timestamp` as a separate `ts` string.
 # Three families: the task lifecycle records whose OWN timestamp field is absent
@@ -173,16 +197,27 @@ _TOP = {"turn_context": _turn_context, "compacted": _top_compacted,
 # rollout being replayed from disk would report the age of the file. `ts` is
 # always the ISO record string, never folded into the numeric `at` a task
 # duration subtracts.
-_RECORD_TS = ("task_started", "task_complete", "exec", "exec_result",
-              "message")
 
 
-def _stamp(
-    rec: dict[str, Any] | None,  # loose: codex JSON, wave 2 gives it a real shape
-    o: dict[str, Any],  # loose: codex JSON, wave 2 gives it a real shape
-) -> dict[str, Any] | None:  # loose: codex JSON, wave 2 gives it a real shape
-    if rec is not None and rec["kind"] in _RECORD_TS:
-        rec["ts"] = o.get("timestamp")
+def _stamp(rec: RolloutRecord | None, o: dict[str, JsonValue]) -> RolloutRecord | None:
+    if rec is None:
+        return rec
+    raw_ts = o.get("timestamp")
+    ts = raw_ts if isinstance(raw_ts, str) else None
+    # One isinstance branch per kind, rather than one check against their
+    # union: dataclasses.replace's stub wants the concrete dataclass type,
+    # not a Union, so this cannot collapse to one isinstance(rec, (A, B, …))
+    # call the way a `kind` string comparison could.
+    if isinstance(rec, TaskStartedRecord):
+        return dataclasses.replace(rec, ts=ts)
+    if isinstance(rec, TaskCompleteRecord):
+        return dataclasses.replace(rec, ts=ts)
+    if isinstance(rec, ExecRecord):
+        return dataclasses.replace(rec, ts=ts)
+    if isinstance(rec, ExecResultRecord):
+        return dataclasses.replace(rec, ts=ts)
+    if isinstance(rec, MessageRecord):
+        return dataclasses.replace(rec, ts=ts)
     return rec
 
 
@@ -216,34 +251,37 @@ KINDS = frozenset({
 })
 
 
-def parse(o: dict[str, Any]) -> dict[str, Any] | None:  # loose: codex JSON, wave 2 gives it a real shape
+def parse(o: dict[str, JsonValue]) -> RolloutRecord | None:
     """One decoded rollout object -> a typed record (module header) or None."""
     t = o.get("type")
-    p = o.get("payload") or {}
+    payload = o.get("payload")
+    p: dict[str, JsonValue] = payload if isinstance(payload, dict) else {}
     if t == "event_msg":
-        h = EVENTS.get(p.get("type") or "")
-        return _stamp(h(p), o) if h else None
+        event_type = p.get("type")
+        event_handler = EVENTS.get(event_type) if isinstance(event_type, str) else None
+        return _stamp(event_handler(p), o) if event_handler else None
     if t == "response_item":
-        h = RESPONSES.get(p.get("type") or "")
+        response_type = p.get("type")
+        response_handler = RESPONSES.get(response_type) if isinstance(response_type, str) else None
         # response_item too: exec / exec_result carry the record's own timestamp so a
         # standalone exec block can time itself (_stamp is a no-op for the rest).
-        return _stamp(h(p), o) if h else None
-    h = _TOP.get(t or "")
+        return _stamp(response_handler(p), o) if response_handler else None
+    top_handler = _TOP.get(t) if isinstance(t, str) else None
     # A top-level record's fields sit under `payload` in the enveloped
     # spelling and at the top level in the older bare-item one — hand the
     # handler whichever mapping actually holds them.
-    return h(o.get("payload") or o) if h else None
+    return top_handler(p or o) if top_handler else None
 
 
-def parse_line(s: str) -> dict[str, Any] | None:  # loose: codex JSON, wave 2 gives it a real shape
-    """One rollout JSONL line -> a typed record; {"kind": "bad", "raw": s}
-    when the line isn't JSON at all (the stream keeps its own json.loads so
-    its malformed-line audit contract stays where it was)."""
+def parse_line(s: str) -> RolloutRecord | None:
+    """One rollout JSONL line -> a typed record; BadRecord(raw=s) when the
+    line isn't JSON at all (the stream keeps its own json.loads so its
+    malformed-line audit contract stays where it was)."""
     try:
         o = json.loads(s)
     except Exception:
-        return {"kind": "bad", "raw": s}
-    return parse(o)
+        return BadRecord(raw=s)
+    return parse(o) if isinstance(o, dict) else BadRecord(raw=s)
 
 
 # --- subagent rollout: skip the replayed-parent PREFIX ---------------------------
@@ -285,16 +323,14 @@ def subagent_fork_epoch(path: str) -> int | None:
         return None
 
 
-def is_child_bootstrap(
-    rec: dict[str, Any] | None,  # loose: codex JSON, wave 2 gives it a real shape
-    fork_epoch: int | None,
-) -> bool:
+def is_child_bootstrap(rec: RolloutRecord | None, fork_epoch: int | None) -> bool:
     """True for the child's OWN bootstrap `task_started` (`at >= fork_epoch`) —
     the FIRST child-own record; the replayed-parent prefix is everything before
     it. `fork_epoch` None => never."""
-    return (fork_epoch is not None and rec is not None
-            and rec.get("kind") == "task_started"
-            and (rec.get("at") or 0) >= fork_epoch)
+    if fork_epoch is None or not isinstance(rec, TaskStartedRecord):
+        return False
+    at = rec.at or 0
+    return isinstance(at, (int, float)) and at >= fork_epoch
 
 
 # How far into a subagent rollout's HEAD a head-reader will read before giving
