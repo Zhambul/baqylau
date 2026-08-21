@@ -265,3 +265,39 @@ def test_the_fake_terminal_used_across_the_suite_matches_the_contract():
         implementation = getattr(plugin, field)
         for name in protocol_methods(protocol):
             assert callable(getattr(implementation, name))
+
+
+@pytest.mark.kitty
+def test_a_real_tab_launch_prints_a_window_id_and_the_tab_closes_again():
+    """The one true-launch smoke test: the real kitten, the real socket.
+
+    This is the path the dashboard's "new session" button stands on. The
+    hermetic suite fakes the remote, so only this test can see a broken
+    kitten binary, a dead socket, or a kitty that stopped answering.
+    Opt-in via CLAUDE_E2E_KITTY=1 (make test-all): it opens and closes one
+    real tab in the user's kitty.
+    """
+    import os
+
+    from terminal.impl.kitty.remote import resolve_listen_on
+    from terminal.models import TabCloseRequest
+
+    if not os.environ.get("CLAUDE_E2E_KITTY"):
+        pytest.skip("real-kitty smoke tests are opt-in (CLAUDE_E2E_KITTY=1)")
+    if not resolve_listen_on():
+        pytest.skip("no kitty socket to talk to")
+
+    tabs = kitty_plugin().tabs
+    opened = tabs.open_tab(TabOpenRequest(
+        working_directory="/tmp",
+        command=("sleep", "30"),
+        title="baqylau-smoke",
+    ))
+    assert opened.succeeded, opened.reason
+    assert opened.window_id is not None
+
+    listed = kitty_plugin().metadata.windows()
+    assert any(w.window_id == opened.window_id for w in listed)
+
+    closed = tabs.close_tab(TabCloseRequest(opened.window_id))
+    assert closed.succeeded, closed.reason
