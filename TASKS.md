@@ -36,10 +36,7 @@ the one gap. Starts when an agent slot frees.
 
 ## Small tickets
 
-- **EnterPlanMode is not in TOOL_KINDS** — the real corpus shows 24 uses;
-  each hits `ignored_unknown` today. A translator semantic gap, not a
-  type-safety one: map it to an entry kind (or an explicit nonsemantic
-  ignore with a reason) so the verdict is deliberate.
+(none)
 
 ## Done
 
