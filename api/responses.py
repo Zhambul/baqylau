@@ -40,12 +40,3 @@ EVERY_ROUTE = errors({
     400: "The request names something unknown, or cannot be acted on as posed.",
     500: "An internal failure. Audited as an `errors` row; the body says nothing more.",
 })
-
-# Registered on every router that sits behind `Depends(control_plane())`, in the
-# order api/guard.py checks them. All four are audited as `web-reject` rows.
-GUARDED = errors({
-    403: "Read-only mode, a non-allowlisted Origin, or no proof of a same-origin caller.",
-    411: "No Content-Length. The body cap is checked before the body is read, so it is required.",
-    413: "Body over this route's cap.",
-    415: "Content-Type is not application/json.",
-})

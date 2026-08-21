@@ -3,7 +3,7 @@
 # took a `control_name` field and was a god endpoint).
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Response
 
 from api.controls.models.answer_question_request import AnswerQuestionRequest
 from api.controls.models.apply_rewind_request import ApplyRewindRequest
@@ -24,15 +24,14 @@ from api.controls.models.send_text_request import SendTextRequest
 from api.controls.models.launch_session_request import LaunchSessionRequest
 from api.common.models.fields import SessionIdPath
 from app.providers import Controls, Launcher
-from api.guard import control_plane
 from api.controls import mapper
 from api.controls.models.control_outcome_response import ControlOutcomeResponse
 from api.controls.models.launch_response import LaunchResponse
-from api.responses import GUARDED, with_body
+from api.responses import with_body
 from domain.ids import SessionId
 from harness.services.controls import HarnessControlService
 
-router = APIRouter(dependencies=[Depends(control_plane())], responses=GUARDED)
+router = APIRouter()
 
 # The route names an api MODEL as its return type and returns one, so the
 # published schema and the bytes are the same statement. The harness layer's own

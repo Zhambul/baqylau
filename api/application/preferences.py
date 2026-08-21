@@ -4,7 +4,7 @@
 # a missing key surfaces.)
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 
 from api.common.models.replies.saved_response import SavedResponse
 from api.application.models.preferences.composer_draft_request import ComposerDraftRequest
@@ -44,15 +44,13 @@ from api.application.models.preferences.session_application_response import (
     SessionApplicationResponse,
 )
 from app.providers import ApplicationPreferences, PushSigningKeys, SessionApplication
-from api.guard import control_plane
-from api.responses import GUARDED
 from notify.channels import webpush
 from dashboard.services.preferences import BrowserPresence, BrowserPushSubscription
 from domain.workspace import AnswerSelection, QueuedMessage
 from domain.ids import AttentionId, SessionId
 
 router = APIRouter()
-guarded = APIRouter(dependencies=[Depends(control_plane())], responses=GUARDED)
+guarded = APIRouter()
 
 
 @router.get("/api/application/push-configuration")

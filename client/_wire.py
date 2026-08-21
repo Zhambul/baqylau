@@ -18,10 +18,6 @@ HOST = "127.0.0.1"                      # never a routable interface
 PORT_VARIABLE = "BAQYLAU_DASHBOARD_PORT"
 PORT = int(os.environ.get(PORT_VARIABLE) or 8377)
 
-# Proof of a same-origin control-plane caller (api/guard.py rejects a POST
-# without it).
-CALLER_HEADER = "X-Baqylau"
-
 HOOK_PATH = "/api/harnesses/%s/hooks"
 TELEMETRY_PATH = "/api/harnesses/%s/telemetry"
 # The pane's three reads, and the whole of what it needs: the aggregate, one

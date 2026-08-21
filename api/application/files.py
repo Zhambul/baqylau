@@ -11,9 +11,13 @@ import re
 import time
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 
+from collections.abc import Mapping
+
+from api.config import Settings
 from api.dependencies import Policy
+from audit.recorder import AuditRecorder
 from app.providers import Recorder
 from api.application.models.files.clipboard_files_request import ClipboardFilesRequest
 from api.application.models.files.clipboard_matches_response import (
@@ -24,13 +28,28 @@ from api.application.models.files.dictation_token_request import DictationTokenR
 from api.application.models.files.upload_request import UploadRequest
 from api.application.models.files.upload_response import UploadResponse
 from app.providers import Uploads
-from api.guard import control_plane, reject_input, valid_session_id
-from api.responses import GUARDED, errors
+from api.responses import errors
 from domain.ids import SessionId
 from domain.uploads import StoredUpload
 from core.daemon.contract import UPLOAD_MAX
 from core import clipboard
 from dashboard import dictate, paths
+
+
+def reject_input(audit: AuditRecorder, action: str, why: str, message: str,
+                 detail: Mapping[str, object], code: int = 400,
+                 log: str = "", path: str = "") -> HTTPException:
+    """Audit and reject malformed application input: a `state_files` row first,
+    then the HTTP error. Input validation, which survived the guard's removal
+    because it is about the BODY, not about who sent it."""
+    audit.state_file(log, path, action,
+                     dict({"ok": False, "why": why},
+                          **{key: repr(value) for key, value in detail.items()}))
+    return HTTPException(code, message)
+
+
+def valid_session_id(policy: Settings, value: str | None) -> bool:
+    return bool(policy.session_id_pattern.match(value or ""))
 
 router = APIRouter()
 
@@ -43,8 +62,7 @@ def _claimed_session_id(policy: Policy, value: str | None) -> str:
 
 
 @router.post("/api/application/uploads",
-             dependencies=[Depends(control_plane(UPLOAD_MAX))],
-             responses={**GUARDED, **errors({
+             responses={**errors({
                  413: "Decoded bytes over UPLOAD_MAX — the base64 envelope passed, the file did not.",
                  500: "The bytes could not be written; no row was recorded.",
              })})
@@ -111,7 +129,7 @@ def upload(
 
 
 @router.post("/api/application/clipboard-files",
-             dependencies=[Depends(control_plane())], responses=GUARDED)
+             )
 def clipboard_files(
     body: ClipboardFilesRequest, policy: Policy, audit: Recorder
 ) -> ClipboardMatchesResponse:
@@ -136,8 +154,7 @@ def clipboard_files(
 
 
 @router.post("/api/application/dictation-token",
-             dependencies=[Depends(control_plane())],
-             responses={**GUARDED, **errors({
+             responses={**errors({
                  501: "No Deepgram key is configured on this host — the page toasts this one.",
                  502: "Deepgram refused to mint the grant.",
              })})

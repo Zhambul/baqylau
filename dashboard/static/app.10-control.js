@@ -695,8 +695,7 @@ function lockDuring(btn, run, rest) {
 }
 
 
-// The close POST rides the plain-fetch channel (postJSON — X-Baqylau header,
-// JSON body, a CLOSE_POST_MS timeout), tagged `audit:"close"` so its whole
+// The close POST rides the plain-fetch channel (postJSON — JSON body, a CLOSE_POST_MS timeout), tagged `audit:"close"` so its whole
 // transport lifecycle lands in the frontend audit (close.begin/ok/fail). This is
 // the transport PROVEN to traverse the tunnel (baqylau/dash.zhambyl.top): the
 // click's own /hint-audit beacon and the composer /message ride it and always

@@ -510,13 +510,6 @@ def test_sessions_carry_their_plugin_only_when_harnesses_are_attached(tmp_path):
     assert SqliteSessionRepository(main_database(database_path)).find(SessionId("missing")) is None
 
 
-def test_public_dashboard_url_is_an_allowed_post_origin():
-    from api import config as api_config
-    from dashboard import config
-
-    assert config.PUBLIC_URL in api_config.ALLOWED_ORIGINS
-
-
 def test_harness_registry_requires_one_explicit_default_when_launchers_exist():
     registry = HarnessRegistry()
     registry.register(
@@ -730,7 +723,7 @@ def test_interpretation_commits_verdict_canonical_and_provenance_together(tmp_pa
 
     assert recorder.unverdicted(10) == ()
     assert store.page_from(0, 10)[0].event == event
-    connection = sqlite3.connect(store.database.path)
+    connection = sqlite3.connect(store.sqlite_database.path)
     assert connection.execute("SELECT count(*) FROM raw_events").fetchone()[0] == 1
     assert connection.execute("SELECT decision FROM interpretations").fetchone()[0] == "translated"
     assert connection.execute(
@@ -756,7 +749,7 @@ def test_replay_is_idempotent_and_a_second_observation_adds_provenance(tmp_path)
     # what was committed, and which observations agreed on it is the store's own
     # record of that fact.
     assert _provenance(store, stored[0]) == (RawEventId("raw-one"), RawEventId("raw-two"))
-    connection = sqlite3.connect(store.database.path)
+    connection = sqlite3.connect(store.sqlite_database.path)
     assert connection.execute(
         "SELECT storage_result FROM interpretation_events WHERE raw_event_id='raw-two'"
     ).fetchone()[0] == "deduplicated"
@@ -806,7 +799,7 @@ def test_re_observing_one_fact_is_idempotent_even_when_observers_disagree(tmp_pa
     assert stored[0].event.payload.content.text == "hello"
     assert _provenance(store, stored[0]) == (RawEventId("raw-one"), RawEventId("raw-two"))
     # Nothing is lost: the disagreeing rendering survives as its own raw evidence.
-    connection = sqlite3.connect(store.database.path)
+    connection = sqlite3.connect(store.sqlite_database.path)
     assert connection.execute(
         "SELECT count(*) FROM raw_events WHERE raw_event_id='raw-two'"
     ).fetchone()[0] == 1
@@ -822,7 +815,7 @@ def test_translation_cannot_move_raw_evidence_to_another_actor(tmp_path):
 
     interpreter.tick()
 
-    connection = sqlite3.connect(store.database.path)
+    connection = sqlite3.connect(store.sqlite_database.path)
     assert connection.execute("SELECT count(*) FROM canonical_events").fetchone()[0] == 0
     decision, reason = connection.execute(
         "SELECT decision, reason FROM interpretations WHERE raw_event_id='raw-child'"
@@ -839,7 +832,7 @@ def test_translation_failure_is_a_complete_audited_decision(tmp_path):
 
     interpreter.tick()
 
-    connection = sqlite3.connect(store.database.path)
+    connection = sqlite3.connect(store.sqlite_database.path)
     decision, reason = connection.execute(
         "SELECT decision, reason FROM interpretations WHERE raw_event_id='raw-bad'"
     ).fetchone()
@@ -872,7 +865,7 @@ def test_a_translator_bug_becomes_a_verdict_and_never_wedges_the_backlog(tmp_pat
 
     interpreter.tick()
 
-    connection = sqlite3.connect(store.database.path)
+    connection = sqlite3.connect(store.sqlite_database.path)
     decision, reason = connection.execute(
         "SELECT decision, reason FROM interpretations WHERE raw_event_id='raw-bug'"
     ).fetchone()
@@ -923,7 +916,7 @@ def test_raw_event_audit_shows_exact_raw_interpretation_and_canonical_chain(tmp_
     recorder.record((raw,))
     interpreter.tick()
 
-    audit = SqliteRawEventAuditRepository(store.database).audit(raw.raw_event_id)
+    audit = SqliteRawEventAuditRepository(store.sqlite_database).audit(raw.raw_event_id)
     assert audit is not None
     assert audit.raw_event.payload == raw.payload
     assert audit.interpretation is not None
@@ -934,7 +927,7 @@ def test_raw_event_audit_shows_exact_raw_interpretation_and_canonical_chain(tmp_
     assert audit.interpretation.completed_at == audit.interpretation.events[0].accepted_at
     assert audit.interpretation.events[0].storage_result == "accepted"
     assert SqliteRawEventAuditRepository(
-        store.database
+        store.sqlite_database
     ).audits_for_session(SessionId("session-one")) == (audit,)
 
 
@@ -943,7 +936,7 @@ def test_raw_event_audit_shows_the_uninterpreted_backlog(tmp_path):
     store = SqliteCanonicalEventRepository(main_database(str(tmp_path / "main.db")))
     recorder.record((raw_observation("raw-waiting"),))
 
-    audit = SqliteRawEventAuditRepository(store.database).audit(RawEventId("raw-waiting"))
+    audit = SqliteRawEventAuditRepository(store.sqlite_database).audit(RawEventId("raw-waiting"))
 
     assert audit is not None
     assert audit.interpretation is None
@@ -1086,7 +1079,7 @@ def test_a_dead_cli_process_becomes_one_session_finished_fact(tmp_path):
 
     # The latch: a later tick re-records nothing.
     interpreter.tick()
-    connection = sqlite3.connect(store.database.path)
+    connection = sqlite3.connect(store.sqlite_database.path)
     assert connection.execute(
         "SELECT count(*) FROM raw_events WHERE source_type='liveness'"
     ).fetchone()[0] == 1
@@ -1307,7 +1300,7 @@ def test_output_location_directives_run_the_whole_foreground_lifecycle(tmp_path)
 
     chunk_types = {
         audit.raw_event.source_type
-        for audit in SqliteRawEventAuditRepository(store.database).audits_for_session(
+        for audit in SqliteRawEventAuditRepository(store.sqlite_database).audits_for_session(
             SessionId("session-one")
         )
     }

@@ -18,9 +18,7 @@ PORT_NUMBER = EV.env_int("BAQYLAU_DASHBOARD_PORT", 8377)
 
 # Proof of a same-origin control-plane caller (see api/guard.py for the full
 # browser-vector defense this header is half of).
-POST_HEADER = "X-Baqylau"
 
-POST_MAX = 64 * 1024               # request-body cap for the control-plane POSTs
 # The composer-attachment upload endpoint carries base64-encoded bytes, so it
 # gets its OWN, larger cap — ~14 MiB admits a base64-inflated 10 MB image (the
 # per-image ceiling) with headroom for the JSON envelope. Every other POST

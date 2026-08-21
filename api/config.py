@@ -14,15 +14,12 @@
 # the read-only switch on, because it was decided at import.
 from __future__ import annotations
 
-import os
 import re
 import time
 from dataclasses import dataclass
 from typing import Mapping
 from urllib.parse import urlsplit
 
-from core.daemon.contract import HOST_ADDRESS, PORT_NUMBER
-from dashboard.config import PUBLIC_URL
 from dashboard.dictate import DEEPGRAM_LISTEN_URL
 
 # The listen(2) backlog. The socketserver-era default of FIVE reset a tunneled
@@ -44,9 +41,9 @@ CACHE_STATIC = "public, max-age=31536000, immutable"
 DICTATION_ORIGIN = "%s://%s" % urlsplit(DEEPGRAM_LISTEN_URL)[:2]
 
 # The Content-Security-Policy every response carries. There is no CORS
-# middleware in this tree on purpose (api/guard.py): that stops a hostile page
-# from READING this origin, and this stops a string that reached one of our own
-# pages from ACTING. The two are different halves and neither substitutes.
+# middleware in this tree on purpose: never answering a preflight stops a
+# hostile page from READING this origin, and this stops a string that reached
+# one of our own pages from ACTING. The two are different halves.
 #
 # Every directive below was read off the assets it governs, not copied from a
 # template — the dashboard is tunneled to real browsers (docs/remote.md) and
@@ -102,26 +99,6 @@ SECURITY_HEADERS = {
 
 # The only Origins a legit same-origin browser POST carries (it usually sends
 # none at all for same-origin fetches; when it does, it is one of these).
-# BAQYLAU_DASHBOARD_ORIGINS extends the set for a proxied deployment
-# (docs/remote.md): comma-separated FULL origins, scheme and all. The knob adds
-# origins, never replaces the local ones, and is NOT an exposure switch — the
-# bind stays 127.0.0.1; only an outbound connector on this machine can front
-# the port.
-def extra_origins(raw: str | None) -> set[str]:
-    """BAQYLAU_DASHBOARD_ORIGINS → the set of extra allowed origins
-    (comma-separated, whitespace-tolerant, empty entries dropped)."""
-    return {origin.strip() for origin in (raw or "").split(",") if origin.strip()}
-
-
-ALLOWED_ORIGINS = ({"http://%s:%d" % (HOST_ADDRESS, PORT_NUMBER),
-                    "http://localhost:%d" % PORT_NUMBER,
-                    PUBLIC_URL}
-                   | extra_origins(os.environ.get("BAQYLAU_DASHBOARD_ORIGINS")))
-
-# BAQYLAU_DASHBOARD_READONLY=1 switches the control plane off entirely (every
-# POST is 403) — remote eyes, no remote hands, whatever the proxy in front allows.
-READONLY = (os.environ.get("BAQYLAU_DASHBOARD_READONLY") or "") == "1"
-
 # Image content types the composer treats as inline screenshots (thumbnailed,
 # and always admitted). Non-image files are still allowed as attachments, just
 # size-capped and shown as a filename chip.
@@ -150,8 +127,6 @@ GRACEFUL_SHUTDOWN_SECONDS = 3
 class Settings:
     """This server's policy, as one value. Injected, never imported."""
 
-    readonly: bool
-    allowed_origins: frozenset[str]
     session_id_pattern: re.Pattern[str]
     image_mimes: frozenset[str]
     boot_id: str
@@ -166,8 +141,6 @@ class Settings:
 def settings() -> Settings:
     """The policy this process runs under, read off the constants above."""
     return Settings(
-        readonly=READONLY,
-        allowed_origins=frozenset(ALLOWED_ORIGINS),
         session_id_pattern=SESSION_ID_PATTERN,
         image_mimes=frozenset(IMAGE_MIMES),
         boot_id=BOOT_ID,

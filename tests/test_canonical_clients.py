@@ -316,7 +316,6 @@ def test_the_wire_matches_the_daemon():
     """
     wire = load_wire()
     assert (wire.HOST, wire.PORT) == (contract.HOST_ADDRESS, contract.PORT_NUMBER)
-    assert wire.CALLER_HEADER == contract.POST_HEADER
     assert wire.TERMINAL_WINDOW_HEADER == headers.TERMINAL_WINDOW_HEADER
     assert wire.CLIENT_PROCESS_HEADER == headers.CLIENT_PROCESS_HEADER
     assert wire.ACCOUNT_ID_HEADER == headers.ACCOUNT_ID_HEADER
@@ -511,7 +510,6 @@ def test_the_claude_hook_ships_its_stdin_and_what_it_observed(daemon):
     delivery = daemon.delivery("/hooks")
     assert delivery.path == "/api/harnesses/claude_code/hooks"
     assert delivery.body == payload                    # the EXACT bytes, unparsed
-    assert delivery.headers[contract.POST_HEADER] == "1"
     assert delivery.headers[headers.TERMINAL_WINDOW_HEADER] == "77"
     # Its own pid, not the CLI's: the daemon walks the ancestry, while the CLI is
     # still blocked on this response and therefore provably alive.

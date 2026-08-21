@@ -3,11 +3,10 @@
 # `command` field).
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Response
 
 from app.providers import PaneCommands
-from api.guard import control_plane
-from api.responses import GUARDED, with_body
+from api.responses import with_body
 from api.terminal.models.panes.grow_request import GrowPaneRequest
 from api.terminal.mapper import panes as mapper
 from api.terminal.models.panes.pane_command_response import PaneCommandResponse
@@ -18,7 +17,7 @@ from api.terminal.models.panes.shrink_request import ShrinkPaneRequest
 from api.terminal.models.panes.toggle_request import TogglePanesRequest
 from terminal.panes.commands import PaneCommandService
 
-router = APIRouter(dependencies=[Depends(control_plane())], responses=GUARDED)
+router = APIRouter()
 
 # Same rule as the control plane: the verdict is the status, the body is
 # unchanged. `handled=False` (no session in this window) is a 200 — nothing was

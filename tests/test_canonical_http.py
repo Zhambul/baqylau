@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 import http.client
 import json
 import pathlib
@@ -17,8 +16,6 @@ from urllib.parse import quote
 from fastapi.routing import APIRoute
 from pydantic import TypeAdapter
 
-from api import config as api_config
-from api import dependencies
 from api.app import build_web_application
 from api.controls.models.send_text_request import SendTextRequest
 from api.server import build_server
@@ -211,46 +208,12 @@ def _post(server, path: str, body: dict):
         "POST",
         path,
         body=encoded,
-        headers={"Content-Type": "application/json", "X-Baqylau": "1"},
+        headers={"Content-Type": "application/json"},
     )
     response = connection.getresponse()
     response_body = response.read()
     connection.close()
     return response.status, response_body
-
-
-def test_read_only_mode_refuses_every_control_plane_post(tmp_path):
-    """BAQYLAU_DASHBOARD_READONLY: remote eyes, no remote hands.
-
-    The switch was untestable while it was an import-time module constant — it
-    was decided before the first test imported anything. It is a field of the
-    injected policy now, so this asserts the thing the deployment actually
-    relies on: reads still answer, every mutation is a 403.
-    """
-    application = _application()
-    read_only = dataclasses.replace(api_config.settings(), readonly=True)
-    server, thread = _server(application, {dependencies.policy: read_only})
-    try:
-        status, _content_type, _body = _get(server, "/sessionData")
-        assert status == 200
-
-        status, body = _post(
-            server,
-            "/api/sessions/session-one/controls/interrupt",
-            {"reason": "user"},
-        )
-        assert status == 403
-        assert json.loads(body) == {"error": "control plane disabled (read-only)"}
-
-        status, body = _post(
-            server, "/api/terminal/panes/toggle",
-            {"window_id": "1", "working_directory": "/work"},
-        )
-        assert status == 403
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=2)
 
 
 def test_insights_use_typed_canonical_application_data(tmp_path):
@@ -1060,39 +1023,6 @@ def test_a_stream_poll_never_runs_on_the_event_loop(tmp_path):
         thread.join(timeout=2)
 
 
-def test_a_body_whose_length_is_not_declared_is_refused_before_it_is_read(tmp_path):
-    """The cap is checked before the body is parsed, which is what makes it free —
-    and which is why the length has to be declared.
-
-    A chunked POST declared nothing, so `int(header or 0)` read it as a zero and
-    it passed every cap; the handler behind it then buffered the whole stream.
-    h11 imposes no maximum of its own, so the header WAS the limit and an absent
-    header was no limit at all.
-    """
-    server, thread = _server(_application())
-    try:
-        status = _post_without_a_declared_length(
-            server,
-            "/api/sessions/session-one/controls/background",
-            b'{"request_id": "req-1"}',
-        )
-        assert status == 411
-
-        # ...and the same request, with its length declared, is served as always.
-        status, body = _post(
-            server,
-            "/api/sessions/session-one/controls/background",
-            {"request_id": "req-1"},
-        )
-        # Served as always: the route's own verdict, in its own shape. A 409 is
-        # the gesture declining, which is a verdict and not an error.
-        assert (status, json.loads(body)["status"]) == (409, "rejected")
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=2)
-
-
 def test_an_internal_failure_is_a_500_and_an_audit_row_not_a_400(tmp_path, monkeypatch):
     """A handler registered for KeyError, ValueError and TypeError answered every
     one of them with 400 and the exception's own message.
@@ -1271,10 +1201,6 @@ def test_the_published_schema_names_every_status_a_caller_must_handle(tmp_path):
         for method, operation in operations.items()
         if isinstance(operation, dict) and "422" in operation.get("responses", {})
     ]
-
-    # The guard's four refusals, on a route that sits behind it.
-    guarded = answers("/api/sessions/{session_id}/controls/background", "post")
-    assert {"403", "411", "413", "415"} <= set(guarded)
 
     # A gesture's real outcomes — all three carrying the gesture's OWN body,
     # because a rejection here is a verdict and not an error.

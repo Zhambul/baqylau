@@ -3,12 +3,11 @@
 # never parsed here; the reply rides the HTTP response back to the harness.
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.concurrency import run_in_threadpool
 
 from api.common.models.fields import HarnessNamePath
-from api.guard import control_plane
-from api.responses import GUARDED, errors
+from api.responses import errors
 from app.providers import HookGateway, Recorder
 from harness.hooks.gateway import UnknownHookHarness
 from harness.models import HarnessHookRequest
@@ -19,7 +18,6 @@ from harness.hooks.headers import (
     LAUNCH_EFFORT_HEADER,
     LAUNCH_MODEL_HEADER,
     TERMINAL_WINDOW_HEADER,
-    HOOK_MAX,
 )
 from repository.errors import RepositoryError
 
@@ -28,9 +26,7 @@ router = APIRouter()
 
 @router.post(
     "/api/harnesses/{harness}/hooks",
-    dependencies=[Depends(control_plane(HOOK_MAX))],
     responses={
-        **GUARDED,
         **errors({
             404: "No such harness, or one that accepts no hooks.",
             409: "That raw event id was reused for DIFFERENT bytes.",

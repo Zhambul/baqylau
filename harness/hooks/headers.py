@@ -30,5 +30,3 @@ LAUNCH_EFFORT_HEADER = "X-Baqylau-Launch-Effort"
 
 # A hook delivery carries the harness's exact hook stdin — a post-tool payload
 # embeds the whole tool response, so it gets its own generous cap, far above
-# the tiny `core.daemon.contract.POST_MAX` every other POST stays at.
-HOOK_MAX = 4 * 1024 * 1024

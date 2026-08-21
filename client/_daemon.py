@@ -39,7 +39,6 @@ def post(
     try:
         connection.request("POST", path, body, {
             "Content-Type": CONTENT_TYPE_JSON,
-            _wire.CALLER_HEADER: "1",
             **(headers or {}),
         })
         response = connection.getresponse()

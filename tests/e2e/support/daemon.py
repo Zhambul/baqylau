@@ -35,7 +35,6 @@ from typing import TypeVar
 from pydantic import TypeAdapter, ValidationError
 
 from api.common.models.replies.health_response import HealthResponse
-from core.daemon.contract import POST_HEADER
 from support.environment import child_environment
 
 Decoded = TypeVar("Decoded")
@@ -116,7 +115,6 @@ class Daemon:
         try:
             connection.request("POST", path, body, {
                 "Content-Type": "application/json",
-                POST_HEADER: "1",
             })
             response = connection.getresponse()
             return response.status, response.read().decode("utf-8", "replace")

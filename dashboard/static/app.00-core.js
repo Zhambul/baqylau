@@ -239,9 +239,7 @@ function apiEp(url) {
     .replace(/session\/[^/]+\//, "session/").replace(/\?.*$/, "");
 }
 
-// The control-plane write: every POST carries the JSON content type AND the
-// custom X-Baqylau header the server's _post_guard demands (both force a
-// CORS preflight a cross-origin page can't pass). Resolves to the parsed JSON
+// The control-plane write: a JSON POST. Resolves to the parsed JSON
 // on success, rejects with the server's {error} on a 4xx/5xx.
 // opts (optional): { keepalive, timeout, audit, sessionId, auditData }.
 //   keepalive — send via the browser's keepalive pool (the sendBeacon infra),
@@ -278,7 +276,7 @@ function postJSON(url, body, opts) {
   }
   const init = {
     method: "POST",
-    headers: { "Content-Type": "application/json", "X-Baqylau": "1" },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body || {}),
   };
   if (opts.keepalive) init.keepalive = true;

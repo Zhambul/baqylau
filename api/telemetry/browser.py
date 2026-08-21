@@ -2,7 +2,7 @@
 # frontend-audit event batches, optimistic-UI lifecycles, failed gestures.
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 
 from api.common.models.replies.recorded_response import RecordedResponse
 from api.telemetry.models.browser_events_request import BrowserEventsRequest
@@ -12,8 +12,6 @@ from api.telemetry.models.optimistic_action_request import (
 )
 from api.common.models.fields import SessionIdPath
 from app.providers import BrowserTelemetry
-from api.guard import control_plane
-from api.responses import GUARDED
 from audit.telemetry import (
     BrowserEvent,
     BrowserEventBatch,
@@ -22,7 +20,7 @@ from audit.telemetry import (
 )
 from domain.ids import SessionId
 
-router = APIRouter(dependencies=[Depends(control_plane())], responses=GUARDED)
+router = APIRouter()
 
 
 @router.post("/api/application/browser-events")

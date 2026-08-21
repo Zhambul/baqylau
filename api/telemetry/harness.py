@@ -3,15 +3,13 @@
 # recorded, never parsed here; unlike it, there is no reply to hand back.
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Request
 from fastapi.concurrency import run_in_threadpool
 
 from api.common.models.fields import HarnessNamePath
 from api.common.models.replies.recorded_response import RecordedResponse
-from api.guard import control_plane
-from api.responses import GUARDED
 from app.providers import TelemetryGateway, Recorder
-from harness.models import TELEMETRY_KIND_HEADER, TELEMETRY_MAX, HarnessTelemetryRequest
+from harness.models import TELEMETRY_KIND_HEADER, HarnessTelemetryRequest
 from harness.services.telemetry import UnknownTelemetryHarness
 from repository.errors import RepositoryError
 
@@ -20,8 +18,6 @@ router = APIRouter()
 
 @router.post(
     "/api/harnesses/{harness}/telemetry",
-    dependencies=[Depends(control_plane(TELEMETRY_MAX))],
-    responses=GUARDED,
 )
 async def record_telemetry_delivery(
     harness: HarnessNamePath, request: Request, gateway: TelemetryGateway, audit: Recorder
