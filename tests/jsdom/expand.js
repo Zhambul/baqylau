@@ -133,6 +133,11 @@ const fileEdit = {
   open: fileBlock && fileBlock.dataset.open,
   header: fileHeader && fileHeader.textContent,
   body: fileBody && fileBody.textContent,
+  removedRows: fileBody ? fileBody.querySelectorAll(".removed").length : 0,
+  addedRows: fileBody ? fileBody.querySelectorAll(".added").length : 0,
+  changedText: fileBody
+    ? fileBody.querySelectorAll(".changed").map(node => node.textContent)
+    : [],
 };
 
 /* ---------- 3. a throwing click reports feed.block.toggle.fail ------------ */

@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, NamedTuple
 
 from _model import SessionModel, ShellFold
 
@@ -43,11 +43,12 @@ MODIFIED = (229, 192, 123)
 DARK = (24, 26, 30)
 VALUE = (171, 178, 191)
 SEPARATOR = " · "
-# The backgrounds a diff is read by. Plain colour and no intra-line highlight:
-# that needed pygments, which is not the standard library and so is not something
-# a file you can copy next to a terminal may import.
+# The backgrounds a diff is read by. Intra-line emphasis is computed from the
+# diff itself and needs no syntax-highlighting dependency.
 REMOVED_BACKGROUND = (55, 31, 36)
 ADDED_BACKGROUND = (29, 50, 38)
+REMOVED_CHANGED_BACKGROUND = (103, 42, 50)
+ADDED_CHANGED_BACKGROUND = (43, 87, 58)
 
 # What a click on a pane link launches. Both are the terminal's own
 # configuration — a scheme it maps to a program — and both carry the session and
@@ -633,22 +634,129 @@ def _content_rows(content: str, action: str, width: int) -> list[str]:
     something, and re-flowing it is how a diff stops being readable. A row wider
     than the pane is cut rather than folded, for the same reason.
     """
+    if action not in ("read", "created"):
+        return _diff_content_rows(content, width)
     lines = content.splitlines()
     number_width = max(1, len(str(len(lines))))
-    changed = action != "read"
     painted = []
     for number, line in enumerate(lines, 1):
-        background = None
-        if changed and line.startswith("-"):
-            background = REMOVED_BACKGROUND
-        elif changed and line.startswith("+"):
-            background = ADDED_BACKGROUND
         painted.extend(rows(
             [Span(line)],
             width,
             prefix=(Span(" %*d " % (number_width, number), DIM),),
             layout="verbatim",
-            background=background,
+        ))
+    return painted
+
+
+_DIFF_HUNK = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+
+
+class _DiffRow(NamedTuple):
+    kind: str
+    number: int | None
+    text: str
+    changed: tuple[int, int] | None = None
+
+
+def _changed_ranges(before: str, after: str) -> tuple[tuple[int, int], tuple[int, int]]:
+    prefix = 0
+    limit = min(len(before), len(after))
+    while prefix < limit and before[prefix] == after[prefix]:
+        prefix += 1
+    suffix = 0
+    remaining = min(len(before) - prefix, len(after) - prefix)
+    while suffix < remaining and before[-suffix - 1] == after[-suffix - 1]:
+        suffix += 1
+    return (prefix, len(before) - suffix), (prefix, len(after) - suffix)
+
+
+def _diff_rows(unified_diff: str) -> list[_DiffRow]:
+    parsed: list[_DiffRow] = []
+    old_number: int | None = None
+    new_number: int | None = None
+    for line in unified_diff.splitlines():
+        hunk = _DIFF_HUNK.match(line)
+        if hunk:
+            if old_number is not None:
+                parsed.append(_DiffRow("sep", None, "⋮"))
+            old_number, new_number = map(int, hunk.groups())
+            continue
+        if old_number is None or new_number is None or line.startswith(("--- ", "+++ ")):
+            continue
+        if line == r"\ No newline at end of file":
+            continue
+        if line.startswith("-"):
+            parsed.append(_DiffRow("removed", old_number, line[1:]))
+            old_number += 1
+        elif line.startswith("+"):
+            parsed.append(_DiffRow("added", new_number, line[1:]))
+            new_number += 1
+        elif line.startswith(" "):
+            parsed.append(_DiffRow("context", new_number, line[1:]))
+            old_number += 1
+            new_number += 1
+
+    index = 0
+    while index < len(parsed):
+        if parsed[index].kind != "removed":
+            index += 1
+            continue
+        removed_start = index
+        while index < len(parsed) and parsed[index].kind == "removed":
+            index += 1
+        added_start = index
+        while index < len(parsed) and parsed[index].kind == "added":
+            index += 1
+        for offset in range(min(added_start - removed_start, index - added_start)):
+            removed_index = removed_start + offset
+            added_index = added_start + offset
+            removed_range, added_range = _changed_ranges(
+                parsed[removed_index].text, parsed[added_index].text
+            )
+            parsed[removed_index] = parsed[removed_index]._replace(changed=removed_range)
+            parsed[added_index] = parsed[added_index]._replace(changed=added_range)
+    return parsed
+
+
+def _diff_spans(row: _DiffRow, background: Color) -> list[Span]:
+    if row.changed is None:
+        return [Span(row.text)]
+    start, end = row.changed
+    changed_background = (
+        REMOVED_CHANGED_BACKGROUND if row.kind == "removed" else ADDED_CHANGED_BACKGROUND
+    )
+    return [
+        Span(row.text[:start]),
+        Span(row.text[start:end], background=changed_background),
+        Span(row.text[end:], background=background),
+    ]
+
+
+def _diff_content_rows(unified_diff: str, width: int) -> list[str]:
+    parsed = _diff_rows(unified_diff)
+    number_width = max((len(str(row.number)) for row in parsed if row.number is not None), default=1)
+    painted: list[str] = []
+    for row in parsed:
+        if row.kind == "sep":
+            painted.extend(rows(
+                [Span("⋮", DIM)], width,
+                prefix=(Span(" " * (number_width + 2), DIM),), layout="verbatim",
+            ))
+            continue
+        assert row.number is not None
+        background = REMOVED_BACKGROUND if row.kind == "removed" else ADDED_BACKGROUND
+        if row.kind == "context":
+            painted.extend(rows(
+                [Span(row.text)], width,
+                prefix=(Span(" %*d " % (number_width, row.number), DIM),),
+                layout="verbatim",
+            ))
+            continue
+        painted.extend(rows(
+            _diff_spans(row, background), width,
+            prefix=(Span(" %*d " % (number_width, row.number), DIM),),
+            layout="verbatim", background=background,
         ))
     return painted
 

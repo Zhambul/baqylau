@@ -696,7 +696,7 @@ def test_a_pane_publishes_what_a_click_can_copy_and_redraws_what_a_click_expands
         entry("3", "file", {
             "path": "domain/entries.py", "action": "updated", "state": "succeeded",
             "lines_added": 1, "lines_removed": 1,
-            "content": {"text": "-old line\n+new line\n"},
+            "content": {"text": "@@ -7 +7 @@\n-old line\n+new line\n"},
         }),
     ]})
 
@@ -713,7 +713,13 @@ def test_a_pane_publishes_what_a_click_can_copy_and_redraws_what_a_click_expands
     opened = render.mirror(
         model, 80, view=lambda entry_id: "view://" + entry_id, opened=frozenset({"3"}),
     )
-    assert "new line" in opened and "old line" in opened
+    plain_opened = re.sub(r"\033\[[0-9;]*m", "", opened)
+    assert "new line" in plain_opened and "old line" in plain_opened
+    assert "@@ -7 +7 @@" not in plain_opened
+    assert "\033[48;2;55;31;36m" in opened
+    assert "\033[48;2;29;50;38m" in opened
+    assert "\033[48;2;103;42;50mold" in opened
+    assert "\033[48;2;43;87;58mnew" in opened
     # The diff came from the ENTRY. There is no second request and no route left
     # to make one to.
     assert "make test" in opened

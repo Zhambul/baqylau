@@ -241,7 +241,9 @@ function fileMarkup(entry) {
   return blockHtml({
     header: markup,
     summary: "",
-    body: '<pre class="opo">' + escapeHtml(content) + "</pre>",
+    body: body.action === "read" || body.action === "created"
+      ? sourceHtml(content)
+      : unifiedDiffHtml(content),
     state: body.state,
     quiet: true,
   });

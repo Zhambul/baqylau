@@ -301,7 +301,10 @@ def test_a_file_edits_header_click_reveals_its_embedded_diff():
     assert "Edit(/work/a.py)" in result["header"]
     assert "+1" in result["header"]
     assert "-1" in result["header"]
-    assert result["body"] == "@@ -1 +1 @@\n-old\n+new\n"
+    assert result["body"] == "1old1new"
+    assert result["removedRows"] == 1
+    assert result["addedRows"] == 1
+    assert result["changedText"] == ["old", "new"]
 
 
 def test_a_throwing_click_reports_the_failure_instead_of_going_dead():

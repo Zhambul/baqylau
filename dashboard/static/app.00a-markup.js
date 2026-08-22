@@ -49,6 +49,99 @@ function escapeHtml(text) {
     .replace(/>/g, "&gt;");
 }
 
+/* ---------- file content ---------------------------------------------------
+   File bytes now arrive in the session entry itself. The old server-side
+   content route parsed unified diffs before returning HTML; keep that parser
+   at the presentation leaf now that each frontend owns its rendering. */
+
+const DIFF_HUNK = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
+
+function changedRanges(before, after) {
+  let prefix = 0;
+  const limit = Math.min(before.length, after.length);
+  while (prefix < limit && before[prefix] === after[prefix]) prefix += 1;
+  let suffix = 0;
+  const remaining = Math.min(before.length - prefix, after.length - prefix);
+  while (suffix < remaining
+         && before[before.length - suffix - 1] === after[after.length - suffix - 1]) {
+    suffix += 1;
+  }
+  return [[prefix, before.length - suffix], [prefix, after.length - suffix]];
+}
+
+function markChangedDiffRows(rows) {
+  let index = 0;
+  while (index < rows.length) {
+    if (rows[index].kind !== "removed") { index += 1; continue; }
+    const removedStart = index;
+    while (index < rows.length && rows[index].kind === "removed") index += 1;
+    const addedStart = index;
+    while (index < rows.length && rows[index].kind === "added") index += 1;
+    const pairs = Math.min(addedStart - removedStart, index - addedStart);
+    for (let offset = 0; offset < pairs; offset += 1) {
+      const removed = rows[removedStart + offset];
+      const added = rows[addedStart + offset];
+      [removed.changed, added.changed] = changedRanges(removed.text, added.text);
+    }
+  }
+  return rows;
+}
+
+function diffRows(unifiedDiff) {
+  const parsed = [];
+  let oldNumber = null;
+  let newNumber = null;
+  for (const line of String(unifiedDiff || "").replace(/\r\n?/g, "\n").split("\n")) {
+    const hunk = DIFF_HUNK.exec(line);
+    if (hunk) {
+      if (oldNumber !== null) parsed.push({ kind: "sep", number: null, text: "⋮" });
+      oldNumber = Number(hunk[1]);
+      newNumber = Number(hunk[2]);
+      continue;
+    }
+    if (oldNumber === null || newNumber === null || line.startsWith("--- ")
+        || line.startsWith("+++ ") || line === "\\ No newline at end of file") continue;
+    if (line.startsWith("-")) {
+      parsed.push({ kind: "removed", number: oldNumber, text: line.slice(1), changed: null });
+      oldNumber += 1;
+    } else if (line.startsWith("+")) {
+      parsed.push({ kind: "added", number: newNumber, text: line.slice(1), changed: null });
+      newNumber += 1;
+    } else if (line.startsWith(" ")) {
+      parsed.push({ kind: "context", number: newNumber, text: line.slice(1), changed: null });
+      oldNumber += 1;
+      newNumber += 1;
+    }
+  }
+  return markChangedDiffRows(parsed);
+}
+
+function diffCodeHtml(row) {
+  if (!row.changed) return escapeHtml(row.text);
+  const [from, to] = row.changed;
+  return escapeHtml(row.text.slice(0, from))
+    + '<mark class="changed">' + escapeHtml(row.text.slice(from, to)) + "</mark>"
+    + escapeHtml(row.text.slice(to));
+}
+
+function unifiedDiffHtml(unifiedDiff) {
+  return '<div class="tdiff">' + diffRows(unifiedDiff).map(row => {
+    if (row.kind === "sep") {
+      return '<div class="dl sep"><span class="ln"></span><span class="tx">⋮</span></div>';
+    }
+    return '<div class="dl ' + row.kind + '"><span class="ln">' + row.number
+      + '</span><span class="tx">' + diffCodeHtml(row) + "</span></div>";
+  }).join("") + "</div>";
+}
+
+function sourceHtml(source) {
+  return '<div class="tdiff">' + String(source || "").split(/\r?\n/)
+    .filter((line, index, lines) => index < lines.length - 1 || line)
+    .map((line, index) => '<div class="dl context"><span class="ln">' + (index + 1)
+      + '</span><span class="tx">' + escapeHtml(line) + "</span></div>")
+    .join("") + "</div>";
+}
+
 // A URL going into an attribute: only http(s) survives, so no javascript: or
 // data: string can ever reach an href.
 function safeUrl(url) {
