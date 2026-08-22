@@ -23,16 +23,19 @@ THAT one, which is how you triage a second daemon without touching the first. Op
 | **main** | `<data>/main.db` | Everything the application owns and reads back: evidence and its interpretation, **the read model every frontend draws from**, your unsent work, your preferences, terminal state, plan usage, uploads. Schema: `repository/impl/sqlite/schema.py`. |
 | **audit** | `<data>/audit.db` | Debug-only records of what the *machinery* did and where it degraded: swallowed exceptions, detached processes, control-plane gestures, browser telemetry. It remains separate so it is readable when `main.db` is the suspect. `BAQYLAU_AUDIT=0` disables it (`audit/record.py`). |
 
-**Nothing outside `repository/impl/sqlite/` opens a database.** The one module elsewhere
+**No application code outside `repository/impl/sqlite/` opens a database.** Read-only
+operator triage with the `sqlite3` CLI is intentionally outside that architecture rule.
+The one application module elsewhere
 that does is `harness/impl/codex/canonical/title.py`, which is itself a repository
 implementation and lives there only because a shared package may not contain a harness's
 name. If you find SQL anywhere else, that is the bug.
 
-CLI: `python3 bin/baqylau-raw-events-audit.py session <session_id>` dumps every
+CLI: `.venv/bin/python bin/baqylau-raw-events-audit.py session <session_id>` dumps every
 `RawEventAudit` for a session; `... raw <raw_event_id>` does one. Each contains the exact
 raw event and its optional `InterpretationAudit` with emitted canonical events. The CLI
 prints JSON, base64-encodes payload bytes, and opens `main.db` read-only. Query the two
-stores directly with `sqlite3` for aggregate questions.
+stores directly with `sqlite3 -readonly` for aggregate questions. The former
+`bin/claude-audit.py` was deleted in the canonical rewrite and must not be used.
 
 ## The model (read this before querying)
 
@@ -133,7 +136,7 @@ row (`func` = `<harness> hook (deliver)`, or `otel delivery (daemon unreachable)
 
 ## Schema
 
-### `main.db` — 29 tables
+### `main.db` — 28 application tables
 
 **The evidence spine** (what a session did):
 
@@ -363,7 +366,7 @@ causes, and step 0 of the triage order separates them before anything else:
   not exist before the split, and it is the one that looks least like a bug from the
   store: run the triage-step-0 query, and if `reacted` is stuck, read `errors` for
   `func LIKE 'reactions (%)'`. Nothing is lost — the loop resumes from its cursor and folds
-  the backlog on the next tick, and `python3 bin/baqylau-dashboard.py rebuild` replays
+  the backlog on the next tick, and `.venv/bin/python bin/baqylau-dashboard.py rebuild` replays
   the whole read model from the facts if a writer bug corrupted it.
 - **The INTERPRETER stopped.** Nothing turns canonical while hook and telemetry
   deliveries keep landing on the HTTP threads — which is exactly why the session still
@@ -481,7 +484,7 @@ FROM errors WHERE func LIKE 'dashboard%' ORDER BY ts DESC LIMIT 10;
 - Confirm what the store actually says. **Two different version numbers, do not confuse
   them**: `SELECT * FROM schema_version;` is the FILE's table layout
   (`repository/impl/sqlite/schema.py`, refused by `SchemaVersionMismatch` at open), while
-  `python3 -c "from domain.codec import SCHEMA_VERSION; print(SCHEMA_VERSION)"` is the
+  `.venv/bin/python -c "from domain.codec import SCHEMA_VERSION; print(SCHEMA_VERSION)"` is the
   canonical PAYLOAD schema, refused per row by `CanonicalCodecError` on decode.
 
 ### One specific thing never appears, but everything else flows
@@ -500,7 +503,7 @@ WHERE session_id='<sid>' GROUP BY 1 ORDER BY 2 DESC;
   GROUP BY 1`), remembering that state-shaped facts produce no entry by design (see the
   `entry_type` list). If the entry is genuinely missing, the mapping in
   `engine/sessiondata/entries.py` is where it is decided, and
-  `python3 bin/baqylau-dashboard.py rebuild` (daemon stopped) re-derives the whole read
+  `.venv/bin/python bin/baqylau-dashboard.py rebuild` (daemon stopped) re-derives the whole read
   model from the facts once the writer is fixed — no evidence is re-read and nothing is
   lost.
 
@@ -677,7 +680,7 @@ So a broken pane is one of three shapes:
   window onto that. Check triage step 0 before suspecting the pane.
 - **The pane is drawing the wrong thing.** The fold and the paint are the client's, so
   this is the one shape that is genuinely the pane's own: run it by hand and watch.
-  `python3 client/terminal_pane.py 127.0.0.1 8377 <sid> mirror` prints to your terminal,
+  `.venv/bin/python client/terminal_pane.py 127.0.0.1 8377 <sid> mirror` prints to your terminal,
   and `tests/test_canonical_clients.py::test_the_pane_folds_a_command_and_paints_it_at_its_own_width`
   is the check to extend if a command folds wrong.
 

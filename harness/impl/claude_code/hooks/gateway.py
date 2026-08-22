@@ -58,7 +58,18 @@ class ClaudeHookGateway(HarnessHookGateway):
         if not source_reference:
             raise ValueError("Claude Code hook payload has no transcript path")
         native_event_id_value = document.hook_event_id or document.uuid
-        native_event_id = str(native_event_id_value or hashlib.sha256(payload).hexdigest())
+        payload_digest = hashlib.sha256(payload).hexdigest()
+        native_event_id = str(native_event_id_value or payload_digest)
+        # Claude Code has been observed reusing one hook_event_id for changed
+        # SubagentStart bytes. Its id therefore names the native occurrence but
+        # not the immutable observation our store requires. Preserve both parts:
+        # identical retries converge, while changed deliveries remain distinct
+        # observations instead of raising EventIdentityConflict and being lost.
+        observation_id = (
+            f"{native_event_id}:{payload_digest}"
+            if native_event_id_value is not None
+            else native_event_id
+        )
         # The client forwarded its environment's two account values raw; what a
         # valid account id looks like is decided here.
         account_id, account_display_name = account.normalize(
@@ -75,12 +86,12 @@ class ClaudeHookGateway(HarnessHookGateway):
         raw_events = [
             RawEvent(
                 raw_event_id=RawEventId(
-                    f"claude_code:hook:{session_id}:{hook_name}:{native_event_id}"
+                    f"claude_code:hook:{session_id}:{hook_name}:{observation_id}"
                 ),
                 harness=HARNESS,
                 source_type=source_type,
                 source_name=hook_name,
-                source_position=native_event_id,
+                source_position=observation_id,
                 session_id=session_id,
                 actor_id=actor_id,
                 parent_actor_id=lead_actor_id if native_actor_id else None,

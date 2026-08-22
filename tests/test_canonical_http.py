@@ -1050,7 +1050,7 @@ def test_hook_delivery_rejections_leave_no_evidence(tmp_path):
         thread.join(timeout=2)
 
 
-def test_hook_identity_reuse_with_different_bytes_is_a_conflict_not_a_rewrite(tmp_path):
+def test_hook_identity_reuse_with_different_bytes_preserves_both_observations(tmp_path):
     application = _application()
     server, thread = _server(application)
     document = {
@@ -1067,14 +1067,17 @@ def test_hook_identity_reuse_with_different_bytes_is_a_conflict_not_a_rewrite(tm
         assert _post_hook(server, "claude_code", first)[0] == 200
 
         changed = json.dumps({**document, "tool_name": "Write"}).encode()
-        status, body = _post_hook(server, "claude_code", changed)
-        assert status == 409
-        assert (
-            _raw_event_audits(application).audits_for_session(SessionId("hook-session"))[
-                0
-            ].raw_event.payload
-            == first
+        status, _body = _post_hook(server, "claude_code", changed)
+        assert status == 200
+        hooks = tuple(
+            item.raw_event
+            for item in _raw_event_audits(application).audits_for_session(
+                SessionId("hook-session")
+            )
+            if item.raw_event.source_type == "hook"
         )
+        assert len(hooks) == 2
+        assert {item.payload for item in hooks} == {first, changed}
     finally:
         server.shutdown()
         server.server_close()

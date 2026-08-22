@@ -130,7 +130,6 @@ from harness.impl.codex.controls.controller import _rollout_abort_state
 from harness.impl.codex.model import BaseInstructionsSourceType, CodexEffort, CodexModel
 from harness.impl.claude_code.otel import gateway as claude_telemetry
 from harness.models import HarnessTelemetryRequest
-from repository.errors import EventIdentityConflict
 from repository.impl.sqlite.databases import main_database
 from repository.impl.sqlite.raw_events import SqliteRawEventRepository
 from repository.impl.sqlite.usage import SqliteAccountUsageRepository
@@ -2129,7 +2128,7 @@ def test_codex_session_start_hook_matches_rollout_metadata(tmp_path, monkeypatch
     ]
 
 
-def test_hook_native_identity_reuse_with_different_bytes_is_a_hard_conflict(monkeypatch, tmp_path):
+def test_hook_native_identity_reuse_preserves_each_distinct_observation(monkeypatch, tmp_path):
     monkeypatch.setenv("BAQYLAU_DATA_DIR", str(tmp_path))
     first = (
         b'{"session_id":"session-one","transcript_path":"/work/session.jsonl",'
@@ -2139,9 +2138,19 @@ def test_hook_native_identity_reuse_with_different_bytes_is_a_hard_conflict(monk
     )
     changed = first.replace(b'"first"', b'"changed"')
     _deliver_hook(claude_hooks.ClaudeHookGateway(), first)
+    _deliver_hook(claude_hooks.ClaudeHookGateway(), changed)
+    # An exact retry still converges on the same immutable observation.
+    _deliver_hook(claude_hooks.ClaudeHookGateway(), changed)
 
-    with pytest.raises(EventIdentityConflict, match="raw event identity reused"):
-        _deliver_hook(claude_hooks.ClaudeHookGateway(), changed)
+    runtime = CanonicalRuntime(str(tmp_path / "main.db"))
+    evidence = tuple(
+        item
+        for item in runtime.raw_event_audits.audits_for_session(SessionId("session-one"))
+        if item.raw_event.source_type == "hook"
+    )
+    assert len(evidence) == 2
+    assert {item.raw_event.payload for item in evidence} == {first, changed}
+    assert all(":hook-one:" in str(item.raw_event.raw_event_id) for item in evidence)
 
 
 def test_catalogs_expose_only_what_depends_on_the_directory(tmp_path):

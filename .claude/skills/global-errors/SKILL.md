@@ -1,154 +1,106 @@
 ---
 name: global-errors
-description: Investigate the ⚠ "global errors" warning light (audit `errors` rows surfaced in every session's scorebar/mirror), then either FIX the root cause or IGNORE a benign, expected-outcome degrade-audit so it stops lighting up. Use when the user reports a persistent ⚠ audit warning, a global error count that won't clear, or asks to "investigate global errors".
+description: Investigate recent audit `errors` rows whose `session_id` is empty, reproduce active failures, and fix their root causes. Use when asked to inspect global or recent application errors.
 ---
 
-# global-errors — triage the ⚠ warning light, then fix or ignore
+# global-errors — triage cross-session failures from current evidence
 
-The always-on audit trail records every swallowed exception into the `errors`
-table. `core/errwatch.py` is the WARNING LIGHT over that table: it surfaces
-errors live as the scorebar's `⚠ N` chip and a `⚠ audit: <script>: <what>`
-one-liner in the mirror. Rows with **`session_id=''`** are GLOBAL — an audit
-outage or a pre-/cross-session failure that degrades every session — so they are
-counted and painted (tagged `global:`) in EVERY session, live and parked. Those
-are the "global errors" this skill is about.
+The audit database records exceptions that application boundaries deliberately
+swallow so the daemon, hooks, streams, and notifications can continue running.
+Rows with `session_id=''` are cross-session: the failure happened before a
+session could be identified, or in machinery shared by every session.
 
-Goal: name each global error **from evidence**, decide whether it is a real
-failure (→ **fix**) or a normal, expected outcome someone chose to audit (→
-**ignore**), and leave the warning light meaningful.
+These rows are diagnostic history. They are **not** currently included in the
+dashboard's per-session warning counts: `SqliteAuditReadRepository.error_counts`
+explicitly excludes the empty session id. There is no `core/errwatch.py`, no
+`IGNORE_FUNCS`, and no global warning-light allowlist in the current tree.
 
-## 1. Investigate
+The goal is to distinguish historical failures from active ones, reproduce the
+active failures, and fix their causes without hiding or deleting evidence.
 
-Run from the repo root (`/Users/z.yermagambet/code/personal/baqylau`).
+## 1. Read the audit database safely
 
-```sh
-# What global errors exist, grouped by signature (newest first)?
-python3 bin/claude-audit.py sql "SELECT script, func, COUNT(*) n, \
-  MAX(datetime(ts,'unixepoch','localtime')) last FROM errors \
-  WHERE session_id='' GROUP BY script, func ORDER BY last DESC"
-
-# The full picture for ALL errors (incl. per-session), same grouping:
-python3 bin/claude-audit.py sql "SELECT script, func, COUNT(*) n FROM errors \
-  GROUP BY script, func ORDER BY n DESC"
-
-# Drill into one signature — traceback + the context dict (args in hand):
-python3 bin/claude-audit.py sql "SELECT id, \
-  datetime(ts,'unixepoch','localtime') t, session_id, traceback, context \
-  FROM errors WHERE func='<func>' ORDER BY ts DESC LIMIT 10"
-```
-
-Read each signature and classify it:
-
-- **`traceback` is a real stack** (`Traceback (most recent call last): … / SomeError: …`)
-  → a genuinely swallowed exception. This is a **bug to FIX** — find the
-  `except` block whose `A.error(..., func=...)` matches and fix the cause. The
-  `context` dict carries the args that were in hand. (Fixing stops *new* rows; it
-  does NOT empty the already-recorded ones — clear those per §4.)
-- **`traceback` is `NoneType: None`** → the row was written by a bare
-  `A.error(...)` OUTSIDE any `except` block: a *deliberate degrade-audit* of a
-  code path someone wanted to keep debuggable. Now read the code at that `func`
-  and decide:
-  - it marks a **failure** (a spawn that should have worked, a dead endpoint,
-    a write that was refused) → **FIX** the underlying condition, or
-  - it marks a **normal, expected outcome** (a "no match, so we just don't show
-    the optional thing" return path) → **IGNORE** it (§3). The tell is the
-    docstring/comment at the call site: if returning here is documented as fine,
-    it does not belong on the warning light.
-
-`grep -rn "func=\"<func>\"\|_audit_once(\"<func>\"" core plugins dashboard` finds
-the call site. Note that `func` is the discriminating field — `script` is just
-whichever long-lived process wrote the row (`claude-scorebar.py`,
-`claude-dashboard.py`).
-
-## 2. Where the warning light is surfaced (so you know what "ignore" hides)
-
-- **`core/errwatch.py`** — the SOLE surface that includes global (`session_id=''`)
-  rows: the scorebar `⚠ N` chip (`poll()` COUNT) and the mirror `⚠ audit:` /
-  `⚠ audit: global:` one-liners (`err_ops`). This is the one to filter.
-- The **dashboard** `⚠` badge (`core/sessionapi.error_count` / `errors`) is
-  chain-scoped to a single session and deliberately EXCLUDES global rows, so
-  `session_id=''` degrade-audits never show there — no change needed for those.
-  (A real per-session swallowed exception shows in both; fix it, don't ignore.)
-
-## 3. Ignore a benign signature
-
-Only ignore an audit that is a **normal, expected return path** (§1, second
-bullet). Add its `func` string to **`IGNORE_FUNCS` in `core/errwatch.py`**, with
-a comment saying why it is benign and the investigation date:
-
-```python
-IGNORE_FUNCS = frozenset({
-    "model_usage._slug_for",   # + a why-benign comment
-    "<your.func>",             # why this is an expected outcome, date
-})
-```
-
-This keeps the row **written and queryable** (`bin/claude-audit.py errors ''`)
-but drops it from both the chip count and the painted one-liners. It does NOT
-delete history and does NOT touch the call site — the audit stays intact for
-future debugging; it just stops lighting up.
-
-Prefer FIXING over ignoring. Reach for the ignore list only for a genuine
-expected-outcome degrade-audit; never silence a real stack trace.
-
-### Verify
+Run from the repository root. Resolve the data path through `core/data.py` when
+`BAQYLAU_DATA_DIR` is configured; the normal path is shown below. Triage is
+read-only.
 
 ```sh
-python3 -m pytest tests/test_l0_units.py -k errwatch -q   # incl. the ignore test
+audit_path=/Users/z.yermagambet/.local/share/baqylau/audit.db
+
+# Global signatures, newest first.
+sqlite3 -readonly -header -column "$audit_path" \
+  "SELECT script,func,COUNT(*) n,MAX(datetime(ts,'unixepoch','localtime')) last
+   FROM errors WHERE session_id=''
+   GROUP BY script,func ORDER BY last DESC"
+
+# All signatures, including session-scoped failures.
+sqlite3 -readonly -header -column "$audit_path" \
+  "SELECT script,func,COUNT(*) n,MAX(datetime(ts,'unixepoch','localtime')) last
+   FROM errors GROUP BY script,func ORDER BY last DESC,n DESC"
+
+# Full recent evidence for one signature.
+sqlite3 -readonly -line "$audit_path" \
+  "SELECT id,datetime(ts,'unixepoch','localtime') time,session_id,traceback,context,pid
+   FROM errors WHERE func='<func>' ORDER BY ts DESC LIMIT 10"
 ```
 
-The row still exists (`… errors ''` shows it); the chip/mirror no longer surface
-it. `IGNORE_FUNCS` is process-scoped in each long-lived poller, so the scorebar
-picks it up on its next re-exec; a running **dashboard** must be restarted only
-if the change also touched a module it imports (this one is scorebar-side —
-errwatch is not imported by the dashboard server, so no restart is needed for
-the ignore to take effect there).
+`bin/claude-audit.py` was deleted in the canonical rewrite; do not recommend it.
+`bin/baqylau-raw-events-audit.py` is for the main database's raw-event spine,
+not operational `errors` rows.
 
-## 4. Empty the count after a FIX (handled ≠ gone)
+## 2. Decide whether a signature is still active
 
-**Handling an error does NOT empty the `errors` table.** The audit is
-append-only, and the scorebar `⚠ N` chip is a COUNT of **all-time** rows
-(`errwatch.poll`: `SELECT COUNT(*) … WHERE session_id IN (<sid>, '')`, minus
-`IGNORE_FUNCS`) — not a count of rows *since* some checkpoint. So the two
-dispositions clear the light differently:
-
-- **IGNORE** (§3) clears the chip on its own — `IGNORE_FUNCS` is subtracted from
-  the COUNT, so those rows stop counting the moment the poller re-execs. Nothing
-  else to do.
-- **FIX** does NOT clear the chip on its own — fixing the root cause only stops
-  *new* rows; the rows already recorded stay in the table and keep counting. A
-  **per-session** fixed signature ages out naturally (a fresh session's chip
-  counts only its own sid plus global, so it starts at 0), but a **GLOBAL**
-  (`session_id=''`) fixed signature keeps lighting ⚠ in *every* session forever
-  until its rows are removed.
-
-So after you FIX a **global** signature, delete its now-resolved rows to clear
-the light — the sanctioned `sql-write` fixup path, surgical (by `func` under
-`session_id=''`), never a blanket wipe:
+Counts are all-time and can be enormous after a tight retry loop. Always compare
+the newest timestamp and writer PID with the running daemon:
 
 ```sh
-python3 bin/claude-audit.py sql-write \
-  "DELETE FROM errors WHERE session_id='' AND func IN ('<fixed.func>', …)"
-# verify the non-ignored global count is now 0 (adjust the ignore list to match):
-python3 bin/claude-audit.py sql \
-  "SELECT COUNT(*) FROM errors WHERE session_id='' AND func NOT IN ('model_usage._slug_for')"
+pgrep -af 'bin/baqylau-dashboard.py serve'
+sqlite3 -readonly -header -column "$audit_path" \
+  "SELECT func,COUNT(*) n,MAX(datetime(ts,'unixepoch','localtime')) last
+   FROM errors WHERE pid=<current-pid> GROUP BY func ORDER BY last DESC"
 ```
 
-The chip re-polls every ~5s, so it drops without a restart. Delete ONLY
-signatures you have **confirmed resolved** (their traceback is captured in your
-investigation above) — never a live signature, and never the IGNORE_FUNCS rows
-(those are kept on purpose for debuggability, §3). Don't delete per-session rows
-to chase a number; they don't follow you into new sessions.
+- A signature produced by the current PID is active.
+- A signature ending before the current process started may already have been
+  fixed or may require the old trigger. Reproduce it before editing code.
+- A rapidly increasing count means a retry loop. Inspect the newest full
+  traceback plus its context before changing code.
+- `NoneType: None` means `AuditRecorder.error` was called outside an `except`
+  block. Read the call site to decide whether it records a real degraded outcome
+  or whether the caller is incorrectly auditing normal control flow.
 
-## 5. Wire-up rules (same-commit, per CLAUDE.md)
+Find the call site with `rg -n '"<func>"' api app audit engine harness notify
+terminal client`. The `func` column is the stable signature; `script` only names
+the process that recorded it.
 
-- Editing `IGNORE_FUNCS` is the whole change for an ignore — no new audit rows,
-  no schema change. Update the comment so the "why benign" is on record.
-- If instead you FIX a real error, follow the normal audit-coverage rules
-  (`.claude/skills/audit-debug/SKILL.md`) and keep the `A.error` **call site**
-  (so a recurrence re-audits) — the fix is proven by no NEW rows appearing, not
-  by gutting the call. The already-recorded rows are separate: they don't vanish,
-  and for a **global** signature you clear them per §4 to drop the count.
-- A new benign signature that recurs across many sessions is a smell that the
-  degrade-audit should have been an expected-outcome return in the first place;
-  consider whether the call site should stop calling `A.error` at all.
+## 3. Reproduce and fix
+
+For session-related errors, continue with `audit-debug`. For global failures:
+
+1. Reproduce against an isolated test database or a SQLite `.backup`, never by
+   mutating the live store.
+2. Add a regression test at the boundary that swallowed the exception.
+3. Fix the originating invariant or adapter mapping; keep the audit call so a
+   recurrence remains observable.
+4. Run the focused test, architecture tests, lint/type checking, and the normal
+   suite in proportion to the change.
+5. Restart the daemon if it imports changed code, then query errors for the new
+   PID and confirm the signature does not recur.
+
+Do not delete historical audit rows merely to reduce a number. They no longer
+pollute per-session warning counts, and they are the evidence needed to prove
+when a defect began and stopped. If the user explicitly requests retention
+cleanup, back up `audit.db` first and make the deletion surgical by signature and
+time range.
+
+## 4. Report
+
+For every recent signature state:
+
+- latest timestamp, count, and whether the current PID produced it;
+- the exception and relevant context;
+- whether it was reproduced, already fixed, or remains actionable;
+- the code path and regression test for any fix.
+
+Do not describe old rows as active errors just because they remain in the
+append-only table.
