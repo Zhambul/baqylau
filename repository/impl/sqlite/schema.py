@@ -25,16 +25,27 @@ columns, half of them null, and none of them queried.
 
 from __future__ import annotations
 
-MAIN_SCHEMA_VERSION = 4
+MAIN_SCHEMA_VERSION = 5
 AUDIT_SCHEMA_VERSION = 1
 
-# Empty, and version 4 is why: the canonical vocabulary was rewritten, so no
-# stored fact of an earlier version means anything under the new one. The
-# "migration" is `rm <data_dir>/main.db*` and a fresh schema from the DDL below;
-# the entries for versions 2 and 3 went with the data they migrated. `audit.db`
-# is untouched, and the raw events allow re-translation if the history is ever
-# wanted back.
-MAIN_MIGRATIONS: dict[int, tuple[str, ...]] = {}
+# Version 4 rewrote the canonical vocabulary, so files older than that remain
+# intentionally unsupported. Version 5 is narrower: ModelReference stopped
+# exposing harness-native selection identifiers, but those references are part
+# of the durable read model and must be upgraded in place.
+MAIN_MIGRATIONS: dict[int, tuple[str, ...]] = {
+    5: (
+        """
+        UPDATE session_data_actors
+        SET payload = json_set(
+            json_remove(payload, '$.model.native_id', '$.model.selection_id'),
+            '$.model.name', json_extract(payload, '$.model.native_id')
+        )
+        WHERE json_type(payload, '$.model') = 'object'
+          AND json_type(payload, '$.model.name') IS NULL
+          AND json_type(payload, '$.model.native_id') = 'text'
+        """,
+    ),
+}
 
 
 _SCHEMA_VERSION_TABLE = """

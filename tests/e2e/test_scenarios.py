@@ -1,6 +1,6 @@
 """Every live-harness scenario, bound to pytest.
 
-One module for all five features. It used to be one module per feature, five
+One module for all features. It used to be one module per feature, several
 files whose entire content was the same two lines with a different filename —
 which is a directory pretending to be a structure. Selection is by name now:
 
@@ -25,6 +25,7 @@ scenarios(
     "features/background.feature",
     "features/greeting.feature",
     "features/monitor.feature",
+    "features/session_data.feature",
     "features/shell.feature",
     "features/subagent.feature",
     "features/usage.feature",

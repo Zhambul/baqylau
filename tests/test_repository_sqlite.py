@@ -47,6 +47,7 @@ from domain.values import (
     ExecutionMode,
     MessagePhase,
     MessageRole,
+    ModelReference,
     Outcome,
     ShellFollowUntil,
     TextContent,
@@ -54,6 +55,7 @@ from domain.values import (
 from domain.workspace import AnswerSelection, ComposerDraft, ComposerQueue, DialogDraft, QueuedMessage
 from harness.models import AccountUsageSnapshot, RawEvent, Session, TranslationResult, UsageWindowSample
 from repository.errors import EventIdentityConflict, SchemaVersionMismatch
+from repository.mapper.documents import decode_document, encode_document
 from repository.impl.sqlite.canonical_events import SqliteCanonicalEventRepository
 from repository.impl.sqlite.connection import SqliteDatabase
 from repository.impl.sqlite.databases import (
@@ -80,7 +82,7 @@ from repository.impl.sqlite.preferences import (
 )
 from repository.impl.sqlite.raw_events import SqliteRawEventRepository
 from repository.impl.sqlite.sessions import SqliteSessionRepository
-from repository.impl.sqlite.schema import MAIN_MIGRATIONS, MAIN_SCHEMA_VERSION
+from repository.impl.sqlite.schema import MAIN_SCHEMA_VERSION
 from repository.impl.sqlite.terminal import (
     SqlitePaneWidthRepository,
 )
@@ -163,14 +165,7 @@ def test_a_file_written_by_another_schema_version_refuses_to_open(tmp_path):
         second.initialize()
 
 
-def test_the_main_schema_is_created_whole_with_no_migration_to_apply(tmp_path):
-    """Version 4 rewrote the canonical vocabulary, so no earlier row means
-    anything under it: the "migration" is deleting the file, and the DDL builds
-    the whole schema on first open. `MAIN_MIGRATIONS` is empty on purpose, and a
-    file from any other version is refused rather than adapted (see
-    `test_a_file_written_by_another_schema_version_refuses_to_open`)."""
-    assert MAIN_MIGRATIONS == {}
-
+def test_the_main_schema_is_created_whole_at_the_current_version(tmp_path):
     database = main_database(str(tmp_path / "main.db"))
     database.initialize()
 
@@ -182,6 +177,45 @@ def test_the_main_schema_is_created_whole_with_no_migration_to_apply(tmp_path):
         }
     assert version["version"] == MAIN_SCHEMA_VERSION
     assert {"raw_events", "canonical_events", "interpretations", "shell_output"} <= tables
+
+
+def test_version_four_actor_models_are_migrated_to_the_domain_shape(tmp_path):
+    path = str(tmp_path / "main.db")
+    old_database = main_database(path)
+    old_database.initialize()
+    actor = replace(
+        AN_ACTOR,
+        model=ModelReference(name="claude-opus-5", display_name="opus-5"),
+    )
+    with old_database.write() as connection:
+        connection.execute(
+            """INSERT INTO session_data_actors(session_id, actor_id, revision, payload)
+               VALUES (?, ?, ?, ?)""",
+            (str(SESSION), str(actor.actor_id), 1, encode_document(actor).decode()),
+        )
+        connection.execute(
+            """UPDATE session_data_actors
+               SET payload = json_set(
+                   json_remove(payload, '$.model.name'),
+                   '$.model.native_id', json_extract(payload, '$.model.name'),
+                   '$.model.selection_id', 'opus'
+               )"""
+        )
+        connection.execute("UPDATE schema_version SET version = 4 WHERE id = 1")
+
+    upgraded = main_database(path)
+    upgraded.initialize()
+
+    with upgraded.read() as connection:
+        row = connection.execute(
+            "SELECT payload FROM session_data_actors WHERE actor_id = ?", (str(actor.actor_id),)
+        ).fetchone()
+        version = connection.execute("SELECT version FROM schema_version WHERE id = 1").fetchone()
+    restored = decode_document(ActorFacts, row["payload"])
+    assert restored.model == actor.model
+    assert version["version"] == MAIN_SCHEMA_VERSION
+    assert "native_id" not in row["payload"]
+    assert "selection_id" not in row["payload"]
 
 
 def test_a_read_only_database_never_creates_the_file(tmp_path):
