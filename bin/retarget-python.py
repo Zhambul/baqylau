@@ -1,4 +1,4 @@
-#!/Users/z.yermagambet/.pyenv/versions/3.12.1/bin/python3
+#!/Users/z.yermagambet/code/personal/baqylau/.venv/bin/python
 # retarget-python.py — point every hook entry point at the *real* CPython binary
 # instead of the pyenv shim, and undo it with --revert.
 #
@@ -30,9 +30,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SETTINGS = os.path.expanduser("~/.claude/settings.json")
 ENV_SHEBANG = "#!/usr/bin/env python3"
 
-# A hook command's leading interpreter token: bare `python3`, or a concrete
-# `.../bin/python3[.N]` we wrote on a previous run (so re-targeting is idempotent).
-_CMD_PY = re.compile(r'("command":\s*")(python3|\S*/bin/python3(?:\.\d+)?)(\s)')
+# A hook command's leading interpreter token: bare `python3`, a virtualenv's
+# `.../bin/python`, or a concrete `.../bin/python3[.N]` written on a previous
+# run (so re-targeting is idempotent across both environment shapes).
+_CMD_PY = re.compile(r'("command":\s*")(python3|\S*/bin/python(?:3(?:\.\d+)?)?)(\s)')
 
 
 def real_interpreter() -> str:

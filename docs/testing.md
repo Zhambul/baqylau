@@ -22,7 +22,7 @@ Each `tests/jsdom/*.js` script builds a sandbox, runs one or more of the real
 object. `tests/test_dashboard_dom.py` runs the script and asserts on that JSON.
 
 ```sh
-python3 -m pytest tests/test_dashboard_dom.py -q     # all of them
+.venv/bin/python -m pytest tests/test_dashboard_dom.py -q     # all of them
 node tests/jsdom/taskorder.js \
   dashboard/static/app.00a-markup.js \
   dashboard/static/app.00b-entries.js \

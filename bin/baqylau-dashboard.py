@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/Users/z.yermagambet/code/personal/baqylau/.venv/bin/python
 """Baqylau dashboard process entry."""
 
 import os

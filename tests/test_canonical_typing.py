@@ -139,7 +139,7 @@ def test_a_type_ignore_names_the_error_it_silences():
     """
     blanket = []
     for path in ROOT.rglob("*.py"):
-        if "__pycache__" in path.parts or ".claude" in path.parts:
+        if any(part in {"__pycache__", ".claude", ".venv"} for part in path.parts):
             continue
         if path.resolve() == pathlib.Path(__file__).resolve():
             continue   # this file NAMES the shape it forbids

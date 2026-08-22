@@ -1,4 +1,4 @@
-PY ?= python3
+PY ?= .venv/bin/python
 
 # The hermetic e2e suite (fake kitten, per-test tmp dirs). See docs/testing.md.
 # Parallel by default (pytest-xdist) — every test is tmpdir-isolated so this is

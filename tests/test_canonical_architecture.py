@@ -413,7 +413,7 @@ def test_the_terminal_tier_imports_no_concrete_harness():
 def test_shared_code_imports_no_concrete_plugin_descriptor():
     importers = []
     for path in ROOT.rglob("*.py"):
-        if any(part in {".git", ".claude", "tests"} for part in path.parts):
+        if any(part in {".git", ".claude", ".venv", "tests"} for part in path.parts):
             continue
         text = path.read_text(encoding="utf-8")
         if "harness.impl.claude_code.plugin" in text or "harness.impl.codex.plugin" in text:

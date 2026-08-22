@@ -3,7 +3,7 @@
 Deliberately NOT an in-process application, and deliberately not a private way
 of starting one. The command below is the command a person types —
 
-    python3 bin/baqylau-dashboard.py serve --port N --data-dir DIR --log FILE
+    .venv/bin/python bin/baqylau-dashboard.py serve --port N --data-dir DIR --log FILE
 
 — so what this suite exercises is the launch path the machine uses, and a rig
 that composed the routes itself, or reached for environment variables the CLI

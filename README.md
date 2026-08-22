@@ -37,13 +37,18 @@ SQLite.
 
 - [kitty](https://sw.kovidgoyal.net/kitty/) with remote control enabled
 - [Claude Code](https://claude.com/claude-code)
-- System `python3` (no package manifest; `pygments` and `wenmode` are optional
-  runtime extras for syntax highlighting and markdown rendering)
+- Python 3.12 and a project virtual environment at `.venv`
 - Optional: codex CLI ≥ 0.142 for the standalone codex host
 
 ## Installation
 
-1. Clone the repo — the scripts run in place, nothing to build or install.
+1. Clone the repo, create its virtual environment, and install its runtime and
+   development dependencies:
+   ```sh
+   python3 -m venv .venv
+   .venv/bin/python -m pip install --upgrade pip
+   .venv/bin/python -m pip install -r requirements.txt -r requirements-dev.txt
+   ```
 2. Enable kitty remote control (`~/.config/kitty/kitty.conf`, then fully
    restart kitty):
    ```
@@ -54,18 +59,18 @@ SQLite.
    the Claude Code plugin entry:
    ```json
    "hooks": { "PostToolUse": [ { "hooks": [
-       { "type": "command", "command": "python3 /ABS/PATH/baqylau/harness/impl/claude_code/bin/hook.py" } ] } ],
+       { "type": "command", "command": "/ABS/PATH/baqylau/.venv/bin/python /ABS/PATH/baqylau/client/claude_hook.py" } ] } ],
        "…every other event…": [ "… same single entry …" ] }
    ```
 4. Wire the ⧉ copy links (`~/.config/kitty/open-actions.conf`):
    ```
    protocol baqylau-content
-   action launch --type=background python3 /ABS/PATH/baqylau/terminal/bin/content.py ${URL}
+   action launch --type=background /ABS/PATH/baqylau/.venv/bin/python /ABS/PATH/baqylau/client/terminal_content.py ${URL}
    protocol baqylau-view
-   action launch --type=background python3 /ABS/PATH/baqylau/terminal/bin/view.py ${URL}
+   action launch --type=background /ABS/PATH/baqylau/.venv/bin/python /ABS/PATH/baqylau/client/terminal_view.py ${URL}
    ```
-5. Using pyenv? Run `./bin/retarget-python.py` once to skip the ~140ms/process
-   shim tax.
+5. Run `.venv/bin/python bin/retarget-python.py` once to point configured
+   Claude hooks directly at the project environment and skip the pyenv shim.
 
 ## Usage
 
@@ -74,7 +79,7 @@ Everything activates automatically per session — the mirror opens on
 
 ```sh
 # Mirror pane
-python3 terminal/bin/panes.py toggle|grow|shrink|reset|setpct <N>
+.venv/bin/python client/terminal_keys.py toggle|grow|shrink|reset|setpct <N>
 
 # Smoke-test the tab colors (~3s each)
 for s in idle thinking working executing awaiting-bg awaiting-command awaiting-response; do
@@ -83,8 +88,8 @@ done
 ./bin/claude-tab-status.py clear
 
 # Raw-event audit CLI — exact source bytes and their interpretations
-python3 bin/baqylau-raw-events-audit.py session <sid>
-python3 bin/baqylau-raw-events-audit.py raw <raw_event_id>
+.venv/bin/python bin/baqylau-raw-events-audit.py session <sid>
+.venv/bin/python bin/baqylau-raw-events-audit.py raw <raw_event_id>
 ```
 
 ## Architecture

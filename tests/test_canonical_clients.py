@@ -158,7 +158,7 @@ def test_nothing_but_two_dev_entries_walks_up_to_the_repository_root():
     """
     violations = []
     for path in sorted(ROOT.rglob("*.py")):
-        if "__pycache__" in path.parts:
+        if "__pycache__" in path.parts or ".venv" in path.parts:
             continue
         relative = path.relative_to(ROOT).as_posix()
         if relative in ROOT_ANCHORS or relative.startswith("tests/"):
