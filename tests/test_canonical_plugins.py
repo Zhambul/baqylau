@@ -123,6 +123,7 @@ from harness.impl.codex.canonical.sources import (
     CodexRolloutRawEventSource,
 )
 from harness.impl.codex.hooks import gateway as codex_hooks
+from harness.impl.codex import usage as codex_usage
 from harness.impl.codex.canonical import rollout as codex_rollout
 from harness.impl.codex.canonical.records import SessionMetaPayload, TurnContextRecord
 from harness.impl.codex.controls.controller import _rollout_abort_state
@@ -3465,6 +3466,64 @@ def test_claude_stop_hook_summary_uses_typed_hook_records():
 
     assert summary.hookInfos is not None
     assert summary.hookInfos[0].durationMs == 74
+
+
+def test_codex_current_app_server_rate_limits_are_strictly_typed_and_normalized():
+    response = codex_usage.RateLimitsRpcResponse.model_validate({
+        "id": 2,
+        "result": {
+            "rateLimits": {
+                "limitId": "codex",
+                "limitName": None,
+                "primary": {
+                    "usedPercent": 12,
+                    "windowDurationMins": 10080,
+                    "resetsAt": 1787879978,
+                },
+                "secondary": None,
+                "credits": {"hasCredits": False, "unlimited": False, "balance": "0"},
+                "individualLimit": None,
+                "spendControlReached": False,
+                "planType": "prolite",
+                "rateLimitReachedType": None,
+            },
+            "rateLimitsByLimitId": {
+                "codex": {
+                    "limitId": "codex",
+                    "limitName": None,
+                    "primary": {
+                        "usedPercent": 12,
+                        "windowDurationMins": 10080,
+                        "resetsAt": 1787879978,
+                    },
+                    "secondary": None,
+                    "credits": {"hasCredits": False, "unlimited": False, "balance": "0"},
+                    "individualLimit": None,
+                    "spendControlReached": False,
+                    "planType": "prolite",
+                    "rateLimitReachedType": None,
+                },
+            },
+            "rateLimitResetCredits": {
+                "availableCount": 1,
+                "credits": [{
+                    "id": "credit-one",
+                    "resetType": "codexRateLimits",
+                    "status": "available",
+                    "grantedAt": 1787358029,
+                    "expiresAt": 1789950029,
+                    "title": "Full reset",
+                    "description": "One free rate limit reset.",
+                }],
+            },
+        },
+    })
+
+    normalized = codex_usage.normalize_rate_limits(response.result)
+    assert normalized is not None
+    assert normalized.plan == "prolite"
+    assert normalized.windows[0].used_percent == 12
+    assert normalized.windows[0].duration_minutes == 10080
 
 
 def test_claude_unmapped_tool_stays_ignored_not_failed():

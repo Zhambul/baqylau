@@ -34,6 +34,7 @@ from impl.messages import *            # noqa: F403 — see the module docstring
 from impl.session import *             # noqa: F403
 from impl.shells import *              # noqa: F403
 from impl.subagents import *           # noqa: F403
+from impl.usage import *               # noqa: F403
 from impl.world import World
 from support import observe
 from support.daemon import Daemon, free_port, start

@@ -265,6 +265,69 @@ worktreePath                        # AgentMetaFile
 activeForm                          # TaskFile
 blockedBy                           # TaskFile
 promptText                          # HookSummaryInfo
+limit_dollars                       # Claude live usage foreign response
+used_dollars                        # Claude live usage foreign response
+remaining_dollars                   # Claude live usage foreign response
+is_enabled                          # Claude live usage foreign response
+monthly_limit                       # Claude live usage foreign response
+used_credits                        # Claude live usage foreign response
+currency                            # Claude live usage foreign response
+decimal_places                      # Claude live usage foreign response
+disabled_reason                     # Claude live usage foreign response
+user_disabled                       # Claude live usage foreign response
+spend_limit_reached                 # Claude live usage foreign response
+credits_ever_enabled                # Claude live usage foreign response
+daily                               # Claude live usage foreign response
+weekly                              # Claude live usage foreign response
+surface                             # Claude live usage foreign response
+severity                            # Claude live usage foreign response
+amount_minor                        # Claude live usage foreign response
+exponent                            # Claude live usage foreign response
+used                                # Claude live usage foreign response
+cap                                 # Claude live usage foreign response
+auto_reload                         # Claude live usage foreign response
+disclaimer                          # Claude live usage foreign response
+can_purchase_credits                # Claude live usage foreign response
+can_toggle                          # Claude live usage foreign response
+seven_day_oauth_apps                # Claude live usage foreign response
+seven_day_opus                      # Claude live usage foreign response
+seven_day_sonnet                    # Claude live usage foreign response
+seven_day_cowork                    # Claude live usage foreign response
+seven_day_omelette                  # Claude live usage foreign response
+tangelo                             # Claude live usage foreign response
+iguana_necktie                      # Claude live usage foreign response
+omelette_promotional                # Claude live usage foreign response
+nimbus_quill                        # Claude live usage foreign response
+cinder_cove                         # Claude live usage foreign response
+amber_ladder                        # Claude live usage foreign response
+extra_usage                         # Claude live usage foreign response
+spend                               # Claude live usage foreign response
+member_dashboard_available          # Claude live usage foreign response
+total_cost_usd                      # Claude live usage foreign response
+total_api_duration_ms               # Claude live usage foreign response
+total_duration_ms                   # Claude live usage foreign response
+total_lines_added                   # Claude live usage foreign response
+total_lines_removed                 # Claude live usage foreign response
+model_usage                         # Claude live usage foreign response
+pct                                 # Claude live usage foreign response
+request_count                       # Claude live usage foreign response
+behaviors                           # Claude live usage foreign response
+agents                              # Claude live usage foreign response
+mcp_servers                         # Claude live usage foreign response
+week                                # Claude live usage foreign response
+rate_limits_available               # Claude live usage foreign response
+hasCredits                          # Codex rate-limit foreign response
+limitId                             # Codex rate-limit foreign response
+limitName                           # Codex rate-limit foreign response
+individualLimit                     # Codex rate-limit foreign response
+spendControlReached                 # Codex rate-limit foreign response
+rateLimitReachedType                # Codex rate-limit foreign response
+resetType                           # Codex rate-limit foreign response
+grantedAt                           # Codex rate-limit foreign response
+expiresAt                           # Codex rate-limit foreign response
+availableCount                      # Codex rate-limit foreign response
+rateLimitsByLimitId                 # Codex rate-limit foreign response
+rateLimitResetCredits               # Codex rate-limit foreign response
 thinking_tokens                    # UsageOutputTokensDetails
 web_search_requests                # UsageServerToolUse
 web_fetch_requests                 # UsageServerToolUse

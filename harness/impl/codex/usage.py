@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import select
 import subprocess
 import time
 from collections.abc import Mapping
@@ -37,16 +38,50 @@ class RateLimitWindowResult(BaseModel):
     resetsAt: float | int | None = None
 
 
+class RateLimitCredits(BaseModel):
+    model_config = _RATE_LIMITS_FOREIGN
+    hasCredits: bool
+    unlimited: bool
+    balance: str
+
+
 class RateLimitsResult(BaseModel):
     model_config = _RATE_LIMITS_FOREIGN
+    limitId: str | None = None
+    limitName: str | None = None
     primary: RateLimitWindowResult | None = None
     secondary: RateLimitWindowResult | None = None
+    credits: RateLimitCredits | None = None
+    individualLimit: None = None
+    spendControlReached: bool | None = None
     planType: str | None = None
+    rateLimitReachedType: str | None = None
+
+
+class RateLimitResetCredit(BaseModel):
+    model_config = _RATE_LIMITS_FOREIGN
+    id: str
+    resetType: str
+    status: str
+    grantedAt: float | int
+    expiresAt: float | int
+    title: str
+    description: str
+
+
+class RateLimitResetCredits(BaseModel):
+    model_config = _RATE_LIMITS_FOREIGN
+    availableCount: int
+    credits: tuple[RateLimitResetCredit, ...]
 
 
 class AccountRateLimitsResponse(BaseModel):
     model_config = _RATE_LIMITS_FOREIGN
     rateLimits: RateLimitsResult | None = None
+    # Limit ids are runtime/vendor-defined (the base `codex` bucket plus
+    # model-specific buckets), so this is genuinely a dynamic keyed mapping.
+    rateLimitsByLimitId: Mapping[str, RateLimitsResult]
+    rateLimitResetCredits: RateLimitResetCredits | None = None
 
 
 class ClientInfo(BaseModel):
@@ -146,8 +181,14 @@ def request_rate_limits() -> AccountRateLimitsResponse | None:
         process.stdin.write(initialize.model_dump_json() + "\n")
         process.stdin.write(request.model_dump_json() + "\n")
         process.stdin.flush()
-        deadline = time.time() + REQUEST_TIMEOUT_SECONDS
-        while time.time() < deadline:
+        deadline = time.monotonic() + REQUEST_TIMEOUT_SECONDS
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            readable, _, _ = select.select((process.stdout,), (), (), remaining)
+            if not readable:
+                return None
             line = process.stdout.readline()
             if not line:
                 return None
@@ -160,7 +201,6 @@ def request_rate_limits() -> AccountRateLimitsResponse | None:
                     return RateLimitsRpcResponse.model_validate_json(line).result
                 except ValidationError:
                     return None
-        return None
     finally:
         if process.stdin is not None:
             process.stdin.close()

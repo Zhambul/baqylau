@@ -27,4 +27,5 @@ scenarios(
     "features/monitor.feature",
     "features/shell.feature",
     "features/subagent.feature",
+    "features/usage.feature",
 )

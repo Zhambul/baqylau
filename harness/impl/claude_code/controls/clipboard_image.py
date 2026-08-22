@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import subprocess
-import sys
+import platform
 
 IMAGE_FLAVORS = ("PNGf", "TIFF", "8BPS", "jp2", "GIF", "JPEG", "picture")
 
 
 def has_image() -> bool:
-    if sys.platform != "darwin":
+    # A runtime platform query keeps the non-macOS branch type-checkable on
+    # Linux; mypy folds `sys.platform` and otherwise declares the real body
+    # unreachable in the Ubuntu CI job.
+    if platform.system() != "Darwin":
         return False
     try:
         result = subprocess.run(

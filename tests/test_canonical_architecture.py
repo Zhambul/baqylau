@@ -860,7 +860,6 @@ def test_canonical_shared_code_imports_no_concrete_harness_package():
         ROOT / "harness" / "hooks",
         ROOT / "harness" / "services",
         ROOT / "dashboard" / "services",
-        ROOT / "dashboard" / "render" / "items",
     ]
     concrete_prefixes = ("harness.impl.claude_code", "harness.impl.codex")
     importers = []

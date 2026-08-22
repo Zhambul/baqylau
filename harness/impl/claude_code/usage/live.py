@@ -32,6 +32,7 @@ windows keep arriving on the cheap channel meanwhile.
 from __future__ import annotations
 
 import os
+import select
 import subprocess
 import time
 from collections.abc import Mapping
@@ -62,6 +63,9 @@ class LiveUsageWindow(BaseModel):
     model_config = _LIVE_FOREIGN
     utilization: float | int | None = None
     resets_at: str | None = None
+    limit_dollars: float | int | None = None
+    used_dollars: float | int | None = None
+    remaining_dollars: float | int | None = None
 
 
 class LiveModelScopedWindow(BaseModel):
@@ -71,17 +75,139 @@ class LiveModelScopedWindow(BaseModel):
     resets_at: str | None = None
 
 
+class LiveExtraUsage(BaseModel):
+    model_config = _LIVE_FOREIGN
+    is_enabled: bool
+    monthly_limit: float | int | None
+    used_credits: float | int | None
+    utilization: float | int | None
+    currency: str | None
+    decimal_places: int | None
+    disabled_reason: str | None
+    user_disabled: bool
+    spend_limit_reached: bool
+    credits_ever_enabled: bool
+    daily: LiveUsageWindow | None
+    weekly: LiveUsageWindow | None
+
+
+class LiveLimitModel(BaseModel):
+    model_config = _LIVE_FOREIGN
+    id: str | None
+    display_name: str
+
+
+class LiveLimitScope(BaseModel):
+    model_config = _LIVE_FOREIGN
+    model: LiveLimitModel | None
+    surface: str | None
+
+
+class LiveLimit(BaseModel):
+    model_config = _LIVE_FOREIGN
+    kind: str
+    group: str
+    percent: float | int
+    severity: str
+    resets_at: str | None
+    scope: LiveLimitScope | None
+    is_active: bool
+
+
+class LiveMoney(BaseModel):
+    model_config = _LIVE_FOREIGN
+    amount_minor: int
+    currency: str
+    exponent: int
+
+
+class LiveSpend(BaseModel):
+    model_config = _LIVE_FOREIGN
+    used: LiveMoney
+    limit: LiveMoney | None
+    percent: float | int
+    severity: str
+    enabled: bool
+    disabled_reason: str | None
+    cap: LiveMoney | None
+    balance: LiveMoney | None
+    auto_reload: None
+    disclaimer: str
+    can_purchase_credits: bool
+    can_toggle: bool
+
+
 class LiveRateLimits(BaseModel):
     model_config = _LIVE_FOREIGN
     five_hour: LiveUsageWindow | None = None
     seven_day: LiveUsageWindow | None = None
+    seven_day_oauth_apps: LiveUsageWindow | None = None
+    seven_day_opus: LiveUsageWindow | None = None
+    seven_day_sonnet: LiveUsageWindow | None = None
+    seven_day_cowork: LiveUsageWindow | None = None
+    seven_day_omelette: LiveUsageWindow | None = None
+    tangelo: LiveUsageWindow | None = None
+    iguana_necktie: LiveUsageWindow | None = None
+    omelette_promotional: LiveUsageWindow | None = None
+    nimbus_quill: LiveUsageWindow | None = None
+    cinder_cove: LiveUsageWindow | None = None
+    amber_ladder: LiveUsageWindow | None = None
+    extra_usage: LiveExtraUsage | None = None
+    limits: tuple[LiveLimit, ...] = ()
+    spend: LiveSpend | None = None
+    member_dashboard_available: bool | None = None
     model_scoped: list[LiveModelScopedWindow] | None = None
+
+
+class LiveSessionUsage(BaseModel):
+    model_config = _LIVE_FOREIGN
+    total_cost_usd: float | int
+    total_api_duration_ms: float | int
+    total_duration_ms: float | int
+    total_lines_added: int
+    total_lines_removed: int
+    # Model identifiers are runtime-defined; the probe session has not invoked
+    # a model, so its only valid measured value is an empty dynamic index.
+    model_usage: Mapping[str, None]
+
+
+class LiveBehavior(BaseModel):
+    model_config = _LIVE_FOREIGN
+    key: str
+    pct: float | int
+    count: int
+
+
+class LiveNamedPercentage(BaseModel):
+    model_config = _LIVE_FOREIGN
+    name: str
+    pct: float | int
+
+
+class LiveBehaviorPeriod(BaseModel):
+    model_config = _LIVE_FOREIGN
+    request_count: int
+    session_count: int
+    behaviors: tuple[LiveBehavior, ...]
+    agents: tuple[LiveNamedPercentage, ...]
+    skills: tuple[LiveNamedPercentage, ...]
+    plugins: tuple[LiveNamedPercentage, ...]
+    mcp_servers: tuple[LiveNamedPercentage, ...]
+
+
+class LiveBehaviors(BaseModel):
+    model_config = _LIVE_FOREIGN
+    day: LiveBehaviorPeriod
+    week: LiveBehaviorPeriod
 
 
 class GetUsageResponse(BaseModel):
     model_config = _LIVE_FOREIGN
+    session: LiveSessionUsage
     rate_limits: LiveRateLimits | None = None
+    rate_limits_available: bool
     subscription_type: str | None = None
+    behaviors: LiveBehaviors
 
 
 class GetUsageRequest(BaseModel):
@@ -98,6 +224,7 @@ class ControlRequestLine(BaseModel):
 
 class ControlResponseBody(BaseModel):
     model_config = _LIVE_FOREIGN
+    subtype: Literal["success"]
     request_id: ClaudeCodeControlRequestId
     response: GetUsageResponse | None = None
 
@@ -110,7 +237,7 @@ class ControlResponseLine(BaseModel):
 # The probe must not out-live a refresh cycle by much. Two seconds is the happy
 # path; the slow one is the CLI's own retry ladder when the usage endpoint is
 # throttled, which it walks before answering with nothing.
-PROBE_TIMEOUT_SECONDS = 60.0
+PROBE_TIMEOUT_SECONDS = 6.0
 CACHE_SECONDS = 600.0
 COMMAND = "claude"
 BINARY_DIRECTORIES = (
@@ -258,7 +385,13 @@ def _control_response(
     session's own lifecycle lines."""
     if process.stdout is None:
         return None
-    while time.time() < deadline:
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None
+        readable, _, _ = select.select((process.stdout,), (), (), remaining)
+        if not readable:
+            return None
         line = process.stdout.readline()
         if not line:
             return None
@@ -269,9 +402,6 @@ def _control_response(
         if message.response.request_id != REQUEST_ID:
             continue
         return message.response.response
-    return None
-
-
 def request_usage(
     config_directory: str | None,
 ) -> GetUsageResponse | None:
@@ -298,7 +428,7 @@ def request_usage(
             return None
         process.stdin.write(REQUEST.model_dump_json() + "\n")
         process.stdin.flush()
-        return _control_response(process, time.time() + PROBE_TIMEOUT_SECONDS)
+        return _control_response(process, time.monotonic() + PROBE_TIMEOUT_SECONDS)
     except OSError:
         return None
     finally:
