@@ -23,6 +23,7 @@ pytestmark = [pytest.mark.drift, pytest.mark.timeout(900)]
 
 scenarios(
     "features/background.feature",
+    "features/files.feature",
     "features/greeting.feature",
     "features/monitor.feature",
     "features/session_data.feature",

@@ -127,12 +127,19 @@ class TextBlock(BaseModel):
     text: str | None = None
 
 
+class DirectCaller(BaseModel):
+    """Claude Code's typed marker for a tool call made by the lead agent."""
+
+    model_config = FOREIGN
+    type: Literal["direct"] = "direct"
+
+
 class ToolUseBlock(BaseModel):
     model_config = FOREIGN
     type: Literal["tool_use"] = "tool_use"
     id: str | None = None
     name: str | None = None
-    caller: str | None = None
+    caller: DirectCaller | None = None
     # The tool's own arguments — a genuinely open, per-tool shape (module
     # header); read generically here and validated against the specific
     # tool's ARGUMENTS model only once TOOL_KINDS has named it (toolcalls.py).
@@ -678,7 +685,6 @@ class ToolCallNative(BaseModel):
     tool_input: ToolArguments | None = None
     input: ToolArguments | None = None
     tool_response: ToolResponse | str | None = None
-    caller: str | None = None
 
 
 # === The hook delivery (hooks.py, hooks/foreground.py, hooks/gateway.py) =====

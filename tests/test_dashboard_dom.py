@@ -288,6 +288,22 @@ def test_a_finished_blocks_header_click_opens_and_closes_its_body():
     assert result["normalClickLoudCalls"] == []
 
 
+def test_a_file_edits_header_click_reveals_its_embedded_diff():
+    result = run(
+        "expand.js",
+        "dashboard/static/app.00a-markup.js",
+        "dashboard/static/app.00b-entries.js",
+        "dashboard/static/app.05-session.js",
+    )["fileEdit"]
+    assert result["hasBlock"] is True
+    assert result["hasHandler"] is True
+    assert result["open"] == "1"
+    assert "Edit(/work/a.py)" in result["header"]
+    assert "+1" in result["header"]
+    assert "-1" in result["header"]
+    assert result["body"] == "@@ -1 +1 @@\n-old\n+new\n"
+
+
 def test_a_throwing_click_reports_the_failure_instead_of_going_dead():
     result = run(
         "expand.js",

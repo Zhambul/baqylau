@@ -233,7 +233,18 @@ function fileMarkup(entry) {
       .map(([count, countColor]) => '<span style="color:' + countColor + '">' + count + "</span>")
       .join(" ");
   }
-  return '<pre class="opl">' + markup + "</pre>";
+  const content = entryText(body.content);
+  if (!content) return '<pre class="opl">' + markup + "</pre>";
+  // The entry already carries a mutation's unified diff (or a Read's text).
+  // Give that content the standard block frame so the same click binding as a
+  // command can reveal it; the old loose <pre> discarded the body completely.
+  return blockHtml({
+    header: markup,
+    summary: "",
+    body: '<pre class="opo">' + escapeHtml(content) + "</pre>",
+    state: body.state,
+    quiet: true,
+  });
 }
 
 function toolBlockMarkup(kind, title, summary, body, state, entry) {

@@ -295,7 +295,7 @@ def _rsp_custom_tool_call(custom_tool_call_payload: CustomToolCallPayload) -> Ro
         if not fn:
             return None
         if fn == "apply_patch":
-            return None
+            return empty_record()
         if fn == "write_stdin":
             return _stdin_record(CodexCallId(call_id), args)
         if fn == "update_plan":
@@ -330,7 +330,7 @@ def _rsp_custom_tool_call_output(
         if combined.patch is not None:
             command_result = combined.test
             if command_result is None:
-                return None
+                return empty_record()
             session_id = command_result.session_id
             return ExecResultRecord(
                 exit=command_result.exit_code,
@@ -348,7 +348,7 @@ def _rsp_custom_tool_call_output(
                 running=process_id is not None and combined.exit_code is None,
                 call_id=CodexCallId(p.call_id or ""),
             )
-        return None
+        return empty_record()
     m = EXIT_RE.search(txt[:EXIT_SCAN_B])
     return ExecResultRecord(exit=m.group(1) if m else None, output=body, call_id=CodexCallId(p.call_id or ""))
 

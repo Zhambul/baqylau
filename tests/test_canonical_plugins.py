@@ -4147,7 +4147,7 @@ def test_codex_exec_wrapped_apply_patch_does_not_render_an_empty_tool_block():
         raw_event_id="wrapped-patch-call",
     ))
 
-    assert translated.decision.startswith("ignored_")
+    assert translated.decision == "ignored_nonsemantic"
     assert translated.canonical_events == ()
 
 
@@ -4169,7 +4169,7 @@ def test_codex_apply_patch_wrapper_output_is_nonsemantic():
         raw_event_id="wrapped-patch-output",
     ))
 
-    assert translation.decision.startswith("ignored_")
+    assert translation.decision == "ignored_nonsemantic"
     assert translation.canonical_events == ()
 
 
@@ -4625,6 +4625,7 @@ def test_claude_hook_and_transcript_produce_identical_tool_start_facts():
                             "id": "tool-one",
                             "name": "Bash",
                             "input": {"command": "pwd"},
+                            "caller": {"type": "direct"},
                         }
                     ],
                 },

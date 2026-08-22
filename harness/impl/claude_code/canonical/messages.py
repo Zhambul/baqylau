@@ -625,7 +625,6 @@ def translate_transcript(
                             id=block.id,
                             name=block.name,
                             input=block.input,
-                            caller=block.caller,
                         ),
                     )
                 )

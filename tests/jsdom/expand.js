@@ -112,13 +112,36 @@ header.onclick({ target: header });
 const afterSecondClick = block.dataset.open;
 const normalClickLoudCalls = loudCalls.slice();
 
-/* ---------- 2. a throwing click reports feed.block.toggle.fail ------------ */
+/* ---------- 2. a file edit exposes its embedded diff -------------------- */
+const fileScene = scene();
+sandbox.appendEntries([{
+  entry_id: "edit", type: "file", cursor: 3, actor_id: "lead",
+  parent_actor_id: null, turn_id: null, occurred_at: 3, summary: null,
+  body: {
+    path: "/work/a.py", action: "updated", state: "succeeded",
+    previous_path: null, lines_added: 1, lines_removed: 1,
+    content: text("@@ -1 +1 @@\n-old\n+new\n"),
+  },
+}]);
+const fileBlock = fileScene.stream.children.find(child => child.classList.contains("blk"));
+const fileHeader = fileBlock && fileBlock.querySelector(".bhead");
+const fileBody = fileBlock && fileBlock.querySelector(".bbody");
+if (fileHeader) fileHeader.onclick({ target: fileHeader });
+const fileEdit = {
+  hasBlock: !!fileBlock,
+  hasHandler: typeof (fileHeader && fileHeader.onclick) === "function",
+  open: fileBlock && fileBlock.dataset.open,
+  header: fileHeader && fileHeader.textContent,
+  body: fileBody && fileBody.textContent,
+};
+
+/* ---------- 3. a throwing click reports feed.block.toggle.fail ------------ */
 loudCalls.length = 0;
 const throwingEvent = { get target() { throw new Error("boom"); } };
 header.onclick(throwingEvent);
 const toggleFailure = loudCalls[0] || null;
 
-/* ---------- 3. a block missing its body reports feed.block.unbound, once - */
+/* ---------- 4. a block missing its body reports feed.block.unbound, once - */
 loudCalls.length = 0;
 const corruptScene = scene();
 sandbox.appendEntries(shell());
@@ -138,6 +161,7 @@ process.stdout.write(JSON.stringify({
   afterFirstClick,
   afterSecondClick,
   normalClickLoudCalls,
+  fileEdit,
   toggleFailure,
   unboundFirstPass,
   unboundSecondPass,
