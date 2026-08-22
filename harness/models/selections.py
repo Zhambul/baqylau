@@ -26,7 +26,7 @@ from domain.values import EffortChangeReason, ModelChangeReason, ModelReference
 
 class SelectionSemantics:
     def __init__(self) -> None:
-        self._models: dict[tuple[str, str], ModelReference] = {}
+        self._models: dict[tuple[str, str], tuple[ModelReference, str]] = {}
         self._efforts: dict[tuple[str, str], str] = {}
 
     @staticmethod
@@ -39,18 +39,19 @@ class SelectionSemantics:
         actor_id: ActorId,
         model_reference: ModelReference,
         model_change_reason: ModelChangeReason,
+        equivalence_key: str,
     ) -> ModelChanged | None:
         """The switch this observation reports, or None when it reports no switch.
 
-        Sameness is the native id: the display name and the selection alias are
-        two spellings of one model, and a harness that spells it differently in
-        two streams has still not changed anything.
+        The adapter supplies the key used to compare its aliases and resolved
+        names. That vendor rule does not leak into the canonical reference.
         """
         key = self._key(session_id, actor_id)
-        previous = self._models.get(key)
-        if previous is not None and previous.native_id == model_reference.native_id:
+        previous_observation = self._models.get(key)
+        if previous_observation is not None and previous_observation[1] == equivalence_key:
             return None
-        self._models[key] = model_reference
+        previous = previous_observation[0] if previous_observation is not None else None
+        self._models[key] = (model_reference, equivalence_key)
         return ModelChanged(previous, model_reference, model_change_reason)
 
     def effort(

@@ -132,7 +132,7 @@ def actor(actor_facts: ActorFacts, *, now: float | None = None) -> ActorResponse
         # One display string, which is all a model is to a reader; the picker
         # gets its selectable ids from the harness catalog, not from here.
         model=None if actor_facts.model is None else (
-            actor_facts.model.display_name or actor_facts.model.native_id
+            actor_facts.model.display_name or actor_facts.model.name
         ),
         effort=actor_facts.effort,
         status=actor_facts.status,

@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import json
 from datetime import datetime
 
-from pydantic import JsonValue
+from pydantic import BaseModel
 
 from domain.events import CanonicalEvent, EventPayload
-from domain.ids import ModelId, SelectionId, TurnId
+from domain.ids import TurnId
 from domain.values import Content, MediaType, ModelReference, StructuredContent, TextContent
 from harness.impl.claude_code import model
 from harness.models import RawEvent, canonical_event
@@ -19,16 +18,14 @@ from harness.models import RawEvent, canonical_event
 SYNTHETIC_MODEL_ID = "<synthetic>"
 
 
-def model_reference(native_id: ModelId) -> ModelReference:
-    family = model.family(native_id)
+def model_reference(claude_code_model: model.ClaudeCodeModel) -> ModelReference:
     return ModelReference(
-        native_id=native_id,
-        display_name=model.short_model(native_id),
-        selection_id=SelectionId(family) if family is not None else None,
+        name=claude_code_model,
+        display_name=model.short_model(claude_code_model),
     )
 
 
-def timestamp(value: JsonValue) -> float | None:
+def timestamp(value: str | int | float | None) -> float | None:
     if isinstance(value, (int, float)):
         return float(value)
     if not isinstance(value, str) or not value:
@@ -40,12 +37,12 @@ def timestamp(value: JsonValue) -> float | None:
 
 
 def content(
-    value: JsonValue,
+    value: str | int | float | bool | BaseModel | None,
     *,
     markdown: bool = False,
 ) -> Content:
-    if isinstance(value, (dict, list)):
-        return StructuredContent(json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True))
+    if isinstance(value, BaseModel):
+        return StructuredContent(value.model_dump_json(exclude_none=True))
     return TextContent(str(value or ""), MediaType.TEXT_MARKDOWN if markdown else MediaType.TEXT_PLAIN)
 
 

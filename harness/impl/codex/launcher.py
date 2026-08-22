@@ -21,8 +21,8 @@ class CodexLauncher(HarnessLauncher):
             arguments.extend(("resume", str(launch_request.resume_session_id)))
         if launch_request.working_directory:
             arguments.extend(("-C", launch_request.working_directory))
-        if launch_request.model_id:
-            arguments.extend(("-m", launch_request.model_id))
+        if launch_request.model:
+            arguments.extend(("-m", launch_request.model))
         if launch_request.effort:
             arguments.extend(("-c", f"model_reasoning_effort={launch_request.effort}"))
         if prompt.strip():

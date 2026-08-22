@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import json
 import re
 import time
+from collections.abc import Mapping
 
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from harness.contract import ControlHandler, HarnessController
 from harness.models import (
@@ -130,7 +130,11 @@ def _command(
     return CommandResult(
         request.request_id,
         ControlAcknowledgement.ACKNOWLEDGED,
-        confirmation=ConfirmationOutcome.CONFIRMED if confirmation["dialog"] else ConfirmationOutcome.NOT_NEEDED,
+        confirmation=(
+            ConfirmationOutcome.CONFIRMED
+            if confirmation.dialog
+            else ConfirmationOutcome.NOT_NEEDED
+        ),
     )
 
 
@@ -328,7 +332,7 @@ class ApplyRewindHandler(ControlHandler):
             request.request_id,
             ControlAcknowledgement.ACKNOWLEDGED,
             restored_text=restored,
-            degraded=bool(result["degraded"]),
+            degraded=result.degraded,
         )
 
 
@@ -343,7 +347,7 @@ class SelectModelHandler(ControlHandler):
     def __call__(self, request: ControlRequest, control_context: ControlContext) -> ControlResult:
         if not isinstance(request, SelectModel):
             raise TypeError("select_model handler requires SelectModel")
-        return _command(request, control_context, f"/model {request.model_id}", confirm=True)
+        return _command(request, control_context, f"/model {request.model}", confirm=True)
 
 
 class SelectEffortHandler(ControlHandler):
@@ -381,13 +385,12 @@ class AnswerQuestionHandler(ControlHandler):
         window_id = control_context.terminal_window_id
         if window_id is None:
             return ControlResult(request.request_id, ControlAcknowledgement.REJECTED, "session is not live")
-        raw_answers = json.loads(request.answers.json_text) if request.answers is not None else []
-        if not isinstance(raw_answers, list):
-            return ControlResult(
-                request.request_id, ControlAcknowledgement.REJECTED, "question answers must be an array"
-            )
         try:
-            answers = [askdialog.AnswerDraft.model_validate(a) for a in raw_answers]
+            answers = (
+                TypeAdapter(list[askdialog.AnswerDraft]).validate_json(request.answers.json_text)
+                if request.answers is not None
+                else []
+            )
         except ValidationError as error:
             return ControlResult(
                 request.request_id, ControlAcknowledgement.REJECTED, f"malformed question answer: {error}"
@@ -432,7 +435,7 @@ class ReadPlanChoicesHandler(ControlHandler):
             request.request_id,
             ControlAcknowledgement.ACKNOWLEDGED,
             choices=tuple(
-                PlanChoice(str(row["digit"]), str(row["label"]), bool(row["feedback"]))
+                PlanChoice(row.digit, row.label, row.feedback)
                 for row in rows
             ),
         )
@@ -454,16 +457,16 @@ class DecidePlanHandler(ControlHandler):
                 plandialog.dismiss(driver, window_id)
             else:
                 rows = plandialog.options(driver, window_id)
-                row = next((row for row in rows if str(row["digit"]) == request.decision), None)
+                row = next((row for row in rows if row.digit == request.decision), None)
                 if row is None:
                     return ControlResult(request.request_id, ControlAcknowledgement.REJECTED, "unknown plan decision")
-                plandialog.decide(driver, window_id, row["digit"], row["label"])
+                plandialog.decide(driver, window_id, row.digit, row.label)
         except plandialog.PlanError as error:
             return ControlResult(request.request_id, ControlAcknowledgement.INDETERMINATE, str(error))
         return ControlResult(request.request_id, ControlAcknowledgement.ACKNOWLEDGED)
 
 
-controller = HarnessController({
+HANDLERS: Mapping[ControlName, ControlHandler] = {
     ControlName.SEND_TEXT: SendTextHandler(),
     ControlName.INTERRUPT: InterruptHandler(),
     ControlName.BACKGROUND: BackgroundHandler(),
@@ -478,4 +481,6 @@ controller = HarnessController({
     ControlName.ANSWER_QUESTION: AnswerQuestionHandler(),
     ControlName.READ_PLAN_CHOICES: ReadPlanChoicesHandler(),
     ControlName.DECIDE_PLAN: DecidePlanHandler(),
-})
+}
+
+controller = HarnessController(HANDLERS)

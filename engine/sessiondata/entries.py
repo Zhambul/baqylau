@@ -242,9 +242,8 @@ def _is_a_switch(model_changed: ModelChanged) -> bool:
     A NAME BEING REFINED. A launch selects an alias, and the harness later reports
     the full id that alias resolved to. Same selection, two spellings, and the
     feed drew an arrow between them — the product telling a person something
-    changed when they had made one choice. Compared by `selection_id` when both
-    sides carry one, because that is the identity of the CHOICE; native ids are
-    the fallback for the sources that report no selection at all.
+    changed when they had made one choice. The adapter suppresses those alias
+    refinements before they enter the canonical stream.
     """
     previous, current = model_changed.previous, model_changed.current
     if previous is None:
@@ -252,11 +251,9 @@ def _is_a_switch(model_changed: ModelChanged) -> bool:
     # A source may stamp machine-injected records with the pseudo-model
     # "<synthetic>". Facts carrying it exist in stored history, and a change to
     # or from a pseudo-model is a report about machinery, never a switch.
-    if "<synthetic>" in (previous.native_id, current.native_id):
+    if "<synthetic>" in (previous.name, current.name):
         return False
-    if previous.selection_id is not None and current.selection_id is not None:
-        return previous.selection_id != current.selection_id
-    return previous.native_id != current.native_id
+    return previous.name != current.name
 
 
 def _diff(file_accessed: FileAccessed) -> TextContent:
@@ -264,6 +261,5 @@ def _diff(file_accessed: FileAccessed) -> TextContent:
     field of its own — which is what lets the entry body have ONE content field
     instead of two that are never both filled."""
     return TextContent(file_accessed.unified_diff or "", MediaType.TEXT_PLAIN)
-
 
 

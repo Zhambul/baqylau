@@ -100,7 +100,7 @@ def _submission_pending(screen_driver: ScreenDriver, win: WindowId, marker: str)
         try:
             from audit import record  # noqa: PLC0415 — audit fallback inside the failure path
 
-            record.error("", "type_command (submit verification)", {"window": str(win)})
+            record.error("", "type_command (submit verification)", f"window={win}")
         except Exception:
             pass
         return False

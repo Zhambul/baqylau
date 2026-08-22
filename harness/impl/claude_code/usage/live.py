@@ -31,17 +31,19 @@ windows keep arriving on the cheap channel meanwhile.
 
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from harness.models import UsageWindowSample
+from harness.impl.claude_code.ids import ClaudeCodeControlRequestId
 
 # The CLI's `get_usage` control-response body — a DIFFERENT foreign source
 # from the transcript/hook registers (canonical/records.py owns those): a
@@ -81,6 +83,30 @@ class GetUsageResponse(BaseModel):
     rate_limits: LiveRateLimits | None = None
     subscription_type: str | None = None
 
+
+class GetUsageRequest(BaseModel):
+    model_config = _LIVE_FOREIGN
+    subtype: Literal["get_usage"] = "get_usage"
+
+
+class ControlRequestLine(BaseModel):
+    model_config = _LIVE_FOREIGN
+    type: Literal["control_request"] = "control_request"
+    request_id: ClaudeCodeControlRequestId
+    request: GetUsageRequest
+
+
+class ControlResponseBody(BaseModel):
+    model_config = _LIVE_FOREIGN
+    request_id: ClaudeCodeControlRequestId
+    response: GetUsageResponse | None = None
+
+
+class ControlResponseLine(BaseModel):
+    model_config = _LIVE_FOREIGN
+    type: Literal["control_response"]
+    response: ControlResponseBody
+
 # The probe must not out-live a refresh cycle by much. Two seconds is the happy
 # path; the slow one is the CLI's own retry ladder when the usage endpoint is
 # throttled, which it walks before answering with nothing.
@@ -93,12 +119,8 @@ BINARY_DIRECTORIES = (
     "/usr/local/bin",
     "~/.hermes/node/bin",
 )
-REQUEST_ID = "baqylau-usage"
-REQUEST = {
-    "type": "control_request",
-    "request_id": REQUEST_ID,
-    "request": {"subtype": "get_usage"},
-}
+REQUEST_ID = ClaudeCodeControlRequestId("baqylau-usage")
+REQUEST = ControlRequestLine(request_id=REQUEST_ID, request=GetUsageRequest())
 
 # The environment this process is NOT allowed to inherit into the probe. The
 # daemon may itself have been started from inside a session (its shell had these
@@ -128,7 +150,14 @@ MODEL_WINDOW_PREFIX = "seven_day_"
 ACCOUNT_WINDOWS = ("five_hour", "seven_day")
 MAX_MODEL_WINDOWS = 6
 
-_cache: dict[str, tuple[float, "LiveUsage | None"]] = {}
+@dataclass(frozen=True)
+class CacheEntry:
+    config_directory: str
+    expires_at: float
+    usage: "LiveUsage | None"
+
+
+_cache: list[CacheEntry] = []
 
 
 @dataclass(frozen=True)
@@ -140,12 +169,10 @@ class LiveUsage:
     windows: tuple[UsageWindowSample, ...]
 
 
-def subprocess_environment(config_directory: str | None) -> dict[str, str]:
-    environment = {
-        name: value
-        for name, value in os.environ.items()
-        if name not in DISCARDED_VARIABLES
-    }
+def subprocess_environment(config_directory: str | None) -> Mapping[str, str]:
+    environment = os.environ.copy()
+    for name in DISCARDED_VARIABLES:
+        environment.pop(name, None)
     if config_directory:
         environment[CONFIG_DIRECTORY_VARIABLE] = config_directory
     environment[PROBE_VARIABLE] = "1"
@@ -226,7 +253,7 @@ def windows(
 def _control_response(
     process: subprocess.Popen[str],
     deadline: float,
-) -> dict[str, JsonValue] | None:
+) -> GetUsageResponse | None:
     """The reply to our one request, out of a stream that also carries the
     session's own lifecycle lines."""
     if process.stdout is None:
@@ -236,16 +263,12 @@ def _control_response(
         if not line:
             return None
         try:
-            message = json.loads(line)
-        except json.JSONDecodeError:
+            message = ControlResponseLine.model_validate_json(line)
+        except ValidationError:
             continue
-        if not isinstance(message, dict) or message.get("type") != "control_response":
+        if message.response.request_id != REQUEST_ID:
             continue
-        response = message.get("response")
-        if not isinstance(response, dict) or response.get("request_id") != REQUEST_ID:
-            continue
-        payload = response.get("response")
-        return payload if isinstance(payload, dict) else None
+        return message.response.response
     return None
 
 
@@ -273,15 +296,9 @@ def request_usage(
     try:
         if process.stdin is None:
             return None
-        process.stdin.write(json.dumps(REQUEST) + "\n")
+        process.stdin.write(REQUEST.model_dump_json() + "\n")
         process.stdin.flush()
-        payload = _control_response(process, time.time() + PROBE_TIMEOUT_SECONDS)
-        if payload is None:
-            return None
-        try:
-            return GetUsageResponse.model_validate(payload)
-        except ValidationError:
-            return None
+        return _control_response(process, time.time() + PROBE_TIMEOUT_SECONDS)
     except OSError:
         return None
     finally:
@@ -296,9 +313,10 @@ def request_usage(
 def usage(config_directory: str | None) -> LiveUsage | None:
     """One account's live windows, at most one probe per CACHE_SECONDS."""
     now = time.time()
-    cached = _cache.get(config_directory or "")
-    if cached is not None and cached[0] > now:
-        return cached[1]
+    cache_key = config_directory or ""
+    cached = next((entry for entry in _cache if entry.config_directory == cache_key), None)
+    if cached is not None and cached.expires_at > now:
+        return cached.usage
     document = request_usage(config_directory)
     result = None
     if document is not None:
@@ -310,5 +328,6 @@ def usage(config_directory: str | None) -> LiveUsage | None:
                 plan=plan if plan else None,
                 windows=samples,
             )
-    _cache[config_directory or ""] = (now + CACHE_SECONDS, result)
+    _cache[:] = [entry for entry in _cache if entry.config_directory != cache_key]
+    _cache.append(CacheEntry(cache_key, now + CACHE_SECONDS, result))
     return result

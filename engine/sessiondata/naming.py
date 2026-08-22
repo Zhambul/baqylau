@@ -33,7 +33,7 @@ class ModelNaming:
         namer = self.display_by_harness.get(harness)
         if namer is not None:
             return namer(model_reference)
-        return model_reference.display_name or model_reference.native_id
+        return model_reference.display_name or model_reference.name
 
     def named(self, harness: HarnessName, model_reference: ModelReference) -> ModelReference:
         """The same reference with its display settled — what the actor row

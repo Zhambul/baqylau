@@ -59,6 +59,8 @@ _.total_tokens
 # every BaseModel subclass to build its validator. We only ever ASSIGN it —
 # the same "framework attribute" shape as `_.total_tokens` above.
 _.model_config
+clientInfo  # codex usage JSON-RPC request field, read by pydantic serialization
+jsonrpc     # codex usage JSON-RPC envelope field, read by pydantic serialization
 
 # --- FOREIGN payload fields validated but never read -----------------------
 # harness/impl/codex/canonical/records.py / usage.py declare codex's OWN JSON
@@ -138,6 +140,7 @@ memory_citation # records.py AgentMessagePayload
 results         # records.py WebSearchEndPayload
 completed_at_ms # records.py ItemCompletedPayload
 thread_id       # records.py ItemCompletedPayload
+create_time     # records.py ChatMessageMetadata
 
 # A TypedDict field read only through dict-literal construction and ["check"]
 # subscripts (askdialog_screen.rows / its dialog callers) — the ANNOTATION is
@@ -261,6 +264,23 @@ worktreeCleanlyRemoved              # AgentMetaFile
 worktreePath                        # AgentMetaFile
 activeForm                          # TaskFile
 blockedBy                           # TaskFile
+promptText                          # HookSummaryInfo
+thinking_tokens                    # UsageOutputTokensDetails
+web_search_requests                # UsageServerToolUse
+web_fetch_requests                 # UsageServerToolUse
+ephemeral_1h_input_tokens           # UsageCacheCreation
+ephemeral_5m_input_tokens           # UsageCacheCreation
+output_tokens_details              # MessageUsage
+server_tool_use                    # MessageUsage
+cache_creation                     # MessageUsage / UsageIteration
+inference_geo                      # MessageUsage
+speed                              # MessageUsage
+
+# Pydantic serializes these Python-side names through their camelCase aliases;
+# the receiver reads the JSON names, so no Python attribute read exists here.
+permission_decision                 # HookSpecificOutput.permissionDecision
+updated_input                       # HookSpecificOutput.updatedInput
+hook_specific_output                # HookReply.hookSpecificOutput
 
 # --- StrEnum members reached only by validation/serialization -------------------
 # A closed vocabulary's member is a complete listing of what a stored value or a
@@ -284,3 +304,29 @@ SHOWN                               # api/telemetry/models/optimistic_action_req
 RECONCILED                          # api/telemetry/models/optimistic_action_request.py OptimisticActionPhase
 DROPPED                             # api/telemetry/models/optimistic_action_request.py OptimisticActionPhase
 STALE                               # api/telemetry/models/optimistic_action_request.py OptimisticActionPhase
+GPT_5_6_SOL                         # harness/impl/codex/model.py CodexModel
+GPT_5_6_TERRA                       # harness/impl/codex/model.py CodexModel
+GPT_5_6_LUNA                        # harness/impl/codex/model.py CodexModel
+GPT_5_5                             # harness/impl/codex/model.py CodexModel
+GPT_5_4                             # harness/impl/codex/model.py CodexModel
+GPT_5_4_MINI                        # harness/impl/codex/model.py CodexModel
+GPT_5_3_CODEX_SPARK                 # harness/impl/codex/model.py CodexModel
+FABLE                               # harness/impl/claude_code/model.py ClaudeCodeModel
+OPUS                                # harness/impl/claude_code/model.py ClaudeCodeModel
+SONNET                              # harness/impl/claude_code/model.py ClaudeCodeModel
+HAIKU                               # harness/impl/claude_code/model.py ClaudeCodeModel
+CLAUDE_FABLE_5                      # harness/impl/claude_code/model.py ClaudeCodeModel
+CLAUDE_OPUS_5                       # harness/impl/claude_code/model.py ClaudeCodeModel
+CLAUDE_OPUS_4_8                     # harness/impl/claude_code/model.py ClaudeCodeModel
+CLAUDE_SONNET_5                     # harness/impl/claude_code/model.py ClaudeCodeModel
+CLAUDE_HAIKU_4_5                    # harness/impl/claude_code/model.py ClaudeCodeModel
+CLAUDE_HAIKU_4_5_20251001           # harness/impl/claude_code/model.py ClaudeCodeModel
+LOW                                 # harness/impl/codex/model.py CodexEffort
+MEDIUM                              # harness/impl/codex/model.py CodexEffort
+HIGH                                # harness/impl/codex/model.py CodexEffort
+XHIGH                               # harness/impl/codex/model.py CodexEffort
+MAX                                 # harness/impl/codex/model.py CodexEffort
+ULTRA                               # harness/impl/codex/model.py CodexEffort
+FALLBACK_MESSAGE                    # records.py UsageIterationType
+STANDARD                            # records.py UsageServiceTier / UsageSpeed
+NOT_AVAILABLE                       # records.py UsageInferenceGeo

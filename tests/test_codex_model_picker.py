@@ -96,7 +96,7 @@ def test_the_picker_opens_straight_on_the_model_step():
     # the 0.144.1 'All models' step is gone; waiting for it is what broke
     picker, result = _run(model="gpt-5.6-sol")
 
-    assert result == {"set": True}
+    assert result is modeldialog.ModelSelectionOutcome.SET
     # model chosen, then the level step's pre-selected default accepted
     assert picker.chosen == ["gpt-5.6-sol (default)", "High (current)"]
     assert picker.index >= len(STEPS)          # the picker closed

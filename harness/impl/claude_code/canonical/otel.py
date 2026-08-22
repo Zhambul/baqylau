@@ -1,90 +1,111 @@
-"""Claude Code's OTel usage/cost metrics stream, translated into usage facts."""
+"""Claude Code's typed OTLP usage/cost metrics translation."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from decimal import Decimal
 
-from pydantic import JsonValue
-
 from domain.events import CanonicalEvent, EventPayload, UsageReported
-from domain.ids import ModelId
 from domain.values import TokenUsage, UsageScope
 from harness.impl.claude_code.canonical import records
 from harness.impl.claude_code.canonical.support import event, model_reference
+from harness.impl.claude_code.model import ClaudeCodeModel
 from harness.models import RawEvent
 
 
-def _dicts(value: JsonValue) -> list[dict[str, JsonValue]]:
-    """`value` as a list of objects — the recurring OTLP shape ("every level
-    of this tree is a list of objects, or absent"), so every nesting below
-    reads the same way regardless of which level is malformed."""
-    return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+@dataclass
+class UsageAmount:
+    key: str
+    value: Decimal
+
+
+@dataclass
+class UsageGroup:
+    model: ClaudeCodeModel | None
+    query_source: str
+    amounts: list[UsageAmount]
+
+    def add(self, key: str, value: Decimal) -> None:
+        amount = next((amount for amount in self.amounts if amount.key == key), None)
+        if amount is None:
+            self.amounts.append(UsageAmount(key, value))
+        else:
+            amount.value += value
+
+    def value(self, key: str) -> Decimal:
+        amount = next((amount for amount in self.amounts if amount.key == key), None)
+        return amount.value if amount is not None else Decimal(0)
 
 
 def translate_otel(
     raw_event: RawEvent,
-    document: dict[str, JsonValue],
+    document: records.OTelMetricsDocument,
 ) -> list[CanonicalEvent[EventPayload]]:
-    # Requires only "a JSON object" (records.OTelMetricsDocument, OPEN_FOREIGN
-    # — the module header): OTLP is walked generically below with `.get()`/
-    # `isinstance` at every level, exactly as it always was.
-    records.OTelMetricsDocument.model_validate(document)
-    grouped: dict[tuple[str, str], dict[str, Decimal]] = {}
-    for resource in _dicts(document.get("resourceMetrics")):
-        for scope in _dicts(resource.get("scopeMetrics")):
-            for metric in _dicts(scope.get("metrics")):
-                metric_name = str(metric.get("name") or "")
-                if "token.usage" not in metric_name and "cost.usage" not in metric_name:
+    groups: list[UsageGroup] = []
+    for resource in document.resourceMetrics:
+        for scope in resource.scopeMetrics:
+            for metric in scope.metrics:
+                if "token.usage" not in metric.name and "cost.usage" not in metric.name:
                     continue
-                metric_sum = metric.get("sum")
-                data_points = metric_sum.get("dataPoints") if isinstance(metric_sum, dict) else None
-                for point in _dicts(data_points):
-                    attributes: dict[str, JsonValue] = {}
-                    for attribute in _dicts(point.get("attributes")):
-                        value = attribute.get("value")
-                        value = value if isinstance(value, dict) else {}
-                        attributes[str(attribute.get("key") or "")] = next(
-                            (value[key] for key in ("stringValue", "intValue", "doubleValue") if key in value),
-                            None,
-                        )
-                    if str(attributes.get("session.id") or "") != str(raw_event.session_id):
+                for point in metric.sum.dataPoints if metric.sum is not None else ():
+                    if str(point.attribute("session.id") or "") != str(raw_event.session_id):
                         continue
-                    native_value = point.get("asDouble", point.get("asInt"))
+                    native_value = point.asDouble if point.asDouble is not None else point.asInt
                     if native_value is None:
                         continue
-                    model_id = str(attributes.get("model") or "")
-                    query_source = str(attributes.get("query_source") or "")
-                    values = grouped.setdefault((model_id, query_source), {})
-                    usage_type = str(attributes.get("type") or "")
-                    key = "cost" if "cost.usage" in metric_name else usage_type
-                    values[key] = values.get(key, Decimal(0)) + Decimal(str(native_value))
+                    model_text = str(point.attribute("model") or "")
+                    model = ClaudeCodeModel(model_text) if model_text else None
+                    query_source = str(point.attribute("query_source") or "")
+                    group = next(
+                        (
+                            candidate
+                            for candidate in groups
+                            if candidate.model == model
+                            and candidate.query_source == query_source
+                        ),
+                        None,
+                    )
+                    if group is None:
+                        group = UsageGroup(model, query_source, [])
+                        groups.append(group)
+                    usage_type = str(point.attribute("type") or "")
+                    key = "cost" if "cost.usage" in metric.name else usage_type
+                    group.add(key, Decimal(str(native_value)))
 
     events = []
-    for index, ((model_id, query_source), values) in enumerate(sorted(grouped.items())):
+    ordered = sorted(groups, key=lambda group: (group.model.value if group.model else "", group.query_source))
+    for index, group in enumerate(ordered):
         tokens = TokenUsage(
-            input_tokens=int(values.get("input", 0)),
-            output_tokens=int(values.get("output", 0)),
-            cache_read_tokens=int(values.get("cacheRead", 0)),
-            cache_write_tokens=int(values.get("cacheCreation", 0)),
+            input_tokens=int(group.value("input")),
+            output_tokens=int(group.value("output")),
+            cache_read_tokens=int(group.value("cacheRead")),
+            cache_write_tokens=int(group.value("cacheCreation")),
         )
-        cost = values.get("cost")
+        cost = next(
+            (amount.value for amount in group.amounts if amount.key == "cost"),
+            None,
+        )
         if tokens == TokenUsage() and cost is None:
             continue
-        model = model_reference(ModelId(model_id)) if model_id else None
+        selected_model = (
+            model_reference(group.model) if group.model else None
+        )
         payload = UsageReported(
             UsageScope.SESSION,
             str(raw_event.session_id),
-            model,
+            selected_model,
             None,
             tokens,
             False,
             cost,
         )
-        events.append(event(
-            raw_event,
-            "usage",
-            f"{raw_event.source_position}:{index}:{model_id}:{query_source}",
-            "reported",
-            payload,
-        ))
+        events.append(
+            event(
+                raw_event,
+                "usage",
+                f"{raw_event.source_position}:{index}:{group.model or ''}:{group.query_source}",
+                "reported",
+                payload,
+            )
+        )
     return events

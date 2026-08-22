@@ -14,6 +14,7 @@
 # and `skills/*/SKILL.md`.
 
 import os
+from dataclasses import dataclass
 
 from harness.impl.claude_code.model import claude_dirs, config_dir
 
@@ -60,6 +61,13 @@ BUILTINS = (
 _HEAD = 4096          # how much of a command/skill file the description scan reads
 
 
+@dataclass(frozen=True)
+class SlashCommand:
+    name: str
+    description: str
+    source: str
+
+
 def describe(path: str) -> str:
     """One display line for a command/skill file: the YAML frontmatter's
     `description:` when present, else the first non-empty body line (leading
@@ -94,7 +102,7 @@ def _dir_label(cdir: str) -> str:
     return "user" if cdir == config_dir() else "project"
 
 
-def slash_commands(cwd: str | None) -> list[dict[str, str]]:
+def slash_commands(cwd: str | None) -> list[SlashCommand]:
     """[{name, desc, src}, …] for a session rooted at `cwd`, sorted by name and
     name-deduped: built-ins first (the TUI resolves those names to itself no
     matter what a same-named custom file claims), then discovered entries in
@@ -102,13 +110,13 @@ def slash_commands(cwd: str | None) -> list[dict[str, str]]:
     one of the same name). src: 'built-in' | 'project' | 'user' (+' skill').
     No cwd (a session with no recorded one) still gets built-ins + the
     user-level entries."""
-    out: list[dict[str, str]] = []
+    out: list[SlashCommand] = []
     seen: set[str] = set()
 
     def add(name: str, desc: str, src: str) -> None:
         if name and name not in seen:
             seen.add(name)
-            out.append({"name": name, "desc": desc, "src": src})
+            out.append(SlashCommand(name, desc, src))
 
     for name, desc in BUILTINS:
         add(name, desc, "built-in")
@@ -132,5 +140,5 @@ def slash_commands(cwd: str | None) -> list[dict[str, str]]:
             sfile = os.path.join(sroot, sk, "SKILL.md")
             if os.path.isfile(sfile):
                 add(sk, describe(sfile), lbl + " skill")
-    out.sort(key=lambda c: c["name"])
+    out.sort(key=lambda command: command.name)
     return out

@@ -3,7 +3,7 @@
 from harness.contract import HarnessPlugin
 from harness.models import EffortOption, HarnessInfo, ModelOption, RewindModeOption
 from domain.events import SCHEMA_VERSION
-from domain.ids import ModelId
+from domain.ids import HarnessName
 from harness.impl.claude_code.canonical.translator import ClaudeCanonicalTranslator
 from harness.impl.claude_code.canonical.sources import ClaudeRawEventSources
 from harness.impl.claude_code.hooks.gateway import CLI_PROCESS_NAME, ClaudeHookGateway
@@ -23,8 +23,8 @@ from harness.impl.claude_code.controls import rewindmenu
 # the per-model truth once it is measured, as it already had to be for codex.
 # (`model.model_default_effort` is NOT usable here: it matches resolved ids like
 # `opus-5`, while this menu speaks the picker's bare aliases.)
-MODEL_IDS = ("fable", "opus", "sonnet", "haiku")
-EFFORT_VALUES = ("low", "medium", "high", "xhigh", "max")
+MODEL_IDS = tuple(model.ClaudeCodeModel(member) for member in ("fable", "opus", "sonnet", "haiku"))
+EFFORT_VALUES = tuple(model.ClaudeCodeEffort)
 DEFAULT_MODEL_ID = MODEL_IDS[0]
 DEFAULT_EFFORT = "high"
 
@@ -35,20 +35,20 @@ MODELS = tuple(
     # value = the alias the harness's /model takes; label = the ONE display
     # name (model.ALIAS_DISPLAY), so the picker says what the actor row says.
     ModelOption(
-        ModelId(model_id),
-        model.ALIAS_DISPLAY.get(model_id, model_id),
+        model_id,
+        model.alias_display(model_id),
         model_id == DEFAULT_MODEL_ID,
         EFFORTS,
     )
     for model_id in MODEL_IDS
 )
 REWIND_MODES = tuple(
-    RewindModeOption(mode, label) for mode, label in rewindmenu.MODE_LABELS.items()
+    RewindModeOption(mode.value, label) for mode, label in rewindmenu.MODE_LABELS.items()
 )
 
 plugin = HarnessPlugin(
     info=HarnessInfo(
-        name="claude_code",
+        name=HarnessName.CLAUDE_CODE,
         display_name="Claude Code",
         plugin_version="3",
         canonical_version=SCHEMA_VERSION,

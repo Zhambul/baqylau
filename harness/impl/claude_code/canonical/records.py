@@ -39,11 +39,21 @@
 # outcome parse_line already gives it.
 from __future__ import annotations
 
-from typing import Literal
+from collections.abc import Mapping
+from enum import StrEnum
+from typing import Annotated, Generic, Literal, TypeVar, Union
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, RootModel
 
-from domain.ids import ActorId, CallId, MessageId, SessionId, TaskListId, TurnId
+from harness.impl.claude_code.ids import (
+    ClaudeCodeActorId,
+    ClaudeCodeCallId,
+    ClaudeCodeMessageId,
+    ClaudeCodeSessionId,
+    ClaudeCodeTaskListId,
+    ClaudeCodeTurnId,
+)
+from domain.ids import AccountId
 
 # The one config every FOREIGN payload model shares — see the module header.
 FOREIGN = ConfigDict(extra="forbid", frozen=True)
@@ -51,6 +61,56 @@ FOREIGN = ConfigDict(extra="forbid", frozen=True)
 # The escape hatch for a shape that is open by the VENDOR's contract, not by
 # an oversight of ours — see the module header.
 OPEN_FOREIGN = ConfigDict(extra="ignore", frozen=True)
+
+
+class ForeignMetadata(BaseModel):
+    """Named vendor metadata that this adapter deliberately does not interpret."""
+
+    model_config = OPEN_FOREIGN
+
+
+class ImageSource(BaseModel):
+    model_config = OPEN_FOREIGN
+    type: str | None = None
+    media_type: str | None = None
+    data: str | None = None
+
+
+class TranscriptRecordHeader(BaseModel):
+    """Only the discriminator, used before the recognized record's strict model."""
+
+    model_config = OPEN_FOREIGN
+    type: str | None = None
+
+
+class TranscriptDocument(BaseModel):
+    """Common fields read independently of a transcript record's subtype."""
+
+    model_config = OPEN_FOREIGN
+    type: str | None = None
+    uuid: str | None = None
+    parentUuid: str | None = None
+    timestamp: str | int | float | None = None
+    cwd: str | None = None
+    transcript_path: str | None = None
+    message: MessageObject | None = None
+    agentName: str | None = None
+    aiTitle: str | None = None
+    summary: str | None = None
+
+
+class CompactMetadata(BaseModel):
+    model_config = FOREIGN
+    preTokens: int | None = None
+
+
+class HookSummaryInfo(BaseModel):
+    """One command/prompt hook measured in a `stop_hook_summary` record."""
+
+    model_config = FOREIGN
+    command: str
+    durationMs: int | float | None = None
+    promptText: str | None = None
 
 
 # === The transcript record register (transcript.py) ==========================
@@ -76,7 +136,7 @@ class ToolUseBlock(BaseModel):
     # The tool's own arguments — a genuinely open, per-tool shape (module
     # header); read generically here and validated against the specific
     # tool's ARGUMENTS model only once TOOL_KINDS has named it (toolcalls.py).
-    input: dict[str, JsonValue] | None = None
+    input: ToolArguments | None = None
 
 
 class InnerContentBlock(BaseModel):
@@ -92,13 +152,13 @@ class InnerContentBlock(BaseModel):
     type: str | None = None
     text: str | None = None
     tool_name: str | None = None
-    source: dict[str, JsonValue] | None = None
+    source: ImageSource | None = None
 
 
 class ToolResultBlock(BaseModel):
     model_config = FOREIGN
     type: Literal["tool_result"] = "tool_result"
-    tool_use_id: CallId | None = None
+    tool_use_id: ClaudeCodeCallId | None = None
     is_error: bool | None = None
     content: str | list[InnerContentBlock | str] | None = None
 
@@ -113,7 +173,7 @@ class ThinkingBlock(BaseModel):
 class ImageBlock(BaseModel):
     model_config = FOREIGN
     type: Literal["image"] = "image"
-    source: dict[str, JsonValue] | None = None
+    source: ImageSource | None = None
 
 
 class FallbackBlock(BaseModel):
@@ -128,6 +188,71 @@ class FallbackBlock(BaseModel):
     to: str | None = None
 
 
+MessageContentBlock = Annotated[
+    Union[TextBlock, ToolUseBlock, ToolResultBlock, ThinkingBlock, ImageBlock, FallbackBlock],
+    Field(discriminator="type"),
+]
+
+
+class UsageOutputTokensDetails(BaseModel):
+    model_config = FOREIGN
+    thinking_tokens: int | float
+
+
+class UsageServerToolUse(BaseModel):
+    model_config = FOREIGN
+    web_search_requests: int | float
+    web_fetch_requests: int | float
+
+
+class UsageCacheCreation(BaseModel):
+    model_config = FOREIGN
+    ephemeral_1h_input_tokens: int | float
+    ephemeral_5m_input_tokens: int | float
+
+
+class UsageIterationType(StrEnum):
+    MESSAGE = "message"
+    FALLBACK_MESSAGE = "fallback_message"
+
+
+class UsageIteration(BaseModel):
+    model_config = FOREIGN
+    input_tokens: int | float
+    output_tokens: int | float
+    cache_read_input_tokens: int | float
+    cache_creation_input_tokens: int | float
+    cache_creation: UsageCacheCreation
+    type: UsageIterationType
+    model: str | None = None
+
+
+class UsageServiceTier(StrEnum):
+    STANDARD = "standard"
+
+
+class UsageSpeed(StrEnum):
+    STANDARD = "standard"
+
+
+class UsageInferenceGeo(StrEnum):
+    NOT_AVAILABLE = "not_available"
+
+
+class MessageUsage(BaseModel):
+    model_config = FOREIGN
+    input_tokens: int | float | None = None
+    cache_creation_input_tokens: int | float | None = None
+    cache_read_input_tokens: int | float | None = None
+    output_tokens: int | float | None = None
+    output_tokens_details: UsageOutputTokensDetails | None = None
+    server_tool_use: UsageServerToolUse | None = None
+    service_tier: UsageServiceTier | None = None
+    cache_creation: UsageCacheCreation | None = None
+    inference_geo: UsageInferenceGeo | None = None
+    iterations: tuple[UsageIteration, ...] | None = None
+    speed: UsageSpeed | None = None
+
 
 class MessageObject(BaseModel):
     """The `message` object a `user`/`assistant` transcript record carries —
@@ -140,14 +265,14 @@ class MessageObject(BaseModel):
     type: str | None = None
     role: str | None = None
     model: str | None = None
-    content: str | list[dict[str, JsonValue]] | None = None
+    content: str | list[MessageContentBlock] | None = None
     stop_reason: str | None = None
     stop_sequence: str | None = None
-    stop_details: dict[str, JsonValue] | None = None
-    usage: dict[str, JsonValue] | None = None
-    container: dict[str, JsonValue] | None = None
-    context_management: dict[str, JsonValue] | None = None
-    diagnostics: dict[str, JsonValue] | None = None
+    stop_details: ForeignMetadata | None = None
+    usage: MessageUsage | None = None
+    container: ForeignMetadata | None = None
+    context_management: ForeignMetadata | None = None
+    diagnostics: ForeignMetadata | None = None
 
 
 class Origin(BaseModel):
@@ -173,11 +298,11 @@ class UserRecord(BaseModel):
     # dozens of per-tool result documents toolUseResult.py's corpus scan
     # turned up. Read generically here; the specific tool's RESPONSE model
     # (ToolResponse below) validates it once the call it answers is known.
-    toolUseResult: str | dict[str, JsonValue] | None = None
+    toolUseResult: ToolResponse | str | None = None
     uuid: str | None = None
     parentUuid: str | None = None
     sessionId: str | None = None
-    session_id: SessionId | None = None
+    session_id: ClaudeCodeSessionId | None = None
     timestamp: str | None = None
     cwd: str | None = None
     gitBranch: str | None = None
@@ -198,8 +323,8 @@ class UserRecord(BaseModel):
     sourceToolUseID: str | None = None
     toolDenialKind: str | None = None
     turnCompanion: bool | None = None
-    userFeedback: dict[str, JsonValue] | None = None
-    imagePasteIds: list[JsonValue] | None = None
+    userFeedback: ForeignMetadata | None = None
+    imagePasteIds: list[str | int] | None = None
 
 
 class AssistantRecord(BaseModel):
@@ -209,7 +334,7 @@ class AssistantRecord(BaseModel):
     uuid: str | None = None
     parentUuid: str | None = None
     sessionId: str | None = None
-    session_id: SessionId | None = None
+    session_id: ClaudeCodeSessionId | None = None
     timestamp: str | None = None
     cwd: str | None = None
     gitBranch: str | None = None
@@ -223,13 +348,13 @@ class AssistantRecord(BaseModel):
     isApiErrorMessage: bool | None = None
     apiErrorStatus: str | int | None = None
     error: str | None = None
-    errorDetails: dict[str, JsonValue] | None = None
+    errorDetails: ForeignMetadata | None = None
     requestId: str | None = None
-    effort: str | dict[str, JsonValue] | None = None
+    effort: str | HookEffort | None = None
     attributionAgent: str | None = None
     attributionPlugin: str | None = None
     attributionSkill: str | None = None
-    quotaLimits: dict[str, JsonValue] | None = None
+    quotaLimits: ForeignMetadata | None = None
 
 
 class SystemRecord(BaseModel):
@@ -245,12 +370,12 @@ class SystemRecord(BaseModel):
     type: Literal["system"] = "system"
     subtype: str | None = None
     content: str | None = None
-    compactMetadata: dict[str, JsonValue] | None = None
+    compactMetadata: CompactMetadata | None = None
     uuid: str | None = None
     parentUuid: str | None = None
     logicalParentUuid: str | None = None
     sessionId: str | None = None
-    session_id: SessionId | None = None
+    session_id: ClaudeCodeSessionId | None = None
     timestamp: str | None = None
     cwd: str | None = None
     gitBranch: str | None = None
@@ -266,10 +391,10 @@ class SystemRecord(BaseModel):
     toolUseId: str | None = None
     stopReason: str | None = None
     hasOutput: bool | None = None
-    hookAdditionalContext: str | None = None
+    hookAdditionalContext: tuple[str, ...] | None = None
     hookCount: int | None = None
-    hookErrors: list[JsonValue] | None = None
-    hookInfos: list[JsonValue] | None = None
+    hookErrors: tuple[str, ...] | None = None
+    hookInfos: tuple[HookSummaryInfo, ...] | None = None
     preventContinuation: bool | None = None
     preventedContinuation: bool | None = None
     durationMs: int | float | None = None
@@ -312,12 +437,20 @@ class QueuedCommandAttachment(BaseModel):
     commandMode: str | None = None
     prompt: str | None = None
     isMeta: bool | None = None
-    origin: dict[str, JsonValue] | None = None
+    origin: Origin | None = None
     source_uuid: str | None = None
     timestamp: str | None = None
 
 
-class AttachmentRecord(BaseModel):
+class AttachmentHeader(BaseModel):
+    model_config = OPEN_FOREIGN
+    type: str | None = None
+
+
+AttachmentBody = TypeVar("AttachmentBody", bound=BaseModel)
+
+
+class AttachmentRecord(BaseModel, Generic[AttachmentBody]):
     """A `type=attachment` record. Claude Code writes ~28 `attachment.type`
     values (corpus: `hook_success`, `total_tokens_reminder`, `skill_listing`,
     …); only `goal_status`/`queued_command` are read a field of, so the
@@ -328,11 +461,11 @@ class AttachmentRecord(BaseModel):
 
     model_config = FOREIGN
     type: Literal["attachment"] = "attachment"
-    attachment: dict[str, JsonValue] | None = None
+    attachment: AttachmentBody | None = None
     uuid: str | None = None
     parentUuid: str | None = None
     sessionId: str | None = None
-    session_id: SessionId | None = None
+    session_id: ClaudeCodeSessionId | None = None
     timestamp: str | None = None
     cwd: str | None = None
     gitBranch: str | None = None
@@ -354,7 +487,7 @@ class QueueOperationRecord(BaseModel):
     operation: str | None = None
     # The same <task-notification> XML string a `user` record's plain-string
     # content carries (transcript.py header) — a raw string here, not JSON.
-    content: str | dict[str, JsonValue] | None = None
+    content: str | ForeignMetadata | None = None
     sessionId: str | None = None
     timestamp: str | None = None
 
@@ -418,92 +551,6 @@ class ShellArguments(BaseModel):
     timeout: int | float | None = None
 
 
-class FileArguments(BaseModel):
-    """Read / Write / Edit / MultiEdit / NotebookEdit — everything TOOL_KINDS
-    maps to `"file"`. `file_path`/`notebook_path`/`content` are what
-    file_facts (toolcalls.py) reads."""
-
-    model_config = OPEN_FOREIGN
-    file_path: str | None = None
-    notebook_path: str | None = None
-    content: str | None = None
-    old_string: str | None = None
-    new_string: str | None = None
-    replace_all: bool | None = None
-    limit: int | None = None
-    offset: int | None = None
-    description: str | None = None
-
-
-class SearchArguments(BaseModel):
-    """Grep / Glob / WebSearch / ToolSearch — everything TOOL_KINDS maps to
-    `"search"`. `pattern`/`query` are SEARCH_QUERY_FIELDS, the two fields
-    tool_finished actually reads."""
-
-    model_config = OPEN_FOREIGN
-    pattern: str | None = None
-    query: str | None = None
-    max_results: int | None = None
-    allowed_domains: list[str] | None = None
-
-
-class WebFetchArguments(BaseModel):
-    model_config = OPEN_FOREIGN
-    url: str | None = None
-    prompt: str | None = None
-    limit: int | None = None
-
-
-class WorktreeArguments(BaseModel):
-    """EnterWorktree / ExitWorktree. Nothing here reads a specific field —
-    tool_finished serialises the whole call as `content(arguments)` — so
-    this exists to give the argument dict a real shape rather than to feed
-    any one field to a reader."""
-
-    model_config = OPEN_FOREIGN
-    name: str | None = None
-    path: str | None = None
-    action: str | None = None
-    discard_changes: bool | None = None
-
-
-class SkillArguments(BaseModel):
-    """A Skill call's own input: `skill` names it, and _skill_started reports
-    every OTHER field it carries (today just `args`) generically as "the
-    call's arguments" — open by the reader's OWN design, not only by the
-    vendor's, so `skill` is the one field pulled out."""
-
-    model_config = OPEN_FOREIGN
-    skill: str | None = None
-
-
-class AssignmentArguments(BaseModel):
-    """Agent / Task — everything TOOL_KINDS maps to `"assignment"`."""
-
-    model_config = OPEN_FOREIGN
-    name: str | None = None
-    subagent_type: str | None = None
-    prompt: str | None = None
-    description: str | None = None
-    model: str | None = None
-    team_name: str | None = None
-    isolation: str | None = None
-    run_in_background: bool | None = None
-
-
-class SendMessageArguments(BaseModel):
-    """A SendMessage call's input — closed and fully corpus-observed (this
-    machine's own hook deliveries and transcript, 2026-08-22), so strict."""
-
-    model_config = FOREIGN
-    recipient: str | None = None
-    to: str | None = None
-    content: str | None = None
-    message: str | None = None
-    summary: str | None = None
-    type: str | None = None
-
-
 class QuestionOption(BaseModel):
     model_config = OPEN_FOREIGN
     label: str | None = None
@@ -519,19 +566,50 @@ class Question(BaseModel):
     options: list[QuestionOption] | None = None
 
 
-class QuestionArguments(BaseModel):
-    """An AskUserQuestion call's input."""
+class QuestionAnswers(RootModel[Mapping[str, str | list[str]]]):
+    pass
+
+
+class ToolArguments(BaseModel):
+    """Declared superset of the fields read from every supported tool input."""
 
     model_config = OPEN_FOREIGN
+    command: str | list[str] | None = None
+    description: str | None = None
+    run_in_background: bool | None = None
+    timeout: int | float | None = None
+    file_path: str | None = None
+    notebook_path: str | None = None
+    content: str | None = None
+    old_string: str | None = None
+    new_string: str | None = None
+    replace_all: bool | None = None
+    limit: int | None = None
+    offset: int | None = None
+    pattern: str | None = None
+    query: str | None = None
+    max_results: int | None = None
+    allowed_domains: list[str] | None = None
+    url: str | None = None
+    prompt: str | None = None
+    name: str | None = None
+    path: str | None = None
+    branch: str | None = None
+    action: str | None = None
+    discard_changes: bool | None = None
+    skill: str | None = None
+    args: str | None = None
+    subagent_type: str | None = None
+    model: str | None = None
+    team_name: str | None = None
+    isolation: str | None = None
+    recipient: str | None = None
+    to: str | None = None
+    message: str | None = None
+    summary: str | None = None
     questions: list[Question] | None = None
-    answers: dict[str, JsonValue] | None = None
-    annotations: dict[str, JsonValue] | None = None
-
-
-class PlanArguments(BaseModel):
-    """An ExitPlanMode call's input."""
-
-    model_config = OPEN_FOREIGN
+    answers: QuestionAnswers | None = None
+    annotations: ForeignMetadata | None = None
     plan: str | None = None
     planFilePath: str | None = None
 
@@ -555,6 +633,10 @@ class PatchHunk(BaseModel):
     lines: list[str] | None = None
 
 
+class ToolResponseBlocks(RootModel[list[InnerContentBlock | str]]):
+    pass
+
+
 class ToolResponse(BaseModel):
     """A tool call's answer — the hook path's `tool_response`, the
     transcript's `toolUseResult` sidecar, and tool_result()'s synthetic
@@ -568,7 +650,7 @@ class ToolResponse(BaseModel):
     `image`, each carrying `content`/`filePath`/`structuredPatch`)."""
 
     model_config = OPEN_FOREIGN
-    content: JsonValue = None
+    content: str | ToolResponseBlocks | None = None
     type: str | None = None
     structuredPatch: list[PatchHunk] | None = None
     backgroundTaskId: str | None = None
@@ -589,17 +671,22 @@ class ToolCallNative(BaseModel):
     which of the two raw event streams it rode."""
 
     model_config = OPEN_FOREIGN
-    tool_use_id: CallId | None = None
+    tool_use_id: ClaudeCodeCallId | None = None
     id: str | None = None
     tool_name: str | None = None
     name: str | None = None
-    tool_input: dict[str, JsonValue] | None = None
-    input: dict[str, JsonValue] | None = None
+    tool_input: ToolArguments | None = None
+    input: ToolArguments | None = None
     tool_response: ToolResponse | str | None = None
     caller: str | None = None
 
 
 # === The hook delivery (hooks.py, hooks/foreground.py, hooks/gateway.py) =====
+
+
+class HookEffort(BaseModel):
+    model_config = FOREIGN
+    level: str | None = None
 
 
 class HookPayload(BaseModel):
@@ -621,34 +708,34 @@ class HookPayload(BaseModel):
     hook_event_name: str | None = None
     hook_event_id: str | None = None
     uuid: str | None = None
-    session_id: SessionId | None = None
+    session_id: ClaudeCodeSessionId | None = None
     transcript_path: str | None = None
     agent_transcript_path: str | None = None
     cwd: str | None = None
     prompt_id: str | None = None
     permission_mode: str | None = None
-    effort: str | dict[str, JsonValue] | None = None
-    agent_id: ActorId | None = None
+    effort: str | HookEffort | None = None
+    agent_id: ClaudeCodeActorId | None = None
     agent_type: str | None = None
-    tool_use_id: CallId | None = None
+    tool_use_id: ClaudeCodeCallId | None = None
     tool_name: str | None = None
-    tool_input: dict[str, JsonValue] | None = None
+    tool_input: ToolArguments | None = None
     tool_response: ToolResponse | str | None = None
-    tool_calls: list[dict[str, JsonValue]] | None = None
+    tool_calls: list[ToolCallNative] | None = None
     duration_ms: int | float | None = None
     error: str | None = None
     is_interrupt: bool | None = None
     reason: str | None = None
     stop_hook_active: bool | None = None
     last_assistant_message: str | None = None
-    background_tasks: list[JsonValue] | None = None
-    session_crons: list[JsonValue] | None = None
+    background_tasks: list[ForeignMetadata] | None = None
+    session_crons: list[ForeignMetadata] | None = None
     message: str | None = None
-    message_id: MessageId | None = None
+    message_id: ClaudeCodeMessageId | None = None
     delta: str | None = None
     final: bool | None = None
     index: int | None = None
-    turn_id: TurnId | None = None
+    turn_id: ClaudeCodeTurnId | None = None
     notification_type: str | None = None
     prompt: str | None = None
     custom_instructions: str | None = None
@@ -662,20 +749,88 @@ class HookPayload(BaseModel):
     team_name: str | None = None
     teammate_name: str | None = None
 
+    def shell_input(self) -> ShellArguments:
+        return (
+            ShellArguments()
+            if self.tool_input is None
+            else ShellArguments.model_validate_json(self.tool_input.model_dump_json())
+        )
+
 
 # === The OTLP metrics document (otel.py, otel/gateway.py) ====================
 
 
-class OTelMetricsDocument(BaseModel):
-    """The OTLP JSON metrics export Claude Code POSTs — GENUINELY open (module
-    header): OTLP is a large, evolving standard this package deliberately
-    walks with `.get()`/`isinstance` at every level rather than asserting a
-    fixed shape (translate_otel, otel/gateway._session_ids/windows), the same
-    posture codex's WorldStatePayload takes for its own periodic snapshot. No
-    field is declared beyond that: this model exists to require "a JSON
-    object", not to describe OTLP itself."""
-
+class OTelAttributeValue(BaseModel):
     model_config = OPEN_FOREIGN
+    stringValue: str | None = None
+    intValue: str | int | None = None
+    doubleValue: int | float | None = None
+
+    def scalar(self) -> str | int | float | None:
+        return self.stringValue or self.intValue or self.doubleValue
+
+
+class OTelAttribute(BaseModel):
+    model_config = OPEN_FOREIGN
+    key: str = ""
+    value: OTelAttributeValue = Field(default_factory=OTelAttributeValue)
+
+
+class OTelDataPoint(BaseModel):
+    model_config = OPEN_FOREIGN
+    attributes: list[OTelAttribute] = Field(default_factory=list)
+    asDouble: int | float | None = None
+    asInt: str | int | None = None
+
+    def attribute(self, key: str) -> str | int | float | None:
+        return next(
+            (attribute.value.scalar() for attribute in self.attributes if attribute.key == key),
+            None,
+        )
+
+
+class OTelSum(BaseModel):
+    model_config = OPEN_FOREIGN
+    dataPoints: list[OTelDataPoint] = Field(default_factory=list)
+
+
+class OTelMetric(BaseModel):
+    model_config = OPEN_FOREIGN
+    name: str = ""
+    sum: OTelSum | None = None
+
+
+class OTelScopeMetrics(BaseModel):
+    model_config = OPEN_FOREIGN
+    metrics: list[OTelMetric] = Field(default_factory=list)
+
+
+class OTelResourceMetrics(BaseModel):
+    model_config = OPEN_FOREIGN
+    scopeMetrics: list[OTelScopeMetrics] = Field(default_factory=list)
+
+
+class OTelMetricsDocument(BaseModel):
+    model_config = OPEN_FOREIGN
+    resourceMetrics: list[OTelResourceMetrics] = Field(default_factory=list)
+
+
+class RateLimitWindow(BaseModel):
+    model_config = FOREIGN
+    used_percentage: int | float | None = None
+    resets_at: int | float | None = None
+
+
+class RateLimits(RootModel[Mapping[str, RateLimitWindow]]):
+    pass
+
+
+class StatusLineDocument(BaseModel):
+    model_config = OPEN_FOREIGN
+    rate_limits: RateLimits | None = None
+    account_id: AccountId | None = Field(default=None, alias="_account_id")
+    account_name: str | None = Field(default=None, alias="_account_name")
+    captured_at: int | float | None = Field(default=None, alias="_ts")
 
 
 # === The launch selection (messages.py launch_selections) ====================
@@ -736,8 +891,8 @@ class TaskFile(BaseModel):
     activeForm: str | None = None
     status: str | None = None
     owner: str | None = None
-    blocks: list[JsonValue] | None = None
-    blockedBy: list[JsonValue] | None = None
+    blocks: list[str | int] | None = None
+    blockedBy: list[str | int] | None = None
 
 
 # === The task list membership document (translator.py) =======================
@@ -748,5 +903,9 @@ class TaskListDocument(BaseModel):
     (ClaudeTaskRawEventSource writes it, ClaudeCanonicalTranslator reads it)."""
 
     model_config = FOREIGN
-    list_id: TaskListId | None = None
+    list_id: ClaudeCodeTaskListId | None = None
     task_ids: list[str] | None = None
+
+
+class TaskSnapshot(RootModel[tuple[TaskFile, ...]]):
+    pass

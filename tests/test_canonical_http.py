@@ -71,7 +71,7 @@ def _application():
     application = ProviderGraph()
     application.sessions.save(
         "codex",
-        Session(SESSION_ID, ACTOR_ID, "native", "fixture", "/work"),
+        Session(SESSION_ID, ACTOR_ID, "fixture", "/work"),
     )
     events = (
         _event("session", SessionStarted("/work", "fixture.jsonl", None, None, None, None, None)),
@@ -629,7 +629,7 @@ def _audited_control(monkeypatch, outcome):
 
     service = object.__new__(services.HarnessControlService)
     service.audit = RowRecorder()
-    request = SelectModel(SESSION_ID, "request-one", model_id="gpt-5.6-sol")
+    request = SelectModel(SESSION_ID, "request-one", model="gpt-5.6-sol")
 
     def run(_request):
         if isinstance(outcome, Exception):
@@ -700,7 +700,7 @@ def test_a_broken_audit_never_takes_down_the_gesture(monkeypatch):
         service, "_execute", lambda r: ControlResult(r.request_id, "acknowledged")
     )
 
-    outcome = service.select_model(SelectModel(SESSION_ID, "request-one", model_id="x"))
+    outcome = service.select_model(SelectModel(SESSION_ID, "request-one", model="x"))
     assert outcome.status == "acknowledged"
 
 
@@ -728,7 +728,7 @@ def test_every_control_method_writes_exactly_one_audit_row_through_one_core(monk
         SelectModel,
         SendText,
     )
-    from domain.ids import AttentionId, ModelId, RequestId
+    from domain.ids import AttentionId, RequestId
 
     rows = []
 
@@ -770,7 +770,7 @@ def test_every_control_method_writes_exactly_one_audit_row_through_one_core(monk
             ),
         ),
         (service.compact, Compact(SESSION_ID, RequestId("r9"))),
-        (service.select_model, SelectModel(SESSION_ID, RequestId("r10"), model_id=ModelId("x"))),
+        (service.select_model, SelectModel(SESSION_ID, RequestId("r10"), model="x")),
         (service.select_effort, SelectEffort(SESSION_ID, RequestId("r11"), effort="high")),
         (
             service.answer_question,
@@ -833,7 +833,7 @@ def _record_agent_message(application):
         actor_id=ActorId("actor-two"),
         turn_id=None,
         parent_actor_id=ACTOR_ID,
-        harness="codex",
+        harness=HarnessName.CODEX,
         occurred_at=11.0,
         terminal_window_id=None,
         harness_process_id=None,

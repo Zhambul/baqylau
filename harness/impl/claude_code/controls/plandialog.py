@@ -25,7 +25,7 @@
 import re
 import time
 from collections.abc import Callable
-from typing import TypedDict
+from dataclasses import dataclass
 
 from domain.ids import WindowId
 
@@ -42,7 +42,8 @@ FEEDBACK_LABEL = "Tell Claude what to change"
 _ROW = re.compile(r"^\s*(?P<cur>❯\s+)?(?P<digit>\d+)\.\s+(?P<label>.+?)\s*$")
 
 
-class Row(TypedDict):
+@dataclass(frozen=True)
+class Row:
     """One numbered decision row as parsed off the screen (see rows())."""
 
     digit: str
@@ -51,7 +52,8 @@ class Row(TypedDict):
     feedback: bool
 
 
-class Option(TypedDict):
+@dataclass(frozen=True)
+class Option:
     """One decision option as offered to the page — a `Row` without the
     cursor position, which the page has no use for."""
 
@@ -60,15 +62,18 @@ class Option(TypedDict):
     feedback: bool
 
 
-class Decided(TypedDict):
+@dataclass(frozen=True)
+class Decided:
     decided: str
 
 
-class Fedback(TypedDict):
+@dataclass(frozen=True)
+class Fedback:
     feedback: bool
 
 
-class Dismissed(TypedDict):
+@dataclass(frozen=True)
+class Dismissed:
     dismissed: bool
 
 
@@ -98,9 +103,14 @@ def rows(screen: str) -> list[Row]:
         m = _ROW.match(ln)
         if m:
             label = m.group("label").strip()
-            out.append({"digit": m.group("digit"), "label": label,
-                        "cursor": bool(m.group("cur")),
-                        "feedback": label.startswith(FEEDBACK_LABEL)})
+            out.append(
+                Row(
+                    m.group("digit"),
+                    label,
+                    bool(m.group("cur")),
+                    label.startswith(FEEDBACK_LABEL),
+                )
+            )
     return out
 
 
@@ -117,8 +127,7 @@ def _open_rows(screen_driver: ScreenDriver, win: WindowId) -> list[Row]:
 def options(screen_driver: ScreenDriver, win: WindowId) -> list[Option]:
     """The live decision options, for the page's buttons — labels vary with
     the session's permission mode, so they can only come from the screen."""
-    return [{"digit": r["digit"], "label": r["label"],
-             "feedback": r["feedback"]} for r in _open_rows(screen_driver, win)]
+    return [Option(row.digit, row.label, row.feedback) for row in _open_rows(screen_driver, win)]
 
 
 def decide(
@@ -128,17 +137,17 @@ def decide(
     `label` on it (the dialog may have been replaced since the page fetched
     its options). Feedback rows are refused — use feedback()."""
     rs = _open_rows(screen_driver, win)
-    row = next((r for r in rs if r["digit"] == str(digit)), None)
-    if row is None or row["label"] != label:
+    row = next((row for row in rs if row.digit == str(digit)), None)
+    if row is None or row.label != label:
         raise PlanError("option", "row %s is not %r any more" % (digit, label))
-    if row["feedback"]:
+    if row.feedback:
         raise PlanError("option", "the feedback row takes text, not a click")
     screen_driver.send_key(win, str(digit))
     _, ok = screendrive.poll_until(
         screen_driver, win, lambda s: not dialog_open(s), SUBMIT_TIMEOUT_S, sleep)
     if not ok:
         raise PlanError("submit", "dialog still open after the decision")
-    return {"decided": label}
+    return Decided(label)
 
 
 def feedback(
@@ -152,10 +161,10 @@ def feedback(
     if not text:
         raise PlanError("feedback", "empty feedback")
     rs = _open_rows(screen_driver, win)
-    row = next((r for r in rs if r["feedback"]), None)
+    row = next((row for row in rs if row.feedback), None)
     if row is None:
         raise PlanError("feedback", "no feedback row on screen")
-    screen_driver.send_key(win, row["digit"])
+    screen_driver.send_key(win, row.digit)
     sleep(POLL_S)
     if not screen_driver.send_text(win, text):
         raise PlanError("feedback", "text not delivered")
@@ -163,7 +172,7 @@ def feedback(
         screen_driver, win, lambda s: not dialog_open(s), SUBMIT_TIMEOUT_S, sleep)
     if not ok:
         raise PlanError("submit", "dialog still open after the feedback")
-    return {"feedback": True}
+    return Fedback(True)
 
 
 def dismiss(screen_driver: ScreenDriver, win: WindowId, sleep: Callable[[float], None] = time.sleep) -> Dismissed:
@@ -174,4 +183,4 @@ def dismiss(screen_driver: ScreenDriver, win: WindowId, sleep: Callable[[float],
         screen_driver, win, lambda s: not dialog_open(s), STEP_TIMEOUT_S, sleep)
     if not ok:
         raise PlanError("submit", "dialog still open after Escape")
-    return {"dismissed": True}
+    return Dismissed(True)

@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import os
 import re
-from typing import TypedDict
+from dataclasses import dataclass
 
 from domain.ids import AccountId
 
 ACCOUNTS_FILE = os.path.expanduser("~/.config/claude-subscriptions/accounts.tsv")
 ACCOUNT_CONFIG_DIRECTORY = os.path.expanduser("~/.config/claude-subscriptions/configs")
 DEFAULT_COMMAND = "claude"
+FALLBACK_ACCOUNT_ID = AccountId("c2")
 SUPPORTED_SHELLS = ("zsh", "bash")
 VALID_ACCOUNT_ID = re.compile(r"^[A-Za-z0-9._-]+$")
 
@@ -40,7 +41,8 @@ def normalize(account_id: AccountId | None, display_name: str | None) -> tuple[A
     return (AccountId(account_id_text) if account_id_text else None), display_name or account_id_text or "default"
 
 
-class AccountRecord(TypedDict):
+@dataclass(frozen=True)
+class AccountRecord:
     slug: str
     label: str
     alias: str
@@ -58,7 +60,7 @@ def registry() -> list[AccountRecord]:
                     continue
                 account_ids.add(account_id)
                 display_name = columns[1].strip() if len(columns) > 1 else account_id
-                accounts.append({"slug": account_id, "label": display_name, "alias": account_id})
+                accounts.append(AccountRecord(account_id, display_name, account_id))
     except OSError:
         return []
     return accounts
@@ -78,10 +80,14 @@ def config_directory(account_id: AccountId | None) -> str | None:
     return directory if os.path.isdir(directory) else None
 
 
-def alias_for(account_id: AccountId) -> str | None:
-    if not account_id or account_id == DEFAULT_COMMAND:
+def alias_for(account_id: AccountId | None) -> str | None:
+    if account_id == DEFAULT_COMMAND:
         return DEFAULT_COMMAND
-    for account_record in registry():
-        if account_record["slug"] == account_id:
-            return account_record["alias"]
-    return None
+    account_records = registry()
+    selected_account_id = account_id or FALLBACK_ACCOUNT_ID
+    for account_record in account_records:
+        if account_record.slug == selected_account_id:
+            return account_record.alias
+    # `c2` is a preference, not a requirement: installations without the
+    # subscription switcher retain the ordinary single-account Claude launch.
+    return DEFAULT_COMMAND if account_id is None else None

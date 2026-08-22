@@ -22,11 +22,7 @@ class HarnessRegistry:
         self._plugins: dict[HarnessName, HarnessPlugin] = {}
 
     def register(self, harness_plugin: HarnessPlugin) -> None:
-        name = HarnessName(harness_plugin.info.name.strip())
-        if not name:
-            raise HarnessRegistryError("harness name cannot be empty")
-        if name != harness_plugin.info.name:
-            raise HarnessRegistryError("harness name cannot have surrounding whitespace")
+        name = harness_plugin.info.name
         if name in self._plugins:
             raise HarnessRegistryError(f"duplicate harness: {name}")
         if harness_plugin.info.canonical_version != SCHEMA_VERSION:

@@ -47,9 +47,8 @@ def token_usage(token_usage: TokenUsage) -> TokenUsageResponse:
 
 def model_reference(model_reference: ModelReference) -> ModelReferenceResponse:
     return ModelReferenceResponse(
-        native_id=model_reference.native_id,
+        name=model_reference.name,
         display_name=model_reference.display_name,
-        selection_id=model_reference.selection_id,
     )
 
 
@@ -130,7 +129,7 @@ def usage_row(usage_row: UsageRow) -> UsageRowResponse:
                 resets_at=window.resets_at,
                 duration_minutes=window.duration_minutes,
                 scope=window.scope,
-                model_id=window.model_id,
+                model_id=window.model_name,
             )
             for window in usage_row.windows
         ),
@@ -139,7 +138,7 @@ def usage_row(usage_row: UsageRow) -> UsageRowResponse:
         limit=(
             None if usage_row.limit is None
             else UsageBlockResponse(
-                model_id=usage_row.limit.model_id,
+                model_id=usage_row.limit.model_name,
                 message=usage_row.limit.message,
                 resets_at=usage_row.limit.resets_at,
             )

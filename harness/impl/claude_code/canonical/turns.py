@@ -17,28 +17,57 @@ this translator — stays open here; the facts after it ride a turn that is over
 
 from __future__ import annotations
 
-from domain.ids import TurnId
+from dataclasses import dataclass
+
+from domain.ids import ActorId, SessionId, TurnId
 from harness.models import RawEvent
+
+
+@dataclass(frozen=True)
+class OpenTurn:
+    session_id: SessionId
+    actor_id: ActorId
+    turn_id: TurnId
 
 
 class TurnSemantics:
     def __init__(self) -> None:
-        self._open: dict[tuple[str, str], TurnId] = {}
+        self._open: list[OpenTurn] = []
 
     @staticmethod
-    def _key(raw_event: RawEvent) -> tuple[str, str]:
-        return (str(raw_event.session_id), str(raw_event.actor_id))
+    def _key(raw_event: RawEvent) -> tuple[SessionId, ActorId]:
+        return raw_event.session_id, raw_event.actor_id
 
     def begin(self, raw_event: RawEvent, turn_id: TurnId) -> bool:
         """Open a turn, unless one already is. True when this prompt started it."""
-        key = self._key(raw_event)
-        if key in self._open:
+        session_id, actor_id = self._key(raw_event)
+        if any(
+            opened.session_id == session_id and opened.actor_id == actor_id
+            for opened in self._open
+        ):
             return False
-        self._open[key] = turn_id
+        self._open.append(OpenTurn(session_id, actor_id, turn_id))
         return True
 
     def current(self, raw_event: RawEvent) -> TurnId | None:
-        return self._open.get(self._key(raw_event))
+        session_id, actor_id = self._key(raw_event)
+        return next(
+            (
+                opened.turn_id
+                for opened in self._open
+                if opened.session_id == session_id and opened.actor_id == actor_id
+            ),
+            None,
+        )
 
     def close(self, raw_event: RawEvent) -> TurnId | None:
-        return self._open.pop(self._key(raw_event), None)
+        session_id, actor_id = self._key(raw_event)
+        index = next(
+            (
+                index
+                for index, opened in enumerate(self._open)
+                if opened.session_id == session_id and opened.actor_id == actor_id
+            ),
+            None,
+        )
+        return self._open.pop(index).turn_id if index is not None else None

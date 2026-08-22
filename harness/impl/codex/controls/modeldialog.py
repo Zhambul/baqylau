@@ -35,9 +35,11 @@
 # behaviour), and the ✧ button keeps the CURRENT model (its `(current)` row) and
 # changes only the level.
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from enum import StrEnum
 
 from domain.ids import WindowId
+from harness.impl.codex.model import CodexEffort, CodexModel
 
 from harness.impl.codex.controls.dialog import (Driver, STEP_TIMEOUT_S, _cursor_to, _poll, rows)
 
@@ -57,14 +59,13 @@ CURRENT = "(current)"                # the model-step marker on the active model
 # levels are included defensively (the config token codex records for them is
 # less certain than low/medium/high) — an unmapped token falls back to the
 # picker default, never a wrong level.
-EFFORT_LABEL = {"low": "Low", "medium": "Medium", "high": "High",
+EFFORT_LABEL: Mapping[str, str] = {"low": "Low", "medium": "Medium", "high": "High",
                 "xhigh": "Extra high", "extra_high": "Extra high",
                 "extra-high": "Extra high", "max": "Max", "ultra": "Ultra"}
 # the codex models the ✦ menu offers, in the picker's own order (label == the
 # picker row + the -m arg). Read off 0.147.0's model step.
-MODEL_CHOICES = ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
-                 "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark")
-EFFORT_CHOICES = ("low", "medium", "high", "xhigh", "max", "ultra")
+MODEL_CHOICES = tuple(CodexModel)
+EFFORT_CHOICES = tuple(CodexEffort)
 
 
 class CodexModelError(Exception):
@@ -115,10 +116,10 @@ def _pick(driver: Driver, win: WindowId, header: str, want: str, sleep: Callable
         screen = driver.get_text(win) or ""
         w = want.lower()
         row = next((r for r in rows(screen)
-                    if _norm(r["label"]) == w or w in r["label"].lower()), None)
+                    if _norm(r.label) == w or w in r.label.lower()), None)
         if row is None:
             raise CodexModelError("row", "no %r under %r" % (want, header))
-        _goto(driver, win, row["num"], sleep)
+        _goto(driver, win, row.num, sleep)
     driver.send_key(win, "enter")
 
 
@@ -148,13 +149,13 @@ def _pick_level(
         return
     w = want.lower()
     screen = driver.get_text(win) or ""
-    row = next((r for r in rows(screen) if _norm(r["label"]) == w), None)
+    row = next((r for r in rows(screen) if _norm(r.label) == w), None)
     if row is not None:                      # listed directly on this model
-        _goto(driver, win, row["num"], sleep)
+        _goto(driver, win, row.num, sleep)
         driver.send_key(win, "enter")
         return
     # not listed — open 'More reasoning…' and pick it in the Advanced sub-step
-    more = next((r for r in rows(screen) if MORE in r["label"].lower()), None)
+    more = next((r for r in rows(screen) if MORE in r.label.lower()), None)
     if more is None:
         # this model has no such level and no Advanced sub-step
         if not strict:
@@ -162,15 +163,19 @@ def _pick_level(
             return
         raise CodexModelError("row", "no %r (nor a More-reasoning row) under %r"
                               % (want, LEVEL_STEP))
-    _goto(driver, win, more["num"], sleep)
+    _goto(driver, win, more.num, sleep)
     driver.send_key(win, "enter")
     _await(driver, win, ADVANCED, sleep)
     screen = driver.get_text(win) or ""
-    row = next((r for r in rows(screen) if _norm(r["label"]) == w), None)
+    row = next((r for r in rows(screen) if _norm(r.label) == w), None)
     if row is None:
         raise CodexModelError("row", "no %r under %r" % (want, ADVANCED))
-    _goto(driver, win, row["num"], sleep)
+    _goto(driver, win, row.num, sleep)
     driver.send_key(win, "enter")
+
+
+class ModelSelectionOutcome(StrEnum):
+    SET = "set"
 
 
 def set_model_effort(
@@ -179,7 +184,7 @@ def set_model_effort(
     model: str = "",
     effort: str | None = "",
     sleep: Callable[[float], None] = time.sleep,
-) -> dict[str, bool]:
+) -> ModelSelectionOutcome:
     """Drive the /model picker. `model` = a codex model id (✦ — changes model,
     accepts that model's DEFAULT effort); `effort` = a token in EFFORT_CHOICES
     (✧ — keeps the CURRENT model, changes only the level). Exactly one is set by
@@ -202,4 +207,4 @@ def set_model_effort(
                     sleep)
     if not gone:
         raise CodexModelError("submit", "picker still open after the level")
-    return {"set": True}
+    return ModelSelectionOutcome.SET

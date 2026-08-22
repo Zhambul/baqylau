@@ -21,7 +21,7 @@
 import re
 import time
 from collections.abc import Callable
-from typing import NotRequired, TypedDict
+from dataclasses import dataclass
 
 from domain.ids import WindowId
 
@@ -45,28 +45,30 @@ class ConfirmError(screendrive.StepError):
     user's decision surface — never Escape it away)."""
 
 
-class ConfirmOutcome(TypedDict):
+@dataclass(frozen=True)
+class ConfirmOutcome:
     """confirm()'s report: whether a menu appeared, and which digit said Yes."""
 
     dialog: bool
-    digit: NotRequired[str]
+    digit: str | None = None
 
 
 def find_menu(screen: str) -> str | None:
     """The Yes option's digit when the screen tail shows a switch-confirm
     menu, else None: numbered options with the ❯ cursor on one of them, one
     label leading with "Yes" and one with "No"."""
-    opts, cursored = {}, False
+    options: list[tuple[str, str]] = []
+    cursored = False
     for ln in (screen or "").splitlines()[-TAIL_LINES:]:
         m = _OPT.match(ln)
         if not m:
             continue
-        opts[m.group("label").lower()] = m.group("digit")
+        options.append((m.group("label").lower(), m.group("digit")))
         cursored = cursored or bool(m.group("cur"))
     if not cursored:
         return None
-    yes = next((d for l, d in opts.items() if l.startswith("yes")), None)
-    no = next((d for l, d in opts.items() if l.startswith("no")), None)
+    yes = next((digit for label, digit in options if label.startswith("yes")), None)
+    no = next((digit for label, digit in options if label.startswith("no")), None)
     return yes if (yes and no) else None
 
 
@@ -80,16 +82,16 @@ def confirm(screen_driver: ScreenDriver, win: WindowId,
     screen, ok = screendrive.poll_until(
         screen_driver, win, find_menu, OPEN_TIMEOUT_S, sleep)
     if not ok:
-        return {"dialog": False}
+        return ConfirmOutcome(False)
     digit = find_menu(screen)
     if digit is None:
         # The menu closed between the poll that saw it and this re-read —
         # the switch applied on its own. Pressing a key here would land in
         # the composer.
-        return {"dialog": False}
+        return ConfirmOutcome(False)
     screen_driver.send_key(win, digit)
     _, ok = screendrive.poll_until(
         screen_driver, win, lambda s: not find_menu(s), STEP_TIMEOUT_S, sleep)
     if not ok:
         raise ConfirmError("close", "confirm menu still open after Yes")
-    return {"dialog": True, "digit": digit}
+    return ConfirmOutcome(True, digit)

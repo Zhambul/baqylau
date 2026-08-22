@@ -33,7 +33,7 @@ def harness_catalog(
         ),
         models=tuple(
             ModelOptionResponse(
-                model_id=model.model_id,
+                model_id=model.value,
                 display_name=model.display_name,
                 default=model.default,
                 efforts=tuple(

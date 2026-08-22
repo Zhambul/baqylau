@@ -18,11 +18,12 @@
 #   own default (docs: high on Opus 4.8/4.6 / Sonnet 5 / Sonnet 4.6 / Fable 5,
 #   xhigh on Opus 4.7). A session-only `/effort` isn't persisted, so it can't
 #   be seen here.
-import json
 import os
 import time
+from collections.abc import Mapping
+from enum import StrEnum
 
-from pydantic import JsonValue
+from pydantic import ValidationError
 
 from core import env as EV
 from domain.ids import ActorId
@@ -33,6 +34,27 @@ from harness.impl.claude_code.canonical import records
 # turn: the latest turn is near the end, so a bounded read stays cheap even on
 # long sessions.
 TAIL_SCAN_BYTES = 256 * 1024
+
+
+class ClaudeCodeModel(StrEnum):
+    FABLE = "fable"
+    OPUS = "opus"
+    SONNET = "sonnet"
+    HAIKU = "haiku"
+    CLAUDE_FABLE_5 = "claude-fable-5"
+    CLAUDE_OPUS_5 = "claude-opus-5"
+    CLAUDE_OPUS_4_8 = "claude-opus-4-8"
+    CLAUDE_SONNET_5 = "claude-sonnet-5"
+    CLAUDE_HAIKU_4_5 = "claude-haiku-4-5"
+    CLAUDE_HAIKU_4_5_20251001 = "claude-haiku-4-5-20251001"
+
+
+class ClaudeCodeEffort(StrEnum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    XHIGH = "xhigh"
+    MAX = "max"
 
 
 def config_dir() -> str:
@@ -142,21 +164,21 @@ def context_window(*models: str | None) -> int:
     return 200_000
 
 
-def context_used(usage: JsonValue) -> int:
+def context_used(usage: records.MessageUsage) -> int:
     """The occupied context window from ONE assistant message's usage dict:
     every input token the model saw — fresh + just-cached + replayed-from-cache.
     output_tokens is excluded (what the model produced back, not context). 0
     when usage is absent/malformed. The ONE owner of this arithmetic
     (styleguide table) — the substream's ctx tag/footer and
     transcript.context_probe (the dashboard's saturation chips) both call it."""
-    if not isinstance(usage, dict):
-        return 0
-
-    def _tokens(key: str) -> int:
-        value = usage.get(key)
+    def _tokens(value: int | float | None) -> int:
         return int(value) if isinstance(value, (int, float)) else 0
 
-    return _tokens("input_tokens") + _tokens("cache_creation_input_tokens") + _tokens("cache_read_input_tokens")
+    return (
+        _tokens(usage.input_tokens)
+        + _tokens(usage.cache_creation_input_tokens)
+        + _tokens(usage.cache_read_input_tokens)
+    )
 
 
 def agent_meta(
@@ -173,11 +195,14 @@ def agent_meta(
     for _ in range(6):
         try:
             with open(p, encoding="utf-8") as fh:
-                data = json.load(fh)
-            return records.AgentMetaFile.model_validate(data) if isinstance(data, dict) else records.AgentMetaFile()
-        except (FileNotFoundError, json.JSONDecodeError):
+                return records.AgentMetaFile.model_validate_json(fh.read())
+        except FileNotFoundError:
             # Missing OR mid-write (a partial file json-fails) — both are the same
             # "not there yet" race, so both retry.
+            time.sleep(0.05)
+        except ValidationError as error:
+            if any(detail["type"] != "json_invalid" for detail in error.errors()):
+                raise
             time.sleep(0.05)
         except OSError:
             # A read failure that is not "not there yet" (permissions, a
@@ -223,12 +248,14 @@ MODEL_LADDER = ("fable", "opus", "sonnet")
 # table here rather than knowledge scattered across the catalog, the writers
 # and the frontend: display_model() below is the ONE answer to "what is this
 # model called", and every surface asks it.
-ALIAS_DISPLAY = {
-    "fable": "fable-5",
-    "opus": "opus-5",
-    "sonnet": "sonnet-5",
-    "haiku": "haiku-4.5",
+ALIAS_DISPLAY: Mapping[str, str] = {
+    "fable": "fable-5", "opus": "opus-5",
+    "sonnet": "sonnet-5", "haiku": "haiku-4.5",
 }
+
+
+def alias_display(model_name: str) -> str:
+    return ALIAS_DISPLAY.get(model_name, model_name)
 
 
 def display_model(model_reference: ModelReference) -> str:
@@ -238,8 +265,8 @@ def display_model(model_reference: ModelReference) -> str:
     alias ("sonnet") names the generation it launches today, so an actor whose
     harness has not yet reported the resolved id still shows the same name it
     will show after the report."""
-    short = short_model(model_reference.native_id)
-    return ALIAS_DISPLAY.get(short, short) or model_reference.native_id
+    short = short_model(model_reference.name)
+    return alias_display(short) or model_reference.name
 
 
 def family(model: str | None) -> str | None:
@@ -255,5 +282,3 @@ def family(model: str | None) -> str | None:
         if fam in m:
             return fam
     return None
-
-

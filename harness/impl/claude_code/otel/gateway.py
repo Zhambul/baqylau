@@ -12,15 +12,14 @@
 # them the only writers outside the daemon. Now each ships its exact bytes to
 # the daemon's telemetry endpoint and THIS says what they were.
 import hashlib
-import json
 import re
 import time
 
-from pydantic import JsonValue
-
-from domain.ids import HarnessName, RawEventId, SessionId
+from domain.ids import AccountId, HarnessName, RawEventId, SessionId
 from harness.contract import HarnessTelemetryGateway
 from harness.impl.claude_code import account
+from harness.impl.claude_code.ids import ClaudeCodeSessionId, session_id_from_claude_code
+from harness.impl.claude_code.canonical import records
 from harness.models import (
     AccountUsageSnapshot,
     HarnessTelemetryRequest,
@@ -31,7 +30,7 @@ from harness.models import (
 )
 from decimal import Decimal
 
-HARNESS = HarnessName("claude_code")
+HARNESS = HarnessName.CLAUDE_CODE
 OTLP_KIND = "otlp"
 STATUSLINE_KIND = "statusline"
 
@@ -43,37 +42,23 @@ KNOWN_WINDOWS = ("five_hour", "seven_day")
 MAX_WINDOWS = 8
 
 
-def _dicts(value: JsonValue) -> list[dict[str, JsonValue]]:
-    """`value` as a list of objects — the recurring OTLP shape, shared with
-    canonical/otel.py's own reader of the same tree."""
-    return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
-
-
 def _session_ids(
-    document: dict[str, JsonValue],
+    document: records.OTelMetricsDocument,
 ) -> tuple[SessionId, ...]:
     session_ids = set()
-    for resource in _dicts(document.get("resourceMetrics")):
-        for scope in _dicts(resource.get("scopeMetrics")):
-            for metric in _dicts(scope.get("metrics")):
-                metric_sum = metric.get("sum")
-                data_points = metric_sum.get("dataPoints") if isinstance(metric_sum, dict) else None
-                for point in _dicts(data_points):
-                    for attribute in _dicts(point.get("attributes")):
-                        if attribute.get("key") != "session.id":
-                            continue
-                        attribute_value = attribute.get("value")
-                        value = (
-                            attribute_value.get("stringValue")
-                            if isinstance(attribute_value, dict)
-                            else None
+    for resource in document.resourceMetrics:
+        for scope in resource.scopeMetrics:
+            for metric in scope.metrics:
+                for point in metric.sum.dataPoints if metric.sum is not None else ():
+                    value = point.attribute("session.id")
+                    if value:
+                        session_ids.add(
+                            session_id_from_claude_code(ClaudeCodeSessionId(str(value)))
                         )
-                        if value:
-                            session_ids.add(SessionId(str(value)))
     return tuple(sorted(session_ids, key=str))
 
 
-def _epoch_seconds(value: JsonValue) -> float | None:
+def _epoch_seconds(value: int | float | None) -> float | None:
     """A rate-limit `resets_at` to epoch SECONDS, or None. Claude Code has sent
     this as either seconds or milliseconds across versions; >1e12 is
     unambiguously milliseconds (a seconds value that large is year ~33000)."""
@@ -82,14 +67,14 @@ def _epoch_seconds(value: JsonValue) -> float | None:
     return value / 1000.0 if value > 1e12 else float(value)
 
 
-def _percent(value: JsonValue) -> Decimal | None:
+def _percent(value: int | float | None) -> Decimal | None:
     if not isinstance(value, (int, float)) or isinstance(value, bool):
         return None
     return Decimal(max(0, min(100, int(round(value)))))
 
 
 def windows(
-    document: dict[str, JsonValue],
+    document: records.StatusLineDocument,
 ) -> tuple[UsageWindowSample, ...]:
     """Every `rate_limits.<key>.{used_percentage, resets_at}` entry, the
     account-wide pair first and any other window sorted by key.
@@ -98,8 +83,9 @@ def windows(
     model-scoped one it flows through here and into the dashboard's per-window
     bars with no code change.
     """
-    limits_value = (document or {}).get("rate_limits")
-    limits = limits_value if isinstance(limits_value, dict) else {}
+    if document.rate_limits is None:
+        return ()
+    limits = document.rate_limits.root
     known = [key for key in KNOWN_WINDOWS if key in limits]
     extra = sorted(key for key in limits if isinstance(key, str) and key not in KNOWN_WINDOWS)
     samples: list[UsageWindowSample] = []
@@ -107,13 +93,13 @@ def windows(
         if len(samples) >= MAX_WINDOWS:
             break
         window = limits.get(key)
-        if not _KEY_OK.match(key) or not isinstance(window, dict):
+        if not _KEY_OK.match(key) or window is None:
             continue
-        used_percent = _percent(window.get("used_percentage"))
+        used_percent = _percent(window.used_percentage)
         if used_percent is None:
             continue
         samples.append(
-            UsageWindowSample(key, used_percent, _epoch_seconds(window.get("resets_at")))
+            UsageWindowSample(key, used_percent, _epoch_seconds(window.resets_at))
         )
     return tuple(samples)
 
@@ -134,9 +120,7 @@ class ClaudeTelemetryGateway(HarnessTelemetryGateway):
 
     @staticmethod
     def _metrics(payload: bytes, telemetry_context: TelemetryContext) -> tuple[RawEvent, ...]:
-        document = json.loads(payload)
-        if not isinstance(document, dict):
-            return ()
+        document = records.OTelMetricsDocument.model_validate_json(payload)
         raw_events = []
         for session_id in _session_ids(document):
             session = telemetry_context.find_session(session_id)
@@ -163,9 +147,7 @@ class ClaudeTelemetryGateway(HarnessTelemetryGateway):
 
     @staticmethod
     def _usage(payload: bytes) -> AccountUsageSnapshot | None:
-        document = json.loads(payload)
-        if not isinstance(document, dict):
-            return None
+        document = records.StatusLineDocument.model_validate_json(payload)
         samples = windows(document)
         if not samples:
             # A fresh account before its first API response: leave the last good
@@ -174,12 +156,13 @@ class ClaudeTelemetryGateway(HarnessTelemetryGateway):
         # The status-line client stamped its own environment's two account values
         # on the way past, raw and unvalidated (`client/claude_statusline.py`).
         account_id, display_name = account.normalize(
-            document.get("_account_id"), document.get("_account_name")
+            AccountId(document.account_id) if document.account_id else None,
+            document.account_name,
         )
         return AccountUsageSnapshot(
             harness=HARNESS,
             account_id=account_id,
             display_name=display_name,
-            captured_at=float(document.get("_ts") or time.time()),
+            captured_at=float(document.captured_at or time.time()),
             windows=samples,
         )

@@ -8,31 +8,42 @@ interpreter's next tick.
 from __future__ import annotations
 
 import hashlib
-import json
 import time
 
 from harness.contract import HarnessHookGateway
 from harness.models import HarnessHookRequest, HarnessHookResponse, RawEvent
-from domain.ids import ActorId, HarnessName, RawEventId, SessionId
+from domain.ids import HarnessName, RawEventId
+from harness.impl.codex.canonical.records import CodexHookPayload
+from harness.impl.codex.ids import (
+    CodexActorId,
+    CodexSessionId,
+    actor_id_from_codex,
+    lead_actor_id_from_codex,
+    session_id_from_codex,
+)
 
-HARNESS = HarnessName("codex")
+HARNESS = HarnessName.CODEX
 CLI_PROCESS_NAME = "codex"
 
 
 class CodexHookGateway(HarnessHookGateway):
     def handle(self, harness_hook_request: HarnessHookRequest) -> HarnessHookResponse:
         payload = harness_hook_request.payload
-        document = json.loads(payload)
-        if not isinstance(document, dict):
-            raise ValueError("Codex hook payload must be an object")
-        session_id = SessionId(str(document["session_id"]))
-        lead_actor_id = ActorId(f"{session_id}:lead")
-        native_actor_id = document.get("agent_id")
-        actor_id = ActorId(str(native_actor_id)) if native_actor_id else lead_actor_id
-        if not str(document.get("transcript_path") or ""):
+        document = CodexHookPayload.model_validate_json(payload)
+        if document.session_id is None:
+            raise ValueError("Codex hook payload has no session id")
+        codex_session_id = CodexSessionId(document.session_id)
+        session_id = session_id_from_codex(codex_session_id)
+        lead_actor_id = lead_actor_id_from_codex(codex_session_id)
+        native_actor_id = document.agent_id
+        actor_id = (
+            actor_id_from_codex(CodexActorId(native_actor_id))
+            if native_actor_id else lead_actor_id
+        )
+        if not document.transcript_path:
             raise ValueError("Codex hook payload has no rollout path")
-        hook_name = str(document.get("hook_event_name") or "hook")
-        native_event_id_value = document.get("hook_event_id") or document.get("uuid")
+        hook_name = document.hook_event_name or "hook"
+        native_event_id_value = document.hook_event_id or document.uuid
         native_event_id = str(native_event_id_value or hashlib.sha256(payload).hexdigest())
         raw_events = (
             RawEvent(

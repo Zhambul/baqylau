@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-import json
 import os
 import time
+from collections.abc import Mapping
+
+from pydantic import TypeAdapter, ValidationError
 
 from harness.contract import ControlHandler, HarnessController
 from harness.models import (
@@ -130,11 +132,10 @@ def _rollout_abort_state(path: str, position: int) -> tuple[bool, bool]:
     records: list[RolloutRecord | None] = []
     for line in lines:
         try:
-            document = json.loads(line)
-        except (UnicodeDecodeError, json.JSONDecodeError):
+            record = rollout.parse_line(line.decode())
+        except (UnicodeDecodeError, ValidationError):
             records.append(None)
             continue
-        record = rollout.parse(document) if isinstance(document, dict) else None
         records.append(record)
         if abort_index is None and isinstance(record, TurnAbortedRecord):
             abort_index = len(records) - 1
@@ -247,7 +248,7 @@ class SelectModelHandler(ControlHandler):
             modeldialog.set_model_effort(
                 _TerminalDriver(terminal),
                 window_id,
-                model=request.model_id,
+                model=request.model,
                 effort=control_context.current_effort,
             )
         except modeldialog.CodexModelError as error:
@@ -276,15 +277,15 @@ class SelectEffortHandler(ControlHandler):
 
 def _native_prompts(question_asked: QuestionAsked) -> list[dialog.Prompt]:
     return [
-        {
-            "id": prompt.prompt_id,
-            "header": prompt.title or "",
-            "question": prompt.prompt,
-            "options": [
-                {"label": choice.label, "description": choice.description or ""}
+        dialog.Prompt(
+            id=prompt.prompt_id,
+            header=prompt.title or "",
+            question=prompt.prompt,
+            options=tuple(
+                dialog.PromptChoice(choice.label, choice.description or "")
                 for choice in prompt.choices
-            ],
-        }
+            ),
+        )
         for prompt in question_asked.questions
     ]
 
@@ -299,8 +300,12 @@ class AnswerQuestionHandler(ControlHandler):
         window_id = control_context.terminal_window_id
         if window_id is None:
             return ControlResult(request.request_id, ControlAcknowledgement.REJECTED, "session is not live")
-        answers = json.loads(request.answers.json_text) if request.answers is not None else []
-        if not isinstance(answers, list):
+        try:
+            answers = (
+                TypeAdapter(list[dialog.Answer]).validate_json(request.answers.json_text)
+                if request.answers is not None else []
+            )
+        except ValidationError:
             return ControlResult(
                 request.request_id, ControlAcknowledgement.REJECTED, "question answers must be an array"
             )
@@ -344,7 +349,7 @@ class ReadPlanChoicesHandler(ControlHandler):
             request.request_id,
             ControlAcknowledgement.ACKNOWLEDGED,
             choices=tuple(
-                PlanChoice(str(row["digit"]), str(row["label"]))
+                PlanChoice(row.digit, row.label)
                 for row in rows
             ),
         )
@@ -368,16 +373,16 @@ class DecidePlanHandler(ControlHandler):
                 plandialog.dismiss(driver, window_id)
             else:
                 rows = plandialog.options(driver, window_id)
-                row = next((row for row in rows if str(row["digit"]) == request.decision), None)
+                row = next((row for row in rows if row.digit == request.decision), None)
                 if row is None:
                     return ControlResult(request.request_id, ControlAcknowledgement.REJECTED, "unknown plan decision")
-                plandialog.decide(driver, window_id, row["digit"], row["label"])
+                plandialog.decide(driver, window_id, row.digit, row.label)
         except plandialog.CodexPlanError as error:
             return ControlResult(request.request_id, ControlAcknowledgement.INDETERMINATE, str(error))
         return ControlResult(request.request_id, ControlAcknowledgement.ACKNOWLEDGED)
 
 
-controller = HarnessController({
+HANDLERS: Mapping[ControlName, ControlHandler] = {
     ControlName.SEND_TEXT: SendTextHandler(),
     ControlName.INTERRUPT: InterruptHandler(),
     ControlName.CLOSE_SESSION: CloseSessionHandler(),
@@ -388,4 +393,6 @@ controller = HarnessController({
     ControlName.ANSWER_QUESTION: AnswerQuestionHandler(),
     ControlName.READ_PLAN_CHOICES: ReadPlanChoicesHandler(),
     ControlName.DECIDE_PLAN: DecidePlanHandler(),
-})
+}
+
+controller = HarnessController(HANDLERS)

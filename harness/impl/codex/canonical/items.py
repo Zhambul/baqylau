@@ -16,15 +16,17 @@
 # becomes the `translation_failed` verdict (the owner's decision, TASKS.md
 # 2026-08-21) — see events.py's header for the same split spelled out in full.
 import ast
-import json
 import re
+from collections.abc import Mapping
+from enum import StrEnum
 
-from pydantic import JsonValue, ValidationError
+from pydantic import BaseModel, ValidationError
 
-from domain.ids import CallId, ShellNativeId
+from harness.impl.codex.ids import CodexCallId, CodexShellId
 from harness.impl.codex.canonical.records import (
     AskArguments,
     COLLABORATION_ARGUMENTS,
+    CollaborationCallName,
     CombinedToolResult,
     ContentPart,
     CustomToolCallOutputPayload,
@@ -188,8 +190,8 @@ def _exec_cmd_from_js(js: str) -> str:
         return ""
     raw = m.group(1)
     try:
-        v = json.loads(raw)                 # "ls" or ["bash","-lc","…"] (double-quoted)
-    except Exception:
+        v = ast.literal_eval(raw)
+    except (SyntaxError, ValueError):
         raw = raw.strip()                   # single-quoted / unquoted — light cleanup
         return raw[1:-1] if raw[:1] in "\"'" else raw
     return " ".join(str(x) for x in v) if isinstance(v, list) else str(v)
@@ -220,41 +222,29 @@ def content_text(c: str | list[ContentPart | str] | None) -> str:
     return "\n".join(parts).strip()
 
 
-def _args(arguments: str | None) -> dict[str, JsonValue]:
-    """A function_call's `arguments` (a JSON *string*) -> a dict; {} when the
-    version at hand wrote something else or the line was truncated. The dict
-    is untyped on purpose: which declared Arguments shape applies depends on
-    the call's NAME, decided by the caller before validating it."""
-    try:
-        a = json.loads(arguments or "{}")
-    except Exception:
-        return {}
-    return a if isinstance(a, dict) else {}
-
-
-def _rsp_web_search_call(raw: dict[str, JsonValue]) -> SearchRecord | None:
-    p = WebSearchCallPayload.model_validate(raw)
+def _rsp_web_search_call(web_search_call_payload: WebSearchCallPayload) -> SearchRecord | None:
+    p = web_search_call_payload
     q = (p.action.query if p.action else None) or ""
     return SearchRecord(query=q) if q else None
 
 
-def _rsp_function_call_output(raw: dict[str, JsonValue]) -> ExecResultRecord | None:
-    p = FunctionCallOutputPayload.model_validate(raw)
+def _rsp_function_call_output(function_call_output_payload: FunctionCallOutputPayload) -> ExecResultRecord | None:
+    p = function_call_output_payload
     out = content_text(p.output) if not isinstance(p.output, str) else p.output
     if not out:
         return None
     m = EXIT_RE.search(out[:EXIT_SCAN_B])
     return ExecResultRecord(exit=m.group(1) if m else None,
-                             output=_exec_output_body(out), call_id=CallId(p.call_id or ""))
+                             output=_exec_output_body(out), call_id=CodexCallId(p.call_id or ""))
 
 
-def _rsp_message(raw: dict[str, JsonValue]) -> RolloutRecord:
+def _rsp_message(message_payload: MessagePayload) -> RolloutRecord:
+    p = message_payload
     # The response_item register (module header): the conversation as the
     # model API records it — assistant/user/developer, and the ONLY place a
     # post-abort or queued prompt appears. Deliberately NOT kind "message"/
     # "prompt": those are the event_msg register the mirror paints, and one
     # turn shows up in both.
-    p = MessagePayload.model_validate(raw)
     txt = content_text(p.content)
     if not txt:
         return empty_record()
@@ -281,17 +271,17 @@ def _rsp_message(raw: dict[str, JsonValue]) -> RolloutRecord:
                        turn=(metadata.turn_id if metadata else None) or "")
 
 
-def _rsp_reasoning(raw: dict[str, JsonValue]) -> RolloutRecord:
+def _rsp_reasoning(reasoning_payload: ReasoningPayload) -> RolloutRecord:
+    p = reasoning_payload
     # summary is a list of {"type": "summary_text", "text": …}; it is empty
     # whenever the think was stored as `encrypted_content` instead.
-    p = ReasoningPayload.model_validate(raw)
     txt = content_text(p.summary)
     return ThinkRecord(text=txt) if txt else empty_record()
 
 
-def _rsp_custom_tool_call(raw: dict[str, JsonValue]) -> RolloutRecord | None:
-    p = CustomToolCallPayload.model_validate(raw)
-    call_id = CallId(p.call_id or "")
+def _rsp_custom_tool_call(custom_tool_call_payload: CustomToolCallPayload) -> RolloutRecord | None:
+    p = custom_tool_call_payload
+    call_id = CodexCallId(p.call_id or "")
     if p.name == "exec":
         js = content_text(p.input) if not isinstance(p.input, str) else p.input
         cmd = _exec_cmd_from_js(js)
@@ -307,7 +297,7 @@ def _rsp_custom_tool_call(raw: dict[str, JsonValue]) -> RolloutRecord | None:
         if fn == "apply_patch":
             return None
         if fn == "write_stdin":
-            return _stdin_record(CallId(call_id), args)
+            return _stdin_record(CodexCallId(call_id), args)
         if fn == "update_plan":
             tasks = _plan_tasks(args)
             if tasks is None:
@@ -322,8 +312,10 @@ def _rsp_custom_tool_call(raw: dict[str, JsonValue]) -> RolloutRecord | None:
     return None
 
 
-def _rsp_custom_tool_call_output(raw: dict[str, JsonValue]) -> RolloutRecord | None:
-    p = CustomToolCallOutputPayload.model_validate(raw)
+def _rsp_custom_tool_call_output(
+    custom_tool_call_output_payload: CustomToolCallOutputPayload,
+) -> RolloutRecord | None:
+    p = custom_tool_call_output_payload
     txt = content_text(p.output) if not isinstance(p.output, str) else p.output
     body = CITATION_RE.sub("", _exec_output_body(txt))
     try:
@@ -343,22 +335,22 @@ def _rsp_custom_tool_call_output(raw: dict[str, JsonValue]) -> RolloutRecord | N
             return ExecResultRecord(
                 exit=command_result.exit_code,
                 output=command_result.output or "",
-                process_id=ShellNativeId(str(session_id)) if session_id is not None else None,
+                process_id=CodexShellId(str(session_id)) if session_id is not None else None,
                 running=session_id is not None and command_result.exit_code is None,
-                call_id=CallId(p.call_id or ""),
+                call_id=CodexCallId(p.call_id or ""),
             )
         if combined.output is not None or combined.session_id is not None or combined.exit_code is not None:
             process_id = combined.session_id
             return ExecResultRecord(
                 exit=combined.exit_code,
                 output=combined.output or "",
-                process_id=ShellNativeId(str(process_id)) if process_id is not None else None,
+                process_id=CodexShellId(str(process_id)) if process_id is not None else None,
                 running=process_id is not None and combined.exit_code is None,
-                call_id=CallId(p.call_id or ""),
+                call_id=CodexCallId(p.call_id or ""),
             )
         return None
     m = EXIT_RE.search(txt[:EXIT_SCAN_B])
-    return ExecResultRecord(exit=m.group(1) if m else None, output=body, call_id=CallId(p.call_id or ""))
+    return ExecResultRecord(exit=m.group(1) if m else None, output=body, call_id=CodexCallId(p.call_id or ""))
 
 
 def _call_exec(function_call_payload: FunctionCallPayload, exec_arguments: ExecArguments) -> ExecRecord | None:
@@ -367,10 +359,10 @@ def _call_exec(function_call_payload: FunctionCallPayload, exec_arguments: ExecA
         cmd = " ".join(str(x) for x in cmd)
     if not cmd:
         return None
-    return ExecRecord(cmd=cmd, call_id=CallId(function_call_payload.call_id or ""))
+    return ExecRecord(cmd=cmd, call_id=CodexCallId(function_call_payload.call_id or ""))
 
 
-def _stdin_record(call_id: CallId, arguments: StdinArguments | str) -> StdinRecord:
+def _stdin_record(call_id: CodexCallId, arguments: StdinArguments | str) -> StdinRecord:
     """Normalize only the measured write_stdin argument shape.
 
     Current custom-tool rollouts contain either JSON (validated strictly by
@@ -393,21 +385,21 @@ def _stdin_record(call_id: CallId, arguments: StdinArguments | str) -> StdinReco
                 arguments,
             )
             if process_match is None or chars_match is None:
-                return StdinRecord(text="", call_id=call_id, process_id=ShellNativeId(""))
+                return StdinRecord(text="", call_id=call_id, process_id=CodexShellId(""))
             fields = StdinArguments(
-                session_id=ShellNativeId(process_match.group(1)),
-                chars=json.loads(chars_match.group(1)),
+                session_id=CodexShellId(process_match.group(1)),
+                chars=ast.literal_eval(chars_match.group(1)),
             )
     process_id = fields.session_id
     return StdinRecord(
         text=fields.chars or "",
         call_id=call_id,
-        process_id=ShellNativeId(str(process_id)) if process_id is not None else ShellNativeId(""),
+        process_id=CodexShellId(str(process_id)) if process_id is not None else CodexShellId(""),
     )
 
 
 def _call_stdin(function_call_payload: FunctionCallPayload, stdin_arguments: StdinArguments) -> StdinRecord:
-    return _stdin_record(CallId(function_call_payload.call_id or ""), stdin_arguments)
+    return _stdin_record(CodexCallId(function_call_payload.call_id or ""), stdin_arguments)
 
 
 def _call_ask(function_call_payload: FunctionCallPayload, ask_arguments: AskArguments) -> AskRecord | None:
@@ -423,36 +415,78 @@ def _call_ask(function_call_payload: FunctionCallPayload, ask_arguments: AskArgu
     )
     # call_id rides along so a presenter can pair the ask with its
     # function_call_output ANSWER without re-reading the raw payload.
-    call_id = CallId(function_call_payload.call_id or "")
+    call_id = CodexCallId(function_call_payload.call_id or "")
     return AskRecord(call_id=call_id, questions=questions) if questions else None
 
 
-def _rsp_function_call(raw: dict[str, JsonValue]) -> RolloutRecord | None:
-    p = FunctionCallPayload.model_validate(raw)
+def _rsp_function_call(function_call_payload: FunctionCallPayload) -> RolloutRecord | None:
+    p = function_call_payload
     name = p.name or ""
-    args_raw = _args(p.arguments)
+    arguments = p.arguments
     # `shell` is the pre-0.1x spelling of `exec_command` (same {command: [...]}
     # shape) and still turns up in older rollouts.
     if name in ("exec_command", "shell"):
-        return _call_exec(p, ExecArguments.model_validate(args_raw))
+        return _call_exec(
+            p,
+            ExecArguments.model_validate_json(arguments or ExecArguments().model_dump_json()),
+        )
     if name == "write_stdin":
-        return _call_stdin(p, StdinArguments.model_validate(args_raw))
+        return _call_stdin(
+            p,
+            StdinArguments.model_validate_json(arguments or StdinArguments().model_dump_json()),
+        )
     if name == "request_user_input":
-        return _call_ask(p, AskArguments.model_validate(args_raw))
-    collaboration_arguments = COLLABORATION_ARGUMENTS.get(name)
+        return _call_ask(
+            p,
+            AskArguments.model_validate_json(arguments or AskArguments().model_dump_json()),
+        )
+    try:
+        collaboration_name = CollaborationCallName(name)
+    except ValueError:
+        collaboration_name = None
+    collaboration_arguments = (
+        COLLABORATION_ARGUMENTS.get(collaboration_name) if collaboration_name else None
+    )
     if collaboration_arguments is not None:
         return CollaborationCallRecord(
-            name=name, args=collaboration_arguments.model_validate(args_raw),
-            call_id=CallId(p.call_id or ""),
+            name=name,
+            args=collaboration_arguments.model_validate_json(
+                arguments or collaboration_arguments().model_dump_json()
+            ),
+            call_id=CodexCallId(p.call_id or ""),
         )
     # An unlisted name is None, so a new codex tool degrades to "not rendered"
     # rather than to an exception.
     return UnmappedToolRecord(name=name)
 
 
-RESPONSES = {"web_search_call": _rsp_web_search_call,
-             "function_call_output": _rsp_function_call_output,
-             "function_call": _rsp_function_call,
-             "message": _rsp_message, "reasoning": _rsp_reasoning,
-             "custom_tool_call": _rsp_custom_tool_call,
-             "custom_tool_call_output": _rsp_custom_tool_call_output}
+class CodexResponseType(StrEnum):
+    WEB_SEARCH_CALL = "web_search_call"
+    FUNCTION_CALL_OUTPUT = "function_call_output"
+    FUNCTION_CALL = "function_call"
+    MESSAGE = "message"
+    REASONING = "reasoning"
+    CUSTOM_TOOL_CALL = "custom_tool_call"
+    CUSTOM_TOOL_CALL_OUTPUT = "custom_tool_call_output"
+
+
+RESPONSES: Mapping[CodexResponseType, type[BaseModel]] = {
+    CodexResponseType.WEB_SEARCH_CALL: WebSearchCallPayload,
+    CodexResponseType.FUNCTION_CALL_OUTPUT: FunctionCallOutputPayload,
+    CodexResponseType.FUNCTION_CALL: FunctionCallPayload,
+    CodexResponseType.MESSAGE: MessagePayload,
+    CodexResponseType.REASONING: ReasoningPayload,
+    CodexResponseType.CUSTOM_TOOL_CALL: CustomToolCallPayload,
+    CodexResponseType.CUSTOM_TOOL_CALL_OUTPUT: CustomToolCallOutputPayload,
+}
+
+
+def parse_response(payload: BaseModel) -> RolloutRecord | None:
+    if isinstance(payload, WebSearchCallPayload): return _rsp_web_search_call(payload)
+    if isinstance(payload, FunctionCallOutputPayload): return _rsp_function_call_output(payload)
+    if isinstance(payload, FunctionCallPayload): return _rsp_function_call(payload)
+    if isinstance(payload, MessagePayload): return _rsp_message(payload)
+    if isinstance(payload, ReasoningPayload): return _rsp_reasoning(payload)
+    if isinstance(payload, CustomToolCallPayload): return _rsp_custom_tool_call(payload)
+    if isinstance(payload, CustomToolCallOutputPayload): return _rsp_custom_tool_call_output(payload)
+    return None

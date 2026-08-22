@@ -26,7 +26,6 @@ from domain.ids import (
     AttentionId,
     CanonicalEventId,
     HarnessName,
-    HarnessSessionId,
     MessageId,
     ShellId,
     RawEventId,
@@ -91,7 +90,7 @@ from repository.impl.sqlite.workspace import SqliteSessionWorkspaceRepository
 
 SESSION = SessionId("session-one")
 ACTOR = ActorId("actor-one")
-HARNESS = HarnessName("example")
+HARNESS = HarnessName.CODEX
 
 
 @pytest.fixture
@@ -106,7 +105,6 @@ def a_session(
     return Session(
         session_id=SESSION,
         lead_actor_id=ACTOR,
-        harness_session_id=HarnessSessionId("harness-one"),
         source_reference="/transcripts/one.jsonl",
         working_directory="/project",
         terminal_window_id=terminal_window_id,
@@ -211,7 +209,6 @@ def test_a_session_upsert_writes_identity_once_and_refreshes_the_live_columns(ma
     stored = sessions.find(SESSION)
     assert stored is not None
     assert (stored.terminal_window_id, stored.harness_process_id) == ("7", 42)
-    assert stored.harness_session_id == "harness-one"
 
 
 def test_a_finished_session_leaves_the_watchable_set(main):

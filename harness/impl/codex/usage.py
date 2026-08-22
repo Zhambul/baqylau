@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
@@ -48,6 +49,49 @@ class AccountRateLimitsResponse(BaseModel):
     rateLimits: RateLimitsResult | None = None
 
 
+class ClientInfo(BaseModel):
+    model_config = _RATE_LIMITS_FOREIGN
+    name: str
+    version: str
+
+
+class InitializeParams(BaseModel):
+    model_config = _RATE_LIMITS_FOREIGN
+    clientInfo: ClientInfo
+
+
+class EmptyParams(BaseModel):
+    model_config = _RATE_LIMITS_FOREIGN
+
+
+class InitializeRequest(BaseModel):
+    model_config = _RATE_LIMITS_FOREIGN
+    jsonrpc: Literal["2.0"] = "2.0"
+    id: Literal[1] = 1
+    method: Literal["initialize"] = "initialize"
+    params: InitializeParams
+
+
+class RateLimitsRequest(BaseModel):
+    model_config = _RATE_LIMITS_FOREIGN
+    jsonrpc: Literal["2.0"] = "2.0"
+    id: Literal[2] = 2
+    method: Literal["account/rateLimits/read"] = "account/rateLimits/read"
+    params: EmptyParams
+
+
+class RpcResponseHeader(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    id: int | None = None
+
+
+class RateLimitsRpcResponse(BaseModel):
+    model_config = _RATE_LIMITS_FOREIGN
+    jsonrpc: Literal["2.0"] = "2.0"
+    id: Literal[2]
+    result: AccountRateLimitsResponse
+
+
 @dataclass(frozen=True, kw_only=True)
 class NormalizedRateLimitWindow:
     used_percent: float | int
@@ -64,8 +108,8 @@ class NormalizedRateLimits:
 _cached_rate_limits: tuple[float, NormalizedRateLimits | None] | None = None
 
 
-def subprocess_environment() -> dict[str, str]:
-    environment = dict(os.environ)
+def subprocess_environment() -> Mapping[str, str]:
+    environment = os.environ.copy()
     directories = []
     configured_directory = environment.get("CODEX_BIN_DIR")
     if configured_directory and os.path.isdir(configured_directory):
@@ -95,20 +139,12 @@ def request_rate_limits() -> AccountRateLimitsResponse | None:
     try:
         if process.stdin is None or process.stdout is None:
             return None
-        initialize = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {"clientInfo": {"name": "baqylau", "version": "1"}},
-        }
-        request = {
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "account/rateLimits/read",
-            "params": {},
-        }
-        process.stdin.write(json.dumps(initialize) + "\n")
-        process.stdin.write(json.dumps(request) + "\n")
+        initialize = InitializeRequest(
+            params=InitializeParams(clientInfo=ClientInfo(name="baqylau", version="1"))
+        )
+        request = RateLimitsRequest(params=EmptyParams())
+        process.stdin.write(initialize.model_dump_json() + "\n")
+        process.stdin.write(request.model_dump_json() + "\n")
         process.stdin.flush()
         deadline = time.time() + REQUEST_TIMEOUT_SECONDS
         while time.time() < deadline:
@@ -116,15 +152,12 @@ def request_rate_limits() -> AccountRateLimitsResponse | None:
             if not line:
                 return None
             try:
-                response = json.loads(line)
-            except json.JSONDecodeError:
+                header = RpcResponseHeader.model_validate_json(line)
+            except ValidationError:
                 continue
-            if response.get("id") == 2:
-                result = response.get("result")
-                if not isinstance(result, dict):
-                    return None
+            if header.id == 2:
                 try:
-                    return AccountRateLimitsResponse.model_validate(result)
+                    return RateLimitsRpcResponse.model_validate_json(line).result
                 except ValidationError:
                     return None
         return None

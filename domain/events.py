@@ -18,7 +18,6 @@ from domain.ids import (
     ReasoningId,
     SessionId,
     ShellId,
-    ShellNativeId,
     SkillId,
     TaskId,
     TaskListId,
@@ -232,12 +231,9 @@ class ShellBackgrounded(EventPayload):
     RESULT of the launching call, which is also why this fact must be committed
     BEFORE the `shell.finished` derived from that same raw event.
 
-    `native_id` is the harness's own handle on the thing (the id a user or the
-    model needs to interact with it again), or None where there isn't one.
     """
 
     shell_id: ShellId
-    native_id: ShellNativeId | None
 
 
 @dataclass(frozen=True)

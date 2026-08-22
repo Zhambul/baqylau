@@ -18,8 +18,16 @@
 # analog of Claude's .claude/commands walk.
 
 import os
+from dataclasses import dataclass
 
 DESCRIPTION_READ_LIMIT = 4096
+
+
+@dataclass(frozen=True)
+class SlashCommand:
+    name: str
+    description: str
+    source: str
 
 
 def describe(path: str) -> str:
@@ -78,7 +86,7 @@ def _prompts_dir() -> str:
     return os.path.join(home, "prompts")
 
 
-def slash_commands(working_directory: str) -> list[dict[str, str]]:
+def slash_commands(working_directory: str) -> list[SlashCommand]:
     """[{name, desc, src}, …] for a codex session, sorted by name and
     name-deduped: built-ins first (the TUI resolves those names to itself no
     matter what a same-named custom prompt claims), then codex's user prompts
@@ -88,13 +96,13 @@ def slash_commands(working_directory: str) -> list[dict[str, str]]:
     prompt convention would layer in here exactly as Claude's project walk
     does."""
     del working_directory
-    commands: list[dict[str, str]] = []
+    commands: list[SlashCommand] = []
     command_names: set[str] = set()
 
     def add(command_name: str, description: str, source: str) -> None:
         if command_name and command_name not in command_names:
             command_names.add(command_name)
-            commands.append({"name": command_name, "desc": description, "src": source})
+            commands.append(SlashCommand(command_name, description, source))
 
     for command_name, description in BUILTINS:
         add(command_name, description, "built-in")
@@ -110,5 +118,5 @@ def slash_commands(working_directory: str) -> list[dict[str, str]]:
                 describe(os.path.join(prompts_directory, filename)),
                 "user",
             )
-    commands.sort(key=lambda command: command["name"])
+    commands.sort(key=lambda command: command.name)
     return commands

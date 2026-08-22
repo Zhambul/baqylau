@@ -5,13 +5,14 @@ from __future__ import annotations
 from datetime import datetime
 
 from domain.events import CanonicalEvent, EventPayload
-from domain.ids import ModelId, SelectionId, TurnId
+from domain.ids import TurnId
 from domain.values import Content, MediaType, ModelReference, Outcome, TextContent
+from harness.impl.codex.model import CodexModel
 from harness.models import RawEvent, canonical_event
 
 
-def model_reference(native_id: ModelId) -> ModelReference:
-    return ModelReference(native_id, native_id, SelectionId(native_id))
+def model_reference(codex_model: CodexModel) -> ModelReference:
+    return ModelReference(codex_model, codex_model)
 
 
 def timestamp(value: str | int | float | None) -> float | None:

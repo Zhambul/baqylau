@@ -18,13 +18,14 @@ test-all:
 # databases, the real CLI in a pseudo-terminal, a real workspace on disk. Catches
 # a harness release changing its evidence under us — the failure nothing
 # simulated can see. Spends tokens, so it is opt-in and sequential (one daemon,
-# one workspace). See tests/e2e/conftest.py.
+# one workspace). It stops on the first failed scenario so a broken live
+# integration does not keep spending tokens. See tests/e2e/conftest.py.
 #
 #   make test-drift                                  the Examples tables as written
 #   make test-drift E2E="--e2e-model claude-opus-5"   every scenario, one model
 #   make test-drift E2E="-k codex --e2e-data-dir /tmp/drift"   keep the databases
 test-drift:
-	$(PY) -m pytest tests/e2e -q $(E2E)
+	$(PY) -m pytest tests/e2e -q -x $(E2E)
 
 # Alias for the (now default-parallel) suite; kept for muscle memory.
 test-par: test
@@ -86,4 +87,4 @@ deadcode-backlog:
 	@$(PY) -m vulture $(DEADCODE_PATHS) vulture-allowlist.py \
 		--ignore-decorators "$(DEADCODE_DECORATORS)" || true
 
-.PHONY: test test-seq test-all test-par lint lint-fix typecheck deadcode deadcode-backlog
+.PHONY: test test-seq test-all test-drift test-par lint lint-fix typecheck deadcode deadcode-backlog

@@ -57,7 +57,9 @@
 import re
 import time
 from collections.abc import Callable
-from typing import Protocol, TypedDict
+from dataclasses import dataclass
+from enum import StrEnum
+from typing import Protocol
 
 from domain.ids import WindowId
 
@@ -99,23 +101,26 @@ class Driver(Protocol):
     def paste_text(self, window_id: WindowId, text: str) -> bool: ...
 
 
-class PromptChoice(TypedDict):
+@dataclass(frozen=True)
+class PromptChoice:
     """One option of a pending question, as the pending_dialog stash carries it."""
 
     label: str
     description: str
 
 
-class Prompt(TypedDict, total=False):
+@dataclass(frozen=True)
+class Prompt:
     """One pending question from the pending_dialog stash (verbatim)."""
 
-    id: str
-    header: str
-    question: str
-    options: list[PromptChoice]
+    id: str = ""
+    header: str = ""
+    question: str = ""
+    options: tuple[PromptChoice, ...] = ()
 
 
-class OptionRow(TypedDict):
+@dataclass(frozen=True)
+class OptionRow:
     """One numbered option row as read off the live screen."""
 
     num: str
@@ -123,13 +128,19 @@ class OptionRow(TypedDict):
     cursor: bool
 
 
-class Answer(TypedDict, total=False):
+@dataclass(frozen=True)
+class Answer:
     """One question's answer, as the control API's `AnswerQuestion.answers`
     JSON decodes to — `{selected: [labels...], other: text}` per question,
     aligned by position with the pending_dialog `Prompt` list."""
 
-    selected: list[str]
-    other: str
+    selected: tuple[str, ...] = ()
+    other: str = ""
+
+
+class DialogOutcome(StrEnum):
+    SUBMITTED = "submitted"
+    SUBMITTED_WITH_UNANSWERED = "submitted_with_unanswered"
 
 
 class CodexAskError(Exception):
@@ -194,9 +205,7 @@ def rows(screen: str) -> list[OptionRow]:
     for ln in (screen or "").splitlines():
         m = _OPT.match(ln)
         if m:
-            out.append({"num": m.group("num"),
-                        "label": m.group("label").strip(),
-                        "cursor": bool(m.group("cur"))})
+            out.append(OptionRow(m.group("num"), m.group("label").strip(), bool(m.group("cur"))))
     return out
 
 
@@ -205,12 +214,12 @@ def _row_num(screen: str, label: str, prefix: str = "") -> str:
     label starts with `prefix` (a narrow pane truncates the dim tail), else ""."""
     rs = rows(screen)
     for r in rs:
-        if r["label"] == label:
-            return r["num"]
+        if r.label == label:
+            return r.num
     if prefix:
         for r in rs:
-            if r["label"].startswith(prefix):
-                return r["num"]
+            if r.label.startswith(prefix):
+                return r.num
     return ""
 
 
@@ -224,15 +233,15 @@ def none_row(screen: str, prompt: Prompt) -> str:
     num = _row_num(screen, NONE_LABEL, NONE_PREFIX)
     if num:
         return num
-    n = len((prompt or {}).get("options") or ())
+    n = len(prompt.options)
     rs = rows(screen)
-    if n and len(rs) == n + 1 and rs[-1]["num"] == str(n + 1):
-        return rs[-1]["num"]
+    if n and len(rs) == n + 1 and rs[-1].num == str(n + 1):
+        return rs[-1].num
     return ""
 
 
 def _cursor_row(screen: str) -> OptionRow | None:
-    return next((r for r in rows(screen) if r["cursor"]), None)
+    return next((r for r in rows(screen) if r.cursor), None)
 
 
 class _NoPreviousCursor:
@@ -251,9 +260,9 @@ def _cursor_to(driver: Driver, win: WindowId, num: str, sleep: Callable[[float],
     prev: str | None | _NoPreviousCursor = _NO_PREVIOUS_CURSOR
     for _ in range(NAV_STEPS):
         cur = _cursor_row(driver.get_text(win) or "")
-        if cur is not None and cur["num"] == "1":
+        if cur is not None and cur.num == "1":
             break
-        key = None if cur is None else cur["num"]
+        key = None if cur is None else cur.num
         if key == prev:
             break
         prev = key
@@ -261,7 +270,7 @@ def _cursor_to(driver: Driver, win: WindowId, num: str, sleep: Callable[[float],
         sleep(POLL_S)
     for _ in range(NAV_STEPS):
         cur = _cursor_row(driver.get_text(win) or "")
-        if cur is not None and cur["num"] == num:
+        if cur is not None and cur.num == num:
             return
         driver.send_key(win, "down")
         sleep(POLL_S)
@@ -298,9 +307,9 @@ def _answer_one(
       · an option AND text     → the same, on the chosen option — codex's dialog
                                  natively carries a note beside a pick.
     """
-    labels = [o.get("label") or "" for o in (prompt.get("options") or [])]
-    selected = [s for s in (answer.get("selected") or []) if s in labels]
-    other = (answer.get("other") or "").strip()
+    labels = [option.label for option in prompt.options]
+    selected = [selection for selection in answer.selected if selection in labels]
+    other = answer.other.strip()
     if selected:
         num = str(1 + labels.index(selected[0]))
     elif other:
@@ -310,7 +319,7 @@ def _answer_one(
                                 "no %r row for a free-text answer" % NONE_LABEL)
     else:
         raise CodexAskError("options",
-                            "no answer for %r" % (prompt.get("question") or "")[:60])
+                            "no answer for %r" % prompt.question[:60])
     _cursor_to(driver, win, num, sleep)
     if other:
         _note(driver, win, other, sleep)
@@ -340,7 +349,7 @@ def drive(
     questions: list[Prompt],
     answers: list[Answer],
     sleep: Callable[[float], None] = time.sleep,
-) -> dict[str, bool]:
+) -> DialogOutcome:
     """Answer codex's OPEN request_user_input dialog in window `win`. `questions`
     is the pending_dialog stash ([{id, header, question, options[{label,
     description}]}], verbatim); `answers` aligns with it ([{selected: [labels…],
@@ -384,7 +393,7 @@ def drive(
     # counts an answer differently must not leave the confirmation hanging with
     # the user's whole submission stuck behind it.
     _confirm(driver, win, sleep)
-    return {"submitted": True}
+    return DialogOutcome.SUBMITTED
 
 
 def decline(
@@ -393,7 +402,7 @@ def decline(
     questions: list[Prompt],
     message: str = "",
     sleep: Callable[[float], None] = time.sleep,
-) -> dict[str, bool | int]:
+) -> DialogOutcome:
     """The card's "chat about this" on codex: submit the dialog with as little
     answered as codex permits, so the turn resumes and the composer is yours.
 
@@ -435,7 +444,7 @@ def decline(
     if n != m:
         raise CodexAskError("navigate",
                             "never reached question %d of %d" % (m, m))
-    q = questions[m - 1] if 0 <= m - 1 < len(questions) else {}
+    q = questions[m - 1] if 0 <= m - 1 < len(questions) else Prompt()
     num = none_row(driver.get_text(win) or "", q)
     if not num:
         raise CodexAskError("noneof", "no %r row to decline with" % NONE_LABEL)
@@ -453,4 +462,4 @@ def decline(
                   STEP_TIMEOUT_S, sleep)
     if not ok:
         raise CodexAskError("close", "the question dialog stayed on screen")
-    return {"submitted": True, "unanswered": max(0, m - 1)}
+    return DialogOutcome.SUBMITTED_WITH_UNANSWERED

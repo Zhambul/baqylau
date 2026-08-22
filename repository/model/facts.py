@@ -15,7 +15,6 @@ from domain.ids import (
     AccountId,
     CanonicalEventId,
     HarnessName,
-    HarnessSessionId,
     RawEventId,
     SessionId,
     ShellId,
@@ -29,7 +28,6 @@ class SessionRow:
     session_id: SessionId
     lead_actor_id: ActorId
     harness: HarnessName
-    harness_session_id: HarnessSessionId
     source_reference: str
     working_directory: str | None
     terminal_window_id: WindowId | None

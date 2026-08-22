@@ -80,28 +80,41 @@
 # replayed-parent PREFIX is a fact about the file's shape, not about one record,
 # so it cannot be answered from a parsed line — each is bounded and fails open.
 import dataclasses
-import json
 import os
+from collections.abc import Mapping
 from datetime import datetime
-from typing import Callable
+from enum import StrEnum
 
-from pydantic import JsonValue
+from pydantic import BaseModel, ValidationError
 
-from harness.impl.codex.canonical.events import EVENTS
-from harness.impl.codex.canonical.items import RESPONSES
+from harness.impl.codex.canonical.events import CodexEventType, EVENTS, parse_event
+from harness.impl.codex.canonical.items import CodexResponseType, RESPONSES, parse_response
 from harness.impl.codex.canonical.records import (
     BadRecord,
     CompactBoundaryRecord,
+    CompactedDocument,
     CompactedPayload,
+    EventDocument,
     ExecRecord,
     ExecResultRecord,
     MessageRecord,
+    ItemCompletedHeaderPayload,
+    ItemCompletedType,
+    PayloadHeaderDocument,
+    ResponseDocument,
+    RolloutDocument,
+    RolloutHeader,
+    RolloutInput,
     RolloutRecord,
+    SessionMetaPayload,
+    SessionMetaSource,
     TaskCompleteRecord,
     TaskStartedRecord,
     TurnContextPayload,
+    TurnContextDocument,
     TurnContextRecord,
     WorldStatePayload,
+    WorldStateDocument,
     WorldStateRecord,
 )
 
@@ -138,25 +151,25 @@ def owns(path: str) -> bool:
 
 # --- the TOP-LEVEL register (neither event_msg nor response_item) ----------------
 
-def _turn_context(raw: dict[str, JsonValue]) -> TurnContextRecord:
+def _turn_context(turn_context_payload: TurnContextPayload) -> TurnContextRecord:
+    p = turn_context_payload
     # `reasoning_effort` moved under collaboration_mode.settings in 0.14x; the
     # bare top-level `effort` is the older (and still emitted) spelling.
-    p = TurnContextPayload.model_validate(raw)
     settings_effort = p.collaboration_mode.settings.reasoning_effort if (
         p.collaboration_mode and p.collaboration_mode.settings
     ) else None
-    effort = (settings_effort or p.effort or "").strip()
-    return TurnContextRecord(model=(p.model or "").strip(), effort=effort)
+    effort = settings_effort or p.effort
+    return TurnContextRecord(model=p.model, effort=effort)
 
 
-def _top_compacted(raw: dict[str, JsonValue]) -> CompactBoundaryRecord:
+def _top_compacted(compacted_payload: CompactedPayload) -> CompactBoundaryRecord:
+    p = compacted_payload
     # The TOP-LEVEL compaction record (distinct from the event_msg
     # `context_compacted` notice the mirror paints as ⟳): it is the boundary
     # itself, and `message` is usually "" because the summary is encrypted.
     # `replacement_history` — the entire rewritten conversation — is
     # deliberately NOT carried, only its length: a record shape must not be a
     # megabyte.
-    p = CompactedPayload.model_validate(raw)
     hist = p.replacement_history
     return CompactBoundaryRecord(
         message=p.message or "", replaced=len(hist) if hist is not None else 0,
@@ -164,7 +177,7 @@ def _top_compacted(raw: dict[str, JsonValue]) -> CompactBoundaryRecord:
     )
 
 
-def _top_world_state(raw: dict[str, JsonValue]) -> WorldStateRecord:
+def _top_world_state(_world_state_payload: WorldStatePayload) -> WorldStateRecord:
     # A large periodic state snapshot (open files, shell sessions, todos).
     # Explicitly ignored: nothing in it is renderable.
     #
@@ -176,13 +189,19 @@ def _top_world_state(raw: dict[str, JsonValue]) -> WorldStateRecord:
     # existed to prevent. The kind produces no canonical events, so the verdict
     # is `ignored_nonsemantic` with this kind named in its reason: recognised,
     # and carrying nothing.
-    WorldStatePayload.model_validate(raw)
     return WorldStateRecord()
 
 
-_TOP: dict[str, Callable[[dict[str, JsonValue]], RolloutRecord]] = {
-    "turn_context": _turn_context, "compacted": _top_compacted,
-    "world_state": _top_world_state,
+class CodexTopLevelType(StrEnum):
+    TURN_CONTEXT = "turn_context"
+    COMPACTED = "compacted"
+    WORLD_STATE = "world_state"
+
+
+_TOP: Mapping[CodexTopLevelType, type[BaseModel]] = {
+    CodexTopLevelType.TURN_CONTEXT: TurnContextDocument,
+    CodexTopLevelType.COMPACTED: CompactedDocument,
+    CodexTopLevelType.WORLD_STATE: WorldStateDocument,
 }
 
 # Record kinds that carry the RECORD's `timestamp` as a separate `ts` string.
@@ -199,11 +218,10 @@ _TOP: dict[str, Callable[[dict[str, JsonValue]], RolloutRecord]] = {
 # duration subtracts.
 
 
-def _stamp(rec: RolloutRecord | None, o: dict[str, JsonValue]) -> RolloutRecord | None:
+def _stamp(rec: RolloutRecord | None, timestamp: str | None) -> RolloutRecord | None:
     if rec is None:
         return rec
-    raw_ts = o.get("timestamp")
-    ts = raw_ts if isinstance(raw_ts, str) else None
+    ts = timestamp
     # One isinstance branch per kind, rather than one check against their
     # union: dataclasses.replace's stub wants the concrete dataclass type,
     # not a Union, so this cannot collapse to one isinstance(rec, (A, B, …))
@@ -257,26 +275,9 @@ KINDS = frozenset({
 })
 
 
-def parse(o: dict[str, JsonValue]) -> RolloutRecord | None:
-    """One decoded rollout object -> a typed record (module header) or None."""
-    t = o.get("type")
-    payload = o.get("payload")
-    p: dict[str, JsonValue] = payload if isinstance(payload, dict) else {}
-    if t == "event_msg":
-        event_type = p.get("type")
-        event_handler = EVENTS.get(event_type) if isinstance(event_type, str) else None
-        return _stamp(event_handler(p), o) if event_handler else None
-    if t == "response_item":
-        response_type = p.get("type")
-        response_handler = RESPONSES.get(response_type) if isinstance(response_type, str) else None
-        # response_item too: exec / exec_result carry the record's own timestamp so a
-        # standalone exec block can time itself (_stamp is a no-op for the rest).
-        return _stamp(response_handler(p), o) if response_handler else None
-    top_handler = _TOP.get(t) if isinstance(t, str) else None
-    # A top-level record's fields sit under `payload` in the enveloped
-    # spelling and at the top level in the older bare-item one — hand the
-    # handler whichever mapping actually holds them.
-    return top_handler(p or o) if top_handler else None
+def parse(o: Mapping[str, object]) -> RolloutRecord | None:
+    """Compatibility boundary for callers that already decoded a line."""
+    return parse_line(RolloutInput(root=o).model_dump_json())
 
 
 def parse_line(s: str) -> RolloutRecord | None:
@@ -284,10 +285,46 @@ def parse_line(s: str) -> RolloutRecord | None:
     line isn't JSON at all (the stream keeps its own json.loads so its
     malformed-line audit contract stays where it was)."""
     try:
-        o = json.loads(s)
-    except Exception:
+        header = RolloutHeader.model_validate_json(s)
+    except ValidationError:
         return BadRecord(raw=s)
-    return parse(o) if isinstance(o, dict) else BadRecord(raw=s)
+    if header.type == "event_msg":
+        payload_type = PayloadHeaderDocument.model_validate_json(s).payload.type
+        try:
+            event_type = CodexEventType(payload_type or "")
+        except ValueError:
+            return None
+        if event_type not in EVENTS:
+            return None
+        if event_type is CodexEventType.ITEM_COMPLETED:
+            item_header = RolloutDocument[ItemCompletedHeaderPayload].model_validate_json(s).payload
+            try:
+                ItemCompletedType((item_header.item.type if item_header.item else None) or "")
+            except ValueError:
+                return None
+        event_document = EventDocument.model_validate_json(s)
+        return _stamp(parse_event(event_document.payload), event_document.timestamp)
+    if header.type == "response_item":
+        payload_type = PayloadHeaderDocument.model_validate_json(s).payload.type
+        try:
+            response_type = CodexResponseType(payload_type or "")
+        except ValueError:
+            return None
+        if response_type not in RESPONSES:
+            return None
+        response_document = ResponseDocument.model_validate_json(s)
+        return _stamp(parse_response(response_document.payload), response_document.timestamp)
+    try:
+        top_type = CodexTopLevelType(header.type or "")
+    except ValueError:
+        return None
+    if top_type not in _TOP:
+        return None
+    if top_type is CodexTopLevelType.TURN_CONTEXT:
+        return _turn_context(TurnContextDocument.model_validate_json(s).payload)
+    if top_type is CodexTopLevelType.COMPACTED:
+        return _top_compacted(CompactedDocument.model_validate_json(s).payload)
+    return _top_world_state(WorldStateDocument.model_validate_json(s).payload)
 
 
 # --- subagent rollout: skip the replayed-parent PREFIX ---------------------------
@@ -311,19 +348,17 @@ def subagent_fork_epoch(path: str) -> int | None:
     has `thread_source == "subagent"` (or a `source.subagent.thread_spawn`)."""
     try:
         with open(path, encoding="utf-8") as fh:
-            o = json.loads(fh.readline())
-        if o.get("type") != "session_meta":
+            line = fh.readline()
+        header = RolloutHeader.model_validate_json(line)
+        if header.type != "session_meta":
             return None
-        p = o.get("payload") or {}
-        source = p.get("source")
-        spawn = (
-            ((source.get("subagent") or {}).get("thread_spawn") or {})
-            if isinstance(source, dict)
-            else {}
-        )
-        if p.get("thread_source") != "subagent" and not spawn:
+        rollout_document = RolloutDocument[SessionMetaPayload].model_validate_json(line)
+        metadata = rollout_document.payload
+        source = metadata.source if isinstance(metadata.source, SessionMetaSource) else None
+        spawn = source.subagent.thread_spawn if source and source.subagent else None
+        if metadata.thread_source != "subagent" and spawn is None:
             return None
-        ts = p.get("timestamp") or o.get("timestamp") or ""
+        ts = metadata.timestamp or rollout_document.timestamp or ""
         return int(datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp())
     except Exception:
         return None
@@ -361,7 +396,7 @@ def subagent_body_offset(path: str) -> int:
         with open(path, "rb") as fh:
             for raw in fh:
                 try:
-                    rec = parse(json.loads(raw.decode("utf-8", "replace")))
+                    rec = parse_line(raw.decode("utf-8", "replace"))
                 except Exception:
                     off += len(raw)
                     continue

@@ -175,6 +175,11 @@ def test_a_parameter_is_named_after_its_class():
             class_name = _simple_annotation_name(argument.annotation)
             if class_name not in classes:
                 continue
+            # A closed harness value is naturally called `harness`; requiring
+            # `harness_name` merely because NewType became an enum would rename
+            # the established domain noun throughout every layer.
+            if class_name == "HarnessName" and argument.arg == "harness":
+                continue
             wanted = _snake(class_name)
             if argument.arg == wanted or argument.arg.endswith(f"_{wanted}"):
                 continue

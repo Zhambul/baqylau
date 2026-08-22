@@ -12,7 +12,7 @@ from enum import StrEnum
 from typing import ClassVar, TypeAlias
 
 from domain.events import PlanProposed, QuestionAsked
-from domain.ids import AttentionId, MessageId, ModelId, RequestId, SessionId, WindowId
+from domain.ids import AttentionId, MessageId, RequestId, SessionId, WindowId
 from domain.values import StructuredContent
 from harness.models.session import Session
 from terminal.contract import TerminalPlugin
@@ -152,7 +152,7 @@ class Compact(ControlTarget):
 @dataclass(frozen=True)
 class SelectModel(ControlTarget):
     control_name: ClassVar[ControlName] = ControlName.SELECT_MODEL
-    model_id: ModelId
+    model: str
 
 
 @dataclass(frozen=True)

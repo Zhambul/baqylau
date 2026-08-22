@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TypeAlias
 
-from domain.ids import AccountId, ModelId, QuestionId, SelectionId
+from domain.ids import AccountId, QuestionId
 from domain.stored import STORED
 
 
@@ -169,9 +169,8 @@ class MediaType(StrEnum):
 class ModelReference:
     __pydantic_config__ = STORED
 
-    native_id: ModelId
+    name: str
     display_name: str | None
-    selection_id: SelectionId | None
 
 
 @dataclass(frozen=True)

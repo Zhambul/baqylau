@@ -41,7 +41,6 @@ def session(row: sqlite3.Row) -> SessionRow:
         session_id=row["session_id"],
         lead_actor_id=row["lead_actor_id"],
         harness=row["harness"],
-        harness_session_id=row["harness_session_id"],
         source_reference=row["source_reference"],
         working_directory=row["working_directory"],
         terminal_window_id=row["terminal_window_id"],

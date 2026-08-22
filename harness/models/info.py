@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from domain.ids import HarnessName
 from harness.models.catalog import ModelOption, RewindModeOption
 
 
@@ -17,7 +18,7 @@ class HarnessInfo:
     commands) cannot be a field no matter how rarely it changes.
     """
 
-    name: str
+    name: HarnessName
     display_name: str
     plugin_version: str
     canonical_version: int

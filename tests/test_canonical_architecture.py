@@ -690,6 +690,126 @@ def _calls_json(path: Path) -> bool:
     return False
 
 
+def _harness_adapter_python_files():
+    return sorted((ROOT / "harness" / "impl").rglob("*.py"))
+
+
+def test_harness_adapters_never_use_the_raw_json_codec():
+    """Foreign JSON crosses an adapter boundary through a typed Pydantic model.
+
+    Importing the stdlib codec is forbidden here, rather than allowlisted: a
+    direct ``json.load(s)`` creates an untyped intermediate before validation,
+    while ``model_validate_json`` validates bytes/text as it decodes them and
+    ``model_dump_json`` serializes a declared model directly.
+    """
+    violations = []
+    for path in _harness_adapter_python_files():
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names if alias.name == "json"]
+                if names:
+                    violations.append(f"{path.relative_to(ROOT)}:{node.lineno} imports json")
+            elif isinstance(node, ast.ImportFrom) and node.module == "json":
+                violations.append(f"{path.relative_to(ROOT)}:{node.lineno} imports from json")
+    assert violations == [], "raw JSON codec use in harness adapters:\n  " + "\n  ".join(violations)
+
+
+def test_harness_adapters_never_use_raw_dictionaries_or_jsonvalue():
+    """Adapter documents and intermediate records must have declared shapes.
+
+    Dictionaries are allowed only for the exact typed registry/index symbols
+    below, where keyed dynamic lookup is the data structure's actual behavior.
+    The exemption is symbol-level, never file-level: payloads and intermediate
+    records in the same modules still have to be dataclasses or Pydantic models.
+    """
+    typed_registry_allowlist = {
+        "harness/impl/claude_code/catalog.py": {"COMMAND_PROMPT_FLOORS"},
+        "harness/impl/claude_code/canonical/messages.py": {"BACKGROUND_OUTCOMES"},
+        "harness/impl/claude_code/canonical/toolcalls.py": {"TOOL_KINDS", "FILE_ACTIONS"},
+        "harness/impl/claude_code/controls/controller.py": {"HANDLERS"},
+        "harness/impl/claude_code/controls/rewindmenu.py": {"MODE_LABELS"},
+        "harness/impl/claude_code/model.py": {"ALIAS_DISPLAY"},
+        "harness/impl/codex/canonical/events.py": {"EVENTS"},
+        "harness/impl/codex/canonical/items.py": {"RESPONSES"},
+        "harness/impl/codex/canonical/records.py": {
+            "ITEM_COMPLETED_ITEMS", "COLLABORATION_ARGUMENTS",
+        },
+        "harness/impl/codex/canonical/rollout.py": {"_TOP"},
+        "harness/impl/codex/canonical/translator.py": {
+            "CODEX_TOOLS", "GOAL_STATES", "ACTIVITY_CALLS", "FILE_ACTIONS",
+            "_collaboration_calls", "_process_shells", "_continuation_shells",
+            "_call_records", "_plan_tasks", "current",
+        },
+        "harness/impl/codex/controls/controller.py": {"HANDLERS"},
+        "harness/impl/codex/controls/modeldialog.py": {"EFFORT_LABEL"},
+        "harness/impl/codex/usage_rows.py": {"WINDOW_LABELS"},
+    }
+
+    def assigned_name(node: ast.AST, parents: dict[ast.AST, ast.AST]) -> str | None:
+        current = node
+        while current in parents:
+            current = parents[current]
+            if isinstance(current, ast.AnnAssign):
+                if isinstance(current.target, ast.Name):
+                    return current.target.id
+                if isinstance(current.target, ast.Attribute):
+                    return current.target.attr
+            if isinstance(current, ast.Assign) and len(current.targets) == 1:
+                target = current.targets[0]
+                return target.id if isinstance(target, ast.Name) else None
+            if isinstance(current, (ast.FunctionDef, ast.ClassDef, ast.Module)):
+                return None
+        return None
+
+    violations = []
+    for path in _harness_adapter_python_files():
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        parents: dict[ast.AST, ast.AST] = {
+            child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)
+        }
+        for node in ast.walk(tree):
+            where = f"{path.relative_to(ROOT)}:{getattr(node, 'lineno', 1)}"
+            relative_path = str(path.relative_to(ROOT))
+            allowed_registries = typed_registry_allowlist.get(relative_path, set())
+            if (
+                isinstance(node, (ast.Dict, ast.DictComp))
+                and assigned_name(node, parents) not in allowed_registries
+            ):
+                violations.append(f"{where} contains a dictionary literal")
+            elif (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "model_dump"
+            ):
+                violations.append(f"{where} materializes model_dump() as a dictionary")
+            elif (
+                isinstance(node, ast.Name)
+                and node.id in {"dict", "Dict"}
+                and assigned_name(node, parents) not in allowed_registries
+            ):
+                violations.append(f"{where} uses the raw dictionary type")
+            elif isinstance(node, ast.Attribute) and node.attr in {"dict", "Dict"}:
+                violations.append(f"{where} uses the raw dictionary type")
+            elif isinstance(node, ast.Name) and node.id == "JsonValue":
+                # Report the type/import once, but do not duplicate the Name
+                # that is merely the value inside a dict[...] annotation.
+                parent = parents.get(node)
+                if not (
+                    isinstance(parent, ast.Subscript)
+                    and isinstance(parent.value, ast.Name)
+                    and parent.value.id in {"dict", "Dict"}
+                ):
+                    violations.append(f"{where} uses JsonValue")
+            elif isinstance(node, ast.ImportFrom):
+                imported = {alias.name for alias in node.names}
+                if "JsonValue" in imported:
+                    violations.append(f"{where} imports JsonValue")
+                if "Dict" in imported:
+                    violations.append(f"{where} imports the raw dictionary type")
+    assert violations == [], "raw dictionaries in harness adapters:\n  " + "\n  ".join(violations)
+
+
 def test_no_canonical_payload_carries_a_presentation_field():
     """A canonical fact says what HAPPENED; how it is drawn is the renderers'.
 
@@ -787,6 +907,10 @@ def test_canonical_shared_code_contains_no_concrete_harness_vocabulary():
     for shared_path in shared_paths:
         paths = shared_path.rglob("*.py") if shared_path.is_dir() else (shared_path,)
         for path in paths:
+            # The requested closed HarnessName enum is the single owner of the
+            # installed adapter names. No other shared module may spell them.
+            if path == ROOT / "domain" / "ids.py":
+                continue
             lowered = path.read_text(encoding="utf-8").lower()
             words = [word for word in concrete_words if word in lowered]
             if words:
@@ -1442,10 +1566,20 @@ def _registered_handlers():
             for node in tree.body
             if isinstance(node, ast.ClassDef)
         }
+        mappings = {
+            target.id: node.value
+            for node in tree.body
+            if isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and isinstance(node.value, ast.Dict)
+            for target in (node.target,)
+        }
         for node in ast.walk(tree):
             if not (isinstance(node, ast.Call) and getattr(node.func, "id", None) == "HarnessController"):
                 continue
             for mapping in node.args:
+                if isinstance(mapping, ast.Name):
+                    mapping = mappings.get(mapping.id, mapping)
                 if not isinstance(mapping, ast.Dict):
                     continue
                 for key, value in zip(mapping.keys, mapping.values):
@@ -1487,3 +1621,83 @@ def test_every_registered_control_name_is_a_real_one():
         if control_name not in names
     ]
     assert unknown == []
+
+
+def test_shared_models_do_not_expose_adapter_identity_fields():
+    """Vendor handles stay behind their adapter boundary.
+
+    A session is canonically identified by SessionId, and a model fact carries
+    a portable name. Reintroducing a second harness/native/selection identity
+    here would make every adapter pretend to support another adapter's concept.
+    """
+    from domain.values import ModelReference
+    from harness.models import Session
+
+    assert set(Session.__dataclass_fields__) == {
+        "session_id", "lead_actor_id", "source_reference", "working_directory",
+        "terminal_window_id", "harness_process_id", "plugin",
+    }
+    assert set(ModelReference.__dataclass_fields__) == {"name", "display_name"}
+
+
+def test_adapter_identity_types_do_not_live_in_domain_ids():
+    source = (ROOT / "domain" / "ids.py").read_text(encoding="utf-8")
+    forbidden = ("HarnessSessionId", "ModelId", "SelectionId", "ShellNativeId", "CallId")
+    assert [name for name in forbidden if name in source] == []
+
+
+def test_adapter_identity_types_are_owned_and_prefixed_by_their_adapter():
+    for adapter, prefix in (("claude_code", "ClaudeCode"), ("codex", "Codex")):
+        path = ROOT / "harness" / "impl" / adapter / "ids.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        declared = [
+            target.id
+            for node in tree.body
+            if isinstance(node, ast.Assign)
+            and isinstance(node.value, ast.Call)
+            and getattr(node.value.func, "id", None) == "NewType"
+            for target in node.targets
+            if isinstance(target, ast.Name)
+        ]
+        assert declared
+        assert [name for name in declared if not name.startswith(prefix)] == []
+
+
+def test_adapters_map_native_entity_ids_only_in_their_ids_module():
+    """An adapter may consume domain IDs, but it may not mint them ad hoc.
+
+    Keeping every native-to-canonical conversion in ``impl/<adapter>/ids.py``
+    makes the namespace crossing explicit and prevents a vendor call, turn, or
+    process handle from becoming a domain identity by an incidental cast.
+    Infrastructure IDs (account/window inputs supplied by Baqylau) are
+    deliberately outside this list: they enter the adapter in domain form.
+    """
+    canonical_entity_ids = {
+        "ActorId",
+        "AssignmentId",
+        "AttentionId",
+        "MessageId",
+        "QuestionId",
+        "ReasoningId",
+        "SessionId",
+        "ShellId",
+        "SkillId",
+        "TaskId",
+        "TaskListId",
+        "TurnId",
+    }
+    violations = []
+    for adapter in ("claude_code", "codex"):
+        root = ROOT / "harness" / "impl" / adapter
+        for path in root.rglob("*.py"):
+            if path == root / "ids.py":
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+                    continue
+                if node.func.id in canonical_entity_ids:
+                    violations.append(
+                        f"{path.relative_to(ROOT)}:{node.lineno} constructs {node.func.id}"
+                    )
+    assert violations == []

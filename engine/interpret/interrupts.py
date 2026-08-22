@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import time
 
-from domain.ids import HarnessName, RawEventId
+from domain.ids import RawEventId
 from harness.contract import HarnessRawEventSource
 from harness.models import INTERRUPT_SOURCE_TYPE, InterruptRegistry, RawEvent, Session
 from repository.mapper.documents import encode_document
@@ -50,7 +50,7 @@ class PendingInterruptSource(HarnessRawEventSource):
         assert self.session.plugin is not None
         return (RawEvent(
             raw_event_id=RawEventId(f"{self.source_identity}:{position}"),
-            harness=HarnessName(self.session.plugin.info.name),
+            harness=self.session.plugin.info.name,
             source_type=INTERRUPT_SOURCE_TYPE,
             source_name="interrupt",
             source_position=position,

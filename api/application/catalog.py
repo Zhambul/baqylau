@@ -19,6 +19,7 @@ from api.application.models.insights.application_insights_response import (
 from api.application.models.resume.resumable_session_response import ResumableSessionResponse
 from app.providers import Catalog, Insights, Registry, ResumableSessions
 from harness.models import QueryContext
+from harness.registry import HarnessRegistryError
 from domain.ids import HarnessName, SessionId
 
 router = APIRouter()
@@ -56,7 +57,10 @@ def catalog(
         session_id=SessionId(session_id) if session_id else None,
         working_directory=working_directory,
     )
-    harness_name = HarnessName(harness)
+    try:
+        harness_name = HarnessName(harness)
+    except ValueError as error:
+        raise HarnessRegistryError(f"unknown harness: {harness}") from error
     # The menu payload is composed here, from the two places its parts honestly
     # live: the STATIC vocabulary on the plugin's HarnessInfo (built once, as a
     # literal) and the per-directory part from the catalogue. The contract

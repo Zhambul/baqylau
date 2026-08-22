@@ -41,5 +41,5 @@ def start() -> None:
         stderr=subprocess.DEVNULL,
         start_new_session=True,
         close_fds=True,
-        env=dict(os.environ),
+        env=os.environ.copy(),
     )

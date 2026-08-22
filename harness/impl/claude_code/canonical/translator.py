@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import base64
-import json
 from dataclasses import replace
 
 from domain.events import ShellProgressed, TaskListChanged
-from domain.ids import TaskId
 from domain.records import RecordedTranslationDecision
 from domain.values import OutputMode
 from repository.mapper.documents import StoredDocumentError, decode_document
@@ -25,6 +23,11 @@ from harness.impl.claude_code.canonical.otel import translate_otel
 from harness.impl.claude_code.canonical.support import content, event
 from harness.impl.claude_code.canonical.toolcalls import ToolCallSemantics
 from harness.impl.claude_code.canonical.turns import TurnSemantics
+from harness.impl.claude_code.ids import (
+    ClaudeCodeTaskId,
+    task_id_from_claude_code,
+    task_list_id_from_claude_code,
+)
 from harness.models import RawEvent, TranslationError, TranslationResult, UnknownRawEvent
 from harness.models.directives import ShellOutputChunk
 from harness.models.selections import SelectionSemantics
@@ -60,27 +63,6 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
         return replace(translation_result, canonical_events=stamped)
 
     def _translate(self, raw_event: RawEvent) -> TranslationResult:
-        try:
-            text = raw_event.payload.decode("utf-8")
-            document = json.loads(text)
-        except (UnicodeDecodeError, json.JSONDecodeError) as error:
-            raise TranslationError("malformed Claude Code record", context=raw_event.source_position) from error
-        if not isinstance(document, dict):
-            raise TranslationError("Claude Code record is not an object", context=raw_event.source_position)
-        if raw_event.source_type == "launch":
-            events = launch_selections(raw_event, document, self._selections)
-            if not events:
-                return TranslationResult(
-                    (), RecordedTranslationDecision.IGNORED_NONSEMANTIC, "launch selects no model or effort"
-                )
-            return TranslationResult(tuple(events), RecordedTranslationDecision.TRANSLATED)
-        if raw_event.source_type == "otel":
-            events = translate_otel(raw_event, document)
-            if not events:
-                return TranslationResult(
-                    (), RecordedTranslationDecision.IGNORED_NONSEMANTIC, "OTEL request carries no session usage"
-                )
-            return TranslationResult(tuple(events), RecordedTranslationDecision.TRANSLATED)
         if raw_event.source_type == "foreground_output":
             # OURS on both ends: engine/interpret/output_source.py wrote this
             # one, so it is decoded as the declared shape rather than read key
@@ -107,21 +89,51 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
                 ),),
                 RecordedTranslationDecision.TRANSLATED,
             )
+        try:
+            return self._translate_json(raw_event)
+        except UnicodeDecodeError as error:
+            raise TranslationError(
+                "malformed Claude Code record", context=raw_event.source_position
+            ) from error
+
+    def _translate_json(self, raw_event: RawEvent) -> TranslationResult:
+        if raw_event.source_type == "launch":
+            launch = records.LaunchSelectionDocument.model_validate_json(raw_event.payload)
+            events = launch_selections(raw_event, launch, self._selections)
+            if not events:
+                return TranslationResult(
+                    (), RecordedTranslationDecision.IGNORED_NONSEMANTIC, "launch selects no model or effort"
+                )
+            return TranslationResult(tuple(events), RecordedTranslationDecision.TRANSLATED)
+        if raw_event.source_type == "otel":
+            document = records.OTelMetricsDocument.model_validate_json(raw_event.payload)
+            events = translate_otel(raw_event, document)
+            if not events:
+                return TranslationResult(
+                    (), RecordedTranslationDecision.IGNORED_NONSEMANTIC, "OTEL request carries no session usage"
+                )
+            return TranslationResult(tuple(events), RecordedTranslationDecision.TRANSLATED)
         if raw_event.source_type == "tasks":
-            canonical = task_event(raw_event, document)
+            task = records.TaskFile.model_validate_json(raw_event.payload)
+            canonical = task_event(raw_event, task)
             return TranslationResult((canonical,), RecordedTranslationDecision.TRANSLATED)
         if raw_event.source_type == "task_list":
-            task_list = records.TaskListDocument.model_validate(document)
+            task_list = records.TaskListDocument.model_validate_json(raw_event.payload)
             if task_list.list_id is None or task_list.task_ids is None:
                 raise TranslationError("malformed Claude Code task list")
             payload = TaskListChanged(
-                task_list.list_id, tuple(TaskId(task_id) for task_id in task_list.task_ids)
+                task_list_id_from_claude_code(task_list.list_id),
+                tuple(
+                    task_id_from_claude_code(ClaudeCodeTaskId(task_id))
+                    for task_id in task_list.task_ids
+                ),
             )
             canonical = event(raw_event, "task_list", raw_event.source_position, "changed", payload)
             return TranslationResult((canonical,), RecordedTranslationDecision.TRANSLATED)
         if raw_event.source_type in ("hook", "teammate_hook"):
+            hook = records.HookPayload.model_validate_json(raw_event.payload)
             events = translate_hook(
-                raw_event, document, self._toolcalls, self._turns, self._selections
+                raw_event, hook, self._toolcalls, self._turns, self._selections
             )
             if not events:
                 return TranslationResult(
@@ -129,21 +141,23 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
                 )
             return TranslationResult(tuple(events), RecordedTranslationDecision.TRANSLATED)
 
+        text = raw_event.payload.decode("utf-8")
+        transcript_document = records.TranscriptDocument.model_validate_json(raw_event.payload)
         starts_lead_session = (
             raw_event.parent_actor_id is None
-            and bool(document.get("cwd"))
-            and document.get("parentUuid") is None
+            and bool(transcript_document.cwd)
+            and transcript_document.parentUuid is None
         )
         starts_child_actor = (
             raw_event.parent_actor_id is not None
             and raw_event.source_position == "0"
         )
         session_events_ = (
-            session_events(raw_event, document)
+            session_events(raw_event, transcript_document)
             if starts_lead_session or starts_child_actor
             else []
         )
-        metadata_events = transcript_metadata(raw_event, document)
+        metadata_events = transcript_metadata(raw_event, transcript_document)
         record = transcript.parse_line(text)
         if record is None:
             if session_events_ or metadata_events:
@@ -151,11 +165,11 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
                     tuple(session_events_ + metadata_events), RecordedTranslationDecision.TRANSLATED
                 )
             return TranslationResult((), RecordedTranslationDecision.IGNORED_NONSEMANTIC, "transcript plumbing record")
-        if record.get("kind") == "bad":
+        if isinstance(record, transcript.BadTranscriptRecord):
             raise TranslationError("malformed Claude Code transcript record", context=raw_event.source_position)
         transcript_events = translate_transcript(
             raw_event,
-            document,
+            transcript_document,
             record,
             self._toolcalls,
             self._turns,
@@ -165,6 +179,7 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
         events = session_events_ + metadata_events + transcript_events
         if not events:
             return TranslationResult(
-                (), RecordedTranslationDecision.IGNORED_NONSEMANTIC, f"nonsemantic Claude record {record['kind']!r}"
+                (), RecordedTranslationDecision.IGNORED_NONSEMANTIC,
+                f"nonsemantic Claude record {record.kind.value!r}",
             )
         return TranslationResult(tuple(events), RecordedTranslationDecision.TRANSLATED)

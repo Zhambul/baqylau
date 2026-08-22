@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-import json
 import os
 import re
+from collections.abc import Mapping
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import JsonValue
+from pydantic import ValidationError
 
 from harness.contract import HarnessTranslator
 from harness.models import RawEvent, TranslationError, TranslationResult, UnknownRawEvent
@@ -44,20 +45,35 @@ from domain.events import (
     WebFetched,
 )
 from domain.ids import (
-    ActorId,
-    AttentionId,
-    AssignmentId,
-    CallId,
-    MessageId,
-    ModelId,
-    QuestionId,
-    ReasoningId,
     ShellId,
-    ShellNativeId,
     TaskId,
-    TaskListId,
     TurnId,
 )
+from harness.impl.codex.ids import (
+    CodexActorId,
+    CodexAttentionId,
+    CodexCallId,
+    CodexMessageId,
+    CodexQuestionId,
+    CodexReasoningId,
+    CodexShellId,
+    CodexTaskId,
+    CodexTaskListId,
+    CodexTurnId,
+    actor_id_from_codex,
+    assignment_id_from_codex_turn,
+    attention_id_from_codex,
+    attention_id_from_codex_call,
+    message_id_from_codex,
+    message_id_from_codex_call,
+    question_id_from_codex,
+    reasoning_id_from_codex,
+    shell_id_from_codex_call,
+    task_id_from_codex,
+    task_list_id_from_codex,
+    turn_id_from_codex,
+)
+from harness.impl.codex.model import CodexModel
 from domain.values import (
     ActorRole,
     AttentionChoice,
@@ -80,12 +96,12 @@ from domain.values import (
 from harness.impl.codex.canonical import rollout
 from harness.impl.codex.canonical.events import PHASE_FINAL
 from harness.impl.codex.canonical.records import (
-    COLLABORATION_ARGUMENTS,
     ActorActivityRecord,
     AskRecord,
     BadRecord,
     ChatRecord,
     CodexHookPayload,
+    CodexToolArguments,
     CollaborationArguments,
     CollaborationCallRecord,
     CommandCompletedRecord,
@@ -101,6 +117,9 @@ from harness.impl.codex.canonical.records import (
     PlanRecord,
     PromptRecord,
     ReasoningRecord,
+    RolloutDocument,
+    RolloutHeader,
+    RolloutObservation,
     RolloutRecord,
     SearchRecord,
     SendMessageArguments,
@@ -113,6 +132,7 @@ from harness.impl.codex.canonical.records import (
     TaskStartedRecord,
     ThinkRecord,
     ToolRecord,
+    ToolRequest,
     TurnAbortedRecord,
     TurnContextRecord,
     UnmappedToolRecord,
@@ -140,6 +160,35 @@ class CodexToolKind(StrEnum):
     IGNORED = "ignored"
 
 
+@dataclass(frozen=True)
+class ToolMeaning:
+    kind: CodexToolKind
+    native_name: str
+
+
+CODEX_TOOLS: Mapping[str, ToolMeaning] = {
+    "view_image": ToolMeaning(CodexToolKind.FILE, "ReadImage"),
+    "image_gen__imagegen": ToolMeaning(CodexToolKind.IGNORED, "GenerateImage"),
+}
+
+GOAL_STATES: Mapping[str, GoalState] = {
+    "active": GoalState.ACTIVE, "paused": GoalState.PAUSED,
+    "blocked": GoalState.BLOCKED, "usageLimited": GoalState.USAGE_LIMITED,
+    "budgetLimited": GoalState.BUDGET_LIMITED, "complete": GoalState.COMPLETED,
+    "cleared": GoalState.CLEARED,
+}
+
+ACTIVITY_CALLS: Mapping[str, str] = {
+    "started": "spawn_agent",
+    "interrupted": "interrupt_agent",
+}
+
+FILE_ACTIONS: Mapping[str, FileAction] = {
+    "add": FileAction.CREATED, "delete": FileAction.DELETED,
+    "move": FileAction.RENAMED, "update": FileAction.UPDATED,
+}
+
+
 def _codex_tool(native_name: str, arguments: str | None) -> tuple[CodexToolKind, str]:
     """Map Codex transport names onto the canonical vocabulary.
 
@@ -151,21 +200,20 @@ def _codex_tool(native_name: str, arguments: str | None) -> tuple[CodexToolKind,
         fields = _tool_fields(arguments)
         if not fields:
             raise TranslationError("Codex web tool arguments are not an object")
-        if any(field in fields for field in ("search_query", "image_query", "weather", "finance", "sports")):
+        if any(fields.has(field) for field in _SEARCH_QUERY_FIELDS[:-1]):
             return CodexToolKind.SEARCH, "WebSearch"
-        if any(field in fields for field in ("open", "click", "find", "screenshot")):
+        if any(fields.has(field) for field in (
+            CodexToolField.OPEN, CodexToolField.CLICK,
+            CodexToolField.FIND, CodexToolField.SCREENSHOT,
+        )):
             return CodexToolKind.WEB, "WebFetch"
         # A time lookup is neither a search nor a fetch: it has no query, no url
         # and no reader.
         raise UnknownRawEvent("unmapped Codex web action")
-    mapping: dict[str, tuple[CodexToolKind, str]] = {
-        "view_image": (CodexToolKind.FILE, "ReadImage"),
-        "image_gen__imagegen": (CodexToolKind.IGNORED, "GenerateImage"),
-    }
-    mapped = mapping.get(native_name)
+    mapped = CODEX_TOOLS.get(native_name)
     if mapped is None:
         raise UnknownRawEvent(f"unmapped Codex tool: {native_name or '<missing>'}")
-    return mapped
+    return mapped.kind, mapped.native_name
 
 
 
@@ -177,10 +225,82 @@ _JS_STRING_FIELD = re.compile(r"""["']?([A-Za-z_][A-Za-z0-9_]*)["']?\s*:\s*"((?:
 
 # Which field of a web search holds what was searched for, in the order codex
 # spells them (`_codex_tool` recognises a search by exactly these names).
-_SEARCH_QUERY_FIELDS = ("search_query", "image_query", "weather", "finance", "sports", "query")
+class CodexToolField(StrEnum):
+    SEARCH_QUERY = "search_query"
+    IMAGE_QUERY = "image_query"
+    WEATHER = "weather"
+    FINANCE = "finance"
+    SPORTS = "sports"
+    QUERY = "query"
+    OPEN = "open"
+    CLICK = "click"
+    FIND = "find"
+    SCREENSHOT = "screenshot"
+    URL = "url"
+    PATH = "path"
+    FILE_PATH = "file_path"
 
 
-def _tool_fields(arguments: str | None) -> dict[str, JsonValue]:
+_SEARCH_QUERY_FIELDS = (
+    CodexToolField.SEARCH_QUERY, CodexToolField.IMAGE_QUERY, CodexToolField.WEATHER,
+    CodexToolField.FINANCE, CodexToolField.SPORTS, CodexToolField.QUERY,
+)
+
+
+@dataclass(frozen=True)
+class ToolStringField:
+    name: str
+    value: str
+
+
+@dataclass(frozen=True)
+class ToolFields:
+    document: CodexToolArguments | None
+    javascript_strings: tuple[ToolStringField, ...]
+
+    def requests(self, codex_tool_field: CodexToolField) -> list[ToolRequest] | None:
+        name = codex_tool_field
+        if self.document is None:
+            return None
+        if name is CodexToolField.SEARCH_QUERY: return self.document.search_query
+        if name is CodexToolField.IMAGE_QUERY: return self.document.image_query
+        if name is CodexToolField.WEATHER: return self.document.weather
+        if name is CodexToolField.FINANCE: return self.document.finance
+        if name is CodexToolField.SPORTS: return self.document.sports
+        if name is CodexToolField.OPEN: return self.document.open
+        if name is CodexToolField.CLICK: return self.document.click
+        if name is CodexToolField.FIND: return self.document.find
+        if name is CodexToolField.SCREENSHOT: return self.document.screenshot
+        return None
+
+    def has(self, codex_tool_field: CodexToolField) -> bool:
+        name = codex_tool_field
+        if self.document is not None:
+            if name is CodexToolField.QUERY: return self.document.query is not None
+            if name is CodexToolField.URL: return self.document.url is not None
+            if name is CodexToolField.PATH: return self.document.path is not None
+            if name is CodexToolField.FILE_PATH: return self.document.file_path is not None
+            return self.requests(name) is not None
+        return any(field.name == name.value for field in self.javascript_strings)
+
+    def string(self, codex_tool_field: CodexToolField) -> str | None:
+        name = codex_tool_field
+        if self.document is not None:
+            if name is CodexToolField.QUERY: return self.document.query
+            if name is CodexToolField.URL: return self.document.url
+            if name is CodexToolField.PATH: return self.document.path
+            if name is CodexToolField.FILE_PATH: return self.document.file_path
+            requests = self.requests(name)
+            if requests:
+                request = requests[0]
+                return request.query or request.q or request.url
+        return next(
+            (field.value for field in self.javascript_strings if field.name == name.value),
+            None,
+        )
+
+
+def _tool_fields(arguments: str | None) -> ToolFields:
     """A Codex non-shell tool call's arguments as fields.
 
     This is the CALL's own argument blob for a tool this codebase does not
@@ -193,15 +313,16 @@ def _tool_fields(arguments: str | None) -> dict[str, JsonValue]:
     every field anything below wants — rather than interpreted.
     """
     try:
-        parsed = json.loads(arguments or "{}")
-    except (TypeError, json.JSONDecodeError):
+        parsed = CodexToolArguments.model_validate_json(
+            arguments or CodexToolArguments().model_dump_json()
+        )
+    except ValidationError:
         parsed = None
-    if isinstance(parsed, dict):
-        return parsed
-    return {
-        match.group(1): match.group(2).encode().decode("unicode_escape")
+    strings = tuple(
+        ToolStringField(match.group(1), match.group(2).encode().decode("unicode_escape"))
         for match in _JS_STRING_FIELD.finditer(arguments or "")
-    }
+    )
+    return ToolFields(parsed, strings)
 
 
 def _search_query(arguments: str | None) -> Content:
@@ -209,8 +330,8 @@ def _search_query(arguments: str | None) -> Content:
     nobody can read is still a better raw event than an empty one."""
     fields = _tool_fields(arguments)
     for name in _SEARCH_QUERY_FIELDS:
-        value = fields.get(name)
-        if isinstance(value, str) and value:
+        value = fields.string(name)
+        if value:
             return content(value)
     return content(arguments)
 
@@ -219,28 +340,19 @@ def _web_url(arguments: str | None) -> str | None:
     """The address a fetch was for, when the call names one. Codex's `open` is
     often an index into a previous search's results rather than an address, so
     only something that reads as one counts."""
-    for value in _tool_fields(arguments).values():
-        if isinstance(value, str) and value.startswith(("http://", "https://")):
+    fields = _tool_fields(arguments)
+    for name in CodexToolField:
+        value = fields.string(name)
+        if value and value.startswith(("http://", "https://")):
             return value
     return None
 
 
-def _json_scalar(value: JsonValue) -> str | int | float | None:
-    """A JSON value narrowed to the scalar shapes `support.timestamp` and a
-    handful of native-identity fallbacks accept — never the container shapes
-    (list/dict) those raw payload lookups can otherwise widen to."""
-    return value if isinstance(value, (str, int, float)) else None
-
-
-def _json_str(value: JsonValue) -> str:
-    return value if isinstance(value, str) else ""
-
-
 def _tool_path(arguments: str | None) -> str:
     fields = _tool_fields(arguments)
-    for name in ("path", "file_path"):
-        value = fields.get(name)
-        if isinstance(value, str) and value:
+    for name in (CodexToolField.PATH, CodexToolField.FILE_PATH):
+        value = fields.string(name)
+        if value:
             return value
     return ""
 
@@ -265,42 +377,21 @@ class CodexCanonicalTranslator(HarnessTranslator):
         return os.path.realpath(raw_event.source_name)
 
     @staticmethod
-    def _decode_arguments(arguments: JsonValue | None) -> dict[str, JsonValue]:
-        """A `function_call`'s JSON `arguments` STRING, decoded to a dict — {}
-        when the version at hand wrote something else or the line was
-        truncated (items._args is the live-path twin of this backscan one)."""
-        if not isinstance(arguments, str):
-            return {}
-        try:
-            decoded = json.loads(arguments)
-        except (TypeError, json.JSONDecodeError):
-            return {}
-        return decoded if isinstance(decoded, dict) else {}
-
-    @staticmethod
-    def _collaboration_call_from_document(
-        document: dict[str, JsonValue], call_id: CallId,
+    def _collaboration_call_from_line(
+        line: bytes, call_id: CodexCallId,
     ) -> tuple[str, CollaborationArguments] | None:
-        payload = document.get("payload")
-        payload = payload if isinstance(payload, dict) else {}
-        name = payload.get("name")
-        arguments_model = COLLABORATION_ARGUMENTS.get(name) if isinstance(name, str) else None
-        if not (
-            document.get("type") == "response_item"
-            and payload.get("type") == "function_call"
-            and payload.get("call_id") == call_id
-            and isinstance(name, str)
-            and arguments_model is not None
-        ):
+        try:
+            record = rollout.parse_line(line.decode())
+        except (UnicodeDecodeError, ValidationError):
             return None
-        return name, arguments_model.model_validate(
-            CodexCanonicalTranslator._decode_arguments(payload.get("arguments"))
-        )
+        if not isinstance(record, CollaborationCallRecord) or record.call_id != call_id:
+            return None
+        return record.name, record.args
 
     def _collaboration_call(
         self,
         raw_event: RawEvent,
-        call_id: CallId,
+        call_id: CodexCallId,
     ) -> tuple[str, CollaborationArguments] | None:
         """Resolve the preceding call without scanning historical rollout data."""
         source_path = os.path.realpath(raw_event.source_name)
@@ -324,13 +415,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
                     source.seek(start_position)
                     chunk = source.read(end_position - start_position)
                     for line in reversed(chunk.splitlines()):
-                        try:
-                            document = json.loads(line)
-                        except (UnicodeDecodeError, json.JSONDecodeError):
-                            continue
-                        if not isinstance(document, dict):
-                            continue
-                        call = self._collaboration_call_from_document(document, call_id)
+                        call = self._collaboration_call_from_line(line, call_id)
                         if call is not None:
                             self._collaboration_calls[key] = call
                             return call
@@ -340,8 +425,8 @@ class CodexCanonicalTranslator(HarnessTranslator):
         return None
 
     @staticmethod
-    def _call_from_document(
-        document: dict[str, JsonValue], call_id: CallId,
+    def _call_from_line(
+        line: bytes, call_id: CodexCallId,
     ) -> ExecRecord | ToolRecord | Literal[False] | None:
         """The parsed call this output belongs to.
 
@@ -351,23 +436,18 @@ class CodexCanonicalTranslator(HarnessTranslator):
         arguments — a command's exit, or a search's results — and only the call
         carries them.
         """
-        payload = document.get("payload")
-        payload = payload if isinstance(payload, dict) else {}
-        if not (
-            document.get("type") == "response_item"
-            and payload.get("type") in ("function_call", "custom_tool_call")
-            and payload.get("call_id") == call_id
-        ):
+        try:
+            record = rollout.parse_line(line.decode())
+        except (UnicodeDecodeError, ValidationError):
             return None
-        record = rollout.parse(document)
-        if isinstance(record, (ExecRecord, ToolRecord)):
-            return record
-        return False
+        if not isinstance(record, (ExecRecord, ToolRecord)) or record.call_id != call_id:
+            return None
+        return record
 
     def _call_record(
         self,
         raw_event: RawEvent,
-        call_id: CallId,
+        call_id: CodexCallId,
     ) -> ExecRecord | ToolRecord | None:
         """Pair an output with the call that opened it.
 
@@ -392,13 +472,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
                     source.seek(start_position)
                     chunk = source.read(end_position - start_position)
                     for line in reversed(chunk.splitlines()):
-                        try:
-                            document = json.loads(line)
-                        except (UnicodeDecodeError, json.JSONDecodeError):
-                            continue
-                        if not isinstance(document, dict):
-                            continue
-                        opened = self._call_from_document(document, call_id)
+                        opened = self._call_from_line(line, call_id)
                         if opened is not None:
                             found = opened if isinstance(opened, (ExecRecord, ToolRecord)) else None
                             self._call_records[key] = found
@@ -418,11 +492,8 @@ class CodexCanonicalTranslator(HarnessTranslator):
     def _translate(self, raw_event: RawEvent) -> TranslationResult:
         try:
             raw_text = raw_event.payload.decode("utf-8")
-            document = json.loads(raw_text)
-        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        except UnicodeDecodeError as error:
             raise TranslationError("malformed Codex rollout record", context=raw_event.source_position) from error
-        if not isinstance(document, dict):
-            raise TranslationError("Codex rollout record is not an object", context=raw_event.source_position)
 
         if raw_event.source_type == "hook":
             if raw_event.parent_actor_id is not None:
@@ -431,7 +502,13 @@ class CodexCanonicalTranslator(HarnessTranslator):
                     RecordedTranslationDecision.IGNORED_NONSEMANTIC,
                     "subagent delivery; its activity arrives through the lead's rollout",
                 )
-            events = self._translate_hook(raw_event, document)
+            try:
+                hook = CodexHookPayload.model_validate_json(raw_text)
+            except ValidationError as error:
+                raise TranslationError(
+                    "malformed Codex hook delivery", context=raw_event.source_position
+                ) from error
+            events = self._translate_hook(raw_event, hook)
             if events:
                 return TranslationResult(tuple(events), RecordedTranslationDecision.TRANSLATED)
             return TranslationResult(
@@ -445,13 +522,18 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 "parent history replayed in child rollout",
             )
 
-        if document.get("type") == "session_meta":
+        try:
+            header = RolloutHeader.model_validate_json(raw_text)
+        except ValidationError as error:
+            raise TranslationError(
+                "malformed Codex rollout record", context=raw_event.source_position
+            ) from error
+        if header.type == "session_meta":
             if raw_event.source_position != "0":
                 return TranslationResult(
                     (), RecordedTranslationDecision.IGNORED_NONSEMANTIC, "replayed session metadata"
                 )
-            raw_metadata = document.get("payload")
-            metadata = SessionMetaPayload.model_validate(raw_metadata if isinstance(raw_metadata, dict) else {})
+            metadata = RolloutDocument[SessionMetaPayload].model_validate_json(raw_text).payload
             if raw_event.parent_actor_id is not None:
                 role: ActorRole = (
                     ActorRole.SIDECAR if raw_event.source_type == "sidecar_rollout" else ActorRole.CHILD
@@ -481,15 +563,16 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 RecordedTranslationDecision.TRANSLATED,
             )
 
-        record = rollout.parse(document)
+        record = rollout.parse_line(raw_text)
         if record is None:
             return TranslationResult(
-                (), RecordedTranslationDecision.IGNORED_UNKNOWN, f"unhandled Codex record {document.get('type')!r}"
+                (), RecordedTranslationDecision.IGNORED_UNKNOWN, f"unhandled Codex record {header.type!r}"
             )
         if isinstance(record, BadRecord):
             raise TranslationError("malformed Codex rollout record", context=raw_event.source_position)
 
-        events = self._translate_record(raw_event, document, record)
+        observation = RolloutObservation.model_validate_json(raw_text)
+        events = self._translate_record(raw_event, observation, record)
         if not events:
             return TranslationResult(
                 (), RecordedTranslationDecision.IGNORED_NONSEMANTIC, f"nonsemantic Codex record {record.kind!r}"
@@ -499,9 +582,9 @@ class CodexCanonicalTranslator(HarnessTranslator):
     def _translate_hook(
         self,
         raw_event: RawEvent,
-        document: dict[str, JsonValue],
+        codex_hook_payload: CodexHookPayload,
     ) -> list[CanonicalEvent[EventPayload]]:
-        hook = CodexHookPayload.model_validate(document)
+        hook = codex_hook_payload
         hook_name = hook.hook_event_name or ""
         native_identity = hook.hook_event_id or hook.uuid or raw_event.source_position
         if hook_name == "SessionStart":
@@ -569,25 +652,28 @@ class CodexCanonicalTranslator(HarnessTranslator):
     def _translate_record(
         self,
         raw_event: RawEvent,
-        document: dict[str, JsonValue],
+        rollout_observation: RolloutObservation,
         record: RolloutRecord,
     ) -> list[CanonicalEvent[EventPayload]]:
-        native_payload = document.get("payload")
-        native_payload = native_payload if isinstance(native_payload, dict) else {}
+        observation = rollout_observation
+        native_payload = observation.payload
         record_call_id = record.call_id if isinstance(record, self._CALL_ID_RECORDS) else None
         native_identity = str(
             record_call_id
-            or native_payload.get("id")
-            or native_payload.get("item_id")
+            or (native_payload.id if native_payload else None)
+            or (native_payload.item_id if native_payload else None)
             or raw_event.source_position
         )
-        occurred_at = timestamp(_json_scalar(document.get("timestamp")))
+        occurred_at = timestamp(observation.timestamp)
         if occurred_at is None:
             record_at = record.at if isinstance(record, self._AT_RECORDS) else None
             occurred_at = timestamp(record_at)
 
         if isinstance(record, TaskStartedRecord):
-            turn_id = TurnId(record.turn or f"{raw_event.session_id}:{native_identity}")
+            native_turn_id = CodexTurnId(
+                record.turn or f"{raw_event.session_id}:{native_identity}"
+            )
+            turn_id = turn_id_from_codex(native_turn_id)
             events = [event(raw_event, "turn", str(turn_id), "started", TurnStarted(None), turn_id, occurred_at)]
             if raw_event.parent_actor_id is not None and raw_event.source_type == "child_rollout":
                 metadata = session_metadata(raw_event.source_name)
@@ -600,7 +686,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 )
                 actor_path = (spawn.agent_path if spawn else None) or ""
                 actor_name = actor_path.rsplit("/", 1)[-1].replace("_", " ").strip()
-                assignment_id = AssignmentId(str(turn_id))
+                assignment_id = assignment_id_from_codex_turn(native_turn_id)
                 # No prompt: the task payload is encrypted_content in the child
                 # rollout, unreadable by design (rollout.subagent_brief).
                 events.append(event(
@@ -618,7 +704,10 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 ))
             return events
         if isinstance(record, TaskCompleteRecord):
-            turn_id = TurnId(record.turn or f"{raw_event.session_id}:{native_identity}")
+            native_turn_id = CodexTurnId(
+                record.turn or f"{raw_event.session_id}:{native_identity}"
+            )
+            turn_id = turn_id_from_codex(native_turn_id)
             events = [
                 event(
                     raw_event,
@@ -631,7 +720,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 )
             ]
             if raw_event.parent_actor_id is not None and raw_event.source_type == "child_rollout":
-                assignment_id = AssignmentId(str(turn_id))
+                assignment_id = assignment_id_from_codex_turn(native_turn_id)
                 result = content(record.last, markdown=True) if record.last else None
                 events.append(
                     event(
@@ -646,10 +735,13 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 )
             return events
         if isinstance(record, TurnAbortedRecord):
-            turn_id = TurnId(record.turn or _json_str(native_payload.get("turn_id")) or native_identity)
+            native_turn_id = CodexTurnId(
+                record.turn or str(native_payload.turn_id if native_payload else "") or native_identity
+            )
+            turn_id = turn_id_from_codex(native_turn_id)
             events = [event(raw_event, "turn", str(turn_id), "aborted", TurnAborted(None), turn_id, occurred_at)]
             if raw_event.parent_actor_id is not None and raw_event.source_type == "child_rollout":
-                assignment_id = AssignmentId(str(turn_id))
+                assignment_id = assignment_id_from_codex_turn(native_turn_id)
                 events.append(event(
                     raw_event,
                     "actor_assignment",
@@ -685,13 +777,15 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 phase = MessagePhase.END_TURN
             elif role == MessageRole.ASSISTANT:
                 phase = MessagePhase.INTERMEDIATE
-            message_id = MessageId(native_identity)
+            message_id = message_id_from_codex(CodexMessageId(native_identity))
             message_content = content(record.text, markdown=role == "assistant")
             payload: EventPayload = MessageCreated(message_id, role, message_content, phase, None)
             # A message need not belong to a turn; the bindings above in this
             # same function always do, so the name has to admit None here.
             message_turn_id: TurnId | None = (
-                TurnId(record.turn) if isinstance(record, ChatRecord) and record.turn else None
+                turn_id_from_codex(CodexTurnId(record.turn))
+                if isinstance(record, ChatRecord) and record.turn
+                else None
             )
             return [event(
                 raw_event,
@@ -703,26 +797,25 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 occurred_at,
             )]
         if isinstance(record, (ReasoningRecord, ThinkRecord)):
-            payload = ReasoningCreated(ReasoningId(native_identity), content(record.text, markdown=True))
+            payload = ReasoningCreated(
+                reasoning_id_from_codex(CodexReasoningId(native_identity)),
+                content(record.text, markdown=True),
+            )
             return [event(raw_event, "reasoning", native_identity, "created", payload, occurred_at=occurred_at)]
         if isinstance(record, CollaborationCallRecord):
-            call_id = CallId(record.call_id or "")
+            call_id = CodexCallId(record.call_id or "")
             self._collaboration_calls[(os.path.realpath(raw_event.source_name), call_id)] = (
                 record.name, record.args,
             )
             return []
         if isinstance(record, ActorActivityRecord):
-            call_id = CallId(record.call_id or "")
+            call_id = CodexCallId(record.call_id or "")
             call = self._collaboration_call(raw_event, call_id)
             if call is None:
                 raise TranslationError(f"Codex actor activity has no collaboration call: {call_id or '<missing>'}")
             call_name, call_arguments = call
             activity = record.activity
-            expected_calls = {
-                "started": "spawn_agent",
-                "interrupted": "interrupt_agent",
-            }
-            expected_call = expected_calls.get(activity)
+            expected_call = ACTIVITY_CALLS.get(activity)
             if expected_call is not None and call_name != expected_call:
                 raise TranslationError(f"Codex actor activity {activity!r} came from {call_name!r}")
             if activity == "interacted":
@@ -730,7 +823,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
                     return []
                 if call_name != "send_message" or not isinstance(call_arguments, SendMessageArguments):
                     raise TranslationError(f"Codex actor interaction came from {call_name!r}")
-                message_id = MessageId(call_id)
+                message_id = message_id_from_codex_call(call_id)
                 # The text is in the call's own arguments, which used to be
                 # fetched and dropped: an actor-to-actor message with no message
                 # is a fact about nothing.
@@ -741,7 +834,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
                     content(spoken, markdown=True),
                     MessagePhase.INTERMEDIATE,
                     None,
-                    ActorId(record.actor_id),
+                    actor_id_from_codex(CodexActorId(record.actor_id)),
                 )
                 return [event(
                     raw_event,
@@ -749,7 +842,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
                     str(message_id),
                     "created",
                     payload,
-                    TurnId(record.turn) if record.turn else None,
+                    turn_id_from_codex(CodexTurnId(record.turn)) if record.turn else None,
                     occurred_at,
                 )]
             if activity in ("started", "interrupted"):
@@ -762,16 +855,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
             # Typed so the table itself is checked: every value here has to be
             # a state GoalChanged accepts, and a typo in one of them used to
             # travel all the way into a stored fact.
-            states: dict[str, GoalState] = {
-                "active": GoalState.ACTIVE,
-                "paused": GoalState.PAUSED,
-                "blocked": GoalState.BLOCKED,
-                "usageLimited": GoalState.USAGE_LIMITED,
-                "budgetLimited": GoalState.BUDGET_LIMITED,
-                "complete": GoalState.COMPLETED,
-                "cleared": GoalState.CLEARED,
-            }
-            state = states.get(native_state)
+            state = GOAL_STATES.get(native_state)
             if state is None:
                 raise TranslationError(f"unknown Codex goal state: {native_state or '<missing>'}")
             objective = (record.objective or "").strip() or None
@@ -787,15 +871,15 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 occurred_at=occurred_at,
             )]
         if isinstance(record, GoalToolRecord):
-            call_id = CallId(record.call_id or native_identity)
+            call_id = CodexCallId(record.call_id or native_identity)
             self._semantic_tool_calls.add((self._source_key(raw_event), call_id))
             return []
         if isinstance(record, TaskListRecord):
-            call_id = CallId(record.call_id or native_identity)
+            call_id = CodexCallId(record.call_id or native_identity)
             source_key = self._source_key(raw_event)
             self._semantic_tool_calls.add((source_key, call_id))
             plan_key = (str(raw_event.session_id), str(raw_event.actor_id))
-            previous = self._plan_tasks.get(plan_key, {})
+            previous = self._plan_tasks.get(plan_key)
             current: dict[TaskId, TaskChanged] = {}
             for task_index, plan_task in enumerate(record.tasks, start=1):
                 subject = (plan_task.step or "").strip()
@@ -810,7 +894,9 @@ class CodexCanonicalTranslator(HarnessTranslator):
                     task_state = TaskState.COMPLETED
                 else:
                     raise TranslationError(f"unknown Codex plan task state: {plan_task.status!r}")
-                task_id = TaskId(f"{raw_event.actor_id}:plan:{task_index}")
+                task_id = task_id_from_codex(
+                    CodexTaskId(f"{raw_event.actor_id}:plan:{task_index}")
+                )
                 current[task_id] = TaskChanged(
                     task_id,
                     subject,
@@ -823,11 +909,14 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 "task_list",
                 str(raw_event.actor_id),
                 f"changed:{call_id}",
-                TaskListChanged(TaskListId(str(raw_event.actor_id)), tuple(current)),
+                TaskListChanged(
+                    task_list_id_from_codex(CodexTaskListId(str(raw_event.actor_id))),
+                    tuple(current),
+                ),
                 occurred_at=occurred_at,
             )]
             for task_id, task_changed in current.items():
-                if previous.get(task_id) == task_changed:
+                if previous is not None and previous.get(task_id) == task_changed:
                     continue
                 events.append(event(
                     raw_event, "task", str(task_id), f"changed:{call_id}", task_changed,
@@ -836,7 +925,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
             self._plan_tasks[plan_key] = current
             return events
         if isinstance(record, (ExecRecord, ToolRecord)):
-            call_id = CallId(record.call_id or native_identity)
+            call_id = CodexCallId(record.call_id or native_identity)
             # Remembered whichever kind it is: the output that lands later is
             # only meaningful as this call's output (see `_call_record`).
             self._call_records[(self._source_key(raw_event), call_id)] = record
@@ -847,7 +936,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 # reported at the CALL, where the name is.
                 _codex_tool(record.name, record.args)
                 return []
-            shell_id = ShellId(call_id)
+            shell_id = shell_id_from_codex_call(call_id)
             payload = ShellStarted(shell_id, content(record.cmd), ExecutionMode.FOREGROUND, None)
             return [event(raw_event, "shell", str(shell_id), "started", payload, occurred_at=occurred_at)]
         if isinstance(record, StdinRecord):
@@ -863,7 +952,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
             if known_shell_id is None:
                 raise TranslationError(f"Codex write_stdin references unknown process session: {process_id}")
             shell_id = known_shell_id
-            call_id = CallId(record.call_id or native_identity)
+            call_id = CodexCallId(record.call_id or native_identity)
             self._continuation_shells[(source_key, call_id)] = shell_id
             text = record.text
             if not text:
@@ -880,7 +969,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 occurred_at=occurred_at,
             )]
         if isinstance(record, ExecResultRecord):
-            call_id = CallId(record.call_id or native_identity)
+            call_id = CodexCallId(record.call_id or native_identity)
             source_key = self._source_key(raw_event)
             if (source_key, call_id) in self._semantic_tool_calls:
                 return []
@@ -914,9 +1003,9 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 return []
             if isinstance(call_record, ToolRecord):
                 return self._tool_result(raw_event, call_id, call_record, record, occurred_at)
-            shell_id = ShellId(call_id)
+            shell_id = shell_id_from_codex_call(call_id)
             process_exit_code = exit_code(record.exit)
-            process_id = record.process_id or ShellNativeId("")
+            process_id = record.process_id or CodexShellId("")
             if process_id:
                 self._process_shells[(source_key, process_id)] = shell_id
             if record.running:
@@ -934,7 +1023,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
                         "shell",
                         str(shell_id),
                         "backgrounded",
-                        ShellBackgrounded(shell_id, ShellNativeId(process_id) if process_id else None),
+                        ShellBackgrounded(shell_id),
                         occurred_at=occurred_at,
                     ))
                 output = record.output
@@ -997,18 +1086,12 @@ class CodexCanonicalTranslator(HarnessTranslator):
             )]
         if isinstance(record, PatchRecord):
             outcome = outcome_of(record.success)
-            action_by_change: dict[str, FileAction] = {
-                "add": FileAction.CREATED,
-                "delete": FileAction.DELETED,
-                "move": FileAction.RENAMED,
-                "update": FileAction.UPDATED,
-            }
             events = []
             for file_order, file_record in enumerate(record.files):
                 path = file_record.path
                 payload = FileAccessed(
                     path=path,
-                    action=action_by_change.get(file_record.change or "", FileAction.UPDATED),
+                    action=FILE_ACTIONS.get(file_record.change or "", FileAction.UPDATED),
                     outcome=outcome,
                     previous_path=file_record.previous_path,
                     lines_added=file_record.added,
@@ -1066,8 +1149,9 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 changed = self._selections.model(
                     raw_event.session_id,
                     raw_event.actor_id,
-                    model_reference(ModelId(record.model)),
+                    model_reference(CodexModel(record.model)),
                     ModelChangeReason.REPORTED_BY_HARNESS,
+                    record.model,
                 )
                 if changed is not None:
                     events.append(event(
@@ -1109,7 +1193,9 @@ class CodexCanonicalTranslator(HarnessTranslator):
         if isinstance(record, AskRecord):
             questions = tuple(
                 AttentionPrompt(
-                    prompt_id=QuestionId(question.id or str(index)),
+                    prompt_id=question_id_from_codex(
+                        CodexQuestionId(question.id or str(index))
+                    ),
                     title=question.header or None,
                     prompt=question.question or "",
                     multiple=False,
@@ -1120,7 +1206,9 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 )
                 for index, question in enumerate(record.questions)
             )
-            attention_id = AttentionId(record.call_id or native_identity)
+            attention_id = attention_id_from_codex_call(
+                CodexCallId(record.call_id or native_identity)
+            )
             payload = QuestionAsked(attention_id, questions)
             return [
                 event(
@@ -1133,7 +1221,9 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 )
             ]
         if isinstance(record, PlanRecord):
-            attention_id = AttentionId(record.id or native_identity)
+            attention_id = attention_id_from_codex(
+                CodexAttentionId(record.id or native_identity)
+            )
             payload = PlanProposed(attention_id, content(record.text or "", markdown=True))
             return [
                 event(
@@ -1150,7 +1240,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
     def _tool_result(
         self,
         raw_event: RawEvent,
-        call_id: CallId,
+        call_id: CodexCallId,
         tool_record: ToolRecord,
         exec_result_record: ExecResultRecord,
         occurred_at: float | None,

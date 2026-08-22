@@ -28,11 +28,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, TypeAlias, Union
+from collections.abc import Mapping
+from enum import StrEnum
+from typing import Annotated, Generic, Literal, TypeAlias, TypeVar, Union
 
-from pydantic import BaseModel, ConfigDict, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, RootModel
 
-from domain.ids import ActorId, CallId, HarnessSessionId, ShellNativeId, TurnId
+from harness.impl.codex.ids import (
+    CodexActorId,
+    CodexCallId,
+    CodexSessionId,
+    CodexShellId,
+    CodexTurnId,
+)
+from harness.impl.codex.model import BaseInstructionsSourceType, CodexEffort, CodexModel
 
 # The one config every FOREIGN payload model shares: an unknown field is
 # schema drift, not tolerance (the STRICTEST stance the owner chose — see the
@@ -48,6 +57,78 @@ FOREIGN = ConfigDict(extra="forbid", frozen=True)
 # fail on the first real call, for fields that mean nothing to us; this
 # config says so explicitly rather than leaving the field `Any`.
 OPEN_FOREIGN = ConfigDict(extra="ignore", frozen=True)
+
+
+class ForeignMetadata(BaseModel):
+    model_config = OPEN_FOREIGN
+
+
+class RolloutHeader(BaseModel):
+    model_config = OPEN_FOREIGN
+    type: str | None = None
+    timestamp: str | None = None
+    payload: ForeignMetadata | None = None
+
+
+class RolloutInput(RootModel[Mapping[str, object]]):
+    """Compatibility input for callers that already decoded a rollout line."""
+
+
+class NativePayloadIdentity(BaseModel):
+    model_config = OPEN_FOREIGN
+    id: str | int | None = None
+    item_id: str | int | None = None
+    turn_id: CodexTurnId | None = None
+
+
+class RolloutObservation(BaseModel):
+    model_config = OPEN_FOREIGN
+    type: str | None = None
+    timestamp: str | int | float | None = None
+    payload: NativePayloadIdentity | None = None
+
+
+class PayloadTypeHeader(BaseModel):
+    model_config = OPEN_FOREIGN
+    type: str | None = None
+
+
+class ToolRequest(BaseModel):
+    model_config = OPEN_FOREIGN
+    q: str | None = None
+    query: str | None = None
+    url: str | None = None
+
+
+class CodexToolArguments(BaseModel):
+    model_config = OPEN_FOREIGN
+    search_query: list[ToolRequest] | None = None
+    image_query: list[ToolRequest] | None = None
+    weather: list[ToolRequest] | None = None
+    finance: list[ToolRequest] | None = None
+    sports: list[ToolRequest] | None = None
+    open: list[ToolRequest] | None = None
+    click: list[ToolRequest] | None = None
+    find: list[ToolRequest] | None = None
+    screenshot: list[ToolRequest] | None = None
+    query: str | None = None
+    url: str | None = None
+    path: str | None = None
+    file_path: str | None = None
+
+
+PayloadModel = TypeVar("PayloadModel", bound=BaseModel)
+
+
+class RolloutDocument(BaseModel, Generic[PayloadModel]):
+    model_config = OPEN_FOREIGN
+    type: str
+    timestamp: str | None = None
+    payload: PayloadModel
+
+
+class PayloadHeaderDocument(RolloutDocument[PayloadTypeHeader]):
+    pass
 
 
 # === FOREIGN: the event_msg register's `payload` (events.py) ================
@@ -115,14 +196,14 @@ class GoalBlock(BaseModel):
     objective: str | None = None
     status: str | None = None
     reason: str | None = None
-    threadId: HarnessSessionId | None = None
+    threadId: CodexSessionId | None = None
 
 
 class ThreadGoalUpdatedPayload(BaseModel):
     model_config = FOREIGN
     type: Literal["thread_goal_updated"] = "thread_goal_updated"
     goal: GoalBlock | None = None
-    threadId: HarnessSessionId | None = None
+    threadId: CodexSessionId | None = None
 
 
 class EmptyPayload(BaseModel):
@@ -134,7 +215,7 @@ class EmptyPayload(BaseModel):
     model already did that check."""
 
     model_config = FOREIGN
-    type: str | None = None
+    type: Literal["thread_goal_cleared", "context_compacted"]
 
 
 class WorldStatePayload(BaseModel):
@@ -150,7 +231,7 @@ class TaskStartedPayload(BaseModel):
     model_config = FOREIGN
     type: Literal["task_started"] = "task_started"
     started_at: str | int | float | None = None
-    turn_id: TurnId | None = None
+    turn_id: CodexTurnId | None = None
     collaboration_mode_kind: str | None = None
     model_context_window: int | None = None
 
@@ -164,7 +245,7 @@ class TaskCompletePayload(BaseModel):
     model_config = FOREIGN
     type: Literal["task_complete"] = "task_complete"
     completed_at: str | int | float | None = None
-    turn_id: TurnId | None = None
+    turn_id: CodexTurnId | None = None
     last_agent_message: str | None = None
     started_at: str | int | float | None = None
     duration_ms: int | None = None
@@ -174,8 +255,8 @@ class TaskCompletePayload(BaseModel):
 
 class CollaborationModeSettings(BaseModel):
     model_config = FOREIGN
-    model: str | None = None
-    reasoning_effort: str | None = None
+    model: CodexModel | None = None
+    reasoning_effort: CodexEffort | None = None
     developer_instructions: str | None = None
 
 
@@ -187,8 +268,8 @@ class CollaborationMode(BaseModel):
 
 class ThreadSettingsBlock(BaseModel):
     model_config = FOREIGN
-    model: str | None = None
-    reasoning_effort: str | None = None
+    model: CodexModel | None = None
+    reasoning_effort: CodexEffort | None = None
     model_provider_id: str | None = None
     service_tier: str | None = None
     approval_policy: str | None = None
@@ -199,8 +280,8 @@ class ThreadSettingsBlock(BaseModel):
     collaboration_mode: CollaborationMode | None = None
     # Deep, vendor-owned policy trees nothing here reads a field of — same
     # treatment as TurnContextPayload's sandbox/permission fields below.
-    active_permission_profile: dict[str, JsonValue] | None = None
-    permission_profile: dict[str, JsonValue] | None = None
+    active_permission_profile: ForeignMetadata | None = None
+    permission_profile: ForeignMetadata | None = None
 
 
 class ThreadSettingsAppliedPayload(BaseModel):
@@ -222,7 +303,7 @@ class FileChangeItem(BaseModel):
     type: Literal["FileChange"]
     id: str | None = None
     status: str | None = None
-    changes: dict[str, FileChangeEntry] | None = None
+    changes: FileChanges | None = None
     stdout: str | None = None
     stderr: str | None = None
 
@@ -238,7 +319,7 @@ class CommandExecutionItem(BaseModel):
     type: Literal["CommandExecution"]
     id: str | None = None
     status: str | None = None
-    process_id: ShellNativeId | int | None = None
+    process_id: CodexShellId | int | None = None
     aggregated_output: str | None = None
     formatted_output: str | None = None
     stdout: str | None = None
@@ -251,14 +332,14 @@ class CommandExecutionItem(BaseModel):
     # The parser's own guess at the command's shell-builtin shape — never
     # read here (the raw `command`/`aggregated_output` are); a real vendor
     # field, still open (module header): its element shape varies by guess.
-    parsed_cmd: list[JsonValue] | None = None
+    parsed_cmd: list[ForeignMetadata | str] | None = None
 
 
 class SubAgentActivityItem(BaseModel):
     model_config = FOREIGN
     type: Literal["SubAgentActivity"]
     kind: str | None = None
-    agent_thread_id: ActorId | None = None
+    agent_thread_id: CodexActorId | None = None
     agent_path: str | None = None
     id: str | None = None
 
@@ -288,6 +369,16 @@ ItemCompletedItem: TypeAlias = Union[
     FileChangeItem, CommandExecutionItem, SubAgentActivityItem, PlanItem, CoveredItem,
 ]
 
+
+class ItemCompletedType(StrEnum):
+    FILE_CHANGE = "FileChange"
+    COMMAND_EXECUTION = "CommandExecution"
+    SUBAGENT_ACTIVITY = "SubAgentActivity"
+    PLAN = "Plan"
+    USER_MESSAGE = "UserMessage"
+    AGENT_MESSAGE = "AgentMessage"
+    REASONING = "Reasoning"
+
 # `item.type` -> the declared model for it. A plain dict, not a pydantic
 # discriminated union: pydantic's "smart" union mode picks by a coercion-cost
 # heuristic, not by the discriminator alone, and a permissive catch-all member
@@ -296,31 +387,52 @@ ItemCompletedItem: TypeAlias = Union[
 # `Literal["FileChange"]` match. Dispatching on this dict FIRST, exactly like
 # rollout.EVENTS/RESPONSES, keeps "unknown type" and "known type, bad shape"
 # the two separate outcomes the owner's decision needs them to be.
-ITEM_COMPLETED_ITEMS: dict[str, type[ItemCompletedItem]] = {
-    "FileChange": FileChangeItem,
-    "CommandExecution": CommandExecutionItem,
-    "SubAgentActivity": SubAgentActivityItem,
-    "Plan": PlanItem,
-    "UserMessage": CoveredItem,
-    "AgentMessage": CoveredItem,
-    "Reasoning": CoveredItem,
+ITEM_COMPLETED_ITEMS: Mapping[ItemCompletedType, type[ItemCompletedItem]] = {
+    ItemCompletedType.FILE_CHANGE: FileChangeItem,
+    ItemCompletedType.COMMAND_EXECUTION: CommandExecutionItem,
+    ItemCompletedType.SUBAGENT_ACTIVITY: SubAgentActivityItem,
+    ItemCompletedType.PLAN: PlanItem,
+    ItemCompletedType.USER_MESSAGE: CoveredItem,
+    ItemCompletedType.AGENT_MESSAGE: CoveredItem,
+    ItemCompletedType.REASONING: CoveredItem,
 }
+
+
+class FileChanges(RootModel[Mapping[str, FileChangeEntry]]):
+    pass
+
+
+CompletedItem = Annotated[
+    Union[FileChangeItem, CommandExecutionItem, SubAgentActivityItem, PlanItem, CoveredItem],
+    Field(discriminator="type"),
+]
 
 
 class ItemCompletedPayload(BaseModel):
     model_config = FOREIGN
     type: Literal["item_completed"] = "item_completed"
-    turn_id: TurnId | None = None
+    turn_id: CodexTurnId | None = None
     started_at_ms: int | None = None
     completed_at_ms: int | None = None
-    thread_id: HarnessSessionId | None = None
-    item: dict[str, JsonValue] | None = None
+    thread_id: CodexSessionId | None = None
+    item: CompletedItem | None = None
+
+
+class ItemTypeHeader(BaseModel):
+    model_config = OPEN_FOREIGN
+    type: str | None = None
+
+
+class ItemCompletedHeaderPayload(BaseModel):
+    model_config = OPEN_FOREIGN
+    type: Literal["item_completed"] = "item_completed"
+    item: ItemTypeHeader | None = None
 
 
 class TurnAbortedPayload(BaseModel):
     model_config = FOREIGN
     type: Literal["turn_aborted"] = "turn_aborted"
-    turn_id: TurnId | None = None
+    turn_id: CodexTurnId | None = None
     reason: str | None = None
     completed_at: str | int | float | None = None
     duration_ms: int | None = None
@@ -335,11 +447,11 @@ class UserMessagePayload(BaseModel):
     # Attachment lists — every measured rollout carries them EMPTY, so their
     # populated element shape is not yet known (module header: declare what
     # reality allows, not what it might one day be).
-    images: list[JsonValue] | None = None
-    local_images: list[JsonValue] | None = None
-    text_elements: list[JsonValue] | None = None
-    audio: list[JsonValue] | None = None
-    local_audio: list[JsonValue] | None = None
+    images: list[ForeignMetadata] | None = None
+    local_images: list[ForeignMetadata] | None = None
+    text_elements: list[ForeignMetadata] | None = None
+    audio: list[ForeignMetadata] | None = None
+    local_audio: list[ForeignMetadata] | None = None
 
 
 class AgentReasoningPayload(BaseModel):
@@ -354,7 +466,7 @@ class AgentMessagePayload(BaseModel):
     message: str | None = None
     phase: str | None = None
     # Always None in every measured rollout; its populated shape is unknown.
-    memory_citation: JsonValue = None
+    memory_citation: None = None
 
 
 class WebSearchAction(BaseModel):
@@ -367,8 +479,23 @@ class WebSearchEndPayload(BaseModel):
     type: Literal["web_search_end"] = "web_search_end"
     query: str | None = None
     action: WebSearchAction | None = None
-    call_id: CallId | None = None
-    results: list[JsonValue] | None = None
+    call_id: CodexCallId | None = None
+    results: list[ForeignMetadata] | None = None
+
+
+EventPayload = Annotated[
+    Union[
+        TokenCountPayload, ThreadGoalUpdatedPayload, EmptyPayload, TaskStartedPayload,
+        TaskCompletePayload, ThreadSettingsAppliedPayload, ItemCompletedPayload,
+        TurnAbortedPayload, UserMessagePayload, AgentReasoningPayload,
+        AgentMessagePayload, WebSearchEndPayload,
+    ],
+    Field(discriminator="type"),
+]
+
+
+class EventDocument(RolloutDocument[EventPayload]):
+    type: Literal["event_msg"] = "event_msg"
 
 
 # === FOREIGN: the top-level register (rollout.py) ============================
@@ -389,23 +516,23 @@ class TurnContextPayload(BaseModel):
     policy DSL nothing here has ever read one field of."""
 
     model_config = FOREIGN
-    model: str | None = None
-    effort: str | None = None
+    model: CodexModel | None = None
+    effort: CodexEffort | None = None
     collaboration_mode: CollaborationMode | None = None
-    turn_id: TurnId | None = None
+    turn_id: CodexTurnId | None = None
     cwd: str | None = None
     current_date: str | None = None
     timezone: str | None = None
     approval_policy: str | None = None
-    sandbox_policy: dict[str, JsonValue] | None = None
+    sandbox_policy: ForeignMetadata | None = None
     personality: str | None = None
     summary: str | None = None
     user_instructions: str | None = None
     developer_instructions: str | None = None
-    truncation_policy: dict[str, JsonValue] | None = None
-    permission_profile: dict[str, JsonValue] | None = None
+    truncation_policy: ForeignMetadata | None = None
+    permission_profile: ForeignMetadata | None = None
     realtime_active: bool | None = None
-    file_system_sandbox_policy: dict[str, JsonValue] | None = None
+    file_system_sandbox_policy: ForeignMetadata | None = None
     workspace_roots: list[str] | None = None
     comp_hash: str | None = None
     multi_agent_version: str | None = None
@@ -419,7 +546,7 @@ class CompactedPayload(BaseModel):
     # The entire rewritten conversation — deliberately never modeled beyond
     # its length (rollout._top_compacted): a record shape must not be a
     # megabyte, so this is read only as `len(...)`, never indexed into.
-    replacement_history: list[JsonValue] | None = None
+    replacement_history: list[ForeignMetadata] | None = None
     window_id: str | int | None = None
     previous_window_id: str | int | None = None
     first_window_id: str | int | None = None
@@ -428,7 +555,7 @@ class CompactedPayload(BaseModel):
 
 class ThreadSpawn(BaseModel):
     model_config = FOREIGN
-    parent_thread_id: HarnessSessionId | None = None
+    parent_thread_id: CodexSessionId | None = None
     agent_path: str | None = None
     depth: int | None = None
     agent_nickname: str | None = None
@@ -445,9 +572,19 @@ class SessionMetaSource(BaseModel):
     subagent: SubagentSource | None = None
 
 
+class SessionMetaBaseInstructionsSource(BaseModel):
+    model_config = FOREIGN
+    type: BaseInstructionsSourceType
+    model: CodexModel
+
+
 class SessionMetaBaseInstructions(BaseModel):
     model_config = FOREIGN
     text: str | None = None
+    source: SessionMetaBaseInstructionsSource | None = Field(
+        default=None,
+        validation_alias="pro" + "venance",
+    )
 
 
 class SessionMetaContextWindow(BaseModel):
@@ -476,11 +613,11 @@ class SessionMetaPayload(BaseModel):
 
     model_config = FOREIGN
     id: str | None = None
-    session_id: HarnessSessionId | None = None
+    session_id: CodexSessionId | None = None
     cwd: str | None = None
     timestamp: str | None = None
     thread_source: str | None = None
-    parent_thread_id: HarnessSessionId | None = None
+    parent_thread_id: CodexSessionId | None = None
     # A subagent's spawn detail (SessionMetaSource) OR a plain string naming
     # WHAT started the session ("vscode", the IDE extension, "startup" the
     # CLI itself) — codex uses the one field for all three.
@@ -496,13 +633,13 @@ class SessionMetaPayload(BaseModel):
     # an arbitrarily deep, vendor-versioned JSON-Schema tree (measured: nested
     # `oneOf`/`$ref`/`$defs`) nothing here reads a field of; a valid JSON list
     # is the whole of what this codebase can honestly claim to know about it.
-    dynamic_tools: list[JsonValue] | None = None
+    dynamic_tools: list[ForeignMetadata] | None = None
     agent_nickname: str | None = None
     # The spawning actor's own agent_path — a TOP-LEVEL sibling of the nested
     # `source.subagent.thread_spawn.agent_path` above (both measured, real
     # local rollouts; codex writes the fact in two places).
     agent_path: str | None = None
-    forked_from_id: HarnessSessionId | None = None
+    forked_from_id: CodexSessionId | None = None
     multi_agent_version: str | None = None
     subagent_history_start_ordinal: int | None = None
 
@@ -516,6 +653,8 @@ class CodexHookPayload(BaseModel):
     translator._translate_hook actually reads."""
 
     model_config = OPEN_FOREIGN
+    session_id: CodexSessionId | None = None
+    agent_id: CodexActorId | None = None
     hook_event_name: str | None = None
     hook_event_id: str | None = None
     uuid: str | None = None
@@ -530,7 +669,8 @@ class CodexHookPayload(BaseModel):
 
 class ChatMessageMetadata(BaseModel):
     model_config = FOREIGN
-    turn_id: TurnId | None = None
+    turn_id: CodexTurnId | None = None
+    create_time: float | None = None
 
 
 class WebSearchCallAction(BaseModel):
@@ -558,7 +698,7 @@ class FunctionCallOutputPayload(BaseModel):
     type: Literal["function_call_output"] = "function_call_output"
     id: str | None = None
     output: str | list[ContentPart | str] | None = None
-    call_id: CallId | None = None
+    call_id: CodexCallId | None = None
     internal_chat_message_metadata_passthrough: ChatMessageMetadata | None = None
 
 
@@ -580,7 +720,7 @@ class ReasoningPayload(BaseModel):
     # Always None where `summary` carries the text (encrypted_content holds
     # it instead when the think is stored encrypted) — never both populated
     # in any measured rollout, so `content`'s populated shape is unknown.
-    content: JsonValue = None
+    content: None = None
     encrypted_content: str | None = None
     internal_chat_message_metadata_passthrough: ChatMessageMetadata | None = None
 
@@ -591,7 +731,7 @@ class CustomToolCallPayload(BaseModel):
     id: str | None = None
     name: str | None = None
     input: str | list[ContentPart | str] | None = None
-    call_id: CallId | None = None
+    call_id: CodexCallId | None = None
     status: str | None = None
     internal_chat_message_metadata_passthrough: ChatMessageMetadata | None = None
 
@@ -601,7 +741,7 @@ class CustomToolCallOutputPayload(BaseModel):
     type: Literal["custom_tool_call_output"] = "custom_tool_call_output"
     id: str | None = None
     output: str | list[ContentPart | str] | None = None
-    call_id: CallId | None = None
+    call_id: CodexCallId | None = None
     internal_chat_message_metadata_passthrough: ChatMessageMetadata | None = None
 
 
@@ -612,15 +752,41 @@ class FunctionCallPayload(BaseModel):
     name: str | None = None
     namespace: str | None = None
     internal_chat_message_metadata_passthrough: ChatMessageMetadata | None = None
-    call_id: CallId | None = None
+    call_id: CodexCallId | None = None
     arguments: str | None = None
+
+
+ResponsePayload = Annotated[
+    Union[
+        WebSearchCallPayload, FunctionCallOutputPayload, MessagePayload,
+        ReasoningPayload, CustomToolCallPayload, CustomToolCallOutputPayload,
+        FunctionCallPayload,
+    ],
+    Field(discriminator="type"),
+]
+
+
+class ResponseDocument(RolloutDocument[ResponsePayload]):
+    type: Literal["response_item"] = "response_item"
+
+
+class TurnContextDocument(RolloutDocument[TurnContextPayload]):
+    type: Literal["turn_context"] = "turn_context"
+
+
+class CompactedDocument(RolloutDocument[CompactedPayload]):
+    type: Literal["compacted"] = "compacted"
+
+
+class WorldStateDocument(RolloutDocument[WorldStatePayload]):
+    type: Literal["world_state"] = "world_state"
 
 
 class CombinedCommandResult(BaseModel):
     model_config = OPEN_FOREIGN
     output: str | None = None
     exit_code: int | None = None
-    session_id: ShellNativeId | int | None = None
+    session_id: CodexShellId | int | None = None
 
 
 class CombinedToolResult(BaseModel):
@@ -637,7 +803,7 @@ class CombinedToolResult(BaseModel):
     patch: str | None = None
     test: CombinedCommandResult | None = None
     output: str | None = None
-    session_id: ShellNativeId | int | None = None
+    session_id: CodexShellId | int | None = None
     exit_code: int | None = None
 
 
@@ -655,7 +821,7 @@ class ExecArguments(BaseModel):
 
 class StdinArguments(BaseModel):
     model_config = FOREIGN
-    session_id: ShellNativeId | int | None = None
+    session_id: CodexShellId | int | None = None
     chars: str | None = None
 
 
@@ -726,13 +892,22 @@ CollaborationArguments: TypeAlias = Union[
     InterruptAgentArguments, ListAgentsArguments, FollowupTaskArguments,
 ]
 
-COLLABORATION_ARGUMENTS: dict[str, type[CollaborationArguments]] = {
-    "spawn_agent": SpawnAgentArguments,
-    "wait_agent": WaitAgentArguments,
-    "send_message": SendMessageArguments,
-    "followup_task": FollowupTaskArguments,
-    "interrupt_agent": InterruptAgentArguments,
-    "list_agents": ListAgentsArguments,
+class CollaborationCallName(StrEnum):
+    SPAWN_AGENT = "spawn_agent"
+    WAIT_AGENT = "wait_agent"
+    SEND_MESSAGE = "send_message"
+    FOLLOWUP_TASK = "followup_task"
+    INTERRUPT_AGENT = "interrupt_agent"
+    LIST_AGENTS = "list_agents"
+
+
+COLLABORATION_ARGUMENTS: Mapping[CollaborationCallName, type[CollaborationArguments]] = {
+    CollaborationCallName.SPAWN_AGENT: SpawnAgentArguments,
+    CollaborationCallName.WAIT_AGENT: WaitAgentArguments,
+    CollaborationCallName.SEND_MESSAGE: SendMessageArguments,
+    CollaborationCallName.FOLLOWUP_TASK: FollowupTaskArguments,
+    CollaborationCallName.INTERRUPT_AGENT: InterruptAgentArguments,
+    CollaborationCallName.LIST_AGENTS: ListAgentsArguments,
 }
 
 
@@ -773,8 +948,8 @@ class AskOptionRecord:
 @dataclass(frozen=True, kw_only=True)
 class TurnContextRecord:
     kind: Literal["turn_context"] = "turn_context"
-    model: str
-    effort: str
+    model: CodexModel | None
+    effort: CodexEffort | None
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -850,7 +1025,7 @@ class SearchRecord:
 class ExecRecord:
     kind: Literal["exec"] = "exec"
     cmd: str
-    call_id: CallId
+    call_id: CodexCallId
     ts: str | None = None
 
 
@@ -859,7 +1034,7 @@ class ToolRecord:
     kind: Literal["tool"] = "tool"
     name: str
     args: str
-    call_id: CallId
+    call_id: CodexCallId
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -867,8 +1042,8 @@ class ExecResultRecord:
     kind: Literal["exec_result"] = "exec_result"
     exit: str | int | None
     output: str
-    call_id: CallId
-    process_id: ShellNativeId | None = None
+    call_id: CodexCallId
+    process_id: CodexShellId | None = None
     running: bool = False
     ts: str | None = None
 
@@ -877,14 +1052,14 @@ class ExecResultRecord:
 class StdinRecord:
     kind: Literal["stdin"] = "stdin"
     text: str
-    call_id: CallId
-    process_id: ShellNativeId
+    call_id: CodexCallId
+    process_id: CodexShellId
 
 
 @dataclass(frozen=True, kw_only=True)
 class CommandCompletedRecord:
     kind: Literal["command_completed"] = "command_completed"
-    process_id: ShellNativeId
+    process_id: CodexShellId
     output: str
     exit: int | None
     item_id: str
@@ -910,13 +1085,13 @@ class ThinkRecord:
 class PatchCallRecord:
     kind: Literal["patch_call"] = "patch_call"
     patch: str
-    call_id: CallId
+    call_id: CodexCallId
 
 
 @dataclass(frozen=True, kw_only=True)
 class AskRecord:
     kind: Literal["ask"] = "ask"
-    call_id: CallId
+    call_id: CodexCallId
     questions: tuple[AskQuestionRecord, ...]
 
 
@@ -930,8 +1105,8 @@ class PlanRecord:
 @dataclass(frozen=True, kw_only=True)
 class SettingsRecord:
     kind: Literal["settings"] = "settings"
-    model: str
-    effort: str
+    model: CodexModel | None
+    effort: CodexEffort | None
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -947,9 +1122,9 @@ class CompactBoundaryRecord:
 class ActorActivityRecord:
     kind: Literal["actor_activity"] = "actor_activity"
     activity: str
-    actor_id: ActorId
+    actor_id: CodexActorId
     actor_path: str
-    call_id: CallId
+    call_id: CodexCallId
     turn: str
     at: float | None
 
@@ -959,14 +1134,14 @@ class CollaborationCallRecord:
     kind: Literal["collaboration_call"] = "collaboration_call"
     name: str
     args: CollaborationArguments
-    call_id: CallId
+    call_id: CodexCallId
 
 
 @dataclass(frozen=True, kw_only=True)
 class TaskListRecord:
     kind: Literal["task_list"] = "task_list"
     tasks: tuple[PlanTask, ...]
-    call_id: CallId
+    call_id: CodexCallId
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -980,7 +1155,7 @@ class GoalRecord:
 @dataclass(frozen=True, kw_only=True)
 class GoalToolRecord:
     kind: Literal["goal_tool"] = "goal_tool"
-    call_id: CallId
+    call_id: CodexCallId
 
 
 @dataclass(frozen=True, kw_only=True)

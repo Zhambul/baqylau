@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
-from domain.ids import AccountId, ModelId, SessionId, WindowId
+from domain.ids import AccountId, SessionId, WindowId
 from harness.models.controls import AttachmentReference
 
 
@@ -18,7 +18,7 @@ class LaunchStatus(StrEnum):
 class LaunchRequest:
     working_directory: str
     initial_text: str | None
-    model_id: ModelId | None
+    model: str | None
     effort: str | None
     account_id: AccountId | None
     resume_session_id: SessionId | None

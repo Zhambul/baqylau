@@ -118,7 +118,7 @@ class ActorWriter(SessionDataWriter):
         if isinstance(payload, ActorAssignmentStarted):
             return aggregate_state.with_actor(replace(actor, state=LifecycleState.RUNNING, finished_at=None))
         if isinstance(payload, ModelChanged):
-            if payload.current.native_id == "<synthetic>":
+            if payload.current.name == "<synthetic>":
                 return aggregate_state  # a machine-injected record, not a model
 
             # The display settles HERE, through the harness's one namer, so an

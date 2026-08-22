@@ -75,7 +75,6 @@ from domain.ids import (
     AssignmentId,
     CanonicalEventId,
     HarnessName,
-    HarnessSessionId,
     MessageId,
     ShellId,
     RawEventId,
@@ -105,7 +104,7 @@ from repository.impl.sqlite.shell_output import SqliteShellOutputRepository
 from repository.impl.sqlite.raw_events import SqliteRawEventRepository
 from repository.impl.sqlite.sessions import SqliteSessionRepository
 
-EXAMPLE_HARNESS = HarnessName("example")
+EXAMPLE_HARNESS = HarnessName.CODEX
 
 # The liveness source checks the CLI pid against the CLI's process name; the
 # suite's sessions carry the test process itself, so they read as alive.
@@ -169,7 +168,6 @@ def example_session(session_id: str = "session-one") -> Session:
     return Session(
         session_id=SessionId(session_id),
         lead_actor_id=ActorId("actor-lead"),
-        harness_session_id=HarnessSessionId(f"harness-{session_id}"),
         source_reference="fixture.jsonl",
         working_directory="/work",
         harness_process_id=os.getpid(),
@@ -179,10 +177,10 @@ def example_session(session_id: str = "session-one") -> Session:
 def example_plugin(
     translation: TranslationResult | TranslationError,
     sources=(),
-    name: str = "example",
+    name: HarnessName = HarnessName.CODEX,
 ) -> HarnessPlugin:
     return HarnessPlugin(
-        info=HarnessInfo(name, name.title(), "1.0", SCHEMA_VERSION, OWN_PROCESS_NAME),
+        info=HarnessInfo(name, name.value.title(), "1.0", SCHEMA_VERSION, OWN_PROCESS_NAME),
         sources=FixedSources(sources),
         translator=FixedTranslator(translation),
     )
@@ -228,7 +226,7 @@ def session_started_event(
         ActorId("actor-lead"),
         None,
         None,
-        HarnessName("example"),
+        HarnessName.CODEX,
         10.0,
         terminal_window_id,
         harness_process_id,
@@ -386,7 +384,7 @@ def registered_runtime(tmp_path, translation: TranslationResult | TranslationErr
     interpreter, sessions, recorder, store, _shell_output = build_interpreter(
         database_path, harnesses
     )
-    sessions.save("example", example_session())
+    sessions.save(HarnessName.CODEX, example_session())
     return store, recorder, sessions, interpreter
 
 
@@ -458,7 +456,7 @@ def test_actor_lifecycle_payload_contract(payload, event_type, expected_payload)
         actor_id=ActorId("actor-one"),
         turn_id=None,
         parent_actor_id=None,
-        harness="example",
+        harness=HarnessName.CODEX,
         occurred_at=1.0,
         terminal_window_id=None,
         harness_process_id=None,
@@ -488,7 +486,7 @@ def test_a_repository_never_leaves_its_connection_open(tmp_path):
 
 def test_a_saved_session_row_is_not_yet_a_canonical_session(tmp_path):
     sessions = SqliteSessionRepository(main_database(str(tmp_path / "main.db")))
-    sessions.save("example", example_session("candidate"))
+    sessions.save(HarnessName.CODEX, example_session("candidate"))
 
     assert SqliteCanonicalEventRepository(main_database(str(tmp_path / "main.db"))).session_ids() == ()
 
@@ -497,9 +495,9 @@ def test_session_save_writes_identity_once_and_live_columns_always(tmp_path):
     """Identity columns are the first observation; the two live columns follow
     the session around — a resume lands in a new window with a new process."""
     sessions = SqliteSessionRepository(main_database(str(tmp_path / "main.db")))
-    sessions.save("example", replace(example_session(), terminal_window_id="window-1"))
+    sessions.save(HarnessName.CODEX, replace(example_session(), terminal_window_id="window-1"))
 
-    sessions.save("example", replace(
+    sessions.save(HarnessName.CODEX, replace(
         example_session(),
         working_directory="/elsewhere",
         terminal_window_id="window-2",
@@ -518,7 +516,7 @@ def test_sessions_carry_their_plugin_only_when_harnesses_are_attached(tmp_path):
     harnesses = HarnessRegistry()
     plugin = example_plugin(TranslationResult((), "ignored_nonsemantic"))
     harnesses.register(plugin)
-    SqliteSessionRepository(main_database(database_path)).save("example", example_session())
+    SqliteSessionRepository(main_database(database_path)).save(HarnessName.CODEX, example_session())
 
     recorder_side = SqliteSessionRepository(main_database(database_path)).find(SessionId("session-one"))
     server_side = SqliteSessionRepository(main_database(database_path), harnesses).find(SessionId("session-one"))
@@ -544,16 +542,16 @@ def test_harness_registry_requires_one_explicit_default_when_launchers_exist():
 
 def test_harness_registry_rejects_multiple_launch_defaults():
     registry = HarnessRegistry()
-    for name in ("first", "second"):
+    for name in (HarnessName.CODEX, HarnessName.CLAUDE_CODE):
         plugin = replace(
             example_plugin(TranslationResult((), "ignored_nonsemantic"), name=name),
             info=HarnessInfo(
-                name, name.title(), "1", SCHEMA_VERSION, OWN_PROCESS_NAME,
+                name, name.value.title(), "1", SCHEMA_VERSION, OWN_PROCESS_NAME,
                 default_for_launch=True,
             ),
             launcher=object(),
         )
-        if name == "first":
+        if name == HarnessName.CODEX:
             registry.register(plugin)
         else:
             with pytest.raises(HarnessRegistryError, match="multiple harnesses"):
@@ -629,7 +627,7 @@ def test_codec_decodes_rows_written_before_a_defaulted_field_existed():
         actor_id=ActorId("actor-one"),
         turn_id=None,
         parent_actor_id=None,
-        harness="example",
+        harness=HarnessName.CODEX,
         occurred_at=1.0,
         terminal_window_id=None,
         harness_process_id=None,
@@ -663,7 +661,7 @@ def test_codec_rejects_an_invalid_payload_before_storage():
 
 def test_stable_event_id_names_the_same_fact_and_distinguishes_its_phase():
     arguments = {
-        "harness": "example",
+        "harness": "codex",
         "session_id": SessionId("session-one"),
         "actor_id": ActorId("actor-lead"),
         "subject_type": "operation",
@@ -713,7 +711,7 @@ def test_the_session_is_born_by_the_reaction_to_its_own_started_fact(tmp_path):
     assert born.working_directory == "/work"
     assert born.terminal_window_id == "the-session-tab"
     assert born.harness_process_id == 4242
-    assert born.plugin is harnesses.plugin("example")
+    assert born.plugin is harnesses.plugin(HarnessName.CODEX)
     assert recorder.unverdicted(10) == ()
 
 
@@ -737,7 +735,7 @@ def test_a_later_delivery_updates_the_live_columns_of_the_row(tmp_path):
     envelope of any later hook-borne fact refreshes the live columns."""
     database_path = str(tmp_path / "main.db")
     sessions = SqliteSessionRepository(main_database(database_path))
-    sessions.save("example", replace(
+    sessions.save(HarnessName.CODEX, replace(
         example_session(), terminal_window_id="old-window", harness_process_id=1,
     ))
     reaction = SessionUpsertCanonicalEventReaction(sessions)
@@ -898,7 +896,7 @@ def test_a_translator_bug_becomes_a_verdict_and_never_wedges_the_backlog(tmp_pat
     harnesses = HarnessRegistry()
     harnesses.register(
         HarnessPlugin(
-            info=HarnessInfo("example", "Example", "1.0", SCHEMA_VERSION, OWN_PROCESS_NAME),
+            info=HarnessInfo(HarnessName.CODEX, "Example", "1.0", SCHEMA_VERSION, OWN_PROCESS_NAME),
             sources=FixedSources(),
             translator=BuggyTranslator(),
         )
@@ -906,7 +904,7 @@ def test_a_translator_bug_becomes_a_verdict_and_never_wedges_the_backlog(tmp_pat
     interpreter, sessions, recorder, store, _shell_output = build_interpreter(
         database_path, harnesses
     )
-    sessions.save("example", example_session())
+    sessions.save(HarnessName.CODEX, example_session())
     recorder.record((raw_observation("raw-bug"),))
 
     interpreter.tick()
@@ -999,7 +997,7 @@ def test_the_interpreter_pulls_translates_and_commits_in_one_tick(tmp_path):
     interpreter, sessions, _recorder, store, _shell_output = build_interpreter(
         database_path, harnesses
     )
-    sessions.save("example", example_session())
+    sessions.save(HarnessName.CODEX, example_session())
 
     interpreter.tick()
 
@@ -1036,7 +1034,7 @@ def test_one_failing_source_neither_stops_its_siblings_nor_the_interpreter(tmp_p
     interpreter, sessions, _recorder, store, _shell_output = build_interpreter(
         database_path, harnesses, audit=audited
     )
-    sessions.save("example", example_session())
+    sessions.save(HarnessName.CODEX, example_session())
 
     interpreter.tick()
 
@@ -1053,7 +1051,7 @@ def test_watchable_is_every_unfinished_session_without_a_count_limit(tmp_path):
     sessions = SqliteSessionRepository(main_database(database_path), harnesses)
     store = SqliteCanonicalEventRepository(main_database(database_path))
     for index in range(6):
-        sessions.save("example", example_session(f"session-{index}"))
+        sessions.save(HarnessName.CODEX, example_session(f"session-{index}"))
 
     assert len(sessions.watchable()) == 6
     assert all(session.plugin is not None for session in sessions.watchable())
@@ -1064,7 +1062,7 @@ def test_watchable_is_every_unfinished_session_without_a_count_limit(tmp_path):
         ActorId("actor-lead"),
         None,
         None,
-        "example",
+        HarnessName.CODEX,
         10.0,
         None,
         None,
@@ -1098,7 +1096,7 @@ def test_a_pid_less_session_is_a_loud_audited_error_every_tick(tmp_path, monkeyp
     interpreter, sessions, _recorder, _store, _shell_output = build_interpreter(
         database_path, harnesses, audit=audited
     )
-    sessions.save("example", replace(example_session(), harness_process_id=None))
+    sessions.save(HarnessName.CODEX, replace(example_session(), harness_process_id=None))
 
     interpreter.tick()
 
@@ -1114,7 +1112,7 @@ def test_a_dead_cli_process_becomes_one_session_finished_fact(tmp_path):
         database_path, harnesses
     )
     # A pid that is certainly not a live process with our name.
-    sessions.save("example", replace(example_session(), harness_process_id=2**22 + 1))
+    sessions.save(HarnessName.CODEX, replace(example_session(), harness_process_id=2**22 + 1))
 
     interpreter.tick()
 
@@ -1147,7 +1145,7 @@ def test_the_liveness_source_verifies_the_process_is_still_the_cli():
         session,
         plugin=replace(
             session.plugin,
-            info=HarnessInfo("example", "Example", "1.0", SCHEMA_VERSION, "definitely-not-us"),
+            info=HarnessInfo(HarnessName.CODEX, "Example", "1.0", SCHEMA_VERSION, "definitely-not-us"),
         ),
     )
     raw_events = SessionLivenessSource(imposter, ProcessProbe()).read(None)
@@ -1213,7 +1211,7 @@ def test_an_uncorroborated_interrupt_eventually_clears_the_busy_state(tmp_path):
         database_path, harnesses, interrupts=registry
     )
     reactions = build_reaction_loop(database_path, harnesses, interrupts=registry)
-    sessions.save("example", example_session())
+    sessions.save(HarnessName.CODEX, example_session())
 
     interpreter.tick()  # sees no evidence yet: nothing to abort
 
@@ -1309,7 +1307,7 @@ def test_output_location_directives_run_the_whole_foreground_lifecycle(tmp_path)
         ActorId("actor-lead"),
         None,
         None,
-        "example",
+        HarnessName.CODEX,
         10.0,
         None,
         None,
@@ -1319,7 +1317,7 @@ def test_output_location_directives_run_the_whole_foreground_lifecycle(tmp_path)
     interpreter, sessions, recorder, store, shell_output = build_interpreter(
         database_path, harnesses
     )
-    sessions.save("example", example_session())
+    sessions.save(HarnessName.CODEX, example_session())
 
     output_path = tmp_path / "operation.out"
     output_path.write_bytes(b"hello")
@@ -1341,7 +1339,7 @@ def test_output_location_directives_run_the_whole_foreground_lifecycle(tmp_path)
         until=ShellFollowUntil.SHELL_FINISHED,
     )
     recorder.record((
-        output_location_raw_event(context, "example", located, payload=encode_document(located)),
+        output_location_raw_event(context, HarnessName.CODEX, located, payload=encode_document(located)),
     ))
     interpreter.tick()  # translates the directive; the reaction starts the following
     interpreter.tick()  # pulls the first chunks
@@ -1395,7 +1393,7 @@ def test_a_background_following_survives_operation_finished_until_the_session_en
     ))
     assert len(shell_output.find_for_session(SessionId("session-one"))) == 1
 
-    sessions.save("example", example_session())
+    sessions.save(HarnessName.CODEX, example_session())
     reaction.react(replace(canonical_message(), payload=SessionFinished(Outcome.SUCCEEDED, None)))
 
     assert shell_output.find_for_session(SessionId("session-one")) == ()

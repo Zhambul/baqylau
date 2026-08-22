@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from enum import StrEnum
 from typing import NewType
 
 SessionId = NewType("SessionId", str)
@@ -18,11 +19,7 @@ TaskId = NewType("TaskId", str)
 AttentionId = NewType("AttentionId", str)
 WindowId = NewType("WindowId", str)
 TabId = NewType("TabId", str)
-CallId = NewType("CallId", str)
 AccountId = NewType("AccountId", str)
-HarnessSessionId = NewType("HarnessSessionId", str)
-ModelId = NewType("ModelId", str)
-SelectionId = NewType("SelectionId", str)
 DeviceId = NewType("DeviceId", str)
 UploadId = NewType("UploadId", str)
 RequestId = NewType("RequestId", str)
@@ -30,15 +27,9 @@ ReasoningId = NewType("ReasoningId", str)
 ClientId = NewType("ClientId", str)
 TaskListId = NewType("TaskListId", str)
 QuestionId = NewType("QuestionId", str)
-# The harness's own handle on a backgrounded shell — a process/job handle it
-# needs to interact with the command again, not one of our own ids and not a
-# model's native id either, despite the same field name.
-ShellNativeId = NewType("ShellNativeId", str)
-
-# A NewType, not an enum: the set of harnesses is OPEN — each plugin declares
-# its own name, and shared code may not list them (a closed enum would name
-# every concrete harness in a shared package).
-HarnessName = NewType("HarnessName", str)
+class HarnessName(StrEnum):
+    CLAUDE_CODE = "claude_code"
+    CODEX = "codex"
 
 
 def stable_event_id(

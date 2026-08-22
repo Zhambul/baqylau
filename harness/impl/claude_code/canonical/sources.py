@@ -4,18 +4,25 @@ from __future__ import annotations
 
 import glob
 import hashlib
-import json
 import os
 import time
+
+from pydantic import ValidationError
 
 from domain.ids import ActorId, HarnessName, RawEventId
 from domain.values import ActorRole
 from harness.contract import HarnessRawEventSource, HarnessRawEventSources
 from harness.impl.claude_code import model
-from harness.impl.claude_code.canonical import transcript
+from harness.impl.claude_code.ids import (
+    ClaudeCodeActorId,
+    actor_id_from_claude_code,
+    claude_code_session_id_from_domain,
+    ClaudeCodeTaskListId,
+)
+from harness.impl.claude_code.canonical import records, transcript
 from harness.models import RawEvent, RawEventSourceContext, Session
 
-HARNESS = HarnessName("claude_code")
+HARNESS = HarnessName.CLAUDE_CODE
 
 
 class ClaudeTranscriptRawEventSource(HarnessRawEventSource):
@@ -76,10 +83,10 @@ class ClaudeTranscriptRawEventSource(HarnessRawEventSource):
     def _actor_context(self, line: bytes) -> tuple[ActorId, ActorId | None]:
         try:
             record = transcript.parse_line(line.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
+        except (UnicodeDecodeError, ValidationError):
             record = None
-        if record and record.get("kind") == "teammsg":
-            sender_text = str(record.get("sender") or "")
+        if isinstance(record, transcript.TeamMessageTranscriptRecord):
+            sender_text = record.sender
             if not sender_text:
                 return self.context.actor_id, self.context.parent_actor_id
             # `team-lead` is the LEAD under its teammate-vocabulary alias, not a
@@ -87,12 +94,15 @@ class ClaudeTranscriptRawEventSource(HarnessRawEventSource):
             sender = (
                 self.context.lead_actor_id
                 if sender_text == transcript.LEAD_TEAMMATE_ID
-                else ActorId(sender_text)
+                else actor_id_from_claude_code(ClaudeCodeActorId(sender_text))
             )
             parent_actor_id = None if sender == self.context.lead_actor_id else self.context.lead_actor_id
             return sender, parent_actor_id
-        if record and record.get("kind") == "actor_assignment_finished" and record.get("actor_id"):
-            return ActorId(str(record["actor_id"])), self.context.lead_actor_id
+        if (
+            isinstance(record, transcript.ActorAssignmentFinishedTranscriptRecord)
+            and record.actor_id
+        ):
+            return actor_id_from_claude_code(record.actor_id), self.context.lead_actor_id
         return self.context.actor_id, self.context.parent_actor_id
 
 
@@ -109,37 +119,38 @@ class ClaudeTaskRawEventSource(HarnessRawEventSource):
     def __init__(self, session: Session) -> None:
         self.session = session
         config_directory = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
-        session_prefix = session.harness_session_id.split("-", 1)[0]
+        native_session_id = claude_code_session_id_from_domain(session.session_id)
+        session_prefix = str(native_session_id).split("-", 1)[0]
         self.task_directory = os.path.join(config_directory, "tasks", f"session-{session_prefix}")
-        self.source_identity = f"claude_code:tasks:{session.harness_session_id}"
+        self.source_identity = f"claude_code:tasks:{session.session_id}"
 
     def read(self, after_position: str | None) -> tuple[RawEvent, ...]:
-        current = {}
+        current: list[records.TaskFile] = []
         for path in sorted(glob.glob(os.path.join(self.task_directory, "*.json"))):
             try:
                 with open(path, encoding="utf-8") as source:
-                    task = json.load(source)
-            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                    task = records.TaskFile.model_validate_json(source.read())
+            except (OSError, UnicodeDecodeError):
                 continue
-            if isinstance(task, dict) and task.get("id") is not None:
-                current[str(task["id"])] = task
+            if task.id is not None:
+                current.append(task)
         if not current and after_position is None:
             return ()
-        snapshot = json.dumps(current, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+        snapshot = records.TaskSnapshot(tuple(current)).model_dump_json(exclude_none=True)
         snapshot_digest = hashlib.sha256(snapshot.encode("utf-8")).hexdigest()
         position = f"list:{snapshot_digest}"
         if position == after_position:
             return ()
         raw_events = []
-        for task in current.values():
-            encoded = json.dumps(task, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+        for task in current:
+            encoded = task.model_dump_json(exclude_none=True)
             digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
             raw_events.append(RawEvent(
-                raw_event_id=RawEventId(f"{self.source_identity}:{task['id']}:{digest}"),
+                raw_event_id=RawEventId(f"{self.source_identity}:{task.id}:{digest}"),
                 harness=HARNESS,
                 source_type="tasks",
                 source_name=self.task_directory,
-                source_position=f"{task['id']}:{digest}",
+                source_position=f"{task.id}:{digest}",
                 session_id=self.session.session_id,
                 actor_id=self.session.lead_actor_id,
                 parent_actor_id=None,
@@ -148,12 +159,10 @@ class ClaudeTaskRawEventSource(HarnessRawEventSource):
                 payload=encoded.encode("utf-8"),
                 source_identity=self.source_identity,
             ))
-        membership = json.dumps(
-            {"list_id": "session", "task_ids": list(current)},
-            ensure_ascii=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        )
+        membership = records.TaskListDocument(
+            list_id=ClaudeCodeTaskListId("session"),
+            task_ids=[str(task.id) for task in current],
+        ).model_dump_json(exclude_none=True)
         # The raw identity chains from the previous position so that returning to
         # an EARLIER snapshot still records a new observation (a bare digest would
         # deduplicate against the old row and the position could never latch);
@@ -200,13 +209,16 @@ class ClaudeRawEventSources(HarnessRawEventSources):
                     RawEventSourceContext(
                         session_id=session.session_id,
                         lead_actor_id=session.lead_actor_id,
-                        actor_id=ActorId(actor_name),
+                        actor_id=actor_id_from_claude_code(ClaudeCodeActorId(actor_name)),
                         parent_actor_id=session.lead_actor_id,
                         source_reference=child_path,
                     ),
                     (
                         ActorRole.TEAMMATE
-                        if model.agent_meta(session.source_reference, ActorId(actor_name)).taskKind
+                        if model.agent_meta(
+                            session.source_reference,
+                            actor_id_from_claude_code(ClaudeCodeActorId(actor_name)),
+                        ).taskKind
                         == "in_process_teammate"
                         else ActorRole.CHILD
                     ),

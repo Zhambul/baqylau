@@ -111,7 +111,6 @@ ignore = [
 
 # Foreign IN — another program's records, parsed into our types. This is what a
 # translator IS, and the whole reason the canonical model exists.
-"harness/impl/**/*.py" = ["TID251"]      # each CLI's transcripts, rollouts, hooks, OTEL, usage
 "notify/channels/*.py" = ["TID251"]      # the Telegram and Web Push HTTP APIs
 "terminal/impl/kitty/remote.py" = ["TID251"]   # kitty's remote-control protocol
 "dashboard/dictate.py" = ["TID251"]      # the Deepgram grant API

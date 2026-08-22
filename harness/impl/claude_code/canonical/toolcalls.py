@@ -10,10 +10,9 @@ arguments are remembered until the result arrives.
 
 from __future__ import annotations
 
-import json
+from collections.abc import Mapping
+from dataclasses import dataclass
 from enum import StrEnum
-
-from pydantic import JsonValue
 
 from domain.events import (
     ActorAssignmentFinished,
@@ -37,15 +36,20 @@ from domain.events import (
     WorktreeChanged,
 )
 from domain.ids import (
-    ActorId,
-    AssignmentId,
-    AttentionId,
-    CallId,
-    MessageId,
-    QuestionId,
     ShellId,
-    ShellNativeId,
-    SkillId,
+)
+from harness.impl.claude_code.ids import (
+    ClaudeCodeActorId,
+    ClaudeCodeCallId,
+    ClaudeCodeQuestionId,
+    ClaudeCodeShellId,
+    actor_id_from_claude_code,
+    assignment_id_from_claude_code_call,
+    attention_id_from_claude_code_call,
+    message_id_from_claude_code_call,
+    question_id_from_claude_code,
+    shell_id_from_claude_code_call,
+    skill_id_from_claude_code_call,
 )
 from domain.values import (
     AttentionAnswer,
@@ -94,40 +98,23 @@ class ToolKind(StrEnum):
 # session-specific for the feed to show. Its sibling `ExitPlanMode` is PLAN
 # below, because that call carries the plan text and the person's decision.
 # An unlisted name is drift.
-TOOL_KINDS: dict[str, ToolKind] = {
-    "Bash": ToolKind.SHELL,
-    "Monitor": ToolKind.SHELL,
-    "exec_command": ToolKind.SHELL,
-    "read_command": ToolKind.SHELL,
-    "py": ToolKind.SHELL,
-    "mcp__node_repl__js": ToolKind.SHELL,
-    "Read": ToolKind.FILE,
-    "Write": ToolKind.FILE,
-    "Edit": ToolKind.FILE,
-    "MultiEdit": ToolKind.FILE,
-    "NotebookEdit": ToolKind.FILE,
-    "Grep": ToolKind.SEARCH,
-    "Glob": ToolKind.SEARCH,
-    "WebSearch": ToolKind.SEARCH,
-    "ToolSearch": ToolKind.SEARCH,
-    "WebFetch": ToolKind.WEB,
-    "EnterWorktree": ToolKind.WORKTREE,
-    "ExitWorktree": ToolKind.WORKTREE,
-    "Skill": ToolKind.SKILL,
-    "Task": ToolKind.ASSIGNMENT,
-    "Agent": ToolKind.ASSIGNMENT,
-    "SendMessage": ToolKind.MESSAGE,
-    "AskUserQuestion": ToolKind.QUESTION,
-    "ExitPlanMode": ToolKind.PLAN,
-    "EnterPlanMode": ToolKind.IGNORED,
-    "TaskCreate": ToolKind.IGNORED,
-    "TaskUpdate": ToolKind.IGNORED,
-    "TaskGet": ToolKind.IGNORED,
-    "TaskList": ToolKind.IGNORED,
-    "TaskStop": ToolKind.IGNORED,
-    "ListAgents": ToolKind.IGNORED,
-    "GenerateImage": ToolKind.IGNORED,
-    "image_gen__imagegen": ToolKind.IGNORED,
+TOOL_KINDS: Mapping[str, ToolKind] = {
+    "Bash": ToolKind.SHELL, "Monitor": ToolKind.SHELL,
+    "exec_command": ToolKind.SHELL, "read_command": ToolKind.SHELL,
+    "py": ToolKind.SHELL, "mcp__node_repl__js": ToolKind.SHELL,
+    "Read": ToolKind.FILE, "Write": ToolKind.FILE, "Edit": ToolKind.FILE,
+    "MultiEdit": ToolKind.FILE, "NotebookEdit": ToolKind.FILE,
+    "Grep": ToolKind.SEARCH, "Glob": ToolKind.SEARCH,
+    "WebSearch": ToolKind.SEARCH, "ToolSearch": ToolKind.SEARCH,
+    "WebFetch": ToolKind.WEB, "EnterWorktree": ToolKind.WORKTREE,
+    "ExitWorktree": ToolKind.WORKTREE, "Skill": ToolKind.SKILL,
+    "Task": ToolKind.ASSIGNMENT, "Agent": ToolKind.ASSIGNMENT,
+    "SendMessage": ToolKind.MESSAGE, "AskUserQuestion": ToolKind.QUESTION,
+    "ExitPlanMode": ToolKind.PLAN, "EnterPlanMode": ToolKind.IGNORED,
+    "TaskCreate": ToolKind.IGNORED, "TaskUpdate": ToolKind.IGNORED,
+    "TaskGet": ToolKind.IGNORED, "TaskList": ToolKind.IGNORED,
+    "TaskStop": ToolKind.IGNORED, "ListAgents": ToolKind.IGNORED,
+    "GenerateImage": ToolKind.IGNORED, "image_gen__imagegen": ToolKind.IGNORED,
 }
 
 # Which field of a search tool's input holds what was searched for.
@@ -142,11 +129,9 @@ TRANSCRIPT_RESULT_KINDS: frozenset[ToolKind] = frozenset(
     {ToolKind.SHELL, ToolKind.FILE, ToolKind.SEARCH, ToolKind.WEB, ToolKind.WORKTREE, ToolKind.SKILL}
 )
 
-FILE_ACTIONS: dict[str, FileAction] = {
-    "Read": FileAction.READ,
-    "Write": FileAction.CREATED,
-    "Edit": FileAction.UPDATED,
-    "MultiEdit": FileAction.UPDATED,
+FILE_ACTIONS: Mapping[str, FileAction] = {
+    "Read": FileAction.READ, "Write": FileAction.CREATED,
+    "Edit": FileAction.UPDATED, "MultiEdit": FileAction.UPDATED,
     "NotebookEdit": FileAction.UPDATED,
 }
 
@@ -184,7 +169,7 @@ def structured_patch(
     return "\n".join(lines) + "\n", added, removed
 
 
-def result_content(tool_response: JsonValue) -> Content | None:
+def result_content(tool_response: records.ToolResponse | str | None) -> Content | None:
     """What a call answered, whatever shape the raw event held it in.
 
     A hook reports the native response document, the transcript reports the
@@ -197,15 +182,15 @@ def result_content(tool_response: JsonValue) -> Content | None:
 
 
 def attention_answers(
-    arguments: records.QuestionArguments,
+    arguments: records.ToolArguments,
 ) -> tuple[AttentionAnswer, ...]:
     native_answers = arguments.answers
-    if not isinstance(native_answers, dict):
+    if native_answers is None:
         return ()
     answers = []
     for question_index, question in enumerate(arguments.questions or ()):
         prompt = str(question.question or "")
-        native_answer = native_answers.get(prompt)
+        native_answer = native_answers.root.get(prompt)
         if native_answer is None:
             continue
         if isinstance(native_answer, list):
@@ -216,7 +201,11 @@ def attention_answers(
             labels = (str(native_answer),)
         answers.append(
             AttentionAnswer(
-                prompt_id=QuestionId(str(question.id if question.id is not None else question_index)),
+                prompt_id=question_id_from_claude_code(
+                    ClaudeCodeQuestionId(
+                        str(question.id if question.id is not None else question_index)
+                    )
+                ),
                 labels=labels,
             )
         )
@@ -237,12 +226,26 @@ def plan_resolution(
     elif tool_response is None:
         text = "{}"
     else:
-        text = json.dumps(tool_response.model_dump(exclude_none=True), ensure_ascii=False)
+        text = tool_response.model_dump_json(exclude_none=True)
     marker = "the user said:"
     marker_position = text.find(marker)
     if marker_position >= 0:
         return PlanState.CHANGES_REQUESTED, text[marker_position + len(marker):].strip(), False
     return PlanState.REJECTED, None, False
+
+
+@dataclass(frozen=True)
+class RememberedCall:
+    call_id: ClaudeCodeCallId
+    native_name: str
+    arguments: records.ToolArguments
+
+
+@dataclass
+class MonitorState:
+    task_id: ClaudeCodeShellId
+    shell_id: ShellId
+    event_count: int = 0
 
 
 class ToolCallSemantics:
@@ -258,7 +261,7 @@ class ToolCallSemantics:
     """
 
     def __init__(self) -> None:
-        self.calls: dict[CallId, tuple[str, dict[str, JsonValue]]] = {}
+        self.calls: list[RememberedCall] = []
         # An armed Monitor's TASK id -> the shell that armed it, and how many
         # of its events have been attributed so far. A monitor's per-event
         # notification names only the task id — never the tool_use_id (measured
@@ -266,53 +269,57 @@ class ToolCallSemantics:
         # to the command the monitors tab lists. Its stream-ENDED notification
         # does carry the tool_use_id, so the end needs no memory and survives a
         # daemon restart that loses this.
-        self.monitor_tasks: dict[ShellNativeId, str] = {}
-        self.monitor_event_counts: dict[ShellNativeId, int] = {}
+        self.monitors: list[MonitorState] = []
 
     # --- what a call was, across the two raw event streams ------------------
 
     def remember(
         self,
-        call_id: CallId,
+        call_id: ClaudeCodeCallId,
         native_name: str,
-        arguments: dict[str, JsonValue],
+        arguments: records.ToolArguments,
     ) -> None:
-        self.calls[call_id] = (native_name, arguments)
+        self.calls = [call for call in self.calls if call.call_id != call_id]
+        self.calls.append(RememberedCall(call_id, native_name, arguments))
 
     def recall(
         self,
-        call_id: CallId,
+        call_id: ClaudeCodeCallId,
         native_name: str | None,
-        arguments: dict[str, JsonValue] | None,
-    ) -> tuple[str, dict[str, JsonValue]]:
+        arguments: records.ToolArguments | None,
+    ) -> tuple[str, records.ToolArguments]:
         """The call's name and input: what this record carries, else what the
         request said. A record that has neither is a call whose start we never
         saw — a daemon that restarted mid-call — and it cannot be classified."""
-        remembered_name, remembered_arguments = self.calls.get(call_id, ("", {}))
-        name = native_name or remembered_name
+        remembered = next((call for call in self.calls if call.call_id == call_id), None)
+        name = native_name or (remembered.native_name if remembered else "")
         if not name:
             raise UnknownRawEvent(f"Claude Code tool result names no call: {call_id or '<missing>'}")
-        return name, arguments if arguments else remembered_arguments
+        return name, arguments or (remembered.arguments if remembered else records.ToolArguments())
 
-    def known(self, call_id: CallId) -> bool:
-        return call_id in self.calls
+    def known(self, call_id: ClaudeCodeCallId) -> bool:
+        return any(call.call_id == call_id for call in self.calls)
 
-    def monitor_armed(self, task_id: ShellNativeId, shell_id: ShellId) -> None:
-        self.monitor_tasks[task_id] = str(shell_id)
+    def monitor_armed(self, task_id: ClaudeCodeShellId, shell_id: ShellId) -> None:
+        self.monitors = [monitor for monitor in self.monitors if monitor.task_id != task_id]
+        self.monitors.append(MonitorState(task_id, shell_id))
 
-    def monitor_shell(self, task_id: ShellNativeId) -> ShellId | None:
-        remembered = self.monitor_tasks.get(task_id)
-        return ShellId(remembered) if remembered else None
+    def monitor_shell(self, task_id: ClaudeCodeShellId) -> ShellId | None:
+        monitor = next((monitor for monitor in self.monitors if monitor.task_id == task_id), None)
+        return monitor.shell_id if monitor else None
 
-    def next_monitor_ordinal(self, task_id: ShellNativeId) -> int:
+    def next_monitor_ordinal(self, task_id: ClaudeCodeShellId) -> int:
         """The position of the next event of this monitor, counted from zero.
 
         Part of the event's identity, not decoration: `stable_event_id` is built
         from the subject and the phase, so two events of one monitor recorded
         under the same phase would collapse into one row (measured — six ticks
         became one canonical event that way)."""
-        ordinal = self.monitor_event_counts.get(task_id, 0)
-        self.monitor_event_counts[task_id] = ordinal + 1
+        monitor = next((monitor for monitor in self.monitors if monitor.task_id == task_id), None)
+        if monitor is None:
+            return 0
+        ordinal = monitor.event_count
+        monitor.event_count += 1
         return ordinal
 
     # --- the request ---------------------------------------------------------
@@ -320,14 +327,14 @@ class ToolCallSemantics:
     def tool_started(
         self,
         raw_event: RawEvent,
-        native: dict[str, JsonValue],
+        tool_call_native: records.ToolCallNative,
     ) -> list[CanonicalEvent[EventPayload]]:
-        call = records.ToolCallNative.model_validate(native)
-        call_id = CallId(str(call.tool_use_id or call.id or raw_event.source_position))
+        call = tool_call_native
+        call_id = ClaudeCodeCallId(str(call.tool_use_id or call.id or raw_event.source_position))
         native_name = str(call.tool_name or call.name or "tool")
         kind = tool_kind(native_name)
         arguments = call.tool_input if call.tool_input is not None else call.input
-        arguments = arguments if arguments is not None else {}
+        arguments = arguments if arguments is not None else records.ToolArguments()
         self.remember(call_id, native_name, arguments)
         if kind == ToolKind.SHELL:
             return [self._shell_started(raw_event, call_id, native_name, arguments)]
@@ -338,13 +345,12 @@ class ToolCallSemantics:
         if kind == ToolKind.MESSAGE:
             return [self._actor_message(raw_event, call_id, arguments)]
         if kind == ToolKind.QUESTION:
-            attention_id = AttentionId(call_id)
+            attention_id = attention_id_from_claude_code_call(call_id)
             payload: EventPayload = QuestionAsked(attention_id, self.questions(arguments))
             return [event(raw_event, "question", str(attention_id), "asked", payload)]
         if kind == ToolKind.PLAN:
-            attention_id = AttentionId(call_id)
-            plan_arguments = records.PlanArguments.model_validate(arguments)
-            payload = PlanProposed(attention_id, content(plan_arguments.plan or "", markdown=True))
+            attention_id = attention_id_from_claude_code_call(call_id)
+            payload = PlanProposed(attention_id, content(arguments.plan or "", markdown=True))
             return [event(raw_event, "plan", str(attention_id), "proposed", payload)]
         # file, search, web, worktree: nothing is known yet that is worth a
         # fact. `ignored`: nothing ever will be.
@@ -353,12 +359,12 @@ class ToolCallSemantics:
     def _shell_started(
         self,
         raw_event: RawEvent,
-        call_id: CallId,
+        call_id: ClaudeCodeCallId,
         native_name: str,
-        arguments: dict[str, JsonValue],
+        arguments: records.ToolArguments,
     ) -> CanonicalEvent[EventPayload]:
-        shell = records.ShellArguments.model_validate(arguments)
-        shell_id = ShellId(call_id)
+        shell = arguments
+        shell_id = shell_id_from_claude_code_call(call_id)
         if native_name == "Monitor":
             execution: ExecutionMode = ExecutionMode.MONITOR
         elif native_name == "Bash" and shell.run_in_background:
@@ -377,27 +383,25 @@ class ToolCallSemantics:
     def _skill_started(
         self,
         raw_event: RawEvent,
-        call_id: CallId,
-        arguments: dict[str, JsonValue],
+        call_id: ClaudeCodeCallId,
+        arguments: records.ToolArguments,
     ) -> CanonicalEvent[EventPayload]:
-        skill_id = SkillId(call_id)
-        skill = records.SkillArguments.model_validate(arguments)
-        name = str(skill.skill or "")
+        skill_id = skill_id_from_claude_code_call(call_id)
+        name = str(arguments.skill or "")
         # The input a Skill call carries is the skill name and, at most, an
         # `args` string; when that is all there is, there are no arguments to
         # show and saying so beats echoing the name twice.
-        extra = {key: value for key, value in arguments.items() if key != "skill"}
-        payload = SkillStarted(skill_id, name, content(extra) if extra else None)
+        payload = SkillStarted(skill_id, name, content(arguments.args) if arguments.args else None)
         return event(raw_event, "skill", str(skill_id), "started", payload)
 
     def _assignment_started(
         self,
         raw_event: RawEvent,
-        call_id: CallId,
-        arguments: dict[str, JsonValue],
+        call_id: ClaudeCodeCallId,
+        arguments: records.ToolArguments,
     ) -> CanonicalEvent[EventPayload]:
-        assignment_id = AssignmentId(call_id)
-        assignment = records.AssignmentArguments.model_validate(arguments)
+        assignment_id = assignment_id_from_claude_code_call(call_id)
+        assignment = arguments
         actor_name = assignment.name or assignment.subagent_type
         prompt = assignment.prompt
         payload = ActorAssignmentStarted(
@@ -411,14 +415,16 @@ class ToolCallSemantics:
     def _actor_message(
         self,
         raw_event: RawEvent,
-        call_id: CallId,
-        arguments: dict[str, JsonValue],
+        call_id: ClaudeCodeCallId,
+        arguments: records.ToolArguments,
     ) -> CanonicalEvent[EventPayload]:
         """A SendMessage: the actor speaking to a named peer, which is a message
         with a recipient — not a tool call with a text argument."""
-        message = records.SendMessageArguments.model_validate(arguments)
-        recipient = ActorId(str(message.recipient or message.to or "peer"))
-        message_id = MessageId(call_id)
+        message = arguments
+        recipient = actor_id_from_claude_code(
+            ClaudeCodeActorId(str(message.recipient or message.to or "peer"))
+        )
+        message_id = message_id_from_claude_code_call(call_id)
         payload = MessageCreated(
             message_id,
             MessageRole.ASSISTANT,
@@ -434,7 +440,7 @@ class ToolCallSemantics:
     def tool_finished(
         self,
         raw_event: RawEvent,
-        native: dict[str, JsonValue],
+        tool_call_native: records.ToolCallNative,
         failed: bool,
         *,
         result: Content | None = None,
@@ -446,8 +452,8 @@ class ToolCallSemantics:
         response document below stands in for it. Both spellings of one answer
         converge on one fact.
         """
-        call = records.ToolCallNative.model_validate(native)
-        call_id = CallId(str(call.tool_use_id or call.id or raw_event.source_position))
+        call = tool_call_native
+        call_id = ClaudeCodeCallId(str(call.tool_use_id or call.id or raw_event.source_position))
         native_name, arguments = self.recall(
             call_id,
             call.tool_name if call.tool_name else None,
@@ -462,49 +468,41 @@ class ToolCallSemantics:
             else records.ToolResponse()
         )
         outcome: Outcome = Outcome.FAILED if failed else Outcome.SUCCEEDED
-        raw_tool_response: JsonValue = (
-            call.tool_response.model_dump(exclude_none=True)
-            if isinstance(call.tool_response, records.ToolResponse)
-            else call.tool_response
-        )
-        answered = result if result is not None else result_content(raw_tool_response)
+        answered = result if result is not None else result_content(call.tool_response)
         if kind == ToolKind.SHELL:
             return self._shell_finished(raw_event, call_id, native_name, arguments, tool_response, outcome)
         if kind == ToolKind.SKILL:
-            skill_id = SkillId(call_id)
+            skill_id = skill_id_from_claude_code_call(call_id)
             payload: EventPayload = SkillFinished(skill_id, outcome, answered)
             return [event(raw_event, "skill", str(skill_id), "finished", payload)]
         if kind == ToolKind.ASSIGNMENT:
             return self._assignment_finished(raw_event, call_id, tool_response, outcome)
         if kind == ToolKind.QUESTION:
-            attention_id = AttentionId(call_id)
-            question_arguments = records.QuestionArguments.model_validate(arguments)
-            payload = QuestionAnswered(attention_id, attention_answers(question_arguments), None)
+            attention_id = attention_id_from_claude_code_call(call_id)
+            payload = QuestionAnswered(attention_id, attention_answers(arguments), None)
             return [event(raw_event, "question", str(attention_id), "answered", payload)]
         if kind == ToolKind.PLAN:
-            attention_id = AttentionId(call_id)
+            attention_id = attention_id_from_claude_code_call(call_id)
             state, feedback, edited = plan_resolution(call.tool_response, failed)
             payload = PlanResolved(attention_id, state, feedback, edited)
             return [event(raw_event, "plan", str(attention_id), "resolved", payload)]
         if kind == ToolKind.FILE:
             return self.file_facts(raw_event, call_id, native_name, arguments, tool_response, outcome)
         if kind == ToolKind.SEARCH:
-            search_arguments = records.SearchArguments.model_validate(arguments)
             query = next(
                 (
-                    getattr(search_arguments, field)
+                    getattr(arguments, field)
                     for field in SEARCH_QUERY_FIELDS
-                    if getattr(search_arguments, field)
+                    if getattr(arguments, field)
                 ),
                 None,
             )
             payload = SearchPerformed(native_name, content(query), answered, outcome)
             return [event(raw_event, "search", call_id, "performed", payload)]
         if kind == ToolKind.WEB:
-            url = records.WebFetchArguments.model_validate(arguments).url
+            url = arguments.url
             payload = WebFetched(str(url) if url else None, answered, outcome)
             return [event(raw_event, "web", call_id, "fetched", payload)]
-        records.WorktreeArguments.model_validate(arguments)  # shape-check only
         action: WorktreeAction = WorktreeAction.ENTERED if native_name == "EnterWorktree" else WorktreeAction.EXITED
         payload = WorktreeChanged(action, content(arguments) if arguments else None, outcome)
         return [event(raw_event, "worktree", call_id, "changed", payload)]
@@ -512,10 +510,10 @@ class ToolCallSemantics:
     def tool_result(
         self,
         raw_event: RawEvent,
-        call_id: CallId,
+        call_id: ClaudeCodeCallId,
         result_text: str,
         failed: bool,
-        tool_response: JsonValue,
+        tool_response: records.ToolResponse | str | None,
     ) -> list[CanonicalEvent[EventPayload]]:
         """One tool_result block from the transcript, as facts.
 
@@ -532,7 +530,7 @@ class ToolCallSemantics:
             return []
         events: list[CanonicalEvent[EventPayload]] = []
         if kind == ToolKind.SHELL:
-            shell_id = ShellId(call_id)
+            shell_id = shell_id_from_claude_code_call(call_id)
             # REPLACE, and ordinal zero: this is the whole output as the harness
             # recorded it, not one more slice of a file being followed.
             events.append(event(
@@ -542,13 +540,17 @@ class ToolCallSemantics:
                 "progress:0",
                 ShellProgressed(shell_id, 0, ProgressStream.OUTPUT, content(result_text), OutputMode.REPLACE),
             ))
-        native: dict[str, JsonValue] = {"tool_use_id": str(call_id), "tool_response": tool_response}
         events.extend(
-            self.tool_finished(raw_event, native, failed, result=content(result_text))
+            self.tool_finished(
+                raw_event,
+                records.ToolCallNative(tool_use_id=call_id, tool_response=tool_response),
+                failed,
+                result=content(result_text),
+            )
         )
         return events
 
-    def pending_attention(self, call_id: CallId) -> bool:
+    def pending_attention(self, call_id: ClaudeCodeCallId) -> bool:
         """Whether this call was one that asks a person something."""
         if not self.known(call_id):
             return False
@@ -558,16 +560,16 @@ class ToolCallSemantics:
     def _shell_finished(
         self,
         raw_event: RawEvent,
-        call_id: CallId,
+        call_id: ClaudeCodeCallId,
         native_name: str,
-        arguments: dict[str, JsonValue],
+        arguments: records.ToolArguments,
         tool_response: records.ToolResponse,
         outcome: Outcome,
     ) -> list[CanonicalEvent[EventPayload]]:
-        shell_id = ShellId(call_id)
+        shell_id = shell_id_from_claude_code_call(call_id)
         events: list[CanonicalEvent[EventPayload]] = []
         response = tool_response
-        shell_arguments = records.ShellArguments.model_validate(arguments)
+        shell_arguments = arguments
         # BACKGROUNDED MID-RUN (ctrl+b on a running command). Structural, from the
         # one document that holds both halves: the input never asked to run in the
         # background, and the response carries a background task id anyway. The
@@ -584,21 +586,21 @@ class ToolCallSemantics:
         # BEFORE the finish below, deliberately: the follow of the file this
         # command is still writing to is ended by `shell.finished` unless this
         # fact has already re-armed it (see ShellBackgrounded).
-        background_task_id = ShellNativeId(str(response.backgroundTaskId or ""))
+        background_task_id = ClaudeCodeShellId(str(response.backgroundTaskId or ""))
         if background_task_id and not shell_arguments.run_in_background:
             events.append(event(
                 raw_event,
                 "shell",
                 str(shell_id),
                 "backgrounded",
-                ShellBackgrounded(shell_id, background_task_id),
+                ShellBackgrounded(shell_id),
             ))
         # An armed Monitor names its task id here and nowhere else this
         # translation can see it. The `shell.finished` below is the ARM
         # returning, not the watch ending — the watch runs on, and its own end
         # arrives as a notification (see monitor_armed).
         if native_name == "Monitor":
-            task_id = ShellNativeId(str(response.taskId or ""))
+            task_id = ClaudeCodeShellId(str(response.taskId or ""))
             if task_id:
                 self.monitor_armed(task_id, shell_id)
         events.append(event(
@@ -614,7 +616,7 @@ class ToolCallSemantics:
     def _assignment_finished(
         self,
         raw_event: RawEvent,
-        call_id: CallId,
+        call_id: ClaudeCodeCallId,
         tool_response: records.ToolResponse,
         outcome: Outcome,
     ) -> list[CanonicalEvent[EventPayload]]:
@@ -623,14 +625,14 @@ class ToolCallSemantics:
         )
         if async_launched:
             return []
-        assignment_id = AssignmentId(call_id)
+        assignment_id = assignment_id_from_claude_code_call(call_id)
         payload = ActorAssignmentFinished(assignment_id, outcome, None, None)
         return [event(raw_event, "actor_assignment", str(assignment_id), "finished", payload)]
 
     def attention_declined(
         self,
         raw_event: RawEvent,
-        call_id: CallId,
+        call_id: ClaudeCodeCallId,
         result_text: str,
     ) -> CanonicalEvent[EventPayload]:
         """The resolution of an attention the user REFUSED. A refused tool call never
@@ -639,7 +641,7 @@ class ToolCallSemantics:
         request ended. It names no tool, hence the remembered call. Refusal carries
         no answers, so nothing is lost if the hook path also reports the same fact:
         both derive the resolution from the same text and converge on one event."""
-        attention_id = AttentionId(call_id)
+        attention_id = attention_id_from_claude_code_call(call_id)
         native_name, _arguments = self.recall(call_id, None, None)
         if native_name == "AskUserQuestion":
             payload: EventPayload = QuestionAnswered(attention_id, (), None)
@@ -651,16 +653,16 @@ class ToolCallSemantics:
     def file_facts(
         self,
         raw_event: RawEvent,
-        call_id: CallId,
+        call_id: ClaudeCodeCallId,
         native_name: str,
-        arguments: dict[str, JsonValue],
+        arguments: records.ToolArguments,
         tool_response: records.ToolResponse,
         outcome: Outcome,
     ) -> list[CanonicalEvent[EventPayload]]:
         action = FILE_ACTIONS.get(native_name)
         if action is None:
             return []
-        file_arguments = records.FileArguments.model_validate(arguments)
+        file_arguments = arguments
         path = file_arguments.file_path or file_arguments.notebook_path or ""
         if not path:
             return []
@@ -683,18 +685,21 @@ class ToolCallSemantics:
 
     @staticmethod
     def questions(
-        arguments: dict[str, JsonValue],
+        arguments: records.ToolArguments,
     ) -> tuple[AttentionPrompt, ...]:
-        question_arguments = records.QuestionArguments.model_validate(arguments)
         prompts = []
-        for index, question in enumerate(question_arguments.questions or ()):
+        for index, question in enumerate(arguments.questions or ()):
             choices = tuple(
                 AttentionChoice(option.label or "", option.description or None)
                 for option in question.options or ()
             )
             prompts.append(
                 AttentionPrompt(
-                    prompt_id=QuestionId(str(question.id if question.id is not None else index)),
+                    prompt_id=question_id_from_claude_code(
+                        ClaudeCodeQuestionId(
+                            str(question.id if question.id is not None else index)
+                        )
+                    ),
                     title=question.header or None,
                     prompt=question.question or "",
                     multiple=bool(question.multiSelect),

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from decimal import Decimal
 
 from domain.ids import HarnessName
@@ -11,8 +12,12 @@ from repository.contract.usage import AccountUsageRepository
 from harness.models import UsageRow, UsageWindow
 from harness.models.usage import UsageWindowScope
 
-HARNESS = HarnessName("codex")
-WINDOW_LABELS = {300: "5h", 10080: "7d"}
+HARNESS = HarnessName.CODEX
+WINDOW_LABELS: Mapping[int, str] = {300: "5h", 10080: "7d"}
+
+
+def _window_label(duration_minutes: int) -> str:
+    return WINDOW_LABELS.get(duration_minutes, f"{duration_minutes}m")
 
 
 class CodexUsage(HarnessUsage):
@@ -25,15 +30,12 @@ class CodexUsage(HarnessUsage):
         windows = tuple(
             UsageWindow(
                 key=f"minutes_{window.duration_minutes}",
-                label=WINDOW_LABELS.get(
-                    window.duration_minutes,
-                    f"{window.duration_minutes}m",
-                ),
+                label=_window_label(window.duration_minutes),
                 used_percent=Decimal(str(window.used_percent)),
                 resets_at=float(window.resets_at) if window.resets_at is not None else None,
                 duration_minutes=window.duration_minutes,
                 scope=UsageWindowScope.ACCOUNT,
-                model_id=None,
+                model_name=None,
             )
             for window in rate_limits.windows
         )

@@ -31,7 +31,7 @@
 #     appears after the last question unless the ask was a single
 #     single-select question.
 import re
-from typing import TypedDict
+from dataclasses import dataclass
 
 from harness.impl.claude_code.canonical import records
 
@@ -58,7 +58,8 @@ _ACTION_ROW = re.compile(r"^\s*(?P<cur>❯\s+)?"
                          r"(?P<label>Next|Submit|Chat about this)\s*$")
 
 
-class Row(TypedDict):
+@dataclass(frozen=True)
+class Row:
     """One cursor-navigable dialog row as parsed off the screen (see rows())."""
 
     digit: str
@@ -116,16 +117,18 @@ def rows(screen: str) -> list[Row]:
     for ln in region(screen).splitlines():
         m = _ROW.match(ln)
         if m:
-            out.append({"digit": m.group("digit"),
-                        "label": m.group("label").strip(),
-                        "cursor": bool(m.group("cur")),
-                        "check": (None if m.group("check") is None
-                                  else m.group("check") != " ")})
+            out.append(
+                Row(
+                    m.group("digit"),
+                    m.group("label").strip(),
+                    bool(m.group("cur")),
+                    None if m.group("check") is None else m.group("check") != " ",
+                )
+            )
             continue
         m = _ACTION_ROW.match(ln)
         if m:
-            out.append({"digit": "", "label": m.group("label"),
-                        "cursor": bool(m.group("cur")), "check": None})
+            out.append(Row("", m.group("label"), bool(m.group("cur")), None))
     return out
 
 
@@ -160,4 +163,4 @@ def current_question(
 
 
 def cursor_row(screen: str) -> Row | None:
-    return next((r for r in rows(screen) if r["cursor"]), None)
+    return next((row for row in rows(screen) if row.cursor), None)

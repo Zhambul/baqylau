@@ -157,7 +157,7 @@ def committed(
         actor_id=actor_id,
         turn_id=turn_id,
         parent_actor_id=parent_actor_id,
-        harness=HarnessName("example"),
+        harness=HarnessName.CODEX,
         occurred_at=occurred_at,
         terminal_window_id=None,
         harness_process_id=None,
@@ -344,18 +344,18 @@ def test_an_actor_is_born_once_and_reopens_rather_than_forgetting():
 def test_an_actor_carries_one_model_name_and_its_effort():
     state = fold(
         *alive(),
-        ModelChanged(None, ModelReference("claude-opus-5", "Opus 5", "opus"), "selected"),
+        ModelChanged(None, ModelReference("claude-opus-5", "Opus 5"), "selected"),
         EffortChanged(None, "high", "selected"),
     )
     # The whole reference is kept: a reader is shown the display name, and a
     # relaunch needs the harness's own id for the same model.
-    assert state.actor(LEAD).model == ModelReference("claude-opus-5", "Opus 5", "opus")
+    assert state.actor(LEAD).model == ModelReference("claude-opus-5", "Opus 5")
     assert state.actor(LEAD).effort == "high"
 
 
-def test_a_model_with_no_display_name_still_records_its_native_id():
-    state = fold(*alive(), ModelChanged(None, ModelReference("gpt-5.4", None, None), "selected"))
-    assert state.actor(LEAD).model.native_id == "gpt-5.4"
+def test_a_model_with_no_display_name_still_records_its_name():
+    state = fold(*alive(), ModelChanged(None, ModelReference("gpt-5.4", None), "selected"))
+    assert state.actor(LEAD).model.name == "gpt-5.4"
 
 
 def test_the_harness_namer_settles_the_display_at_fold_time():
@@ -366,11 +366,11 @@ def test_the_harness_namer_settles_the_display_at_fold_time():
     from engine.sessiondata.naming import ModelNaming
     from harness.impl.claude_code.model import display_model
 
-    writer = ActorWriter(ModelNaming({"example": display_model}))
+    writer = ActorWriter(ModelNaming({HarnessName.CODEX: display_model}))
     state = AggregateState()
     for payload in (
         *alive(),
-        ModelChanged(None, ModelReference("sonnet", None, "sonnet"), "selected"),
+        ModelChanged(None, ModelReference("sonnet", None), "selected"),
     ):
         state = writer.write(committed(payload), state)
     assert state.actor(LEAD).model.display_name == "sonnet-5"
@@ -380,11 +380,11 @@ def test_the_claude_namer_speaks_one_vocabulary():
     from harness.impl.claude_code.model import display_model
     from harness.impl.claude_code.plugin import MODELS
 
-    assert display_model(ModelReference("claude-sonnet-5", None, "sonnet")) == "sonnet-5"
-    assert display_model(ModelReference("sonnet", None, "sonnet")) == "sonnet-5"
-    assert display_model(ModelReference("claude-haiku-4-5-20251001", None, None)) == "haiku-4.5"
+    assert display_model(ModelReference("claude-sonnet-5", None)) == "sonnet-5"
+    assert display_model(ModelReference("sonnet", None)) == "sonnet-5"
+    assert display_model(ModelReference("claude-haiku-4-5-20251001", None)) == "haiku-4.5"
     # the PICKER offers the same strings, keyed by the alias the harness takes
-    assert {option.model_id: option.display_name for option in MODELS} == {
+    assert {option.value: option.display_name for option in MODELS} == {
         "fable": "fable-5", "opus": "opus-5", "sonnet": "sonnet-5", "haiku": "haiku-4.5",
     }
 
@@ -514,7 +514,7 @@ def test_a_command_backgrounded_mid_run_becomes_background_work_and_counts_as_a_
     state = fold(
         *alive(),
         ShellStarted(ShellId("sh1"), TextContent("make test"), ExecutionMode.FOREGROUND, None),
-        ShellBackgrounded(ShellId("sh1"), "b18"),
+        ShellBackgrounded(ShellId("sh1")),
     )
     background = state.actor(LEAD).background
     assert background.running_shell_ids == (ShellId("sh1"),)
@@ -790,8 +790,8 @@ def test_a_question_entry_keeps_the_choices_a_person_is_offered():
 def test_a_model_change_entry_marks_a_fallback_the_harness_chose_for_you():
     automatic = entry_of(
         ModelChanged(
-            ModelReference("claude-opus-5", "Opus 5", None),
-            ModelReference("claude-fable-5", "Fable 5", None),
+            ModelReference("claude-opus-5", "Opus 5"),
+            ModelReference("claude-fable-5", "Fable 5"),
             "automatic_fallback",
         )
     )
@@ -810,8 +810,8 @@ def test_only_a_real_switch_reaches_the_feed():
     landing on a per-actor row and correct; it drew a line only because a report
     used to draw one.
     """
-    launched = ModelReference("sonnet", "sonnet", "sonnet")
-    resolved = ModelReference("claude-sonnet-5", "sonnet-5", "sonnet")
+    launched = ModelReference("sonnet", "sonnet")
+    resolved = ModelReference("claude-sonnet-5", "sonnet-5")
 
     # An initial report is not a change: nothing it replaced is known, which is
     # what `previous is None` means.
@@ -820,8 +820,8 @@ def test_only_a_real_switch_reaches_the_feed():
     # …and the same value again, from the harness's own stream, is not either.
     assert body_of(EffortChanged("low", "low", "reported_by_harness")) is None
 
-    # A name being REFINED is not a change: same selection, two spellings.
-    assert body_of(ModelChanged(launched, resolved, "reported_by_harness")) is None
+    # Alias refinement is suppressed by the adapter before this layer; the
+    # canonical reader deliberately has no vendor alias vocabulary.
     # …but the actor's row takes the better name, because that is what an
     # aggregate is for. The refinement lands; only the feed line goes.
     state = fold(
@@ -833,11 +833,11 @@ def test_only_a_real_switch_reaches_the_feed():
 
     # A person switching models IS a change: a different selection.
     assert body_of(
-        ModelChanged(resolved, ModelReference("claude-opus-5", "Opus 5", "opus"), "selected")
+        ModelChanged(resolved, ModelReference("claude-opus-5", "Opus 5"), "selected")
     ) == ModelChangeBody("Opus 5", "sonnet-5", False)
     # So is a fallback the harness chose, and it says so.
     assert body_of(
-        ModelChanged(resolved, ModelReference("claude-haiku-4-5", "haiku", None),
+        ModelChanged(resolved, ModelReference("claude-haiku-4-5", "haiku"),
                      "automatic_fallback")
     ) == ModelChangeBody("haiku", "sonnet-5", True)
     # And so is a real effort switch.
@@ -919,7 +919,7 @@ def _record(database, events, payloads) -> None:
     for cursor, payload in enumerate(payloads, start=1):
         raw_event = RawEvent(
             raw_event_id=RawEventId(f"raw-{cursor}"),
-            harness=HarnessName("example"),
+            harness=HarnessName.CODEX,
             source_type="fixture",
             source_name="fixture.jsonl",
             source_position=str(cursor),
@@ -1116,7 +1116,7 @@ class FixedSessions:
         self.lead_actor_id = lead_actor_id
 
     def find(self, session_id):
-        return Session(SESSION, self.lead_actor_id, "native", "fixture", "/work")
+        return Session(SESSION, self.lead_actor_id, "fixture", "/work")
 
 
 def test_the_tab_is_painted_from_the_status_that_was_just_committed(tmp_path):

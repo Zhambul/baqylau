@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pydantic import JsonValue
-
 from domain.events import (
     ActorFinished,
     ActorNameChanged,
@@ -40,9 +38,7 @@ def effort_report(
     Every one of those hooks reports it, so all but the first report the level
     that is already known — a change event with nothing changed. Only a real
     transition survives `selections`."""
-    level: JsonValue = hook.effort
-    if isinstance(level, dict):
-        level = level.get("level")
+    level = hook.effort.level if isinstance(hook.effort, records.HookEffort) else hook.effort
     if not isinstance(level, str) or not level:
         return []
     changed = selection_semantics.effort(
@@ -84,16 +80,15 @@ def turn_finished(
 
 def translate_hook(
     raw_event: RawEvent,
-    document: dict[str, JsonValue],
+    hook: records.HookPayload,
     tool_call_semantics: ToolCallSemantics,
     turn_semantics: TurnSemantics,
     selection_semantics: SelectionSemantics,
 ) -> list[CanonicalEvent[EventPayload]]:
-    hook = records.HookPayload.model_validate(document)
     hook_name = hook.hook_event_name or ""
     native_identity = str(hook.hook_event_id or hook.uuid or raw_event.source_position)
     if hook_name == "SessionStart":
-        return session_events(raw_event, document)
+        return session_events(raw_event, hook)
     if hook_name == "SessionEnd":
         payload: EventPayload = SessionFinished(Outcome.SUCCEEDED, hook.reason or None)
         return [event(raw_event, "session", str(raw_event.session_id), "finished", payload)]
@@ -115,12 +110,21 @@ def translate_hook(
         return events
     if hook_name == "PreToolUse":
         return [
-            *tool_call_semantics.tool_started(raw_event, document),
+            *tool_call_semantics.tool_started(raw_event, records.ToolCallNative(
+                tool_use_id=hook.tool_use_id,
+                tool_name=hook.tool_name,
+                tool_input=hook.tool_input,
+            )),
             *effort_report(raw_event, hook, selection_semantics),
         ]
     if hook_name in ("PostToolUse", "PostToolUseFailure"):
         return [
-            *tool_call_semantics.tool_finished(raw_event, document, hook_name == "PostToolUseFailure"),
+            *tool_call_semantics.tool_finished(raw_event, records.ToolCallNative(
+                tool_use_id=hook.tool_use_id,
+                tool_name=hook.tool_name,
+                tool_input=hook.tool_input,
+                tool_response=hook.tool_response,
+            ), hook_name == "PostToolUseFailure"),
             *effort_report(raw_event, hook, selection_semantics),
         ]
     if hook_name == "SubagentStart":

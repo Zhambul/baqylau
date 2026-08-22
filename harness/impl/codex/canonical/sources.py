@@ -4,25 +4,39 @@ from __future__ import annotations
 
 import glob
 import hashlib
-import json
 import os
 import re
 import time
-from domain.ids import ActorId, HarnessName, HarnessSessionId, RawEventId
+from dataclasses import dataclass
+from pydantic import ValidationError
+from domain.ids import HarnessName, RawEventId
+from harness.impl.codex.ids import (
+    CodexActorId,
+    CodexSessionId,
+    actor_id_from_codex,
+    codex_session_id_from_domain,
+)
 from domain.values import ActorRole
 from harness.contract import HarnessRawEventSource, HarnessRawEventSources
 from harness.impl.codex.canonical import rollout
-from harness.impl.codex.canonical.records import SessionMetaPayload, SessionMetaSource
+from harness.impl.codex.canonical.records import (
+    RolloutDocument,
+    RolloutHeader,
+    SessionMetaPayload,
+    SessionMetaSource,
+)
 from harness.models import RawEvent, RawEventSourceContext, Session
 
-HARNESS = HarnessName("codex")
+HARNESS = HarnessName.CODEX
 ROLLOUT_NAME = re.compile(r"rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-(.+)\.jsonl$")
 EVENT_BATCH_SIZE = 100
 
 
-def harness_session_id(path: str) -> str:
+def codex_session_id(path: str) -> CodexSessionId:
     match = ROLLOUT_NAME.search(os.path.basename(path))
-    return match.group(1) if match else os.path.splitext(os.path.basename(path))[0]
+    return CodexSessionId(
+        match.group(1) if match else os.path.splitext(os.path.basename(path))[0]
+    )
 
 
 def session_metadata(path: str) -> SessionMetaPayload | None:
@@ -37,11 +51,10 @@ def session_metadata(path: str) -> SessionMetaPayload | None:
                 line = source.readline()
                 if not line:
                     break
-                document = json.loads(line)
-                if isinstance(document, dict) and document.get("type") == "session_meta":
-                    payload = document.get("payload")
-                    return SessionMetaPayload.model_validate(payload if isinstance(payload, dict) else {})
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                header = RolloutHeader.model_validate_json(line)
+                if header.type == "session_meta":
+                    return RolloutDocument[SessionMetaPayload].model_validate_json(line).payload
+    except (OSError, UnicodeDecodeError, ValidationError):
         return None
     return None
 
@@ -140,39 +153,53 @@ class CodexRolloutRawEventSource(HarnessRawEventSource):
         return f"{self.actor_role}_rollout" if self.actor_role else "rollout"
 
 
+@dataclass
+class ChildRollouts:
+    parent_session_id: CodexSessionId
+    paths: tuple[str, ...]
+    next_index: int = 0
+
+
 class CodexRawEventSources(HarnessRawEventSources):
     def __init__(self) -> None:
         self._known_rollout_paths: tuple[str, ...] = ()
-        self._child_rollouts: dict[str, tuple[str, ...]] = {}
-        self._next_child: dict[str, int] = {}
+        self._child_rollouts: list[ChildRollouts] = []
 
-    def _next_child_rollout(self, parent_harness_session_id: HarnessSessionId) -> tuple[str, ...]:
+    def _next_child_rollout(self, parent_codex_session_id: CodexSessionId) -> tuple[str, ...]:
         rollout_paths = _rollout_paths()
         if rollout_paths != self._known_rollout_paths:
-            children: dict[str, list[str]] = {}
+            children: list[ChildRollouts] = []
             for rollout_path in rollout_paths:
                 parent_id = _parent_thread_id(session_metadata(rollout_path))
                 if parent_id:
-                    children.setdefault(parent_id, []).append(rollout_path)
+                    group = next(
+                        (child for child in children if child.parent_session_id == parent_id),
+                        None,
+                    )
+                    if group is None:
+                        group = ChildRollouts(CodexSessionId(parent_id), ())
+                        children.append(group)
+                    group.paths = (*group.paths, rollout_path)
             self._known_rollout_paths = rollout_paths
-            self._child_rollouts = {
-                parent_id: tuple(paths)
-                for parent_id, paths in children.items()
-            }
-        parent_id_text = str(parent_harness_session_id)
-        child_rollouts = self._child_rollouts.get(parent_id_text, ())
-        if not child_rollouts:
+            self._child_rollouts = children
+        selected_children = next(
+            (child for child in self._child_rollouts if child.parent_session_id == parent_codex_session_id),
+            None,
+        )
+        if selected_children is None or not selected_children.paths:
             return ()
-        position = self._next_child.get(parent_id_text, 0) % len(child_rollouts)
-        self._next_child[parent_id_text] = position + 1
-        return (child_rollouts[position],)
+        position = selected_children.next_index % len(selected_children.paths)
+        selected_children.next_index += 1
+        return (selected_children.paths[position],)
 
     def for_session(self, session: Session) -> tuple[HarnessRawEventSource, ...]:
         sources: list[HarnessRawEventSource] = []
         owns_lead_session = lead_rollout(session.source_reference)
         if owns_lead_session:
             sources.append(CodexRolloutRawEventSource(session.source_context))
-        for child_path in self._next_child_rollout(session.harness_session_id):
+        for child_path in self._next_child_rollout(
+            codex_session_id_from_domain(session.session_id)
+        ):
             child_body_position = rollout.subagent_body_offset(child_path)
             if child_body_position == 0:
                 continue
@@ -181,7 +208,9 @@ class CodexRawEventSources(HarnessRawEventSources):
                     RawEventSourceContext(
                         session_id=session.session_id,
                         lead_actor_id=session.lead_actor_id,
-                        actor_id=ActorId(harness_session_id(child_path)),
+                        actor_id=actor_id_from_codex(
+                            CodexActorId(codex_session_id(child_path))
+                        ),
                         parent_actor_id=session.lead_actor_id,
                         source_reference=child_path,
                     ),

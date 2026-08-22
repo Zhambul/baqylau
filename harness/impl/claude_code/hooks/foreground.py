@@ -4,16 +4,24 @@ from __future__ import annotations
 
 import glob
 import hashlib
-import json
 import os
 from dataclasses import dataclass
 
-from pydantic import JsonValue
+from pydantic import BaseModel, ConfigDict, Field
 
 from domain.events import ShellOutputLocated
 from domain.ids import SessionId, ShellId
 from domain.values import ShellFollowUntil
 from harness.impl.claude_code import shell
+from harness.impl.claude_code.canonical.records import HookPayload, ShellArguments, ToolResponse
+from harness.impl.claude_code.ids import (
+    ClaudeCodeCallId,
+    ClaudeCodeSessionId,
+    ClaudeCodeShellId,
+    shell_id_from_claude_code,
+    shell_id_from_claude_code_call,
+    session_id_from_claude_code,
+)
 
 CHUNK_SOURCE_TYPE = "foreground_output"
 
@@ -28,6 +36,18 @@ BACKGROUND_OUTPUT_ROOT = "/tmp"
 class PreparedForegroundCommand:
     reply: bytes
     located: ShellOutputLocated
+
+
+class HookSpecificOutput(BaseModel):
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+    hook_event_name: str = Field(alias="hookEventName")
+    permission_decision: str = Field(alias="permissionDecision")
+    updated_input: ShellArguments = Field(alias="updatedInput")
+
+
+class HookReply(BaseModel):
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+    hook_specific_output: HookSpecificOutput = Field(alias="hookSpecificOutput")
 
 
 def _safe_identity(value: str) -> str:
@@ -51,29 +71,24 @@ def _tee_path(session_id: SessionId, shell_id: ShellId) -> str:
 
 
 def _updated_input(
-    tool_input: dict[str, JsonValue],
+    shell_arguments: ShellArguments,
     command: str,
 ) -> bytes:
-    updated_input = dict(tool_input)
-    updated_input["command"] = command
-    return (
-        json.dumps(
-            {
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "allow",
-                    "updatedInput": updated_input,
-                }
-            },
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
-        + "\n"
-    ).encode("utf-8")
+    reply = HookReply(hookSpecificOutput=HookSpecificOutput(
+        hookEventName="PreToolUse",
+        permissionDecision="allow",
+        updatedInput=ShellArguments(
+            command=command,
+            description=shell_arguments.description,
+            run_in_background=shell_arguments.run_in_background,
+            timeout=shell_arguments.timeout,
+        ),
+    ))
+    return (reply.model_dump_json(by_alias=True, exclude_none=True) + "\n").encode("utf-8")
 
 
 def background_output(
-    document: dict[str, JsonValue],
+    hook_payload: HookPayload,
 ) -> ShellOutputLocated | None:
     """The output location of a background command's native output file.
 
@@ -83,24 +98,23 @@ def background_output(
     following ends with the session (or the lifetime cap), never with the
     command, whose launch reports "finished" while output keeps flowing.
     """
-    tool_input_value = document.get("tool_input")
-    tool_input = tool_input_value if isinstance(tool_input_value, dict) else {}
-    if not tool_input.get("run_in_background"):
+    shell_arguments = hook_payload.shell_input()
+    if not shell_arguments.run_in_background:
         return None
-    shell_id = str(document.get("tool_use_id") or "")
-    session_id = str(document.get("session_id") or "")
-    response = document.get("tool_response")
-    task_id = str(response.get("backgroundTaskId") or "") if isinstance(response, dict) else ""
-    if not shell_id or not session_id or not task_id:
+    call_id = ClaudeCodeCallId(hook_payload.tool_use_id or "")
+    native_session_id = ClaudeCodeSessionId(hook_payload.session_id or "")
+    response = hook_payload.tool_response
+    task_id = response.backgroundTaskId if isinstance(response, ToolResponse) else None
+    if not call_id or not native_session_id or not task_id:
         return None
     pattern = os.path.join(
-        BACKGROUND_OUTPUT_ROOT, "claude-*", "*", session_id, "tasks", f"{task_id}.output"
+        BACKGROUND_OUTPUT_ROOT, "claude-*", "*", native_session_id, "tasks", f"{task_id}.output"
     )
     matches = sorted(glob.glob(pattern))
     if not matches:
         return None
     return ShellOutputLocated(
-        shell_id=ShellId(shell_id),
+        shell_id=shell_id_from_claude_code_call(call_id),
         source_path=os.path.realpath(matches[0]),
         chunk_source_type=CHUNK_SOURCE_TYPE,
         delete_source=False,
@@ -112,7 +126,7 @@ def background_output(
 
 
 def prepare(
-    document: dict[str, JsonValue],
+    hook_payload: HookPayload,
 ) -> PreparedForegroundCommand | None:
     """Rewrite one Bash command so its output lands in a readable file.
 
@@ -121,17 +135,18 @@ def prepare(
     gateway's only file act is creating the tee target, which the rewritten
     command itself requires.
     """
-    tool_input_value = document.get("tool_input")
-    tool_input = tool_input_value if isinstance(tool_input_value, dict) else {}
-    command = str(tool_input.get("command") or "")
-    if not command.strip() or tool_input.get("run_in_background"):
+    shell_arguments = hook_payload.shell_input()
+    command = shell_arguments.command if isinstance(shell_arguments.command, str) else ""
+    if not command.strip() or shell_arguments.run_in_background:
         return None
-    session_id = SessionId(str(document.get("session_id") or ""))
-    shell_id = ShellId(str(document.get("tool_use_id") or ""))
-    if not session_id or not shell_id:
+    native_session_id = ClaudeCodeSessionId(hook_payload.session_id or "")
+    call_id = ClaudeCodeCallId(hook_payload.tool_use_id or "")
+    if not native_session_id or not call_id:
         raise ValueError("Claude Code foreground command has no session or command id")
+    session_id = session_id_from_claude_code(native_session_id)
+    shell_id = shell_id_from_claude_code_call(call_id)
 
-    working_directory = document.get("cwd")
+    working_directory = hook_payload.cwd
     redirect = shell.redirected_output(
         command, str(working_directory) if working_directory is not None else None
     )
@@ -163,9 +178,9 @@ def prepare(
         wait_for_source_change = not append
 
     return PreparedForegroundCommand(
-        _updated_input(tool_input, wrapped_command),
+        _updated_input(shell_arguments, wrapped_command),
         ShellOutputLocated(
-            shell_id=ShellId(shell_id),
+            shell_id=shell_id_from_claude_code(ClaudeCodeShellId(shell_id)),
             source_path=source_path,
             chunk_source_type=CHUNK_SOURCE_TYPE,
             delete_source=delete_source,

@@ -49,6 +49,10 @@ async def record_hook_delivery(
     slug) happens below this, where the vocabulary lives."""
     payload = await request.body()
     try:
+        try:
+            harness_name = HarnessName(harness)
+        except ValueError as error:
+            raise UnknownHookHarness(f"unknown hook harness: {harness}") from error
         process_header = (request.headers.get(CLIENT_PROCESS_HEADER) or "").strip()
         delivery = HarnessHookRequest(
             payload=payload,
@@ -68,7 +72,7 @@ async def record_hook_delivery(
             launch_model=request.headers.get(LAUNCH_MODEL_HEADER) or None,
             launch_effort=request.headers.get(LAUNCH_EFFORT_HEADER) or None,
         )
-        output = await run_in_threadpool(gateway.record, HarnessName(harness), delivery)
+        output = await run_in_threadpool(gateway.record, harness_name, delivery)
     except UnknownHookHarness as error:
         # Raised, not built: every refusal this server sends is rendered by the
         # one handler in api/app.py, from the one ErrorResponse model.

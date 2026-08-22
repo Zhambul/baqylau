@@ -32,7 +32,9 @@
 import re
 import time
 from collections.abc import Callable
-from typing import TypedDict
+from collections.abc import Mapping
+from dataclasses import dataclass
+from enum import StrEnum
 
 from domain.ids import WindowId
 
@@ -45,11 +47,24 @@ from harness.impl.claude_code.controls.screen_driver import ScreenDriver
 # case-insensitively on the parsed confirm menu, so a menu that lacks the
 # option (e.g. "code" at a checkpoint with no code changes) is a clean bail,
 # not a wrong digit.
-MODE_LABELS = {
-    "both": "restore code and conversation",
-    "conversation": "restore conversation",
-    "code": "restore code",
+class ClaudeCodeRewindMode(StrEnum):
+    BOTH = "both"
+    CONVERSATION = "conversation"
+    CODE = "code"
+
+
+MODE_LABELS: Mapping[ClaudeCodeRewindMode, str] = {
+    ClaudeCodeRewindMode.BOTH: "restore code and conversation",
+    ClaudeCodeRewindMode.CONVERSATION: "restore conversation",
+    ClaudeCodeRewindMode.CODE: "restore code",
 }
+
+
+def _mode_label(mode: str) -> str | None:
+    try:
+        return MODE_LABELS.get(ClaudeCodeRewindMode(mode))
+    except ValueError:
+        return None
 
 MENU_HEADER = "Rewind"                       # first-menu region anchor
 # First-menu open detector, matched CASE-INSENSITIVELY on the STABLE half of
@@ -138,15 +153,22 @@ def cursor_entry(screen: str) -> str:
     return m[-1].strip() if m else ""
 
 
-def confirm_options(screen: str) -> dict[str, str]:
+@dataclass(frozen=True)
+class ConfirmOption:
+    label: str
+    digit: str
+
+
+def confirm_options(screen: str) -> tuple[ConfirmOption, ...]:
     """The confirm menu's numbered options as {label-lowercased: digit-str}.
     Tolerates the cursor mark and the scroll indicators (↑/↓) the TUI puts
     before a boundary row."""
-    out: dict[str, str] = {}
-    for digit, label in re.findall(
-            r"^\s*(?:[❯↑↓]\s*)*(\d+)\.\s+(.*?)\s*$", menu_region(screen), re.M):
-        out[label.lower()] = digit
-    return out
+    return tuple(
+        ConfirmOption(label.lower(), digit)
+        for digit, label in re.findall(
+            r"^\s*(?:[❯↑↓]\s*)*(\d+)\.\s+(.*?)\s*$", menu_region(screen), re.M
+        )
+    )
 
 
 class MenuError(screendrive.StepError):
@@ -154,7 +176,8 @@ class MenuError(screendrive.StepError):
     audit row; the driver has already pressed Escape to close any open menu."""
 
 
-class RewindOutcome(TypedDict):
+@dataclass(frozen=True)
+class RewindOutcome:
     """What a successful drive() reports back to its caller."""
 
     steps: int
@@ -215,7 +238,8 @@ def drive(
     top, then back down through everything — to find the entry by TEXT. Returns {"steps": .., "digit": ..} on
     success; raises MenuError (menus already closed) on any step that
     didn't verify."""
-    if mode not in MODE_LABELS:
+    requested_label = _mode_label(mode)
+    if requested_label is None:
         raise MenuError("bad-mode", mode)
     # the input line may hold a draft — /rewind appended to it would send
     # garbage instead of the command; kill line both ways first (harmless
@@ -261,7 +285,7 @@ def drive(
         raise MenuError("confirm", "confirm menu never appeared")
     opts = confirm_options(screen)
     unchanged = CODE_UNCHANGED in menu_region(screen)
-    digit = opts.get(MODE_LABELS[mode])
+    digit = next((option.digit for option in opts if option.label == requested_label), None)
     degraded = False
     if not digit and mode == "both" and unchanged:
         # no code changes since that checkpoint ⇒ the code is ALREADY in the
@@ -269,12 +293,16 @@ def drive(
         # no-ops — a conversation restore IS "both" here, so degrade to it
         # instead of failing the request (reported live: "restore code and
         # conversation" on a no-change checkpoint bailed as an error)
-        digit = opts.get(MODE_LABELS["conversation"])
+        conversation_label = _mode_label("conversation") or ""
+        digit = next(
+            (option.digit for option in opts if option.label == conversation_label),
+            None,
+        )
         degraded = bool(digit)
     if not digit:
         _bail(screen_driver, win, sleep)
         raise MenuError("option", "%r not offered here%s" % (
-            MODE_LABELS[mode],
+            requested_label,
             " — no code changes to revert at that checkpoint"
             if unchanged else ""))
     screen_driver.send_key(win, digit)
@@ -283,4 +311,4 @@ def drive(
     if not ok:
         _bail(screen_driver, win, sleep)
         raise MenuError("close", "menu still open after selecting")
-    return {"steps": steps, "digit": digit, "degraded": degraded}
+    return RewindOutcome(steps, digit, degraded)

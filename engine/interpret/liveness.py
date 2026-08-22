@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 
 from core.process import process_alive, process_is_alive
-from domain.ids import HarnessName, RawEventId
+from domain.ids import RawEventId
 from harness.contract import HarnessRawEventSource
 from harness.models import LIVENESS_SOURCE_TYPE, RawEvent, Session
 from repository.mapper.documents import encode_document
@@ -84,7 +84,7 @@ class SessionLivenessSource(HarnessRawEventSource):
             return ()
         return (RawEvent(
             raw_event_id=RawEventId(self.source_identity),
-            harness=HarnessName(self.plugin.info.name),
+            harness=self.plugin.info.name,
             source_type=LIVENESS_SOURCE_TYPE,
             source_name=f"process:{self.harness_process_id}",
             source_position="exited",

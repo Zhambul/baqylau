@@ -15,8 +15,9 @@ was the only channel.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from decimal import Decimal
-from domain.ids import AccountId, HarnessName, ModelId
+from domain.ids import AccountId, HarnessName
 from harness.contract import HarnessUsage
 from harness.models import AccountUsageSnapshot, UsageRow, UsageWindow, UsageWindowSample
 from harness.models.usage import UsageWindowScope
@@ -25,44 +26,56 @@ from harness.impl.claude_code import account
 from harness.impl.claude_code.account import AccountRecord
 from harness.impl.claude_code.usage import live
 
-HARNESS = HarnessName("claude_code")
+HARNESS = HarnessName.CLAUDE_CODE
 # The account-wide windows. A per-model cap is one of these keys with the model
 # appended — `seven_day_fable` is the weekly Fable bucket under the weekly bar —
 # which is what lets one vocabulary carry both.
-WINDOWS: dict[str, tuple[str, int]] = {
-    "five_hour": ("5h", 5 * 60),
-    "seven_day": ("7d", 7 * 24 * 60),
-}
+@dataclass(frozen=True)
+class WindowDefinition:
+    key: str
+    label: str
+    minutes: int
+
+
+WINDOWS = (
+    WindowDefinition("five_hour", "5h", 5 * 60),
+    WindowDefinition("seven_day", "7d", 7 * 24 * 60),
+)
 UNKNOWN_WINDOW_MINUTES = 7 * 24 * 60
 
 
-def window_shape(key: str) -> tuple[str, int, UsageWindowScope, ModelId | None]:
+def window_shape(key: str) -> tuple[str, int, UsageWindowScope, str | None]:
     """One window key as (label, duration, scope, model).
 
     Scope is what the strip lays itself out by: an `account` window gets its own
     reset column, a `model` one is a cap UNDER the account window of the same
     duration and rides in the block beside it.
     """
-    if key in WINDOWS:
-        label, minutes = WINDOWS[key]
-        return label, minutes, UsageWindowScope.ACCOUNT, None
-    for base, (label, minutes) in WINDOWS.items():
-        prefix = f"{base}_"
+    known = next((window for window in WINDOWS if window.key == key), None)
+    if known is not None:
+        return known.label, known.minutes, UsageWindowScope.ACCOUNT, None
+    for window in WINDOWS:
+        prefix = f"{window.key}_"
         if key.startswith(prefix) and len(key) > len(prefix):
-            model = ModelId(key[len(prefix):].replace("_", " "))
-            return f"{label} {model}", minutes, UsageWindowScope.MODEL, model
+            model = key[len(prefix):].replace("_", " ")
+            return f"{window.label} {model}", window.minutes, UsageWindowScope.MODEL, model
     # A window neither source has sent before still renders, because the harness
     # may add one without telling us: model-scoped by assumption, since every
     # account-wide window we know of is named above.
-    return key.replace("_", " "), UNKNOWN_WINDOW_MINUTES, UsageWindowScope.MODEL, ModelId(key)
+    return key.replace("_", " "), UNKNOWN_WINDOW_MINUTES, UsageWindowScope.MODEL, key
 
 
 def _order(usage_window_sample: UsageWindowSample) -> tuple[int, str]:
     """Account-wide windows first in their canonical order, then model caps by
     key — so the strip reads short-window-first and each cap follows the window
     it belongs to."""
-    if usage_window_sample.key in WINDOWS:
-        return list(WINDOWS).index(usage_window_sample.key), ""
+    known_index = next(
+        (index for index, window in enumerate(WINDOWS)
+         if window.key == usage_window_sample.key),
+        None,
+    )
+    if known_index is not None:
+        return known_index, ""
     return len(WINDOWS), usage_window_sample.key
 
 
@@ -71,7 +84,12 @@ def merge(
     live_usage: live.LiveUsage | None,
 ) -> tuple[UsageWindowSample, ...]:
     """Every window either source knows, each at its freshest reading."""
-    readings: dict[str, tuple[float, UsageWindowSample]] = {}
+    @dataclass(frozen=True)
+    class Reading:
+        captured_at: float
+        sample: UsageWindowSample
+
+    readings: list[Reading] = []
     sources = []
     if account_usage_snapshot is not None:
         sources.append((account_usage_snapshot.captured_at, account_usage_snapshot.windows))
@@ -79,27 +97,47 @@ def merge(
         sources.append((live_usage.captured_at, live_usage.windows))
     for captured_at, samples in sources:
         for sample in samples:
-            previous = readings.get(sample.key)
-            if previous is None or captured_at >= previous[0]:
-                readings[sample.key] = (captured_at, sample)
-    return tuple(sorted((sample for _, sample in readings.values()), key=_order))
+            previous_index = next(
+                (index for index, reading in enumerate(readings)
+                 if reading.sample.key == sample.key),
+                None,
+            )
+            if previous_index is None:
+                readings.append(Reading(captured_at, sample))
+            elif captured_at >= readings[previous_index].captured_at:
+                readings[previous_index] = Reading(captured_at, sample)
+    return tuple(sorted((reading.sample for reading in readings), key=_order))
 
 
 class ClaudeCodeUsage(HarnessUsage):
     def read(self, account_usage_repository: AccountUsageRepository) -> tuple[UsageRow, ...]:
-        snapshots = {
-            snapshot.account_id: snapshot
+        snapshots = tuple(
+            snapshot
             for snapshot in account_usage_repository.snapshots()
             if snapshot.harness == HARNESS
-        }
+        )
         accounts = account.registry()
-        if not accounts and None in snapshots:
-            accounts = [{"slug": "", "label": snapshots[None].display_name, "alias": ""}]
+        default_snapshot = next(
+            (snapshot for snapshot in snapshots if snapshot.account_id is None),
+            None,
+        )
+        if not accounts and default_snapshot is not None:
+            accounts = [AccountRecord("", default_snapshot.display_name, "")]
         return tuple(
             self._row(
                 record,
-                snapshots.get(AccountId(record["slug"]) if record["slug"] else None),
-                live.usage(account.config_directory(AccountId(record["slug"]) if record["slug"] else None)),
+                next(
+                    (
+                        snapshot
+                        for snapshot in snapshots
+                        if snapshot.account_id
+                        == (AccountId(record.slug) if record.slug else None)
+                    ),
+                    None,
+                ),
+                live.usage(
+                    account.config_directory(AccountId(record.slug) if record.slug else None)
+                ),
             )
             for record in accounts
         )
@@ -122,7 +160,7 @@ class ClaudeCodeUsage(HarnessUsage):
                     resets_at=sample.resets_at,
                     duration_minutes=minutes,
                     scope=scope,
-                    model_id=model,
+                    model_name=model,
                 )
             )
         five_hour = next(
@@ -131,9 +169,9 @@ class ClaudeCodeUsage(HarnessUsage):
         scheduling_score = Decimal(100) - five_hour if five_hour is not None else None
         return UsageRow(
             harness=HARNESS,
-            account_id=AccountId(account_record["slug"]) if account_record["slug"] else None,
-            display_name=account_record["label"],
-            switchable=bool(account_record["slug"]),
+            account_id=AccountId(account_record.slug) if account_record.slug else None,
+            display_name=account_record.label,
+            switchable=bool(account_record.slug),
             plan=live_usage.plan if live_usage is not None else None,
             windows=tuple(windows),
             scheduling_score=scheduling_score,

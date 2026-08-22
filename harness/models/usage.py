@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
 
-from domain.ids import AccountId, HarnessName, ModelId
+from domain.ids import AccountId, HarnessName
 
 
 class UsageWindowScope(StrEnum):
@@ -26,12 +26,12 @@ class UsageWindow:
     resets_at: float | None
     duration_minutes: int | None
     scope: UsageWindowScope
-    model_id: ModelId | None
+    model_name: str | None
 
 
 @dataclass(frozen=True)
 class UsageBlock:
-    model_id: ModelId | None
+    model_name: str | None
     message: str | None
     resets_at: float | None
 

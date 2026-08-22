@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-import json
+from collections.abc import Mapping
+
 import os
 
-from pydantic import JsonValue
+from pydantic import ValidationError
 
 from domain.events import (
     ActorAssignmentFinished,
@@ -26,19 +27,24 @@ from domain.events import (
     TaskChanged,
     TurnStarted,
 )
-from domain.ids import (
-    AccountId,
-    ActorId,
-    AssignmentId,
-    CallId,
-    MessageId,
-    ModelId,
-    ReasoningId,
-    ShellId,
-    ShellNativeId,
-    TaskId,
-    TurnId,
+from domain.ids import AccountId
+from harness.impl.claude_code.ids import (
+    ClaudeCodeActorId,
+    ClaudeCodeCallId,
+    ClaudeCodeMessageId,
+    ClaudeCodeReasoningId,
+    ClaudeCodeShellId,
+    ClaudeCodeTaskId,
+    ClaudeCodeTurnId,
+    actor_id_from_claude_code,
+    assignment_id_from_claude_code_call,
+    message_id_from_claude_code,
+    reasoning_id_from_claude_code,
+    shell_id_from_claude_code_call,
+    task_id_from_claude_code,
+    turn_id_from_claude_code,
 )
+from harness.impl.claude_code.model import ClaudeCodeModel
 from domain.values import (
     AccountReference,
     ActorRole,
@@ -70,7 +76,7 @@ from harness.models.selections import SelectionSemantics
 # `cancelled` an earlier reader guessed at. Anything else is unknown rather than
 # assumed good: reporting a job as succeeded is the one answer that cannot be
 # walked back by looking at it.
-BACKGROUND_OUTCOMES: dict[str, Outcome] = {
+BACKGROUND_OUTCOMES: Mapping[str, Outcome] = {
     "completed": Outcome.SUCCEEDED,
     "failed": Outcome.FAILED,
     "killed": Outcome.CANCELLED,
@@ -78,13 +84,16 @@ BACKGROUND_OUTCOMES: dict[str, Outcome] = {
 }
 
 
-def background_outcome(status: JsonValue) -> Outcome | None:
-    return BACKGROUND_OUTCOMES.get(str(status or "").strip().lower(), Outcome.UNKNOWN) if status else None
+def background_outcome(status: str | None) -> Outcome | None:
+    if not status:
+        return None
+    normalized = str(status).strip().lower()
+    return BACKGROUND_OUTCOMES.get(normalized, Outcome.UNKNOWN)
 
 
 def launch_selections(
     raw_event: RawEvent,
-    document: dict[str, JsonValue],
+    launch: records.LaunchSelectionDocument,
     selection_semantics: SelectionSemantics,
 ) -> list[CanonicalEvent[EventPayload]]:
     """The launch observation the gateway recorded from the hook's inherited
@@ -96,7 +105,6 @@ def launch_selections(
     `reported_by_harness`. Without this event the selectors sit empty until
     then — and for the effort, forever: Claude Code never echoes it in any
     raw event stream."""
-    launch = records.LaunchSelectionDocument.model_validate(document)
     subject_id = f"launch:{raw_event.source_position}"
     events = []
     model_selection = launch.model
@@ -104,8 +112,9 @@ def launch_selections(
         changed = selection_semantics.model(
             raw_event.session_id,
             raw_event.actor_id,
-            model_reference(ModelId(model_selection)),
+            model_reference(ClaudeCodeModel(model_selection)),
             ModelChangeReason.SELECTED,
+            model.family(model_selection) or model_selection,
         )
         if changed is not None:
             events.append(event(raw_event, "model", subject_id, "selected", changed))
@@ -130,7 +139,7 @@ def prompt_turn(
     The prompt's own identity is the turn's: nothing else in Claude Code's
     raw events name a turn, and the prompt is what the turn answers.
     """
-    turn_id = TurnId(native_identity)
+    turn_id = turn_id_from_claude_code(ClaudeCodeTurnId(native_identity))
     if not turn_semantics.begin(raw_event, turn_id):
         return []
     return [
@@ -139,7 +148,7 @@ def prompt_turn(
             "turn",
             str(turn_id),
             "started",
-            TurnStarted(MessageId(native_identity)),
+            TurnStarted(message_id_from_claude_code(ClaudeCodeMessageId(native_identity))),
             turn_id=turn_id,
             occurred_at=occurred_at,
         )
@@ -148,7 +157,7 @@ def prompt_turn(
 
 def slash_command(
     raw_event: RawEvent,
-    record: dict[str, JsonValue],
+    record: transcript.SlashCommandTranscriptRecord,
     native_identity: str,
     occurred_at: float | None,
     turn_semantics: TurnSemantics,
@@ -175,13 +184,14 @@ def slash_command(
     A bare `/model` (no argument) opens the picker and settles nothing, and a
     multi-token argument is not a selection, so neither emits a state event.
     """
-    name = str(record["name"]).lstrip("/").strip().lower()
-    selection = str(record["args"]).strip()
+    name = record.name.lstrip("/").strip().lower()
+    selection = record.arguments.strip()
     if selection and len(selection.split()) == 1 and name in ("model", "effort"):
         payload: EventPayload | None = (
             selection_semantics.model(
-                raw_event.session_id, raw_event.actor_id, model_reference(ModelId(selection)),
+                raw_event.session_id, raw_event.actor_id, model_reference(ClaudeCodeModel(selection)),
                 ModelChangeReason.SELECTED,
+                model.family(selection) or selection,
             )
             if name == "model"
             else selection_semantics.effort(
@@ -204,7 +214,11 @@ def slash_command(
             native_identity,
             "created",
             MessageCreated(
-                MessageId(native_identity), role, content(record["text"]), MessagePhase.PROMPT, None
+                message_id_from_claude_code(ClaudeCodeMessageId(native_identity)),
+                role,
+                content(record.text),
+                MessagePhase.PROMPT,
+                None,
             ),
             occurred_at=occurred_at,
         )
@@ -216,22 +230,21 @@ def slash_command(
 
 def transcript_metadata(
     raw_event: RawEvent,
-    document: dict[str, JsonValue],
+    transcript_document: records.TranscriptDocument,
 ) -> list[CanonicalEvent[EventPayload]]:
     if raw_event.parent_actor_id is not None:
         return []
-    record_type = document.get("type")
+    record_type = transcript_document.type
     if record_type not in ("agent-name", "ai-title", "summary"):
         return []
-    title_record = records.TitleRecord.model_validate(document)
     if record_type == "agent-name":
-        title = str(title_record.agentName or "").strip()
+        title = str(transcript_document.agentName or "").strip()
         origin: TitleOrigin = TitleOrigin.CUSTOM
     elif record_type == "ai-title":
-        title = str(title_record.aiTitle or "").strip()
+        title = str(transcript_document.aiTitle or "").strip()
         origin = TitleOrigin.AUTOMATIC
     else:
-        title = str(title_record.summary or "").strip()
+        title = str(transcript_document.summary or "").strip()
         origin = TitleOrigin.SUMMARY
     if not title:
         return []
@@ -248,7 +261,7 @@ def transcript_metadata(
 
 def session_events(
     raw_event: RawEvent,
-    document: dict[str, JsonValue],
+    document: records.TranscriptDocument | records.HookPayload,
 ) -> list[CanonicalEvent[EventPayload]]:
     lead_actor_id = raw_event.actor_id
     if raw_event.parent_actor_id is not None:
@@ -257,8 +270,12 @@ def session_events(
             metadata_path = os.path.splitext(raw_event.source_name)[0] + ".meta.json"
             try:
                 with open(metadata_path, encoding="utf-8") as metadata_file:
-                    metadata = records.AgentMetaFile.model_validate(json.load(metadata_file))
-            except (OSError, json.JSONDecodeError):
+                    metadata = records.AgentMetaFile.model_validate_json(metadata_file.read())
+            except OSError:
+                metadata = records.AgentMetaFile()
+            except ValidationError as error:
+                if any(detail["type"] != "json_invalid" for detail in error.errors()):
+                    raise
                 metadata = records.AgentMetaFile()
         events = [
             event(
@@ -282,9 +299,9 @@ def session_events(
                 ActorNameChanged(description),
             ))
         return events
-    transcript_path = str(document.get("transcript_path") or "")
+    transcript_path = str(document.transcript_path or "")
     session_started = SessionStarted(
-        working_directory=str(document.get("cwd") or ""),
+        working_directory=str(document.cwd or ""),
         source_reference=(
             os.path.realpath(transcript_path) if transcript_path else raw_event.source_name
         ),
@@ -325,10 +342,9 @@ def session_events(
 
 def task_event(
     raw_event: RawEvent,
-    document: dict[str, JsonValue],
+    task: records.TaskFile,
 ) -> CanonicalEvent[EventPayload]:
-    task = records.TaskFile.model_validate(document)
-    task_id = TaskId(str(task.id or ""))
+    task_id = task_id_from_claude_code(ClaudeCodeTaskId(str(task.id or "")))
     if not task_id:
         raise TranslationError("Claude Code task has no id", context=raw_event.source_position)
     native_state = task.status
@@ -345,34 +361,30 @@ def task_event(
         str(task.subject or ""),
         str(task.description or "").strip() or None,
         state,
-        ActorId(owner) if owner else None,
+        actor_id_from_claude_code(ClaudeCodeActorId(owner)) if owner else None,
     )
     return event(raw_event, "task", str(task_id), "changed", payload)
 
 
 def translate_transcript(
     raw_event: RawEvent,
-    document: dict[str, JsonValue],
-    record: dict[str, JsonValue],
+    transcript_document: records.TranscriptDocument,
+    record: transcript.TranscriptRecord,
     tool_call_semantics: ToolCallSemantics,
     turn_semantics: TurnSemantics,
     selection_semantics: SelectionSemantics,
     *,
     actor_started: bool,
 ) -> list[CanonicalEvent[EventPayload]]:
-    kind = record["kind"]
-    native_message = document.get("message")
-    native_message_id = (
-        native_message.get("id") if isinstance(native_message, dict) else None
-    )
+    native_message_id = transcript_document.message.id if transcript_document.message is not None else None
     native_identity = str(
-        document.get("uuid")
+        transcript_document.uuid
         or native_message_id
         or raw_event.source_position
     )
-    occurred_at = timestamp(document.get("timestamp"))
-    if kind == "prompt":
-        synthetic = bool(record.get("meta"))
+    occurred_at = timestamp(transcript_document.timestamp)
+    if isinstance(record, transcript.PromptTranscriptRecord):
+        synthetic = record.meta
         phase: MessagePhase = MessagePhase.SYNTHETIC if synthetic else MessagePhase.PROMPT
         role: MessageRole = (
             MessageRole.SYSTEM
@@ -382,7 +394,11 @@ def translate_transcript(
             else MessageRole.USER
         )
         payload: EventPayload = MessageCreated(
-            MessageId(native_identity), role, content(record["text"]), phase, None
+            message_id_from_claude_code(ClaudeCodeMessageId(native_identity)),
+            role,
+            content(record.text),
+            phase,
+            None,
         )
         created = event(raw_event, "message", native_identity, "created", payload, occurred_at=occurred_at)
         if role != MessageRole.USER:
@@ -390,25 +406,25 @@ def translate_transcript(
             # turn belongs to the person who asked for one.
             return [created]
         return [*prompt_turn(raw_event, turn_semantics, native_identity, occurred_at), created]
-    if kind == "slash_command":
+    if isinstance(record, transcript.SlashCommandTranscriptRecord):
         return slash_command(
             raw_event, record, native_identity, occurred_at, turn_semantics, selection_semantics
         )
-    if kind == "goal":
-        objective = record.get("objective")
-        reason = record.get("reason")
+    if isinstance(record, transcript.GoalTranscriptRecord):
+        objective = record.objective
+        reason = record.reason
         # The state string is ours (built by parse_line/_task_notification,
         # never read back off Claude Code's own JSON), so the enum member it
         # constructs is a fact about THIS module, not a foreign claim.
-        state = GoalState(str(record["state"]))
+        state = GoalState(record.state)
         payload = GoalChanged(
             str(objective) if objective is not None else None,
             state,
             str(reason) if reason is not None else None,
         )
         return [event(raw_event, "goal", native_identity, "changed", payload, occurred_at=occurred_at)]
-    if kind == "background_command_completed":
-        shell_id = ShellId(str(record.get("operation_id") or ""))
+    if isinstance(record, transcript.BackgroundCommandCompletedTranscriptRecord):
+        shell_id = shell_id_from_claude_code_call(record.operation_id)
         if not shell_id:
             raise TranslationError(
                 "Claude Code background completion has no command id",
@@ -417,7 +433,7 @@ def translate_transcript(
         # The JOB's outcome, which the notification carries and this translation
         # used to drop — leaving the dashboard to report the LAUNCH's outcome, so a
         # background command that exited non-zero read as succeeded.
-        payload = ShellOutputFinished(shell_id, background_outcome(record.get("status")))
+        payload = ShellOutputFinished(shell_id, background_outcome(record.status))
         return [event(
             raw_event,
             "shell",
@@ -426,12 +442,12 @@ def translate_transcript(
             payload,
             occurred_at=occurred_at,
         )]
-    if kind == "monitor_event":
+    if isinstance(record, transcript.MonitorEventTranscriptRecord):
         # One line the watched command printed. Recorded as progress on the
         # armed command — the same shape a command's output takes — under the
         # "status" stream, which is what a monitors panel reads as an EVENT
         # rather than as output.
-        task_id = ShellNativeId(str(record.get("task") or ""))
+        task_id = ClaudeCodeShellId(record.task)
         armed = tool_call_semantics.monitor_shell(task_id)
         if armed is None:
             # A monitor armed before this translation began — a daemon restarted
@@ -445,7 +461,7 @@ def translate_transcript(
             armed,
             ordinal,
             ProgressStream.STATUS,
-            content(str(record.get("event") or "")),
+            content(record.event),
             OutputMode.APPEND,
         )
         return [event(
@@ -456,18 +472,18 @@ def translate_transcript(
             payload,
             occurred_at=occurred_at,
         )]
-    if kind == "monitor_ended":
+    if isinstance(record, transcript.MonitorEndedTranscriptRecord):
         # The watch itself ending, which is NOT its arm returning: the arm's
         # `shell.finished` arrived turns ago and the status writer deliberately
         # ignores it for a monitor. This is the same fact a background job's
         # completion is, so it is the same event.
-        shell_id = ShellId(str(record.get("operation_id") or ""))
+        shell_id = shell_id_from_claude_code_call(record.operation_id)
         if not str(shell_id):
             raise TranslationError(
                 "Claude Code monitor end has no command id",
                 context=raw_event.source_position,
             )
-        payload = ShellOutputFinished(shell_id, background_outcome(record.get("status")))
+        payload = ShellOutputFinished(shell_id, background_outcome(record.status))
         return [event(
             raw_event,
             "shell",
@@ -476,15 +492,15 @@ def translate_transcript(
             payload,
             occurred_at=occurred_at,
         )]
-    if kind == "actor_assignment_finished":
-        assignment_id = AssignmentId(str(record["assignment_id"]))
-        status = str(record["status"])
+    if isinstance(record, transcript.ActorAssignmentFinishedTranscriptRecord):
+        assignment_id = assignment_id_from_claude_code_call(record.assignment_id)
+        status = record.status
         outcome: Outcome = (
             Outcome.FAILED if status == "failed"
             else Outcome.CANCELLED if status == "cancelled"
             else Outcome.SUCCEEDED
         )
-        result = record.get("result")
+        result = record.result
         payload = ActorAssignmentFinished(
             assignment_id,
             outcome,
@@ -501,14 +517,18 @@ def translate_transcript(
                 occurred_at=occurred_at,
             )
         ]
-    if kind == "teammsg":
-        if not record.get("sender"):
+    if isinstance(record, transcript.TeamMessageTranscriptRecord):
+        if not record.sender:
             raise TranslationError(
                 "Claude Code teammate message has no sender",
                 context=raw_event.source_position,
             )
         payload = MessageCreated(
-            MessageId(native_identity), MessageRole.PEER, content(record["body"]), None, None
+            message_id_from_claude_code(ClaudeCodeMessageId(native_identity)),
+            MessageRole.PEER,
+            content(record.body),
+            None,
+            None,
         )
         events = []
         if raw_event.parent_actor_id is not None and not actor_started:
@@ -531,14 +551,12 @@ def translate_transcript(
             )
         )
         return events
-    if kind == "assistant":
+    if isinstance(record, transcript.AssistantTranscriptRecord):
         events = []
         message_identity = native_identity
-        native_message_value = document.get("message")
-        native_message = native_message_value if isinstance(native_message_value, dict) else {}
-        native_blocks = native_message.get("content")
-        if not isinstance(native_blocks, list):
-            native_blocks = []
+        assistant_message = record.message
+        native_content = assistant_message.content if assistant_message is not None else None
+        native_blocks = native_content if isinstance(native_content, list) else []
         # WHERE THE MODEL STOPPED, from the one field that says so structurally.
         # `stop_reason` is the API's own verdict on this response: "end_turn" is a
         # response that ended, "tool_use" is one that broke off to call a tool, and
@@ -553,26 +571,21 @@ def translate_transcript(
         # Only the LAST text block carries it: one response may hold several text
         # blocks (`uuid:0`, `uuid:1`, …) and the stop belongs to the response, so
         # the earlier blocks are prose the model wrote on its way to stopping.
-        ends_turn = native_message.get("stop_reason") == "end_turn"
+        ends_turn = assistant_message is not None and assistant_message.stop_reason == "end_turn"
         last_text_index = max(
             (
                 index for index, block in enumerate(native_blocks)
-                if isinstance(block, dict)
-                and block.get("type") == "text"
-                and str(block.get("text") or "").strip()
+                if isinstance(block, records.TextBlock) and (block.text or "").strip()
             ),
             default=-1,
         )
         for block_index, block in enumerate(native_blocks):
-            if not isinstance(block, dict):
-                continue
-            block_type = block.get("type")
-            if block_type == "text" and str(block.get("text") or "").strip():
+            if isinstance(block, records.TextBlock) and (block.text or "").strip():
                 block_identity = f"{message_identity}:{block_index}"
                 payload = MessageCreated(
-                    MessageId(block_identity),
+                    message_id_from_claude_code(ClaudeCodeMessageId(block_identity)),
                     MessageRole.ASSISTANT,
-                    content(block.get("text"), markdown=True),
+                    content(block.text, markdown=True),
                     MessagePhase.END_TURN
                     if ends_turn and block_index == last_text_index
                     else MessagePhase.INTERMEDIATE,
@@ -588,11 +601,11 @@ def translate_transcript(
                         occurred_at=occurred_at,
                     )
                 )
-            elif block_type == "thinking" and str(block.get("thinking") or "").strip():
+            elif isinstance(block, records.ThinkingBlock) and (block.thinking or "").strip():
                 block_identity = f"{message_identity}:{block_index}"
                 payload = ReasoningCreated(
-                    ReasoningId(block_identity),
-                    content(block.get("thinking"), markdown=True),
+                    reasoning_id_from_claude_code(ClaudeCodeReasoningId(block_identity)),
+                    content(block.thinking, markdown=True),
                 )
                 events.append(
                     event(
@@ -604,14 +617,24 @@ def translate_transcript(
                         occurred_at=occurred_at,
                     )
                 )
-            elif block_type == "tool_use":
-                events.extend(tool_call_semantics.tool_started(raw_event, block))
-        model_id = str(record.get("model")) if record.get("model") else None
+            elif isinstance(block, records.ToolUseBlock):
+                events.extend(
+                    tool_call_semantics.tool_started(
+                        raw_event,
+                        records.ToolCallNative(
+                            id=block.id,
+                            name=block.name,
+                            input=block.input,
+                            caller=block.caller,
+                        ),
+                    )
+                )
+        model_id = record.message.model if record.message else None
         # "<synthetic>" is the transcript's marker on machine-injected
         # assistant records (interrupt notices, hook output). It names no model
         # anyone selected, so it reports nothing.
         model_reference_value = (
-            model_reference(ModelId(model_id))
+            model_reference(ClaudeCodeModel(model_id))
             if model_id and model_id != SYNTHETIC_MODEL_ID
             else None
         )
@@ -621,6 +644,7 @@ def translate_transcript(
                 raw_event.actor_id,
                 model_reference_value,
                 ModelChangeReason.REPORTED_BY_HARNESS,
+                model.family(model_id) or model_id or "",
             )
             if reported is not None:
                 events.append(
@@ -633,8 +657,8 @@ def translate_transcript(
                         occurred_at=occurred_at,
                     )
                 )
-        usage = record.get("usage")
-        if isinstance(usage, dict) and model_reference_value is not None:
+        usage = record.message.usage if record.message else None
+        if usage is not None and model_reference_value is not None:
             events.append(
                 event(
                     raw_event,
@@ -650,54 +674,48 @@ def translate_transcript(
                 )
             )
         return events
-    if kind == "results":
+    if isinstance(record, transcript.ResultsTranscriptRecord):
         events = []
-        blocks_value = record.get("blocks")
-        blocks = [b for b in blocks_value if isinstance(b, dict)] if isinstance(blocks_value, list) else []
+        blocks = record.blocks
         # The line's `toolUseResult` sidecar carries what only the native
         # response document holds — a diff's structured patch, a background
         # launch's task id. It belongs to the line, so it can only be attributed
         # when the line holds exactly one result.
-        sidecar = record.get("tur") if len(blocks) == 1 else None
-        for block in blocks:
-            call_id = CallId(str(block.get("tool_use_id") or native_identity))
-            result_text = transcript.result_text(block.get("content"))
+        sidecar = record.tool_response if len(blocks) == 1 else None
+        for tool_result_block in blocks:
+            call_id = ClaudeCodeCallId(tool_result_block.tool_use_id or native_identity)
+            result_text = transcript.result_text(tool_result_block.content)
             # A background launch's tool_result is boilerplate ("Command
             # running in background with ID … Output is being written to …"),
             # and its REPLACE mode would wipe any watch chunk that committed
             # first. The real output arrives through the file watch.
             if result_text.startswith(BACKGROUND_LAUNCH_STUB):
                 continue
-            failed = bool(block.get("is_error"))
+            failed = bool(tool_result_block.is_error)
             events.extend(
                 tool_call_semantics.tool_result(raw_event, call_id, result_text, failed, sidecar)
             )
             if failed and tool_call_semantics.pending_attention(call_id):
                 events.append(tool_call_semantics.attention_declined(raw_event, call_id, result_text))
-        texts_value = record.get("texts")
-        texts = [t for t in texts_value if isinstance(t, str)] if isinstance(texts_value, list) else []
-        for text_index, result_text in enumerate(texts):
+        for text_index, result_text in enumerate(record.texts):
             text_identity = f"{native_identity}:text:{text_index}"
             payload = MessageCreated(
-                MessageId(text_identity),
-                MessageRole.SYSTEM if record.get("meta") else MessageRole.USER,
+                message_id_from_claude_code(ClaudeCodeMessageId(text_identity)),
+                MessageRole.SYSTEM if record.meta else MessageRole.USER,
                 content(result_text),
-                MessagePhase.SYNTHETIC if record.get("meta") else MessagePhase.PROMPT,
+                MessagePhase.SYNTHETIC if record.meta else MessagePhase.PROMPT,
                 None,
             )
             events.append(event(raw_event, "message", text_identity, "created", payload))
         return events
-    if kind == "compact":
-        meta_value = record.get("meta")
-        meta = meta_value if isinstance(meta_value, dict) else {}
-        before = meta.get("preTokens")
-        payload = CompactionFinished(int(before) if isinstance(before, int) else None, None)
+    if isinstance(record, transcript.CompactTranscriptRecord):
+        payload = CompactionFinished(record.before_tokens, None)
         return [event(raw_event, "compaction", native_identity, "finished", payload, occurred_at=occurred_at)]
-    if kind == "recap":
+    if isinstance(record, transcript.TextTranscriptRecord) and record.kind == transcript.TranscriptKind.RECAP:
         payload = MessageCreated(
-            MessageId(native_identity),
+            message_id_from_claude_code(ClaudeCodeMessageId(native_identity)),
             MessageRole.SYSTEM,
-            content(record["text"], markdown=True),
+            content(record.text, markdown=True),
             MessagePhase.RECAP,
             None,
         )

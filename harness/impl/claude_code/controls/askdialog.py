@@ -41,6 +41,7 @@
 #     question set — which is why this driver never presses Escape.
 import time
 from collections.abc import Callable
+from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict
 
@@ -87,6 +88,11 @@ class AskError(screendrive.StepError):
     Claude Code upgrade vs a blank/partial capture all look identical."""
 
 
+class AskOutcome(StrEnum):
+    SUBMITTED = "submitted"
+    CHAT = "chat"
+
+
 def cursor_to(
     screen_driver: ScreenDriver,
     win: WindowId,
@@ -121,9 +127,9 @@ def cursor_to(
     prev = object()
     for _ in range(NAV_STEPS):               # normalize to the first row
         cur = askscreen.cursor_row(screen_driver.get_text(win) or "")
-        if cur is not None and cur.get("digit") == "1":
+        if cur is not None and cur.digit == "1":
             break
-        key = None if cur is None else (cur["digit"], cur["label"])
+        key = None if cur is None else (cur.digit, cur.label)
         if key == prev:                      # up made no progress (trapped row)
             break
         prev = key
@@ -131,7 +137,7 @@ def cursor_to(
         sleep(POLL_S)
     for _ in range(NAV_STEPS):
         screen = screen_driver.get_text(win) or ""
-        if any(r["cursor"] and pred(r) for r in rows(screen)):
+        if any(row.cursor and pred(row) for row in rows(screen)):
             return screen
         screen_driver.send_key(win, "down")
         sleep(POLL_S)
@@ -139,7 +145,7 @@ def cursor_to(
 
 
 def _by_digit(d: str) -> Callable[[Row], bool]:
-    return lambda r: r["digit"] == d
+    return lambda row: row.digit == d
 
 
 def _require_type_row(screen_driver: ScreenDriver, win: WindowId, type_digit: str) -> None:
@@ -153,7 +159,7 @@ def _require_type_row(screen_driver: ScreenDriver, win: WindowId, type_digit: st
     reached Type row' dead-walk, 2026-07-19). The web ask card routes typed
     answers on preview questions through 'Chat about this' instead, so the
     driver should not normally reach here."""
-    if not any(r["digit"] == type_digit for r in rows(screen_driver.get_text(win) or "")):
+    if not any(row.digit == type_digit for row in rows(screen_driver.get_text(win) or "")):
         raise AskError("type", "no typed-answer row (preview-layout dialog) — "
                        "answer via 'Chat about this'")
 
@@ -178,7 +184,7 @@ def _advance_multi(
     the explicit "Next"/"Submit" row leaves the text field first, so it works
     whether or not custom text was typed; then Enter is the dialog's designed
     advance. Screen-verified: the pane must actually leave question `i`."""
-    cursor_to(screen_driver, win, lambda r: r["label"] in ("Next", "Submit"), sleep,
+    cursor_to(screen_driver, win, lambda row: row.label in ("Next", "Submit"), sleep,
               "advance row")
     screen_driver.send_key(win, "enter")
     screen, ok = screendrive.poll_until(screen_driver, win,
@@ -216,11 +222,11 @@ def _answer_question(
         # against the checkbox the screen actually shows (the user may have
         # pre-toggled some in the terminal), and only flip the ones that differ
         for j, label in enumerate(labels):
-            row = next((r for r in rows(screen_driver.get_text(win) or "")
-                        if r["digit"] == str(j + 1)), None)
+            row = next((row for row in rows(screen_driver.get_text(win) or "")
+                        if row.digit == str(j + 1)), None)
             if row is None:
                 raise AskError("options", "row %d not on screen" % (j + 1))
-            if bool(row["check"]) != (label in selected):
+            if bool(row.check) != (label in selected):
                 cursor_to(screen_driver, win, _by_digit(str(j + 1)), sleep,
                           "option %d" % (j + 1))
                 screen_driver.send_key(win, "enter")        # toggle
@@ -232,14 +238,14 @@ def _answer_question(
                 raise AskError("type", "other text not delivered")
             sleep(POLL_S)
             # the CR may or may not have checked the custom row; ensure it is
-            checked = any(r["check"] for r in rows(screen_driver.get_text(win) or "")
-                          if r["label"].startswith(other[:24]))
+            checked = any(row.check for row in rows(screen_driver.get_text(win) or "")
+                          if row.label.startswith(other[:24]))
             if not checked:
                 screen_driver.send_key(win, "enter")
             _, ok = screendrive.poll_until(
                 screen_driver, win,
-                lambda s: any(r["check"] for r in rows(s)
-                              if r["label"].startswith(other[:24])),
+                lambda s: any(row.check for row in rows(s)
+                              if row.label.startswith(other[:24])),
                 STEP_TIMEOUT_S, sleep)
             if not ok:
                 raise AskError("type", "custom option never checked")
@@ -266,7 +272,7 @@ def drive(
     answers: list[AnswerDraft],
     chat: bool = False,
     sleep: Callable[[float], None] = time.sleep,
-) -> dict[str, bool]:
+) -> AskOutcome:
     """Answer the OPEN AskUserQuestion dialog in window `win`. `questions` is
     the ask-pending stash (the PreToolUse tool_input.questions, verbatim);
     `answers` aligns with it: [{"selected": [labels…], "other": "text"}] per
@@ -286,9 +292,9 @@ def drive(
     if not ok:
         raise AskError("open", "no question dialog on screen", screen=screen)
     if chat:
-        if not any(r["label"] == CHAT_LABEL for r in rows(screen)):
+        if not any(row.label == CHAT_LABEL for row in rows(screen)):
             raise AskError("chat", "no 'Chat about this' row on screen")
-        cursor_to(screen_driver, win, lambda r: r["label"] == CHAT_LABEL, sleep,
+        cursor_to(screen_driver, win, lambda row: row.label == CHAT_LABEL, sleep,
                   "Chat row")
         screen_driver.send_key(win, "enter")
         _, ok = screendrive.poll_until(screen_driver, win,
@@ -296,7 +302,7 @@ def drive(
                       STEP_TIMEOUT_S, sleep)
         if not ok:
             raise AskError("chat", "dialog still open")
-        return {"chat": True}
+        return AskOutcome.CHAT
     if len(answers) != len(questions):
         raise AskError("answers", "expected %d answers, got %d"
                        % (len(questions), len(answers)))
@@ -355,7 +361,7 @@ def drive(
         raise AskError("review", "neither review pane nor submit happened",
                        screen=screen)
     if review_open(screen):
-        cursor_to(screen_driver, win, lambda r: r["label"] == SUBMIT_LABEL, sleep,
+        cursor_to(screen_driver, win, lambda row: row.label == SUBMIT_LABEL, sleep,
                   "Submit answers")
         screen_driver.send_key(win, "enter")
         _, ok = screendrive.poll_until(screen_driver, win,
@@ -363,4 +369,4 @@ def drive(
                       SUBMIT_TIMEOUT_S, sleep)
         if not ok:
             raise AskError("submit", "dialog still open after Submit answers")
-    return {"submitted": True}
+    return AskOutcome.SUBMITTED

@@ -24,6 +24,8 @@
 # Verified live (codex-cli 0.144.1) against a real plan-mode session.
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
+from enum import StrEnum
 
 from domain.ids import WindowId
 
@@ -46,8 +48,21 @@ KEEP_PLANNING = "stay in plan mode"
 # screen read (the plan is proven pending read-side; these are static), and
 # decide() re-reads + label-verifies the LIVE screen before pressing, so a codex
 # wording drift fails SAFE (no press) rather than mis-deciding.
-APPROVE_OPTIONS = ({"digit": "1", "label": "Yes, implement this plan"},
-                   {"digit": "2", "label": "Yes, clear context and implement"})
+@dataclass(frozen=True)
+class PlanOption:
+    digit: str
+    label: str
+
+
+APPROVE_OPTIONS = (
+    PlanOption("1", "Yes, implement this plan"),
+    PlanOption("2", "Yes, clear context and implement"),
+)
+
+
+class PlanOutcome(StrEnum):
+    DECIDED = "decided"
+    DISMISSED = "dismissed"
 
 
 class CodexPlanError(CodexAskError):
@@ -79,7 +94,7 @@ def option_rows(screen: str) -> list[OptionRow]:
     return rows(_picker_region(screen))
 
 
-def options(driver: Driver, win: WindowId) -> list[dict[str, str]]:
+def options(driver: Driver, win: WindowId) -> list[PlanOption]:
     """The APPROVE options on the live picker as [{digit, label}] — every
     decision row EXCEPT the keep-planning row (which the card offers as its own
     'keep planning' button, mapped to dismiss). Read-only: no key is pressed.
@@ -88,11 +103,11 @@ def options(driver: Driver, win: WindowId) -> list[dict[str, str]]:
     screen, ok = _poll(driver, win, picker_open, STEP_TIMEOUT_S, time.sleep)
     if not ok:
         raise CodexPlanError("open", "no plan-decision picker on screen")
-    out: list[dict[str, str]] = []
+    out: list[PlanOption] = []
     for r in option_rows(screen):
-        if KEEP_PLANNING in r["label"].lower():
+        if KEEP_PLANNING in r.label.lower():
             continue
-        out.append({"digit": r["num"], "label": r["label"]})
+        out.append(PlanOption(r.num, r.label))
     return out
 
 
@@ -118,7 +133,7 @@ def decide(
     digit: str,
     label: str,
     sleep: Callable[[float], None] = time.sleep,
-) -> dict[str, bool]:
+) -> PlanOutcome:
     """APPROVE the plan: press the decision row whose LABEL matches `label` (a
     case-insensitive substring — the same label-guard Claude's plandialog.decide
     uses, but keyed on the LABEL not the digit so codex reordering the rows can't
@@ -129,23 +144,23 @@ def decide(
         raise CodexPlanError("open", "no plan-decision picker on screen")
     want = (label or "").strip().lower()
     match = next((r for r in option_rows(screen)
-                  if want and want in r["label"].strip().lower()), None)
+                  if want and want in r.label.strip().lower()), None)
     if match is None:
         raise CodexPlanError("label", "no row matching %r on screen (digit %s)"
                              % (label, digit))
-    _decide_row(driver, win, match["num"], sleep)
-    return {"decided": True}
+    _decide_row(driver, win, match.num, sleep)
+    return PlanOutcome.DECIDED
 
 
-def dismiss(driver: Driver, win: WindowId, sleep: Callable[[float], None] = time.sleep) -> dict[str, bool]:
+def dismiss(driver: Driver, win: WindowId, sleep: Callable[[float], None] = time.sleep) -> PlanOutcome:
     """KEEP PLANNING: pick the 'No, stay in Plan mode' row (an explicit choice,
     not an Esc — Esc only steps BACK). Returns {"dismissed": True}."""
     screen, ok = _poll(driver, win, picker_open, STEP_TIMEOUT_S, sleep)
     if not ok:
         raise CodexPlanError("open", "no plan-decision picker on screen")
     row = next((r for r in option_rows(screen)
-                if KEEP_PLANNING in r["label"].lower()), None)
+                if KEEP_PLANNING in r.label.lower()), None)
     if row is None:
         raise CodexPlanError("dismiss", "no keep-planning row on screen")
-    _decide_row(driver, win, row["num"], sleep)
-    return {"dismissed": True}
+    _decide_row(driver, win, row.num, sleep)
+    return PlanOutcome.DISMISSED

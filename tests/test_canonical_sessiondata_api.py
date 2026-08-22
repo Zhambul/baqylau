@@ -36,8 +36,6 @@ from domain.ids import (
     CanonicalEventId,
     HarnessName,
     MessageId,
-    ModelId,
-    SelectionId,
     SessionId,
     ShellId,
     TaskId,
@@ -107,7 +105,7 @@ ACTOR = ActorFacts(
     name="Claude",
     state=LifecycleState.RUNNING,
     status=ActorStatus.EXECUTING,
-    model=ModelReference(ModelId("claude-fable-5"), "Fable 5", SelectionId("fable")),
+    model=ModelReference("claude-fable-5", "Fable 5"),
     effort="high",
 )
 

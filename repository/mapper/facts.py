@@ -59,7 +59,6 @@ def session(session_row: SessionRow) -> Session:
     return Session(
         session_id=SessionId(session_row.session_id),
         lead_actor_id=ActorId(session_row.lead_actor_id),
-        harness_session_id=session_row.harness_session_id,
         source_reference=session_row.source_reference,
         working_directory=session_row.working_directory,
         terminal_window_id=session_row.terminal_window_id,
@@ -72,7 +71,7 @@ def session_values(harness: HarnessName, session: Session, created_at: float) ->
         str(session.session_id),
         str(session.lead_actor_id),
         harness,
-        session.harness_session_id,
+        str(session.session_id),
         session.source_reference,
         session.working_directory,
         session.terminal_window_id,

@@ -77,14 +77,16 @@
 #       the same monitor's stream ending, which does carry <tool-use-id> — so
 #       the end is attributable on its own even when nothing remembers the arm.
 import html
-import json
 import os
 import re
-from typing import cast
+from dataclasses import dataclass
+from enum import StrEnum
+from typing import TypeAlias
 
-from pydantic import JsonValue
+from pydantic import ValidationError
 
 from harness.impl.claude_code.canonical import records
+from harness.impl.claude_code.ids import ClaudeCodeActorId, ClaudeCodeCallId, ClaudeCodeShellId
 from harness.models import TitleWriteOutcome
 from repository.contract.titles import NativeSessionTitleRepository
 
@@ -120,7 +122,129 @@ def _note_tag(xml: str, name: str) -> str | None:
     return m.group(1).strip() if m else None
 
 
-def _task_notification(content: str) -> dict[str, JsonValue]:
+class TranscriptKind(StrEnum):
+    BAD = "bad"
+    COMPACT = "compact"
+    RECAP = "recap"
+    PROMPT = "prompt"
+    SLASH_COMMAND = "slash_command"
+    TEAM_MESSAGE = "teammsg"
+    RESULTS = "results"
+    ASSISTANT = "assistant"
+    MONITOR_EVENT = "monitor_event"
+    MONITOR_ENDED = "monitor_ended"
+    ACTOR_ASSIGNMENT_FINISHED = "actor_assignment_finished"
+    BACKGROUND_COMMAND_COMPLETED = "background_command_completed"
+    GOAL = "goal"
+
+
+@dataclass(frozen=True)
+class BadTranscriptRecord:
+    raw: str
+    kind: TranscriptKind = TranscriptKind.BAD
+
+
+@dataclass(frozen=True)
+class CompactTranscriptRecord:
+    before_tokens: int | None
+    kind: TranscriptKind = TranscriptKind.COMPACT
+
+
+@dataclass(frozen=True)
+class TextTranscriptRecord:
+    text: str
+    kind: TranscriptKind
+
+
+@dataclass(frozen=True)
+class PromptTranscriptRecord:
+    text: str
+    meta: bool = False
+    kind: TranscriptKind = TranscriptKind.PROMPT
+
+
+@dataclass(frozen=True)
+class SlashCommandTranscriptRecord:
+    name: str
+    arguments: str
+    text: str
+    kind: TranscriptKind = TranscriptKind.SLASH_COMMAND
+
+
+@dataclass(frozen=True)
+class TeamMessageTranscriptRecord:
+    sender: str
+    body: str
+    kind: TranscriptKind = TranscriptKind.TEAM_MESSAGE
+
+
+@dataclass(frozen=True)
+class ResultsTranscriptRecord:
+    blocks: tuple[records.ToolResultBlock, ...]
+    tool_response: records.ToolResponse | str | None
+    texts: tuple[str, ...]
+    meta: bool
+    kind: TranscriptKind = TranscriptKind.RESULTS
+
+
+@dataclass(frozen=True)
+class AssistantTranscriptRecord:
+    message: records.MessageObject | None
+    kind: TranscriptKind = TranscriptKind.ASSISTANT
+
+
+@dataclass(frozen=True)
+class GoalTranscriptRecord:
+    objective: str | None
+    state: str
+    reason: str | None
+    kind: TranscriptKind = TranscriptKind.GOAL
+
+
+@dataclass(frozen=True)
+class BackgroundCommandCompletedTranscriptRecord:
+    operation_id: ClaudeCodeCallId
+    status: str
+    kind: TranscriptKind = TranscriptKind.BACKGROUND_COMMAND_COMPLETED
+
+
+@dataclass(frozen=True)
+class MonitorEventTranscriptRecord:
+    task: ClaudeCodeShellId
+    summary: str
+    event: str
+    kind: TranscriptKind = TranscriptKind.MONITOR_EVENT
+
+
+@dataclass(frozen=True)
+class MonitorEndedTranscriptRecord:
+    task: ClaudeCodeShellId
+    operation_id: ClaudeCodeCallId
+    status: str
+    kind: TranscriptKind = TranscriptKind.MONITOR_ENDED
+
+
+@dataclass(frozen=True)
+class ActorAssignmentFinishedTranscriptRecord:
+    assignment_id: ClaudeCodeCallId
+    actor_id: ClaudeCodeActorId | None
+    status: str
+    summary: str
+    result: str | None
+    kind: TranscriptKind = TranscriptKind.ACTOR_ASSIGNMENT_FINISHED
+
+
+TranscriptRecord: TypeAlias = (
+    BadTranscriptRecord | CompactTranscriptRecord | TextTranscriptRecord
+    | PromptTranscriptRecord | SlashCommandTranscriptRecord
+    | TeamMessageTranscriptRecord | ResultsTranscriptRecord
+    | AssistantTranscriptRecord | GoalTranscriptRecord
+    | BackgroundCommandCompletedTranscriptRecord | MonitorEventTranscriptRecord
+    | MonitorEndedTranscriptRecord | ActorAssignmentFinishedTranscriptRecord
+)
+
+
+def _task_notification(content: str) -> TranscriptRecord:
     """A <task-notification> block -> the one fact it carries.
 
     The single reader of this channel, so that a notification cannot be counted
@@ -136,37 +260,33 @@ def _task_notification(content: str) -> dict[str, JsonValue]:
         # A background Bash completion, NOT an agent's: the same channel
         # delivers both, and treating this as an assignment finish painted
         # phantom "Agent finished" blocks for plain background commands.
-        return {
-            "kind": "background_command_completed",
-            "operation_id": _note_tag(xml, "tool-use-id") or "",
-            "status": _note_tag(xml, "status") or "completed",
-        }
+        return BackgroundCommandCompletedTranscriptRecord(
+            ClaudeCodeCallId(_note_tag(xml, "tool-use-id") or ""),
+            _note_tag(xml, "status") or "completed",
+        )
     event = _note_tag(xml, "event")
     if event is not None:
-        return {
-            "kind": "monitor_event",
-            "task": _note_tag(xml, "task-id") or "",
-            "summary": summary,
-            "event": event,
-        }
+        return MonitorEventTranscriptRecord(
+            ClaudeCodeShellId(_note_tag(xml, "task-id") or ""), summary, event,
+        )
     if summary.startswith(MONITOR_SUMMARY_PREFIX):
-        return {
-            "kind": "monitor_ended",
-            "task": _note_tag(xml, "task-id") or "",
-            "operation_id": _note_tag(xml, "tool-use-id") or "",
-            "status": _note_tag(xml, "status") or "completed",
-        }
-    return {
-        "kind": "actor_assignment_finished",
-        "assignment_id": _note_tag(xml, "tool-use-id") or "",
-        "actor_id": _note_tag(xml, "task-id"),
-        "status": _note_tag(xml, "status") or "completed",
-        "summary": summary,
-        "result": html.unescape(_note_tag(xml, "result") or "") or None,
-    }
+        return MonitorEndedTranscriptRecord(
+            ClaudeCodeShellId(_note_tag(xml, "task-id") or ""),
+            ClaudeCodeCallId(_note_tag(xml, "tool-use-id") or ""),
+            _note_tag(xml, "status") or "completed",
+        )
+    return ActorAssignmentFinishedTranscriptRecord(
+        ClaudeCodeCallId(_note_tag(xml, "tool-use-id") or ""),
+        ClaudeCodeActorId(actor_id) if (actor_id := _note_tag(xml, "task-id")) else None,
+        _note_tag(xml, "status") or "completed",
+        summary,
+        html.unescape(_note_tag(xml, "result") or "") or None,
+    )
 
 
-def result_text(content: JsonValue) -> str:
+def result_text(
+    content: str | list[records.InnerContentBlock | str] | None,
+) -> str:
     """Normalise a tool_result's content (str | block | block list) to text.
 
     Each block is validated against `records.InnerContentBlock` (a genuinely
@@ -175,23 +295,19 @@ def result_text(content: JsonValue) -> str:
     rather than riding along silently misread."""
     if isinstance(content, str):
         return content
-    if isinstance(content, dict):       # a lone content block — normalise to a 1-list
-        content = [content]
     if isinstance(content, list):
         parts = []
         for b in content:
-            if isinstance(b, dict):
-                block = records.InnerContentBlock.model_validate(b)
-                if block.type == "text" or isinstance(block.text, str):
-                    parts.append(block.text or "")
-                elif block.type == "tool_reference":         # ToolSearch result
-                    parts.append("→ loaded tool: " + str(block.tool_name or ""))
-                elif block.type == "image":
-                    parts.append("[image]")
-                else:                                        # unknown block -> show it
-                    parts.append(block.model_dump_json(exclude_none=True))
-            elif isinstance(b, str):
+            if isinstance(b, str):
                 parts.append(b)
+            elif b.type == "text" or isinstance(b.text, str):
+                parts.append(b.text or "")
+            elif b.type == "tool_reference":
+                parts.append("→ loaded tool: " + str(b.tool_name or ""))
+            elif b.type == "image":
+                parts.append("[image]")
+            else:
+                parts.append(b.model_dump_json(exclude_none=True))
         return "\n".join(p for p in parts if p)
     return str(content)
 
@@ -335,7 +451,7 @@ KINDS = ("bad", "compact", "recap", "prompt", "teammsg", "results",
          "actor_assignment_finished", "background_command_completed", "goal")
 
 
-def parse_line(s: str) -> dict[str, JsonValue] | None:
+def parse_line(s: str) -> TranscriptRecord | None:
     """One transcript JSONL line -> a typed record (see the module header).
 
     Dispatches on the raw `type` string FIRST — exactly as records.py's own
@@ -345,16 +461,15 @@ def parse_line(s: str) -> dict[str, JsonValue] | None:
     declared shape raises `pydantic.ValidationError`, which the interpreter
     loop turns into `translation_failed`."""
     try:
-        o = json.loads(s)
-    except Exception:
-        return {"kind": "bad", "raw": s}
-    if not isinstance(o, dict):
-        return {"kind": "bad", "raw": s}
-    t = o.get("type")
+        t = records.TranscriptRecordHeader.model_validate_json(s).type
+    except ValidationError:
+        return BadTranscriptRecord(s)
     if t == "system":
-        system = records.SystemRecord.model_validate(o)
+        system = records.SystemRecord.model_validate_json(s)
         if system.subtype == "compact_boundary":
-            return {"kind": "compact", "meta": system.compactMetadata or {}}
+            return CompactTranscriptRecord(
+                system.compactMetadata.preTokens if system.compactMetadata else None
+            )
         if system.subtype == "away_summary":
             # Claude Code's recap — the away summary (see the module header).
             # The summary text is the system record's plain-string `content`;
@@ -362,19 +477,18 @@ def parse_line(s: str) -> dict[str, JsonValue] | None:
             # which points at a terminal-only menu and is noise in the
             # dashboard bubble.
             text = _strip_recap_hint(system.content or "")
-            return {"kind": "recap", "text": text} if text else None
+            return TextTranscriptRecord(text, TranscriptKind.RECAP) if text else None
         if isinstance(system.content, str):
             cleared_prefix = "Goal cleared:"
             if system.content.startswith(cleared_prefix):
-                return {
-                    "kind": "goal",
-                    "objective": system.content[len(cleared_prefix):].strip() or None,
-                    "state": "cleared",
-                    "reason": None,
-                }
+                return GoalTranscriptRecord(
+                    system.content[len(cleared_prefix):].strip() or None,
+                    "cleared",
+                    None,
+                )
         return None
     if t == "user":
-        user = records.UserRecord.model_validate(o)
+        user = records.UserRecord.model_validate_json(s)
         message = user.message
         content = message.content if message else None
         if isinstance(content, str):
@@ -384,7 +498,7 @@ def parse_line(s: str) -> dict[str, JsonValue] | None:
                 return _task_notification(content)
             kind, a, b = classify_user_text(content)
             if kind == "teammsg":
-                return {"kind": "teammsg", "sender": a, "body": b}
+                return TeamMessageTranscriptRecord(a, b or "")
             # The three records of a `/command` turn (see _CMD_STDOUT_RE): the
             # wrapper becomes ONE record carrying what the human typed, and the
             # caveat + the command's echoed stdout are dropped. Ordered before
@@ -392,27 +506,22 @@ def parse_line(s: str) -> dict[str, JsonValue] | None:
             # otherwise become.
             cmd_name, cmd_args = _command_wrapper(content)
             if cmd_name:
-                return {"kind": "slash_command", "name": cmd_name, "args": cmd_args,
-                        "text": _command_text(content)}
+                return SlashCommandTranscriptRecord(cmd_name, cmd_args, _command_text(content))
             if _CMD_CAVEAT_RE.match(content) or _CMD_STDOUT_RE.match(content):
                 return None
             # isMeta = Claude Code injected this user turn (see the header) —
             # carried so consumers can tell it from something the human typed.
             # The content goes in too: the teammate-mail wrapper is injected
             # with no structural flag to show it (see _TEAM_WRAPPER).
-            return {"kind": "prompt", "text": content,
-                    "meta": _injected(user, content)}
+            return PromptTranscriptRecord(content, _injected(user, content))
         if isinstance(content, list):
-            blocks: list[dict[str, JsonValue]] = []
+            blocks: list[records.ToolResultBlock] = []
             texts: list[str] = []
             for blk in content:
-                if blk.get("type") == "tool_result":
-                    records.ToolResultBlock.model_validate(blk)  # shape-check only
+                if isinstance(blk, records.ToolResultBlock):
                     blocks.append(blk)
-                elif blk.get("type") == "text":
-                    text_block = records.TextBlock.model_validate(blk)
-                    if (text_block.text or "").strip():
-                        texts.append(text_block.text or "")
+                elif isinstance(blk, records.TextBlock) and (blk.text or "").strip():
+                    texts.append(blk.text or "")
             if blocks or texts:
                 # `meta` as on a plain prompt (see the header): a SKILL LOAD
                 # arrives in exactly this shape — an isMeta user record whose
@@ -420,43 +529,15 @@ def parse_line(s: str) -> dict[str, JsonValue] | None:
                 # this skill: …"), injected right after the Skill tool_result.
                 # Without the flag conversation() rendered it as a YOU prompt
                 # bubble holding the entire skill.
-                results_record: dict[str, JsonValue] = {
-                    "kind": "results", "blocks": cast(list[JsonValue], blocks),
-                    "tur": user.toolUseResult, "texts": cast(list[JsonValue], texts),
-                    # the leading text block, for the one text-read mark
-                    # (_TEAM_WRAPPER): a wrapper arriving in list form
-                    # would be that block, and the mark is anchored anyway
-                    "meta": _injected(user, texts[0] if texts else ""),
-                }
-                return results_record
+                tool_response = user.toolUseResult
+                return ResultsTranscriptRecord(
+                    tuple(blocks), tool_response, tuple(texts),
+                    _injected(user, texts[0] if texts else ""),
+                )
         return None
     if t == "assistant":
-        assistant = records.AssistantRecord.model_validate(o)
-        message = assistant.message
-        content = message.content if message else None
-        assistant_blocks: list[JsonValue] = []
-        if isinstance(content, list):
-            for blk in content:
-                if blk.get("type") == "text":
-                    text_block = records.TextBlock.model_validate(blk)
-                    assistant_blocks.append(["text", text_block.text or ""])
-                elif blk.get("type") == "tool_use":
-                    records.ToolUseBlock.model_validate(blk)  # shape-check only
-                    assistant_blocks.append(["tool", blk])
-                elif blk.get("type") == "thinking":
-                    records.ThinkingBlock.model_validate(blk)  # shape-check only
-                elif blk.get("type") == "image":
-                    records.ImageBlock.model_validate(blk)  # shape-check only
-                elif blk.get("type") == "fallback":
-                    records.FallbackBlock.model_validate(blk)  # shape-check only
-        usage = message.usage if message else None
-        assistant_record: dict[str, JsonValue] = {
-            "kind": "assistant", "usage": usage,
-            "model": message.model if message else None,
-            "id": message.id if message else None,
-            "blocks": assistant_blocks,
-        }
-        return assistant_record
+        assistant = records.AssistantRecord.model_validate_json(s)
+        return AssistantTranscriptRecord(assistant.message)
     if t == "attachment":
         # A message typed while a turn is running is QUEUED by Claude Code and,
         # when the turn boundary delivers it, recorded ONLY as this
@@ -470,27 +551,35 @@ def parse_line(s: str) -> dict[str, JsonValue] | None:
         # auto-continuation) from the `task-notification` re-injections (which
         # are harness noise, not user turns); conversation()'s own `<`-wrapper
         # filter still drops any command/caveat wrapper, same as a typed prompt.
-        attachment = records.AttachmentRecord.model_validate(o)
-        att = attachment.attachment or {}
-        att_type = att.get("type")
+        attachment = records.AttachmentRecord[
+            records.AttachmentHeader
+        ].model_validate_json(s)
+        att_type = attachment.attachment.type if attachment.attachment is not None else None
         if att_type == "goal_status":
-            goal = records.GoalStatusAttachment.model_validate(att)
+            goal = records.AttachmentRecord[
+                records.GoalStatusAttachment
+            ].model_validate_json(s).attachment
+            if goal is None:
+                return None
             objective = str(goal.condition or "").strip()
             if not objective:
                 return None
-            return {
-                "kind": "goal",
-                "objective": objective,
-                "state": "completed" if goal.met is True else "active",
-                "reason": str(goal.reason or "").strip() or None,
-            }
+            return GoalTranscriptRecord(
+                objective,
+                "completed" if goal.met is True else "active",
+                str(goal.reason or "").strip() or None,
+            )
         if att_type == "queued_command":
-            queued = records.QueuedCommandAttachment.model_validate(att)
+            queued = records.AttachmentRecord[
+                records.QueuedCommandAttachment
+            ].model_validate_json(s).attachment
+            if queued is None:
+                return None
             if queued.commandMode == "prompt":
-                return {"kind": "prompt", "text": queued.prompt or ""}
+                return PromptTranscriptRecord(queued.prompt or "")
         return None
     if t == "queue-operation":
-        records.QueueOperationRecord.model_validate(o)  # shape-check only
+        records.QueueOperationRecord.model_validate_json(s)  # shape-check only
         # The ENQUEUE half of a task-notification's delivery, and the same XML
         # the `user` record above carries — measured: every notification appeared
         # in both shapes. Read here too, it would double every monitor event.
@@ -662,10 +751,10 @@ def _claude_head(path: str) -> bool:
         if not raw.strip():
             continue
         try:
-            o = json.loads(raw)
-        except Exception:
+            header = records.TranscriptRecordHeader.model_validate_json(raw)
+        except ValidationError:
             continue                    # noise, or the head's torn last line
-        if isinstance(o, dict) and o.get("type") in RECORD_TYPES:
+        if header.type in RECORD_TYPES:
             return True
     return False
 
@@ -725,8 +814,9 @@ def set_session_title(path: str, name: str) -> bool | None:
     if not renameable(path):
         return None
     sid = os.path.basename(path)[:-len(".jsonl")]
-    rec = json.dumps({"type": "agent-name", "agentName": name,
-                      "sessionId": sid}, ensure_ascii=False)
+    rec = records.TitleRecord(
+        type="agent-name", agentName=name, sessionId=sid
+    ).model_dump_json(exclude_none=True)
     with open(path, "a", encoding="utf-8") as fh:
         fh.write(rec + "\n")                # ONE write: atomic O_APPEND line
     return True

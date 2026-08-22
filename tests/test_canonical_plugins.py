@@ -104,6 +104,7 @@ from domain.ids import (
 )
 from domain.values import AccountReference, AttentionPrompt, ModelReference, ShellFollowUntil, TextContent
 from harness.impl.claude_code.canonical.translator import ClaudeCanonicalTranslator
+from harness.impl.claude_code.canonical.records import HookPayload, MessageUsage, SystemRecord
 from harness.impl.claude_code.canonical.sources import (
     ClaudeRawEventSources,
     ClaudeTaskRawEventSource,
@@ -112,8 +113,9 @@ from harness.impl.claude_code.canonical.sources import (
 from harness.impl.claude_code import account
 from harness.impl.claude_code.hooks import gateway as claude_hooks
 from harness.impl.claude_code.hooks import foreground as claude_foreground
-from harness.impl.claude_code.controls import tui as claude_tui
+from harness.impl.claude_code.controls import confirmdialog, tui as claude_tui
 from harness.impl.claude_code.usage.rows import usage_reader as claude_usage_reader
+from harness.impl.claude_code.usage import live as claude_live_usage
 from harness.impl.claude_code.reactors import ClaudeOtelCanonicalEventReactor
 from harness.impl.codex.canonical.translator import CodexCanonicalTranslator
 from harness.impl.codex.canonical.sources import (
@@ -122,7 +124,9 @@ from harness.impl.codex.canonical.sources import (
 )
 from harness.impl.codex.hooks import gateway as codex_hooks
 from harness.impl.codex.canonical import rollout as codex_rollout
+from harness.impl.codex.canonical.records import SessionMetaPayload, TurnContextRecord
 from harness.impl.codex.controls.controller import _rollout_abort_state
+from harness.impl.codex.model import BaseInstructionsSourceType, CodexEffort, CodexModel
 from harness.impl.claude_code.otel import gateway as claude_telemetry
 from harness.models import HarnessTelemetryRequest
 from repository.errors import EventIdentityConflict
@@ -280,13 +284,13 @@ def test_claude_registers_no_automatic_account_migration_reactor():
 def test_claude_stop_failure_rate_limit_yields_the_usage_limited_goal_fact():
     translation = ClaudeCanonicalTranslator().translate(raw_event(
         {"hook_event_name": "StopFailure", "error": "rate_limit"},
-        harness="claude_code",
+        harness=HarnessName.CLAUDE_CODE,
         source_type="hook",
         raw_event_id="stop-failure",
     ))
     unrelated = ClaudeCanonicalTranslator().translate(raw_event(
         {"hook_event_name": "StopFailure", "error": "network"},
-        harness="claude_code",
+        harness=HarnessName.CLAUDE_CODE,
         source_type="hook",
         raw_event_id="stop-network",
     ))
@@ -357,7 +361,6 @@ def test_file_sources_preserve_the_exact_complete_line(tmp_path):
     session = Session(
         SessionId("session-one"),
         ActorId("session-one:lead"),
-        "native",
         str(source_path),
         "/work",
     )
@@ -382,7 +385,6 @@ def test_file_sources_read_bounded_batches_and_resume_by_position(tmp_path, sour
     session = Session(
         SessionId("session-one"),
         ActorId("session-one:lead"),
-        "native",
         str(source_path),
         "/work",
     )
@@ -456,7 +458,6 @@ def test_claude_team_messages_preserve_the_native_sender_as_evidence_actor(
     session = Session(
         SessionId("session-one"),
         ActorId("session-one:lead"),
-        "native",
         str(source_path),
         "/work",
     )
@@ -503,7 +504,6 @@ def test_claude_source_factory_includes_child_transcripts(tmp_path):
     session = Session(
         session_id=SessionId("session-one"),
         lead_actor_id=ActorId("session-one:lead"),
-        harness_session_id="session-one",
         source_reference=str(parent_path),
         working_directory=str(tmp_path),
     )
@@ -535,7 +535,6 @@ def test_claude_task_source_captures_full_updates_and_deletion(tmp_path, monkeyp
     session = Session(
         SessionId("6165ab88-21b7-4b54-a2dd-c25a8ecb0b59"),
         ActorId("6165ab88-21b7-4b54-a2dd-c25a8ecb0b59:lead"),
-        "6165ab88-21b7-4b54-a2dd-c25a8ecb0b59",
         "/work/session.jsonl",
         "/work",
     )
@@ -578,7 +577,7 @@ def test_claude_goal_status_is_canonical_goal_state():
                 "reason": "One test remains",
             },
         },
-        harness="claude_code",
+        harness=HarnessName.CLAUDE_CODE,
         source_type="transcript",
         raw_event_id="goal-active",
     ))
@@ -593,7 +592,7 @@ def test_claude_goal_status_is_canonical_goal_state():
                 "reason": "The suite is green",
             },
         },
-        harness="claude_code",
+        harness=HarnessName.CLAUDE_CODE,
         source_type="transcript",
         raw_event_id="goal-completed",
     ))
@@ -607,7 +606,7 @@ def test_claude_goal_status_is_canonical_goal_state():
 
     cleared = ClaudeCanonicalTranslator().translate(raw_event(
         {"type": "system", "uuid": "goal-cleared", "content": "Goal cleared: All tests pass"},
-        harness="claude_code",
+        harness=HarnessName.CLAUDE_CODE,
         source_type="transcript",
         raw_event_id="goal-cleared",
     ))
@@ -626,7 +625,7 @@ def test_codex_goal_and_plan_use_shared_goal_and_task_events():
                 "goal": {"objective": "Ship it", "status": "active"},
             },
         },
-        harness="codex",
+        harness=HarnessName.CODEX,
         source_type="rollout",
         raw_event_id="goal-one",
     ))
@@ -644,7 +643,7 @@ def test_codex_goal_and_plan_use_shared_goal_and_task_events():
                 ),
             },
         },
-        harness="codex",
+        harness=HarnessName.CODEX,
         source_type="rollout",
         raw_event_id="plan-one",
     ))
@@ -663,7 +662,7 @@ def test_codex_goal_state_is_strict_and_clear_removes_the_goal():
     translator = CodexCanonicalTranslator()
     cleared = translator.translate(raw_event(
         {"type": "event_msg", "payload": {"type": "thread_goal_cleared"}},
-        harness="codex",
+        harness=HarnessName.CODEX,
         source_type="rollout",
         raw_event_id="goal-cleared",
     ))
@@ -678,7 +677,7 @@ def test_codex_goal_state_is_strict_and_clear_removes_the_goal():
                     "goal": {"objective": "Ship it", "status": "mystery"},
                 },
             },
-            harness="codex",
+            harness=HarnessName.CODEX,
             source_type="rollout",
             raw_event_id="goal-invalid",
         ))
@@ -694,7 +693,7 @@ def test_codex_source_factory_includes_native_subagent_rollouts(tmp_path, monkey
             "payload": {
                 "cwd": "/work",
                 "thread_source": "subagent",
-                "parent_thread_id": "parent-native",
+                "parent_thread_id": "parent-session",
                 "timestamp": "2026-08-14T10:00:00Z",
             },
         },
@@ -720,7 +719,6 @@ def test_codex_source_factory_includes_native_subagent_rollouts(tmp_path, monkey
     session = Session(
         session_id=SessionId("parent-session"),
         lead_actor_id=ActorId("parent-session:lead"),
-        harness_session_id="parent-native",
         source_reference=str(tmp_path / "not-a-codex-session.jsonl"),
         working_directory="/work",
     )
@@ -761,7 +759,7 @@ def test_codex_source_factory_rotates_native_subagent_rollouts(tmp_path, monkeyp
                 "payload": {
                     "cwd": "/work",
                     "thread_source": "subagent",
-                    "parent_thread_id": "parent-native",
+                    "parent_thread_id": "parent-session",
                     "timestamp": "2026-08-14T10:00:00Z",
                 },
             })
@@ -786,7 +784,6 @@ def test_codex_source_factory_rotates_native_subagent_rollouts(tmp_path, monkeyp
     session = Session(
         SessionId("parent-session"),
         ActorId("parent-session:lead"),
-        "parent-native",
         str(tmp_path / "not-a-codex-session.jsonl"),
         "/work",
     )
@@ -806,7 +803,15 @@ def test_codex_session_start_announces_only_a_lead_rollout(tmp_path, monkeypatch
     lead_path.parent.mkdir(parents=True)
     lead_path.write_text(json.dumps({
         "type": "session_meta",
-        "payload": {"id": "lead-one", "cwd": "/work", "thread_source": "user"},
+        "payload": {
+            "id": "lead-one",
+            "cwd": "/work",
+            "thread_source": "user",
+            "base_instructions": {
+                "text": "You are Codex.",
+                "provenance": {"type": "model", "model": "gpt-5.6-luna"},
+            },
+        },
     }) + "\n")
     child_path = lead_path.with_name("rollout-2026-08-15T10-00-01-child-one.jsonl")
     child_path.write_text(json.dumps({
@@ -818,7 +823,7 @@ def test_codex_session_start_announces_only_a_lead_rollout(tmp_path, monkeypatch
         return replace(raw_event(
             {"session_id": session_id, "transcript_path": str(path), "cwd": "/work",
              "hook_event_name": "SessionStart"},
-            harness="codex",
+            harness=HarnessName.CODEX,
             source_type="hook",
             raw_event_id=f"hook-{session_id}",
         ), session_id=SessionId(session_id))
@@ -834,6 +839,60 @@ def test_codex_session_start_announces_only_a_lead_rollout(tmp_path, monkeypatch
     assert child.canonical_events == ()
 
 
+def test_codex_0149_base_instruction_source_is_a_closed_vocabulary():
+    metadata = SessionMetaPayload.model_validate({
+        "base_instructions": {
+            "text": "You are Codex.",
+            "provenance": {"type": "model", "model": "gpt-5.6-luna"},
+        },
+    })
+
+    assert metadata.base_instructions is not None
+    assert metadata.base_instructions.source is not None
+    assert metadata.base_instructions.source.type is BaseInstructionsSourceType.MODEL
+    assert metadata.base_instructions.source.model is CodexModel.GPT_5_6_LUNA
+
+
+def test_codex_turn_context_model_and_effort_are_closed_vocabularies():
+    record = codex_rollout.parse({
+        "type": "turn_context",
+        "payload": {"model": "gpt-5.6-luna", "effort": "low"},
+    })
+
+    assert isinstance(record, TurnContextRecord)
+    assert record.model is CodexModel.GPT_5_6_LUNA
+    assert record.effort is CodexEffort.LOW
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (("model", "gpt-codex-next"), ("effort", "extreme")),
+)
+def test_codex_unknown_turn_context_selection_is_contract_drift(field, value):
+    payload = {"model": "gpt-5.6-luna", "effort": "low"}
+    payload[field] = value
+
+    with pytest.raises(ValidationError, match=field):
+        codex_rollout.parse({"type": "turn_context", "payload": payload})
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (("type", "configuration"), ("model", "gpt-codex-next")),
+)
+def test_codex_unknown_base_instruction_source_value_is_contract_drift(field, value):
+    source = {"type": "model", "model": "gpt-5.6-luna"}
+    source[field] = value
+
+    with pytest.raises(ValidationError, match=field):
+        SessionMetaPayload.model_validate({
+            "base_instructions": {
+                "text": "You are Codex.",
+                "provenance": source,
+            },
+        })
+
+
 def test_codex_source_factory_waits_for_native_child_boundary(tmp_path, monkeypatch):
     child_path = tmp_path / "sessions" / "2026" / "08" / "14" / "rollout-2026-08-14T10-00-00-child-one.jsonl"
     child_path.parent.mkdir(parents=True)
@@ -842,14 +901,13 @@ def test_codex_source_factory_waits_for_native_child_boundary(tmp_path, monkeypa
         "timestamp": "2026-08-14T10:00:00Z",
         "payload": {
             "thread_source": "subagent",
-            "parent_thread_id": "parent-native",
+            "parent_thread_id": "parent-session",
         },
     }) + "\n")
     monkeypatch.setenv("CODEX_HOME", str(tmp_path))
     session = Session(
         SessionId("parent-session"),
         ActorId("parent-session:lead"),
-        "parent-native",
         str(tmp_path / "not-a-codex-session.jsonl"),
         "/work",
     )
@@ -876,7 +934,6 @@ def test_codex_source_factory_accepts_string_session_source(tmp_path, monkeypatc
     session = Session(
         SessionId("parent-session"),
         ActorId("parent-session:lead"),
-        "parent-native",
         str(tmp_path / "not-a-codex-session.jsonl"),
         "/work",
     )
@@ -1006,11 +1063,11 @@ def test_claude_launch_selections_reach_the_summary_from_the_hook_environment(mo
     # the environment carries the selection ALIAS; the native id arrives later,
     # on the first assistant record, as `reported_by_harness`
     assert model_changes[0].reason == "selected"
-    assert model_changes[0].current.selection_id == "fable"
+    assert model_changes[0].current.name == "fable"
 
     stored_models = stored_payloads(runtime, SessionId("claude-session"), ModelChanged)
     stored_efforts = stored_payloads(runtime, SessionId("claude-session"), EffortChanged)
-    assert stored_models[0].current.selection_id == "fable"
+    assert stored_models[0].current.name == "fable"
     assert stored_efforts[0].current == "high"
 
 
@@ -1229,15 +1286,15 @@ def test_claude_background_output_requires_the_native_task_evidence(monkeypatch,
 
     foreground_document = json.loads(json.dumps(document))
     foreground_document["tool_input"].pop("run_in_background")
-    assert claude_foreground.background_output(foreground_document) is None
+    assert claude_foreground.background_output(HookPayload.model_validate(foreground_document)) is None
 
     missing_task = json.loads(json.dumps(document))
     missing_task["tool_response"].pop("backgroundTaskId")
-    assert claude_foreground.background_output(missing_task) is None
+    assert claude_foreground.background_output(HookPayload.model_validate(missing_task)) is None
 
     no_file_yet = json.loads(json.dumps(document))
     no_file_yet["tool_response"]["backgroundTaskId"] = "btk-without-a-file"
-    assert claude_foreground.background_output(no_file_yet) is None
+    assert claude_foreground.background_output(HookPayload.model_validate(no_file_yet)) is None
 
 
 def test_claude_background_output_streams_into_the_operation(monkeypatch, tmp_path):
@@ -1251,7 +1308,7 @@ def test_claude_background_output_streams_into_the_operation(monkeypatch, tmp_pa
     runtime, interpreter = interpreting_runtime(tmp_path / "data" / "main.db")
     runtime.register("claude_code", Session(
         SessionId("session-one"), ActorId("session-one:lead"),
-        "session-one", str(tmp_path / "session-one.jsonl"), "/work",
+        str(tmp_path / "session-one.jsonl"), "/work",
     ))
     interpreter.tick()  # translates the directive; the reaction starts the following
     output_path.write_bytes(b"1\n2\n3\n")  # the job keeps writing
@@ -1312,7 +1369,7 @@ def test_a_command_backgrounded_mid_run_keeps_its_output_file_and_its_following(
 
     runtime, interpreter = interpreting_runtime(tmp_path / "data" / "main.db")
     runtime.register("claude_code", Session(
-        SessionId(session_id), ActorId(f"{session_id}:lead"), session_id, transcript_path, "/work",
+        SessionId(session_id), ActorId(f"{session_id}:lead"), transcript_path, "/work",
     ))
     interpreter.tick()                                   # the directive starts the following
     following = runtime.shell_output.find_for_session(SessionId(session_id))
@@ -1357,7 +1414,7 @@ def test_claude_foreground_output_is_canonical_append_progress():
             "stream": "output",
             "content_base64": base64.b64encode(content).decode("ascii"),
         },
-        harness="claude_code",
+        harness=HarnessName.CLAUDE_CODE,
         source_type="foreground_output",
         raw_event_id="foreground-one",
     ))
@@ -1385,7 +1442,7 @@ def test_claude_background_launch_stub_is_not_progress(tmp_path):
                 "content": [{"type": "tool_result", "tool_use_id": "background-op", "content": stub}]
             },
         },
-        harness="claude_code",
+        harness=HarnessName.CLAUDE_CODE,
         source_type="transcript",
         raw_event_id="background-stub",
     ))
@@ -1404,7 +1461,7 @@ def test_claude_foreground_prepare_rewrites_the_command_into_an_output_location(
         "tool_input": {"command": "printf hello"},
     }
 
-    prepared = claude_foreground.prepare(document)
+    prepared = claude_foreground.prepare(HookPayload.model_validate(document))
 
     assert prepared is not None
     native_output = json.loads(prepared.reply)
@@ -1441,7 +1498,7 @@ def test_claude_foreground_bytes_flow_through_raw_audit_into_operation_projectio
     runtime, interpreter = interpreting_runtime(tmp_path / "application" / "main.db")
     runtime.register("claude_code", Session(
         SessionId("session-one"), ActorId("session-one:lead"),
-        "session-one", str(tmp_path / "session-one.jsonl"), str(tmp_path),
+        str(tmp_path / "session-one.jsonl"), str(tmp_path),
     ))
     interpreter.tick()  # translates the directive; the reaction starts the following
     output_sources = runtime.shell_output.find_for_session(SessionId("session-one"))
@@ -1813,7 +1870,7 @@ def test_claude_hook_and_child_transcript_deduplicate_actor_start():
                 "agent_id": "child-one",
                 "agent_type": "researcher",
             },
-            harness="claude_code",
+            harness=HarnessName.CLAUDE_CODE,
             source_type="hook",
             raw_event_id="child-hook",
         ),
@@ -1822,7 +1879,7 @@ def test_claude_hook_and_child_transcript_deduplicate_actor_start():
     transcript_record = replace(
         raw_event(
             {"type": "user", "uuid": "child-prompt", "message": {"content": "inspect"}},
-            harness="claude_code",
+            harness=HarnessName.CLAUDE_CODE,
             source_type="transcript",
             raw_event_id="child-transcript",
             source_position="0",
@@ -1844,7 +1901,7 @@ def test_claude_subagent_stop_hook_finishes_the_actor():
     hook = replace(
         raw_event(
             {"hook_event_name": "SubagentStop", "hook_event_id": "child-stop"},
-            harness="claude_code",
+            harness=HarnessName.CLAUDE_CODE,
             source_type="hook",
             raw_event_id="child-stop-hook",
         ),
@@ -1869,7 +1926,7 @@ def test_claude_first_teammate_message_starts_the_actor_once():
                     "content": '<teammate-message teammate_id="worker-one">hello</teammate-message>',
                 },
             },
-            harness="claude_code",
+            harness=HarnessName.CLAUDE_CODE,
             source_type="teammate_transcript",
             raw_event_id="worker-transcript",
             source_position="0",
@@ -1892,7 +1949,7 @@ def test_claude_later_teammate_message_reuses_the_canonical_actor_start():
     first_record = replace(
         raw_event(
             {"type": "user", "uuid": "first", "message": {"content": "inspect"}},
-            harness="claude_code",
+            harness=HarnessName.CLAUDE_CODE,
             source_type="teammate_transcript",
             raw_event_id="first-record",
             source_position="0",
@@ -1910,7 +1967,7 @@ def test_claude_later_teammate_message_reuses_the_canonical_actor_start():
                     "content": '<teammate-message teammate_id="worker-one">done</teammate-message>',
                 },
             },
-            harness="claude_code",
+            harness=HarnessName.CLAUDE_CODE,
             source_type="teammate_transcript",
             raw_event_id="later-message",
             source_position="500",
@@ -1929,7 +1986,7 @@ def test_claude_lead_start_uses_the_first_root_record_with_a_working_directory()
     translator = ClaudeCanonicalTranslator()
     plumbing = translator.translate(raw_event(
         {"type": "queue-operation", "operation": "enqueue"},
-        harness="claude_code",
+        harness=HarnessName.CLAUDE_CODE,
         source_type="transcript",
         raw_event_id="queue",
         source_position="0",
@@ -1942,14 +1999,14 @@ def test_claude_lead_start_uses_the_first_root_record_with_a_working_directory()
             "cwd": "/work",
             "message": {"content": "hello"},
         },
-        harness="claude_code",
+        harness=HarnessName.CLAUDE_CODE,
         source_type="transcript",
         raw_event_id="root-record",
         source_position="297",
     ))
     hook = translator.translate(raw_event(
         {"hook_event_name": "SessionStart", "cwd": "/work"},
-        harness="claude_code",
+        harness=HarnessName.CLAUDE_CODE,
         source_type="hook",
         raw_event_id="session-hook",
     ))
@@ -1988,7 +2045,6 @@ def test_claude_teammate_hook_and_transcript_share_one_actor_identity(monkeypatc
     session = Session(
         SessionId("session-one"),
         ActorId("session-one:lead"),
-        "session-one",
         str(main_path),
         str(tmp_path),
     )
@@ -2013,13 +2069,13 @@ def test_codex_hook_maps_unique_compaction_lifecycle():
     translator = CodexCanonicalTranslator()
     before = translator.translate(raw_event(
         {"hook_event_name": "PreCompact", "hook_event_id": "compact-one"},
-        harness="codex",
+        harness=HarnessName.CODEX,
         source_type="hook",
         raw_event_id="compact-before",
     ))
     after = translator.translate(raw_event(
         {"hook_event_name": "PostCompact", "hook_event_id": "compact-one"},
-        harness="codex",
+        harness=HarnessName.CODEX,
         source_type="hook",
         raw_event_id="compact-after",
     ))
@@ -2043,7 +2099,7 @@ def test_codex_session_start_hook_matches_rollout_metadata(tmp_path, monkeypatch
     hook = translator.translate(raw_event(
         {"hook_event_name": "SessionStart", "cwd": "/work",
          "transcript_path": str(rollout_path)},
-        harness="codex",
+        harness=HarnessName.CODEX,
         source_type="hook",
         raw_event_id="session-hook",
     ))
@@ -2054,7 +2110,7 @@ def test_codex_session_start_hook_matches_rollout_metadata(tmp_path, monkeypatch
                 "type": "session_meta",
                 "payload": {"cwd": "/work", "originator": "codex-tui"},
             },
-            harness="codex",
+            harness=HarnessName.CODEX,
             source_type="rollout",
             raw_event_id="session-rollout",
             source_position="0",
@@ -2111,13 +2167,13 @@ def test_static_menu_vocabulary_lives_on_the_harness_descriptor():
     from harness.impl.claude_code.plugin import plugin as claude_plugin
     from harness.impl.codex.plugin import plugin as codex_plugin
 
-    assert [model.model_id for model in claude_plugin.info.models] == [
+    assert [model.value for model in claude_plugin.info.models] == [
         "fable",
         "opus",
         "sonnet",
         "haiku",
     ]
-    assert all(model.model_id.startswith("gpt-") for model in codex_plugin.info.models)
+    assert all(model.value.startswith("gpt-") for model in codex_plugin.info.models)
     assert claude_plugin.info.rewind_modes
     assert codex_plugin.info.rewind_modes == ()
     # only one harness has a subscription switcher behind it
@@ -2135,7 +2191,7 @@ def test_reasoning_levels_belong_to_the_model_that_offers_them():
     """
     from harness.impl.codex.plugin import plugin as codex_plugin
 
-    by_id = {model.model_id: model for model in codex_plugin.info.models}
+    by_id = {model.value: model for model in codex_plugin.info.models}
     luna = {effort.value for effort in by_id["gpt-5.6-luna"].efforts}
     sol = {effort.value for effort in by_id["gpt-5.6-sol"].efforts}
 
@@ -2165,8 +2221,9 @@ def test_the_daemon_decides_what_a_statusline_delivery_meant(monkeypatch, tmp_pa
     """
     monkeypatch.setattr(
         "harness.impl.claude_code.usage.rows.account.registry",
-        lambda: [{"slug": "work", "label": "Work", "alias": "work"}],
+        lambda: [account.AccountRecord("work", "Work", "work")],
     )
+    monkeypatch.setattr(claude_live_usage, "usage", lambda _config_directory: None)
     body = json.dumps({
         "session_id": "session-usage",
         "rate_limits": {
@@ -2203,7 +2260,11 @@ def test_an_account_a_client_reported_is_validated_by_the_daemon():
     assert account.normalize(7, 7) == ("7", "7")
 
 
-def test_launchers_build_native_commands_and_share_terminal_launch_mechanics(tmp_path):
+def test_launchers_build_native_commands_and_share_terminal_launch_mechanics(monkeypatch, tmp_path):
+    monkeypatch.setattr(account, "registry", lambda: [
+        account.AccountRecord("c1", "Account One", "c1"),
+        account.AccountRecord("c2", "Account Two", "c2"),
+    ])
     application = ProviderGraph()
     terminal = FakeTerminal()
     launcher = HarnessLauncherService(
@@ -2218,7 +2279,7 @@ def test_launchers_build_native_commands_and_share_terminal_launch_mechanics(tmp
         LaunchRequest(
             working_directory="/work",
             initial_text="hello",
-            model_id="fable",
+            model="fable",
             effort="high",
             account_id=None,
             resume_session_id=None,
@@ -2230,7 +2291,7 @@ def test_launchers_build_native_commands_and_share_terminal_launch_mechanics(tmp
         LaunchRequest(
             working_directory="/work",
             initial_text="hello",
-            model_id="gpt-5.6-terra",
+            model="gpt-5.6-terra",
             effort="high",
             account_id=None,
             resume_session_id=None,
@@ -2244,7 +2305,7 @@ def test_launchers_build_native_commands_and_share_terminal_launch_mechanics(tmp
     # shared launch convention; everything after them is the harness's plan.
     assert terminal.opened_tabs[0].command[1] == "-lic"
     assert terminal.opened_tabs[0].command[3:] == (
-        "claude",
+        "c2",
         "--model",
         "fable",
         "--effort",
@@ -2266,9 +2327,24 @@ def test_launchers_build_native_commands_and_share_terminal_launch_mechanics(tmp
     # They precede the command word inside the shell's own -c string, which is
     # what keeps an aliased CLI resolving.
     assert terminal.opened_tabs[0].command[2].startswith(
-        'BAQYLAU_LAUNCH_MODEL=fable BAQYLAU_LAUNCH_EFFORT=high claude "$@"'
+        'BAQYLAU_LAUNCH_MODEL=fable BAQYLAU_LAUNCH_EFFORT=high c2 "$@"'
     )
     assert "BAQYLAU_LAUNCH_MODEL" not in terminal.opened_tabs[1].command[2]
+
+
+def test_claude_account_selection_prefers_c2_only_as_the_missing_selection_fallback(monkeypatch):
+    monkeypatch.setattr(account, "registry", lambda: [
+        account.AccountRecord("c1", "Account One", "c1"),
+        account.AccountRecord("c2", "Account Two", "c2"),
+    ])
+
+    assert account.alias_for(None) == "c2"
+    assert account.alias_for(AccountId("c1")) == "c1"
+    assert account.alias_for(AccountId("claude")) == "claude"
+    assert account.alias_for(AccountId("missing")) is None
+
+    monkeypatch.setattr(account, "registry", lambda: [])
+    assert account.alias_for(None) == "claude"
 
 
 def test_a_harness_that_announces_at_its_first_turn_refuses_an_empty_launch(tmp_path):
@@ -2287,7 +2363,7 @@ def test_a_harness_that_announces_at_its_first_turn_refuses_an_empty_launch(tmp_
     empty = LaunchRequest(
         working_directory="/work",
         initial_text="   ",
-        model_id=None,
+        model=None,
         effort=None,
         account_id=None,
         resume_session_id=None,
@@ -2359,7 +2435,6 @@ def test_claude_question_discussion_is_delivered_after_declining(monkeypatch, tm
     session = Session(
         SessionId("session-one"),
         ActorId("session-one:lead"),
-        "native-one",
         "/work/session.jsonl",
         "/work",
     )
@@ -2394,7 +2469,6 @@ def test_codex_question_discussion_stays_in_the_native_dialog(monkeypatch, tmp_p
     session = Session(
         SessionId("session-one"),
         ActorId("session-one:lead"),
-        "native-one",
         "/work/rollout-session-one.jsonl",
         "/work",
     )
@@ -2426,13 +2500,12 @@ def test_claude_model_control_resolves_the_native_confirmation(monkeypatch, tmp_
     )
     monkeypatch.setattr(
         "harness.impl.claude_code.controls.controller.confirmdialog.confirm",
-        lambda _terminal, _window: {"dialog": True, "digit": "1"},
+        lambda _terminal, _window: confirmdialog.ConfirmOutcome(True, "1"),
     )
     application = ProviderGraph()
     session = Session(
         SessionId("session-one"),
         ActorId("session-one:lead"),
-        "native-one",
         "/work/session.jsonl",
         "/work",
     )
@@ -2482,7 +2555,6 @@ def test_parked_rename_uses_only_the_owning_harness_title_store(
     session = Session(
         SessionId("session-one"),
         ActorId("session-one:lead"),
-        "native-one",
         "/work/native-session",
         "/work",
     )
@@ -2501,7 +2573,7 @@ def test_claude_prompt_and_codex_prompt_share_the_message_model():
     claude = ClaudeCanonicalTranslator().translate(
         raw_event(
             {"type": "user", "uuid": "claude-message", "message": {"content": "fix it"}},
-            harness="claude_code",
+            harness=HarnessName.CLAUDE_CODE,
             source_type="transcript",
             raw_event_id="claude-prompt",
         )
@@ -2509,7 +2581,7 @@ def test_claude_prompt_and_codex_prompt_share_the_message_model():
     codex = CodexCanonicalTranslator().translate(
         raw_event(
             {"type": "event_msg", "payload": {"type": "user_message", "message": "fix it"}},
-            harness="codex",
+            harness=HarnessName.CODEX,
             source_type="rollout",
             raw_event_id="codex-prompt",
         )
@@ -2528,7 +2600,7 @@ def test_claude_child_prompt_is_authored_by_the_parent_agent():
     child_prompt = replace(
         raw_event(
             {"type": "user", "uuid": "child-prompt", "message": {"content": "inspect it"}},
-            harness="claude_code",
+            harness=HarnessName.CLAUDE_CODE,
             source_type="transcript",
             raw_event_id="child-prompt",
             source_position="1",
@@ -2555,7 +2627,7 @@ def test_claude_async_agent_launch_stays_running_until_task_notification():
                 "subagent_type": "general-purpose",
             },
         },
-        harness="claude_code",
+        harness=HarnessName.CLAUDE_CODE,
         source_type="hook",
         raw_event_id="agent-start",
     ))
@@ -2571,7 +2643,7 @@ def test_claude_async_agent_launch_stays_running_until_task_notification():
                 "agentId": "child-one",
             },
         },
-        harness="claude_code",
+        harness=HarnessName.CLAUDE_CODE,
         source_type="hook",
         raw_event_id="agent-launch-ack",
     ))
@@ -2604,7 +2676,7 @@ def test_claude_task_notification_finishes_actor_assignment_instead_of_creating_
                 )
             },
         },
-        harness="claude_code",
+        harness=HarnessName.CLAUDE_CODE,
         source_type="transcript",
         raw_event_id="task-notification",
     ))
@@ -2638,7 +2710,7 @@ def test_claude_background_completion_is_an_output_finish_not_an_agent_finish():
                 )
             },
         },
-        harness="claude_code",
+        harness=HarnessName.CLAUDE_CODE,
         source_type="transcript",
         raw_event_id="background-completion",
     ))
@@ -2673,7 +2745,7 @@ def test_claude_background_completion_carries_the_jobs_own_outcome():
                     )
                 },
             },
-            harness="claude_code",
+            harness=HarnessName.CLAUDE_CODE,
             source_type="transcript",
             raw_event_id=f"background-completion-{status}",
         ))
@@ -2697,7 +2769,7 @@ def _monitor_notification(uuid, body):
             "promptSource": "system",
             "message": {"content": f"<task-notification>{body}</task-notification>"},
         },
-        harness="claude_code",
+        harness=HarnessName.CLAUDE_CODE,
         source_type="transcript",
         raw_event_id=uuid,
     )
@@ -2713,7 +2785,7 @@ def _armed_monitor(translator, shell_id="monitor-op-one", task_id="bmfwjr03l"):
             "tool_input": {"command": "tail -f log", "description": "ticks"},
             "tool_response": {"taskId": task_id, "timeoutMs": 300000, "persistent": False},
         },
-        harness="claude_code",
+        harness=HarnessName.CLAUDE_CODE,
         source_type="hook",
         raw_event_id=f"arm-{shell_id}",
     ))
@@ -2812,7 +2884,7 @@ def test_claude_task_notifications_are_counted_once_though_they_arrive_twice():
                 "<event>tick-1</event></task-notification>"
             ),
         },
-        harness="claude_code",
+        harness=HarnessName.CLAUDE_CODE,
         source_type="transcript",
         raw_event_id="enqueue-tick-1",
     ))
@@ -2836,7 +2908,7 @@ def test_claude_command_backgrounded_mid_run_says_so_before_it_says_finished():
             "tool_input": {"command": "sleep 30; echo done"},
             "tool_response": {"backgroundTaskId": "btk9y72c9"},
         },
-        harness="claude_code",
+        harness=HarnessName.CLAUDE_CODE,
         source_type="hook",
         raw_event_id="post-tool-use-backgrounded",
     ))
@@ -2845,7 +2917,7 @@ def test_claude_command_backgrounded_mid_run_says_so_before_it_says_finished():
     assert kinds.index("ShellBackgrounded") < kinds.index("ShellFinished")
     backgrounded = payloads(translation, ShellBackgrounded)[0].payload
     assert backgrounded.shell_id == ShellId("op-backgrounded")
-    assert backgrounded.native_id == "btk9y72c9"
+    assert backgrounded.shell_id == ShellId("op-backgrounded")
 
 
 def test_claude_background_launch_is_not_a_mid_run_backgrounding():
@@ -2862,7 +2934,7 @@ def test_claude_background_launch_is_not_a_mid_run_backgrounding():
             "tool_input": {"command": "sleep 30", "run_in_background": True},
             "tool_response": {"backgroundTaskId": "btk9y72c9"},
         },
-        harness="claude_code",
+        harness=HarnessName.CLAUDE_CODE,
         source_type="hook",
         raw_event_id="post-tool-use-native-background",
     ))
@@ -2879,7 +2951,7 @@ def test_codex_exec_that_outlives_its_yield_is_announced_as_background_once():
     def rollout_event(document, position):
         return raw_event(
             document,
-            harness="codex",
+            harness=HarnessName.CODEX,
             source_type="rollout",
             raw_event_id=f"codex-bg-{position}",
             source_position=str(position),
@@ -2909,7 +2981,7 @@ def test_codex_exec_that_outlives_its_yield_is_announced_as_background_once():
 
     backgrounded = payloads(first, ShellBackgrounded)
     assert len(backgrounded) == 1
-    assert backgrounded[0].payload.native_id == "4242"
+    assert backgrounded[0].payload.shell_id
     assert not payloads(first, ShellFinished)
     assert not payloads(second, ShellBackgrounded)
 
@@ -2922,7 +2994,7 @@ def test_claude_skill_and_web_and_worktree_tools_have_their_own_facts():
 
     def hook(document, raw_event_id):
         return translator.translate(raw_event(
-            document, harness="claude_code", source_type="hook", raw_event_id=raw_event_id
+            document, harness=HarnessName.CLAUDE_CODE, source_type="hook", raw_event_id=raw_event_id
         ))
 
     skill_start = hook({
@@ -2978,7 +3050,7 @@ def test_claude_plan_is_proposed_and_then_resolved_with_what_the_person_decided(
             "tool_name": "ExitPlanMode",
             "tool_input": {"plan": "1. Read it\n2. Change it"},
         },
-        harness="claude_code",
+        harness=HarnessName.CLAUDE_CODE,
         source_type="hook",
         raw_event_id="plan-proposed",
     ))
@@ -2993,7 +3065,7 @@ def test_claude_plan_is_proposed_and_then_resolved_with_what_the_person_decided(
                 "the user said:\nstart with the tests"
             ),
         },
-        harness="claude_code",
+        harness=HarnessName.CLAUDE_CODE,
         source_type="hook",
         raw_event_id="plan-resolved",
     ))
@@ -3021,7 +3093,7 @@ def test_claude_enter_plan_mode_is_a_deliberate_ignore_not_drift():
             "tool_name": "EnterPlanMode",
             "tool_input": {},
         },
-        harness="claude_code",
+        harness=HarnessName.CLAUDE_CODE,
         source_type="hook",
         raw_event_id="enter-plan-started",
     ))
@@ -3036,7 +3108,7 @@ def test_claude_enter_plan_mode_is_a_deliberate_ignore_not_drift():
                 "codebase and designing an implementation approach."
             ),
         },
-        harness="claude_code",
+        harness=HarnessName.CLAUDE_CODE,
         source_type="hook",
         raw_event_id="enter-plan-finished",
     ))
@@ -3052,7 +3124,7 @@ def test_claude_turn_opens_on_the_prompt_and_closes_on_the_stop_hook():
     translator = ClaudeCanonicalTranslator()
     prompt = translator.translate(raw_event(
         {"type": "user", "uuid": "prompt-one", "message": {"content": "fix it"}},
-        harness="claude_code",
+        harness=HarnessName.CLAUDE_CODE,
         source_type="transcript",
         raw_event_id="prompt",
     ))
@@ -3063,19 +3135,19 @@ def test_claude_turn_opens_on_the_prompt_and_closes_on_the_stop_hook():
             "tool_name": "Bash",
             "tool_input": {"command": "pwd"},
         },
-        harness="claude_code",
+        harness=HarnessName.CLAUDE_CODE,
         source_type="hook",
         raw_event_id="tool",
     ))
     injected = translator.translate(raw_event(
         {"type": "user", "uuid": "prompt-two", "message": {"content": "and also this"}},
-        harness="claude_code",
+        harness=HarnessName.CLAUDE_CODE,
         source_type="transcript",
         raw_event_id="injection",
     ))
     stop = translator.translate(raw_event(
         {"hook_event_name": "Stop", "hook_event_id": "stop-one"},
-        harness="claude_code",
+        harness=HarnessName.CLAUDE_CODE,
         source_type="hook",
         raw_event_id="stop",
     ))
@@ -3086,7 +3158,7 @@ def test_claude_turn_opens_on_the_prompt_and_closes_on_the_stop_hook():
             "tool_name": "Bash",
             "tool_input": {"command": "ls"},
         },
-        harness="claude_code",
+        harness=HarnessName.CLAUDE_CODE,
         source_type="hook",
         raw_event_id="after",
     ))
@@ -3119,7 +3191,7 @@ def test_claude_search_is_one_fact_holding_both_its_query_and_its_result():
                 }]
             },
         },
-        harness="claude_code",
+        harness=HarnessName.CLAUDE_CODE,
         source_type="transcript",
         raw_event_id="tool-search",
     ))
@@ -3135,7 +3207,7 @@ def test_claude_search_is_one_fact_holding_both_its_query_and_its_result():
                 }]
             },
         },
-        harness="claude_code",
+        harness=HarnessName.CLAUDE_CODE,
         source_type="transcript",
         raw_event_id="tool-result",
     ))
@@ -3162,7 +3234,7 @@ def test_claude_child_actor_uses_the_task_description_from_its_sidecar(tmp_path)
                 "cwd": "/work",
                 "message": {"content": "Find the weather"},
             },
-            harness="claude_code",
+            harness=HarnessName.CLAUDE_CODE,
             source_type="child_transcript",
             raw_event_id="child-prompt",
             source_position="0",
@@ -3194,7 +3266,7 @@ def test_codex_deliberate_ignores_are_nonsemantic_and_only_drift_stays_unknown()
     def verdict(document):
         return CodexCanonicalTranslator().translate(raw_event(
             document,
-            harness="codex",
+            harness=HarnessName.CODEX,
             source_type="rollout",
             raw_event_id=f"codex-{document.get('type')}-{id(document)}",
         )).decision
@@ -3253,7 +3325,7 @@ def test_codex_unknown_field_on_a_known_record_fails_translation_naming_it():
                     "a_field_records_py_has_never_declared": "surprise",
                 },
             },
-            harness="codex",
+            harness=HarnessName.CODEX,
             source_type="rollout",
             raw_event_id="codex-unknown-field",
         ))
@@ -3270,7 +3342,7 @@ def test_codex_wrong_typed_field_on_a_known_record_fails_translation():
                 "type": "event_msg",
                 "payload": {"type": "task_started", "turn_id": ["not", "a", "string"]},
             },
-            harness="codex",
+            harness=HarnessName.CODEX,
             source_type="rollout",
             raw_event_id="codex-wrong-type",
         ))
@@ -3290,7 +3362,7 @@ def test_codex_unknown_record_kind_stays_ignored_not_failed():
                 "whatever_fields_it_someday_carries": True,
             },
         },
-        harness="codex",
+        harness=HarnessName.CODEX,
         source_type="rollout",
         raw_event_id="codex-unknown-kind",
     ))
@@ -3311,7 +3383,7 @@ def test_claude_unknown_hook_field_fails_translation_naming_it():
                 "session_id": "session-one",
                 "a_field_records_py_has_never_declared": "surprise",
             },
-            harness="claude_code",
+            harness=HarnessName.CLAUDE_CODE,
             source_type="hook",
             raw_event_id="claude-unknown-field",
         ))
@@ -3331,10 +3403,68 @@ def test_claude_wrong_typed_hook_field_fails_translation():
                 "tool_name": "Bash",
                 "duration_ms": ["not", "a", "number"],
             },
-            harness="claude_code",
+            harness=HarnessName.CLAUDE_CODE,
             source_type="hook",
             raw_event_id="claude-wrong-type",
         ))
+
+
+def test_claude_message_usage_models_the_complete_current_vendor_shape():
+    """The 2.1.239 transcript contract is typed all the way through its nested
+    usage records; these are records, not dynamic dictionaries."""
+    usage = MessageUsage.model_validate({
+        "output_tokens_details": {"thinking_tokens": 7},
+        "input_tokens": 2,
+        "output_tokens": 3,
+        "cache_creation_input_tokens": 4,
+        "cache_read_input_tokens": 5,
+        "server_tool_use": {"web_search_requests": 0, "web_fetch_requests": 0},
+        "service_tier": "standard",
+        "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 4,
+        },
+        "inference_geo": "not_available",
+        "iterations": [{
+            "input_tokens": 2,
+            "output_tokens": 3,
+            "cache_read_input_tokens": 5,
+            "cache_creation_input_tokens": 4,
+            "cache_creation": {
+                "ephemeral_1h_input_tokens": 0,
+                "ephemeral_5m_input_tokens": 4,
+            },
+            "type": "message",
+            "model": "claude-fable-5",
+        }],
+        "speed": "standard",
+    })
+
+    assert usage.server_tool_use is not None
+    assert usage.server_tool_use.web_fetch_requests == 0
+    assert usage.iterations is not None
+    assert usage.iterations[0].type.value == "message"
+
+
+def test_claude_stop_hook_summary_uses_typed_hook_records():
+    summary = SystemRecord.model_validate({
+        "type": "system",
+        "subtype": "stop_hook_summary",
+        "hookCount": 2,
+        "hookInfos": [
+            {"command": ".venv/bin/python client/claude_hook.py", "durationMs": 74},
+            {"command": "node stop-review-gate-hook.mjs", "durationMs": 105},
+        ],
+        "hookErrors": [],
+        "hookAdditionalContext": [],
+        "preventedContinuation": False,
+        "stopReason": "",
+        "hasOutput": False,
+        "level": "suggestion",
+    })
+
+    assert summary.hookInfos is not None
+    assert summary.hookInfos[0].durationMs == 74
 
 
 def test_claude_unmapped_tool_stays_ignored_not_failed():
@@ -3352,7 +3482,7 @@ def test_claude_unmapped_tool_stays_ignored_not_failed():
             "tool_name": "ATool2026HasNotShippedYet",
             "tool_input": {"whatever": "fields"},
         },
-        harness="claude_code",
+        harness=HarnessName.CLAUDE_CODE,
         source_type="hook",
         raw_event_id="claude-unknown-kind",
     ))
@@ -3371,7 +3501,7 @@ def test_native_instruction_wrappers_are_canonical_system_messages():
                     "content": [{"type": "input_text", "text": "<environment_context>facts</environment_context>"}],
                 },
             },
-            harness="codex",
+            harness=HarnessName.CODEX,
             source_type="rollout",
             raw_event_id="codex-system-message",
         )
@@ -3384,7 +3514,7 @@ def test_native_instruction_wrappers_are_canonical_system_messages():
                 "isMeta": True,
                 "message": {"content": "Continue from where you left off."},
             },
-            harness="claude_code",
+            harness=HarnessName.CLAUDE_CODE,
             source_type="transcript",
             raw_event_id="claude-system-message",
         )
@@ -3398,13 +3528,13 @@ def test_claude_title_records_preserve_native_title_origin():
     translator = ClaudeCanonicalTranslator()
     custom = translator.translate(raw_event(
         {"type": "agent-name", "agentName": "Chosen name"},
-        harness="claude_code",
+        harness=HarnessName.CLAUDE_CODE,
         source_type="transcript",
         raw_event_id="custom-title",
     ))
     automatic = translator.translate(raw_event(
         {"type": "ai-title", "aiTitle": "Generated name"},
-        harness="claude_code",
+        harness=HarnessName.CLAUDE_CODE,
         source_type="transcript",
         raw_event_id="automatic-title",
     ))
@@ -3427,7 +3557,7 @@ def test_claude_assistant_preserves_reasoning_and_model_without_duplicate_usage(
                 "usage": {"input_tokens": 10, "output_tokens": 3},
             },
         },
-        harness="claude_code",
+        harness=HarnessName.CLAUDE_CODE,
         source_type="transcript",
         raw_event_id="assistant",
     ))
@@ -3436,9 +3566,8 @@ def test_claude_assistant_preserves_reasoning_and_model_without_duplicate_usage(
     model = payloads(translation, ModelChanged)[0].payload
     context = payloads(translation, ContextReported)[0].payload
     assert reasoning.content.text == "Inspect the failure"
-    assert model.current.native_id == "claude-opus-4-8"
+    assert model.current.name == "claude-opus-4-8"
     assert model.current.display_name == "opus-4.8"
-    assert model.current.selection_id == "opus"
     assert context.used_tokens == 10
     assert context.window_tokens == 1_000_000
     assert context.model == model.current
@@ -3460,7 +3589,7 @@ def test_claude_marks_where_the_model_stopped_from_the_response_stop_reason():
                 "uuid": "assistant-one",
                 "message": {"content": blocks, "stop_reason": stop_reason},
             },
-            harness="claude_code",
+            harness=HarnessName.CLAUDE_CODE,
             source_type="transcript",
             raw_event_id=f"assistant-{stop_reason}-{len(blocks)}",
         ))
@@ -3522,14 +3651,14 @@ def test_claude_otel_translates_raw_usage_once_by_model_and_query_source():
     }
     translation = ClaudeCanonicalTranslator().translate(raw_event(
         document,
-        harness="claude_code",
+        harness=HarnessName.CLAUDE_CODE,
         source_type="otel",
         raw_event_id="otel-one",
     ))
     reports = payloads(translation, UsageReported)
     assert len(reports) == 1
     usage = reports[0].payload
-    assert usage.model == ModelReference("claude-opus-4-8", "opus-4.8", "opus")
+    assert usage.model == ModelReference("claude-opus-4-8", "opus-4.8")
     assert usage.tokens.input_tokens == 10
     assert usage.tokens.cache_read_tokens == 7
     assert usage.cost_in_usd == Decimal("0.25")
@@ -3540,7 +3669,6 @@ def test_claude_otel_delivery_records_raw_and_canonical_audit(tmp_path):
     session = Session(
         SessionId("session-one"),
         ActorId("session-one:lead"),
-        "session-one",
         "/tmp/session-one.jsonl",
         "/work",
     )
@@ -3600,7 +3728,7 @@ def test_claude_operation_execution_comes_from_native_tool_semantics():
                 "description": "Run tests",
             },
         },
-        harness="claude_code",
+        harness=HarnessName.CLAUDE_CODE,
         source_type="hook",
         raw_event_id="background",
     ))
@@ -3611,7 +3739,7 @@ def test_claude_operation_execution_comes_from_native_tool_semantics():
             "tool_name": "Monitor",
             "tool_input": {"task_id": "task-one"},
         },
-        harness="claude_code",
+        harness=HarnessName.CLAUDE_CODE,
         source_type="hook",
         raw_event_id="monitor",
     ))
@@ -3633,7 +3761,7 @@ def test_codex_write_stdin_continues_the_original_operation():
             "call_id": "command-one",
             "input": 'tools.exec_command({"cmd":"read value"})',
         },
-    }, harness="codex", source_type="rollout", raw_event_id="command", source_position="40"))
+    }, harness=HarnessName.CODEX, source_type="rollout", raw_event_id="command", source_position="40"))
     initial_output = translator.translate(raw_event({
         "type": "response_item",
         "payload": {
@@ -3641,7 +3769,7 @@ def test_codex_write_stdin_continues_the_original_operation():
             "call_id": "command-one",
             "output": json.dumps({"session_id": 77, "output": "waiting\n"}),
         },
-    }, harness="codex", source_type="rollout", raw_event_id="command-output", source_position="41"))
+    }, harness=HarnessName.CODEX, source_type="rollout", raw_event_id="command-output", source_position="41"))
     provided = translator.translate(raw_event({
         "type": "response_item",
         "payload": {
@@ -3650,7 +3778,7 @@ def test_codex_write_stdin_continues_the_original_operation():
             "call_id": "input-one",
             "input": 'tools.write_stdin({session_id:77,chars:"yes\\n",yield_time_ms:1000})',
         },
-    }, harness="codex", source_type="rollout", raw_event_id="stdin", source_position="42"))
+    }, harness=HarnessName.CODEX, source_type="rollout", raw_event_id="stdin", source_position="42"))
     continued_output = translator.translate(raw_event({
         "type": "response_item",
         "payload": {
@@ -3658,7 +3786,7 @@ def test_codex_write_stdin_continues_the_original_operation():
             "call_id": "input-one",
             "output": "accepted\n",
         },
-    }, harness="codex", source_type="rollout", raw_event_id="stdin-output", source_position="43"))
+    }, harness=HarnessName.CODEX, source_type="rollout", raw_event_id="stdin-output", source_position="43"))
     finished = translator.translate(raw_event({
         "type": "event_msg",
         "payload": {
@@ -3672,7 +3800,7 @@ def test_codex_write_stdin_continues_the_original_operation():
                 "exit_code": 0,
             },
         },
-    }, harness="codex", source_type="rollout", raw_event_id="command-finished", source_position="44"))
+    }, harness=HarnessName.CODEX, source_type="rollout", raw_event_id="command-finished", source_position="44"))
 
     shell_id = payloads(started, ShellStarted)[0].payload.shell_id
     assert shell_id == "command-one"
@@ -3702,7 +3830,7 @@ def test_codex_command_completion_outcome_follows_the_integer_exit_code():
                 "call_id": f"command-{suffix}",
                 "input": 'tools.exec_command({"cmd":"run"})',
             },
-        }, harness="codex", source_type="rollout",
+        }, harness=HarnessName.CODEX, source_type="rollout",
             raw_event_id=f"command-{suffix}", source_position="40"))
         translator.translate(raw_event({
             "type": "response_item",
@@ -3711,7 +3839,7 @@ def test_codex_command_completion_outcome_follows_the_integer_exit_code():
                 "call_id": f"command-{suffix}",
                 "output": json.dumps({"session_id": suffix, "output": "running\n"}),
             },
-        }, harness="codex", source_type="rollout",
+        }, harness=HarnessName.CODEX, source_type="rollout",
             raw_event_id=f"command-output-{suffix}", source_position="41"))
         finished = translator.translate(raw_event({
             "type": "event_msg",
@@ -3726,7 +3854,7 @@ def test_codex_command_completion_outcome_follows_the_integer_exit_code():
                     "exit_code": exit_code,
                 },
             },
-        }, harness="codex", source_type="rollout",
+        }, harness=HarnessName.CODEX, source_type="rollout",
             raw_event_id=f"command-finished-{suffix}", source_position="42"))
 
         finished_payload = payloads(finished, ShellFinished)[0].payload
@@ -3744,7 +3872,7 @@ def test_codex_empty_write_stdin_poll_is_raw_only_and_ctrl_c_is_input():
             "call_id": "command-one",
             "input": 'tools.exec_command({"cmd":"sleep 30"})',
         },
-    }, harness="codex", source_type="rollout", raw_event_id="command"))
+    }, harness=HarnessName.CODEX, source_type="rollout", raw_event_id="command"))
     translator.translate(raw_event({
         "type": "response_item",
         "payload": {
@@ -3752,7 +3880,7 @@ def test_codex_empty_write_stdin_poll_is_raw_only_and_ctrl_c_is_input():
             "call_id": "command-one",
             "output": json.dumps({"session_id": 88, "output": ""}),
         },
-    }, harness="codex", source_type="rollout", raw_event_id="command-output", source_position="11"))
+    }, harness=HarnessName.CODEX, source_type="rollout", raw_event_id="command-output", source_position="11"))
     poll = translator.translate(raw_event({
         "type": "response_item",
         "payload": {
@@ -3761,7 +3889,7 @@ def test_codex_empty_write_stdin_poll_is_raw_only_and_ctrl_c_is_input():
             "call_id": "poll-one",
             "input": 'tools.write_stdin({session_id:88,chars:"",yield_time_ms:1000})',
         },
-    }, harness="codex", source_type="rollout", raw_event_id="poll", source_position="12"))
+    }, harness=HarnessName.CODEX, source_type="rollout", raw_event_id="poll", source_position="12"))
     interrupt = translator.translate(raw_event({
         "type": "response_item",
         "payload": {
@@ -3770,7 +3898,7 @@ def test_codex_empty_write_stdin_poll_is_raw_only_and_ctrl_c_is_input():
             "call_id": "interrupt-one",
             "input": 'tools.write_stdin({session_id:88,chars:"\\u0003",yield_time_ms:1000})',
         },
-    }, harness="codex", source_type="rollout", raw_event_id="interrupt", source_position="13"))
+    }, harness=HarnessName.CODEX, source_type="rollout", raw_event_id="interrupt", source_position="13"))
 
     assert poll.decision == "ignored_nonsemantic"
     assert poll.canonical_events == ()
@@ -3787,7 +3915,7 @@ def test_codex_write_stdin_requires_a_known_process_session():
                 "call_id": "input-one",
                 "arguments": json.dumps({"session_id": 99, "chars": "hello"}),
             },
-        }, harness="codex", source_type="rollout", raw_event_id="stdin"))
+        }, harness=HarnessName.CODEX, source_type="rollout", raw_event_id="stdin"))
 
 
 def test_codex_write_stdin_records_raw_and_canonical_audit(tmp_path):
@@ -3795,7 +3923,6 @@ def test_codex_write_stdin_records_raw_and_canonical_audit(tmp_path):
     runtime.register("codex", Session(
         SessionId("session-one"),
         ActorId("session-one:lead"),
-        "session-one",
         "fixture.jsonl",
         "/work",
     ))
@@ -3808,7 +3935,7 @@ def test_codex_write_stdin_records_raw_and_canonical_audit(tmp_path):
                 "call_id": "command-one",
                 "input": 'tools.exec_command({"cmd":"read value"})',
             },
-        }, harness="codex", source_type="rollout", raw_event_id="command", source_position="40"),
+        }, harness=HarnessName.CODEX, source_type="rollout", raw_event_id="command", source_position="40"),
         raw_event({
             "type": "response_item",
             "payload": {
@@ -3816,7 +3943,7 @@ def test_codex_write_stdin_records_raw_and_canonical_audit(tmp_path):
                 "call_id": "command-one",
                 "output": json.dumps({"session_id": 77, "output": ""}),
             },
-        }, harness="codex", source_type="rollout", raw_event_id="command-output", source_position="41"),
+        }, harness=HarnessName.CODEX, source_type="rollout", raw_event_id="command-output", source_position="41"),
         raw_event({
             "type": "response_item",
             "payload": {
@@ -3825,7 +3952,7 @@ def test_codex_write_stdin_records_raw_and_canonical_audit(tmp_path):
                 "call_id": "poll-one",
                 "input": 'tools.write_stdin({session_id:77,chars:""})',
             },
-        }, harness="codex", source_type="rollout", raw_event_id="poll", source_position="42"),
+        }, harness=HarnessName.CODEX, source_type="rollout", raw_event_id="poll", source_position="42"),
         raw_event({
             "type": "response_item",
             "payload": {
@@ -3834,7 +3961,7 @@ def test_codex_write_stdin_records_raw_and_canonical_audit(tmp_path):
                 "call_id": "input-one",
                 "input": 'tools.write_stdin({session_id:77,chars:"yes\\n"})',
             },
-        }, harness="codex", source_type="rollout", raw_event_id="stdin", source_position="43"),
+        }, harness=HarnessName.CODEX, source_type="rollout", raw_event_id="stdin", source_position="43"),
     )
     runtime.recorder.record(observations)
     interpreter.tick()
@@ -3864,7 +3991,7 @@ def test_codex_plan_has_a_canonical_fact():
                 "item": {"type": "Plan", "id": "plan-one", "text": "1. Change it"},
             },
         },
-        harness="codex",
+        harness=HarnessName.CODEX,
         source_type="rollout",
         raw_event_id="plan",
     ))
@@ -3885,7 +4012,7 @@ def test_codex_preliminary_patch_marker_is_nonsemantic():
                 "input": "*** Begin Patch",
             },
         },
-        harness="codex",
+        harness=HarnessName.CODEX,
         source_type="rollout",
         raw_event_id="patch-call",
     ))
@@ -3918,7 +4045,7 @@ def test_codex_current_file_change_emits_the_shared_file_facts():
                 },
             },
         },
-        harness="codex",
+        harness=HarnessName.CODEX,
         source_type="rollout",
         raw_event_id="file-change",
     ))
@@ -3947,7 +4074,7 @@ def test_codex_exec_wrapped_apply_patch_does_not_render_an_empty_tool_block():
                 "input": 'text(await tools.apply_patch(patch));',
             },
         },
-        harness="codex",
+        harness=HarnessName.CODEX,
         source_type="rollout",
         raw_event_id="wrapped-patch-call",
     ))
@@ -3969,7 +4096,7 @@ def test_codex_apply_patch_wrapper_output_is_nonsemantic():
                 ],
             },
         },
-        harness="codex",
+        harness=HarnessName.CODEX,
         source_type="rollout",
         raw_event_id="wrapped-patch-output",
     ))
@@ -3990,7 +4117,7 @@ def test_codex_opaque_exec_output_does_not_create_a_finish_without_a_start():
                 "input": "const hits = ALL_TOOLS.filter(x => x.name); text(hits);",
             },
         },
-        harness="codex",
+        harness=HarnessName.CODEX,
         source_type="rollout",
         raw_event_id="opaque-call",
         source_position="40",
@@ -4004,7 +4131,7 @@ def test_codex_opaque_exec_output_does_not_create_a_finish_without_a_start():
                 "output": "Script completed\nOutput:\n[]",
             },
         },
-        harness="codex",
+        harness=HarnessName.CODEX,
         source_type="rollout",
         raw_event_id="opaque-output",
         source_position="41",
@@ -4049,7 +4176,7 @@ def test_codex_output_recovers_its_call_pairing_across_a_restart(
                 "output": "Script completed\nOutput:\nresult",
             },
         },
-        harness="codex",
+        harness=HarnessName.CODEX,
         source_type="rollout",
         raw_event_id="restart-output",
         source_position=str(len(call_line.encode())),
@@ -4087,7 +4214,7 @@ def test_codex_collaboration_lifecycle_uses_child_turn_as_assignment_identity(tm
                 "started_at": 1,
             },
         },
-        harness="codex",
+        harness=HarnessName.CODEX,
         source_type="child_rollout",
         raw_event_id="child-start",
     ), source_name=str(rollout_path), actor_id=ActorId("child-one"), parent_actor_id=ActorId("lead-one"))
@@ -4103,7 +4230,7 @@ def test_codex_collaboration_lifecycle_uses_child_turn_as_assignment_identity(tm
                     "last_agent_message": "Rain, 24°C",
                 },
             },
-            harness="codex",
+            harness=HarnessName.CODEX,
             source_type="child_rollout",
             raw_event_id="child-finish",
         ),
@@ -4124,7 +4251,7 @@ def test_codex_collaboration_lifecycle_uses_child_turn_as_assignment_identity(tm
     hook_raw = replace(
         raw_event(
             {"hook_event_name": "SubagentStop", "agent_id": "child-one"},
-            harness="codex",
+            harness=HarnessName.CODEX,
             source_type="hook",
             raw_event_id="child-stop-hook",
         ),
@@ -4160,7 +4287,7 @@ def test_codex_collaboration_controls_map_only_semantic_actor_facts(tmp_path):
     def translate(document, raw_id):
         event = replace(raw_event(
             document,
-            harness="codex",
+            harness=HarnessName.CODEX,
             source_type="rollout",
             raw_event_id=raw_id,
         ), source_name=str(rollout_path))
@@ -4267,7 +4394,7 @@ def test_codex_actor_message_correlation_survives_translator_restart(tmp_path):
                 },
             },
         },
-        harness="codex",
+        harness=HarnessName.CODEX,
         source_type="rollout",
         raw_event_id="send-activity",
         source_position=str(len(call.encode())),
@@ -4293,7 +4420,7 @@ def test_codex_child_abort_cancels_only_its_current_assignment():
                 "reason": "interrupted",
             },
         },
-        harness="codex",
+        harness=HarnessName.CODEX,
         source_type="child_rollout",
         raw_event_id="child-abort",
     ), actor_id=ActorId("child-one"), parent_actor_id=ActorId("lead-one"))
@@ -4330,7 +4457,7 @@ def test_codex_web_tool_uses_shared_search_vocabulary(tmp_path):
     opened = translator.translate(replace(
         raw_event(
             json.loads(call),
-            harness="codex",
+            harness=HarnessName.CODEX,
             source_type="rollout",
             raw_event_id="web-search",
             source_position="0",
@@ -4347,7 +4474,7 @@ def test_codex_web_tool_uses_shared_search_vocabulary(tmp_path):
                     "output": "26C and sunny",
                 },
             },
-            harness="codex",
+            harness=HarnessName.CODEX,
             source_type="rollout",
             raw_event_id="web-search-result",
             source_position=str(len(call.encode())),
@@ -4376,7 +4503,7 @@ def test_codex_unmapped_tool_is_unknown_evidence_not_a_failure():
                 "input": "const result = await tools.unknown_tool({}); text(result);",
             },
         },
-        harness="codex",
+        harness=HarnessName.CODEX,
         source_type="rollout",
         raw_event_id="unknown-tool",
     ))
@@ -4411,7 +4538,7 @@ def test_claude_hook_and_transcript_produce_identical_tool_start_facts():
                 "tool_name": "Bash",
                 "tool_input": {"command": "pwd"},
             },
-            harness="claude_code",
+            harness=HarnessName.CLAUDE_CODE,
             source_type="hook",
             raw_event_id="hook-start",
             observed_at=100.0,
@@ -4434,7 +4561,7 @@ def test_claude_hook_and_transcript_produce_identical_tool_start_facts():
                     ],
                 },
             },
-            harness="claude_code",
+            harness=HarnessName.CLAUDE_CODE,
             source_type="transcript",
             raw_event_id="transcript-start",
             observed_at=200.0,
@@ -4465,7 +4592,7 @@ def test_claude_file_facts_converge_from_either_evidence_stream():
     }
     for translator in (hook_translator, transcript_translator):
         translator.translate(raw_event(
-            call, harness="claude_code", source_type="transcript", raw_event_id="start"
+            call, harness=HarnessName.CLAUDE_CODE, source_type="transcript", raw_event_id="start"
         ))
     hook = hook_translator.translate(raw_event(
         {
@@ -4475,7 +4602,7 @@ def test_claude_file_facts_converge_from_either_evidence_stream():
             "tool_input": {"file_path": "/work/a.py"},
             "tool_response": response,
         },
-        harness="claude_code",
+        harness=HarnessName.CLAUDE_CODE,
         source_type="hook",
         raw_event_id="hook-finish",
     ))
@@ -4490,7 +4617,7 @@ def test_claude_file_facts_converge_from_either_evidence_stream():
             },
             "toolUseResult": response,
         },
-        harness="claude_code",
+        harness=HarnessName.CLAUDE_CODE,
         source_type="transcript",
         raw_event_id="transcript-finish",
     ))
@@ -4518,7 +4645,7 @@ def test_claude_edit_completion_preserves_the_native_structured_patch():
                 }],
             },
         },
-        harness="claude_code",
+        harness=HarnessName.CLAUDE_CODE,
         source_type="hook",
         raw_event_id="edit-finish",
     ))
@@ -4543,7 +4670,7 @@ def test_claude_hook_and_transcript_tool_finish_deduplicate_transactionally(tmp_
             "tool_name": "Bash",
             "tool_input": {"command": "pwd"},
         },
-        harness="claude_code",
+        harness=HarnessName.CLAUDE_CODE,
         source_type="hook",
         raw_event_id="hook-start",
     ))
@@ -4555,7 +4682,7 @@ def test_claude_hook_and_transcript_tool_finish_deduplicate_transactionally(tmp_
             "tool_input": {"command": "pwd"},
             "tool_response": "output",
         },
-        harness="claude_code",
+        harness=HarnessName.CLAUDE_CODE,
         source_type="hook",
         raw_event_id="hook-finish",
     )
@@ -4567,7 +4694,7 @@ def test_claude_hook_and_transcript_tool_finish_deduplicate_transactionally(tmp_
                 "content": [{"type": "tool_result", "tool_use_id": "tool-one", "content": "output"}]
             },
         },
-        harness="claude_code",
+        harness=HarnessName.CLAUDE_CODE,
         source_type="transcript",
         raw_event_id="transcript-finish",
     )
@@ -4583,7 +4710,6 @@ def test_claude_hook_and_transcript_tool_finish_deduplicate_transactionally(tmp_
         Session(
             SessionId("session-one"),
             ActorId("session-one:lead"),
-            "native",
             "fixture.jsonl",
             "/work",
         ),
@@ -4621,7 +4747,7 @@ def test_claude_question_preserves_multiple_prompts_and_multiselect():
                     ]
                 },
             },
-            harness="claude_code",
+            harness=HarnessName.CLAUDE_CODE,
             source_type="hook",
             raw_event_id="ask",
         )
@@ -4651,7 +4777,7 @@ def test_claude_question_resolution_is_canonical_not_a_native_response_object():
                 },
                 "tool_response": {"vendor_field": "not canonical"},
             },
-            harness="claude_code",
+            harness=HarnessName.CLAUDE_CODE,
             source_type="hook",
             raw_event_id="ask-answer",
         )
@@ -4678,7 +4804,7 @@ def test_claude_refused_question_resolves_from_the_transcript_not_a_missing_hook
             "tool_name": "AskUserQuestion",
             "tool_input": {"questions": [{"question": "Which approach?", "options": []}]},
         },
-        harness="claude_code",
+        harness=HarnessName.CLAUDE_CODE,
         source_type="hook",
         raw_event_id="ask-refused",
     ))
@@ -4703,7 +4829,7 @@ def test_claude_refused_question_resolves_from_the_transcript_not_a_missing_hook
                 ],
             },
         },
-        harness="claude_code",
+        harness=HarnessName.CLAUDE_CODE,
         source_type="transcript",
         raw_event_id="ask-refused-result",
     ))
@@ -4729,7 +4855,7 @@ def test_claude_answered_question_leaves_the_transcript_result_to_the_hook():
             "tool_name": "AskUserQuestion",
             "tool_input": {"questions": [{"question": "Which approach?", "options": []}]},
         },
-        harness="claude_code",
+        harness=HarnessName.CLAUDE_CODE,
         source_type="hook",
         raw_event_id="ask-answered",
     ))
@@ -4749,7 +4875,7 @@ def test_claude_answered_question_leaves_the_transcript_result_to_the_hook():
                 ],
             },
         },
-        harness="claude_code",
+        harness=HarnessName.CLAUDE_CODE,
         source_type="transcript",
         raw_event_id="ask-answered-result",
     ))
@@ -4762,7 +4888,7 @@ def test_codex_session_turn_operation_usage_and_context_records():
     session = translator.translate(
         raw_event(
             {"type": "session_meta", "payload": {"cwd": "/work", "originator": "codex-tui"}},
-            harness="codex",
+            harness=HarnessName.CODEX,
             source_type="rollout",
             raw_event_id="session",
             source_position="0",
@@ -4771,7 +4897,7 @@ def test_codex_session_turn_operation_usage_and_context_records():
     turn = translator.translate(
         raw_event(
             {"type": "event_msg", "payload": {"type": "task_started", "turn_id": "turn-one"}},
-            harness="codex",
+            harness=HarnessName.CODEX,
             source_type="rollout",
             raw_event_id="turn",
         )
@@ -4787,7 +4913,7 @@ def test_codex_session_turn_operation_usage_and_context_records():
                     "arguments": json.dumps({"cmd": "pwd"}),
                 },
             },
-            harness="codex",
+            harness=HarnessName.CODEX,
             source_type="rollout",
             raw_event_id="operation",
         )
@@ -4805,7 +4931,7 @@ def test_codex_session_turn_operation_usage_and_context_records():
                     },
                 },
             },
-            harness="codex",
+            harness=HarnessName.CODEX,
             source_type="rollout",
             raw_event_id="usage",
         )
@@ -4830,11 +4956,12 @@ def test_codex_message_keeps_its_native_turn_identity():
                     "phase": "final_answer",
                     "content": [{"type": "output_text", "text": "Finished"}],
                     "internal_chat_message_metadata_passthrough": {
-                        "turn_id": "turn-one"
+                        "turn_id": "turn-one",
+                        "create_time": 1787403595.261263,
                     },
                 },
             },
-            harness="codex",
+            harness=HarnessName.CODEX,
             source_type="rollout",
             raw_event_id="message",
         )
@@ -4846,7 +4973,7 @@ def test_codex_message_keeps_its_native_turn_identity():
 def test_codex_source_can_attach_an_actor_to_another_harness_session():
     nested_raw_event = raw_event(
         {"type": "session_meta", "payload": {"cwd": "/work", "originator": "codex-exec"}},
-        harness="codex",
+        harness=HarnessName.CODEX,
         source_type="sidecar_rollout",
         raw_event_id="nested-session",
         source_position="0",
@@ -4869,7 +4996,7 @@ def test_codex_source_can_attach_an_actor_to_another_harness_session():
 def test_codex_native_subagent_keeps_the_child_role():
     child_raw_event = raw_event(
         {"type": "session_meta", "payload": {"parent_thread_id": "codex-parent"}},
-        harness="codex",
+        harness=HarnessName.CODEX,
         source_type="child_rollout",
         raw_event_id="native-child",
         source_position="0",
@@ -4905,7 +5032,7 @@ def test_codex_question_uses_the_same_attention_prompt_model():
                     }),
                 },
             },
-            harness="codex",
+            harness=HarnessName.CODEX,
             source_type="rollout",
             raw_event_id="ask",
         )
@@ -4941,7 +5068,7 @@ def _slash_turn_events():
             translator.translate(
                 raw_event(
                     document,
-                    harness="claude_code",
+                    harness=HarnessName.CLAUDE_CODE,
                     source_type="transcript",
                     raw_event_id="slash-" + uuid,
                 )
@@ -4969,7 +5096,7 @@ def test_claude_slash_model_reports_the_selection_at_the_moment_it_was_made():
     assert models[0].reason == "selected"
     # the transcript carries the ALIAS here; the native id arrives a turn later
     # on the next assistant record, as `reported_by_harness`
-    assert models[0].current.selection_id == "opus"
+    assert models[0].current.name == "opus"
 
 
 def test_claude_slash_effort_reports_the_selection():
@@ -4977,7 +5104,7 @@ def test_claude_slash_effort_reports_the_selection():
         raw_event(
             {"type": "user", "uuid": "eff", "message": {"content":
                 "<command-name>/effort</command-name><command-args>high</command-args>"}},
-            harness="claude_code",
+            harness=HarnessName.CLAUDE_CODE,
             source_type="transcript",
             raw_event_id="slash-effort",
         )
@@ -4998,7 +5125,7 @@ def test_claude_subagent_hook_reports_its_own_effort():
                 "hook_event_id": "child-start",
                 "agent_id": "child-one",
             },
-            harness="claude_code",
+            harness=HarnessName.CLAUDE_CODE,
             source_type="hook",
             raw_event_id="child-start-hook",
         ),
@@ -5015,7 +5142,7 @@ def test_claude_subagent_hook_reports_its_own_effort():
                 "tool_input": {"file_path": "/work/a.py"},
                 "effort": {"level": "high"},
             },
-            harness="claude_code",
+            harness=HarnessName.CLAUDE_CODE,
             source_type="hook",
             raw_event_id="child-pretool-hook",
         ),
@@ -5039,7 +5166,7 @@ def test_claude_pretool_without_effort_reports_no_effort_change():
             "tool_name": "Read",
             "tool_input": {"file_path": "/work/b.py"},
         },
-        harness="claude_code",
+        harness=HarnessName.CLAUDE_CODE,
         source_type="hook",
         raw_event_id="no-effort-hook",
     ))
@@ -5052,7 +5179,7 @@ def test_claude_argless_slash_command_settles_no_state():
         raw_event(
             {"type": "user", "uuid": "bare", "message": {"content":
                 "<command-name>/model</command-name>"}},
-            harness="claude_code",
+            harness=HarnessName.CLAUDE_CODE,
             source_type="transcript",
             raw_event_id="slash-bare",
         )
@@ -5071,7 +5198,7 @@ def test_claude_prompt_quoting_a_command_envelope_stays_a_prompt():
         translation = ClaudeCanonicalTranslator().translate(
             raw_event(
                 {"type": "user", "uuid": "quote", "message": {"content": content}},
-                harness="claude_code",
+                harness=HarnessName.CLAUDE_CODE,
                 source_type="transcript",
                 raw_event_id="quote-" + content[:6],
             )

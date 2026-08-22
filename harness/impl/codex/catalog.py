@@ -12,8 +12,8 @@ class CodexCatalog(HarnessCatalog):
         return HarnessCatalogSnapshot(
             commands=tuple(
                 CommandOption(
-                    command=row["name"],
-                    description=row.get("desc") or "",
+                    command=row.name,
+                    description=row.description,
                     minimum_prompt_count=0,
                 )
                 for row in commands.slash_commands(query_context.working_directory or "")
