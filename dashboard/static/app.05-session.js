@@ -302,6 +302,19 @@ function applyBackgroundPanels() {
   }
   view.monitors = monitors;
   view.jobs = jobs;
+  // The tabs describe the rows this frontend can actually show. The aggregate
+  // counters are lifetime totals and were previously reused as live/list
+  // counts, which is how a session with four loaded jobs displayed 44 badges.
+  if (view.monTab) setSectionCount("monitors", monitors.length);
+  if (view.jobTab) setSectionCount("jobs", jobs.length);
+  const runningIds = new Set(view.runningShellIds || []);
+  view.running = { operation: 0, background: 0, monitor: 0 };
+  for (const fold of view.shells.values()) {
+    if (!runningIds.has(fold.shellId)) continue;
+    if (fold.execution === "monitor") view.running.monitor += 1;
+    else if (fold.execution === "background" || fold.backgrounded) view.running.background += 1;
+    else view.running.operation += 1;
+  }
 }
 
 function applySessionApplication(snapshot) {
@@ -380,14 +393,11 @@ function applyCanonicalSnapshot(data) {
     : null;
   S.sessionView.compacting = context && context.compacting ? { active: true } : null;
   const background = (actor && actor.background) || {};
-  const monitorCount = background.monitor_count || 0;
-  const backgroundCount = background.background_job_count || 0;
-  const runningCount = (background.running_shell_ids || []).length;
-  S.sessionView.running = {
-    operation: Math.max(0, runningCount - monitorCount - backgroundCount),
-    background: backgroundCount,
-    monitor: monitorCount,
-  };
+  // IDs are live state; monitor/background counters are lifetime statistics.
+  // Classification happens against the shell folds in applyBackgroundPanels,
+  // once the entry page has supplied the execution kind for each visible job.
+  S.sessionView.runningShellIds = background.running_shell_ids || [];
+  applyBackgroundPanels();
 }
 
 function canonicalSessionQuery() {

@@ -75,17 +75,15 @@ def translate_otel(
     events = []
     ordered = sorted(groups, key=lambda group: (group.model.value if group.model else "", group.query_source))
     for index, group in enumerate(ordered):
-        tokens = TokenUsage(
-            input_tokens=int(group.value("input")),
-            output_tokens=int(group.value("output")),
-            cache_read_tokens=int(group.value("cacheRead")),
-            cache_write_tokens=int(group.value("cacheCreation")),
-        )
         cost = next(
             (amount.value for amount in group.amounts if amount.key == "cost"),
             None,
         )
-        if tokens == TokenUsage() and cost is None:
+        # Transcript assistant records are always present and own tokens. OTEL
+        # is optional, and recording its duplicate token metrics would inflate
+        # the scoreboard whenever telemetry happens to be enabled. Its unique
+        # contribution is the provider-calculated cost.
+        if cost is None:
             continue
         selected_model = (
             model_reference(group.model) if group.model else None
@@ -95,7 +93,7 @@ def translate_otel(
             str(raw_event.session_id),
             selected_model,
             None,
-            tokens,
+            TokenUsage(),
             False,
             cost,
         )

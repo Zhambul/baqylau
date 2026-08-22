@@ -25,13 +25,15 @@ columns, half of them null, and none of them queried.
 
 from __future__ import annotations
 
-MAIN_SCHEMA_VERSION = 5
+MAIN_SCHEMA_VERSION = 6
 AUDIT_SCHEMA_VERSION = 1
 
 # Version 4 rewrote the canonical vocabulary, so files older than that remain
-# intentionally unsupported. Version 5 is narrower: ModelReference stopped
-# exposing harness-native selection identifiers, but those references are part
-# of the durable read model and must be upgraded in place.
+# intentionally unsupported. Version 5 removed harness-native selection ids
+# from ModelReference. Version 6 repairs Codex yielded commands recorded before
+# their adapter emitted the distinct output-finished fact: adding that fact to
+# the canonical log keeps both the current projection and every later rebuild
+# honest.
 MAIN_MIGRATIONS: dict[int, tuple[str, ...]] = {
     5: (
         """
@@ -43,6 +45,59 @@ MAIN_MIGRATIONS: dict[int, tuple[str, ...]] = {
         WHERE json_type(payload, '$.model') = 'object'
           AND json_type(payload, '$.model.name') IS NULL
           AND json_type(payload, '$.model.native_id') = 'text'
+        """,
+    ),
+    6: (
+        """
+        INSERT INTO canonical_events(
+            event_id, schema_version, event_type, session_id, actor_id,
+            turn_id, parent_actor_id, harness, occurred_at,
+            terminal_window_id, harness_process_id, accepted_at, payload
+        )
+        SELECT
+            'migration:6:shell-output-finished:' || finished.event_id,
+            finished.schema_version,
+            'shell.output_finished',
+            finished.session_id,
+            finished.actor_id,
+            finished.turn_id,
+            finished.parent_actor_id,
+            finished.harness,
+            finished.occurred_at,
+            finished.terminal_window_id,
+            finished.harness_process_id,
+            finished.accepted_at,
+            json_object(
+                'shell_id', json_extract(finished.payload, '$.shell_id'),
+                'outcome', json_extract(finished.payload, '$.outcome')
+            )
+        FROM canonical_events AS backgrounded
+        JOIN canonical_events AS finished
+          ON finished.session_id = backgrounded.session_id
+         AND finished.actor_id = backgrounded.actor_id
+         AND finished.event_type = 'shell.finished'
+         AND json_extract(finished.payload, '$.shell_id') =
+             json_extract(backgrounded.payload, '$.shell_id')
+        WHERE backgrounded.harness = 'codex'
+          AND backgrounded.event_type = 'shell.backgrounded'
+          AND finished.cursor = (
+              SELECT MAX(candidate.cursor)
+              FROM canonical_events AS candidate
+              WHERE candidate.session_id = backgrounded.session_id
+                AND candidate.actor_id = backgrounded.actor_id
+                AND candidate.event_type = 'shell.finished'
+                AND json_extract(candidate.payload, '$.shell_id') =
+                    json_extract(backgrounded.payload, '$.shell_id')
+          )
+          AND NOT EXISTS (
+              SELECT 1
+              FROM canonical_events AS closed
+              WHERE closed.session_id = backgrounded.session_id
+                AND closed.actor_id = backgrounded.actor_id
+                AND closed.event_type = 'shell.output_finished'
+                AND json_extract(closed.payload, '$.shell_id') =
+                    json_extract(backgrounded.payload, '$.shell_id')
+          )
         """,
     ),
 }

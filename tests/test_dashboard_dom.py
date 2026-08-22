@@ -131,6 +131,11 @@ def test_liveness_has_one_owner_and_a_refresh_cannot_park_a_running_session():
     assert liveness["synthetic_omits_live"] is False
     assert liveness["after_refresh"] is True
     assert liveness["after_refresh_parked"] is False
+    assert liveness["running_from_live_identities"] == {
+        "operation": 1,
+        "background": 1,
+        "monitor": 0,
+    }
 
 
 def test_session_catalog_waits_for_the_harness_capabilities_on_cold_load():

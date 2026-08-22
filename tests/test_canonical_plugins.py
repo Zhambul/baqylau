@@ -102,7 +102,15 @@ from domain.ids import (
     TurnId,
     WindowId,
 )
-from domain.values import AccountReference, AttentionPrompt, ModelReference, ShellFollowUntil, TextContent
+from domain.values import (
+    AccountReference,
+    AttentionPrompt,
+    ModelReference,
+    Outcome,
+    ShellFollowUntil,
+    TextContent,
+    TokenUsage,
+)
 from harness.impl.claude_code.canonical.translator import ClaudeCanonicalTranslator
 from harness.impl.claude_code.canonical.records import HookPayload, MessageUsage, SystemRecord
 from harness.impl.claude_code.canonical.sources import (
@@ -2995,6 +3003,56 @@ def test_codex_exec_that_outlives_its_yield_is_announced_as_background_once():
     assert not payloads(first, ShellFinished)
     assert not payloads(second, ShellBackgrounded)
 
+    finished = translator.translate(rollout_event({
+        "type": "response_item",
+        "payload": {
+            "type": "custom_tool_call_output", "call_id": "call-one",
+            "output": '{"output":"done","exit_code":0}',
+        },
+    }, 40))
+    assert len(payloads(finished, ShellFinished)) == 1
+    output_finished = payloads(finished, ShellOutputFinished)
+    assert len(output_finished) == 1
+    assert output_finished[0].payload.shell_id == backgrounded[0].payload.shell_id
+
+
+def test_codex_fast_exec_uses_the_authoritative_item_exit_code():
+    translator = CodexCanonicalTranslator()
+    call = translator.translate(raw_event({
+        "type": "response_item",
+        "payload": {
+            "type": "custom_tool_call", "name": "exec", "call_id": "call-fast",
+            "input": 'const r = await tools.exec_command({cmd:"exit 7"}); text(r.output);',
+        },
+    }, harness=HarnessName.CODEX, source_type="rollout", raw_event_id="fast-call"))
+    completed = translator.translate(raw_event({
+        "type": "event_msg",
+        "payload": {
+            "type": "item_completed",
+            "item": {
+                "type": "CommandExecution", "id": "exec-fast", "process_id": "818",
+                "command": ["/bin/zsh", "-lc", "exit 7"], "status": "failed",
+                "stdout": "", "stderr": "failed\n", "aggregated_output": "failed\n",
+                "exit_code": 7,
+            },
+        },
+    }, harness=HarnessName.CODEX, source_type="rollout", raw_event_id="fast-item"))
+    wrapper = translator.translate(raw_event({
+        "type": "response_item",
+        "payload": {
+            "type": "custom_tool_call_output", "call_id": "call-fast",
+            "output": "Script completed\nOutput:\nfailed\n",
+        },
+    }, harness=HarnessName.CODEX, source_type="rollout", raw_event_id="fast-output"))
+
+    assert len(payloads(call, ShellStarted)) == 1
+    finish = payloads(completed, ShellFinished)[0].payload
+    assert finish.outcome == Outcome.FAILED
+    assert finish.exit_code == 7
+    assert finish.result is not None and finish.result.text == "failed\n"
+    assert wrapper.decision == "ignored_nonsemantic"
+    assert wrapper.canonical_events == ()
+
 
 def test_claude_skill_and_web_and_worktree_tools_have_their_own_facts():
     """Four tool families that used to be one generic operation, each now saying
@@ -3611,7 +3669,7 @@ def test_claude_title_records_preserve_native_title_origin():
     assert automatic.canonical_events[0].payload == SessionTitleChanged("Generated name", "automatic")
 
 
-def test_claude_assistant_preserves_reasoning_and_model_without_duplicate_usage():
+def test_claude_assistant_preserves_reasoning_model_and_session_usage():
     translation = ClaudeCanonicalTranslator().translate(raw_event(
         {
             "type": "assistant",
@@ -3622,7 +3680,16 @@ def test_claude_assistant_preserves_reasoning_and_model_without_duplicate_usage(
                     {"type": "thinking", "thinking": "Inspect the failure"},
                     {"type": "text", "text": "I found it"},
                 ],
-                "usage": {"input_tokens": 10, "output_tokens": 3},
+                "usage": {
+                    "input_tokens": 10,
+                    "output_tokens": 3,
+                    "cache_read_input_tokens": 7,
+                    "cache_creation_input_tokens": 6,
+                    "cache_creation": {
+                        "ephemeral_5m_input_tokens": 4,
+                        "ephemeral_1h_input_tokens": 2,
+                    },
+                },
             },
         },
         harness=HarnessName.CLAUDE_CODE,
@@ -3636,10 +3703,18 @@ def test_claude_assistant_preserves_reasoning_and_model_without_duplicate_usage(
     assert reasoning.content.text == "Inspect the failure"
     assert model.current.name == "claude-opus-4-8"
     assert model.current.display_name == "opus-4.8"
-    assert context.used_tokens == 10
+    assert context.used_tokens == 23
     assert context.window_tokens == 1_000_000
     assert context.model == model.current
-    assert payloads(translation, UsageReported) == []
+    usage = payloads(translation, UsageReported)[0].payload
+    assert usage.tokens == TokenUsage(
+        input_tokens=10,
+        output_tokens=3,
+        cache_read_tokens=7,
+        cache_write_tokens=4,
+        one_hour_cache_write_tokens=2,
+    )
+    assert usage.cost_in_usd is None
 
 
 def test_claude_marks_where_the_model_stopped_from_the_response_stop_reason():
@@ -3727,8 +3802,9 @@ def test_claude_otel_translates_raw_usage_once_by_model_and_query_source():
     assert len(reports) == 1
     usage = reports[0].payload
     assert usage.model == ModelReference("claude-opus-4-8", "opus-4.8")
-    assert usage.tokens.input_tokens == 10
-    assert usage.tokens.cache_read_tokens == 7
+    # Tokens come from the always-present transcript; the optional OTEL export
+    # contributes only provider-calculated cost and cannot double-count them.
+    assert usage.tokens == TokenUsage()
     assert usage.cost_in_usd == Decimal("0.25")
 
 
@@ -3745,14 +3821,13 @@ def test_claude_otel_delivery_records_raw_and_canonical_audit(tmp_path):
         "resourceMetrics": [{
             "scopeMetrics": [{
                 "metrics": [{
-                    "name": "claude_code.token.usage",
+                    "name": "claude_code.cost.usage",
                     "sum": {"dataPoints": [{
                         "attributes": [
                             {"key": "session.id", "value": {"stringValue": "session-one"}},
                             {"key": "query_source", "value": {"stringValue": "main"}},
-                            {"key": "type", "value": {"stringValue": "output"}},
                         ],
-                        "asInt": 9,
+                        "asDouble": 0.09,
                     }]},
                 }],
             }],
@@ -3781,7 +3856,8 @@ def test_claude_otel_delivery_records_raw_and_canonical_audit(tmp_path):
     assert evidence[0].interpretation.decision == "translated"
     assert len(evidence[0].interpretation.events) == 1
     reported = stored_payloads(runtime, SessionId("session-one"), UsageReported)
-    assert [usage.tokens.output_tokens for usage in reported] == [9]
+    assert [usage.cost_in_usd for usage in reported] == [Decimal("0.09")]
+    assert [usage.tokens for usage in reported] == [TokenUsage()]
 
 
 def test_claude_operation_execution_comes_from_native_tool_semantics():
@@ -3955,7 +4031,7 @@ def test_codex_empty_write_stdin_poll_is_raw_only_and_ctrl_c_is_input():
             "type": "custom_tool_call",
             "name": "exec",
             "call_id": "poll-one",
-            "input": 'tools.write_stdin({session_id:88,chars:"",yield_time_ms:1000})',
+            "input": 'tools.write_stdin({session_id:88,yield_time_ms:1000})',
         },
     }, harness=HarnessName.CODEX, source_type="rollout", raw_event_id="poll", source_position="12"))
     interrupt = translator.translate(raw_event({

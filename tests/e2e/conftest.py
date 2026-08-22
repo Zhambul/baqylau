@@ -33,6 +33,7 @@ import pytest
 from impl.files import *               # noqa: F403
 from impl.messages import *            # noqa: F403 — see the module docstring
 from impl.persistence import *         # noqa: F403
+from impl.scoreboard import *          # noqa: F403
 from impl.session import *             # noqa: F403
 from impl.shells import *              # noqa: F403
 from impl.subagents import *           # noqa: F403

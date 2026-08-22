@@ -20,7 +20,15 @@ from audit.models import (
     StreamOpened,
 )
 from domain.entries import MessageBody, SessionEntry, ShellStartedBody
-from domain.events import CanonicalEvent, MessageCreated, SessionFinished, SessionStarted
+from domain.events import (
+    CanonicalEvent,
+    MessageCreated,
+    SessionFinished,
+    SessionStarted,
+    ShellBackgrounded,
+    ShellFinished,
+    ShellOutputFinished,
+)
 from domain.ids import (
     ActorId,
     AttentionId,
@@ -216,6 +224,46 @@ def test_version_four_actor_models_are_migrated_to_the_domain_shape(tmp_path):
     assert version["version"] == MAIN_SCHEMA_VERSION
     assert "native_id" not in row["payload"]
     assert "selection_id" not in row["payload"]
+
+
+def test_version_five_closes_finished_codex_backgrounded_shells(tmp_path):
+    path = str(tmp_path / "main.db")
+    old_database = main_database(path)
+    raw_events = SqliteRawEventRepository(old_database)
+    canonical = SqliteCanonicalEventRepository(old_database)
+    raw = a_raw_event()
+    raw_events.record([raw])
+    shell_id = ShellId("yielded-one")
+    backgrounded = replace(
+        a_started_event("backgrounded-one"),
+        payload=ShellBackgrounded(shell_id),
+    )
+    finished = replace(
+        a_started_event("finished-one"),
+        payload=ShellFinished(shell_id, Outcome.SUCCEEDED, TextContent("done"), 0),
+    )
+    canonical.record_translation(
+        raw,
+        "1",
+        TranslationResult((backgrounded, finished), "translated"),
+        1001.0,
+    )
+    with old_database.write() as connection:
+        connection.execute("UPDATE schema_version SET version = 5 WHERE id = 1")
+
+    upgraded = main_database(path)
+    upgraded.initialize()
+
+    repaired = SqliteCanonicalEventRepository(upgraded).find(
+        CanonicalEventId("migration:6:shell-output-finished:finished-one")
+    )
+    assert repaired is not None
+    assert repaired.payload == ShellOutputFinished(shell_id, Outcome.SUCCEEDED)
+    with upgraded.read() as connection:
+        version = connection.execute(
+            "SELECT version FROM schema_version WHERE id = 1"
+        ).fetchone()
+    assert version["version"] == MAIN_SCHEMA_VERSION
 
 
 def test_a_read_only_database_never_creates_the_file(tmp_path):

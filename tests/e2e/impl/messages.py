@@ -36,6 +36,9 @@ def _i_send_message(world: World, daemon: Daemon, prompt: str) -> None:
     assert world.session_id is not None, "no session to send to"
     session_id = str(world.session_id)
     world.prompt = prompt
+    world.expected_prompt_count = (
+        sum(actor.statistics.prompt_count for actor in observe.actors(daemon, session_id)) + 1
+    )
     answers: list[str] = []
 
     def sent() -> bool:

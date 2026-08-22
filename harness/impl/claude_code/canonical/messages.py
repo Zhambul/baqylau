@@ -26,6 +26,7 @@ from domain.events import (
     ShellProgressed,
     TaskChanged,
     TurnStarted,
+    UsageReported,
 )
 from domain.ids import AccountId
 from harness.impl.claude_code.ids import (
@@ -58,6 +59,8 @@ from domain.values import (
     ProgressStream,
     TaskState,
     TitleOrigin,
+    TokenUsage,
+    UsageScope,
 )
 from harness.impl.claude_code import model
 from harness.impl.claude_code.canonical import records, transcript
@@ -658,6 +661,17 @@ def translate_transcript(
                 )
         usage = record.message.usage if record.message else None
         if usage is not None and model_reference_value is not None:
+            cache_creation = usage.cache_creation
+            cache_write_tokens = (
+                int(cache_creation.ephemeral_5m_input_tokens)
+                if cache_creation is not None
+                else int(usage.cache_creation_input_tokens or 0)
+            )
+            one_hour_cache_write_tokens = (
+                int(cache_creation.ephemeral_1h_input_tokens)
+                if cache_creation is not None
+                else 0
+            )
             events.append(
                 event(
                     raw_event,
@@ -668,6 +682,33 @@ def translate_transcript(
                         model.context_used(usage),
                         model.context_window(model_id),
                         model_reference_value,
+                    ),
+                    occurred_at=occurred_at,
+                )
+            )
+            # Every assistant response records its own token usage in the
+            # transcript. This is the durable session-token source; OTEL is
+            # optional and therefore owns cost only (see canonical/otel.py).
+            events.append(
+                event(
+                    raw_event,
+                    "usage",
+                    message_identity,
+                    "reported",
+                    UsageReported(
+                        UsageScope.SESSION,
+                        str(raw_event.session_id),
+                        model_reference_value,
+                        None,
+                        TokenUsage(
+                            input_tokens=int(usage.input_tokens or 0),
+                            output_tokens=int(usage.output_tokens or 0),
+                            cache_read_tokens=int(usage.cache_read_input_tokens or 0),
+                            cache_write_tokens=cache_write_tokens,
+                            one_hour_cache_write_tokens=one_hour_cache_write_tokens,
+                        ),
+                        False,
+                        None,
                     ),
                     occurred_at=occurred_at,
                 )

@@ -384,11 +384,14 @@ def _stdin_record(call_id: CodexCallId, arguments: StdinArguments | str) -> Stdi
                 r'(?:^|[,{])\s*["\']?chars["\']?\s*:\s*("(?:[^"\\]|\\.)*")',
                 arguments,
             )
-            if process_match is None or chars_match is None:
+            if process_match is None:
                 return StdinRecord(text="", call_id=call_id, process_id=CodexShellId(""))
             fields = StdinArguments(
                 session_id=CodexShellId(process_match.group(1)),
-                chars=ast.literal_eval(chars_match.group(1)),
+                # Polling is represented by omitting `chars` as well as by an
+                # explicit empty string in current Codex rollouts. Both mean
+                # no input; the process identity remains fully meaningful.
+                chars=ast.literal_eval(chars_match.group(1)) if chars_match else "",
             )
     process_id = fields.session_id
     return StdinRecord(

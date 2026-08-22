@@ -61,6 +61,7 @@ def _launch(
     world.model = str(pytestconfig.getoption("--e2e-model") or model)
     world.effort = str(pytestconfig.getoption("--e2e-effort") or effort)
     world.prompt = prompt or ""
+    world.expected_prompt_count = 1 if prompt else None
     # Taken BEFORE the launch: the session this scenario is about is the one that
     # was not there a moment ago (see observe.session_started_in).
     known = observe.session_ids(daemon)
@@ -94,11 +95,23 @@ def _launch(
 @then(parsers.parse("the turn ends within {minutes:d} minutes"))
 def _the_turn_ends(world: World, daemon: Daemon, minutes: int) -> None:
     assert world.session_id is not None
+    session_id = str(world.session_id)
+
+    def new_turn_ended() -> bool:
+        actors = observe.actors(daemon, session_id)
+        prompt_count = sum(actor.statistics.prompt_count for actor in actors)
+        prompt_arrived = (
+            world.expected_prompt_count is None
+            or prompt_count >= world.expected_prompt_count
+        )
+        return prompt_arrived and observe.status(daemon, session_id) in TURN_ENDED
+
     observe.until(
         f"the turn to end (the lead's status one of {TURN_ENDED})",
-        lambda: observe.status(daemon, str(world.session_id)) in TURN_ENDED,
+        new_turn_ended,
         timeout=minutes * 60,
     )
+    world.expected_prompt_count = None
 
 
 @then(parsers.parse("the session reports the model {model}"))

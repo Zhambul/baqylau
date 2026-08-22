@@ -55,6 +55,7 @@ const sandbox = {
   updateAgents: () => {},
   updateRunning: () => {},
   updateErrCount: () => {},
+  setSectionCount: () => {},
   applyViewMode: () => {},
   applySuggestion: () => {},
   drainPending: () => {},
@@ -65,6 +66,7 @@ const sandbox = {
   shortSid: value => value,
   dur: sec => Math.max(0, sec | 0) + "s",
   tp: s => s,
+  escapeHtml: s => String(s || ""),
   BUSY_TABS: [],
   sessionTabState: () => "",
   sessionUsage: () => ({ tokens: {}, cost_in_usd: null }),
@@ -111,6 +113,33 @@ ck("parked_from_payload", meta({ session: SESSION, actors: ACTORS, live: false }
 // the KEY is absent, not false: the merge downstream must leave what it finds
 ck("synthetic_omits_live",
    "live" in meta({ session: SESSION, actors: ACTORS }), false);
+
+/* ---- lifetime job totals never become running-ribbon chips -------------- */
+{
+  const sessionView = view();
+  sessionView.shells.set("done", {
+    shellId: "done", execution: "foreground", backgrounded: true, state: "succeeded",
+  });
+  sessionView.shells.set("job", {
+    shellId: "job", execution: "background", backgrounded: false, state: null,
+  });
+  sessionView.shells.set("fg", {
+    shellId: "fg", execution: "foreground", backgrounded: false, state: null,
+  });
+  const actors = [{
+    ...ACTORS[0],
+    background: {
+      // Forty-four is the historical total from the reported session. Only
+      // these visible/live identities may become ribbon chips.
+      background_job_count: 44,
+      monitor_count: 9,
+      running_shell_ids: ["job", "fg"],
+    },
+  }];
+  vm.runInContext("applyCanonicalSnapshot", sandbox)({ session: SESSION, actors });
+  ck("running_from_live_identities", sessionView.running,
+     { operation: 1, background: 1, monitor: 0 });
+}
 
 /* ---- so the refresh path preserves a live session ----------------------- */
 {

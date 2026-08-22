@@ -34,6 +34,7 @@ from domain.events import (
     ShellBackgrounded,
     ShellFinished,
     ShellInputProvided,
+    ShellOutputFinished,
     ShellProgressed,
     ShellStarted,
     TaskChanged,
@@ -375,6 +376,25 @@ class CodexCanonicalTranslator(HarnessTranslator):
     @staticmethod
     def _source_key(raw_event: RawEvent) -> str:
         return os.path.realpath(raw_event.source_name)
+
+    def _only_pending_exec_shell(self, source_key: str) -> ShellId | None:
+        """The shell belonging to a fast CommandExecution item.
+
+        Current Codex emits the authoritative item (with its real exit code)
+        before the wrapper output. The item names a process id but not the
+        wrapper call id; when exactly one exec is awaiting its result, that
+        ordering is the correlation. Ambiguity stays uninterpreted rather than
+        attaching an outcome to the wrong command.
+        """
+        candidates = [
+            shell_id_from_codex_call(CodexCallId(call_id))
+            for (known_source, call_id), record in self._call_records.items()
+            if known_source == source_key
+            and isinstance(record, ExecRecord)
+            and (source_key, shell_id_from_codex_call(CodexCallId(call_id)))
+                not in self._finished_shells
+        ]
+        return candidates[0] if len(candidates) == 1 else None
 
     @staticmethod
     def _collaboration_call_from_line(
@@ -1004,6 +1024,8 @@ class CodexCanonicalTranslator(HarnessTranslator):
             if isinstance(call_record, ToolRecord):
                 return self._tool_result(raw_event, call_id, call_record, record, occurred_at)
             shell_id = shell_id_from_codex_call(call_id)
+            if (source_key, shell_id) in self._finished_shells:
+                return []
             process_exit_code = exit_code(record.exit)
             process_id = record.process_id or CodexShellId("")
             if process_id:
@@ -1041,7 +1063,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
             outcome: Outcome = Outcome.SUCCEEDED if process_exit_code in (None, 0) else Outcome.FAILED
             payload = ShellFinished(shell_id, outcome, content(record.output), process_exit_code)
             self._finished_shells.add((source_key, shell_id))
-            return [
+            finished_events = [
                 event(
                     raw_event,
                     "shell",
@@ -1051,12 +1073,27 @@ class CodexCanonicalTranslator(HarnessTranslator):
                     occurred_at=occurred_at,
                 )
             ]
+            if (source_key, shell_id) in self._backgrounded_shells:
+                self._backgrounded_shells.discard((source_key, shell_id))
+                finished_events.append(event(
+                    raw_event,
+                    "shell",
+                    str(shell_id),
+                    "output_finished",
+                    ShellOutputFinished(shell_id, outcome),
+                    occurred_at=occurred_at,
+                ))
+            return finished_events
         if isinstance(record, CommandCompletedRecord):
             source_key = self._source_key(raw_event)
             process_id = record.process_id
             # Same reason as the write_stdin branch above: the lookup is
             # optional, the id every line after it uses is not.
             completed_shell_id = self._process_shells.get((source_key, process_id))
+            if completed_shell_id is None:
+                completed_shell_id = self._only_pending_exec_shell(source_key)
+                if completed_shell_id is not None:
+                    self._process_shells[(source_key, process_id)] = completed_shell_id
             if completed_shell_id is None or (source_key, completed_shell_id) in self._finished_shells:
                 return []
             shell_id = completed_shell_id
@@ -1064,7 +1101,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
             outcome = Outcome.SUCCEEDED if process_exit_code == 0 else Outcome.FAILED
             self._finished_shells.add((source_key, shell_id))
             payload = ShellFinished(shell_id, outcome, content(record.output), process_exit_code)
-            return [event(
+            finished_events = [event(
                 raw_event,
                 "shell",
                 str(shell_id),
@@ -1072,6 +1109,17 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 payload,
                 occurred_at=occurred_at,
             )]
+            if (source_key, shell_id) in self._backgrounded_shells:
+                self._backgrounded_shells.discard((source_key, shell_id))
+                finished_events.append(event(
+                    raw_event,
+                    "shell",
+                    str(shell_id),
+                    "output_finished",
+                    ShellOutputFinished(shell_id, outcome),
+                    occurred_at=occurred_at,
+                ))
+            return finished_events
         if isinstance(record, SearchRecord):
             # Codex reports the query and nothing of what came back, so the
             # result is honestly absent rather than an empty string.

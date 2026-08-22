@@ -46,6 +46,10 @@ class World:
     # existing sentence about the feed then reads that actor's thread without
     # knowing it moved.
     viewpoint: str | None = None
+    # The prompt total the next "turn ends" must observe. Without this fence a
+    # second send can sample the previous turn's already-quiet status and race
+    # ahead before the newly accepted prompt has even reached the transcript.
+    expected_prompt_count: int | None = None
 
 
 def feed(world: World, daemon: Daemon) -> tuple[EntryResponse, ...]:
