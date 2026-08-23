@@ -51,7 +51,7 @@ lint: typecheck deadcode
 # `client` is in the list: those files are stdlib-only scripts, but they are the
 # programs every harness and the terminal actually run, so they get the same gate
 # as everything else.
-TYPECHECK_PATHS = api app bin client core dashboard audit domain engine harness notify repository terminal tests
+TYPECHECK_PATHS = api app bin client core dashboard audit domain engine harness notify repository sdk terminal tests
 
 typecheck:
 	$(PY) -m mypy $(TYPECHECK_PATHS)
@@ -68,6 +68,9 @@ lint-fix:
 # only its own test calls is unreferenced product code, and naming tests/ here
 # would hide exactly that. (To see which findings tests do reach, add tests to
 # the path list and diff the two runs.)
+# `sdk/` is also absent: it is a dev-only test client, and all of its public
+# callers are in tests/. It still has strict type, Ruff, architecture, and
+# focused behavior gates.
 #
 # The two .py files are vulture whitelists, not sources — see their headers.
 DEADCODE_PATHS = api app bin client core dashboard audit domain engine harness notify repository terminal

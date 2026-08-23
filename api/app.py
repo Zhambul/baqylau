@@ -22,6 +22,7 @@ from api import config
 from api.application import catalog, files, preferences, static
 from api.common import health
 from api.controls import routes as controls
+from api.diagnostics import routes as diagnostics
 from api.hooks import routes as hooks
 from api.telemetry import browser as browser_telemetry
 from api.telemetry import harness as harness_telemetry
@@ -183,6 +184,7 @@ def build_web_application(
     web.include_router(session_data_streams.router)
     web.include_router(session_data_routes.router)
     web.include_router(controls.router)
+    web.include_router(diagnostics.router)
     web.include_router(preferences.router)
     web.include_router(preferences.guarded)
     web.include_router(browser_telemetry.router)

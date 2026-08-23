@@ -1,12 +1,10 @@
-@drift
-Feature: harness usage reaches the dashboard
+Feature: harness usage reaches global application state
 
-  Scenario Outline: plan usage is visible on the web dashboard
-    Given a <harness> session on <model> at <effort> effort with prompt 'Only say "Hi" and nothing more'
-    Then the turn ends within 3 minutes
-    Then the dashboard reports <harness> usage with at least 1 window within 30 seconds
+  Scenario Outline: plan usage is available to a dashboard client
+    Then global usage for <harness> has at least 1 window
+    And each global usage window for <harness> has a positive duration
 
     Examples:
-      | harness     | model        | effort |
-      | codex       | gpt-5.6-luna | low    |
-      | claude_code | haiku        | low    |
+      | harness     |
+      | codex       |
+      | claude_code |

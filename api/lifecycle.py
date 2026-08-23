@@ -1,7 +1,8 @@
 # api/lifecycle.py — what the daemon runs BESIDE the request loop, owned by the
 # ASGI lifespan instead of by hand around uvicorn.
 #
-# The three threads and the one boot chore used to live in serve()'s try/finally.
+# The three threads and the one boot chore used to live in the server's
+# try/finally block.
 # They live here because they need exactly what the routes need — the same
 # interpreter, the same usage state — and the singleton registry is the app's, so
 # the thing that starts them has to run inside the application's own lifetime.

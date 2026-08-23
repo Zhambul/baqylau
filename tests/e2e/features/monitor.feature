@@ -1,14 +1,15 @@
-@drift
 Feature: an armed monitor reports its events
 
-  Scenario Outline: monitor events arrive after the turn that armed it
-    Given a <harness> session on <model> at <effort> effort with prompt 'Use the Monitor tool with description ticks to watch this command: for i in 1 2 3 4 5 6; do echo tick-$i; sleep 5; done — do not run it with Bash and do not wait for it. Reply only with the word armed'
-    Then the turn ends within 3 minutes
-    And the session lists a monitor 'tick'
-    And that monitor is still running
-    And that monitor reports the event 'tick-2' within 2 minutes
-    And that monitor ends within 2 minutes
-
-    Examples:
-      | harness     | model | effort |
-      | claude_code | haiku | low    |
+  Scenario: monitor events arrive after the turn that armed it
+    Given session configuration "primary" uses claude_code with model haiku and low effort
+    When I launch session "primary" as turn "arm ticks" with prompt
+      """
+      Use the Monitor tool with description ticks to watch this command:
+      `for i in 1 2 3 4 5 6; do echo tick-$i; sleep 5; done`.
+      Do not run it with Bash. Do not wait for it. Reply only with the word armed.
+      """
+    Then turn "arm ticks" completes
+    When I name the only monitor in turn "arm ticks" containing 'tick' "tick monitor"
+    Then monitor "tick monitor" is running
+    And monitor "tick monitor" has event containing 'tick-2'
+    And monitor "tick monitor" ends

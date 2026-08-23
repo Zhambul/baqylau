@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 # Every package this repository owns — the universe each rule below draws from.
 OUR_PACKAGES = (
     "api", "app", "core", "dashboard", "audit", "domain",
-    "engine", "harness", "notify", "repository", "terminal",
+    "engine", "harness", "notify", "repository", "sdk", "terminal",
 )
 
 
@@ -369,6 +369,11 @@ def test_the_engine_imports_only_the_domain_and_the_harness_contract():
     )
 
 
+def test_the_sdk_is_an_outside_client_of_the_http_api():
+    """The SDK can know the wire contract, but it cannot know the application graph."""
+    assert_imports("sdk", {"api", "sdk"})
+
+
 def test_the_audit_write_tier_is_a_floor_and_the_read_tier_is_the_daemons():
     """Everything writes audit; only the daemon reads them back.
 
@@ -599,11 +604,11 @@ def test_no_response_anywhere_is_a_hand_built_document():
     ]
 
 
-# The daemon's composition root. `serve()` is the one function in the tree that
-# builds the HTTP application, and it lives behind an inline import so that
-# importing the CLI does not pull FastAPI in. Every other name below api/ that
-# reached for it would be a layer knowing about its own consumer.
+# The application runtime is the composition root. The CLI imports it inline so
+# that importing the CLI does not pull FastAPI in. The SDK is an outside client
+# of the wire contract. Every other name below api/ would invert the direction.
 API_CONSUMERS = {Path("dashboard/cli.py")}
+API_CONSUMER_PACKAGES = {"sdk"}
 
 
 def test_nothing_below_the_api_layer_knows_it_exists():
@@ -620,6 +625,7 @@ def test_nothing_below_the_api_layer_knows_it_exists():
         for package in OUR_PACKAGES if package != "api"
         for path, imported in imports_under(package)
         if (imported == "api" or imported.startswith("api."))
+        and package not in API_CONSUMER_PACKAGES
         and path.relative_to(ROOT) not in API_CONSUMERS
     ]
     assert reaching == []

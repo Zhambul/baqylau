@@ -181,7 +181,7 @@ class TeamMessageTranscriptRecord:
 @dataclass(frozen=True)
 class ResultsTranscriptRecord:
     blocks: tuple[records.ToolResultBlock, ...]
-    tool_response: records.ToolResponse | str | None
+    tool_response: records.ToolResponse | records.ToolResponseBlocks | str | None
     texts: tuple[str, ...]
     meta: bool
     kind: TranscriptKind = TranscriptKind.RESULTS

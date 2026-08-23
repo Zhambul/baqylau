@@ -1,11 +1,6 @@
-# api/server.py — the daemon's lifecycle, and now barely more than the bind.
-#
-# serve() runs the singleton uvicorn server as one audited stream (kind
-# 'dashboard') so uptime and the exit path are queryable. The port bind IS the
-# singleton guard: a second daemon cannot listen, and a pid claim in a database
-# was a second answer to a question the kernel already answers. Everything the
-# daemon runs beside the request loop belongs to the application's lifespan
-# (api/lifecycle.py), not to this function.
+# The HTTP server for an application that already owns a bound socket and a
+# provider graph. api.runtime owns configuration and the port bind. The
+# application's lifespan owns all background work.
 from __future__ import annotations
 
 import signal
@@ -18,8 +13,7 @@ from fastapi import FastAPI
 from api import dependencies
 from api.app import build_web_application
 from app import providers
-from app.injection import registry, resolve
-from core.daemon.contract import HOST_ADDRESS, PORT_NUMBER
+from app.injection import Instances, resolve
 
 def build_server(web_application: FastAPI, graceful_shutdown_seconds: int = 3) -> uvicorn.Server:
     """One uvicorn server for an already-bound socket (passed to run()).
@@ -38,22 +32,12 @@ def build_server(web_application: FastAPI, graceful_shutdown_seconds: int = 3) -
     )
 
 
-def serve() -> int:
-    """Run the server in THIS process (the `serve` CLI verb — `start` spawns
-    it detached). Singleton: the port bind, and nothing else."""
-    # The one registry this process has: the policy below, the routes' services
-    # and the lifespan's workers all resolve from it.
-    instances = registry()
+def run_server(bound_socket: socket.socket, instances: Instances) -> int:
+    """Run one configured application on an already-bound socket."""
     policy = resolve(instances, dependencies.policy)
     audit = resolve(instances, providers.recorder)
-    try:
-        bound_socket = socket.create_server(
-            (HOST_ADDRESS, PORT_NUMBER), backlog=policy.request_queue_size
-        )
-    except OSError:
-        audit.error("", "dashboard serve (port busy)", {"port": PORT_NUMBER})
-        return 1
-    stream_id = audit.stream_start("", "dashboard", src_path=f"http://{HOST_ADDRESS}:{PORT_NUMBER}")
+    host, port = bound_socket.getsockname()[:2]
+    stream_id = audit.stream_start("", "dashboard", src_path=f"http://{host}:{port}")
     try:
         server = build_server(
             build_web_application(instances, run_background_workers=True),
@@ -65,7 +49,7 @@ def serve() -> int:
             # RE-RAISES the captured signal after run() to preserve kill
             # semantics — which would end the process before the cleanup below
             # (the audit stream_end). Restoring to this absorber instead of the
-            # default lets serve() finish and exit 0, as it always has.
+            # default lets the application runtime finish and exit 0.
             pass
 
         signal.signal(signal.SIGTERM, absorb_signal)
@@ -84,7 +68,6 @@ def serve() -> int:
         audit.stream_end(stream_id, "stopped")
         return 0
     except Exception:
-        audit.error("", "dashboard serve", {"port": PORT_NUMBER})
+        audit.error("", "dashboard serve", {"port": port})
         audit.stream_end(stream_id, "crash")
         raise
-

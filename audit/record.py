@@ -6,7 +6,6 @@ here after the daemon learned to inject `AuditRecorder` (audit/recorder.py)
 is the set of writers that genuinely cannot take one:
 
   * `dashboard/cli.py`, which audits a spawn before the daemon it spawned exists;
-  * `api/server.py`'s port-busy exit, which happens before the application does;
   * free functions deep in the tree — the clipboard read, a notify channel's
     delivery failure — whose callers hold no graph and whose signatures would
     have to grow one purely to pass a recorder through.

@@ -123,9 +123,9 @@ def _redirect(log_path: str) -> None:
 
 
 def _serve() -> int:
-    from api import server  # noqa: PLC0415 — import purity: serve() is the only thing that pulls the server in
+    from api.runtime import ApplicationConfig, DashboardApplication  # noqa: PLC0415 — configuration precedes imports
 
-    return server.serve()
+    return DashboardApplication(ApplicationConfig.from_environment()).run().exit_code
 
 
 def holder() -> int:
@@ -183,8 +183,7 @@ def _listening_pid(port: int) -> int:
 def url() -> str:
     # the daemon contract, not the server facade: the bind address is
     # core/daemon/contract.py's to own, and a lazy import keeps this module import-pure
-    # like _serve() does (`serve` must stay the only thing that pulls the
-    # server in).
+    # like _serve() does (the application runtime owns the server import).
     from core.daemon import contract as daemon_contract  # noqa: PLC0415 — same import purity as _serve()
     return "http://%s:%d" % (daemon_contract.HOST_ADDRESS, daemon_contract.PORT_NUMBER)
 

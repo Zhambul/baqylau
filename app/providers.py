@@ -103,7 +103,9 @@ from repository.contract.terminal import PaneWidthRepository
 from repository.contract.uploads import UploadRepository
 from repository.contract.usage import AccountUsageRepository
 from repository.contract.workspace import SessionWorkspaceRepository
+from repository.contract.diagnostics import DiagnosticsRepository
 from repository.impl.sqlite.canonical_events import SqliteCanonicalEventRepository
+from repository.impl.sqlite.diagnostics import SqliteDiagnosticsRepository
 from repository.impl.sqlite.connection import SqliteDatabase
 from repository.impl.sqlite.databases import audit_database, main_database, read_only
 from repository.impl.sqlite.audit import (
@@ -166,6 +168,14 @@ def audit_reader_db(database: AuditDb) -> SqliteDatabase:
 
 
 AuditReaderDb = Annotated[SqliteDatabase, Depends(audit_reader_db)]
+
+
+@singleton
+def diagnostics(database: MainDb, audit_database: AuditReaderDb) -> DiagnosticsRepository:
+    return SqliteDiagnosticsRepository(database, audit_database)
+
+
+Diagnostics = Annotated[DiagnosticsRepository, Depends(diagnostics)]
 
 
 # --- what is installed on this machine ---------------------------------------

@@ -169,7 +169,9 @@ def structured_patch(
     return "\n".join(lines) + "\n", added, removed
 
 
-def result_content(tool_response: records.ToolResponse | str | None) -> Content | None:
+def result_content(
+    tool_response: records.ToolResponse | records.ToolResponseBlocks | str | None,
+) -> Content | None:
     """What a call answered, whatever shape the raw event held it in.
 
     A hook reports the native response document, the transcript reports the
@@ -213,7 +215,7 @@ def attention_answers(
 
 
 def plan_resolution(
-    tool_response: records.ToolResponse | str | None,
+    tool_response: records.ToolResponse | records.ToolResponseBlocks | str | None,
     failed: bool,
 ) -> tuple[PlanState, str | None, bool]:
     if not failed:
@@ -513,7 +515,7 @@ class ToolCallSemantics:
         call_id: ClaudeCodeCallId,
         result_text: str,
         failed: bool,
-        tool_response: records.ToolResponse | str | None,
+        tool_response: records.ToolResponse | records.ToolResponseBlocks | str | None,
     ) -> list[CanonicalEvent[EventPayload]]:
         """One tool_result block from the transcript, as facts.
 
@@ -624,6 +626,14 @@ class ToolCallSemantics:
             tool_response.isAsync is True or tool_response.status == "async_launched"
         )
         if async_launched:
+            return []
+        # A successful Agent hook says that the tool call returned. It does not
+        # carry the subagent result. Claude Code sends the semantic completion
+        # as a task notification, with the result. If this hook writes the same
+        # canonical identity first, normal deduplication must discard the richer
+        # notification. Keep a failed hook because no successful completion
+        # notification will follow it.
+        if outcome == Outcome.SUCCEEDED:
             return []
         assignment_id = assignment_id_from_claude_code_call(call_id)
         payload = ActorAssignmentFinished(assignment_id, outcome, None, None)

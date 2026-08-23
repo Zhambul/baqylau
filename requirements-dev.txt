@@ -11,6 +11,8 @@ pytest-xdist>=3.5
 # a workspace), and behave's own runner would reach none of them. `make test`
 # ignores tests/e2e, so the hermetic suite still runs without this installed.
 pytest-bdd>=8.1
+# Typed HTTP transport for the live application client.
+httpx>=0.28
 # The terminal emulator behind terminal/impl/pty — the headless terminal that
 # suite drives its harnesses through. A pty gives paint operations; pyte adds
 # them up into the screen `read_screen` is asked for. Dev-only because pinning

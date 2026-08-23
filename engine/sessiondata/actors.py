@@ -86,6 +86,15 @@ class ActorWriter(SessionDataWriter):
     ) -> AggregateState:
         event = canonical_event
         payload = event.payload
+        if isinstance(payload, SessionFinished):
+            return aggregate_state.with_actors({
+                actor_id: replace(
+                    actor,
+                    state=LifecycleState.FINISHED,
+                    finished_at=canonical_event.happened_at,
+                )
+                for actor_id, actor in dict(aggregate_state.actors).items()
+            })
         if isinstance(payload, ActorStarted):
             existing = aggregate_state.actor(event.actor_id)
             born = ActorFacts(

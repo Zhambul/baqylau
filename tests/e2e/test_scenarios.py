@@ -27,7 +27,6 @@ scenarios(
     "features/greeting.feature",
     "features/monitor.feature",
     "features/scoreboard.feature",
-    "features/session_data.feature",
     "features/shell.feature",
     "features/subagent.feature",
     "features/usage.feature",

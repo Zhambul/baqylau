@@ -544,6 +544,24 @@ def test_a_finished_session_clears_every_actor_not_just_the_one_that_ended_it():
     assert [actor.status for actor in dict(state.actors).values()] == [None, None]
 
 
+def test_a_finished_session_finishes_every_actor_not_just_the_lead():
+    state = fold(
+        *alive(),
+        committed(
+            ActorStarted("Explore", ActorRole.CHILD),
+            actor_id=CHILD,
+            parent_actor_id=LEAD,
+            cursor=3,
+        ),
+        committed(SessionFinished(Outcome.SUCCEEDED, None), cursor=4, occurred_at=500.0),
+    )
+
+    assert [(actor.state, actor.finished_at) for actor in state.actors.values()] == [
+        ("finished", 500.0),
+        ("finished", 500.0),
+    ]
+
+
 # --- usage, context, statistics ----------------------------------------------
 
 

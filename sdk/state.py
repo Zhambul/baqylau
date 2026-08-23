@@ -1,0 +1,165 @@
+"""One typed and consistent client view of a session."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+from api.sessiondata.models.entry import (
+    AssignmentFinishedBodyResponse,
+    AssignmentStartedBodyResponse,
+    EntryResponse,
+    MessageBodyResponse,
+    ShellBackgroundedBodyResponse,
+    ShellFinishedBodyResponse,
+    ShellOutputBodyResponse,
+    ShellStartedBodyResponse,
+)
+from api.sessiondata.models.session_data import ActorResponse, SessionDataResponse
+
+
+@dataclass
+class ShellState:
+    shell_id: str
+    actor_id: str
+    turn_id: str | None
+    command: str
+    execution: str
+    started_cursor: int
+    output: str = ""
+    status: str = ""
+    state: str | None = None
+    exit_code: int | None = None
+    backgrounded: bool = False
+    entry_ids: list[str] = field(default_factory=list)
+
+
+@dataclass
+class AssignmentState:
+    assignment_id: str
+    actor_id: str
+    turn_id: str | None
+    assigned_actor_name: str | None
+    started_cursor: int
+    state: str | None = None
+    result: str = ""
+
+
+@dataclass(frozen=True)
+class SessionSnapshot:
+    data: SessionDataResponse
+    entries: tuple[EntryResponse, ...]
+
+    @property
+    def cursor(self) -> int:
+        return self.data.cursor
+
+    @property
+    def session_id(self) -> str:
+        return self.data.session.session_id
+
+    def actor(self, actor_id: str) -> ActorResponse:
+        found = [actor for actor in self.data.actors if actor.actor_id == actor_id]
+        if len(found) != 1:
+            raise LookupError(f"actor {actor_id!r} has {len(found)} matches")
+        return found[0]
+
+    def lead(self) -> ActorResponse:
+        return self.actor(self.data.session.lead_actor_id)
+
+    def messages(
+        self,
+        *,
+        actor_id: str | None = None,
+        role: str | None = None,
+        phase: str | None = None,
+    ) -> tuple[EntryResponse, ...]:
+        return tuple(
+            entry
+            for entry in self.entries
+            if (actor_id is None or entry.actor_id == actor_id)
+            and isinstance(entry.body, MessageBodyResponse)
+            and (role is None or entry.body.role == role)
+            and (phase is None or entry.body.phase == phase)
+        )
+
+    def shells(self, *, actor_id: str | None = None) -> tuple[ShellState, ...]:
+        return _shells(self.entries, actor_id=actor_id)
+
+    def assignments(self) -> tuple[AssignmentState, ...]:
+        return _assignments(self.entries)
+
+
+SHELL_BODIES = (
+    ShellStartedBodyResponse,
+    ShellOutputBodyResponse,
+    ShellBackgroundedBodyResponse,
+    ShellFinishedBodyResponse,
+)
+
+
+def _shells(
+    entries: tuple[EntryResponse, ...], *, actor_id: str | None
+) -> tuple[ShellState, ...]:
+    folded: dict[str, ShellState] = {}
+    for entry in entries:
+        body = entry.body
+        if actor_id is not None and entry.actor_id != actor_id:
+            continue
+        if not isinstance(body, SHELL_BODIES):
+            continue
+        if isinstance(body, ShellStartedBodyResponse):
+            folded[body.shell_id] = ShellState(
+                shell_id=body.shell_id,
+                actor_id=entry.actor_id,
+                turn_id=entry.turn_id,
+                command=body.command.text,
+                execution=body.execution,
+                started_cursor=entry.cursor,
+            )
+        found = folded.get(body.shell_id)
+        if found is None:
+            continue
+        found.entry_ids.append(entry.entry_id)
+        if isinstance(body, ShellOutputBodyResponse):
+            current = found.status if body.stream == "status" else found.output
+            value = body.content.text if body.mode == "replace" else current + body.content.text
+            if body.stream == "status":
+                found.status = value
+            else:
+                found.output = value
+        elif isinstance(body, ShellBackgroundedBodyResponse):
+            found.backgrounded = True
+        elif isinstance(body, ShellFinishedBodyResponse):
+            found.state = body.state
+            found.exit_code = body.exit_code
+            if body.result is not None and body.result.text:
+                found.output = body.result.text
+    return tuple(folded.values())
+
+
+def _assignments(entries: tuple[EntryResponse, ...]) -> tuple[AssignmentState, ...]:
+    folded: dict[str, AssignmentState] = {}
+    for entry in entries:
+        body = entry.body
+        if isinstance(body, AssignmentStartedBodyResponse):
+            folded[body.assignment_id] = AssignmentState(
+                assignment_id=body.assignment_id,
+                actor_id=entry.actor_id,
+                turn_id=entry.turn_id,
+                assigned_actor_name=body.assigned_actor_name,
+                started_cursor=entry.cursor,
+            )
+        elif isinstance(body, AssignmentFinishedBodyResponse):
+            found = folded.get(body.assignment_id)
+            if found is None:
+                found = AssignmentState(
+                    assignment_id=body.assignment_id,
+                    actor_id=entry.actor_id,
+                    turn_id=entry.turn_id,
+                    assigned_actor_name=None,
+                    started_cursor=entry.cursor,
+                )
+                folded[body.assignment_id] = found
+            found.state = body.state
+            found.result = body.result.text if body.result is not None else ""
+    return tuple(folded.values())

@@ -2809,6 +2809,62 @@ def _armed_monitor(translator, shell_id="monitor-op-one", task_id="bmfwjr03l"):
     ))
 
 
+def test_claude_monitor_hook_accepts_a_structured_reference_response():
+    translator = ClaudeCanonicalTranslator()
+    translated = translator.translate(raw_event(
+        {
+            "hook_event_name": "PostToolUse",
+            "tool_use_id": "monitor-op-one",
+            "tool_name": "Monitor",
+            "tool_input": {"command": "tail -f log", "description": "ticks"},
+            "tool_response": [{"type": "tool_reference", "tool_name": "Monitor"}],
+        },
+        harness=HarnessName.CLAUDE_CODE,
+        source_type="hook",
+        raw_event_id="structured-monitor-response",
+    ))
+
+    assert payloads(translated, ShellFinished)[0].payload.shell_id == ShellId("monitor-op-one")
+
+
+def test_claude_agent_hook_does_not_hide_the_notification_result():
+    translator = ClaudeCanonicalTranslator()
+    returned = translator.translate(raw_event(
+        {
+            "hook_event_name": "PostToolUse",
+            "tool_use_id": "agent-tool-one",
+            "tool_name": "Agent",
+            "tool_input": {"description": "ticker"},
+            "tool_response": [{"type": "tool_reference", "tool_name": "Agent"}],
+        },
+        harness=HarnessName.CLAUDE_CODE,
+        source_type="hook",
+        raw_event_id="agent-returned",
+    ))
+    completed = translator.translate(raw_event(
+        {
+            "type": "user",
+            "uuid": "agent-notification",
+            "origin": {"kind": "task-notification"},
+            "message": {
+                "content": (
+                    "<task-notification><task-id>child-one</task-id>"
+                    "<tool-use-id>agent-tool-one</tool-use-id>"
+                    "<status>completed</status><summary>Agent ticker finished</summary>"
+                    "<result>gathered</result></task-notification>"
+                )
+            },
+        },
+        harness=HarnessName.CLAUDE_CODE,
+        source_type="transcript",
+        raw_event_id="agent-notification",
+    ))
+
+    assert returned.canonical_events == ()
+    assignment = payloads(completed, ActorAssignmentFinished)[0].payload
+    assert assignment.result.text == "gathered"
+
+
 def test_claude_monitor_events_are_progress_on_the_monitor_not_agent_finishes():
     """A monitor's events are the whole point of arming one, and every one of them
     was being read as an AGENT completing (session 246c8079, 2026-08-17): the

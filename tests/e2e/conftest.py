@@ -1,125 +1,216 @@
-"""The live-harness suite: its fixtures, and the wiring that finds its steps.
-
-This suite is not hermetic and does not pretend to be. It starts the REAL daemon
-the way a person starts one, runs the REAL harness CLI against a real workspace
-on disk, and spends real tokens — because the failure it exists to catch is a
-harness release changing its evidence under an integration that keeps reporting
-success. Nothing simulated can catch that.
-
-What it does isolate is our own state: a private data directory (both databases)
-and a private port, both passed as the daemon's own launch flags. The harness's
-OWN configuration — credentials, installed hooks — is deliberately the real one
-(see support/environment.py).
-
-The steps themselves live in `impl/`, one module per concern. They are pulled
-into this namespace, and that is not a style choice: pytest-bdd registers each
-step as a FIXTURE in the module that defines it, and pytest discovers fixtures
-only from conftest and test modules. So a step in a third module is invisible
-until its names are here.
-
-The one thing NOT expressible as a sentence is the invariant every scenario is
-held to — that nothing the harness said went uninterpreted. It is a fixture, not
-a `Then`, precisely because a forgotten assertion is the failure mode this suite
-exists to remove.
-"""
+"""Fixtures for the live harness feature suite."""
 
 from __future__ import annotations
 
 import os
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 
-from impl.files import *               # noqa: F403
-from impl.messages import *            # noqa: F403 — see the module docstring
-from impl.persistence import *         # noqa: F403
-from impl.scoreboard import *          # noqa: F403
-from impl.session import *             # noqa: F403
-from impl.shells import *              # noqa: F403
-from impl.subagents import *           # noqa: F403
-from impl.usage import *               # noqa: F403
-from impl.world import World
-from support import observe
-from support.daemon import Daemon, free_port, start
+from api.runtime import ApplicationConfig
+from api.diagnostics.models import DiagnosticsReportResponse
+from sdk.client import BaqylauClient
+from tests.e2e.testkit.policy import WaitPolicy
+from tests.e2e.testkit.process import ApplicationProcess
+from tests.e2e.testkit.references import (
+    Actors,
+    Assignments,
+    Controls,
+    FileOperations,
+    References,
+    SessionSpecs,
+    Sessions,
+    Shells,
+    Turns,
+)
 
-REPOSITORY_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+pytest_plugins = (
+    "tests.e2e.steps.files",
+    "tests.e2e.steps.scoreboard",
+    "tests.e2e.steps.sessions",
+    "tests.e2e.steps.shells",
+    "tests.e2e.steps.subagents",
+    "tests.e2e.steps.usage",
+)
+
 DEFAULT_WORKSPACE = os.path.expanduser("~/code/personal/baqylau-tests")
-
-INTERPRETER_DRAIN_TIMEOUT_SECONDS = 30.0
+FILE_OPERATION_FIXTURE = "baqylau-e2e-file.txt"
+PARENT_SESSION_VARIABLES = (
+    "CLAUDECODE",
+    "CLAUDE_CODE_CHILD_SESSION",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_EXECPATH",
+    "CLAUDE_CODE_MESSAGING_SOCKET",
+    "CLAUDE_CODE_MESSAGING_TOKEN",
+    "CLAUDE_CODE_SSE_PORT",
+    "CLAUDE_PID",
+    "CLAUDE_EFFORT",
+    "CLAUDE_OTEL_PORT",
+    "CODEX_COMPANION_SESSION_ID",
+    "BAQYLAU_LAUNCH_MODEL",
+    "BAQYLAU_LAUNCH_EFFORT",
+    "KITTY_WINDOW_ID",
+)
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
-    group = parser.getgroup("baqylau live-harness tests")
-    group.addoption(
-        "--e2e-workspace",
-        default=DEFAULT_WORKSPACE,
-        help="the directory the harness runs in (default: %(default)s)",
-    )
-    group.addoption(
-        "--e2e-data-dir",
-        default=None,
-        help="keep the run's databases here instead of a tmpdir — what you want after a failure",
-    )
-    # The two overrides that let a new model be tried against the WHOLE suite
-    # without editing a single Examples table.
-    group.addoption("--e2e-model", default=None, help="override every scenario's model")
-    group.addoption("--e2e-effort", default=None, help="override every scenario's effort")
+    group = parser.getgroup("baqylau live harness tests")
+    group.addoption("--e2e-workspace", default=DEFAULT_WORKSPACE)
+    group.addoption("--e2e-data-dir", default=None)
+    group.addoption("--e2e-model", default=None)
+    group.addoption("--e2e-effort", default=None)
 
 
 @pytest.fixture(scope="session")
 def workspace(pytestconfig: pytest.Config) -> str:
-    """The directory the harness works in. A real git repository, because a
-    harness behaves differently outside one and the dashboard reads its status."""
-    directory = os.path.abspath(os.path.expanduser(str(pytestconfig.getoption("--e2e-workspace"))))
-    if not os.path.isdir(directory):
+    directory = Path(str(pytestconfig.getoption("--e2e-workspace"))).expanduser().resolve()
+    if not directory.is_dir():
         raise pytest.UsageError(f"workspace does not exist: {directory}")
-    return os.path.realpath(directory)
+    return str(directory)
 
 
 @pytest.fixture(scope="session")
-def daemon(pytestconfig: pytest.Config, tmp_path_factory: pytest.TempPathFactory) -> Iterator[Daemon]:
-    """One daemon for the whole run, on its own port and its own databases."""
+def application_process(
+    pytestconfig: pytest.Config,
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Iterator[ApplicationProcess]:
     configured = pytestconfig.getoption("--e2e-data-dir")
     data_directory = (
-        os.path.abspath(os.path.expanduser(str(configured)))
+        Path(str(configured)).expanduser().resolve()
         if configured
-        else str(tmp_path_factory.mktemp("baqylau-live-data"))
+        else tmp_path_factory.mktemp("baqylau-live-data")
     )
-    running = start(REPOSITORY_ROOT, data_directory, free_port())
-    print(f"\nlive daemon · {running.url} · data {data_directory}")
+    process = ApplicationProcess.start(ApplicationConfig(
+        data_directory=Path(data_directory),
+        port=0,
+        terminal="pty",
+        notify_telegram=False,
+        notify_webpush=False,
+        environment_removals=PARENT_SESSION_VARIABLES,
+        base_environment=dict(os.environ),
+    ))
+    try:
+        yield process
+    finally:
+        exit_code = process.stop()
+        assert exit_code == 0, f"application process exited with {exit_code}"
+
+
+def _assert_report_is_clean(label: str, report: DiagnosticsReportResponse) -> None:
+    findings = []
+    if report.raw_event_count != report.verdict_count:
+        findings.append(
+            f"{report.raw_event_count - report.verdict_count} raw events have no verdict"
+        )
+    findings.extend(
+        f"raw event {item.raw_event_cursor} {item.source_type}:{item.source_position} "
+        f"has decision {item.decision!r}: {item.reason or 'no reason'}; {item.payload}"
+        for item in report.interpretation_problems
+    )
+    findings.extend(
+        f"audit error {item.error_cursor} {item.component} {item.action}: {item.context}"
+        for item in report.audit_problems
+    )
+    assert not findings, label + ":\n" + "\n".join(findings)
+
+
+@pytest.fixture(scope="session")
+def client(application_process: ApplicationProcess) -> Iterator[BaqylauClient]:
+    running = BaqylauClient(application_process.endpoint.url)
+    running.application.wait_until_ready()
+    start = running.diagnostics.checkpoint()
     try:
         yield running
+        end = running.diagnostics.wait_until_drained()
+        _assert_report_is_clean(
+            "the complete E2E run has pipeline findings",
+            running.diagnostics.report(start, end),
+        )
     finally:
-        running.stop()
+        running.close()
 
 
 @pytest.fixture
-def world() -> World:
-    return World()
+def wait_policy() -> WaitPolicy:
+    return WaitPolicy()
+
+
+@pytest.fixture
+def session_specs() -> SessionSpecs:
+    return References("session configuration")
+
+
+@pytest.fixture
+def sessions() -> Sessions:
+    return References("session")
+
+
+@pytest.fixture
+def turns() -> Turns:
+    return References("turn")
+
+
+@pytest.fixture
+def shells() -> Shells:
+    return References("shell command")
+
+
+@pytest.fixture
+def actors() -> Actors:
+    return References("actor")
+
+
+@pytest.fixture
+def assignments() -> Assignments:
+    return References("assignment")
+
+
+@pytest.fixture
+def file_operations() -> FileOperations:
+    return References("file operation")
+
+
+@pytest.fixture
+def controls() -> Controls:
+    return References("control")
+
+
+@pytest.fixture
+def file_operation_path(workspace: str) -> Iterator[str]:
+    path = os.path.join(workspace, FILE_OPERATION_FIXTURE)
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+    try:
+        yield path
+    finally:
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
 
 
 @pytest.fixture(autouse=True)
-def nothing_went_uninterpreted(world: World, daemon: Daemon) -> Iterator[None]:
-    """After every scenario: the harness said nothing we failed to understand.
-
-    Checked before the CLI is stopped (its exit writes evidence of its own) and
-    after the interpreter has drained, so the verdict is complete rather than
-    merely early. `ignored_nonsemantic` is not a finding — that is the
-    interpreter recognising a record and having nothing to say about it.
-    """
+def scenario_signoff(
+    client: BaqylauClient,
+    sessions: Sessions,
+    wait_policy: WaitPolicy,
+) -> Iterator[None]:
+    start = client.diagnostics.checkpoint()
     yield
-    try:
-        if world.session_id is None:
-            return
-        observe.until(
-            "the interpreter to rule on every raw event",
-            lambda: observe.unverdicted_count(daemon) == 0,
-            timeout=INTERPRETER_DRAIN_TIMEOUT_SECONDS,
-        )
-        unknown = observe.uninterpreted(daemon, world.session_id)
-        errors = observe.audit_errors(daemon, world.session_id)
-        assert not unknown, "the harness said things we did not understand:\n" + "\n".join(unknown)
-        assert not errors, "the machinery recorded errors:\n" + "\n".join(errors)
-    finally:
-        if world.live is not None:
-            world.live.stop(world.session_id)
+    for session in sessions.values():
+        snapshot = client.sessions.snapshot(session)
+        if snapshot.data.session.state != "finished":
+            receipt = client.sessions.close(session)
+            assert receipt.status_code in (200, 202), (
+                f"cleanup action {receipt.request_id!r} was not accepted: {receipt.outcome}"
+            )
+        client.sessions.wait_until_finished(session, wait_policy.cleanup)
+    end = client.diagnostics.wait_until_drained(wait_policy.pipeline)
+    _assert_report_is_clean(
+        "the scenario has pipeline findings",
+        client.diagnostics.report(start, end),
+    )

@@ -1,18 +1,38 @@
-@drift
 Feature: the scoreboard summarizes the session
 
   Scenario Outline: completed work fills every activity and usage counter
     Given the file operation fixture does not exist
-    And a <harness> session on <model> at <effort> effort with prompt 'Run only the shell command `echo scoreboard-ok`, then reply only with success'
-    Then the turn ends within 3 minutes
-    When I send message 'Run only the shell command `sh -c "echo expected-error >&2; exit 7"`, then reply only with failed-as-expected'
-    Then the turn ends within 3 minutes
-    When I send message 'Using file editing tools, not shell commands, create baqylau-e2e-file.txt containing alpha, then edit alpha to beta. Finally reply only with done'
-    Then the turn ends within 3 minutes
-    And the scoreboard reports at least 3 prompts, 2 commands, 1 failed command, and 1 file
-    And the scoreboard reports added and removed lines with Write and Edit tools
-    And the scoreboard reports positive active time and token usage
-    And the assistant ends the turn with 'done'
+    And session configuration "primary" uses <harness> with model <model> and <effort> effort
+    When I launch session "primary" as turn "successful command" with prompt
+      """
+      Run only the shell command `echo scoreboard-ok`. Then, reply only with success.
+      """
+    Then turn "successful command" completes
+    When I send prompt to session "primary" as turn "failed command"
+      """
+      Run only the shell command `sh -c "echo expected-error >&2; exit 7"`.
+      Then, reply only with failed-as-expected.
+      """
+    Then turn "failed command" completes
+    When I send prompt to session "primary" as turn "file changes"
+      """
+      Use file editing tools, not shell commands. Create baqylau-e2e-file.txt
+      with the content alpha. Then, edit alpha to beta. Finally, reply only
+      with exactly these four lowercase letters and no other text: done
+      """
+    Then turn "file changes" completes
+    And session "primary" has at least 3 prompts
+    And session "primary" has at least 2 shell commands
+    And session "primary" has at least 1 failed shell command
+    And session "primary" has at least 1 file operation
+    And session "primary" has added lines
+    And session "primary" has removed lines
+    And session "primary" used tool Write
+    And session "primary" used tool Edit
+    And session "primary" has positive active time
+    And session "primary" has positive input token usage
+    And session "primary" has positive output token usage
+    And turn "file changes" has final answer 'done'
 
     Examples:
       | harness     | model        | effort |
@@ -20,8 +40,16 @@ Feature: the scoreboard summarizes the session
       | claude_code | haiku        | low    |
 
   Scenario: a completed yielded Codex command is history, not live background work
-    Given a codex session on gpt-5.6-luna at low effort with prompt 'Use the shell execution tool with a 1000 ms yield time to run `sleep 5; echo yielded-done`. After it yields, poll that same process until it finishes, then reply only with done'
-    Then the turn ends within 3 minutes
-    And the jobs history contains exactly 1 backgrounded command
-    And the scoreboard reports exactly 1 historical job and no running work
-    And the assistant ends the turn with 'done'
+    Given session configuration "primary" uses codex with model gpt-5.6-luna and low effort
+    When I launch session "primary" as turn "yielded command" with prompt
+      """
+      Use the shell execution tool with a 1000 ms yield time to run
+      `sleep 5; echo yielded-done`. After it yields, poll that same process until
+      it finishes. Then, reply with exactly these four lowercase letters and no
+      other text: done
+      """
+    Then turn "yielded command" completes
+    And turn "yielded command" has exactly 1 backgrounded command
+    And session "primary" has exactly 1 historical job
+    And session "primary" has no running work
+    And turn "yielded command" has final answer 'done'

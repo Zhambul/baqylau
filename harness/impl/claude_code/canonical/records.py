@@ -305,7 +305,7 @@ class UserRecord(BaseModel):
     # dozens of per-tool result documents toolUseResult.py's corpus scan
     # turned up. Read generically here; the specific tool's RESPONSE model
     # (ToolResponse below) validates it once the call it answers is known.
-    toolUseResult: ToolResponse | str | None = None
+    toolUseResult: ToolResponse | ToolResponseBlocks | str | None = None
     uuid: str | None = None
     parentUuid: str | None = None
     sessionId: str | None = None
@@ -684,7 +684,7 @@ class ToolCallNative(BaseModel):
     name: str | None = None
     tool_input: ToolArguments | None = None
     input: ToolArguments | None = None
-    tool_response: ToolResponse | str | None = None
+    tool_response: ToolResponse | ToolResponseBlocks | str | None = None
 
 
 # === The hook delivery (hooks.py, hooks/foreground.py, hooks/gateway.py) =====
@@ -726,7 +726,7 @@ class HookPayload(BaseModel):
     tool_use_id: ClaudeCodeCallId | None = None
     tool_name: str | None = None
     tool_input: ToolArguments | None = None
-    tool_response: ToolResponse | str | None = None
+    tool_response: ToolResponse | ToolResponseBlocks | str | None = None
     tool_calls: list[ToolCallNative] | None = None
     duration_ms: int | float | None = None
     error: str | None = None

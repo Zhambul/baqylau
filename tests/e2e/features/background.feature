@@ -1,26 +1,29 @@
-@drift
-Feature: background work reaches the dashboard
+Feature: background work reaches the session feed
 
-  Scenario Outline: a backgrounded command is tracked past the end of its turn
-    Given a <harness> session on <model> at <effort> effort
-    When I send message 'Start a background terminal running `sleep 5; echo done`. Do not wait for it. Reply only with the word started'
-    Then the turn ends within 3 minutes
-    And the session lists a background job 'sleep'
-    And that job is still running
-    And that job prints 'done' within 2 minutes
-    And that job ends within 2 minutes
+  Scenario: a backgrounded command is tracked past the end of its turn
+    Given session configuration "primary" uses claude_code with model haiku and low effort
+    When I launch session "primary" as turn "start delayed echo" with prompt
+      """
+      Start a background terminal that runs `sleep 5; echo done`. Do not wait
+      for it. Reply only with the word started.
+      """
+    Then turn "start delayed echo" completes
+    When I name the only background job in turn "start delayed echo" containing 'sleep' "delayed echo"
+    Then job "delayed echo" is running
+    And job "delayed echo" has output containing 'done'
+    And job "delayed echo" ends
 
-    Examples:
-      | harness     | model | effort |
-      | claude_code | haiku | low    |
-
-  Scenario Outline: a command backgrounded mid-run keeps reporting
-    Given a <harness> session on <model> at <effort> effort with prompt 'Run `echo started; sleep 30; echo done` in the foreground and wait for it. Do not use run_in_background.'
-    When I move that command to the background
-    Then the session lists a background job 'sleep'
-    And that job is still running
-    And that job prints 'done' within 2 minutes
-
-    Examples:
-      | harness     | model | effort |
-      | claude_code | haiku | low    |
+  Scenario: a command backgrounded mid-run keeps reporting
+    Given session configuration "primary" uses claude_code with model haiku and low effort
+    When I launch session "primary" as turn "run delayed echo" with prompt
+      """
+      Run `echo started; sleep 30; echo done` in the foreground and wait for it.
+      Do not use run_in_background.
+      """
+    And I name the only running foreground command in turn "run delayed echo" containing 'sleep' "delayed echo"
+    And I request backgrounding in session "primary" as control "background delayed echo"
+    Then control "background delayed echo" response is accepted
+    And control "background delayed echo" outcome is acknowledged
+    And command "delayed echo" becomes a background job
+    And job "delayed echo" is running
+    And job "delayed echo" has output containing 'done'

@@ -48,10 +48,10 @@ instead of through a sandbox. They are pure by design for exactly that reason.
 
 ## The live-harness suite — `tests/e2e/`, `make test-drift`
 
-Excluded from `make test` and run on demand, because it starts the REAL daemon,
-launches the REAL `claude` / `codex` CLI against a real workspace, and spends
-real tokens. It exists for the one failure nothing simulated can catch: a harness
-release changing its evidence under an integration that keeps reporting success.
+This suite is not part of `make test`. Run it on demand. It starts the real
+application, launches the real `claude` and `codex` programs in a real
+workspace, and uses real tokens. It detects a harness change that a simulated
+test cannot detect.
 
 ```sh
 make test-drift                                        # every scenario
@@ -60,19 +60,48 @@ make test-drift E2E="--e2e-model claude-opus-5"        # every scenario, one mod
 make test-drift E2E="--e2e-data-dir /tmp/drift"        # keep the databases after
 ```
 
-It isolates OUR state and nothing else: a private data directory (both
-databases) and a private port, so a run never touches the daemon on 8377. The
-harness's own configuration — credentials, installed hooks — is deliberately the
-real one.
+The run has one private data directory and one automatic port. It cannot use the
+normal application on port 8377. It uses the installed harness credentials and
+hooks. One application process serves all scenarios. This is the same use case
+as several normal sessions in one long-running application. It also keeps the
+run time and token cost low.
 
-Everything goes through the product's own surface. The daemon runs with
-`BAQYLAU_TERMINAL=pty`, so it owns the harness's terminal; a launch is
-`POST /api/sessions`, the same request the new-session form makes; a prompt is
-the `send-text` control; and the two raw-key interactions (the first-run trust
-gate, the backgrounding chord) go through the window-addressed terminal
-passthrough. Assertions read `/sessionData` — the aggregate and the entry
-feed — plus a direct read-only look at the two databases for the machinery
-verdicts, which have no route by design.
+The suite has these layers:
+
+- `api.runtime.DashboardApplication` is the application runtime. The CLI and
+  the tests use this same runtime.
+
+- `testkit.process.ApplicationProcess` owns only the child process and its
+  process signals. It does not send HTTP requests, read logs, or read a
+  database.
+
+- `sdk.BaqylauClient` is the typed client. Its resources launch and control
+  sessions, read application state, and read structured diagnostics. Test code
+  does not use raw GET and POST operations.
+
+- A session snapshot reads the aggregate first. It then reads all feed pages at
+  the aggregate cursor. Thus, all data in the snapshot is from one boundary.
+
+- `testkit.references` stores scenario names such as `"greeting"`,
+  `"hello command"`, and `"ticker actor"`. A selector must find exactly one
+  product identity before it binds a name. Zero matches cause a wait. More than
+  one match causes an immediate failure.
+
+- Step modules separate actions, reference acquisition, and checks. A `Then`
+  step checks one fact. Time limits are in `testkit.policy`, not in feature
+  text.
+
+The suite does not read application logs or databases. Each scenario records a
+diagnostic checkpoint before it starts. At signoff, it closes each session and
+checks that the session and all actors are finished. It then waits for the raw,
+canonical, and reaction pipelines to drain. The diagnostic report must show a
+verdict for every raw event, no unknown or failed interpretation, and no audit
+error. A second report applies to the complete test run.
+
+Usage is global, so usage cases do not create a session. Storage migrations are
+white-box repository tests and do not run as live Gherkin cases. A future
+browser suite can reuse the application process, typed client, and named
+references.
 
 ## `notify_sink.py`
 
