@@ -238,6 +238,21 @@ planFilePath                       # PlanArguments
 backgroundedByUser                  # ToolResponse
 agent_transcript_path               # HookPayload
 permission_mode                     # HookPayload
+headUuid                           # PreservedCompactSegment
+anchorUuid                         # PreservedCompactSegment / PreservedCompactMessages
+tailUuid                           # PreservedCompactSegment
+uuids                              # PreservedCompactMessages
+allUuids                           # PreservedCompactMessages
+postTokens                         # CompactMetadata
+cumulativeDroppedTokens            # CompactMetadata
+preCompactDiscoveredTools          # CompactMetadata
+preservedSegment                   # CompactMetadata
+preservedMessages                  # CompactMetadata
+filePath                           # ToolResponseFile
+numLines                           # ToolResponseFile
+startLine                          # ToolResponseFile
+totalLines                         # ToolResponseFile
+token_budget                       # codex GoalArguments
 tool_calls                          # HookPayload
 is_interrupt                        # HookPayload
 stop_hook_active                    # HookPayload
@@ -251,6 +266,8 @@ compact_summary                     # HookPayload
 load_reason                         # HookPayload
 memory_type                         # HookPayload
 teammate_name                       # HookPayload
+task_subject                        # HookPayload
+task_description                    # HookPayload
 agentType                          # AgentMetaFile
 customAgentType                    # AgentMetaFile
 isFork                              # AgentMetaFile

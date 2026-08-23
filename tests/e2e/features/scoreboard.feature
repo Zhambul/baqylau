@@ -14,6 +14,7 @@ Feature: the scoreboard summarizes the session
       Then, reply only with failed-as-expected.
       """
     Then turn "failed command" completes
+    When I name the only shell command in turn "failed command" containing 'expected-error' "expected failure"
     When I send prompt to session "primary" as turn "file changes"
       """
       Use file editing tools, not shell commands. Create baqylau-e2e-file.txt
@@ -21,6 +22,9 @@ Feature: the scoreboard summarizes the session
       with exactly these four lowercase letters and no other text: done
       """
     Then turn "file changes" completes
+    And command "expected failure" has state failed
+    And command "expected failure" has exit code 7
+    And command "expected failure" has output containing 'expected-error'
     And session "primary" has at least 3 prompts
     And session "primary" has at least 2 shell commands
     And session "primary" has at least 1 failed shell command

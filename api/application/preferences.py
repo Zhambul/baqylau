@@ -4,7 +4,7 @@
 # a missing key surfaces.)
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from api.common.models.replies.saved_response import SavedResponse
 from api.application.models.preferences.composer_draft_request import ComposerDraftRequest
@@ -222,5 +222,8 @@ def set_notifications_muted(
 def set_tasks_hidden(
     session_id: SessionIdPath, tasks_hidden_request: TasksHiddenRequest, workspace: SessionApplication
 ) -> SavedResponse:
-    workspace.set_tasks_hidden(SessionId(session_id), tasks_hidden_request.hidden)
+    try:
+        workspace.set_tasks_hidden(SessionId(session_id), tasks_hidden_request.hidden)
+    except ValueError as error:
+        raise HTTPException(409, str(error)) from error
     return SavedResponse()

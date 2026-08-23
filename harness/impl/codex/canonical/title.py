@@ -88,5 +88,27 @@ class CodexThreadTitleRepository(NativeSessionTitleRepository):
             return TitleWriteOutcome.UNAVAILABLE
         return TitleWriteOutcome.RENAMED if cursor.rowcount else TitleWriteOutcome.UNAVAILABLE
 
+    def read_title(self, source_reference: str) -> str | None:
+        """Read the current title from the native thread index."""
+        if not self.renameable(source_reference):
+            return None
+        database = _state_database()
+        thread_uuid = _thread_uuid(source_reference)
+        if not database or not thread_uuid:
+            return None
+        try:
+            connection = sqlite3.connect(database, timeout=CONNECT_TIMEOUT_SECONDS)
+            try:
+                row = connection.execute(
+                    "SELECT title FROM threads WHERE id=?",
+                    (thread_uuid,),
+                ).fetchone()
+            finally:
+                connection.close()
+        except sqlite3.Error:
+            return None
+        title = str(row[0]).strip() if row and row[0] is not None else ""
+        return title or None
+
 
 titles = CodexThreadTitleRepository()

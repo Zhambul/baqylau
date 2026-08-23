@@ -34,6 +34,8 @@ from harness.impl.codex.canonical.records import (
     ExecArguments,
     FunctionCallOutputPayload,
     FunctionCallPayload,
+    GoalArguments,
+    GoalToolResultDocument,
     MessagePayload,
     PlanArguments,
     ReasoningPayload,
@@ -48,12 +50,14 @@ from harness.impl.codex.canonical.records import (
     CollaborationCallRecord,
     ExecRecord,
     ExecResultRecord,
+    GoalRecord,
     GoalToolRecord,
     PatchCallRecord,
     PlanRecord,
     PlanTask,
     RolloutRecord,
     SearchRecord,
+    StateToolBatchRecord,
     StdinRecord,
     TaskListRecord,
     ThinkRecord,
@@ -110,9 +114,8 @@ _JS_PLAN_STATUS = re.compile(
 )
 
 
-def js_tool_call(js: str) -> tuple[str, str]:
-    """(name, args) of the `tools.<fn>(…)` call in a `custom_tool_call` name=exec
-    JS input — ("", "") when there is none.
+def js_tool_calls(js: str) -> tuple[tuple[str, str], ...]:
+    """All top-level `tools.<fn>(…)` calls in JavaScript execution order.
 
     codex ≥ 0.146 runs MANY tools through the SAME `exec` custom tool: a shell
     command is `tools.exec_command({cmd:…})` (handled by _exec_cmd_from_js
@@ -129,28 +132,82 @@ def js_tool_call(js: str) -> tuple[str, str]:
     `text(r.content.map(x=>x.text||"").join("\\n"))`), so the whole `; text(…)`
     tail was landing in the rendered command. An unbalanced (truncated) input
     falls open to the rest of the string rather than raising."""
-    m = _JS_TOOL.search(js or "")
-    if not m:
-        return "", ""
-    i, depth, quote, esc = m.end(), 1, "", False
-    while i < len(js) and depth:
-        ch = js[i]
-        if esc:
-            esc = False
-        elif quote:
-            if ch == "\\":
-                esc = True
-            elif ch == quote:
-                quote = ""
-        elif ch in _JS_QUOTES:
-            quote = ch
-        elif ch == "(":
-            depth += 1
-        elif ch == ")":
-            depth -= 1
-        i += 1
-    args = js[m.end():i - 1] if not depth else js[m.end():]
-    return m.group(1), args.strip()
+    calls = []
+    cursor = 0
+    while match := _JS_TOOL.search(js or "", cursor):
+        index, depth, quote, escaped = match.end(), 1, "", False
+        while index < len(js) and depth:
+            character = js[index]
+            if escaped:
+                escaped = False
+            elif quote:
+                if character == "\\":
+                    escaped = True
+                elif character == quote:
+                    quote = ""
+            elif character in _JS_QUOTES:
+                quote = character
+            elif character == "(":
+                depth += 1
+            elif character == ")":
+                depth -= 1
+            index += 1
+        arguments = (
+            js[match.end():index - 1]
+            if not depth
+            else js[match.end():]
+        )
+        calls.append((match.group(1), arguments.strip()))
+        cursor = max(index, match.end())
+    return tuple(calls)
+
+
+def _loose_string_field(arguments: str, field: str) -> str | None:
+    match = re.search(
+        rf'''["']?{field}["']?\s*:\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')''',
+        arguments,
+    )
+    if match is None:
+        return None
+    try:
+        return str(ast.literal_eval(match.group(1)))
+    except (SyntaxError, ValueError):
+        return None
+
+
+def _goal_tool(
+    name: str,
+    arguments: str,
+    call_id: CodexCallId,
+) -> GoalToolRecord | None:
+    try:
+        parsed = GoalArguments.model_validate_json(arguments)
+    except ValidationError:
+        parsed = GoalArguments(
+            objective=_loose_string_field(arguments, "objective"),
+            status=_loose_string_field(arguments, "status"),
+            reason=_loose_string_field(arguments, "reason"),
+        )
+    return GoalToolRecord(
+        call_id=call_id,
+        name=name,
+        objective=parsed.objective,
+        status=parsed.status,
+        reason=parsed.reason,
+    )
+
+
+def _state_tool_action(
+    name: str,
+    arguments: str,
+    call_id: CodexCallId,
+) -> TaskListRecord | GoalToolRecord | None:
+    if name == "update_plan":
+        tasks = _plan_tasks(arguments)
+        return TaskListRecord(tasks=tasks, call_id=call_id) if tasks is not None else None
+    if name in ("create_goal", "get_goal", "update_goal"):
+        return _goal_tool(name, arguments, call_id)
+    return None
 
 
 def _plan_tasks(arguments: str) -> tuple[PlanTask, ...] | None:
@@ -183,7 +240,7 @@ def _plan_tasks(arguments: str) -> tuple[PlanTask, ...] | None:
 def _exec_cmd_from_js(js: str) -> str:
     """The SHELL command out of a `custom_tool_call` name=exec JS `input`, or ''
     when the call is not a shell one — `tools.exec_command({cmd:…})` yields its
-    cmd, anything else is a different tool and belongs to js_tool_call above (the
+    cmd, anything else is a different tool and belongs to js_tool_calls above (the
     `tool` record), not to a command block."""
     m = _JS_CMD.search(js or "")
     if not m:
@@ -284,16 +341,44 @@ def _rsp_custom_tool_call(custom_tool_call_payload: CustomToolCallPayload) -> Ro
     call_id = CodexCallId(p.call_id or "")
     if p.name == "exec":
         js = content_text(p.input) if not isinstance(p.input, str) else p.input
+        calls = js_tool_calls(js)
+        if len(calls) > 1:
+            actions = []
+            for index, (name, arguments) in enumerate(calls, start=1):
+                if name == "apply_patch":
+                    # Each authoritative FileChange item carries the patch and
+                    # its result. The wrapper call is only request plumbing.
+                    continue
+                action = _state_tool_action(
+                    name,
+                    arguments,
+                    CodexCallId(f"{call_id}:{index}"),
+                )
+                if action is None:
+                    return UnmappedToolRecord(name=f"batched {name}")
+                actions.append(action)
+            return (
+                StateToolBatchRecord(call_id=call_id, actions=tuple(actions))
+                if actions
+                else empty_record()
+            )
         cmd = _exec_cmd_from_js(js)
         if cmd:
-            return ExecRecord(cmd=cmd, call_id=call_id)
+            metadata = p.internal_chat_message_metadata_passthrough
+            return ExecRecord(
+                cmd=cmd,
+                call_id=call_id,
+                turn=metadata.turn_id if metadata else None,
+            )
         # …not a shell command: any OTHER `tools.<fn>(…)` through the same exec
         # tool is a TOOL CALL and gets its own record — structured (name + args)
         # rather than laundered into the exec/command shape, which painted a
         # subagent's web lookups as a `▶ cmd` block of raw JS.
-        fn, args = js_tool_call(js)
+        fn, args = calls[0] if calls else ("", "")
         if not fn:
-            return None
+            # JavaScript that inspects the execution environment but calls no
+            # tool is known execution plumbing. It has no canonical activity.
+            return empty_record()
         if fn == "apply_patch":
             return empty_record()
         if fn == "write_stdin":
@@ -304,7 +389,8 @@ def _rsp_custom_tool_call(custom_tool_call_payload: CustomToolCallPayload) -> Ro
                 return UnmappedToolRecord(name="update_plan")
             return TaskListRecord(tasks=tasks, call_id=call_id)
         if fn in ("create_goal", "get_goal", "update_goal"):
-            return GoalToolRecord(call_id=call_id)
+            goal = _goal_tool(fn, args, call_id)
+            return goal if goal is not None else UnmappedToolRecord(name=fn)
         return ToolRecord(name=fn, args=args, call_id=call_id)
     if p.name == "apply_patch":
         patch = content_text(p.input) if not isinstance(p.input, str) else p.input
@@ -318,6 +404,17 @@ def _rsp_custom_tool_call_output(
     p = custom_tool_call_output_payload
     txt = content_text(p.output) if not isinstance(p.output, str) else p.output
     body = CITATION_RE.sub("", _exec_output_body(txt))
+    try:
+        goal_result = GoalToolResultDocument.model_validate_json(body)
+    except ValidationError:
+        goal_result = None
+    if goal_result is not None and goal_result.goal is not None:
+        goal = goal_result.goal
+        return GoalRecord(
+            objective=goal.objective,
+            status=goal.status,
+            reason=goal.reason,
+        )
     try:
         combined = CombinedToolResult.model_validate_json(body)
     except ValidationError:
@@ -348,9 +445,15 @@ def _rsp_custom_tool_call_output(
                 running=process_id is not None and combined.exit_code is None,
                 call_id=CodexCallId(p.call_id or ""),
             )
-        return empty_record()
+        if body.strip() == "{}":
+            return empty_record()
     m = EXIT_RE.search(txt[:EXIT_SCAN_B])
-    return ExecResultRecord(exit=m.group(1) if m else None, output=body, call_id=CodexCallId(p.call_id or ""))
+    return ExecResultRecord(
+        exit=m.group(1) if m else None,
+        output=body,
+        call_id=CodexCallId(p.call_id or ""),
+        interrupted=body.casefold().startswith("aborted by user after "),
+    )
 
 
 def _call_exec(function_call_payload: FunctionCallPayload, exec_arguments: ExecArguments) -> ExecRecord | None:
@@ -359,7 +462,12 @@ def _call_exec(function_call_payload: FunctionCallPayload, exec_arguments: ExecA
         cmd = " ".join(str(x) for x in cmd)
     if not cmd:
         return None
-    return ExecRecord(cmd=cmd, call_id=CodexCallId(function_call_payload.call_id or ""))
+    metadata = function_call_payload.internal_chat_message_metadata_passthrough
+    return ExecRecord(
+        cmd=cmd,
+        call_id=CodexCallId(function_call_payload.call_id or ""),
+        turn=metadata.turn_id if metadata else None,
+    )
 
 
 def _stdin_record(call_id: CodexCallId, arguments: StdinArguments | str) -> StdinRecord:

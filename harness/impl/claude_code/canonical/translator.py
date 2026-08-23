@@ -15,12 +15,12 @@ from harness.impl.claude_code.canonical.hooks import translate_hook
 from harness.impl.claude_code.canonical.messages import (
     launch_selections,
     session_events,
-    task_event,
     transcript_metadata,
     translate_transcript,
 )
 from harness.impl.claude_code.canonical.otel import translate_otel
 from harness.impl.claude_code.canonical.support import content, event
+from harness.impl.claude_code.canonical.tasks import task_file_event
 from harness.impl.claude_code.canonical.toolcalls import ToolCallSemantics
 from harness.impl.claude_code.canonical.turns import TurnSemantics
 from harness.impl.claude_code.ids import (
@@ -115,7 +115,7 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
             return TranslationResult(tuple(events), RecordedTranslationDecision.TRANSLATED)
         if raw_event.source_type == "tasks":
             task = records.TaskFile.model_validate_json(raw_event.payload)
-            canonical = task_event(raw_event, task)
+            canonical = task_file_event(raw_event, task)
             return TranslationResult((canonical,), RecordedTranslationDecision.TRANSLATED)
         if raw_event.source_type == "task_list":
             task_list = records.TaskListDocument.model_validate_json(raw_event.payload)

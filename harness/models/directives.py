@@ -1,6 +1,6 @@
 """The engine's own synthetic raw events, as documents.
 
-Three raw-event payloads that nothing outside this tree ever produces: a chunk
+Four raw-event payloads that nothing outside this tree ever produces: a chunk
 of a followed output file, the observation that a CLI process is gone, and the
 mark left by an interrupt no native raw event corroborated. They are OURS on
 both ends — written by `engine/interpret/`, read by a translator — and each was
@@ -20,7 +20,7 @@ from typing import Literal
 
 from domain.ids import SessionId, ShellId
 from domain.stored import STORED
-from domain.values import ProgressStream
+from domain.values import ProgressStream, TitleOrigin
 
 
 @dataclass(frozen=True)
@@ -54,3 +54,13 @@ class InterruptMark:
     __pydantic_config__ = STORED
 
     session_id: SessionId
+
+
+@dataclass(frozen=True)
+class NativeTitleObservation:
+    """A title read from a harness store that has no native event stream."""
+
+    __pydantic_config__ = STORED
+
+    title: str
+    origin: TitleOrigin

@@ -8,8 +8,9 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 
 from api.sessiondata.models.entry import EntryPageResponse, EntryResponse
+from api.controls.models.control_outcome_response import ControlResultResponse
 from api.sessiondata.models.session_data import SessionDataResponse
-from sdk.client import SessionRef, SessionsResource, SessionWatch
+from sdk.client import SessionRef, SessionsResource, SessionWatch, UploadsResource
 from sdk.state import SessionSnapshot
 from sdk.transport import ApiFailure, HttpTransport
 from tests.e2e.testkit import selectors
@@ -53,6 +54,27 @@ def message_entry(cursor: int) -> EntryResponse:
             "role": "assistant",
             "phase": "end_turn",
             "content": {"text": str(cursor), "media_type": "text/plain"},
+            "recipient_actor_id": None,
+            "reply_to": None,
+        },
+    })
+
+
+def prompt_entry(cursor: int, text: str) -> EntryResponse:
+    return EntryResponse.model_validate({
+        "entry_id": f"prompt-{cursor}",
+        "type": "message",
+        "cursor": cursor,
+        "actor_id": "lead-one",
+        "parent_actor_id": None,
+        "turn_id": "turn-one",
+        "occurred_at": float(cursor),
+        "summary": None,
+        "body": {
+            "message_id": f"prompt-message-{cursor}",
+            "role": "user",
+            "phase": "prompt",
+            "content": {"text": text, "media_type": "text/plain"},
             "recipient_actor_id": None,
             "reply_to": None,
         },
@@ -113,6 +135,39 @@ class StalledTransport:
         return EntryPageResponse(items=(), oldest_cursor=0, has_more=True)
 
 
+class ControlTransport:
+    def __init__(self) -> None:
+        self.posts: list[tuple[str, object, set[int]]] = []
+
+    def get(self, path, _adapter):
+        if path == "/sessionData/session-one":
+            return session_data()
+        return EntryPageResponse(items=(), oldest_cursor=0, has_more=False)
+
+    def post(self, path, document, _adapter, accepted_statuses):
+        self.posts.append((path, document, accepted_statuses))
+        return 200, ControlResultResponse(
+            request_id=document["request_id"],
+            status="acknowledged",
+            reason=None,
+        )
+
+
+class UploadTransport:
+    def __init__(self) -> None:
+        self.posts: list[tuple[str, object, set[int]]] = []
+
+    def post(self, path, document, _adapter, accepted_statuses):
+        self.posts.append((path, document, accepted_statuses))
+        return 200, _adapter.validate_python({
+            "ok": True,
+            "path": "/tmp/upload-context.txt",
+            "name": "context.txt",
+            "mime": "text/plain",
+            "is_image": False,
+        })
+
+
 def test_a_session_snapshot_reads_all_pages_at_one_cursor():
     transport = PagedTransport()
     sessions = SessionsResource(cast(HttpTransport, transport))
@@ -144,6 +199,17 @@ def test_a_selector_rejects_two_matching_commands():
         )
 
 
+def test_a_launch_turn_uses_the_prompt_that_the_harness_delivered():
+    delivered = "/tmp/context.txt\nRead the attachment."
+    snapshot = SessionSnapshot(session_data(1), (prompt_entry(1, delivered),))
+
+    found = selectors.launched_turn(cast(SessionWatch, FixedWatch(snapshot)), timeout=1.0)
+
+    assert found.prompt == delivered
+    assert found.turn_id == "turn-one"
+    assert found.prompt_cursor == 1
+
+
 def test_named_references_reject_rebinding_and_unknown_names():
     references = References[int]("command")
     references.bind("build", 1)
@@ -152,3 +218,89 @@ def test_named_references_reject_rebinding_and_unknown_names():
         references.bind("build", 2)
     with pytest.raises(AssertionError, match=r"available names: \['build'\]"):
         references.get("missing")
+
+
+def test_session_controls_use_one_typed_dispatch_path():
+    transport = ControlTransport()
+    sessions = SessionsResource(cast(HttpTransport, transport))
+
+    receipt = sessions.select_effort(SessionRef("session-one"), "medium")
+
+    path, document, statuses = transport.posts[0]
+    assert path == "/api/sessions/session-one/controls/select-effort"
+    assert document["effort"] == "medium"
+    assert str(document["request_id"]).startswith("e2e-select-effort-")
+    assert statuses == {200, 202, 409}
+    assert receipt.cursor_before == 1001
+    assert receipt.outcome.status == "acknowledged"
+
+
+def test_upload_resource_encodes_bytes_and_returns_a_typed_attachment():
+    transport = UploadTransport()
+    uploads = UploadsResource(cast(HttpTransport, transport))
+
+    staged = uploads.stage(
+        name="context.txt",
+        media_type="text/plain",
+        data=b"sample",
+    )
+
+    path, document, statuses = transport.posts[0]
+    assert path == "/api/application/uploads"
+    assert document == {
+        "name": "context.txt",
+        "mime": "text/plain",
+        "data": "c2FtcGxl",
+        "session_id": None,
+    }
+    assert statuses == {200}
+    assert staged.path == "/tmp/upload-context.txt"
+
+
+def test_question_state_folds_asked_and_answered_entries():
+    asked = EntryResponse.model_validate({
+        "entry_id": "question-asked",
+        "type": "question_asked",
+        "cursor": 1,
+        "actor_id": "lead-one",
+        "parent_actor_id": None,
+        "turn_id": "turn-one",
+        "occurred_at": 1.0,
+        "summary": None,
+        "body": {
+            "attention_id": "attention-one",
+            "questions": [{
+                "question_id": "question-one",
+                "title": "Colour",
+                "question": "Which colour?",
+                "multiple": False,
+                "choices": [
+                    {"label": "Blue", "description": "Use blue"},
+                    {"label": "Green", "description": "Use green"},
+                ],
+            }],
+        },
+    })
+    answered = EntryResponse.model_validate({
+        "entry_id": "question-answered",
+        "type": "question_answered",
+        "cursor": 2,
+        "actor_id": "lead-one",
+        "parent_actor_id": None,
+        "turn_id": "turn-one",
+        "occurred_at": 2.0,
+        "summary": None,
+        "body": {
+            "attention_id": "attention-one",
+            "answers": [{"question_id": "question-one", "labels": ["Blue"]}],
+            "feedback": None,
+        },
+    })
+
+    questions = SessionSnapshot(session_data(2), (asked, answered)).questions()
+
+    assert len(questions) == 1
+    assert questions[0].pending is False
+    assert questions[0].questions[0].question == "Which colour?"
+    assert questions[0].answers is not None
+    assert questions[0].answers[0].labels == ("Blue",)

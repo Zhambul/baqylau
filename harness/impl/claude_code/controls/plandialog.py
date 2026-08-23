@@ -29,6 +29,7 @@ from dataclasses import dataclass
 
 from domain.ids import WindowId
 
+from harness.impl.claude_code.controls import numberedmenu
 from harness.impl.claude_code.controls import screen_driver as screendrive
 from harness.impl.claude_code.controls.screen_driver import ScreenDriver
 
@@ -114,6 +115,13 @@ def rows(screen: str) -> list[Row]:
     return out
 
 
+def _numbered_rows(screen_driver: ScreenDriver, win: WindowId) -> tuple[numberedmenu.Row, ...]:
+    return tuple(
+        numberedmenu.Row(row.digit, row.label, row.cursor)
+        for row in _open_rows(screen_driver, win)
+    )
+
+
 def _open_rows(screen_driver: ScreenDriver, win: WindowId) -> list[Row]:
     screen = screen_driver.get_text(win) or ""
     if not dialog_open(screen):
@@ -142,7 +150,17 @@ def decide(
         raise PlanError("option", "row %s is not %r any more" % (digit, label))
     if row.feedback:
         raise PlanError("option", "the feedback row takes text, not a click")
-    screen_driver.send_key(win, str(digit))
+    try:
+        numberedmenu.select(
+            screen_driver,
+            win,
+            lambda: _numbered_rows(screen_driver, win),
+            str(digit),
+            sleep=sleep,
+            key_gap=POLL_S,
+        )
+    except numberedmenu.SelectionError as error:
+        raise PlanError("option", str(error)) from error
     _, ok = screendrive.poll_until(
         screen_driver, win, lambda s: not dialog_open(s), SUBMIT_TIMEOUT_S, sleep)
     if not ok:

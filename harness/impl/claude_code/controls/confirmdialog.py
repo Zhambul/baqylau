@@ -18,13 +18,13 @@
 # effort header would silently miss the model variant (unmeasured wording) —
 # and the cursor-on-a-numbered-row + Yes-and-No pair never matches scrollback
 # prose or the bare composer prompt (a column-0 `❯` with no `N.` after it).
-import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
 from domain.ids import WindowId
 
+from harness.impl.claude_code.controls import numberedmenu
 from harness.impl.claude_code.controls import screen_driver as screendrive
 from harness.impl.claude_code.controls.screen_driver import ScreenDriver
 
@@ -34,10 +34,6 @@ OPEN_TIMEOUT_S = 4.0   # paste delivered → menu visible (slash-cmd latency);
 STEP_TIMEOUT_S = 2.0   # Yes digit pressed → menu gone
 TAIL_LINES = 20        # the live menu sits at the screen bottom; anything
 #                        higher is scrollback and must not match
-
-# option row: cursor mark? · digit. · label
-_OPT = re.compile(r"^\s*(?P<cur>❯\s*)?(?P<digit>\d+)\.\s+(?P<label>.+?)\s*$")
-
 
 class ConfirmError(screendrive.StepError):
     """The confirm menu appeared but would not close after Yes. .step names
@@ -53,23 +49,33 @@ class ConfirmOutcome:
     digit: str | None = None
 
 
+@dataclass(frozen=True)
+class Menu:
+    yes_digit: str
+
+
+def _menu(screen: str) -> Menu | None:
+    options = numberedmenu.rows("\n".join((screen or "").splitlines()[-TAIL_LINES:]))
+    yes = next(
+        (row.digit for row in options if row.label.casefold().startswith("yes")),
+        None,
+    )
+    no = next(
+        (row.digit for row in options if row.label.casefold().startswith("no")),
+        None,
+    )
+    cursor = next((row.digit for row in options if row.cursor), None)
+    if not yes or not no or not cursor:
+        return None
+    return Menu(yes)
+
+
 def find_menu(screen: str) -> str | None:
     """The Yes option's digit when the screen tail shows a switch-confirm
     menu, else None: numbered options with the ❯ cursor on one of them, one
     label leading with "Yes" and one with "No"."""
-    options: list[tuple[str, str]] = []
-    cursored = False
-    for ln in (screen or "").splitlines()[-TAIL_LINES:]:
-        m = _OPT.match(ln)
-        if not m:
-            continue
-        options.append((m.group("label").lower(), m.group("digit")))
-        cursored = cursored or bool(m.group("cur"))
-    if not cursored:
-        return None
-    yes = next((digit for label, digit in options if label.startswith("yes")), None)
-    no = next((digit for label, digit in options if label.startswith("no")), None)
-    return yes if (yes and no) else None
+    found = _menu(screen)
+    return found.yes_digit if found is not None else None
 
 
 def confirm(screen_driver: ScreenDriver, win: WindowId,
@@ -83,15 +89,27 @@ def confirm(screen_driver: ScreenDriver, win: WindowId,
         screen_driver, win, find_menu, OPEN_TIMEOUT_S, sleep)
     if not ok:
         return ConfirmOutcome(False)
-    digit = find_menu(screen)
-    if digit is None:
+    menu = _menu(screen)
+    if menu is None:
         # The menu closed between the poll that saw it and this re-read —
         # the switch applied on its own. Pressing a key here would land in
         # the composer.
         return ConfirmOutcome(False)
-    screen_driver.send_key(win, digit)
-    _, ok = screendrive.poll_until(
+    try:
+        numberedmenu.select(
+            screen_driver,
+            win,
+            lambda: numberedmenu.rows("\n".join(
+                (screen_driver.get_text(win) or "").splitlines()[-TAIL_LINES:]
+            )),
+            menu.yes_digit,
+            sleep=sleep,
+            key_gap=screendrive.POLL_SECONDS,
+        )
+    except numberedmenu.SelectionError as error:
+        raise ConfirmError("select", str(error), screen) from error
+    closed_screen, ok = screendrive.poll_until(
         screen_driver, win, lambda s: not find_menu(s), STEP_TIMEOUT_S, sleep)
     if not ok:
-        raise ConfirmError("close", "confirm menu still open after Yes")
-    return ConfirmOutcome(True, digit)
+        raise ConfirmError("close", "confirm menu still open after Yes", closed_screen)
+    return ConfirmOutcome(True, menu.yes_digit)

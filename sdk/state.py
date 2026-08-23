@@ -7,12 +7,23 @@ from dataclasses import dataclass, field
 from api.sessiondata.models.entry import (
     AssignmentFinishedBodyResponse,
     AssignmentStartedBodyResponse,
+    CompactionFinishedBodyResponse,
+    CompactionStartedBodyResponse,
     EntryResponse,
     MessageBodyResponse,
+    PlanProposedBodyResponse,
+    PlanResolvedBodyResponse,
+    QuestionAnsweredBodyResponse,
+    QuestionAskedBodyResponse,
+    QuestionAnswerResponse,
+    QuestionResponse,
     ShellBackgroundedBodyResponse,
     ShellFinishedBodyResponse,
     ShellOutputBodyResponse,
     ShellStartedBodyResponse,
+    SkillFinishedBodyResponse,
+    SkillStartedBodyResponse,
+    TurnFinishedBodyResponse,
 )
 from api.sessiondata.models.session_data import ActorResponse, SessionDataResponse
 
@@ -42,6 +53,63 @@ class AssignmentState:
     started_cursor: int
     state: str | None = None
     result: str = ""
+
+
+@dataclass
+class SkillState:
+    skill_id: str
+    actor_id: str
+    turn_id: str | None
+    name: str
+    arguments: str
+    started_cursor: int
+    state: str | None = None
+    result: str = ""
+
+
+@dataclass
+class QuestionState:
+    attention_id: str
+    actor_id: str
+    turn_id: str | None
+    questions: tuple[QuestionResponse, ...]
+    asked_cursor: int
+    answers: tuple[QuestionAnswerResponse, ...] | None = None
+    feedback: str | None = None
+
+    @property
+    def pending(self) -> bool:
+        return self.answers is None
+
+
+@dataclass
+class PlanState:
+    attention_id: str
+    actor_id: str
+    turn_id: str | None
+    text: str
+    proposed_cursor: int
+    state: str | None = None
+    feedback: str | None = None
+    edited: bool = False
+
+    @property
+    def pending(self) -> bool:
+        return self.state is None
+
+
+@dataclass
+class CompactionState:
+    actor_id: str
+    turn_id: str | None
+    started_cursor: int
+    before_tokens: int | None
+    after_tokens: int | None = None
+    finished_cursor: int | None = None
+
+    @property
+    def finished(self) -> bool:
+        return self.finished_cursor is not None
 
 
 @dataclass(frozen=True)
@@ -87,6 +155,28 @@ class SessionSnapshot:
 
     def assignments(self) -> tuple[AssignmentState, ...]:
         return _assignments(self.entries)
+
+    def skills(self) -> tuple[SkillState, ...]:
+        return _skills(self.entries)
+
+    def questions(self) -> tuple[QuestionState, ...]:
+        return _questions(self.entries)
+
+    def plans(self) -> tuple[PlanState, ...]:
+        return _plans(self.entries)
+
+    def compactions(self) -> tuple[CompactionState, ...]:
+        return _compactions(self.entries)
+
+    def turn_state(self, turn_id: str) -> str | None:
+        states = [
+            entry.body.state
+            for entry in self.entries
+            if entry.turn_id == turn_id and isinstance(entry.body, TurnFinishedBodyResponse)
+        ]
+        if len(states) > 1:
+            raise LookupError(f"turn {turn_id!r} has {len(states)} finished states")
+        return states[0] if states else None
 
 
 SHELL_BODIES = (
@@ -163,3 +253,93 @@ def _assignments(entries: tuple[EntryResponse, ...]) -> tuple[AssignmentState, .
             found.state = body.state
             found.result = body.result.text if body.result is not None else ""
     return tuple(folded.values())
+
+
+def _skills(entries: tuple[EntryResponse, ...]) -> tuple[SkillState, ...]:
+    folded: dict[str, SkillState] = {}
+    for entry in entries:
+        body = entry.body
+        if isinstance(body, SkillStartedBodyResponse):
+            folded[body.skill_id] = SkillState(
+                skill_id=body.skill_id,
+                actor_id=entry.actor_id,
+                turn_id=entry.turn_id,
+                name=body.name,
+                arguments=body.arguments.text if body.arguments is not None else "",
+                started_cursor=entry.cursor,
+            )
+        elif isinstance(body, SkillFinishedBodyResponse):
+            found = folded.get(body.skill_id)
+            if found is None:
+                continue
+            found.state = body.state
+            found.result = body.result.text if body.result is not None else ""
+    return tuple(folded.values())
+
+
+def _questions(entries: tuple[EntryResponse, ...]) -> tuple[QuestionState, ...]:
+    folded: dict[str, QuestionState] = {}
+    for entry in entries:
+        body = entry.body
+        if isinstance(body, QuestionAskedBodyResponse):
+            folded[body.attention_id] = QuestionState(
+                attention_id=body.attention_id,
+                actor_id=entry.actor_id,
+                turn_id=entry.turn_id,
+                questions=body.questions,
+                asked_cursor=entry.cursor,
+            )
+        elif isinstance(body, QuestionAnsweredBodyResponse):
+            found = folded.get(body.attention_id)
+            if found is None:
+                continue
+            found.answers = body.answers
+            found.feedback = body.feedback
+    return tuple(folded.values())
+
+
+def _plans(entries: tuple[EntryResponse, ...]) -> tuple[PlanState, ...]:
+    folded: dict[str, PlanState] = {}
+    for entry in entries:
+        body = entry.body
+        if isinstance(body, PlanProposedBodyResponse):
+            folded[body.attention_id] = PlanState(
+                attention_id=body.attention_id,
+                actor_id=entry.actor_id,
+                turn_id=entry.turn_id,
+                text=body.plan.text,
+                proposed_cursor=entry.cursor,
+            )
+        elif isinstance(body, PlanResolvedBodyResponse):
+            found = folded.get(body.attention_id)
+            if found is None:
+                continue
+            found.state = body.state
+            found.feedback = body.feedback
+            found.edited = body.edited
+    return tuple(folded.values())
+
+
+def _compactions(entries: tuple[EntryResponse, ...]) -> tuple[CompactionState, ...]:
+    found: list[CompactionState] = []
+    open_by_actor: dict[str, CompactionState] = {}
+    for entry in entries:
+        body = entry.body
+        if isinstance(body, CompactionStartedBodyResponse):
+            started = CompactionState(
+                actor_id=entry.actor_id,
+                turn_id=entry.turn_id,
+                started_cursor=entry.cursor,
+                before_tokens=body.before_tokens,
+            )
+            found.append(started)
+            open_by_actor[entry.actor_id] = started
+        elif isinstance(body, CompactionFinishedBodyResponse):
+            open_state = open_by_actor.get(entry.actor_id)
+            if open_state is None:
+                continue
+            del open_by_actor[entry.actor_id]
+            open_state.before_tokens = body.before_tokens
+            open_state.after_tokens = body.after_tokens
+            open_state.finished_cursor = entry.cursor
+    return tuple(found)

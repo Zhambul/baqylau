@@ -16,20 +16,39 @@ from tests.e2e.testkit.process import ApplicationProcess
 from tests.e2e.testkit.references import (
     Actors,
     Assignments,
+    Compactions,
     Controls,
     FileOperations,
+    HarnessCatalogs,
+    HarnessLists,
+    InsightsSnapshots,
+    Plans,
+    Questions,
     References,
+    ResumableLists,
     SessionSpecs,
     Sessions,
     Shells,
+    StagedAttachments,
+    Skills,
+    Tasks,
     Turns,
 )
 
 pytest_plugins = (
+    "tests.e2e.steps.catalog",
+    "tests.e2e.steps.attachments",
+    "tests.e2e.steps.compactions",
+    "tests.e2e.steps.controls",
     "tests.e2e.steps.files",
+    "tests.e2e.steps.insights",
+    "tests.e2e.steps.planning",
+    "tests.e2e.steps.preferences",
+    "tests.e2e.steps.questions",
     "tests.e2e.steps.scoreboard",
     "tests.e2e.steps.sessions",
     "tests.e2e.steps.shells",
+    "tests.e2e.steps.skills",
     "tests.e2e.steps.subagents",
     "tests.e2e.steps.usage",
 )
@@ -173,8 +192,58 @@ def file_operations() -> FileOperations:
 
 
 @pytest.fixture
+def staged_attachments() -> StagedAttachments:
+    return References("staged attachment")
+
+
+@pytest.fixture
 def controls() -> Controls:
     return References("control")
+
+
+@pytest.fixture
+def skills() -> Skills:
+    return References("skill")
+
+
+@pytest.fixture
+def questions() -> Questions:
+    return References("question")
+
+
+@pytest.fixture
+def plans() -> Plans:
+    return References("plan")
+
+
+@pytest.fixture
+def tasks() -> Tasks:
+    return References("task")
+
+
+@pytest.fixture
+def compactions() -> Compactions:
+    return References("compaction")
+
+
+@pytest.fixture
+def harness_lists() -> HarnessLists:
+    return References("harness list")
+
+
+@pytest.fixture
+def harness_catalogs() -> HarnessCatalogs:
+    return References("harness catalog")
+
+
+@pytest.fixture
+def insights_snapshots() -> InsightsSnapshots:
+    return References("insights snapshot")
+
+
+@pytest.fixture
+def resumable_lists() -> ResumableLists:
+    return References("resumable list")
 
 
 @pytest.fixture

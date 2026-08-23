@@ -223,6 +223,19 @@ class RenameSessionHandler(ControlHandler):
             return ControlResult(request.request_id, ControlAcknowledgement.ACKNOWLEDGED)
         result = _submit(request, control_context, f"/rename {request.name}")
         if result.status == ControlAcknowledgement.ACKNOWLEDGED:
+            durable = title.titles.set_title(session.source_reference, request.name)
+            if durable == "unavailable":
+                return ControlResult(
+                    request.request_id,
+                    ControlAcknowledgement.INDETERMINATE,
+                    "native title store is unavailable",
+                )
+            if durable == "unsupported":
+                return ControlResult(
+                    request.request_id,
+                    ControlAcknowledgement.REJECTED,
+                    "session source is not renameable",
+                )
             window_id = control_context.terminal_window_id
             if window_id is not None:
                 terminal.tabs.rename_tab(TabRenameRequest(NativeWindowId(str(window_id)), request.name))

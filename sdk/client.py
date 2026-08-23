@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import time
 import uuid
 from collections.abc import Callable
@@ -11,10 +12,28 @@ from urllib.parse import quote, urlencode
 
 from pydantic import TypeAdapter
 
+from api.application.models.harnesses.harness_catalog_response import (
+    HarnessCatalogResponse,
+)
+from api.application.models.harnesses.harness_description_response import (
+    HarnessDescriptionResponse,
+)
+from api.application.models.insights.application_insights_response import (
+    ApplicationInsightsResponse,
+)
+from api.application.models.files.upload_response import UploadResponse
 from api.application.models.preferences.global_application_response import (
     GlobalApplicationResponse,
 )
+from api.application.models.preferences.session_application_response import (
+    SessionApplicationResponse,
+)
+from api.application.models.resume.resumable_session_response import (
+    ResumableSessionResponse,
+)
 from api.common.models.replies.health_response import HealthResponse
+from api.common.models.replies.saved_response import SavedResponse
+from api.controls.models.attachment_reference import AttachmentReferenceBody
 from api.controls.models.control_outcome_response import ControlOutcomeResponse
 from api.controls.models.launch_response import LaunchResponse
 from api.diagnostics.models import DiagnosticsCheckpointResponse, DiagnosticsReportResponse
@@ -35,6 +54,13 @@ SESSION_LIST = TypeAdapter(SessionDataListResponse)
 SESSION_DATA = TypeAdapter(SessionDataResponse)
 ENTRY_PAGE = TypeAdapter(EntryPageResponse)
 APPLICATION = TypeAdapter(GlobalApplicationResponse)
+SESSION_APPLICATION = TypeAdapter(SessionApplicationResponse)
+HARNESS_LIST = TypeAdapter(tuple[HarnessDescriptionResponse, ...])
+HARNESS_CATALOG = TypeAdapter(HarnessCatalogResponse)
+INSIGHTS = TypeAdapter(ApplicationInsightsResponse)
+RESUMABLE_SESSIONS = TypeAdapter(tuple[ResumableSessionResponse, ...])
+UPLOAD = TypeAdapter(UploadResponse)
+SAVED = TypeAdapter(SavedResponse)
 DIAGNOSTICS_CHECKPOINT = TypeAdapter(DiagnosticsCheckpointResponse)
 DIAGNOSTICS_REPORT = TypeAdapter(DiagnosticsReportResponse)
 
@@ -153,6 +179,8 @@ class SessionsResource:
         prompt: str | None,
         model: str | None,
         effort: str | None,
+        resume_session_id: str | None = None,
+        attachments: tuple[AttachmentReferenceBody, ...] = (),
     ) -> LaunchRef:
         known = frozenset(item.session.session_id for item in self.list().sessions)
         status, answer = self.transport.post(
@@ -163,6 +191,8 @@ class SessionsResource:
                 "initial_text": prompt,
                 "model_id": model,
                 "effort": effort,
+                "resume_session_id": resume_session_id,
+                "attachments": [item.model_dump() for item in attachments],
             },
             LAUNCH,
             {202, 409},
@@ -241,41 +271,303 @@ class SessionsResource:
             timeout=timeout,
         )
 
-    def send(self, session: SessionRef, text: str) -> ActionReceipt:
+    def _control(
+        self,
+        session: SessionRef,
+        control_name: str,
+        document: dict[str, object] | None = None,
+    ) -> ActionReceipt:
         cursor = self.snapshot(session).cursor
-        request_id = f"e2e-send-{uuid.uuid4()}"
-        path = f"/api/sessions/{quote(session.session_id, safe='')}/controls/send-text"
+        request_id = f"e2e-{control_name}-{uuid.uuid4()}"
+        path = (
+            f"/api/sessions/{quote(session.session_id, safe='')}/controls/{control_name}"
+        )
+        body: dict[str, object] = {"request_id": request_id}
+        body.update(document or {})
         status, outcome = self.transport.post(
             path,
-            {"request_id": request_id, "text": text},
+            body,
             CONTROL,
             {200, 202, 409},
         )
         return ActionReceipt(request_id, status, outcome, cursor)
+
+    def send(
+        self,
+        session: SessionRef,
+        text: str,
+        *,
+        attachments: tuple[AttachmentReferenceBody, ...] = (),
+        replace_terminal_draft: bool = False,
+    ) -> ActionReceipt:
+        return self._control(session, "send-text", {
+            "text": text,
+            "attachments": [item.model_dump() for item in attachments],
+            "replace_terminal_draft": replace_terminal_draft,
+        })
+
+    def interrupt(self, session: SessionRef) -> ActionReceipt:
+        return self._control(session, "interrupt")
 
     def background(self, session: SessionRef) -> ActionReceipt:
-        cursor = self.snapshot(session).cursor
-        request_id = f"e2e-background-{uuid.uuid4()}"
-        path = f"/api/sessions/{quote(session.session_id, safe='')}/controls/background"
-        status, outcome = self.transport.post(
-            path,
-            {"request_id": request_id},
-            CONTROL,
-            {200, 202, 409},
-        )
-        return ActionReceipt(request_id, status, outcome, cursor)
+        return self._control(session, "background")
 
     def close(self, session: SessionRef) -> ActionReceipt:
-        cursor = self.snapshot(session).cursor
-        request_id = f"e2e-close-{uuid.uuid4()}"
-        path = f"/api/sessions/{quote(session.session_id, safe='')}/controls/close-session"
-        status, outcome = self.transport.post(
-            path,
-            {"request_id": request_id},
-            CONTROL,
-            {200, 202, 409},
+        return self._control(session, "close-session")
+
+    def rename(self, session: SessionRef, name: str) -> ActionReceipt:
+        return self._control(session, "rename-session", {"name": name})
+
+    def auto_name(self, session: SessionRef) -> ActionReceipt:
+        return self._control(session, "auto-name-session")
+
+    def open_rewind(self, session: SessionRef) -> ActionReceipt:
+        return self._control(session, "open-rewind")
+
+    def apply_rewind(
+        self,
+        session: SessionRef,
+        *,
+        target_message_id: str,
+        target_text: str,
+        newer_prompt_count: int,
+        mode: str,
+    ) -> ActionReceipt:
+        return self._control(session, "apply-rewind", {
+            "target_message_id": target_message_id,
+            "target_text": target_text,
+            "newer_prompt_count": newer_prompt_count,
+            "mode": mode,
+        })
+
+    def compact(self, session: SessionRef) -> ActionReceipt:
+        return self._control(session, "compact")
+
+    def select_model(self, session: SessionRef, model: str) -> ActionReceipt:
+        return self._control(session, "select-model", {"model_id": model})
+
+    def select_effort(self, session: SessionRef, effort: str) -> ActionReceipt:
+        return self._control(session, "select-effort", {"effort": effort})
+
+    def answer_question(
+        self,
+        session: SessionRef,
+        *,
+        attention_id: str,
+        answers: tuple[dict[str, object], ...],
+    ) -> ActionReceipt:
+        return self._control(session, "answer-question", {
+            "attention_id": attention_id,
+            "decision": "answer",
+            "answers": answers,
+        })
+
+    def discuss_question(
+        self,
+        session: SessionRef,
+        *,
+        attention_id: str,
+        discussion: str,
+    ) -> ActionReceipt:
+        return self._control(session, "answer-question", {
+            "attention_id": attention_id,
+            "decision": "discuss",
+            "discussion": discussion,
+        })
+
+    def read_plan_choices(self, session: SessionRef, attention_id: str) -> ActionReceipt:
+        return self._control(
+            session,
+            "read-plan-choices",
+            {"attention_id": attention_id},
         )
-        return ActionReceipt(request_id, status, outcome, cursor)
+
+    def decide_plan(
+        self,
+        session: SessionRef,
+        *,
+        attention_id: str,
+        decision: str,
+        feedback: str | None = None,
+    ) -> ActionReceipt:
+        return self._control(session, "decide-plan", {
+            "attention_id": attention_id,
+            "decision": decision,
+            "feedback": feedback,
+        })
+
+
+class HarnessesResource:
+    def __init__(self, transport: HttpTransport) -> None:
+        self.transport = transport
+
+    def list(self) -> tuple[HarnessDescriptionResponse, ...]:
+        return self.transport.get("/api/harnesses", HARNESS_LIST)
+
+    def catalog(
+        self,
+        harness: str,
+        *,
+        session: SessionRef | None = None,
+        workspace: str | None = None,
+    ) -> HarnessCatalogResponse:
+        query = urlencode({
+            key: value
+            for key, value in {
+                "session_id": session.session_id if session is not None else None,
+                "working_directory": workspace,
+            }.items()
+            if value is not None
+        })
+        suffix = f"?{query}" if query else ""
+        return self.transport.get(
+            f"/api/harnesses/{quote(harness, safe='')}/catalog{suffix}",
+            HARNESS_CATALOG,
+        )
+
+
+class InsightsResource:
+    def __init__(self, transport: HttpTransport) -> None:
+        self.transport = transport
+
+    def state(self) -> ApplicationInsightsResponse:
+        return self.transport.get("/api/insights", INSIGHTS)
+
+    def resumable_sessions(
+        self,
+        *,
+        workspace: str,
+        search: str | None = None,
+    ) -> tuple[ResumableSessionResponse, ...]:
+        query = urlencode({
+            key: value
+            for key, value in {"working_directory": workspace, "search": search}.items()
+            if value is not None
+        })
+        return self.transport.get(f"/api/resumable-sessions?{query}", RESUMABLE_SESSIONS)
+
+
+class UploadsResource:
+    def __init__(self, transport: HttpTransport) -> None:
+        self.transport = transport
+
+    def stage(
+        self,
+        *,
+        name: str,
+        media_type: str,
+        data: bytes,
+        session: SessionRef | None = None,
+    ) -> UploadResponse:
+        _status, response = self.transport.post(
+            "/api/application/uploads",
+            {
+                "name": name,
+                "mime": media_type,
+                "data": base64.b64encode(data).decode("ascii"),
+                "session_id": session.session_id if session is not None else None,
+            },
+            UPLOAD,
+            {200},
+        )
+        return response
+
+
+class PreferencesResource:
+    def __init__(self, transport: HttpTransport, application: ApplicationResource) -> None:
+        self.transport = transport
+        self.application = application
+
+    def global_state(self) -> GlobalApplicationResponse:
+        return self.application.state()
+
+    def session_state(self, session: SessionRef) -> SessionApplicationResponse:
+        session_id = quote(session.session_id, safe="")
+        return self.transport.get(
+            f"/api/sessions/{session_id}/application",
+            SESSION_APPLICATION,
+        )
+
+    def _save(self, path: str, document: dict[str, object]) -> SavedResponse:
+        _status, response = self.transport.post(path, document, SAVED, {200})
+        return response
+
+    def save_new_session_choices(
+        self,
+        *,
+        workspace: str,
+        harness: str,
+        model: str,
+        effort: str,
+    ) -> SavedResponse:
+        return self._save("/api/application/new-session-preferences", {
+            "working_directory": workspace,
+            "harness": harness,
+            "model": model,
+            "effort": effort,
+        })
+
+    def save_new_session_draft(
+        self,
+        *,
+        workspace: str,
+        text: str,
+        sequence: float,
+    ) -> SavedResponse:
+        return self._save("/api/application/new-session-drafts", {
+            "working_directory": workspace,
+            "text": text,
+            "sequence": sequence,
+        })
+
+    def save_composer_draft(
+        self,
+        session: SessionRef,
+        *,
+        text: str,
+        origin: str,
+        sequence: float,
+    ) -> SavedResponse:
+        session_id = quote(session.session_id, safe="")
+        return self._save(f"/api/sessions/{session_id}/application/composer-draft", {
+            "text": text,
+            "origin": origin,
+            "sequence": sequence,
+        })
+
+    def save_composer_queue(
+        self,
+        session: SessionRef,
+        *,
+        messages: tuple[str, ...],
+        origin: str,
+    ) -> SavedResponse:
+        session_id = quote(session.session_id, safe="")
+        return self._save(f"/api/sessions/{session_id}/application/composer-queue", {
+            "items": [{"text": message} for message in messages],
+            "origin": origin,
+        })
+
+    def set_view_mode(self, session: SessionRef, view_mode: str) -> SavedResponse:
+        session_id = quote(session.session_id, safe="")
+        return self._save(
+            f"/api/sessions/{session_id}/application/view-mode",
+            {"view_mode": view_mode},
+        )
+
+    def set_notifications_muted(self, session: SessionRef, muted: bool) -> SavedResponse:
+        session_id = quote(session.session_id, safe="")
+        return self._save(
+            f"/api/sessions/{session_id}/application/notifications-muted",
+            {"muted": muted},
+        )
+
+    def set_tasks_hidden(self, session: SessionRef, hidden: bool) -> SavedResponse:
+        session_id = quote(session.session_id, safe="")
+        return self._save(
+            f"/api/sessions/{session_id}/application/tasks-hidden",
+            {"hidden": hidden},
+        )
 
 
 class UsageResource:
@@ -330,6 +622,10 @@ class BaqylauClient:
         self.transport = HttpTransport(base_url)
         self.application = ApplicationResource(self.transport)
         self.sessions = SessionsResource(self.transport)
+        self.harnesses = HarnessesResource(self.transport)
+        self.insights = InsightsResource(self.transport)
+        self.uploads = UploadsResource(self.transport)
+        self.preferences = PreferencesResource(self.transport, self.application)
         self.usage = UsageResource(self.application)
         self.diagnostics = DiagnosticsResource(self.transport)
 

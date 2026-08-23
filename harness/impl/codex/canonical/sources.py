@@ -19,13 +19,22 @@ from harness.impl.codex.ids import (
 from domain.values import ActorRole
 from harness.contract import HarnessRawEventSource, HarnessRawEventSources
 from harness.impl.codex.canonical import rollout
+from harness.impl.codex.canonical import title as native_title
 from harness.impl.codex.canonical.records import (
     RolloutDocument,
     RolloutHeader,
     SessionMetaPayload,
     SessionMetaSource,
 )
-from harness.models import RawEvent, RawEventSourceContext, Session
+from harness.models import (
+    TITLE_SOURCE_TYPE,
+    RawEvent,
+    RawEventSourceContext,
+    Session,
+)
+from harness.models.directives import NativeTitleObservation
+from repository.mapper.documents import encode_document
+from domain.values import TitleOrigin
 
 HARNESS = HarnessName.CODEX
 ROLLOUT_NAME = re.compile(r"rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-(.+)\.jsonl$")
@@ -153,6 +162,45 @@ class CodexRolloutRawEventSource(HarnessRawEventSource):
         return f"{self.actor_role}_rollout" if self.actor_role else "rollout"
 
 
+class CodexTitleRawEventSource(HarnessRawEventSource):
+    """Observe the native Codex index, which has no title event stream."""
+
+    def __init__(self, raw_event_source_context: RawEventSourceContext) -> None:
+        self.context = raw_event_source_context
+        source_hash = hashlib.sha256(
+            os.path.realpath(raw_event_source_context.source_reference).encode("utf-8")
+        ).hexdigest()
+        self.source_identity = f"codex:title:{source_hash}"
+
+    def read(self, after_position: str | None) -> tuple[RawEvent, ...]:
+        observed_title = native_title.titles.read_title(self.context.source_reference)
+        if observed_title is None:
+            return ()
+        position = hashlib.sha256(observed_title.encode("utf-8")).hexdigest()
+        if position == after_position:
+            return ()
+        origin = (
+            TitleOrigin.AUTOMATIC
+            if after_position is None
+            else TitleOrigin.CUSTOM
+        )
+        observation = NativeTitleObservation(observed_title, origin)
+        return (RawEvent(
+            raw_event_id=RawEventId(f"{self.source_identity}:{position}"),
+            harness=HARNESS,
+            source_type=TITLE_SOURCE_TYPE,
+            source_name=self.context.source_reference,
+            source_position=position,
+            session_id=self.context.session_id,
+            actor_id=self.context.actor_id,
+            parent_actor_id=self.context.parent_actor_id,
+            observed_at=time.time(),
+            encoding="json",
+            payload=encode_document(observation),
+            source_identity=self.source_identity,
+        ),)
+
+
 @dataclass
 class ChildRollouts:
     parent_session_id: CodexSessionId
@@ -197,6 +245,7 @@ class CodexRawEventSources(HarnessRawEventSources):
         owns_lead_session = lead_rollout(session.source_reference)
         if owns_lead_session:
             sources.append(CodexRolloutRawEventSource(session.source_context))
+            sources.append(CodexTitleRawEventSource(session.source_context))
         for child_path in self._next_child_rollout(
             codex_session_id_from_domain(session.session_id)
         ):

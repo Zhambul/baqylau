@@ -10,6 +10,7 @@ arguments are remembered until the result arrives.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
@@ -28,6 +29,7 @@ from domain.events import (
     SearchPerformed,
     ShellBackgrounded,
     ShellFinished,
+    ShellOutputFinished,
     ShellProgressed,
     ShellStarted,
     SkillFinished,
@@ -65,6 +67,7 @@ from domain.values import (
     PlanState,
     ProgressStream,
     WorktreeAction,
+    content_text as value_content_text,
 )
 from harness.impl.claude_code.canonical import records
 from harness.impl.claude_code.canonical.support import content, event
@@ -74,6 +77,7 @@ from harness.models import RawEvent, UnknownRawEvent
 # in the background. Its shell.finished still converges from the hook's raw event;
 # only this text is suppressed.
 BACKGROUND_LAUNCH_STUB = "Command running in background with ID:"
+SHELL_EXIT_CODE = re.compile(r"(?:^|\n)(?:Error: )?Exit code (\d+)(?:\n|$)")
 
 class ToolKind(StrEnum):
     SHELL = "shell"
@@ -446,6 +450,7 @@ class ToolCallSemantics:
         failed: bool,
         *,
         result: Content | None = None,
+        cancelled: bool = False,
     ) -> list[CanonicalEvent[EventPayload]]:
         """Everything one tool call's RESULT says.
 
@@ -469,10 +474,24 @@ class ToolCallSemantics:
             if isinstance(call.tool_response, records.ToolResponse)
             else records.ToolResponse()
         )
-        outcome: Outcome = Outcome.FAILED if failed else Outcome.SUCCEEDED
+        outcome: Outcome = (
+            Outcome.CANCELLED
+            if cancelled
+            else Outcome.FAILED
+            if failed
+            else Outcome.SUCCEEDED
+        )
         answered = result if result is not None else result_content(call.tool_response)
         if kind == ToolKind.SHELL:
-            return self._shell_finished(raw_event, call_id, native_name, arguments, tool_response, outcome)
+            return self._shell_finished(
+                raw_event,
+                call_id,
+                native_name,
+                arguments,
+                tool_response,
+                answered,
+                outcome,
+            )
         if kind == ToolKind.SKILL:
             skill_id = skill_id_from_claude_code_call(call_id)
             payload: EventPayload = SkillFinished(skill_id, outcome, answered)
@@ -516,6 +535,8 @@ class ToolCallSemantics:
         result_text: str,
         failed: bool,
         tool_response: records.ToolResponse | records.ToolResponseBlocks | str | None,
+        *,
+        cancelled: bool = False,
     ) -> list[CanonicalEvent[EventPayload]]:
         """One tool_result block from the transcript, as facts.
 
@@ -548,6 +569,7 @@ class ToolCallSemantics:
                 records.ToolCallNative(tool_use_id=call_id, tool_response=tool_response),
                 failed,
                 result=content(result_text),
+                cancelled=cancelled,
             )
         )
         return events
@@ -566,6 +588,7 @@ class ToolCallSemantics:
         native_name: str,
         arguments: records.ToolArguments,
         tool_response: records.ToolResponse,
+        result: Content | None,
         outcome: Outcome,
     ) -> list[CanonicalEvent[EventPayload]]:
         shell_id = shell_id_from_claude_code_call(call_id)
@@ -601,18 +624,30 @@ class ToolCallSemantics:
         # translation can see it. The `shell.finished` below is the ARM
         # returning, not the watch ending — the watch runs on, and its own end
         # arrives as a notification (see monitor_armed).
+        monitor_task_id = ClaudeCodeShellId("")
         if native_name == "Monitor":
-            task_id = ClaudeCodeShellId(str(response.taskId or ""))
-            if task_id:
-                self.monitor_armed(task_id, shell_id)
+            monitor_task_id = ClaudeCodeShellId(str(response.taskId or ""))
+            if monitor_task_id:
+                self.monitor_armed(monitor_task_id, shell_id)
+        exit_match = SHELL_EXIT_CODE.search(value_content_text(result))
+        exit_code = int(exit_match.group(1)) if exit_match is not None else None
         events.append(event(
             raw_event,
             "shell",
             str(shell_id),
             "finished",
-            # Claude Code reports no exit status anywhere in a tool result.
-            ShellFinished(shell_id, outcome, None, None),
+            ShellFinished(shell_id, outcome, None, exit_code),
         ))
+        if native_name == "Monitor" and not monitor_task_id:
+            # A rejected monitor has no native task and cannot send a later
+            # end notification. Its tool result is its complete lifetime.
+            events.append(event(
+                raw_event,
+                "shell",
+                str(shell_id),
+                "output_finished",
+                ShellOutputFinished(shell_id, outcome),
+            ))
         return events
 
     def _assignment_finished(
@@ -676,10 +711,23 @@ class ToolCallSemantics:
         path = file_arguments.file_path or file_arguments.notebook_path or ""
         if not path:
             return []
+        read_content = tool_response.file.content if tool_response.file is not None else None
         content_value = (
-            tool_response.content if tool_response.content is not None else file_arguments.content
+            file_arguments.content
+            if action == FileAction.CREATED
+            else read_content
+            if read_content is not None
+            else tool_response.content
+            if tool_response.content is not None
+            else file_arguments.content
         )
         unified_diff, lines_added, lines_removed = structured_patch(path, tool_response)
+        if (
+            action == FileAction.CREATED
+            and lines_added is None
+            and file_arguments.content is not None
+        ):
+            lines_added = len(file_arguments.content.splitlines())
         payload = FileAccessed(
             path,
             action,

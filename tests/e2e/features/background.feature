@@ -12,13 +12,17 @@ Feature: background work reaches the session feed
     Then job "delayed echo" is running
     And job "delayed echo" has output containing 'done'
     And job "delayed echo" ends
+    And command "delayed echo" has state succeeded
+    And session "primary" has no running work
+    And turn "start delayed echo" has final answer 'started'
 
   Scenario: a command backgrounded mid-run keeps reporting
     Given session configuration "primary" uses claude_code with model haiku and low effort
     When I launch session "primary" as turn "run delayed echo" with prompt
       """
       Run `echo started; sleep 30; echo done` in the foreground and wait for it.
-      Do not use run_in_background.
+      Do not use run_in_background. If the command is moved to the background,
+      do not start a monitor or any other tool. Reply only with the word started.
       """
     And I name the only running foreground command in turn "run delayed echo" containing 'sleep' "delayed echo"
     And I request backgrounding in session "primary" as control "background delayed echo"
@@ -27,3 +31,6 @@ Feature: background work reaches the session feed
     And command "delayed echo" becomes a background job
     And job "delayed echo" is running
     And job "delayed echo" has output containing 'done'
+    And job "delayed echo" ends
+    And command "delayed echo" has state succeeded
+    And session "primary" has no running work

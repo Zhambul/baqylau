@@ -5,14 +5,22 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from typing import TypeVar
 
-from api.sessiondata.models.entry import FileBodyResponse, MessageBodyResponse
+from api.sessiondata.models.entry import (
+    FileBodyResponse,
+    MessageBodyResponse,
+)
 from sdk.client import SessionWatch
 from sdk.state import AssignmentState, SessionSnapshot, ShellState
 from tests.e2e.testkit.references import (
     ActorRef,
     AssignmentRef,
+    CompactionRef,
     FileOperationRef,
+    PlanRef,
+    QuestionRef,
     ShellRef,
+    SkillRef,
+    TaskRef,
     TurnRef,
 )
 
@@ -40,6 +48,16 @@ def cursor_is_in_turn(snapshot: SessionSnapshot, reference: TurnRef, cursor: int
     return boundary is None or cursor < boundary
 
 
+def belongs_to_turn(
+    snapshot: SessionSnapshot,
+    reference: TurnRef,
+    *,
+    turn_id: str | None,
+    cursor: int,
+) -> bool:
+    return turn_id == reference.turn_id or cursor_is_in_turn(snapshot, reference, cursor)
+
+
 def turn(watch: SessionWatch, reference: TurnRef, timeout: float) -> TurnRef:
     if reference.turn_id is not None:
         return reference
@@ -55,8 +73,13 @@ def turn(watch: SessionWatch, reference: TurnRef, timeout: float) -> TurnRef:
             and entry.body.content.text.strip() == reference.prompt
         ]
         prompt = _one(prompts, f"prompt {reference.prompt!r}")
-        if prompt is None or prompt.turn_id is None:
+        if (
+            prompt is None
+            or prompt.turn_id is None
+            or not isinstance(prompt.body, MessageBodyResponse)
+        ):
             return None
+        body = prompt.body
         return TurnRef(
             session=reference.session,
             prompt=reference.prompt,
@@ -64,6 +87,8 @@ def turn(watch: SessionWatch, reference: TurnRef, timeout: float) -> TurnRef:
             expected_prompt_count=reference.expected_prompt_count,
             turn_id=prompt.turn_id,
             prompt_cursor=prompt.cursor,
+            prompt_message_id=body.message_id,
+            completion_after_cursor=reference.completion_after_cursor,
         )
 
     return watch.wait(
@@ -71,6 +96,44 @@ def turn(watch: SessionWatch, reference: TurnRef, timeout: float) -> TurnRef:
         found,
         timeout=timeout,
     )
+
+
+def launched_turn(watch: SessionWatch, timeout: float) -> TurnRef:
+    """The first user turn in a newly launched session.
+
+    The harness owns the delivered prompt text. It can add attachment paths,
+    so the client reads that text instead of reconstructing it.
+    """
+
+    def found(snapshot: SessionSnapshot) -> TurnRef | None:
+        prompts = [
+            entry
+            for entry in snapshot.entries
+            if isinstance(entry.body, MessageBodyResponse)
+            and entry.body.role == "user"
+            and entry.body.phase == "prompt"
+        ]
+        prompt = _one(prompts, "first user prompt in the launched session")
+        if (
+            prompt is None
+            or prompt.turn_id is None
+            or not isinstance(prompt.body, MessageBodyResponse)
+        ):
+            return None
+        body = prompt.body
+        return TurnRef(
+            session=SessionRef(snapshot.session_id),
+            prompt=body.content.text,
+            cursor_before=0,
+            expected_prompt_count=1,
+            turn_id=prompt.turn_id,
+            prompt_cursor=prompt.cursor,
+            prompt_message_id=body.message_id,
+        )
+
+    from sdk.client import SessionRef  # noqa: PLC0415
+
+    return watch.wait("one first user prompt in the launched session", found, timeout=timeout)
 
 
 def shell(
@@ -89,8 +152,12 @@ def shell(
             if command_contains in item.command
             and (
                 turn_reference is None
-                or item.turn_id == turn_reference.turn_id
-                or cursor_is_in_turn(snapshot, turn_reference, item.started_cursor)
+                or belongs_to_turn(
+                    snapshot,
+                    turn_reference,
+                    turn_id=item.turn_id,
+                    cursor=item.started_cursor,
+                )
             )
             and (predicate is None or predicate(item))
         ]
@@ -132,9 +199,11 @@ def assignment(
         candidates = [
             item
             for item in snapshot.assignments()
-            if (
-                item.turn_id == turn_reference.turn_id
-                or cursor_is_in_turn(snapshot, turn_reference, item.started_cursor)
+            if belongs_to_turn(
+                snapshot,
+                turn_reference,
+                turn_id=item.turn_id,
+                cursor=item.started_cursor,
             )
             and (
                 exact_actor_name is None
@@ -165,9 +234,11 @@ def file_operation(
         candidates = [
             entry
             for entry in snapshot.entries
-            if (
-                entry.turn_id == turn_reference.turn_id
-                or cursor_is_in_turn(snapshot, turn_reference, entry.cursor)
+            if belongs_to_turn(
+                snapshot,
+                turn_reference,
+                turn_id=entry.turn_id,
+                cursor=entry.cursor,
             )
             and isinstance(entry.body, FileBodyResponse)
             and entry.body.path == path
@@ -183,3 +254,150 @@ def file_operation(
     from sdk.client import SessionRef  # noqa: PLC0415
 
     return watch.wait(f"one {action} file operation for {path!r}", found, timeout=timeout)
+
+
+def skill(
+    watch: SessionWatch,
+    *,
+    turn_reference: TurnRef,
+    exact_name: str,
+    timeout: float,
+) -> SkillRef:
+    def found(snapshot: SessionSnapshot) -> SkillRef | None:
+        candidates = [
+            item
+            for item in snapshot.skills()
+            if belongs_to_turn(
+                snapshot,
+                turn_reference,
+                turn_id=item.turn_id,
+                cursor=item.started_cursor,
+            )
+            and item.name.casefold() == exact_name.casefold()
+        ]
+        item = _one(candidates, f"skill named {exact_name!r}")
+        return None if item is None else SkillRef(SessionRef(snapshot.session_id), item.skill_id)
+
+    from sdk.client import SessionRef  # noqa: PLC0415
+
+    return watch.wait(f"one skill named {exact_name!r}", found, timeout=timeout)
+
+
+def question(
+    watch: SessionWatch,
+    *,
+    turn_reference: TurnRef,
+    turn_name: str,
+    prompt_contains: str,
+    timeout: float,
+) -> QuestionRef:
+    def found(snapshot: SessionSnapshot) -> QuestionRef | None:
+        candidates = [
+            (item, question_item)
+            for item in snapshot.questions()
+            if item.pending
+            and belongs_to_turn(
+                snapshot,
+                turn_reference,
+                turn_id=item.turn_id,
+                cursor=item.asked_cursor,
+            )
+            for question_item in item.questions
+            if prompt_contains in question_item.question
+        ]
+        item = _one(candidates, f"pending question containing {prompt_contains!r}")
+        return (
+            None
+            if item is None
+            else QuestionRef(
+                SessionRef(snapshot.session_id),
+                item[0].attention_id,
+                item[1].question_id,
+                turn_name,
+            )
+        )
+
+    from sdk.client import SessionRef  # noqa: PLC0415
+
+    return watch.wait(
+        f"one pending question containing {prompt_contains!r}",
+        found,
+        timeout=timeout,
+    )
+
+
+def plan(
+    watch: SessionWatch,
+    *,
+    turn_reference: TurnRef,
+    turn_name: str,
+    text_contains: str,
+    timeout: float,
+) -> PlanRef:
+    def found(snapshot: SessionSnapshot) -> PlanRef | None:
+        candidates = [
+            item
+            for item in snapshot.plans()
+            if item.pending
+            and belongs_to_turn(
+                snapshot,
+                turn_reference,
+                turn_id=item.turn_id,
+                cursor=item.proposed_cursor,
+            )
+            and text_contains in item.text
+        ]
+        item = _one(candidates, f"pending plan containing {text_contains!r}")
+        return (
+            None
+            if item is None
+            else PlanRef(SessionRef(snapshot.session_id), item.attention_id, turn_name)
+        )
+
+    from sdk.client import SessionRef  # noqa: PLC0415
+
+    return watch.wait(f"one pending plan containing {text_contains!r}", found, timeout=timeout)
+
+
+def task(
+    watch: SessionWatch,
+    *,
+    exact_subject: str,
+    timeout: float,
+) -> TaskRef:
+    def found(snapshot: SessionSnapshot) -> TaskRef | None:
+        candidates = [
+            item for item in snapshot.data.session.tasks if item.subject == exact_subject
+        ]
+        item = _one(candidates, f"task with subject {exact_subject!r}")
+        return None if item is None else TaskRef(SessionRef(snapshot.session_id), item.task_id)
+
+    from sdk.client import SessionRef  # noqa: PLC0415
+
+    return watch.wait(f"one task with subject {exact_subject!r}", found, timeout=timeout)
+
+
+def compaction(
+    watch: SessionWatch,
+    *,
+    after_cursor: int,
+    timeout: float,
+) -> CompactionRef:
+    def found(snapshot: SessionSnapshot) -> CompactionRef | None:
+        candidates = [
+            item for item in snapshot.compactions() if item.started_cursor > after_cursor
+        ]
+        item = _one(candidates, "compaction after the named control")
+        return (
+            None
+            if item is None
+            else CompactionRef(
+                SessionRef(snapshot.session_id),
+                item.actor_id,
+                item.started_cursor,
+            )
+        )
+
+    from sdk.client import SessionRef  # noqa: PLC0415
+
+    return watch.wait("one compaction after the named control", found, timeout=timeout)

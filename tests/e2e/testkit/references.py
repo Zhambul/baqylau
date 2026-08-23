@@ -2,9 +2,20 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Generic, TypeVar
 
+from api.application.models.harnesses.harness_catalog_response import HarnessCatalogResponse
+from api.application.models.harnesses.harness_description_response import (
+    HarnessDescriptionResponse,
+)
+from api.application.models.insights.application_insights_response import (
+    ApplicationInsightsResponse,
+)
+from api.application.models.files.upload_response import UploadResponse
+from api.application.models.resume.resumable_session_response import (
+    ResumableSessionResponse,
+)
 from sdk.client import ActionReceipt, SessionRef
 
 T = TypeVar("T")
@@ -56,6 +67,12 @@ class TurnRef:
     expected_prompt_count: int
     turn_id: str | None = None
     prompt_cursor: int | None = None
+    prompt_message_id: str | None = None
+    completion_after_cursor: int | None = None
+
+    def resumed_after(self, cursor: int) -> TurnRef:
+        """Require the next completion to be newer than one control action."""
+        return replace(self, completion_after_cursor=cursor)
 
 
 @dataclass(frozen=True)
@@ -82,6 +99,40 @@ class FileOperationRef:
     entry_id: str
 
 
+@dataclass(frozen=True)
+class SkillRef:
+    session: SessionRef
+    skill_id: str
+
+
+@dataclass(frozen=True)
+class QuestionRef:
+    session: SessionRef
+    attention_id: str
+    question_id: str
+    turn_name: str
+
+
+@dataclass(frozen=True)
+class PlanRef:
+    session: SessionRef
+    attention_id: str
+    turn_name: str
+
+
+@dataclass(frozen=True)
+class TaskRef:
+    session: SessionRef
+    task_id: str
+
+
+@dataclass(frozen=True)
+class CompactionRef:
+    session: SessionRef
+    actor_id: str
+    started_cursor: int
+
+
 SessionSpecs = References[SessionSpec]
 Sessions = References[SessionRef]
 Turns = References[TurnRef]
@@ -89,4 +140,14 @@ Shells = References[ShellRef]
 Actors = References[ActorRef]
 Assignments = References[AssignmentRef]
 FileOperations = References[FileOperationRef]
+Skills = References[SkillRef]
+Questions = References[QuestionRef]
+Plans = References[PlanRef]
+Tasks = References[TaskRef]
+Compactions = References[CompactionRef]
 Controls = References[ActionReceipt]
+HarnessLists = References[tuple[HarnessDescriptionResponse, ...]]
+HarnessCatalogs = References[HarnessCatalogResponse]
+InsightsSnapshots = References[ApplicationInsightsResponse]
+ResumableLists = References[tuple[ResumableSessionResponse, ...]]
+StagedAttachments = References[UploadResponse]

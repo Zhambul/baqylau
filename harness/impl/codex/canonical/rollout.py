@@ -263,6 +263,7 @@ KINDS = frozenset({
     "search", "exec", "exec_result", "stdin", "command_completed", "chat", "think", "patch_call",
     "ask", "plan", "settings", "compact_boundary", "tool",
     "actor_activity", "collaboration_call", "task_list", "goal", "goal_tool",
+    "state_tool_batch",
     "unmapped_tool", "bad",
     # The RECOGNISED-AND-CARRYING-NOTHING kinds. They exist so that a deliberate
     # ignore is a verdict of its own (`ignored_nonsemantic`, naming the kind)

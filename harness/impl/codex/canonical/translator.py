@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import os
 import re
 from collections.abc import Mapping
@@ -12,7 +13,15 @@ from typing import Literal
 from pydantic import ValidationError
 
 from harness.contract import HarnessTranslator
-from harness.models import RawEvent, TranslationError, TranslationResult, UnknownRawEvent
+from harness.models import (
+    TITLE_SOURCE_TYPE,
+    RawEvent,
+    TranslationError,
+    TranslationResult,
+    UnknownRawEvent,
+)
+from harness.models.directives import NativeTitleObservation
+from repository.mapper.documents import StoredDocumentError, decode_document
 from domain.records import RecordedTranslationDecision
 from domain.events import (
     ActorAssignmentFinished,
@@ -27,10 +36,12 @@ from domain.events import (
     GoalChanged,
     MessageCreated,
     PlanProposed,
+    QuestionAnswered,
     QuestionAsked,
     ReasoningCreated,
     SearchPerformed,
     SessionStarted,
+    SessionTitleChanged,
     ShellBackgrounded,
     ShellFinished,
     ShellInputProvided,
@@ -47,7 +58,6 @@ from domain.events import (
 )
 from domain.ids import (
     ShellId,
-    TaskId,
     TurnId,
 )
 from harness.impl.codex.ids import (
@@ -77,6 +87,7 @@ from harness.impl.codex.ids import (
 from harness.impl.codex.model import CodexModel
 from domain.values import (
     ActorRole,
+    AttentionAnswer,
     AttentionChoice,
     AttentionPrompt,
     Content,
@@ -92,6 +103,7 @@ from domain.values import (
     ProgressStream,
     TaskState,
     TokenUsage,
+    TitleOrigin,
     UsageScope,
 )
 from harness.impl.codex.canonical import rollout
@@ -99,6 +111,7 @@ from harness.impl.codex.canonical.events import PHASE_FINAL
 from harness.impl.codex.canonical.records import (
     ActorActivityRecord,
     AskRecord,
+    AskResultDocument,
     BadRecord,
     ChatRecord,
     CodexHookPayload,
@@ -113,6 +126,7 @@ from harness.impl.codex.canonical.records import (
     GoalRecord,
     GoalToolRecord,
     MessageRecord,
+    NodeReplResultDocument,
     PatchCallRecord,
     PatchRecord,
     PlanRecord,
@@ -128,6 +142,7 @@ from harness.impl.codex.canonical.records import (
     SessionMetaSource,
     SettingsRecord,
     StdinRecord,
+    StateToolBatchRecord,
     TaskCompleteRecord,
     TaskListRecord,
     TaskStartedRecord,
@@ -211,6 +226,10 @@ def _codex_tool(native_name: str, arguments: str | None) -> tuple[CodexToolKind,
         # A time lookup is neither a search nor a fetch: it has no query, no url
         # and no reader.
         raise UnknownRawEvent("unmapped Codex web action")
+    if native_name == "mcp__node_repl__js":
+        if _node_read_path(arguments):
+            return CodexToolKind.FILE, "Read"
+        return CodexToolKind.IGNORED, "NodeRepl"
     mapped = CODEX_TOOLS.get(native_name)
     if mapped is None:
         raise UnknownRawEvent(f"unmapped Codex tool: {native_name or '<missing>'}")
@@ -223,6 +242,12 @@ def _codex_tool(native_name: str, arguments: str | None) -> tuple[CodexToolKind,
 # same shape `_JS_CMD` in items.py reads, and for the same reason: the arguments
 # are JavaScript source, and nothing here interprets JavaScript.
 _JS_STRING_FIELD = re.compile(r"""["']?([A-Za-z_][A-Za-z0-9_]*)["']?\s*:\s*"((?:[^"\\]|\\.)*)\"""")
+_NODE_READ_FILE = re.compile(
+    r'''\breadFile\(\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')'''
+)
+_NODE_READ_TEMPLATE_EXPRESSION = re.compile(
+    r'''\breadFile\(\s*["']\$\{\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')\s*\}["']'''
+)
 
 # Which field of a web search holds what was searched for, in the order codex
 # spells them (`_codex_tool` recognises a search by exactly these names).
@@ -355,7 +380,19 @@ def _tool_path(arguments: str | None) -> str:
         value = fields.string(name)
         if value:
             return value
-    return ""
+    return _node_read_path(arguments)
+
+
+def _node_read_path(arguments: str | None) -> str:
+    source = arguments or ""
+    match = _NODE_READ_TEMPLATE_EXPRESSION.search(source) or _NODE_READ_FILE.search(source)
+    if match is None:
+        return ""
+    try:
+        path = ast.literal_eval(match.group(1))
+    except (SyntaxError, ValueError):
+        return ""
+    return str(path)
 
 
 class CodexCanonicalTranslator(HarnessTranslator):
@@ -369,8 +406,11 @@ class CodexCanonicalTranslator(HarnessTranslator):
         # not about the poll that observed it.
         self._backgrounded_shells: set[tuple[str, ShellId]] = set()
         self._semantic_tool_calls: set[tuple[str, str]] = set()
-        self._call_records: dict[tuple[str, str], ExecRecord | ToolRecord | None] = {}
-        self._plan_tasks: dict[tuple[str, str], dict[TaskId, TaskChanged]] = {}
+        self._call_records: dict[
+            tuple[str, str], ExecRecord | ToolRecord | AskRecord | None
+        ] = {}
+        self._plan_tasks: dict[tuple[str, str], tuple[TaskChanged, ...]] = {}
+        self._goals: dict[str, GoalChanged] = {}
         self._selections = SelectionSemantics()
 
     @staticmethod
@@ -447,7 +487,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
     @staticmethod
     def _call_from_line(
         line: bytes, call_id: CodexCallId,
-    ) -> ExecRecord | ToolRecord | Literal[False] | None:
+    ) -> ExecRecord | ToolRecord | AskRecord | Literal[False] | None:
         """The parsed call this output belongs to.
 
         None means this is not the call being sought; False means it is the
@@ -460,7 +500,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
             record = rollout.parse_line(line.decode())
         except (UnicodeDecodeError, ValidationError):
             return None
-        if not isinstance(record, (ExecRecord, ToolRecord)) or record.call_id != call_id:
+        if not isinstance(record, (ExecRecord, ToolRecord, AskRecord)) or record.call_id != call_id:
             return None
         return record
 
@@ -468,7 +508,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
         self,
         raw_event: RawEvent,
         call_id: CodexCallId,
-    ) -> ExecRecord | ToolRecord | None:
+    ) -> ExecRecord | ToolRecord | AskRecord | None:
         """Pair an output with the call that opened it.
 
         The in-memory answer handles the normal adjacent call/output pair. The
@@ -494,7 +534,11 @@ class CodexCanonicalTranslator(HarnessTranslator):
                     for line in reversed(chunk.splitlines()):
                         opened = self._call_from_line(line, call_id)
                         if opened is not None:
-                            found = opened if isinstance(opened, (ExecRecord, ToolRecord)) else None
+                            found = (
+                                opened
+                                if isinstance(opened, (ExecRecord, ToolRecord, AskRecord))
+                                else None
+                            )
                             self._call_records[key] = found
                             return found
                     end_position = start_position
@@ -533,6 +577,32 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 return TranslationResult(tuple(events), RecordedTranslationDecision.TRANSLATED)
             return TranslationResult(
                 (), RecordedTranslationDecision.IGNORED_NONSEMANTIC, "hook carries no unique canonical activity"
+            )
+
+        if raw_event.source_type == TITLE_SOURCE_TYPE:
+            try:
+                title_observation = decode_document(
+                    NativeTitleObservation,
+                    raw_event.payload,
+                )
+            except StoredDocumentError as error:
+                raise TranslationError(
+                    "malformed Codex title observation",
+                    context=raw_event.source_position,
+                ) from error
+            changed = SessionTitleChanged(
+                title_observation.title,
+                TitleOrigin(title_observation.origin),
+            )
+            return TranslationResult(
+                (event(
+                    raw_event,
+                    "session",
+                    str(raw_event.session_id),
+                    f"title:{title_observation.origin}:{raw_event.source_position}",
+                    changed,
+                ),),
+                RecordedTranslationDecision.TRANSLATED,
             )
 
         if raw_event.source_type in ("child_replay", "sidecar_replay"):
@@ -666,6 +736,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
     _CALL_ID_RECORDS = (
         ExecRecord, ExecResultRecord, StdinRecord, ToolRecord, PatchCallRecord, AskRecord,
         ActorActivityRecord, CollaborationCallRecord, TaskListRecord, GoalToolRecord,
+        StateToolBatchRecord,
     )
     _AT_RECORDS = (TaskStartedRecord, TaskCompleteRecord)
 
@@ -760,6 +831,29 @@ class CodexCanonicalTranslator(HarnessTranslator):
             )
             turn_id = turn_id_from_codex(native_turn_id)
             events = [event(raw_event, "turn", str(turn_id), "aborted", TurnAborted(None), turn_id, occurred_at)]
+            source_key = self._source_key(raw_event)
+            interrupted_shells = [
+                shell_id_from_codex_call(CodexCallId(call_id))
+                for (known_source, call_id), call in self._call_records.items()
+                if known_source == source_key
+                and isinstance(call, ExecRecord)
+                and call.turn == native_turn_id
+                and (source_key, shell_id_from_codex_call(CodexCallId(call_id)))
+                    not in self._finished_shells
+            ]
+            for shell_id in interrupted_shells:
+                if (source_key, shell_id) in self._backgrounded_shells:
+                    continue
+                self._backgrounded_shells.add((source_key, shell_id))
+                events.append(event(
+                    raw_event,
+                    "shell",
+                    str(shell_id),
+                    "backgrounded",
+                    ShellBackgrounded(shell_id),
+                    turn_id,
+                    occurred_at,
+                ))
             if raw_event.parent_actor_id is not None and raw_event.source_type == "child_rollout":
                 assignment_id = assignment_id_from_codex_turn(native_turn_id)
                 events.append(event(
@@ -882,6 +976,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
             if state != GoalState.CLEARED and objective is None:
                 raise TranslationError("Codex goal has no objective")
             payload = GoalChanged(objective, state, (record.reason or "").strip() or None)
+            self._goals[str(raw_event.session_id)] = payload
             return [event(
                 raw_event,
                 "goal",
@@ -890,6 +985,58 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 payload,
                 occurred_at=occurred_at,
             )]
+        if isinstance(record, StateToolBatchRecord):
+            self._semantic_tool_calls.add((
+                self._source_key(raw_event),
+                CodexCallId(record.call_id or native_identity),
+            ))
+            batch_events: list[CanonicalEvent[EventPayload]] = []
+            for action in record.actions:
+                if isinstance(action, TaskListRecord):
+                    batch_events.extend(self._translate_record(
+                        raw_event,
+                        rollout_observation,
+                        action,
+                    ))
+                    continue
+                if action.name == "get_goal":
+                    continue
+                if action.name == "create_goal":
+                    objective = (action.objective or "").strip() or None
+                    native_state = action.status or "active"
+                elif action.name == "update_goal":
+                    previous_goal = self._goals.get(str(raw_event.session_id))
+                    objective = (
+                        (action.objective or "").strip()
+                        or (previous_goal.objective if previous_goal else None)
+                    )
+                    native_state = action.status or ""
+                else:
+                    raise TranslationError(
+                        f"unknown Codex goal tool: {action.name or '<missing>'}"
+                    )
+                state = GOAL_STATES.get(native_state)
+                if state is None:
+                    raise TranslationError(
+                        f"unknown Codex goal state: {native_state or '<missing>'}"
+                    )
+                if objective is None:
+                    raise TranslationError("Codex goal has no objective")
+                goal_changed = GoalChanged(
+                    objective,
+                    state,
+                    (action.reason or "").strip() or None,
+                )
+                self._goals[str(raw_event.session_id)] = goal_changed
+                batch_events.append(event(
+                    raw_event,
+                    "goal",
+                    str(action.call_id),
+                    "changed",
+                    goal_changed,
+                    occurred_at=occurred_at,
+                ))
+            return batch_events
         if isinstance(record, GoalToolRecord):
             call_id = CodexCallId(record.call_id or native_identity)
             self._semantic_tool_calls.add((self._source_key(raw_event), call_id))
@@ -900,7 +1047,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
             self._semantic_tool_calls.add((source_key, call_id))
             plan_key = (str(raw_event.session_id), str(raw_event.actor_id))
             previous = self._plan_tasks.get(plan_key)
-            current: dict[TaskId, TaskChanged] = {}
+            current: list[TaskChanged] = []
             for task_index, plan_task in enumerate(record.tasks, start=1):
                 subject = (plan_task.step or "").strip()
                 if not subject:
@@ -917,13 +1064,13 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 task_id = task_id_from_codex(
                     CodexTaskId(f"{raw_event.actor_id}:plan:{task_index}")
                 )
-                current[task_id] = TaskChanged(
+                current.append(TaskChanged(
                     task_id,
                     subject,
                     None,
                     task_state,
                     raw_event.actor_id,
-                )
+                ))
             events = [event(
                 raw_event,
                 "task_list",
@@ -931,18 +1078,19 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 f"changed:{call_id}",
                 TaskListChanged(
                     task_list_id_from_codex(CodexTaskListId(str(raw_event.actor_id))),
-                    tuple(current),
+                    tuple(task_changed.task_id for task_changed in current),
                 ),
                 occurred_at=occurred_at,
             )]
-            for task_id, task_changed in current.items():
-                if previous is not None and previous.get(task_id) == task_changed:
+            for task_changed in current:
+                task_id = task_changed.task_id
+                if previous is not None and task_changed in previous:
                     continue
                 events.append(event(
                     raw_event, "task", str(task_id), f"changed:{call_id}", task_changed,
                     occurred_at=occurred_at,
                 ))
-            self._plan_tasks[plan_key] = current
+            self._plan_tasks[plan_key] = tuple(current)
             return events
         if isinstance(record, (ExecRecord, ToolRecord)):
             call_id = CodexCallId(record.call_id or native_identity)
@@ -1023,6 +1171,13 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 return []
             if isinstance(call_record, ToolRecord):
                 return self._tool_result(raw_event, call_id, call_record, record, occurred_at)
+            if isinstance(call_record, AskRecord):
+                return self._question_result(
+                    raw_event,
+                    call_record,
+                    record,
+                    occurred_at,
+                )
             shell_id = shell_id_from_codex_call(call_id)
             if (source_key, shell_id) in self._finished_shells:
                 return []
@@ -1030,6 +1185,18 @@ class CodexCanonicalTranslator(HarnessTranslator):
             process_id = record.process_id or CodexShellId("")
             if process_id:
                 self._process_shells[(source_key, process_id)] = shell_id
+            if record.interrupted:
+                if (source_key, shell_id) in self._backgrounded_shells:
+                    return []
+                self._backgrounded_shells.add((source_key, shell_id))
+                return [event(
+                    raw_event,
+                    "shell",
+                    str(shell_id),
+                    "backgrounded",
+                    ShellBackgrounded(shell_id),
+                    occurred_at=occurred_at,
+                )]
             if record.running:
                 # A BACKGROUND TERMINAL: the command outlived its yield budget, so
                 # codex handed back a live session (its `session_id`, the cell id
@@ -1239,6 +1406,8 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 )
             ]
         if isinstance(record, AskRecord):
+            call_id = CodexCallId(record.call_id or native_identity)
+            self._call_records[(self._source_key(raw_event), call_id)] = record
             questions = tuple(
                 AttentionPrompt(
                     prompt_id=question_id_from_codex(
@@ -1255,7 +1424,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 for index, question in enumerate(record.questions)
             )
             attention_id = attention_id_from_codex_call(
-                CodexCallId(record.call_id or native_identity)
+                call_id
             )
             payload = QuestionAsked(attention_id, questions)
             return [
@@ -1303,8 +1472,23 @@ class CodexCanonicalTranslator(HarnessTranslator):
             return []
         arguments = tool_record.args
         output = exec_result_record.output
+        native_failed = False
+        if tool_record.name == "mcp__node_repl__js":
+            try:
+                node_result = NodeReplResultDocument.model_validate_json(output)
+            except ValidationError:
+                # The custom-exec wrapper can print the MCP text directly.
+                # In that form, `output` already is the complete result.
+                pass
+            else:
+                output = "\n".join(
+                    part.text for part in node_result.content if part.text is not None
+                )
+                native_failed = node_result.isError
         outcome: Outcome = (
-            Outcome.FAILED if exit_code(exec_result_record.exit) not in (None, 0) else Outcome.SUCCEEDED
+            Outcome.FAILED
+            if native_failed or exit_code(exec_result_record.exit) not in (None, 0)
+            else Outcome.SUCCEEDED
         )
         answered = content(output) if output else None
         if kind == CodexToolKind.SEARCH:
@@ -1320,5 +1504,45 @@ class CodexCanonicalTranslator(HarnessTranslator):
             # No path is readable from the call, and a file fact whose path was
             # invented is worse than no fact.
             return []
-        payload = FileAccessed(path=path, action=FileAction.READ, outcome=outcome)
+        payload = FileAccessed(
+            path=path,
+            action=FileAction.READ,
+            outcome=outcome,
+            content=(
+                answered
+                if tool_record.name == "mcp__node_repl__js"
+                else None
+            ),
+        )
         return [event(raw_event, "file", f"{call_id}:read:{path}", "accessed", payload, occurred_at=occurred_at)]
+
+    @staticmethod
+    def _question_result(
+        raw_event: RawEvent,
+        ask_record: AskRecord,
+        exec_result_record: ExecResultRecord,
+        occurred_at: float | None,
+    ) -> list[CanonicalEvent[EventPayload]]:
+        document = AskResultDocument.model_validate_json(exec_result_record.output)
+        answers: list[AttentionAnswer] = []
+        for index, question in enumerate(ask_record.questions):
+            native_question_id = question.id or str(index)
+            answer = document.answers.root.get(native_question_id)
+            if answer is None:
+                raise TranslationError(
+                    f"Codex question result has no answer for {native_question_id!r}"
+                )
+            answers.append(AttentionAnswer(
+                question_id_from_codex(CodexQuestionId(native_question_id)),
+                answer.answers,
+            ))
+        attention_id = attention_id_from_codex_call(ask_record.call_id)
+        payload = QuestionAnswered(attention_id, tuple(answers), None)
+        return [event(
+            raw_event,
+            "question",
+            str(attention_id),
+            "answered",
+            payload,
+            occurred_at=occurred_at,
+        )]

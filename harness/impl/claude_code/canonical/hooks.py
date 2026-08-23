@@ -18,6 +18,7 @@ from domain.values import ActorRole, EffortChangeReason, GoalState, Outcome
 from harness.impl.claude_code.canonical import records
 from harness.impl.claude_code.canonical.messages import session_events
 from harness.impl.claude_code.canonical.support import event
+from harness.impl.claude_code.canonical.tasks import task_hook_event
 from harness.impl.claude_code.canonical.toolcalls import ToolCallSemantics
 from harness.impl.claude_code.canonical.turns import TurnSemantics
 from harness.models import RawEvent
@@ -123,7 +124,11 @@ def translate_hook(
                 tool_use_id=hook.tool_use_id,
                 tool_name=hook.tool_name,
                 tool_input=hook.tool_input,
-                tool_response=hook.tool_response,
+                tool_response=(
+                    hook.tool_response
+                    if hook.tool_response is not None
+                    else hook.error
+                ),
             ), hook_name == "PostToolUseFailure"),
             *effort_report(raw_event, hook, selection_semantics),
         ]
@@ -163,7 +168,7 @@ def translate_hook(
             *effort_report(raw_event, hook, selection_semantics),
         ]
     if hook_name in ("TaskCreated", "TaskCompleted"):
-        return []
+        return [task_hook_event(raw_event, hook)]
     if hook_name == "PreCompact":
         return [
             event(

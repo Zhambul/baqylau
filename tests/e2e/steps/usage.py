@@ -55,3 +55,54 @@ def global_usage_windows_have_positive_duration(
         found,
         timeout=wait_policy.feed,
     )
+
+
+@then(parsers.parse('each global usage window for {harness} has a valid percentage'))
+def global_usage_windows_have_valid_percentage(
+    client: BaqylauClient,
+    wait_policy: WaitPolicy,
+    harness: str,
+) -> None:
+    def found() -> list[UsageWindowResponse] | None:
+        windows = [
+            window
+            for row in client.usage.state().usage_rows
+            if row.harness == harness
+            for window in row.windows
+        ]
+        valid = windows and all(0 <= window.used_percent <= 100 for window in windows)
+        return windows if valid else None
+
+    wait_for(
+        f"each global usage window for {harness!r} to have a percentage from 0 to 100",
+        found,
+        timeout=wait_policy.feed,
+    )
+
+
+@then(parsers.parse('global usage window keys for {harness} are unique per account'))
+def global_usage_window_keys_are_unique(
+    client: BaqylauClient,
+    wait_policy: WaitPolicy,
+    harness: str,
+) -> None:
+    def found() -> list[UsageRowResponse] | None:
+        rows = [row for row in client.usage.state().usage_rows if row.harness == harness]
+        if not rows:
+            return None
+        failures = [
+            row.display_name
+            for row in rows
+            if len({window.key for window in row.windows}) != len(row.windows)
+        ]
+        if failures:
+            raise AssertionError(
+                f"global usage for {harness!r} has duplicate window keys in {failures}"
+            )
+        return rows
+
+    wait_for(
+        f"global usage for {harness!r} to have unique window keys per account",
+        found,
+        timeout=wait_policy.feed,
+    )

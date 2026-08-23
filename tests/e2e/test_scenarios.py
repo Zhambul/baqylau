@@ -22,12 +22,23 @@ from pytest_bdd import scenarios
 pytestmark = [pytest.mark.drift, pytest.mark.timeout(900)]
 
 scenarios(
+    "features/attachments.feature",
     "features/background.feature",
+    "features/catalog.feature",
+    "features/compaction.feature",
+    "features/controls.feature",
     "features/files.feature",
     "features/greeting.feature",
+    "features/insights.feature",
+    "features/interrupt.feature",
     "features/monitor.feature",
+    "features/planning.feature",
+    "features/preferences.feature",
+    "features/question.feature",
+    "features/rewind.feature",
     "features/scoreboard.feature",
     "features/shell.feature",
+    "features/skills.feature",
     "features/subagent.feature",
     "features/usage.feature",
 )

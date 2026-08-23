@@ -8,7 +8,7 @@ from sdk.client import BaqylauClient
 from sdk.state import SessionSnapshot, ShellState
 from tests.e2e.testkit import selectors
 from tests.e2e.testkit.policy import WaitPolicy
-from tests.e2e.testkit.references import Controls, ShellRef, Shells, Sessions, Turns
+from tests.e2e.testkit.references import ShellRef, Shells, Turns
 
 
 def _shell(snapshot: SessionSnapshot, reference: ShellRef) -> ShellState:
@@ -132,31 +132,6 @@ def name_monitor(
     shells.bind(name, found)
 
 
-@when(parsers.parse(
-    'I request backgrounding in session "{session_name}" as control "{control_name}"'
-))
-def request_backgrounding(
-    client: BaqylauClient,
-    sessions: Sessions,
-    controls: Controls,
-    session_name: str,
-    control_name: str,
-) -> None:
-    controls.bind(control_name, client.sessions.background(sessions.get(session_name)))
-
-
-@then(parsers.parse('control "{name}" response is accepted'))
-def control_response_is_accepted(controls: Controls, name: str) -> None:
-    receipt = controls.get(name)
-    assert receipt.status_code == 200, f"control {name!r} returned {receipt.outcome}"
-
-
-@then(parsers.parse('control "{name}" outcome is acknowledged'))
-def control_outcome_is_acknowledged(controls: Controls, name: str) -> None:
-    receipt = controls.get(name)
-    assert receipt.outcome.status == "acknowledged"
-
-
 @then(parsers.parse('command "{name}" has state {state}'))
 def command_has_state(
     client: BaqylauClient,
@@ -183,6 +158,22 @@ def command_has_output(
 ) -> None:
     reference = shells.get(name)
     _wait_for_output(client, reference, wait_policy, name, text)
+
+
+@then(parsers.parse('command "{name}" has exit code {exit_code:d}'))
+def command_has_exit_code(
+    client: BaqylauClient,
+    shells: Shells,
+    wait_policy: WaitPolicy,
+    name: str,
+    exit_code: int,
+) -> None:
+    reference = shells.get(name)
+    client.sessions.watch(reference.session).wait(
+        f"command {name!r} to have exit code {exit_code}",
+        lambda snapshot: True if _shell(snapshot, reference).exit_code == exit_code else None,
+        timeout=wait_policy.feed,
+    )
 
 
 @then(parsers.parse('command "{name}" becomes a background job'))

@@ -9,6 +9,7 @@ from api.sessiondata.models.entry import EntryResponse, MessageBodyResponse
 from sdk.client import BaqylauClient
 from sdk.state import SessionSnapshot
 from tests.e2e.testkit import selectors
+from tests.e2e.testkit.launching import start_named_session
 from tests.e2e.testkit.policy import WaitPolicy
 from tests.e2e.testkit.references import SessionSpec, SessionSpecs, Sessions, TurnRef, Turns
 
@@ -17,10 +18,14 @@ TURN_ENDED = ("awaiting_response", "awaiting_background")
 
 def _turn_enders(snapshot: SessionSnapshot, reference: TurnRef) -> list[EntryResponse]:
     assert reference.prompt_cursor is not None
+    answer_after = max(
+        reference.prompt_cursor,
+        reference.completion_after_cursor or reference.prompt_cursor,
+    )
     later_prompts = [
         entry.cursor
         for entry in snapshot.entries
-        if entry.cursor > reference.prompt_cursor
+        if entry.cursor > answer_after
         and isinstance(entry.body, MessageBodyResponse)
         and entry.body.role == "user"
         and entry.body.phase == "prompt"
@@ -33,7 +38,7 @@ def _turn_enders(snapshot: SessionSnapshot, reference: TurnRef) -> list[EntryRes
             role="assistant",
             phase="end_turn",
         )
-        if entry.cursor > reference.prompt_cursor
+        if entry.cursor > answer_after
         and (boundary is None or entry.cursor < boundary)
         and isinstance(entry.body, MessageBodyResponse)
         and entry.body.recipient_actor_id is None
@@ -71,17 +76,17 @@ def launch_session(
     docstring: str,
 ) -> None:
     prompt = docstring.strip()
-    spec = session_specs.get(session_name)
-    launch = client.sessions.launch(
-        spec.harness,
-        workspace=workspace,
+    start_named_session(
+        client,
+        workspace,
+        session_specs,
+        sessions,
+        turns,
+        wait_policy,
+        session_name=session_name,
+        turn_name=turn_name,
         prompt=prompt,
-        model=spec.model,
-        effort=spec.effort,
     )
-    session = client.sessions.wait_for_session(launch, wait_policy.session_announcement)
-    sessions.bind(session_name, session)
-    turns.bind(turn_name, TurnRef(session, prompt, 0, 1))
 
 
 @when(parsers.parse(
@@ -135,6 +140,26 @@ def turn_completes(
     )
 
 
+@then(parsers.parse('turn "{name}" has state {state}'))
+def turn_has_state(
+    client: BaqylauClient,
+    turns: Turns,
+    wait_policy: WaitPolicy,
+    name: str,
+    state: str,
+) -> None:
+    current = turns.get(name)
+    watch = client.sessions.watch(current.session)
+    current = selectors.turn(watch, current, wait_policy.turn)
+    turns.replace(name, current)
+    assert current.turn_id is not None
+    watch.wait(
+        f"turn {name!r} to have state {state!r}",
+        lambda snapshot: True if snapshot.turn_state(current.turn_id or "") == state else None,
+        timeout=wait_policy.turn,
+    )
+
+
 @then(parsers.parse('turn "{name}" has prompt \'{text}\''))
 def turn_has_prompt(client: BaqylauClient, turns: Turns, name: str, text: str) -> None:
     reference = turns.get(name)
@@ -181,6 +206,24 @@ def session_reports_model(
     assert wanted in reported, f"configured model {wanted!r}, reported model {reported!r}"
 
 
+@then(parsers.parse('session "{name}" reports model {model}'))
+def session_reports_selected_model(
+    client: BaqylauClient,
+    sessions: Sessions,
+    wait_policy: WaitPolicy,
+    name: str,
+    model: str,
+) -> None:
+    wanted = model.casefold()
+    client.sessions.watch(sessions.get(name)).wait(
+        f"session {name!r} to report model {model!r}",
+        lambda snapshot: (
+            True if wanted in (snapshot.lead().model or "").casefold() else None
+        ),
+        timeout=wait_policy.feed,
+    )
+
+
 @then(parsers.parse('session "{name}" reports its configured effort'))
 def session_reports_effort(
     client: BaqylauClient,
@@ -191,3 +234,82 @@ def session_reports_effort(
     wanted = session_specs.get(name).effort
     reported = client.sessions.snapshot(sessions.get(name)).lead().effort
     assert reported == wanted, f"configured effort {wanted!r}, reported effort {reported!r}"
+
+
+@then(parsers.parse('session "{name}" has title \'{title}\''))
+def session_has_title(
+    client: BaqylauClient,
+    sessions: Sessions,
+    wait_policy: WaitPolicy,
+    name: str,
+    title: str,
+) -> None:
+    session = sessions.get(name)
+    client.sessions.watch(session).wait(
+        f"session {name!r} to have title {title!r}",
+        lambda snapshot: True if snapshot.data.session.title == title else None,
+        timeout=wait_policy.feed,
+    )
+
+
+@then(parsers.parse('session "{name}" reports effort {effort}'))
+def session_reports_exact_effort(
+    client: BaqylauClient,
+    sessions: Sessions,
+    wait_policy: WaitPolicy,
+    name: str,
+    effort: str,
+) -> None:
+    session = sessions.get(name)
+    client.sessions.watch(session).wait(
+        f"session {name!r} to report effort {effort!r}",
+        lambda snapshot: True if snapshot.lead().effort == effort else None,
+        timeout=wait_policy.feed,
+    )
+
+
+@then(parsers.parse('session "{name}" finishes'))
+def session_finishes(
+    client: BaqylauClient,
+    sessions: Sessions,
+    wait_policy: WaitPolicy,
+    name: str,
+) -> None:
+    client.sessions.wait_until_finished(sessions.get(name), wait_policy.cleanup)
+
+
+@then(parsers.parse('session "{name}" is live'))
+def session_is_live(client: BaqylauClient, sessions: Sessions, name: str) -> None:
+    snapshot = client.sessions.snapshot(sessions.get(name))
+    assert snapshot.data.live
+
+
+@then(parsers.parse('session "{name}" has repository status'))
+def session_has_repository_status(
+    client: BaqylauClient,
+    sessions: Sessions,
+    name: str,
+) -> None:
+    snapshot = client.sessions.snapshot(sessions.get(name))
+    assert snapshot.data.repository is not None
+    assert snapshot.data.repository.branch
+
+
+@then(parsers.parse('session "{name}" title is not \'{title}\''))
+def session_title_is_not(
+    client: BaqylauClient,
+    sessions: Sessions,
+    wait_policy: WaitPolicy,
+    name: str,
+    title: str,
+) -> None:
+    client.sessions.watch(sessions.get(name)).wait(
+        f"session {name!r} title to change from {title!r}",
+        lambda snapshot: (
+            True
+            if snapshot.data.session.title
+            and snapshot.data.session.title != title
+            else None
+        ),
+        timeout=wait_policy.feed,
+    )

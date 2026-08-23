@@ -22,7 +22,7 @@
 #     (with code changes: 1. Restore code and conversation / 2. Restore
 #     conversation / 3. Restore code / …; without: 1. Restore conversation /
 #     …) — so the digit is resolved from the parsed LABELS, never hard-coded;
-#   - a digit key selects immediately (no Enter);
+#   - the numbered rows use cursor navigation and Enter;
 #   - Escape closes either menu cleanly back to the composer.
 #
 # Menu-region parsing: get_text returns the whole visible screen, where
@@ -38,6 +38,7 @@ from enum import StrEnum
 
 from domain.ids import WindowId
 
+from harness.impl.claude_code.controls import numberedmenu
 from harness.impl.claude_code.controls import screen_driver as screendrive
 from harness.impl.claude_code.controls import tui
 from harness.impl.claude_code.controls.screen_driver import ScreenDriver
@@ -157,6 +158,7 @@ def cursor_entry(screen: str) -> str:
 class ConfirmOption:
     label: str
     digit: str
+    cursor: bool
 
 
 def confirm_options(screen: str) -> tuple[ConfirmOption, ...]:
@@ -164,10 +166,8 @@ def confirm_options(screen: str) -> tuple[ConfirmOption, ...]:
     Tolerates the cursor mark and the scroll indicators (↑/↓) the TUI puts
     before a boundary row."""
     return tuple(
-        ConfirmOption(label.lower(), digit)
-        for digit, label in re.findall(
-            r"^\s*(?:[❯↑↓]\s*)*(\d+)\.\s+(.*?)\s*$", menu_region(screen), re.M
-        )
+        ConfirmOption(row.label.lower(), row.digit, row.cursor)
+        for row in numberedmenu.rows(menu_region(screen))
     )
 
 
@@ -183,6 +183,29 @@ class RewindOutcome:
     steps: int
     digit: str
     degraded: bool
+
+
+def select_confirm_option(
+    screen_driver: ScreenDriver,
+    win: WindowId,
+    digit: str,
+    sleep: Callable[[float], None] = time.sleep,
+) -> None:
+    """Select one verified confirmation row with cursor keys and Enter."""
+    def current_rows() -> tuple[numberedmenu.Row, ...]:
+        return numberedmenu.rows(menu_region(screen_driver.get_text(win) or ""))
+
+    try:
+        numberedmenu.select(
+            screen_driver,
+            win,
+            current_rows,
+            digit,
+            sleep=sleep,
+            key_gap=POLL_S,
+        )
+    except numberedmenu.SelectionError as error:
+        raise MenuError("select", str(error)) from error
 
 
 def _bail(screen_driver: ScreenDriver, win: WindowId, sleep: Callable[[float], None]) -> None:
@@ -305,7 +328,7 @@ def drive(
             requested_label,
             " — no code changes to revert at that checkpoint"
             if unchanged else ""))
-    screen_driver.send_key(win, digit)
+    select_confirm_option(screen_driver, win, digit, sleep)
     screen, ok = screendrive.poll_until(screen_driver, win, lambda s: not menu_region(s),
                        STEP_TIMEOUT_S, sleep)
     if not ok:

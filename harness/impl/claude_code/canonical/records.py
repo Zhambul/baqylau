@@ -50,6 +50,7 @@ from harness.impl.claude_code.ids import (
     ClaudeCodeCallId,
     ClaudeCodeMessageId,
     ClaudeCodeSessionId,
+    ClaudeCodeTaskId,
     ClaudeCodeTaskListId,
     ClaudeCodeTurnId,
 )
@@ -99,9 +100,30 @@ class TranscriptDocument(BaseModel):
     summary: str | None = None
 
 
+class PreservedCompactSegment(BaseModel):
+    model_config = FOREIGN
+    headUuid: str
+    anchorUuid: str
+    tailUuid: str
+
+
+class PreservedCompactMessages(BaseModel):
+    model_config = FOREIGN
+    anchorUuid: str
+    uuids: tuple[str, ...]
+    allUuids: tuple[str, ...]
+
+
 class CompactMetadata(BaseModel):
     model_config = FOREIGN
     preTokens: int | None = None
+    trigger: str | None = None
+    postTokens: int | None = None
+    cumulativeDroppedTokens: int | None = None
+    durationMs: int | float | None = None
+    preCompactDiscoveredTools: tuple[str, ...] | None = None
+    preservedSegment: PreservedCompactSegment | None = None
+    preservedMessages: PreservedCompactMessages | None = None
 
 
 class HookSummaryInfo(BaseModel):
@@ -644,6 +666,17 @@ class ToolResponseBlocks(RootModel[list[InnerContentBlock | str]]):
     pass
 
 
+class ToolResponseFile(BaseModel):
+    """The built-in Read tool's file result."""
+
+    model_config = FOREIGN
+    filePath: str | None = None
+    content: str | None = None
+    numLines: int | None = None
+    startLine: int | None = None
+    totalLines: int | None = None
+
+
 class ToolResponse(BaseModel):
     """A tool call's answer — the hook path's `tool_response`, the
     transcript's `toolUseResult` sidecar, and tool_result()'s synthetic
@@ -658,6 +691,7 @@ class ToolResponse(BaseModel):
 
     model_config = OPEN_FOREIGN
     content: str | ToolResponseBlocks | None = None
+    file: ToolResponseFile | None = None
     type: str | None = None
     structuredPatch: list[PatchHunk] | None = None
     backgroundTaskId: str | None = None
@@ -700,12 +734,13 @@ class HookPayload(BaseModel):
     and version-stable (unlike a tool's own arguments), so FOREIGN. Every
     field below is corpus-observed: this machine's own `raw_events` table
     (`harness='claude_code' and source_type='hook'`), grouped by
-    `hook_event_name`, across all 18 hook events this installation has fired
-    (2026-08-22) — `PreToolUse`, `PostToolUse`, `PostToolBatch`, `Stop`,
+    `hook_event_name`, across all 20 hook events this installation has fired
+    (2026-08-23) — `PreToolUse`, `PostToolUse`, `PostToolBatch`, `Stop`,
     `SubagentStart`, `SubagentStop`, `SessionStart`, `SessionEnd`,
     `PreCompact`, `PostCompact`, `Notification`, `MessageDisplay`,
     `UserPromptSubmit`, `InstructionsLoaded`, `ConfigChange`, `TeammateIdle`,
-    `PostToolUseFailure`, `PermissionRequest`. One model for all of them, on
+    `PostToolUseFailure`, `PermissionRequest`, `TaskCreated`, `TaskCompleted`.
+    One model for all of them, on
     the same footing as SystemRecord above: each event uses a subset of the
     union below, and `hook_event_name` is read first (translate_hook) to pick
     the branch, so a field one event never carries simply stays None on it."""
@@ -754,6 +789,9 @@ class HookPayload(BaseModel):
     memory_type: str | None = None
     team_name: str | None = None
     teammate_name: str | None = None
+    task_id: ClaudeCodeTaskId | None = None
+    task_subject: str | None = None
+    task_description: str | None = None
 
     def shell_input(self) -> ShellArguments:
         return (

@@ -160,6 +160,7 @@ class TextTranscriptRecord:
 class PromptTranscriptRecord:
     text: str
     meta: bool = False
+    interrupted: bool = False
     kind: TranscriptKind = TranscriptKind.PROMPT
 
 
@@ -184,6 +185,8 @@ class ResultsTranscriptRecord:
     tool_response: records.ToolResponse | records.ToolResponseBlocks | str | None
     texts: tuple[str, ...]
     meta: bool
+    cancelled: bool
+    interrupted: bool
     kind: TranscriptKind = TranscriptKind.RESULTS
 
 
@@ -513,7 +516,11 @@ def parse_line(s: str) -> TranscriptRecord | None:
             # carried so consumers can tell it from something the human typed.
             # The content goes in too: the teammate-mail wrapper is injected
             # with no structural flag to show it (see _TEAM_WRAPPER).
-            return PromptTranscriptRecord(content, _injected(user, content))
+            return PromptTranscriptRecord(
+                content,
+                _injected(user, content),
+                bool(user.interruptedMessageId),
+            )
         if isinstance(content, list):
             blocks: list[records.ToolResultBlock] = []
             texts: list[str] = []
@@ -533,6 +540,8 @@ def parse_line(s: str) -> TranscriptRecord | None:
                 return ResultsTranscriptRecord(
                     tuple(blocks), tool_response, tuple(texts),
                     _injected(user, texts[0] if texts else ""),
+                    user.toolDenialKind == "user-rejected",
+                    bool(user.interruptedMessageId),
                 )
         return None
     if t == "assistant":

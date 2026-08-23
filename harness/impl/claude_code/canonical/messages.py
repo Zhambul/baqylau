@@ -24,25 +24,21 @@ from domain.events import (
     SessionTitleChanged,
     ShellOutputFinished,
     ShellProgressed,
-    TaskChanged,
+    TurnAborted,
     TurnStarted,
     UsageReported,
 )
 from domain.ids import AccountId
 from harness.impl.claude_code.ids import (
-    ClaudeCodeActorId,
     ClaudeCodeCallId,
     ClaudeCodeMessageId,
     ClaudeCodeReasoningId,
     ClaudeCodeShellId,
-    ClaudeCodeTaskId,
     ClaudeCodeTurnId,
-    actor_id_from_claude_code,
     assignment_id_from_claude_code_call,
     message_id_from_claude_code,
     reasoning_id_from_claude_code,
     shell_id_from_claude_code_call,
-    task_id_from_claude_code,
     turn_id_from_claude_code,
 )
 from harness.impl.claude_code.model import ClaudeCodeModel
@@ -57,7 +53,6 @@ from domain.values import (
     Outcome,
     OutputMode,
     ProgressStream,
-    TaskState,
     TitleOrigin,
     TokenUsage,
     UsageScope,
@@ -343,32 +338,6 @@ def session_events(
     return events
 
 
-def task_event(
-    raw_event: RawEvent,
-    task: records.TaskFile,
-) -> CanonicalEvent[EventPayload]:
-    task_id = task_id_from_claude_code(ClaudeCodeTaskId(str(task.id or "")))
-    if not task_id:
-        raise TranslationError("Claude Code task has no id", context=raw_event.source_position)
-    native_state = task.status
-    try:
-        state = TaskState(native_state or "")
-    except ValueError:
-        raise TranslationError(
-            f"unknown Claude Code task state: {native_state!r}",
-            context=raw_event.source_position,
-        ) from None
-    owner = str(task.owner or "").strip()
-    payload = TaskChanged(
-        task_id,
-        str(task.subject or ""),
-        str(task.description or "").strip() or None,
-        state,
-        actor_id_from_claude_code(ClaudeCodeActorId(owner)) if owner else None,
-    )
-    return event(raw_event, "task", str(task_id), "changed", payload)
-
-
 def translate_transcript(
     raw_event: RawEvent,
     transcript_document: records.TranscriptDocument,
@@ -403,7 +372,30 @@ def translate_transcript(
             phase,
             None,
         )
-        created = event(raw_event, "message", native_identity, "created", payload, occurred_at=occurred_at)
+        turn_id = turn_semantics.current(raw_event) if record.interrupted else None
+        created = event(
+            raw_event,
+            "message",
+            native_identity,
+            "created",
+            payload,
+            turn_id=turn_id,
+            occurred_at=occurred_at,
+        )
+        if record.interrupted:
+            turn_semantics.close(raw_event)
+            return [
+                created,
+                event(
+                    raw_event,
+                    "turn",
+                    str(turn_id) if turn_id else native_identity,
+                    "aborted",
+                    TurnAborted(None),
+                    turn_id=turn_id,
+                    occurred_at=occurred_at,
+                ),
+            ]
         if role != MessageRole.USER:
             # A synthetic or parent-authored prompt is machinery or a brief; a
             # turn belongs to the person who asked for one.
@@ -716,6 +708,9 @@ def translate_transcript(
         return events
     if isinstance(record, transcript.ResultsTranscriptRecord):
         events = []
+        interrupted_turn_id = (
+            turn_semantics.current(raw_event) if record.interrupted else None
+        )
         blocks = record.blocks
         # The line's `toolUseResult` sidecar carries what only the native
         # response document holds — a diff's structured patch, a background
@@ -733,7 +728,14 @@ def translate_transcript(
                 continue
             failed = bool(tool_result_block.is_error)
             events.extend(
-                tool_call_semantics.tool_result(raw_event, call_id, result_text, failed, sidecar)
+                tool_call_semantics.tool_result(
+                    raw_event,
+                    call_id,
+                    result_text,
+                    failed,
+                    sidecar,
+                    cancelled=record.cancelled,
+                )
             )
             if failed and tool_call_semantics.pending_attention(call_id):
                 events.append(tool_call_semantics.attention_declined(raw_event, call_id, result_text))
@@ -746,7 +748,25 @@ def translate_transcript(
                 MessagePhase.SYNTHETIC if record.meta else MessagePhase.PROMPT,
                 None,
             )
-            events.append(event(raw_event, "message", text_identity, "created", payload))
+            events.append(event(
+                raw_event,
+                "message",
+                text_identity,
+                "created",
+                payload,
+                turn_id=interrupted_turn_id,
+            ))
+        if record.interrupted:
+            turn_semantics.close(raw_event)
+            events.append(event(
+                raw_event,
+                "turn",
+                str(interrupted_turn_id) if interrupted_turn_id else native_identity,
+                "aborted",
+                TurnAborted(None),
+                turn_id=interrupted_turn_id,
+                occurred_at=occurred_at,
+            ))
         return events
     if isinstance(record, transcript.CompactTranscriptRecord):
         payload = CompactionFinished(record.before_tokens, None)

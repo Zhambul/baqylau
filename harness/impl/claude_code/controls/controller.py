@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import time
 from collections.abc import Mapping
@@ -94,6 +95,24 @@ def _screen_text(terminal_plugin: TerminalPlugin, window_id: WindowId) -> str | 
     ).text
 
 
+def _transcript_has_interrupt(source_reference: str, after_position: int) -> bool:
+    """Read only new transcript records and find Claude Code's abort marker."""
+    try:
+        with open(source_reference, "rb") as source:
+            source.seek(max(after_position, 0))
+            added = source.read()
+    except OSError:
+        return False
+    for line in added.splitlines():
+        record = transcript.parse_line(line.decode("utf-8", errors="replace"))
+        if isinstance(
+            record,
+            (transcript.PromptTranscriptRecord, transcript.ResultsTranscriptRecord),
+        ) and record.interrupted:
+            return True
+    return False
+
+
 def _result(request: ControlRequest, succeeded: bool, reason: str) -> ControlResult:
     return ControlResult(
         request.request_id,
@@ -177,28 +196,51 @@ class InterruptHandler(ControlHandler):
         window_id = control_context.terminal_window_id
         if window_id is None:
             return DeliveryResult(request.request_id, ControlAcknowledgement.REJECTED, "session is not live")
-        previous = _screen_text(terminal, window_id)
-        if not terminal.input.send_key(KeySendRequest(NativeWindowId(str(window_id)), "escape")).succeeded:
-            return DeliveryResult(
-                request.request_id, ControlAcknowledgement.INDETERMINATE, "interrupt key was not delivered"
-            )
-        stopped: bool | None = None
-        for _attempt in range(4):
-            time.sleep(0.15)
-            current = _screen_text(terminal, window_id)
-            if previous is None or current is None:
+        try:
+            position = os.path.getsize(control_context.session.source_reference)
+        except OSError:
+            position = -1
+        delivered = False
+        native_window_id = NativeWindowId(str(window_id))
+        for _attempt in range(2):
+            sent = terminal.input.send_key(KeySendRequest(native_window_id, "escape")).succeeded
+            delivered = delivered or sent
+            if not delivered:
                 break
-            if current == previous:
-                stopped = True
-                break
-            stopped = False
-            previous = current
-            terminal.input.send_key(KeySendRequest(NativeWindowId(str(window_id)), "escape"))
+            deadline = time.monotonic() + 1.25
+            while time.monotonic() < deadline:
+                time.sleep(0.1)
+                if position >= 0 and _transcript_has_interrupt(
+                    control_context.session.source_reference,
+                    position,
+                ):
+                    input_state = ClaudeCodeTerminalProbe().input_state(
+                        terminal.viewport,
+                        window_id,
+                    )
+                    return DeliveryResult(
+                        request.request_id,
+                        ControlAcknowledgement.ACKNOWLEDGED,
+                        restored_text=(
+                            input_state.typed_text
+                            if input_state and input_state.typed_text
+                            else ""
+                        ),
+                        corroborated=True,
+                    )
         input_state = ClaudeCodeTerminalProbe().input_state(terminal.viewport, window_id)
         return DeliveryResult(
             request.request_id,
-            ControlAcknowledgement.ACKNOWLEDGED if stopped is not False else ControlAcknowledgement.INDETERMINATE,
-            None if stopped is not False else "session remained active after interrupt",
+            (
+                ControlAcknowledgement.INDETERMINATE
+                if delivered
+                else ControlAcknowledgement.REJECTED
+            ),
+            (
+                "native interrupt marker was not observed"
+                if delivered
+                else "interrupt key was not delivered"
+            ),
             restored_text=input_state.typed_text if input_state and input_state.typed_text else "",
         )
 

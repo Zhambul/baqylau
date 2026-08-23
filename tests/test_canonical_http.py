@@ -323,6 +323,16 @@ def test_session_application_routes_publish_complete_composer_state(tmp_path):
             },
         }
         assert state["dialog"] == {"draft": None}
+
+        status, body = _post(
+            server,
+            "/api/sessions/session-one/application/tasks-hidden",
+            {"hidden": True},
+        )
+        assert status == 409
+        assert json.loads(body) == {
+            "error": "every task must be completed before hiding the task card"
+        }
     finally:
         server.shutdown()
         server.server_close()

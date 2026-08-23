@@ -352,8 +352,7 @@ class PlanItem(BaseModel):
 
 
 class CoveredItem(BaseModel):
-    """`UserMessage` / `AgentMessage` / `Reasoning` — content this register
-    ALSO carries the record for, read there instead (events.COVERED_ITEMS).
+    """An item whose canonical facts come from another native record.
 
     Open on purpose (OPEN_FOREIGN, module header): the whole point of this
     model is that NOTHING on it is read, only its `type`, so its other
@@ -362,7 +361,9 @@ class CoveredItem(BaseModel):
     that actually read it (items.MessagePayload, items.ReasoningPayload)."""
 
     model_config = OPEN_FOREIGN
-    type: Literal["UserMessage", "AgentMessage", "Reasoning"]
+    type: Literal[
+        "UserMessage", "AgentMessage", "Reasoning", "McpToolCall", "ContextCompaction",
+    ]
 
 
 ItemCompletedItem: TypeAlias = Union[
@@ -378,6 +379,8 @@ class ItemCompletedType(StrEnum):
     USER_MESSAGE = "UserMessage"
     AGENT_MESSAGE = "AgentMessage"
     REASONING = "Reasoning"
+    MCP_TOOL_CALL = "McpToolCall"
+    CONTEXT_COMPACTION = "ContextCompaction"
 
 # `item.type` -> the declared model for it. A plain dict, not a pydantic
 # discriminated union: pydantic's "smart" union mode picks by a coercion-cost
@@ -395,6 +398,8 @@ ITEM_COMPLETED_ITEMS: Mapping[ItemCompletedType, type[ItemCompletedItem]] = {
     ItemCompletedType.USER_MESSAGE: CoveredItem,
     ItemCompletedType.AGENT_MESSAGE: CoveredItem,
     ItemCompletedType.REASONING: CoveredItem,
+    ItemCompletedType.MCP_TOOL_CALL: CoveredItem,
+    ItemCompletedType.CONTEXT_COMPACTION: CoveredItem,
 }
 
 
@@ -693,6 +698,14 @@ class ContentPart(BaseModel):
     text: str | None = None
 
 
+class NodeReplResultDocument(BaseModel):
+    """The outer result document returned by the node-repl MCP tool."""
+
+    model_config = FOREIGN
+    content: list[ContentPart]
+    isError: bool = False
+
+
 class FunctionCallOutputPayload(BaseModel):
     model_config = FOREIGN
     type: Literal["function_call_output"] = "function_call_output"
@@ -807,6 +820,25 @@ class CombinedToolResult(BaseModel):
     exit_code: int | None = None
 
 
+class GoalToolResultBlock(BaseModel):
+    """The goal fields that Codex control tools return.
+
+    The result can also include budget and elapsed-use fields. Those fields do
+    not change the canonical goal, so this boundary leaves them open and reads
+    only the goal identity and state.
+    """
+
+    model_config = OPEN_FOREIGN
+    objective: str | None = None
+    status: str | None = None
+    reason: str | None = None
+
+
+class GoalToolResultDocument(BaseModel):
+    model_config = OPEN_FOREIGN
+    goal: GoalToolResultBlock | None = None
+
+
 # --- function_call NAME -> its argument grammar ------------------------------
 # `arguments` is a JSON *string*; these models are what it decodes to. A
 # codex build that stops sending valid JSON there still degrades (items._args
@@ -844,6 +876,22 @@ class AskArguments(BaseModel):
     questions: list[AskQuestion] | None = None
 
 
+class AskAnswer(BaseModel):
+    model_config = FOREIGN
+    answers: tuple[str, ...] = ()
+
+
+class AskAnswers(RootModel[Mapping[str, AskAnswer]]):
+    pass
+
+
+class AskResultDocument(BaseModel):
+    """The value Codex records for a completed request_user_input call."""
+
+    model_config = FOREIGN
+    answers: AskAnswers
+
+
 class PlanTask(BaseModel):
     model_config = FOREIGN
     step: str | None = None
@@ -853,6 +901,14 @@ class PlanTask(BaseModel):
 class PlanArguments(BaseModel):
     model_config = FOREIGN
     plan: list[PlanTask] | None = None
+
+
+class GoalArguments(BaseModel):
+    model_config = FOREIGN
+    objective: str | None = None
+    status: str | None = None
+    reason: str | None = None
+    token_budget: int | None = None
 
 
 # The multi-agent verbs (collaboration.spawn_agent and friends): a GENUINELY
@@ -1026,6 +1082,7 @@ class ExecRecord:
     kind: Literal["exec"] = "exec"
     cmd: str
     call_id: CodexCallId
+    turn: CodexTurnId | None = None
     ts: str | None = None
 
 
@@ -1045,6 +1102,7 @@ class ExecResultRecord:
     call_id: CodexCallId
     process_id: CodexShellId | None = None
     running: bool = False
+    interrupted: bool = False
     ts: str | None = None
 
 
@@ -1156,6 +1214,17 @@ class GoalRecord:
 class GoalToolRecord:
     kind: Literal["goal_tool"] = "goal_tool"
     call_id: CodexCallId
+    name: str
+    objective: str | None = None
+    status: str | None = None
+    reason: str | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
+class StateToolBatchRecord:
+    kind: Literal["state_tool_batch"] = "state_tool_batch"
+    call_id: CodexCallId
+    actions: tuple[TaskListRecord | GoalToolRecord, ...]
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -1194,6 +1263,7 @@ RolloutRecord: TypeAlias = Union[
     SearchRecord, ExecRecord, ExecResultRecord, StdinRecord, CommandCompletedRecord,
     ChatRecord, ThinkRecord, PatchCallRecord, AskRecord, PlanRecord, SettingsRecord,
     CompactBoundaryRecord, ToolRecord, ActorActivityRecord, CollaborationCallRecord,
-    TaskListRecord, GoalRecord, GoalToolRecord, UnmappedToolRecord, BadRecord,
+    TaskListRecord, GoalRecord, GoalToolRecord, StateToolBatchRecord,
+    UnmappedToolRecord, BadRecord,
     WorldStateRecord, CoveredItemRecord, EmptyRecord,
 ]

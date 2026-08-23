@@ -77,10 +77,10 @@ PHASE_FINAL = "final_answer"
 # register and is therefore read there, not here (measured against codex-cli
 # 0.147.0: `UserMessage` and `AgentMessage` items are completed for the same prose
 # the `response_item/message` records already carry, `Reasoning` for the think the
-# `reasoning` records carry — and `_ev_user_message` / `_ev_agent_message` /
-# `_ev_agent_reasoning` already de-double the event_msg spellings of the same).
-# A CLOSED list on purpose — records.CoveredItem's Literal names the three,
-# and records.ITEM_COMPLETED_ITEMS is the one dispatch table that reads it.
+# `reasoning` records carry, `McpToolCall` for the tool records, and
+# `ContextCompaction` for the compaction lifecycle records. A CLOSED list on
+# purpose: records.CoveredItem's Literal and records.ITEM_COMPLETED_ITEMS are the
+# one dispatch contract that declares these measured mirrors.
 
 
 def _ev_token_count(token_count_payload: TokenCountPayload) -> UsageRecord | None:

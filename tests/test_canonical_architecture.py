@@ -745,7 +745,8 @@ def test_harness_adapters_never_use_raw_dictionaries_or_jsonvalue():
         "harness/impl/codex/canonical/translator.py": {
             "CODEX_TOOLS", "GOAL_STATES", "ACTIVITY_CALLS", "FILE_ACTIONS",
             "_collaboration_calls", "_process_shells", "_continuation_shells",
-            "_call_records", "_plan_tasks", "current",
+                "_call_records", "_plan_tasks", "current",
+                "_goals",
         },
         "harness/impl/codex/controls/controller.py": {"HANDLERS"},
         "harness/impl/codex/controls/modeldialog.py": {"EFFORT_LABEL"},
@@ -990,6 +991,8 @@ FILE_ACCESS_ALLOWLIST = {
         "the transcript — read as evidence, appended to for a parked rename",
     "harness/impl/claude_code/canonical/sources.py":     "transcripts and task files, read as evidence",
     "harness/impl/claude_code/canonical/messages.py":    "a child actor's meta.json sidecar, read as evidence",
+    "harness/impl/claude_code/controls/controller.py":
+        "reads the transcript tail to confirm an interrupt landed",
     "harness/impl/claude_code/model.py":                 "the agent meta.json sidecar beside a transcript",
     "harness/impl/claude_code/slashcmds.py":             "your .claude/commands and skills",
     "harness/impl/claude_code/hooks/foreground.py":      "creates the tee file a command writes its output into",
