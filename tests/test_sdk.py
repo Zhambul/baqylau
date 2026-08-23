@@ -14,7 +14,7 @@ from sdk.client import SessionRef, SessionsResource, SessionWatch, UploadsResour
 from sdk.state import SessionSnapshot
 from sdk.transport import ApiFailure, HttpTransport
 from tests.e2e.testkit import selectors
-from tests.e2e.testkit.references import References
+from tests.e2e.testkit.references import References, TurnRef
 
 
 def session_data(cursor: int = 1001) -> SessionDataResponse:
@@ -60,14 +60,20 @@ def message_entry(cursor: int) -> EntryResponse:
     })
 
 
-def prompt_entry(cursor: int, text: str) -> EntryResponse:
+def prompt_entry(
+    cursor: int,
+    text: str,
+    *,
+    actor_id: str = "lead-one",
+    turn_id: str = "turn-one",
+) -> EntryResponse:
     return EntryResponse.model_validate({
         "entry_id": f"prompt-{cursor}",
         "type": "message",
         "cursor": cursor,
-        "actor_id": "lead-one",
-        "parent_actor_id": None,
-        "turn_id": "turn-one",
+        "actor_id": actor_id,
+        "parent_actor_id": None if actor_id == "lead-one" else "lead-one",
+        "turn_id": turn_id,
         "occurred_at": float(cursor),
         "summary": None,
         "body": {
@@ -208,6 +214,70 @@ def test_a_launch_turn_uses_the_prompt_that_the_harness_delivered():
     assert found.prompt == delivered
     assert found.turn_id == "turn-one"
     assert found.prompt_cursor == 1
+
+
+def test_a_lead_turn_boundary_ignores_a_child_prompt():
+    snapshot = SessionSnapshot(
+        session_data(4),
+        (
+            prompt_entry(1, "lead prompt"),
+            prompt_entry(2, "child prompt", actor_id="child-one", turn_id="child-turn"),
+            message_entry(3),
+            prompt_entry(4, "next lead prompt", turn_id="turn-two"),
+        ),
+    )
+    reference = TurnRef(
+        SessionRef("session-one"),
+        "lead prompt",
+        0,
+        1,
+        actor_id="lead-one",
+        turn_id="turn-one",
+        prompt_cursor=1,
+    )
+
+    assert selectors.cursor_is_in_turn(snapshot, reference, 3)
+    assert not selectors.cursor_is_in_turn(snapshot, reference, 4)
+
+
+def test_an_assignment_uses_the_actor_that_finishes_it():
+    started = EntryResponse.model_validate({
+        "entry_id": "assignment-started",
+        "type": "assignment_started",
+        "cursor": 1,
+        "actor_id": "lead-one",
+        "parent_actor_id": None,
+        "turn_id": "turn-one",
+        "occurred_at": 1.0,
+        "summary": None,
+        "body": {
+            "assignment_id": "assignment-one",
+            "assigned_actor_name": "ticker",
+            "prompt": {"text": "run a command", "media_type": "text/plain"},
+        },
+    })
+    finished = EntryResponse.model_validate({
+        "entry_id": "assignment-finished",
+        "type": "assignment_finished",
+        "cursor": 2,
+        "actor_id": "child-one",
+        "parent_actor_id": "lead-one",
+        "turn_id": "child-turn",
+        "occurred_at": 2.0,
+        "summary": None,
+        "body": {
+            "assignment_id": "assignment-one",
+            "state": "succeeded",
+            "result": {"text": "gathered", "media_type": "text/plain"},
+        },
+    })
+
+    assignment = SessionSnapshot(session_data(2), (started, finished)).assignments()[0]
+
+    assert assignment.actor_id == "child-one"
+    assert assignment.turn_id == "turn-one"
+    assert assignment.assigned_actor_name == "ticker"
+    assert assignment.state == "succeeded"
 
 
 def test_named_references_reject_rebinding_and_unknown_names():

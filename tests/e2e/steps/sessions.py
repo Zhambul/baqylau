@@ -13,8 +13,6 @@ from tests.e2e.testkit.launching import start_named_session
 from tests.e2e.testkit.policy import WaitPolicy
 from tests.e2e.testkit.references import SessionSpec, SessionSpecs, Sessions, TurnRef, Turns
 
-TURN_ENDED = ("awaiting_response", "awaiting_background")
-
 
 def _turn_enders(snapshot: SessionSnapshot, reference: TurnRef) -> list[EntryResponse]:
     assert reference.prompt_cursor is not None
@@ -22,19 +20,13 @@ def _turn_enders(snapshot: SessionSnapshot, reference: TurnRef) -> list[EntryRes
         reference.prompt_cursor,
         reference.completion_after_cursor or reference.prompt_cursor,
     )
-    later_prompts = [
-        entry.cursor
-        for entry in snapshot.entries
-        if entry.cursor > answer_after
-        and isinstance(entry.body, MessageBodyResponse)
-        and entry.body.role == "user"
-        and entry.body.phase == "prompt"
-    ]
-    boundary = min(later_prompts) if later_prompts else None
+    if reference.actor_id is None:
+        raise AssertionError("turn does not have a resolved actor identity")
+    boundary = selectors.next_prompt_cursor(snapshot, reference, after=answer_after)
     return [
         entry
         for entry in snapshot.messages(
-            actor_id=snapshot.lead().actor_id,
+            actor_id=reference.actor_id,
             role="assistant",
             phase="end_turn",
         )
@@ -103,13 +95,23 @@ def send_prompt(
     prompt = docstring.strip()
     session = sessions.get(session_name)
     before = client.sessions.snapshot(session)
-    expected = sum(actor.statistics.prompt_count for actor in before.data.actors) + 1
+    lead = before.lead()
+    expected = lead.statistics.prompt_count + 1
     receipt = client.sessions.send(session, prompt)
-    if receipt.status_code not in (200, 202):
+    if receipt.status_code != 200 or receipt.outcome.status != "acknowledged":
         raise AssertionError(
             f"send action {receipt.request_id!r} was not accepted: {receipt.outcome}"
         )
-    turns.bind(turn_name, TurnRef(session, prompt, receipt.cursor_before, expected))
+    turns.bind(
+        turn_name,
+        TurnRef(
+            session,
+            prompt,
+            receipt.cursor_before,
+            expected,
+            actor_id=lead.actor_id,
+        ),
+    )
 
 
 @then(parsers.parse('turn "{name}" completes'))
@@ -126,15 +128,18 @@ def turn_completes(
 
     def completed(snapshot: SessionSnapshot) -> bool | None:
         enders = _turn_enders(snapshot, current)
-        prompt_count = sum(actor.statistics.prompt_count for actor in snapshot.data.actors)
-        quiet = snapshot.lead().status in TURN_ENDED
-        return True if len(enders) == 1 and prompt_count >= current.expected_prompt_count and quiet else None
+        assert current.actor_id is not None
+        prompt_count = snapshot.actor(current.actor_id).statistics.prompt_count
+        if len(enders) > 1:
+            raise AssertionError(f"turn {name!r} has {len(enders)} final answers")
+        return (
+            True
+            if len(enders) == 1 and prompt_count >= current.expected_prompt_count
+            else None
+        )
 
     watch.wait(
-        lambda snapshot: (
-            f"turn {name!r} to have one end message and a quiet lead; "
-            f"lead status is {snapshot.lead().status!r}"
-        ),
+        f"turn {name!r} to have exactly one final answer and its prompt",
         completed,
         timeout=wait_policy.turn,
     )

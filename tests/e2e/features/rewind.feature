@@ -1,7 +1,7 @@
 Feature: rewind restores a named prompt for revision
 
-  Scenario: Claude Code restores a named prompt for revision
-    Given session configuration "primary" uses claude_code with model haiku and low effort
+  Scenario Outline: a harness restores a named prompt for revision
+    Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" as turn "first prompt" with prompt
       """
       Reply only with the word first.
@@ -18,3 +18,7 @@ Feature: rewind restores a named prompt for revision
     Then control "restore first prompt" response is accepted
     And control "restore first prompt" outcome is acknowledged
     And control "restore first prompt" restores turn "first prompt"
+
+    Examples:
+      | harness     | model |
+      | claude_code | haiku |

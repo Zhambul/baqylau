@@ -26,6 +26,7 @@ from harness.impl.codex.canonical.records import (
     AgentMessagePayload,
     AgentReasoningPayload,
     CommandExecutionItem,
+    CollabAgentToolCallItem,
     CoveredItem,
     EmptyPayload,
     FileChangeEntry,
@@ -230,7 +231,7 @@ def _ev_item_completed(item_completed_payload: ItemCompletedPayload) -> RolloutR
     expected_model = ITEM_COMPLETED_ITEMS[item_type]
     if not isinstance(item, expected_model):
         raise TypeError(f"Codex item {item.type!r} did not match {expected_model.__name__}")
-    if isinstance(item, CoveredItem):
+    if isinstance(item, (CoveredItem, CollabAgentToolCallItem)):
         return CoveredItemRecord()
     if isinstance(item, FileChangeItem):
         return _file_change(item)

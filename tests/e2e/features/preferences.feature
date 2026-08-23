@@ -1,16 +1,21 @@
 Feature: browser-owned preferences round trip through the application
 
-  Scenario: new-session form state returns the last saved values
-    When I save new-session choices for codex model gpt-5.6-luna and low effort
+  Scenario Outline: new-session form state returns the last saved values
+    When I save new-session choices for <harness> model <model> and low effort
     And I save new-session draft 'continue the E2E work'
-    Then global new-session choices are codex model gpt-5.6-luna and low effort
+    Then global new-session choices are <harness> model <model> and low effort
     And global new-session draft is 'continue the E2E work'
 
-  Scenario: session display and composer state return the last saved values
-    Given session configuration "primary" uses codex with model gpt-5.6-luna and low effort
+    Examples:
+      | harness     | model        |
+      | codex       | gpt-5.6-luna |
+      | claude_code | haiku        |
+
+  Scenario Outline: session display and composer state return the last saved values
+    Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" as turn "open preferences" with prompt
       """
-      Use update_plan exactly once with one completed step named "Saved task".
+      <task_instruction>
       Reply only with the word ready.
       """
     Then turn "open preferences" completes
@@ -24,3 +29,8 @@ Feature: browser-owned preferences round trip through the application
     And view mode for session "primary" is focus
     And notifications for session "primary" are muted
     And tasks for session "primary" are hidden
+
+    Examples:
+      | harness     | model        | task_instruction                                                     |
+      | codex       | gpt-5.6-luna | Use update_plan exactly once with one completed step named "Saved task". |
+      | claude_code | haiku        | Use TaskCreate once for "Saved task", then mark it completed.        |

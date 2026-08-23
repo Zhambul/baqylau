@@ -65,6 +65,7 @@ class TurnRef:
     prompt: str
     cursor_before: int
     expected_prompt_count: int
+    actor_id: str | None = None
     turn_id: str | None = None
     prompt_cursor: int | None = None
     prompt_message_id: str | None = None

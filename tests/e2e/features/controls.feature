@@ -32,8 +32,8 @@ Feature: session controls change live session state
       | codex       | gpt-5.6-luna | gpt-5.6-terra |
       | claude_code | haiku        | sonnet         |
 
-  Scenario: Claude Code can replace a custom title with an automatic name
-    Given session configuration "primary" uses claude_code with model haiku and low effort
+  Scenario Outline: a harness can replace a custom title with an automatic name
+    Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" as turn "name sample" with prompt
       """
       Reply only with the word ready.
@@ -47,3 +47,7 @@ Feature: session controls change live session state
     Then control "automatic name" response is accepted
     And control "automatic name" outcome is acknowledged
     And session "primary" title is not 'Temporary E2E title'
+
+    Examples:
+      | harness     | model |
+      | claude_code | haiku |

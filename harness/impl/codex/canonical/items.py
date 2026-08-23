@@ -26,6 +26,7 @@ from harness.impl.codex.ids import CodexCallId, CodexShellId
 from harness.impl.codex.canonical.records import (
     AskArguments,
     COLLABORATION_ARGUMENTS,
+    CollaborationArguments,
     CollaborationCallName,
     CombinedToolResult,
     ContentPart,
@@ -57,11 +58,12 @@ from harness.impl.codex.canonical.records import (
     PlanTask,
     RolloutRecord,
     SearchRecord,
-    StateToolBatchRecord,
+    SendMessageArguments,
     StdinRecord,
     TaskListRecord,
     ThinkRecord,
     ToolRecord,
+    ToolBatchRecord,
     UnmappedToolRecord,
 )
 from harness.impl.codex.canonical.vocabulary import (
@@ -104,6 +106,7 @@ _OUTPUT_MARK = "Output:\n"
 
 
 _JS_TOOL = re.compile(r"tools\.([A-Za-z_][A-Za-z0-9_]*)\s*\(")
+COLLABORATION_TOOL_PREFIX = "multi_agent_v1__"
 # The quote characters the argument scan below must not read structure inside.
 _JS_QUOTES = "\"'`"
 _JS_PLAN_STEP = re.compile(
@@ -175,6 +178,17 @@ def _loose_string_field(arguments: str, field: str) -> str | None:
         return None
 
 
+def _loose_int_field(arguments: str, field: str) -> int | None:
+    for spelling in (field, field.replace("-", "_")):
+        match = re.search(
+            rf"""["']?{re.escape(spelling)}["']?\s*:\s*(\d+)""",
+            arguments,
+        )
+        if match is not None:
+            return int(match.group(1))
+    return None
+
+
 def _goal_tool(
     name: str,
     arguments: str,
@@ -195,6 +209,47 @@ def _goal_tool(
         status=parsed.status,
         reason=parsed.reason,
     )
+
+
+def _collaboration_name(native_name: str) -> CollaborationCallName | None:
+    name = (
+        native_name.removeprefix(COLLABORATION_TOOL_PREFIX)
+        if native_name.startswith(COLLABORATION_TOOL_PREFIX)
+        else native_name
+    )
+    try:
+        return CollaborationCallName(name)
+    except ValueError:
+        return None
+
+
+def _collaboration_call(
+    native_name: str,
+    arguments: str,
+    call_id: CodexCallId,
+    *,
+    javascript: bool = False,
+) -> CollaborationCallRecord | None:
+    name = _collaboration_name(native_name)
+    argument_model = COLLABORATION_ARGUMENTS.get(name) if name is not None else None
+    if name is None or argument_model is None:
+        return None
+    try:
+        parsed: CollaborationArguments = argument_model.model_validate_json(
+            arguments or argument_model().model_dump_json()
+        )
+    except ValidationError:
+        if not javascript:
+            raise
+        if name == CollaborationCallName.SEND_MESSAGE:
+            parsed = SendMessageArguments(
+                message=_loose_string_field(arguments, "message"),
+                content=_loose_string_field(arguments, "content"),
+                target=_loose_string_field(arguments, "target"),
+            )
+        else:
+            parsed = argument_model()
+    return CollaborationCallRecord(name=name.value, args=parsed, call_id=call_id)
 
 
 def _state_tool_action(
@@ -259,7 +314,9 @@ def _exec_output_body(txt: str) -> str:
     the block body is the command's real output (uniform with a Claude command);
     the whole text is still what the exit is scanned from."""
     i = txt.find(_OUTPUT_MARK)
-    return txt[i + len(_OUTPUT_MARK):].lstrip("\n") if i >= 0 else txt
+    if i >= 0:
+        return txt[i + len(_OUTPUT_MARK) :].lstrip("\n")
+    return "" if txt.endswith(_OUTPUT_MARK.rstrip("\n")) else txt
 
 
 def content_text(c: str | list[ContentPart | str] | None) -> str:
@@ -291,8 +348,9 @@ def _rsp_function_call_output(function_call_output_payload: FunctionCallOutputPa
     if not out:
         return None
     m = EXIT_RE.search(out[:EXIT_SCAN_B])
-    return ExecResultRecord(exit=m.group(1) if m else None,
-                             output=_exec_output_body(out), call_id=CodexCallId(p.call_id or ""))
+    return ExecResultRecord(
+        exit=m.group(1) if m else None, output=_exec_output_body(out), call_id=CodexCallId(p.call_id or "")
+    )
 
 
 def _rsp_message(message_payload: MessagePayload) -> RolloutRecord:
@@ -344,31 +402,57 @@ def _rsp_custom_tool_call(custom_tool_call_payload: CustomToolCallPayload) -> Ro
         calls = js_tool_calls(js)
         if len(calls) > 1:
             actions = []
+            metadata = p.internal_chat_message_metadata_passthrough
             for index, (name, arguments) in enumerate(calls, start=1):
+                action_call_id = CodexCallId(f"{call_id}:{index}")
                 if name == "apply_patch":
                     # Each authoritative FileChange item carries the patch and
                     # its result. The wrapper call is only request plumbing.
                     continue
-                action = _state_tool_action(
-                    name,
-                    arguments,
-                    CodexCallId(f"{call_id}:{index}"),
-                )
+                action: ExecRecord | StdinRecord | TaskListRecord | GoalToolRecord | CollaborationCallRecord | None
+                if name == "exec_command":
+                    cmd = _exec_cmd_from_js(arguments)
+                    action = (
+                        ExecRecord(
+                            cmd=cmd,
+                            call_id=action_call_id,
+                            turn=metadata.turn_id if metadata else None,
+                            yield_ms=_loose_int_field(arguments, "yield_time_ms"),
+                            reports_session_id=".session_id" in js,
+                        )
+                        if cmd
+                        else None
+                    )
+                elif name == "write_stdin":
+                    continuation = _stdin_record(action_call_id, arguments)
+                    # A dynamic `r.session_id` waits for an exec in this same
+                    # cell. The completed CommandExecution item owns its result.
+                    action = continuation if continuation.process_id else None
+                    if action is None and ".session_id" in arguments:
+                        continue
+                else:
+                    action = _state_tool_action(name, arguments, action_call_id)
+                if action is None:
+                    action = _collaboration_call(
+                        name,
+                        arguments,
+                        action_call_id,
+                        javascript=True,
+                    )
                 if action is None:
                     return UnmappedToolRecord(name=f"batched {name}")
                 actions.append(action)
-            return (
-                StateToolBatchRecord(call_id=call_id, actions=tuple(actions))
-                if actions
-                else empty_record()
-            )
+            return ToolBatchRecord(call_id=call_id, actions=tuple(actions)) if actions else empty_record()
         cmd = _exec_cmd_from_js(js)
         if cmd:
             metadata = p.internal_chat_message_metadata_passthrough
+            arguments = calls[0][1] if len(calls) == 1 else ""
             return ExecRecord(
                 cmd=cmd,
                 call_id=call_id,
                 turn=metadata.turn_id if metadata else None,
+                yield_ms=_loose_int_field(arguments, "yield-time_ms"),
+                reports_session_id=".session_id" in js,
             )
         # …not a shell command: any OTHER `tools.<fn>(…)` through the same exec
         # tool is a TOOL CALL and gets its own record — structured (name + args)
@@ -391,6 +475,9 @@ def _rsp_custom_tool_call(custom_tool_call_payload: CustomToolCallPayload) -> Ro
         if fn in ("create_goal", "get_goal", "update_goal"):
             goal = _goal_tool(fn, args, call_id)
             return goal if goal is not None else UnmappedToolRecord(name=fn)
+        collaboration = _collaboration_call(fn, args, call_id, javascript=True)
+        if collaboration is not None:
+            return collaboration
         return ToolRecord(name=fn, args=args, call_id=call_id)
     if p.name == "apply_patch":
         patch = content_text(p.input) if not isinstance(p.input, str) else p.input

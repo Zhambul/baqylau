@@ -141,6 +141,10 @@ results         # records.py WebSearchEndPayload
 completed_at_ms # records.py ItemCompletedPayload
 thread_id       # records.py ItemCompletedPayload
 create_time     # records.py ChatMessageMetadata
+sender_thread_id   # records.py CollabAgentToolCallItem
+receiver_thread_ids  # records.py CollabAgentToolCallItem
+receiver_agents      # records.py CollabAgentToolCallItem
+agents_states        # records.py CollabAgentToolCallItem
 
 # A TypedDict field read only through dict-literal construction and ["check"]
 # subscripts (askdialog_screen.rows / its dialog callers) — the ANNOTATION is

@@ -12,14 +12,16 @@ from collections.abc import Callable
 
 from domain.ids import WindowId
 
+from harness.impl.claude_code import suggestion
 from harness.impl.claude_code.controls import clipboard_image
-from harness.impl.claude_code.controls.screen_driver import ScreenDriver
+from harness.impl.claude_code.controls.screen_driver import ScreenDriver, poll_until
 
 # after the line-kill that clears whatever the box held, settle before pasting —
 # a paste into a just-cleared input drops leading bytes (measured; the mangle).
 CLEAR_GAP_S = 0.15
 CLEAR_LINES_MAX = 50    # ceiling on the per-line kill loop: a corrupt/huge
 #                         stash must not become an unbounded keystroke storm.
+COMPOSER_READY_TIMEOUT_S = 3.0
 
 
 def type_command(screen_driver: ScreenDriver, win: WindowId, text: str) -> tuple[bool, bool]:
@@ -59,6 +61,14 @@ def type_command(screen_driver: ScreenDriver, win: WindowId, text: str) -> tuple
     delivery — the caller reports indeterminate instead of lying. Multi-line
     pastes collapse into Claude Code's placeholder and cannot be verified; they
     keep the optimistic contract."""
+    _screen, ready = poll_until(
+        screen_driver,
+        win,
+        suggestion.input_box_visible,
+        COMPOSER_READY_TIMEOUT_S,
+    )
+    if not ready:
+        return False, False
     clip = clipboard_image.clear_image()
     if not screen_driver.paste_text(win, text):
         return False, clip

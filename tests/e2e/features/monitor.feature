@@ -1,7 +1,7 @@
 Feature: an armed monitor reports its events
 
-  Scenario: monitor events arrive after the turn that armed it
-    Given session configuration "primary" uses claude_code with model haiku and low effort
+  Scenario Outline: monitor events arrive after the turn that armed it
+    Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" as turn "arm ticks" with prompt
       """
       Use the Monitor tool with description ticks to watch this command:
@@ -17,3 +17,7 @@ Feature: an armed monitor reports its events
     And command "tick monitor" has state succeeded
     And session "primary" has no running work
     And turn "arm ticks" has final answer 'armed'
+
+    Examples:
+      | harness     | model |
+      | claude_code | haiku |

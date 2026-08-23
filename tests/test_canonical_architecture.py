@@ -746,7 +746,7 @@ def test_harness_adapters_never_use_raw_dictionaries_or_jsonvalue():
             "CODEX_TOOLS", "GOAL_STATES", "ACTIVITY_CALLS", "FILE_ACTIONS",
             "_collaboration_calls", "_process_shells", "_continuation_shells",
                 "_call_records", "_plan_tasks", "current",
-                "_goals",
+                "_goals", "_working_directories",
         },
         "harness/impl/codex/controls/controller.py": {"HANDLERS"},
         "harness/impl/codex/controls/modeldialog.py": {"EFFORT_LABEL"},

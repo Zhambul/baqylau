@@ -142,7 +142,7 @@ from harness.impl.codex.canonical.records import (
     SessionMetaSource,
     SettingsRecord,
     StdinRecord,
-    StateToolBatchRecord,
+    ToolBatchRecord,
     TaskCompleteRecord,
     TaskListRecord,
     TaskStartedRecord,
@@ -247,6 +247,9 @@ _NODE_READ_FILE = re.compile(
 )
 _NODE_READ_TEMPLATE_EXPRESSION = re.compile(
     r'''\breadFile\(\s*["']\$\{\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')\s*\}["']'''
+)
+_NODE_READ_CWD_SUFFIX = re.compile(
+    r'''\breadFile\(\s*nodeRepl\.cwd\s*\+\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')'''
 )
 
 # Which field of a web search holds what was searched for, in the order codex
@@ -385,14 +388,21 @@ def _tool_path(arguments: str | None) -> str:
 
 def _node_read_path(arguments: str | None) -> str:
     source = arguments or ""
-    match = _NODE_READ_TEMPLATE_EXPRESSION.search(source) or _NODE_READ_FILE.search(source)
+    cwd_match = _NODE_READ_CWD_SUFFIX.search(source)
+    match = cwd_match or _NODE_READ_TEMPLATE_EXPRESSION.search(source) or _NODE_READ_FILE.search(source)
     if match is None:
         return ""
     try:
         path = ast.literal_eval(match.group(1))
     except (SyntaxError, ValueError):
         return ""
-    return str(path)
+    found = str(path)
+    return found.lstrip("/") if cwd_match is not None else found
+
+
+_REPORTED_PROCESS_ID = re.compile(
+    r"(?:session(?:_id)?\s*[:=]?\s*)?(\d+)"
+)
 
 
 class CodexCanonicalTranslator(HarnessTranslator):
@@ -411,6 +421,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
         ] = {}
         self._plan_tasks: dict[tuple[str, str], tuple[TaskChanged, ...]] = {}
         self._goals: dict[str, GoalChanged] = {}
+        self._working_directories: dict[str, str] = {}
         self._selections = SelectionSemantics()
 
     @staticmethod
@@ -703,6 +714,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
         *,
         occurred_at: float | None = None,
     ) -> list[CanonicalEvent[EventPayload]]:
+        self._working_directories[str(raw_event.session_id)] = working_directory
         return [
             event(
                 raw_event,
@@ -736,7 +748,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
     _CALL_ID_RECORDS = (
         ExecRecord, ExecResultRecord, StdinRecord, ToolRecord, PatchCallRecord, AskRecord,
         ActorActivityRecord, CollaborationCallRecord, TaskListRecord, GoalToolRecord,
-        StateToolBatchRecord,
+        ToolBatchRecord,
     )
     _AT_RECORDS = (TaskStartedRecord, TaskCompleteRecord)
 
@@ -844,13 +856,13 @@ class CodexCanonicalTranslator(HarnessTranslator):
             for shell_id in interrupted_shells:
                 if (source_key, shell_id) in self._backgrounded_shells:
                     continue
-                self._backgrounded_shells.add((source_key, shell_id))
+                self._finished_shells.add((source_key, shell_id))
                 events.append(event(
                     raw_event,
                     "shell",
                     str(shell_id),
-                    "backgrounded",
-                    ShellBackgrounded(shell_id),
+                    "finished",
+                    ShellFinished(shell_id, Outcome.CANCELLED, None, None),
                     turn_id,
                     occurred_at,
                 ))
@@ -985,13 +997,20 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 payload,
                 occurred_at=occurred_at,
             )]
-        if isinstance(record, StateToolBatchRecord):
+        if isinstance(record, ToolBatchRecord):
             self._semantic_tool_calls.add((
                 self._source_key(raw_event),
                 CodexCallId(record.call_id or native_identity),
             ))
             batch_events: list[CanonicalEvent[EventPayload]] = []
             for action in record.actions:
+                if isinstance(action, (CollaborationCallRecord, ExecRecord, StdinRecord)):
+                    batch_events.extend(self._translate_record(
+                        raw_event,
+                        rollout_observation,
+                        action,
+                    ))
+                    continue
                 if isinstance(action, TaskListRecord):
                     batch_events.extend(self._translate_record(
                         raw_event,
@@ -1182,22 +1201,40 @@ class CodexCanonicalTranslator(HarnessTranslator):
             if (source_key, shell_id) in self._finished_shells:
                 return []
             process_exit_code = exit_code(record.exit)
-            process_id = record.process_id or CodexShellId("")
+            reported_process_id = (
+                _REPORTED_PROCESS_ID.fullmatch(record.output.strip())
+                if call_record.reports_session_id
+                else None
+            )
+            process_id = record.process_id or CodexShellId(
+                reported_process_id.group(1) if reported_process_id is not None else ""
+            )
             if process_id:
                 self._process_shells[(source_key, process_id)] = shell_id
             if record.interrupted:
                 if (source_key, shell_id) in self._backgrounded_shells:
                     return []
-                self._backgrounded_shells.add((source_key, shell_id))
+                self._finished_shells.add((source_key, shell_id))
                 return [event(
                     raw_event,
                     "shell",
                     str(shell_id),
-                    "backgrounded",
-                    ShellBackgrounded(shell_id),
+                    "finished",
+                    ShellFinished(shell_id, Outcome.CANCELLED, None, None),
                     occurred_at=occurred_at,
                 )]
-            if record.running:
+            yielded_without_identity = (
+                call_record.yield_ms is not None
+                and record.exit is None
+                and not record.output
+            )
+            yielded_with_identity = (
+                call_record.yield_ms is not None
+                and record.exit is None
+                and bool(process_id)
+                and reported_process_id is not None
+            )
+            if record.running or yielded_without_identity or yielded_with_identity:
                 # A BACKGROUND TERMINAL: the command outlived its yield budget, so
                 # codex handed back a live session (its `session_id`, the cell id
                 # `/ps` lists and `write_stdin` polls) with no exit code. Announced
@@ -1215,7 +1252,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
                         ShellBackgrounded(shell_id),
                         occurred_at=occurred_at,
                     ))
-                output = record.output
+                output = "" if yielded_with_identity else record.output
                 if output:
                     ordinal = int(raw_event.source_position)
                     running_events.append(event(
@@ -1504,6 +1541,10 @@ class CodexCanonicalTranslator(HarnessTranslator):
             # No path is readable from the call, and a file fact whose path was
             # invented is worse than no fact.
             return []
+        if not os.path.isabs(path):
+            working_directory = self._working_directories.get(str(raw_event.session_id))
+            if working_directory:
+                path = os.path.normpath(os.path.join(working_directory, path))
         payload = FileAccessed(
             path=path,
             action=FileAction.READ,

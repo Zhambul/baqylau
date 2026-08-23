@@ -21,9 +21,7 @@ from tests.e2e.testkit.references import (
 
 
 def _assignment(snapshot: SessionSnapshot, reference: AssignmentRef) -> AssignmentState:
-    found = [
-        item for item in snapshot.assignments() if item.assignment_id == reference.assignment_id
-    ]
+    found = [item for item in snapshot.assignments() if item.assignment_id == reference.assignment_id]
     if len(found) != 1:
         raise AssertionError(f"assignment {reference.assignment_id!r} has {len(found)} matches")
     return found[0]
@@ -33,9 +31,7 @@ def _actor(snapshot: SessionSnapshot, reference: ActorRef) -> ActorResponse:
     return snapshot.actor(reference.actor_id)
 
 
-@when(parsers.parse(
-    'I name the only assignment in turn "{turn_name}" "{assignment_name}"'
-))
+@when(parsers.parse('I name the only assignment in turn "{turn_name}" "{assignment_name}"'))
 def name_assignment(
     client: BaqylauClient,
     turns: Turns,
@@ -53,10 +49,35 @@ def name_assignment(
     assignments.bind(assignment_name, found)
 
 
-@when(parsers.parse(
-    'I name the subagent in session "{session_name}" with exact name '
-    '\'{exact_name}\' "{actor_name}"'
-))
+@when(parsers.parse('I name the actor assigned to assignment "{assignment_name}" "{actor_name}"'))
+def name_assigned_actor(
+    client: BaqylauClient,
+    assignments: Assignments,
+    actors: Actors,
+    wait_policy: WaitPolicy,
+    assignment_name: str,
+    actor_name: str,
+) -> None:
+    assignment = assignments.get(assignment_name)
+
+    def assigned_actor(snapshot: SessionSnapshot) -> ActorRef | None:
+        actor_id = _assignment(snapshot, assignment).actor_id
+        actor = snapshot.actor(actor_id)
+        return (
+            ActorRef(assignment.session, actor_id)
+            if actor.parent_actor_id is not None
+            else None
+        )
+
+    found = client.sessions.watch(assignment.session).wait(
+        f"assignment {assignment_name!r} to identify its actor",
+        assigned_actor,
+        timeout=wait_policy.feed,
+    )
+    actors.bind(actor_name, found)
+
+
+@when(parsers.parse('I name the subagent in session "{session_name}" with exact name \'{exact_name}\' "{actor_name}"'))
 def name_subagent(
     client: BaqylauClient,
     sessions: Sessions,
@@ -74,9 +95,7 @@ def name_subagent(
     actors.bind(actor_name, found)
 
 
-@when(parsers.parse(
-    'I name the only command for actor "{actor_name}" containing \'{command}\' "{shell_name}"'
-))
+@when(parsers.parse('I name the only command for actor "{actor_name}" containing \'{command}\' "{shell_name}"'))
 def name_actor_command(
     client: BaqylauClient,
     actors: Actors,
@@ -112,7 +131,7 @@ def assignment_has_state(
     )
 
 
-@then(parsers.parse('assignment "{name}" has result containing \'{text}\''))
+@then(parsers.parse("assignment \"{name}\" has result containing '{text}'"))
 def assignment_has_result(
     client: BaqylauClient,
     assignments: Assignments,
@@ -158,8 +177,7 @@ def turn_has_assignment_count(
         found = [
             item
             for item in snapshot.assignments()
-            if item.turn_id == turn.turn_id
-            or selectors.cursor_is_in_turn(snapshot, turn, item.started_cursor)
+            if item.turn_id == turn.turn_id or selectors.cursor_is_in_turn(snapshot, turn, item.started_cursor)
         ]
         if len(found) > count:
             raise AssertionError(f"turn {turn_name!r} has {len(found)} assignments: {found}")
@@ -216,9 +234,7 @@ def every_subagent_has_state(
     )
 
 
-@then(parsers.parse(
-    'the lead actor in session "{session_name}" has no command containing \'{command}\''
-))
+@then(parsers.parse("the lead actor in session \"{session_name}\" has no command containing '{command}'"))
 def lead_has_no_command(
     client: BaqylauClient,
     sessions: Sessions,
@@ -227,6 +243,4 @@ def lead_has_no_command(
 ) -> None:
     snapshot = client.sessions.snapshot(sessions.get(session_name))
     found = [item.command for item in snapshot.shells(actor_id=snapshot.lead().actor_id)]
-    assert not any(command in item for item in found), (
-        f"lead actor has a command containing {command!r}: {found}"
-    )
+    assert not any(command in item for item in found), f"lead actor has a command containing {command!r}: {found}"

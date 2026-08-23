@@ -98,6 +98,14 @@ def _region(lines: list[str]) -> list[str]:
     return lines[start:end]
 
 
+def input_box_visible(screen: str) -> bool:
+    """True when the screen contains the column-zero composer prompt."""
+    return any(
+        strip_ansi(line).startswith(PROMPT)
+        for line in _region((screen or "").splitlines())
+    )
+
+
 def _box_content(screen: str) -> list[tuple[str, bool]]:
     """The input box's post-prompt `[(char, faint)]` list — the shared
     intermediate of `parse()` and `typed()`: the box region's visible chars with
@@ -158,5 +166,4 @@ def typed(screen: str) -> str | None:
     chars = _box_content(screen)
     real = "".join(c for c, f in chars if not f and c != "\n").replace(NBSP, " ")
     return norm(real) or None
-
 

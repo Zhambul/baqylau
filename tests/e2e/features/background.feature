@@ -1,11 +1,11 @@
 Feature: background work reaches the session feed
 
-  Scenario: a backgrounded command is tracked past the end of its turn
-    Given session configuration "primary" uses claude_code with model haiku and low effort
+  Scenario Outline: a backgrounded command is tracked past the end of its turn
+    Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" as turn "start delayed echo" with prompt
       """
-      Start a background terminal that runs `sleep 5; echo done`. Do not wait
-      for it. Reply only with the word started.
+      Run `sleep 5; echo done` as background work. <background_instruction>
+      Do not wait for it. Reply only with the word started.
       """
     Then turn "start delayed echo" completes
     When I name the only background job in turn "start delayed echo" containing 'sleep' "delayed echo"
@@ -16,8 +16,13 @@ Feature: background work reaches the session feed
     And session "primary" has no running work
     And turn "start delayed echo" has final answer 'started'
 
-  Scenario: a command backgrounded mid-run keeps reporting
-    Given session configuration "primary" uses claude_code with model haiku and low effort
+    Examples:
+      | harness     | model        | background_instruction                                                   |
+      | codex       | gpt-5.6-luna | Use the shell execution tool with a 1000 ms yield time and do not poll it. |
+      | claude_code | haiku        | Use the Bash tool with run_in_background set to true.                     |
+
+  Scenario Outline: a command backgrounded mid-run keeps reporting
+    Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" as turn "run delayed echo" with prompt
       """
       Run `echo started; sleep 30; echo done` in the foreground and wait for it.
@@ -34,3 +39,7 @@ Feature: background work reaches the session feed
     And job "delayed echo" ends
     And command "delayed echo" has state succeeded
     And session "primary" has no running work
+
+    Examples:
+      | harness     | model |
+      | claude_code | haiku |

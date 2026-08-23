@@ -344,6 +344,33 @@ class SubAgentActivityItem(BaseModel):
     id: str | None = None
 
 
+class CollabAgentReference(BaseModel):
+    model_config = FOREIGN
+    thread_id: CodexActorId
+    agent_nickname: str | None = None
+
+
+class CollabAgentStates(RootModel[Mapping[CodexActorId, str]]):
+    pass
+
+
+class CollabAgentToolCallItem(BaseModel):
+    """A collaboration mirror whose child rollout owns the canonical facts."""
+
+    model_config = FOREIGN
+    type: Literal["CollabAgentToolCall"]
+    id: str | None = None
+    tool: str | None = None
+    status: str | None = None
+    sender_thread_id: CodexActorId | None = None
+    receiver_thread_ids: list[CodexActorId] | None = None
+    receiver_agents: list[CollabAgentReference] | None = None
+    prompt: str | None = None
+    model: str | None = None
+    reasoning_effort: str | None = None
+    agents_states: CollabAgentStates | None = None
+
+
 class PlanItem(BaseModel):
     model_config = FOREIGN
     type: Literal["Plan"]
@@ -367,7 +394,8 @@ class CoveredItem(BaseModel):
 
 
 ItemCompletedItem: TypeAlias = Union[
-    FileChangeItem, CommandExecutionItem, SubAgentActivityItem, PlanItem, CoveredItem,
+    FileChangeItem, CommandExecutionItem, SubAgentActivityItem, CollabAgentToolCallItem,
+    PlanItem, CoveredItem,
 ]
 
 
@@ -375,6 +403,7 @@ class ItemCompletedType(StrEnum):
     FILE_CHANGE = "FileChange"
     COMMAND_EXECUTION = "CommandExecution"
     SUBAGENT_ACTIVITY = "SubAgentActivity"
+    COLLAB_AGENT_TOOL_CALL = "CollabAgentToolCall"
     PLAN = "Plan"
     USER_MESSAGE = "UserMessage"
     AGENT_MESSAGE = "AgentMessage"
@@ -394,6 +423,7 @@ ITEM_COMPLETED_ITEMS: Mapping[ItemCompletedType, type[ItemCompletedItem]] = {
     ItemCompletedType.FILE_CHANGE: FileChangeItem,
     ItemCompletedType.COMMAND_EXECUTION: CommandExecutionItem,
     ItemCompletedType.SUBAGENT_ACTIVITY: SubAgentActivityItem,
+    ItemCompletedType.COLLAB_AGENT_TOOL_CALL: CollabAgentToolCallItem,
     ItemCompletedType.PLAN: PlanItem,
     ItemCompletedType.USER_MESSAGE: CoveredItem,
     ItemCompletedType.AGENT_MESSAGE: CoveredItem,
@@ -408,7 +438,10 @@ class FileChanges(RootModel[Mapping[str, FileChangeEntry]]):
 
 
 CompletedItem = Annotated[
-    Union[FileChangeItem, CommandExecutionItem, SubAgentActivityItem, PlanItem, CoveredItem],
+    Union[
+        FileChangeItem, CommandExecutionItem, SubAgentActivityItem,
+        CollabAgentToolCallItem, PlanItem, CoveredItem,
+    ],
     Field(discriminator="type"),
 ]
 
@@ -1083,6 +1116,8 @@ class ExecRecord:
     cmd: str
     call_id: CodexCallId
     turn: CodexTurnId | None = None
+    yield_ms: int | None = None
+    reports_session_id: bool = False
     ts: str | None = None
 
 
@@ -1221,11 +1256,13 @@ class GoalToolRecord:
 
 
 @dataclass(frozen=True, kw_only=True)
-class StateToolBatchRecord:
-    kind: Literal["state_tool_batch"] = "state_tool_batch"
+class ToolBatchRecord:
+    kind: Literal["tool_batch"] = "tool_batch"
     call_id: CodexCallId
-    actions: tuple[TaskListRecord | GoalToolRecord, ...]
-
+    actions: tuple[
+        ExecRecord | StdinRecord | TaskListRecord | GoalToolRecord | CollaborationCallRecord,
+        ...,
+    ]
 
 @dataclass(frozen=True, kw_only=True)
 class UnmappedToolRecord:
@@ -1263,7 +1300,7 @@ RolloutRecord: TypeAlias = Union[
     SearchRecord, ExecRecord, ExecResultRecord, StdinRecord, CommandCompletedRecord,
     ChatRecord, ThinkRecord, PatchCallRecord, AskRecord, PlanRecord, SettingsRecord,
     CompactBoundaryRecord, ToolRecord, ActorActivityRecord, CollaborationCallRecord,
-    TaskListRecord, GoalRecord, GoalToolRecord, StateToolBatchRecord,
+    TaskListRecord, GoalRecord, GoalToolRecord, ToolBatchRecord,
     UnmappedToolRecord, BadRecord,
     WorldStateRecord, CoveredItemRecord, EmptyRecord,
 ]

@@ -131,13 +131,18 @@ def apply_rewind(
     target = turns.get(turn_name)
     if target.session != session:
         raise AssertionError(f"turn {turn_name!r} does not belong to session {session_name!r}")
-    if target.prompt_cursor is None or target.prompt_message_id is None:
+    if (
+        target.actor_id is None
+        or target.prompt_cursor is None
+        or target.prompt_message_id is None
+    ):
         raise AssertionError(f"turn {turn_name!r} does not have a resolved prompt identity")
     snapshot = client.sessions.snapshot(session)
     newer_prompt_count = sum(
         1
         for entry in snapshot.entries
         if entry.cursor > target.prompt_cursor
+        and entry.actor_id == target.actor_id
         and isinstance(entry.body, MessageBodyResponse)
         and entry.body.role == "user"
         and entry.body.phase == "prompt"

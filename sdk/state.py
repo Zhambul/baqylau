@@ -250,6 +250,8 @@ def _assignments(entries: tuple[EntryResponse, ...]) -> tuple[AssignmentState, .
                     started_cursor=entry.cursor,
                 )
                 folded[body.assignment_id] = found
+            else:
+                found.actor_id = entry.actor_id
             found.state = body.state
             found.result = body.result.text if body.result is not None else ""
     return tuple(folded.values())

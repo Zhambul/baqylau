@@ -47,9 +47,9 @@ Feature: file operations reach the session feed
       | codex       | gpt-5.6-luna | low    |
       | claude_code | haiku        | low    |
 
-  Scenario: a deleted file keeps its complete operation history
+  Scenario Outline: a deleted file keeps its complete operation history
     Given the file operation fixture does not exist
-    And session configuration "primary" uses codex with model gpt-5.6-luna and low effort
+    And session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" as turn "delete fixture" with prompt
       """
       Use apply_patch in two separate calls. First, create
@@ -66,3 +66,7 @@ Feature: file operations reach the session feed
     And file operation "fixture deletion" has removed lines
     And the file operation fixture is absent
     And turn "delete fixture" has final answer 'done'
+
+    Examples:
+      | harness | model        |
+      | codex   | gpt-5.6-luna |

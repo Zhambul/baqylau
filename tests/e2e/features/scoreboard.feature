@@ -43,8 +43,8 @@ Feature: the scoreboard summarizes the session
       | codex       | gpt-5.6-luna | low    |
       | claude_code | haiku        | low    |
 
-  Scenario: a completed yielded Codex command is history, not live background work
-    Given session configuration "primary" uses codex with model gpt-5.6-luna and low effort
+  Scenario Outline: a completed yielded command is history, not live background work
+    Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" as turn "yielded command" with prompt
       """
       Use the shell execution tool with a 1000 ms yield time to run
@@ -57,3 +57,7 @@ Feature: the scoreboard summarizes the session
     And session "primary" has exactly 1 historical job
     And session "primary" has no running work
     And turn "yielded command" has final answer 'done'
+
+    Examples:
+      | harness | model        |
+      | codex   | gpt-5.6-luna |

@@ -1,10 +1,10 @@
 Feature: subagent work reaches the session feed
 
-  Scenario: the work a subagent does is attributed to that subagent
-    Given session configuration "primary" uses claude_code with model haiku and low effort
+  Scenario Outline: the work a subagent does is attributed to that subagent
+    Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" as turn "delegate ticker" with prompt
       """
-      Use the Agent tool exactly once to launch a general-purpose subagent with
+      Use the <agent_tool> tool exactly once to launch a subagent with
       description ticker. Give it this prompt: run the shell command
       `echo from-the-subagent` and then reply only with the word gathered.
       Do not run a shell command yourself. After the launch, reply only with
@@ -13,7 +13,7 @@ Feature: subagent work reaches the session feed
     Then turn "delegate ticker" completes
     And turn "delegate ticker" has final answer 'waiting'
     When I name the only assignment in turn "delegate ticker" "ticker work"
-    And I name the subagent in session "primary" with exact name 'ticker' "ticker actor"
+    And I name the actor assigned to assignment "ticker work" "ticker actor"
     And I name the only command for actor "ticker actor" containing 'echo from-the-subagent' "ticker command"
     Then assignment "ticker work" has state succeeded
     And assignment "ticker work" has result containing 'gathered'
@@ -28,11 +28,16 @@ Feature: subagent work reaches the session feed
     Then turn "confirm delegation" completes
     And turn "confirm delegation" has final answer 'delegated'
 
-  Scenario: two subagents launched at once stay two
-    Given session configuration "primary" uses claude_code with model haiku and low effort
+    Examples:
+      | harness     | model        | agent_tool  |
+      | codex       | gpt-5.6-luna | multi_agent_v1__spawn_agent |
+      | claude_code | haiku        | Agent       |
+
+  Scenario Outline: two subagents launched at once stay two
+    Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" as turn "delegate twice" with prompt
       """
-      Use the Agent tool twice in one response to launch two general-purpose
+      Use the <agent_tool> tool twice in one response to launch two
       subagents in parallel. Use description alpha and prompt "reply only with
       the word alpha" for the first subagent. Use description beta and prompt
       "reply only with the word beta" for the second subagent. Do not do their
@@ -49,3 +54,8 @@ Feature: subagent work reaches the session feed
       """
     Then turn "confirm two delegations" completes
     And turn "confirm two delegations" has final answer 'both'
+
+    Examples:
+      | harness     | model        | agent_tool  |
+      | codex       | gpt-5.6-luna | multi_agent_v1__spawn_agent |
+      | claude_code | haiku        | Agent       |

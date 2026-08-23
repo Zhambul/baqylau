@@ -33,18 +33,30 @@ def _one(items: Sequence[T], description: str) -> T | None:
     return items[0] if items else None
 
 
-def cursor_is_in_turn(snapshot: SessionSnapshot, reference: TurnRef, cursor: int) -> bool:
-    if reference.prompt_cursor is None or cursor <= reference.prompt_cursor:
-        return False
-    later_prompts = [
+def next_prompt_cursor(
+    snapshot: SessionSnapshot,
+    reference: TurnRef,
+    *,
+    after: int,
+) -> int | None:
+    if reference.actor_id is None:
+        raise AssertionError("turn does not have a resolved actor identity")
+    found = [
         entry.cursor
         for entry in snapshot.entries
-        if entry.cursor > reference.prompt_cursor
+        if entry.cursor > after
+        and entry.actor_id == reference.actor_id
         and isinstance(entry.body, MessageBodyResponse)
         and entry.body.role == "user"
         and entry.body.phase == "prompt"
     ]
-    boundary = min(later_prompts) if later_prompts else None
+    return min(found) if found else None
+
+
+def cursor_is_in_turn(snapshot: SessionSnapshot, reference: TurnRef, cursor: int) -> bool:
+    if reference.prompt_cursor is None or cursor <= reference.prompt_cursor:
+        return False
+    boundary = next_prompt_cursor(snapshot, reference, after=reference.prompt_cursor)
     return boundary is None or cursor < boundary
 
 
@@ -67,6 +79,7 @@ def turn(watch: SessionWatch, reference: TurnRef, timeout: float) -> TurnRef:
             entry
             for entry in snapshot.entries
             if entry.cursor > reference.cursor_before
+            and (reference.actor_id is None or entry.actor_id == reference.actor_id)
             and isinstance(entry.body, MessageBodyResponse)
             and entry.body.role == "user"
             and entry.body.phase == "prompt"
@@ -85,6 +98,7 @@ def turn(watch: SessionWatch, reference: TurnRef, timeout: float) -> TurnRef:
             prompt=reference.prompt,
             cursor_before=reference.cursor_before,
             expected_prompt_count=reference.expected_prompt_count,
+            actor_id=prompt.actor_id,
             turn_id=prompt.turn_id,
             prompt_cursor=prompt.cursor,
             prompt_message_id=body.message_id,
@@ -109,7 +123,8 @@ def launched_turn(watch: SessionWatch, timeout: float) -> TurnRef:
         prompts = [
             entry
             for entry in snapshot.entries
-            if isinstance(entry.body, MessageBodyResponse)
+            if entry.actor_id == snapshot.data.session.lead_actor_id
+            and isinstance(entry.body, MessageBodyResponse)
             and entry.body.role == "user"
             and entry.body.phase == "prompt"
         ]
@@ -126,6 +141,7 @@ def launched_turn(watch: SessionWatch, timeout: float) -> TurnRef:
             prompt=body.content.text,
             cursor_before=0,
             expected_prompt_count=1,
+            actor_id=prompt.actor_id,
             turn_id=prompt.turn_id,
             prompt_cursor=prompt.cursor,
             prompt_message_id=body.message_id,

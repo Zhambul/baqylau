@@ -1,13 +1,13 @@
 Feature: a dashboard answer resolves a harness question
 
-  Scenario: a Claude Code question keeps its choices and selected answer
-    Given session configuration "primary" uses claude_code with model haiku and low effort
+  Scenario Outline: a question keeps its choices and selected answer
+    Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" as turn "ask colour" with prompt
       """
-      Use AskUserQuestion exactly once. Ask "Which colour should I use?" with
-      the title Colour. Offer Blue with description "Use blue" and Green with
-      description "Use green". Allow only one choice. Do not select an answer.
-      After the user answers, reply only with the word done.
+      Use <question_tool> exactly once. Ask "Which colour should I use?" with
+      the <title_kind> Colour. Offer Blue with description "Use blue" and Green
+      with description "Use green". Allow only one choice. Do not select an
+      answer. After the user answers, reply only with the word done.
       """
     And I name the pending question in turn "ask colour" containing 'Which colour' "colour choice"
     Then question "colour choice" is single choice
@@ -21,29 +21,13 @@ Feature: a dashboard answer resolves a harness question
     And turn "ask colour" completes
     And turn "ask colour" has final answer 'done'
 
-  Scenario: a Codex question keeps its choices and selected answer
-    Given session configuration "primary" uses codex with model gpt-5.6-luna and low effort
-    When I launch session "primary" as turn "ask colour" with prompt
-      """
-      Use request_user_input exactly once. Ask "Which colour should I use?" with
-      the header Colour. Offer Blue with description "Use blue" and Green with
-      description "Use green". Do not select an answer. After the user answers,
-      reply only with the word done.
-      """
-    And I name the pending question in turn "ask colour" containing 'Which colour' "colour choice"
-    Then question "colour choice" is single choice
-    And question "colour choice" offers option 'Blue'
-    And question "colour choice" offers option 'Green'
-    When I answer question "colour choice" with option 'Green' as control "choose green"
-    Then control "choose green" response is accepted
-    And control "choose green" outcome is acknowledged
-    And question "colour choice" records option 'Green'
-    And question "colour choice" is resolved
-    And turn "ask colour" completes
-    And turn "ask colour" has final answer 'done'
+    Examples:
+      | harness     | model        | question_tool     | title_kind |
+      | codex       | gpt-5.6-luna | request_user_input | header     |
+      | claude_code | haiku        | AskUserQuestion    | title      |
 
-  Scenario: a Claude Code question records multiple selected choices
-    Given session configuration "primary" uses claude_code with model haiku and low effort
+  Scenario Outline: a question records multiple selected choices
+    Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" as turn "ask colours" with prompt
       """
       Use AskUserQuestion exactly once. Ask "Which colours should I use?" with
@@ -63,3 +47,7 @@ Feature: a dashboard answer resolves a harness question
     And question "colour choices" is resolved
     And turn "ask colours" completes
     And turn "ask colours" has final answer 'done'
+
+    Examples:
+      | harness     | model |
+      | claude_code | haiku |

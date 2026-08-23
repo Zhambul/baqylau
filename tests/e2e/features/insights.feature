@@ -1,7 +1,7 @@
 Feature: completed session activity reaches insights and resume state
 
-  Scenario: one completed turn appears in application summaries
-    Given session configuration "primary" uses codex with model gpt-5.6-luna and low effort
+  Scenario Outline: one completed turn appears in application summaries
+    Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" as turn "insight sample" with prompt
       """
       Reply only with the word measured.
@@ -16,3 +16,8 @@ Feature: completed session activity reaches insights and resume state
     Then insights "current insights" report at least 1 session
     And insights "current insights" include the workspace
     And resumable list "workspace history" contains session "primary"
+
+    Examples:
+      | harness     | model        |
+      | codex       | gpt-5.6-luna |
+      | claude_code | haiku        |
