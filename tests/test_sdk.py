@@ -9,19 +9,26 @@ import pytest
 
 from api.sessiondata.models.entry import EntryPageResponse, EntryResponse
 from api.controls.models.control_outcome_response import ControlResultResponse
-from api.sessiondata.models.session_data import SessionDataResponse
+from api.sessiondata.models.session_data import SessionDataListResponse, SessionDataResponse
 from sdk.client import SessionRef, SessionsResource, SessionWatch, UploadsResource
 from sdk.state import SessionSnapshot
 from sdk.transport import ApiFailure, HttpTransport
 from tests.e2e.testkit import selectors
+from tests.e2e.testkit import turns as turn_checks
 from tests.e2e.testkit.references import References, TurnRef
 
 
-def session_data(cursor: int = 1001) -> SessionDataResponse:
+def session_data(
+    cursor: int = 1001,
+    *,
+    session_id: str = "session-one",
+    continued_from: str | None = None,
+    live: bool = True,
+) -> SessionDataResponse:
     return SessionDataResponse.model_validate({
         "cursor": cursor,
         "session": {
-            "session_id": "session-one",
+            "session_id": session_id,
             "harness": "codex",
             "title": None,
             "state": "running",
@@ -32,9 +39,10 @@ def session_data(cursor: int = 1001) -> SessionDataResponse:
             "lead_actor_id": "lead-one",
             "goal": None,
             "tasks": [],
+            "continued_from": continued_from,
         },
         "actors": [],
-        "live": True,
+        "live": live,
         "repository": None,
     })
 
@@ -57,6 +65,46 @@ def message_entry(cursor: int) -> EntryResponse:
             "recipient_actor_id": None,
             "reply_to": None,
         },
+    })
+
+
+def lead_message_entry(
+    cursor: int,
+    text: str,
+    *,
+    turn_id: str | None,
+) -> EntryResponse:
+    return EntryResponse.model_validate({
+        "entry_id": f"lead-message-{cursor}",
+        "type": "message",
+        "cursor": cursor,
+        "actor_id": "lead-one",
+        "parent_actor_id": None,
+        "turn_id": turn_id,
+        "occurred_at": float(cursor),
+        "summary": None,
+        "body": {
+            "message_id": f"lead-message-{cursor}",
+            "role": "assistant",
+            "phase": "end_turn",
+            "content": {"text": text, "media_type": "text/plain"},
+            "recipient_actor_id": None,
+            "reply_to": None,
+        },
+    })
+
+
+def turn_finished_entry(cursor: int, turn_id: str | None) -> EntryResponse:
+    return EntryResponse.model_validate({
+        "entry_id": f"turn-finished-{cursor}",
+        "type": "turn_finished",
+        "cursor": cursor,
+        "actor_id": "lead-one",
+        "parent_actor_id": None,
+        "turn_id": turn_id,
+        "occurred_at": float(cursor),
+        "summary": None,
+        "body": {"state": "finished"},
     })
 
 
@@ -174,6 +222,20 @@ class UploadTransport:
         })
 
 
+class PromptOwnerSessions(SessionsResource):
+    def __init__(self, snapshots: dict[str, SessionSnapshot]) -> None:
+        self.snapshots = snapshots
+
+    def list(self) -> SessionDataListResponse:
+        return SessionDataListResponse(
+            cursor=max(snapshot.cursor for snapshot in self.snapshots.values()),
+            sessions=tuple(snapshot.data for snapshot in self.snapshots.values()),
+        )
+
+    def snapshot(self, session: SessionRef) -> SessionSnapshot:
+        return self.snapshots[session.session_id]
+
+
 def test_a_session_snapshot_reads_all_pages_at_one_cursor():
     transport = PagedTransport()
     sessions = SessionsResource(cast(HttpTransport, transport))
@@ -189,6 +251,34 @@ def test_a_session_snapshot_rejects_a_page_that_cannot_make_progress():
 
     with pytest.raises(ApiFailure, match="returned no entries"):
         sessions.snapshot(SessionRef("session-one"))
+
+
+def test_prompt_owner_follows_a_declared_session_continuation():
+    source = SessionSnapshot(
+        session_data(session_id="session-old", live=False),
+        (),
+    )
+    continuation = SessionSnapshot(
+        session_data(
+            cursor=1002,
+            session_id="session-new",
+            continued_from="session-old",
+        ),
+        (prompt_entry(1002, "Revised prompt"),),
+    )
+    sessions = PromptOwnerSessions({
+        "session-old": source,
+        "session-new": continuation,
+    })
+
+    owner = sessions.wait_for_prompt_owner(
+        SessionRef("session-old"),
+        prompt="Revised prompt",
+        after_cursor=1001,
+        timeout=0.1,
+    )
+
+    assert owner == SessionRef("session-new")
 
 
 def test_a_selector_rejects_two_matching_commands():
@@ -240,6 +330,32 @@ def test_a_lead_turn_boundary_ignores_a_child_prompt():
     assert not selectors.cursor_is_in_turn(snapshot, reference, 4)
 
 
+def test_a_later_autonomous_completion_does_not_add_an_answer_to_the_named_turn():
+    reference = TurnRef(
+        SessionRef("session-one"),
+        "delegate",
+        0,
+        1,
+        actor_id="lead-one",
+        turn_id="turn-one",
+        prompt_cursor=1,
+    )
+    snapshot = SessionSnapshot(
+        session_data(5),
+        (
+            prompt_entry(1, "delegate"),
+            turn_finished_entry(2, "turn-one"),
+            lead_message_entry(3, "launched", turn_id=None),
+            turn_finished_entry(4, None),
+            lead_message_entry(5, "notification", turn_id=None),
+        ),
+    )
+
+    assert [entry.body.content.text for entry in turn_checks.enders(snapshot, reference)] == [
+        "launched"
+    ]
+
+
 def test_an_assignment_uses_the_actor_that_finishes_it():
     started = EntryResponse.model_validate({
         "entry_id": "assignment-started",
@@ -277,6 +393,7 @@ def test_an_assignment_uses_the_actor_that_finishes_it():
     assert assignment.actor_id == "child-one"
     assert assignment.turn_id == "turn-one"
     assert assignment.assigned_actor_name == "ticker"
+    assert assignment.requested_prompt == "run a command"
     assert assignment.state == "succeeded"
 
 

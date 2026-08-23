@@ -50,9 +50,11 @@ class AssignmentState:
     actor_id: str
     turn_id: str | None
     assigned_actor_name: str | None
+    requested_prompt: str | None
     started_cursor: int
     state: str | None = None
     result: str = ""
+    finished_cursor: int | None = None
 
 
 @dataclass
@@ -237,6 +239,9 @@ def _assignments(entries: tuple[EntryResponse, ...]) -> tuple[AssignmentState, .
                 actor_id=entry.actor_id,
                 turn_id=entry.turn_id,
                 assigned_actor_name=body.assigned_actor_name,
+                requested_prompt=(
+                    body.prompt.text if body.prompt is not None else None
+                ),
                 started_cursor=entry.cursor,
             )
         elif isinstance(body, AssignmentFinishedBodyResponse):
@@ -247,6 +252,7 @@ def _assignments(entries: tuple[EntryResponse, ...]) -> tuple[AssignmentState, .
                     actor_id=entry.actor_id,
                     turn_id=entry.turn_id,
                     assigned_actor_name=None,
+                    requested_prompt=None,
                     started_cursor=entry.cursor,
                 )
                 folded[body.assignment_id] = found
@@ -254,6 +260,7 @@ def _assignments(entries: tuple[EntryResponse, ...]) -> tuple[AssignmentState, .
                 found.actor_id = entry.actor_id
             found.state = body.state
             found.result = body.result.text if body.result is not None else ""
+            found.finished_cursor = entry.cursor
     return tuple(folded.values())
 
 

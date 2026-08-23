@@ -142,6 +142,8 @@ from harness.impl.codex.hooks import gateway as codex_hooks
 from harness.impl.codex import usage as codex_usage
 from harness.impl.codex.canonical import rollout as codex_rollout
 from harness.impl.codex.canonical.records import SessionMetaPayload, TurnContextRecord
+from harness.impl.codex.continuity import RewindContinuity
+from harness.impl.codex.controls import backtrack, composer
 from harness.impl.codex.controls.controller import _rollout_abort_state
 from harness.impl.codex.model import BaseInstructionsSourceType, CodexEffort, CodexModel
 from harness.impl.claude_code.otel import gateway as claude_telemetry
@@ -1780,6 +1782,24 @@ def test_terminal_adapter_reads_the_session_window_from_evidence_and_checks_it_l
     assert adapter.window_for_session(SessionId("session-missing")) is None
 
 
+def test_terminal_adapter_gives_a_shared_window_to_its_new_session_owner():
+    terminal = FakeTerminal(windows=[
+        window("window-one", tags={SESSION_WINDOW_TAG: "session-new"}),
+    ])
+    sessions = FakeSessions({
+        "session-old": "window-one",
+        "session-new": "window-one",
+    })
+    adapter = TerminalAdapter(terminal.plugin(), sessions)
+
+    assert adapter.window_for_session(SessionId("session-old")) is None
+    assert adapter.window_for_session(SessionId("session-new")) == "window-one"
+    assert adapter.live_sessions((
+        SessionId("session-old"),
+        SessionId("session-new"),
+    )) == frozenset({SessionId("session-new")})
+
+
 def test_terminal_adapter_measures_the_activity_pane_against_its_row():
     terminal = FakeTerminal(windows=[
         window("window-one", columns=75),
@@ -2276,7 +2296,12 @@ def test_codex_session_start_hook_matches_rollout_metadata(tmp_path, monkeypatch
     rollout_path.parent.mkdir(parents=True)
     rollout_path.write_text(json.dumps({
         "type": "session_meta",
-        "payload": {"id": "session-one", "cwd": "/work", "thread_source": "user"},
+        "payload": {
+            "id": "session-one",
+            "cwd": "/work",
+            "thread_source": "user",
+            "forked_from_id": "session-before-rewind",
+        },
     }) + "\n")
     translator = CodexCanonicalTranslator()
     hook = translator.translate(raw_event(
@@ -2291,7 +2316,11 @@ def test_codex_session_start_hook_matches_rollout_metadata(tmp_path, monkeypatch
             {
                 "timestamp": "2026-08-14T12:00:00Z",
                 "type": "session_meta",
-                "payload": {"cwd": "/work", "originator": "codex-tui"},
+                "payload": {
+                    "cwd": "/work",
+                    "originator": "codex-tui",
+                    "forked_from_id": "session-before-rewind",
+                },
             },
             harness=HarnessName.CODEX,
             source_type="rollout",
@@ -2368,7 +2397,7 @@ def test_static_menu_vocabulary_lives_on_the_harness_descriptor():
     ]
     assert all(model.value.startswith("gpt-") for model in codex_plugin.info.models)
     assert claude_plugin.info.rewind_modes
-    assert codex_plugin.info.rewind_modes == ()
+    assert [mode.value for mode in codex_plugin.info.rewind_modes] == ["conversation"]
     # only one harness has a subscription switcher behind it
     assert claude_plugin.info.supports_accounts
     assert not codex_plugin.info.supports_accounts
@@ -2885,6 +2914,90 @@ def test_claude_plan_decision_uses_cursor_navigation(screen, keys):
 
     assert outcome == plandialog.Decided("Yes, and bypass permissions")
     assert driver.keys == keys
+
+
+def test_codex_backtrack_selects_a_named_prompt_before_it_confirms():
+    prompts = ("Reply only with the word first.", "Reply only with the word second.")
+
+    class BacktrackDriver:
+        def __init__(self) -> None:
+            self.keys: list[str] = []
+            self.state = "composer"
+            self.selected = 1
+
+        def get_text(self, _window, extent="screen", ansi=False):
+            del extent
+            if self.state == "hint":
+                return backtrack.ESCAPE_HINT
+            if self.state == "transcript":
+                selected = prompts[self.selected]
+                style = f"\x1b[7m{selected}\x1b[27m" if ansi else selected
+                return (
+                    f"{backtrack.TRANSCRIPT_HEADER}\n"
+                    f"{style}\n"
+                    f"{backtrack.TRANSCRIPT_FOOTER}"
+                )
+            if self.state == "restored":
+                return f"› {prompts[self.selected]}\n  gpt-5.6-luna low"
+            return "› Ask Codex to do anything"
+
+        def send_key(self, _window, *pressed):
+            self.keys.extend(pressed)
+            if pressed == ("escape",) and self.state == "composer":
+                self.state = "hint"
+            elif pressed == ("escape",) and self.state == "hint":
+                self.state = "transcript"
+            elif pressed == ("left",) and self.state == "transcript":
+                self.selected = max(0, self.selected - 1)
+            elif pressed == ("enter",) and self.state == "transcript":
+                self.state = "restored"
+            return True
+
+    driver = BacktrackDriver()
+
+    backtrack.drive(
+        driver,
+        "window-one",
+        prompts[0],
+        newer_prompt_count=1,
+        sleep=lambda _seconds: None,
+    )
+
+    assert driver.keys == ["ctrl+u", "ctrl+k", "escape", "escape", "left", "enter"]
+
+
+def test_codex_backtrack_can_verify_a_plain_pty_transcript():
+    screen = (
+        f"{backtrack.TRANSCRIPT_HEADER}\n"
+        "› Reply only with the word first.\n"
+        f"{backtrack.TRANSCRIPT_FOOTER}"
+    )
+
+    assert backtrack.selected_prompt(screen, "Reply only with the word first.")
+
+
+def test_codex_composer_clears_the_complete_restored_draft():
+    class ComposerDriver:
+        def __init__(self) -> None:
+            self.screen = "› Reply only with the word first.\n  gpt-5.6-luna low"
+            self.keys: list[str] = []
+
+        def get_text(self, _window, extent="screen", ansi=False):
+            del extent, ansi
+            return self.screen
+
+        def send_key(self, _window, *pressed):
+            self.keys.extend(pressed)
+            if pressed == ("ctrl+c",):
+                self.screen = f"› {composer.EMPTY_PROMPT}\n  gpt-5.6-luna low"
+            return True
+
+    driver = ComposerDriver()
+
+    composer.clear(driver, "window-one", sleep=lambda _seconds: None)
+
+    assert driver.keys == ["ctrl+c"]
+    assert composer.empty(driver.screen)
 
 
 class _RecordingTitles:
@@ -3557,6 +3670,116 @@ def test_claude_skill_and_web_and_worktree_tools_have_their_own_facts():
     changed = payloads(entered, WorktreeChanged)[0].payload
     assert changed.action == "entered"
     assert changed.arguments.field("branch") == "wip"
+
+
+def test_codex_loaded_skill_has_the_shared_skill_lifecycle():
+    translation = CodexCanonicalTranslator().translate(raw_event(
+        {
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "id": "skill-message-one",
+                "role": "user",
+                "content": [{
+                    "type": "input_text",
+                    "text": (
+                        "<skill>\n"
+                        "<name>baqylau-e2e-communication</name>\n"
+                        "<path>/work/.agents/skills/baqylau-e2e-communication/SKILL.md</path>\n"
+                        "instructions\n"
+                        "</skill>"
+                    ),
+                }],
+                "internal_chat_message_metadata_passthrough": {
+                    "turn_id": "turn-one",
+                },
+            },
+        },
+        harness=HarnessName.CODEX,
+        source_type="rollout",
+        raw_event_id="codex-skill",
+    ))
+
+    started = payloads(translation, SkillStarted)[0]
+    finished = payloads(translation, SkillFinished)[0]
+    assert started.turn_id == "turn-one"
+    assert started.payload.skill_id == "skill-message-one"
+    assert started.payload.name == "baqylau-e2e-communication"
+    assert started.payload.arguments is None
+    assert finished.turn_id == "turn-one"
+    assert finished.payload.skill_id == "skill-message-one"
+    assert finished.payload.outcome == Outcome.SUCCEEDED
+    assert finished.payload.result is None
+
+
+def test_codex_subagent_skill_read_has_the_shared_skill_lifecycle():
+    translator = CodexCanonicalTranslator()
+    skill_path = "/work/.agents/skills/baqylau-e2e-communication/SKILL.md"
+    started = translator.translate(raw_event(
+        {
+            "type": "response_item",
+            "payload": {
+                "type": "custom_tool_call",
+                "name": "exec",
+                "call_id": "skill-call-one",
+                "input": (
+                    "const r = await tools.exec_command("
+                    f'{{"cmd":"cat {skill_path}"}}); text(r.output);'
+                ),
+                "internal_chat_message_metadata_passthrough": {
+                    "turn_id": "turn-one",
+                },
+            },
+        },
+        harness=HarnessName.CODEX,
+        source_type="child_rollout",
+        raw_event_id="codex-child-skill-start",
+    ))
+    finished = translator.translate(raw_event(
+        {
+            "type": "response_item",
+            "payload": {
+                "type": "custom_tool_call_output",
+                "call_id": "skill-call-one",
+                "output": '{"output":"skill instructions","exit_code":0}',
+            },
+        },
+        harness=HarnessName.CODEX,
+        source_type="child_rollout",
+        raw_event_id="codex-child-skill-finish",
+    ))
+
+    skill_started = payloads(started, SkillStarted)[0]
+    skill_finished = payloads(finished, SkillFinished)[0]
+    assert skill_started.turn_id == "turn-one"
+    assert skill_started.payload.name == "baqylau-e2e-communication"
+    assert skill_finished.turn_id == "turn-one"
+    assert skill_finished.payload.outcome == Outcome.SUCCEEDED
+    assert not payloads(started, ShellStarted)
+    assert not payloads(finished, ShellFinished)
+
+
+def test_codex_read_of_a_non_skill_file_remains_a_shell_command():
+    translation = CodexCanonicalTranslator().translate(raw_event(
+        {
+            "type": "response_item",
+            "payload": {
+                "type": "custom_tool_call",
+                "name": "exec",
+                "call_id": "read-call-one",
+                "input": (
+                    "const r = await tools.exec_command("
+                    '{"cmd":"cat /work/docs/SKILL.md"}); text(r.output);'
+                ),
+            },
+        },
+        harness=HarnessName.CODEX,
+        source_type="rollout",
+        raw_event_id="codex-ordinary-read",
+    ))
+
+    assert len(payloads(translation, ShellStarted)) == 1
+    assert not payloads(translation, SkillStarted)
 
 
 def test_claude_plan_is_proposed_and_then_resolved_with_what_the_person_decided():
@@ -5264,6 +5487,42 @@ def test_codex_execution_introspection_and_mirrored_items_are_known_plumbing():
     assert compacted_item.decision == "ignored_nonsemantic"
 
 
+def test_codex_v2_agent_transport_records_are_known_plumbing():
+    translator = CodexCanonicalTranslator()
+    trigger = translator.translate(raw_event(
+        {
+            "type": "inter_agent_communication_metadata",
+            "payload": {"trigger_turn": True},
+        },
+        harness=HarnessName.CODEX,
+        source_type="child_rollout",
+        raw_event_id="v2-trigger",
+    ))
+    envelope = translator.translate(raw_event(
+        {
+            "type": "response_item",
+            "payload": {
+                "type": "agent_message",
+                "id": "v2-message",
+                "author": "/root",
+                "recipient": "/root/worker",
+                "content": [
+                    {"type": "input_text", "text": "Message Type: NEW_TASK"},
+                    {"type": "encrypted_content", "encrypted_content": "ciphertext"},
+                ],
+            },
+        },
+        harness=HarnessName.CODEX,
+        source_type="child_rollout",
+        raw_event_id="v2-envelope",
+    ))
+
+    assert trigger.canonical_events == ()
+    assert trigger.decision == "ignored_nonsemantic"
+    assert envelope.canonical_events == ()
+    assert envelope.decision == "ignored_nonsemantic"
+
+
 def test_codex_unmapped_tool_is_unknown_evidence_not_a_failure():
     """An unmapped tool is a hole in this translator, not bad evidence: the
     verdict says `ignored_unknown` so the audit can name it, and the rest of
@@ -5341,6 +5600,50 @@ def test_codex_abort_cancels_its_unfinished_exec():
     started_shell = payloads(started, ShellStarted)[0].payload.shell_id
     finished = payloads(aborted, ShellFinished)[0].payload
     assert finished.shell_id == started_shell
+    assert finished.outcome == Outcome.CANCELLED
+
+
+def test_codex_abort_cancels_its_unfinished_skill_load():
+    translator = CodexCanonicalTranslator()
+    started = translator.translate(raw_event(
+        {
+            "type": "response_item",
+            "payload": {
+                "type": "custom_tool_call",
+                "name": "exec",
+                "call_id": "skill-one",
+                "input": (
+                    'tools.exec_command({cmd:"cat '
+                    '/work/.agents/skills/audit-skill/SKILL.md"})'
+                ),
+                "internal_chat_message_metadata_passthrough": {
+                    "turn_id": "turn-one",
+                },
+            },
+        },
+        harness=HarnessName.CODEX,
+        source_type="rollout",
+        raw_event_id="skill-started",
+        source_position="10",
+    ))
+    aborted = translator.translate(raw_event(
+        {
+            "type": "event_msg",
+            "payload": {
+                "type": "turn_aborted",
+                "turn_id": "turn-one",
+                "reason": "interrupted",
+            },
+        },
+        harness=HarnessName.CODEX,
+        source_type="rollout",
+        raw_event_id="turn-aborted",
+        source_position="11",
+    ))
+
+    started_skill = payloads(started, SkillStarted)[0].payload.skill_id
+    finished = payloads(aborted, SkillFinished)[0].payload
+    assert finished.skill_id == started_skill
     assert finished.outcome == Outcome.CANCELLED
 
 
@@ -5475,7 +5778,7 @@ def test_codex_current_collaboration_wrapper_and_item_are_known(tmp_path):
                 "type": "custom_tool_call",
                 "name": "exec",
                 "input": (
-                    "const r = await tools.multi_agent_v1__spawn_agent("
+                    "const r = await tools.multi_agent_v2__spawn_agent("
                     '{message:"reply only with the word gathered."}); text(r);'
                 ),
                 "call_id": call_id,
@@ -5511,8 +5814,8 @@ def test_codex_current_collaboration_wrapper_and_item_are_known(tmp_path):
                 "name": "exec",
                 "input": (
                     "const [a, b] = await Promise.all(["
-                    'tools.multi_agent_v1__spawn_agent({message:"alpha"}),'
-                    'tools.multi_agent_v1__spawn_agent({message:"beta"})]);'
+                    'tools.multi_agent_v2__spawn_agent({message:"alpha"}),'
+                    'tools.multi_agent_v2__spawn_agent({message:"beta"})]);'
                     'text("launched");'
                 ),
                 "call_id": batch_id,
@@ -6352,6 +6655,60 @@ def test_codex_session_turn_operation_usage_and_context_records():
     assert isinstance(operation.canonical_events[0].payload, ShellStarted)
     assert len(payloads(usage, UsageReported)) == 1
     assert len(payloads(usage, ContextReported)) == 1
+
+
+def test_codex_rewind_session_keeps_its_prior_session_identity():
+    result = CodexCanonicalTranslator().translate(
+        raw_event(
+            {
+                "type": "session_meta",
+                "payload": {
+                    "cwd": "/work",
+                    "originator": "codex-tui",
+                    "forked_from_id": "session-before-rewind",
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="rewind-session",
+            source_position="0",
+        )
+    )
+
+    started = payloads(result, SessionStarted)
+    assert len(started) == 1
+    assert started[0].payload.continued_from == SessionId("session-before-rewind")
+
+
+def test_codex_rewind_intent_supplies_the_relation_missing_from_native_metadata():
+    continuity = RewindContinuity()
+    continuity.expect(SessionId("session-before-rewind"), WindowId("window-one"))
+    translator = CodexCanonicalTranslator(continuity)
+    native = replace(
+        raw_event(
+            {
+                "type": "session_meta",
+                "payload": {"cwd": "/work", "originator": "codex-tui"},
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="rewind-session-without-native-parent",
+            source_position="0",
+        ),
+        session_id=SessionId("session-after-rewind"),
+        actor_id=ActorId("session-after-rewind:lead"),
+        terminal_window_id=WindowId("window-one"),
+    )
+
+    first = translator.translate(native)
+    repeated = translator.translate(native)
+
+    assert payloads(first, SessionStarted)[0].payload.continued_from == SessionId(
+        "session-before-rewind"
+    )
+    assert payloads(repeated, SessionStarted)[0].payload.continued_from == SessionId(
+        "session-before-rewind"
+    )
 
 
 def test_codex_message_keeps_its_native_turn_identity():

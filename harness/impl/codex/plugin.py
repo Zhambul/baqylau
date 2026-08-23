@@ -1,7 +1,7 @@
 """Codex's single public harness-plugin descriptor."""
 
 from harness.contract import HarnessPlugin
-from harness.models import EffortOption, HarnessInfo, ModelOption
+from harness.models import EffortOption, HarnessInfo, ModelOption, RewindModeOption
 from domain.events import SCHEMA_VERSION
 from domain.ids import HarnessName
 from harness.impl.codex.model import CodexModel
@@ -9,7 +9,7 @@ from harness.impl.codex.canonical.translator import CodexCanonicalTranslator
 from harness.impl.codex.canonical.sources import CodexRawEventSources
 from harness.impl.codex.hooks.gateway import CLI_PROCESS_NAME, CodexHookGateway
 from harness.impl.codex.catalog import CodexCatalog
-from harness.impl.codex.controls.controller import controller
+from harness.impl.codex.controls.controller import controller, rewind_continuity
 from harness.impl.codex.launcher import CodexLauncher
 from harness.impl.codex.usage_rows import usage_reader
 from harness.impl.codex.controls import modeldialog
@@ -49,11 +49,12 @@ plugin = HarnessPlugin(
         # first UserPromptSubmit, and an idle TUI writes no rollout at all), so a
         # promptless launch is invisible to us. See HarnessInfo.
         requires_initial_message=True,
+        rewind_modes=(RewindModeOption("conversation", "Restore conversation"),),
         models=MODELS,
     ),
     hooks=CodexHookGateway(),
     sources=CodexRawEventSources(),
-    translator=CodexCanonicalTranslator(),
+    translator=CodexCanonicalTranslator(rewind_continuity),
     controller=controller,
     catalog=CodexCatalog(),
     usage=usage_reader,

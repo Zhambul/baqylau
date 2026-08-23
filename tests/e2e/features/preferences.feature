@@ -13,12 +13,21 @@ Feature: browser-owned preferences round trip through the application
 
   Scenario Outline: session display and composer state return the last saved values
     Given session configuration "primary" uses <harness> with model <model> and low effort
-    When I launch session "primary" as turn "open preferences" with prompt
+    When I launch session "primary" and assign work "prepare preferences" to the subagent with prompt
+      """
+      Reply only with the word prepared.
+      """
+    Then work "prepare preferences" completes
+    And work "prepare preferences" has worker type subagent
+    And work "prepare preferences" has final answer 'prepared'
+    And work "prepare preferences" releases the lead
+    When I assign work "open preferences" in session "primary" to the lead with prompt
       """
       <task_instruction>
       Reply only with the word ready.
       """
-    Then turn "open preferences" completes
+    Then work "open preferences" completes
+    And work "open preferences" has worker type lead
     When I save composer draft 'unsent detail' for session "primary"
     And I queue message 'follow-up detail' for session "primary"
     And I set view mode focus for session "primary"
@@ -31,6 +40,6 @@ Feature: browser-owned preferences round trip through the application
     And tasks for session "primary" are hidden
 
     Examples:
-      | harness     | model        | task_instruction                                                     |
-      | codex       | gpt-5.6-luna | Use update_plan exactly once with one completed step named "Saved task". |
-      | claude_code | haiku        | Use TaskCreate once for "Saved task", then mark it completed.        |
+      | harness     | model        | task_instruction                                                             |
+      | codex       | gpt-5.6-luna | Use update_plan exactly once with one completed step named "Saved task".     |
+      | claude_code | haiku        | Use TaskCreate once for "Saved task", then use TaskUpdate to mark it completed. |

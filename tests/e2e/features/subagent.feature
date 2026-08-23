@@ -2,50 +2,48 @@ Feature: subagent work reaches the session feed
 
   Scenario Outline: the work a subagent does is attributed to that subagent
     Given session configuration "primary" uses <harness> with model <model> and low effort
-    When I launch session "primary" as turn "delegate ticker" with prompt
+    When I launch session "primary" and assign work "ticker work" to the subagent with prompt
       """
-      Use the <agent_tool> tool exactly once to launch a subagent with
-      description ticker. Give it this prompt: run the shell command
-      `echo from-the-subagent` and then reply only with the word gathered.
-      Do not run a shell command yourself. After the launch, reply only with
-      the word waiting.
+      Run the shell command `echo from-the-subagent` and then reply only with
+      the word gathered.
       """
-    Then turn "delegate ticker" completes
-    And turn "delegate ticker" has final answer 'waiting'
-    When I name the only assignment in turn "delegate ticker" "ticker work"
-    And I name the actor assigned to assignment "ticker work" "ticker actor"
-    And I name the only command for actor "ticker actor" containing 'echo from-the-subagent' "ticker command"
-    Then assignment "ticker work" has state succeeded
-    And assignment "ticker work" has result containing 'gathered'
-    And actor "ticker actor" has state finished
+    Then work "ticker work" completes
+    And work "ticker work" has worker type subagent
+    When I name the only shell command in work "ticker work" containing 'echo from-the-subagent' "ticker command"
+    Then subagent work "ticker work" has assignment state succeeded
+    And subagent work "ticker work" has assignment result containing 'gathered'
+    And work "ticker work" releases the lead
     And command "ticker command" has state succeeded
     And command "ticker command" has output containing 'from-the-subagent'
     And the lead actor in session "primary" has no command containing 'echo from-the-subagent'
-    When I send prompt to session "primary" as turn "confirm delegation"
+    When I assign work "confirm delegation" in session "primary" to the lead with prompt
       """
       The assigned subagent completed. Reply only with the word delegated.
       """
-    Then turn "confirm delegation" completes
-    And turn "confirm delegation" has final answer 'delegated'
+    Then work "confirm delegation" completes
+    And work "confirm delegation" has worker type lead
+    And work "confirm delegation" has final answer 'delegated'
 
     Examples:
-      | harness     | model        | agent_tool  |
-      | codex       | gpt-5.6-luna | multi_agent_v1__spawn_agent |
-      | claude_code | haiku        | Agent       |
+      | harness     | model        |
+      | codex       | gpt-5.6-luna |
+      | claude_code | haiku        |
 
   Scenario Outline: two subagents launched at once stay two
     Given session configuration "primary" uses <harness> with model <model> and low effort
-    When I launch session "primary" as turn "delegate twice" with prompt
-      """
-      Use the <agent_tool> tool twice in one response to launch two
-      subagents in parallel. Use description alpha and prompt "reply only with
-      the word alpha" for the first subagent. Use description beta and prompt
-      "reply only with the word beta" for the second subagent. Do not do their
-      work yourself. After both launches, reply only with the word launched.
-      """
-    Then turn "delegate twice" completes
-    And turn "delegate twice" has final answer 'launched'
-    And turn "delegate twice" has exactly 2 assignments
+    When I launch session "primary" as turn "parallel delegation" and assign these work items in parallel to subagents
+      | work       | prompt                         |
+      | alpha work | Reply only with the word alpha. |
+      | beta work  | Reply only with the word beta.  |
+    Then turn "parallel delegation" completes
+    And turn "parallel delegation" has final answer 'launched'
+    And work "alpha work" completes
+    And work "alpha work" has worker type subagent
+    And work "alpha work" has final answer 'alpha'
+    And work "beta work" completes
+    And work "beta work" has worker type subagent
+    And work "beta work" has final answer 'beta'
+    And turn "parallel delegation" has exactly 2 assignments
     And session "primary" has exactly 2 subagents
     And every subagent in session "primary" has state finished
     When I send prompt to session "primary" as turn "confirm two delegations"
@@ -56,6 +54,6 @@ Feature: subagent work reaches the session feed
     And turn "confirm two delegations" has final answer 'both'
 
     Examples:
-      | harness     | model        | agent_tool  |
-      | codex       | gpt-5.6-luna | multi_agent_v1__spawn_agent |
-      | claude_code | haiku        | Agent       |
+      | harness     | model        |
+      | codex       | gpt-5.6-luna |
+      | claude_code | haiku        |

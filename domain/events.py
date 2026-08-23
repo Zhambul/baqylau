@@ -71,6 +71,9 @@ class SessionStarted(EventPayload):
     model: ModelReference | None
     effort: str | None
     account: AccountReference | None
+    # Some harnesses continue from an earlier session under a new native id.
+    # The new session is distinct, but terminal ownership moves to it.
+    continued_from: SessionId | None = None
 
 
 @dataclass(frozen=True)

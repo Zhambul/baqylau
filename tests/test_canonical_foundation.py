@@ -1294,6 +1294,35 @@ def test_a_headless_session_gets_no_panes(tmp_path):
     assert terminal.calls == []
 
 
+def test_a_continuation_moves_the_panes_from_the_prior_session():
+    terminal = RecordingTerminal()
+
+    class Sessions:
+        def find(self, session_id):
+            if session_id != SessionId("session-new"):
+                return None
+            return type("SessionRow", (), {
+                "terminal_window_id": "the-session-tab",
+                "working_directory": "/work",
+            })()
+
+    reaction = PaneCanonicalEventReaction(terminal, Sessions(), _PaneWidths())
+    started = replace(
+        session_started_event(session_id="session-new"),
+        payload=replace(
+            session_started_event().payload,
+            continued_from=SessionId("session-old"),
+        ),
+    )
+
+    reaction.react(started)
+
+    assert terminal.calls == [
+        ("close", SessionId("session-old")),
+        ("open", SessionId("session-new"), "the-session-tab"),
+    ]
+
+
 # --- operation output -------------------------------------------------------------
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from enum import StrEnum
 from typing import Generic, TypeVar
 
 from api.application.models.harnesses.harness_catalog_response import HarnessCatalogResponse
@@ -60,6 +61,12 @@ class SessionSpec:
 
 
 @dataclass(frozen=True)
+class SessionContinuationRef:
+    before: SessionRef
+    after: SessionRef
+
+
+@dataclass(frozen=True)
 class TurnRef:
     session: SessionRef
     prompt: str
@@ -70,6 +77,16 @@ class TurnRef:
     prompt_cursor: int | None = None
     prompt_message_id: str | None = None
     completion_after_cursor: int | None = None
+    start_cursor: int | None = None
+
+    @property
+    def activity_cursor(self) -> int | None:
+        """The first visible event for this turn.
+
+        A lead turn starts with a visible prompt. A Codex v2 child turn starts
+        with an assignment because its prompt is encrypted.
+        """
+        return self.start_cursor if self.start_cursor is not None else self.prompt_cursor
 
     def resumed_after(self, cursor: int) -> TurnRef:
         """Require the next completion to be newer than one control action."""
@@ -92,6 +109,28 @@ class ActorRef:
 class AssignmentRef:
     session: SessionRef
     assignment_id: str
+
+
+class WorkerKind(StrEnum):
+    LEAD = "lead"
+    SUBAGENT = "subagent"
+
+
+@dataclass(frozen=True)
+class WorkerRef:
+    session: SessionRef
+    kind: WorkerKind
+    actor_id: str
+
+
+@dataclass(frozen=True)
+class WorkRef:
+    session: SessionRef
+    requested_prompt: str
+    request_turn: TurnRef
+    worker: WorkerRef
+    turn: TurnRef
+    assignment: AssignmentRef | None = None
 
 
 @dataclass(frozen=True)
@@ -136,10 +175,12 @@ class CompactionRef:
 
 SessionSpecs = References[SessionSpec]
 Sessions = References[SessionRef]
+SessionContinuations = References[SessionContinuationRef]
 Turns = References[TurnRef]
 Shells = References[ShellRef]
 Actors = References[ActorRef]
 Assignments = References[AssignmentRef]
+Works = References[WorkRef]
 FileOperations = References[FileOperationRef]
 Skills = References[SkillRef]
 Questions = References[QuestionRef]

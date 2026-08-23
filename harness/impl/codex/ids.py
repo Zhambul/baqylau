@@ -11,6 +11,7 @@ from domain.ids import (
     ReasoningId,
     SessionId,
     ShellId,
+    SkillId,
     TaskId,
     TaskListId,
     TurnId,
@@ -24,6 +25,7 @@ CodexMessageId = NewType("CodexMessageId", str)
 CodexQuestionId = NewType("CodexQuestionId", str)
 CodexReasoningId = NewType("CodexReasoningId", str)
 CodexShellId = NewType("CodexShellId", str)
+CodexSkillId = NewType("CodexSkillId", str)
 CodexTaskId = NewType("CodexTaskId", str)
 CodexTaskListId = NewType("CodexTaskListId", str)
 CodexTurnId = NewType("CodexTurnId", str)
@@ -47,6 +49,10 @@ def lead_actor_id_from_codex(codex_session_id: CodexSessionId) -> ActorId:
 
 def shell_id_from_codex_call(codex_call_id: CodexCallId) -> ShellId:
     return ShellId(codex_call_id)
+
+
+def skill_id_from_codex(codex_skill_id: CodexSkillId) -> SkillId:
+    return SkillId(codex_skill_id)
 
 
 def attention_id_from_codex_call(codex_call_id: CodexCallId) -> AttentionId:

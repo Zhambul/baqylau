@@ -2,19 +2,29 @@ Feature: planning tools update the session goal and tasks
 
   Scenario Outline: task tools update shared session state
     Given session configuration "primary" uses <harness> with model <model> and low effort
-    When I launch session "primary" as turn "record tasks" with prompt
+    When I launch session "primary" and assign work "prepare tasks" to the subagent with prompt
+      """
+      Read these task subjects: "Inspect the sample" and "Finish the sample".
+      Do not use tools. Reply only with the word prepared.
+      """
+    Then work "prepare tasks" completes
+    And work "prepare tasks" has worker type subagent
+    And work "prepare tasks" has final answer 'prepared'
+    And work "prepare tasks" releases the lead
+    When I assign work "record tasks" in session "primary" to the lead with prompt
       """
       <task_instruction> Create exactly two tasks with subjects "Inspect the
       sample" and "Finish the sample". Mark both tasks completed. Do not inspect
       files. Reply only with the word done.
       """
-    Then turn "record tasks" completes
+    Then work "record tasks" completes
+    And work "record tasks" has worker type lead
     When I name the task in session "primary" with subject 'Inspect the sample' "inspection"
     And I name the task in session "primary" with subject 'Finish the sample' "completion"
     Then session "primary" has exactly 2 tasks
     And task "inspection" has state completed
     And task "completion" has state completed
-    And turn "record tasks" has final answer 'done'
+    And work "record tasks" has final answer 'done'
 
     Examples:
       | harness     | model        | task_instruction                                             |

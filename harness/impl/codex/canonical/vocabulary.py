@@ -43,6 +43,7 @@ SYNTHETIC_PREFIXES = (
 )
 
 _WRAP_RE = re.compile(r"^<([A-Za-z][A-Za-z0-9_ -]*)>")
+_SKILL_NAME_RE = re.compile(r"^<skill>\s*<name>([^<]+)</name>", re.DOTALL)
 
 
 def _wrapper_tag(text: str) -> str:
@@ -65,6 +66,15 @@ def plan_body(text: str) -> str:
     if inner.rstrip().endswith(close):
         inner = inner.rstrip()[:-len(close)]
     return inner.strip()
+
+
+def loaded_skill_name(text: str) -> str:
+    """Return the name in a native loaded-skill block, or an empty string."""
+    stripped = (text or "").strip()
+    if not stripped.endswith("</skill>"):
+        return ""
+    match = _SKILL_NAME_RE.match(stripped)
+    return match.group(1).strip() if match is not None else ""
 
 
 def strip_input_wrapper(text: str) -> str:

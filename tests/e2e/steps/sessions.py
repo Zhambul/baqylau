@@ -5,36 +5,21 @@ from __future__ import annotations
 import pytest
 from pytest_bdd import given, parsers, then, when
 
-from api.sessiondata.models.entry import EntryResponse, MessageBodyResponse
+from api.sessiondata.models.entry import MessageBodyResponse
 from sdk.client import BaqylauClient
-from sdk.state import SessionSnapshot
 from tests.e2e.testkit import selectors
 from tests.e2e.testkit.launching import start_named_session
 from tests.e2e.testkit.policy import WaitPolicy
-from tests.e2e.testkit.references import SessionSpec, SessionSpecs, Sessions, TurnRef, Turns
-
-
-def _turn_enders(snapshot: SessionSnapshot, reference: TurnRef) -> list[EntryResponse]:
-    assert reference.prompt_cursor is not None
-    answer_after = max(
-        reference.prompt_cursor,
-        reference.completion_after_cursor or reference.prompt_cursor,
-    )
-    if reference.actor_id is None:
-        raise AssertionError("turn does not have a resolved actor identity")
-    boundary = selectors.next_prompt_cursor(snapshot, reference, after=answer_after)
-    return [
-        entry
-        for entry in snapshot.messages(
-            actor_id=reference.actor_id,
-            role="assistant",
-            phase="end_turn",
-        )
-        if entry.cursor > answer_after
-        and (boundary is None or entry.cursor < boundary)
-        and isinstance(entry.body, MessageBodyResponse)
-        and entry.body.recipient_actor_id is None
-    ]
+from tests.e2e.testkit.references import (
+    SessionContinuationRef,
+    SessionContinuations,
+    SessionSpec,
+    SessionSpecs,
+    Sessions,
+    TurnRef,
+    Turns,
+)
+from tests.e2e.testkit import turns as turn_checks
 
 
 @given(parsers.parse(
@@ -114,6 +99,55 @@ def send_prompt(
     )
 
 
+@when(parsers.parse(
+    'I revise the restored draft in session "{session_name}" as turn "{turn_name}"'
+))
+def revise_restored_draft(
+    client: BaqylauClient,
+    sessions: Sessions,
+    session_continuations: SessionContinuations,
+    turns: Turns,
+    wait_policy: WaitPolicy,
+    session_name: str,
+    turn_name: str,
+    docstring: str,
+) -> None:
+    prompt = docstring.strip()
+    source = sessions.get(session_name)
+    receipt = client.sessions.send(
+        source,
+        prompt,
+        replace_terminal_draft=True,
+    )
+    if receipt.status_code != 200 or receipt.outcome.status != "acknowledged":
+        raise AssertionError(
+            f"draft revision {receipt.request_id!r} was not accepted: {receipt.outcome}"
+        )
+    owner = client.sessions.wait_for_prompt_owner(
+        source,
+        prompt=prompt,
+        after_cursor=receipt.cursor_before,
+        timeout=wait_policy.feed,
+    )
+    snapshot = client.sessions.snapshot(owner)
+    lead = snapshot.lead()
+    sessions.replace(session_name, owner)
+    session_continuations.bind(
+        session_name,
+        SessionContinuationRef(before=source, after=owner),
+    )
+    turns.bind(
+        turn_name,
+        TurnRef(
+            owner,
+            prompt,
+            receipt.cursor_before,
+            max(1, lead.statistics.prompt_count),
+            actor_id=lead.actor_id,
+        ),
+    )
+
+
 @then(parsers.parse('turn "{name}" completes'))
 def turn_completes(
     client: BaqylauClient,
@@ -121,28 +155,13 @@ def turn_completes(
     wait_policy: WaitPolicy,
     name: str,
 ) -> None:
-    current = turns.get(name)
-    watch = client.sessions.watch(current.session)
-    current = selectors.turn(watch, current, wait_policy.turn)
-    turns.replace(name, current)
-
-    def completed(snapshot: SessionSnapshot) -> bool | None:
-        enders = _turn_enders(snapshot, current)
-        assert current.actor_id is not None
-        prompt_count = snapshot.actor(current.actor_id).statistics.prompt_count
-        if len(enders) > 1:
-            raise AssertionError(f"turn {name!r} has {len(enders)} final answers")
-        return (
-            True
-            if len(enders) == 1 and prompt_count >= current.expected_prompt_count
-            else None
-        )
-
-    watch.wait(
-        f"turn {name!r} to have exactly one final answer and its prompt",
-        completed,
+    current = turn_checks.wait_until_complete(
+        client,
+        turns.get(name),
+        name=name,
         timeout=wait_policy.turn,
     )
+    turns.replace(name, current)
 
 
 @then(parsers.parse('turn "{name}" has state {state}'))
@@ -184,12 +203,7 @@ def turn_has_prompt(client: BaqylauClient, turns: Turns, name: str, text: str) -
 @then(parsers.parse('turn "{name}" has final answer \'{text}\''))
 def turn_has_final_answer(client: BaqylauClient, turns: Turns, name: str, text: str) -> None:
     reference = turns.get(name)
-    snapshot = client.sessions.snapshot(reference.session)
-    answers = [
-        entry.body.content.text.strip()
-        for entry in _turn_enders(snapshot, reference)
-        if isinstance(entry.body, MessageBodyResponse)
-    ]
+    answers = turn_checks.final_answer_texts(client, reference)
     found = [
         answer for answer in answers if answer == text
     ]
@@ -287,6 +301,25 @@ def session_finishes(
 def session_is_live(client: BaqylauClient, sessions: Sessions, name: str) -> None:
     snapshot = client.sessions.snapshot(sessions.get(name))
     assert snapshot.data.live
+
+
+@then(parsers.parse('session "{name}" keeps one live terminal after revision'))
+def session_keeps_one_live_terminal_after_revision(
+    client: BaqylauClient,
+    session_continuations: SessionContinuations,
+    name: str,
+) -> None:
+    continuation = session_continuations.get(name)
+    before = client.sessions.snapshot(continuation.before)
+    after = client.sessions.snapshot(continuation.after)
+    if continuation.before != continuation.after:
+        assert after.data.session.continued_from == continuation.before.session_id
+        assert not before.data.live
+    assert after.data.live
+    assert sum({
+        continuation.before.session_id: before.data.live,
+        continuation.after.session_id: after.data.live,
+    }.values()) == 1
 
 
 @then(parsers.parse('session "{name}" has repository status'))

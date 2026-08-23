@@ -227,6 +227,13 @@ class WorldStatePayload(BaseModel):
     model_config = OPEN_FOREIGN
 
 
+class InterAgentCommunicationMetadataPayload(BaseModel):
+    """A v2 child-turn trigger with no user-visible content."""
+
+    model_config = FOREIGN
+    trigger_turn: bool
+
+
 class TaskStartedPayload(BaseModel):
     model_config = FOREIGN
     type: Literal["task_started"] = "task_started"
@@ -731,6 +738,13 @@ class ContentPart(BaseModel):
     text: str | None = None
 
 
+class AgentCommunicationPayload(BaseModel):
+    """A v2 agent-to-agent message whose task body can be encrypted."""
+
+    model_config = OPEN_FOREIGN
+    type: Literal["agent_message"] = "agent_message"
+
+
 class NodeReplResultDocument(BaseModel):
     """The outer result document returned by the node-repl MCP tool."""
 
@@ -806,7 +820,7 @@ ResponsePayload = Annotated[
     Union[
         WebSearchCallPayload, FunctionCallOutputPayload, MessagePayload,
         ReasoningPayload, CustomToolCallPayload, CustomToolCallOutputPayload,
-        FunctionCallPayload,
+        FunctionCallPayload, AgentCommunicationPayload,
     ],
     Field(discriminator="type"),
 ]
@@ -826,6 +840,14 @@ class CompactedDocument(RolloutDocument[CompactedPayload]):
 
 class WorldStateDocument(RolloutDocument[WorldStatePayload]):
     type: Literal["world_state"] = "world_state"
+
+
+class InterAgentCommunicationMetadataDocument(
+    RolloutDocument[InterAgentCommunicationMetadataPayload]
+):
+    type: Literal["inter_agent_communication_metadata"] = (
+        "inter_agent_communication_metadata"
+    )
 
 
 class CombinedCommandResult(BaseModel):
@@ -1091,6 +1113,13 @@ class PromptRecord:
 
 
 @dataclass(frozen=True, kw_only=True)
+class SkillRecord:
+    kind: Literal["skill"] = "skill"
+    name: str
+    turn: str
+
+
+@dataclass(frozen=True, kw_only=True)
 class ReasoningRecord:
     kind: Literal["reasoning"] = "reasoning"
     text: str
@@ -1296,7 +1325,7 @@ class EmptyRecord:
 # pin in the test suite checks against).
 RolloutRecord: TypeAlias = Union[
     TurnContextRecord, UsageRecord, PatchRecord, CompactRecord, TaskStartedRecord,
-    TaskCompleteRecord, TurnAbortedRecord, PromptRecord, ReasoningRecord, MessageRecord,
+    TaskCompleteRecord, TurnAbortedRecord, PromptRecord, SkillRecord, ReasoningRecord, MessageRecord,
     SearchRecord, ExecRecord, ExecResultRecord, StdinRecord, CommandCompletedRecord,
     ChatRecord, ThinkRecord, PatchCallRecord, AskRecord, PlanRecord, SettingsRecord,
     CompactBoundaryRecord, ToolRecord, ActorActivityRecord, CollaborationCallRecord,

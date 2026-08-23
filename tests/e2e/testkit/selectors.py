@@ -47,16 +47,17 @@ def next_prompt_cursor(
         if entry.cursor > after
         and entry.actor_id == reference.actor_id
         and isinstance(entry.body, MessageBodyResponse)
-        and entry.body.role == "user"
+        and entry.body.role in ("user", "parent")
         and entry.body.phase == "prompt"
     ]
     return min(found) if found else None
 
 
 def cursor_is_in_turn(snapshot: SessionSnapshot, reference: TurnRef, cursor: int) -> bool:
-    if reference.prompt_cursor is None or cursor <= reference.prompt_cursor:
+    start_cursor = reference.activity_cursor
+    if start_cursor is None or cursor <= start_cursor:
         return False
-    boundary = next_prompt_cursor(snapshot, reference, after=reference.prompt_cursor)
+    boundary = next_prompt_cursor(snapshot, reference, after=start_cursor)
     return boundary is None or cursor < boundary
 
 
@@ -71,7 +72,17 @@ def belongs_to_turn(
 
 
 def turn(watch: SessionWatch, reference: TurnRef, timeout: float) -> TurnRef:
-    if reference.turn_id is not None:
+    if (
+        reference.actor_id is not None
+        and reference.activity_cursor is not None
+        and (
+            reference.turn_id is not None
+            or (
+                reference.prompt_cursor is not None
+                and reference.prompt_message_id is not None
+            )
+        )
+    ):
         return reference
 
     def found(snapshot: SessionSnapshot) -> TurnRef | None:
@@ -103,6 +114,7 @@ def turn(watch: SessionWatch, reference: TurnRef, timeout: float) -> TurnRef:
             prompt_cursor=prompt.cursor,
             prompt_message_id=body.message_id,
             completion_after_cursor=reference.completion_after_cursor,
+            start_cursor=prompt.cursor,
         )
 
     return watch.wait(
@@ -145,6 +157,7 @@ def launched_turn(watch: SessionWatch, timeout: float) -> TurnRef:
             turn_id=prompt.turn_id,
             prompt_cursor=prompt.cursor,
             prompt_message_id=body.message_id,
+            start_cursor=prompt.cursor,
         )
 
     from sdk.client import SessionRef  # noqa: PLC0415
@@ -204,11 +217,111 @@ def actor(watch: SessionWatch, *, exact_name: str, timeout: float) -> ActorRef:
     return watch.wait(f"one subagent named {exact_name!r}", found, timeout=timeout)
 
 
+def actor_from_assignment(
+    watch: SessionWatch,
+    *,
+    assignment_reference: AssignmentRef,
+    timeout: float,
+) -> ActorRef:
+    def found(snapshot: SessionSnapshot) -> ActorRef | None:
+        assignments = [
+            item
+            for item in snapshot.assignments()
+            if item.assignment_id == assignment_reference.assignment_id
+        ]
+        item = _one(assignments, f"assignment {assignment_reference.assignment_id!r}")
+        if item is None:
+            return None
+        candidate = snapshot.actor(item.actor_id)
+        if candidate.parent_actor_id is None:
+            return None
+        return ActorRef(SessionRef(snapshot.session_id), candidate.actor_id)
+
+    from sdk.client import SessionRef  # noqa: PLC0415
+
+    return watch.wait(
+        f"assignment {assignment_reference.assignment_id!r} to identify its child actor",
+        found,
+        timeout=timeout,
+    )
+
+
+def actor_assignment_turn(
+    watch: SessionWatch,
+    *,
+    actor_reference: ActorRef,
+    assignment_reference: AssignmentRef,
+    requested_prompt: str,
+    timeout: float,
+) -> TurnRef:
+    def found(snapshot: SessionSnapshot) -> TurnRef | None:
+        assignments = [
+            item
+            for item in snapshot.assignments()
+            if item.assignment_id == assignment_reference.assignment_id
+        ]
+        assignment = _one(
+            assignments,
+            f"assignment {assignment_reference.assignment_id!r}",
+        )
+        if assignment is None:
+            return None
+        if assignment.actor_id != actor_reference.actor_id:
+            raise AssertionError(
+                f"assignment {assignment.assignment_id!r} belongs to actor "
+                f"{assignment.actor_id!r}, not {actor_reference.actor_id!r}"
+            )
+        actor = snapshot.actor(actor_reference.actor_id)
+        if snapshot.data.session.harness == "claude_code":
+            prompts = [
+                entry
+                for entry in snapshot.entries
+                if entry.cursor > assignment.started_cursor
+                and entry.actor_id == actor_reference.actor_id
+                and isinstance(entry.body, MessageBodyResponse)
+                and entry.body.role in ("user", "parent")
+                and entry.body.phase == "prompt"
+                and entry.body.content.text.strip() == requested_prompt
+            ]
+            prompt = _one(prompts, f"prompt for actor {actor_reference.actor_id!r}")
+            if prompt is None or not isinstance(prompt.body, MessageBodyResponse):
+                return None
+            return TurnRef(
+                session=actor_reference.session,
+                prompt=requested_prompt,
+                cursor_before=assignment.started_cursor,
+                expected_prompt_count=actor.statistics.prompt_count,
+                actor_id=actor_reference.actor_id,
+                turn_id=prompt.turn_id,
+                prompt_cursor=prompt.cursor,
+                prompt_message_id=prompt.body.message_id,
+                start_cursor=prompt.cursor,
+            )
+        if assignment.turn_id is None:
+            return None
+        return TurnRef(
+            session=actor_reference.session,
+            prompt=requested_prompt,
+            cursor_before=assignment.started_cursor - 1,
+            expected_prompt_count=actor.statistics.prompt_count,
+            actor_id=actor_reference.actor_id,
+            turn_id=assignment.turn_id,
+            start_cursor=assignment.started_cursor,
+        )
+
+    return watch.wait(
+        f"assignment {assignment_reference.assignment_id!r} to identify its child turn",
+        found,
+        timeout=timeout,
+    )
+
+
 def assignment(
     watch: SessionWatch,
     *,
     turn_reference: TurnRef,
     exact_actor_name: str | None = None,
+    exact_prompt: str | None = None,
     timeout: float,
 ) -> AssignmentRef:
     def found(snapshot: SessionSnapshot) -> AssignmentRef | None:
@@ -224,6 +337,10 @@ def assignment(
             and (
                 exact_actor_name is None
                 or (item.assigned_actor_name or "").casefold() == exact_actor_name.casefold()
+            )
+            and (
+                exact_prompt is None
+                or (item.requested_prompt or "").strip() == exact_prompt.strip()
             )
         ]
         item: AssignmentState | None = _one(candidates, "agent assignment")

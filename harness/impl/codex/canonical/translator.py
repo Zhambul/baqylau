@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import os
 import re
+import shlex
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
@@ -48,6 +49,8 @@ from domain.events import (
     ShellOutputFinished,
     ShellProgressed,
     ShellStarted,
+    SkillFinished,
+    SkillStarted,
     TaskChanged,
     TaskListChanged,
     TurnAborted,
@@ -57,7 +60,9 @@ from domain.events import (
     WebFetched,
 )
 from domain.ids import (
+    SessionId,
     ShellId,
+    SkillId,
     TurnId,
 )
 from harness.impl.codex.ids import (
@@ -67,7 +72,9 @@ from harness.impl.codex.ids import (
     CodexMessageId,
     CodexQuestionId,
     CodexReasoningId,
+    CodexSessionId,
     CodexShellId,
+    CodexSkillId,
     CodexTaskId,
     CodexTaskListId,
     CodexTurnId,
@@ -79,7 +86,9 @@ from harness.impl.codex.ids import (
     message_id_from_codex_call,
     question_id_from_codex,
     reasoning_id_from_codex,
+    session_id_from_codex,
     shell_id_from_codex_call,
+    skill_id_from_codex,
     task_id_from_codex,
     task_list_id_from_codex,
     turn_id_from_codex,
@@ -141,6 +150,7 @@ from harness.impl.codex.canonical.records import (
     SessionMetaPayload,
     SessionMetaSource,
     SettingsRecord,
+    SkillRecord,
     StdinRecord,
     ToolBatchRecord,
     TaskCompleteRecord,
@@ -154,6 +164,7 @@ from harness.impl.codex.canonical.records import (
     UnmappedToolRecord,
     UsageRecord,
 )
+from harness.impl.codex.continuity import RewindContinuity
 from harness.impl.codex.canonical.sources import lead_rollout, session_metadata
 from harness.impl.codex.canonical.support import (
     content,
@@ -403,14 +414,33 @@ def _node_read_path(arguments: str | None) -> str:
 _REPORTED_PROCESS_ID = re.compile(
     r"(?:session(?:_id)?\s*[:=]?\s*)?(\d+)"
 )
+_SKILL_DIRECTORY_NAME = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+
+
+def _read_skill_name(command: str) -> str | None:
+    """Return the name from one direct read of a Codex skill file."""
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return None
+    if len(words) != 2 or words[0] != "cat":
+        return None
+    skill_parts = os.path.normpath(words[1]).split(os.sep)
+    if len(skill_parts) < 4 or skill_parts[-4:-2] != [".agents", "skills"]:
+        return None
+    name, filename = skill_parts[-2:]
+    if filename != "SKILL.md":
+        return None
+    return name if _SKILL_DIRECTORY_NAME.fullmatch(name) else None
 
 
 class CodexCanonicalTranslator(HarnessTranslator):
-    def __init__(self) -> None:
+    def __init__(self, rewind_continuity: RewindContinuity | None = None) -> None:
         self._collaboration_calls: dict[tuple[str, str], tuple[str, CollaborationArguments]] = {}
         self._process_shells: dict[tuple[str, str], ShellId] = {}
         self._continuation_shells: dict[tuple[str, str], ShellId] = {}
         self._finished_shells: set[tuple[str, ShellId]] = set()
+        self._finished_skills: set[tuple[str, SkillId]] = set()
         # Announced background once. An exec that outlived its yield is reported
         # again by every continuation poll, and the fact is about the command,
         # not about the poll that observed it.
@@ -423,6 +453,22 @@ class CodexCanonicalTranslator(HarnessTranslator):
         self._goals: dict[str, GoalChanged] = {}
         self._working_directories: dict[str, str] = {}
         self._selections = SelectionSemantics()
+        self._rewind_continuity = rewind_continuity or RewindContinuity()
+
+    def _continued_from(
+        self,
+        raw_event: RawEvent,
+        declared_from: str | None,
+    ) -> SessionId | None:
+        return self._rewind_continuity.resolve(
+            raw_event.session_id,
+            raw_event.terminal_window_id,
+            declared_from=(
+                session_id_from_codex(CodexSessionId(declared_from))
+                if declared_from is not None
+                else None
+            ),
+        )
 
     @staticmethod
     def _source_key(raw_event: RawEvent) -> str:
@@ -442,6 +488,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
             for (known_source, call_id), record in self._call_records.items()
             if known_source == source_key
             and isinstance(record, ExecRecord)
+            and _read_skill_name(record.cmd) is None
             and (source_key, shell_id_from_codex_call(CodexCallId(call_id)))
                 not in self._finished_shells
         ]
@@ -660,6 +707,12 @@ class CodexCanonicalTranslator(HarnessTranslator):
                     raw_event,
                     metadata.cwd or "",
                     os.path.realpath(raw_event.source_name),
+                    continued_from=self._continued_from(
+                        raw_event,
+                        str(metadata.forked_from_id)
+                        if metadata.forked_from_id is not None
+                        else None,
+                    ),
                 )),
                 RecordedTranslationDecision.TRANSLATED,
             )
@@ -693,10 +746,17 @@ class CodexCanonicalTranslator(HarnessTranslator):
             if not lead_rollout(path):
                 # A subagent thread announces no session of its own.
                 return []
+            metadata = session_metadata(path)
             return self._session_started_events(
                 raw_event,
                 hook.cwd or "",
                 os.path.realpath(path),
+                continued_from=self._continued_from(
+                    raw_event,
+                    str(metadata.forked_from_id)
+                    if metadata is not None and metadata.forked_from_id is not None
+                    else None,
+                ),
             )
         if hook_name == "PreCompact":
             payload: EventPayload = CompactionStarted(hook.before_tokens)
@@ -713,6 +773,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
         source_reference: str,
         *,
         occurred_at: float | None = None,
+        continued_from: SessionId | None = None,
     ) -> list[CanonicalEvent[EventPayload]]:
         self._working_directories[str(raw_event.session_id)] = working_directory
         return [
@@ -729,6 +790,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
                     model=None,
                     effort=None,
                     account=None,
+                    continued_from=continued_from,
                 ),
                 occurred_at=occurred_at,
             ),
@@ -849,6 +911,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 for (known_source, call_id), call in self._call_records.items()
                 if known_source == source_key
                 and isinstance(call, ExecRecord)
+                and _read_skill_name(call.cmd) is None
                 and call.turn == native_turn_id
                 and (source_key, shell_id_from_codex_call(CodexCallId(call_id)))
                     not in self._finished_shells
@@ -863,6 +926,29 @@ class CodexCanonicalTranslator(HarnessTranslator):
                     str(shell_id),
                     "finished",
                     ShellFinished(shell_id, Outcome.CANCELLED, None, None),
+                    turn_id,
+                    occurred_at,
+                ))
+            interrupted_skills = [
+                skill_id_from_codex(CodexSkillId(call_id))
+                for (known_source, call_id), call in self._call_records.items()
+                if known_source == source_key
+                and isinstance(call, ExecRecord)
+                and _read_skill_name(call.cmd) is not None
+                and call.turn == native_turn_id
+                and (
+                    source_key,
+                    skill_id_from_codex(CodexSkillId(call_id)),
+                ) not in self._finished_skills
+            ]
+            for skill_id in interrupted_skills:
+                self._finished_skills.add((source_key, skill_id))
+                events.append(event(
+                    raw_event,
+                    "skill",
+                    str(skill_id),
+                    "finished",
+                    SkillFinished(skill_id, Outcome.CANCELLED, None),
                     turn_id,
                     occurred_at,
                 ))
@@ -922,6 +1008,33 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 message_turn_id,
                 occurred_at,
             )]
+        if isinstance(record, SkillRecord):
+            skill_id = skill_id_from_codex(CodexSkillId(native_identity))
+            skill_turn_id = (
+                turn_id_from_codex(CodexTurnId(record.turn))
+                if record.turn
+                else None
+            )
+            return [
+                event(
+                    raw_event,
+                    "skill",
+                    native_identity,
+                    "started",
+                    SkillStarted(skill_id, record.name, None),
+                    skill_turn_id,
+                    occurred_at,
+                ),
+                event(
+                    raw_event,
+                    "skill",
+                    native_identity,
+                    "finished",
+                    SkillFinished(skill_id, Outcome.SUCCEEDED, None),
+                    skill_turn_id,
+                    occurred_at,
+                ),
+            ]
         if isinstance(record, (ReasoningRecord, ThinkRecord)):
             payload = ReasoningCreated(
                 reasoning_id_from_codex(CodexReasoningId(native_identity)),
@@ -1123,6 +1236,23 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 # reported at the CALL, where the name is.
                 _codex_tool(record.name, record.args)
                 return []
+            skill_name = _read_skill_name(record.cmd)
+            if skill_name is not None:
+                skill_id = skill_id_from_codex(CodexSkillId(call_id))
+                skill_turn_id = (
+                    turn_id_from_codex(CodexTurnId(record.turn))
+                    if record.turn
+                    else None
+                )
+                return [event(
+                    raw_event,
+                    "skill",
+                    str(skill_id),
+                    "started",
+                    SkillStarted(skill_id, skill_name, None),
+                    skill_turn_id,
+                    occurred_at,
+                )]
             shell_id = shell_id_from_codex_call(call_id)
             payload = ShellStarted(shell_id, content(record.cmd), ExecutionMode.FOREGROUND, None)
             return [event(raw_event, "shell", str(shell_id), "started", payload, occurred_at=occurred_at)]
@@ -1197,6 +1327,33 @@ class CodexCanonicalTranslator(HarnessTranslator):
                     record,
                     occurred_at,
                 )
+            skill_name = _read_skill_name(call_record.cmd)
+            if skill_name is not None:
+                skill_id = skill_id_from_codex(CodexSkillId(call_id))
+                if (source_key, skill_id) in self._finished_skills:
+                    return []
+                self._finished_skills.add((source_key, skill_id))
+                process_exit_code = exit_code(record.exit)
+                if record.interrupted:
+                    skill_outcome = Outcome.CANCELLED
+                elif process_exit_code not in (None, 0):
+                    skill_outcome = Outcome.FAILED
+                else:
+                    skill_outcome = Outcome.SUCCEEDED
+                skill_turn_id = (
+                    turn_id_from_codex(CodexTurnId(call_record.turn))
+                    if call_record.turn
+                    else None
+                )
+                return [event(
+                    raw_event,
+                    "skill",
+                    str(skill_id),
+                    "finished",
+                    SkillFinished(skill_id, skill_outcome, None),
+                    skill_turn_id,
+                    occurred_at,
+                )]
             shell_id = shell_id_from_codex_call(call_id)
             if (source_key, shell_id) in self._finished_shells:
                 return []

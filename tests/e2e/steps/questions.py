@@ -35,6 +35,10 @@ def _question(
     'I name the pending question in turn "{turn_name}" containing '
     '\'{prompt}\' "{question_name}"'
 ))
+@when(parsers.parse(
+    'I name the pending question in work "{turn_name}" containing '
+    '\'{prompt}\' "{question_name}"'
+))
 def name_pending_question(
     client: BaqylauClient,
     turns: Turns,

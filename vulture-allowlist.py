@@ -115,6 +115,7 @@ workspace_roots                # records.py TurnContextPayload
 comp_hash                      # records.py TurnContextPayload
 multi_agent_version            # records.py TurnContextPayload / SessionMetaPayload
 multi_agent_mode                # records.py TurnContextPayload
+trigger_turn                    # records.py InterAgentCommunicationMetadataPayload
 first_window_id                 # records.py CompactedPayload
 window_number                   # records.py CompactedPayload
 commit_hash                     # records.py SessionMetaGit

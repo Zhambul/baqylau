@@ -2,11 +2,13 @@ Feature: session controls change live session state
 
   Scenario Outline: a quiet session can be renamed, reconfigured, and closed
     Given session configuration "primary" uses <harness> with model <model> and low effort
-    When I launch session "primary" as turn "open controls" with prompt
+    When I launch session "primary" and assign work "open controls" to the <worker> with prompt
       """
       Reply only with the word ready.
       """
-    Then turn "open controls" completes
+    Then work "open controls" completes
+    And work "open controls" has worker type <worker>
+    And work "open controls" releases the lead
     When I rename session "primary" to 'E2E control sample' as control "rename sample"
     Then control "rename sample" response is accepted
     And control "rename sample" outcome is acknowledged
@@ -28,9 +30,11 @@ Feature: session controls change live session state
     And session "primary" finishes
 
     Examples:
-      | harness     | model        | new_model      |
-      | codex       | gpt-5.6-luna | gpt-5.6-terra |
-      | claude_code | haiku        | sonnet         |
+      | harness     | model        | new_model      | worker   |
+      | codex       | gpt-5.6-luna | gpt-5.6-terra | lead     |
+      | codex       | gpt-5.6-luna | gpt-5.6-terra | subagent |
+      | claude_code | haiku        | sonnet         | lead     |
+      | claude_code | haiku        | sonnet         | subagent |
 
   Scenario Outline: a harness can replace a custom title with an automatic name
     Given session configuration "primary" uses <harness> with model <model> and low effort

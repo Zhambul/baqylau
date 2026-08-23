@@ -120,19 +120,30 @@ class TerminalAdapter:
         if not window_id:
             return None
         native = NativeWindowId(str(window_id))
-        return window_id if self._window(native) is not None else None
+        window = self._window(native)
+        if window is None:
+            return None
+        owner = window.tags.get(SESSION_WINDOW_TAG)
+        return window_id if not owner or owner == str(session_id) else None
 
     def live_sessions(self, session_ids: Iterable[SessionId]) -> frozenset[SessionId]:
         """The subset whose window is still on screen — `window_for_session`
         for many sessions, paying for ONE window listing instead of one per
         session. Listing the windows costs a subprocess in the real plugins,
         and the session-list route asks about every visible session at once."""
-        on_screen = {window.window_id for window in self._plugin.metadata.windows()}
+        on_screen = {
+            window.window_id: window.tags.get(SESSION_WINDOW_TAG)
+            for window in self._plugin.metadata.windows()
+        }
         live = set()
         for session_id in session_ids:
             session = self._sessions.find(session_id)
             window_id = session.terminal_window_id if session is not None else None
-            if window_id and NativeWindowId(str(window_id)) in on_screen:
+            if not window_id:
+                continue
+            native = NativeWindowId(str(window_id))
+            owner = on_screen.get(native)
+            if native in on_screen and (not owner or owner == str(session_id)):
                 live.add(session_id)
         return frozenset(live)
 

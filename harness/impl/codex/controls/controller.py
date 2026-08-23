@@ -12,6 +12,7 @@ from harness.contract import ControlHandler, HarnessController
 from harness.models import (
     AnswerDecision,
     AnswerQuestion,
+    ApplyRewind,
     CloseSession,
     Compact,
     ControlAcknowledgement,
@@ -26,6 +27,7 @@ from harness.models import (
     PlanChoicesResult,
     ReadPlanChoices,
     RenameSession,
+    RewindResult,
     SelectEffort,
     SelectModel,
     SendText,
@@ -48,10 +50,12 @@ from domain.ids import WindowId
 from terminal.models.values import WindowId as NativeWindowId
 from harness.impl.codex.canonical import rollout, title
 from harness.impl.codex.canonical.records import PromptRecord, RolloutRecord, TaskStartedRecord, TurnAbortedRecord
-from harness.impl.codex.controls import dialog, modeldialog, plandialog
+from harness.impl.codex.continuity import RewindContinuity
+from harness.impl.codex.controls import backtrack, composer, dialog, modeldialog, plandialog
+from harness.impl.codex.controls.dialog import Driver
 
 
-class _TerminalDriver:
+class _TerminalDriver(Driver):
     """Expose the small driver vocabulary used by Codex's screen modules."""
 
     def __init__(self, terminal_plugin: TerminalPlugin) -> None:
@@ -108,10 +112,20 @@ class SendTextHandler(ControlHandler):
     ) -> DeliveryResult:
         if not isinstance(request, SendText):
             raise TypeError("send_text handler requires SendText")
-        if request.replace_terminal_draft:
+        window_id = control_context.terminal_window_id
+        if window_id is None:
             return DeliveryResult(
-                request.request_id, ControlAcknowledgement.REJECTED, "Codex draft replacement is unsupported"
+                request.request_id, ControlAcknowledgement.REJECTED, "session is not live"
             )
+        if request.replace_terminal_draft:
+            try:
+                composer.clear(_TerminalDriver(control_context.terminal), window_id)
+            except composer.ComposerError as error:
+                return DeliveryResult(
+                    request.request_id,
+                    ControlAcknowledgement.INDETERMINATE,
+                    str(error),
+                )
         attachment_text = " ".join(attachment.local_path for attachment in request.attachments)
         message = attachment_text + ("\n" if attachment_text and request.text else "") + request.text
         result = _submit(request, control_context, message)
@@ -247,6 +261,47 @@ class CompactHandler(ControlHandler):
         if not isinstance(request, Compact):
             raise TypeError("compact handler requires Compact")
         return _submit(request, control_context, "/compact")
+
+
+class ApplyRewindHandler(ControlHandler):
+    def __init__(self, rewind_continuity: RewindContinuity) -> None:
+        self._rewind_continuity = rewind_continuity
+
+    def __call__(self, request: ControlRequest, control_context: ControlContext) -> RewindResult:
+        if not isinstance(request, ApplyRewind):
+            raise TypeError("apply_rewind handler requires ApplyRewind")
+        if request.mode != "conversation":
+            return RewindResult(
+                request.request_id,
+                ControlAcknowledgement.REJECTED,
+                "Codex supports conversation rewind only",
+            )
+        window_id = control_context.terminal_window_id
+        if window_id is None:
+            return RewindResult(
+                request.request_id,
+                ControlAcknowledgement.REJECTED,
+                "session is not live",
+            )
+        try:
+            backtrack.drive(
+                _TerminalDriver(control_context.terminal),
+                window_id,
+                request.target_text,
+                newer_prompt_count=request.newer_prompt_count,
+            )
+        except backtrack.BacktrackError as error:
+            return RewindResult(
+                request.request_id,
+                ControlAcknowledgement.INDETERMINATE,
+                str(error),
+            )
+        self._rewind_continuity.expect(request.session_id, window_id)
+        return RewindResult(
+            request.request_id,
+            ControlAcknowledgement.ACKNOWLEDGED,
+            restored_text=request.target_text,
+        )
 
 
 class SelectModelHandler(ControlHandler):
@@ -395,12 +450,15 @@ class DecidePlanHandler(ControlHandler):
         return ControlResult(request.request_id, ControlAcknowledgement.ACKNOWLEDGED)
 
 
+rewind_continuity = RewindContinuity()
+
 HANDLERS: Mapping[ControlName, ControlHandler] = {
     ControlName.SEND_TEXT: SendTextHandler(),
     ControlName.INTERRUPT: InterruptHandler(),
     ControlName.CLOSE_SESSION: CloseSessionHandler(),
     ControlName.RENAME_SESSION: RenameSessionHandler(),
     ControlName.COMPACT: CompactHandler(),
+    ControlName.APPLY_REWIND: ApplyRewindHandler(rewind_continuity),
     ControlName.SELECT_MODEL: SelectModelHandler(),
     ControlName.SELECT_EFFORT: SelectEffortHandler(),
     ControlName.ANSWER_QUESTION: AnswerQuestionHandler(),

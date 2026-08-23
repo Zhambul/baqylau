@@ -146,6 +146,7 @@ def test_the_snapshot_carries_the_facts_the_world_state_and_one_cursor():
             FACTS,
             goal=SessionGoal("ship the redesign", False),
             tasks=(SessionTask(TaskId("t1"), "Fix the reconnect", None, TaskState.IN_PROGRESS, LEAD),),
+            continued_from=SessionId("session-before-rewind"),
         ),
         actors=(ACTOR,),
         cursor=4812,
@@ -163,6 +164,7 @@ def test_the_snapshot_carries_the_facts_the_world_state_and_one_cursor():
     assert response.session.account.display_name == "zhambyl"
     assert response.session.goal.objective == "ship the redesign"
     assert [task.subject for task in response.session.tasks] == ["Fix the reconnect"]
+    assert response.session.continued_from == "session-before-rewind"
     # Beside the facts, not inside them: an SSE frame carries the same `session`
     # shape and cannot know either of these.
     assert response.live is True

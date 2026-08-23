@@ -3,25 +3,29 @@ Feature: the scoreboard summarizes the session
   Scenario Outline: completed work fills every activity and usage counter
     Given the file operation fixture does not exist
     And session configuration "primary" uses <harness> with model <model> and <effort> effort
-    When I launch session "primary" as turn "successful command" with prompt
+    When I launch session "primary" and assign work "successful command" to the lead with prompt
       """
       Run only the shell command `echo scoreboard-ok`. Then, reply only with success.
       """
-    Then turn "successful command" completes
-    When I send prompt to session "primary" as turn "failed command"
+    Then work "successful command" completes
+    And work "successful command" has worker type lead
+    When I assign work "failed command" in session "primary" to the subagent with prompt
       """
       Run only the shell command `sh -c "echo expected-error >&2; exit 7"`.
       Then, reply only with failed-as-expected.
       """
-    Then turn "failed command" completes
-    When I name the only shell command in turn "failed command" containing 'expected-error' "expected failure"
-    When I send prompt to session "primary" as turn "file changes"
+    Then work "failed command" completes
+    And work "failed command" has worker type subagent
+    And work "failed command" releases the lead
+    When I name the only shell command in work "failed command" containing 'expected-error' "expected failure"
+    When I assign work "file changes" in session "primary" to the lead with prompt
       """
       Use file editing tools, not shell commands. Create baqylau-e2e-file.txt
       with the content alpha. Then, edit alpha to beta. Finally, reply only
       with exactly these four lowercase letters and no other text: done
       """
-    Then turn "file changes" completes
+    Then work "file changes" completes
+    And work "file changes" has worker type lead
     And command "expected failure" has state failed
     And command "expected failure" has exit code 7
     And command "expected failure" has output containing 'expected-error'
@@ -36,7 +40,7 @@ Feature: the scoreboard summarizes the session
     And session "primary" has positive active time
     And session "primary" has positive input token usage
     And session "primary" has positive output token usage
-    And turn "file changes" has final answer 'done'
+    And work "file changes" has final answer 'done'
 
     Examples:
       | harness     | model        | effort |

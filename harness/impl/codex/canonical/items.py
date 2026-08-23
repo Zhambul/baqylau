@@ -24,6 +24,7 @@ from pydantic import BaseModel, ValidationError
 
 from harness.impl.codex.ids import CodexCallId, CodexShellId
 from harness.impl.codex.canonical.records import (
+    AgentCommunicationPayload,
     AskArguments,
     COLLABORATION_ARGUMENTS,
     CollaborationArguments,
@@ -59,6 +60,7 @@ from harness.impl.codex.canonical.records import (
     RolloutRecord,
     SearchRecord,
     SendMessageArguments,
+    SkillRecord,
     StdinRecord,
     TaskListRecord,
     ThinkRecord,
@@ -69,6 +71,7 @@ from harness.impl.codex.canonical.records import (
 from harness.impl.codex.canonical.vocabulary import (
     empty_record,
     is_synthetic,
+    loaded_skill_name,
     plan_body,
     strip_input_wrapper,
 )
@@ -106,7 +109,7 @@ _OUTPUT_MARK = "Output:\n"
 
 
 _JS_TOOL = re.compile(r"tools\.([A-Za-z_][A-Za-z0-9_]*)\s*\(")
-COLLABORATION_TOOL_PREFIX = "multi_agent_v1__"
+COLLABORATION_TOOL_PREFIX = re.compile(r"^multi_agent_v\d+__")
 # The quote characters the argument scan below must not read structure inside.
 _JS_QUOTES = "\"'`"
 _JS_PLAN_STEP = re.compile(
@@ -212,11 +215,7 @@ def _goal_tool(
 
 
 def _collaboration_name(native_name: str) -> CollaborationCallName | None:
-    name = (
-        native_name.removeprefix(COLLABORATION_TOOL_PREFIX)
-        if native_name.startswith(COLLABORATION_TOOL_PREFIX)
-        else native_name
-    )
+    name = COLLABORATION_TOOL_PREFIX.sub("", native_name, count=1)
     try:
         return CollaborationCallName(name)
     except ValueError:
@@ -364,6 +363,13 @@ def _rsp_message(message_payload: MessagePayload) -> RolloutRecord:
     if not txt:
         return empty_record()
     role = (p.role or "").strip()
+    metadata = p.internal_chat_message_metadata_passthrough
+    skill_name = loaded_skill_name(txt) if role == "user" else ""
+    if skill_name:
+        return SkillRecord(
+            name=skill_name,
+            turn=(metadata.turn_id if metadata else None) or "",
+        )
     # A PLAN before anything else: it is an assistant turn wearing a wrapper tag,
     # so the structural synthetic rule below would drop it as machinery (see
     # vocabulary.PLAN_WRAPPER). Its own kind, not a `chat`, because it is a
@@ -380,7 +386,6 @@ def _rsp_message(message_payload: MessagePayload) -> RolloutRecord:
     # the twin of the event_msg one, and the web's conversation read takes
     # whichever arrives first — so the fact that a reply is the turn's FINAL
     # ANSWER has to survive both spellings or it survives neither.
-    metadata = p.internal_chat_message_metadata_passthrough
     return ChatRecord(role=role, text=strip_input_wrapper(txt), synthetic=synth,
                        phase=(p.phase or "").strip(),
                        turn=(metadata.turn_id if metadata else None) or "")
@@ -659,6 +664,7 @@ def _rsp_function_call(function_call_payload: FunctionCallPayload) -> RolloutRec
 
 
 class CodexResponseType(StrEnum):
+    AGENT_MESSAGE = "agent_message"
     WEB_SEARCH_CALL = "web_search_call"
     FUNCTION_CALL_OUTPUT = "function_call_output"
     FUNCTION_CALL = "function_call"
@@ -669,6 +675,7 @@ class CodexResponseType(StrEnum):
 
 
 RESPONSES: Mapping[CodexResponseType, type[BaseModel]] = {
+    CodexResponseType.AGENT_MESSAGE: AgentCommunicationPayload,
     CodexResponseType.WEB_SEARCH_CALL: WebSearchCallPayload,
     CodexResponseType.FUNCTION_CALL_OUTPUT: FunctionCallOutputPayload,
     CodexResponseType.FUNCTION_CALL: FunctionCallPayload,
@@ -680,6 +687,7 @@ RESPONSES: Mapping[CodexResponseType, type[BaseModel]] = {
 
 
 def parse_response(payload: BaseModel) -> RolloutRecord | None:
+    if isinstance(payload, AgentCommunicationPayload): return empty_record()
     if isinstance(payload, WebSearchCallPayload): return _rsp_web_search_call(payload)
     if isinstance(payload, FunctionCallOutputPayload): return _rsp_function_call_output(payload)
     if isinstance(payload, FunctionCallPayload): return _rsp_function_call(payload)

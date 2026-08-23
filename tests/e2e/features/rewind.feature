@@ -18,7 +18,15 @@ Feature: rewind restores a named prompt for revision
     Then control "restore first prompt" response is accepted
     And control "restore first prompt" outcome is acknowledged
     And control "restore first prompt" restores turn "first prompt"
+    When I revise the restored draft in session "primary" as turn "revised prompt"
+      """
+      Reply only with the word revised.
+      """
+    Then turn "revised prompt" completes
+    And turn "revised prompt" has final answer 'revised'
+    And session "primary" keeps one live terminal after revision
 
     Examples:
       | harness     | model |
+      | codex       | gpt-5.6-luna |
       | claude_code | haiku |

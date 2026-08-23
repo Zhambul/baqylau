@@ -26,6 +26,7 @@ from tests.e2e.testkit.references import (
     Questions,
     References,
     ResumableLists,
+    SessionContinuations,
     SessionSpecs,
     Sessions,
     Shells,
@@ -33,7 +34,10 @@ from tests.e2e.testkit.references import (
     Skills,
     Tasks,
     Turns,
+    Works,
 )
+from tests.e2e.testkit.skill_fixtures import SkillFixtures, SkillWorkDriver
+from tests.e2e.testkit.work import WorkDriver
 
 pytest_plugins = (
     "tests.e2e.steps.catalog",
@@ -51,6 +55,7 @@ pytest_plugins = (
     "tests.e2e.steps.skills",
     "tests.e2e.steps.subagents",
     "tests.e2e.steps.usage",
+    "tests.e2e.steps.work",
 )
 
 DEFAULT_WORKSPACE = os.path.expanduser("~/code/personal/baqylau-tests")
@@ -167,8 +172,44 @@ def sessions() -> Sessions:
 
 
 @pytest.fixture
+def session_continuations() -> SessionContinuations:
+    return References("session continuation")
+
+
+@pytest.fixture
 def turns() -> Turns:
     return References("turn")
+
+
+@pytest.fixture
+def works() -> Works:
+    return References("work")
+
+
+@pytest.fixture
+def work_driver(
+    client: BaqylauClient,
+    workspace: str,
+    wait_policy: WaitPolicy,
+) -> WorkDriver:
+    return WorkDriver(client, workspace, wait_policy)
+
+
+@pytest.fixture
+def skill_fixtures(workspace: str) -> Iterator[SkillFixtures]:
+    fixtures = SkillFixtures(workspace)
+    try:
+        yield fixtures
+    finally:
+        fixtures.close()
+
+
+@pytest.fixture
+def skill_work_driver(
+    work_driver: WorkDriver,
+    skill_fixtures: SkillFixtures,
+) -> SkillWorkDriver:
+    return SkillWorkDriver(work_driver, skill_fixtures)
 
 
 @pytest.fixture

@@ -37,6 +37,9 @@ def _wait_for_output(
 @when(parsers.parse(
     'I name the only shell command in turn "{turn_name}" containing \'{command}\' "{name}"'
 ))
+@when(parsers.parse(
+    'I name the only shell command in work "{turn_name}" containing \'{command}\' "{name}"'
+))
 def name_shell_command(
     client: BaqylauClient,
     turns: Turns,
@@ -58,6 +61,9 @@ def name_shell_command(
 
 @when(parsers.parse(
     'I name the only running foreground command in turn "{turn_name}" containing \'{command}\' "{name}"'
+))
+@when(parsers.parse(
+    'I name the only running foreground command in work "{turn_name}" containing \'{command}\' "{name}"'
 ))
 def name_running_foreground_command(
     client: BaqylauClient,
@@ -89,6 +95,9 @@ def name_running_foreground_command(
 @when(parsers.parse(
     'I name the only background job in turn "{turn_name}" containing \'{command}\' "{name}"'
 ))
+@when(parsers.parse(
+    'I name the only background job in work "{turn_name}" containing \'{command}\' "{name}"'
+))
 def name_background_job(
     client: BaqylauClient,
     turns: Turns,
@@ -111,6 +120,9 @@ def name_background_job(
 
 @when(parsers.parse(
     'I name the only monitor in turn "{turn_name}" containing \'{command}\' "{name}"'
+))
+@when(parsers.parse(
+    'I name the only monitor in work "{turn_name}" containing \'{command}\' "{name}"'
 ))
 def name_monitor(
     client: BaqylauClient,

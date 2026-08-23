@@ -38,6 +38,9 @@ def file_operation_fixture_is_absent(file_operation_path: str) -> None:
 @when(parsers.parse(
     'I name the {action} fixture operation in turn "{turn_name}" "{operation_name}"'
 ))
+@when(parsers.parse(
+    'I name the {action} fixture operation in work "{turn_name}" "{operation_name}"'
+))
 def name_fixture_operation(
     client: BaqylauClient,
     turns: Turns,
@@ -61,6 +64,10 @@ def name_fixture_operation(
 
 @when(parsers.parse(
     'I name the {action} operation in turn "{turn_name}" for workspace file '
+    '\'{relative_path}\' "{operation_name}"'
+))
+@when(parsers.parse(
+    'I name the {action} operation in work "{turn_name}" for workspace file '
     '\'{relative_path}\' "{operation_name}"'
 ))
 def name_workspace_file_operation(

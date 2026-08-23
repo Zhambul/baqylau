@@ -92,6 +92,7 @@ def _born(canonical_event: CanonicalEvent[EventPayload]) -> SessionFacts:
         started_at=canonical_event.happened_at,
         lead_actor_id=event.actor_id,
         account=payload.account,
+        continued_from=payload.continued_from,
         automatic_title_internal=payload.title,
     )
 

@@ -50,6 +50,7 @@ class SessionResponse(BaseModel):
     lead_actor_id: str
     goal: GoalResponse | None
     tasks: tuple[TaskResponse, ...]
+    continued_from: str | None = None
 
 
 class ActorUsageResponse(BaseModel):

@@ -94,6 +94,9 @@ def session(session_facts: SessionFacts) -> SessionResponse:
         finished_at=session_facts.finished_at,
         account=values.maybe_account_reference(session_facts.account),
         lead_actor_id=str(session_facts.lead_actor_id),
+        continued_from=(
+            None if session_facts.continued_from is None else str(session_facts.continued_from)
+        ),
         goal=(
             None
             if session_facts.goal is None

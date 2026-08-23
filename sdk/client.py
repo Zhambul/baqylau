@@ -37,7 +37,7 @@ from api.controls.models.attachment_reference import AttachmentReferenceBody
 from api.controls.models.control_outcome_response import ControlOutcomeResponse
 from api.controls.models.launch_response import LaunchResponse
 from api.diagnostics.models import DiagnosticsCheckpointResponse, DiagnosticsReportResponse
-from api.sessiondata.models.entry import EntryPageResponse, EntryResponse
+from api.sessiondata.models.entry import EntryPageResponse, EntryResponse, MessageBodyResponse
 from api.sessiondata.models.session_data import (
     SessionDataListResponse,
     SessionDataResponse,
@@ -222,6 +222,60 @@ class SessionsResource:
         return wait_for(
             lambda: f"launch window {launch.window_id!r} to announce one session; found {candidates}",
             announced,
+            timeout=timeout,
+        )
+
+    def wait_for_prompt_owner(
+        self,
+        source: SessionRef,
+        *,
+        prompt: str,
+        after_cursor: int,
+        timeout: float,
+    ) -> SessionRef:
+        """Find the session that accepted a prompt after an in-place action.
+
+        Most harnesses keep the current native session. A harness can instead
+        continue under a new native id. The new session states that relation,
+        so callers do not need a harness-specific branch.
+        """
+        candidates: list[str] = []
+
+        def owner() -> SessionRef | None:
+            nonlocal candidates
+            listed = self.list()
+            candidates = [source.session_id]
+            candidates.extend(
+                item.session.session_id
+                for item in listed.sessions
+                if item.session.continued_from == source.session_id
+            )
+            matches: list[str] = []
+            for session_id in candidates:
+                snapshot = self.snapshot(SessionRef(session_id))
+                lower_bound = after_cursor if session_id == source.session_id else 0
+                prompts = [
+                    entry
+                    for entry in snapshot.entries
+                    if entry.cursor > lower_bound
+                    and isinstance(entry.body, MessageBodyResponse)
+                    and entry.body.role == "user"
+                    and entry.body.phase == "prompt"
+                    and entry.body.content.text.strip() == prompt
+                ]
+                if len(prompts) > 1:
+                    raise AssertionError(
+                        f"session {session_id!r} has {len(prompts)} matching prompts"
+                    )
+                if prompts:
+                    matches.append(session_id)
+            if len(matches) > 1:
+                raise AssertionError(f"prompt {prompt!r} belongs to multiple sessions: {matches}")
+            return SessionRef(matches[0]) if matches else None
+
+        return wait_for(
+            lambda: f"prompt {prompt!r} to belong to one of sessions {candidates}",
+            owner,
             timeout=timeout,
         )
 

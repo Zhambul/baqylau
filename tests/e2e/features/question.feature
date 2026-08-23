@@ -2,14 +2,23 @@ Feature: a dashboard answer resolves a harness question
 
   Scenario Outline: a question keeps its choices and selected answer
     Given session configuration "primary" uses <harness> with model <model> and low effort
-    When I launch session "primary" as turn "ask colour" with prompt
+    When I launch session "primary" and assign work "prepare colours" to the subagent with prompt
+      """
+      Read these colour options: Blue and Green. Do not use tools. Reply only
+      with the word prepared.
+      """
+    Then work "prepare colours" completes
+    And work "prepare colours" has worker type subagent
+    And work "prepare colours" has final answer 'prepared'
+    And work "prepare colours" releases the lead
+    When I assign work "ask colour" in session "primary" to the lead with prompt
       """
       Use <question_tool> exactly once. Ask "Which colour should I use?" with
       the <title_kind> Colour. Offer Blue with description "Use blue" and Green
       with description "Use green". Allow only one choice. Do not select an
       answer. After the user answers, reply only with the word done.
       """
-    And I name the pending question in turn "ask colour" containing 'Which colour' "colour choice"
+    And I name the pending question in work "ask colour" containing 'Which colour' "colour choice"
     Then question "colour choice" is single choice
     And question "colour choice" offers option 'Blue'
     And question "colour choice" offers option 'Green'
@@ -18,13 +27,14 @@ Feature: a dashboard answer resolves a harness question
     And control "choose blue" outcome is acknowledged
     And question "colour choice" records option 'Blue'
     And question "colour choice" is resolved
-    And turn "ask colour" completes
-    And turn "ask colour" has final answer 'done'
+    And work "ask colour" completes
+    And work "ask colour" has worker type lead
+    And work "ask colour" has final answer 'done'
 
     Examples:
-      | harness     | model        | question_tool     | title_kind |
+      | harness     | model        | question_tool      | title_kind |
       | codex       | gpt-5.6-luna | request_user_input | header     |
-      | claude_code | haiku        | AskUserQuestion    | title      |
+      | claude_code | haiku        | AskUserQuestion     | title      |
 
   Scenario Outline: a question records multiple selected choices
     Given session configuration "primary" uses <harness> with model <model> and low effort

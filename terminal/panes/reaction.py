@@ -29,6 +29,11 @@ class PaneCanonicalEventReaction(CanonicalEventReaction):
         if isinstance(payload, SessionFinished):
             self.terminal.close_session_panes(canonical_event.session_id)
         elif isinstance(payload, SessionStarted):
+            if (
+                payload.continued_from is not None
+                and payload.continued_from != canonical_event.session_id
+            ):
+                self.terminal.close_session_panes(payload.continued_from)
             self._open(canonical_event.session_id)
 
     def _open(self, session_id: SessionId) -> None:

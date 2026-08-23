@@ -83,6 +83,7 @@ class SessionFacts:
     account: AccountReference | None = None
     goal: SessionGoal | None = None
     tasks: tuple[SessionTask, ...] = ()
+    continued_from: SessionId | None = None
     # A title derived from the first prompt: the only title a session has
     # until a harness names it, and some never do. Kept apart from `title`
     # because a real title must always win however late it arrives, and the

@@ -13,7 +13,10 @@ from tests.e2e.testkit.references import (
     Sessions,
     StagedAttachments,
     Turns,
+    WorkerKind,
+    Works,
 )
+from tests.e2e.testkit.work import WorkDriver
 
 
 @when(parsers.parse(
@@ -71,6 +74,40 @@ def launch_with_attachment(
             media_type=staged.mime,
         ),),
     )
+
+
+@when(parsers.parse(
+    'I launch session "{session_name}" and assign work "{work_name}" to the '
+    '{worker_type} with attachment "{attachment_name}" and prompt'
+))
+def launch_attachment_work(
+    work_driver: WorkDriver,
+    session_specs: SessionSpecs,
+    sessions: Sessions,
+    turns: Turns,
+    works: Works,
+    staged_attachments: StagedAttachments,
+    session_name: str,
+    work_name: str,
+    worker_type: str,
+    attachment_name: str,
+    docstring: str,
+) -> None:
+    staged = staged_attachments.get(attachment_name)
+    started = work_driver.launch(
+        session_specs.get(session_name),
+        work_name=work_name,
+        worker_kind=WorkerKind(worker_type),
+        prompt=docstring.strip(),
+        attachments=(AttachmentReferenceBody(
+            local_path=staged.path,
+            display_name=staged.name,
+            media_type=staged.mime,
+        ),),
+    )
+    sessions.bind(session_name, started.session)
+    works.bind(work_name, started.work)
+    turns.bind(work_name, started.work.turn)
 
 
 @then(parsers.parse('staged attachment "{name}" is text file \'{file_name}\''))

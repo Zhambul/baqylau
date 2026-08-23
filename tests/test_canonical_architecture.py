@@ -749,6 +749,9 @@ def test_harness_adapters_never_use_raw_dictionaries_or_jsonvalue():
                 "_goals", "_working_directories",
         },
         "harness/impl/codex/controls/controller.py": {"HANDLERS"},
+        "harness/impl/codex/continuity.py": {
+            "_pending_by_window", "_resolved_by_session",
+        },
         "harness/impl/codex/controls/modeldialog.py": {"EFFORT_LABEL"},
         "harness/impl/codex/usage_rows.py": {"WINDOW_LABELS"},
     }
@@ -1416,6 +1419,9 @@ PROTOCOL_DECLARATION_EXEMPTIONS = {
         "the Protocol lives in dashboard/, which harness/ may not import",
     ("_TerminalDriver", "ScreenDriver"):
         "the Protocol lives in claude_code/, which codex/ may not import "
+        "(one harness may not name another)",
+    ("_TerminalDriver", "Driver"):
+        "the Protocol lives in codex/, which claude_code/ may not import "
         "(one harness may not name another)",
 }
 

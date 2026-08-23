@@ -2,12 +2,14 @@ Feature: session compaction has a complete lifecycle
 
   Scenario Outline: a compacted session remains usable
     Given session configuration "primary" uses <harness> with model <model> and low effort
-    When I launch session "primary" as turn "first context" with prompt
+    When I launch session "primary" and assign work "first context" to the <worker> with prompt
       """
       Remember the phrase amber circle. Reply only with the word first.
       """
-    Then turn "first context" completes
-    And turn "first context" has final answer 'first'
+    Then work "first context" completes
+    And work "first context" has worker type <worker>
+    And work "first context" has final answer 'first'
+    And work "first context" releases the lead
     When I send prompt to session "primary" as turn "second context"
       """
       Remember the phrase blue square. Reply only with the word second.
@@ -28,6 +30,8 @@ Feature: session compaction has a complete lifecycle
     And turn "after compaction" has final answer 'usable'
 
     Examples:
-      | harness     | model        |
-      | codex       | gpt-5.6-luna |
-      | claude_code | haiku        |
+      | harness     | model        | worker   |
+      | codex       | gpt-5.6-luna | lead     |
+      | codex       | gpt-5.6-luna | subagent |
+      | claude_code | haiku        | lead     |
+      | claude_code | haiku        | subagent |

@@ -95,11 +95,13 @@ from harness.impl.codex.canonical.records import (
     CompactedDocument,
     CompactedPayload,
     EventDocument,
+    EmptyRecord,
     ExecRecord,
     ExecResultRecord,
     MessageRecord,
     ItemCompletedHeaderPayload,
     ItemCompletedType,
+    InterAgentCommunicationMetadataDocument,
     PayloadHeaderDocument,
     ResponseDocument,
     RolloutDocument,
@@ -196,12 +198,16 @@ class CodexTopLevelType(StrEnum):
     TURN_CONTEXT = "turn_context"
     COMPACTED = "compacted"
     WORLD_STATE = "world_state"
+    INTER_AGENT_COMMUNICATION_METADATA = "inter_agent_communication_metadata"
 
 
 _TOP: Mapping[CodexTopLevelType, type[BaseModel]] = {
     CodexTopLevelType.TURN_CONTEXT: TurnContextDocument,
     CodexTopLevelType.COMPACTED: CompactedDocument,
     CodexTopLevelType.WORLD_STATE: WorldStateDocument,
+    CodexTopLevelType.INTER_AGENT_COMMUNICATION_METADATA: (
+        InterAgentCommunicationMetadataDocument
+    ),
 }
 
 # Record kinds that carry the RECORD's `timestamp` as a separate `ts` string.
@@ -259,7 +265,7 @@ def _stamp(rec: RolloutRecord | None, timestamp: str | None) -> RolloutRecord | 
 # hands out.
 KINDS = frozenset({
     "turn_context", "usage", "patch", "compact", "task_started",
-    "task_complete", "turn_aborted", "prompt", "reasoning", "message",
+    "task_complete", "turn_aborted", "prompt", "skill", "reasoning", "message",
     "search", "exec", "exec_result", "stdin", "command_completed", "chat", "think", "patch_call",
     "ask", "plan", "settings", "compact_boundary", "tool",
     "actor_activity", "collaboration_call", "task_list", "goal", "goal_tool",
@@ -325,6 +331,9 @@ def parse_line(s: str) -> RolloutRecord | None:
         return _turn_context(TurnContextDocument.model_validate_json(s).payload)
     if top_type is CodexTopLevelType.COMPACTED:
         return _top_compacted(CompactedDocument.model_validate_json(s).payload)
+    if top_type is CodexTopLevelType.INTER_AGENT_COMMUNICATION_METADATA:
+        InterAgentCommunicationMetadataDocument.model_validate_json(s)
+        return EmptyRecord()
     return _top_world_state(WorldStateDocument.model_validate_json(s).payload)
 
 
