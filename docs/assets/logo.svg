@@ -3,7 +3,7 @@
        seen looking up into it, reworked as a control view: a central aperture
        (the observer) with spokes to gold nodes on a ring (the agents). Same
        glyph as the dashboard brandmark / favicon (dashboard/static/index.html,
-       app.01-attention.js FAV_GLYPH). Gold accent (#E9B949) on a neutral ink
+       AttentionStrip.svelte ASK_FAVICON). Gold accent (#E9B949) on a neutral ink
        (#9aa7b0) that reads on both GitHub themes. -->
   <g stroke="#9aa7b0" stroke-width="6" stroke-linecap="round">
     <line x1="100" y1="84" x2="100" y2="18"/>

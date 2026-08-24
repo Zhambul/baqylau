@@ -688,12 +688,16 @@ def test_the_global_stream_carries_every_session_and_no_entries(tmp_path):
     )
 
     async def frames():
-        stream = streams._global_frames(read_model, SilentAudit(), 0)
+        stream = streams._global_frames(read_model, SilentAudit(), 0, "boot-one")
+        ready = await asyncio.wait_for(stream.__anext__(), 3)
         frame = await asyncio.wait_for(stream.__anext__(), 3)
         await stream.aclose()
-        return frame
+        return ready, frame
 
-    body = frame_body(asyncio.run(frames()))
+    ready, frame = asyncio.run(frames())
+    assert "event: ready" in ready
+    assert frame_body(ready) == {"boot_id": "boot-one"}
+    body = frame_body(frame)
     assert {row["session_id"] for row in body["sessions"]} == {"session-one", "session-two"}
     assert len(body["actors"]) == 2
     assert "entries" not in body

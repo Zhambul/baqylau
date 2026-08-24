@@ -8,43 +8,47 @@ Most of it is ordinary pytest over the Python tree. Two tiers are not, and both
 are referenced from the files themselves, so this page exists to say what they
 are and how to run them.
 
-## The DOM harness — `tests/jsdom/` driven by `tests/test_dashboard_dom.py`
+## Frontend tests — Vitest and Playwright
 
-The dashboard is a hand-written SPA in `dashboard/static/*.js`, and since the
-redesign it OWNS its rendering: the daemon serves facts, the browser builds the
-markup. That makes the JS load-bearing, and a browser is not available to a test
-runner.
+The Svelte frontend has two test layers. `make test-frontend` runs strict type
+checks, formatting, and Vitest with coverage. The coverage gate applies to the
+pure behavior modules and state machines. Playwright covers compiled components
+and API boundaries, where statement coverage measures generated component code
+instead of useful behavior.
 
-So the real modules are loaded into `node` with a hand-written DOM shim
-(`tests/jsdom/domshim.js` — no jsdom dependency, no npm, nothing to install).
-Each `tests/jsdom/*.js` script builds a sandbox, runs one or more of the real
-`dashboard/static/*.js` files inside it, drives them, and prints ONE JSON verdict
-object. `tests/test_dashboard_dom.py` runs the script and asserts on that JSON.
+`make test-browser` builds and stamps the production bundle. It seeds a temporary
+data directory through the canonical event pipeline. It then starts a second
+daemon with explicit `--port`, `--data-dir`, and `--log` values. The suite uses
+port 8794 by default and runs Chromium and WebKit. It does not use the normal
+daemon or its data.
 
 ```sh
-.venv/bin/python -m pytest tests/test_dashboard_dom.py -q     # all of them
-node tests/jsdom/taskorder.js \
-  dashboard/static/app.00a-markup.js \
-  dashboard/static/app.00b-entries.js \
-  dashboard/static/app.05-session.js                 # one, by hand, for its raw JSON
+make test-frontend
+make test-browser
+cd dashboard/frontend && npm run test:browser -- --project=chromium
 ```
 
-**Every case here SKIPS when `node` is absent.** That is deliberate: `node` is
-not a build requirement of this project and never becomes one. It is present on
-the machines this is developed on, and the cases that need it are the ones no
-other tier can express.
+The browser suite checks the production manifest, CSP console errors, route and
+scope transitions, the session feed, agent and monitor drill-downs, the resume
+preview focus boundary, structural accessibility, and stable screenshots. The
+screenshots keep the existing design visible as an executable contract.
 
-What belongs here is behaviour a grep cannot check and a Python test cannot
-reach — where an entry LANDS in a newest-first feed when its anchor arrived on an
-earlier tick, whether a density pass hides the right rail, whether a dialog
-submits what it displayed. What does not belong here is anything about the facts
-themselves: those are `tests/test_canonical_sessiondata*.py`, over the writers
-and the routes, where they are cheaper and clearer.
+The old hand-written DOM shim had these replacement owners:
 
-The two pure modules — `app.00a-markup.js` (markdown and ANSI to HTML) and
-`app.00b-entries.js` (one entry to the markup that draws it) — export under
-`module.exports` when `module` exists, so a script can require them directly
-instead of through a sandbox. They are pure by design for exactly that reason.
+- Account alignment: `application/usage-layout.test.ts` and the list snapshot.
+- Questions and control outcomes: control translator tests plus the session E2E.
+- Dictation: `dictation-controller.svelte.test.ts`.
+- Composer liveness, optimistic prompts, and history: reducer tests plus the
+  session and parked-session E2E paths.
+- Feed scope, grouping, expansion, and trusted markup: feed, session reducer,
+  shell fold, and markup tests plus the session snapshot.
+- Route order, first-connect cursor, and reload protocol: route, stream decoder,
+  and application shell tests plus the production browser boot.
+- New-session, header, monitor, and agent interactions: the production browser
+  suite in Chromium and WebKit.
+
+Canonical facts remain in `tests/test_canonical_sessiondata*.py`, where the
+writers and HTTP response models are cheaper and clearer to test.
 
 ## The live-harness suite — `tests/e2e/`, `make test-drift`
 

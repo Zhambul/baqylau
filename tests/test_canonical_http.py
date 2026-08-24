@@ -1373,10 +1373,17 @@ def test_every_plane_carries_the_security_headers(tmp_path):
             # legitimately opens a socket to.
             assert "connect-src 'self' wss://api.deepgram.com" in policy, path
 
-        # A route that sets its own Cache-Control keeps it: the policy only ever
-        # fills in a header that is absent.
-        _status, headers, _body = _get_response(server, "/static/style.css")
-        assert headers["Cache-Control"] == "no-store"
+        # A content-addressed build route keeps its immutable Cache-Control:
+        # the policy only fills in a header that is absent.
+        manifest_path = (
+            pathlib.Path(REPOSITORY_ROOT)
+            / "dashboard/static/build/.vite/manifest.json"
+        )
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))["src/main.ts"]
+        _status, headers, _body = _get_response(
+            server, "/static/build/" + manifest["file"]
+        )
+        assert headers["Cache-Control"] == "public, max-age=31536000, immutable"
         assert headers["X-Content-Type-Options"] == "nosniff"
     finally:
         server.shutdown()
@@ -1387,11 +1394,8 @@ def test_every_plane_carries_the_security_headers(tmp_path):
 def test_every_asset_the_document_references_is_served_as_its_own_type():
     """The browser's boot, from the document outward.
 
-    index.html is the only list of sub-resources that matters, and it was NOT
-    the list the server admitted: the app parts pass by shape, and the shape
-    missed a lettered slot (app.00a-markup.js), so two real scripts 404ed —
-    with the framework's JSON error body, which a browser then refuses to
-    execute. Whatever the document asks for, the server owes.
+    FastAPI owns index.html and inserts Vite's content-addressed files from its
+    manifest. Whatever that rendered document asks for, the server owes.
     """
     server, thread = _server(_application())
     try:
@@ -1400,26 +1404,31 @@ def test_every_asset_the_document_references_is_served_as_its_own_type():
         assert content_type == "text/html; charset=utf-8"
         types = {".js": "text/javascript", ".css": "text/css", ".png": "image/png",
                  ".webmanifest": "application/manifest+json"}
-        parts = set()
         references = re.findall(rb"(?:src|href)=\"(/static/[^\"]+)\"", document)
-        # the parts, the stylesheet, the manifest and the touch icon
-        assert len(references) >= 18
+        # The Vite module and stylesheet, manifest, and touch icon. The normal
+        # favicon is the original inline SVG data URI.
+        assert len(references) >= 4
+        build_references = set()
         for reference in references:
             path = reference.decode()
             name = path.split("?")[0].rsplit("/", 1)[1]
-            if name.endswith(".js"):
-                parts.add(name)
-                # every script URL carries this boot's cache-busting stamp
-                assert "?v=" in path, path
+            if path.startswith("/static/build/"):
+                build_references.add(path.removeprefix("/static/build/"))
+                # Vite's content hash is the cache key. BOOT_ID is for the
+                # unbundled icons and web manifest only.
+                assert "?v=" not in path, path
             status, content_type, body = _get(server, path)
             assert status == 200, path
             assert body, path
             suffix = "." + name.rsplit(".", 1)[1]
             assert content_type.startswith(types[suffix]), (path, content_type)
-        # ...and the other direction: a part shipped but never referenced is
-        # dead weight the browser never runs.
-        static_dir = pathlib.Path(REPOSITORY_ROOT) / "dashboard" / "static"
-        assert parts == {part.name for part in static_dir.glob("app.*.js")}
+        manifest_path = (
+            pathlib.Path(REPOSITORY_ROOT)
+            / "dashboard/static/build/.vite/manifest.json"
+        )
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))["src/main.ts"]
+        expected_build = {manifest["file"], *manifest.get("css", [])}
+        assert build_references == expected_build
     finally:
         server.shutdown()
         server.server_close()

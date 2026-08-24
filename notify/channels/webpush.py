@@ -384,7 +384,7 @@ def retract_alert(
     BUDGET: exactly one resolve per delivered alert (the notifier forgets the
     record either way), so the silent:visible ratio is bounded at 1:1 rather
     than being a background chatter channel. BAQYLAU_DASHBOARD_RESOLVE_PUSH=0 turns it
-    off, and the page's own foreground sweep (app.01-attention.js) still clears
+    off, and the page's own foreground sweep (push-notifications.ts) still clears
     stale banners on open — so a refused or dropped resolve degrades to "cleared
     a bit later", never to a wrong badge."""
     if not config.RESOLVE_PUSH:

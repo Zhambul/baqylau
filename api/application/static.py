@@ -1,15 +1,14 @@
-# api/application/static.py — the SPA assets: the whitelist server and the
-# BOOT_ID cache-busting stamp.
+# api/application/static.py — the SPA shell and its content-addressed assets.
 #
 # This is policy, not plumbing, so it stays hand-written: no user-path
-# resolution ever (a whitelist plus one shape rule), and index.html is
-# rewritten on every serve so a restart's new BOOT_ID re-points every
-# sub-resource URL at bytes nothing has cached — which is the whole of the
-# cache-busting story, and why `v` is accepted and ignored below.
+# resolution ever. FastAPI owns the document and reads Vite's manifest to add
+# content-addressed CSS and module tags. BOOT_ID still stamps the icons and web
+# manifest because Vite does not own those files.
 from __future__ import annotations
 
 import os
 import re
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
@@ -17,33 +16,26 @@ from fastapi.responses import Response
 from api.dependencies import Policy
 from api.responses import errors
 from dashboard.config import STATIC, STATIC_DIR
+from dashboard.frontend_build import (
+    FrontendBuildError,
+    build_asset_path,
+    manifest_tags,
+)
 
 router = APIRouter(responses=errors({
-    404: "Not on the content-type whitelist, and not shaped like an app part.",
+    404: "Not on the static content-type whitelist.",
     500: "On the whitelist, but unreadable on disk.",
 }))
 
-# The SPA parts (app.NN-name.js) are admitted by SHAPE, not a per-file
-# whitelist entry — still no user-path resolution (a strict basename pattern),
-# just no dict bloat for the parts. The slot number takes an optional LETTER
-# (app.00a-markup.js): load order IS the file name, so a part inserted between
-# two existing ones needs a letter rather than a renumbering of every part
-# after it.
-_PART_NAME = r"app\.[0-9]{2}[a-z]?-[a-z-]+\.js"
-_APP_PART = re.compile(rf"^{_PART_NAME}$")
+_VITE_MARKER = b"<!-- vite-assets -->"
+_BUILD_TYPES = {
+    ".css": "text/css; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+}
 
 
 def _stamped_index(data: bytes, boot_id: bytes) -> bytes:
-    # CACHE-BUST the sub-resource URLs with BOOT_ID (bumped every restart).
-    # The origin sends no-store, but that can't evict an already-cached
-    # app.js/style.css in a remote browser — so a dashboard update left the
-    # phone running old JS forever. index.html itself is served no-store AND
-    # is the main document a reload always refetches, so a fresh ?v=<BOOT_ID>
-    # reaches the browser and points at a URL nothing has cached.
-    data = re.sub(rb"(/static/" + _PART_NAME.encode() + rb")",
-                  rb"\1?v=" + boot_id, data)
-    data = data.replace(b"/static/style.css", b"/static/style.css?v=" + boot_id)
-    # ...and the ICONS, for the same reason: a REGENERATED icon is new bytes at
+    # Cache-bust the icons. A regenerated icon is new bytes at
     # an unchanged URL, and mobile browsers keep a persistent favicon cache a
     # hard reload does not evict. The manifest URL is stamped too so a changed
     # icon list is re-read.
@@ -53,10 +45,14 @@ def _stamped_index(data: bytes, boot_id: bytes) -> bytes:
                         b"/static/manifest.webmanifest?v=" + boot_id)
 
 
+def _index_document(data: bytes, boot_id: bytes) -> bytes:
+    if data.count(_VITE_MARKER) != 1:
+        raise FrontendBuildError("index.html must contain one Vite asset marker")
+    return _stamped_index(data.replace(_VITE_MARKER, manifest_tags()), boot_id)
+
+
 def _serve(policy: Policy, name: str, version: str) -> Response:
     content_type = STATIC.get(name)
-    if not content_type and _APP_PART.match(name):
-        content_type = "text/javascript; charset=utf-8"
     if not content_type:
         raise HTTPException(404, "not found")
     try:
@@ -65,7 +61,10 @@ def _serve(policy: Policy, name: str, version: str) -> Response:
     except OSError as error:
         raise HTTPException(500, "unreadable") from error
     if name == "index.html":
-        data = _stamped_index(data, policy.boot_id.encode())
+        try:
+            data = _index_document(data, policy.boot_id.encode())
+        except FrontendBuildError as error:
+            raise HTTPException(500, str(error)) from error
     if name == "manifest.webmanifest":
         # the manifest's own icon URLs — the installed-app glyph comes from
         # here, not from index.html.
@@ -80,9 +79,32 @@ def _serve(policy: Policy, name: str, version: str) -> Response:
                     headers={"Cache-Control": cache})
 
 
+def _serve_build(policy: Policy, asset_name: str) -> Response:
+    content_type = _BUILD_TYPES.get(Path(asset_name).suffix)
+    if content_type is None:
+        raise HTTPException(404, "not found")
+    try:
+        path = build_asset_path(asset_name)
+        data = path.read_bytes()
+    except FrontendBuildError as error:
+        raise HTTPException(404, "not found") from error
+    except OSError as error:
+        raise HTTPException(500, "unreadable") from error
+    return Response(
+        content=data,
+        media_type=content_type,
+        headers={"Cache-Control": policy.cache_static},
+    )
+
+
 @router.get("/")
 def index(policy: Policy, v: str = "") -> Response:
     return _serve(policy, "index.html", v)
+
+
+@router.get("/static/build/{asset_name:path}")
+def build_asset(asset_name: str, policy: Policy) -> Response:
+    return _serve_build(policy, asset_name)
 
 
 @router.get("/static/{name}")

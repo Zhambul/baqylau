@@ -2,7 +2,7 @@
 #
 # The daemon no longer renders anything for a pane; it serves SessionData and an
 # append-only feed of entries, and this is the pane's copy of both. The browser
-# holds the same two things in `app.05-session.js` and folds them the same way,
+# holds the same two things in `sessions/shell-fold.ts` and folds them the same way,
 # because the fold is a property of the FEED, not of a frontend: a command
 # arrives as a start, some output chunks and a finish, and it is one block on
 # any screen.
@@ -260,4 +260,3 @@ class SessionModel:
 def _is_prompt(entry: dict[str, Any]) -> bool:
     body = entry["body"] or {}
     return entry["type"] == "message" and body.get("role") == "user"
-

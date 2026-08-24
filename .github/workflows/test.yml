@@ -12,12 +12,17 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.22.3"
+          cache: npm
+          cache-dependency-path: dashboard/frontend/package-lock.json
       # The repo's shebangs are baked to the owner's pyenv interpreter
       # (retarget-python.py's speed hack); --revert restores the portable
       # `#!/usr/bin/env python3` so the few shebang-exec'd paths
@@ -30,10 +35,13 @@ jobs:
       - run: .venv/bin/python -m pip install --upgrade pip
       - run: .venv/bin/python -m pip install -r requirements.txt -r requirements-dev.txt
       - run: .venv/bin/python -m pip check
+      - run: npm install --global npm@10.9.8
+      - run: npm ci
+        working-directory: dashboard/frontend
       # Lint before test: ruff and mypy are both pinned in requirements-dev.txt,
-      # configs in ruff.toml and mypy.ini. `make lint` runs three gates — dead
-      # code, static types, then ruff — and the tree must stay finding-free in
-      # all three.
+      # configs in ruff.toml and mypy.ini. `make lint` runs the frontend gate,
+      # static types, dead code, and Ruff; the tree stays finding-free in all
+      # four.
       - run: make lint
       # pytest-timeout must scale in LOCKSTEP with conftest's WAIT_SCALE (6x on
       # CI): pytest.ini's 30s is sized for local runs, and an unscaled per-test
@@ -41,6 +49,17 @@ jobs:
       # dump before its scaled 60s ceiling is ever reachable (test_f10b /
       # test_f4a on the shared macOS runner). 180 = 30 * WAIT_SCALE; pinned by
       # test_pytest_timeout_budget_outlives_scaled_waits.
+      # Screenshot baselines are platform-specific. The macOS job runs the
+      # production browser suite; both jobs run the Python and fast frontend
+      # gates.
+      - run: npx playwright install chromium webkit
+        if: runner.os == 'macOS'
+        working-directory: dashboard/frontend
       - run: make test
+        if: runner.os == 'macOS'
+        env:
+          PYTEST_TIMEOUT: 180
+      - run: make test-frontend test-python
+        if: runner.os == 'Linux'
         env:
           PYTEST_TIMEOUT: 180

@@ -8,9 +8,8 @@
 Formerly known as *claude-kitty*.
 
 Tab colors that track what Claude is doing, a live mirror pane streaming every
-command and agent, and an always-on SQLite audit trail. No daemon, no build
-step — just Python scripts fired by Claude Code hooks, coordinating through
-SQLite.
+command and agent, an always-on SQLite audit trail, and a live web dashboard.
+The hook pipeline is Python; the dashboard is a compiled Svelte application.
 
 <!-- demo screenshot / recording placeholder -->
 
@@ -38,6 +37,7 @@ SQLite.
 - [kitty](https://sw.kovidgoyal.net/kitty/) with remote control enabled
 - [Claude Code](https://claude.com/claude-code)
 - Python 3.12 and a project virtual environment at `.venv`
+- Node.js 22.22.3 and npm 10.9.8 for dashboard builds and tests
 - Optional: codex CLI ≥ 0.142 for the standalone codex host
 
 ## Installation
@@ -48,6 +48,7 @@ SQLite.
    python3 -m venv .venv
    .venv/bin/python -m pip install --upgrade pip
    .venv/bin/python -m pip install -r requirements.txt -r requirements-dev.txt
+   make build-frontend
    ```
 2. Enable kitty remote control (`~/.config/kitty/kitty.conf`, then fully
    restart kitty):
@@ -121,10 +122,9 @@ harness/     the harness concern, whole: contract + models, the hook channel,
              the services over one plugin, and harness/impl/<name>/ — one
              directory per agent tool (claude_code · codex), the only place a
              harness's name appears
-dashboard/   the web surface: static/ (the SPA, which builds its own markup from
-             the facts it is served), services/ (one question, one answer),
-             and its own config,
-             paths and CLI
+dashboard/   the web surface: frontend/ (Svelte 5, strict TypeScript, Vite),
+             static/ (the FastAPI-owned shell and PWA assets), services/ (one
+             question, one answer), and its own config, paths, and CLI
 notify/      alerts about sessions: when one is owed you (notifier), whether
              you need telling (presence), and where it reaches you (channels/)
 api/         the daemon's HTTP layer — one FastAPI app, every request AND
@@ -144,7 +144,9 @@ bin/         the repository's own CLIs (audit, dashboard). Every entry an
 ## Testing
 
 ```sh
-make test        # hermetic e2e suite (fake kitten, per-test tmp dirs; parallel via pytest-xdist)
-make test-seq    # same, sequential (debugging / no xdist)
+make test        # frontend unit/browser gates + hermetic Python suite
+make test-frontend # formatting, strict checks, and Vitest coverage
+make test-browser  # isolated production daemon; Chromium and WebKit
+make test-seq    # Python suite, sequential (debugging / no xdist)
 make test-all    # + opt-in real-kitty smoke tests
 ```

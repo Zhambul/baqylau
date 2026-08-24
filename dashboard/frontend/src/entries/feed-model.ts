@@ -1,0 +1,349 @@
+import type { ActorId } from '../app/domain-ids';
+import type { ViewMode } from '../application/session-model';
+import type { ShellFold } from '../sessions/shell-fold';
+import type { Entry } from './model';
+import {
+  presentEntry,
+  presentShell,
+  type SummaryKind,
+  type VisibleEntryPresentation,
+} from './presentation';
+
+export type FeedItem = VisibleEntryPresentation;
+
+type SummaryFragment = {
+  readonly verb: string;
+  readonly count: number;
+  readonly singular: string;
+  readonly plural: string;
+};
+
+export type RunSummary = {
+  readonly key: string;
+  readonly open: boolean;
+  readonly running: boolean;
+  readonly bad: boolean;
+  readonly anchor: number;
+  readonly fragments: readonly SummaryFragment[];
+  readonly linesAdded: number;
+  readonly linesRemoved: number;
+};
+
+export type DensityUnit =
+  | { readonly kind: 'summary'; readonly summary: RunSummary }
+  | {
+      readonly kind: 'item';
+      readonly item: FeedItem;
+      readonly extraClass: string;
+      readonly defaultOpen: boolean;
+    };
+
+type Disposition = 'show' | 'hide' | 'dim' | 'fold';
+
+const DEFAULT_FOLD = new Set<SummaryKind>(['shell', 'file_read', 'monitor']);
+const FOCUS_FOLD = new Set<SummaryKind>([
+  'shell',
+  'file_read',
+  'background',
+  'monitor',
+  'file_edit',
+  'file_write',
+  'actor_assignment',
+  'skill',
+  'tool',
+  'search',
+  'network',
+  'workspace',
+]);
+
+const COUNTER: Readonly<Partial<Record<SummaryKind, string>>> = {
+  file_edit: 'file_change',
+  file_write: 'file_change',
+  file_read: 'file_read',
+  actor_assignment: 'actor_assignment',
+  skill: 'skill',
+  tool: 'tool',
+  search: 'tool',
+  network: 'tool',
+  workspace: 'tool',
+  shell: 'shell',
+  background: 'background',
+  monitor: 'monitor',
+};
+
+const FRAGMENTS: readonly {
+  readonly key: string;
+  readonly active: string;
+  readonly done: string;
+  readonly singular: string;
+  readonly plural: string;
+}[] = [
+  {
+    key: 'file_change',
+    active: 'editing',
+    done: 'edited',
+    singular: 'file',
+    plural: 'files',
+  },
+  {
+    key: 'file_read',
+    active: 'reading',
+    done: 'read',
+    singular: 'file',
+    plural: 'files',
+  },
+  {
+    key: 'actor_assignment',
+    active: 'running',
+    done: 'ran',
+    singular: 'agent',
+    plural: 'agents',
+  },
+  {
+    key: 'skill',
+    active: 'using',
+    done: 'used',
+    singular: 'skill',
+    plural: 'skills',
+  },
+  {
+    key: 'tool',
+    active: 'using',
+    done: 'used',
+    singular: 'tool',
+    plural: 'tools',
+  },
+  {
+    key: 'shell',
+    active: 'running',
+    done: 'ran',
+    singular: 'shell command',
+    plural: 'shell commands',
+  },
+  {
+    key: 'background',
+    active: 'running',
+    done: 'ran',
+    singular: 'background job',
+    plural: 'background jobs',
+  },
+  {
+    key: 'monitor',
+    active: 'watching',
+    done: 'watched',
+    singular: 'monitor',
+    plural: 'monitors',
+  },
+];
+
+function suppressReplacedPrompts(entries: readonly Entry[]): readonly Entry[] {
+  const replies = new Set<string>();
+  return entries.filter((entry) => {
+    if (
+      entry.type !== 'message' ||
+      entry.body.role !== 'user' ||
+      entry.body.phase === 'synthetic' ||
+      entry.body.replyTo === null
+    )
+      return true;
+    if (replies.has(entry.body.replyTo)) return false;
+    replies.add(entry.body.replyTo);
+    return true;
+  });
+}
+
+export function buildFeedItems(
+  entries: readonly Entry[],
+  actors: ReadonlyMap<ActorId, string>,
+  shells: readonly ShellFold[],
+): readonly FeedItem[] {
+  const shellById = new Map(shells.map((shell) => [shell.shellId, shell]));
+  const items: FeedItem[] = [];
+  for (const entry of suppressReplacedPrompts(entries)) {
+    if (entry.type === 'shell_started') {
+      const fold = shellById.get(entry.body.shellId);
+      if (fold !== undefined) items.push(presentShell(fold));
+      continue;
+    }
+    const presentation = presentEntry(entry, actors);
+    if (presentation.kind !== 'hidden') items.push(presentation);
+  }
+  return items;
+}
+
+function dispositions(
+  items: readonly FeedItem[],
+  mode: ViewMode,
+  busy: boolean,
+): readonly Disposition[] {
+  if (mode === 'verbose') return items.map(() => 'show');
+  const folded = mode === 'focus' ? FOCUS_FOLD : DEFAULT_FOLD;
+  let sawReply = false;
+  let inNewestTurn = true;
+  return items.map((item) => {
+    if (item.group === 'messages') {
+      if (item.conversationKind === 'prompt') {
+        sawReply = false;
+        inNewestTurn = false;
+        return 'show';
+      }
+      if (item.conversationKind === 'system') return 'hide';
+      if (mode === 'focus' && item.conversationKind === 'message') {
+        const newest = !sawReply;
+        sawReply = true;
+        if (!newest) return 'hide';
+        return busy && inNewestTurn ? 'dim' : 'show';
+      }
+      return 'show';
+    }
+    return folded.has(item.summaryKind) ? 'fold' : 'show';
+  });
+}
+
+function runFragments(
+  members: readonly FeedItem[],
+  running: boolean,
+): readonly SummaryFragment[] {
+  const counts = new Map<string, number>();
+  const assignments = new Set<string>();
+  for (const member of members) {
+    const counter = COUNTER[member.summaryKind];
+    if (counter === undefined) continue;
+    if (counter === 'actor_assignment' && member.assignmentId !== null) {
+      assignments.add(member.assignmentId);
+      continue;
+    }
+    counts.set(counter, (counts.get(counter) ?? 0) + 1);
+  }
+  if (assignments.size > 0) counts.set('actor_assignment', assignments.size);
+  const fragments: SummaryFragment[] = [];
+  for (const vocabulary of FRAGMENTS) {
+    const count = counts.get(vocabulary.key) ?? 0;
+    if (count === 0) continue;
+    let verb = running ? vocabulary.active : vocabulary.done;
+    if (fragments.length === 0)
+      verb = `${verb.slice(0, 1).toUpperCase()}${verb.slice(1)}`;
+    fragments.push({
+      verb,
+      count,
+      singular: vocabulary.singular,
+      plural: vocabulary.plural,
+    });
+  }
+  return fragments;
+}
+
+function isRunDisposition(disposition: Disposition): boolean {
+  return disposition !== 'show';
+}
+
+export function planDensity(
+  items: readonly FeedItem[],
+  mode: ViewMode,
+  busy: boolean,
+  openRuns: ReadonlySet<string>,
+): readonly DensityUnit[] {
+  const disposition = dispositions(items, mode, busy);
+  if (mode === 'verbose')
+    return items.map((item) => ({
+      kind: 'item',
+      item,
+      extraClass: '',
+      defaultOpen: true,
+    }));
+
+  const summaryAt = new Map<number, RunSummary>();
+  const openMember = new Set<number>();
+  const lastOpenMember = new Set<number>();
+  let index = 0;
+  while (index < items.length) {
+    if (!isRunDisposition(disposition[index] ?? 'show')) {
+      index += 1;
+      continue;
+    }
+    const start = index;
+    let cursor = index;
+    let lastFold = -1;
+    while (
+      cursor < items.length &&
+      isRunDisposition(disposition[cursor] ?? 'show')
+    ) {
+      if (disposition[cursor] === 'fold') lastFold = cursor;
+      cursor += 1;
+    }
+    index = cursor;
+    if (lastFold < start) continue;
+    const memberIndexes: number[] = [];
+    for (let position = start; position <= lastFold; position += 1)
+      if (disposition[position] === 'fold') memberIndexes.push(position);
+    const members = memberIndexes.flatMap((position) => {
+      const item = items[position];
+      return item === undefined ? [] : [item];
+    });
+    const oldest = members.at(-1);
+    if (oldest === undefined) continue;
+    const key = oldest.key;
+    const open = openRuns.has(key);
+    const running =
+      start === 0 && busy && members.some((member) => member.state === null);
+    const summary: RunSummary = {
+      key,
+      open,
+      running,
+      bad: members.some(
+        (member) => member.state === 'failed' || member.state === 'cancelled',
+      ),
+      anchor: running
+        ? Math.min(...members.map((member) => member.occurredAt))
+        : 0,
+      fragments: runFragments(members, running),
+      linesAdded: members.reduce(
+        (total, member) => total + member.linesAdded,
+        0,
+      ),
+      linesRemoved: members.reduce(
+        (total, member) => total + member.linesRemoved,
+        0,
+      ),
+    };
+    summaryAt.set(start, summary);
+    if (open) {
+      const shown: number[] = [];
+      for (let position = start; position <= lastFold; position += 1) {
+        if (disposition[position] === 'hide') continue;
+        openMember.add(position);
+        shown.push(position);
+      }
+      const last = shown.at(-1);
+      if (last !== undefined) lastOpenMember.add(last);
+    }
+  }
+
+  const units: DensityUnit[] = [];
+  items.forEach((item, position) => {
+    const summary = summaryAt.get(position);
+    if (summary !== undefined) units.push({ kind: 'summary', summary });
+    const current = disposition[position] ?? 'show';
+    const visible =
+      current === 'show' ||
+      current === 'dim' ||
+      (current === 'fold' && openMember.has(position));
+    if (!visible) return;
+    const classes = [
+      current === 'dim' ? 'vdim' : '',
+      openMember.has(position) ? 'vrun' : '',
+      lastOpenMember.has(position) ? 'vrun-last' : '',
+    ].filter((value) => value.length > 0);
+    units.push({
+      kind: 'item',
+      item,
+      extraClass: classes.join(' '),
+      defaultOpen: false,
+    });
+  });
+  return units;
+}
+
+export function visibleDensityCount(units: readonly DensityUnit[]): number {
+  return units.length;
+}

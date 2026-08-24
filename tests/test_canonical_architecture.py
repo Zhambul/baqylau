@@ -410,9 +410,9 @@ def test_the_terminal_tier_imports_no_concrete_harness():
 
 
 # test_the_render_tier_is_inert lived here. `dashboard/render/` is gone: the
-# markup is the browser's, built in JS from the entries the read model serves, so
-# there is no daemon-side render tier left to keep inert. What replaced the rule
-# is tests/test_dashboard_dom.py, which runs the real modules under `node`.
+# Svelte frontend builds markup from the entries the read model serves, so there
+# is no daemon-side render tier left to keep inert. Vitest and Playwright own the
+# replacement behavior gates.
 
 
 def test_shared_code_imports_no_concrete_plugin_descriptor():
@@ -499,7 +499,7 @@ def test_harness_hook_and_pane_entries_do_not_come_back_to_bin():
 # shape loses it. (`content` and `pane_stream` were here; the content route and
 # the daemon-side pane streams are both gone.)
 RAW_RESPONSE_ROUTES = {
-    "index", "static", "service_worker", "favicon", "openapi_yaml",
+    "index", "build_asset", "static", "service_worker", "favicon", "openapi_yaml",
     "record_hook_delivery",
     "global_stream", "session_stream",
 }
@@ -1019,6 +1019,7 @@ FILE_ACCESS_ALLOWLIST = {
     "dashboard/paths.py":                       "resolves the uploads directory",
     "dashboard/cli.py":                         "--log sends the daemon's own output to a file",
     "api/application/static.py":                "serves the SPA's own files",
+    "dashboard/frontend_build.py":              "validates Vite's generated manifest and source stamp",
 }
 
 
@@ -1312,8 +1313,9 @@ def test_resume_and_sse_have_one_authoritative_path():
     launch_files = (
         ROOT / "harness" / "models" / "launch.py",
         ROOT / "api" / "controls" / "routes.py",
-        ROOT / "dashboard" / "static" / "app.08-composer.js",
-        ROOT / "dashboard" / "static" / "app.09-newsession.js",
+        ROOT / "dashboard" / "frontend" / "src" / "sessions" / "components" / "Composer.svelte",
+        ROOT / "dashboard" / "frontend" / "src" / "new-session" / "NewSessionModal.svelte",
+        ROOT / "dashboard" / "frontend" / "src" / "app" / "app-state.svelte.ts",
         ROOT / "harness" / "impl" / "claude_code" / "launcher.py",
         ROOT / "harness" / "impl" / "codex" / "launcher.py",
     )
@@ -1323,7 +1325,7 @@ def test_resume_and_sse_have_one_authoritative_path():
         if "continue_latest" in path.read_text(encoding="utf-8")
     ]
     session_browser = (
-        ROOT / "dashboard" / "static" / "app.05-session.js"
+        ROOT / "dashboard" / "frontend" / "src" / "api" / "session-stream.ts"
     ).read_text(encoding="utf-8")
     assert "stream.onerror" not in session_browser
     assert "SES_RECONNECT" not in session_browser

@@ -54,7 +54,7 @@ CONTENT_SECURITY_POLICY = "; ".join((
     # index.html is fourteen external <script src> files and NOT one inline
     # script, so 'self' costs nothing. blob: is not a loophole reopening that:
     # it is the dictation AudioWorklet, which must be addressed as a URL and so
-    # is compiled from a Blob (app.08-composer.js).
+    # is compiled from a Blob (dictation-controller.svelte.ts).
     "script-src 'self' blob:",
     # THE ONE CONCESSION. Server-rendered content is injected with innerHTML and
     # carries inline style attributes — an ANSI span's colour (dashboard/render/

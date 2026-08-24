@@ -12,3 +12,8 @@ spool.jsonl
 # stray live-fg streaming sentinels (tee side-files .done markers landing in cwd)
 *.done
 .DS_Store
+dashboard/frontend/node_modules/
+dashboard/frontend/coverage/
+dashboard/frontend/playwright-report/
+dashboard/frontend/test-results/
+dashboard/static/build/

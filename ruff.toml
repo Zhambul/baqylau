@@ -115,6 +115,7 @@ ignore = [
 "terminal/impl/kitty/remote.py" = ["TID251"]   # kitty's remote-control protocol
 "dashboard/dictate.py" = ["TID251"]      # the Deepgram grant API
 "dashboard/cli.py" = ["TID251"]          # the daemon's health reply, read over a socket
+"dashboard/frontend_build.py" = ["TID251"]  # Vite's manifest, checked by this boundary translator
 "client/*.py" = ["TID251"]               # stdlib-only programs the harnesses and terminal RUN
 "repository/mapper/audit.py" = ["TID251"]      # a swallowed exception's context, whatever it was
 "app/raw_events_audit_cli.py" = ["TID251"]     # a debugging report, printed for a person

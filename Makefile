@@ -1,10 +1,35 @@
 PY ?= .venv/bin/python
+NPM ?= npm
+FRONTEND_DIR = dashboard/frontend
+FRONTEND_MODULES = $(FRONTEND_DIR)/node_modules/.package-lock.json
+
+$(FRONTEND_MODULES): $(FRONTEND_DIR)/package.json $(FRONTEND_DIR)/package-lock.json
+	cd $(FRONTEND_DIR) && $(NPM) ci
+
+frontend-install: $(FRONTEND_MODULES)
+
+build-frontend: frontend-install
+	cd $(FRONTEND_DIR) && $(NPM) run build
+	$(PY) -m dashboard.frontend_build --stamp
+
+test-frontend: frontend-install
+	cd $(FRONTEND_DIR) && $(NPM) run format:check
+	cd $(FRONTEND_DIR) && $(NPM) run check
+	cd $(FRONTEND_DIR) && $(NPM) run test:coverage
+
+test-browser: build-frontend
+	cd $(FRONTEND_DIR) && BAQYLAU_E2E_PYTHON=$(abspath $(PY)) $(NPM) run test:browser
+
+lint-frontend: frontend-install
+	cd $(FRONTEND_DIR) && $(NPM) run lint
 
 # The hermetic e2e suite (fake kitten, per-test tmp dirs). See docs/testing.md.
 # Parallel by default (pytest-xdist) — every test is tmpdir-isolated so this is
 # safe; use test-seq for debugging or where xdist is unavailable.
-test:
+test-python:
 	$(PY) -m pytest -q -m "not kitty" -n auto --ignore=tests/e2e
+
+test: test-frontend test-browser test-python
 
 # Sequential run of the same suite.
 test-seq:
@@ -38,7 +63,7 @@ test-par: test
 # type gate went quiet instead of red, and stayed quiet for a whole refactor
 # while 523 errors accumulated behind it. The cheapest gate is not the most
 # important one.
-lint: typecheck deadcode
+lint: lint-frontend typecheck deadcode
 	$(PY) -m ruff check .
 
 # Static types (mypy — config in mypy.ini; CI-enforced). The tree is strict:
@@ -75,6 +100,7 @@ lint-fix:
 # The two .py files are vulture whitelists, not sources — see their headers.
 DEADCODE_PATHS = api app bin client core dashboard audit domain engine harness notify repository terminal
 DEADCODE_WHITELISTS = vulture-allowlist.py vulture-baseline.py
+DEADCODE_EXCLUDES = dashboard/frontend
 # Call sites vulture cannot see: the framework invokes these, never our code.
 # Matched by SHAPE, not by router name — `router`, `web` and `guarded` are three
 # APIRouters today, and a fourth must not silently read as dead code.
@@ -82,12 +108,14 @@ DEADCODE_DECORATORS = @*.get,@*.post,@*.put,@*.patch,@*.delete,@*.websocket,@mod
 
 deadcode:
 	$(PY) -m vulture $(DEADCODE_PATHS) $(DEADCODE_WHITELISTS) \
+		--exclude "$(DEADCODE_EXCLUDES)" \
 		--ignore-decorators "$(DEADCODE_DECORATORS)"
 
 # The same scan with the baseline OFF — the standing backlog of dead code.
 # Not a gate; run it when you want something to delete.
 deadcode-backlog:
 	@$(PY) -m vulture $(DEADCODE_PATHS) vulture-allowlist.py \
+		--exclude "$(DEADCODE_EXCLUDES)" \
 		--ignore-decorators "$(DEADCODE_DECORATORS)" || true
 
-.PHONY: test test-seq test-all test-drift test-par lint lint-fix typecheck deadcode deadcode-backlog
+.PHONY: frontend-install build-frontend test-frontend test-browser test-python test test-seq test-all test-drift test-par lint lint-fix typecheck deadcode deadcode-backlog

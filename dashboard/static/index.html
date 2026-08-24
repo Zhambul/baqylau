@@ -2,85 +2,26 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<!-- maximum-scale=1 suppresses iPadOS Safari's ~1.3x auto-zoom on focusing a
-     text control (user pinch-zoom still works — Safari has ignored max-scale
-     for user gestures since iOS 10); interactive-widget=resizes-content makes
-     the on-screen keyboard resize the layout instead of overlaying the
-     composer; viewport-fit=cover pairs with the safe-area insets in the CSS -->
+<!-- The scale suppresses iPadOS Safari auto-zoom on text controls. Safari still
+     permits pinch zoom. The interactive widget setting makes the keyboard
+     resize the composer instead of covering it. -->
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
-<!-- iPad/iOS "Add to Home Screen" standalone mode: opened from the home-screen
-     icon the dashboard runs chrome-less and PERSISTENTLY fullscreen — crucially
-     WITHOUT the Fullscreen-API swipe-down-to-exit gesture (which Safari won't
-     let a page suppress; the ⛶ button's requestFullscreen path always has it).
-     black-translucent runs content under the status bar, pairing with the
-     viewport-fit=cover + safe-area insets already in the CSS. The bare
-     mobile-web-app-capable is the Android/Chrome spelling of the same. -->
+<!-- These settings keep the installed dashboard full-screen on iOS and
+     Android. The CSS supplies the matching safe-area insets. -->
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="baqylau">
 <meta name="theme-color" content="#0a0e15">
-<!-- installed-app manifest + home-screen icon: the manifest gives name/icons/display + long-press shortcuts (the
-     shortcuts are Android/desktop — iOS ignores them); iOS uses the
-     apple-touch-icon for the home-screen glyph (a real PNG beats the
-     screenshot iOS generates without one). Re-add to Home Screen to pick up a
-     changed icon. -->
 <link rel="manifest" href="/static/manifest.webmanifest" crossorigin="use-credentials">
 <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
-<title>baqylau</title>
-<link rel="stylesheet" href="/static/style.css">
-<!-- the baqylau shanyrak (see FAV_GLYPH in app.js — app.js overwrites this href
-     on first render + on the asking state; this static default matches it for
-     the pre-JS load): gold nodes on a ring, neutral-ink spokes + aperture -->
 <link rel="icon" id="favicon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200'%3E%3Cg stroke='%239aa7b0' stroke-width='6' stroke-linecap='round'%3E%3Cline x1='100' y1='84' x2='100' y2='18'/%3E%3Cline x1='111.31' y1='88.69' x2='157.98' y2='42.02'/%3E%3Cline x1='116' y1='100' x2='182' y2='100'/%3E%3Cline x1='111.31' y1='111.31' x2='157.98' y2='157.98'/%3E%3Cline x1='100' y1='116' x2='100' y2='182'/%3E%3Cline x1='88.69' y1='111.31' x2='42.02' y2='157.98'/%3E%3Cline x1='84' y1='100' x2='18' y2='100'/%3E%3Cline x1='88.69' y1='88.69' x2='42.02' y2='42.02'/%3E%3C/g%3E%3Ccircle cx='100' cy='100' r='82' fill='none' stroke='%23E9B949' stroke-width='8'/%3E%3Cg fill='%23E9B949'%3E%3Ccircle cx='100' cy='18' r='9'/%3E%3Ccircle cx='157.98' cy='42.02' r='9'/%3E%3Ccircle cx='182' cy='100' r='9'/%3E%3Ccircle cx='157.98' cy='157.98' r='9'/%3E%3Ccircle cx='100' cy='182' r='9'/%3E%3Ccircle cx='42.02' cy='157.98' r='9'/%3E%3Ccircle cx='18' cy='100' r='9'/%3E%3Ccircle cx='42.02' cy='42.02' r='9'/%3E%3C/g%3E%3Ccircle cx='100' cy='100' r='16' fill='none' stroke='%239aa7b0' stroke-width='6'/%3E%3Ccircle cx='100' cy='100' r='8' fill='%23E9B949'/%3E%3C/svg%3E">
+<title>baqylau</title>
+<!-- FastAPI replaces this marker from Vite's production manifest. Vite does
+     not own this document. -->
+<!-- vite-assets -->
 </head>
 <body>
-<header id="top">
-  <!-- the brand IS the way out of a session view (href="#/"), which is why
-       there is no separate ‹ back button: a standalone home-screen app has no
-       browser chrome, but the logo covers the one navigation it needed. -->
-  <a class="brand" href="#/"><svg class="brandmark" viewBox="0 0 200 200" aria-hidden="true"><g stroke="currentColor" stroke-width="7" stroke-linecap="round" opacity="0.8"><line x1="100" y1="84" x2="100" y2="18"/><line x1="111.31" y1="88.69" x2="157.98" y2="42.02"/><line x1="116" y1="100" x2="182" y2="100"/><line x1="111.31" y1="111.31" x2="157.98" y2="157.98"/><line x1="100" y1="116" x2="100" y2="182"/><line x1="88.69" y1="111.31" x2="42.02" y2="157.98"/><line x1="84" y1="100" x2="18" y2="100"/><line x1="88.69" y1="88.69" x2="42.02" y2="42.02"/></g><circle cx="100" cy="100" r="82" fill="none" stroke="#E9B949" stroke-width="8"/><g fill="#E9B949"><circle cx="100" cy="18" r="9"/><circle cx="157.98" cy="42.02" r="9"/><circle cx="182" cy="100" r="9"/><circle cx="157.98" cy="157.98" r="9"/><circle cx="100" cy="182" r="9"/><circle cx="42.02" cy="157.98" r="9"/><circle cx="18" cy="100" r="9"/><circle cx="42.02" cy="42.02" r="9"/></g><circle cx="100" cy="100" r="16" fill="none" stroke="currentColor" stroke-width="6"/><circle cx="100" cy="100" r="8" fill="#E9B949"/></svg><b>baqylau</b></a>
-  <!-- ORDER IS DELIBERATE: "+ session" is LAST, hard against the right edge,
-       because starting a session is the list page's most-used gesture and the
-       screen edge is the easiest target to hit. The conn dot is a status light,
-       not a button, so it sits inboard of it. -->
-  <div class="topright">
-    <!-- the open session's OWN action buttons (app.11-chrome.js
-         mountHeaderActions) — this corner belongs to the session while you are
-         reading one, and to the list's gestures otherwise. Empty + hidden on
-         every non-session route. -->
-    <div id="sessact" class="topact" hidden></div>
-    <button id="statsbtn" class="ghost" title="stats">▦ stats</button>
-    <button id="notifytoggle" class="ghost" title="global alerts">◉ alerts</button>
-    <button id="notifbtn" class="ghost" hidden>enable notifications</button>
-    <button id="wakebtn" class="ghost" title="keep screen awake" hidden><svg class="sunmark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.2 5.2l1.6 1.6M17.2 17.2l1.6 1.6M18.8 5.2l-1.6 1.6M6.8 17.2l-1.6 1.6"/></svg></button>
-    <button id="fsbtn" class="ghost" title="fullscreen">⛶</button>
-    <span id="conn" class="dot" data-on="0" title="event stream"></span>
-    <button id="newbtn" class="ghost">+ session</button>
-  </div>
-</header>
-<div id="accounts" hidden></div>
-<div id="attn" hidden></div>
-<main id="view"></main>
-<div id="modal" hidden></div>
-<div id="toasts"></div>
-<script src="/static/app.00-core.js"></script>
-<!-- the presentation leaves: text to markup, and one feed entry to the markup
-     that draws it. Loaded before every view that paints one. -->
-<script src="/static/app.00a-markup.js"></script>
-<script src="/static/app.00b-entries.js"></script>
-<script src="/static/app.01-attention.js"></script>
-<script src="/static/app.02-router.js"></script>
-<script src="/static/app.03-stats.js"></script>
-<script src="/static/app.04-list.js"></script>
-<script src="/static/app.05-session.js"></script>
-<script src="/static/app.06-clientlog.js"></script>
-<script src="/static/app.07-dialogs.js"></script>
-<script src="/static/app.08-composer.js"></script>
-<script src="/static/app.09-newsession.js"></script>
-<script src="/static/app.10-control.js"></script>
-<script src="/static/app.11-chrome.js"></script>
-<script src="/static/app.12-shell.js"></script>
-<script src="/static/app.13-init.js"></script>
+<div id="app"></div>
 </body>
 </html>

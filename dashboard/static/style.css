@@ -167,7 +167,7 @@ body.in-session #newbtn { display: none; }
    · the ⛶ comes back while fullscreen is actually ENGAGED, because it is then
      the EXIT affordance, and entering fullscreen on the list then opening a
      session would strand you with no visible way out (`body.fs-on`, kept in
-     sync by the fullscreenchange handler in app.12-shell.js);
+     sync by the fullscreenchange handler in App.svelte);
    · the connection dot is hidden only while it is GREEN (`data-on="1"` — the
      stream is up, which is the state you never need told). A dropped stream
      turns it grey, and that you do need told: a session view whose SSE is down
@@ -176,7 +176,7 @@ body.in-session #conn[data-on="1"] { display: none; }
 body.in-session.fs-on #fsbtn { display: revert; }
 /* …and what takes their place: the open session's own action bar (✦ model ✧
    effort ⊜ compact · ✎ rename ⇆ migrate ◉ alerts ↶ rewind ■ stop ✕ close),
-   mounted here by app.11-chrome.js. Two .actrow groups side by side — the same
+   mounted here by SessionActions.svelte. Two .actrow groups side by side — the same
    two that used to stack under the session title — so the row gap inside a
    group reads as one group and the gap between them separates the quick
    commands from the session gestures.
@@ -383,7 +383,7 @@ body.in-session.fs-on #fsbtn { display: revert; }
 .sstop:hover, .sresume:hover { color: var(--text); box-shadow: var(--card-hover); }
 .sstop.arm { color: #fff; background: var(--red, #b5484d); }
 /* A disabled action still SHOWS (the header greys instead of hiding — see
-   app.11-chrome.js gate()), so it has to read as unavailable at a glance and
+   SessionActions.svelte), so it has to read as unavailable at a glance and
    stay inert under the cursor: :hover matches a disabled button, and lighting
    up under one is the whole "why won't it click" confusion. The title says
    which condition is missing. */
@@ -562,7 +562,7 @@ body.in-session.fs-on #fsbtn { display: revert; }
 /* ---- usage strip (under the header) ------------------------------------- */
 /* ONE strip over every host's rate-limit rows — a Claude subscription account
    and a codex host reading are the same `.acct` pill, stacked in one container
-   and grouped by host in the painter (app.01-attention.renderAccounts). The
+   and grouped by host in AccountUsageStrip.svelte. The
    codex half used to be a SECOND container (#codexusage) with its own endpoint,
    poll and painter, welded flush under this one so the two would read as a
    single strip; now they are one. */
@@ -574,7 +574,7 @@ body.in-session #accounts { display: none; }
    it wears the ⚠ badge, or how many windows it reports. The rows were flex lines before this, each laying out its own
    sequence of fixed-width parts; that only stacks while every part measures the
    same in every row, and it kept not doing so. Cells name their track
-   explicitly (`grid-column`, app.01-attention.place), so the alignment does not
+   explicitly (`grid-column`, AccountUsageStrip.svelte), so the alignment does not
    rest on the source order either.
    `overflow-x: auto` replaces the rows' old `flex-wrap`: a grid row cannot
    fold, and the strip must not widen the page on a narrow screen. */
@@ -1420,7 +1420,7 @@ body.modal-open { overflow: hidden; }
    pill inside a panel card ("style foreground/background/monitors to the same style
    that we have established / I don't like those boxy blocks / also get rid of the
    colors / I still want the dot and the time info"). The server hands the pieces to
-   the header's slots (opshtml.cmd_note, app.05-session.js createBlock/fillBlock):
+   the header's slots (FeedItem.svelte):
      .bchips  the dot + the kind word, when the register keeps one (`background`,
               `monitor · <desc>`; `foreground` is muted — the command says it)
      .bsum    the command itself, the block's own first body line as always
@@ -1696,7 +1696,7 @@ body.modal-open { overflow: hidden; }
 }
 .msg.prompt:hover .rw, .rwpick .msg.prompt .rw { opacity: 1; }
 .msg.prompt .rw:hover { box-shadow: var(--card-hover); }
-/* :not(.sys) — an injected ⚙ SYSTEM turn is not a rewind target (app.10-control) */
+/* :not(.sys) — an injected ⚙ SYSTEM turn is not a rewind target (FeedView.svelte) */
 .rwpick .msg.prompt:not(.sys) { cursor: pointer;
   outline: 1px dashed color-mix(in srgb, var(--gold) 55%, transparent); }
 .rwmenu {

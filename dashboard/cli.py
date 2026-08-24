@@ -123,6 +123,16 @@ def _redirect(log_path: str) -> None:
 
 
 def _serve() -> int:
+    from dashboard.frontend_build import (  # noqa: PLC0415 — startup validation stays lazy
+        FrontendBuildError,
+        validate_frontend_build,
+    )
+
+    try:
+        validate_frontend_build()
+    except FrontendBuildError as error:
+        print("dashboard cannot start: %s" % error, file=sys.stderr)
+        return 1
     from api.runtime import ApplicationConfig, DashboardApplication  # noqa: PLC0415 — configuration precedes imports
 
     return DashboardApplication(ApplicationConfig.from_environment()).run().exit_code

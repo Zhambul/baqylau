@@ -24,6 +24,8 @@ from fastapi.responses import StreamingResponse
 
 from api.common.models.fields import SessionIdPath
 from api.common.models.streams.error_frame import ErrorFrame
+from api.common.models.streams.ready_frame import ReadyFrame
+from api.dependencies import Policy
 from api.sessiondata import mapper
 from api.sessiondata.models.stream_frame import GlobalStreamFrame, SessionStreamFrame
 from api.sse import (
@@ -76,11 +78,17 @@ def session_stream(
 def global_stream(
     read_model: SessionDataStore,
     audit: Recorder,
+    policy: Policy,
     after_cursor: int = 0,
     last_event_id: str | None = Header(None, alias="Last-Event-ID"),
 ) -> StreamingResponse:
     return StreamingResponse(
-        _global_frames(read_model, audit, _from_cursor(last_event_id, after_cursor)),
+        _global_frames(
+            read_model,
+            audit,
+            _from_cursor(last_event_id, after_cursor),
+            policy.boot_id,
+        ),
         media_type=EVENT_STREAM,
         headers=NO_STORE,
     )
@@ -133,7 +141,9 @@ async def _global_frames(
     session_data_repository: SessionDataRepository,
     audit_recorder: AuditRecorder,
     cursor: int,
+    boot_id: str,
 ) -> AsyncIterator[str]:
+    yield sse_frame("ready", ReadyFrame(boot_id=boot_id))
     try:
         heartbeat_at = asyncio.get_running_loop().time()
         while True:

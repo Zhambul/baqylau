@@ -26,7 +26,7 @@ from repository.contract.preferences import PushSubscriptionRepository
 
 # Per-session "a browser is LOOKING AT this session right now" presence. The
 # page POSTs /api/session/<session_id>/viewing on a heartbeat, but ONLY while it is
-# visible + focused + showing that session (app.13-init.js presenceBeat). So the
+# visible + focused + showing that session (presence.ts). So the
 # mere arrival of a recent beat IS the "you're watching the dashboard" signal
 # the deferred Telegram alert suppresses on — the web analog of the terminal
 # tab being frontmost. In-memory + TTL'd: this is ephemeral live-only presence
