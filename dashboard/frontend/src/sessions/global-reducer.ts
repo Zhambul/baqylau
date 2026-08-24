@@ -31,7 +31,11 @@ export function reduceGlobalDelta(
     }
     const existing = sessions[position];
     if (existing !== undefined) {
-      sessions[position] = { ...existing, session: changed };
+      sessions[position] = {
+        ...existing,
+        session: changed,
+        live: changed.state === 'running',
+      };
     }
   }
 

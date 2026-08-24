@@ -209,6 +209,15 @@ function message(
       body: contentBody(body.content),
       questions: [],
     };
+  if (body.role === 'user' && entry.parentActorId !== null)
+    return {
+      ...metadata(entry, 'messages', 'message', 'message'),
+      kind: 'message',
+      className: 'message',
+      label: 'parent agent',
+      body: contentBody(body.content),
+      questions: [],
+    };
   if (body.role === 'user')
     return {
       ...metadata(entry, 'messages', 'message', 'prompt'),

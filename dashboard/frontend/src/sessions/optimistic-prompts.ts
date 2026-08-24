@@ -15,12 +15,16 @@ export function promptMatches(delivered: string, sent: string): boolean {
 export function mergeQueuedPromptTexts(
   persisted: readonly string[],
   optimistic: readonly string[],
+  delivered: readonly string[] = [],
 ): readonly string[] {
-  return [
+  const merged = [
     ...persisted,
     ...optimistic.filter(
       (text) =>
         !persisted.some((known) => known === text || known.endsWith(text)),
     ),
   ];
+  return merged.filter(
+    (text) => !delivered.some((prompt) => promptMatches(prompt, text)),
+  );
 }

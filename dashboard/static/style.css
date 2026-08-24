@@ -1503,6 +1503,13 @@ body.modal-open { overflow: hidden; }
   color: var(--text-soft); font: 12px/1.4 var(--mono); flex: 1; min-width: 0;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+/* A closed activity row stays one line for scanning. Once opened, its full
+   command is part of the revealed detail and must not keep the closed-row
+   ellipsis. Long unbroken arguments can wrap too. */
+.blk[data-open="1"] > .bhead .bsum {
+  white-space: pre-wrap; overflow: visible; text-overflow: clip;
+  overflow-wrap: anywhere;
+}
 /* the in-flight foreground command's live elapsed chip (`· 1m04s`, ticking) —
    deliberately NOT a filled `.chip` like its ▶/■ siblings: those are the
    session's own painted labels, this one is the dashboard talking. Outlined and
@@ -1608,10 +1615,14 @@ body.modal-open { overflow: hidden; }
 .cl { opacity: 0; transition: opacity .12s; }
 .bhead:hover .cl, .ol:hover .cl, .bbody:hover .cl { opacity: 1; }
 .chip {
-  color: #14161c; font-weight: 650; font-size: 12px; font-family: var(--mono);
+  color: var(--text-soft); font-weight: 500; font-size: 12px; font-family: var(--mono);
   padding: 1px 9px; border-radius: calc(var(--r) / 2); display: inline-block;
   max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+/* Tool names and named shell kinds share one restrained label treatment. The
+   legacy chip text was near-black and vanished on the stream background;
+   semantic color fills would be too loud for these quiet activity rows. */
+.operation-label { color: var(--text-soft); font-weight: 500; }
 .cl { display: inline-flex; gap: 10px; }
 .cl .cc, a.cc { color: var(--dim); cursor: pointer; font-size: 11px; font-family: var(--mono); }
 .cl .cc:hover, a.cc:hover { color: var(--text); }

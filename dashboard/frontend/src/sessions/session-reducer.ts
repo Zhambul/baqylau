@@ -21,7 +21,13 @@ export function entriesForActor(
   entries: readonly Entry[],
   actorId: ActorId,
 ): readonly Entry[] {
-  return entries.filter((entry) => entry.actorId === actorId);
+  return entries.filter(
+    (entry) =>
+      entry.actorId === actorId ||
+      (entry.parentActorId === actorId &&
+        (entry.type === 'assignment_started' ||
+          entry.type === 'assignment_finished')),
+  );
 }
 
 function uniqueEntries(entries: readonly Entry[]): readonly Entry[] {

@@ -36,6 +36,7 @@ async function expectAccessible(page: Page): Promise<void> {
 
 test('loads the production shell and session list without browser failures', async ({
   page,
+  request,
 }) => {
   const failures = watchBrowserFailures(page);
   const response = await page.goto('/');
@@ -45,6 +46,18 @@ test('loads the production shell and session list without browser failures', asy
     "script-src 'self' blob:",
   );
   await expect(page.getByRole('link', { name: 'baqylau' })).toBeVisible();
+  const brandMark = page.locator('.brandmark');
+  await expect(brandMark).toBeVisible();
+  await expect(brandMark.locator('line')).toHaveCount(8);
+  await expect(brandMark.locator('circle')).toHaveCount(11);
+  const favicon = await request.get('/favicon.ico');
+  expect(favicon.status()).toBe(200);
+  expect(favicon.headers()['content-type']).toContain(
+    'image/vnd.microsoft.icon',
+  );
+  expect((await favicon.body()).subarray(0, 4)).toEqual(
+    Buffer.from([0, 0, 1, 0]),
+  );
   await expect(page.getByText('2 sessions')).toBeVisible();
 
   await page.getByRole('button', { name: /parked · 2/ }).click();
@@ -56,6 +69,63 @@ test('loads the production shell and session list without browser failures', asy
   await expect(page).toHaveScreenshot('session-list.png', {
     fullPage: true,
   });
+  expect(failures).toEqual([]);
+});
+
+test('keeps activity details readable and expandable', async ({ page }) => {
+  const failures = watchBrowserFailures(page);
+  await page.goto('/#/s/fixture-active');
+
+  const queued = page.locator('.msg.prompt.queued');
+  await expect(queued).toContainText('show this complete queued message');
+  await expect(queued.locator('.qbadge')).toHaveText('⧗ queued');
+
+  const edit = page.locator('.blk').filter({
+    has: page.locator('.bchips', {
+      hasText: 'Edit(dashboard/frontend/src/app/App.svelte)',
+    }),
+  });
+  await expect(edit).toHaveAttribute('data-open', '0');
+  await edit.locator('.bhead').click();
+  await expect(edit).toHaveAttribute('data-open', '1');
+  await expect(edit.locator('.tdiff')).toContainText('typed shell');
+
+  const summaries = page.locator('.vsum');
+  for (let index = 0; index < (await summaries.count()); index += 1)
+    await summaries.nth(index).click();
+  const longCommand = page.locator('.blk').filter({
+    hasText: 'every-frontend-operation',
+  });
+  await expect(longCommand).toHaveAttribute('data-open', '0');
+  await longCommand.locator('.bhead').click();
+  await expect(longCommand).toHaveAttribute('data-open', '1');
+  const summary = longCommand.locator('.bsum');
+  await expect(summary).toContainText('every-frontend-operation');
+  await expect(summary).toHaveCSS('white-space', 'pre-wrap');
+  await expect(summary).toHaveCSS('text-overflow', 'clip');
+
+  const webSearch = page.locator('.operation-label', {
+    hasText: 'WebSearch',
+  });
+  const background = page.locator('.operation-label', {
+    hasText: 'background',
+  });
+  await expect(webSearch).toHaveCSS('font-weight', '500');
+  await expect(background).toHaveCSS('font-weight', '500');
+  const labelStyles = await Promise.all(
+    [webSearch, background].map((label) =>
+      label.evaluate((element) => {
+        const style = getComputedStyle(element);
+        return { color: style.color, background: style.backgroundColor };
+      }),
+    ),
+  );
+  expect(labelStyles[0]?.color).toBe(labelStyles[1]?.color);
+  expect(labelStyles[0]?.color).not.toBe('rgb(20, 22, 28)');
+  expect(
+    labelStyles.every((style) => style.background === 'rgba(0, 0, 0, 0)'),
+  ).toBe(true);
+
   expect(failures).toEqual([]);
 });
 

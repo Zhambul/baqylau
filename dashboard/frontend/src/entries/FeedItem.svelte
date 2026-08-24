@@ -107,7 +107,10 @@
     const target = event.target;
     if (target instanceof Element && target.closest('a, button') !== null)
       return;
-    if (presentation.kind !== 'block' || presentation.body.kind === 'empty')
+    if (
+      (presentation.kind !== 'block' && presentation.kind !== 'file') ||
+      presentation.body.kind === 'empty'
+    )
       return;
     userSet = true;
     open = !open;
@@ -244,11 +247,12 @@
           <span class="ol"
             ><span class="anmark">⏺</span
             >{#if presentation.header.shellKind !== 'cmd'}<span
-                >{presentation.header.label}</span
+                class="operation-label">{presentation.header.label}</span
               >{/if}</span
           >
         {:else}
-          <span class={['chip', presentation.header.chipKind]}
+          <span
+            class={['chip', 'operation-label', presentation.header.chipKind]}
             >{presentation.header.label}</span
           >
         {/if}

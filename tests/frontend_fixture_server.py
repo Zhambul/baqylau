@@ -27,6 +27,7 @@ def _seed(data_directory: Path) -> None:
     from app.injection import registry, resolve
     from domain.events import (
         ActorDescriptionChanged,
+        ActorFinished,
         ActorStarted,
         CanonicalEvent,
         ContextReported,
@@ -36,9 +37,12 @@ def _seed(data_directory: Path) -> None:
         MessageCreated,
         ModelChanged,
         QuestionAsked,
+        SearchPerformed,
         SessionFinished,
         SessionStarted,
         SessionTitleChanged,
+        ShellFinished,
+        ShellOutputFinished,
         ShellProgressed,
         ShellStarted,
         TaskChanged,
@@ -63,6 +67,7 @@ def _seed(data_directory: Path) -> None:
         TurnId,
     )
     from domain.records import RecordedTranslationDecision
+    from domain.workspace import ComposerQueue, QueuedMessage
     from domain.values import (
         AccountReference,
         ActorRole,
@@ -93,6 +98,7 @@ def _seed(data_directory: Path) -> None:
     raw_events = resolve(instances, providers.raw_events)
     canonical_events = resolve(instances, providers.canonical_events)
     reaction_loop = resolve(instances, providers.reaction_loop)
+    workspaces = resolve(instances, providers.workspaces)
 
     now = time.time()
     harness = HarnessName.CODEX
@@ -250,6 +256,64 @@ def _seed(data_directory: Path) -> None:
         turn_id=turn,
         seconds_ago=680,
     )
+    long_command = (
+        "python -m baqylau.audit --configuration "
+        + "/a-very-long-directory-name/" * 8
+        + "settings.toml --include every-frontend-operation"
+    )
+    foreground = ShellId("fixture-long-command")
+    add(
+        "active-long-command",
+        ShellStarted(
+            foreground,
+            TextContent(long_command),
+            ExecutionMode.FOREGROUND,
+            None,
+        ),
+        turn_id=turn,
+        seconds_ago=675,
+    )
+    add(
+        "active-long-command-finished",
+        ShellFinished(foreground, Outcome.SUCCEEDED, TextContent("done"), 0),
+        turn_id=turn,
+        seconds_ago=674,
+    )
+    add(
+        "active-web-search",
+        SearchPerformed(
+            "WebSearch",
+            TextContent("Svelte operation label contrast"),
+            TextContent("one result"),
+            Outcome.SUCCEEDED,
+        ),
+        turn_id=turn,
+        seconds_ago=673,
+    )
+    background = ShellId("fixture-background")
+    add(
+        "active-background",
+        ShellStarted(
+            background,
+            TextContent("python -m baqylau.worker --watch"),
+            ExecutionMode.BACKGROUND,
+            "frontend worker",
+        ),
+        turn_id=turn,
+        seconds_ago=672,
+    )
+    add(
+        "active-background-launched",
+        ShellFinished(background, Outcome.SUCCEEDED, None, 0),
+        turn_id=turn,
+        seconds_ago=671,
+    )
+    add(
+        "active-background-finished",
+        ShellOutputFinished(background, Outcome.SUCCEEDED),
+        turn_id=turn,
+        seconds_ago=670,
+    )
     shell = ShellId("fixture-monitor")
     add(
         "active-shell",
@@ -336,6 +400,13 @@ def _seed(data_directory: Path) -> None:
         actor_id=child_actor,
         parent_actor_id=active_lead,
         seconds_ago=500,
+    )
+    add(
+        "child-finished",
+        ActorFinished(None),
+        actor_id=child_actor,
+        parent_actor_id=active_lead,
+        seconds_ago=490,
     )
     question = QuestionId("fixture-question")
     add(
@@ -443,6 +514,13 @@ def _seed(data_directory: Path) -> None:
             now,
         )
     reaction_loop.tick()
+    workspaces.save_composer_queue(
+        active_session,
+        ComposerQueue(
+            (QueuedMessage("show this complete queued message"),),
+            "browser-fixture",
+        ),
+    )
 
 
 def main() -> int:

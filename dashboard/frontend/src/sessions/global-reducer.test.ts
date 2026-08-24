@@ -43,4 +43,37 @@ describe('global session reducer', () => {
     expect(result.adopt).toEqual(['session-new']);
     expect(result.unknownActorSessions).toEqual(['session-orphan']);
   });
+
+  it('marks a session non-live when a terminal close finishes it', () => {
+    const current = translateSessionSnapshot(wireSnapshot());
+    const finished = translateSession({
+      ...wireSession(),
+      state: 'finished',
+      finished_at: 1_700_000_100,
+    });
+
+    const result = reduceGlobalDelta([current], {
+      sessions: [finished],
+      actors: [],
+    });
+
+    expect(result.sessions[0]?.session.state).toBe('finished');
+    expect(result.sessions[0]?.live).toBe(false);
+  });
+
+  it('marks a parked session live when it resumes', () => {
+    const parked = {
+      ...translateSessionSnapshot(wireSnapshot()),
+      live: false,
+    };
+    const resumed = translateSession(wireSession());
+
+    const result = reduceGlobalDelta([parked], {
+      sessions: [resumed],
+      actors: [],
+    });
+
+    expect(result.sessions[0]?.session.state).toBe('running');
+    expect(result.sessions[0]?.live).toBe(true);
+  });
 });

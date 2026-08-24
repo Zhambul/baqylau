@@ -23,4 +23,14 @@ describe('mergeQueuedPromptTexts', () => {
       ),
     ).toEqual(['@/tmp/file queued message', 'another']);
   });
+
+  it('drops persisted and optimistic queue items after live delivery', () => {
+    expect(
+      mergeQueuedPromptTexts(
+        ['persisted message', 'keep persisted'],
+        ['optimistic message', 'keep optimistic'],
+        ['@/tmp/file persisted message', 'restored draft optimistic message'],
+      ),
+    ).toEqual(['keep persisted', 'keep optimistic']);
+  });
 });

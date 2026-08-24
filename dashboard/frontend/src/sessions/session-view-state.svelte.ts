@@ -458,9 +458,14 @@ export class SessionViewState {
   get queuedPromptTexts(): readonly string[] {
     const persisted =
       this.application?.composer.queue?.items.map((item) => item.text) ?? [];
+    const delivered = this.entries.flatMap((entry) => {
+      const text = deliveredPrompt(entry);
+      return text === null ? [] : [text];
+    });
     return mergeQueuedPromptTexts(
       persisted,
       this.pendingQueuedPrompts.map((item) => item.text),
+      delivered,
     );
   }
 
