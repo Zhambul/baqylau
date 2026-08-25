@@ -16,28 +16,54 @@
   let loading = $state(true);
   let pending = $state(false);
   let failure = $state<string | null>(null);
-  let requested = $state(false);
 
   $effect(() => {
     const capable = view.capabilities?.plan;
-    if (requested || capable === undefined) return;
-    requested = true;
+    const sessionId = view.sessionId;
+    const attentionId = entry.body.attentionId;
+    if (capable === undefined) return;
     if (!capable) {
       loading = false;
       return;
     }
-    void readPlanChoices(view.sessionId, newRequestId(), entry.body.attentionId)
-      .then((result) => {
-        if (result.kind === 'plan-choices') choices = result.choices;
-        else if (result.status !== 'acknowledged')
-          failure = result.reason ?? 'the session did not return plan choices';
-      })
-      .catch((error: unknown) => {
-        failure = error instanceof Error ? error.message : String(error);
-      })
-      .finally(() => {
-        loading = false;
+    let cancelled = false;
+    const stopped = (): boolean => cancelled;
+    const wait = (): Promise<void> =>
+      new Promise((resolve) => {
+        setTimeout(resolve, 250);
       });
+    const load = async (): Promise<void> => {
+      while (!stopped()) {
+        try {
+          const result = await readPlanChoices(
+            sessionId,
+            newRequestId(),
+            attentionId,
+          );
+          if (stopped()) return;
+          if (result.kind === 'plan-choices') {
+            choices = result.choices;
+            failure = null;
+            loading = false;
+            return;
+          }
+          if (result.status === 'rejected') {
+            failure =
+              result.reason ?? 'the session did not return plan choices';
+            loading = false;
+            return;
+          }
+        } catch (error) {
+          if (stopped()) return;
+          failure = error instanceof Error ? error.message : String(error);
+        }
+        await wait();
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
   });
 
   async function submit(

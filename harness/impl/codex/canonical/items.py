@@ -652,6 +652,10 @@ def _rsp_function_call(function_call_payload: FunctionCallPayload) -> RolloutRec
             p,
             AskArguments.model_validate_json(arguments or AskArguments().model_dump_json()),
         )
+    if name == "wait":
+        # Deferred custom-tool orchestration. The originating tool owns the
+        # semantic fact; waiting for its cell only schedules transport work.
+        return empty_record()
     try:
         collaboration_name = CollaborationCallName(name)
     except ValueError:

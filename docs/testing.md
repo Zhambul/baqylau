@@ -52,23 +52,47 @@ writers and HTTP response models are cheaper and clearer to test.
 
 ## The live-harness suite — `tests/e2e/`, `make test-drift`
 
-This suite is not part of `make test`. Run it on demand. It starts the real
-application, launches the real `claude` and `codex` programs in a real
-workspace, and uses real tokens. It detects a harness change that a simulated
-test cannot detect.
+This suite is not part of `make test`. Run it on demand. It starts real
+applications, launches the real `claude` and `codex` programs in isolated
+copies of the configured workspace, and uses real tokens. It detects a harness
+change that a simulated test cannot detect.
 
 ```sh
 make test-drift                                        # every scenario
 make test-drift E2E="-k codex"                         # one harness
 make test-drift E2E="--e2e-model claude-opus-5"        # every scenario, one model
 make test-drift E2E="--e2e-data-dir /tmp/drift"        # keep the databases after
+make test-drift E2E_WORKERS=20                          # stress concurrent scenarios
 ```
 
-The run has one private data directory and one automatic port. It cannot use the
-normal application on port 8377. It uses the installed harness credentials and
-hooks. One application process serves all scenarios. This is the same use case
-as several normal sessions in one long-running application. It also keeps the
-run time and token cost low.
+Each worker has one private data directory, one automatic port, one Codex home,
+and one Git workspace copy. It cannot use the normal application on port 8377.
+It uses the installed harness credentials and hooks. After every scenario the
+worker restarts its private application; application shutdown closes every PTY
+process group. The next scenario therefore gets a fresh daemon, terminal, and
+harness process boundary without paying for a new xdist worker or workspace.
+The only run-scoped shared resource is a locked, atomic snapshot of read-only
+account usage, which prevents every daemon from launching the same native usage
+probes.
+
+The default is 20 concurrent live scenarios; frontend browser tests use 16
+workers. The suite is dominated by subprocess, socket, and remote-model waits
+rather than Python CPU work, so the live default is deliberately not tied to
+the logical CPU count. xdist uses separate Python processes, so the GIL does not
+serialize them. Dynamic one-test scheduling and a one-test scheduling chunk
+keep every scenario independently assignable and prevent fail-fast from leaving
+a large preassigned tail. Codex, Claude Code, usage, and automatic-title
+scenarios all share this pool. Local limits are process startup, memory, file
+descriptors, and database/socket work; remote CLI calls can still develop long
+tails when one provider alone is saturated. Override `E2E_WORKERS` to measure a
+different concurrency level. Use `E2E_WORKERS=1` for real-terminal or
+installed-daemon cases because those explicit opt-in suites control one
+machine-level resource.
+
+`make test-drift` collects only `tests/e2e/test_scenarios.py`, the active live
+matrix. Browser drift, real-Kitty, and installed-daemon tests remain separate
+explicit commands, so the normal result reports tests that actually ran rather
+than a large block of expected skips.
 
 The suite has these layers:
 
@@ -96,11 +120,12 @@ The suite has these layers:
   text.
 
 The suite does not read application logs or databases. Each scenario records a
-diagnostic checkpoint before it starts. At signoff, it closes each session and
-checks that the session and all actors are finished. It then waits for the raw,
-canonical, and reaction pipelines to drain. The diagnostic report must show a
-verdict for every raw event, no unknown or failed interpretation, and no audit
-error. A second report applies to the complete test run.
+diagnostic checkpoint before it starts. At signoff, it closes each active
+session, checks that the session and all actors are finished, waits for the raw,
+canonical, and reaction pipelines to drain, and restarts the isolated daemon.
+The diagnostic report must show a verdict for every raw event, no unknown or
+failed interpretation, and no audit error. A second report applies to the
+complete test run.
 
 Usage is global, so usage cases do not create a session. Storage migrations are
 white-box repository tests and do not run as live Gherkin cases. A future

@@ -46,7 +46,12 @@ class QuestionWorkDriver:
     @staticmethod
     def _native_prompt(spec: SessionSpec, prompt: str) -> str:
         if spec.harness == "codex":
-            instruction = "Use request_user_input exactly once."
+            instruction = (
+                "Use request_user_input exactly once. If its result contains a "
+                "user_note: item, treat only the text after user_note: as the "
+                "answer; never include user_note: or None of the above in your "
+                "final reply."
+            )
         elif spec.harness == "claude_code":
             instruction = "Use AskUserQuestion exactly once."
         else:

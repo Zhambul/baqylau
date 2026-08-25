@@ -509,6 +509,17 @@ def parse_line(s: str) -> TranscriptRecord | None:
             # dashboard bubble.
             text = _strip_recap_hint(system.content or "")
             return TextTranscriptRecord(text, TranscriptKind.RECAP) if text else None
+        if system.subtype == "local_command" and isinstance(system.content, str):
+            # Current Claude Code records slash commands as a system
+            # local_command (older versions used a wrapped user record).  Both
+            # are the same native action and must acknowledge terminal input.
+            cmd_name, cmd_args = _command_wrapper(system.content)
+            if cmd_name:
+                return SlashCommandTranscriptRecord(
+                    cmd_name,
+                    cmd_args,
+                    _command_text(system.content),
+                )
         if isinstance(system.content, str):
             cleared_prefix = "Goal cleared:"
             if system.content.startswith(cleared_prefix):
@@ -622,12 +633,16 @@ def parse_line(s: str) -> TranscriptRecord | None:
         queue_record = records.QueueOperationRecord.model_validate_json(s)
         # Monitor notifications have ordered event rows. Reading both their
         # queue and user copies would create two different ordinals. Background
-        # completion has one stable shell identity, so its usual user copy
-        # deduplicates. Claude Code 2.1.241 can put a CHILD command completion
-        # only in the PARENT queue. Read that one semantic queue shape.
+        # and agent completions have content-stable identities, so their usual
+        # user copies deduplicate. Either kind can occur only in the queue: a
+        # child background completion in the parent transcript, or a resumed
+        # agent's later completion after an earlier user copy was delivered.
         if queue_record.operation == "enqueue" and isinstance(queue_record.content, str):
             notification = _task_notification(queue_record.content)
-            if isinstance(notification, BackgroundCommandCompletedTranscriptRecord):
+            if isinstance(notification, (
+                BackgroundCommandCompletedTranscriptRecord,
+                ActorAssignmentFinishedTranscriptRecord,
+            )):
                 return notification
         return None
     return None

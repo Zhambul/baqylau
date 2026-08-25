@@ -273,8 +273,11 @@
   </a>
   <div class="topright">
     <div id="sessact" class="topact" hidden={!appState.inSession}>
-      {#if appState.activeSession !== null}
-        <SessionActions view={appState.activeSession} />
+      {#if appState.inSession}
+        {@const activeSession = appState.activeSession}
+        {#if activeSession !== null}
+          <SessionActions view={activeSession} />
+        {/if}
       {/if}
     </div>
     <button

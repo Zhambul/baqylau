@@ -51,12 +51,23 @@ def clear(
     sleep: Callable[[float], None] = time.sleep,
 ) -> None:
     """Clear the complete Codex draft and check the empty composer."""
-    if not driver.send_key(window_id, "ctrl+c"):
-        raise ComposerError("the draft clear key was not delivered")
     deadline = time.monotonic() + CLEAR_TIMEOUT_SECONDS
     screen = driver.get_text(window_id)
     while not empty(screen) and time.monotonic() < deadline:
+        # Codex's kill shortcuts apply to one logical line. Clear both sides
+        # of the cursor, then join the preceding line and repeat.
+        if not driver.send_key(window_id, "ctrl+u", "ctrl+k"):
+            raise ComposerError("the draft clear key was not delivered")
+        sleep(POLL_SECONDS)
+        screen = driver.get_text(window_id)
+        if empty(screen):
+            break
+        if not driver.send_key(window_id, "backspace"):
+            raise ComposerError("the draft join key was not delivered")
         sleep(POLL_SECONDS)
         screen = driver.get_text(window_id)
     if not empty(screen):
-        raise ComposerError("the Codex composer did not become empty")
+        observed = (screen or "")[-1200:]
+        raise ComposerError(
+            f"the Codex composer did not become empty; screen={observed!r}"
+        )

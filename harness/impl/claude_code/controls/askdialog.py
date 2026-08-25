@@ -73,6 +73,8 @@ STEP_TIMEOUT_S = 2.5   # a key press → its screen effect visible
 KEY_GAP_S = 0.12       # beat between successive blind key presses
 SUBMIT_TIMEOUT_S = 4.0  # final submit → dialog gone (the tool round-trips)
 NAV_STEPS = 24         # max up/down presses to walk the cursor to a target row
+KEY_EFFECT_TIMEOUT_S = 1.5  # a cursor key can be descheduled behind other CLIs
+DIALOG_MIN_LINES = 60  # keep option rows visible while the web drives the dialog
 
 
 class AskError(screendrive.StepError):
@@ -91,6 +93,14 @@ class AskError(screendrive.StepError):
 class AskOutcome(StrEnum):
     SUBMITTED = "submitted"
     CHAT = "chat"
+
+
+def _screen_changed(before: str) -> Callable[[str], bool]:
+    return lambda screen: screen != before
+
+
+def _screen_changed_or_has_cursor(before: str) -> Callable[[str], bool]:
+    return lambda screen: screen != before or askscreen.cursor_row(screen) is not None
 
 
 def cursor_to(
@@ -124,6 +134,22 @@ def cursor_to(
     so pressing up NAV_STEPS times there is 24 dead no-ops. The down-walk still
     finds any target at or below the trap (e.g. the "Next" advance row), so a
     stuck normalize is harmless — just cut it short."""
+    # A tall dialog can leave the selected first row above the viewport. Move
+    # down until the cursor becomes visible, then walk back to the top. The
+    # down/up pair makes the terminal scroll the hidden row into view.
+    for _ in range(NAV_STEPS):
+        before = screen_driver.get_text(win) or ""
+        if askscreen.cursor_row(before) is not None:
+            break
+        screen_driver.send_key(win, "down")
+        screendrive.poll_until(
+            screen_driver,
+            win,
+            _screen_changed_or_has_cursor(before),
+            KEY_EFFECT_TIMEOUT_S,
+            sleep,
+        )
+
     prev = object()
     for _ in range(NAV_STEPS):               # normalize to the first row
         cur = askscreen.cursor_row(screen_driver.get_text(win) or "")
@@ -133,15 +159,39 @@ def cursor_to(
         if key == prev:                      # up made no progress (trapped row)
             break
         prev = key
+        before = screen_driver.get_text(win) or ""
         screen_driver.send_key(win, "up")
-        sleep(POLL_S)
+        _, changed = screendrive.poll_until(
+            screen_driver,
+            win,
+            _screen_changed(before),
+            KEY_EFFECT_TIMEOUT_S,
+            sleep,
+        )
+        if not changed:
+            break
     for _ in range(NAV_STEPS):
         screen = screen_driver.get_text(win) or ""
         if any(row.cursor and pred(row) for row in rows(screen)):
             return screen
+        before = screen
         screen_driver.send_key(win, "down")
-        sleep(POLL_S)
-    raise AskError("cursor", "cursor never reached %s" % what)
+        screendrive.poll_until(
+            screen_driver,
+            win,
+            _screen_changed(before),
+            KEY_EFFECT_TIMEOUT_S,
+            sleep,
+        )
+    visible = [
+        (row.digit, row.label, row.cursor, row.check)
+        for row in rows(screen)
+    ]
+    raise AskError(
+        "cursor",
+        "cursor never reached %s; visible rows: %r" % (what, visible),
+        screen=screen,
+    )
 
 
 def _by_digit(d: str) -> Callable[[Row], bool]:
@@ -222,13 +272,27 @@ def _answer_question(
         # against the checkbox the screen actually shows (the user may have
         # pre-toggled some in the terminal), and only flip the ones that differ
         for j, label in enumerate(labels):
-            row = next((row for row in rows(screen_driver.get_text(win) or "")
-                        if row.digit == str(j + 1)), None)
+            digit = str(j + 1)
+            screen = cursor_to(
+                screen_driver,
+                win,
+                _by_digit(digit),
+                sleep,
+                "option %d" % (j + 1),
+            )
+            visible_rows = rows(screen)
+            row = next(
+                (row for row in visible_rows if row.digit == digit),
+                None,
+            )
             if row is None:
-                raise AskError("options", "row %d not on screen" % (j + 1))
+                visible = [(item.digit, item.label, item.check) for item in visible_rows]
+                raise AskError(
+                    "options",
+                    "row %d not on screen; visible rows: %r" % (j + 1, visible),
+                    screen=screen,
+                )
             if bool(row.check) != (label in selected):
-                cursor_to(screen_driver, win, _by_digit(str(j + 1)), sleep,
-                          "option %d" % (j + 1))
                 screen_driver.send_key(win, "enter")        # toggle
                 sleep(KEY_GAP_S)
         if other:
@@ -265,7 +329,7 @@ def _answer_question(
     screen_driver.send_key(win, "enter")                    # select + auto-advance
 
 
-def drive(
+def _drive_dialog(
     screen_driver: ScreenDriver,
     win: WindowId,
     questions: list[records.Question],
@@ -370,3 +434,24 @@ def drive(
         if not ok:
             raise AskError("submit", "dialog still open after Submit answers")
     return AskOutcome.SUBMITTED
+
+
+def drive(
+    screen_driver: ScreenDriver,
+    win: WindowId,
+    questions: list[records.Question],
+    answers: list[AnswerDraft],
+    chat: bool = False,
+    sleep: Callable[[float], None] = time.sleep,
+) -> AskOutcome:
+    """Drive one question dialog inside a temporary usable viewport."""
+    current_lines = screen_driver.lines(win)
+    growth = max(0, DIALOG_MIN_LINES - current_lines) if current_lines is not None else 0
+    grown = growth > 0 and screen_driver.resize_lines(win, growth)
+    if grown:
+        sleep(POLL_S)
+    try:
+        return _drive_dialog(screen_driver, win, questions, answers, chat, sleep)
+    finally:
+        if grown:
+            screen_driver.resize_lines(win, -growth)

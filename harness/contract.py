@@ -58,9 +58,14 @@ from harness.models.usage import UsageRow
 from repository.contract.usage import AccountUsageRepository
 from domain.events import CanonicalEvent, EventPayload
 from terminal.contract import TerminalViewport
-from terminal.models import WindowInfo
+from terminal.models import SESSION_WINDOW_TAG, WindowInfo
 
 TerminalWindows = tuple[WindowInfo, ...]
+
+
+def terminal_window_session(window_info: WindowInfo) -> str | None:
+    """Return the session tag from one harness-visible terminal window."""
+    return window_info.tags.get(SESSION_WINDOW_TAG)
 
 
 class HarnessRawEventSource(Protocol):

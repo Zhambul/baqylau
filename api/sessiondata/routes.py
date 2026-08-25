@@ -132,7 +132,7 @@ def _found(session_data_repository: SessionDataRepository, session_id: SessionId
     return data
 
 
-def _live(terminal_adapter: TerminalAdapter, data: SessionData) -> bool:
+def _live(terminal_adapter: TerminalAdapter, session_data: SessionData) -> bool:
     """Whether a running harness owns a terminal window right now.
 
     A shell tab can outlive its harness after `/exit`. Its existence does not
@@ -141,8 +141,8 @@ def _live(terminal_adapter: TerminalAdapter, data: SessionData) -> bool:
     is attended through.
     """
     return (
-        data.session.state == LifecycleState.RUNNING
-        and terminal_adapter.window_for_session(data.session.session_id) is not None
+        session_data.session.state == LifecycleState.RUNNING
+        and terminal_adapter.window_for_session(session_data.session.session_id) is not None
     )
 
 

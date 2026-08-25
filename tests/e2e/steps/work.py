@@ -265,20 +265,30 @@ def work_completes(
 def work_has_final_answer(
     client: BaqylauClient,
     works: Works,
+    wait_policy: WaitPolicy,
     name: str,
     text: str,
 ) -> None:
     work = works.get(name)
     if work.assignment is not None:
-        assignment = _assignment(client.sessions.snapshot(work.session), work)
-        if assignment.result:
-            assert assignment.result == text, (
-                f"subagent work {name!r} has assignment result "
-                f"{assignment.result!r}, not {text!r}"
-            )
-            return
+        client.sessions.watch(work.session).wait(
+            f"subagent work {name!r} to have final answer {text!r}",
+            lambda snapshot: (
+                True
+                if turn_checks.matches_final_answer(
+                    _assignment(snapshot, work).result,
+                    text,
+                )
+                else None
+            ),
+            timeout=wait_policy.background,
+        )
+        return
     answers = turn_checks.final_answer_texts(client, work.turn)
-    found = [answer for answer in answers if answer == text]
+    found = [
+        answer for answer in answers
+        if turn_checks.matches_final_answer(answer, text)
+    ]
     assert len(found) == 1, (
         f"work {name!r} has {len(found)} final answers equal to {text!r}; "
         f"actual final answers: {answers}"
@@ -301,17 +311,19 @@ def work_has_worker_type(
     expected = _kind(worker_type)
     snapshot = client.sessions.snapshot(work.session)
     actor = snapshot.actor(work.worker.actor_id)
+    request_identity = work.request_turn.actor_id, work.request_turn.turn_id
+    work_identity = work.turn.actor_id, work.turn.turn_id
     assert work.worker.kind == expected
     if expected == WorkerKind.LEAD:
         assert actor.parent_actor_id is None
         assert work.assignment is None
-        assert work.turn == work.request_turn
+        assert work_identity == request_identity
     else:
         assert work.worker.parent_actor_id is not None
         assert actor.parent_actor_id == work.worker.parent_actor_id
         assert work.assignment is not None
         assert work.turn.actor_id == actor.actor_id
-        assert work.turn != work.request_turn
+        assert work_identity != request_identity
 
 
 @then(parsers.parse('work "{name}" has positive context use'))
@@ -474,10 +486,20 @@ def work_releases_lead(
         if assignment.state != "succeeded" or assignment.finished_cursor is None:
             return None
         if snapshot.data.session.harness == "claude_code":
+            assignment_finish = next(
+                (
+                    entry
+                    for entry in snapshot.entries
+                    if entry.cursor == assignment.finished_cursor
+                ),
+                None,
+            )
+            if assignment_finish is None:
+                return None
             has_later_lead_turn = any(
-                entry.cursor > assignment.finished_cursor
-                and entry.actor_id == lead.actor_id
+                entry.actor_id == lead.actor_id
                 and isinstance(entry.body, TurnFinishedBodyResponse)
+                and entry.occurred_at > assignment_finish.occurred_at
                 for entry in snapshot.entries
             )
             if not has_later_lead_turn:
@@ -491,5 +513,5 @@ def work_releases_lead(
     client.sessions.watch(work.session).wait(
         f"work {name!r} to finish its assignment and release the lead",
         released,
-        timeout=wait_policy.background,
+        timeout=wait_policy.turn,
     )

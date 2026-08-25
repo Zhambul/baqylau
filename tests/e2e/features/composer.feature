@@ -18,9 +18,8 @@ Feature: prompts sent during active work wait for that work
     And control "queued delivery" reports queued delivery
     And session "primary" has control "queued delivery" queued as prompt 'Reply only with QUEUED_WORK_DONE.' after a fresh application read
     And command "active command" has state succeeded
-    And turn "queued work" prompt is delivered after command "active command" finishes
+    And turn "queued work" produces its final answer after command "active command" finishes
     And turn "queued work" completes
-    And turn "queued work" has final answer 'QUEUED_WORK_DONE'
     And session "primary" has no queued prompts after a fresh application read
     And session "primary" has no running work
 

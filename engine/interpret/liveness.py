@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import time
-from typing import Literal
 
 from core.process import process_alive, process_is_alive
 from domain.ids import RawEventId
-from harness.contract import HarnessRawEventSource, TerminalWindows
+from harness.contract import (
+    HarnessRawEventSource,
+    TerminalWindows,
+    terminal_window_session,
+)
 from harness.models import (
     LIVENESS_SOURCE_TYPE,
     RESUME_LIVENESS_SOURCE_TYPE,
@@ -15,10 +18,7 @@ from harness.models import (
     Session,
 )
 from repository.mapper.documents import encode_document
-from harness.models.directives import ProcessExit
-from terminal.models import SESSION_WINDOW_TAG
-from terminal.models.values import WindowId as NativeWindowId
-from terminal.ownership import window_hosts_process
+from harness.models.directives import ProcessExit, ProcessExitState
 
 
 class ProcessProbe:
@@ -89,24 +89,23 @@ class SessionLivenessSource(HarnessRawEventSource):
         if after_position in {"exited", "displaced"}:
             return ()
         if self._terminal_was_reassigned():
-            return (self._finish_event("displaced"),)
+            return (self._finish_event(ProcessExitState.DISPLACED),)
         if self.process_probe.alive(
             self.source_identity,
             self.harness_process_id,
             self.plugin.info.cli_process_name,
         ):
             return ()
-        return (self._finish_event("exited"),)
+        return (self._finish_event(ProcessExitState.EXITED),)
 
     def _terminal_was_reassigned(self) -> bool:
         window_id = self.session.terminal_window_id
         if window_id is None:
             return False
-        native_window_id = NativeWindowId(str(window_id))
         for window in self.terminal_windows:
-            if window.window_id != native_window_id:
+            if str(window.window_id) != str(window_id):
                 continue
-            owner = window.tags.get(SESSION_WINDOW_TAG)
+            owner = terminal_window_session(window)
             if not owner or owner == str(self.session.session_id):
                 return False
             return any(
@@ -115,19 +114,21 @@ class SessionLivenessSource(HarnessRawEventSource):
             )
         return False
 
-    def _finish_event(self, state: Literal["exited", "displaced"]) -> RawEvent:
+    def _finish_event(self, process_exit_state: ProcessExitState) -> RawEvent:
         return RawEvent(
             raw_event_id=RawEventId(self.source_identity),
             harness=self.plugin.info.name,
             source_type=LIVENESS_SOURCE_TYPE,
             source_name=f"process:{self.harness_process_id}",
-            source_position=state,
+            source_position=process_exit_state,
             session_id=self.session.session_id,
             actor_id=self.session.lead_actor_id,
             parent_actor_id=None,
             observed_at=time.time(),
             encoding="json",
-            payload=encode_document(ProcessExit(process_id=self.harness_process_id, state=state)),
+            payload=encode_document(
+                ProcessExit(process_id=self.harness_process_id, state=process_exit_state)
+            ),
             source_identity=self.source_identity,
             terminal_window_id=self.session.terminal_window_id,
         )
@@ -156,20 +157,20 @@ class SessionWindowLivenessSource(HarnessRawEventSource):
         if after_position == "exited":
             return ()
         window_id = self.session.terminal_window_id
-        native_window_id = NativeWindowId(str(window_id))
         window = next(
-            (item for item in self.terminal_windows if item.window_id == native_window_id),
+            (item for item in self.terminal_windows if str(item.window_id) == str(window_id)),
             None,
         )
         if window is not None:
-            owner = window.tags.get(SESSION_WINDOW_TAG)
+            owner = terminal_window_session(window)
             if owner == str(self.session.session_id):
                 return ()
-            if not owner and window_hosts_process(
-                window,
-                None,
-                self.plugin.info.cli_process_name,
-            ):
+            # A newly opened terminal exists before the login shell has
+            # necessarily exec'd the harness and before its first hook can tag
+            # the window.  That is a starting run, not a closed one.  Keep
+            # waiting while the window is unassigned; if startup really dies,
+            # terminal metadata drops the exited window on the next scan.
+            if not owner:
                 return ()
         return (
             RawEvent(
@@ -183,7 +184,7 @@ class SessionWindowLivenessSource(HarnessRawEventSource):
                 parent_actor_id=None,
                 observed_at=time.time(),
                 encoding="json",
-                payload=encode_document(ProcessExit(process_id=None, state="exited")),
+                payload=encode_document(ProcessExit(process_id=None, state=ProcessExitState.EXITED)),
                 source_identity=self.source_identity,
                 terminal_window_id=self.session.terminal_window_id,
             ),

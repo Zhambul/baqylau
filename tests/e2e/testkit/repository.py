@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import fcntl
 import os
 import stat
 import subprocess
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -41,8 +44,10 @@ class RepositoryWorkspace:
                 'trust_level = "trusted"\n'
             )
 
-    def trust_for_claude_code(self) -> tuple[ClaudeCodeProjectTrust, ...]:
-        state_file = _default_claude_code_state_file()
+    def trust_for_claude_code(
+        self,
+        state_file: Path,
+    ) -> tuple[ClaudeCodeProjectTrust, ...]:
         granted: list[ClaudeCodeProjectTrust] = []
         try:
             for directory in (self.working_directory, self.repository_root):
@@ -78,45 +83,60 @@ class ClaudeCodeProjectTrust:
         state_file: Path,
         working_directory: str,
     ) -> ClaudeCodeProjectTrust:
-        document = _read_json_object(state_file)
-        projects = document.setdefault("projects", {})
-        if not isinstance(projects, dict):
-            raise AssertionError(f"Claude Code projects are not an object in {state_file}")
-        existed = working_directory in projects
-        previous_value = projects.get(working_directory)
-        previous = dict(previous_value) if isinstance(previous_value, dict) else None
-        trusted = dict(previous or {})
-        trusted.update({
-            "allowedTools": [],
-            "mcpContextUris": [],
-            "mcpServers": {},
-            "enabledMcpjsonServers": [],
-            "disabledMcpjsonServers": [],
-            "hasTrustDialogAccepted": True,
-            "projectOnboardingSeenCount": 0,
-            "hasClaudeMdExternalIncludesApproved": False,
-            "hasClaudeMdExternalIncludesWarningShown": False,
-        })
-        projects[working_directory] = trusted
-        _write_json_object(state_file, document)
+        with _locked_claude_state():
+            document = _read_json_object(state_file)
+            projects = document.setdefault("projects", {})
+            if not isinstance(projects, dict):
+                raise AssertionError(
+                    f"Claude Code projects are not an object in {state_file}"
+                )
+            existed = working_directory in projects
+            previous_value = projects.get(working_directory)
+            previous = (
+                dict(previous_value) if isinstance(previous_value, dict) else None
+            )
+            trusted = dict(previous or {})
+            trusted.update({
+                "allowedTools": [],
+                "mcpContextUris": [],
+                "mcpServers": {},
+                "enabledMcpjsonServers": [],
+                "disabledMcpjsonServers": [],
+                "hasTrustDialogAccepted": True,
+                "projectOnboardingSeenCount": 0,
+                "hasClaudeMdExternalIncludesApproved": False,
+                "hasClaudeMdExternalIncludesWarningShown": False,
+            })
+            projects[working_directory] = trusted
+            _write_json_object(state_file, document)
         return cls(state_file, working_directory, previous, existed)
 
     def close(self) -> None:
-        document = _read_json_object(self.state_file)
-        projects = document.get("projects")
-        if not isinstance(projects, dict):
-            raise AssertionError(
-                f"Claude Code projects are not an object in {self.state_file}"
-            )
-        if self.existed:
-            projects[self.working_directory] = self.previous
-        else:
-            projects.pop(self.working_directory, None)
-        _write_json_object(self.state_file, document)
+        with _locked_claude_state():
+            document = _read_json_object(self.state_file)
+            projects = document.get("projects")
+            if not isinstance(projects, dict):
+                raise AssertionError(
+                    f"Claude Code projects are not an object in {self.state_file}"
+                )
+            if self.existed:
+                projects[self.working_directory] = self.previous
+            else:
+                projects.pop(self.working_directory, None)
+            _write_json_object(self.state_file, document)
 
 
-def _default_claude_code_state_file() -> Path:
-    return Path.home() / ".claude.json"
+@contextmanager
+def _locked_claude_state() -> Iterator[None]:
+    lock_path = Path(tempfile.gettempdir()) / (
+        f"baqylau-e2e-claude-state-{os.getuid()}.lock"
+    )
+    with lock_path.open("a+", encoding="utf-8") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
 
 
 def _read_json_object(path: Path) -> dict[str, Any]:
@@ -147,7 +167,6 @@ def _write_json_object(path: Path, document: dict[str, Any]) -> None:
     finally:
         if temporary_path is not None and temporary_path.exists():
             temporary_path.unlink()
-
 
 def _git(working_directory: Path, *arguments: str) -> None:
     subprocess.run(

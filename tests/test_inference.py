@@ -187,6 +187,25 @@ def test_title_that_violates_the_requested_shape_falls_back() -> None:
     assert [launch.command[0] for launch in terminal.opened_tabs] == ["codex", "claude"]
 
 
+def test_transient_provider_failures_retry_the_preferred_provider() -> None:
+    terminal = InferenceTerminal(
+        (
+            "rate limit exceeded",
+            "model unavailable",
+            '{"title":"Recovered preferred provider title"}',
+        )
+    )
+
+    response = factory(terminal).small().send(ModelPromptRequest("name this"))
+
+    assert response.text == "Recovered preferred provider title"
+    assert [launch.command[0] for launch in terminal.opened_tabs] == [
+        "codex",
+        "claude",
+        "codex",
+    ]
+
+
 def test_each_send_opens_and_closes_a_new_session() -> None:
     terminal = InferenceTerminal(
         (
@@ -212,12 +231,12 @@ def test_a_valid_title_about_rate_limits_is_not_mistaken_for_provider_failure() 
 
 
 def test_timeout_closes_every_attempted_provider_window() -> None:
-    terminal = InferenceTerminal(("", ""), stays_open=True)
+    terminal = InferenceTerminal(("", "", ""), stays_open=True)
 
     with pytest.raises(ModelUnavailableError):
         factory(terminal, timeout=-1).small().send(ModelPromptRequest("name this"))
 
-    assert terminal.closed_tabs == ["model-1", "model-2"]
+    assert terminal.closed_tabs == ["model-1", "model-2", "model-3"]
 
 
 def test_exhausted_known_quotas_do_not_open_any_provider() -> None:

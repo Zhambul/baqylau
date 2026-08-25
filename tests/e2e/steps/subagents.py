@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pytest_bdd import parsers, then, when
 
+from api.sessiondata.models.entry import MessageBodyResponse
 from api.sessiondata.models.session_data import ActorResponse
 from sdk.client import BaqylauClient
 from sdk.state import AssignmentState, SessionSnapshot
@@ -20,6 +21,7 @@ from tests.e2e.testkit.references import (
     Turns,
     Works,
 )
+from tests.e2e.testkit.turns import matches_final_answer
 
 
 def _assignment(snapshot: SessionSnapshot, reference: AssignmentRef) -> AssignmentState:
@@ -190,6 +192,55 @@ def actor_message_goes_from_lead_to_work_worker(
     assert message.session == work.session
     assert message.sender_actor_id == snapshot.lead().actor_id
     assert message.recipient_actor_id == work.worker.actor_id
+
+
+@then(parsers.parse(
+    "follow-up '{text}' is observed by worker of work \"{work_name}\""
+))
+def followup_is_observed_by_work_worker(
+    client: BaqylauClient,
+    works: Works,
+    wait_policy: WaitPolicy,
+    text: str,
+    work_name: str,
+) -> None:
+    """Accept each harness's durable proof that the child received a follow-up.
+
+    Claude exposes SendMessage as a clear actor-to-actor message. Codex keeps
+    collaboration payloads encrypted in its rollout, but exposes the child
+    answer produced by the triggered turn. Both are feed-level evidence tied
+    to the selected child actor, not a guess based on the lead's response.
+    """
+    work = works.get(work_name)
+    lead_actor_id = client.sessions.snapshot(work.session).lead().actor_id
+    answer_after = work.turn.activity_cursor or 0
+
+    def observed(snapshot: SessionSnapshot) -> bool | None:
+        sent = [
+            entry
+            for entry in snapshot.entries
+            if entry.actor_id == lead_actor_id
+            and isinstance(entry.body, MessageBodyResponse)
+            and entry.body.recipient_actor_id == work.worker.actor_id
+            and entry.body.content.text == text
+        ]
+        answered = [
+            entry
+            for entry in snapshot.entries
+            if entry.cursor > answer_after
+            and entry.actor_id == work.worker.actor_id
+            and isinstance(entry.body, MessageBodyResponse)
+            and entry.body.role == "assistant"
+            and entry.body.phase == "end_turn"
+            and matches_final_answer(entry.body.content.text, text)
+        ]
+        return True if sent or answered else None
+
+    client.sessions.watch(work.session).wait(
+        f"worker of work {work_name!r} to observe follow-up {text!r}",
+        observed,
+        timeout=wait_policy.feed,
+    )
 
 
 @then(parsers.parse(

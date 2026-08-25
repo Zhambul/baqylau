@@ -10,7 +10,7 @@ from typing import Protocol
 from domain.ids import WindowId
 
 POLL_SECONDS = 0.1
-STEP_TIMEOUT_SECONDS = 3.0
+STEP_TIMEOUT_SECONDS = 10.0
 ESCAPE_HINT = "esc again to edit previous message"
 TRANSCRIPT_HEADER = "/ T R A N S C R I P T /"
 TRANSCRIPT_FOOTER = "enter to edit message"

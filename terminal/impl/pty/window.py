@@ -24,15 +24,18 @@ import struct
 import subprocess
 import termios
 import threading
+import time
 from dataclasses import dataclass, field
 
+import psutil
 import pyte
 
 from terminal.models.values import WindowId
 
 COLUMNS = 200
-LINES = 24
+LINES = 40
 CLOSE_TIMEOUT_SECONDS = 10.0
+DESCENDANT_CLOSE_TIMEOUT_SECONDS = 2.0
 READ_SIZE = 65536
 
 
@@ -47,9 +50,11 @@ class PtyWindow:
     stream: pyte.ByteStream
     command: tuple[str, ...]
     tags: dict[str, str] = field(default_factory=dict)
+    descendant_identities: dict[int, float] = field(default_factory=dict)
     # The emulator is fed from the drain thread and read from the caller's, and
     # pyte keeps a mutable grid: a read mid-feed would see half a repaint.
-    lock: threading.Lock = field(default_factory=threading.Lock)
+    lock: threading.Condition = field(default_factory=threading.Condition)
+    revision: int = 0
 
     def display(self) -> str:
         with self.lock:
@@ -62,6 +67,17 @@ class PtyWindow:
             return True
         except OSError:
             return False
+
+    def wait_for_screen_change(self, after: int, timeout: float) -> bool:
+        """Wait until the child has processed input and painted a response."""
+        deadline = time.monotonic() + timeout
+        with self.lock:
+            while self.revision <= after:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                self.lock.wait(remaining)
+            return True
 
     def resize(self, columns: int, lines: int) -> bool:
         try:
@@ -76,9 +92,46 @@ class PtyWindow:
             self.screen.resize(lines, columns)
         return True
 
+    def observe_descendants(self) -> tuple[psutil.Process, ...]:
+        """Remember descendants while ancestry still connects them to the window."""
+        try:
+            found = tuple(psutil.Process(self.process.pid).children(recursive=True))
+        except (psutil.Error, OSError, SystemError):
+            return ()
+        identities: dict[int, float] = {}
+        for child in found:
+            try:
+                identities[child.pid] = child.create_time()
+            except (psutil.Error, OSError, SystemError):
+                continue
+        with self.lock:
+            self.descendant_identities.update(identities)
+        return found
+
+    def owned_descendants(self) -> tuple[psutil.Process, ...]:
+        """Live descendants previously observed, even after they are reparented."""
+        observed = {child.pid: child for child in self.observe_descendants()}
+        with self.lock:
+            identities = tuple(self.descendant_identities.items())
+        for pid, created_at in identities:
+            if pid in observed:
+                continue
+            try:
+                candidate = psutil.Process(pid)
+                if candidate.create_time() == created_at:
+                    observed[pid] = candidate
+            except (psutil.Error, OSError, SystemError):
+                continue
+        return tuple(observed.values())
+
     def close(self) -> bool:
-        """Signal the whole process group: a login shell wrapping a CLI is two
-        processes, and killing only the shell orphans the program."""
+        """Close the wrapper and descendants, including escaped tool groups.
+
+        The login shell and CLI share our process group, but a harness can launch a
+        tool in a new session of its own. Snapshot the tree before signalling
+        the root group, then explicitly reap any descendants that survived it.
+        """
+        descendants = list(self.owned_descendants())
         if self.process.poll() is None:
             try:
                 os.killpg(os.getpgid(self.process.pid), signal.SIGTERM)
@@ -88,6 +141,23 @@ class PtyWindow:
                 self.process.wait(timeout=CLOSE_TIMEOUT_SECONDS)
             except subprocess.TimeoutExpired:
                 self.process.kill()
+        for child in reversed(descendants):
+            try:
+                if child.is_running():
+                    child.terminate()
+            except (psutil.Error, OSError, SystemError):
+                pass
+        _gone, alive = psutil.wait_procs(
+            descendants,
+            timeout=DESCENDANT_CLOSE_TIMEOUT_SECONDS,
+        )
+        for child in alive:
+            try:
+                child.kill()
+            except (psutil.Error, OSError, SystemError):
+                pass
+        if alive:
+            psutil.wait_procs(alive, timeout=DESCENDANT_CLOSE_TIMEOUT_SECONDS)
         try:
             os.close(self.descriptor)
         except OSError:
@@ -144,3 +214,5 @@ def _drain(pty_window: PtyWindow) -> None:
             return
         with pty_window.lock:
             pty_window.stream.feed(chunk)
+            pty_window.revision += 1
+            pty_window.lock.notify_all()

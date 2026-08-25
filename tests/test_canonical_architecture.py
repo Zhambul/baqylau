@@ -755,7 +755,11 @@ def test_harness_adapters_never_use_raw_dictionaries_or_jsonvalue():
     """
     typed_registry_allowlist = {
         "harness/impl/claude_code/catalog.py": {"COMMAND_PROMPT_FLOORS"},
-        "harness/impl/claude_code/canonical/messages.py": {"BACKGROUND_OUTCOMES"},
+        "harness/impl/claude_code/canonical/messages.py": {
+            "BACKGROUND_OUTCOMES",
+            "notifications_by_actor",
+        },
+        "harness/impl/claude_code/canonical/sources.py": {"notifications_by_actor"},
         "harness/impl/claude_code/canonical/toolcalls.py": {
             "TOOL_KINDS",
             "FILE_ACTIONS",
@@ -795,10 +799,12 @@ def test_harness_adapters_never_use_raw_dictionaries_or_jsonvalue():
             "_plan_tasks",
             "current",
             "_goals",
-            "_working_directories",
-            "_mcp_tool_outcomes",
-            "_sources_by_session",
-        },
+                "_working_directories",
+                "_active_turns",
+                "_mcp_tool_outcomes",
+                "_sources_by_session",
+                "result_calls",
+            },
         "harness/impl/codex/controls/controller.py": {"HANDLERS"},
         "harness/impl/codex/continuity.py": {
             "_pending_by_window",
@@ -1062,6 +1068,7 @@ FILE_ACCESS_ALLOWLIST = {
     "harness/impl/codex/commands.py": "your $CODEX_HOME/prompts",
     "harness/impl/codex/controls/controller.py": "reads the rollout tail to confirm an interrupt landed",
     "harness/impl/__init__.py": "plugin discovery globs its own directory",
+    "harness/services/usage.py": "a run-scoped cross-process usage cache and its lock",
     # --- ours, and the one place we write bytes rather than rows ---------------
     "api/application/files.py": "stages an attachment; the harness is handed an @path",
     "engine/interpret/output_source.py": "reads a followed output file, and unlinks the tee we made",

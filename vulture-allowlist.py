@@ -71,6 +71,12 @@ _.fail
 _.model_config
 clientInfo  # codex usage JSON-RPC request field, read by pydantic serialization
 jsonrpc     # codex usage JSON-RPC envelope field, read by pydantic serialization
+account_name  # Claude status-line field read by pydantic serialization
+
+# FileMarker is compared as one dataclass value. Dataclass equality reads these
+# generated fields, which static name analysis cannot see.
+inode        # harness/file_tail.py FileMarker
+modified_at  # harness/file_tail.py FileMarker
 
 # --- FOREIGN payload fields validated but never read -----------------------
 # harness/impl/codex/canonical/records.py / usage.py declare codex's OWN JSON
@@ -134,6 +140,9 @@ cli_version                     # records.py SessionMetaPayload
 model_provider                  # records.py SessionMetaPayload
 base_instructions               # records.py SessionMetaPayload
 history_mode                    # records.py SessionMetaPayload
+history_base                    # records.py SessionMetaPayload
+end_ordinal_exclusive           # records.py SessionMetaHistoryBase
+end_byte_offset                 # records.py SessionMetaHistoryBase
 git                             # records.py SessionMetaPayload
 dynamic_tools                   # records.py SessionMetaPayload
 agent_nickname                  # records.py SessionMetaPayload / ThreadSpawn

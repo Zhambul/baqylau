@@ -17,7 +17,10 @@ import json
 
 import _http
 
-TIMEOUT_SECONDS = 2.0
+# Hooks are local, but a busy workstation can briefly deschedule both the
+# harness client and its daemon while many sessions start together. Keep the
+# bound finite without dropping canonical events during that startup burst.
+TIMEOUT_SECONDS = 5.0
 CONTENT_TYPE_JSON = "application/json"
 
 

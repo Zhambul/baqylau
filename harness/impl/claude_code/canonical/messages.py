@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import hashlib
 
 import os
 
@@ -83,6 +84,20 @@ BACKGROUND_OUTCOMES: Mapping[str, Outcome] = {
     "killed": Outcome.CANCELLED,
     "stopped": Outcome.CANCELLED,
 }
+
+
+def _assignment_finish_phase(status: str, result: str | None) -> str:
+    """Identify one reported revision of a resumable agent's result.
+
+    Claude Code can report the same agent as completed more than once when it
+    stops, receives an automatic background-job notification, and resumes. Its
+    queue and user copies of one report must converge, while a later result
+    must remain a newer fact instead of colliding with the first one.
+    """
+    revision = hashlib.sha256(
+        f"{status}\0{result or ''}".encode("utf-8")
+    ).hexdigest()
+    return f"finished:{revision}"
 
 
 def background_outcome(status: str | None) -> Outcome | None:
@@ -531,7 +546,7 @@ def translate_transcript(
                 raw_event,
                 "actor_assignment",
                 str(assignment_id),
-                "finished",
+                _assignment_finish_phase(status, result),
                 payload,
                 occurred_at=occurred_at,
             )

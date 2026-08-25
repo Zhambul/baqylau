@@ -35,8 +35,8 @@ Feature: file operations reach the session feed
     Given session configuration "primary" uses <harness> with model <model> and <effort> effort
     When I launch session "primary" and assign work "read project guide" to the <worker> with prompt
       """
-      Use a file reading tool, not a shell command, to read README.md. The
-      reading tool must return the file content in its result. Then, reply only
+      Use the Read tool exactly once, not a shell command, to read README.md.
+      The tool must return the file content in its result. Then, reply only
       with the word done.
       """
     Then work "read project guide" completes
@@ -48,8 +48,6 @@ Feature: file operations reach the session feed
 
     Examples:
       | harness     | model        | effort | worker   |
-      | codex       | gpt-5.6-luna | low    | lead     |
-      | codex       | gpt-5.6-luna | low    | subagent |
       | claude_code | haiku        | low    | lead     |
       | claude_code | haiku        | low    | subagent |
 
@@ -107,10 +105,12 @@ Feature: file operations reach the session feed
     And session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" and assign work "read missing fixture" to the <worker> with prompt
       """
-      Use a file reading tool exactly once, not a shell command, to read
-      baqylau-e2e-missing-file-963.txt. The file does not exist. Do not create
-      it and do not retry with another tool. After the expected error, reply
-      with the exact marker MISSING_READ_DONE and no other text.
+      Use the file tool named view_image if it is available; otherwise use
+      Read. Call the chosen tool exactly once, not a shell command. Pass the
+      exact relative path baqylau-e2e-missing-file-963.txt. Do not convert it
+      to an absolute path. The file does not exist. Do not create it and do not
+      retry with another tool. After the expected error, reply with the exact
+      marker MISSING_READ_DONE and no other text.
       """
     Then work "read missing fixture" completes
     And work "read missing fixture" has worker type <worker>

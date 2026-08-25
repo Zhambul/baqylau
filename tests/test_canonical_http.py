@@ -11,6 +11,7 @@ import socket
 import sqlite3
 import threading
 import time
+from types import SimpleNamespace
 from urllib.parse import quote
 
 from fastapi.routing import APIRoute
@@ -674,6 +675,7 @@ def test_a_broken_audit_never_takes_down_the_gesture(monkeypatch):
 
     service = object.__new__(services.HarnessControlService)
     service.audit = BrokenAudit()
+    service.sessions = SimpleNamespace(find=lambda _session_id: None)
     monkeypatch.setattr(service, "_execute", lambda r: ControlResult(r.request_id, "acknowledged"))
 
     outcome = service.select_model(SelectModel(SESSION_ID, "request-one", model="x"))

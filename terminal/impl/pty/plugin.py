@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 import os
-import time
+import threading
 from itertools import count
 from uuid import uuid4
 
@@ -90,7 +90,7 @@ NO_ANSI = "the pty terminal reads plain screens only"
 # for free; a pseudo-terminal has no window manager and no such convention, so
 # this establishes one.
 WINDOW_ID_VARIABLE = "BAQYLAU_PTY_WINDOW_ID"
-SUBMIT_ENTER_DELAY_SECONDS = 0.15
+SUBMIT_PAINT_TIMEOUT_SECONDS = 2.0
 
 
 class PtyWindows:
@@ -105,6 +105,7 @@ class PtyWindows:
     def __init__(self, environment: dict[str, str] | None = None) -> None:
         self.environment = dict(os.environ if environment is None else environment)
         self.windows: dict[WindowId, PtyWindow] = {}
+        self.lock = threading.RLock()
         # Session facts are durable, but this in-memory terminal is not. Keep
         # its window identities unique after an application restart so a new
         # native run cannot deduplicate against a finished run that used the
@@ -118,26 +119,37 @@ class PtyWindows:
         working_directory: str,
         environment: tuple[tuple[str, str], ...],
     ) -> PtyWindow | None:
-        window_id = WindowId(f"{self._namespace}:{next(self._ids)}")
-        child_environment = dict(self.environment)
-        child_environment.update({str(name): str(value) for name, value in environment})
+        with self.lock:
+            window_id = WindowId(f"{self._namespace}:{next(self._ids)}")
+            child_environment = dict(self.environment)
+            child_environment.update({str(name): str(value) for name, value in environment})
         # Last, so the window's own identity cannot be overridden by a caller's
         # environment: this is the one value the terminal knows and the program
         # cannot be told by anyone else.
         child_environment[WINDOW_ID_VARIABLE] = window_id
         window = open_window(window_id, tuple(command), working_directory, child_environment)
         if window is not None:
-            self.windows[window_id] = window
+            with self.lock:
+                self.windows[window_id] = window
         return window
 
     def get(self, window_id: WindowId) -> PtyWindow | None:
-        return self.windows.get(window_id)
+        with self.lock:
+            return self.windows.get(window_id)
 
     def close(self, window_id: WindowId) -> bool:
-        window = self.windows.pop(window_id, None)
+        with self.lock:
+            window = self.windows.pop(window_id, None)
         if window is None:
             return False
         return window.close()
+
+    def close_all(self) -> None:
+        """Close every owned process group at the application boundary."""
+        with self.lock:
+            window_ids = tuple(self.windows)
+        for window_id in window_ids:
+            self.close(window_id)
 
 
 class PtyTabs(TerminalTabs):
@@ -182,15 +194,16 @@ class PtyPanes(TerminalPanes):
     def resize_pane(self, pane_resize_request: PaneResizeRequest) -> PaneResizeResponse:
         # The one pane operation a pty really has: a window size is a property
         # of the tty, and a program watching SIGWINCH reflows for it.
-        window = self.pty_windows.get(pane_resize_request.window_id)
-        if window is None:
-            return PaneResizeResponse(False, NO_WINDOW)
-        columns, lines = window.screen.columns, window.screen.lines
-        if pane_resize_request.axis == SplitAxis.HORIZONTAL:
-            columns = max(1, columns + pane_resize_request.cells)
-        else:
-            lines = max(1, lines + pane_resize_request.cells)
-        resized = window.resize(columns, lines)
+        with self.pty_windows.lock:
+            window = self.pty_windows.get(pane_resize_request.window_id)
+            if window is None:
+                return PaneResizeResponse(False, NO_WINDOW)
+            columns, lines = window.screen.columns, window.screen.lines
+            if pane_resize_request.axis == SplitAxis.HORIZONTAL:
+                columns = max(1, columns + pane_resize_request.cells)
+            else:
+                lines = max(1, lines + pane_resize_request.cells)
+            resized = window.resize(columns, lines)
         return PaneResizeResponse(resized, None if resized else "pty resize failed")
 
     def focus_window(self, window_focus_request: WindowFocusRequest) -> WindowFocusResponse:
@@ -210,33 +223,37 @@ class PtyMetadata(TerminalMetadata):
         windows a user could be looking at. It is still readable by id until it
         is closed, so the screen a program died on survives for whoever needs to
         see why."""
-        return tuple(
-            WindowInfo(
-                window_id=window.window_id,
-                tab_id=TabId(str(window.window_id)),
-                tags=dict(window.tags),
-                columns=window.screen.columns,
-                lines=window.screen.lines,
-                is_first_in_tab=True,
-                tab_is_active=True,
-                # Nothing here holds keyboard focus: there is no keyboard and no
-                # user. Reporting focus would make the mirror believe a window
-                # the user is looking at is on screen.
-                tab_is_focused=False,
-                is_active_in_tab=True,
-                processes=_window_processes(window),
+        with self.pty_windows.lock:
+            return tuple(
+                WindowInfo(
+                    window_id=window.window_id,
+                    tab_id=TabId(str(window.window_id)),
+                    tags=dict(window.tags),
+                    columns=window.screen.columns,
+                    lines=window.screen.lines,
+                    is_first_in_tab=True,
+                    tab_is_active=True,
+                    # Nothing here holds keyboard focus: there is no keyboard and no
+                    # user. Reporting focus would make the mirror believe a window
+                    # the user is looking at is on screen.
+                    tab_is_focused=False,
+                    is_active_in_tab=True,
+                    processes=_window_processes(window),
+                )
+                for window in self.pty_windows.windows.values()
+                if window.process.poll() is None
             )
-            for window in self.pty_windows.windows.values()
-            if window.process.poll() is None
-        )
 
     def tag_window(self, window_tag_request: WindowTagRequest) -> WindowTagResponse:
-        window = self.pty_windows.get(window_tag_request.window_id)
-        if window is None:
-            return WindowTagResponse(False, NO_WINDOW)
-        # Stored IN the window, so a tag has exactly the window's lifetime —
-        # the property the contract asks of this operation.
-        window.tags.update({str(name): str(value) for name, value in window_tag_request.tags.items()})
+        with self.pty_windows.lock:
+            window = self.pty_windows.get(window_tag_request.window_id)
+            if window is None:
+                return WindowTagResponse(False, NO_WINDOW)
+            # Stored IN the window, so a tag has exactly the window's lifetime —
+            # the property the contract asks of this operation.
+            window.tags.update(
+                {str(name): str(value) for name, value in window_tag_request.tags.items()}
+            )
         return WindowTagResponse(True)
 
     def current_window_id(self) -> WindowId | None:
@@ -244,20 +261,25 @@ class PtyMetadata(TerminalMetadata):
         return None
 
 
-def _window_processes(window: PtyWindow) -> tuple[WindowProcess, ...]:
+def _window_processes(pty_window: PtyWindow) -> tuple[WindowProcess, ...]:
     """The wrapper and every live descendant hosted by this PTY window."""
     try:
-        root = psutil.Process(window.process.pid)
-        process_tree = (root, *root.children(recursive=True))
-    except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess):
-        return (WindowProcess(window.process.pid, window.command),)
+        root = psutil.Process(pty_window.process.pid)
+        descendants = (
+            pty_window.observe_descendants()
+            if isinstance(pty_window, PtyWindow)
+            else tuple(root.children(recursive=True))
+        )
+        process_tree = (root, *descendants)
+    except (psutil.Error, OSError, SystemError):
+        return (WindowProcess(pty_window.process.pid, pty_window.command),)
     reported: list[WindowProcess] = []
     for process in process_tree:
         try:
             reported.append(WindowProcess(process.pid, tuple(process.cmdline())))
-        except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess):
+        except (psutil.Error, OSError, SystemError):
             continue
-    return tuple(reported) or (WindowProcess(window.process.pid, window.command),)
+    return tuple(reported) or (WindowProcess(pty_window.process.pid, pty_window.command),)
 
 
 class PtyInput(TerminalInput):
@@ -265,30 +287,36 @@ class PtyInput(TerminalInput):
         self.pty_windows = pty_windows
 
     def submit_text(self, text_submit_request: TextSubmitRequest) -> TextSubmitResponse:
-        window = self.pty_windows.get(text_submit_request.window_id)
-        if window is None:
-            return TextSubmitResponse(False, NO_WINDOW)
-        payload = text_submit_request.text.encode("utf-8")
-        if text_submit_request.mode == TextSubmitMode.PASTE:
-            payload = keys.BRACKETED_PASTE_START + payload + keys.BRACKETED_PASTE_END
-        # The Enter stays a separate keystroke, so it submits rather than
-        # becoming a newline in the draft (TextSubmitRequest). The delay also
-        # keeps the operating system from coalescing both writes into one read,
-        # which a chunk-based TUI can interpret as one paste with a newline.
-        delivered = window.write(payload)
-        if delivered:
-            time.sleep(SUBMIT_ENTER_DELAY_SECONDS)
-            delivered = window.write(keys.NAMED_KEYS["enter"])
+        with self.pty_windows.lock:
+            window = self.pty_windows.get(text_submit_request.window_id)
+            if window is None:
+                return TextSubmitResponse(False, NO_WINDOW)
+            payload = text_submit_request.text.encode("utf-8")
+            if text_submit_request.mode == TextSubmitMode.PASTE:
+                payload = keys.BRACKETED_PASTE_START + payload + keys.BRACKETED_PASTE_END
+            # The Enter stays a separate keystroke, so it submits rather than
+            # becoming a newline in the draft (TextSubmitRequest). The delay also
+            # keeps the operating system from coalescing both writes into one read,
+            # which a chunk-based TUI can interpret as one paste with a newline.
+            revision = window.revision
+            delivered = window.write(payload)
+            if delivered:
+                # Wait until the TUI has consumed the text. A fixed
+                # sleep can expire while the child is descheduled and lets the
+                # OS coalesce text + Enter into one terminal read.
+                window.wait_for_screen_change(revision, SUBMIT_PAINT_TIMEOUT_SECONDS)
+                delivered = window.write(keys.NAMED_KEYS["enter"])
         return TextSubmitResponse(delivered, None if delivered else "pty input failed")
 
     def send_key(self, key_send_request: KeySendRequest) -> KeySendResponse:
-        window = self.pty_windows.get(key_send_request.window_id)
-        if window is None:
-            return KeySendResponse(False, NO_WINDOW)
-        payload = keys.chord(key_send_request.key)
-        if payload is None:
-            return KeySendResponse(False, f"the pty terminal cannot send {key_send_request.key!r}")
-        delivered = window.write(payload)
+        with self.pty_windows.lock:
+            window = self.pty_windows.get(key_send_request.window_id)
+            if window is None:
+                return KeySendResponse(False, NO_WINDOW)
+            payload = keys.chord(key_send_request.key)
+            if payload is None:
+                return KeySendResponse(False, f"the pty terminal cannot send {key_send_request.key!r}")
+            delivered = window.write(payload)
         return KeySendResponse(delivered, None if delivered else "pty key input failed")
 
 
@@ -299,10 +327,11 @@ class PtyViewport(TerminalViewport):
     def read_screen(self, screen_read_request: ScreenReadRequest) -> ScreenReadResponse:
         if screen_read_request.ansi:
             return ScreenReadResponse(False, None, NO_ANSI)
-        window = self.pty_windows.get(screen_read_request.window_id)
-        if window is None:
-            return ScreenReadResponse(False, None, NO_WINDOW)
-        return ScreenReadResponse(True, window.display())
+        with self.pty_windows.lock:
+            window = self.pty_windows.get(screen_read_request.window_id)
+            if window is None:
+                return ScreenReadResponse(False, None, NO_WINDOW)
+            return ScreenReadResponse(True, window.display())
 
 
 def pty_plugin(pty_windows: PtyWindows | None = None) -> TerminalPlugin:
@@ -314,4 +343,5 @@ def pty_plugin(pty_windows: PtyWindows | None = None) -> TerminalPlugin:
         metadata=PtyMetadata(pty_windows),
         input=PtyInput(pty_windows),
         viewport=PtyViewport(pty_windows),
+        close=pty_windows.close_all,
     )

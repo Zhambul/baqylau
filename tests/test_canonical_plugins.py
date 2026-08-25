@@ -1850,6 +1850,43 @@ def test_claude_clear_input_removes_each_restored_logical_line():
     ]
 
 
+def test_claude_clear_input_waits_for_delayed_screen_updates():
+    class DelayedClearDriver:
+        terminal = None
+
+        def __init__(self):
+            self.lines = ["restored first line", "restored second line"]
+            self.pending_clear = False
+            self.keys = []
+
+        def get_text(self, _window, extent="screen", ansi=False):
+            del extent, ansi
+            if self.pending_clear:
+                self.lines.pop()
+                self.pending_clear = False
+            rule = "─" * 20
+            content = "\n".join(self.lines)
+            return f"{rule}\n❯\u00a0{content}\n{rule}"
+
+        def send_key(self, _window, *pressed):
+            self.keys.extend(pressed)
+            if pressed == ("ctrl+k",) and self.lines:
+                self.pending_clear = True
+            return True
+
+    driver = DelayedClearDriver()
+
+    killed = claude_tui.clear_input(
+        driver,
+        "window-one",
+        "restored first line\nrestored second line",
+        sleep=lambda _seconds: None,
+    )
+
+    assert killed == 2
+    assert driver.lines == []
+
+
 def test_claude_foreground_post_tool_records_no_directive():
     """The foreground following ends with the committed operation.finished fact,
     not with a directive from the PostToolUse delivery."""
@@ -3752,7 +3789,7 @@ def test_claude_active_send_is_not_called_queued_without_native_confirmation(
 
     assert outcome.status == "indeterminate"
     assert outcome.queued is False
-    assert outcome.reason == "Claude Code did not confirm the queued message"
+    assert outcome.reason == "Claude Code did not confirm the message"
 
 
 def test_claude_native_queue_state_changes_to_sent_when_the_queue_drains(tmp_path):
@@ -3781,21 +3818,60 @@ def test_claude_native_queue_state_changes_to_sent_when_the_queue_drains(tmp_pat
     ) == claude_controller.NATIVE_TEXT_SENT
 
 
+def test_claude_native_slash_command_confirms_text_delivery(tmp_path):
+    source = tmp_path / "session.jsonl"
+    source.write_text("prefix\n", encoding="utf-8")
+    position = source.stat().st_size
+    with source.open("a", encoding="utf-8") as transcript_file:
+        transcript_file.write(
+            json.dumps(
+                {
+                    "type": "system",
+                    "subtype": "local_command",
+                    "content": (
+                        "<command-name>/rename</command-name>"
+                        "<command-message>rename</command-message>"
+                        "<command-args>Native E2E 738</command-args>"
+                    ),
+                }
+            )
+            + "\n"
+        )
+
+    assert claude_controller._native_text_state(
+        str(source),
+        position,
+        "/rename Native E2E 738",
+    ) == claude_controller.NATIVE_TEXT_SENT
+
+
 def test_claude_question_discussion_is_delivered_after_declining(monkeypatch, tmp_path):
     calls = []
+    source = tmp_path / "session.jsonl"
+    source.write_text("", encoding="utf-8")
     monkeypatch.setattr(
         "harness.impl.claude_code.controls.controller.askdialog.drive",
         lambda _terminal, _window, _prompts, _answers, *, chat: calls.append(("dialog", chat)),
     )
+
+    def submit_discussion(_terminal, _window, text, *, ensure_submit=False):
+        del ensure_submit
+        calls.append(("discussion", text))
+        source.write_text(
+            json.dumps({"type": "user", "message": {"content": text}}) + "\n",
+            encoding="utf-8",
+        )
+        return True, False
+
     monkeypatch.setattr(
         "harness.impl.claude_code.controls.controller.tui.type_command",
-        lambda _terminal, _window, text: calls.append(("discussion", text)) or (True, False),
+        submit_discussion,
     )
     application = ProviderGraph()
     session = Session(
         SessionId("session-one"),
         ActorId("session-one:lead"),
-        "/work/session.jsonl",
+        str(source),
         "/work",
     )
     request = AnswerQuestion(
@@ -3821,20 +3897,53 @@ def test_claude_question_discussion_is_delivered_after_declining(monkeypatch, tm
 
 def test_claude_attachment_delivery_keeps_the_prompt_visible_for_verification(
     monkeypatch,
+    tmp_path,
 ):
     delivered = []
+    source = tmp_path / "session.jsonl"
+    source.write_text("", encoding="utf-8")
+
+    def submit_attachment(_terminal, _window, text, *, ensure_submit=False):
+        delivered.append((text, ensure_submit))
+        source.write_text(
+            json.dumps(
+                {
+                    "type": "user",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    '[Image #1]Image attachment "marker.png":\n'
+                                    "Inspect the attached image."
+                                ),
+                            },
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "image/png",
+                                    "data": "AA==",
+                                },
+                            },
+                        ]
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return True, False
+
     monkeypatch.setattr(
         "harness.impl.claude_code.controls.controller.tui.type_command",
-        lambda _terminal, _window, text, *, ensure_submit=False: (
-            delivered.append((text, ensure_submit)) or True,
-            False,
-        ),
+        submit_attachment,
     )
     application = ProviderGraph()
     session = Session(
         SessionId("session-one"),
         ActorId("session-one:lead"),
-        "/work/session.jsonl",
+        str(source),
         "/work",
     )
     request = SendText(
@@ -3903,9 +4012,25 @@ def test_codex_question_discussion_declines_then_sends_a_new_prompt(monkeypatch,
 
 
 def test_claude_model_control_resolves_the_native_confirmation(monkeypatch, tmp_path):
+    transcript_path = tmp_path / "session.jsonl"
+    transcript_path.write_text("{}\n")
+
+    def submit_model(_terminal, _window, _text):
+        with transcript_path.open("a") as target:
+            target.write(json.dumps({
+                "type": "user",
+                "message": {
+                    "content": (
+                        "<command-name>/model</command-name>"
+                        "<command-args>opus</command-args>"
+                    ),
+                },
+            }) + "\n")
+        return True, False
+
     monkeypatch.setattr(
         "harness.impl.claude_code.controls.controller.tui.type_command",
-        lambda _terminal, _window, _text: (True, False),
+        submit_model,
     )
     monkeypatch.setattr(
         "harness.impl.claude_code.controls.controller.confirmdialog.confirm",
@@ -3915,7 +4040,7 @@ def test_claude_model_control_resolves_the_native_confirmation(monkeypatch, tmp_
     session = Session(
         SessionId("session-one"),
         ActorId("session-one:lead"),
-        "/work/session.jsonl",
+        str(transcript_path),
         "/work",
     )
     request = SelectModel(session.session_id, "request-one", "opus")
@@ -4265,25 +4390,38 @@ def test_codex_backtrack_can_verify_a_plain_pty_transcript():
 def test_codex_composer_clears_the_complete_restored_draft():
     class ComposerDriver:
         def __init__(self) -> None:
-            self.screen = "› Reply only with the word first.\n  gpt-5.6-luna low"
+            self.lines = ["old prompt", "continued prompt", "final prompt"]
             self.keys: list[str] = []
 
         def get_text(self, _window, extent="screen", ansi=False):
             del extent, ansi
-            return self.screen
+            if not self.lines or self.lines == [""]:
+                return f"› {composer.EMPTY_PROMPT}\n  gpt-5.6-luna low"
+            return "› " + "\n".join(self.lines) + "\n  gpt-5.6-luna low"
 
         def send_key(self, _window, *pressed):
             self.keys.extend(pressed)
-            if pressed == ("ctrl+c",):
-                self.screen = f"› {composer.EMPTY_PROMPT}\n  gpt-5.6-luna low"
+            if pressed == ("ctrl+u", "ctrl+k"):
+                self.lines[-1] = ""
+            elif pressed == ("backspace",):
+                self.lines.pop()
             return True
 
     driver = ComposerDriver()
 
     composer.clear(driver, "window-one", sleep=lambda _seconds: None)
 
-    assert driver.keys == ["ctrl+c"]
-    assert composer.empty(driver.screen)
+    assert driver.keys == [
+        "ctrl+u",
+        "ctrl+k",
+        "backspace",
+        "ctrl+u",
+        "ctrl+k",
+        "backspace",
+        "ctrl+u",
+        "ctrl+k",
+    ]
+    assert composer.empty(driver.get_text("window-one"))
 
 
 class _RecordingTitles:
@@ -5027,6 +5165,55 @@ def test_claude_task_notifications_are_counted_once_though_they_arrive_twice():
 
     assert enqueued.canonical_events == ()
     assert enqueued.decision == "ignored_nonsemantic"
+
+
+def test_claude_resumed_agent_keeps_a_later_queue_only_result():
+    """An async agent may stop once, resume on its background notification,
+    and stop again. Claude Code writes only the later report to the queue, so
+    both revisions need distinct identities while duplicate copies converge."""
+    translator = ClaudeCanonicalTranslator()
+
+    def notification(event_id, result, record_type="queue-operation"):
+        content = (
+            "<task-notification><task-id>child-one</task-id>"
+            "<tool-use-id>agent-tool-one</tool-use-id>"
+            "<status>completed</status>"
+            '<summary>Agent "background worker" finished</summary>'
+            f"<result>{result}</result></task-notification>"
+        )
+        document = (
+            {"type": "queue-operation", "operation": "enqueue", "content": content}
+            if record_type == "queue-operation"
+            else {
+                "type": "user",
+                "uuid": event_id,
+                "origin": {"kind": "task-notification"},
+                "message": {"content": content},
+            }
+        )
+        return translator.translate(raw_event(
+            document,
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id=event_id,
+        ))
+
+    waiting = payloads(
+        notification("agent-waiting", "Waiting for background job"),
+        ActorAssignmentFinished,
+    )[0]
+    waiting_copy = payloads(
+        notification("agent-waiting-copy", "Waiting for background job", "user"),
+        ActorAssignmentFinished,
+    )[0]
+    completed = payloads(
+        notification("agent-completed", "CHILD_JOB_DONE"),
+        ActorAssignmentFinished,
+    )[0]
+
+    assert waiting.event_id == waiting_copy.event_id
+    assert completed.event_id != waiting.event_id
+    assert completed.payload.result.text == "CHILD_JOB_DONE"
 
 
 def test_claude_command_backgrounded_mid_run_says_so_before_it_says_finished():
@@ -6305,6 +6492,23 @@ def test_codex_current_app_server_rate_limits_are_strictly_typed_and_normalized(
     assert normalized.windows[0].duration_minutes == 10080
 
 
+def test_codex_usage_retries_a_transient_app_server_miss(monkeypatch):
+    expected = codex_usage.NormalizedRateLimits(plan="available", windows=())
+    responses = iter((None, object()))
+    now = iter((100.0, 103.0))
+    monkeypatch.setattr(codex_usage, "_cached_rate_limits", None)
+    monkeypatch.setattr(codex_usage, "request_rate_limits", lambda: next(responses))
+    monkeypatch.setattr(
+        codex_usage,
+        "normalize_rate_limits",
+        lambda response: None if response is None else expected,
+    )
+    monkeypatch.setattr(codex_usage.time, "time", lambda: next(now))
+
+    assert codex_usage.read_rate_limits() is None
+    assert codex_usage.read_rate_limits() == expected
+
+
 def test_claude_unmapped_tool_stays_ignored_not_failed():
     """The distinction the owner's decision draws, on THIS package's own
     "unknown kind" dispatch (toolcalls.TOOL_KINDS, not records.py): an
@@ -6913,6 +7117,82 @@ def test_codex_write_stdin_requires_a_known_process_session():
                 raw_event_id="stdin",
             )
         )
+
+
+def test_codex_late_write_stdin_does_not_reopen_a_finished_command():
+    translator = CodexCanonicalTranslator()
+    translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "exec",
+                    "call_id": "command-one",
+                    "input": 'tools.exec_command({"cmd":"read value"})',
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="command",
+        )
+    )
+    translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "call_id": "command-one",
+                    "output": json.dumps({"session_id": 77, "output": ""}),
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="command-output",
+        )
+    )
+    translator.translate(
+        raw_event(
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "item_completed",
+                    "item": {
+                        "type": "CommandExecution",
+                        "id": "execution-one",
+                        "process_id": 77,
+                        "status": "completed",
+                        "aggregated_output": "received:yes\n",
+                        "exit_code": 0,
+                    },
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="command-finished",
+        )
+    )
+
+    late = translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "exec",
+                    "call_id": "input-one",
+                    "input": 'tools.write_stdin({session_id:77,chars:"yes\\n"})',
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="stdin",
+        )
+    )
+
+    assert late.decision == "ignored_nonsemantic"
+    assert late.canonical_events == ()
 
 
 def test_codex_write_stdin_records_raw_and_canonical_audit(tmp_path):
@@ -7613,6 +7893,65 @@ def test_codex_child_abort_cancels_only_its_current_assignment():
     assert assignment.reason == "interrupted"
 
 
+def test_codex_child_abort_without_turn_id_closes_its_started_assignment(tmp_path):
+    rollout_path = tmp_path / "child.jsonl"
+    rollout_path.write_text(
+        json.dumps(
+            {
+                "type": "session_meta",
+                "payload": {
+                    "source": {
+                        "subagent": {
+                            "thread_spawn": {
+                                "parent_thread_id": "lead-one",
+                                "agent_path": "/root/worker",
+                            }
+                        }
+                    }
+                },
+            }
+        )
+        + "\n"
+    )
+    translator = CodexCanonicalTranslator()
+
+    def child_event(document, event_id):
+        return replace(
+            raw_event(
+                document,
+                harness=HarnessName.CODEX,
+                source_type="child_rollout",
+                raw_event_id=event_id,
+            ),
+            source_name=str(rollout_path),
+            actor_id=ActorId("child-one"),
+            parent_actor_id=ActorId("lead-one"),
+        )
+
+    started = translator.translate(
+        child_event(
+            {
+                "type": "event_msg",
+                "payload": {"type": "task_started", "turn_id": "child-turn"},
+            },
+            "child-start",
+        )
+    )
+    aborted = translator.translate(
+        child_event(
+            {"type": "event_msg", "payload": {"type": "turn_aborted"}},
+            "child-abort",
+        )
+    )
+
+    assert payloads(aborted, TurnAborted)[0].turn_id == payloads(
+        started, TurnStarted
+    )[0].turn_id
+    assignment = payloads(aborted, ActorAssignmentFinished)[0].payload
+    assert assignment.assignment_id == AssignmentId("child-turn")
+    assert assignment.outcome == Outcome.CANCELLED
+
+
 def test_codex_web_tool_uses_shared_search_vocabulary(tmp_path):
     """One web tool covers search and fetch, and which one it was is decided by
     the fields it was called with — so the call names the tool and the result
@@ -7784,7 +8123,7 @@ def test_codex_failed_local_mcp_resource_read_is_a_failed_file_fact(tmp_path):
                     "call_id": "resource-read-one",
                     "input": (
                         "const result = await tools.read_mcp_resource("
-                        '{server:"filesystem",uri:"/work/missing.txt"}); text(result);'
+                        '{server:"filesystem",uri:"file:///work/missing.txt"}); text(result);'
                     ),
                 },
             }
@@ -8025,6 +8364,73 @@ def test_codex_node_repl_file_read_uses_the_native_mcp_failure_state():
     assert accessed.outcome == "failed"
 
 
+def test_codex_builtin_resource_call_matches_its_native_mcp_completion():
+    translator = CodexCanonicalTranslator()
+    opened = translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "exec",
+                    "call_id": "resource-list",
+                    "input": (
+                        "const r = await tools.list_mcp_resources({});"
+                        "text(JSON.stringify(r));"
+                    ),
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="resource-list-start",
+        )
+    )
+    completed = translator.translate(
+        raw_event(
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "item_completed",
+                    "item": {
+                        "type": "McpToolCall",
+                        "id": "resource-list-native",
+                        "server": "codex",
+                        "tool": "list_mcp_resources",
+                        "status": "completed",
+                    },
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="resource-list-completed",
+        )
+    )
+    answered = translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "call_id": "resource-list",
+                    "output": [
+                        {
+                            "type": "input_text",
+                            "text": "Script completed\nOutput:\n{\"resources\":[]}",
+                        }
+                    ],
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="resource-list-result",
+        )
+    )
+
+    assert opened.decision == "ignored_nonsemantic"
+    assert completed.decision == "ignored_nonsemantic"
+    assert answered.decision == "ignored_nonsemantic"
+
+
 def test_codex_execution_introspection_and_mirrored_items_are_known_plumbing():
     introspection = CodexCanonicalTranslator().translate(
         raw_event(
@@ -8140,6 +8546,34 @@ def test_codex_unmapped_tool_is_unknown_evidence_not_a_failure():
     assert translation.canonical_events == ()
     assert translation.decision == "ignored_unknown"
     assert "unmapped Codex tool" in translation.reason
+
+
+def test_codex_deferred_tool_wait_is_known_nonsemantic_orchestration():
+    translation = CodexCanonicalTranslator().translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call",
+                    "name": "wait",
+                    "call_id": "wait-one",
+                    "arguments": json.dumps(
+                        {
+                            "cell_id": "1",
+                            "yield_time_ms": 30000,
+                            "max_tokens": 2000,
+                        }
+                    ),
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="deferred-wait",
+        )
+    )
+
+    assert translation.canonical_events == ()
+    assert translation.decision == "ignored_nonsemantic"
 
 
 def test_codex_interrupt_detects_a_queued_turn_after_abort(tmp_path):
@@ -9359,6 +9793,12 @@ def test_codex_rewind_session_keeps_its_prior_session_identity():
                     "cwd": "/work",
                     "originator": "codex-tui",
                     "forked_from_id": "session-before-rewind",
+                    "history_mode": "paginated",
+                    "history_base": {
+                        "thread_id": "rollout-before-rewind",
+                        "end_ordinal_exclusive": 15,
+                        "end_byte_offset": 43030,
+                    },
                 },
             },
             harness=HarnessName.CODEX,

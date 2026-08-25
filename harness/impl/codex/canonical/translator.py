@@ -10,6 +10,7 @@ from collections.abc import Mapping, MutableMapping
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Literal, TypeVar
+from urllib.parse import unquote, urlparse
 
 from pydantic import ValidationError
 
@@ -211,7 +212,15 @@ class ToolMeaning:
 CODEX_TOOLS: Mapping[str, ToolMeaning] = {
     "view_image": ToolMeaning(CodexToolKind.FILE, "ReadImage"),
     "read_mcp_resource": ToolMeaning(CodexToolKind.FILE, "ReadResource"),
+    "list_mcp_resources": ToolMeaning(CodexToolKind.IGNORED, "ListResources"),
+    "list_mcp_resource_templates": ToolMeaning(
+        CodexToolKind.IGNORED, "ListResourceTemplates"
+    ),
     "image_gen__imagegen": ToolMeaning(CodexToolKind.IGNORED, "GenerateImage"),
+    # Deferred web execution yields a local orchestration handle and Codex
+    # later waits on that handle.  The search/fetch call owns the user-visible
+    # fact; waiting for its cell has no separate canonical meaning.
+    "wait": ToolMeaning(CodexToolKind.IGNORED, "WaitForTool"),
 }
 
 GOAL_STATES: Mapping[str, GoalState] = {
@@ -461,6 +470,9 @@ def _tool_path(arguments: str | None) -> str:
     for name in (CodexToolField.PATH, CodexToolField.FILE_PATH, CodexToolField.URI):
         value = fields.string(name)
         if value:
+            parsed = urlparse(value)
+            if parsed.scheme == "file":
+                return unquote(parsed.path)
             return value
     return _node_read_path(arguments)
 
@@ -523,6 +535,11 @@ class CodexCanonicalTranslator(HarnessTranslator):
         self._plan_tasks: dict[tuple[str, str], tuple[TaskChanged, ...]] = {}
         self._goals: dict[str, GoalChanged] = {}
         self._working_directories: dict[str, str] = {}
+        # Codex's `turn_aborted` payload may omit `turn_id`.  One rollout file
+        # carries at most one active turn, so retain the task-start identity by
+        # source and use it to close that same turn when the terminal interrupt
+        # record is sparse.
+        self._active_turns: dict[str, CodexTurnId] = {}
         self._sources_by_session: dict[SessionId, set[str]] = {}
         self._selections = SelectionSemantics()
         self._rewind_continuity = rewind_continuity or RewindContinuity()
@@ -573,6 +590,8 @@ class CodexCanonicalTranslator(HarnessTranslator):
             key for key in self._finished_tool_calls if key[0] not in sources
         }
         _drop_source_keys(self._plan_tasks, sources)
+        for source in sources:
+            self._active_turns.pop(source, None)
         self._goals.pop(str(session_id), None)
         self._working_directories.pop(str(session_id), None)
         self._selections.release_session(session_id)
@@ -955,7 +974,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
     def _hook_run_started_events(
         self,
         raw_event: RawEvent,
-        hook: CodexHookPayload,
+        codex_hook_payload: CodexHookPayload,
     ) -> list[CanonicalEvent[EventPayload]]:
         """Let any lead hook confirm a run whose SessionStart hook was missed.
 
@@ -965,16 +984,16 @@ class CodexCanonicalTranslator(HarnessTranslator):
         """
         if raw_event.parent_actor_id is not None:
             return []
-        if hook.hook_event_name != "SessionStart" and raw_event.terminal_window_id is None:
+        if codex_hook_payload.hook_event_name != "SessionStart" and raw_event.terminal_window_id is None:
             return []
-        path = hook.transcript_path or ""
+        path = codex_hook_payload.transcript_path or ""
         if not lead_rollout(path):
             # A subagent thread announces no session of its own.
             return []
         metadata = session_metadata(path)
         return self._session_started_events(
             raw_event,
-            hook.cwd or "",
+            codex_hook_payload.cwd or "",
             os.path.realpath(path),
             continued_from=self._continued_from(
                 raw_event,
@@ -1064,9 +1083,11 @@ class CodexCanonicalTranslator(HarnessTranslator):
             occurred_at = timestamp(record_at)
 
         if isinstance(record, TaskStartedRecord):
+            source_key = self._source_key(raw_event)
             native_turn_id = CodexTurnId(
                 record.turn or f"{raw_event.session_id}:{native_identity}"
             )
+            self._active_turns[source_key] = native_turn_id
             turn_id = turn_id_from_codex(native_turn_id)
             events = [event(raw_event, "turn", str(turn_id), "started", TurnStarted(None), turn_id, occurred_at)]
             if raw_event.parent_actor_id is not None and raw_event.source_type == "child_rollout":
@@ -1098,9 +1119,14 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 ))
             return events
         if isinstance(record, TaskCompleteRecord):
+            source_key = self._source_key(raw_event)
             native_turn_id = CodexTurnId(
-                record.turn or f"{raw_event.session_id}:{native_identity}"
+                record.turn
+                or self._active_turns.get(source_key)
+                or f"{raw_event.session_id}:{native_identity}"
             )
+            if self._active_turns.get(source_key) == native_turn_id:
+                self._active_turns.pop(source_key, None)
             turn_id = turn_id_from_codex(native_turn_id)
             events = [
                 event(
@@ -1129,12 +1155,17 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 )
             return events
         if isinstance(record, TurnAbortedRecord):
+            source_key = self._source_key(raw_event)
             native_turn_id = CodexTurnId(
-                record.turn or str(native_payload.turn_id if native_payload else "") or native_identity
+                record.turn
+                or (str(native_payload.turn_id or "") if native_payload else "")
+                or self._active_turns.get(source_key)
+                or native_identity
             )
+            if self._active_turns.get(source_key) == native_turn_id:
+                self._active_turns.pop(source_key, None)
             turn_id = turn_id_from_codex(native_turn_id)
             events = [event(raw_event, "turn", str(turn_id), "aborted", TurnAborted(None), turn_id, occurred_at)]
-            source_key = self._source_key(raw_event)
             interrupted_shells = [
                 shell_id_from_codex_call(CodexCallId(call_id))
                 for (known_source, call_id), call in self._call_records.items()
@@ -1507,7 +1538,12 @@ class CodexCanonicalTranslator(HarnessTranslator):
             if not text:
                 return []
             if (source_key, shell_id) in self._finished_shells:
-                raise TranslationError(f"Codex write_stdin targets finished command: {shell_id}")
+                # The native command-completed event and the wrapper tool call
+                # are separate streams. Under load the completed observation
+                # can be ingested first even though this input call preceded it
+                # in the model's turn. The settled shell is authoritative; a
+                # late input observation cannot reopen or mutate it.
+                return []
             payload = ShellInputProvided(shell_id, content(text), False)
             return [event(
                 raw_event,
@@ -1785,12 +1821,17 @@ class CodexCanonicalTranslator(HarnessTranslator):
         if isinstance(record, McpToolCompletedRecord):
             source_key = self._source_key(raw_event)
             native_name = f"mcp__{record.server}__{record.tool}"
+            # Codex exposes built-in resource operations without an MCP prefix
+            # in the JavaScript wrapper. The native completion can attribute
+            # the same call to an internal server such as `codex` or
+            # `filesystem`, so both native spellings identify the pending call.
+            known_names = {native_name, record.tool}
             candidates = [
                 call_id
                 for (known_source, call_id), call_record in self._call_records.items()
                 if known_source == source_key
                 and isinstance(call_record, ToolRecord)
-                and call_record.name == native_name
+                and call_record.name in known_names
                 and (source_key, call_id) not in self._finished_tool_calls
             ]
             if len(candidates) != 1:

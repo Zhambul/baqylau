@@ -229,6 +229,43 @@ def shell(
     )
 
 
+def first_shell_attempt(
+    watch: SessionWatch,
+    *,
+    turn_reference: TurnRef,
+    command_contains: str,
+    predicate: Callable[[ShellState], bool],
+    timeout: float,
+) -> ShellRef:
+    """Bind one deterministic attempt when a harness legitimately retries."""
+
+    def found(snapshot: SessionSnapshot) -> ShellRef | None:
+        candidates = [
+            item
+            for item in snapshot.shells()
+            if command_contains in item.command
+            and belongs_to_turn(
+                snapshot,
+                turn_reference,
+                turn_id=item.turn_id,
+                cursor=item.started_cursor,
+            )
+            and predicate(item)
+        ]
+        if not candidates:
+            return None
+        item = min(candidates, key=lambda candidate: candidate.started_cursor)
+        return ShellRef(SessionRef(snapshot.session_id), item.shell_id, item.actor_id)
+
+    from sdk.client import SessionRef  # noqa: PLC0415
+
+    return watch.wait(
+        f"a shell attempt containing {command_contains!r}",
+        found,
+        timeout=timeout,
+    )
+
+
 def actor(watch: SessionWatch, *, exact_name: str, timeout: float) -> ActorRef:
     def found(snapshot: SessionSnapshot) -> ActorRef | None:
         candidates = [
@@ -548,6 +585,7 @@ def search(
             for entry in snapshot.entries
             if isinstance(entry.body, SearchBodyResponse)
             and query_contains in entry.body.query.text
+            and entry.body.state == "succeeded"
             and belongs_to_turn(
                 snapshot,
                 turn_reference,
@@ -555,7 +593,7 @@ def search(
                 cursor=entry.cursor,
             )
         ]
-        entry = _one(candidates, f"search with query containing {query_contains!r}")
+        entry = min(candidates, key=lambda candidate: candidate.cursor) if candidates else None
         return (
             None
             if entry is None
@@ -565,7 +603,7 @@ def search(
     from sdk.client import SessionRef  # noqa: PLC0415
 
     return watch.wait(
-        f"one search with query containing {query_contains!r}",
+        f"a successful search with query containing {query_contains!r}",
         found,
         timeout=timeout,
     )
@@ -584,6 +622,7 @@ def web_fetch(
             for entry in snapshot.entries
             if isinstance(entry.body, WebBodyResponse)
             and entry.body.url == url
+            and entry.body.state == "succeeded"
             and belongs_to_turn(
                 snapshot,
                 turn_reference,
@@ -591,7 +630,7 @@ def web_fetch(
                 cursor=entry.cursor,
             )
         ]
-        entry = _one(candidates, f"web fetch for {url!r}")
+        entry = min(candidates, key=lambda candidate: candidate.cursor) if candidates else None
         return (
             None
             if entry is None
@@ -600,7 +639,7 @@ def web_fetch(
 
     from sdk.client import SessionRef  # noqa: PLC0415
 
-    return watch.wait(f"one web fetch for {url!r}", found, timeout=timeout)
+    return watch.wait(f"a successful web fetch for {url!r}", found, timeout=timeout)
 
 
 def reasoning_trace(

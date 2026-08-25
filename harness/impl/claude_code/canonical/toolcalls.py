@@ -72,7 +72,7 @@ from domain.values import (
 )
 from harness.impl.claude_code.canonical import records, transcript
 from harness.impl.claude_code.canonical.support import content, event
-from harness.models import RawEvent, UnknownRawEvent
+from harness.models import RawEvent, UnknownRawEvent, plan_resolution_phase
 
 # The tool_result boilerplate Claude Code emits when a Bash command is launched
 # in the background. Its shell.finished still converges from the hook's raw event;
@@ -618,7 +618,13 @@ class ToolCallSemantics:
             attention_id = attention_id_from_claude_code_call(call_id)
             state, feedback, edited = plan_resolution(call.tool_response, failed)
             payload = PlanResolved(attention_id, state, feedback, edited)
-            return [event(raw_event, "plan", str(attention_id), "resolved", payload)]
+            return [event(
+                raw_event,
+                "plan",
+                str(attention_id),
+                plan_resolution_phase(payload),
+                payload,
+            )]
         if kind == ToolKind.FILE:
             return self.file_facts(raw_event, call_id, native_name, arguments, tool_response, outcome)
         if kind == ToolKind.SEARCH:
@@ -827,7 +833,13 @@ class ToolCallSemantics:
             return event(raw_event, "question", str(attention_id), "answered", payload)
         state, feedback, edited = plan_resolution(result_text, True)
         payload = PlanResolved(attention_id, state, feedback, edited)
-        return event(raw_event, "plan", str(attention_id), "resolved", payload)
+        return event(
+            raw_event,
+            "plan",
+            str(attention_id),
+            plan_resolution_phase(payload),
+            payload,
+        )
 
     def file_facts(
         self,

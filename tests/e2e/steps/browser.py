@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from pytest_bdd import given, parsers, then, when
 
 from sdk.client import BaqylauClient, wait_for
@@ -22,6 +24,8 @@ from tests.e2e.testkit.references import (
 from tests.e2e.testkit.resume import assert_one_live_session, assert_saved_metadata
 from tests.e2e.testkit.repository import RepositoryWorkspace
 
+BROWSER_ACTIVE_RELEASE = ".baqylau-browser-active-release"
+
 
 @given("the browser is on the session list")
 def browser_is_on_session_list(browser_session_driver: BrowserSessionDriver) -> None:
@@ -31,6 +35,21 @@ def browser_is_on_session_list(browser_session_driver: BrowserSessionDriver) -> 
 @when("I open the browser session list")
 def open_browser_session_list(browser_session_driver: BrowserSessionDriver) -> None:
     browser_session_driver.open_session_list()
+
+
+@when(parsers.parse('I release active browser work in session "{session_name}"'))
+def release_active_browser_work(
+    client: BaqylauClient,
+    sessions: Sessions,
+    session_name: str,
+) -> None:
+    working_directory = client.sessions.snapshot(
+        sessions.get(session_name)
+    ).data.session.working_directory
+    Path(working_directory, BROWSER_ACTIVE_RELEASE).write_text(
+        "release\n",
+        encoding="utf-8",
+    )
 
 
 @when(parsers.parse(
@@ -449,11 +468,14 @@ def browser_renders_file_diff_colors(
     )
 
 
-@then("the browser can load older session activity automatically")
+@then(parsers.parse(
+    "the browser can load older session activity automatically containing '{text}'"
+))
 def browser_offers_older_session_activity(
     browser_session_driver: BrowserSessionDriver,
+    text: str,
 ) -> None:
-    browser_session_driver.assert_older_history_available()
+    browser_session_driver.assert_older_history_available(text)
 
 
 @when("I scroll to older session activity in the browser")

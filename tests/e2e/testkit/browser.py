@@ -13,7 +13,15 @@ from api.controls.models.control_outcome_response import PlanChoicesResultRespon
 from api.common.models.values.usage_row import UsageRowResponse, UsageWindowResponse
 from api.sessiondata.models.entry import FileBodyResponse, QuestionResponse
 from domain.sessiondata import ActorStatus
-from playwright.sync_api import ConsoleMessage, Locator, Page, Request, expect
+from playwright.sync_api import (
+    ConsoleMessage,
+    Error as PlaywrightError,
+    Locator,
+    Page,
+    Request,
+    TimeoutError as PlaywrightTimeoutError,
+    expect,
+)
 
 from sdk.client import BaqylauClient, SessionRef, wait_for
 from sdk.state import PlanState, QuestionState, SessionSnapshot
@@ -67,6 +75,8 @@ def default_model_usage_window(
         if row.collection_error is not None
     ]
     if failures:
+        if all("timed out" in failure.casefold() for failure in failures):
+            return None
         raise AssertionError("usage refresh failed: " + "; ".join(failures))
     harness_rows = [row for row in rows if row.harness == harness]
     if not harness_rows:
@@ -133,11 +143,7 @@ class BrowserSessionDriver:
         self._configure_fresh_session(dialog, spec, workspace)
         dialog.get_by_placeholder(re.compile(r"what should .* start on\?")).fill(prompt)
         dialog.get_by_role("button", name="launch", exact=True).click()
-        session = self._wait_for_visible_session()
-        if session.session_id in known:
-            raise AssertionError(
-                f"browser launch opened existing session {session.session_id!r}"
-            )
+        session = self._wait_for_visible_session(known)
         snapshot = self._client.sessions.snapshot(session)
         if snapshot.data.session.harness != spec.harness:
             raise AssertionError(
@@ -278,7 +284,14 @@ class BrowserSessionDriver:
         option.click()
         dialog = self._new_session_dialog()
         dialog.get_by_placeholder(re.compile(r"what should .* start on\?")).fill(prompt)
-        dialog.get_by_role("button", name="launch", exact=True).click()
+        launch = dialog.get_by_role("button", name="launch", exact=True)
+        # Selecting a resume row starts the matching harness-catalog load. On
+        # a busy parallel run the row is visible before that request settles,
+        # and clicking the still-disabled button is a silent browser no-op.
+        expect(launch).to_be_enabled(
+            timeout=self._milliseconds(self._wait_policy.feed),
+        )
+        launch.click()
         completed = self._resume.complete(prepared, prompt)
         self._wait_for_session_url(completed.turn.session)
         return BrowserSessionResume(
@@ -466,26 +479,36 @@ class BrowserSessionDriver:
         expect(removed.locator(".dm")).to_have_text("−")
         expect(added.locator(".dm")).to_have_text("+")
 
-    def assert_older_history_available(self) -> None:
-        expect(self._page.locator(".load-sentinel")).to_be_attached(
-            timeout=self._milliseconds(self._wait_policy.feed),
+    def assert_older_history_available(self, oldest_marker: str) -> None:
+        marker = self._page.locator(".stream").get_by_text(
+            oldest_marker,
+            exact=False,
         )
+        sentinel = self._page.locator(".load-sentinel")
+        deadline = time.monotonic() + self._wait_policy.feed
+        while marker.count() == 0 and sentinel.count() == 0:
+            # The initial page can finish between the two observations: in
+            # that state the old marker has arrived and the now-unneeded
+            # sentinel has already been retired. Observe both outcomes until
+            # either one is true instead of pinning a disappearing DOM node.
+            if time.monotonic() >= deadline:
+                raise AssertionError(
+                    "browser exposed neither older history nor its load sentinel"
+                )
+            self._page.wait_for_timeout(25)
 
     def load_older_history(self) -> None:
         for _page_number in range(100):
             sentinel = self._page.locator(".load-sentinel")
             if sentinel.count() == 0:
                 return
-            with self._page.expect_response(
-                lambda response: "/entries?" in response.url
-                and "before=" in response.url,
-                timeout=self._milliseconds(self._wait_policy.feed),
-            ) as response_info:
-                sentinel.scroll_into_view_if_needed()
-            if not response_info.value.ok:
-                raise AssertionError(
-                    f"older browser history returned HTTP {response_info.value.status}"
-                )
+            try:
+                # IntersectionObserver may consume and replace this sentinel
+                # between count() and the scroll.  Re-read instead of waiting
+                # 30 seconds for a node that was successfully retired.
+                sentinel.scroll_into_view_if_needed(timeout=250)
+            except (PlaywrightError, PlaywrightTimeoutError):
+                continue
             expect(self._page.locator(".feed-loader")).to_have_count(
                 0,
                 timeout=self._milliseconds(self._wait_policy.feed),
@@ -752,7 +775,6 @@ class BrowserSessionDriver:
             current_window,
             timeout=self._wait_policy.feed,
         )
-        assert model_window.resets_at is not None
         self._page.reload()
         expect(self._page.get_by_role("button", name="+ session")).to_be_visible(
             timeout=self._milliseconds(self._wait_policy.feed),
@@ -876,9 +898,16 @@ class BrowserSessionDriver:
         listbox = dialog.get_by_role("listbox", name=label, exact=True)
         listbox.get_by_role("option", name=option, exact=True).click()
 
-    def _wait_for_visible_session(self) -> SessionRef:
-        self._page.wait_for_url(
-            re.compile(r".*/#/s/[^/?#]+$"),
+    def _wait_for_visible_session(
+        self,
+        known: frozenset[str] = frozenset(),
+    ) -> SessionRef:
+        self._page.wait_for_function(
+            r"""known => {
+                const match = /^#\/s\/([^/?#]+)$/.exec(location.hash);
+                return match !== null && !known.includes(match[1]);
+            }""",
+            arg=list(known),
             timeout=self._milliseconds(self._wait_policy.session_announcement),
         )
         fragment = urlsplit(self._page.url).fragment

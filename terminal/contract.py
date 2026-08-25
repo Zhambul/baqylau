@@ -17,7 +17,7 @@ the harness contract may import them without inverting a layer.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Callable, Protocol
 
 from terminal.models.input import (
     KeySendRequest,
@@ -128,6 +128,11 @@ class TerminalInput(Protocol):
 class TerminalViewport(Protocol):
     def read_screen(self, screen_read_request: ScreenReadRequest) -> ScreenReadResponse: ...
 
+
+def _no_terminal_cleanup() -> None:
+    return None
+
+
 @dataclass(frozen=True)
 class TerminalPlugin:
     """One terminal, composed."""
@@ -138,3 +143,7 @@ class TerminalPlugin:
     metadata: TerminalMetadata
     input: TerminalInput
     viewport: TerminalViewport
+    # A real terminal application owns its windows outside this process. The
+    # headless PTY implementation does not: its child process groups belong to
+    # this plugin and must be reaped when the application lifetime ends.
+    close: Callable[[], None] = _no_terminal_cleanup

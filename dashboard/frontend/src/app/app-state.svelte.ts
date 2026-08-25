@@ -393,6 +393,15 @@ export class AppState {
         );
         return false;
       }
+      // Acknowledgement means the terminal close itself succeeded.  Remove
+      // the card immediately instead of leaving a stale live session visible
+      // until the global SSE frame catches up.  The eventual durable frame is
+      // idempotent against the already-absent card.
+      this.sessions = this.sessions.filter(
+        (snapshot) => snapshot.session.sessionId !== sessionId,
+      );
+      this.reconcileSessionCloses();
+      this.push.present(this.sessions);
       this.showToast('done', 'session closed', 'terminal tab closed');
       return true;
     } catch (error) {

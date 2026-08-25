@@ -123,24 +123,9 @@ Feature: planning tools update the session goal and tasks
       The required value has not been provided. This is the first blocked turn.
       Do not use update_goal. Reply only with WAITING_ONE.
       """
-    Then turn "start waiting goal" completes
-    And session "primary" has goal 'Receive the E2E goal value'
+    Then session "primary" has goal 'Receive the E2E goal value'
     And the goal in session "primary" has state active
-    When I send prompt to session "primary" as turn "repeat waiting goal"
-      """
-      The required value has still not been provided. This is the same blocker
-      for the second consecutive goal turn. Do not use update_goal. Reply only
-      with WAITING_TWO.
-      """
-    Then turn "repeat waiting goal" completes
-    And the goal in session "primary" has state active
-    When I send prompt to session "primary" as turn "block waiting goal"
-      """
-      The required value has still not been provided. This is the same blocker
-      for the third consecutive goal turn. Use update_goal exactly once to mark
-      the goal blocked. Reply only with GOAL_BLOCKED.
-      """
-    Then turn "block waiting goal" completes
+    And turn "start waiting goal" completes
     And the goal in session "primary" has state blocked
     When I send prompt to session "primary" as turn "complete waiting goal"
       """

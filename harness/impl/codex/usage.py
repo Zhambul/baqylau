@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 REQUEST_TIMEOUT_SECONDS = 6.0
 CACHE_SECONDS = 120.0
+FAILED_CACHE_SECONDS = 2.0
 BINARY_DIRECTORIES = (
     "~/.hermes/node/bin",
     "/opt/homebrew/bin",
@@ -239,5 +240,6 @@ def read_rate_limits() -> NormalizedRateLimits | None:
     if _cached_rate_limits is not None and _cached_rate_limits[0] > now:
         return _cached_rate_limits[1]
     result = normalize_rate_limits(request_rate_limits())
-    _cached_rate_limits = (now + CACHE_SECONDS, result)
+    cache_seconds = CACHE_SECONDS if result is not None else FAILED_CACHE_SECONDS
+    _cached_rate_limits = (now + cache_seconds, result)
     return result

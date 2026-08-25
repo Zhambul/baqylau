@@ -81,7 +81,7 @@ Feature: session controls change live session state
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" as turn "name sample" with prompt
       """
-      Prepare a database migration plan for archived audit records.
+      Summarize how archived audit records should be migrated.
       Reply only with the word ready.
       """
     Then turn "name sample" completes

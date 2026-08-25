@@ -385,6 +385,16 @@ def _plans(entries: tuple[EntryResponse, ...]) -> tuple[PlanState, ...]:
             found = folded.get(body.attention_id)
             if found is None:
                 continue
+            # Claude can report a generic tool rejection after the control
+            # already recorded the person's feedback. That late, weaker
+            # observation must not erase the explicit decision.
+            if (
+                found.state == "changes_requested"
+                and found.feedback
+                and body.state == "rejected"
+                and not body.feedback
+            ):
+                continue
             found.state = body.state
             found.feedback = body.feedback
             found.edited = body.edited

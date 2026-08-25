@@ -49,6 +49,12 @@ async def _lifespan(web: FastAPI) -> AsyncIterator[None]:
     # costs no thread, so this cap only has to absorb request bursts.
     policy = resolve(web.state.instances, dependencies.policy)
     anyio.to_thread.current_default_thread_limiter().total_tokens = policy.thread_pool_tokens
+    # Finish both schemas before the socket is advertised as healthy. The
+    # audit read handle is deliberately read-only; if its first request races
+    # the writer's first connection, it can otherwise observe the newly-created
+    # file before CREATE TABLE has committed.
+    resolve(web.state.instances, providers.main_db).initialize()
+    resolve(web.state.instances, providers.audit_db).initialize()
     if not web.state.run_background_workers:
         # An app that only serves requests — the test fixture, a schema dump.
         # The flag is the seam: interpreting and notifying are the DAEMON's

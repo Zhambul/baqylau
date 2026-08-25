@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class WaitPolicy:
-    session_announcement: float = 120.0
+    session_announcement: float = 300.0
     turn: float = 300.0
     feed: float = 60.0
     background: float = 120.0

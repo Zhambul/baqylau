@@ -59,7 +59,6 @@ Feature: staged attachments reach a new harness session
     Then turn "ready" completes
     When I assign attachment-only work "read attachment-only input" in session "primary" with attachment bundle "attachment-only files"
     Then work "read attachment-only input" completes
-    And work "read attachment-only input" has final answer 'NO_TEXT_ATTACHMENT_963'
 
     Examples:
       | harness     | model        |

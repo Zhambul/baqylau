@@ -9,12 +9,15 @@ from harness.models import (
     RawEvent,
     TranslationResult,
     canonical_event,
+    plan_resolution_phase,
     session_run_finished_event,
     session_run_started_events,
 )
 from domain.events import (
     ActorStarted,
     ActorAssignmentFinished,
+    EffortChanged,
+    ModelChanged,
     PlanResolved,
     SessionFinished,
     SessionStarted,
@@ -26,7 +29,10 @@ from domain.events import (
 from domain.ids import AssignmentId, ShellId
 from domain.records import RecordedTranslationDecision
 from domain.values import ActorRole, OpenWorkKind, Outcome
+from domain.values import EffortChangeReason, ModelChangeReason, ModelReference
 from harness.models.directives import (
+    EffortSelectionObservation,
+    ModelSelectionObservation,
     PlanDecisionObservation,
     ProcessExit,
     SessionCloseWorkObservation,
@@ -125,6 +131,8 @@ class ControlTranslator(CoreTranslator):
     """A confirmed control effect becomes the same fact as a native event."""
 
     def translate(self, raw_event: RawEvent) -> TranslationResult:
+        if raw_event.source_name == "session_finish":
+            return self._session_finish(raw_event)
         if raw_event.source_name == "session_close":
             return self._session_close(raw_event)
         if raw_event.source_name == "session_rename":
@@ -147,22 +155,60 @@ class ControlTranslator(CoreTranslator):
                 ),
                 RecordedTranslationDecision.TRANSLATED,
             )
-        observed = decode_document(PlanDecisionObservation, raw_event.payload)
+        if raw_event.source_name == "model_selection":
+            model_observation = decode_document(ModelSelectionObservation, raw_event.payload)
+            model_changed = ModelChanged(
+                None,
+                ModelReference(model_observation.model, model_observation.model),
+                ModelChangeReason.SELECTED,
+            )
+            return TranslationResult(
+                (
+                    canonical_event(
+                        raw_event,
+                        "model",
+                        str(raw_event.actor_id),
+                        f"selected:{raw_event.source_position}",
+                        model_changed,
+                    ),
+                ),
+                RecordedTranslationDecision.TRANSLATED,
+            )
+        if raw_event.source_name == "effort_selection":
+            effort_observation = decode_document(EffortSelectionObservation, raw_event.payload)
+            effort_changed = EffortChanged(
+                None,
+                effort_observation.effort,
+                EffortChangeReason.SELECTED,
+            )
+            return TranslationResult(
+                (
+                    canonical_event(
+                        raw_event,
+                        "effort",
+                        str(raw_event.actor_id),
+                        f"selected:{raw_event.source_position}",
+                        effort_changed,
+                    ),
+                ),
+                RecordedTranslationDecision.TRANSLATED,
+            )
+        plan_observation = decode_document(PlanDecisionObservation, raw_event.payload)
         resolved = PlanResolved(
-            observed.attention_id,
-            observed.state,
-            observed.feedback,
-            observed.edited,
+            plan_observation.attention_id,
+            plan_observation.state,
+            plan_observation.feedback,
+            plan_observation.edited,
         )
         return TranslationResult(
             (
                 canonical_event(
                     raw_event,
                     "plan",
-                    str(observed.attention_id),
-                    "resolved",
+                    str(plan_observation.attention_id),
+                    plan_resolution_phase(resolved),
                     resolved,
-                    turn_id=observed.turn_id,
+                    turn_id=plan_observation.turn_id,
                 ),
             ),
             RecordedTranslationDecision.TRANSLATED,
@@ -206,6 +252,25 @@ class ControlTranslator(CoreTranslator):
             )
         return TranslationResult(
             (event,),
+            RecordedTranslationDecision.TRANSLATED,
+        )
+
+    @staticmethod
+    def _session_finish(raw_event: RawEvent) -> TranslationResult:
+        # Decode the recorder-owned document so writer/reader schema drift is
+        # still rejected even though the close fact only needs its existence.
+        decode_document(ProcessExit, raw_event.payload)
+        finished = SessionFinished(Outcome.UNKNOWN, "session_closed")
+        return TranslationResult(
+            (
+                canonical_event(
+                    raw_event,
+                    "session_control",
+                    raw_event.source_position,
+                    "finished",
+                    finished,
+                ),
+            ),
             RecordedTranslationDecision.TRANSLATED,
         )
 

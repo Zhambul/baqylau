@@ -112,6 +112,16 @@ class SendTextHandler(ControlHandler):
         window_id = control_context.terminal_window_id
         if window_id is None:
             return DeliveryResult(request.request_id, ControlAcknowledgement.REJECTED, "session is not live")
+        if control_context.lead_active:
+            # Codex's TUI does not provide a passive native queue: submitting
+            # during an active unified exec aborts that turn at its next tool
+            # boundary. Keep the request in Baqylau's durable queue; the
+            # canonical turn-finish reaction submits it once the lead is idle.
+            return DeliveryResult(
+                request.request_id,
+                ControlAcknowledgement.ACKNOWLEDGED,
+                queued=True,
+            )
         if request.replace_terminal_draft:
             try:
                 composer.clear(_TerminalDriver(control_context.terminal), window_id)
@@ -128,7 +138,7 @@ class SendTextHandler(ControlHandler):
             result.request_id,
             result.status,
             result.reason,
-            queued=control_context.lead_active,
+            queued=False,
         )
 
 
@@ -267,6 +277,25 @@ class CompactHandler(ControlHandler):
     def __call__(self, request: ControlRequest, control_context: ControlContext) -> ControlResult:
         if not isinstance(request, Compact):
             raise TypeError("compact handler requires Compact")
+        window_id = control_context.terminal_window_id
+        if window_id is None:
+            return ControlResult(
+                request.request_id,
+                ControlAcknowledgement.REJECTED,
+                "session is not live",
+            )
+        try:
+            # A turn completion can reach the canonical feed just before the
+            # TUI restores its prompt.  Verify the native composer is ready
+            # before submitting the slash command; otherwise terminal input
+            # can report successful delivery while Codex silently drops it.
+            composer.clear(_TerminalDriver(control_context.terminal), window_id)
+        except composer.ComposerError as error:
+            return ControlResult(
+                request.request_id,
+                ControlAcknowledgement.INDETERMINATE,
+                str(error),
+            )
         return _submit(request, control_context, "/compact")
 
 

@@ -23,11 +23,17 @@ from harness.models import (
     DecidePlan,
     RawEvent,
     RenameSession,
+    SelectEffort,
+    SelectModel,
     SendText,
     Session,
 )
 from harness.models.directives import (
+    EffortSelectionObservation,
+    ModelSelectionObservation,
     PlanDecisionObservation,
+    ProcessExit,
+    ProcessExitState,
     SessionCloseWorkObservation,
     SessionRenameObservation,
 )
@@ -52,9 +58,12 @@ class ControlEffectRecorder:
 
     def text_queued(self, send_text: SendText) -> None:
         """Keep an accepted mid-turn send until its native prompt arrives."""
-        text = send_text.text.strip()
-        if not text:
-            text = " ".join(attachment.local_path for attachment in send_text.attachments)
+        attachments = " ".join(
+            attachment.local_path for attachment in send_text.attachments
+        )
+        text = attachments + ("\n" if attachments and send_text.text else "")
+        text += send_text.text
+        text = text.strip()
         if not text:
             return
         self.workspaces.enqueue_composer_message(
@@ -141,6 +150,40 @@ class ControlEffectRecorder:
             )
         )
 
+    def selection_changed(
+        self,
+        session: Session,
+        selection: SelectModel | SelectEffort,
+    ) -> None:
+        """Record a confirmed TUI selection even when the client omits a slash record."""
+        if session.plugin is None:
+            raise ValueError(f"session has no attached harness plugin: {session.session_id}")
+        harness = session.plugin.info.name
+        if isinstance(selection, SelectModel):
+            source_name = "model_selection"
+            payload = encode_document(ModelSelectionObservation(selection.model))
+        else:
+            source_name = "effort_selection"
+            payload = encode_document(EffortSelectionObservation(selection.effort))
+        identity = (
+            f"{harness}:control:{selection.session_id}:"
+            f"{selection.request_id}:{source_name}"
+        )
+        self.raw_events.record((RawEvent(
+            raw_event_id=RawEventId(identity),
+            harness=harness,
+            source_type=CONTROL_SOURCE_TYPE,
+            source_name=source_name,
+            source_position=str(selection.request_id),
+            session_id=selection.session_id,
+            actor_id=session.lead_actor_id,
+            parent_actor_id=None,
+            observed_at=time.time(),
+            encoding="json",
+            payload=payload,
+            source_identity=f"{harness}:control:{selection.session_id}",
+        ),))
+
     def work_before_close(
         self,
         session_id: SessionId,
@@ -165,14 +208,38 @@ class ControlEffectRecorder:
         close_session: CloseSession,
         observations: tuple[tuple[SessionEntry, SessionCloseWorkObservation], ...],
     ) -> None:
-        """Record every work item that the confirmed close stopped."""
+        """Record the confirmed close and every work item that it stopped."""
         if session.plugin is None:
             raise ValueError(f"session has no attached harness plugin: {session.session_id}")
-        if not observations:
-            return
         observed_at = time.time()
         harness = session.plugin.info.name
-        raw_events = []
+        finish_identity = (
+            f"{harness}:control:{close_session.session_id}:"
+            f"{close_session.request_id}:session_finish"
+        )
+        raw_events = [
+            RawEvent(
+                raw_event_id=RawEventId(finish_identity),
+                harness=harness,
+                source_type=CONTROL_SOURCE_TYPE,
+                source_name="session_finish",
+                source_position=str(close_session.request_id),
+                session_id=close_session.session_id,
+                actor_id=session.lead_actor_id,
+                parent_actor_id=None,
+                observed_at=observed_at,
+                encoding="json",
+                payload=encode_document(
+                    ProcessExit(
+                        process_id=session.harness_process_id,
+                        state=ProcessExitState.EXITED,
+                    )
+                ),
+                source_identity=f"{harness}:control:{close_session.session_id}",
+                terminal_window_id=session.terminal_window_id,
+                harness_process_id=session.harness_process_id,
+            )
+        ]
         for entry, observation in observations:
             identity = (
                 f"{harness}:control:{close_session.session_id}:"

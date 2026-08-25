@@ -7,6 +7,7 @@ event identity and stored-event stamping in one place.
 
 from __future__ import annotations
 
+import hashlib
 import time
 from dataclasses import dataclass
 
@@ -14,6 +15,7 @@ from domain.events import (
     ActorStarted,
     CanonicalEvent,
     EventPayload,
+    PlanResolved,
     SessionFinished,
     SessionStarted,
     ShellOutputLocated,
@@ -77,6 +79,18 @@ class TranslationResult:
             raise ValueError("translated observations must produce at least one canonical event")
         if self.decision != RecordedTranslationDecision.TRANSLATED and self.canonical_events:
             raise ValueError("ignored observations cannot produce canonical events")
+
+
+def plan_resolution_phase(plan_resolved: PlanResolved) -> str:
+    """Return the identity of one reported revision of a plan decision."""
+    revision = hashlib.sha256(
+        "\0".join((
+            str(plan_resolved.state),
+            plan_resolved.feedback or "",
+            "edited" if plan_resolved.edited else "unchanged",
+        )).encode("utf-8")
+    ).hexdigest()
+    return f"resolved:{revision}"
 
 
 def canonical_event(

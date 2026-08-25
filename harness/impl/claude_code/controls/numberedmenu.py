@@ -13,6 +13,7 @@ from harness.impl.claude_code.controls.screen_driver import ScreenDriver
 _ROW = re.compile(
     r"^\s*(?P<marks>(?:[❯↑↓]\s*)*)(?P<digit>\d+)\.\s+(?P<label>.+?)\s*$"
 )
+KEY_EFFECT_TIMEOUT_SECONDS = 2.0
 
 
 @dataclass(frozen=True)
@@ -62,8 +63,17 @@ def select(
         raise SelectionError("the cursor or target option is absent")
     key = "down" if target_index > current_index else "up"
     for _ in range(abs(target_index - current_index)):
-        screen_driver.send_key(win, key)
-        sleep(key_gap)
+        before = next((option.digit for option in read_rows() if option.cursor), None)
+        if not screen_driver.send_key(win, key):
+            raise SelectionError("the cursor key was not delivered")
+        deadline = time.monotonic() + KEY_EFFECT_TIMEOUT_SECONDS
+        while True:
+            after = next((option.digit for option in read_rows() if option.cursor), None)
+            if after is not None and after != before:
+                break
+            if time.monotonic() >= deadline:
+                raise SelectionError("the cursor key had no visible effect")
+            sleep(key_gap)
     selected = next((option for option in read_rows() if option.cursor), None)
     if selected is None or selected.digit != digit:
         raise SelectionError("the target option did not get the cursor")

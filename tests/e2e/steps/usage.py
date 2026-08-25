@@ -27,7 +27,7 @@ def global_usage_has_windows(
     wait_for(
         f"global usage for {harness!r} to have at least {count} window",
         found,
-        timeout=wait_policy.feed,
+        timeout=wait_policy.background,
     )
 
 
@@ -53,7 +53,7 @@ def global_usage_windows_have_positive_duration(
     wait_for(
         f"each global usage window for {harness!r} to have a positive duration",
         found,
-        timeout=wait_policy.feed,
+        timeout=wait_policy.background,
     )
 
 
@@ -76,7 +76,7 @@ def global_usage_windows_have_valid_percentage(
     wait_for(
         f"each global usage window for {harness!r} to have a percentage from 0 to 100",
         found,
-        timeout=wait_policy.feed,
+        timeout=wait_policy.background,
     )
 
 
@@ -104,5 +104,5 @@ def global_usage_window_keys_are_unique(
     wait_for(
         f"global usage for {harness!r} to have unique window keys per account",
         found,
-        timeout=wait_policy.feed,
+        timeout=wait_policy.background,
     )

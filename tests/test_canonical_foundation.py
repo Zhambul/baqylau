@@ -1414,7 +1414,7 @@ def test_a_copied_terminal_id_does_not_displace_its_session():
     assert SessionLivenessSource(session, ProcessProbe(), (window,)).read(None) == ()
 
 
-def test_resume_liveness_waits_for_the_session_tag_while_the_cli_is_present():
+def test_resume_liveness_waits_for_the_session_tag_while_the_window_is_starting():
     session = replace(
         example_session(),
         plugin=example_plugin(TranslationResult((), "ignored_nonsemantic")),
@@ -1430,7 +1430,9 @@ def test_resume_liveness_waits_for_the_session_tag_while_the_cli_is_present():
         True,
         True,
         True,
-        processes=(WindowProcess(None, (f"/opt/{OWN_PROCESS_NAME}", "resume")),),
+        # The login shell can be the only visible process for a few seconds
+        # before it starts the harness.
+        processes=(WindowProcess(None, ("/bin/zsh", "-lic", "codex resume")),),
     )
 
     assert SessionWindowLivenessSource(session, (window,)).read(None) == ()
@@ -1637,8 +1639,41 @@ def test_a_continuation_moves_the_panes_from_the_prior_session():
 
     assert terminal.calls == [
         ("close", SessionId("session-old")),
-        ("ownership", "the-session-tab", 4242, "codex"),
         ("open", SessionId("session-new"), "the-session-tab"),
+    ]
+
+
+def test_a_confirmed_same_session_resume_tags_its_starting_window():
+    terminal = RecordingTerminal()
+
+    class Sessions:
+        def find(self, session_id):
+            if session_id != SessionId("session-one"):
+                return None
+            return type("SessionRow", (), {
+                "terminal_window_id": "the-resume-tab",
+                "harness_process_id": None,
+                "working_directory": "/work",
+                "plugin": type("Plugin", (), {
+                    "info": type("Info", (), {"cli_process_name": "codex"})(),
+                })(),
+            })()
+
+    reaction = PaneCanonicalEventReaction(terminal, Sessions(), _PaneWidths())
+    started = replace(
+        session_started_event(),
+        payload=replace(
+            session_started_event().payload,
+            resumed_from=SessionId("session-one"),
+        ),
+    )
+
+    reaction.react(started)
+
+    # No process-ownership probe: the trusted launch observation arrives while
+    # the login shell may still be the window's only process.
+    assert terminal.calls == [
+        ("open", SessionId("session-one"), "the-resume-tab"),
     ]
 
 

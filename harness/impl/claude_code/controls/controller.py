@@ -140,7 +140,11 @@ def _transcript_has_interrupt(source_reference: str, after_position: int) -> boo
     return False
 
 
-NATIVE_TEXT_CONFIRM_TIMEOUT_SECONDS = 1.0
+# The native transcript write is normally immediate, but a busy terminal host
+# can take several seconds to finish a dialog transition or materialize an
+# attachment before it records the accepted prompt. Keep each attempt bounded
+# while allowing that local transition to settle before retrying the paste.
+NATIVE_TEXT_CONFIRM_TIMEOUT_SECONDS = 5.0
 NATIVE_TEXT_CONFIRM_POLL_SECONDS = 0.05
 NATIVE_TEXT_DELIVERY_ATTEMPTS = 2
 NATIVE_TEXT_QUEUED = "queued"
@@ -148,7 +152,39 @@ NATIVE_TEXT_SENT = "sent"
 
 
 def _same_native_prompt(expected: str, observed: str) -> bool:
-    return bool(expected.strip()) and expected.strip() == observed.strip()
+    expected = expected.strip()
+    observed = observed.strip()
+    if not expected:
+        return False
+    if expected == observed:
+        return True
+    # Claude turns a pasted image path into an image content block. Its paired
+    # text drops that private path and gains a display ordinal:
+    #   Image attachment "x.png": /tmp/x.png\nPrompt
+    #   [Image #1]Image attachment "x.png":\nPrompt
+    # The display names and exact prompt suffix are the stable native identity.
+    attachment_pattern = r'Image attachment "([^"]+)":'
+    expected_names = tuple(re.findall(attachment_pattern, expected))
+    observed_names = tuple(re.findall(attachment_pattern, observed))
+    if not expected_names or expected_names != observed_names:
+        return False
+    expected_suffix = expected.partition("\n")[2].strip()
+    observed_suffix = observed.partition("\n")[2].strip()
+    return expected_suffix == observed_suffix
+
+
+def _image_prompt_text(user: records.UserRecord) -> str | None:
+    content = user.message.content if user.message is not None else None
+    if not isinstance(content, list) or not any(
+        isinstance(block, records.ImageBlock) for block in content
+    ):
+        return None
+    texts = [
+        block.text
+        for block in content
+        if isinstance(block, records.TextBlock) and block.text
+    ]
+    return "\n".join(texts) if texts else None
 
 
 def _native_text_state(
@@ -187,6 +223,15 @@ def _native_text_state(
                     elif operation.operation == "remove":
                         state = NATIVE_TEXT_SENT
                 continue
+            if header.type == "user":
+                image_prompt = _image_prompt_text(
+                    records.UserRecord.model_validate_json(line)
+                )
+                if image_prompt is not None and _same_native_prompt(
+                    expected, image_prompt
+                ):
+                    state = NATIVE_TEXT_SENT
+                    continue
             parsed = transcript.parse_line(line.decode("utf-8", errors="replace"))
         except (UnicodeError, ValidationError):
             # The file can be read between two native writes. The next poll
@@ -195,6 +240,11 @@ def _native_text_state(
         if (
             isinstance(parsed, transcript.PromptTranscriptRecord)
             and not parsed.meta
+            and _same_native_prompt(expected, parsed.text)
+        ):
+            state = NATIVE_TEXT_SENT
+        elif (
+            isinstance(parsed, transcript.SlashCommandTranscriptRecord)
             and _same_native_prompt(expected, parsed.text)
         ):
             state = NATIVE_TEXT_SENT
@@ -214,6 +264,46 @@ def _wait_for_native_text_state(
         if time.monotonic() >= deadline:
             return None
         time.sleep(NATIVE_TEXT_CONFIRM_POLL_SECONDS)
+
+
+def _deliver_native_text(
+    control_context: ControlContext,
+    _terminal_driver: _TerminalDriver,
+    window_id: WindowId,
+    message: str,
+    *,
+    ensure_submit: bool = False,
+) -> tuple[str | None, str | None]:
+    """Submit text and require Claude's transcript to acknowledge acceptance."""
+    source_reference = control_context.session.source_reference
+    try:
+        transcript_position = os.path.getsize(source_reference)
+    except OSError:
+        transcript_position = -1
+    for _attempt in range(NATIVE_TEXT_DELIVERY_ATTEMPTS):
+        native_state = _native_text_state(
+            source_reference,
+            transcript_position,
+            message,
+        )
+        if native_state is not None:
+            return native_state, None
+        succeeded, _cleared_image = tui.type_command(
+            _terminal_driver,
+            window_id,
+            message,
+            ensure_submit=ensure_submit,
+        )
+        if not succeeded:
+            return None, "terminal message was not delivered"
+        native_state = _wait_for_native_text_state(
+            source_reference,
+            transcript_position,
+            message,
+        )
+        if native_state is not None:
+            return native_state, None
+    return None, "Claude Code did not confirm the message"
 
 
 def _result(request: ControlRequest, succeeded: bool, reason: str) -> ControlResult:
@@ -273,65 +363,23 @@ class SendTextHandler(ControlHandler):
             input_state = ClaudeCodeTerminalProbe().input_state(terminal.viewport, window_id)
             tui.clear_input(driver, window_id, (input_state.typed_text or "") if input_state else "")
         message = control_prompt_with_attachments(request.text, request.attachments)
-        if not control_context.lead_active:
-            succeeded, _cleared_image = tui.type_command(
-                driver,
-                window_id,
-                message,
-                ensure_submit=bool(request.attachments),
-            )
+        native_state, reason = _deliver_native_text(
+            control_context,
+            driver,
+            window_id,
+            message,
+            ensure_submit=bool(request.attachments),
+        )
+        if native_state is not None:
             return DeliveryResult(
                 request.request_id,
-                ControlAcknowledgement.ACKNOWLEDGED if succeeded else ControlAcknowledgement.INDETERMINATE,
-                None if succeeded else "terminal message was not delivered",
-                queued=False,
+                ControlAcknowledgement.ACKNOWLEDGED,
+                queued=native_state == NATIVE_TEXT_QUEUED,
             )
-        try:
-            transcript_position = os.path.getsize(control_context.session.source_reference)
-        except OSError:
-            transcript_position = -1
-        for _attempt in range(NATIVE_TEXT_DELIVERY_ATTEMPTS):
-            # A late native record can arrive at the retry boundary. Read it
-            # once more before a second paste, so an accepted message is never
-            # submitted twice.
-            native_state = _native_text_state(
-                control_context.session.source_reference,
-                transcript_position,
-                message,
-            )
-            if native_state is not None:
-                return DeliveryResult(
-                    request.request_id,
-                    ControlAcknowledgement.ACKNOWLEDGED,
-                    queued=native_state == NATIVE_TEXT_QUEUED,
-                )
-            succeeded, _cleared_image = tui.type_command(
-                driver,
-                window_id,
-                message,
-                ensure_submit=bool(request.attachments),
-            )
-            if not succeeded:
-                return DeliveryResult(
-                    request.request_id,
-                    ControlAcknowledgement.INDETERMINATE,
-                    "terminal message was not delivered",
-                )
-            native_state = _wait_for_native_text_state(
-                control_context.session.source_reference,
-                transcript_position,
-                message,
-            )
-            if native_state is not None:
-                return DeliveryResult(
-                    request.request_id,
-                    ControlAcknowledgement.ACKNOWLEDGED,
-                    queued=native_state == NATIVE_TEXT_QUEUED,
-                )
         return DeliveryResult(
             request.request_id,
             ControlAcknowledgement.INDETERMINATE,
-            "Claude Code did not confirm the queued message",
+            reason,
         )
 
 
@@ -358,7 +406,10 @@ class InterruptHandler(ControlHandler):
             delivered = delivered or sent
             if not delivered:
                 break
-            deadline = time.monotonic() + 1.25
+            # The transcript write is local but can be descheduled behind
+            # other live CLIs. Success still returns immediately; the larger
+            # bound only affects a missing native acknowledgement.
+            deadline = time.monotonic() + 5.0
             while time.monotonic() < deadline:
                 time.sleep(0.1)
                 if position >= 0 and _transcript_has_interrupt(
@@ -398,7 +449,7 @@ BACKGROUND_CHORD = "ctrl+b"
 # Long enough to cover the harness's own 2 s delay with room for a slow screen
 # read; short enough that a command which will never offer it (one that already
 # finished, one the TUI is not blocked on) answers the caller promptly.
-BACKGROUND_OFFER_TIMEOUT_SECONDS = 6.0
+BACKGROUND_OFFER_TIMEOUT_SECONDS = 15.0
 BACKGROUND_POLL_SECONDS = 0.2
 
 WHITESPACE = re.compile(r"\s+")
@@ -600,10 +651,17 @@ class AnswerQuestionHandler(ControlHandler):
         except askdialog.AskError as error:
             return ControlResult(request.request_id, ControlAcknowledgement.INDETERMINATE, str(error))
         if request.decision == AnswerDecision.DISCUSS and request.discussion:
-            succeeded, _cleared_image = tui.type_command(driver, window_id, request.discussion)
-            if not succeeded:
+            native_state, reason = _deliver_native_text(
+                control_context,
+                driver,
+                window_id,
+                request.discussion,
+            )
+            if native_state is None:
                 return ControlResult(
-                    request.request_id, ControlAcknowledgement.INDETERMINATE, "discussion text was not delivered"
+                    request.request_id,
+                    ControlAcknowledgement.INDETERMINATE,
+                    reason,
                 )
         return ControlResult(request.request_id, ControlAcknowledgement.ACKNOWLEDGED)
 

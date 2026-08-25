@@ -1,11 +1,20 @@
 import AxeBuilder from '@axe-core/playwright';
-import { expect, test } from '@playwright/test';
 import type { Page } from '@playwright/test';
 
-test.describe.configure({ mode: 'serial' });
+import { expect, test } from './fixtures';
+
+const FIXTURE_TIME = 1_700_000_000_000;
+
+test.beforeEach(async ({ page }) => {
+  await page.clock.setFixedTime(FIXTURE_TIME);
+});
 
 function watchBrowserFailures(page: Page): readonly string[] {
   const failures: string[] = [];
+  page.on('response', (response) => {
+    if (response.status() >= 500)
+      failures.push(`${String(response.status())} ${response.url()}`);
+  });
   page.on('console', (message) => {
     const text = message.text();
     // WebKit ignores this Chromium viewport extension and reports the ignore

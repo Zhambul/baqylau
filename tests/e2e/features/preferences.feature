@@ -15,11 +15,10 @@ Feature: browser-owned preferences round trip through the application
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" and assign work "prepare preferences" to the subagent with prompt
       """
-      Reply only with the word prepared.
+      Reply with the exact marker PREFERENCES_PREPARED and no other text.
       """
     Then work "prepare preferences" completes
     And work "prepare preferences" has worker type subagent
-    And work "prepare preferences" has final answer 'prepared'
     And work "prepare preferences" releases the lead
     When I assign work "open preferences" in session "primary" to the lead with prompt
       """

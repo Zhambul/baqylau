@@ -21,12 +21,16 @@ from domain.events import (
     ActorAssignmentFinished,
     ActorStarted,
     CanonicalEvent,
+    EffortChanged,
     MessageCreated,
+    ModelChanged,
     PlanResolved,
+    SessionFinished,
     SessionStarted,
     SessionTitleChanged,
     ShellFinished,
     TurnAborted,
+    TurnFinished,
 )
 from domain.ids import (
     ActorId,
@@ -45,8 +49,11 @@ from domain.ids import (
 from domain.values import (
     ActorRole,
     ExecutionMode,
+    EffortChangeReason,
     MessagePhase,
     MessageRole,
+    ModelChangeReason,
+    ModelReference,
     Outcome,
     PlanState,
     TextContent,
@@ -63,11 +70,14 @@ from harness.impl.claude_code.canonical.translator import ClaudeCanonicalTransla
 from harness.models import (
     AttachmentReference,
     CloseSession,
+    plan_resolution_phase,
     ControlAcknowledgement,
     DecidePlan,
     DeliveryResult,
     DurableTitleResult,
     RenameSession,
+    SelectEffort,
+    SelectModel,
     SendText,
     Session,
 )
@@ -321,6 +331,19 @@ def test_confirmed_plan_decision_becomes_one_canonical_resolution(
     assert event.payload == PlanResolved(attention_id, state, feedback, False)
 
 
+def test_plan_feedback_is_a_newer_revision_than_a_generic_rejection() -> None:
+    attention_id = AttentionId("plan-one")
+    generic = PlanResolved(attention_id, PlanState.REJECTED, None, False)
+    feedback = PlanResolved(
+        attention_id,
+        PlanState.CHANGES_REQUESTED,
+        "start with tests",
+        False,
+    )
+
+    assert plan_resolution_phase(generic) != plan_resolution_phase(feedback)
+
+
 def test_confirmed_parked_rename_becomes_one_canonical_title_change() -> None:
     raw_events = RawEvents()
     recorder = ControlEffectRecorder(
@@ -360,6 +383,56 @@ def test_confirmed_parked_rename_becomes_one_canonical_title_change() -> None:
         "Parked title",
         TitleOrigin.CUSTOM,
     )
+
+
+@pytest.mark.parametrize(
+    ("selection_request", "source_name", "expected"),
+    (
+        (
+            SelectModel(SessionId("session-one"), RequestId("model-one"), "sonnet"),
+            "model_selection",
+            ModelChanged(
+                None,
+                ModelReference("sonnet", "sonnet"),
+                ModelChangeReason.SELECTED,
+            ),
+        ),
+        (
+            SelectEffort(SessionId("session-one"), RequestId("effort-one"), "medium"),
+            "effort_selection",
+            EffortChanged(None, "medium", EffortChangeReason.SELECTED),
+        ),
+    ),
+)
+def test_confirmed_selections_become_canonical_state_changes(
+    selection_request,
+    source_name,
+    expected,
+) -> None:
+    raw_events = RawEvents()
+    recorder = ControlEffectRecorder(
+        cast(RawEventRepository, raw_events),
+        cast(SessionWorkspaceRepository, Workspaces()),
+        cast(SessionDataRepository, SessionEntries()),
+    )
+    session = Session(
+        SessionId("session-one"),
+        ActorId("actor-one"),
+        "transcript.jsonl",
+        "/work",
+        plugin=cast(
+            HarnessPlugin,
+            SimpleNamespace(info=SimpleNamespace(name=HarnessName.CLAUDE_CODE)),
+        ),
+    )
+
+    recorder.selection_changed(session, selection_request)
+
+    assert len(raw_events.items) == 1
+    raw_event = raw_events.items[0]
+    assert raw_event.source_name == source_name
+    translated = ControlTranslator().translate(raw_event)
+    assert [event.payload for event in translated.canonical_events] == [expected]
 
 
 @pytest.mark.parametrize(
@@ -468,18 +541,20 @@ def test_a_confirmed_close_cancels_each_open_work_identity():
         observations,
     )
 
-    assert len(raw_events.items) == 3
+    assert len(raw_events.items) == 4
     translated = [ControlTranslator().translate(item).canonical_events[0] for item in raw_events.items]
     assert [type(item.payload) for item in translated] == [
+        SessionFinished,
         TurnAborted,
         ShellFinished,
         ActorAssignmentFinished,
     ]
-    assert all(item.actor_id == child_id for item in translated)
-    assert all(item.parent_actor_id == lead_id for item in translated)
-    assert all(item.turn_id == turn_id for item in translated)
-    assert translated[1].payload.outcome == Outcome.CANCELLED
+    assert translated[0].actor_id == lead_id
+    assert all(item.actor_id == child_id for item in translated[1:])
+    assert all(item.parent_actor_id == lead_id for item in translated[1:])
+    assert all(item.turn_id == turn_id for item in translated[1:])
     assert translated[2].payload.outcome == Outcome.CANCELLED
+    assert translated[3].payload.outcome == Outcome.CANCELLED
 
 
 @pytest.mark.parametrize(
@@ -506,6 +581,10 @@ def test_only_an_acknowledged_queued_send_is_persisted(
         ControlEffectRecorder,
         SimpleNamespace(text_queued=lambda request: recorded.append(request)),
     )
+    service.sessions = cast(
+        SessionRepository,
+        SimpleNamespace(find=lambda _session_id: None),
+    )
     monkeypatch.setattr(
         service,
         "_execute",
@@ -515,6 +594,7 @@ def test_only_an_acknowledged_queued_send_is_persisted(
             queued=queued,
         ),
     )
+    monkeypatch.setattr(service, "_lead_active", lambda _session_id: True)
     request = SendText(
         SessionId("session-one"),
         RequestId("request-one"),
@@ -524,6 +604,81 @@ def test_only_an_acknowledged_queued_send_is_persisted(
     service.send_text(request)
 
     assert recorded == ([request] if saved else [])
+
+
+def test_a_send_that_misses_the_turn_boundary_drains_after_it_is_persisted(
+    monkeypatch,
+) -> None:
+    recorded = []
+    executions: list[bool | None] = []
+    service = object.__new__(HarnessControlService)
+    service.audit = cast(
+        AuditRecorder,
+        SimpleNamespace(state_file=lambda *_args, **_kwargs: None),
+    )
+    service.control_effects = cast(
+        ControlEffectRecorder,
+        SimpleNamespace(text_queued=lambda request: recorded.append(request)),
+    )
+    service.sessions = cast(
+        SessionRepository,
+        SimpleNamespace(find=lambda _session_id: None),
+    )
+
+    def execute(_request, *, lead_active=None):
+        executions.append(lead_active)
+        return DeliveryResult(
+            RequestId("request-one"),
+            ControlAcknowledgement.ACKNOWLEDGED,
+            queued=lead_active is not False,
+        )
+
+    monkeypatch.setattr(service, "_execute", execute)
+    monkeypatch.setattr(service, "_lead_active", lambda _session_id: False)
+    request = SendText(
+        SessionId("session-one"),
+        RequestId("request-one"),
+        text="do this next",
+    )
+
+    outcome = service.send_text(request)
+
+    assert isinstance(outcome, DeliveryResult)
+    assert outcome.queued is True
+    assert recorded == [request]
+    assert executions == [None, False]
+
+
+def test_a_native_queue_is_not_submitted_again_at_the_turn_boundary(
+    monkeypatch,
+) -> None:
+    session = Session(
+        SessionId("session-one"),
+        ActorId("actor-one"),
+        "transcript.jsonl",
+        "/work",
+        plugin=cast(
+            HarnessPlugin,
+            SimpleNamespace(
+                info=SimpleNamespace(supports_native_text_queue=True),
+            ),
+        ),
+    )
+    service = object.__new__(HarnessControlService)
+    service.sessions = cast(SessionRepository, Sessions(session))
+    monkeypatch.setattr(
+        service,
+        "_audited",
+        lambda *_args, **_kwargs: pytest.fail("native queued text was resubmitted"),
+    )
+
+    outcome = service.send_queued_text(
+        SendText(session.session_id, RequestId("request-one"), "next prompt")
+    )
+
+    assert isinstance(outcome, DeliveryResult)
+    assert outcome.status == ControlAcknowledgement.ACKNOWLEDGED
+    assert outcome.queued is True
 
 
 def test_only_a_confirmed_durable_rename_is_recorded(monkeypatch) -> None:
@@ -593,3 +748,31 @@ def test_each_native_prompt_consumes_only_one_equal_queued_send():
 
     assert workspaces.removed == ["request-one", "request-two"]
     assert workspaces.items == []
+
+
+def test_a_queued_codex_prompt_is_submitted_after_the_active_turn_finishes():
+    workspaces = DurableQueue()
+    sent = []
+    reaction = QueuedPromptCanonicalEventReaction(
+        workspaces,
+        SimpleNamespace(send_queued_text=lambda request: sent.append(request)),
+    )
+    reaction.react(
+        CanonicalEvent(
+            event_id=CanonicalEventId("active-turn-finished"),
+            session_id=SessionId("session-one"),
+            actor_id=ActorId("actor-one"),
+            turn_id=TurnId("turn-one"),
+            parent_actor_id=None,
+            harness=HarnessName.CODEX,
+            occurred_at=2.0,
+            terminal_window_id=None,
+            harness_process_id=None,
+            payload=TurnFinished(None, Outcome.SUCCEEDED),
+        )
+    )
+
+    assert len(sent) == 1
+    assert sent[0].request_id == "request-one"
+    assert sent[0].text == "same prompt"
+    assert workspaces.removed == []

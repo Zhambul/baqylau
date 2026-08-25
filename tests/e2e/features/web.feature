@@ -4,7 +4,7 @@ Feature: web activity stays on the work that requested it
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" and assign work "search example" to the <worker> with prompt
       """
-      Use the web search tool exactly once. Search with the exact query
+      Use the web search tool. Search with the exact query
       "IANA Example Domain reserved". Use the search result. When the work is
       complete, reply with the exact marker WEB_SEARCH_DONE and no other text.
       """
@@ -25,7 +25,7 @@ Feature: web activity stays on the work that requested it
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" and assign work "fetch example" to the <worker> with prompt
       """
-      Use the web page fetch tool exactly once. Fetch the exact URL
+      Use the web page fetch tool. Fetch the exact URL
       https://example.com without a web search. Read the page. When the work is
       complete, reply with the exact marker WEB_FETCH_DONE and no other text.
       """

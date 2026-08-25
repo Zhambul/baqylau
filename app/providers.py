@@ -446,7 +446,7 @@ Catalog = Annotated[HarnessCatalogService, Depends(catalog)]
 
 @singleton
 def usage_state(harnesses: Registry, usage: AccountUsage) -> ApplicationUsageState:
-    return ApplicationUsageState(HarnessUsageService(harnesses, usage))
+    return ApplicationUsageState.configured(HarnessUsageService(harnesses, usage))
 
 
 UsageState = Annotated[ApplicationUsageState, Depends(usage_state)]
@@ -723,12 +723,13 @@ def reactions(
     workspaces: Workspaces,
     harnesses: Registry,
     jobs: NamingJobs,
+    control_service: Controls,
 ) -> tuple[CanonicalEventReaction, ...]:
     """What a committed fact CAUSES, in dependency order, on the reaction loop."""
     return (
         AutomaticNamingReaction(harnesses, jobs),
         PaneCanonicalEventReaction(adapter, session_storage, widths),
-        QueuedPromptCanonicalEventReaction(workspaces),
+        QueuedPromptCanonicalEventReaction(workspaces, control_service),
         InterruptCanonicalEventReaction(interrupts),
     )
 

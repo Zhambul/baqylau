@@ -38,7 +38,7 @@ Feature: shell work reaches the session feed
       """
     Then work "answer interactive command" completes
     And work "answer interactive command" has worker type <worker>
-    When I name the only shell command in work "answer interactive command" containing 'value=input' "interactive command"
+    When I name the successful shell command in work "answer interactive command" containing 'value=input' "interactive command"
     Then command "interactive command" has output containing 'received:interactive-marker-417'
     And command "interactive command" has state succeeded
     And command "interactive command" has exit code 0

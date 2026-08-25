@@ -152,7 +152,7 @@ class TerminalAdapter:
     ) -> bool:
         """Whether the named harness is the foreground process in this window.
 
-        KITTY_WINDOW_ID is inherited by every child command. It is a location
+        A terminal window id is inherited by every child command. It is a location
         hint, not ownership proof. A hook's resolved CLI PID is exact. A
         resume-launch observation can arrive before its hook and has no PID,
         so that one case uses the plugin's exact executable name.

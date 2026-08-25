@@ -16,11 +16,16 @@ the one place in the tree that turns an object into bytes.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from enum import StrEnum
 
 from domain.ids import AssignmentId, AttentionId, SessionId, ShellId, TurnId
 from domain.stored import STORED
 from domain.values import OpenWorkKind, PlanState, ProgressStream, TitleOrigin
+
+
+class ProcessExitState(StrEnum):
+    EXITED = "exited"
+    DISPLACED = "displaced"
 
 
 @dataclass(frozen=True)
@@ -43,7 +48,7 @@ class ProcessExit:
     __pydantic_config__ = STORED
 
     process_id: int | None
-    state: Literal["exited", "displaced"]
+    state: ProcessExitState
 
 
 @dataclass(frozen=True)
@@ -77,6 +82,24 @@ class SessionRenameObservation:
 
     title: str
     origin: TitleOrigin
+
+
+@dataclass(frozen=True)
+class ModelSelectionObservation:
+    """A model selection confirmed by a native control driver."""
+
+    __pydantic_config__ = STORED
+
+    model: str
+
+
+@dataclass(frozen=True)
+class EffortSelectionObservation:
+    """An effort selection confirmed by a native control driver."""
+
+    __pydantic_config__ = STORED
+
+    effort: str
 
 
 @dataclass(frozen=True)

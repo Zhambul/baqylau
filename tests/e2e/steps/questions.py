@@ -10,7 +10,7 @@ from api.sessiondata.models.entry import (
 )
 from sdk.client import BaqylauClient
 from sdk.state import QuestionState, SessionSnapshot
-from tests.e2e.testkit import selectors
+from tests.e2e.testkit import selectors, turns as turn_checks
 from tests.e2e.testkit.policy import WaitPolicy
 from tests.e2e.testkit.questions import QuestionWorkDriver
 from tests.e2e.testkit.references import (
@@ -478,7 +478,7 @@ def question_is_followed_by_final_answer(
             and isinstance(entry.body, MessageBodyResponse)
             and entry.body.role == "assistant"
             and entry.body.phase == "end_turn"
-            and entry.body.content.text.strip() == text
+            and turn_checks.matches_final_answer(entry.body.content.text, text)
         ]
         if len(found) > 1:
             raise AssertionError(
@@ -520,7 +520,7 @@ def question_sends_chat_prompt(
             and isinstance(entry.body, MessageBodyResponse)
             and entry.body.role == "user"
             and entry.body.phase == "prompt"
-            and entry.body.content.text.strip() == text
+            and turn_checks.matches_final_answer(entry.body.content.text, text)
         ]
         if len(found) > 1:
             raise AssertionError(

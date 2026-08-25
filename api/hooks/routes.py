@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.concurrency import run_in_threadpool
+from starlette.requests import ClientDisconnect
 
 from api.common.models.fields import HarnessNamePath
 from api.responses import errors
@@ -47,7 +48,12 @@ async def record_hook_delivery(
     The headers are read verbatim — every value is what the client OBSERVED, and
     the interpretation of it (the CLI pid behind a client pid, a valid account
     slug) happens below this, where the vocabulary lives."""
-    payload = await request.body()
+    try:
+        payload = await request.body()
+    except ClientDisconnect:
+        # The bounded hook client may disappear while this process is
+        # descheduled. No complete delivery exists to record or audit.
+        return Response(status_code=499)
     try:
         try:
             harness_name = HarnessName(harness)

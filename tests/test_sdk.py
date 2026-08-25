@@ -787,6 +787,43 @@ def test_two_equal_pending_assignments_do_not_guess_a_child_actor():
     assert [item.actor_id for item in assignments] == [None, None]
 
 
+def test_a_late_generic_plan_rejection_does_not_erase_feedback():
+    def plan_entry(cursor: int, entry_type: str, body: dict) -> EntryResponse:
+        return EntryResponse.model_validate({
+            "entry_id": f"plan-{cursor}",
+            "type": entry_type,
+            "cursor": cursor,
+            "actor_id": "lead-one",
+            "parent_actor_id": None,
+            "turn_id": "turn-one",
+            "occurred_at": float(cursor),
+            "summary": None,
+            "body": {"attention_id": "plan-one", **body},
+        })
+
+    plan = SessionSnapshot(
+        session_data(3),
+        (
+            plan_entry(1, "plan_proposed", {
+                "plan": {"text": "Do it", "media_type": "text/markdown"},
+            }),
+            plan_entry(2, "plan_resolved", {
+                "state": "changes_requested",
+                "feedback": "start with tests",
+                "edited": False,
+            }),
+            plan_entry(3, "plan_resolved", {
+                "state": "rejected",
+                "feedback": None,
+                "edited": False,
+            }),
+        ),
+    ).plans()[0]
+
+    assert plan.state == "changes_requested"
+    assert plan.feedback == "start with tests"
+
+
 def test_named_references_reject_rebinding_and_unknown_names():
     references = References[int]("command")
     references.bind("build", 1)

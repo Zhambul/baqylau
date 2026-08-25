@@ -7,6 +7,7 @@ import time
 from audit.recorder import AuditRecorder
 from domain.entries import PlanProposedBody, QuestionAskedBody, SessionEntry
 from domain.events import PlanProposed, QuestionAsked
+from domain.ids import SessionId
 from harness.contract import HarnessReactorContext
 from harness.models import (
     AnswerQuestion,
@@ -117,6 +118,29 @@ class HarnessControlService(HarnessReactorContext):
     def send_text(self, send_text: SendText) -> ControlOutcome:
         return self._audited(send_text)
 
+    def send_queued_text(self, send_text: SendText) -> ControlOutcome:
+        """Deliver a durable item after a canonical idle boundary.
+
+        The session-data projection can still report the just-finished turn as
+        active while reactions for that same fact are running.  The canonical
+        boundary is the stronger fact, so the drain path explicitly supplies
+        the idle state instead of re-queueing the item forever.
+        """
+        session = self.sessions.find(send_text.session_id)
+        if (
+            session is not None
+            and session.plugin is not None
+            and session.plugin.info.supports_native_text_queue
+        ):
+            # The native queue accepted the original Enter and owns delivery.
+            # Its eventual prompt fact removes the durable UI copy.
+            return DeliveryResult(
+                send_text.request_id,
+                ControlAcknowledgement.ACKNOWLEDGED,
+                queued=True,
+            )
+        return self._audited(send_text, lead_active=False)
+
     def interrupt(self, interrupt: Interrupt) -> ControlOutcome:
         return self._audited(interrupt)
 
@@ -156,14 +180,23 @@ class HarnessControlService(HarnessReactorContext):
     def decide_plan(self, decide_plan: DecidePlan) -> ControlOutcome:
         return self._audited(decide_plan)
 
-    def _audited(self, request: ControlRequest) -> ControlOutcome:
+    def _audited(
+        self,
+        request: ControlRequest,
+        *,
+        lead_active: bool | None = None,
+    ) -> ControlOutcome:
         pending_entry = self._pending_attention_entry(request) if isinstance(request, DecidePlan) else None
         work_before_close = (
             self.control_effects.work_before_close(request.session_id) if isinstance(request, CloseSession) else ()
         )
         started = time.monotonic()
         try:
-            outcome = self._execute(request)
+            outcome = (
+                self._execute(request)
+                if lead_active is None
+                else self._execute(request, lead_active=lead_active)
+            )
         except Exception:
             _audit_control(self.audit, request, None, time.monotonic() - started)
             raise
@@ -181,6 +214,12 @@ class HarnessControlService(HarnessReactorContext):
             and outcome.queued
         ):
             self.control_effects.text_queued(request)
+            # Persist first, then check for the missed-wakeup ordering where
+            # the turn finished between the controller's stale active read and
+            # this write. If it is idle now, delivery cannot be left waiting
+            # for a turn-finished reaction that already ran.
+            if not self._lead_active(request.session_id):
+                self.send_queued_text(request)
         if isinstance(request, CloseSession) and outcome.status == ControlAcknowledgement.ACKNOWLEDGED:
             session = self.sessions.find(request.session_id)
             if session is not None:
@@ -197,6 +236,13 @@ class HarnessControlService(HarnessReactorContext):
             session = self.sessions.find(request.session_id)
             if session is not None:
                 self.control_effects.session_renamed(session, request)
+        if (
+            isinstance(request, (SelectModel, SelectEffort))
+            and outcome.status == ControlAcknowledgement.ACKNOWLEDGED
+        ):
+            session = self.sessions.find(request.session_id)
+            if session is not None:
+                self.control_effects.selection_changed(session, request)
         # An interrupt the harness acknowledged but did not corroborate in its
         # own raw event: nothing else will ever tell the interpreter this turn
         # ended, so mark it for the registry's fallback fact. A harness whose
@@ -224,7 +270,26 @@ class HarnessControlService(HarnessReactorContext):
             pending_session_entry,
         )
 
-    def _execute(self, request: ControlRequest) -> ControlOutcome:
+    def _lead_active(self, session_id: SessionId) -> bool:
+        data = self.read_model.read(session_id)
+        if data is None:
+            return False
+        lead = next(
+            (
+                actor
+                for actor in data.actors
+                if actor.actor_id == data.session.lead_actor_id
+            ),
+            None,
+        )
+        return bool(lead and lead.statistics.active_since_internal is not None)
+
+    def _execute(
+        self,
+        request: ControlRequest,
+        *,
+        lead_active: bool | None = None,
+    ) -> ControlOutcome:
         session = self.sessions.find(request.session_id)
         if session is None:
             return ControlResult(request.request_id, ControlAcknowledgement.REJECTED, "unknown session")
@@ -246,7 +311,11 @@ class HarnessControlService(HarnessReactorContext):
             terminal=self.plugin,
             terminal_window_id=self.terminal.window_for_session(request.session_id),
             current_effort=lead.effort if lead is not None else None,
-            lead_active=bool(lead and lead.statistics.active_since_internal is not None),
+            lead_active=(
+                lead_active
+                if lead_active is not None
+                else bool(lead and lead.statistics.active_since_internal is not None)
+            ),
             pending_attention=self._pending_attention(request),
         )
         if (

@@ -10,6 +10,12 @@ from tests.e2e.testkit import selectors
 from tests.e2e.testkit.references import TurnRef
 
 
+def matches_final_answer(observed: str, expected: str) -> bool:
+    """Match a marker despite one optional sentence-final period."""
+    answer = observed.strip()
+    return answer in (expected, f"{expected}.")
+
+
 def enders(snapshot: SessionSnapshot, reference: TurnRef) -> list[EntryResponse]:
     start_cursor = reference.activity_cursor
     if start_cursor is None:

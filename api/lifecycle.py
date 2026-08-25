@@ -81,3 +81,9 @@ def background_workers(instances: Instances) -> Iterator[None]:
         usage.join(timeout=2)
         notifier.join(timeout=2)
         naming.join(timeout=2)
+        # Headless terminals own their subprocesses. Closing them after the
+        # workers stop prevents interactive harness and naming-model processes
+        # from surviving an application restart; external terminals provide a
+        # no-op lifecycle callback.
+        resolve(instances, providers.terminal_plugin).close()
+        resolve(instances, providers.model_terminal).close()

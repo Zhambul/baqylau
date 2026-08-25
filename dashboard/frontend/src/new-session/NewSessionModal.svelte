@@ -178,7 +178,8 @@
   });
 
   $effect(() => {
-    const models = catalog?.models ?? [];
+    if (catalog === null) return;
+    const models = catalog.models;
     if (models.length === 0) {
       modelId = '';
       effort = '';
@@ -190,6 +191,7 @@
   });
 
   $effect(() => {
+    if (catalog === null) return;
     const efforts = selectedModel?.efforts ?? [];
     if (efforts.length === 0) {
       effort = '';
@@ -230,6 +232,9 @@
     catalogRequest = controller;
     catalogLoading = true;
     catalogFailure = null;
+    // Do not let a previous harness's catalog rewrite a resume row's saved
+    // model while the matching catalog is in flight.
+    catalog = null;
     try {
       const result = await readLaunchCatalog(
         selectedHarness,

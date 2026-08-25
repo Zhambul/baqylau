@@ -4,9 +4,8 @@ Feature: session compaction has a complete lifecycle
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" and assign work "first context" to the <worker> with prompt
       """
-      This prompt is the test task. Do not inspect files and do not use tools.
-      Remember the exact phrase amber circle. Your complete response must be
-      exactly this one word: first
+      Remember the exact phrase amber circle for a later recall check. Do not
+      use tools. Acknowledge by replying with exactly this one word: first
       """
     Then work "first context" completes
     And work "first context" has worker type <worker>
@@ -14,9 +13,8 @@ Feature: session compaction has a complete lifecycle
     And work "first context" releases the lead
     When I send prompt to session "primary" as turn "second context"
       """
-      This prompt is the test task. Do not inspect files and do not use tools.
-      Remember both exact phrases amber circle and blue square. Your complete
-      response must be exactly this one word: second
+      Also remember the exact phrase blue square for the same recall check. Do
+      not use tools. Acknowledge by replying with exactly this one word: second
       """
     Then turn "second context" completes
     And turn "second context" has final answer 'second'

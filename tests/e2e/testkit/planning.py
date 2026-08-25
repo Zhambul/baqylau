@@ -6,6 +6,7 @@ from api.sessiondata.models.entry import MessageBodyResponse
 from sdk.client import ActionReceipt, BaqylauClient, SessionRef
 from sdk.state import PlanState, SessionSnapshot
 from tests.e2e.testkit.references import PlanRef, SessionSpec, TurnRef
+from tests.e2e.testkit.turns import matches_final_answer
 
 
 def plan_state(snapshot: SessionSnapshot, reference: PlanRef) -> PlanState:
@@ -40,7 +41,7 @@ def wait_for_plan_answer(
             and isinstance(entry.body, MessageBodyResponse)
             and entry.body.role == "assistant"
             and entry.body.phase == "end_turn"
-            and entry.body.content.text.strip() == text
+            and matches_final_answer(entry.body.content.text, text)
         ]
         if len(found) > 1:
             raise AssertionError(
@@ -71,9 +72,11 @@ class PlanWorkDriver:
             self._require_acknowledged(mode, "enter Codex plan mode")
         elif spec.harness == "claude_code":
             native_prompt = (
-                "Use EnterPlanMode exactly once before you make the plan. "
+                "Your first action must be an EnterPlanMode tool call. Do not "
+                "send assistant text before it. "
                 f"{prompt} "
-                "Use ExitPlanMode exactly once to propose the plan."
+                "Your final action must be exactly one ExitPlanMode tool call "
+                "that proposes the plan; do not answer in prose instead."
             )
         else:
             raise AssertionError(f"harness {spec.harness!r} has no plan work adapter")

@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures';
 
 test('keeps an unfinished message across an immediate reload', async ({
   page,

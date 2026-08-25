@@ -7,7 +7,7 @@ from pytest_bdd import parsers, then, when
 from api.sessiondata.models.entry import ShellFinishedBodyResponse
 from sdk.client import BaqylauClient
 from sdk.state import SessionSnapshot, ShellState
-from tests.e2e.testkit import selectors
+from tests.e2e.testkit import selectors, turns as turn_checks
 from tests.e2e.testkit.policy import WaitPolicy
 from tests.e2e.testkit.references import ShellRef, Shells, Turns, Works
 
@@ -55,6 +55,55 @@ def name_shell_command(
         client.sessions.watch(turn.session),
         turn_reference=turn,
         command_contains=command,
+        timeout=wait_policy.feed,
+    )
+    shells.bind(name, found)
+
+
+@when(parsers.parse(
+    'I name the successful shell command in turn "{turn_name}" containing \'{command}\' "{name}"'
+))
+@when(parsers.parse(
+    'I name the successful shell command in work "{turn_name}" containing \'{command}\' "{name}"'
+))
+def name_successful_shell_command(
+    client: BaqylauClient,
+    turns: Turns,
+    shells: Shells,
+    wait_policy: WaitPolicy,
+    turn_name: str,
+    command: str,
+    name: str,
+) -> None:
+    turn = turns.get(turn_name)
+    found = selectors.shell(
+        client.sessions.watch(turn.session),
+        turn_reference=turn,
+        command_contains=command,
+        predicate=lambda item: item.state == "succeeded",
+        timeout=wait_policy.feed,
+    )
+    shells.bind(name, found)
+
+
+@when(parsers.parse(
+    'I name a successful shell attempt in turn "{turn_name}" containing \'{command}\' "{name}"'
+))
+def name_successful_shell_attempt(
+    client: BaqylauClient,
+    turns: Turns,
+    shells: Shells,
+    wait_policy: WaitPolicy,
+    turn_name: str,
+    command: str,
+    name: str,
+) -> None:
+    turn = turns.get(turn_name)
+    found = selectors.first_shell_attempt(
+        client.sessions.watch(turn.session),
+        turn_reference=turn,
+        command_contains=command,
+        predicate=lambda item: item.state == "succeeded",
         timeout=wait_policy.feed,
     )
     shells.bind(name, found)
@@ -162,9 +211,9 @@ def command_has_state(
 
 
 @then(parsers.parse(
-    'turn "{turn_name}" prompt is delivered after command "{command_name}" finishes'
+    'turn "{turn_name}" produces its final answer after command "{command_name}" finishes'
 ))
-def turn_prompt_is_delivered_after_command_finishes(
+def turn_final_answer_is_after_command_finishes(
     client: BaqylauClient,
     turns: Turns,
     shells: Shells,
@@ -173,27 +222,31 @@ def turn_prompt_is_delivered_after_command_finishes(
     command_name: str,
 ) -> None:
     command = shells.get(command_name)
-    turn = selectors.turn(
-        client.sessions.watch(command.session),
+    turn = turn_checks.wait_until_complete(
+        client,
         turns.get(turn_name),
-        wait_policy.turn,
+        name=turn_name,
+        timeout=wait_policy.turn,
     )
     turns.replace(turn_name, turn)
-    if turn.prompt_cursor is None:
-        raise AssertionError(f"turn {turn_name!r} has no prompt cursor")
-    finished = [
+    snapshot = client.sessions.snapshot(command.session)
+    command_finishes = [
         entry
-        for entry in client.sessions.snapshot(command.session).entries
+        for entry in snapshot.entries
         if entry.actor_id == command.actor_id
         and isinstance(entry.body, ShellFinishedBodyResponse)
         and entry.body.shell_id == command.shell_id
     ]
-    assert len(finished) == 1, (
-        f"command {command_name!r} has {len(finished)} completion facts"
+    assert len(command_finishes) == 1, (
+        f"command {command_name!r} has {len(command_finishes)} completion facts"
     )
-    assert turn.prompt_cursor > finished[0].cursor, (
-        f"turn {turn_name!r} prompt at {turn.prompt_cursor} was not delivered "
-        f"after command {command_name!r} finished at {finished[0].cursor}"
+    answers = turn_checks.enders(snapshot, turn)
+    assert len(answers) == 1, (
+        f"turn {turn_name!r} has {len(answers)} final answers"
+    )
+    assert answers[0].cursor > command_finishes[0].cursor, (
+        f"turn {turn_name!r} answered at {answers[0].cursor} before "
+        f"command {command_name!r} finished at {command_finishes[0].cursor}"
     )
 
 

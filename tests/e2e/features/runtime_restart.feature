@@ -106,7 +106,7 @@ Feature: live harness sessions survive a Baqylau restart
     And session "primary" has control "queued persistence" queued as prompt 'Reply only with QUEUED_PERSISTENCE_DONE.' after a fresh application read
     And command "persistence command" has output containing 'persistence-survived'
     And command "persistence command" has state succeeded
-    And turn "queued work" prompt is delivered after command "persistence command" finishes
+    And turn "queued work" produces its final answer after command "persistence command" finishes
     And turn "queued work" completes
     And turn "queued work" has final answer 'QUEUED_PERSISTENCE_DONE'
     And session "primary" has no queued prompts after a fresh application read

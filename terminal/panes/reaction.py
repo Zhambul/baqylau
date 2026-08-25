@@ -29,14 +29,25 @@ class PaneCanonicalEventReaction(CanonicalEventReaction):
         if isinstance(payload, SessionFinished):
             self.terminal.close_session_panes(canonical_event.session_id)
         elif isinstance(payload, SessionStarted):
-            if (
+            continued = (
                 payload.continued_from is not None
                 and payload.continued_from != canonical_event.session_id
-            ):
+            )
+            if continued:
+                assert payload.continued_from is not None
                 self.terminal.close_session_panes(payload.continued_from)
-            self._open(canonical_event.session_id)
+            # Resume observations are emitted only after our launcher opened
+            # the exact window.  At that instant its login shell may not have
+            # exec'd the harness yet, so waiting for process corroboration
+            # would miss the only non-deduplicated start fact and leave the
+            # window permanently untagged.
+            resumed = payload.resumed_from is not None
+            self._open(
+                canonical_event.session_id,
+                trusted_transfer=continued or resumed,
+            )
 
-    def _open(self, session_id: SessionId) -> None:
+    def _open(self, session_id: SessionId, *, trusted_transfer: bool = False) -> None:
         if self.terminal.session_panes_are_open(session_id):
             return
         # The session-upsert reaction already ran for this whole batch
@@ -46,14 +57,17 @@ class PaneCanonicalEventReaction(CanonicalEventReaction):
         if session is None or session.terminal_window_id is None:
             return  # headless launch: no anchor, no panes
         if (
-            session.plugin is None
-            or not self.terminal.window_hosts_process(
-                session.terminal_window_id,
-                session.harness_process_id,
-                session.plugin.info.cli_process_name,
+            not trusted_transfer
+            and (
+                session.plugin is None
+                or not self.terminal.window_hosts_process(
+                    session.terminal_window_id,
+                    session.harness_process_id,
+                    session.plugin.info.cli_process_name,
+                )
             )
         ):
-            # A child command inherits KITTY_WINDOW_ID from its parent. Do not
+            # A child command inherits its window id from its parent. Do not
             # let that copied value retag the parent's tab or open panes in it.
             return
         self.terminal.open_session_panes(SessionPaneRequest(

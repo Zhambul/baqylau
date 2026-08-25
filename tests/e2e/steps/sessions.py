@@ -326,7 +326,7 @@ def turn_has_final_answer(client: BaqylauClient, turns: Turns, name: str, text: 
     reference = turns.get(name)
     answers = turn_checks.final_answer_texts(client, reference)
     found = [
-        answer for answer in answers if answer == text
+        answer for answer in answers if turn_checks.matches_final_answer(answer, text)
     ]
     assert len(found) == 1, (
         f"turn {name!r} has {len(found)} final answers equal to {text!r}; "

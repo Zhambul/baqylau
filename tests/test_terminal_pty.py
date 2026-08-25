@@ -8,10 +8,13 @@ codes filtered out of it — that `read_screen` answers with what is VISIBLE.
 from __future__ import annotations
 
 import os
+import sys
 import time
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
+import psutil
 
 from terminal.impl.pty import plugin as pty_module
 from terminal.impl.pty.plugin import PtyInput, PtyWindows, pty_plugin
@@ -71,6 +74,93 @@ def test_window_identity_does_not_repeat_after_terminal_restart():
             second.tabs.close_tab(TabCloseRequest(second_window.window_id))
 
 
+def test_terminal_lifecycle_closes_every_owned_window():
+    plugin = pty_plugin(PtyWindows())
+    first = plugin.tabs.open_tab(TabOpenRequest("/tmp", ("/bin/cat",), ""))
+    second = plugin.tabs.open_tab(TabOpenRequest("/tmp", ("/bin/cat",), ""))
+    assert first.succeeded and second.succeeded
+
+    plugin.close()
+
+    assert plugin.metadata.windows() == ()
+
+
+def test_window_close_kills_a_tool_that_escaped_into_its_own_session(
+    terminal,
+    tmp_path,
+):
+    plugin, _ = terminal
+    child_pid_path = tmp_path / "escaped-child.pid"
+    window_id = _open(
+        terminal,
+        (
+            sys.executable,
+            "-c",
+            (
+                "import pathlib, subprocess, time; "
+                "child = subprocess.Popen(['/bin/sleep', '30'], start_new_session=True); "
+                f"pathlib.Path({str(child_pid_path)!r}).write_text(str(child.pid)); "
+                "time.sleep(30)"
+            ),
+        ),
+    )
+    deadline = time.monotonic() + TIMEOUT_SECONDS
+    while not child_pid_path.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert child_pid_path.exists()
+    child_pid = int(child_pid_path.read_text())
+
+    assert plugin.tabs.close_tab(TabCloseRequest(window_id)).succeeded
+
+    deadline = time.monotonic() + TIMEOUT_SECONDS
+    while psutil.pid_exists(child_pid) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert not psutil.pid_exists(child_pid), "detached tool outlived its PTY window"
+
+
+def test_window_close_kills_an_observed_tool_after_its_parent_exits(
+    terminal,
+    tmp_path,
+):
+    plugin, _ = terminal
+    child_pid_path = tmp_path / "orphaned-child.pid"
+    release_path = tmp_path / "release-parent"
+    window_id = _open(
+        terminal,
+        (
+            sys.executable,
+            "-c",
+            (
+                "import pathlib, subprocess, time; "
+                "child = subprocess.Popen(['/bin/sleep', '30'], start_new_session=True); "
+                f"pathlib.Path({str(child_pid_path)!r}).write_text(str(child.pid)); "
+                f"release = pathlib.Path({str(release_path)!r}); "
+                "\nwhile not release.exists(): time.sleep(0.05)"
+            ),
+        ),
+    )
+    deadline = time.monotonic() + TIMEOUT_SECONDS
+    while not child_pid_path.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert child_pid_path.exists()
+    child_pid = int(child_pid_path.read_text())
+
+    processes = plugin.metadata.windows()[0].processes
+    assert any(process.process_id == child_pid for process in processes)
+    release_path.write_text("release\n")
+    deadline = time.monotonic() + TIMEOUT_SECONDS
+    while plugin.metadata.windows() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert plugin.metadata.windows() == ()
+
+    assert plugin.tabs.close_tab(TabCloseRequest(window_id)).succeeded
+
+    deadline = time.monotonic() + TIMEOUT_SECONDS
+    while psutil.pid_exists(child_pid) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert not psutil.pid_exists(child_pid), "orphaned tool outlived its PTY window"
+
+
 def test_window_metadata_reports_descendant_processes(terminal):
     """A hook identifies the CLI child, not the shell that launched it."""
     plugin, _ = terminal
@@ -89,6 +179,30 @@ def test_window_metadata_reports_descendant_processes(terminal):
         raise AssertionError(f"PTY metadata omitted its sleep child: {processes}")
 
     assert len(processes) >= 2
+
+
+def test_window_metadata_falls_back_when_process_details_are_temporarily_denied(
+    monkeypatch,
+):
+    class DeniedProcess:
+        pid = 731
+
+        def children(self, recursive):
+            assert recursive is True
+            return ()
+
+        def cmdline(self):
+            raise SystemError("the operating system denied process details")
+
+    monkeypatch.setattr(pty_module.psutil, "Process", lambda _pid: DeniedProcess())
+    window = SimpleNamespace(
+        process=SimpleNamespace(pid=731),
+        command=("codex", "resume"),
+    )
+
+    assert pty_module._window_processes(window) == (
+        pty_module.WindowProcess(731, ("codex", "resume")),
+    )
 
 
 def test_the_screen_is_what_is_visible_not_everything_that_was_printed(terminal):
@@ -129,14 +243,15 @@ def test_typing_and_keying_reach_the_program(terminal):
 def test_text_submit_keeps_enter_in_a_separate_terminal_read(monkeypatch):
     events = []
     window = SimpleNamespace(
+        revision=7,
         write=lambda payload: events.append(("write", payload)) or True,
+        wait_for_screen_change=lambda revision, timeout: events.append(
+            ("paint", revision, timeout)
+        )
+        or True,
     )
-    windows = SimpleNamespace(get=lambda _window_id: window)
-    monkeypatch.setattr(
-        pty_module.time,
-        "sleep",
-        lambda seconds: events.append(("sleep", seconds)),
-    )
+    windows = SimpleNamespace(get=lambda _window_id: window, lock=nullcontext())
+    del monkeypatch
 
     result = PtyInput(windows).submit_text(
         TextSubmitRequest("window-one", "queued prompt", "paste")
@@ -148,7 +263,7 @@ def test_text_submit_keeps_enter_in_a_separate_terminal_read(monkeypatch):
             "write",
             b"\x1b[200~queued prompt\x1b[201~",
         ),
-        ("sleep", pty_module.SUBMIT_ENTER_DELAY_SECONDS),
+        ("paint", 7, pty_module.SUBMIT_PAINT_TIMEOUT_SECONDS),
         ("write", b"\r"),
     ]
 

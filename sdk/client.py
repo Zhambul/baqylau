@@ -72,6 +72,7 @@ SESSION_STREAM = TypeAdapter(SessionStreamFrame)
 GLOBAL_STREAM = TypeAdapter(GlobalStreamFrame)
 PANE_COMMAND = TypeAdapter(PaneCommandResponse)
 AUTOMATIC_NAME_TIMEOUT_SECONDS = 120.0
+CONTROL_TIMEOUT_SECONDS = 60.0
 
 
 @dataclass(frozen=True)
@@ -404,6 +405,7 @@ class SessionsResource:
                 body,
                 CONTROL,
                 {200, 202, 409},
+                timeout=CONTROL_TIMEOUT_SECONDS,
             )
         else:
             status, outcome = self.transport.post(

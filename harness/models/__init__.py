@@ -65,6 +65,7 @@ from harness.models.raw_events import (
     UnknownRawEvent,
     canonical_event,
     output_location_raw_event,
+    plan_resolution_phase,
     session_run_finished_event,
     session_run_started_events,
 )
@@ -174,6 +175,7 @@ __all__ = [
     "UsageWindowScope",
     "canonical_event",
     "output_location_raw_event",
+    "plan_resolution_phase",
     "session_run_finished_event",
     "session_run_started_events",
 ]

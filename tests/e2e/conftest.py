@@ -14,6 +14,10 @@ from pathlib import Path
 import pytest
 
 from api.runtime import ApplicationConfig
+from harness.impl.claude_code.usage.rows import usage_reader as claude_usage_reader
+from harness.impl.codex.usage_rows import usage_reader as codex_usage_reader
+from harness.models import AccountUsageSnapshot, UsageRow
+from harness.services.usage import SharedUsageCache
 from sdk.client import BaqylauClient
 from tests.e2e.testkit.policy import WaitPolicy
 from tests.e2e.testkit.planning import PlanWorkDriver
@@ -23,7 +27,7 @@ from tests.e2e.testkit.process import (
     ApplicationProcess,
     assert_clean_diagnostics,
 )
-from tests.e2e.testkit.repository import RepositoryWorkspace
+from tests.e2e.testkit.repository import ClaudeCodeProjectTrust, RepositoryWorkspace
 from tests.e2e.testkit.references import (
     AccountSelections,
     ApplicationRestarts,
@@ -74,6 +78,70 @@ MISSING_FILE_FIXTURE = "baqylau-e2e-missing-file-963.txt"
 REWIND_FILE_FIXTURE = "baqylau-e2e-rewind.txt"
 
 
+class _EmptyUsageRepository:
+    def record(self, account_usage_snapshot: AccountUsageSnapshot) -> None:
+        del account_usage_snapshot
+
+    def snapshots(self) -> tuple[AccountUsageSnapshot, ...]:
+        return ()
+
+
+class _LiveE2EUsageSource:
+    def read(self) -> tuple[UsageRow, ...]:
+        repository = _EmptyUsageRepository()
+        return (
+            *claude_usage_reader.read(repository),
+            *codex_usage_reader.read(repository),
+        )
+
+
+def _prewarm_usage_cache(path: Path) -> None:
+    """Run the two account probes before twenty daemons compete for them."""
+    rows = SharedUsageCache(path, max_age_seconds=600).read(
+        _LiveE2EUsageSource()
+    )
+    claude = next((row for row in rows if row.harness == "claude_code"), None)
+    codex = next((row for row in rows if row.harness == "codex"), None)
+    if claude is None or claude.collection_error is not None:
+        raise AssertionError(
+            "Claude usage preflight failed: "
+            + ("no usage row" if claude is None else str(claude.collection_error))
+        )
+    if not any(window.model_name == "fable" for window in claude.windows):
+        raise AssertionError("Claude usage preflight has no Fable window")
+    if codex is None:
+        raise AssertionError("Codex usage preflight has no usage row")
+
+
+def _copy_claude_credentials(source: Path, destination: Path) -> None:
+    """Seed an isolated profile from Claude's authoritative credential store."""
+    credential_text: str | None = None
+    security = shutil.which("security")
+    if security is not None:
+        result = subprocess.run(
+            (
+                security,
+                "find-generic-password",
+                "-w",
+                "-s",
+                "Claude Code-credentials",
+            ),
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            credential_text = result.stdout
+    if credential_text is None:
+        credential_text = (source / ".credentials.json").read_text(encoding="utf-8")
+    credentials = json.loads(credential_text)
+    if not isinstance(credentials, dict):
+        raise AssertionError("Claude credentials are not an object")
+    target = destination / ".credentials.json"
+    target.write_text(json.dumps(credentials), encoding="utf-8")
+    target.chmod(0o600)
+
+
 def pytest_addoption(parser: pytest.Parser) -> None:
     group = parser.getgroup("baqylau live harness tests")
     group.addoption("--e2e-workspace", default=DEFAULT_WORKSPACE)
@@ -83,10 +151,41 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 
 @pytest.fixture(scope="session")
-def workspace(pytestconfig: pytest.Config) -> str:
-    directory = Path(str(pytestconfig.getoption("--e2e-workspace"))).expanduser().resolve()
-    if not directory.is_dir():
-        raise pytest.UsageError(f"workspace does not exist: {directory}")
+def workspace(
+    pytestconfig: pytest.Config,
+    tmp_path_factory: pytest.TempPathFactory,
+) -> str:
+    source = Path(str(pytestconfig.getoption("--e2e-workspace"))).expanduser().resolve()
+    if not source.is_dir():
+        raise pytest.UsageError(f"workspace does not exist: {source}")
+    directory = tmp_path_factory.mktemp("baqylau-e2e-workspace")
+    shutil.copytree(
+        source,
+        directory,
+        dirs_exist_ok=True,
+        ignore=shutil.ignore_patterns(".git", "baqylau-e2e-*.txt"),
+    )
+    subprocess.run(
+        ("git", "-C", str(directory), "init", "--initial-branch=main"),
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    for name, value in (
+        ("user.name", "Baqylau E2E"),
+        ("user.email", "baqylau-e2e@example.invalid"),
+    ):
+        subprocess.run(
+            ("git", "-C", str(directory), "config", name, value),
+            check=True,
+        )
+    subprocess.run(("git", "-C", str(directory), "add", "."), check=True)
+    subprocess.run(
+        ("git", "-C", str(directory), "commit", "-m", "Create E2E workspace"),
+        check=True,
+        capture_output=True,
+        text=True,
+    )
     return str(directory)
 
 
@@ -141,6 +240,70 @@ def isolated_codex_home(
     return destination
 
 
+@pytest.fixture(scope="session")
+def isolated_claude_home(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Iterator[Path]:
+    """One writable Claude profile per xdist worker, with shared auth only."""
+    source = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude"))
+    destination = tmp_path_factory.mktemp("baqylau-e2e-claude-home")
+    _copy_claude_credentials(source, destination)
+    for filename in ("settings.local.json",):
+        source_file = source / filename
+        if source_file.exists():
+            shutil.copy2(source_file, destination / filename)
+    settings = json.loads((source / "settings.json").read_text(encoding="utf-8"))
+    settings["enabledPlugins"] = {}
+    settings["extraKnownMarketplaces"] = {}
+    settings.pop("statusLine", None)
+    settings_environment = settings.setdefault("env", {})
+    if not isinstance(settings_environment, dict):
+        raise AssertionError("Claude settings env is not an object")
+    settings_environment["CLAUDE_CODE_ENABLE_TELEMETRY"] = "0"
+    for name in (
+        "CLAUDE_OTEL_PORT",
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE",
+        "OTEL_EXPORTER_OTLP_PROTOCOL",
+        "OTEL_METRICS_EXPORTER",
+        "OTEL_METRIC_EXPORT_INTERVAL",
+    ):
+        settings_environment.pop(name, None)
+    (destination / "settings.json").write_text(
+        json.dumps(settings, sort_keys=True),
+        encoding="utf-8",
+    )
+    source_profile = source / ".claude.json"
+    if not source_profile.exists():
+        source_profile = Path.home() / ".claude.json"
+    shutil.copy2(source_profile, destination / ".claude.json")
+
+    previous = os.environ.get("CLAUDE_CONFIG_DIR")
+    os.environ["CLAUDE_CONFIG_DIR"] = str(destination)
+    try:
+        yield destination
+    finally:
+        if previous is None:
+            os.environ.pop("CLAUDE_CONFIG_DIR", None)
+        else:
+            os.environ["CLAUDE_CONFIG_DIR"] = previous
+
+
+@pytest.fixture(scope="session")
+def claude_workspace_trust(
+    workspace: str,
+    isolated_claude_home: Path,
+) -> Iterator[None]:
+    trust = ClaudeCodeProjectTrust.grant(
+        isolated_claude_home / ".claude.json",
+        workspace,
+    )
+    try:
+        yield
+    finally:
+        trust.close()
+
+
 @pytest.fixture
 def versioned_workspace() -> str:
     directory = Path(__file__).resolve().parents[2]
@@ -156,6 +319,7 @@ def versioned_workspace() -> str:
 def repository_workspace(
     workspace: str,
     isolated_codex_home: Path,
+    isolated_claude_home: Path,
 ) -> Iterator[RepositoryWorkspace]:
     with tempfile.TemporaryDirectory(
         prefix="baqylau-repository-",
@@ -163,7 +327,9 @@ def repository_workspace(
     ) as temporary_directory:
         repository = RepositoryWorkspace.create(Path(temporary_directory))
         repository.trust_for_codex(isolated_codex_home)
-        claude_code_trust = repository.trust_for_claude_code()
+        claude_code_trust = repository.trust_for_claude_code(
+            isolated_claude_home / ".claude.json"
+        )
         try:
             yield repository
         finally:
@@ -176,11 +342,25 @@ def application_process(
     pytestconfig: pytest.Config,
     tmp_path_factory: pytest.TempPathFactory,
     isolated_codex_home: Path,
+    isolated_claude_home: Path,
+    claude_workspace_trust: None,
 ) -> Iterator[ApplicationProcess]:
-    configured = pytestconfig.getoption("--e2e-data-dir")
-    data_directory = (
-        Path(str(configured)).expanduser().resolve() if configured else tmp_path_factory.mktemp("baqylau-live-data")
+    del claude_workspace_trust
+    run_identity = os.environ.get("PYTEST_XDIST_TESTRUNUID", "single")
+    usage_cache = Path(tempfile.gettempdir()) / (
+        f"baqylau-e2e-usage-{run_identity}.json"
     )
+    _prewarm_usage_cache(usage_cache)
+    configured = pytestconfig.getoption("--e2e-data-dir")
+    if configured:
+        data_directory = Path(str(configured)).expanduser().resolve()
+        distributed_run_identity = os.environ.get("PYTEST_XDIST_TESTRUNUID")
+        worker_identity = os.environ.get("PYTEST_XDIST_WORKER")
+        if distributed_run_identity and worker_identity:
+            data_directory = data_directory / distributed_run_identity / worker_identity
+        data_directory.mkdir(parents=True, exist_ok=True)
+    else:
+        data_directory = tmp_path_factory.mktemp("baqylau-live-data")
     process = ApplicationProcess.start(
         ApplicationConfig(
             data_directory=Path(data_directory),
@@ -192,6 +372,13 @@ def application_process(
             base_environment={
                 **os.environ,
                 "CODEX_HOME": str(isolated_codex_home),
+                "CLAUDE_CONFIG_DIR": str(isolated_claude_home),
+                # Usage is global account state. One run-scoped snapshot keeps
+                # isolated daemons from launching the same native probes.
+                "BAQYLAU_USAGE_SHARED_CACHE": str(usage_cache),
+                "BAQYLAU_USAGE_SHARED_CACHE_SECONDS": "600",
+                "BAQYLAU_USAGE_INITIAL_DELAY_SECONDS": "0",
+                "BAQYLAU_USAGE_REFRESH_SECONDS": "65",
             },
         )
     )
@@ -512,22 +699,31 @@ def rewind_file_path(workspace: str) -> Iterator[str]:
 
 @pytest.fixture(autouse=True)
 def scenario_signoff(
+    application_process: ApplicationProcess,
     client: BaqylauClient,
     sessions: Sessions,
     wait_policy: WaitPolicy,
 ) -> Iterator[None]:
     start = client.diagnostics.checkpoint()
-    yield
-    for session in sessions.values():
-        snapshot = client.sessions.snapshot(session)
-        if snapshot.data.session.state != "finished" and snapshot.data.live:
-            receipt = client.sessions.close(session)
-            assert receipt.status_code in (200, 202), (
-                f"cleanup action {receipt.request_id!r} was not accepted: {receipt.outcome}"
-            )
-        client.sessions.wait_until_finished(session, wait_policy.cleanup)
-    end = client.diagnostics.wait_until_drained(wait_policy.pipeline)
-    assert_clean_diagnostics(
-        "the scenario has pipeline findings",
-        client.diagnostics.report(start, end),
-    )
+    try:
+        yield
+        for session in sessions.values():
+            snapshot = client.sessions.snapshot(session)
+            if snapshot.data.session.state != "finished" and snapshot.data.live:
+                receipt = client.sessions.close(session)
+                assert receipt.status_code in (200, 202), (
+                    f"cleanup action {receipt.request_id!r} was not accepted: {receipt.outcome}"
+                )
+            client.sessions.wait_until_finished(session, wait_policy.cleanup)
+        end = client.diagnostics.wait_until_drained(wait_policy.pipeline)
+        assert_clean_diagnostics(
+            "the scenario has pipeline findings",
+            client.diagnostics.report(start, end),
+        )
+    finally:
+        # A completed turn can leave an interactive CLI waiting in its PTY
+        # after its logical session is already finished and no longer appears
+        # live. Restarting the isolated per-worker daemon closes every owned
+        # PTY and gives the next scenario a clean process/runtime boundary.
+        application_process.restart()
+        client.application.wait_until_ready()

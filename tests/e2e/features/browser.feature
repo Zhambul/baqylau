@@ -147,14 +147,18 @@ Feature: the browser controls real harness sessions
       | codex       | gpt-5.6-luna | no           |
       | claude_code | haiku        | no           |
 
-  Scenario: the browser shows one default Claude profile and live Fable usage
-    Given session configuration "claude form" uses claude_code with model haiku and low effort
+  Scenario Outline: the browser shows one default profile and live Fable usage
+    Given session configuration "claude form" uses <harness> with model <model> and low effort
     And session configuration "claude form" uses no account
     Given the browser is on the session list
     Then the browser shows the claude_code fable model usage limit for its default account
     When I open configured browser session form "claude form" using session configuration "claude form"
     Then browser session form "claude form" has no account selection
     When I close browser session form "claude form"
+
+    Examples:
+      | harness     | model |
+      | claude_code | haiku |
 
   Scenario Outline: a browser starts and resumes one real session
     Given session configuration "primary" uses <harness> with model <model> and low effort
@@ -168,6 +172,10 @@ Feature: the browser controls real harness sessions
     And turn "before browser resume" has final answer 'BROWSER_STARTED'
     And the browser shows session "primary"
     And the browser shows the exact text 'BROWSER_STARTED'
+    When I rename session "primary" to 'Browser resume title 824' as control "saved browser resume name"
+    Then control "saved browser resume name" response is accepted
+    And control "saved browser resume name" outcome is acknowledged
+    And session "primary" has title 'Browser resume title 824'
     When I close session "primary" as control "prepare browser resume"
     Then control "prepare browser resume" response is accepted
     And control "prepare browser resume" outcome is acknowledged
@@ -205,11 +213,11 @@ Feature: the browser controls real harness sessions
     And session configuration "primary" uses <account> account
     When I launch session "primary" as turn "active work" with prompt
       """
-      Run `python -c 'import time; time.sleep(8); print("browser-active-finished")'`
+      Run `while [ ! -f .baqylau-browser-active-release ]; do sleep 0.2; done; printf 'browser-active-finished\n'`
       as a foreground shell command. Do not run it in the background. Wait for
       it, and then reply only with BROWSER_ACTIVE_DONE.
       """
-    And I name the only running foreground command in turn "active work" containing 'time.sleep(8)' "active command"
+    And I name the only running foreground command in turn "active work" containing 'baqylau-browser-active-release' "observed active command"
     And I open session "primary" in the browser
     And I send browser prompt to session "primary" as turn "queued work"
       """
@@ -219,8 +227,10 @@ Feature: the browser controls real harness sessions
     And session "primary" has queued prompt 'Reply with the exact marker BROWSER_QUEUED_DONE and no other text.' after a fresh application read
     When I reload browser session "primary"
     Then the browser shows queued prompt 'Reply with the exact marker BROWSER_QUEUED_DONE and no other text.'
-    And command "active command" has state succeeded
-    And turn "queued work" prompt is delivered after command "active command" finishes
+    When I release active browser work in session "primary"
+    And I name a successful shell attempt in turn "active work" containing 'baqylau-browser-active-release' "active command"
+    Then command "active command" has state succeeded
+    And turn "queued work" produces its final answer after command "active command" finishes
     And turn "queued work" completes
     And turn "queued work" has final answer 'BROWSER_QUEUED_DONE'
     And the browser does not show queued prompt 'Reply with the exact marker BROWSER_QUEUED_DONE and no other text.'
@@ -247,8 +257,7 @@ Feature: the browser controls real harness sessions
     Then work "oldest browser activity" completes
     And work "oldest browser activity" has final answer 'BROWSER_HISTORY_DONE'
     When I open session "primary" in the browser
-    Then the browser can load older session activity automatically
-    And the browser feed does not show text containing 'BROWSER-OLDEST-ACTIVITY-731'
+    Then the browser can load older session activity automatically containing 'BROWSER-OLDEST-ACTIVITY-731'
     When I scroll to older session activity in the browser
     Then the browser feed shows text containing 'BROWSER-OLDEST-ACTIVITY-731'
 

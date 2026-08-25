@@ -660,6 +660,15 @@ class SessionMetaContextWindow(BaseModel):
     window_id: str | None = None
 
 
+class SessionMetaHistoryBase(BaseModel):
+    """The immutable rollout prefix used by a paginated rewind."""
+
+    model_config = FOREIGN
+    thread_id: CodexSessionId
+    end_ordinal_exclusive: int
+    end_byte_offset: int
+
+
 class SessionMetaGit(BaseModel):
     """The repository facts codex stamps on a session — `{}` outside a repo,
     `{commit_hash, branch, repository_url}` inside one (both measured, real
@@ -695,6 +704,7 @@ class SessionMetaPayload(BaseModel):
     model_provider: str | None = None
     base_instructions: SessionMetaBaseInstructions | None = None
     history_mode: str | None = None
+    history_base: SessionMetaHistoryBase | None = None
     context_window: SessionMetaContextWindow | None = None
     git: SessionMetaGit | None = None
     # The MCP-style tool manifest codex's app-server negotiates per session —

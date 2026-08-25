@@ -19,6 +19,7 @@ from harness.impl.claude_code.controls.screen_driver import ScreenDriver, poll_u
 # after the line-kill that clears whatever the box held, settle before pasting —
 # a paste into a just-cleared input drops leading bytes (measured; the mangle).
 CLEAR_GAP_S = 0.15
+CLEAR_EFFECT_TIMEOUT_S = 1.5
 CLEAR_LINES_MAX = 50    # ceiling on the per-line kill loop: a corrupt/huge
 #                         stash must not become an unbounded keystroke storm.
 COMPOSER_READY_TIMEOUT_S = 3.0
@@ -149,8 +150,7 @@ def clear_input(
         screen_driver.send_key(win, "ctrl+u")
         screen_driver.send_key(win, "ctrl+k")
         killed += 1
-        sleep(CLEAR_GAP_S)
-        after = _input_text(screen_driver, win)
+        after = _wait_for_input_change(screen_driver, win, before, sleep)
         if after == "":
             return killed
         if after is not None and after == before:
@@ -158,9 +158,25 @@ def clear_input(
         if after is None and killed >= fallback_lines:
             return killed
         screen_driver.send_key(win, "backspace")
-        joined = _input_text(screen_driver, win)
+        joined = _wait_for_input_change(screen_driver, win, after, sleep)
         before = joined if joined is not None else after
     return killed
+
+
+def _wait_for_input_change(
+    screen_driver: ScreenDriver,
+    win: WindowId,
+    before: str | None,
+    sleep: Callable[[float], None],
+) -> str | None:
+    deadline = time.monotonic() + CLEAR_EFFECT_TIMEOUT_S
+    while True:
+        current = _input_text(screen_driver, win)
+        if current != before:
+            return current
+        if time.monotonic() >= deadline:
+            return current
+        sleep(CLEAR_GAP_S)
 
 
 def _input_text(screen_driver: ScreenDriver, win: WindowId) -> str | None:

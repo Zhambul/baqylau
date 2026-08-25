@@ -1,5 +1,8 @@
 PY ?= .venv/bin/python
 NPM ?= npm
+E2E_WORKERS ?= 20
+BROWSER_E2E_WORKERS ?= 20
+E2E_DIST ?= load
 FRONTEND_DIR = dashboard/frontend
 FRONTEND_MODULES = $(FRONTEND_DIR)/node_modules/.package-lock.json
 
@@ -18,7 +21,7 @@ test-frontend: frontend-install
 	cd $(FRONTEND_DIR) && $(NPM) run test:coverage
 
 test-browser: build-frontend
-	cd $(FRONTEND_DIR) && BAQYLAU_E2E_PYTHON=$(abspath $(PY)) $(NPM) run test:browser
+	cd $(FRONTEND_DIR) && BAQYLAU_E2E_PYTHON=$(abspath $(PY)) BAQYLAU_E2E_WORKERS=$(BROWSER_E2E_WORKERS) $(NPM) run test:browser
 
 lint-frontend: frontend-install
 	cd $(FRONTEND_DIR) && $(NPM) run lint
@@ -42,18 +45,19 @@ test-all:
 # The LIVE-harness suite (tests/e2e): the real daemon on its own port and
 # databases, the real CLI in a pseudo-terminal, a real workspace on disk. Catches
 # a harness release changing its evidence under us — the failure nothing
-# simulated can see. Spends tokens, so it is opt-in and sequential (one daemon,
-# one workspace). It stops on the first failed scenario so a broken live
-# integration does not keep spending tokens. See tests/e2e/conftest.py.
+# simulated can see. Spends tokens, so it is opt-in. Each xdist worker owns its
+# daemon, databases, Codex home, and workspace copy. It stops after the first
+# failed scenario so a broken live integration does not keep spending tokens.
+# See tests/e2e/conftest.py.
 #
 #   make test-drift                                  the Examples tables as written
 #   make test-drift E2E="--e2e-model claude-opus-5"   every scenario, one model
 #   make test-drift E2E="-k codex --e2e-data-dir /tmp/drift"   keep the databases
 test-drift:
-	$(PY) -m pytest tests/e2e -q -x $(E2E)
+	$(PY) -m pytest tests/e2e/test_scenarios.py -q -x -n $(E2E_WORKERS) --dist $(E2E_DIST) --maxschedchunk 1 $(E2E)
 
 test-browser-drift: build-frontend
-	BAQYLAU_E2E_BROWSER=1 $(PY) -m pytest tests/e2e/browser -q -x $(E2E)
+	BAQYLAU_E2E_BROWSER=1 $(PY) -m pytest tests/e2e/browser -q -x -n $(E2E_WORKERS) --dist $(E2E_DIST) $(E2E)
 
 # Alias for the (now default-parallel) suite; kept for muscle memory.
 test-par: test

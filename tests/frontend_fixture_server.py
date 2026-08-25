@@ -6,7 +6,6 @@ import os
 import socket
 import sys
 import tempfile
-import time
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -15,9 +14,9 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 PORT = int(os.environ.get("BAQYLAU_E2E_PORT", "8794"))
 
 
-def _seed(data_directory: Path) -> dict[Any, Any]:
+def _seed(data_directory: Path, port: int) -> dict[Any, Any]:
     os.environ["BAQYLAU_DATA_DIR"] = str(data_directory)
-    os.environ["BAQYLAU_DASHBOARD_PORT"] = str(PORT)
+    os.environ["BAQYLAU_DASHBOARD_PORT"] = str(port)
     os.environ["BAQYLAU_DASHBOARD_NOTIFY_TELEGRAM"] = "0"
     os.environ["BAQYLAU_DASHBOARD_NOTIFY_WEBPUSH"] = "0"
 
@@ -25,6 +24,7 @@ def _seed(data_directory: Path) -> dict[Any, Any]:
 
     from app import providers
     from app.injection import registry, resolve
+    from core.repository import RepositoryQueries, RepositoryStatus
     from domain.events import (
         ActorAssignmentStarted,
         ActorDescriptionChanged,
@@ -101,8 +101,17 @@ def _seed(data_directory: Path) -> dict[Any, Any]:
     from fake_terminal import FakeTerminal, window
     from terminal.models import SESSION_WINDOW_TAG
 
+    class FixtureRepositoryQueries(RepositoryQueries):
+        """Keep the browser fixture independent of the source checkout."""
+
+        @classmethod
+        def status(cls, working_directory: str) -> RepositoryStatus | None:
+            del working_directory
+            return RepositoryStatus("main", None, False)
+
     instances = registry()
-    now = time.time()
+    instances[providers.repositories] = FixtureRepositoryQueries()
+    now = 1_700_000_000.0
     harness = HarnessName.CODEX
     active_session = SessionId("fixture-active")
     active_lead = ActorId("fixture-active:lead")
@@ -658,20 +667,23 @@ def _seed(data_directory: Path) -> dict[Any, Any]:
 
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="baqylau-browser-") as temporary:
+        bound_socket = socket.create_server(("127.0.0.1", PORT))
+        address = bound_socket.getsockname()
+        port = int(address[1])
         data_directory = Path(temporary)
-        instances = _seed(data_directory)
+        instances = _seed(data_directory, port)
         from api import dependencies
         from api.app import build_web_application
         from api.server import build_server
         from app.injection import resolve
 
-        bound_socket = socket.create_server(("127.0.0.1", PORT))
         policy = resolve(instances, dependencies.policy)
         bound_socket.listen(policy.request_queue_size)
         server = build_server(
             build_web_application(instances, run_background_workers=False),
             policy.graceful_shutdown_seconds,
         )
+        print(f"BAQYLAU_FIXTURE_URL=http://127.0.0.1:{port}", flush=True)
         server.run(sockets=[bound_socket])
         return 0
 

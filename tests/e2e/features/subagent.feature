@@ -22,7 +22,7 @@ Feature: subagent work reaches the session feed
       """
     Then work "follow-up work" completes
     And work "follow-up work" has worker type subagent
-    And work "follow-up work" has final answer 'FOLLOWUP_MARKER_417'
+    And follow-up 'FOLLOWUP_MARKER_417' is observed by worker of work "follow-up work"
 
     Examples:
       | harness     | model        |

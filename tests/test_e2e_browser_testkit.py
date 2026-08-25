@@ -57,6 +57,14 @@ def test_usage_selection_waits_for_initial_publication():
     assert default_model_usage_window((), "claude_code", "fable") is None
 
 
+def test_usage_selection_retries_a_transient_probe_timeout():
+    assert default_model_usage_window(
+        (_row(collection_error="usage probe timed out"),),
+        "claude_code",
+        "fable",
+    ) is None
+
+
 def test_usage_selection_rejects_a_claude_account_selector():
     with pytest.raises(AssertionError, match="published an account selection"):
         default_model_usage_window(

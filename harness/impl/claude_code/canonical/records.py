@@ -527,7 +527,8 @@ class AttachmentRecord(BaseModel, Generic[AttachmentBody]):
 class QueueOperationRecord(BaseModel):
     """A `type=queue-operation` record — the enqueue half of a
     task-notification's delivery. Most notifications also have a `user` copy.
-    A child background command can have only this parent-transcript copy."""
+    A child background command or a resumed agent's later completion can have
+    only this copy."""
 
     model_config = FOREIGN
     type: Literal["queue-operation"] = "queue-operation"
@@ -719,8 +720,8 @@ class ToolResponse(BaseModel):
     status: str | None = None
     name: str | None = None
     agentId: str | None = None
-    agent_id: str | None = None
-    teammate_id: str | None = None
+    agent_id: ClaudeCodeActorId | None = None
+    teammate_id: ClaudeCodeActorId | None = None
     team_name: str | None = None
     taskId: str | None = None
     planWasEdited: bool | None = None

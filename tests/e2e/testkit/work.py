@@ -58,16 +58,17 @@ def _delegation_prompt(
     *,
     named: bool = False,
 ) -> str:
-    attachment_note = ""
+    delegated_prompt = work_prompt
     if attachments:
         paths = "\n".join(f"- {item.local_path}" for item in attachments)
-        attachment_note = (
-            "\nThe files for this work are at these exact paths:\n"
-            f"{paths}\nGive these paths to the subagent."
+        delegated_prompt = (
+            f"{work_prompt}\n\n"
+            "The files for this work are at these exact paths. Use only these paths:\n"
+            f"{paths}"
         )
     name = _worker_name(work_name)
     if harness == "codex":
-        encoded_message = json.dumps(work_prompt).replace("$", "\\u0024")
+        encoded_message = json.dumps(delegated_prompt).replace("$", "\\u0024")
         instruction = (
             "Use multi_agent_v2__spawn_agent exactly once. "
             f"Set task_name to {name!r}. Decode WORK MESSAGE JSON as JSON and "
@@ -92,10 +93,10 @@ def _delegation_prompt(
         raise AssertionError(f"harness {harness!r} has no subagent work adapter")
     if harness == "codex":
         return (
-            f"{instruction}{attachment_note}\n\n"
+            f"{instruction}\n\n"
             f"WORK MESSAGE JSON\n{encoded_message}"
         )
-    return f"{instruction}{attachment_note}\n\nWORK START\n{work_prompt}\nWORK END"
+    return f"{instruction}\n\nWORK START\n{delegated_prompt}\nWORK END"
 
 
 def _parallel_delegation_prompt(
@@ -121,7 +122,9 @@ def _parallel_delegation_prompt(
             "in one response so the subagents run in parallel. For each call, set "
             "description to the stated work name and set prompt to the exact text "
             "between WORK START and WORK END. Do not set name. Do not do the work "
-            "yourself. After all Agent calls return, reply only with the word launched."
+            "yourself. Each Agent call returns an async launch acknowledgement. "
+            "Immediately after the final launch acknowledgement, reply only with "
+            "the word launched. Do not wait for child completion or notifications."
         )
     else:
         raise AssertionError(f"harness {harness!r} has no subagent work adapter")
@@ -390,7 +393,6 @@ class WorkDriver:
                 work_name=work_name,
                 prompt=prompt,
                 worker_kind=WorkerKind.SUBAGENT,
-                exact_prompt=prompt if spec.harness == "claude_code" else None,
             ),
         )
 

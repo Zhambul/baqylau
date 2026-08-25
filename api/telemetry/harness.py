@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Request
 from fastapi.concurrency import run_in_threadpool
+from starlette.requests import ClientDisconnect
 
 from api.common.models.fields import HarnessNamePath
 from api.common.models.replies.recorded_response import RecordedResponse
@@ -31,7 +32,12 @@ async def record_telemetry_delivery(
     never break the status line), so a delivery the daemon refused would
     otherwise vanish.
     """
-    payload = await request.body()
+    try:
+        payload = await request.body()
+    except ClientDisconnect:
+        # Status/OTLP publishers are intentionally best-effort. A publisher
+        # leaving mid-body is a missing delivery, not an application error.
+        return RecordedResponse(recorded=False)
     delivery = HarnessTelemetryRequest(
         kind=(request.headers.get(TELEMETRY_KIND_HEADER) or "").strip(),
         payload=payload,

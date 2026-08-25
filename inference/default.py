@@ -22,6 +22,7 @@ from terminal.models import ScreenReadRequest, TabCloseRequest, TabOpenRequest
 
 INTERNAL_MODEL_VARIABLE = "BAQYLAU_INTERNAL_MODEL"
 DEFAULT_TIMEOUT_SECONDS = 45.0
+PROVIDER_ATTEMPT_TIMEOUT_SECONDS = 15.0
 POLL_SECONDS = 0.05
 TITLE_SCHEMA_JSON = (
     '{"type":"object","properties":{"title":{"type":"string"}},'
@@ -171,7 +172,12 @@ class _SmallModel:
     def send(self, model_prompt_request: ModelPromptRequest) -> ModelPromptResponse:
         candidates = self._candidates()
         failures: list[str] = []
-        for candidate in candidates:
+        # A CLI or remote request can fail transiently even though account
+        # capacity remains. Try every provider once, then retry the preferred
+        # one in a fresh ephemeral process. Per-attempt time is capped so the
+        # extra recovery attempt is still faster than one old 45-second hang.
+        attempts = (*candidates, candidates[0]) if candidates else ()
+        for candidate in attempts:
             try:
                 return self._send(candidate, model_prompt_request)
             except ProviderUnavailableError as error:
@@ -209,7 +215,10 @@ class _SmallModel:
                 raise ProviderUnavailableError(opened.reason or "model process did not start")
             window_id = opened.window_id
             try:
-                deadline = time.monotonic() + self.timeout_seconds
+                deadline = time.monotonic() + min(
+                    self.timeout_seconds,
+                    PROVIDER_ATTEMPT_TIMEOUT_SECONDS,
+                )
                 while any(window.window_id == window_id for window in self.terminal.metadata.windows()):
                     if time.monotonic() >= deadline:
                         raise ProviderUnavailableError("model response timed out")
