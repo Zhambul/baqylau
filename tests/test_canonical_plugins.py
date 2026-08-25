@@ -178,7 +178,8 @@ from domain.events import ShellOutputLocated
 class _QuietLiveness:
     """Liveness has its own contract tests; here it must not finish fixture sessions."""
 
-    def __init__(self, session, probe):
+    def __init__(self, session, probe, terminal_windows=()):
+        del probe, terminal_windows
         self.source_identity = f"test:liveness:{session.session_id}"
 
     def read(self, after_position):

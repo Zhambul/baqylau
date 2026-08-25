@@ -47,6 +47,7 @@ from repository.contract.session_data import SessionDataRepository
 from repository.contract.sessions import SessionRepository
 from repository.impl.sqlite.databases import main_database
 from repository.impl.sqlite.naming import SqliteNamingJobRepository
+from repository.impl.sqlite.schema import MAIN_SCHEMA_VERSION
 from terminal.adapter import TerminalAdapter
 from tests.fake_terminal import FakeTerminal
 
@@ -412,7 +413,7 @@ def test_version_thirteen_database_gains_the_naming_queue(tmp_path) -> None:
         ).fetchone()
 
     assert table is not None
-    assert version is not None and version["version"] == 14
+    assert version is not None and version["version"] == MAIN_SCHEMA_VERSION
 
 
 def control_service(

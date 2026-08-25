@@ -17,6 +17,7 @@ from harness.models import (
 from repository.mapper.documents import encode_document
 from harness.models.directives import ProcessExit
 from terminal.models import SESSION_WINDOW_TAG
+from terminal.models.values import WindowId as NativeWindowId
 from terminal.ownership import window_hosts_process
 
 
@@ -101,8 +102,9 @@ class SessionLivenessSource(HarnessRawEventSource):
         window_id = self.session.terminal_window_id
         if window_id is None:
             return False
+        native_window_id = NativeWindowId(str(window_id))
         for window in self.terminal_windows:
-            if window.window_id != window_id:
+            if window.window_id != native_window_id:
                 continue
             owner = window.tags.get(SESSION_WINDOW_TAG)
             if not owner or owner == str(self.session.session_id):
@@ -154,8 +156,9 @@ class SessionWindowLivenessSource(HarnessRawEventSource):
         if after_position == "exited":
             return ()
         window_id = self.session.terminal_window_id
+        native_window_id = NativeWindowId(str(window_id))
         window = next(
-            (item for item in self.terminal_windows if item.window_id == window_id),
+            (item for item in self.terminal_windows if item.window_id == native_window_id),
             None,
         )
         if window is not None:

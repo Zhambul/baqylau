@@ -260,6 +260,7 @@ class JourneyDriver:
         environment["KITTY_WINDOW_ID"] = host.window_id
 
         workspace = spec.workspace or self._workspace
+        command: tuple[str, ...]
         if spec.harness == "claude_code":
             command = (
                 "claude",
