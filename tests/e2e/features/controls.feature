@@ -81,6 +81,7 @@ Feature: session controls change live session state
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" as turn "name sample" with prompt
       """
+      Prepare a database migration plan for archived audit records.
       Reply only with the word ready.
       """
     Then turn "name sample" completes
@@ -129,6 +130,7 @@ Feature: session controls change live session state
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" as turn "parked generic name" with prompt
       """
+      Review background cleanup behavior for parked sessions.
       Reply only with PARKED_GENERIC_READY.
       """
     Then turn "parked generic name" completes

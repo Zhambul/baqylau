@@ -38,6 +38,7 @@ UNAVAILABLE_MARKERS = (
     "not logged in",
 )
 ESCAPED_TITLE = re.compile(r'\\?"title\\?"\s*:\s*\\?"((?:\\.|[^"\\])*)\\?"')
+MINIMUM_TITLE_WORDS = 3
 
 
 class _TitleDocument(BaseModel):
@@ -235,21 +236,33 @@ def _remaining_capacity(harness: HarnessName, rows: tuple[UsageRow, ...]) -> Dec
 
 
 def _title_from_output(output: str) -> str:
+    invalid_shape = False
     candidates = (*reversed(output.splitlines()), "".join(output.splitlines()))
     for candidate in candidates:
         title = _title_from_document(candidate)
         if title:
-            return title
+            if _has_requested_title_shape(title):
+                return title
+            invalid_shape = True
     match = ESCAPED_TITLE.search(output)
     if match:
         try:
-            return TypeAdapter(str).validate_json(f'"{match.group(1)}"')
+            title = TypeAdapter(str).validate_json(f'"{match.group(1)}"')
+            if _has_requested_title_shape(title):
+                return title
+            invalid_shape = True
         except ValidationError:
             pass
     lowered = output.lower()
     if any(marker in lowered for marker in UNAVAILABLE_MARKERS):
         raise ProviderUnavailableError("provider reported an availability limit")
+    if invalid_shape:
+        raise ProviderUnavailableError("model returned a title outside the requested shape")
     raise ProviderUnavailableError("model returned no structured title")
+
+
+def _has_requested_title_shape(title: str) -> bool:
+    return len(title.split()) >= MINIMUM_TITLE_WORDS
 
 
 def _title_from_document(value: str) -> str | None:

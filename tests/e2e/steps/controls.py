@@ -101,12 +101,14 @@ def session_has_concise_title(
         title = snapshot.data.session.title
         if not title or title == fallback:
             return None
-        assert "\n" not in title
-        assert len(title) <= 80
-        assert 3 <= len(title.split()) <= 8
-        assert "http" not in title.casefold()
-        assert "<" not in title and ">" not in title
-        return True
+        return True if (
+            "\n" not in title
+            and len(title) <= 80
+            and 3 <= len(title.split()) <= 8
+            and "http" not in title.casefold()
+            and "<" not in title
+            and ">" not in title
+        ) else None
 
     client.sessions.watch(sessions.get(session_name)).wait(
         f"session {session_name!r} to receive a concise automatic title",

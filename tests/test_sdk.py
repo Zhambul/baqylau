@@ -14,6 +14,7 @@ from api.controls.models.control_outcome_response import ControlResultResponse
 from api.sessiondata.models.session_data import SessionDataListResponse, SessionDataResponse
 from sdk import sse
 from sdk.client import (
+    AUTOMATIC_NAME_TIMEOUT_SECONDS,
     SessionRef,
     SessionsResource,
     SessionWatch,
@@ -234,14 +235,16 @@ class EventStreamTransport:
 class ControlTransport:
     def __init__(self) -> None:
         self.posts: list[tuple[str, object, set[int]]] = []
+        self.timeouts: list[float | None] = []
 
     def get(self, path, _adapter):
         if path == "/sessionData/session-one":
             return session_data()
         return EntryPageResponse(items=(), oldest_cursor=0, has_more=False)
 
-    def post(self, path, document, _adapter, accepted_statuses):
+    def post(self, path, document, _adapter, accepted_statuses, *, timeout=None):
         self.posts.append((path, document, accepted_statuses))
+        self.timeouts.append(timeout)
         return 200, ControlResultResponse(
             request_id=document["request_id"],
             status="acknowledged",
@@ -807,6 +810,15 @@ def test_session_controls_use_one_typed_dispatch_path():
     assert statuses == {200, 202, 409}
     assert receipt.cursor_before == 1001
     assert receipt.outcome.status == "acknowledged"
+
+
+def test_automatic_name_allows_two_model_provider_attempts():
+    transport = ControlTransport()
+    sessions = SessionsResource(cast(HttpTransport, transport))
+
+    sessions.auto_name(SessionRef("session-one"))
+
+    assert transport.timeouts == [AUTOMATIC_NAME_TIMEOUT_SECONDS]
 
 
 def test_upload_resource_encodes_bytes_and_returns_a_typed_attachment():

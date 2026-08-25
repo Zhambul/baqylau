@@ -173,6 +173,20 @@ def test_rate_limited_provider_falls_back_to_a_fresh_other_provider_window() -> 
     assert terminal.opened_tabs[0].working_directory != terminal.opened_tabs[1].working_directory
 
 
+def test_title_that_violates_the_requested_shape_falls_back() -> None:
+    terminal = InferenceTerminal(
+        (
+            '{"title":"Too short"}',
+            '{"title":"Fallback title has enough words"}',
+        )
+    )
+
+    response = factory(terminal).small().send(ModelPromptRequest("name this"))
+
+    assert response.text == "Fallback title has enough words"
+    assert [launch.command[0] for launch in terminal.opened_tabs] == ["codex", "claude"]
+
+
 def test_each_send_opens_and_closes_a_new_session() -> None:
     terminal = InferenceTerminal(
         (
