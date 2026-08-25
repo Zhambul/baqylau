@@ -1285,6 +1285,60 @@ def test_a_dead_cli_process_becomes_one_session_finished_fact(tmp_path):
     ).fetchone()[0] == 1
 
 
+def test_a_dead_run_finishes_before_its_rollout_batch_is_interpreted(tmp_path):
+    """A stale large rollout cannot hold a newer session behind its exit."""
+    rollout = raw_observation("stale-rollout")
+    harnesses = HarnessRegistry()
+    harnesses.register(
+        example_plugin(
+            TranslationResult((canonical_message(),), "translated"),
+            sources=(FixedReadSource((rollout,)),),
+        )
+    )
+    interpreter, sessions, _recorder, store, _shell_output = build_interpreter(
+        str(tmp_path / "main.db"), harnesses
+    )
+    sessions.save(
+        HarnessName.CODEX,
+        replace(
+            example_session(),
+            terminal_window_id=WindowId("stale-window"),
+            harness_process_id=2**22 + 1,
+        ),
+    )
+
+    interpreter.tick()
+
+    assert [type(event.payload) for event in store.page_from(0, 10)] == [
+        SessionFinished,
+        MessageCreated,
+    ]
+
+
+def test_each_native_run_gets_its_own_process_exit_fact():
+    """A resumed session is one lineage but each terminal window is one run."""
+    plugin = example_plugin(TranslationResult((), "ignored_nonsemantic"))
+
+    def finished_event(window_id: str, process_id: int):
+        session = replace(
+            example_session(),
+            plugin=plugin,
+            terminal_window_id=WindowId(window_id),
+            harness_process_id=process_id,
+        )
+        raw_event = SessionLivenessSource(session, ProcessProbe()).read(None)[0]
+        return LivenessTranslator().translate(raw_event).canonical_events[0]
+
+    first = finished_event("window-one", 2**22 + 1)
+    same_run = finished_event("window-one", 2**22 + 2)
+    resumed = finished_event("window-two", 2**22 + 3)
+
+    assert first.event_id == same_run.event_id
+    assert resumed.event_id != first.event_id
+    assert first.terminal_window_id == WindowId("window-one")
+    assert resumed.terminal_window_id == WindowId("window-two")
+
+
 def stored_reason(stored) -> str | None:
     return stored.payload.reason
 

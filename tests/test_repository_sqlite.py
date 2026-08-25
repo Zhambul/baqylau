@@ -531,6 +531,87 @@ def test_version_fourteen_closes_a_codex_shell_duplicated_after_restart(tmp_path
     )
 
 
+def test_version_fifteen_finishes_a_resumed_run_with_a_deduplicated_exit(tmp_path):
+    path = str(tmp_path / "main.db")
+    old_database = main_database(path)
+    sessions = SqliteSessionRepository(old_database)
+    raw_events = SqliteRawEventRepository(old_database)
+    canonical = SqliteCanonicalEventRepository(old_database)
+    first_window = WindowId("window-one")
+    resumed_window = WindowId("window-two")
+    sessions.save(HARNESS, a_session(first_window, 101))
+
+    first_started_raw = a_raw_event("first-started")
+    first_exit = replace(
+        a_raw_event("first-exit"),
+        source_type="liveness",
+        terminal_window_id=first_window,
+    )
+    resumed_started_raw = a_raw_event("resumed-started")
+    resumed_exit = replace(
+        a_raw_event("resumed-exit"),
+        source_type="liveness",
+        terminal_window_id=resumed_window,
+    )
+    raw_events.record(
+        (first_started_raw, first_exit, resumed_started_raw, resumed_exit)
+    )
+    first_started = replace(
+        a_started_event("first-run-started"),
+        terminal_window_id=first_window,
+        harness_process_id=101,
+    )
+    old_shared_finish = replace(
+        a_started_event("old-shared-session-finish"),
+        terminal_window_id=first_window,
+        harness_process_id=101,
+        payload=SessionFinished(Outcome.UNKNOWN, "process_exited"),
+    )
+    resumed_started = replace(
+        a_started_event("resumed-run-started"),
+        terminal_window_id=resumed_window,
+        harness_process_id=202,
+    )
+    canonical.record_translation(
+        first_started_raw,
+        "1",
+        TranslationResult((first_started,), "translated"),
+        1001.0,
+    )
+    canonical.record_translation(
+        first_exit,
+        "1",
+        TranslationResult((old_shared_finish,), "translated"),
+        1002.0,
+    )
+    canonical.record_translation(
+        resumed_started_raw,
+        "1",
+        TranslationResult((resumed_started,), "translated"),
+        1003.0,
+    )
+    canonical.record_translation(
+        resumed_exit,
+        "1",
+        TranslationResult((old_shared_finish,), "translated"),
+        1004.0,
+    )
+    with old_database.write() as connection:
+        connection.execute("UPDATE schema_version SET version = 15 WHERE id = 1")
+
+    upgraded = main_database(path)
+    upgraded.initialize()
+
+    repaired = SqliteCanonicalEventRepository(upgraded).find(
+        CanonicalEventId("migration:16:session-run-finished:resumed-exit")
+    )
+    assert repaired is not None
+    assert repaired.terminal_window_id == resumed_window
+    assert repaired.harness_process_id == 202
+    assert repaired.payload == SessionFinished(Outcome.UNKNOWN, "process_exited")
+    assert SqliteSessionRepository(upgraded).watchable() == ()
+
+
 def test_version_nine_builds_the_pending_raw_event_queue(tmp_path):
     path = str(tmp_path / "main.db")
     old_database = main_database(path)

@@ -73,6 +73,8 @@ Feature: sessions cross dashboard and terminal boundaries
     And journey session "primary" has one live terminal and one logical lineage
     And session "primary" is live
     And the terminal tab for journey session "primary" has color awaiting_response
+    When I close the terminal for journey session "primary"
+    Then session "primary" and all its actors finish
 
     Examples:
       | harness     | model        | account_mode         | start_origin | resume_origin |

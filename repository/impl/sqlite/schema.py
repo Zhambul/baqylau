@@ -25,7 +25,7 @@ columns, half of them null, and none of them queried.
 
 from __future__ import annotations
 
-MAIN_SCHEMA_VERSION = 15
+MAIN_SCHEMA_VERSION = 16
 AUDIT_SCHEMA_VERSION = 1
 
 # Version 4 rewrote the canonical vocabulary, so files older than that remain
@@ -53,6 +53,9 @@ AUDIT_SCHEMA_VERSION = 1
 # Version 14 adds the durable, idempotent automatic-title job queue.
 # Version 15 closes a yielded Codex shell whose native completion was recorded
 # as a second shell after an application restart lost transient correlation.
+# Version 16 repairs a resumed native run whose process exit deduplicated against
+# an earlier run's session finish. Without the second finish, the interpreter
+# keeps the dead session watchable and can replay a large rollout indefinitely.
 MAIN_MIGRATIONS: dict[int, tuple[str, ...]] = {
     5: (
         """
@@ -403,6 +406,54 @@ MAIN_MIGRATIONS: dict[int, tuple[str, ...]] = {
             json_object('shell_id', shell_id, 'outcome', outcome)
         FROM duplicate_completions
         WHERE candidate_order = 1
+        """,
+    ),
+    16: (
+        """
+        INSERT INTO canonical_events(
+            event_id, schema_version, event_type, session_id, actor_id,
+            turn_id, parent_actor_id, harness, occurred_at,
+            terminal_window_id, harness_process_id, accepted_at, payload
+        )
+        SELECT
+            'migration:16:session-run-finished:' || exit.raw_event_id,
+            previous_finish.schema_version,
+            'session.finished',
+            exit.session_id,
+            exit.actor_id,
+            NULL,
+            exit.parent_actor_id,
+            exit.harness,
+            NULL,
+            exit.terminal_window_id,
+            run_started.harness_process_id,
+            interpretation.completed_at,
+            previous_finish.payload
+        FROM raw_events AS exit
+        JOIN interpretations AS interpretation
+          ON interpretation.raw_event_id = exit.raw_event_id
+        JOIN interpretation_events AS verdict
+          ON verdict.raw_event_id = exit.raw_event_id
+         AND verdict.storage_result = 'deduplicated'
+        JOIN canonical_events AS previous_finish
+          ON previous_finish.event_id = verdict.event_id
+         AND previous_finish.event_type = 'session.finished'
+        JOIN canonical_events AS run_started
+          ON run_started.session_id = exit.session_id
+         AND run_started.event_type = 'session.started'
+         AND run_started.terminal_window_id = exit.terminal_window_id
+         AND run_started.cursor > previous_finish.cursor
+        WHERE exit.source_type = 'liveness'
+          AND exit.terminal_window_id IS NOT NULL
+          AND NOT EXISTS (
+              SELECT 1
+              FROM canonical_events AS later_lifecycle
+              WHERE later_lifecycle.session_id = exit.session_id
+                AND later_lifecycle.event_type IN (
+                    'session.started', 'session.finished'
+                )
+                AND later_lifecycle.cursor > run_started.cursor
+          )
         """,
     ),
 }

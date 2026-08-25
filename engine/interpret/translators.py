@@ -57,15 +57,15 @@ class ShellOutputTranslator(CoreTranslator):
 
 class LivenessTranslator(CoreTranslator):
     """Liveness raw event ("the CLI process is gone") → `session.finished` — the
-    SAME fact identity the harness's own end-of-session hook produces, so a
-    clean exit and a kill converge on one fact."""
+    fact for THIS native run. A parked session can start again in a new terminal
+    window, so its later exit must not deduplicate against the first run's exit."""
 
     def translate(self, raw_event: RawEvent) -> TranslationResult:
         observation = decode_document(ProcessExit, raw_event.payload)
         reason = "terminal_reassigned" if observation.state == "displaced" else "process_exited"
         finished = SessionFinished(Outcome.UNKNOWN, reason)
         return TranslationResult(
-            (canonical_event(raw_event, "session", str(raw_event.session_id), "finished", finished),),
+            (session_run_finished_event(raw_event, finished),),
             RecordedTranslationDecision.TRANSLATED,
         )
 

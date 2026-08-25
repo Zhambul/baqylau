@@ -244,11 +244,12 @@ class Interpreter:
                     # named, instead of as an AttributeError from the next line.
                     raise ValueError(f"session has no attached harness plugin: {session.session_id}")
                 sources = (
+                    # Check the cheap exit latch first. If an old run has died,
+                    # its run-scoped finish reaches the translation queue before
+                    # a large source migration batch from that run.
+                    self._liveness_source(session, terminal_windows),
                     *session.plugin.sources.for_session(session),
                     *output_source.sources_for_session(self.shell_output_repository, session.session_id),
-                    # ALWAYS built — no silent skip: a pid-less session raises,
-                    # loudly, into the audit below.
-                    self._liveness_source(session, terminal_windows),
                     PendingInterruptSource(session, self.interrupt_registry),
                 )
             except Exception:
